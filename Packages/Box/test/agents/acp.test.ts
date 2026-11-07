@@ -1060,3 +1060,25 @@ describe.skipIf(!canFence)("Antigravity in the box's sandbox", () => {
     expect(initialize.params.clientCapabilities.fs).toEqual({ readTextFile: true, writeTextFile: true })
   })
 })
+
+describe("summarizing when you ask (/compact)", () => {
+  test("Grok gets its command exactly as typed, with no instructions before it: no reply, no note", async () => {
+    const agent = new TestGrok(program(fakeAcp([["agent_message_chunk", { content: { type: "text", text: "HARBOUR" } }]], [], undefined, { next: [] }), join(root, "grok")), root)
+    const id = await run(agent)
+    const before = steps(id).length
+    expect(sessions.compact(id).state).toBe("compacting")
+    await settled(id, 2)
+    const prompts = readFileSync(join(root, "received.jsonl"), "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line)).filter((message) => message.method === "session/prompt")
+    expect(prompts.at(-1).params.prompt).toEqual([{ type: "text", text: "/compact" }])
+    expect(steps(id)).toHaveLength(before)
+    expect(notices(id)).toEqual([])
+    expect(sessions.messages(id).find((message) => message.type === "compaction")).toMatchObject({ status: "completed", reason: "manual" })
+  })
+
+  test("Antigravity can't be asked: it says so, and nothing is sent", async () => {
+    const agent = new TestAntigravity(fakeAcp([["agent_message_chunk", { content: { type: "text", text: "hello" } }]]), root)
+    const id = await run(agent)
+    expect(() => sessions.compact(id)).toThrow("Antigravity can't summarize on request: it does so by itself when the conversation fills up.")
+    expect(readFileSync(join(root, "received.jsonl"), "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line)).filter((message) => message.method === "session/prompt")).toHaveLength(1)
+  })
+})

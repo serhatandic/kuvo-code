@@ -157,7 +157,15 @@ process.stdin.on("data", (chunk) => {
     const message = JSON.parse(line)
     if (message.method === undefined) answered.get(message.id)?.()
     else if (message.method === "thread/start") send({ id: message.id, result: { thread: { id: thread } } })
-    else if (message.method === "turn/start") {
+    else if (message.method === "thread/compact/start") {
+      // As Codex 0.166 does: its answer says nothing, and a turn of its own does it.
+      send({ id: message.id, result: {} })
+      send({ method: "turn/started", params: { threadId: thread, turn: { id: "c1" } } })
+      send({ method: "item/started", params: { threadId: thread, turnId: "c1", item: { type: "contextCompaction", id: "cc1" } } })
+      send({ method: "thread/tokenUsage/updated", params: { threadId: thread, turnId: "c1", tokenUsage: { last: { totalTokens: 16476, inputTokens: 0, cachedInputTokens: 0, outputTokens: 0, reasoningOutputTokens: 0 }, total: { totalTokens: 16476 }, modelContextWindow: 272000 } } })
+      send({ method: "item/completed", params: { threadId: thread, turnId: "c1", item: { type: "contextCompaction", id: "cc1" } } })
+      send({ method: "turn/completed", params: { threadId: thread, turn: { id: "c1", status: "completed" } } })
+    } else if (message.method === "turn/start") {
       input = message.params.input ?? []
       turning = true
       steers = 0
@@ -1741,5 +1749,33 @@ describe("Stopping Codex", () => {
     codex!.shutdown()
     await until(() => ended(id))
     expect(sessions.messages(id).at(-1)).toMatchObject({ type: "idle", outcome: "interrupted" })
+  })
+})
+
+describe("summarizing when you ask (/compact)", () => {
+  test("Codex is asked with its own request, no turn of words: the row shows it, with no reply or note", async () => {
+    const said: [string, any][] = [["item/completed", { item: { type: "agentMessage", id: "m1", text: "The word is HARBOUR." } }]]
+    const id = await run(said)
+    const before = steps(id).length
+    expect(sessions.compact(id).state).toBe("compacting")
+    await until(() => sessions.messages(id).filter((message) => message.type === "idle").length === 2)
+    expect(sent().filter((message) => message.method === "thread/compact/start").map((message) => message.params)).toEqual([{ threadId: "t1" }])
+    expect(sent().filter((message) => message.method === "turn/start")).toHaveLength(1)
+    expect(steps(id)).toHaveLength(before)
+    expect(sessions.messages(id).filter((message) => message.type === "synthetic")).toEqual([])
+    expect(sessions.messages(id).find((message) => message.type === "compaction")).toMatchObject({ status: "completed", reason: "manual" })
+  })
+
+  test("one it does by itself still says so", async () => {
+    const id = await run([["item/completed", { item: { type: "contextCompaction", id: "cc0" } }]])
+    expect(sessions.messages(id).flatMap((message: any) => (message.type === "synthetic" ? [message.text] : []))).toEqual(["Codex summarized the conversation to make room."])
+  })
+
+  test("asked during a turn it isn't sent until that turn ends: Codex would stop the turn", async () => {
+    const id = start([untilStopped])
+    await until(() => existsSync(join(root, "sent.jsonl")) && sent().some((message) => message.method === "turn/start"))
+    expect(sessions.compact(id).state).toBe("waiting")
+    await Bun.sleep(50)
+    expect(sent().some((message) => message.method === "thread/compact/start")).toBe(false)
   })
 })

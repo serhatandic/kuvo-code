@@ -462,6 +462,14 @@ export class AcpThread implements Thread {
       // (Run whole in the sandbox, which hides Kuvo Code's folder where it's kept: a copy it reads.)
       else if (file.path) others.push(this.fenced ? fenceCopy(this.session.location.directory, file.path) : file.path)
     }
+    // Its command, exactly as typed, or it'd be taken for a message; its instructions wait for one.
+    if (input.compact) {
+      return new Promise<RunResult>((resolve) => {
+        const active: Active = { turn, hooks, resolve, rpc, tools: new Map(), toolsSinceText: false, ended: false, compacted: true, children: new Map(), served: new Map(), started: Date.now(), prompt: 0, input }
+        this.active = active
+        this.prompt(active, sessionId, [{ type: "text", text: "/compact" }])
+      })
+    }
     let text = input.text
     const instructions = hooks.instructions()
     // The agent's own instructions can't be added to: they go with the first message, and again

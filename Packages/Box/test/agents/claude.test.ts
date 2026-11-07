@@ -1533,3 +1533,65 @@ describe("Claude Code's reply", () => {
     expect(sessions.permissions(id)).toHaveLength(0)
   })
 })
+
+describe("summarizing when you ask (/compact)", () => {
+  // What Claude Code 2.1.318 sends for it, in order.
+  const compacts = (fake: FakeClaude, more: Record<string, unknown> = {}) => {
+    fake.out.push({ type: "system", subtype: "status", status: "compacting" })
+    fake.out.push({ type: "system", subtype: "hook_started", hook_name: "SessionStart:compact", hook_event: "SessionStart", hook_id: "h1" })
+    fake.out.push({ type: "system", subtype: "hook_response", hook_name: "SessionStart:compact", hook_event: "SessionStart", hook_id: "h1", outcome: "success", exit_code: 0 })
+    fake.out.push({ type: "system", subtype: "status", status: null, compact_result: "success", ...more })
+    fake.out.push({ type: "system", subtype: "init", session_id: "claude-1" })
+    fake.out.push({ type: "system", subtype: "compact_boundary", compact_metadata: { trigger: "manual", pre_tokens: 32985, post_tokens: 10541 } })
+    fake.out.push({ type: "user", isSynthetic: true, message: { role: "user", content: "This session is being continued from a previous conversation." } })
+    fake.out.push({ type: "user", isReplay: true, message: { role: "user", content: "<local-command-stdout>Compacted </local-command-stdout>" } })
+    fake.out.push({ type: "command_lifecycle", command: "compact" })
+    fake.out.push({ type: "result", subtype: "success", is_error: false, result: "", num_turns: 0 })
+  }
+  const words = (id: string) => sessions.messages(id).flatMap((message: any) => (message.type === "synthetic" ? [message.text] : []))
+
+  async function afterATurn() {
+    const id = sessions.create({ model: { providerID: provider, id: "default" }, location: { directory: root } }).id
+    sessions.prompt(id, { id: "msg_claude_compact1", text: "remember the word", files: [], delivery: "steer" })
+    await until(() => fake.sent.length === 1)
+    fake.streams([fake.sent[0].uuid], [{ type: "text", text: "HARBOUR" }])
+    fake.result([fake.sent[0].uuid])
+    await until(() => idles(id).length === 1)
+    return id
+  }
+
+  test("it's typed as you would, and ends on its first result: the row shows it, the conversation stays as it was", async () => {
+    const id = await afterATurn()
+    expect(sessions.compact(id).state).toBe("compacting")
+    await until(() => fake.sent.length === 2)
+    expect(fake.sent[1].message.content.filter((part: any) => part.type === "text").map((part: any) => part.text).join("")).toBe("/compact")
+    compacts(fake)
+    await until(() => idles(id).length === 2)
+    expect(idles(id)[1].outcome).toBe("succeeded")
+    expect(sessions.messages(id).find((message) => message.type === "compaction")).toMatchObject({ status: "completed", reason: "manual" })
+    expect(words(id)).toEqual([])
+    expect(texts(id)).toEqual(["HARBOUR"])
+    expect(sessions.messages(id).filter((message) => message.type === "user").map((message: any) => message.text)).toEqual(["remember the word"])
+  })
+
+  test("one that fails shows why, though its result says it went through", async () => {
+    const id = await afterATurn()
+    sessions.compact(id)
+    await until(() => fake.sent.length === 2)
+    fake.out.push({ type: "system", subtype: "status", status: null, compact_result: "failed", compact_error: "Not enough messages to compact." })
+    fake.out.push({ type: "result", subtype: "success", is_error: false, result: "", num_turns: 0 })
+    await until(() => idles(id).length === 2)
+    expect(sessions.messages(id).find((message) => message.type === "compaction")).toMatchObject({ status: "failed" })
+    expect(idles(id)[1].error?.message).toBe("Claude Code couldn't summarize the conversation: Not enough messages to compact.")
+  })
+
+  test("a hook that fails as it compacts still says so", async () => {
+    const id = await afterATurn()
+    sessions.compact(id)
+    await until(() => fake.sent.length === 2)
+    fake.out.push({ type: "system", subtype: "hook_response", hook_name: "SessionStart:compact", hook_event: "SessionStart", outcome: "error", stderr: "Failed to run" })
+    compacts(fake)
+    await until(() => idles(id).length === 2)
+    expect(words(id)).toEqual(["Your SessionStart:compact hook failed: Failed to run."])
+  })
+})

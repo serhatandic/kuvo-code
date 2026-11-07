@@ -148,7 +148,16 @@ export interface ShellMessage {
   output?: { output: string; truncated: boolean }
 }
 
-export type Message = UserMessage | AssistantMessage | NoticeMessage | IdleMessage | ModelSwitchMessage | AgentSwitchMessage | ShellMessage
+/** A summary of the conversation you asked for, as the engine shows its own (`/compact`). */
+export interface CompactionMessage {
+  type: "compaction"
+  id: string
+  time: MessageTime
+  status: "running" | "completed" | "failed"
+  reason: "manual"
+}
+
+export type Message = UserMessage | AssistantMessage | NoticeMessage | IdleMessage | ModelSwitchMessage | AgentSwitchMessage | ShellMessage | CompactionMessage
 
 export interface FileDiff {
   file: string

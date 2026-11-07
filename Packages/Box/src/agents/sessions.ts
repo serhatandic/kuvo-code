@@ -28,7 +28,7 @@ import { runningShells, stopShell } from "./shells"
 import { skillFolders, within } from "./skills"
 import type { Record_, Store } from "./store"
 import { Turn, type Outcome } from "./turn"
-import type { AssistantMessage, Attachment, Decision, FormAnswer, FormRequest, Message, ModelRef, PermissionRequest, PermissionRule, Session, ShellMessage, FileDiff, StructuredError } from "./wire"
+import type { AssistantMessage, Attachment, CompactionMessage, Decision, FormAnswer, FormRequest, Message, ModelRef, PermissionRequest, PermissionRule, Session, ShellMessage, FileDiff, StructuredError } from "./wire"
 import { plain } from "./proc"
 import type { Snapshots } from "./snapshots"
 import { AGENTS_TEXT_BYTES } from "../shared/text"
@@ -47,6 +47,8 @@ interface Input {
   synthetic?: { description?: string; metadata?: Record<string, unknown> }
   /** A turn the agent on this model began on its own (a command it left running ended): it's taken, not sent. */
   adopt?: ModelRef
+  /** No message: its agent summarizes the conversation (`compact`). */
+  compact?: boolean
 }
 
 /** A turn under way. */
@@ -61,6 +63,8 @@ interface Run {
   steered: SnapshotNote[]
   /** Notes in it asking its agent to pass your message on to a subagent (by their input). */
   relayed?: string[]
+  /** It's a summary of the conversation, not a turn: nothing goes into it partway. */
+  compacting?: boolean
 }
 
 /**
@@ -992,9 +996,22 @@ export class Sessions {
     const record = this.store.get(id)
     if (!record) return
     let changed = false
-    // A turn starts with your message, or with a note from the app (a mid-turn model switch).
-    const lastUser = record.messages.findLastIndex((message) => message.type === "user" || message.type === "synthetic")
+    // A turn starts with your message, or with a note from the app (a mid-turn model switch), and
+    // a summary you asked for is one too.
+    const lastUser = record.messages.findLastIndex((message) => message.type === "user" || message.type === "synthetic" || message.type === "compaction")
+    // A summary waiting for a turn that went with the bridge: that turn is over, and nothing shows it waits.
+    const queue = this.queue(record)
+    if (queue.some((input) => input.compact)) {
+      queue.splice(0, queue.length, ...queue.filter((input) => !input.compact))
+      changed = true
+    }
     for (const message of record.messages) {
+      // A summary under way when the bridge stopped: it didn't finish here.
+      if (message.type === "compaction" && message.status === "running") {
+        message.status = "failed"
+        message.time.completed = message.time.created
+        changed = true
+      }
       // A command of yours the bridge stopped with: over.
       if (message.type === "shell" && message.status === "running") {
         message.status = "failed"
@@ -1497,8 +1514,8 @@ export class Sessions {
     return this.queue(this.record(id)).map((input) => ({
       id: input.id,
       sessionID: id,
-      type: input.synthetic ? "synthetic" : "user",
-      payload: input.synthetic ? { text: input.text, description: input.synthetic.description } : { text: input.text, files: input.files, metadata: input.metadata },
+      type: input.compact ? "compaction" : input.synthetic ? "synthetic" : "user",
+      payload: input.compact ? {} : input.synthetic ? { text: input.text, description: input.synthetic.description } : { text: input.text, files: input.files, metadata: input.metadata },
       delivery: input.delivery,
     }))
   }
@@ -1528,7 +1545,7 @@ export class Sessions {
     if (queue.some((waiting) => waiting.id === input.id) || record.messages.some((message) => message.id === input.id)) return
     const doing = live.doing
     // While a turn runs, it waits for it, unless the agent at work takes it partway (Codex does).
-    const into = doing.kind === "running" && input.delivery !== "queue" && doing.run.agent?.thread.steer ? doing.run : undefined
+    const into = doing.kind === "running" && input.delivery !== "queue" && !doing.run.compacting && doing.run.agent?.thread.steer ? doing.run : undefined
     // While nothing runs (or only files are being kept or put back: it goes once that's done), one
     // to go after the turn goes now, as the engine's do (a bot's wake-up), unless others wait
     // before it (held after a Stop).
@@ -1540,6 +1557,61 @@ export class Sessions {
     emit("session.inbox.enqueued", { sessionID: id, inboxID: input.id, item: { ...item, delivery } }, record.session.location.directory)
     if (into) void this.steerNow(id, live, into, input)
     else if (delivery === "steer") this.wake(id)
+  }
+
+  /**
+   * Summarizes the conversation to free up its context, by the agent that holds it: now when
+   * nothing runs, or as soon as the turn under way ends, ahead of what else waits (an agent asked
+   * partway stops its turn, or refuses). Asked twice, it's the one. What can't be summarized says
+   * why, in a sentence.
+   */
+  compact(id: string): { state: "compacting" | "waiting" } {
+    const record = this.record(id)
+    const live = this.state(id)
+    if (live.doing.kind === "deleting") throw new NotFound(`No session ${id}.`)
+    if (record.session.parentID) throw new BadRequest("A subagent's conversation can't be summarized: summarize the conversation that started it.")
+    const queue = this.queue(record)
+    const run = runOf(live.doing)
+    if (!run?.compacting && !queue.some((input) => input.compact)) {
+      const why = this.whyNotCompact(record, Boolean(run))
+      if (why) throw new BadRequest(why)
+      const input: Input = { id: newID("msg"), text: "", files: [], delivery: "steer", compact: true }
+      queue.unshift(input)
+      this.store.save(id, true)
+      emit("session.inbox.enqueued", { sessionID: id, inboxID: input.id, item: { type: "compaction", payload: {}, delivery: "steer" } }, record.session.location.directory)
+      if (run) run.turn.notice("The conversation will be summarized when this turn ends.")
+    }
+    // (Nothing runs now, and one waits from before: it goes.)
+    this.wake(id)
+    const running = runOf(live.doing)
+    return { state: !running || running.compacting ? "compacting" : "waiting" }
+  }
+
+  /** The model that holds a session's conversation now: its own, or on Auto, the last to run in it. */
+  private holdingModel(record: Record_): ModelRef | undefined {
+    const model = record.session.model
+    if (model?.providerID !== autoProvider) return model
+    return record.messages.findLast((message): message is AssistantMessage => message.type === "assistant")?.model
+  }
+
+  /** Why a session's conversation can't be summarized now, in a sentence. `working`: its agent is at it, and will have something to summarize. */
+  private whyNotCompact(record: Record_, working: boolean): string | undefined {
+    const model = this.holdingModel(record)
+    if (!model) return "There's nothing to summarize yet."
+    const agent = this.agent(model.providerID)
+    if (!agent) return "This model's agent isn't available: sign in to it in Settings › Accounts, or pick another model."
+    const name = agent.name.split(" · ")[0]
+    if (!agent.compacts) return `${name} can't summarize on request: it does so by itself when the conversation fills up.`
+    if (!working && !this.slots(record)[model.providerID]?.seen) return `There's nothing to summarize yet: ${name} hasn't started on this conversation.`
+    return undefined
+  }
+
+  /** A summary that was waiting for a turn that stopped or failed: it won't go, and the turn says so while it can. */
+  private dropCompaction(id: string, record: Record_, turn: Turn) {
+    const waiting = this.queue(record).find((input) => input.compact)
+    if (!waiting) return
+    turn.notice("The conversation wasn't summarized: this turn stopped first.")
+    this.cancelInput(id, waiting.id)
   }
 
   /**
@@ -1892,6 +1964,7 @@ export class Sessions {
 
   /** Runs one message: on its model, or down your Auto list. */
   private async runTurn(id: string, live: Live, record: Record_, run: Run, input: Input): Promise<void> {
+    if (input.compact) return this.runCompaction(id, live, record, run, input)
     const { turn, abort } = run
     const session = record.session
     const directory = session.location.directory
@@ -1961,6 +2034,7 @@ export class Sessions {
       result = { outcome: "failed", error: failure(error) }
     }
     const outcome: Outcome = abort.signal.aborted ? "interrupted" : result.outcome
+    if (outcome !== "succeeded") this.dropCompaction(id, record, turn)
     const before = record.messages[record.messages.length - 1]?.id
     turn.finish(outcome, outcome === "interrupted" ? undefined : result.error)
     this.settleRelays(live, run)
@@ -1999,6 +2073,45 @@ export class Sessions {
       if (live.doing !== keeping) return
     }
     this.free(id, live, outcome)
+  }
+
+  /**
+   * The conversation summarized by the agent that holds it, shown as the engine shows its own. It
+   * changes no files and tells the agent nothing it hasn't seen, so what it hasn't seen still goes
+   * to it with your next message. It takes nothing else with it: what waited held after a Stop
+   * stays held.
+   */
+  private async runCompaction(id: string, live: Live, record: Record_, run: Run, input: Input): Promise<void> {
+    const { turn, abort } = run
+    const session = record.session
+    const directory = session.location.directory
+    const held = session.outcome !== undefined && session.outcome !== "succeeded"
+    run.compacting = true
+    emit("session.inbox.delivered", { sessionID: id, inboxID: input.id }, directory)
+    const message: CompactionMessage = { type: "compaction", id: input.id, time: { created: Date.now() }, status: "running", reason: "manual" }
+    record.messages.push(message)
+    session.time.updated = Date.now()
+    this.store.save(id, true)
+    emit("session.compaction.started", { sessionID: id, reason: "manual", inputID: input.id }, directory)
+    let result: RunResult
+    try {
+      // (Asked before the turn that was running ended: it may have moved on.)
+      const why = this.whyNotCompact(record, false)
+      const model = this.holdingModel(record)
+      if (why || !model) result = { outcome: "failed", error: { type: "agent", message: why ?? "There's nothing to summarize yet." } }
+      else result = await this.runOn(id, record, live, run, model, { text: "/compact", files: [], model, plan: session.agent === "plan", compact: true }, input.id)
+    } catch (error) {
+      result = { outcome: "failed", error: failure(error) }
+    }
+    const outcome: Outcome = abort.signal.aborted ? "interrupted" : result.outcome
+    message.status = outcome === "succeeded" ? "completed" : "failed"
+    message.time.completed = Date.now()
+    emit(outcome === "succeeded" ? "session.compaction.ended" : "session.compaction.failed", { sessionID: id }, directory)
+    turn.finish(outcome, outcome === "interrupted" ? undefined : result.error)
+    this.settleAsks(id, live)
+    // Deleted meanwhile: nothing more for it.
+    if (runOf(live.doing) !== run) return
+    this.free(id, live, held ? undefined : outcome)
   }
 
   /** A while after its last turn, a session's agents stop running: they go on where they left off next time. */
@@ -2088,6 +2201,12 @@ export class Sessions {
         if (prepared?.fresh) slot.seen = undefined
       }
       if (signal.aborted) return { outcome: "interrupted" }
+      // Nothing to send: its conversation is summarized. What it hasn't seen waits for your next
+      // message (so `seen` stays where it is). One that had to start over has nothing to summarize.
+      if (input.compact) {
+        if (!slot.seen) return { outcome: "failed", error: { type: "agent", message: `There's nothing to summarize: ${agent.name.split(" · ")[0]} couldn't pick its conversation up again, and starts over with your next message.` } }
+        return await Promise.race([thread.run({ ...input, model }, turn, hooks), abandoned])
+      }
       // What it hasn't seen: what came before your message since it last ran here, and what
       // another agent did on this message before handing it over.
       const at = record.messages.findIndex((message) => message.id === userMessage)
