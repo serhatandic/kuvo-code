@@ -319,8 +319,10 @@ final class BoxProcess {
     /// The engine stopped and isn't started again until you say (`run/engine-stopped`): why, in
     /// the words the window shows (their first paragraph), for the box to tell whoever asks it;
     /// and what the engine wrote last, which the window shows under it (`run/engine-output`), for
-    /// the app to show as it shows its own engine's when it follows the keeper's.
-    static func engineGaveUp(_ reason: String) {
+    /// the app to show as it shows its own engine's when it follows the keeper's. `retryingAfter`:
+    /// it's tried again by itself in that many seconds (`run/engine.retry`, when, as a machine's
+    /// keeper says it).
+    static func engineGaveUp(_ reason: String, retryingAfter wait: Int? = nil) {
         let paragraphs = reason.components(separatedBy: "\n\n")
         let why = paragraphs.first?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         // As it is, so a client shows the reason in the same words.
@@ -334,6 +336,11 @@ final class BoxProcess {
                 // (Without it, the reason still: never neither.)
                 try? Data(output.utf8).write(to: run.appending(path: "engine-output"), options: .atomic)
             }
+            if let wait {
+                try? Data("\(Int(Date.now.timeIntervalSince1970) + wait)\n".utf8).write(to: run.appending(path: "engine.retry"), options: .atomic)
+            } else {
+                try? FileManager.default.removeItem(at: run.appending(path: "engine.retry"))
+            }
             try Data(why.utf8).write(to: run.appending(path: "engine-stopped"), options: .atomic)
         } catch {
             log.error("Couldn't tell this Mac's box its engine stopped: \(error.localizedDescription, privacy: .public)")
@@ -345,6 +352,7 @@ final class BoxProcess {
     static func forgetEngineStopped() {
         try? FileManager.default.removeItem(at: run.appending(path: "engine-stopped"))
         try? FileManager.default.removeItem(at: run.appending(path: "engine-output"))
+        try? FileManager.default.removeItem(at: run.appending(path: "engine.retry"))
     }
 
     /// The coding agents' bridge, as it records itself on a machine (`run/bridge.json`).
