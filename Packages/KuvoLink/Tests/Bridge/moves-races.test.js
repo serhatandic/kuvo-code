@@ -388,10 +388,10 @@ test("a copy that brings a link (to somewhere else on this computer) isn't set u
 });
 
 test("a copy whose links only seem to stay in its folder, one through another, isn't set up", async () => {
-  // `d/L` is its own folder `e`; `A` reads, as text, as a file in it, but is `e`'s folder's
-  // parent's: out of it.
+  // `d/L` is its own folder `e`; `A` reads, as text, as a file in it, but is the file next to its
+  // folder (one there: refused for where it goes, not for going nowhere).
   const thing = "ses_link2";
-  const { bytes, hash } = bundleFor(thing, [{ info: { id: thing, title: "Notes" }, messages: [] }], { "wakes.json": "[]", "e/notes.txt": "x" }, { "d/L": "../e", A: "d/L/../../outside.txt" });
+  const { bytes, hash } = bundleFor(thing, [{ info: { id: thing, title: "Notes" }, messages: [] }], { "wakes.json": "[]", "e/notes.txt": "x" }, { "d/L": "../e", A: "d/L/../../move.json" });
   await say({ op: "offer", id: "mov_link2", kind: "chat", thing, name: "“Notes”", size: bytes.length, hash, wasPaused: false, from: peerKey });
   await say({ op: "part", id: "mov_link2", hash, i: 0, of: 1, d: bytes.toString("base64url") });
   await until(() => told.some(move => move.id === "mov_link2" && (move.op === "failed" || move.op === "arrived")));
