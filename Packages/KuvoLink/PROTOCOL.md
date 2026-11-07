@@ -321,13 +321,14 @@ connection.
   `answer_ask`, nothing else. `id` is `cal_…`; `from` the lead's conversation; `args` the tool's
   (with `session`); `as` `{name, bot?: {bot, name}, rules, free}` who's calling, filled in by the
   lead's box from its own record, never from the agent's words: its name, the bot it is, the rules
-  its conversation goes by there (that box's Settings › Permissions, then its own) and whether its
+  its conversation goes by there (that box's Settings › Permissions, then its own; more than 300 go as
+  one rule that asks about everything, so an allow can't go past one left out) and whether its
   own commands run free of the sandbox (Full Access, or no sandbox there). `made` is when it was left,
   `at` when this mail of it was sealed (each send, as for a note). A new top-level key, so a box from
   before this ignores it.
   - **Checks**: a call `at` over a day off is answered `retry` (a replay, or a clock that's off). Each
     `id` runs once (remembered 30 days, noted once answered); one running now that comes again is
-    dropped. Calls aren't counted as messages. `from` may not be a conversation on the receiving
+    dropped (a list's remembered two days, as a letter's). Calls aren't counted as messages. `from` may not be a conversation on the receiving
     box (refused); while it moves between computers, or while this box knows it to live on another
     box than the one calling (that word may be stale), it's answered `retry`; otherwise the receiver
     notes `from` lives on the box that called. So a lead that moved twice (A to B to C) while A was
@@ -353,7 +354,8 @@ connection.
     list is only kept while its tool waits; an allow a day; a stop, a compact or a refusal 30 days.
     One let go for that is told to its lead (`[Not done] …`), and so is a kept one that box refuses
     for good (`ok: false` without `retry`), unless it was sent to every box in case one had it
-    (`quiet`). While its box isn't answering (`run/peer-reach.json`), only its oldest call goes,
+    (`quiet`). One whose lead has moved on to another computer since ends, and its lead is told
+    there to ask again from where it lives. While its box isn't answering (`run/peer-reach.json`), only its oldest call goes,
     once a minute; once that box's mail comes again, all of them go at once.
   - **Who isn't answering** (`run/peer-reach.json`, `{<key>: since}`): a box notes a peer from the
     moment the relay says nothing's connected at its address (`unreachable`, after something was
@@ -366,7 +368,9 @@ connection.
   from each box, with the sessions they name noted as living there ("Homes"), and answers
   `{"delivered": {id, ok: true}}`; none at all (`leads: {}`) clears what it kept. A box tells one
   computer once in 15 seconds at most, however busy (four a minute), again each minute only while
-  unanswered, and nothing while nothing changed. Rows aren't letters: they don't count against a
+  unanswered, nothing while nothing changed, and nothing while that computer isn't answering
+  (`run/peer-reach.json`): what changed goes once its mail comes again. Rows older than what a box
+  kept are receipted and not kept. What's kept of a computer you removed goes. Rows aren't letters: they don't count against a
   box's letters or notes.
 - **Leaving one**: an agent's `send_message` or `read_conversation` for an agent on another
   computer ("Agents' tools") leaves a letter in `run/outbox/sending/<id>.json`, which the link
@@ -652,7 +656,7 @@ its own, which a `SIGTERM` stops waiting.
     following up a session it started, by address; anyone else's is refused (bridge 0.9.204). A
     conversation here named by its address still takes a message from any conversation here.
   - An address the lists don't name (older than the latest 40) is found on the computer that told
-    this one of it as one of the caller's sessions ("Work", rows from elsewhere), or where it's known
+    this one of it as one of a lead's sessions ("Work", rows from elsewhere), or where it's known
     to live now ("Homes"), as well as here (bridge 0.9.204). `read_conversation` also reads a session
     put away that's under the caller, here or there; any other put away, a subagent's or a seat
     stays unread. A read for a box that isn't answering (`run/peer-reach.json`) is refused at once,

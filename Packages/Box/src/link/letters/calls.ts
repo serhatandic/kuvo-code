@@ -25,7 +25,7 @@ import { awaySince } from "../peers/reach";
 import { macLink, readLink } from "../state";
 import { homesOf, noteHomes } from "../work/homes";
 import { rowsBox, rowsOf } from "../work/elsewhere";
-import { ALLOW_LIFE, answerAskTool, compactSessionTool, liveRows, listSessionsTool, stopSessionTool } from "../work/tools";
+import { ALLOW_LIFE, answerAskTool, compactSessionTool, liveRows, stopSessionTool } from "../work/tools";
 import { deliverNote } from "./note";
 import { cutText, LETTER_LIFE, letterTries, NOTE_MEMORY, placeOfSession, SENDING } from "./letter";
 import { READ_BY_MAIL } from "./conversation";
@@ -89,6 +89,8 @@ export interface OutboxCall {
   sentTo?: string;
 }
 
+// How many bytes of rows a list's answer carries at most: within what a letter's words are cut to.
+const LIST_BYTES = 22_000;
 // How long a box that doesn't answer may take before a tool stops waiting for it.
 export const CALL_WAIT = 20_000;
 
@@ -110,7 +112,7 @@ const ownName = (): string => plainName(IS_MAC ? macLink.config?.name : readLink
 const verbOf = (tool: CallTool) => (tool === "stop_session" ? "stop" : tool === "compact_session" ? "summary" : tool === "answer_ask" ? "answer" : "list");
 
 /** `call` left in the outbox for box `peer`: sent at once on this Mac, the next moment on a machine
- * (its link looks for new ones twice a second). Its id. */
+ * (its link watches its outbox). Its id. */
 export function leaveCall(peer: string, from: string, call: OutboxCall["call"], { wait, quiet = false }: { wait: boolean; quiet?: boolean }, now = Date.now()): string {
   const id = "cal_" + crypto.randomBytes(16).toString("base64url");
   fs.mkdirSync(SENDING, { recursive: true, mode: 0o700 });
@@ -133,6 +135,17 @@ export function sendCall(host: Pick<LinkHost, "send">, id: string, file: string,
     const peer = peers.find(each => each.key === call.peer);
     return tellLead(call.from, `[Not done] Your ${call.call.tool} for ${String(call.call.args.session ?? "")} on ${peer ? boxName(peer) : "another computer"} wasn't done: that computer wasn't back in time.${call.call.tool === "answer_ask" && call.call.args.decision === "allow" ? " An allow waits a day at most, as what it was for may have changed. Look at what it asks with list_sessions once it's back." : ""}`).catch(() => {});
   }
+  // Its lead lives on another computer now (it moved on since): that box doesn't take it from
+  // here, so it ends, and the lead hears it to ask again from where it lives.
+  const own = ownKey(link);
+  const lives = homesOf(link).get(call.from) ?? movedOf(link).get(call.from);
+  if (lives && lives !== own && !call.quiet) {
+    fs.rmSync(file, { force: true });
+    letterTries.delete(id);
+    if (call.call.tool === "list_sessions") return;
+    return tellLead(call.from, `[Not done] Your ${call.call.tool} for ${String(call.call.args.session ?? "")} wasn't done: you moved to another computer before it could go. Ask again from there.`).catch(() => {});
+  }
+  if (lives && lives !== own) return void fs.rmSync(file, { force: true });
   const peer = peers.find(each => each.key === call.peer);
   if (!peer) {
     // A computer you removed: no one to call.
@@ -201,7 +214,7 @@ const AWAY = "it may be asleep, off or offline";
  * it's back. */
 export async function callPeer(peer: Peer, tool: CallTool, args: Record<string, unknown>, lead: Lead, place: Pick<ToolPlace, "signal" | "step">, { keep, quiet = false, most = CALL_WAIT }: { keep: boolean; quiet?: boolean; most?: number }): Promise<CallOutcome> {
   if (!(readPeerAgents()[peer.key]?.features ?? []).includes(CALLS_FEATURE)) return { older: true };
-  const call: OutboxCall["call"] = { tool, args, as: asOf(lead) };
+  const call: OutboxCall["call"] = { tool, args, as: callAs(lead) };
   if (offRelay()) {
     if (keep) leaveCall(peer.key, lead.session, call, { wait: false, quiet });
     return { offline: true, kept: keep };
@@ -222,12 +235,12 @@ export async function callPeer(peer: Peer, tool: CallTool, args: Record<string, 
 /** The answer to letter or call `id`, sent to box `peer` at `sent`: waited for until it comes, the
  * relay says that box isn't there (`unreachable`), it's been `most` ms, or its asker went; then it
  * goes on without waiting (one that's kept), or not at all (a read, a list). */
-export async function awaitAnswer(id: string, peer: string, sent: number, place: Pick<ToolPlace, "signal" | "step">, { most, cut }: { most?: number; cut?: number }): Promise<{ answer: LetterReply | null; unreachable: boolean }> {
+export async function awaitAnswer(id: string, peer: string, sent: number, place: Pick<ToolPlace, "signal" | "step">, { most, cut, every = 250 }: { most?: number; cut?: number; every?: number }): Promise<{ answer: LetterReply | null; unreachable: boolean }> {
   const stop = new AbortController();
   const gone = () => stop.abort();
   if (place.signal?.aborted) stop.abort();
   place.signal?.addEventListener("abort", gone, { once: true });
-  const step = Math.min(place.step ?? 250, 250);
+  const step = Math.min(place.step ?? every, every);
   let unreachable = false;
   const watching = (async () => {
     while (!stop.signal.aborted) {
@@ -249,15 +262,20 @@ export async function awaitAnswer(id: string, peer: string, sent: number, place:
 }
 
 /** Who's calling, as a call carries it. */
-const asOf = (lead: Lead): CallAs => ({ name: lead.name, ...(lead.bot ? { bot: lead.bot } : {}), rules: lead.rules.slice(0, 300), free: lead.free });
+// (Rules past what a call carries: none of them is dropped, as the last could be the one that holds
+// it back; it goes as one that asks about everything, so it can't allow anything there.)
+export const callAs = (lead: Lead): CallAs => ({ name: lead.name, ...(lead.bot ? { bot: lead.bot } : {}), rules: lead.rules.length <= MOST_RULES ? lead.rules : [{ action: "*", resource: "*", effect: "ask" }], free: lead.free });
+const MOST_RULES = 300;
 
 /** The box a session of the caller's lives on, as this box knows it: what that box told of it (its
  * rows), where it lives now, or the peer that lists it; null when none says. */
 export function boxOf(session: string, link: LinkState | null = readLink()): Peer | null {
   const peers = peersOf(link);
   const own = ownKey(link ?? {});
-  const key = rowsBox(session)?.key ?? homesOf(link).get(session);
-  if (key && key !== own) return peers.find(each => each.key === key) ?? null;
+  for (const key of [rowsBox(session)?.key, homesOf(link).get(session)]) {
+    const peer = key && key !== own ? peers.find(each => each.key === key) : undefined;
+    if (peer) return peer;
+  }
   return peerOf(session, peers, readPeerAgents(), movedOf(link));
 }
 
@@ -302,13 +320,17 @@ export async function rowsEverywhere(lead: Lead, place: Pick<ToolPlace, "signal"
     const name = boxName(peer);
     const before = kept.get(peer.key);
     const outcome = await callPeer(peer, "list_sessions", {}, lead, place, { keep: false, most });
+    let whole = false;
     if ("answer" in outcome && !outcome.answer.isError) {
       let rows: LiveRow[] = [];
-      try { rows = (JSON.parse(outcome.answer.text) as { rows?: LiveRow[] }).rows ?? []; } catch {}
-      return { name, rows: rows.filter(row => isObject(row) && typeof row.session === "string") };
+      try {
+        rows = (JSON.parse(outcome.answer.text) as { rows?: LiveRow[] }).rows ?? [];
+        whole = true;
+      } catch {}
+      if (whole) return { name, rows: rows.filter(row => isObject(row) && typeof row.session === "string") };
     }
     if (!before) return null;
-    return { name, rows: before.rows, asOf: before.at, away: "away" in outcome ? outcome.away : "offline" in outcome ? "this computer is off the relay" : AWAY };
+    return { name, rows: before.rows, asOf: before.at, away: "away" in outcome ? outcome.away : "offline" in outcome ? "this computer is off the relay" : "answer" in outcome ? "its answer didn't come whole" : AWAY };
   }))).filter((each): each is RowsThere => each !== null);
 }
 
@@ -333,8 +355,8 @@ export interface TakeCallOptions {
 function asOfMail(given: unknown): CallAs | null {
   if (!isObject(given) || typeof given.name !== "string" || typeof given.free !== "boolean" || !Array.isArray(given.rules)) return null;
   const rules = given.rules.filter((rule): rule is KitRule => isObject(rule) && typeof rule.action === "string" && typeof rule.resource === "string" && typeof rule.effect === "string" && rule.effect !== "")
-    .slice(0, 300).map(rule => ({ action: rule.action.slice(0, 200), resource: rule.resource.slice(0, 2000), effect: rule.effect }));
-  if (rules.length !== Math.min(given.rules.length, 300)) return null;
+    .slice(0, MOST_RULES).map(rule => ({ action: rule.action.slice(0, 200), resource: rule.resource.slice(0, 2000), effect: rule.effect }));
+  if (rules.length !== given.rules.length) return null;
   const bot = isObject(given.bot) && typeof given.bot.bot === "string" && /^bot_[A-Za-z0-9]{1,60}$/.test(given.bot.bot) && typeof given.bot.name === "string" ? { bot: given.bot.bot, name: plainName(given.bot.name).slice(0, 100) } : undefined;
   return { name: plainName(given.name).slice(0, 100) || "another agent", ...(bot ? { bot } : {}), rules, free: given.free };
 }
@@ -385,7 +407,12 @@ export async function takeCall(sender: LetterSender & { name?: string }, given: 
     if (tool === "list_sessions") {
       let rows = await liveRows(from, targets);
       // As many as fit in an answer, the latest first.
-      while (rows.length > 1 && JSON.stringify({ rows }).length > READ_BY_MAIL - 500) rows = rows.slice(0, Math.min(rows.length - 1, Math.floor(rows.length * 0.7)));
+      // (Measured in UTF-8, as the mail cuts a letter's words, so it's never cut there: a list cut
+      // short isn't a list.)
+      const size = () => Buffer.byteLength(JSON.stringify({ rows }));
+      while (rows.length > 1 && size() > LIST_BYTES) rows = rows.slice(0, Math.min(rows.length - 1, Math.floor(rows.length * 0.7)));
+      if (size() > LIST_BYTES) rows = rows.map(row => ({ ...row, title: row.title.slice(0, 100), lastReply: undefined, asks: row.asks?.slice(0, 200) }));
+      if (size() > LIST_BYTES) rows = [];
       said = { text: JSON.stringify({ rows }), isError: false };
     } else if (tool === "stop_session") said = await stopSessionTool(lead, { ...args, session }, targets);
     else if (tool === "compact_session") said = await compactSessionTool(lead, { ...args, session }, targets);
@@ -396,7 +423,8 @@ export async function takeCall(sender: LetterSender & { name?: string }, given: 
   } finally {
     running.delete(id);
   }
-  noteSeen(`note:${id}`, now);
+  // (A list may be asked again harmlessly: remembered as a letter is, not as long as news.)
+  noteSeen(tool === "list_sessions" ? id : `note:${id}`, now);
   send(sender, { delivered: { id, ok: true } });
 }
 

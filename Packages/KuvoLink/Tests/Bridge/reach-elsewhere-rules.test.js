@@ -270,7 +270,7 @@ test("rows of a lead's sessions go to the computer it lives on, and only there, 
 test("rows kept from another computer: the newest it said, and the sessions it names live there", async () => {
   const row = (session, state) => ({ session, title: "Sign-in", folder: "/work", startedBy: "ses_lead", depth: 1, state, started: 1, tokens: 0 });
   assert.equal(link.takeRows(mini.peer, { at: 2000, leads: { ses_lead: [row("ses_far", "working")] } }), true);
-  assert.equal(link.takeRows(mini.peer, { at: 1000, leads: { ses_lead: [row("ses_far", "finished")] } }), false, "older than what it said: not taken");
+  assert.equal(link.takeRows(mini.peer, { at: 1000, leads: { ses_lead: [row("ses_far", "finished")] } }), true, "older than what it said: had (so it isn't sent again), not kept");
   assert.equal(read(path.join(run, "work", "elsewhere", `${mini.pub}.json`)).leads.ses_lead[0].state, "working");
   assert.equal(read(path.join(run, "work", "homes.json")).ses_far.key, mini.pub);
   // Something that isn't a row is left out; a name, cleaned.
@@ -348,4 +348,56 @@ test("a message from another computer to a conversation this box doesn't list re
   // One it lists takes anyone's, as before.
   assert.equal((await send("ses_someone", "ses_user")).ok, true);
   assert.deepEqual(eng.seen.prompts.map(each => each.to), ["ses_left", "ses_user"]);
+});
+
+test("a full list in any script comes back whole: never cut where the mail cuts a letter", async () => {
+  // Forty sessions with long titles in Japanese, three bytes a character, and long last replies.
+  const long = "署名の流れを直す作業".repeat(20);
+  for (let i = 0; i < 40; i++) eng.all.set(`ses_jp${i}`, { id: `ses_jp${i}`, title: long, time: { created: i, updated: i }, directory: "/work", metadata: { kuvo: { startedBy: "ses_lead", depth: 1, by } } });
+  const call = callOf("list_sessions");
+  await take(call);
+  const text = answerOf(call).text;
+  assert.ok(Buffer.byteLength(text) <= 24_000, `${Buffer.byteLength(text)} bytes`);
+  const rows = JSON.parse(text).rows;
+  assert.ok(rows.length >= 5, `${rows.length} rows`);
+  assert.equal(rows[0].title, long.slice(0, 200));
+});
+
+test("a lead's rules past what a call carries go as one that asks about everything: no allow past one left out", async () => {
+  const many = Array.from({ length: 301 }, (_, i) => ({ action: "read", resource: `file${i}`, effect: "allow" }));
+  const as = link.callAs({ session: "ses_lead", name: "Foreman", bot: by, rules: [...many, { action: "shell", resource: "*", effect: "deny" }], free: true });
+  assert.deepEqual(as.rules, [{ action: "*", resource: "*", effect: "ask" }]);
+  eng.seen.asks.set("ses_billing", [{ id: "per_1", action: "shell", resources: ["git status"] }]);
+  const call = callOf("answer_ask", { session: "ses_billing", ask: "per_1", decision: "allow", reason: "Needed." }, { as });
+  await take(call);
+  assert.match(answerOf(call).note.words, /^You can't allow that/);
+  assert.equal(eng.seen.replied.length, 0);
+});
+
+test("a call kept for a box that's away ends once its lead has moved on to another computer, and the lead hears it there", async () => {
+  const T = Date.now();
+  write(path.join(run, "outbox", "sending", "cal_moved00000000001.json"), { call: { tool: "stop_session", args: { session: "ses_a" }, as: { name: "Foreman", rules: [], free: true } }, from: "ses_lead", to: "", peer: mini.pub, at: T - MINUTE, wait: false });
+  // The lead moved from this box to the third since.
+  write(path.join(run, "moves", "moved.json"), [{ session: "ses_lead", key: third.pub, at: T - 1000 }]);
+  const sent = [];
+  await link.sendOutbox({ send: bytes => sent.push(bytes) }, link.readLink(), T, 0, undefined, 1);
+  assert.ok(!sending().includes("cal_moved00000000001.json"), "it doesn't go to mini");
+  // It's told on the computer the lead lives on now, as this box's own word.
+  const told = sending().map(name => read(path.join(run, "outbox", "sending", name))).find(each => each?.to === "ses_lead");
+  assert.equal(told.peer, third.pub);
+  assert.equal(told.text, "[Not done] Your stop_session for ses_a wasn't done: you moved to another computer before it could go. Ask again from there.");
+});
+
+test("rows don't go to a computer that isn't answering: what changed goes once it's back", async () => {
+  write(path.join(run, "moves", "moved.json"), [{ session: "ses_lead", key: mini.pub, at: Date.now() - MINUTE }]);
+  write(path.join(run, "peer-reach.json"), { [mini.pub]: Date.now() - MINUTE });
+  const sent = [];
+  const host = { send: bytes => sent.push(bytes) };
+  const T = Date.now();
+  for (let at = T; at <= T + 10 * MINUTE; at += MINUTE) await link.pushRows(host, link.readLink(), [eng.target], at, { force: true });
+  assert.equal(sent.length, 0, "ten minutes away, no mail");
+  // Its mail comes: it's back, and the rows go at the next round.
+  link.receiveMail(link.sealOneWay(Buffer.from(JSON.stringify({ at: T })), mini.key, link.publicOf(here.key)).message, host);
+  await link.pushRows(host, link.readLink(), [eng.target], T + 10 * MINUTE + 3000);
+  assert.equal(sent.length, 1);
 });

@@ -168,7 +168,7 @@ export { bridgeAsk, bridgeClock, carrySeat, seatPayloads, seatPeers, takeSeat, t
 export { announce, ownAgents, refreshOwn, writeAgents } from "./peers/agents";
 export { answered, deliverLeftAnswers, letterMail, letterWent, sendOutbox } from "./letters/outbox";
 export { takeLetter } from "./letters/take";
-export { callsBack, takeCall } from "./letters/calls";
+export { callAs, callsBack, takeCall } from "./letters/calls";
 export { pushRows, takeRows } from "./work/elsewhere";
 export { readReach } from "./peers/reach";
 export { peerPlaces } from "./engine/client";

@@ -8,7 +8,7 @@ import { readEngineFile } from "../engine/client";
 import { leaveAnswer, letterWent } from "../letters/outbox";
 import { takeLetter } from "../letters/take";
 import { callsBack, takeCall } from "../letters/calls";
-import { rowsWent, takeRows } from "../work/elsewhere";
+import { rowsBack, rowsWent, takeRows } from "../work/elsewhere";
 import { noteHeard } from "./reach";
 import { takeMoving, tellMovingAgain } from "../moves/elsewhere";
 import { takeMoveMail } from "../moves/move";
@@ -89,7 +89,10 @@ export function receiveMail(
   const { sender, payload } = opened;
   // It answers: whatever this box's tools last heard of it (PROTOCOL.md, "Peers", `run/peer-reach.json`).
   // Back after not answering: what's kept for it goes now, not at its next minute.
-  if (noteHeard(sender.key)) callsBack(sender.key);
+  if (noteHeard(sender.key)) {
+    callsBack(sender.key);
+    rowsBack();
+  }
   if (macsOf(link).includes(sender.key)) heardFromMac(sender.key, payload);
   const attention = macsOf(link).includes(sender.key) ? attentionGiven(payload.attention) : null;
   if (attention && typeof payload.at === "number") attended(sender.key, attention, payload.at);

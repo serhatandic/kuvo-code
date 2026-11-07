@@ -12,7 +12,8 @@ import { cut, plainName } from "../../shared/text";
 import { listOf, locked, writePrivate } from "../files";
 import { RUN } from "../home";
 import { MOVES } from "../moves/records";
-import { KEY, mailFor, ownKey, peersOf } from "../peers/known";
+import { KEY, mailFor, ownKey, peersOf, removedBoxes } from "../peers/known";
+import { awaySince } from "../peers/reach";
 import { readPeerAgents } from "../peers/directory";
 import { WORK_CHANGES, WORK_FOLDER } from "./changes";
 import { homesOf, noteHomes } from "./homes";
@@ -108,12 +109,9 @@ export function rowsBox(session: string): { key: string; row: Row } | null {
   return null;
 }
 
-/** Whether any computer told this one of sessions at all (so a lead's list asks them). */
-export const anyRows = (): boolean => listOf(ELSEWHERE).some(name => name.endsWith(".json"));
-
 /** What a computer, `sender`, says of the sessions of leads that live here (`{rows: {id, at, leads}}`):
- * kept, if it's newer than what it said before; and the sessions it names live there. False for one
- * that isn't. */
+ * kept, if it's newer than what it said before; and the sessions it names live there. True for any
+ * that's whole (an older one is had, too, so it isn't sent again), false for one that isn't. */
 export function takeRows(sender: { key: string }, given: unknown, now = Date.now()): boolean {
   if (!isObject(given) || typeof given.at !== "number" || !isObject(given.leads)) return false;
   const at = Math.min(given.at, now);
@@ -135,7 +133,7 @@ export function takeRows(sender: { key: string }, given: unknown, now = Date.now
     });
   } catch {}
   if (taken) noteHomes(Object.values(leads).flat().map(row => row.session), sender.key, at);
-  return taken;
+  return true;
 }
 
 /** What this box last told each computer (`run/work/pushed.json`): the rows' id, whether that
@@ -229,7 +227,13 @@ export async function pushRows(host: Pick<LinkHost, "send">, link: LinkState | n
     lastMarks = changedMarks;
     const pushed = readPushed();
     const told = readPeerAgents();
+    // What's kept of computers you removed goes: theirs, and what was told them.
+    const removed = removedBoxes(link);
+    for (const key of removed) fs.rmSync(keptFile(key), { force: true });
+    if (Object.keys(pushed).some(key => removed.has(key))) changePushed(all => { for (const key of removed) delete all[key]; });
     for (const peer of peersOf(link)) {
+      // Not to one that isn't answering: what's changed goes once it's back (`rowsBack`).
+      if (awaySince(peer.key) !== null) continue;
       const leads = rows.get(peer.key) ?? {};
       const before = pushed[peer.key];
       // Nothing for it, and nothing told it before: nothing to say.
@@ -257,6 +261,11 @@ export async function pushRows(host: Pick<LinkHost, "send">, link: LinkState | n
   } finally {
     pushing = false;
   }
+}
+
+/** A computer answers again: rows are worked out and told at the next round. */
+export function rowsBack(): void {
+  lastMarks = "";
 }
 
 // The rows' id: the same while they're the same.

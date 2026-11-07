@@ -263,7 +263,7 @@ async function readOne(args: Record<string, unknown>, caller: string | null, all
   } catch {
     return refused(later);
   }
-  const { answer, unreachable } = await awaitAnswer(id, away.peer.key, sent, place, { cut: READ_BY_MAIL });
+  const { answer, unreachable } = await awaitAnswer(id, away.peer.key, sent, place, { cut: READ_BY_MAIL, every: 1000 });
   if (answer && "text" in answer) return said(intro + answer.text);
   if (answer && "failed" in answer) return refused(`Couldn't read ${target.name}'s conversation: ${answer.failed}`);
   return refused(unreachable ? asleep : later);

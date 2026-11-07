@@ -150,11 +150,6 @@ async function oneOfMine(caller: Pick<Lead, "session">, session: unknown, target
   return { error: refused(doing === "answer" ? `"${title}" isn't one of your sessions: only the user answers what it asks.` : `"${title}" isn't yours to ${doing}: ask the user.`) };
 }
 
-/** list_sessions: the caller's sessions here, where each stands, the latest first. */
-export async function listSessionsTool(caller: Pick<Lead, "session">, targets: Target[], signal?: AbortSignal): Promise<ToolAnswer> {
-  return describeList(await liveRows(caller.session, targets, signal), []);
-}
-
 /** list_sessions' words: the caller's sessions here (`rows`), then those on each other computer
  * (`there`), live or as of when it last told. */
 export function describeList(rows: LiveRow[], there: RowsThere[], now = Date.now()): ToolAnswer {
