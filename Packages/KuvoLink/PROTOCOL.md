@@ -715,8 +715,10 @@ client shows it from the same routes.
   fix what they find, and end with a short report.
 - **Tools** (`POST kuvo/agent-tools`, any conversation, for the sessions under it):
   `list_sessions` (each with where it stands: working, asking and what, with the ask's id,
-  finished, failed, stopped; its model, tokens and last reply's first lines), `stop_session`
-  (`{session, archive?}`; only one of its own), `answer_ask` (`{session, ask, decision: allow|deny,
+  finished, failed, stopped; its model, the tokens in its context now, or that it was just
+  summarized, the tokens it used in total, and last reply's first lines), `stop_session`
+  (`{session, archive?}`; only one of its own), `compact_session` (`{session}`; only one of its
+  own, by `POST api/session/<id>/compact` where it runs), `answer_ask` (`{session, ask, decision: allow|deny,
   reason}`, or `{session, ask, answer, reason}` for a question), `list_models` (the models there's
   an account for here, `provider/model`, with their efforts; none its provider is retiring).
 - **Models that can't answer** (`work/unanswering.ts`, `run/work/unanswering.json`, bridge
@@ -1480,6 +1482,16 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     too: it runs those through an engine session of its own, which carries
     `metadata.kuvo.engineFor` and is never shown (hide it in the engine's session list).
     `…/session/<id>/fork {before}` makes a new session from a message.
+    `…/session/<id>/fork {before}` makes a new session from a message.
+  - `POST …/session/<id>/compact` summarizes a conversation, on the engine as on the agents (the
+    command `/compact`, and a lead's `compact_session`). On the agents: `{"data": {"state":
+    "compacting"}}`, or `"waiting"` while a turn runs (held to its end, first in the queue, as an
+    inbox item of type `compaction`, and dropped with a notice if the turn doesn't succeed; asked
+    twice is once). 400 `{"message"}` is a sentence to show: nothing to summarize yet, a subagent's,
+    or an agent that can't be asked (Cursor, Antigravity). It shows as the engine's own does, a
+    `compaction` message with `reason: "manual"` and `session.compaction.started`, `.ended` or
+    `.failed`, then `idle`; a failed one is a failed run. It adds no reply, and what's there stays.
+    A summary that went through is no news: no notification, no `[Session finished]` to a lead.
 - Plan accounts (Copilot, OpenCode, GitLab, Poe, a provider's API key), on a Mac and a machine,
   as Settings › Accounts has them: the phone sees, reads and signs in to them as the app does.
   Each computer keeps its own: a new
@@ -2308,7 +2320,7 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
 - `kuvo/groups`: the group chats that live on the computer asked, with their bots (face, name, session), who's
   talking, whether one is under way or paused, and the last thing said; `kuvo/groups/events`
   streams that list as it changes, and `kuvo/groups/<id>/events` one chat's latest messages,
-  the same way. `POST kuvo/groups/<id>` writes to it (`{"text"}`); `…/stop`, `…/keep-going`
+  the same way. `POST kuvo/groups/<id>` writes to it (`{"text"}`; 400 `{"message"}` for `/compact`, which a chat of several has no one conversation for); `…/stop`, `…/keep-going`
   and `…/viewed` do what they say; `…/undo` (`{"message"}`) takes a message of yours back and
   answers with what was taken. A wrap-up can carry `tasks`, who does what: each with `id`, `bot`,
   `task`, `state` (`proposed`, `waiting`, `working`, `done` or `failed`), `started`/`finished`,
