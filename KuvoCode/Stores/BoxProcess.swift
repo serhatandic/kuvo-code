@@ -24,7 +24,7 @@ final class BoxProcess {
 
     /// Where it's reached while it runs.
     private(set) var endpoint: ServerEndpoint?
-    /// Why it isn't running, when it stopped and didn't start again.
+    /// Why it isn't running: it can't start, or it keeps stopping, and says if it's tried again.
     private(set) var failure: String?
     /// Whether its last start was refused because what it runs isn't what it was (`BoxIntegrity`):
     /// then nothing else runs the box's script with the engine's Bun either.
@@ -41,7 +41,21 @@ final class BoxProcess {
     /// What it was last started with, beside what it sets itself.
     var environment: [String: String]? { runtime?.environment }
     @ObservationIgnored private var restarts: [Date] = []
-    @ObservationIgnored private var isStarting = false
+    /// One whose start failed, or that keeps stopping, tried again by itself: `stop` and Try Again
+    /// call off the next try.
+    @ObservationIgnored let retries = StartRetries()
+    /// When it came up, this time.
+    @ObservationIgnored private var upSince: Date?
+    /// The start under way, and the one that's running: one stopped or given up on meanwhile is
+    /// neither, so what it does later changes nothing.
+    @ObservationIgnored private var startInFlight: UUID?
+    @ObservationIgnored private var runningStart: UUID?
+    /// Its process starting: stopping it tells it to go at once.
+    @ObservationIgnored private var starting: Task<ServerProcess, Error>?
+    /// How long it's given to say where it listens (a test's is short). Up in well under a second:
+    /// the engine's start waits for it (its settings first), so one that's held up (macOS asking
+    /// about a folder its script is in) doesn't hold the engine up for long.
+    @ObservationIgnored var startTimeout: Duration = .seconds(15)
     /// Up, the first time or again (late, after Try Again, or after it stopped by itself).
     @ObservationIgnored var onStarted: () -> Void = {}
     /// It was given what it starts with (the engine's start got that far): Try Again can start it.
@@ -110,6 +124,9 @@ final class BoxProcess {
     /// the engine is checked for opencode's signature before each start (not one you named with
     /// `KUVO_OPENCODE_BINARY`, a build of your own).
     func start(engine: URL, environment: [String: String], checked: Bool = true) async {
+        // (Waiting for its next try, it isn't tried sooner for the engine's. That's its own to go by,
+        // and each engine try would bring back a question macOS is asking about it.)
+        guard !retries.isWaiting else { return }
         checksRuntime = checked
         runsEngine = true
         var env = environment
@@ -134,9 +151,11 @@ final class BoxProcess {
     #endif
 
     private func launch(_ runtime: URL, environment: [String: String], arguments: @escaping (URL) -> [String]) async {
-        guard server == nil, !isStarting else { return }
-        isStarting = true
-        defer { isStarting = false }
+        guard server == nil, startInFlight == nil else { return }
+        let start = UUID()
+        startInFlight = start
+        defer { if startInFlight == start { startInFlight = nil } }
+        let began = ContinuousClock.now
         self.runtime = (runtime, environment, arguments)
         guard let script = Self.script else {
             failure = "Kuvo Code’s background service is missing from the app. Install Kuvo Code again."
@@ -158,7 +177,9 @@ final class BoxProcess {
             // yours to write, so an agent's command's too) would run as the box. (Off the main
             // thread: reading them takes a second or so.)
             let engine = runtime
-            if let trouble = await Task.detached(operation: { BoxIntegrity.trouble(engine: engine) }).value {
+            let trouble = await Task.detached(operation: { BoxIntegrity.trouble(engine: engine) }).value
+            guard startInFlight == start else { return }
+            if let trouble {
                 failure = trouble
                 refused = true
                 return
@@ -201,21 +222,29 @@ final class BoxProcess {
             for (variable, name) in [("KUVO_HOST_VAULT_SECRET", "hostVaultSecret"), ("KUVO_VAULT_FILE_KEY", "vaultFileKey")] {
                 if let value = env.removeValue(forKey: variable) { secrets[name] = value }
             }
-            let server = try await ServerProcess.start(
-                executable: runtime,
-                arguments: arguments(script),
-                environment: env,
-                directory: Self.home,
-                secrets: secrets,
-                // Up in well under a second: the engine's start waits for it (its settings first),
-                // so one that's held up (macOS asking about a folder its script is in) doesn't
-                // hold the engine up for long. It's tried again once the engine is up.
-                timeout: .seconds(15),
-                onExit: { [weak self] status in Task { @MainActor in self?.exited(status: status) } }
-            )
+            let command = arguments(script), given = env, directory = Self.home, secretsNow = secrets, timeout = startTimeout
+            let starting = Task {
+                try await ServerProcess.start(
+                    executable: runtime,
+                    arguments: command,
+                    environment: given,
+                    directory: directory,
+                    secrets: secretsNow,
+                    timeout: timeout,
+                    onExit: { [weak self] status in Task { @MainActor in self?.exited(status: status, of: start) } }
+                )
+            }
+            self.starting = starting
+            let server = try await withTaskCancellationHandler { try await starting.value } onCancel: { starting.cancel() }
+            // Stopped meanwhile: it stays stopped.
+            guard startInFlight == start else {
+                server.stop()
+                return
+            }
             self.server = server
+            runningStart = start
             if let status = server.exitStatus {
-                exited(status: status)
+                exited(status: status, of: start)
                 return
             }
             endpoint = server.endpoint
@@ -223,22 +252,50 @@ final class BoxProcess {
             // Where it answers, for a client that didn't start it (the app, when the keeper runs it).
             Self.write(Record(pid: server.processID, port: server.endpoint.url.port, password: server.endpoint.password, version: nil), to: "serve.json")
             failure = nil
+            upSince = .now
             onStarted()
         } catch {
+            guard startInFlight == start else { return }
             log.error("This Mac's box didn't start: \(error.localizedDescription, privacy: .public)")
-            failure = error.localizedDescription
+            guard StartRetries.canHelp(error) else {
+                failure = error.localizedDescription
+                return
+            }
+            tryAgain(error.localizedDescription, asked: retries.wasAsked(error, since: began))
         }
     }
 
-    /// Started again after it stopped for good (Try Again where it shows): by this Mac's keeper,
-    /// when it's the keeper's.
+    /// Down, for a reason another try can help: it says so, and goes on trying.
+    private func tryAgain(_ reason: String, asked: Bool = false) {
+        guard let runtime else { return }
+        let wait = retries.next(asked: asked)
+        failure = StartRetries.noted(reason)
+        log.info("Trying this Mac's box again in \(wait) seconds")
+        retries.schedule(after: wait, orAnswered: asked) { [weak self] in
+            await self?.launch(runtime.executable, environment: runtime.environment, arguments: runtime.arguments)
+        }
+    }
+
+    /// A start under way ended, and the next try called off.
+    private func callOffStart() {
+        retries.callOff()
+        starting?.cancel()
+        starting = nil
+        startInFlight = nil
+    }
+
+    /// Started again at once (Try Again where it shows), whatever it's doing by itself: by this
+    /// Mac's keeper, when it's the keeper's.
     func startAgain() async {
         if follows {
             do { try await KeeperControl.send(.restartBox) } catch { failure = error.localizedDescription }
             return
         }
         guard server == nil, let runtime else { return }
+        callOffStart()
         restarts.removeAll()
+        retries.reset()
+        failure = nil
         await launch(runtime.executable, environment: runtime.environment, arguments: runtime.arguments)
     }
 
@@ -251,6 +308,9 @@ final class BoxProcess {
     #endif
 
     func stop() {
+        callOffStart()
+        // Stopped, nothing's trying any more, and there's no failure to tell.
+        failure = nil
         if server != nil { Self.write(nil, to: "serve.json") }
         server?.stop()
         server = nil
@@ -281,19 +341,22 @@ final class BoxProcess {
         follows = false
     }
 
-    /// It stopped by itself: started again, unless it keeps stopping.
-    private func exited(status: Int32) {
-        guard server != nil else { return }
+    /// It stopped by itself: started again, at once unless it keeps stopping.
+    private func exited(status: Int32, of start: UUID) {
+        guard server != nil, start == runningStart else { return }
         let output = server?.recentOutput.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         log.error("This Mac's box stopped (\(status)): \(output, privacy: .public)")
+        retries.stopped(ranFor: upSince.map { -$0.timeIntervalSinceNow } ?? 0)
         stop()
         restarts.removeAll { $0 < .now.addingTimeInterval(-300) }
         guard restarts.count < 3, let runtime else {
-            failure = "Kuvo Code’s background service stopped unexpectedly (exit code \(status)).\(output.isEmpty ? "" : "\n\n" + String(output.suffix(600)))"
+            tryAgain("Kuvo Code’s background service stopped unexpectedly (exit code \(status)).\(output.isEmpty ? "" : "\n\n" + String(output.suffix(600)))")
             return
         }
         restarts.append(.now)
-        Task { await launch(runtime.executable, environment: runtime.environment, arguments: runtime.arguments) }
+        retries.schedule(after: nil) { [weak self] in
+            await self?.launch(runtime.executable, environment: runtime.environment, arguments: runtime.arguments)
+        }
     }
 
     /// Notes defaults as added already (`box/defaults-added`, a name a line), beside those noted.
@@ -366,6 +429,25 @@ final class BoxProcess {
         try? FileManager.default.removeItem(at: run.appending(path: "engine-stopped"))
         try? FileManager.default.removeItem(at: run.appending(path: "engine-output"))
         try? FileManager.default.removeItem(at: run.appending(path: "engine.retry"))
+    }
+
+    /// The coding agents' bridge is down (`run/agents-stopped`): why, in the words the window shows
+    /// (their first paragraph), and whether it's tried again by itself, for the box to tell whoever
+    /// asks it what runs on the bridge.
+    static func agentsStopped(_ reason: String, retrying: Bool) {
+        let why = reason.components(separatedBy: "\n\n").first?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        do {
+            try FileManager.default.createDirectory(at: run, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+            let data = try JSONSerialization.data(withJSONObject: ["why": why, "retrying": retrying] as [String: Any])
+            try data.write(to: run.appending(path: "agents-stopped"), options: .atomic)
+        } catch {
+            log.error("Couldn't tell this Mac's box its coding agents stopped: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    /// The bridge is starting, or was stopped: why it was down, gone.
+    static func forgetAgentsStopped() {
+        try? FileManager.default.removeItem(at: run.appending(path: "agents-stopped"))
     }
 
     /// The coding agents' bridge, as it records itself on a machine (`run/bridge.json`).

@@ -57,14 +57,13 @@ final class OutsideAgents {
     @ObservationIgnored private var runningStart: UUID?
     /// Its process starting: stopping it ends that at once.
     @ObservationIgnored private var starting: Task<ServerProcess, Error>?
-    /// One whose start failed, tried again by itself until these run out (`StartRetries`).
-    @ObservationIgnored private var retries = StartRetries()
-    /// The next try, waiting its turn: `stop` calls it off.
-    @ObservationIgnored private var retry: Task<Void, Never>?
+    /// One whose start failed, or that keeps stopping, tried again by itself: `stop` calls off the
+    /// next try.
+    @ObservationIgnored let retries = StartRetries()
+    /// When it came up, this time.
+    @ObservationIgnored private var upSince: Date?
     /// How long it's given to say where it listens (a test's is short).
     @ObservationIgnored var startTimeout: Duration = .seconds(60)
-    /// How it waits between tries (a test's moves on as it says).
-    @ObservationIgnored var retryClock: (Int) async -> Void = StartRetries.wait
     /// An exit heard, whichever server's (a test waits on it).
     @ObservationIgnored var onExitHeard: () -> Void = {}
     @ObservationIgnored private var eventTask: Task<Void, Never>?
@@ -199,11 +198,13 @@ final class OutsideAgents {
         let start = UUID()
         startInFlight = start
         defer { if startInFlight == start { startInFlight = nil } }
+        let began = ContinuousClock.now
         self.engine = engine
         self.environment = environment
+        // Why it was down isn't why it is now: a phone hears it's starting while it is.
+        BoxProcess.forgetAgentsStopped()
         guard let script = Self.script else {
-            failure = "The agents bridge is missing from the app."
-            onStopped?()
+            down("The agents bridge is missing from the app.")
             return
         }
         var env = environment
@@ -246,7 +247,7 @@ final class OutsideAgents {
             let api = OpenCodeAPI(endpoint: server.endpoint)
             self.api = api
             failure = nil
-            retries.reset()
+            upSince = .now
             // This Mac's box finds it as a machine's does.
             BoxProcess.agentsChanged(server.endpoint, pid: server.processID)
             listen(to: api)
@@ -257,28 +258,37 @@ final class OutsideAgents {
         } catch {
             guard startInFlight == start else { return }
             log.error("The agents bridge didn't start: \(error.localizedDescription, privacy: .public)")
-            guard StartRetries.canHelp(error), let wait = retries.next() else {
-                failure = Self.reason(error)
-                onStopped?()
+            guard StartRetries.canHelp(error) else {
+                down(Self.reason(error))
                 return
             }
-            failure = StartRetries.noted(Self.reason(error))
-            onStopped?()
-            log.info("Trying the agents bridge again in \(wait) seconds")
-            retry?.cancel()
-            retry = Task { [weak self, retryClock] in
-                await retryClock(wait)
-                guard let self, !Task.isCancelled else { return }
-                self.retry = nil
-                await self.start(engine: engine, environment: environment)
-            }
+            tryAgain(Self.reason(error), asked: retries.wasAsked(error, since: began))
         }
+    }
+
+    /// Down, for a reason another try can help: it says so, and goes on trying.
+    private func tryAgain(_ reason: String, asked: Bool = false) {
+        guard let engine else { return }
+        let wait = retries.next(asked: asked)
+        down(StartRetries.noted(reason), retrying: true)
+        log.info("Trying the agents bridge again in \(wait) seconds")
+        let environment = environment
+        retries.schedule(after: wait, orAnswered: asked) { [weak self] in
+            await self?.start(engine: engine, environment: environment)
+        }
+    }
+
+    /// Down: why, here and for whoever asks this Mac's box (`run/agents-stopped`).
+    private func down(_ reason: String, retrying: Bool = false) {
+        failure = reason
+        BoxProcess.agentsStopped(reason, retrying: retrying)
+        onStopped?()
     }
 
     /// Whether it was started (there was a Bun to run it with), so it can be started again.
     var wasStarted: Bool { engine != nil || follows }
 
-    /// Started again after it stopped for good (Restart where that shows), as it was started: by
+    /// Started again at once (Restart where that shows), as it was started: by
     /// this Mac's keeper, when it's the keeper's.
     func startAgain() async {
         if follows {
@@ -320,8 +330,7 @@ final class OutsideAgents {
 
     /// A start under way ended, and the next try called off.
     private func callOffStart() {
-        retry?.cancel()
-        retry = nil
+        retries.callOff()
         starting?.cancel()
         starting = nil
         startInFlight = nil
@@ -332,6 +341,9 @@ final class OutsideAgents {
         eventTask?.cancel()
         eventTask = nil
         if server != nil { BoxProcess.agentsChanged(nil, pid: nil) }
+        // Stopped, nothing's trying any more, and there's no failure to tell.
+        failure = nil
+        BoxProcess.forgetAgentsStopped()
         server?.stop()
         server = nil
         api = nil
@@ -446,25 +458,23 @@ final class OutsideAgents {
         }
     }
 
-    /// It stopped by itself: started again, unless it keeps stopping.
+    /// It stopped by itself: started again, at once unless it keeps stopping.
     private func exited(status: Int32, of start: UUID) {
         defer { onExitHeard() }
         guard server != nil, start == runningStart else { return }
         let output = server?.recentOutput.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         log.error("The agents bridge stopped (\(status)): \(output, privacy: .public)")
+        retries.stopped(ranFor: upSince.map { -$0.timeIntervalSinceNow } ?? 0)
         stop()
         restarts.removeAll { $0 < .now.addingTimeInterval(-300) }
         guard restarts.count < 3, let engine else {
-            failure = "It stopped unexpectedly (exit code \(status)).\(output.isEmpty ? "" : "\n\n" + String(output.suffix(600)))"
-            onStopped?()
+            tryAgain("It stopped unexpectedly (exit code \(status)).\(output.isEmpty ? "" : "\n\n" + String(output.suffix(600)))")
             return
         }
         restarts.append(.now)
         let environment = environment
-        retry = Task { [weak self] in
-            guard let self, !Task.isCancelled else { return }
-            self.retry = nil
-            await self.start(engine: engine, environment: environment)
+        retries.schedule(after: nil) { [weak self] in
+            await self?.start(engine: engine, environment: environment)
         }
     }
 
