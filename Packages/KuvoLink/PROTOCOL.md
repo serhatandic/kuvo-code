@@ -1636,6 +1636,15 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     A turn of its own that went through is no news: it stays read if it was, with no notification and
     no `[Session finished]` to a lead, who still reads how the work before it went. One that failed
     says why, tells a lead `[Session not summarized]` and pauses nothing.
+  - A summary the agent makes by itself as the conversation fills up shows the same way with
+    `reason: "auto"`, as the engine's own does: a `compaction` message partway through the turn
+    (what you send meanwhile comes after it), `running` from `session.compaction.started` until
+    `.ended` or `.failed`. Claude Code, Codex and Grok say when one begins; Cursor and Antigravity
+    only that one happened, which shows as a finished row. One that's stopped, or whose agent or
+    bridge quits, ends `failed`. While the last `compaction` since the last `idle` is `running`, a
+    client says the conversation is being summarized, on its row and on the line under it
+    ("Summarizing the conversation…", with the time since it began), rather than that it waits for
+    the model.
 - Plan accounts (Copilot, OpenCode, GitLab, Poe, a provider's API key), on a Mac and a machine,
   as Settings › Accounts has them: the phone sees, reads and signs in to them as the app does.
   Each computer keeps its own: a new

@@ -708,14 +708,16 @@ describe("Claude Code, nothing dropped", () => {
       { type: "system", subtype: "brand_new_thing", content: "Something new to read." },
       { type: "system", subtype: "post_turn_summary", summary: "Already shown." },
     ])
-    expect(notices(id)).toEqual(["Claude Code summarized the conversation to make room.", "Claude's API is overloaded: trying again (2/10).", "Something new to read."])
+    expect(notices(id)).toEqual(["Claude's API is overloaded: trying again (2/10).", "Something new to read."])
+    expect(sessions.messages(id).filter((message) => message.type === "compaction")).toMatchObject([{ status: "completed", reason: "auto" }])
   })
 
   test("several hooks failing the same way at the same moment show as one row, and the same failure again later as another", async () => {
     const failed = { type: "system", subtype: "hook_response", hook_name: "SessionStart:compact", hook_event: "SessionStart", outcome: "error", stderr: "Failed to run" }
     const id = await turn(() => [failed, failed, failed, failed, { type: "system", subtype: "compact_boundary", compact_metadata: { trigger: "auto" } }, failed])
     const row = "Your SessionStart:compact hook failed: Failed to run."
-    expect(notices(id)).toEqual([row, "Claude Code summarized the conversation to make room.", row])
+    expect(notices(id)).toEqual([row, row])
+    expect(sessions.messages(id).map((message) => message.type)).toEqual(["user", "synthetic", "compaction", "synthetic", "idle"])
   })
 })
 
@@ -1619,5 +1621,145 @@ describe("summarizing when you ask (/compact)", () => {
     compacts(fake)
     await until(() => idles(id).length === 2)
     expect(words(id)).toEqual(["Your SessionStart:compact hook failed: Failed to run."])
+  })
+
+  test("shows as one row, not a second one for what Claude Code says as it summarizes", async () => {
+    const id = await afterATurn()
+    sessions.compact(id)
+    await until(() => fake.sent.length === 2)
+    compacts(fake)
+    await until(() => idles(id).length === 2)
+    expect(sessions.messages(id).filter((message) => message.type === "compaction")).toMatchObject([{ status: "completed", reason: "manual" }])
+  })
+})
+
+describe("summarizing on its own, as the conversation fills up", () => {
+  // What Claude Code 2.1.319 sends as it summarizes by itself partway through a turn: `status:
+  // "compacting"` (again every 30 seconds while it waits), then `status: null` with how it went,
+  // then the boundary. One with no result (it stopped, or found nothing to summarize) ends with a
+  // bare `status: null`.
+  const compacting = { type: "system", subtype: "status", status: "compacting" }
+  const over = (result?: "success" | "failed", more: Record<string, unknown> = {}) => ({ type: "system", subtype: "status", status: null, ...(result ? { compact_result: result } : {}), ...more })
+  const boundary = { type: "system", subtype: "compact_boundary", compact_metadata: { trigger: "auto", pre_tokens: 180000, post_tokens: 12000 } }
+  const summaries = (id: string) => sessions.messages(id).filter((message) => message.type === "compaction") as Extract<Message, { type: "compaction" }>[]
+  const notices = (id: string) => sessions.messages(id).flatMap((message: any) => (message.type === "synthetic" ? [message.text] : []))
+  let told: { type: string; data: any }[] = []
+  let unsubscribe = () => {}
+  beforeEach(() => {
+    told = []
+    unsubscribe = subscribe((event) => {
+      if (event.type.startsWith("session.compaction.")) told.push({ type: event.type, data: event.data })
+    })
+  })
+  afterEach(() => unsubscribe())
+
+  /** A turn at work (a command run), then Claude Code summarizing: the session's id and Claude Code's for the message. */
+  async function summarizing() {
+    const { id, first } = await begin()
+    fake.streams([first], [{ type: "tool_use", id: "toolu_1", name: "Bash", input: { command: "ls" } }])
+    fake.toolResult("toolu_1", "a.ts")
+    fake.out.push(compacting)
+    await until(() => summaries(id).length === 1)
+    return { id, first }
+  }
+
+  test("while it runs the conversation says so, last, as it happens; it ends as one finished row, the turn going on after it", async () => {
+    const { id, first } = await summarizing()
+    expect(summaries(id)).toMatchObject([{ status: "running", reason: "auto" }])
+    // Last in the conversation, so the line under it says it too.
+    expect(sessions.messages(id).at(-1)).toMatchObject({ type: "compaction", status: "running" })
+    expect(told).toMatchObject([{ type: "session.compaction.started", data: { reason: "auto" } }])
+    // Said again as it waits: still the one.
+    fake.out.push(compacting)
+    fake.out.push(over("success"))
+    fake.out.push({ type: "system", subtype: "init", session_id: "claude-1" })
+    fake.out.push(boundary)
+    fake.streams([first], [{ type: "text", text: "Listed." }])
+    fake.result([first])
+    await until(() => idles(id).length === 1)
+    expect(idles(id)[0].outcome).toBe("succeeded")
+    expect(summaries(id)).toMatchObject([{ status: "completed", reason: "auto", time: { completed: expect.any(Number) } }])
+    expect(told.map((event) => event.type)).toEqual(["session.compaction.started", "session.compaction.ended"])
+    expect(notices(id)).toEqual([])
+    expect(sessions.messages(id).map((message) => message.type)).toEqual(["user", "assistant", "compaction", "assistant", "idle"])
+    expect(texts(id)).toEqual(["Listed."])
+  })
+
+  test("one that fails says so on its row, once, and the turn goes on", async () => {
+    const { id, first } = await summarizing()
+    fake.out.push(over("failed", { compact_error: "Conversation too long." }))
+    fake.out.push({ type: "system", subtype: "notification", key: "error-compacting-conversation", text: "Error compacting conversation", priority: "immediate" })
+    fake.streams([first], [{ type: "text", text: "Carrying on." }])
+    fake.result([first])
+    await until(() => idles(id).length === 1)
+    expect(idles(id)[0].outcome).toBe("succeeded")
+    expect(summaries(id)).toMatchObject([{ status: "failed", reason: "auto" }])
+    expect(told.map((event) => event.type)).toEqual(["session.compaction.started", "session.compaction.failed"])
+    expect(notices(id)).toEqual(["Error compacting conversation"])
+  })
+
+  test("one that ends with nothing summarized doesn't stay under way while the turn goes on", async () => {
+    const { id, first } = await summarizing()
+    fake.out.push(over())
+    fake.streams([first], [{ type: "text", text: "Carrying on." }])
+    await until(() => texts(id).length === 1)
+    expect(summaries(id)).toMatchObject([{ status: "failed" }])
+    fake.result([first])
+    await until(() => idles(id).length === 1)
+    expect(summaries(id)).toHaveLength(1)
+  })
+
+  test("one it lets go of and begins again at once (or a permission mode set meanwhile) is still the one row", async () => {
+    const { id, first } = await summarizing()
+    fake.out.push(over())
+    fake.out.push({ type: "system", subtype: "status", status: null, permissionMode: "default" })
+    fake.out.push(compacting)
+    fake.out.push(over("success"))
+    fake.out.push(boundary)
+    fake.streams([first], [{ type: "text", text: "Listed." }])
+    fake.result([first])
+    await until(() => idles(id).length === 1)
+    expect(summaries(id)).toMatchObject([{ status: "completed", reason: "auto" }])
+    expect(told.map((event) => event.type)).toEqual(["session.compaction.started", "session.compaction.ended"])
+  })
+
+  test("Stop during it: the turn ends stopped and the row isn't left under way", async () => {
+    const { id, first } = await summarizing()
+    fake.onInterrupt = () => fake.result([first], "error_during_execution")
+    await sessions.interrupt(id, false)
+    await until(() => idles(id).length === 1)
+    expect(idles(id)[0].outcome).toBe("interrupted")
+    expect(summaries(id)).toMatchObject([{ status: "failed" }])
+    expect(told.map((event) => event.type)).toEqual(["session.compaction.started", "session.compaction.failed"])
+  })
+
+  test("Claude Code quitting during it: the row isn't left under way", async () => {
+    const { id } = await summarizing()
+    fake.crash(new Error("Claude Code exited with code 1"))
+    await until(() => idles(id).length === 1)
+    expect(summaries(id)).toMatchObject([{ status: "failed" }])
+  })
+
+  test("a message you send meanwhile goes to Claude Code, and the row stays the one until it's done", async () => {
+    const { id, first } = await summarizing()
+    sessions.prompt(id, { id: "msg_claude_meanwhile", text: "and the tests too", files: [], delivery: "steer" })
+    await until(() => fake.sent.length === 2)
+    expect(summaries(id)).toMatchObject([{ status: "running" }])
+    // After the row, which still says it's summarizing.
+    expect(sessions.messages(id).map((message) => message.type)).toEqual(["user", "assistant", "compaction", "user"])
+    fake.out.push(over("success"))
+    fake.out.push(boundary)
+    fake.result([first, fake.sent[1].uuid])
+    await until(() => idles(id).length === 1)
+    expect(summaries(id)).toMatchObject([{ status: "completed" }])
+  })
+
+  test("told only once it's done (no word as it began): one finished row, not a note", async () => {
+    const { id, first } = await begin()
+    fake.out.push(boundary)
+    fake.result([first])
+    await until(() => idles(id).length === 1)
+    expect(summaries(id)).toMatchObject([{ status: "completed", reason: "auto" }])
+    expect(notices(id)).toEqual([])
   })
 })

@@ -671,8 +671,19 @@ export class AcpThread implements Thread {
         return
       case "compaction_update":
       case "compaction_summary_chunk":
-        if (!active.compacted) turn.notice(`${this.name} summarized the conversation to make room.`)
+        // Summarized, told only once it's done. (One you asked for shows as that, and one under
+        // way says how it went itself.)
+        if (!active.compacted && !turn.isCompacting) turn.compacted(true)
         active.compacted = true
+        return
+      // Grok summarizing by itself, from when it begins to how it went. (Not one you asked for.)
+      case "auto_compact_started":
+        if (!active.input?.compact) turn.compacting()
+        return
+      case "auto_compact_completed":
+      case "auto_compact_failed":
+      case "auto_compact_cancelled":
+        if (!active.input?.compact) turn.compacted(update.sessionUpdate === "auto_compact_completed")
         return
       case "user_message_chunk":
       case "available_commands_update":

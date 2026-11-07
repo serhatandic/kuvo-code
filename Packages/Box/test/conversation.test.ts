@@ -1,6 +1,6 @@
 import "./safety"
 import { expect, test } from "bun:test";
-import { excerpt } from "../src/link/letters/conversation";
+import { conversationMarkdown, excerpt } from "../src/link/letters/conversation";
 
 // What read_conversation gives of a long conversation, on every box: with a query, each place that
 // mentions it with what's around it, the latest kept when there's no room for all; without, how it
@@ -24,4 +24,16 @@ test("a long conversation read whole keeps how it began and its latest part", ()
   expect(read.startsWith("Paragraph 1 ")).toBe(true);
   expect(read).toContain("[… the middle is left out; read it with query, to find a part …]");
   expect(read).toContain("Paragraph 200 ");
+});
+
+test("a turn that failed after a summary its agent made by itself still says why; one you asked for says it itself", () => {
+  const turn = (reason: string) => conversationMarkdown("Release", [
+    { id: "msg_1", type: "user", text: "Tidy the notes." },
+    { id: "msg_2", type: "compaction", reason, status: "failed" },
+    { id: "msg_3", type: "idle", outcome: "failed", error: { message: "Claude Code exited with code 1" } },
+  ], "Claude");
+  expect(turn("auto")).toContain("_Couldn't summarize the conversation._");
+  expect(turn("auto")).toContain("It stopped with an error: Claude Code exited with code 1");
+  expect(turn("manual")).toContain("_Couldn't summarize the conversation._");
+  expect(turn("manual")).not.toContain("It stopped with an error");
 });

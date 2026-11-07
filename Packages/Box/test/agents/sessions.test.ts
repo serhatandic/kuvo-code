@@ -2638,6 +2638,21 @@ describe("a session the bridge stopped in the middle of", () => {
     expect(sessions.get(id).outcome).toBe("interrupted")
   })
 
+  test("a summary its agent was making by itself isn't left under way", () => {
+    const id = create()
+    const record = store.get(id)!
+    record.messages.push(
+      { type: "user", id: "msg_u", time: { created: 1 }, text: "go" },
+      { type: "assistant", id: "msg_a", time: { created: 2, completed: 3 }, agent: "build", model: { providerID: "alpha", id: "one" }, content: [{ type: "text", text: "Looking." }] },
+      { type: "compaction", id: "msg_c", time: { created: 4 }, status: "running", reason: "auto" },
+    )
+    store.save(id, true)
+    make()
+    const messages = sessions.messages(id)
+    expect(messages.find((message) => message.type === "compaction")).toMatchObject({ status: "failed", reason: "auto" })
+    expect(messages.at(-1)).toMatchObject({ type: "idle", outcome: "interrupted" })
+  })
+
   test("a turn an app note started is ended too", () => {
     const id = create()
     const record = store.get(id)!

@@ -1426,7 +1426,7 @@ class ClaudeThread implements Thread {
             if (block.type === "text" && block.text && !failing) turn.text(block.text)
             else if (block.type === "thinking" && block.thinking) turn.reasoning(block.thinking)
             else if (block.type === "redacted_thinking") turn.reasoning("(The model kept this thinking to itself.)")
-            else if (block.type === "compaction") this.noticeLater(lane, "Claude summarized the conversation to make room.")
+            else if (block.type === "compaction") turn.compacted(true)
           }
         }
         if (id && !lane.streamed.has(id)) turn.endBlock()
@@ -1490,16 +1490,22 @@ class ClaudeThread implements Thread {
         if (typeof message.tool_use_id === "string" && (message.summary || message.description)) turn.toolProgress(message.tool_use_id, { summary: message.summary ?? message.description, lastTool: message.last_tool_name })
         return
       case "compact_boundary":
-        // (One you asked for shows as that, whichever way it ends.)
-        if (!active?.compacting) this.noticeLater(lane, "Claude Code summarized the conversation to make room.")
+        // Summarized. (One you asked for shows as that, whichever way it ends.)
+        if (!active?.compacting) turn.compacted(true)
         return
       case "status": {
-        if (message.compact_result !== "failed") return
-        const failed = `Claude Code couldn't summarize the conversation${message.compact_error ? `: ${String(message.compact_error).replace(/\.$/, "")}` : ""}.`
+        // One it makes by itself: `compacting` as it begins (and again while it waits), then a
+        // `null` status with how it went. A bare `null` one says no more than that it isn't
+        // summarizing now: it may begin again at once (the same row), or the model answers next
+        // (which ends the row: see Turn.startStep), or the turn ends.
         if (active?.compacting) {
+          if (message.compact_result !== "failed") return
           active.compactFailed = true
-          active.problem = failed
-        } else turn.notice(failed)
+          active.problem = `Claude Code couldn't summarize the conversation${message.compact_error ? `: ${String(message.compact_error).replace(/\.$/, "")}` : ""}.`
+          return
+        }
+        if (message.status === "compacting") turn.compacting()
+        else if (message.compact_result === "success" || message.compact_result === "failed") turn.compacted(message.compact_result === "success")
         return
       }
       case "api_retry":
@@ -1548,11 +1554,6 @@ class ClaudeThread implements Thread {
     if (!this.sandboxedNow || !about.length) return said.trim() ? `: ${said.trim()}` : ""
     const why = about.some((line) => line.includes("mkdir")) ? "Claude Code can't start this one in the sandbox" : "the sandbox doesn't let a hook set environment variables with CLAUDE_ENV_FILE"
     return `: ${[...lines.filter((line) => !line.includes("session-env") && line.trim()), why].join("\n")}`
-  }
-
-  /** A note now, or after the words being written (a notice ends the step under way). */
-  private noticeLater(lane: Lane, text: string) {
-    lane.turn.notice(text)
   }
 
   /** A note, once per kind for this Claude Code. */

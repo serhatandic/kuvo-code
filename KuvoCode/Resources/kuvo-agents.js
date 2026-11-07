@@ -7908,9 +7908,19 @@ ${others.map((path) => `- ${path}`).join(`
         return;
       case "compaction_update":
       case "compaction_summary_chunk":
-        if (!active.compacted)
-          turn.notice(`${this.name} summarized the conversation to make room.`);
+        if (!active.compacted && !turn.isCompacting)
+          turn.compacted(true);
         active.compacted = true;
+        return;
+      case "auto_compact_started":
+        if (!active.input?.compact)
+          turn.compacting();
+        return;
+      case "auto_compact_completed":
+      case "auto_compact_failed":
+      case "auto_compact_cancelled":
+        if (!active.input?.compact)
+          turn.compacted(update.sessionUpdate === "auto_compact_completed");
         return;
       case "user_message_chunk":
       case "available_commands_update":
@@ -10896,7 +10906,7 @@ class ClaudeThread {
             else if (block.type === "redacted_thinking")
               turn.reasoning("(The model kept this thinking to itself.)");
             else if (block.type === "compaction")
-              this.noticeLater(lane, "Claude summarized the conversation to make room.");
+              turn.compacted(true);
           }
         }
         if (id && !lane.streamed.has(id))
@@ -10966,17 +10976,20 @@ class ClaudeThread {
         return;
       case "compact_boundary":
         if (!active?.compacting)
-          this.noticeLater(lane, "Claude Code summarized the conversation to make room.");
+          turn.compacted(true);
         return;
       case "status": {
-        if (message.compact_result !== "failed")
-          return;
-        const failed = `Claude Code couldn't summarize the conversation${message.compact_error ? `: ${String(message.compact_error).replace(/\.$/, "")}` : ""}.`;
         if (active?.compacting) {
+          if (message.compact_result !== "failed")
+            return;
           active.compactFailed = true;
-          active.problem = failed;
-        } else
-          turn.notice(failed);
+          active.problem = `Claude Code couldn't summarize the conversation${message.compact_error ? `: ${String(message.compact_error).replace(/\.$/, "")}` : ""}.`;
+          return;
+        }
+        if (message.status === "compacting")
+          turn.compacting();
+        else if (message.compact_result === "success" || message.compact_result === "failed")
+          turn.compacted(message.compact_result === "success");
         return;
       }
       case "api_retry":
@@ -11030,9 +11043,6 @@ class ClaudeThread {
     const why = about.some((line) => line.includes("mkdir")) ? "Claude Code can't start this one in the sandbox" : "the sandbox doesn't let a hook set environment variables with CLAUDE_ENV_FILE";
     return `: ${[...lines.filter((line) => !line.includes("session-env") && line.trim()), why].join(`
 `)}`;
-  }
-  noticeLater(lane, text) {
-    lane.turn.notice(text);
   }
   noticeOnce(key, turn, text) {
     if (this.noticed.has(key))
@@ -13255,6 +13265,10 @@ ${said.map((each) => each.text).join(`
     const active = lane;
     const turn = lane.turn;
     switch (item?.type) {
+      case "contextCompaction":
+        if (this.active?.turn !== turn || !this.active.compacting)
+          turn.compacting();
+        return;
       case "sleep":
         active.toolsSinceText = true;
         turn.toolStart(item.id, "sleep", { seconds: Math.round((item.durationMs ?? 0) / 1000) });
@@ -13502,7 +13516,7 @@ From memory: ${cited.join("; ")}`);
         return;
       case "contextCompaction":
         if (this.active?.turn !== turn || !this.active.compacting)
-          turn.notice("Codex summarized the conversation to make room.");
+          turn.compacted(true);
         return;
       case "enteredReviewMode":
         turn.notice(`Reviewing${typeof item.review === "string" && item.review ? `: ${item.review}` : ""}`);
@@ -14538,8 +14552,11 @@ ${text}`;
         turn.toolProgress(id, { output });
         return;
       }
+      case "summary-started":
+        turn.compacting();
+        return;
       case "summary-completed":
-        turn.notice("Cursor summarized the conversation to make room.");
+        turn.compacted(true);
         return;
       case "turn-ended":
         if (lane === active && update.usage)
@@ -15175,7 +15192,8 @@ function items(messages, names, partway = false) {
   for (const message of messages) {
     switch (message.type) {
       case "compaction":
-        summary = true;
+        if (message.reason === "manual")
+          summary = true;
         break;
       case "user": {
         const files = (message.files ?? []).map((file) => file.name ?? (file.source?.type === "uri" ? file.source.uri : "a file"));
@@ -15309,6 +15327,8 @@ class Turn {
   keyed = new Map;
   tools = new Map;
   ended = false;
+  compaction;
+  justCompacted = false;
   started = Date.now();
   tokens = noTokens();
   cost = 0;
@@ -15343,6 +15363,9 @@ class Turn {
       return "";
     if (this.step)
       this.endStep();
+    if (this.compaction)
+      this.compacted(false);
+    this.justCompacted = false;
     const step = {
       type: "assistant",
       id: newID("msg"),
@@ -15577,12 +15600,48 @@ class Turn {
     this.messages.push({ type: "synthetic", id: messageID(event.id), time: { created: event.created }, text });
     this.save();
   }
+  compacting() {
+    if (this.ended || this.compaction)
+      return;
+    this.justCompacted = false;
+    this.endBlock();
+    if (this.step)
+      this.endStep();
+    const event = emit("session.compaction.started", { sessionID: this.sessionID, reason: "auto" }, this.directory);
+    const message = { type: "compaction", id: messageID(event.id), time: { created: event.created }, status: "running", reason: "auto" };
+    this.compaction = message;
+    this.messages.push(message);
+    this.store.save(this.sessionID, true);
+  }
+  compacted(succeeded) {
+    if (this.ended)
+      return;
+    if (!this.compaction) {
+      if (this.justCompacted)
+        return;
+      this.compacting();
+    }
+    const message = this.compaction;
+    if (!message)
+      return;
+    this.compaction = undefined;
+    this.justCompacted = true;
+    message.status = succeeded ? "completed" : "failed";
+    message.time.completed = Date.now();
+    this.send(succeeded ? "session.compaction.ended" : "session.compaction.failed", {});
+    this.store.save(this.sessionID, true);
+  }
+  get isCompacting() {
+    return this.compaction !== undefined;
+  }
   stopTools(message) {
     for (const [id, tool] of this.tools) {
       const status = tool.call.state.status;
       if (status === "running" || status === "streaming")
         this.toolFailed(id, message);
     }
+    if (this.compaction)
+      this.compacted(false);
   }
   hasTool(id) {
     return this.tools.has(id);
@@ -15597,6 +15656,8 @@ class Turn {
   finish(outcome, error) {
     if (this.ended)
       return;
+    if (this.compaction)
+      this.compacted(false);
     this.endBlock();
     if (this.step)
       this.endStep(error && outcome === "failed" ? { error } : {});
@@ -23991,4 +24052,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 3aa0c641403f7578832be34c6a68a3564045409a4b930821b0724f93a53648c8
+// Built from Packages/Box/src/agents 800ff0a9a67cd20fd318a1cb0eaa747890379b64c5c28274191933323c928ba0
