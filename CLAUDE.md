@@ -14,6 +14,21 @@ Kuvo Code is a small distributed system. Build every feature for that system, ne
   - Where a box can't do something yet, say so plainly in the UI and in your report, rather than quietly making the Mac a hub.
   - **Box code runs on both macOS and Linux.** This Mac's box and each machine's, on Linux or a Mac, run the same code (`IS_MAC` is the box with the app next to it, not the system), so anything on the box side works on both. Prefer code that's the same on both (Node and Bun APIs that behave alike); where they differ (file watching, processes and `/proc`, paths, the keeper, the shell, the Keychain versus files), handle both explicitly, in one place, and test each. Check a box change on a Linux machine too (a test folder of your own on devbox) before calling it done.
 
+### Logic goes in the box, never in a client (strict)
+
+The default for all new code that isn't drawing is the box, `Packages/Box`. This rule has no exceptions unless the user agrees to one. In November 2026 a review found 32 to 45 hours of work to move out of the Mac app, and features that failed whenever the app was closed. That must not build up again.
+
+- **A box decides, a client draws.** Anything about sessions, agents, accounts, models, settings, files, git, processes, the network or what's allowed belongs in the box, this Mac's box included. A client reads the box's state, changes it through a route, and draws the result.
+- **The box states facts, not finished views.** It says "this session is running, and this bot oversees it", not "6 sessions at work". Clients work out what they show from that state, and what Mac and phone both work out goes in the shared client code, `Packages/KuvoClient`, so they can't differ. Only views go there: a rule that changes behavior or data is still the box's.
+- **Only this stays in a client:** drawing and layout, animation, window and selection state, the side panel's browser, and what only an installed app can do (updating itself, login items, Mac notifications). The keeper starts and watches the box, and takes on no features.
+- **Before writing logic in Swift, ask three questions.** Does it work with this client closed? Does it work on a Linux machine? Can the phone use it without a second copy? Any "no" means it goes in the box.
+- **Never add:**
+  - a route that only the app answers (`toApp` in `link/mac/relay.ts`, `PhoneLink.swift`);
+  - a copy of box logic in a client, or in `kuvo-browser.js` and the keeper side by side;
+  - client logic "for now", "until the box can do it", or because the app is quicker to change.
+- **Logic already in a client:** don't extend it. Move it to the box as part of your change if that's small. If it's bigger, make the smallest fix, say so in your report, and add it to the list of what's left to move.
+- **If something truly can't be on the box,** say why before you build it, and the user decides. Plans and briefs name where each new piece of logic lives.
+
 ## UI and UX come first (strict)
 
 What people see and touch is the most important part of Kuvo Code. Never trade its quality away, and never let the machinery behind a feature crowd it out.
@@ -32,6 +47,7 @@ What people see and touch is the most important part of Kuvo Code. Never trade i
 Have your work reviewed by reviewer agents by default, without being asked.
 
 - At each checkpoint (a finished feature or phase, and before a merge to main or a release), start independent reviewer agents on everything since the last review. They look at correctness first, then the UI and UX against this file, then what could be simpler.
+- Every review also checks each change to a client against "Logic goes in the box, never in a client". Logic in the wrong place counts as a bug and blocks the merge, even if it works.
 - Split a large change by area, one reviewer each, and give each the commits and what the change is for.
 - Sort what they find. Fix what users would hit first, then the minor problems. Skip only edge cases no one would hit. Add a test for each fix where it can be tested.
 - Say in your report which reviews ran, and what they found and you fixed.
