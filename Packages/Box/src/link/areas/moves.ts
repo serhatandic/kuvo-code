@@ -61,5 +61,5 @@ export async function* movePlacesRoute(context: RouteContext): AsyncGenerator<An
   if (!KINDS.includes(kind) || !id) return yield* json(400, { message: "Say what: ?kind=bot|chat|group&id=…" });
   const places = await placesFor(kind, id, signal);
   if (!places) return yield* json(404, { message: "It isn’t on this computer any more." });
-  return yield* json(200, { places } satisfies MovePlaces);
+  return yield* json(200, places satisfies MovePlaces);
 }

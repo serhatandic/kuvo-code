@@ -9545,6 +9545,7 @@ function goalPlans(file = GOALS_FILE) {
   const now = Date.now();
   return latestOf(readKept2(file)).filter((goal) => botHere(goal.bot) && (goal.state === "running" || now - (goal.ended ?? goal.proposed) < SHOWN)).sort((a, b) => b.proposed - a.proposed).map(shown);
 }
+var proposedGoals = (file = GOALS_FILE, now = Date.now()) => latestOf(readKept2(file)).filter((goal) => goal.state === "proposed" && now - goal.proposed < SHOWN);
 var runningGoal = (bot, file = GOALS_FILE) => bot ? readKept2(file).find((goal) => goal.bot === bot && goal.state === "running") ?? null : null;
 var latestOf = (goals) => {
   const latest = new Map;
@@ -17913,6 +17914,34 @@ async function placesFor(kind, thing, signal) {
   const what = await movable(kind, thing, signal);
   if (!what)
     return null;
+  const stays = kind === "group" ? undefined : await staysOf(kind, thing, what, signal);
+  return { places: placesOf(kind, thing, what), ...stays && Object.keys(stays).length ? { stays } : {} };
+}
+async function staysOf(kind, thing, what, signal) {
+  const stays = {};
+  const targets = [readEngineFile, bridgeTarget].flatMap((each) => {
+    try {
+      return [each()].filter((target) => Boolean(target));
+    } catch {
+      return [];
+    }
+  });
+  const all = await workSessions(targets, signal).catch(() => []);
+  const started = new Set([...what.root ? under(what.root, all) : [], ...kind === "bot" ? ofBot(thing, all) : []].map((each) => each.data.id));
+  if (started.size)
+    stays.sessions = started.size;
+  const own = (session, bot) => kind === "bot" ? bot === thing : session === what.root;
+  const asks = workAsks().filter((ask) => own(ask.session, ask.bot)).length;
+  if (asks)
+    stays.asks = asks;
+  const goals = proposedGoals().filter((goal) => own(goal.session, goal.bot)).length;
+  if (goals)
+    stays.goals = goals;
+  if (what.lane)
+    stays.agent = true;
+  return stays;
+}
+function placesOf(kind, thing, what) {
   const moving = moveOf(thing) !== null;
   const own = ownKey(readLink() ?? {});
   return peersOf(readLink()).filter((peer) => peer.key !== own).map((peer) => {
@@ -29036,7 +29065,7 @@ async function* movePlacesRoute(context) {
   const places = await placesFor(kind, id, signal);
   if (!places)
     return yield* json(404, { message: "It isn’t on this computer any more." });
-  return yield* json(200, { places });
+  return yield* json(200, places);
 }
 
 // Packages/Box/src/link/areas/work.ts

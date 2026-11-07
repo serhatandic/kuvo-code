@@ -514,7 +514,14 @@ A client asks the box it lives on once, and watches; the move goes on with no cl
   from before moves, as the `features` its agents' mail last gave say; a group chat's bots don't all
   live on that machine, as its agents' mail says, none of them here) and `note`, the same in a few
   words for beside the computer's name in a menu. `404 {message}` when it isn't here. A group chat
-  can go to any Mac (its bots stay where they are); the machine it goes to checks again.
+  can go to any Mac (its bots stay where they are); the machine it goes to checks again. For a bot
+  or chat, `stays?: {sessions?, asks?, goals?, agent?}` says what of it stays on this box as it moves
+  (each left out when none, `stays` too): how many sessions it started (they stay, and it reaches
+  them from where it goes), its unanswered asks (`work/asks`) and the goals it proposed and you
+  haven't started (they're here again if it comes back), and `agent: true` when its coding agent's
+  own copy of its conversation is kept here as the way back (removed a week after it first runs
+  there). Clients put it in Move's question (`MoveWords.question`, its `stays`), with the words
+  that each computer's vault, integrations and browser sign-ins stay with it.
 - `POST kuvo/moves {kind, id, to}` (`to`: the box's key, as `places` gives it) answers once the move
   ends: `200 {move}` (it lives there now); `409 {message}` refused or taken back, as it was (working,
   working on a goal,

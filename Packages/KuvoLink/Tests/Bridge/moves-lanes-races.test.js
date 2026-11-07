@@ -318,6 +318,12 @@ test("a conversation with something in it that isn't a plain file can't be packe
   await asItWas(linked, wrote);
 });
 
+test("asked where it can go, a bot with a coding agent says its agent's copy of its conversation stays here", async () => {
+  const places = await ask("GET", `kuvo/moves/places?kind=bot&id=${quiet.bot}`);
+  assert.equal(places.status, 200, JSON.stringify(places.json));
+  assert.deepEqual(places.json.stays, { agent: true });
+});
+
 test("a bridge that isn't running says why", async () => {
   const record = path.join(home, "run", "bridge.json");
   const was = fs.readFileSync(record, "utf8");

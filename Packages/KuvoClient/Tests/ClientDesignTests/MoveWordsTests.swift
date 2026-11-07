@@ -44,13 +44,27 @@ struct MoveWordsTests {
     @Test func askedFirstItSaysWhatGoesAndWhatsLeftWhere() {
         let chat = MoveWords.question(kind: "chat", name: "“Trip plans”", place: "lab", placeIsMac: false, from: nil, fromMachine: false)
         #expect(chat.title == "Move “Trip plans” to lab?")
-        #expect(chat.message == "Its conversation and wake-ups go there, and it carries on there. Nothing goes to it while it moves. Its folder here goes to the Trash, with a copy of its conversation in it.")
+        #expect(chat.message == "Its conversation and wake-ups go there, and it carries on there. Nothing goes to it while it moves. Its folder here goes to the Trash, with a copy of its conversation in it. Vault items, integrations and browser sign-ins stay here.")
         // From a machine, asked from elsewhere (a phone): what's left goes to Kuvo Code's trash there.
         let bot = MoveWords.question(kind: "bot", name: "Ada", place: "Studio Mac", placeIsMac: true, from: "lab", fromMachine: true)
-        #expect(bot.message.hasSuffix("Its folder on lab goes to Kuvo Code’s trash folder there, with a copy of its conversation in it."))
+        #expect(bot.message.hasSuffix("Its folder on lab goes to Kuvo Code’s trash folder there, with a copy of its conversation in it. Vault items, integrations and browser sign-ins stay on lab."))
         #expect(MoveWords.question(kind: "group", name: "“Standup”", place: "this Mac", placeIsMac: true, toHere: true, from: "lab", fromMachine: true).message
             .hasPrefix("Its messages and meeting come here, and it carries on here while this Mac is on"))
         #expect(MoveWords.question(kind: "group", name: "“Standup”", place: "lab", placeIsMac: false, from: nil, fromMachine: false).message
             .hasPrefix("Its messages and meeting go there, and it carries on there, also while your Macs are off."))
+    }
+
+    @Test func askedFirstItSaysWhatStaysOnTheComputerItLeaves() {
+        // A bot on Claude Code, with work it started and things waiting on you.
+        let bot = MoveWords.question(kind: "bot", name: "Ada", place: "lab", placeIsMac: false, from: nil, fromMachine: false,
+                                     stays: .init(sessions: 2, asks: 1, goals: 1, agent: true))
+        #expect(bot.message.hasSuffix("Its folder here goes to the Trash, and its coding agent’s copy of its conversation stays here until a week after it first runs there. "
+            + "The 2 sessions it started, its unanswered question and the goal it proposed stay here, and it still reaches those sessions from there. "
+            + "Vault items, integrations and browser sign-ins stay here."))
+        // One thing: said as one.
+        let chat = MoveWords.question(kind: "chat", name: "this chat", place: "lab", placeIsMac: false, from: "Studio Mac", fromMachine: false, stays: .init(sessions: 1))
+        #expect(chat.message.contains("The session it started stays on Studio Mac, and it still reaches that session from there."))
+        #expect(MoveWords.question(kind: "chat", name: "this chat", place: "lab", placeIsMac: false, from: nil, fromMachine: false, stays: .init(asks: 2)).message
+            .contains("Its 2 unanswered questions stay here."))
     }
 }

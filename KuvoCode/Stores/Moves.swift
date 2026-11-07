@@ -37,6 +37,8 @@ final class Moves {
         /// The box that said it.
         var box: String
         var list: [Place]
+        /// What of it stays on that box as it moves.
+        var stays: MoveWords.Stays? = nil
     }
     /// When each thing's places were last read: they're kept for its menu a while.
     @ObservationIgnored private var placesRead: [String: Date] = [:]
@@ -189,6 +191,11 @@ final class Moves {
         places[id].flatMap { $0.box == (machine ?? BoxClient.mac) ? $0.list : nil }
     }
 
+    /// What of `id` stays on the box it lives on as it moves, as that box last said with its places.
+    func stays(of id: String, from machine: String?) -> MoveWords.Stays? {
+        places[id].flatMap { $0.box == (machine ?? BoxClient.mac) ? $0.stays : nil }
+    }
+
     /// Where `id` can go from the box it lives on (`machine`, nil: this Mac), as that box says now;
     /// kept for its menu a while. Nil when it can't be asked (`whyNotAsked`), or didn't answer.
     @discardableResult
@@ -212,10 +219,10 @@ final class Moves {
         guard whyNotAsked(from: machine) == nil, let client = client(box) else { return nil }
         placeReads[id, default: 0] += 1
         let read = placeReads[id, default: 0]
-        struct Answer: Decodable { var places: [Place] }
+        struct Answer: Decodable { var places: [Place]; var stays: MoveWords.Stays? }
         let query = "kind=\(kind)&id=" + (id.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? id)
         guard let answer = try? await client.value(Answer.self, "GET", "kuvo/moves/places?" + query) else { return nil }
-        return (answer.places, Heard(known: Known(box: box, list: answer.places), read: read))
+        return (answer.places, Heard(known: Known(box: box, list: answer.places, stays: answer.stays), read: read))
     }
 
     /// What boxes said of where things can go, kept all at once and only where it differs, since

@@ -48,8 +48,10 @@ const server = http.createServer((request, response) => {
     const given = chunks.length ? JSON.parse(Buffer.concat(chunks).toString("utf8")) : {};
     const url = new URL(request.url, "http://x");
     const send = (status, data) => response.writeHead(status, { "content-type": "application/json" }).end(JSON.stringify({ data }));
-    const listed = each => ({ id: each.id, title: each.title, directory: each.directory, location: { directory: each.directory } });
-    if (url.pathname === "/api/session" && url.searchParams.get("parentID")) return send(200, [...engine.sessions.values()].filter(each => each.parentID === url.searchParams.get("parentID")).map(listed));
+    const listed = each => ({ id: each.id, title: each.title, directory: each.directory, location: { directory: each.directory }, ...(each.metadata ? { metadata: each.metadata } : {}), ...(each.time ? { time: each.time } : {}) });
+    // (Those at the top, `parentID=null`, only those another conversation started: the work lists'.)
+    const parent = url.searchParams.get("parentID");
+    if (url.pathname === "/api/session" && parent) return send(200, [...engine.sessions.values()].filter(each => parent === "null" ? !each.parentID && each.metadata : each.parentID === parent).map(listed));
     if (url.pathname === "/api/session/active") return send(200, {});
     if (url.pathname === "/api/provider") return send(200, [{ id: "opencode" }]);
     if (url.pathname === "/api/experimental/session/import") {
@@ -1092,6 +1094,29 @@ test("what came with it doesn't count as having run here, whatever the other com
   engine.sessions.get("ses_skew").replies = [{ id: "msg_here1", type: "assistant", time: { created: at + 60_000 } }, { id: "msg_here0", type: "user", time: { created: at + 50_000 } }, ...came];
   await say({ op: "ran?", id: "mov_skew", session: "ses_skew" });
   assert.deepEqual(heard().map(move => move.at), [at + 60_000]);
+});
+
+test("asked where it can go, it says what stays here: the sessions it started, what it asked you, the goal it proposed", async () => {
+  chat("ses_stays1");
+  chat("ses_stays2");
+  engine.sessions.set("ses_stays1w", { id: "ses_stays1w", title: "Its work", directory: chats, messages: [], metadata: { kuvo: { startedBy: "ses_stays1", depth: 1 } }, time: { created: 2 } });
+  engine.sessions.set("ses_stays1ww", { id: "ses_stays1ww", title: "Its work's work", directory: chats, messages: [], metadata: { kuvo: { startedBy: "ses_stays1w", depth: 2 } }, time: { created: 3 } });
+  const work = path.join(home, "run", "work");
+  fs.mkdirSync(work, { recursive: true });
+  const asked = { id: "ask_stays1", action: "makeProject", session: "ses_stays1", name: "“Trip plans”", project: "trip", folderName: "trip", folder: null, at: Date.now(), given: { name: "trip" } };
+  fs.writeFileSync(path.join(work, "asks.json"), JSON.stringify({ asks: [asked] }));
+  fs.writeFileSync(path.join(work, "goals.json"), JSON.stringify({ goals: [{ id: "goal_stays1", bot: "", session: "ses_stays1", name: "Book it", state: "proposed", proposed: Date.now(), projects: [] }] }));
+  try {
+    const places = await ask("GET", "kuvo/moves/places?kind=chat&id=ses_stays1");
+    assert.equal(places.status, 200, JSON.stringify(places.json));
+    assert.deepEqual(places.json.stays, { sessions: 2, asks: 1, goals: 1 });
+    // Another chat, with none of it: nothing said.
+    assert.equal((await ask("GET", "kuvo/moves/places?kind=chat&id=ses_stays2")).json.stays, undefined);
+  } finally {
+    fs.rmSync(path.join(work, "asks.json"), { force: true });
+    fs.rmSync(path.join(work, "goals.json"), { force: true });
+    for (const id of ["ses_stays1", "ses_stays2", "ses_stays1w", "ses_stays1ww"]) engine.sessions.delete(id);
+  }
 });
 
 // ---- Whether it can run there, asked first ----

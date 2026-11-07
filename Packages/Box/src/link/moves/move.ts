@@ -14,7 +14,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { isObject } from "../../shared/json";
 import type { Target } from "../../shared/records";
-import type { Move, MoveKind, MovePlace } from "../../shared/routes/moves";
+import type { Move, MoveKind, MovePlace, MoveStays } from "../../shared/routes/moves";
 import { plainName } from "../../shared/text";
 import { answerBotKeys, forgetBotKeys } from "../areas/bot-keys";
 import { askGroups } from "../areas/groups";
@@ -30,7 +30,9 @@ import { mailFor, ownKey, peersOf } from "../peers/known";
 import type { MailSender, Peer } from "../peers/known";
 import type { LinkHost } from "../relay/host";
 import { readLink } from "../state";
-import { goalRuns } from "../work/goals";
+import { goalRuns, proposedGoals } from "../work/goals";
+import { workAsks } from "../work/asks";
+import { ofBot, under, workSessions } from "../work/tree";
 import { readBackground } from "../work/background";
 import { decidedOf, forgetDecided, isAutopilot, keepDecided, tellAutopilot } from "../work/autopilot";
 import type { EngineSession } from "../engine/sessions";
@@ -324,9 +326,33 @@ function botsLiveOn(members: string[], peer: Peer): boolean {
 }
 
 /** Where `thing` can go: each of your other computers, and why not one where it can't. */
-export async function placesFor(kind: MoveKind, thing: string, signal?: AbortSignal): Promise<MovePlace[] | null> {
+export async function placesFor(kind: MoveKind, thing: string, signal?: AbortSignal): Promise<{ places: MovePlace[]; stays?: MoveStays } | null> {
   const what = await movable(kind, thing, signal);
   if (!what) return null;
+  const stays = kind === "group" ? undefined : await staysOf(kind, thing, what, signal);
+  return { places: placesOf(kind, thing, what), ...(stays && Object.keys(stays).length ? { stays } : {}) };
+}
+
+/** What of a bot or chat stays here as it moves: none of it goes, and none of it's lost (it's here
+ * again if it comes back). Sessions it can't list now aren't counted. */
+async function staysOf(kind: MoveKind, thing: string, what: Movable, signal?: AbortSignal): Promise<MoveStays> {
+  const stays: MoveStays = {};
+  const targets = [readEngineFile, bridgeTarget].flatMap(each => {
+    try { return [each()].filter((target): target is Target => Boolean(target)); } catch { return []; }
+  });
+  const all = await workSessions(targets, signal).catch(() => []);
+  const started = new Set([...(what.root ? under(what.root, all) : []), ...(kind === "bot" ? ofBot(thing, all) : [])].map(each => each.data.id));
+  if (started.size) stays.sessions = started.size;
+  const own = (session: string | undefined, bot: string | undefined) => (kind === "bot" ? bot === thing : session === what.root);
+  const asks = workAsks().filter(ask => own(ask.session, ask.bot)).length;
+  if (asks) stays.asks = asks;
+  const goals = proposedGoals().filter(goal => own(goal.session, goal.bot)).length;
+  if (goals) stays.goals = goals;
+  if (what.lane) stays.agent = true;
+  return stays;
+}
+
+function placesOf(kind: MoveKind, thing: string, what: Movable): MovePlace[] {
   const moving = moveOf(thing) !== null;
   const own = ownKey(readLink() ?? {});
   return peersOf(readLink()).filter(peer => peer.key !== own).map(peer => {
