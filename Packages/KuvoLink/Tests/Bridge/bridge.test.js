@@ -1097,6 +1097,11 @@ test("a summary's news: one that failed says only that, one that went through is
   assert.equal(failed.body, "Couldn't summarize the conversation.");
   page = [end("failed"), summary("failed"), end("succeeded"), said];
   assert.equal((await link.noticeFor({ type: "session.execution.failed", data: { sessionID: "ses_s" } }, get)).body, "Couldn't summarize the conversation.");
+  // A message waiting its turn, or a model picked, written since: still only a summary.
+  page = [{ type: "user", text: "And then." }, end("succeeded"), summary("completed"), end("succeeded"), said];
+  assert.equal(await link.noticeFor(ends, get), null);
+  page = [{ type: "model-switched" }, end("succeeded"), summary("completed"), end("succeeded"), said];
+  assert.equal(await link.noticeFor(ends, get), null);
   // A command you ran at rest before it isn't a run.
   page = [end("succeeded"), summary("completed"), { type: "shell", command: "git status" }, end("succeeded"), said];
   assert.equal(await link.noticeFor(ends, get), null);

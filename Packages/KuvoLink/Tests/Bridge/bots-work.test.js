@@ -374,6 +374,9 @@ test("how a lead reads a session past several summaries: what they did isn't how
   // Failed; then two summaries.
   kept.set(session, [end("succeeded", "msg_i3"), summary("completed", "msg_c2"), end("succeeded", "msg_i2"), summary("completed", "msg_c1"), end("failed", "msg_i1"), said]);
   assert.match((await tool("list_sessions", {}, "ses_pixel")).text, /failed/);
+  // Failed; a summary; then a model picked, which is no turn.
+  kept.set(session, [{ id: "msg_m", type: "model-switched" }, end("succeeded", "msg_i2"), summary("completed", "msg_c1"), end("failed", "msg_i1"), said]);
+  assert.match((await tool("list_sessions", {}, "ses_pixel")).text, /failed/);
 });
 
 test("list_sessions tells how full a session's context is, as the app's gauge reads it, and the running total as that", async () => {

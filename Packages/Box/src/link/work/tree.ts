@@ -161,7 +161,6 @@ const lastMessages = (target: Target, session: string, signal?: AbortSignal) =>
  * engine's `outcome` says how that went. What it said before stands.
  */
 function outcomeOf(listed: Listed, page: unknown): unknown {
-  if (summaryAtEnd(page) === null) return listed.data.outcome;
   return lastTurnEnd(page)?.outcome ?? listed.data.outcome;
 }
 

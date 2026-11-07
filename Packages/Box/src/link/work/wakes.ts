@@ -34,7 +34,7 @@ import { projectNameOf } from "../notices/news";
 import type { Target } from "../../shared/records";
 import type { EngineSession } from "../engine/sessions";
 import type { EngineForm, PermissionAsked } from "../notices/news";
-import { lastTurnEnd, pastSummaries } from "../../shared/summaries";
+import { pastSummaries } from "../../shared/summaries";
 
 export const WORK_WAKES = path.join(WORK_FOLDER, "wakes.json");
 /** What each followed session's starter was told (its last reply's message, its asks), and when the
@@ -99,18 +99,20 @@ const took = (ms: number) => {
   return minutes < 1 ? "under a minute" : minutes < 90 ? `${minutes} min` : `${Math.round(minutes / 60)} h`;
 };
 
+/** A session as a line to its lead names it. */
+function namedOf(session: Partial<EngineSession> & { id: string }): string {
+  const folder = session.location?.directory ?? session.directory ?? "";
+  return `"${session.title || "New Session"}" ${placeWords({ project: projectNameOf(folder), folder })} (address ${session.id})`;
+}
+
 /** What a conversation is told of a summary it asked of a session that failed. */
 function notSummarizedLine(session: Partial<EngineSession> & { id: string }, why: string | undefined): string {
-  const folder = session.location?.directory ?? session.directory ?? "";
-  const named = `"${session.title || "New Session"}" ${placeWords({ project: projectNameOf(folder), folder })} (address ${session.id})`;
-  return `[Session not summarized] ${named}: ${why ? cut(why.replace(/\.+$/, ""), 400) : "It couldn't"}. Its conversation and work are as they were.`;
+  return `[Session not summarized] ${namedOf(session)}: ${why ? cut(why.replace(/\.+$/, ""), 400) : "It couldn't"}. Its conversation and work are as they were.`;
 }
 
 /** What a conversation is told of one of its sessions, as a line, or null for nothing. */
 export async function wakeLine(event: WorkEvent, session: Partial<EngineSession> & { id: string }, target: Target, still?: BackgroundWork | null): Promise<string | null> {
-  const folder = session.location?.directory ?? session.directory ?? "";
-  const project = projectNameOf(folder);
-  const named = `"${session.title || "New Session"}" ${placeWords({ project, folder })} (address ${session.id})`;
+  const named = namedOf(session);
   switch (event.type) {
     case "session.execution.succeeded": {
       const reply = await lastReplyOf({ target, data: session as never });
@@ -260,7 +262,7 @@ interface LastReply {
   began: Began;
   /** Something's written since its last turn ended. */
   underWay: boolean;
-  /** How its last turn of work ended, when summaries asked for came after it. */
+  /** How its last turn of work ended, past any summaries asked for after it. */
   workOutcome?: unknown;
 }
 
@@ -311,7 +313,7 @@ async function lastReply(target: Target, session: string): Promise<LastReply> {
     text = message.content.filter((part: unknown) => isObject(part) && part.type === "text").map((part: { text?: unknown }) => String(part.text ?? "")).join(" ").replace(/\s+/g, " ").trim();
     if (text) break;
   }
-  return { id: reply?.id ?? null, at: at(reply), turn: ended?.id ?? null, turnAt: at(ended), text, began: beganBy(turn), underWay: from === 0 && turn.some(ofTurn), ...(messages.length < whole.length ? { workOutcome: (lastTurnEnd(messages) as { outcome?: unknown } | undefined)?.outcome } : {}) };
+  return { id: reply?.id ?? null, at: at(reply), turn: ended?.id ?? null, turnAt: at(ended), text, began: beganBy(turn), underWay: from === 0 && turn.some(ofTurn), workOutcome: (messages.find(message => message.type === "idle") as { outcome?: unknown } | undefined)?.outcome };
 }
 
 // Whether a finished turn is news to whoever started the session. The first it hears of it always is,

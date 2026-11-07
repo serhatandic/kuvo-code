@@ -1058,10 +1058,17 @@ function onItsOwn(rows, index) {
 }
 function summaryRowAtEnd(messages) {
   const rows = asRows(messages);
-  const at = rows.findIndex((row) => row?.type !== "idle");
-  if (at < 0 || !asked2(rows[at]) || typeof rows[at].status !== "string")
+  let at = 0;
+  while (rows[at]?.type === "user" || between.has(rows[at]?.type))
+    at++;
+  while (rows[at]?.type === "idle")
+    at++;
+  while (between.has(rows[at]?.type))
+    at++;
+  const row = rows[at];
+  if (!asked2(row) || typeof row?.status !== "string")
     return null;
-  return onItsOwn(rows, at) ? rows[at] : null;
+  return onItsOwn(rows, at) ? row : null;
 }
 var summaryAtEnd = (messages) => summaryRowAtEnd(messages)?.status ?? null;
 function pastSummaries(messages) {
@@ -7376,8 +7383,6 @@ async function summaryRowOf(target, session, signal) {
 }
 var lastMessages = (target, session, signal) => call(target, "GET", `/api/session/${encodeURIComponent(session)}/message?limit=6&order=desc`, undefined, signal).catch(() => null);
 function outcomeOf(listed, page) {
-  if (summaryAtEnd(page) === null)
-    return listed.data.outcome;
   return lastTurnEnd(page)?.outcome ?? listed.data.outcome;
 }
 async function keepReadThroughSummary(target, session, signal) {
@@ -8756,15 +8761,15 @@ var took = (ms) => {
   const minutes = Math.round(ms / 60000);
   return minutes < 1 ? "under a minute" : minutes < 90 ? `${minutes} min` : `${Math.round(minutes / 60)} h`;
 };
-function notSummarizedLine(session, why) {
+function namedOf(session) {
   const folder = session.location?.directory ?? session.directory ?? "";
-  const named = `"${session.title || "New Session"}" ${placeWords({ project: projectNameOf(folder), folder })} (address ${session.id})`;
-  return `[Session not summarized] ${named}: ${why ? cut(why.replace(/\.+$/, ""), 400) : "It couldn't"}. Its conversation and work are as they were.`;
+  return `"${session.title || "New Session"}" ${placeWords({ project: projectNameOf(folder), folder })} (address ${session.id})`;
+}
+function notSummarizedLine(session, why) {
+  return `[Session not summarized] ${namedOf(session)}: ${why ? cut(why.replace(/\.+$/, ""), 400) : "It couldn't"}. Its conversation and work are as they were.`;
 }
 async function wakeLine(event, session, target, still) {
-  const folder = session.location?.directory ?? session.directory ?? "";
-  const project = projectNameOf(folder);
-  const named = `"${session.title || "New Session"}" ${placeWords({ project, folder })} (address ${session.id})`;
+  const named = namedOf(session);
   switch (event.type) {
     case "session.execution.succeeded": {
       const reply = await lastReplyOf({ target, data: session });
@@ -8910,7 +8915,7 @@ async function lastReply(target, session) {
     if (text)
       break;
   }
-  return { id: reply?.id ?? null, at: at(reply), turn: ended?.id ?? null, turnAt: at(ended), text, began: beganBy(turn), underWay: from === 0 && turn.some(ofTurn), ...messages.length < whole.length ? { workOutcome: lastTurnEnd(messages)?.outcome } : {} };
+  return { id: reply?.id ?? null, at: at(reply), turn: ended?.id ?? null, turnAt: at(ended), text, began: beganBy(turn), underWay: from === 0 && turn.some(ofTurn), workOutcome: messages.find((message) => message.type === "idle")?.outcome };
 }
 function isNews(was, last) {
   if (last.id && last.id === was.reply)

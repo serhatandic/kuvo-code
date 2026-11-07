@@ -31,9 +31,14 @@ function onItsOwn(rows: ConversationRow[], index: number): boolean {
 /** The summary a session did last, if that's all it did since its last turn. */
 export function summaryRowAtEnd(messages: unknown): ConversationRow | null {
   const rows = asRows(messages);
-  const at = rows.findIndex(row => row?.type !== "idle");
-  if (at < 0 || !asked(rows[at]) || typeof rows[at].status !== "string") return null;
-  return onItsOwn(rows, at) ? rows[at] : null;
+  let at = 0;
+  // Past what's been written since (a message waiting its turn, a note), and its end.
+  while (rows[at]?.type === "user" || between.has(rows[at]?.type)) at++;
+  while (rows[at]?.type === "idle") at++;
+  while (between.has(rows[at]?.type)) at++;
+  const row = rows[at];
+  if (!asked(row) || typeof row?.status !== "string") return null;
+  return onItsOwn(rows, at) ? row : null;
 }
 
 /** How that summary went, if that's what a session did last. */
