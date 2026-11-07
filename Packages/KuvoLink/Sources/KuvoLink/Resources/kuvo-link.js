@@ -12992,7 +12992,7 @@ function conversationMarkdown(title, messages, agent) {
       say("User", "Ran `" + message.command + "`" + (output ? "\n\n```\n" + output + "\n```" : ""));
     } else if (message.type === "idle" && message.outcome === "failed") {
       const before = messages[at - 1];
-      if (before?.type === "compaction" && before.status === "failed")
+      if (before?.type === "compaction" && before.reason === "manual" && before.status === "failed")
         continue;
       say("Stopped", `It stopped with an error: ${message.error?.message?.trim() || "the engine gave no reason."}`);
     } else if (message.type === "compaction") {

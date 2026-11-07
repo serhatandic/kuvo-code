@@ -1695,6 +1695,11 @@ class CodexThread implements Thread {
     const active = lane
     const turn = lane.turn
     switch (item?.type) {
+      case "contextCompaction":
+        // It summarizes the conversation by itself (it's filling up), until the item completes.
+        // (One you asked for shows as that.)
+        if (this.active?.turn !== turn || !this.active.compacting) turn.compacting()
+        return
       case "sleep":
         // It waits a while on purpose.
         active.toolsSinceText = true
@@ -1915,8 +1920,8 @@ class CodexThread implements Thread {
         turn.toolSucceeded(item.id, withPictures("", [pictureFile(item.path)]))
         return
       case "contextCompaction":
-        // (One you asked for shows as that.)
-        if (this.active?.turn !== turn || !this.active.compacting) turn.notice("Codex summarized the conversation to make room.")
+        // Summarized. (One you asked for shows as that.)
+        if (this.active?.turn !== turn || !this.active.compacting) turn.compacted(true)
         return
       case "enteredReviewMode":
         turn.notice(`Reviewing${typeof item.review === "string" && item.review ? `: ${item.review}` : ""}`)

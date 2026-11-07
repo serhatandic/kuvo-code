@@ -22,7 +22,8 @@ function items(messages: Message[], names: (message: AssistantMessage) => string
   for (const message of messages) {
     switch (message.type) {
       case "compaction":
-        summary = true
+        // (One the agent made by itself was part of a turn, which ends as that turn does.)
+        if (message.reason === "manual") summary = true
         break
       case "user": {
         const files = (message.files ?? []).map((file) => file.name ?? (file.source?.type === "uri" ? file.source.uri : "a file"))

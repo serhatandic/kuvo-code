@@ -5,7 +5,7 @@
 import { emit } from "./events"
 import { messageID, newID } from "./ids"
 import type { Store } from "./store"
-import type { AssistantMessage, Content, ModelRef, StructuredError, TokenUsage, ToolCall, ToolOutput } from "./wire"
+import type { AssistantMessage, CompactionMessage, Content, ModelRef, StructuredError, TokenUsage, ToolCall, ToolOutput } from "./wire"
 import { noTokens } from "./wire"
 
 export type Outcome = "succeeded" | "failed" | "interrupted"
@@ -29,6 +29,10 @@ export class Turn {
   /** Each tool call's step: results come after the step that called them has ended. */
   private tools = new Map<string, { step: AssistantMessage; call: ToolCall }>()
   private ended = false
+  /** A summary the agent is making by itself (`compacting`), until it's done. */
+  private compaction?: CompactionMessage
+  /** One just ended, with no model call since: more about it is about that one. */
+  private justCompacted = false
   readonly started = Date.now()
   /** What the run used, in all its steps. */
   tokens: TokenUsage = noTokens()
@@ -75,6 +79,10 @@ export class Turn {
   startStep(model?: ModelRef): string {
     if (this.ended) return ""
     if (this.step) this.endStep()
+    // A summary still under way as the model answers again: it's over, and it wasn't said to
+    // have gone through (one an agent dropped, or gave no end for), so it doesn't stay running.
+    if (this.compaction) this.compacted(false)
+    this.justCompacted = false
     const step: AssistantMessage = {
       type: "assistant",
       id: newID("msg"),
@@ -307,12 +315,57 @@ export class Turn {
     this.save()
   }
 
+  // MARK: Summaries the agent makes by itself
+
+  /**
+   * The agent began summarizing the conversation by itself (it's filling up): a row says so, last
+   * in the conversation, until it's done. Said again while it runs, it's the same one.
+   */
+  compacting() {
+    if (this.ended || this.compaction) return
+    this.justCompacted = false
+    this.endBlock()
+    if (this.step) this.endStep()
+    const event = emit("session.compaction.started", { sessionID: this.sessionID, reason: "auto" }, this.directory)
+    const message: CompactionMessage = { type: "compaction", id: messageID(event.id), time: { created: event.created }, status: "running", reason: "auto" }
+    this.compaction = message
+    this.messages.push(message)
+    this.store.save(this.sessionID, true)
+  }
+
+  /**
+   * It's done: the row says how it went. One the agent tells of only once it's done gets its row
+   * then; a second word about the one just ended (before its next model call) is the same one.
+   */
+  compacted(succeeded: boolean) {
+    if (this.ended) return
+    if (!this.compaction) {
+      if (this.justCompacted) return
+      this.compacting()
+    }
+    const message = this.compaction
+    if (!message) return
+    this.compaction = undefined
+    this.justCompacted = true
+    message.status = succeeded ? "completed" : "failed"
+    message.time.completed = Date.now()
+    this.send(succeeded ? "session.compaction.ended" : "session.compaction.failed", {})
+    this.store.save(this.sessionID, true)
+  }
+
+  /** Whether the agent is summarizing by itself now. */
+  get isCompacting() {
+    return this.compaction !== undefined
+  }
+
   /** Tools still running from an attempt that gave up (Auto goes on with another model): stopped. */
   stopTools(message: string) {
     for (const [id, tool] of this.tools) {
       const status = tool.call.state.status
       if (status === "running" || status === "streaming") this.toolFailed(id, message)
     }
+    // And a summary it had under way: it won't finish it.
+    if (this.compaction) this.compacted(false)
   }
 
   hasTool(id: string) {
@@ -334,6 +387,8 @@ export class Turn {
   /** Ends the run: open steps close, tools still running are stopped, and the idle marker goes in. */
   finish(outcome: Outcome, error?: StructuredError) {
     if (this.ended) return
+    // A summary under way when it stopped or failed: it didn't finish.
+    if (this.compaction) this.compacted(false)
     this.endBlock()
     if (this.step) this.endStep(error && outcome === "failed" ? { error } : {})
     for (const [id, tool] of this.tools) {
