@@ -55,11 +55,11 @@ public struct BoxNote: Equatable, Sendable {
 
     // Its sessions' news, as the box's `wakeLineShown` says it: one session's, or how many.
     private static func sessionNews(_ text: String) -> BoxNote? {
-        let pattern = #"^\[Session (finished|failed|asks)\] "([^"\n]*)""#
+        let pattern = #"^\[Session (finished|still working|failed|asks)\] "([^"\n]*)""#
         guard let first = firstMatch(pattern, in: text) else { return nil }
         let told = text.components(separatedBy: "\n\n").filter { firstMatch(pattern, in: $0) != nil }.count
         guard told == 1 else { return BoxNote(from: "Its sessions", line: "\(told) updates from its sessions") }
-        let what = first[0] == "finished" ? "finished" : first[0] == "failed" ? "stopped with an error" : "asks something"
+        let what = first[0] == "finished" ? "finished" : first[0] == "still working" ? "still working" : first[0] == "failed" ? "stopped with an error" : "asks something"
         return BoxNote(from: "Its sessions", line: "“\(first[1].isEmpty ? "New Session" : first[1])” \(what)")
     }
 

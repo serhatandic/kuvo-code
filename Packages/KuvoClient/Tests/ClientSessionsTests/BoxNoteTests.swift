@@ -36,6 +36,8 @@ struct BoxNoteTests {
              BoxNote(from: "Goal", line: "Reminded to carry on")),
             ("[Session finished] \"Sign-in\" in tidepool (address ses_9), after 3 min:\nDone, all green.",
              BoxNote(from: "Its sessions", line: "“Sign-in” finished")),
+            ("[Session still working] \"Sign-in\" in tidepool (address ses_9), after 30 min:\nStarted the tests.\n(Still running in the background: the command `npm test`. It may write again once that ends.)",
+             BoxNote(from: "Its sessions", line: "“Sign-in” still working")),
             ("[Session failed] \"Sign-in\" in tidepool (address ses_9) stopped with an error. Read it with read_conversation.",
              BoxNote(from: "Its sessions", line: "“Sign-in” stopped with an error")),
             ("[Session finished] \"A\" in x (address ses_1):\nok\n\n[Session asks] \"B\" in x (address ses_2) asks: a name (ask f1).",
