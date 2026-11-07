@@ -187,11 +187,17 @@ export function movedOf(link: LinkState | null | undefined): Map<string, string>
   // A Mac's word: what this Mac's app says (`kuvo/link/peers`), or a Mac's peers document.
   if (IS_MAC) for (const { session, key } of cleanMoved(link?.macMoved)) moved.set(session, key);
   else for (const word of macWords(link)) for (const { session, key } of cleanMoved(word.moved)) moved.set(session, key);
-  // Over it, the word of the box that moved each: this one's, and what its peers (those it has now)
-  // say they moved in the last two days, never of one of this box's own conversations; the newest
-  // last. (The files are `directory.ts`' PEER_AGENTS_FILE and AGENTS_FILE, which import this one.)
+  // Over it, the word of the box that moved each: this one's, and its peers'; the newest last.
   const now = Date.now();
-  const words: { session: string; key: string; at: number }[] = movedAway(now);
+  for (const { session, key } of [...movedAway(now), ...movesTold(link, now)].sort((one, other) => one.at - other.at)) moved.set(session, key);
+  return moved;
+}
+
+/** What this box's peers (those it has now) say they moved in the last two days, never of one of
+ * this box's own conversations. (The files are `directory.ts`' PEER_AGENTS_FILE and AGENTS_FILE,
+ * which import this one.) */
+export function movesTold(link: LinkState | null | undefined, now = Date.now()): { session: string; key: string; at: number }[] {
+  const words: { session: string; key: string; at: number }[] = [];
   const peers = new Set(peersOf(link).map(peer => peer.key));
   const own = new Set(ownListed().map(agent => agent.session));
   try {
@@ -202,8 +208,18 @@ export function movedOf(link: LinkState | null | undefined): Map<string, string>
         && typeof one.at === "number" && now - one.at < MOVED_FOR && !own.has(one.session)));
     }
   } catch {}
-  for (const { session, key } of words.sort((one, other) => one.at - other.at)) moved.set(session, key);
-  return moved;
+  return words;
+}
+
+/** The boxes you removed, so they're no peers of this one (`left`: this Mac's own record, or what
+ * its Macs' peers documents say), not those just missing from a list for now. */
+export function removedBoxes(link: LinkState | null | undefined): Set<string> {
+  const left = IS_MAC ? (Array.isArray(link?.left) ? link.left : []) : macsOf(link).flatMap(mac => {
+    const named = macDoc(link, mac, "peers")?.body.left;
+    return Array.isArray(named) ? named.filter((key): key is string => typeof key === "string") : [];
+  });
+  const peers = new Set(peersOf(link).map(peer => peer.key));
+  return new Set(left.filter(key => !peers.has(key)));
 }
 
 /** This box's own agents as `run/agents.json` lists them: each one's session and name. */

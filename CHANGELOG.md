@@ -16,6 +16,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ### All Changes
 
+- News from a session always reaches the bot or conversation that started it now, once, even if that moved to another computer long ago or its computer is away for days. It waits up to 30 days for that computer to come back; before, it was lost after a day or two.
 - `/compact` and Summarize Now work in every conversation now, on Claude Code, Codex and Grok as on the engine's models: the conversation stays whole, and the agent carries on from a summary. Cursor and Antigravity only summarize by themselves, and it says so. During a turn, a coding agent's summary waits for the turn to end.
 - A bot or session that leads others can summarize one of its own sessions, and sees how full each session's context is, apart from what it used in total.
 - The model picker tells your coding agents' accounts apart: in Starred and in search, a model from an account you added shows that account's letter on its mark, as its icon down the picker's side does. Turning to Starred from an account's page no longer leaves a row drawn as that page had it, without its account and with a repeated ⌘ shortcut.

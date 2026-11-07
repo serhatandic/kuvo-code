@@ -109,6 +109,7 @@ export { queueOf, queueWatcher, readQueues, scanQueues, stopSession } from "./en
 export { keepReadThroughSummary } from "./work/tree";
 export { letAttachmentsGo } from "./server/attached";
 export { workWatcher } from "./work/wakes";
+export { forgetOldHomes } from "./work/homes";
 export { AT_WORK_LIMIT, FINISH_HOLD_LIMIT, atWorkNow, noteStopped, readBackground, readStopped, stopWork } from "./work/background";
 export { goalFollowers, goalHolds, settleGoalHolds, lookAtGoals, periodOf, periodEnd, pauseGoal, REVIEW_PAUSE } from "./work/goals";
 export { keptAwake, letGo } from "./work/awake";
