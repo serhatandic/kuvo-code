@@ -2706,8 +2706,9 @@ launch agent in the app (`Contents/Library/LaunchAgents/<bundle id>.box.plist`, 
 `SMAppService` the first time the app opens), at each login and again if it stops by itself. It has
 no window. It runs the engine, the box and the coding agents' bridge, starts each again when it
 stops (up to three times in five minutes), tries the engine and the bridge again when they couldn't
-start (after 15 s, 30 s, 1, 2, 5 and 10 minutes, as a machine's keeper waits, then no more, and not
-when another try can't help: a program that isn't there), and records each in the box's `run` folder,
+start (after 15 s, 30 s, 1, 2, 5 and 10 minutes, as a machine's keeper waits, though a machine's
+goes on at the last for good; and not when another try can't help: a program that isn't there, or a
+start that took too long while macOS asked you something), and records each in the box's `run` folder,
 as a machine's keeper does, so a client finds them there:
 
 - `run/keeper.json`: `{"pid", "version", "build", "url", "password", "started"}` (milliseconds).
@@ -2716,7 +2717,7 @@ as a machine's keeper does, so a client finds them there:
   the engine stopped and isn't started again until asked, or until its next try, and beside it
   `run/engine-output`, what the engine wrote last (when it wrote anything), which the app shows under
   the reason, and while it waits for that try, `run/engine.retry` (when, in seconds since 1970, as on
-  a machine).
+  a machine); `run/.system-asking` while macOS asks you something.
 - `run/serve.json`: `{"pid", "port", "password"}`, where the box answers.
 - `bin/kuvo-start`: as a machine's (`kuvo-start restart`), here calling the keeper
   (`--box-control`).
@@ -4203,16 +4204,21 @@ starts the keeper when it isn't running. A Mac quitting or disconnecting leaves 
 coding agents' bridge. Every 30 seconds each asks its server something over a plain connection (any
 answer counts, an error too). Only all of this, at every look for ten minutes without a break, counts
 as hung: it takes the connection and says nothing within 20 seconds; connections on this computer
-work (the watch answers itself); its main thread is asleep (not running, on a disk or paused), it used
-under 2% of a CPU since the last look, and nothing it started is running or used over 10% of one; its
-command line is that server's; and nothing's stopped, starting or updating it on purpose (`run/stopped`,
-`run/.launching`, `run/.updating`). A look that comes late (the computer slept, was paused, or was
-starved) starts the count again. A hung server is told to stop (SIGTERM), then made to ten seconds
-later (SIGKILL), and whoever keeps it starts it again as after any crash. At most three in six hours
-(`run/hung-engine.json`, `run/hung-bridge.json`, when each was ended, in milliseconds), then it's left
-for a Restart. A server spinning at full CPU is never ended: from outside, that's long work. Neither
-is the link watched, nor, on a machine with nothing for it to answer (where it doesn't run), the
-coding agents' bridge.
+work (the watch answers itself); all its threads are asleep (none running, on a disk or paused), it
+used under 2% of a CPU since the last look, and nothing it started is running or used over 5% of one;
+its command line is that server's; and nothing's stopped, starting or updating it on purpose, nor is
+macOS asking you something (`run/stopped`, `run/.launching`, `run/.updating`, `run/.system-asking`). A
+look that comes late (the computer slept, was paused, or was starved) starts the count again. A hung
+server is told to stop (SIGTERM), then made to ten seconds later (SIGKILL), and whoever keeps it starts
+it again as after any crash; what it started goes on, as after any crash. At most three in six hours
+(`run/hung-engine.json`, `run/hung-bridge.json`, when each was ended, in milliseconds; one it can't
+write or read counts as too many), then it's left for a Restart.
+
+What it can't see: a server spinning at full CPU (from outside, that's long work), or one whose event
+loop runs while its work is stuck (it answers). From outside, a call that sleeps for good looks like
+one that would still return: one taking over ten minutes (a network folder that stalled) counts as
+hung. Nothing watches the link, nor the coding agents' bridge on a machine with nothing for its link to
+answer (where it doesn't run), nor the engine while the bridge is down.
 
 ## For released Macs
 
