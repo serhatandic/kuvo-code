@@ -1444,7 +1444,7 @@ final class Machines {
     }
 
     /// Where machines that wouldn't read are kept, followed by when.
-    static let unreadableKey = "machines.unreadable"
+    nonisolated static let unreadableKey = "machines.unreadable"
 }
 
 /// A sign-in to an agent on a machine whose page sends your browser back to `localhost` there
