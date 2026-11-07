@@ -1809,7 +1809,8 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     different names and stay two machines.
   - The list isn't only the app's: it's `machines.json` in this Mac's box's folder, which the app
     alone writes and the box only reads (bridge 0.9.201). With the app closed, stuck (no answer
-    within seconds) or still starting, the box answers from it, so a phone needs nothing different:
+    within seconds) or answering anything else, the box answers from it, so a phone needs nothing
+    different:
     - `GET kuvo/machines` lists them with `connection` `notConnected`, no `action`, no `failure`, and
       `hosts` empty. `status` says what the box can tell by itself, and that the app isn't open:
       "Running · Kuvo Code isn’t open on Studio" for a machine whose box was heard from in the last

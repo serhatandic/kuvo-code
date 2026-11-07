@@ -22,8 +22,8 @@ const support = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link
 removeAtEnd(support);
 
 // What answers for this Mac's app (the keeper's host interface): `closed`, as the keeper says it while
-// the app isn't open, which isn't the app's own answer; `open`, the app's; `starting`, its own 503 until
-// it's ready; `stuck`, no answer.
+// the app isn't open, which isn't the app's own answer; `open`, the app's; `wontSay`, its own 503 (its list
+// wouldn't read); `stuck`, no answer.
 const app = { state: "closed", streams: new Set(), asked: [] };
 const appLine = { machines: [{ id: "lab", name: "lab", otherAddresses: [], connection: "connected", status: "Connected", action: "disconnect" }], hosts: ["gpu"] };
 const appHost = http.createServer((request, response) => {
@@ -39,7 +39,7 @@ const appHost = http.createServer((request, response) => {
     if (request.url !== "/link/route") return response.writeHead(404).end();
     app.asked.push(given);
     if (app.state === "stuck") return;
-    if (app.state === "starting") return response.writeHead(503, { "content-type": "application/json", "x-kuvo-answer": "1" }).end(JSON.stringify({ message: "Kuvo Code isn't ready yet." }));
+    if (app.state === "wontSay") return response.writeHead(503, { "content-type": "application/json", "x-kuvo-answer": "1" }).end(JSON.stringify({ message: "Its own words" }));
     if (app.state === "closed") return response.writeHead(503, { "content-type": "application/json" }).end(JSON.stringify({ message: "Kuvo Code isn’t open on this Mac." }));
     if (given.path === "kuvo/machines/events") {
       response.writeHead(200, { "content-type": "application/x-ndjson", "x-kuvo-answer": "1" });
@@ -258,6 +258,14 @@ test("whether a machine was heard from goes by when it was heard, not by its clo
     assert.equal(link.takeAgents({ key, kind: "machine", id: "lab" }, { at: Date.now() + off * 3600_000, list: [] }), true);
     assert.equal((await phone.request("GET", "kuvo/machines")).json.machines[0].status, "Running · Kuvo Code isn’t open on Studio", `a clock ${off} hours off`);
   }
+  // A clock set right after running ahead: older by it, and heard all the same.
+  fs.rmSync(path.join(box, "run", "peer-agents.json"), { force: true });
+  link.takeAgents({ key, kind: "machine", id: "lab" }, { at: Date.now() + 6 * 3600_000, list: [] });
+  const ahead = JSON.parse(fs.readFileSync(path.join(box, "run", "peer-agents.json"), "utf8"));
+  ahead[key].heard = Date.now() - 3600_000;
+  fs.writeFileSync(path.join(box, "run", "peer-agents.json"), JSON.stringify(ahead));
+  assert.equal(link.takeAgents({ key, kind: "machine", id: "lab" }, { at: Date.now(), list: [] }), false, "the list said ahead of it stands");
+  assert.equal((await phone.request("GET", "kuvo/machines")).json.machines[0].status, "Running · Kuvo Code isn’t open on Studio");
   // And long ago is long ago, however it was dated.
   const kept = JSON.parse(fs.readFileSync(path.join(box, "run", "peer-agents.json"), "utf8"));
   kept[key].heard = Date.now() - 3600_000;
@@ -265,17 +273,19 @@ test("whether a machine was heard from goes by when it was heard, not by its clo
   assert.equal((await phone.request("GET", "kuvo/machines")).json.machines[0].status, "Not heard from lately · Kuvo Code isn’t open on Studio");
 });
 
-test("an app still starting says it isn't ready, and a phone gets the list all the same", async () => {
+test("an app that won't say isn't the last word on a read: the box says what it can, and only a change hears the app", async () => {
   saved([{ destination: "lab" }]);
-  app.state = "starting";
+  app.state = "wontSay";
   const listed = await phone.request("GET", "kuvo/machines");
   assert.equal(listed.status, 200);
   assert.equal(listed.json.machines[0].id, "lab");
   fs.writeFileSync(phoneLinkFile, JSON.stringify({ phones: [], removed: [], machines: {} }));
   assert.equal((await phone.request("GET", "kuvo/hosts")).status, 200);
   fs.rmSync(phoneLinkFile, { force: true });
-  // What changes something hears it from the app.
-  assert.deepEqual(await phone.request("POST", "kuvo/machines/lab/connect"), { status: 503, json: { message: "Kuvo Code isn't ready yet." } });
+  saved("{ not json");
+  assert.deepEqual(await phone.request("GET", "kuvo/machines"), { status: 503, json: { message: "This Mac’s list of machines can’t be read right now." } });
+  assert.deepEqual(await phone.request("POST", "kuvo/machines/lab/connect"), { status: 503, json: { message: "Its own words" } });
+  fs.rmSync(listFile, { force: true });
   app.state = "closed";
 });
 
@@ -340,10 +350,10 @@ test("an app that's stuck is answered for, as one that's closed", async () => {
   app.state = "closed";
 });
 
-test("a stream carries on past an app that's stuck, or still starting, and finds it when it answers", async () => {
+test("a stream carries on past an app that's stuck, or won't say, and finds it when it answers", async () => {
   saved([{ destination: "bench" }]);
   const own = { machines: [{ id: "bench", name: "bench", otherAddresses: [], connection: "notConnected", status: "Kuvo Code isn’t open on Studio" }], hosts: [] };
-  for (const state of ["stuck", "starting"]) {
+  for (const state of ["stuck", "wontSay"]) {
     app.state = state;
     const stream = follow();
     assert.equal((await stream.head()).head.status, 200, state);
@@ -361,14 +371,15 @@ test("a stream carries on past an app that's stuck, or still starting, and finds
 test("a phone leaving stops the asking", async () => {
   saved([{ destination: "lab" }]);
   app.state = "stuck";
-  const front = link.macFront(async function* () {}, { wait: 60_000, look: 60_000 });
+  // (The app's never given up on by itself here: only the phone leaving ends this.)
+  const front = link.macFront(async function* () {}, { wait: 2_000_000_000, look: 2_000_000_000 });
   const stop = new AbortController();
   const pieces = front({ method: "GET", path: "kuvo/machines/events", headers: {}, body: Buffer.alloc(0) }, undefined, stop.signal);
   const asked = app.asked.length;
   const next = pieces.next();
   while (app.asked.length === asked) await new Promise(resolve => setImmediate(resolve));
   stop.abort();
-  assert.equal((await next).done, true, "ended, with nothing more said and nothing left waiting a minute");
+  assert.equal((await next).done, true, "ended, with nothing more said");
   app.state = "closed";
 });
 

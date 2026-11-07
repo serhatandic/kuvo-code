@@ -8089,8 +8089,13 @@ function takeAgents(sender, given, file = PEER_AGENTS_FILE, lock = PEER_LOCK) {
     try {
       all = JSON.parse(fs31.readFileSync(file, "utf8"));
     } catch {}
-    if (given.at <= (all[sender.key]?.at ?? 0))
+    if (given.at <= (all[sender.key]?.at ?? 0)) {
+      if (all[sender.key]) {
+        all[sender.key].heard = Date.now();
+        writePrivate(file, JSON.stringify(all));
+      }
       return false;
+    }
     all[sender.key] = {
       at: given.at,
       heard: Date.now(),
@@ -28519,14 +28524,13 @@ function keptHosts() {
     return error.code === "ENOENT" ? undefined : null;
   }
 }
-function savedMachines() {
+function savedMachines(kept = keptHosts()) {
   let text;
   try {
     text = fs95.readFileSync(LIST_FILE, "utf8");
   } catch (error) {
     if (error.code !== "ENOENT")
       return null;
-    const kept = keptHosts();
     return kept === undefined || kept && !Object.keys(kept).length ? [] : null;
   }
   try {
@@ -28553,9 +28557,9 @@ function machinesWithoutApp(now = Date.now()) {
   };
 }
 function hostsWithoutApp() {
-  const saved = savedMachines();
-  const relay = macLink.config?.relay;
   const kept = keptHosts();
+  const saved = savedMachines(kept);
+  const relay = macLink.config?.relay;
   if (!saved || !relay || kept === null || kept === undefined && saved.length)
     return null;
   const hosts = Object.entries(kept ?? {}).flatMap(([machine, { name, address, key, anotherMac }]) => typeof name === "string" && typeof address === "string" && typeof key === "string" ? [{ kind: "machine", name, address, key, relay, machine, anotherMac: anotherMac === true, removed: !saved.some((each) => each.destination === machine) }] : []);
@@ -28621,13 +28625,14 @@ async function* machinesFollowed(request, phone, signal, timing) {
     await pause2(timing.look, signal);
   }
 }
+var OWN_ANSWERS = { "kuvo/machines": machinesWithoutApp, "kuvo/hosts": hostsWithoutApp };
 var isMachinesRoute = (route) => /^kuvo\/(machines|hosts)(\/|$)/.test(route);
 async function* machinesRoute(request, phone, signal, route, timing = TIMING) {
   const read = request.method.toUpperCase() === "GET";
   if (read && route === "kuvo/machines/events")
     return yield* machinesFollowed(request, phone, signal, timing);
   const response = read ? await appWithin(request, phone, signal, timing.wait) : await appAnswer(request, phone, signal);
-  const own = !read ? null : route === "kuvo/machines" ? machinesWithoutApp : route === "kuvo/hosts" ? hostsWithoutApp : null;
+  const own = read ? OWN_ANSWERS[route] : undefined;
   if (response && (!own || response.status === 200))
     return yield* passedOn(response, signal);
   await response?.body?.cancel().catch(() => {});

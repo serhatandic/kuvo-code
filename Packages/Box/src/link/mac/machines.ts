@@ -55,13 +55,12 @@ function keptHosts(): Record<string, KeptHost> | null | undefined {
 // Its machines as the app keeps them, or null when that can't be told, which isn't the same as none:
 // a list that won't read, or no list while the app keeps bridges for machines. (Removing the last one
 // leaves an empty list; no list then means it couldn't be written, and it's in the app's settings.)
-function savedMachines(): { destination: string; otherAddresses?: string[] }[] | null {
+function savedMachines(kept = keptHosts()): { destination: string; otherAddresses?: string[] }[] | null {
   let text: string;
   try {
     text = fs.readFileSync(LIST_FILE, "utf8");
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") return null;
-    const kept = keptHosts();
     return kept === undefined || (kept && !Object.keys(kept).length) ? [] : null;
   }
   try {
@@ -95,9 +94,9 @@ export function machinesWithoutApp(now = Date.now()): MacMachines | null {
  * be told or there's no relay yet to name, since a phone takes this list for all your machines and
  * forgets the rest. */
 function hostsWithoutApp(): Hosts | null {
-  const saved = savedMachines();
-  const relay = macLink.config?.relay;
   const kept = keptHosts();
+  const saved = savedMachines(kept);
+  const relay = macLink.config?.relay;
   if (!saved || !relay || kept === null || (kept === undefined && saved.length)) return null;
   const hosts = Object.entries(kept ?? {}).flatMap(([machine, { name, address, key, anotherMac }]) => (typeof name === "string" && typeof address === "string" && typeof key === "string"
     ? [{ kind: "machine" as const, name, address, key, relay, machine, anotherMac: anotherMac === true, removed: !saved.some(each => each.destination === machine) }]
@@ -167,6 +166,9 @@ async function* machinesFollowed(request: LinkRequest, phone: Asker | undefined,
   }
 }
 
+// What this box can say itself of what's read.
+const OWN_ANSWERS: Record<string, () => MacMachines | Hosts | null> = { "kuvo/machines": machinesWithoutApp, "kuvo/hosts": hostsWithoutApp };
+
 /** Whether `route` is one of those this file answers. */
 export const isMachinesRoute = (route: string): boolean => /^kuvo\/(machines|hosts)(\/|$)/.test(route);
 
@@ -178,8 +180,8 @@ export async function* machinesRoute(request: LinkRequest, phone: Asker | undefi
   // Only what's read has this box to fall back on. What changes something may take as long as it
   // takes (adding a machine checks it over SSH first), and can't be said not to have happened.
   const response = read ? await appWithin(request, phone, signal, timing.wait) : await appAnswer(request, phone, signal);
-  const own = !read ? null : route === "kuvo/machines" ? machinesWithoutApp : route === "kuvo/hosts" ? hostsWithoutApp : null;
-  // (An app still starting says it isn't ready, and this box has the list.)
+  const own = read ? OWN_ANSWERS[route] : undefined;
+  // (An app that won't say, whose list wouldn't read as it started, isn't the last word on it.)
   if (response && (!own || response.status === 200)) return yield* passedOn(response, signal);
   await response?.body?.cancel().catch(() => {});
   if (signal?.aborted) return;
