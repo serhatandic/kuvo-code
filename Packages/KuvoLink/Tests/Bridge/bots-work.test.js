@@ -49,6 +49,8 @@ function setBots({ pixelWork } = {}) {
 // The engine: the bots' conversations, a session of the user's own, the models there are accounts
 // for; the sessions made, what each was sent, what each asks, and how each ask was answered.
 let sessions, prompts, made, asked, replied, interrupted, active, busy, restarts;
+// A session's latest messages where a test says, newest first; what's asked of `/compact`, and how each answers.
+let kept, compacted, compacting;
 // Sessions given a task stay at work (`staysAtWork`); none is made until the sessions at work were
 // looked at `holdMaking` times, so starts asked for at once all look before any is made.
 let staysAtWork, holdMaking, activeLooks, held;
@@ -69,6 +71,9 @@ function resetEngine() {
   asked = new Map();
   replied = [];
   interrupted = [];
+  kept = new Map();
+  compacted = [];
+  compacting = new Map();
   active = new Set();
   busy = new Map();
   staysAtWork = false;
@@ -148,6 +153,12 @@ const standIn = onBridge => (request, response) => {
       if (staysAtWork) active.add(id);
       return reply({});
     }
+    if (one?.[2] === "/compact" && request.method === "POST") {
+      compacted.push(id);
+      const answer = compacting.get(id) ?? {};
+      return reply(answer.message ? { message: answer.message } : { data: answer.data ?? {} }, answer.message ? 400 : 200);
+    }
+    if (one?.[2] === "/message" && kept.has(id)) return reply({ data: kept.get(id) });
     if (one?.[2] === "/message") {
       // Its answer, after the last message it was sent (ids sort by time); and each tool call it
       // asks about, whole, in a message of its own, as the engine keeps them.
@@ -337,6 +348,89 @@ test("list_sessions shows a bot's work and where each stands; stop_session stops
   assert.deepEqual(interrupted, [first]);
   const notMine = await tool("stop_session", { session: "ses_mine" }, "ses_pixel");
   assert.deepEqual(notMine, { text: "\"My own\" isn't yours to stop: ask the user.", isError: true });
+});
+
+test("a summary doesn't change how a lead reads a session: failed stays failed, and a summary that failed is said to be only that", async () => {
+  const session = startedAddress(await tool("start_session", { task: "One.", title: "Sign-in", project: "Tidepool" }, "ses_pixel"));
+  busy.delete(session);
+  sessions.get(session).outcome = "succeeded"; // As the engine has it after the summary.
+  sessions.get(session).time.idle = Date.now();
+  kept.set(session, [{ id: "msg_i2", type: "idle", outcome: "succeeded" }, { id: "msg_c", type: "compaction", status: "completed", reason: "manual" }, { id: "msg_i1", type: "idle", outcome: "failed" }, { id: "msg_s", type: "assistant", content: [] }]);
+  assert.match((await tool("list_sessions", {}, "ses_pixel")).text, /failed/);
+  assert.doesNotMatch((await tool("list_sessions", {}, "ses_pixel")).text, /finished/);
+});
+
+test("how a lead reads a session past several summaries: what they did isn't how its work went", async () => {
+  const session = startedAddress(await tool("start_session", { task: "One.", title: "Sign-in", project: "Tidepool" }, "ses_pixel"));
+  busy.delete(session);
+  sessions.get(session).outcome = "succeeded";
+  sessions.get(session).time.idle = Date.now();
+  const end = (outcome, id) => ({ id, type: "idle", outcome });
+  const summary = (status, id) => ({ id, type: "compaction", status, reason: "manual" });
+  const said = { id: "msg_s", type: "assistant", content: [{ type: "text", text: "Done." }] };
+  // Worked; then a summary failed, and the next went through.
+  kept.set(session, [end("succeeded", "msg_i3"), summary("completed", "msg_c2"), end("failed", "msg_i2"), summary("failed", "msg_c1"), end("succeeded", "msg_i1"), said]);
+  assert.match((await tool("list_sessions", {}, "ses_pixel")).text, /finished/);
+  // Failed; then two summaries.
+  kept.set(session, [end("succeeded", "msg_i3"), summary("completed", "msg_c2"), end("succeeded", "msg_i2"), summary("completed", "msg_c1"), end("failed", "msg_i1"), said]);
+  assert.match((await tool("list_sessions", {}, "ses_pixel")).text, /failed/);
+  // No summary, and a run that died without writing its end: the session's word.
+  sessions.get(session).outcome = "failed";
+  kept.set(session, [said, end("succeeded", "msg_i1")]);
+  assert.match((await tool("list_sessions", {}, "ses_pixel")).text, /failed/);
+  sessions.get(session).outcome = "succeeded";
+  // Failed; a summary; then a model picked, which is no turn.
+  kept.set(session, [{ id: "msg_m", type: "model-switched" }, end("succeeded", "msg_i2"), summary("completed", "msg_c1"), end("failed", "msg_i1"), said]);
+  assert.match((await tool("list_sessions", {}, "ses_pixel")).text, /failed/);
+});
+
+test("list_sessions tells how full a session's context is, as the app's gauge reads it, and the running total as that", async () => {
+  const session = startedAddress(await tool("start_session", { task: "One.", title: "Sign-in", project: "Tidepool" }, "ses_pixel"));
+  sessions.get(session).tokens = { input: 400_000, output: 27_000, reasoning: 0, cache: { read: 9_000_000, write: 0 } };
+  const step = (input, read, write, output) => ({ id: "msg_s", type: "assistant", content: [{ type: "text", text: "Going." }], tokens: { input, output, reasoning: 50, cache: { read, write } } });
+  // Newest first: the last step that says, past a note and a step that doesn't.
+  kept.set(session, [{ id: "msg_n", type: "synthetic", text: "A note." }, { id: "msg_t", type: "assistant", content: [] }, step(10_000, 295_000, 1_000, 4_000), step(90_000, 10_000, 0, 1_000)]);
+  const listed = (await tool("list_sessions", {}, "ses_pixel")).text;
+  assert.match(listed, /· 310,000 tokens in context now · 427,000 tokens used in total/);
+  // Just summarized: what it was before isn't what's in it now.
+  kept.set(session, [{ id: "msg_i", type: "idle", outcome: "succeeded" }, { id: "msg_c", type: "compaction", status: "completed", reason: "manual" }, step(10_000, 295_000, 1_000, 4_000)]);
+  const after = (await tool("list_sessions", {}, "ses_pixel")).text;
+  assert.match(after, /· just summarized, context size known after its next step · 427,000 tokens used in total/);
+  assert.doesNotMatch(after, /310,000/);
+  // One that failed changed nothing.
+  kept.set(session, [{ id: "msg_i", type: "idle", outcome: "failed" }, { id: "msg_c", type: "compaction", status: "failed", reason: "manual" }, step(10_000, 295_000, 1_000, 4_000)]);
+  assert.match((await tool("list_sessions", {}, "ses_pixel")).text, /· 310,000 tokens in context now/);
+  // Nothing said yet: no number made up.
+  kept.set(session, []);
+  sessions.get(session).tokens = noTokens();
+  assert.doesNotMatch((await tool("list_sessions", {}, "ses_pixel")).text, /tokens/);
+});
+
+test("compact_session summarizes only a session of the caller's own, and says plainly what it can't and when it will", async () => {
+  const session = startedAddress(await tool("start_session", { task: "One.", title: "Sign-in", project: "Tidepool" }, "ses_pixel"));
+  assert.deepEqual(await tool("compact_session", { session: "ses_mine" }, "ses_pixel"), { text: "\"My own\" isn't yours to compact: ask the user.", isError: true });
+  assert.deepEqual(compacted, []);
+  assert.equal((await tool("compact_session", {}, "ses_pixel")).isError, true);
+  assert.deepEqual(compacted, []);
+
+  // At rest: now, on the engine or the bridge.
+  busy.delete(session);
+  assert.match((await tool("compact_session", { session }, "ses_pixel")).text, /^Summarizing "Sign-in" now\./);
+  compacting.set(session, { data: { state: "compacting" } });
+  assert.match((await tool("compact_session", { session }, "ses_pixel")).text, /^Summarizing "Sign-in" now\./);
+  // Working: a coding agent's when its turn ends, the engine's at its next step.
+  active.add(session);
+  compacting.set(session, { data: { state: "waiting" } });
+  assert.deepEqual(await tool("compact_session", { session }, "ses_pixel"), { text: "\"Sign-in\" will be summarized when its turn ends.", isError: false });
+  compacting.delete(session);
+  assert.deepEqual(await tool("compact_session", { session }, "ses_pixel"), { text: "\"Sign-in\" will be summarized at its next step.", isError: false });
+  active.delete(session);
+  // What can't, in its box's own words.
+  const why = "Cursor can't summarize on request: it does so by itself when the conversation fills up.";
+  compacting.set(session, { message: why });
+  assert.deepEqual(await tool("compact_session", { session }, "ses_pixel"), { text: `Couldn't summarize "Sign-in": ${why}`, isError: true });
+  assert.equal(compacted.every(each => each === session), true);
+  assert.equal(compacted.length, 5);
 });
 
 test("a bot answers its sessions' asks as its own conversation could go ahead, recorded on the session: a push too, as in any conversation", async () => {

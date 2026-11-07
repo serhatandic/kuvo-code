@@ -1046,6 +1046,55 @@ import fs9 from "node:fs";
 import path8 from "node:path";
 import { fileURLToPath } from "node:url";
 
+// Packages/Box/src/shared/summaries.ts
+var asRows = (messages) => Array.isArray(messages) ? messages : [];
+var between = new Set(["synthetic", "system", "model-switched", "agent-switched", "shell"]);
+var asked2 = (row) => row?.type === "compaction" && row.reason === "manual";
+function onItsOwn(rows, index) {
+  for (let at = index + 1;at < rows.length; at++) {
+    if (between.has(rows[at]?.type))
+      continue;
+    return rows[at]?.type === "idle";
+  }
+  return true;
+}
+function summaryRowAtEnd(messages) {
+  const rows = asRows(messages);
+  let at = 0;
+  while (rows[at]?.type === "user" || between.has(rows[at]?.type))
+    at++;
+  while (rows[at]?.type === "idle")
+    at++;
+  while (between.has(rows[at]?.type))
+    at++;
+  const row = rows[at];
+  if (!asked2(row) || typeof row?.status !== "string")
+    return null;
+  return onItsOwn(rows, at) ? row : null;
+}
+var summaryAtEnd = (messages) => summaryRowAtEnd(messages)?.status ?? null;
+function pastSummaries(messages) {
+  const work = [];
+  messages.forEach((row, at) => {
+    if (!asked2(row) || !onItsOwn(messages, at)) {
+      work.push(row);
+      return;
+    }
+    let end = work.length - 1;
+    while (end >= 0 && between.has(work[end]?.type))
+      end--;
+    if (work[end]?.type === "idle")
+      work.splice(end, 1);
+  });
+  return work;
+}
+function workOutcome(messages, outcome) {
+  const rows = asRows(messages);
+  const work = pastSummaries(rows);
+  return work.length < rows.length ? work.find((row) => row?.type === "idle")?.outcome ?? outcome : outcome;
+}
+var lastTurnEnd = (messages) => pastSummaries(asRows(messages)).find((row) => row?.type === "idle");
+
 // Packages/Box/src/link/engine/sessions.ts
 import crypto3 from "node:crypto";
 var isHiddenRun = (session) => Boolean(session?.metadata?.kuvo?.engineFor || session?.metadata?.kuvo?.seat || session?.metadata?.kuvo?.reviewPart);
@@ -1198,6 +1247,17 @@ async function inboxOf(target, session) {
 async function isRunning(target, session) {
   const active = (await asked(target, "GET", "api/session/active"))?.data ?? {};
   return Array.isArray(active) ? active.includes(session) : Boolean(active[session]);
+}
+var messagesIn = (inbox) => inbox.filter((item) => item.type !== "compaction");
+async function letSummariesGo(target, session) {
+  for (const item of await inboxOf(target, session)) {
+    if (item.type === "compaction")
+      await asked(target, "DELETE", `api/session/${address(session)}/inbox/${address(item.id)}`).catch(() => {});
+  }
+}
+async function onlyASummaryFailed(target, session) {
+  const page = await asked(target, "GET", `api/session/${address(session)}/message?limit=6&order=desc`).catch(() => null);
+  return summaryAtEnd(page?.data) === "failed";
 }
 var setDelivery = (target, session, item, delivery) => asked(target, "PATCH", `api/session/${address(session)}/inbox/${address(item)}`, { delivery });
 var interrupt = (target, session, resume = false) => asked(target, "POST", `api/session/${address(session)}/interrupt${resume ? "?resume=true" : ""}`);
@@ -1472,7 +1532,7 @@ function putBack(session, { message, shown, held }, place) {
 }
 async function holdQueue(target, session, since, items = []) {
   const resumedSince = () => since !== undefined && (queueOf(session).resumed ?? 0) >= since;
-  const inbox = await inboxOf(target, session);
+  const inbox = messagesIn(await inboxOf(target, session));
   if (resumedSince())
     return queueOf(session);
   const held = queueOf(session).held;
@@ -1485,7 +1545,7 @@ async function holdQueue(target, session, since, items = []) {
     else if (await setDelivery(target, session, id, "queue").then(() => true, () => false))
       moved.push(id);
   }
-  const waiting = await inboxOf(target, session).catch(() => inbox);
+  const waiting = await inboxOf(target, session).then(messagesIn, () => inbox);
   return changeQueue2(session, (state) => {
     const there = (id) => waiting.some((item) => item.id === id) || Boolean(state.waiting?.some((each) => each.id === id));
     return since !== undefined && (state.resumed ?? 0) >= since ? state : { ...state, paused: state.paused || waiting.length > 0 || Boolean(state.waiting?.length), held: [...moved.filter(there), ...state.held.filter((id) => !moved.includes(id) && there(id))] };
@@ -1587,9 +1647,10 @@ function queueWatcher(target, { after = DRAIN_AFTER, schedule = setTimeout, canc
         }
         const at = Date.now();
         ended(session, stops, async (waited) => {
-          if ((queueOf(session).resumed ?? 0) < at)
+          if ((queueOf(session).resumed ?? 0) < at) {
             await holdQueue(target, session, at);
-          else if (waited)
+            await letSummariesGo(target, session);
+          } else if (waited)
             await drain(target, session);
         });
         break;
@@ -1610,9 +1671,17 @@ function queueWatcher(target, { after = DRAIN_AFTER, schedule = setTimeout, canc
       case "session.execution.failed": {
         forget(stops, session);
         const at = Date.now();
-        holdQueue(target, session, at).catch(() => {});
+        const onlySummary = onlyASummaryFailed(target, session);
+        onlySummary.then(async (only) => {
+          if (only)
+            return;
+          await holdQueue(target, session, at);
+          await letSummariesGo(target, session);
+        }).catch(() => {});
         ended(session, stops, async (waited) => {
-          if (waited && (queueOf(session).resumed ?? 0) >= at)
+          if (await onlySummary)
+            await drain(target, session);
+          else if (waited && (queueOf(session).resumed ?? 0) >= at)
             await drain(target, session);
         });
         break;
@@ -7303,12 +7372,45 @@ async function lastReplyOf(listed, signal) {
   }
   return null;
 }
+async function contextOf(listed, signal) {
+  const page = await call(listed.target, "GET", `/api/session/${encodeURIComponent(listed.data.id)}/message?limit=20&order=desc`, undefined, signal).catch(() => null);
+  for (const message of Array.isArray(page) ? page : []) {
+    if (!isObject(message))
+      continue;
+    if (message.type === "compaction" && message.status === "completed")
+      return { summarized: true };
+    if (message.type !== "assistant" || !isObject(message.tokens))
+      continue;
+    const { input, output, cache } = message.tokens;
+    return { used: (input ?? 0) + (cache?.read ?? 0) + (cache?.write ?? 0) + (output ?? 0) };
+  }
+  return;
+}
+async function summaryRowOf(target, session, signal) {
+  return summaryRowAtEnd(await lastMessages(target, session, signal));
+}
+var lastMessages = (target, session, signal) => call(target, "GET", `/api/session/${encodeURIComponent(session)}/message?limit=6&order=desc`, undefined, signal).catch(() => null);
+function outcomeOf(listed, page) {
+  return workOutcome(page, listed.data.outcome);
+}
+async function keepReadThroughSummary(target, session, signal) {
+  const route = `/api/session/${encodeURIComponent(session)}`;
+  const page = await lastMessages(target, session, signal);
+  if (summaryAtEnd(page) !== "completed")
+    return;
+  const before = lastTurnEnd(page)?.time?.created;
+  const listed = await call(target, "GET", route, undefined, signal).catch(() => null);
+  if (before === undefined || listed?.time?.idle === undefined || (listed.time.viewed ?? 0) < before)
+    return;
+  await call(target, "POST", `${route}/view`, { idle: listed.time.idle }, signal).catch(() => {});
+}
 var tokensOf = (data) => (data.tokens?.input ?? 0) + (data.tokens?.output ?? 0) + (data.tokens?.reasoning ?? 0);
 async function describeWork(listed, working, { replies = false, signal } = {}) {
   const { data } = listed;
   const folder = data.location?.directory ?? data.directory ?? "";
   const asking = await askingNow(listed, signal);
-  const state = asking ? "asking" : working.has(data.id) ? "working" : data.outcome === "succeeded" ? "finished" : data.outcome === "failed" ? "failed" : data.outcome === "interrupted" ? "stopped" : data.time?.idle ? "finished" : "idle";
+  const outcome = replies && !working.has(data.id) ? outcomeOf(listed, await call(listed.target, "GET", `/api/session/${encodeURIComponent(data.id)}/message?limit=6&order=desc`, undefined, signal).catch(() => null)) : data.outcome;
+  const state = asking ? "asking" : working.has(data.id) ? "working" : outcome === "succeeded" ? "finished" : outcome === "failed" ? "failed" : outcome === "interrupted" ? "stopped" : data.time?.idle ? "finished" : "idle";
   const reply = replies && state !== "working" ? await lastReplyOf(listed, signal) : null;
   const project = folder === CHATS ? undefined : projectNameOf(folder);
   return {
@@ -8538,14 +8640,10 @@ function errorOf(value, at) {
 }
 async function turnError(target, session, signal) {
   const page = await call(target, "GET", `/api/session/${encodeURIComponent(session)}/message?limit=5&order=desc`, undefined, signal).catch(() => null);
-  for (const message of Array.isArray(page) ? page : []) {
-    if (!isObject(message) || message.type !== "idle")
-      continue;
-    if (message.outcome !== "failed")
-      return null;
-    return errorOf(message.error, Number(isObject(message.time) ? message.time.created : 0) || undefined) ?? { type: "", message: "" };
-  }
-  return null;
+  const end = lastTurnEnd(page);
+  if (end?.outcome !== "failed")
+    return null;
+  return errorOf(end.error, Number(end.time?.created ?? 0) || undefined) ?? { type: "", message: "" };
 }
 function isFree(model) {
   if (!isObject(model))
@@ -8682,10 +8780,15 @@ var took = (ms) => {
   const minutes = Math.round(ms / 60000);
   return minutes < 1 ? "under a minute" : minutes < 90 ? `${minutes} min` : `${Math.round(minutes / 60)} h`;
 };
-async function wakeLine(event, session, target, still) {
+function namedOf(session) {
   const folder = session.location?.directory ?? session.directory ?? "";
-  const project = projectNameOf(folder);
-  const named = `"${session.title || "New Session"}" ${placeWords({ project, folder })} (address ${session.id})`;
+  return `"${session.title || "New Session"}" ${placeWords({ project: projectNameOf(folder), folder })} (address ${session.id})`;
+}
+function notSummarizedLine(session, why) {
+  return `[Session not summarized] ${namedOf(session)}: ${why ? cut(why.replace(/\.+$/, ""), 400) : "It couldn't"}. Its conversation and work are as they were.`;
+}
+async function wakeLine(event, session, target, still) {
+  const named = namedOf(session);
   switch (event.type) {
     case "session.execution.succeeded": {
       const reply = await lastReplyOf({ target, data: session });
@@ -8805,14 +8908,15 @@ async function latestMessages(target, session) {
       if (isObject(message) && typeof message.id === "string")
         messages.push(message);
     const next = page?.cursor?.next ?? page?.cursor?.previous;
-    if (!data.length || !next || turnIn(messages).before >= 0)
+    if (!data.length || !next || turnIn(pastSummaries(messages)).before >= 0)
       break;
     query = `limit=100&cursor=${encodeURIComponent(next)}`;
   }
   return messages;
 }
 async function lastReply(target, session) {
-  const messages = await latestMessages(target, session);
+  const whole = await latestMessages(target, session);
+  const messages = pastSummaries(whole);
   const at = messageTime;
   const newest = (type) => {
     const index = messages.findIndex((message) => message.type === type);
@@ -8830,7 +8934,7 @@ async function lastReply(target, session) {
     if (text)
       break;
   }
-  return { id: reply?.id ?? null, at: at(reply), turn: ended?.id ?? null, turnAt: at(ended), text, began: beganBy(turn), underWay: from === 0 && turn.some(ofTurn) };
+  return { id: reply?.id ?? null, at: at(reply), turn: ended?.id ?? null, turnAt: at(ended), text, began: beganBy(turn), underWay: from === 0 && turn.some(ofTurn), whole };
 }
 function isNews(was, last) {
   if (last.id && last.id === was.reply)
@@ -9148,7 +9252,7 @@ function workWatcher(source, targets, { gather = GATHER, schedule = setTimeout, 
     const waited = readTold(toldFile)?.waiting?.[data.id];
     if (waited && waited.from === from)
       return finish(data, starter, last);
-    const outcome = data.outcome;
+    const outcome = workOutcome(last.whole, data.outcome);
     const failed = outcome === "failed";
     const reply = last.id && last.id !== was.reply ? last.id : null;
     const failedBare = failed && !reply && !!last.turn && last.turn !== was.turn && !(was.at && (last.turnAt ?? Infinity) <= was.at);
@@ -9239,6 +9343,18 @@ function workWatcher(source, targets, { gather = GATHER, schedule = setTimeout, 
       const bot = worksFor(session)?.bot;
       if (bot)
         noteWorkChanged(bot);
+      if (event.type === "session.execution.succeeded" || event.type === "session.execution.failed") {
+        const summary = await summaryRowOf(source, session.id);
+        if (summary?.status === "failed") {
+          if (starter && wakes.includes("finished") && !isArchived(session) && readStopped(stoppedFile)[session.id] === undefined) {
+            const error = errorOf(event.data.error) ?? errorOf(summary.error);
+            tell(starter, notSummarizedLine(session, error?.message), false);
+          }
+          return await settle(session.id);
+        }
+        if (summary?.status === "completed" && event.type === "session.execution.succeeded")
+          return await settle(session.id);
+      }
       const form = event.type === "form.created" ? event.data?.form ?? event.data : null;
       if (form && isAutopilot(session)) {
         const asked = { ...form, sessionID: form.sessionID ?? id };
@@ -11121,12 +11237,17 @@ async function noticeFor(event, get) {
       const ended = await session(id);
       if (ended.parentID || isHiddenRun(ended))
         return null;
+      const page = await get(`api/session/${encodeURIComponent(id)}/message?limit=6&order=desc`).catch(() => null);
+      const summary = summaryAtEnd(page?.data);
+      if (summary === "failed")
+        return about(ended, "failed", "Couldn't summarize the conversation.");
       if (event.type === "session.execution.failed")
         return about(ended, "failed", "Stopped with an error.");
+      if (summary === "completed")
+        return null;
       let reply = "";
       try {
-        const page = await get(`api/session/${encodeURIComponent(id)}/message?limit=6&order=desc`);
-        for (const message of page.data ?? []) {
+        for (const message of page?.data ?? []) {
           if (message.type !== "assistant")
             continue;
           reply = plain2((message.content ?? []).filter((part) => part.type === "text").map((part) => part.text).join(" "));
@@ -12803,7 +12924,7 @@ function conversationMarkdown(title, messages, agent) {
     speaker = who;
     blocks.push(words);
   };
-  for (const message of messages) {
+  for (const [at, message] of messages.entries()) {
     if (message.type === "user") {
       const written = String(message.text ?? "");
       const mail = /^\[Message from (.*) · (ses_\S+|unknown)\] \([^\n]*\)\n\n([\s\S]*)$/.exec(written);
@@ -12840,9 +12961,15 @@ function conversationMarkdown(title, messages, agent) {
       const output = String(message.output?.output ?? "").trim();
       say("User", "Ran `" + message.command + "`" + (output ? "\n\n```\n" + output + "\n```" : ""));
     } else if (message.type === "idle" && message.outcome === "failed") {
+      const before = messages[at - 1];
+      if (before?.type === "compaction" && before.status === "failed")
+        continue;
       say("Stopped", `It stopped with an error: ${message.error?.message?.trim() || "the engine gave no reason."}`);
     } else if (message.type === "compaction") {
-      say(agent, "_Summarized the conversation so far._");
+      if (message.status === "completed")
+        say(agent, "_Summarized the conversation so far._");
+      else if (message.status === "failed")
+        say(agent, "_Couldn't summarize the conversation._");
     }
   }
   if (steps.length)
@@ -13177,7 +13304,6 @@ function noteSeen(id, now = Date.now()) {
     writePrivate(LETTERS_SEEN, JSON.stringify(seen));
   });
 }
-var answerSeen = (answers) => `answer:${answers}`;
 var delivering = new Set;
 async function answerTo(target, session, id, { wait = 2000, signal, by, fresh = false } = {}) {
   return (await awaitingAnswer(session, by, () => waitForAnswer(target, session, id, wait, signal, fresh))).text;
@@ -13240,14 +13366,8 @@ async function takeLetter(sender, letter, { send, targets, answer = () => {}, to
     return;
   if (seenAlready(id, now))
     return send(sender, { delivered: { id, ok: true } });
-  const answers = typeof letter.answers === "string" && LETTER_ID.test(letter.answers) ? letter.answers : null;
-  if (answers && !isObject(letter.read) && seenAlready(answerSeen(answers), now)) {
+  if (typeof letter.answers === "string" && LETTER_ID.test(letter.answers) && (answered(sender, letter, now) || isObject(letter.read))) {
     noteSeen(id, now);
-    return send(sender, { delivered: { id, ok: true } });
-  }
-  if (answers && (answered(sender, letter, now) || isObject(letter.read))) {
-    noteSeen(id, now);
-    noteSeen(answerSeen(answers), now);
     return send(sender, { delivered: { id, ok: true } });
   }
   if (isObject(letter.read))
@@ -13303,8 +13423,6 @@ async function takeLetter(sender, letter, { send, targets, answer = () => {}, to
     delivering.delete(id);
   }
   noteSeen(note ? `note:${id}` : id, now);
-  if (answers)
-    noteSeen(answerSeen(answers), now);
   if (note) {
     noteHomes(note.about ?? [], sender.key, typeof letter.made === "number" ? Math.min(letter.made, now) : now);
     return send(sender, { delivered: { id, ok: true } });
@@ -20127,6 +20245,8 @@ async function watchEvents(read, tell, signal, answered = () => {}, { bots = fal
         goalHeld?.(event).catch(() => {});
         if (signIns)
           noteSignIn(event, source).catch(() => {}).finally(() => signedIn(event));
+        if (work && event.type === "session.execution.succeeded" && typeof event.data?.sessionID === "string")
+          keepReadThroughSummary(source, event.data.sessionID, connection.signal).catch(() => {});
         if (!bots) {
           if (event.type === "session.created")
             settleNewSession(source, event.data?.sessionID ?? event.data?.info?.id).catch(() => {});
@@ -20561,7 +20681,7 @@ function ended(id, outcome) {
     resolve(outcome);
   waiting.delete(id);
 }
-function outcomeOf(id) {
+function outcomeOf2(id) {
   return new Promise((resolve) => {
     let timer = null;
     const done = (outcome) => {
@@ -20750,7 +20870,7 @@ async function startMove(kind, thing, to, signal) {
   };
   if (!noteFirst(record))
     return { ok: false, status: 409, message: say.moving };
-  const outcome = outcomeOf(id);
+  const outcome = outcomeOf2(id);
   if (watching)
     drive(id);
   return outcome;
@@ -23850,7 +23970,7 @@ async function oneOfMine(caller, session, targets, doing, signal) {
   }
   if (title === null)
     return { error: refused(`There's no session ${session.trim()} here. Use list_sessions to see yours.`) };
-  return { error: refused(doing === "stop" ? `"${title}" isn't yours to stop: ask the user.` : `"${title}" isn't one of your sessions: only the user answers what it asks.`) };
+  return { error: refused(doing === "answer" ? `"${title}" isn't one of your sessions: only the user answers what it asks.` : `"${title}" isn't yours to ${doing}: ask the user.`) };
 }
 async function listSessionsTool(caller, targets, signal) {
   const listed = await mine(caller, targets, signal);
@@ -23865,7 +23985,9 @@ async function listSessionsTool(caller, targets, signal) {
     const under = work.depth > 1 ? `, started by ${work.startedBy}` : "";
     const reply = work.lastReply && work.state !== "asking" ? `
   Last reply: ${work.lastReply}` : "";
-    lines.push(`- ${work.title} (address ${work.session}), ${placeWords(work)}: ${state}${model}${under}${work.tokens ? ` · ${work.tokens.toLocaleString("en-US")} tokens` : ""}${reply}`);
+    const context = await contextOf(each, signal);
+    const held = !context ? "" : ("used" in context) ? ` · ${context.used.toLocaleString("en-US")} tokens in context now` : " · just summarized, context size known after its next step";
+    lines.push(`- ${work.title} (address ${work.session}), ${placeWords(work)}: ${state}${model}${under}${held}${work.tokens ? ` · ${work.tokens.toLocaleString("en-US")} tokens used in total` : ""}${reply}`);
   }
   return said(`Your sessions, the latest first:
 ${lines.join(`
@@ -23890,6 +24012,27 @@ async function stopSessionTool(caller, args, targets, signal) {
     return said(`Stopped and archived "${data.title || "New Session"}".`);
   }
   return said(`Stopped "${data.title || "New Session"}".`);
+}
+async function compactSessionTool(caller, args, targets, signal) {
+  const found = await oneOfMine(caller, args.session, targets, "compact", signal);
+  if ("error" in found)
+    return found.error;
+  const { target, data } = found.listed;
+  const title = data.title || "New Session";
+  const working = (await workingNow([target], signal)).has(data.id);
+  let answer;
+  try {
+    answer = await call(target, "POST", `/api/session/${encodeURIComponent(data.id)}/compact`, {}, signal);
+  } catch (error) {
+    return refused(`Couldn't summarize "${title}": ${why(error)}`);
+  }
+  changed(data);
+  const state = isObject(answer) ? answer.state : undefined;
+  if (state === "waiting")
+    return said(`"${title}" will be summarized when its turn ends.`);
+  if (working && state !== "compacting")
+    return said(`"${title}" will be summarized at its next step.`);
+  return said(`Summarizing "${title}" now. list_sessions shows its context size again after its next step.`);
 }
 function commandsInSandbox(target, permission) {
   let engine = false;
@@ -24069,7 +24212,7 @@ async function finishGoalTool(caller, args, targets) {
 }
 
 // Packages/Box/src/link/letters/tools.ts
-var AGENT_TOOLS = ["list_agents", "send_message", "read_conversation", "start_session", "list_sessions", "stop_session", "answer_ask", "list_models", "make_project", "list_projects", "propose_goal", "goal_progress", "may_spend", "finish_goal"];
+var AGENT_TOOLS = ["list_agents", "send_message", "read_conversation", "start_session", "list_sessions", "stop_session", "compact_session", "answer_ask", "list_models", "make_project", "list_projects", "propose_goal", "goal_progress", "may_spend", "finish_goal"];
 var isAgentTool = (name) => AGENT_TOOLS.includes(name);
 var said2 = (text) => ({ text, isError: false });
 var refused2 = (text) => ({ text, isError: true });
@@ -24318,6 +24461,7 @@ async function agentTool(name, args, session, place) {
     }
     case "list_sessions":
     case "stop_session":
+    case "compact_session":
     case "answer_ask": {
       if (!root)
         return refused2("Only a conversation on this computer has sessions of its own.");
@@ -24326,6 +24470,8 @@ async function agentTool(name, args, session, place) {
         return listSessionsTool(caller, targets, place.signal);
       if (name === "stop_session")
         return stopSessionTool(caller, args, targets, place.signal);
+      if (name === "compact_session")
+        return compactSessionTool(caller, args, targets, place.signal);
       return answerAskTool(caller, args, targets, place.signal);
     }
   }
@@ -29989,6 +30135,7 @@ export {
   keepJobs,
   keepKeeper,
   keepMoving,
+  keepReadThroughSummary,
   keepSkillTrashClear,
   keptAwake,
   keysNamedHere,
@@ -30130,6 +30277,7 @@ export {
   steering,
   stopMacLink,
   stopMacPeers,
+  stopSession,
   stopWork,
   takeAgents,
   takeDoc,

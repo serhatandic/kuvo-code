@@ -688,6 +688,18 @@ describe("a group chat on a machine", () => {
     expect((await call("GET", ["../x"])).status).toBe(404)
   })
 
+  test("/compact in a group chat: it says why not, and nobody is told anything", async () => {
+    const { groups, store } = runner()
+    const call = (method: string, parts: string[], body: unknown = {}) => groupRoutes(groups, store, method, parts, async () => body)
+    groups.put(group(), [], "held", false)
+    groups.activate("grp_team000001")
+    const asked = await call("POST", ["grp_team000001", "send"], { text: " /compact " })
+    expect(asked.status).toBe(400)
+    expect(((await asked.json()) as any).message).toBe("A group chat can't be summarized: each bot keeps its own conversation, and starts it over when it grows too long.")
+    expect(groups.get("grp_team000001")?.messages ?? []).toEqual([])
+    expect(engine.requests.filter((request) => request.path.endsWith("/prompt"))).toEqual([])
+  })
+
   test("deleted through its route: not while it moves; once it's here it goes, and then there's no such chat", async () => {
     const { groups, store } = runner()
     const call = (method: string, parts: string[], body: unknown = {}) => groupRoutes(groups, store, method, parts, async () => body)

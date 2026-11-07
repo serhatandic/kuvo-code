@@ -35,6 +35,7 @@ const KEPT_IN_HOME = ["*.toml", "hooks-paths", "disabled-hooks", "*.sh"]
 
 export class GrokAgent implements Agent {
   id = "grok"
+  compacts = true
   readonly providerID: string
   get name() {
     return accountName("Grok", this.instance)

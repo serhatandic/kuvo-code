@@ -88,6 +88,37 @@ afterEach(() => {
 })
 
 describe("a goal", () => {
+  test("a summary asked for after a turn isn't taken for the turn: that turn is still what's checked", async () => {
+    engine.verdicts = [`{"verdict": "met", "reason": "npm test exits 0."}`]
+    engine.holding = true
+    await goals.set("ses_work", "all tests pass")
+    await until(() => engine.synthetic.length === 1)
+    engine.holdingReads = true
+    engine.finish()
+    // Read only once the summary has ended too (its stream dropped, say).
+    await until(() => engine.conversations.get("ses_work")!.at(-1)?.type === "idle")
+    engine.conversations.get("ses_work")!.push({ id: "msg_zzsum", type: "compaction", status: "completed", reason: "manual", time: { created: 2 } }, { id: "msg_zzend", type: "idle", outcome: "succeeded", time: { created: 3 } })
+    engine.answerReads()
+    await until(() => goal()?.state === "met")
+    expect(engine.checks).toHaveLength(1)
+  })
+
+  test("a summary taken during a turn on the engine is part of that turn: the turn is what's checked", async () => {
+    engine.verdicts = [`{"verdict": "met", "reason": "npm test exits 0."}`]
+    // A step of it, the summary at the next, and its end, with nothing written after.
+    engine.turns.push({ tool: false, text: "" })
+    engine.holding = true
+    await goals.set("ses_work", "all tests pass")
+    await until(() => engine.synthetic.length === 1)
+    engine.conversations.get("ses_work")!.push(
+      { id: "msg_zstep", type: "assistant", content: [{ type: "text", text: "Tests pass." }], time: { created: 2 } },
+      { id: "msg_zmid", type: "compaction", status: "completed", reason: "manual", time: { created: 2 } },
+    )
+    engine.finish()
+    await until(() => goal()?.state === "met")
+    expect(engine.checks).toHaveLength(1)
+  })
+
   test("starts the agent on it, keeps it going while it isn't met, and stops once a check finds it met", async () => {
     engine.verdicts = [`{"verdict": "not_met", "reason": "2 tests in test/auth still fail."}`, `{"verdict": "met", "reason": "npm test exits 0."}`]
     const set = await goals.set("ses_work", "all tests in test/auth pass")

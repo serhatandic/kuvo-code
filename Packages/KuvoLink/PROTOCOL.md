@@ -745,8 +745,10 @@ client shows it from the same routes.
   fix what they find, and end with a short report.
 - **Tools** (`POST kuvo/agent-tools`, any conversation, for the sessions under it):
   `list_sessions` (each with where it stands: working, asking and what, with the ask's id,
-  finished, failed, stopped; its model, tokens and last reply's first lines), `stop_session`
-  (`{session, archive?}`; only one of its own), `answer_ask` (`{session, ask, decision: allow|deny,
+  finished, failed, stopped; its model, the tokens in its context now, or that it was just
+  summarized, the tokens it used in total, and last reply's first lines), `stop_session`
+  (`{session, archive?}`; only one of its own), `compact_session` (`{session}`; only one of its
+  own, by `POST api/session/<id>/compact` where it runs), `answer_ask` (`{session, ask, decision: allow|deny,
   reason}`, or `{session, ask, answer, reason}` for a question), `list_models` (the models there's
   an account for here, `provider/model`, with their efforts; none its provider is retiring).
 - **Models that can't answer** (`work/unanswering.ts`, `run/work/unanswering.json`, bridge
@@ -802,7 +804,9 @@ client shows it from the same routes.
 - **`GET kuvo/work?bot=<id>`** → `{bot, sessions: [{session, title, folder, project?, startedBy,
   depth, model?, mode?, state, asks?, started, tokens, cost?, lastReply?}], answered: [answer with
   its session], today: {started, working, tokens, cost?}, limits}`: its sessions the latest first,
-  archived ones left out. 400 without `bot`, 404 for no such bot here, 503 with no engine.
+  archived ones left out. 400 without `bot`, 404 for no such bot here, 503 with no engine. Each
+  `state` is as of the read. `today.working` stays, since clients until 0.7.2 need it to read the
+  report, but no client shows it (see At work).
 - **`GET kuvo/work/events`** (ndjson): `{"changed": {<bot>: <ms>}}` now and at each change to a
   bot's work (a session started, stopped, finished or asking, an ask answered, its limits); a
   client reads that bot's work again when its time moves. Kept in `run/work/changes.json`.
@@ -822,6 +826,23 @@ client shows it from the same routes.
   another (its session that started one, say).
 
   Clients show the bot looking after its sessions with these marks. The first line is what was there already; each new `id` after it plays once. Only the latest minute is kept, at most 50, in `run/work/oversight.json`. A box from before it answers 404.
+- **At work** (KuvoClient's `AtWork`): whether a bot is at work and how many of its sessions are
+  isn't sent as an answer. Each client works it out the same way, from facts its box states, for a
+  bot's row, face, tab and header and the bar over its composer:
+  - a session is *working* when its engine (or the coding agents' bridge) runs a turn of it
+    (`session.status`, `/api/session/active`) or Background work lists it, and *at work* when it's
+    working or waiting on an answer (a permission or question, its own or a subagent's);
+  - the sessions a bot oversees are those marked `kuvo.by` with its id (the box marks those its
+    sessions start too, so no client follows `startedBy`), and not archived (`time.archived`, `kuvo.archived`, or `kuvo: {archived: true}`). A
+    subagent isn't one: it keeps the session it works for at work, through Background work;
+  - a bot is at work through them (its face and row) while one is working, unless its wake-ups are
+    paused (it sleeps; its bar still lists them). One only waiting on you shows that on its own row;
+  - the bar takes `kuvo/work`'s sessions as the client knows them now: one asking, asking; one
+    working, working; one the report had at work that no longer is, done. So it counts what the row
+    counts without reading the report again.
+
+  A box from before Background work lists nothing there, and its report doesn't count it either:
+  both say a session waiting on a command it left running isn't at work.
 - **Background work** (`work/background.ts`): what still runs for a session once its own turn is
   over. One fact, worked out on the box, that clients show and never work out themselves.
   - **`GET kuvo/work/background`** → `{sessions: {<session>: {commands, subagents, tasks, since}}}`,
@@ -830,8 +851,8 @@ client shows it from the same routes.
     `subagents`: subagents at work under it, a review's parts and other hidden runs left out.
     `tasks`: anything else its agent keeps going. A client shows a session at work when its own turn
     runs or it's listed here. Kept in `run/work/background.json`, per place (engine, bridge).
-  - **Counting at work**: `kuvo/work`'s `state` and `today.working`, a bot's limits and
-    `list_sessions` all go by the same fact. One running 6 hours (a dev server) stops counting, though
+  - **Counting at work**: `kuvo/work`'s `state` and `today.working`, a bot's limits,
+    `list_sessions` and every client's At work all go by the same fact. One running 6 hours (a dev server) stops counting, though
     it may still run, and a client's list of commands still shows it. A goal's Mac stays awake for it
     too, but it holds off a goal's nudge only for 30 minutes, and never hides a turn that failed at a
     limit.
@@ -1510,6 +1531,22 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     too: it runs those through an engine session of its own, which carries
     `metadata.kuvo.engineFor` and is never shown (hide it in the engine's session list).
     `…/session/<id>/fork {before}` makes a new session from a message.
+  - `POST …/session/<id>/compact` summarizes a conversation, on the engine as on the agents (the
+    command `/compact`, and a lead's `compact_session`). On the agents: `{"data": {"state":
+    "compacting"}}`, or `"waiting"` while a turn runs (held to its end, first in the queue, as an
+    inbox item of type `compaction`, and dropped with a notice if the turn doesn't succeed; asked
+    twice is once). On the engine it waits for the next step; Stop and a failed run take it from the
+    inbox, and it's never held or paused for. 400 `{"message"}` is a sentence to show: nothing to summarize yet, a subagent's,
+    an agent that can't be asked (Cursor, Antigravity), or on the agents an undo staged. On the
+    engine an undo staged is made final by it, as by a message. It shows as the engine's own does, a
+    `compaction` message with `reason: "manual"` and `session.compaction.started`, `.ended` or
+    `.failed`, then `idle`. It adds no reply, and what's there stays. Its `status` says how it went:
+    the engine's `idle` and run end say `succeeded` even for one that failed.
+    Only one that ran at rest is a turn of its own (an `idle` before it, `Packages/Box/src/shared/summaries.ts`):
+    taken at a step of a run on the engine, the `idle` after it ends that run, told as any run's.
+    A turn of its own that went through is no news: it stays read if it was, with no notification and
+    no `[Session finished]` to a lead, who still reads how the work before it went. One that failed
+    says why, tells a lead `[Session not summarized]` and pauses nothing.
 - Plan accounts (Copilot, OpenCode, GitLab, Poe, a provider's API key), on a Mac and a machine,
   as Settings › Accounts has them: the phone sees, reads and signs in to them as the app does.
   Each computer keeps its own: a new
@@ -2338,7 +2375,7 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
 - `kuvo/groups`: the group chats that live on the computer asked, with their bots (face, name, session), who's
   talking, whether one is under way or paused, and the last thing said; `kuvo/groups/events`
   streams that list as it changes, and `kuvo/groups/<id>/events` one chat's latest messages,
-  the same way. `POST kuvo/groups/<id>` writes to it (`{"text"}`); `…/stop`, `…/keep-going`
+  the same way. `POST kuvo/groups/<id>` writes to it (`{"text"}`; 400 `{"message"}` for `/compact`, which a chat of several has no one conversation for); `…/stop`, `…/keep-going`
   and `…/viewed` do what they say; `…/undo` (`{"message"}`) takes a message of yours back and
   answers with what was taken. A wrap-up can carry `tasks`, who does what: each with `id`, `bot`,
   `task`, `state` (`proposed`, `waiting`, `working`, `done` or `failed`), `started`/`finished`,

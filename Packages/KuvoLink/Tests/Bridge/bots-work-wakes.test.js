@@ -31,6 +31,8 @@ const sessions = {
 };
 let prompts = [];
 let asking = {};
+// A session's latest messages where a test says, newest first.
+const conversations = {};
 const engine = http.createServer((request, response) => {
   let body = "";
   request.on("data", chunk => { body += chunk; });
@@ -44,6 +46,7 @@ const engine = http.createServer((request, response) => {
     const one = request.url.match(/^\/api\/session\/([^/?]+)(\/[^?]*)?/);
     const id = one && decodeURIComponent(one[1]);
     if (one && !one[2]) return sessions[id] ? reply({ data: sessions[id] }) : reply({ message: "No such session." }, 404);
+    if (one?.[2] === "/message" && conversations[decodeURIComponent(one[1])]) return reply({ data: conversations[decodeURIComponent(one[1])] });
     if (one?.[2] === "/message") return reply({ data: [{ id: "msg_9", type: "assistant", content: [{ type: "text", text: "Sign-in works, with tests. Reviewers found 2 problems; both fixed." }] }] });
     if (one?.[2] === "/prompt") {
       prompts.push({ to: id, ...JSON.parse(body) });
@@ -311,6 +314,59 @@ test("a session stopped while the box was down (Stop All, or cut short) isn't to
     assert.deepEqual(prompts, []);
   } finally {
     delete sessions.ses_signin.outcome;
+    for (const each of Object.values(sessions)) each.time.updated = 1;
+  }
+});
+
+test("a turn that failed, then a summary, while the box was down: its bot hears the turn failed, though the engine's outcome says otherwise", async () => {
+  const toldFile = path.join(home, "run", "work", "told.json");
+  fs.mkdirSync(path.dirname(toldFile), { recursive: true });
+  fs.writeFileSync(toldFile, JSON.stringify({ since: 5, sessions: {} }));
+  sessions.ses_signin.time.updated = 10;
+  sessions.ses_signin.outcome = "succeeded";
+  conversations.ses_signin = [
+    { id: "msg_i2", type: "idle", outcome: "succeeded" },
+    { id: "msg_c", type: "compaction", status: "completed", reason: "manual" },
+    { id: "msg_i1", type: "idle", outcome: "failed", error: { message: "It broke." } },
+    { id: "msg_9", type: "assistant", content: [{ type: "text", text: "Starting on it." }] },
+  ];
+  try {
+    const first = clock();
+    await link.workWatcher(source, () => [source], { schedule: first.schedule }).caughtUp;
+    await first.runAll();
+    assert.equal(prompts.length, 1);
+    // Why, too: the turn's own words, past the summary's end.
+    assert.match(prompts[0].text, /\[Session failed\] "Sign-in".* stopped with an error: It broke\./);
+    assert.doesNotMatch(prompts[0].text, /\[Session finished\]/);
+  } finally {
+    delete sessions.ses_signin.outcome;
+    delete conversations.ses_signin;
+    for (const each of Object.values(sessions)) each.time.updated = 1;
+  }
+});
+
+test("a turn its bot was told failed, then a summary, then the box starts again: it isn't told again", async () => {
+  const toldFile = path.join(home, "run", "work", "told.json");
+  fs.mkdirSync(path.dirname(toldFile), { recursive: true });
+  fs.writeFileSync(toldFile, JSON.stringify({ since: 5, sessions: { ses_signin: { reply: "msg_old", turn: "msg_i1", at: 8 } } }));
+  sessions.ses_signin.time.updated = 10;
+  sessions.ses_signin.outcome = "succeeded";
+  conversations.ses_signin = [
+    { id: "msg_i2", type: "idle", outcome: "succeeded", time: { created: 10 } },
+    { id: "msg_c", type: "compaction", status: "completed", reason: "manual", time: { created: 9 } },
+    { id: "msg_i1", type: "idle", outcome: "failed", error: { message: "It broke." }, time: { created: 7 } },
+    { id: "msg_u", type: "user", text: "Go.", time: { created: 6 } },
+    { id: "msg_i0", type: "idle", outcome: "succeeded", time: { created: 4 } },
+    { id: "msg_old", type: "assistant", content: [{ type: "text", text: "Earlier." }], time: { created: 3 } },
+  ];
+  try {
+    const first = clock();
+    await link.workWatcher(source, () => [source], { schedule: first.schedule }).caughtUp;
+    await first.runAll();
+    assert.deepEqual(prompts, []);
+  } finally {
+    delete sessions.ses_signin.outcome;
+    delete conversations.ses_signin;
     for (const each of Object.values(sessions)) each.time.updated = 1;
   }
 });

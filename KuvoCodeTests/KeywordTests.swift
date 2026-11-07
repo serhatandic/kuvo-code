@@ -81,6 +81,27 @@ import Testing
         return bridge
     }
 
+    /// `/compact` is on offer in a coding agent's conversation as in the engine's, goes to its box,
+    /// and what can't be summarized says why in the conversation, where the box's words show.
+    @Test func compactGoesToTheBoxAndSaysWhyWhenItCant() async throws {
+        defer { clean() }
+        serve(directory: "/tmp", answers: [])
+        let session = try JSONDecoder().decode(Session.self, from: JSONSerialization.data(withJSONObject: StubEngine.session(id, directory: "/tmp", extra: ["metadata": ["kuvoAgent": "cursor"]])))
+        let model = SessionModel(session: session, api: engine.api)
+        #expect(OutsideAgents.isAgentSession(session))
+        #expect(model.keywords.contains(.compact))
+
+        let why = "Cursor can't summarize on request: it does so by itself when the conversation fills up."
+        engine.on("POST", "/api/session/\(id)/compact", json: ["message": why], status: 400)
+        model.draftText = "/compact"
+        model.submitDraft(for: nil, queue: false, commands: [])
+        #expect(model.draftText.isEmpty)
+        try await until { model.failure != nil }
+        #expect(engine.requests("POST", "/api/session/\(id)/compact").count == 1)
+        #expect(told == 0, "it's no message to the agent")
+        #expect(model.failure?.contains(why) == true, "\(model.failure ?? "")")
+    }
+
     private func clean() {
         engine.stop()
         Drafts.shared.remove(id)

@@ -15,6 +15,7 @@ import { isObject } from "../../shared/json";
 import { locked, writePrivate } from "../files";
 import { RUN } from "../home";
 import { asked } from "./client";
+import { summaryAtEnd } from "../../shared/summaries";
 import { messageID } from "./sessions";
 import * as files from "../../shared/queues";
 import { isBoxNote, showsQueue, type Outgoing, type QueueState, type Shown, type Waiting } from "../../shared/queues";
@@ -67,6 +68,24 @@ async function inboxOf(target: Target, session: string): Promise<InboxEntry[]> {
 async function isRunning(target: Target, session: string): Promise<boolean> {
   const active = (await asked(target, "GET", "api/session/active") as { data?: string[] | Record<string, unknown> } | null)?.data ?? {};
   return Array.isArray(active) ? active.includes(session) : Boolean(active[session]);
+}
+
+// A summary asked for waits in an inbox too, but it's no message of yours: Stop and a failed run
+// let it go, and nothing waits for Resume on its account.
+const messagesIn = (inbox: InboxEntry[]) => inbox.filter(item => item.type !== "compaction");
+
+/** What a run's end leaves of a summary that was waiting: on the bridge it's gone by then, with a
+ * note in the conversation; the engine would run it unseen with whatever comes next. */
+async function letSummariesGo(target: Target, session: string): Promise<void> {
+  for (const item of await inboxOf(target, session)) {
+    if (item.type === "compaction") await asked(target, "DELETE", `api/session/${address(session)}/inbox/${address(item.id)}`).catch(() => {});
+  }
+}
+
+/** Whether a failed run was only a summary: the conversation is as it was. */
+async function onlyASummaryFailed(target: Target, session: string): Promise<boolean> {
+  const page = await asked(target, "GET", `api/session/${address(session)}/message?limit=6&order=desc`).catch(() => null) as { data?: unknown } | null;
+  return summaryAtEnd(page?.data) === "failed";
 }
 
 const setDelivery = (target: Target, session: string, item: string, delivery: InboxEntry["delivery"]) =>
@@ -380,7 +399,7 @@ function putBack(session: string, { message, shown, held }: { message: Outgoing 
 // messages a client held as they went (queued or not), put first, in that order.
 export async function holdQueue(target: Target, session: string, since?: number, items: string[] = []): Promise<QueueState> {
   const resumedSince = () => since !== undefined && (queueOf(session).resumed ?? 0) >= since;
-  const inbox = await inboxOf(target, session);
+  const inbox = messagesIn(await inboxOf(target, session));
   if (resumedSince()) return queueOf(session);
   const held = queueOf(session).held;
   const named = items.filter(id => inbox.some(item => item.id === id));
@@ -391,7 +410,7 @@ export async function holdQueue(target: Target, session: string, since?: number,
     if (inbox.find(item => item.id === id)?.delivery !== "steer") moved.push(id);
     else if (await setDelivery(target, session, id, "queue").then(() => true, () => false)) moved.push(id);
   }
-  const waiting = await inboxOf(target, session).catch(() => inbox);
+  const waiting = await inboxOf(target, session).then(messagesIn, () => inbox);
   return changeQueue(session, state => {
     // (One held that waits on the box stays held.)
     const there = (id: string) => waiting.some(item => item.id === id) || Boolean(state.waiting?.some(each => each.id === id));
@@ -535,8 +554,10 @@ export function queueWatcher(target: Target, { after = DRAIN_AFTER, schedule = s
         // look may have found it still at work), its next goes now.
         const at = Date.now();
         ended(session, stops, async waited => {
-          if ((queueOf(session).resumed ?? 0) < at) await holdQueue(target, session, at);
-          else if (waited) await drain(target, session);
+          if ((queueOf(session).resumed ?? 0) < at) {
+            await holdQueue(target, session, at);
+            await letSummariesGo(target, session);
+          } else if (waited) await drain(target, session);
         });
         break;
       }
@@ -556,8 +577,17 @@ export function queueWatcher(target: Target, { after = DRAIN_AFTER, schedule = s
         // (Not when resumed since.) Resumed while the bridge was still keeping what it changed:
         // its next goes once it's free.
         const at = Date.now();
-        holdQueue(target, session, at).catch(() => {});
-        ended(session, stops, async waited => { if (waited && (queueOf(session).resumed ?? 0) >= at) await drain(target, session); });
+        // Only a summary that failed: what's queued goes on, as after any turn.
+        const onlySummary = onlyASummaryFailed(target, session);
+        onlySummary.then(async only => {
+          if (only) return;
+          await holdQueue(target, session, at);
+          await letSummariesGo(target, session);
+        }).catch(() => {});
+        ended(session, stops, async waited => {
+          if (await onlySummary) await drain(target, session);
+          else if (waited && (queueOf(session).resumed ?? 0) >= at) await drain(target, session);
+        });
         break;
       }
       case "session.inbox.enqueued":

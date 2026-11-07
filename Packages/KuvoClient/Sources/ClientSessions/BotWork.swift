@@ -26,6 +26,13 @@ public struct SessionBackground: Decodable, Sendable, Hashable {
     public let subagents: Int
     public let tasks: Int
     public let since: Double
+
+    public init(commands: Int, subagents: Int, tasks: Int, since: Double) {
+        self.commands = commands
+        self.subagents = subagents
+        self.tasks = tasks
+        self.since = since
+    }
 }
 
 /// A box's sessions with something running besides their own turns, by session.
@@ -125,9 +132,11 @@ public struct BotWorkReport: Decodable, Sendable, Equatable {
         public let depth: Int
         public let model: Model?
         public let mode: String?
-        public let state: State
+        /// Where it stands: as its box said when the report was read, and, once a client has
+        /// `standing` it, as it knows now.
+        public internal(set) var state: State
         /// What it asks, in words, while it asks.
-        public let asks: String?
+        public internal(set) var asks: String?
         /// When it started, in ms since 1970.
         public let started: Double
         public let tokens: Int
@@ -139,15 +148,16 @@ public struct BotWorkReport: Decodable, Sendable, Equatable {
         public var isAtWork: Bool { state == .working || state == .asking }
     }
 
+    /// What it did today. (Its box says how many were working too, for clients from before
+    /// `AtWork`: read none of it here, as both apps work that out from the facts.)
     public struct Today: Decodable, Sendable, Equatable {
         public let started: Int
-        public let working: Int
         public let tokens: Int
         public let cost: Double?
     }
 
     public let bot: String
-    public let sessions: [Item]
+    public internal(set) var sessions: [Item]
     public let answered: [WorkAnswer]
     public let today: Today
     public let limits: WorkLimits?
@@ -177,7 +187,8 @@ public struct BotWorkReport: Decodable, Sendable, Equatable {
         projects = (try? container.decodeIfPresent([Lenient<MadeProject>].self, forKey: .projects))?.compactMap(\.value) ?? []
     }
 
-    /// Its sessions still at it, the latest first.
+    /// Its sessions still at it, the latest first: read from a report `standing` as the client
+    /// knows them now.
     public var atWork: [Item] { sessions.filter(\.isAtWork) }
 }
 

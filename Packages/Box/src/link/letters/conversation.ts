@@ -15,6 +15,7 @@ export const READ_BY_MAIL = 20_000;
 interface ReadMessage {
   id: string;
   type: string;
+  status?: string;
   text?: string;
   files?: { name?: string }[];
   content?: { type: string; text?: string; name?: string; state?: { input?: Record<string, unknown> } }[];
@@ -61,7 +62,7 @@ export function conversationMarkdown(title: string, messages: ReadMessage[], age
     speaker = who;
     blocks.push(words);
   };
-  for (const message of messages) {
+  for (const [at, message] of messages.entries()) {
     if (message.type === "user") {
       const written = String(message.text ?? "");
       const mail = /^\[Message from (.*) · (ses_\S+|unknown)\] \([^\n]*\)\n\n([\s\S]*)$/.exec(written);
@@ -91,10 +92,13 @@ export function conversationMarkdown(title: string, messages: ReadMessage[], age
       const output = String(message.output?.output ?? "").trim();
       say("User", "Ran `" + message.command + "`" + (output ? "\n\n```\n" + output + "\n```" : ""));
     } else if (message.type === "idle" && message.outcome === "failed") {
-      // Why a turn stopped, as the conversation shows it.
+      // Why a turn stopped, as the conversation shows it. (A summary that failed says so itself.)
+      const before = messages[at - 1];
+      if (before?.type === "compaction" && before.status === "failed") continue;
       say("Stopped", `It stopped with an error: ${message.error?.message?.trim() || "the engine gave no reason."}`);
     } else if (message.type === "compaction") {
-      say(agent, "_Summarized the conversation so far._");
+      if (message.status === "completed") say(agent, "_Summarized the conversation so far._");
+      else if (message.status === "failed") say(agent, "_Couldn't summarize the conversation._");
     }
   }
   if (steps.length) say(agent, "");

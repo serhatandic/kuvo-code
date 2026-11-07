@@ -518,3 +518,90 @@ extension Message {
         }
     }
 }
+
+public extension Array where Element == Message {
+    /// Whether the message at `index` is a summary you asked for that ran on its own: what came
+    /// before it had ended. One asked for during a run on the engine is taken at a step of that
+    /// run, and the end after it is the end of that run's real work (as the box's
+    /// `shared/summaries.ts`).
+    private func isSummaryOnItsOwn(at index: Int) -> Bool {
+        guard case .compaction(let summary) = self[index], summary.reason == "manual" else { return false }
+        var before = index - 1
+        while before >= startIndex, isBetweenTurns(self[before]) { before -= 1 }
+        guard before >= startIndex else { return true }
+        if case .idle = self[before] { return true }
+        return false
+    }
+
+    /// What's written between turns: notes, a model or mode picked, a command you ran.
+    private func isBetweenTurns(_ message: Message) -> Bool {
+        switch message {
+        case .synthetic, .system, .modelSwitched, .agentSwitched, .shell: true
+        default: false
+        }
+    }
+
+    /// The summary you asked for that ended with the end at `index`, if one did.
+    private func summaryEnded(at index: Int) -> Int? {
+        var before = index - 1
+        while before >= startIndex, isBetweenTurns(self[before]) { before -= 1 }
+        return before >= startIndex && isSummaryOnItsOwn(at: before) ? before : nil
+    }
+
+    /// The summary a session did last, if that's all it did since its last turn. How it went is its
+    /// `status`: the engine's run says it succeeded even for one that failed.
+    var summaryAtEnd: Message.Compaction? {
+        var at = endIndex - 1
+        // Past what's been written since (a message waiting its turn, a note), and its end.
+        while at >= startIndex, isBetweenTurns(self[at]) || { if case .user = self[at] { true } else { false } }() { at -= 1 }
+        while at >= startIndex, case .idle = self[at] { at -= 1 }
+        while at >= startIndex, isBetweenTurns(self[at]) { at -= 1 }
+        guard at >= startIndex, isSummaryOnItsOwn(at: at), case .compaction(let summary) = self[at] else { return nil }
+        return summary
+    }
+
+    /// Where the last turn of work ended, past any summaries you asked for after it.
+    var lastTurnEndIndex: Int? {
+        var index = endIndex - 1
+        while index >= startIndex {
+            if case .idle = self[index] {
+                guard let summary = summaryEnded(at: index) else { return index }
+                index = summary
+            }
+            index -= 1
+        }
+        return nil
+    }
+
+    /// That end, which says how that work went: a summary after it says how the summary did.
+    var lastTurnEnd: Message.Idle? {
+        guard let index = lastTurnEndIndex, case .idle(let idle) = self[index] else { return nil }
+        return idle
+    }
+
+    /// Where the conversation ends for Try Again: past a model or mode picked after a failed run,
+    /// and past a summary you asked for after it, neither of which takes it away.
+    var whereItEnds: Int? {
+        var index = endIndex - 1
+        while index >= startIndex {
+            switch self[index] {
+            case .modelSwitched, .agentSwitched: index -= 1
+            case .compaction where isSummaryOnItsOwn(at: index): index -= 1
+            case .idle:
+                guard let summary = summaryEnded(at: index) else { return index }
+                index = summary - 1
+            default: return index
+            }
+        }
+        return nil
+    }
+
+    /// A message is sent again as it is after this, rather than its turn taken back first: that
+    /// would throw the summary away with it, and fail for the same reason as before.
+    func summarized(since message: String) -> Bool {
+        guard let from = firstIndex(where: { $0.id == message }) else { return false }
+        return indices[from...].contains { index in
+            if case .compaction(let summary) = self[index] { summary.status == "completed" && isSummaryOnItsOwn(at: index) } else { false }
+        }
+    }
+}

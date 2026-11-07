@@ -50,11 +50,87 @@ import Testing
     }
 
     /// One model call of a reply, with what it sent and got back.
-    private func step(_ session: SessionModel, input: Int, cached: Int, written: Int = 0, output: Int) throws {
-        let reply: [String: Any] = ["assistantMessageID": "msg_02"]
+    private func step(_ session: SessionModel, input: Int, cached: Int, written: Int = 0, output: Int, message: String = "msg_02") throws {
+        let reply: [String: Any] = ["assistantMessageID": message]
         session.apply(try engine.event("session.step.started", session: id, reply.merging(["agent": "build", "model": ["id": "gpt-5", "providerID": "openai"]]) { $1 }))
         let tokens: [String: Any] = ["input": input, "output": output, "reasoning": 0, "cache": ["read": cached, "write": written]]
         session.apply(try engine.event("session.step.ended", session: id, reply.merging(["finish": "tool-calls", "cost": 0.01, "tokens": tokens]) { $1 }))
+    }
+
+    /// Summarized: the number from before it would be wrong, so the gauge waits for the next step.
+    @Test func aSummaryClearsTheNumberUntilTheNextStep() async throws {
+        defer { engine.stop() }
+        let session = try await open(on: "anthropic", "sonnet")
+        try step(session, input: 2_000, cached: 150_000, output: 300)
+        #expect(session.contextUsed == 152_300)
+        session.apply(try engine.event("session.compaction.started", session: id, ["reason": "manual", "inputID": "msg_c"]))
+        #expect(session.contextUsed == 152_300, "not until it has")
+        session.apply(try engine.event("session.compaction.ended", session: id, [:]))
+        #expect(session.contextUsed == nil)
+        try step(session, input: 400, cached: 11_000, output: 100, message: "msg_03")
+        #expect(session.contextUsed == 11_500)
+    }
+
+    /// One that didn't go through leaves the conversation as full as it was.
+    @Test func aFailedSummaryKeepsTheNumber() async throws {
+        defer { engine.stop() }
+        let session = try await open(on: "anthropic", "sonnet")
+        try step(session, input: 2_000, cached: 150_000, output: 300)
+        session.apply(try engine.event("session.compaction.started", session: id, ["reason": "manual", "inputID": "msg_c"]))
+        session.apply(try engine.event("session.compaction.failed", session: id, [:]))
+        #expect(session.contextUsed == 152_300)
+    }
+
+    /// A summary you asked for isn't news: it says nothing and did nothing. One the engine did by
+    /// itself on the way, or a reply after it, is.
+    @Test func aRunThatOnlySummarizedIsNoNews() throws {
+        func messages(_ json: [[String: Any]]) throws -> [Message] {
+            try JSONDecoder().decode([Message].self, from: JSONSerialization.data(withJSONObject: json))
+        }
+        func summarized(_ messages: [Message]) -> Bool { messages.summaryAtEnd?.status == "completed" }
+        let time = ["created": 1]
+        let summary: [String: Any] = ["id": "msg_c", "type": "compaction", "time": time, "status": "completed", "reason": "manual"]
+        let idle: [String: Any] = ["id": "msg_i", "type": "idle", "time": time, "outcome": "succeeded"]
+        #expect(summarized(try messages([summary, idle])))
+        #expect(summarized(try messages([idle, summary, idle])))
+        // Taken at a step of a run on the engine, the end after it is that run's: its reply is news.
+        let said: [String: Any] = ["id": "msg_a", "type": "assistant", "time": time, "agent": "build", "model": ["id": "m", "providerID": "p"], "content": []]
+        #expect(!summarized(try messages([said, summary, idle])))
+        // A command you ran at rest before it isn't a run.
+        let ran: [String: Any] = ["id": "msg_s", "type": "shell", "time": time, "shellID": "sh_1", "command": "ls", "status": "completed"]
+        #expect(summarized(try messages([idle, ran, summary, idle])))
+        #expect(!summarized(try messages([summary.merging(["reason": "auto"]) { $1 }, idle])))
+        #expect(!summarized(try messages([summary.merging(["status": "failed"]) { $1 }, idle])))
+        #expect(!summarized(try messages([summary, ["id": "msg_u", "type": "user", "time": time, "text": "and then"], idle])))
+        // A message waiting its turn, or a model picked, written since: it's still what it did last.
+        #expect(summarized(try messages([idle, summary, idle, ["id": "msg_u", "type": "user", "time": time, "text": "and then"]])))
+        #expect(summarized(try messages([idle, summary, idle, ["id": "msg_m", "type": "model-switched", "time": time, "model": ["id": "m", "providerID": "p"]]])))
+    }
+
+    @Test func whatABotsMissedRunSaysWithASummaryAfterIt() throws {
+        func rows(_ json: [[String: Any]]) throws -> [Message] {
+            try JSONDecoder().decode([Message].self, from: JSONSerialization.data(withJSONObject: json))
+        }
+        func end(_ at: Int, _ outcome: String = "succeeded") -> [String: Any] { ["id": "msg_i\(at)", "type": "idle", "time": ["created": at], "outcome": outcome] }
+        func summary(_ at: Int, _ status: String = "completed") -> [String: Any] { ["id": "msg_c\(at)", "type": "compaction", "time": ["created": at], "status": status, "reason": "manual"] }
+        let said: [String: Any] = ["id": "msg_a", "type": "assistant", "time": ["created": 1], "agent": "build", "model": ["id": "m", "providerID": "p"], "content": []]
+        let switched: [String: Any] = ["id": "msg_m", "type": "model-switched", "time": ["created": 9], "model": ["id": "m", "providerID": "p"]]
+
+        // Its work was told as it ended, and a lead summarized it while this Mac was away: not again.
+        #expect(Workspace.missedNews(try rows([said, end(2), summary(3), end(4)]), outcome: .succeeded, told: 2) == nil)
+        // A summary that failed is all there is to say.
+        #expect(Workspace.missedNews(try rows([said, end(2), summary(3, "failed"), end(4)]), outcome: .succeeded, told: 2) == .couldntSummarize)
+        // Work not told yet is news, however the summary after it went.
+        #expect(Workspace.missedNews(try rows([said, end(2), summary(3), end(4)]), outcome: .succeeded, told: 1) == .finished)
+        #expect(Workspace.missedNews(try rows([said, end(2), summary(3, "failed"), end(4)]), outcome: .succeeded, told: 1) == .finished)
+        // A turn that failed stays failed, though the summary's run left the session's outcome succeeded.
+        #expect(Workspace.missedNews(try rows([said, end(2, "failed"), summary(3), end(4)]), outcome: .succeeded, told: 1) == .stopped)
+        #expect(Workspace.missedNews(try rows([said, end(2, "failed"), summary(3), end(4), switched]), outcome: .succeeded, told: 1) == .stopped)
+        // With nothing to read, what the session says; no summary, its end.
+        #expect(Workspace.missedNews([], outcome: .failed, told: 0) == .stopped)
+        #expect(Workspace.missedNews(try rows([said, end(2)]), outcome: .succeeded, told: 1) == .finished)
+        // A run that died without writing an end: the session's word, not the end of the turn before.
+        #expect(Workspace.missedNews(try rows([end(2), said]), outcome: .failed, told: 1) == .stopped)
     }
 
     @Test func theLastRequestAgainstWhatTheModelTakes() async throws {

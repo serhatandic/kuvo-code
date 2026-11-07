@@ -21,6 +21,7 @@ import type { Requester } from "./groups/api"
 import { freshAnswer, sessionInfo, type SessionInfo } from "./oneoff"
 import { isLimit, resetsIn, resetTime } from "../shared/limits"
 import { PAUSED_BY_YOU } from "../shared/goals"
+import { lastTurnEnd } from "../shared/summaries"
 
 export type GoalState = "working" | "paused" | "met" | "unmet"
 export type Verdict = "met" | "not_met" | "impossible"
@@ -572,8 +573,7 @@ function shown(goal: Kept): Goal {
 
 /** The last turn's end in a conversation, oldest first. */
 function lastIdle(messages: any[]): any | undefined {
-  for (let index = messages.length - 1; index >= 0; index--) if (messages[index]?.type === "idle") return messages[index]
-  return undefined
+  return lastTurnEnd([...messages].reverse())
 }
 
 /** The turn that ended with `idle`: what came after the turn before it ended. */

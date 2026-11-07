@@ -270,6 +270,8 @@ export async function linkRoutes(runner: GroupRunner | undefined, store: GroupSt
     case undefined:
       if (typeof given.text !== "string" || !trim(given.text)) return json({}, 400)
       asked = await ask(runner, store, "POST", [id, "send"], { text: given.text, ...(typeof given.named === "string" ? { named: given.named } : {}) })
+      // What the chat refused, in its words ("/compact").
+      if (asked.status === 400 && asked.value?.message) return message(400, asked.value.message)
       break
     case "stop":
     case "keep-going":

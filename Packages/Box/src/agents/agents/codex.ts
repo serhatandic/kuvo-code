@@ -75,6 +75,7 @@ interface Slot {
 
 export class CodexAgent implements Agent {
   id = "codex"
+  compacts = true
   readonly providerID: string
   get name() {
     return accountName("Codex", this.instance)
@@ -792,6 +793,8 @@ interface Active extends Lane {
   stoppedForLimit?: boolean
   model: string
   problem?: string
+  /** It's the summary you asked for: no reply, and no note saying it summarized. */
+  compacting?: boolean
   /** In Plan: it looks and plans, and changes nothing. */
   planning?: boolean
 }
@@ -1266,8 +1269,12 @@ class CodexThread implements Thread {
         resolve(result)
       }
       this.active = active
-      turn.startStep()
-      rpc.request("turn/start", params, 60_000).then(
+      // (Asked to summarize, it says nothing: no step, and only its own thread to name. Sent while
+      // a turn runs it stops that turn, so the session waits for the turn to end first.)
+      if (input.compact) active.compacting = true
+      else turn.startStep()
+      const asked = input.compact ? rpc.request("thread/compact/start", { threadId: this.nativeID }, 60_000) : rpc.request("turn/start", params, 60_000)
+      asked.then(
         (result: any) => {
           if (result?.turn?.id) active.turnID ??= result.turn.id
         },
@@ -1908,7 +1915,8 @@ class CodexThread implements Thread {
         turn.toolSucceeded(item.id, withPictures("", [pictureFile(item.path)]))
         return
       case "contextCompaction":
-        turn.notice("Codex summarized the conversation to make room.")
+        // (One you asked for shows as that.)
+        if (this.active?.turn !== turn || !this.active.compacting) turn.notice("Codex summarized the conversation to make room.")
         return
       case "enteredReviewMode":
         turn.notice(`Reviewing${typeof item.review === "string" && item.review ? `: ${item.review}` : ""}`)
