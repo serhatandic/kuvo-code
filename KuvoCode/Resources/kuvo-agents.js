@@ -2961,6 +2961,7 @@ function model(providerID, id, name, options = {}) {
     providerID,
     name,
     family: options.family,
+    ...options.aliases?.length ? { aliases: options.aliases } : {},
     capabilities: { tools: true, input: options.images ? ["text", "image"] : ["text"], output: ["text"] },
     variants: (options.variants ?? []).map((id) => ({ id })),
     time: { released: options.released ?? 0 },
@@ -10202,15 +10203,27 @@ class ClaudeAgent {
   }
   windows = new ContextWindows;
   listModels(list) {
+    const standing = list.find((info) => info.value === "default");
+    const stands = standing && list.find((info) => info !== standing && stoodFor(standing, info));
     this.modelList = {
       at: Date.now(),
-      models: list.map((info, index) => model(this.providerID, info.value, modelName(info), {
-        family: family(modelName(info)),
-        variants: info.supportedEffortLevels,
-        images: true,
-        context: this.windows.get(info.value) ?? (/1M/i.test(info.description ?? "") ? 1e6 : 200000),
-        released: Date.now() - index
-      }))
+      models: list.flatMap((info, index) => {
+        if (info === standing && stands)
+          return [];
+        const alone = info === standing && standing.resolvedModel ? standing.resolvedModel : undefined;
+        const place = info === stands ? list.indexOf(standing) : index;
+        const name = info === standing ? aloneName(info) : modelName(info);
+        return [
+          model(this.providerID, alone ?? info.value, name, {
+            family: family(name),
+            variants: info.supportedEffortLevels,
+            images: true,
+            context: this.windows.get(info.value) ?? (/1M/i.test(info.description ?? "") ? 1e6 : 200000),
+            released: Date.now() - place,
+            ...info === stands || alone ? { aliases: ["default"] } : {}
+          })
+        ];
+      })
     };
     emit("model.updated", {});
   }
@@ -10286,9 +10299,20 @@ function withTimeout(promise, milliseconds) {
 }
 function modelName(info) {
   const what = info.description?.split(" \xB7 ")[0]?.trim();
-  if (!what || !/^(opus|sonnet|haiku|fable|claude)/i.test(what))
-    return info.displayName;
-  return info.value === "default" ? `Default (${what})` : what;
+  return what && /^(opus|sonnet|haiku|fable|claude)/i.test(what) ? what : info.displayName;
+}
+function aloneName(info) {
+  const what = info.description?.split(" \xB7 ")[0]?.trim();
+  if (what && /^(opus|sonnet|haiku|fable|claude)/i.test(what))
+    return what;
+  const parts = (info.resolvedModel ?? "").replace(/^claude-/, "").split("-").filter((part) => /^[a-z]+$/i.test(part) || /^\d{1,2}$/.test(part));
+  const [maker, ...version] = parts;
+  return maker ? `${maker[0].toUpperCase()}${maker.slice(1)}${version.length ? " " + version.join(".") : ""}` : "Claude Code's recommended model";
+}
+function stoodFor(standing, info) {
+  if (standing.resolvedModel && info.resolvedModel)
+    return standing.resolvedModel === info.resolvedModel;
+  return modelName(standing) === modelName(info);
 }
 function family(name) {
   return "claude-" + (name.split(/\s+/)[0] ?? "").toLowerCase();
@@ -10304,7 +10328,7 @@ function updateChannel() {
 }
 function fallbackModels(providerID) {
   return [
-    model(providerID, "default", "Claude Code's default", { family: "claude-default", images: true, variants: ["low", "medium", "high", "xhigh", "max"], released: 3 }),
+    model(providerID, "opus", "Opus", { family: "claude-opus", images: true, variants: ["low", "medium", "high", "xhigh", "max"], released: 3, aliases: ["default"] }),
     model(providerID, "sonnet", "Sonnet", { family: "claude-sonnet", images: true, variants: ["low", "medium", "high", "max"], released: 2 }),
     model(providerID, "haiku", "Haiku", { family: "claude-haiku", images: true, released: 1 })
   ];
@@ -23991,4 +24015,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents cf1fe1c6e5515846c072fa7b1672ec96d628ea6ce6809faa4736866fdb0be12c
+// Built from Packages/Box/src/agents cc478bd15157c3db7cea63da8416d0f4075a782bd8a3d8287ec092a710353953

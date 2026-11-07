@@ -740,27 +740,74 @@ describe("Claude Code's models", () => {
   test("each holds what Claude Code says it does on your plan, which its list doesn't say", async () => {
     fake.models = listed
     fake.windows = { default: 1_000_000, "claude-haiku-4-5": 200_000, "opus[1m]": 1_000_000 }
-    const want = { default: 1_000_000, opus: 1_000_000, "claude-haiku-4-5": 200_000, "opus[1m]": 1_000_000 }
+    const want = { opus: 1_000_000, "claude-haiku-4-5": 200_000, "opus[1m]": 1_000_000 }
     expect(await windows(new TestClaude(fake, root), want)).toEqual(want)
     expect(fake.asked).toEqual(["default", "claude-haiku-4-5", "opus[1m]"])
   })
 
-  test("its default reads apart from the model it stands for now, which Claude Code lists too", async () => {
+  /** The models as listed once Claude Code has said which it has. */
+  async function offered(claude: ClaudeAgent) {
+    let models = await claude.models()
+    for (const start = Date.now(); Date.now() - start < 3_000 && !models.some((model) => model.id === "claude-haiku-4-5"); await Bun.sleep(20)) models = await claude.models()
+    return models
+  }
+
+  test("its default isn't offered: the model it stands for is, known by that name too", async () => {
     fake.models = listed
+    const models = await offered(new TestClaude(fake, root))
+    expect(models.map((model) => model.id)).toEqual(["opus", "claude-haiku-4-5", "opus[1m]"])
+    expect(Object.fromEntries(models.map((model) => [model.id, model.aliases ?? []]))).toEqual({ opus: ["default"], "claude-haiku-4-5": [], "opus[1m]": [] })
+  })
+
+  test("what its default stands for is whatever this account's Claude Code says, never assumed", async () => {
+    fake.models = [
+      { value: "default", resolvedModel: "claude-sonnet-5-5", displayName: "Default (recommended)", description: "Sonnet 5.5 · Everyday" },
+      { value: "opus", resolvedModel: "claude-opus-5-5", displayName: "Opus 5.5", description: "Best for complex tasks" },
+      { value: "sonnet", resolvedModel: "claude-sonnet-5-5", displayName: "Sonnet 5.5", description: "Everyday" },
+      { value: "claude-haiku-4-5", displayName: "Haiku 4.5", description: "Haiku 4.5 · Fast" },
+    ]
+    const models = await offered(new TestClaude(fake, root))
+    expect(Object.fromEntries(models.map((model) => [model.id, model.aliases ?? []]))).toEqual({ opus: [], sonnet: ["default"], "claude-haiku-4-5": [] })
+    // Where its default was listed, a new session starts on: so Sonnet stays first.
+    expect([...models].sort((x, y) => y.time.released - x.time.released)[0].id).toBe("sonnet")
+  })
+
+  test("a default nothing else lists is that model, under its own id", async () => {
+    fake.models = [
+      { value: "default", resolvedModel: "claude-fable-5-1", displayName: "Default (recommended)", description: "Fable 5.1 · Newest" },
+      { value: "claude-haiku-4-5", displayName: "Haiku 4.5", description: "Haiku 4.5 · Fast" },
+    ]
+    const models = await offered(new TestClaude(fake, root))
+    expect(models.map((model) => [model.id, model.name, model.aliases ?? []])).toEqual([["claude-fable-5-1", "Fable 5.1", ["default"]], ["claude-haiku-4-5", "Haiku 4.5", []]])
+  })
+
+  test("a default described without a model's name is named by the model it resolves to, never \"Default\"", async () => {
+    fake.models = [
+      { value: "default", resolvedModel: "claude-opus-5-5", displayName: "Default (recommended)", description: "Use the default model (currently Opus)" },
+      { value: "claude-haiku-4-5", displayName: "Haiku 4.5", description: "Haiku 4.5 · Fast" },
+    ]
+    const models = await offered(new TestClaude(fake, root))
+    expect(models.map((model) => [model.id, model.name])).toEqual([["claude-opus-5-5", "Opus 5.5"], ["claude-haiku-4-5", "Haiku 4.5"]])
+  })
+
+  test("before Claude Code has listed its models, the usual ones still answer to its default", async () => {
     const claude = new TestClaude(fake, root)
-    let names: Record<string, string> = {}
-    for (const start = Date.now(); Date.now() - start < 3_000 && !names.opus; await Bun.sleep(20)) {
-      names = Object.fromEntries((await claude.models()).map((model) => [model.id, model.name]))
-    }
-    expect(names).toEqual({ default: "Default (Opus 5.5)", opus: "Opus 5.5", "claude-haiku-4-5": "Haiku 4.5", "opus[1m]": "Opus 4.8 with 1M context" })
-    // Each its own kind, so neither folds the other away under Older models.
-    const families = new Set((await claude.models()).filter((model) => model.id === "default" || model.id === "opus").map((model) => model.family))
-    expect(families.size).toBe(2)
+    const models = await claude.models()
+    expect(models.filter((model) => model.aliases?.includes("default")).map((model) => model.id)).toEqual(["opus"])
+    expect(models.some((model) => model.id === "default" || /default/i.test(model.name))).toBe(false)
+  })
+
+  test("a session already on its default goes on: Claude Code's own default is what it runs", async () => {
+    fake.models = listed
+    const { id, first } = await begin()
+    expect(fake.options.model).toBeUndefined()
+    expect(sessions.get(id).model).toMatchObject({ providerID: provider, id: "default" })
+    fake.result([first])
   })
 
   test("an older Claude Code that doesn't say: as its list says", async () => {
     fake.models = listed
-    const want = { default: 200_000, opus: 200_000, "claude-haiku-4-5": 200_000, "opus[1m]": 1_000_000 }
+    const want = { opus: 200_000, "claude-haiku-4-5": 200_000, "opus[1m]": 1_000_000 }
     expect(await windows(new TestClaude(fake, root), want)).toEqual(want)
   })
 })

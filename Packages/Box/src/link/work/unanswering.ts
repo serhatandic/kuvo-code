@@ -132,8 +132,10 @@ export const unansweringNow = (file = UNANSWERING, now = Date.now()): Unanswerin
 
 /** Why `model` can't answer now, if it can't: its provider's hold (one for funds, if it costs
  * something), or its own. */
-export function holdOf(model: ModelRef, held: Unanswering[]): Unanswering | null {
-  return held.find(each => each.key === model.providerID && covers(each, model)) ?? held.find(each => each.key === `${model.providerID}/${model.id}`) ?? null;
+export function holdOf(model: ModelRef & { aliases?: string[] }, held: Unanswering[]): Unanswering | null {
+  // (A hold kept under another name it's known by counts: a session on Claude Code's `default`.)
+  const keys = [model.id, ...(model.aliases ?? [])].map(id => `${model.providerID}/${id}`);
+  return held.find(each => each.key === model.providerID && covers(each, model)) ?? held.find(each => keys.includes(each.key)) ?? null;
 }
 // Whether a provider's hold is one on `model`: its paid ones', or its free ones', or all of them.
 const covers = (held: Unanswering, model: ModelRef) => !(held.paid && model.free) && !(held.free && !model.free);

@@ -8683,7 +8683,8 @@ function unansweringList(held = unansweringNow(), listed = null) {
 }
 var unansweringNow = (file = UNANSWERING2, now = Date.now()) => read(file, now);
 function holdOf(model, held) {
-  return held.find((each) => each.key === model.providerID && covers(each, model)) ?? held.find((each) => each.key === `${model.providerID}/${model.id}`) ?? null;
+  const keys = [model.id, ...model.aliases ?? []].map((id) => `${model.providerID}/${id}`);
+  return held.find((each) => each.key === model.providerID && covers(each, model)) ?? held.find((each) => keys.includes(each.key)) ?? null;
 }
 var covers = (held, model) => !(held.paid && model.free) && !(held.free && !model.free);
 function noteFailed(model, error, file = UNANSWERING2, now = Date.now()) {
@@ -16782,7 +16783,8 @@ function modelsIn(listed, target, agents, ready) {
     if (ready && !ready.has(each.providerID))
       continue;
     const efforts = Array.isArray(each.variants) ? each.variants.map((variant) => isObject(variant) ? variant.id : null).filter((id) => typeof id === "string") : [];
-    models.push({ providerID: each.providerID, id: each.id, name: typeof each.name === "string" && each.name ? each.name : each.id, efforts, target, agents, retiring: each.status === "deprecated", free: isFree(each) });
+    const aliases = Array.isArray(each.aliases) ? each.aliases.filter((alias) => typeof alias === "string") : [];
+    models.push({ providerID: each.providerID, id: each.id, aliases, name: typeof each.name === "string" && each.name ? each.name : each.id, efforts, target, agents, retiring: each.status === "deprecated", free: isFree(each) });
   }
   return models;
 }
@@ -16827,12 +16829,12 @@ function pickModel(given, effort, models) {
   }
   if (!id)
     return { refused: "Name the model as provider/model, from list_models." };
-  const matches = models.filter((model) => model.id === id && (!providerID || model.providerID === providerID));
+  const matches = models.filter((model) => (model.id === id || model.aliases.includes(id)) && (!providerID || model.providerID === providerID));
   if (!matches.length) {
     const known = providerID && models.some((model) => model.providerID === providerID);
     return { refused: known ? `There's no ${id} among ${providerID}'s models here. Use list_models to see what there is.` : `There's no account for ${providerID || id} on ${HERE}. Use list_models to see the models you can use.` };
   }
-  const model = matches[0];
+  const model = matches.find((each) => each.id === id) ?? matches[0];
   if (effort === undefined || effort === null || effort === "")
     return { model, variant: null };
   if (!model.efforts.length)
@@ -23342,7 +23344,7 @@ function modelInput(base, headers, signal) {
     const ref = own ?? await read("/api/model/default");
     if (!ref)
       return null;
-    const model = Array.isArray(ref.capabilities?.input) ? ref : (await read("/api/model") ?? []).find((listed) => listed?.id === ref.id && listed?.providerID === ref.providerID);
+    const model = Array.isArray(ref.capabilities?.input) ? ref : (await read("/api/model") ?? []).find((listed) => (listed?.id === ref.id || Array.isArray(listed?.aliases) && listed.aliases.includes(ref.id)) && listed?.providerID === ref.providerID);
     const input = model?.capabilities?.input;
     return Array.isArray(input) ? input.filter((kind) => typeof kind === "string") : null;
   };

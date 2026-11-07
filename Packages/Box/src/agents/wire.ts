@@ -219,6 +219,8 @@ export interface Model {
   providerID: string
   name: string
   family?: string
+  /** Other ids this model is known by, which a session or a pick may still name it with (Claude Code's `default` is whichever model it recommends now). */
+  aliases?: string[]
   capabilities: { tools: boolean; input: string[]; output: string[] }
   variants: { id: string }[]
   time: { released: Millis }
