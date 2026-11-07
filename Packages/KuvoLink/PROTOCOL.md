@@ -337,9 +337,12 @@ connection.
     told (`[Not done]`) at 30 days. A session it doesn't have is refused (`retry` while
     its coding agents' bridge isn't running). The tool itself then checks the session is under
     `from` (`kuvo.startedBy`, up its line), as for one here: so sessions the user started are out of
-    reach. An allow goes only as far as `as` says the lead could go itself, with the receiving box's
-    own Don't Allow rules (its Settings › Permissions' `deny`) added, which no one gets past there;
-    the sandbox it's judged by is the session's own, there. An allow `made` over a day ago isn't
+    reach. An allow goes only as far as `as` says the lead could go itself and as far as the receiving
+    box's own rules (its engine defaults and its Settings › Permissions, Ask and Don't Allow alike)
+    would let a conversation go ahead without asking, each judged on its own (moving never loosens
+    anything: a rule of this box that allows doesn't undo one of the lead's that asks, nor the other
+    way round); `free` is the lead's, the sandbox it's judged by the session's own, there. Never
+    for a session in Ask First ("Work", Answering asks), which this box knows. An allow `made` over a day ago isn't
     given, and says so. A stop or a compact kept over 31 days is refused as too old.
   - **The answer** is a letter back (`{to: from, answers: <call id>, refused?}`) whose `id` is the
     call's with `-a` after it, so a call that comes again is answered by one that's already been
@@ -927,6 +930,14 @@ client shows it from the same routes.
     where the session's run there too: the engine's while it's `on`; a coding agent's when the
     agents bridge marks its ask `sandboxed`, its program having started in it, and while it's still
     set up. In Full Access, or with no sandbox here, anywhere its rules allow.
+  - **A session in Ask First always asks the user** (bridge 0.9.205), whatever the bot's mode: a
+    bot in Full Access or Auto can't allow what it asks. Read from the session's approval as it
+    stands now ("Approval", `effective`: an Auto that can't be had here is Ask First), on the engine
+    and on the coding agents' bridge, by the box that has the session, so it holds across computers
+    too. Its answer is the same refusal ("You can't allow that"): the ask stays on the session for
+    the user. A bot may still deny, and still answer a question in words (that's no permission).
+    Accept Edits, Auto and Full Access sessions are judged as above; a subagent's ask is its
+    session's.
   - Everything else goes to the user. It may always deny, with its reason passed on. A command a
     bot allows still can't get out of the sandbox: only you can let one out (`sandbox_ask`,
     "Asks"), and no tool answers that.
