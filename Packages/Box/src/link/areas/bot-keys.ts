@@ -146,6 +146,19 @@ function reconnectForBot(engine: EngineRecord | null, id: string, bot: string, l
 
 /** `kuvo/bots/<id>/keys…`, for a bot that lives on this box. `later` runs what waits a moment (a
  * test's own). Where its keys are kept can't be reached (this Mac's app not answering): `503 {"message"}`. */
+/** A bot's own keys gone from this box, by their names, whether it's here or not (one that moved
+ * away, its folder in the trash): whether they are now. */
+export async function forgetBotKeys(bot: string): Promise<boolean> {
+  try {
+    return await keyWork(async () => {
+      for (const name of (await keyNames()).filter(each => each.endsWith(botVariable("", bot)))) await deleteKey(name);
+      return true;
+    });
+  } catch {
+    return false;
+  }
+}
+
 export async function answerBotKeys(method: string, requestPath: string, body: Body<"keys">, engine: EngineRecord | null, file = INTEGRATIONS_FILE, later: Later = soon): Promise<BotKeysAnswer> {
   try {
     return await keyWork(() => botKeysAnswer(method, requestPath, body, engine, file, later));

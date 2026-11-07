@@ -43,7 +43,7 @@ export async function* movesRoute(context: RouteContext): AsyncGenerator<AnswerP
   // It goes on if the client goes: the box it leaves sees it through.
   const outcome = await startMove(given.kind as MoveKind, given.id, given.to);
   if (signal?.aborted) return;
-  return yield* (outcome.ok ? json(200, { move: outcome.move }) : json(outcome.status, { message: outcome.message }));
+  return yield* (outcome.ok ? json(200, { move: outcome.move, ...(outcome.note ? { note: outcome.note } : {}) }) : json(outcome.status, { message: outcome.message }));
 }
 
 export async function* moveEventsRoute(context: RouteContext): AsyncGenerator<AnswerPiece> {
@@ -61,5 +61,5 @@ export async function* movePlacesRoute(context: RouteContext): AsyncGenerator<An
   if (!KINDS.includes(kind) || !id) return yield* json(400, { message: "Say what: ?kind=bot|chat|group&id=…" });
   const places = await placesFor(kind, id, signal);
   if (!places) return yield* json(404, { message: "It isn’t on this computer any more." });
-  return yield* json(200, { places } satisfies MovePlaces);
+  return yield* json(200, places satisfies MovePlaces);
 }

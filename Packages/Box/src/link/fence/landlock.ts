@@ -210,6 +210,8 @@ if (tmp) { fs.mkdirSync(tmp, { recursive: true }); grant(tmp, all); }
 if (wakes && fs.existsSync(wakes)) {
   grant(wakes, READS);
   grant(path.join(wakes, "inbox"), all);
+  // Its agent's own memory, in the bot's folder: only there does it write in that folder.
+  if (fs.existsSync(path.join(wakes, "memory"))) grant(path.join(wakes, "memory"), all);
 }
 // Its bot's memory, which the launcher names: that file alone, read and written in place (a file's
 // rule can't make, move or remove it).

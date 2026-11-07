@@ -25,7 +25,7 @@ export interface MoveRecord extends Move {
   folder?: string;
   hash?: string;
   /** Where it is between the boxes: the source waits for `ready`, `arrived`, `switched`, `dropped`. */
-  step?: "offer" | "parts" | "arrive" | "switch" | "drop" | "done";
+  step?: "check" | "offer" | "parts" | "arrive" | "switch" | "drop" | "done";
   tries: number;
   /** The box it goes to: all its parts came, and it's being (or was) put in place; parts that come
    * after are ignored. */
@@ -65,6 +65,19 @@ export interface MoveRecord extends Move {
    * goes to, since when its copy's been let go of. */
   dropSince?: number;
   started: number;
+  /** It talks with a coding agent: its conversations are on the agents bridge, not the engine, and
+   * each agent's own go with them (`carry.ts`). */
+  lane?: boolean;
+  /** The box it leaves: where each agent kept what it carried, to clear later (`left.ts`). */
+  leftOf?: unknown[];
+  /** The box it goes to: the hash of what's in place, said back as it arrives. */
+  digest?: string;
+  /** The box it goes to: where it was, to tell it as it's switched to. */
+  was?: { place: string; folder?: string };
+  /** The model it talks with, for the box it goes to to check (`check`). */
+  model?: { providerID: string; id: string };
+  /** What the box it goes to said it does differently there (another account of its coding agent). */
+  note?: string;
   /** Taken back, with why (said to whoever asked). */
   failed?: string;
   /** The status a failure answers: 409 (it can't, now) or 503 (the other computer can't be reached). */
@@ -153,7 +166,8 @@ export function awaySessions(records = liveMoves()): string[] {
 /** The conversations held while they move (nothing reaches them: prompts wait, letters come
  * again later), and the bots and group chats. */
 export function frozen(records = liveMoves()): Set<string> {
-  return new Set(records.flatMap(record => [record.thing, ...record.sessions]));
+  // (Not while the box it goes to is only asked whether it can run it: nothing's held yet.)
+  return new Set(records.filter(record => record.step !== "check").flatMap(record => [record.thing, ...record.sessions]));
 }
 
 /** A conversation moved away from here in the last two days, and where it lives now (a box's key). */
@@ -206,12 +220,34 @@ export function endedAs(id: string, now = Date.now()): "switched" | "dropped" | 
   }
 }
 
-/** `sessions`: those of a copy here let go of, which live on where they came from. */
-export function noteEnded(id: string, as: "switched" | "dropped", now = Date.now(), sessions: readonly string[] = []): void {
-  let kept: Record<string, { as: string; at: number; sessions?: string[] }> = {};
+/** When a move that came here was switched to, or let go of. */
+export function endedAt(id: string, now = Date.now()): number | null {
+  try {
+    const kept = JSON.parse(fs.readFileSync(ENDED_FILE, "utf8")) as Record<string, { as?: unknown; at?: unknown }>;
+    const one = kept?.[id];
+    return keptFor(one, now) ? one!.at as number : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The newest message of a copy switched to here, as it came. */
+export function endedLast(id: string, now = Date.now()): string | undefined {
+  try {
+    const one = JSON.parse(fs.readFileSync(ENDED_FILE, "utf8"))?.[id];
+    return keptFor(one, now) && typeof one.last === "string" ? one.last : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** `sessions`: those of a copy here let go of, which live on where they came from. `last`: the newest
+ * message of one switched to, as it came (what's after it ran here, whatever the clocks say). */
+export function noteEnded(id: string, as: "switched" | "dropped", now = Date.now(), sessions: readonly string[] = [], last?: string): void {
+  let kept: Record<string, { as: string; at: number; sessions?: string[]; last?: string }> = {};
   try { kept = JSON.parse(fs.readFileSync(ENDED_FILE, "utf8")) ?? {}; } catch {}
   for (const [other, one] of Object.entries(kept)) if (!keptFor(one, now)) delete kept[other];
-  kept[id] = { as, at: now, ...(sessions.length ? { sessions: [...sessions] } : {}) };
+  kept[id] = { as, at: now, ...(sessions.length ? { sessions: [...sessions] } : {}), ...(last ? { last } : {}) };
   writePrivate(ENDED_FILE, JSON.stringify(kept));
 }
 

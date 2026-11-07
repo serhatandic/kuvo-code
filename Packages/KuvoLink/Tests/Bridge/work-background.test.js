@@ -160,7 +160,7 @@ function clock(start = Date.now() + 60 * 1000) {
 }
 const SECONDS = 1000;
 const watcher = time => link.workWatcher(source, () => [source], { schedule: time.schedule, now: time.now });
-const finished = () => state.prompts.filter(each => each.to === "ses_pixel").flatMap(each => each.text.split("\n\n").filter(line => line.startsWith("[Session finished]")));
+const finished = () => state.prompts.filter(each => each.to === "ses_pixel").flatMap(each => each.text.split("\n\n").filter(line => line.startsWith("[Session finished]") || line.startsWith("[Session still working]")));
 const atWork = async () => [...await link.atWorkNow([source])];
 const handle = link.engineHandler(() => source, { name: "test" }, () => null);
 async function route(method, where) {
@@ -447,6 +447,7 @@ test("a command that never ends: the lead hears at the limit, saying what still 
   await time.pass(61 * SECONDS);
   await time.pass(5 * SECONDS);
   assert.equal(finished().length, 1, "at the limit it's told");
+  assert.match(finished()[0], /^\[Session still working\] "Tests"/, "not finished: its command runs");
   assert.match(finished()[0], /Still running in the background: the command `npm run dev`/);
   assert.deepEqual(await atWork(), ["ses_tests"], "it does still run");
   assert.equal(link.AT_WORK_LIMIT > link.FINISH_HOLD_LIMIT, true);
@@ -466,13 +467,16 @@ test("told at the limit, what it says when the command does end is told, however
   await time.pass(link.FINISH_HOLD_LIMIT + 1);
   await time.pass(5 * SECONDS);
   assert.equal(finished().length, 1);
+  assert.match(finished()[0], /^\[Session still working\] "Tests"/);
   await watch(exited("sh_1"));
   ownWord();
   said("All pass.");
   await watch(ended());
   await time.pass(5 * SECONDS);
   assert.equal(finished().length, 2);
+  assert.match(finished()[1], /^\[Session finished\] "Tests"/, "really finished now");
   assert.match(finished()[1], /All pass\./);
+  assert.doesNotMatch(finished()[1], /Still running/);
 });
 
 test("the engine gone with its commands: a new connection finds none, and the lead is told once", async () => {
@@ -719,6 +723,7 @@ test("a question isn't held up by what ran before it was asked; a turn on its ow
   await watch(ended());
   await time.pass(5 * SECONDS);
   assert.equal(finished().length, 1, "told at once, the server still up");
+  assert.match(finished()[0], /^\[Session finished\] "Tests"/, "its answer is done; a server it ran before is no work of the question's");
   assert.match(finished()[0], /Port 3000/);
   assert.match(finished()[0], /Still running in the background: the command `npm run dev`/);
   // Its own timer's turn, with something to say: waits for what runs.
@@ -797,7 +802,30 @@ test("not reachable at its limit: looked at again, so a command that never ends 
   await time.pass(61 * SECONDS);
   await time.pass(5 * SECONDS);
   assert.equal(finished().length, 1);
+  assert.match(finished()[0], /^\[Session still working\] "Tests"/);
   assert.match(finished()[0], /Still running in the background/);
+});
+
+test("told still working at the limit, a command that ends with nothing new said tells the lead nothing more, and its bot still sees it finish", async () => {
+  const time = clock();
+  const watch = watcher(time);
+  await watch.caughtUp;
+  const marks = async () => (await route("GET", "kuvo/work/oversight")).body.marks.filter(mark => mark.kind === "finished").length;
+  asked();
+  await watch(startJob("sh_1", "npm test", time.at));
+  said("Started.");
+  await watch(ended());
+  await time.pass(link.FINISH_HOLD_LIMIT + 1);
+  await time.pass(5 * SECONDS);
+  assert.match(finished()[0], /^\[Session still working\]/);
+  assert.equal(await marks(), 0, "not finished, so not shown finishing");
+  // Its command ends; the agent is woken and has nothing to add.
+  await watch(exited("sh_1"));
+  ownWord();
+  await watch(ended());
+  await time.pass(30 * SECONDS);
+  assert.equal(finished().length, 1, "nothing finished that it hadn't said");
+  assert.equal(await marks(), 1, "its bot sees it finish, once");
 });
 
 test("a session running past the at-work limit: its bot's clients hear it no longer counts", async () => {

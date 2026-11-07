@@ -14,13 +14,14 @@ import fs from "node:fs";
 import path from "node:path";
 import { isObject } from "../../shared/json";
 import type { Target } from "../../shared/records";
-import type { Move, MoveKind, MovePlace } from "../../shared/routes/moves";
+import type { Move, MoveKind, MovePlace, MoveStays } from "../../shared/routes/moves";
 import { plainName } from "../../shared/text";
-import { answerBotKeys } from "../areas/bot-keys";
+import { answerBotKeys, forgetBotKeys } from "../areas/bot-keys";
 import { askGroups } from "../areas/groups";
 import { botHere, MOVING } from "../bots/here";
+import { signInRefusal } from "../bots/make";
 import { settleBot } from "../bots/tell";
-import { call, readBridgeFile, readEngineFile } from "../engine/client";
+import { bridgeTarget, call, readBridgeFile, readEngineFile } from "../engine/client";
 import { CantCarry, forgetQueue, packQueues, queueOf, resumeQueue, unpackQueues } from "../engine/queue";
 import { writePrivate } from "../files";
 import { HERE, IS_MAC, K } from "../home";
@@ -29,13 +30,18 @@ import { mailFor, ownKey, peersOf } from "../peers/known";
 import type { MailSender, Peer } from "../peers/known";
 import type { LinkHost } from "../relay/host";
 import { readLink } from "../state";
-import { goalRuns } from "../work/goals";
+import { goalRuns, proposedGoals } from "../work/goals";
+import { workAsks } from "../work/asks";
+import { ofBot, under, workSessions } from "../work/tree";
+import { readBackground } from "../work/background";
 import { decidedOf, forgetDecided, isAutopilot, keepDecided, tellAutopilot } from "../work/autopilot";
 import type { EngineSession } from "../engine/sessions";
 import { CHATS, engineWait, MOST_BUNDLE, NotTaken, TooBig, deleteSession, directoryOf, exportAll, folderOf, groupAction, conversationHash, hashOf, idsOf, importAll, keysOf, ownTree, pack, toTrash, unpack } from "./bundle";
 import type { Contents } from "./bundle";
 import { forgetQuiet, tellMoving } from "./elsewhere";
-import { MOVES, bundleOf, changeMove, endedAs, forgetMove, forgetMovedAway, moveOf, movesChanged, noteEnded, noteMovedAway, readMove, readMoves, saveMove, shownMove, waitingFor } from "./records";
+import { ASK_LEFT, KEEP_LEFT, forgetLeft, keysGone, noteLeft, noteRan, readLeft, removeTrashed } from "./left";
+import type { LeftEntry } from "./left";
+import { MOVES, bundleOf, changeMove, endedAs, endedAt, endedLast, forgetMove, forgetMovedAway, moveOf, movesChanged, noteEnded, noteMovedAway, readMove, readMoves, saveMove, shownMove, waitingFor } from "./records";
 import type { MoveRecord } from "./records";
 
 /** Raw bytes in each part (40,000 characters as base64url, as documents' parts are). */
@@ -88,7 +94,14 @@ export const say = {
   working: (name: string) => `${name} is working. Move it once it’s done.`,
   leftBoth: (name: string, place: string) => `${name} is on ${place} now, but couldn’t be let go of here, so it’s on both computers. Delete the one you don’t want.`,
   inProject: (name: string) => `${name} works in one of your projects, which stays where it is. Only a bot with a folder of its own can move.`,
-  withAgents: (name: string) => `${name} talks with a coding agent, which keeps its conversation on this computer, so it can’t move yet.`,
+  noAgents: (place: string) => `The coding agents on ${place} aren’t running. Try again once they are.`,
+  cantCarry: (name: string, why: string) => `${name} can’t move: ${why}.`,
+  agentNotThere: (name: string, agent: string, place: string) => `${name} talks with ${agent}, which isn’t installed on ${place}. Install it in Settings › Accounts there, then move ${name}.`,
+  agentSignedOut: (name: string, agent: string, place: string) => `${name} talks with ${agent}, which isn’t signed in on ${place}. Sign in to it in Settings › Accounts there, then move ${name}.`,
+  otherAccount: (name: string, agent: string, who: string, place: string) => `On ${place}, ${name} uses the ${agent} account signed in there${who}.`,
+  modelNotThere: (name: string, model: string, place: string) => `${name} uses ${model}, which needs a sign-in on ${place}. Sign in to it in Settings › Accounts there, or choose another model, then move ${name}.`,
+  notSame: (name: string) => `${name}’s conversation didn’t come out the same on the other computer, so it stayed here. Try again.`,
+  background: (name: string, what: string) => `${name} has ${what} running. Wait for it to finish, or stop it, then move ${name}.`,
   onGoal: (name: string) => `${name} is working on a goal, which stays on this computer. Move it once the goal is done, or stop the goal first.`,
   waiting: (name: string) => `${name} still has messages on their way. Try again in a moment.`,
   busy: (name: string) => `${name} kept getting messages while it moved, so it stayed where it is. Try again in a moment.`,
@@ -107,8 +120,9 @@ export const say = {
 /** The same, short, for a menu that shows it beside a computer's name. */
 const note = {
   inProject: "Works in a project",
-  withAgents: "Talks with a coding agent",
+  noAgents: "Its coding agents aren’t running",
   onGoal: "Working on a goal",
+  background: "Running something",
   inBoxGroup: "In a group chat that lives here",
   needsUpdate: "Needs a newer Kuvo Code",
   botsNotThere: "Its bots don’t all live there",
@@ -116,7 +130,7 @@ const note = {
 };
 
 /** A move's outcome, for whoever asked for it. */
-export type MoveOutcome = { ok: true; move: Move } | { ok: false; status: number; message: string };
+export type MoveOutcome = { ok: true; move: Move; note?: string } | { ok: false; status: number; message: string };
 
 // Those waiting on a move here, by its ID. How it ended is also noted beside its record for a while
 // (`<id>.outcome.json`), for a client that asked through another process (a Mac's `box route`),
@@ -167,7 +181,11 @@ const driving = new Set<string>();
 function drive(id: string): void {
   if (driving.has(id)) return;
   driving.add(id);
-  inTurn(id, () => carryOn(id).catch(error => takeBack(id, String((error as Error | null)?.message ?? error), (error as Refused | null)?.status ?? 409))).finally(() => driving.delete(id));
+  inTurn(id, () => carryOn(id).catch(async error => {
+    await takeBack(id, String((error as Error | null)?.message ?? error), (error as Refused | null)?.status ?? 409);
+    // Taken back already as a step went on (too long held): what that step left in its folder goes.
+    if (!readMove(id)) try { fs.rmSync(bundleOf(id), { recursive: true, force: true }); } catch {}
+  })).finally(() => driving.delete(id));
 }
 
 const nameOf = (key: string): string => plainName(peersOf(readLink()).find(peer => peer.key === key)?.name ?? "") || "the other computer";
@@ -202,6 +220,26 @@ interface Movable {
   note?: string;
   /** A group chat's bots, by their IDs. */
   members?: string[];
+  /** It talks with a coding agent. */
+  lane?: boolean;
+  /** The model it talks with, for the computer it goes to to check it can. */
+  model?: { providerID: string; id: string };
+}
+
+
+/** The agents bridge's part of a move (`carry.ts`, its `kuvo/carry` routes): what it answers, or why
+ * not, in its own words. */
+async function carry<T>(bridge: Target, step: string, body: Record<string, unknown>, signal?: AbortSignal): Promise<T> {
+  return await call(bridge, "POST", `/api/kuvo/carry/${step}`, body, engineWait(signal, CARRY_WAIT)) as T;
+}
+/** How long the bridge has to pack, hash or place a conversation (its whole files, up to 1 GB). */
+const CARRY_WAIT = 10 * 60_000;
+
+/** What the bridge says as it packs a conversation. */
+interface Packed {
+  sessions: { id: string; metadata?: Record<string, unknown> }[];
+  digest: string;
+  left: unknown[];
 }
 
 /** Whether the chat `session` has its own goal (`/goal`) working or paused: the agents bridge keeps
@@ -224,8 +262,10 @@ async function movable(kind: MoveKind, thing: string, signal?: AbortSignal): Pro
     if (!here) return null;
     const name = here.described.name;
     if (here.described.project) return { name, why: say.inProject(name), note: note.inProject };
-    if (here.agents) return { name, why: say.withAgents(name), note: note.withAgents };
+    if (here.agents && !bridgeTarget()) return { name, why: say.noAgents(HERE), note: note.noAgents };
     if (goalRuns(thing)) return { name, why: say.onGoal(name), note: note.onGoal };
+    const running = runningOf([here.session]);
+    if (running) return { name, why: say.background(name, running), note: note.background };
     // One in a group chat that lives here with its bots, on a machine, stays with it.
     if (!IS_MAC) {
       let bridge: Target | null = null;
@@ -234,19 +274,22 @@ async function movable(kind: MoveKind, thing: string, signal?: AbortSignal): Pro
       const chat = (listed?.status === 200 && Array.isArray(listed.value?.data) ? listed.value.data : []).find(each => Array.isArray(each?.group?.members) && (each.group.members as unknown[]).includes(thing));
       if (chat) return { name, root: here.session, why: say.inBoxGroup(name, plainName(chat.group?.name ?? "") || "a group chat"), note: note.inBoxGroup };
     }
-    return { name, root: here.session };
+    return { name, root: here.session, ...(here.agents ? { lane: true } : {}), ...(modelOf(here.described.model) ?? {}) };
   }
   if (kind === "chat") {
-    let session: unknown;
-    try { session = await call(readEngineFile(), "GET", `/api/session/${encodeURIComponent(thing)}`, undefined, engineWait(signal)); } catch { return null; }
+    // On the engine, or, talking with a coding agent, on the agents bridge.
+    const look = (target: () => Target) => Promise.resolve().then(() => call(target(), "GET", `/api/session/${encodeURIComponent(thing)}`, undefined, engineWait(signal))).catch(() => null);
+    let session = await look(readEngineFile);
+    const lane = !isObject(session);
+    if (lane) session = await look(readBridgeFile);
     if (!isObject(session)) return null;
     const title = typeof session.title === "string" && session.title.trim() ? `“${session.title.trim()}”` : "This chat";
     const directory = isObject(session.location) ? session.location.directory : session.directory;
     if (directory !== CHATS) return null;
-    const kuvo = isObject(session.metadata) && isObject(session.metadata.kuvo) ? session.metadata.kuvo : {};
-    if (kuvo.agents || kuvo.agent) return { name: title, why: say.withAgents(title), note: note.withAgents };
     if (await chatGoalRuns(thing, signal)) return { name: title, why: say.onGoal(title), note: note.onGoal };
-    return { name: title, root: thing };
+    const running = runningOf([thing]);
+    if (running) return { name: title, why: say.background(title, running), note: note.background };
+    return { name: title, root: thing, ...(lane ? { lane: true } : {}), ...(modelOf(session.model) ?? {}) };
   }
   let bridge: Target;
   try { bridge = readBridgeFile(); } catch { return null; }
@@ -259,6 +302,19 @@ async function movable(kind: MoveKind, thing: string, signal?: AbortSignal): Pro
   };
 }
 
+/** What still runs for any of `sessions` besides a turn (a command left running, a subagent sent
+ * off), in words; null when nothing does. It would end as it moves, so it's waited for. */
+function runningOf(sessions: readonly string[]): string | null {
+  const running = readBackground();
+  const all = sessions.map(session => running[session]).filter(each => each !== undefined);
+  const commands = all.reduce((sum, each) => sum + each.commands, 0), helpers = all.reduce((sum, each) => sum + each.subagents + each.tasks, 0);
+  if (!commands && !helpers) return null;
+  return [commands ? (commands === 1 ? "a command" : `${commands} commands`) : "", helpers ? (helpers === 1 ? "a subagent" : `${helpers} subagents`) : ""].filter(Boolean).join(" and ");
+}
+
+const modelOf = (model: unknown): { model: { providerID: string; id: string } } | null =>
+  isObject(model) && typeof model.providerID === "string" && typeof model.id === "string" ? { model: { providerID: model.providerID, id: model.id } } : null;
+
 /** Whether a group chat's bots all live on the machine `peer`, as the computers say: none here, and
  * each in that machine's list of its agents. One that hasn't said what it has isn't judged (it
  * checks itself as the chat comes). */
@@ -270,9 +326,33 @@ function botsLiveOn(members: string[], peer: Peer): boolean {
 }
 
 /** Where `thing` can go: each of your other computers, and why not one where it can't. */
-export async function placesFor(kind: MoveKind, thing: string, signal?: AbortSignal): Promise<MovePlace[] | null> {
+export async function placesFor(kind: MoveKind, thing: string, signal?: AbortSignal): Promise<{ places: MovePlace[]; stays?: MoveStays } | null> {
   const what = await movable(kind, thing, signal);
   if (!what) return null;
+  const stays = kind === "group" ? undefined : await staysOf(kind, thing, what, signal);
+  return { places: placesOf(kind, thing, what), ...(stays && Object.keys(stays).length ? { stays } : {}) };
+}
+
+/** What of a bot or chat stays here as it moves: none of it goes, and none of it's lost (it's here
+ * again if it comes back). Sessions it can't list now aren't counted. */
+async function staysOf(kind: MoveKind, thing: string, what: Movable, signal?: AbortSignal): Promise<MoveStays> {
+  const stays: MoveStays = {};
+  const targets = [readEngineFile, bridgeTarget].flatMap(each => {
+    try { return [each()].filter((target): target is Target => Boolean(target)); } catch { return []; }
+  });
+  const all = await workSessions(targets, signal).catch(() => []);
+  const started = new Set([...(what.root ? under(what.root, all) : []), ...(kind === "bot" ? ofBot(thing, all) : [])].map(each => each.data.id));
+  if (started.size) stays.sessions = started.size;
+  const own = (session: string | undefined, bot: string | undefined) => (kind === "bot" ? bot === thing : session === what.root);
+  const asks = workAsks().filter(ask => own(ask.session, ask.bot)).length;
+  if (asks) stays.asks = asks;
+  const goals = proposedGoals().filter(goal => own(goal.session, goal.bot)).length;
+  if (goals) stays.goals = goals;
+  if (what.lane) stays.agent = true;
+  return stays;
+}
+
+function placesOf(kind: MoveKind, thing: string, what: Movable): MovePlace[] {
   const moving = moveOf(thing) !== null;
   const own = ownKey(readLink() ?? {});
   return peersOf(readLink()).filter(peer => peer.key !== own).map(peer => {
@@ -280,7 +360,7 @@ export async function placesFor(kind: MoveKind, thing: string, signal?: AbortSig
     // Why not, and the same short: the thing's own reason first, then that computer's.
     const not: [string, string] | null = moving ? [say.moving, note.moving]
       : what.why ? [what.why, what.note ?? what.why]
-      : olderThanMoves(peer.key) ? [say.needsUpdate(name), note.needsUpdate]
+      : olderThanMoves(peer.key) || (what.lane && olderThanCarrying(peer.key)) ? [say.needsUpdate(name), note.needsUpdate]
       // A group chat goes to a machine only where all its bots live (to a Mac, they stay put).
       : kind === "group" && peer.kind === "machine" && !botsLiveOn(what.members ?? [], peer) ? [say.botsNotThere(what.name, name), note.botsNotThere]
       : null;
@@ -292,6 +372,15 @@ export async function placesFor(kind: MoveKind, thing: string, signal?: AbortSig
 function olderThanMoves(key: string): boolean {
   const features = readPeerAgents()[key]?.features;
   return Array.isArray(features) && !features.includes("moves");
+}
+
+/** Whether another computer checks it can run what comes before it's held here (`check`). */
+const checksFirst = (key: string): boolean => readPeerAgents()[key]?.features?.includes("moves.check") === true;
+
+/** The same, for one that talks with a coding agent. */
+function olderThanCarrying(key: string): boolean {
+  const features = readPeerAgents()[key]?.features;
+  return Array.isArray(features) && !features.includes("moves.agents");
 }
 
 // ---- The box it leaves ----
@@ -307,11 +396,13 @@ export async function startMove(kind: MoveKind, thing: string, to: string, signa
   const what = await movable(kind, thing, signal);
   if (!what) return { ok: false, status: 404, message: "It isn’t on this computer any more." };
   if (what.why) return { ok: false, status: 409, message: what.why };
+  if (what.lane && olderThanCarrying(to)) return { ok: false, status: 409, message: say.needsUpdate(plainName(peer.name) || "That computer") };
   const id = `mov_${crypto.randomBytes(12).toString("base64url").replace(/[-_]/g, "")}`;
   const folder = folderOf(kind, thing);
   const record: MoveRecord = {
     id, kind, thing, name: what.name, from: own, to, role: "from", stage: "holding", sessions: what.root ? [what.root] : [],
-    peer: to, wasPaused: true, tries: 0, started: Date.now(), ...(folder && fs.existsSync(folder) ? { folder } : {}),
+    peer: to, wasPaused: true, tries: 0, started: Date.now(), ...(folder && fs.existsSync(folder) ? { folder } : {}), ...(what.lane ? { lane: true } : {}),
+    ...(what.model ? { model: what.model } : {}), ...(checksFirst(to) && kind !== "group" ? { step: "check" as const } : {}),
   };
   // One move of a thing at a time, whoever asks (a phone and a Mac at once, through this bridge or
   // `box route`): noted under a lock, after a look again.
@@ -367,11 +458,11 @@ function unhold(folder: string | undefined, wasPaused: boolean, pausedAs?: strin
 
 /** Until none of its conversations is at work and nothing waits to go to them: a minute at most.
  * What the engine holds for one you stopped waits for Resume, and goes with it (`packQueues`). */
-async function settle(engine: Target, sessions: readonly string[], name: string): Promise<void> {
+async function settle(target: Target, sessions: readonly string[], name: string): Promise<void> {
   for (let tries = 0; tries < SETTLE_FOR; tries++) {
-    const active = await call(engine, "GET", "/api/session/active", undefined, engineWait()).catch(() => ({}));
+    const active = await call(target, "GET", "/api/session/active", undefined, engineWait()).catch(() => ({}));
     const busy = isObject(active) && sessions.some(session => session in active);
-    const inbox = sessions[0] && !queueOf(sessions[0]).paused ? await call(engine, "GET", `/api/session/${encodeURIComponent(sessions[0])}/inbox`, undefined, engineWait()).catch(() => []) : [];
+    const inbox = sessions[0] && !queueOf(sessions[0]).paused ? await call(target, "GET", `/api/session/${encodeURIComponent(sessions[0])}/inbox`, undefined, engineWait()).catch(() => []) : [];
     if (!busy && !(Array.isArray(inbox) && inbox.length)) return;
     await new Promise(resolve => setTimeout(resolve, 1000));
   }
@@ -385,10 +476,11 @@ class Refused extends Error {
 }
 
 /** What a move carries of its conversations, to see whether anything changed as it went: their
- * messages, word for word (`conversationHash`), and their queues (what waits for them), but when
- * each was read as waiting. */
-const fingerprint = (exports: unknown[], queues: Record<string, unknown>): string =>
-  `${conversationHash(exports)}.${crypto.createHash("sha256").update(JSON.stringify(queues, (key, value) => key === "at" ? undefined : value)).digest("base64url")}`;
+ * messages, word for word (`conversationHash`), or, with a coding agent, those and each agent's own
+ * files (the bridge's `digest`), and their queues (what waits for them), but when each was read as
+ * waiting. */
+const fingerprint = (conversation: string, queues: Record<string, unknown>): string =>
+  `${conversation}.${crypto.createHash("sha256").update(JSON.stringify(queues, (key, value) => key === "at" ? undefined : value)).digest("base64url")}`;
 
 /** What waits for its conversations, as a move carries it (`packQueues`); one the engine held that
  * can't go with it, and it doesn't go yet. */
@@ -398,12 +490,21 @@ const queuesOf = (engine: Target, sessions: readonly string[], name: string) => 
 
 // What the box it leaves has of each move in memory: the parts the other box has, and those on
 // their way (by when they went).
-const outgoing = new Map<string, { got: Set<number>; flying: Map<number, number>; exports: string }>();
+// (`window`: how many may be on their way now: halved as one's lost, one more as each comes, up to
+// `IN_FLIGHT`; a slow connection isn't sent everything again and again.)
+const outgoing = new Map<string, { got: Set<number>; flying: Map<number, number>; exports: string; digest?: string; window?: number }>();
 
 /** The box it leaves, carrying on from where it is (as it starts, or step by step). */
 async function carryOn(id: string): Promise<void> {
-  const record = readMove(id);
+  let record = readMove(id);
   if (!record || record.role !== "from" || record.stage !== "holding" || record.failed) return;
+  // The computer it goes to says first whether it can run it there: nothing's held here till then.
+  if (record.step === "check") {
+    const there = await checkThere(record);
+    const now = changeMove(id, each => { if (!each.failed && each.stage === "holding") { each.step = undefined; if (there.note) each.note = there.note; } });
+    if (!now || now.failed || now.stage !== "holding") return;
+    record = now;
+  }
   hold(record);
   record.holdSince = Date.now();
   saveMove(record);
@@ -418,6 +519,7 @@ async function carryOn(id: string): Promise<void> {
     return true;
   };
   let exports: unknown[] = [];
+  let digest = "";
   let queues: Record<string, unknown> = {};
   const contents: Contents = { kind: record.kind, thing: record.thing, name: record.name, exports, wasPaused: record.wasPaused };
   if (record.kind === "group") {
@@ -433,13 +535,29 @@ async function carryOn(id: string): Promise<void> {
       if (goal) throw new Refused(say.onGoal(record.name));
       if (goal === undefined) throw new Refused(`${record.name}’s goal couldn’t be checked on ${HERE}. Try again in a moment.`);
     }
-    const engine = readEngineFile();
-    await settle(engine, record.sessions, record.name);
-    exports = await exportAll(engine, record.sessions[0]);
-    contents.exports = exports;
-    record.sessions = idsOf(exports);
+    const target = record.lane ? readBridgeFile() : readEngineFile();
+    await settle(target, record.sessions, record.name);
+    const running = runningOf(record.sessions);
+    if (running) throw new Refused(say.background(record.name, running));
+    if (record.lane) {
+      const packed = await carry<Packed>(target, "pack", { root: record.sessions[0], into: path.join(bundleOf(id), "carry"), most: MOST_BUNDLE }).catch(error => {
+        throw (error as { status?: number } | null)?.status === 413 ? new Refused(say.tooBig(record.name)) : new Refused(say.cantCarry(record.name, String((error as Error | null)?.message ?? error)));
+      });
+      digest = packed.digest;
+      record.sessions = packed.sessions.map(each => each.id);
+      record.leftOf = packed.left;
+      contents.lane = { sessions: [...record.sessions], root: record.sessions[0] };
+    } else {
+      exports = await exportAll(target, record.sessions[0]);
+      contents.exports = exports;
+      record.sessions = idsOf(exports);
+      digest = conversationHash(exports);
+    }
+    // (What its conversation says of where it worked: a bot's folder; a chat's, this box's chats.)
+    const worked = record.kind === "bot" ? record.folder : CHATS;
+    contents.was = { place: plainName(readLink()?.name ?? "") || (IS_MAC ? "a Mac" : "a machine"), ...(worked ? { folder: worked } : {}) };
     // A conversation you stopped goes stopped, with what waits for it, here and in the engine.
-    queues = await queuesOf(engine, record.sessions, record.name);
+    queues = await queuesOf(target, record.sessions, record.name);
     if (Object.keys(queues).length) contents.queues = queues;
     const decided = decidedOf(record.sessions);
     if (Object.keys(decided).length) contents.decided = decided;
@@ -458,15 +576,86 @@ async function carryOn(id: string): Promise<void> {
   });
   if (bundle.size > MOST_BUNDLE) throw new Refused(say.tooBig(record.name));
   if (takenBack()) return;
-  outgoing.set(id, { got: new Set(), flying: new Map(), exports: fingerprint(exports, queues) });
+  outgoing.set(id, { got: new Set(), flying: new Map(), exports: fingerprint(digest, queues), digest });
   const now = changeMove(id, each => {
-    Object.assign(each, { sessions: record.sessions, wasPaused: record.wasPaused, pausedAs: record.pausedAs, members: record.members, hash: bundle.hash, size: bundle.size, sent: 0, stage: "copying", step: "offer", offered: true, sentAt: Date.now(), holdSince: undefined });
+    Object.assign(each, { leftOf: record.leftOf, sessions: record.sessions, wasPaused: record.wasPaused, pausedAs: record.pausedAs, members: record.members, hash: bundle.hash, size: bundle.size, sent: 0, stage: "copying", step: "offer", offered: true, sentAt: Date.now(), holdSince: undefined });
   });
   if (now) offer(now);
 }
 
+// ---- Whether it can run there ----
+
+/** How long the computer it goes to has to say whether it can run it. */
+const CHECK_WAIT = 45_000;
+const checking = new Map<string, (answer: Record<string, unknown>) => void>();
+
+/** Asked of the computer it goes to before anything's held: whether it can run it there (its agents
+ * or engine running, its coding agent there and signed in, its model usable). Refused there: why,
+ * as that computer says it; no answer: it isn't connected. */
+async function checkThere(record: MoveRecord): Promise<{ note?: string }> {
+  const answer = await new Promise<Record<string, unknown> | null>(resolve => {
+    const timer = setTimeout(() => { checking.delete(record.id); resolve(null); }, CHECK_WAIT);
+    checking.set(record.id, given => { clearTimeout(timer); checking.delete(record.id); resolve(given); });
+    tell(record.peer, { op: "check", id: record.id, kind: record.kind, name: record.name, ...(record.lane ? { lane: true } : {}), ...(record.model ? { model: record.model } : {}) });
+  });
+  if (!answer) throw new Refused(say.notConnected(nameOf(record.peer)), 503);
+  if (answer.ok !== true) throw new Refused(typeof answer.message === "string" && answer.message ? answer.message : `${record.name} can’t run on ${nameOf(record.peer)}.`);
+  return typeof answer.note === "string" && answer.note ? { note: answer.note } : {};
+}
+
+/** A coding agent's account here, as its bridge lists it (`api/integration`). */
+interface AgentAccount {
+  id?: string;
+  name?: string;
+  metadata?: { agent?: string; installed?: boolean; account?: string; accountLabel?: string };
+  connections?: unknown[];
+}
+
+/** The box it goes to: whether it can run what's coming (`check`), said back at once. */
+async function checkHere(sender: MailSender, given: Record<string, unknown>, id: string): Promise<void> {
+  const answer = (move: Record<string, unknown>) => void tell(sender.key, { op: "checked", id, ...move });
+  const name = typeof given.name === "string" ? given.name : "It";
+  const lane = given.lane === true;
+  const place = IS_MAC ? "this Mac" : (plainName(readLink()?.name ?? "") || "this machine");
+  const wait = AbortSignal.timeout(20_000);
+  let target: Target;
+  try {
+    target = lane ? readBridgeFile() : readEngineFile();
+    await call(target, "GET", "/api/session/active", undefined, wait);
+  } catch {
+    return answer({ ok: false, message: lane ? say.noAgents(place) : say.noEngine(place) });
+  }
+  const model = isObject(given.model) && typeof given.model.providerID === "string" && typeof given.model.id === "string" ? { providerID: given.model.providerID, id: given.model.id } : null;
+  if (!model || given.kind === "group") return answer({ ok: true });
+  if (!lane) {
+    const refused = await signInRefusal(model, target, wait).catch(() => null);
+    return answer(refused ? { ok: false, message: say.modelNotThere(name, model.id, place) } : { ok: true });
+  }
+  // (Its agent's accounts there, by the provider they're all of: `claude-code`, `claude-code@<account>`.)
+  const kind = model.providerID.split("@")[0]!;
+  // Custom Auto picks among what's signed in there.
+  if (kind === "auto") return answer({ ok: true });
+  const listed = await call(target, "GET", "/api/integration", undefined, wait).catch(() => null);
+  if (!Array.isArray(listed)) return answer({ ok: false, message: say.noAgents(place) });
+  const ofKind = (listed as (AgentAccount | null)[]).filter((each): each is AgentAccount => typeof each?.id === "string" && each.id.split("@")[0] === kind);
+  // Not a coding agent's: a model the engine's sign-ins give it, as for a bot of the engine's.
+  if (!ofKind.length) {
+    const refused = await signInRefusal(model, readEngineFile(), wait).catch(() => null);
+    return answer(refused ? { ok: false, message: say.modelNotThere(name, model.id, place) } : { ok: true });
+  }
+  const agentName = ofKind[0]!.name ?? "its coding agent";
+  if (!ofKind.some(each => each.metadata?.installed)) return answer({ ok: false, message: say.agentNotThere(name, agentName, place) });
+  const signedIn = ofKind.filter(each => each.metadata?.installed && Array.isArray(each.connections) && each.connections.length);
+  if (!signedIn.length) return answer({ ok: false, message: say.agentSignedOut(name, agentName, place) });
+  // Its own account, or another of the same agent there: which it is from then on, said.
+  if (signedIn.some(each => each.id === model.providerID)) return answer({ ok: true });
+  const uses = signedIn[0]!;
+  const who = uses.metadata?.account ? ` (${uses.metadata.account})` : "";
+  return answer({ ok: true, note: say.otherAccount(name, agentName, who, place) });
+}
+
 function offer(record: MoveRecord): void {
-  tell(record.peer, { op: "offer", id: record.id, kind: record.kind, thing: record.thing, name: record.name, size: record.size, hash: record.hash, wasPaused: record.wasPaused, ...(record.pausedAs !== undefined ? { pausedAs: record.pausedAs } : {}), from: record.from, ...(record.members ? { members: record.members } : {}) });
+  tell(record.peer, { op: "offer", id: record.id, kind: record.kind, thing: record.thing, name: record.name, size: record.size, hash: record.hash, wasPaused: record.wasPaused, ...(record.pausedAs !== undefined ? { pausedAs: record.pausedAs } : {}), from: record.from, ...(record.members ? { members: record.members } : {}), ...(record.lane ? { lane: true } : {}) });
 }
 
 // The next parts to the other box, up to `IN_FLIGHT` on their way.
@@ -476,9 +665,13 @@ function sendParts(record: MoveRecord, now = Date.now()): void {
   const of = Math.ceil(record.size / PART_BYTES);
   const file = path.join(bundleOf(record.id), "bundle.tgz");
   let handle: number | null = null;
+  // One unanswered this long is lost (the relay dropped, say): no longer on its way, so it goes again.
+  let lost = false;
+  for (const [i, when] of state.flying) if (now - when >= PART_AGAIN) { state.flying.delete(i); lost = true; }
+  if (lost) state.window = Math.max(1, Math.floor((state.window ?? IN_FLIGHT) / 2));
   try {
-    for (let i = 0; i < of && state.flying.size < IN_FLIGHT; i++) {
-      if (state.got.has(i) || (state.flying.has(i) && now - state.flying.get(i)! < PART_AGAIN)) continue;
+    for (let i = 0; i < of && state.flying.size < (state.window ?? IN_FLIGHT); i++) {
+      if (state.got.has(i) || state.flying.has(i)) continue;
       handle ??= fs.openSync(file, "r");
       const bytes = Buffer.alloc(Math.min(PART_BYTES, record.size - i * PART_BYTES));
       fs.readSync(handle, bytes, 0, bytes.length, i * PART_BYTES);
@@ -491,19 +684,23 @@ function sendParts(record: MoveRecord, now = Date.now()): void {
 }
 
 /** It's there, held: settled and read again; the same, it switches; not, it all goes again. */
-async function arrived(record: MoveRecord): Promise<void> {
+async function arrived(record: MoveRecord, placed?: unknown): Promise<void> {
   const still = () => {
     const now = readMove(record.id);
     return now?.role === "from" && now.stage === "copying" && !now.failed ? now : null;
   };
   if (record.kind !== "group") {
-    const engine = readEngineFile();
-    await settle(engine, record.sessions, record.name);
-    const again = await exportAll(engine, record.sessions[0]);
+    const target = record.lane ? readBridgeFile() : readEngineFile();
+    await settle(target, record.sessions, record.name);
+    // What's in place there, file by file, is what was sent: or it's not the one to go on from.
+    if (record.lane && placed !== outgoing.get(record.id)?.digest) throw new Refused(say.notSame(record.name));
+    const again = record.lane
+      ? (await carry<{ digest: string }>(target, "digest", { root: record.sessions[0] })).digest
+      : conversationHash(await exportAll(target, record.sessions[0]));
     const before = outgoing.get(record.id)?.exports;
     // Taken back meanwhile (its copy there couldn't be set up, or it took too long): nothing more.
     if (!still()) return;
-    if (!before || fingerprint(again, await queuesOf(engine, record.sessions, record.name)) !== before) {
+    if (!before || fingerprint(again, await queuesOf(target, record.sessions, record.name)) !== before) {
       if (record.tries >= 2) throw new Refused(say.busy(record.name));
       // (Getting it ready again from now: what `keepMoving` counts its half hour from.)
       changeMove(record.id, each => { each.tries += 1; each.stage = "holding"; each.step = undefined; each.holdSince = Date.now(); });
@@ -524,14 +721,18 @@ async function finish(id: string): Promise<void> {
   if (record.kind === "group") {
     await groupAction(readBridgeFile(), record.thing, "release");
   } else {
-    const engine = readEngineFile();
+    const engine = record.lane ? readBridgeFile() : readEngineFile();
     const place = record.folder ?? path.join(K, `moved-${record.thing}`);
     // Kept by a try before this one, whole: not again (some of it may be gone since).
     if (!record.kept) {
       try {
-        const exports = await exportAll(engine, record.sessions[0]);
         fs.mkdirSync(place, { recursive: true });
-        writePrivate(path.join(place, "conversation.json"), JSON.stringify(exports, null, 2));
+        if (record.lane) {
+          await carry(engine, "keep", { root: record.sessions[0], into: path.join(place, "conversation") });
+        } else {
+          const exports = await exportAll(engine, record.sessions[0]);
+          writePrivate(path.join(place, "conversation.json"), JSON.stringify(exports, null, 2));
+        }
         changeMove(id, each => { each.kept = true; });
       } catch (error) {
         // Gone already: on. Still here: not yet; refused that way, again and again, with its engine
@@ -554,13 +755,16 @@ async function finish(id: string): Promise<void> {
     }
     // What waited for them here went with them.
     for (const session of record.sessions) forgetQueue(session);
-    if (record.kind === "bot") await answerBotKeys("DELETE", `kuvo/bots/${record.thing}/keys`, null, null).catch(() => {});
-    await toTrash(place);
+    // (Kept here they're no one's, but never left for good: tried again till they're gone.)
+    const keysLeft = record.kind === "bot" && !(await answerBotKeys("DELETE", `kuvo/bots/${record.thing}/keys`, null, null).then(answer => answer.status === 200, () => false));
+    const trash = await toTrash(place);
+    // Kept as the way back, until it has run there a while.
+    noteLeft({ id, thing: record.thing, kind: record.kind, to: record.to, at: Date.now(), sessions: [...record.sessions], ...(record.lane ? { lane: true } : {}), ...(trash ? { trash } : {}), ...(record.leftOf?.length ? { left: record.leftOf } : {}), ...(keysLeft ? { keys: true } : {}) });
   }
   noteMovedAway(record.sessions, record.to);
   forgetMove(id);
   outgoing.delete(id);
-  ended(id, { ok: true, move: shownMove({ ...record, stage: "finishing" }) });
+  ended(id, { ok: true, move: shownMove({ ...record, stage: "finishing" }), ...(record.note ? { note: record.note } : {}) });
 }
 
 /** Taken back before it switched: the other box lets its copy go, and it goes on here as it was. */
@@ -629,6 +833,7 @@ async function takeOffer(sender: MailSender, given: Record<string, unknown>): Pr
   const thing = typeof given.thing === "string" ? given.thing : "";
   const name = typeof given.name === "string" ? given.name : "It";
   const size = typeof given.size === "number" ? given.size : 0;
+  const lane = given.lane === true;
   if (!["bot", "chat", "group"].includes(kind) || !/^[A-Za-z0-9_]{1,80}$/.test(thing) || typeof given.hash !== "string" || size <= 0) return void answer({ op: "refused", message: "That isn’t a move." });
   if (size > MOST_BUNDLE) return void answer({ op: "refused", message: say.tooBig(name) });
   const place = IS_MAC ? "this Mac" : (plainName(readLink()?.name ?? "") || "this machine");
@@ -642,9 +847,9 @@ async function takeOffer(sender: MailSender, given: Record<string, unknown>): Pr
     if (!IS_MAC && members.some(member => !botHere(member))) return void answer({ op: "refused", message: say.botsElsewhere(name) });
   } else {
     try {
-      await call(readEngineFile(), "GET", "/api/session/active", undefined, engineWait());
+      await call(lane ? readBridgeFile() : readEngineFile(), "GET", "/api/session/active", undefined, engineWait());
     } catch {
-      return void answer({ op: "refused", message: say.noEngine(place) });
+      return void answer({ op: "refused", message: lane ? say.noAgents(place) : say.noEngine(place) });
     }
   }
   const was = readMove(id);
@@ -670,7 +875,7 @@ async function takeOffer(sender: MailSender, given: Record<string, unknown>): Pr
   incoming.set(id, new Set());
   saveMove({
     id, kind, thing, name, from: sender.key, to: ownKey(readLink() ?? {}) ?? "", role: "to", stage: "copying", sessions: was?.sessions ?? [],
-    peer: sender.key, wasPaused: given.wasPaused === true, ...(typeof given.pausedAs === "string" ? { pausedAs: given.pausedAs.slice(0, 2000) } : {}), hash: given.hash, size, sent: 0, tries: 0, started: was?.started ?? Date.now(),
+    peer: sender.key, wasPaused: given.wasPaused === true, ...(typeof given.pausedAs === "string" ? { pausedAs: given.pausedAs.slice(0, 2000) } : {}), hash: given.hash, size, sent: 0, tries: 0, started: was?.started ?? Date.now(), ...(lane ? { lane: true } : {}),
   });
   answer({ op: "ready" });
 }
@@ -685,12 +890,14 @@ async function livesHere(kind: MoveKind, thing: string): Promise<boolean> {
   if (fs.existsSync(folderOf(kind, thing)!)) return true;
   const root = kind === "bot" ? null : thing;
   if (!root) return false;
-  try {
-    await call(readEngineFile(), "GET", `/api/session/${encodeURIComponent(root)}`, undefined, engineWait());
-    return true;
-  } catch {
-    return false;
+  // On either: a chat's on the agents bridge once it talks with a coding agent.
+  for (const target of [readEngineFile, readBridgeFile]) {
+    try {
+      await call(target(), "GET", `/api/session/${encodeURIComponent(root)}`, undefined, engineWait());
+      return true;
+    } catch {}
   }
+  return false;
 }
 
 async function takePart(sender: MailSender, given: Record<string, unknown>): Promise<void> {
@@ -698,8 +905,10 @@ async function takePart(sender: MailSender, given: Record<string, unknown>): Pro
   const record = readMove(id);
   const i = given.i, of = given.of;
   const expected = Math.ceil((record?.size ?? 0) / PART_BYTES);
-  if (!record || record.role !== "to" || record.complete || record.dropping || record.peer !== sender.key || record.hash !== given.hash || !Number.isInteger(i) || of !== expected
+  if (!record || record.role !== "to" || record.dropping || record.peer !== sender.key || record.hash !== given.hash || !Number.isInteger(i) || of !== expected
     || (i as number) < 0 || (i as number) >= expected || typeof given.d !== "string" || given.d.length > Math.ceil(PART_BYTES * 4 / 3)) return;
+  // All here already, and this one's answer lost: said again, so the box it comes from goes on.
+  if (record.complete) return void tell(sender.key, { op: "got", id, i });
   const parts = partsOf(id);
   const bytes = Buffer.from(given.d, "base64url");
   const file = path.join(bundleOf(id), "bundle.tgz");
@@ -738,8 +947,8 @@ async function setUp(sender: MailSender, id: string, file: string): Promise<void
     if (await hashOf(file) !== record.hash) throw new NotTaken("What came wasn’t what was sent.");
     const sessions = await bringIn(record, stop.signal);
     stop.signal.throwIfAborted();
-    changeMove(id, each => { each.sessions = sessions; each.setUpSince = undefined; each.setUpAt = Date.now(); });
-    tell(sender.key, { op: "arrived", id, hash: record.hash });
+    const now = changeMove(id, each => { each.sessions = sessions; each.setUpSince = undefined; each.setUpAt = Date.now(); });
+    tell(sender.key, { op: "arrived", id, hash: record.hash, ...(now?.digest ? { digest: now.digest } : {}) });
   } catch (thrown) {
     const error = stop.signal.aborted ? stop.signal.reason : thrown;
     // What was set up of it goes: the box it came from takes it back, and a switch for it is
@@ -757,7 +966,7 @@ async function setUp(sender: MailSender, id: string, file: string): Promise<void
 
 /** The bundle put in place here, held: its folder, its conversations, a bot's keys, a group chat. */
 async function bringIn(record: MoveRecord, signal: AbortSignal): Promise<string[]> {
-  const { contents, folder } = await unpack(record.id);
+  const { contents, folder, carry: carried } = await unpack(record.id);
   if (record.kind === "group") {
     const held = contents.group;
     if (!held || !isObject(held.group)) throw new NotTaken("The group chat didn’t come with it.");
@@ -769,9 +978,15 @@ async function bringIn(record: MoveRecord, signal: AbortSignal): Promise<string[
   // Only its own conversations, one of them its root (a chat's is the chat; a bot's, the one its
   // folder names), and none that's here already: it never brings in, or takes away, another one.
   const root = record.kind === "chat" ? record.thing : (() => { try { return folder ? fs.readFileSync(path.join(folder, "session"), "utf8").trim() : ""; } catch { return ""; } })();
-  if (!ownTree(contents.exports, root)) throw new NotTaken("Its conversations aren’t its own.");
-  const engine = readEngineFile();
-  for (const session of idsOf(contents.exports)) {
+  // (It says the same as what was offered, or it's put where it can't run.)
+  if (Boolean(contents.lane) !== Boolean(record.lane)) throw new NotTaken("What came isn’t a move.");
+  if (contents.lane ? contents.lane.root !== root : !ownTree(contents.exports, root)) throw new NotTaken("Its conversations aren’t its own.");
+  const engine = record.lane ? readBridgeFile() : readEngineFile();
+  // (Those it says it brings, none of them here: noted before they're brought in, so each is held from
+  // the moment it's here. The bridge looks again as it places them.)
+  const bringing = contents.lane ? contents.lane.sessions.filter(each => typeof each === "string" && /^ses_[A-Za-z0-9]{1,60}$/.test(each)) : idsOf(contents.exports);
+  if (contents.lane && (!bringing.length || bringing.length !== contents.lane.sessions.length)) throw new NotTaken("Its conversations aren’t its own.");
+  for (const session of bringing) {
     if (await call(engine, "GET", `/api/session/${encodeURIComponent(session)}`, undefined, engineWait(signal)).then(() => true, () => false)) throw new NotTaken(`Its conversations are on ${HERE} already.`);
   }
   signal.throwIfAborted();
@@ -789,24 +1004,72 @@ async function bringIn(record: MoveRecord, signal: AbortSignal): Promise<string[
   }
   const directory = directoryOf(record.kind, record.thing);
   fs.mkdirSync(directory, { recursive: true });
-  // Its conversations, noted before they're brought in: any that came go if it's taken back.
-  changeMove(record.id, each => { each.sessions = idsOf(contents.exports); });
-  await importAll(engine, contents.exports, directory, signal);
+  const was = contents.was && typeof contents.was.place === "string" ? { place: plainName(contents.was.place), ...(typeof contents.was.folder === "string" ? { folder: contents.was.folder } : {}) } : undefined;
+  // Its conversations, noted before they're brought in: any that came go if it's taken back (with a
+  // coding agent, what its bridge placed it undoes itself).
+  let sessions = bringing;
+  changeMove(record.id, each => { each.sessions = sessions; each.was = was; });
+  let infos: (Partial<EngineSession> & { id: string })[];
+  if (contents.lane) {
+    const placed = await carry<{ digest: string; sessions: string[]; model?: { providerID?: string }; infos: { id: string; metadata?: Record<string, unknown> }[] }>(engine, "place", { from: carried, keep: placedOf(record.id), directory, root }, signal).catch(error => {
+      if ((error as { status?: number } | null)?.status === 409) throw new NotTaken(String((error as Error).message));
+      throw error;
+    });
+    sessions = [...new Set([...sessions, ...placed.sessions])];
+    changeMove(record.id, each => { each.digest = placed.digest; each.sessions = sessions; });
+    infos = placed.infos as typeof infos;
+    // Its account isn't on this computer: the bot goes on with the one its conversation went to.
+    if (record.kind === "bot" && placed.model?.providerID) rewriteModel(place, placed.model.providerID);
+  } else {
+    await importAll(engine, contents.exports, directory, signal);
+    infos = contents.exports.flatMap(exported => isObject(exported) && isObject(exported.info) ? [exported.info as Partial<EngineSession> & { id: string }] : []);
+  }
   // What waited for them, kept here paused until the switch.
-  const goOn = unpackQueues(contents.queues, idsOf(contents.exports));
+  const goOn = unpackQueues(contents.queues, sessions);
   if (goOn.length) changeMove(record.id, each => { each.queuesGoOn = goOn; });
   // The calls it made on Autopilot; on it (its flag came with it), its agent is told so here.
-  keepDecided(contents.decided, idsOf(contents.exports));
-  for (const exported of contents.exports) {
-    const info = isObject(exported) && isObject(exported.info) ? exported.info as Partial<EngineSession> & { id: string } : null;
-    if (info && isAutopilot(info)) await tellAutopilot(engine, info.id, true, signal).catch(error => console.error(`kuvo-link: ${record.name} couldn't be told it's on Autopilot here: ${error}`));
+  keepDecided(contents.decided, sessions);
+  for (const info of infos) {
+    if (isAutopilot(info)) await tellAutopilot(engine, info.id, true, signal).catch(error => console.error(`kuvo-link: ${record.name} couldn't be told it's on Autopilot here: ${error}`));
   }
   for (const [integration, keys] of Object.entries(contents.keys ?? {})) {
     const given = await answerBotKeys("PUT", `kuvo/bots/${record.thing}/keys/${encodeURIComponent(integration)}`, { keys }, null);
-    if (given.status !== 200) console.error(`kuvo-link: a moved bot's own key for ${integration} didn't come with it (${given.status}).`);
+    // Never lost on the way: one that can't be kept here takes the move back, and it stays there.
+    if (given.status !== 200) {
+      console.error(`kuvo-link: a moved bot's own key for ${integration} couldn't be kept here (${given.status}).`);
+      throw new NotTaken(`Its own key for ${integration} couldn’t be kept there.`);
+    }
   }
   fs.rmSync(path.join(bundleOf(record.id), "opened"), { recursive: true, force: true });
-  return idsOf(contents.exports);
+  return sessions;
+}
+
+/** What the bridge keeps of what it placed for a move, until it's over (never in what's opened). */
+const placedOf = (id: string) => path.join(bundleOf(id), "carried");
+
+/** The account a moved bot's model is on, as its conversation's now is here. */
+function rewriteModel(folder: string, provider: string): void {
+  try {
+    const file = path.join(folder, "bot.json");
+    const described: unknown = JSON.parse(fs.readFileSync(file, "utf8"));
+    if (!isObject(described) || !isObject(described.model) || described.model.providerID === provider) return;
+    described.model.providerID = provider;
+    writePrivate(file, JSON.stringify(described, null, 2));
+  } catch {}
+}
+
+/** What it's told as it's switched to: where it is now, for what its conversation still says. */
+async function tellMoved(record: MoveRecord): Promise<void> {
+  const root = record.sessions[0];
+  if (!root || !record.was) return;
+  const folder = record.kind === "bot" ? folderOf(record.kind, record.thing) : CHATS;
+  const lines = [
+    `You moved to this computer from ${record.was.place}. What you did before that happened there.`,
+    ...(record.was.folder && folder && record.was.folder !== folder ? [`Paths in your conversation under ${record.was.folder} are under ${folder} now.`] : []),
+    `Other paths on ${record.was.place} aren't here, and the sessions you started there stay there: reach them with list_agents, send_message and read_conversation.`,
+  ];
+  const target = record.lane ? readBridgeFile() : readEngineFile();
+  await call(target, "PUT", `/api/experimental/session/${encodeURIComponent(root)}/instructions/entries/kuvo.moved`, { value: lines.join(" ") }, engineWait());
 }
 
 /** Switched to: the copy here goes on from now, as it was where it came from. */
@@ -816,10 +1079,99 @@ async function switchHere(record: MoveRecord): Promise<void> {
   } else {
     unhold(folderOf(record.kind, record.thing) ?? undefined, record.wasPaused, record.pausedAs);
     forgetMovedAway(record.sessions);
+    await backHere(record.thing).catch(error => console.error(`kuvo-link: what an earlier move of ${record.name} left couldn't all be cleared: ${String((error as Error | null)?.message ?? error)}`));
+    // Told where it is now, before anything could run it here.
+    await tellMoved(record).catch(error => console.error(`kuvo-link: ${record.name} couldn't be told it moved: ${String((error as Error | null)?.message ?? error)}`));
     // A queue that went on where it came from goes on here (one you stopped stays stopped).
-    for (const session of record.queuesGoOn ?? []) await resumeQueue(readEngineFile(), session).catch(() => {});
+    for (const session of record.queuesGoOn ?? []) await resumeQueue(record.lane ? readBridgeFile() : readEngineFile(), session).catch(() => {});
     if (record.kind === "bot") await settleBot(record.thing, readEngineFile, () => { try { return readBridgeFile(); } catch { return null; } }).catch(() => {});
   }
+}
+
+/** Moved back to where an earlier move left it: this is the one now. What's in the trash is older, and
+ * goes; each agent's files were replaced by what came, but for the memory a bot now keeps in its folder. */
+async function backHere(thing: string): Promise<void> {
+  for (const entry of readLeft().filter(each => each.thing === thing)) {
+    // Forgotten first: whatever below fails, nothing here is ever removed later as "left" (it runs here now).
+    forgetLeft(entry.id);
+    removeTrashed(entry.trash);
+    const memory = (entry.left ?? []).flatMap(each => isObject(each) && typeof each.memory === "string" ? [{ ...each, paths: [] }] : []);
+    const bridge = memory.length ? bridgeTarget() : null;
+    if (bridge) await carry(bridge, "remove", { left: memory, sessions: entry.sessions, back: true });
+  }
+}
+
+// ---- What a move left ----
+
+let leftAskedAt = 0;
+
+/** The newest message of a session here. */
+async function newestMessage(lane: boolean, session: string): Promise<string | undefined> {
+  const target = lane ? readBridgeFile() : readEngineFile();
+  const listed = await call(target, "GET", `/api/session/${encodeURIComponent(session)}/message?limit=1&order=desc`, undefined, engineWait());
+  const newest = Array.isArray(listed) ? listed[0] : null;
+  return isObject(newest) && typeof newest.id === "string" ? newest.id : undefined;
+}
+
+/** When it first ran here since it came at `since`: the first of its replies after `last` (its newest
+ * message as it came; replies that came with it keep the other computer's times), on what it's kept on. */
+async function ranHereSince(lane: boolean, session: string, since: number, last?: string): Promise<number | null | "gone"> {
+  const target = lane ? readBridgeFile() : readEngineFile();
+  let listed: unknown;
+  try {
+    listed = await call(target, "GET", `/api/session/${encodeURIComponent(session)}/message?limit=20&order=desc`, undefined, engineWait());
+  } catch (error) {
+    if ((error as { status?: number } | null)?.status === 404) return "gone";
+    throw error;
+  }
+  let messages = Array.isArray(listed) ? listed : [];
+  // Not among the last 20 when there are more: all of those came after it. Fewer, and it isn't one
+  // (gone since, reverted say): by the time, then.
+  let came = last ? messages.findIndex(each => isObject(each) && each.id === last) : -1;
+  if (came < 0 && messages.length < 20) came = -2;
+  if (came >= 0) messages = messages.slice(0, came);
+  const byOrder = !!last && came !== -2;
+  const replies = messages.flatMap(each => {
+    if (!isObject(each) || each.type !== "assistant" || !isObject(each.time) || typeof each.time.created !== "number") return [];
+    return byOrder || each.time.created > since ? [Math.max(each.time.created, since)] : [];
+  });
+  return replies.length ? Math.min(...replies) : null;
+}
+
+/** Once in a while: the computers a move went to asked whether it has run there; what's been kept
+ * long enough since then, removed. Nothing while a move of it is under way here (it may be coming
+ * back, and its way back taken back). */
+function keepLeft(now: number): void {
+  const entries = readLeft();
+  if (!entries.length) return;
+  // (A clock set back asks again, rather than not until it's caught up.)
+  const asking = now - leftAskedAt >= ASK_LEFT || now < leftAskedAt;
+  if (asking) {
+    leftAskedAt = now;
+    for (const entry of entries) {
+      if (entry.ranAt === undefined && entry.sessions[0]) tell(entry.to, { op: "ran?", id: entry.id, session: entry.sessions[0], ...(entry.lane ? { lane: true } : {}) });
+    }
+  }
+  for (const entry of entries) {
+    // A bot's keys that couldn't go as it left: again each hour (never while it's moving back here).
+    if (entry.keys && asking && !moveOf(entry.thing)) void inTurn(entry.id, () => forgetBotKeys(entry.thing).then(gone => { if (gone && !moveOf(entry.thing)) keysGone(entry.id); }));
+    if (entry.ranAt === undefined || now - entry.ranAt < KEEP_LEFT || moveOf(entry.thing)) continue;
+    inTurn(entry.id, () => clearLeft(entry)).catch(error => console.error(`kuvo-link: what a move of ${entry.thing} left couldn't be removed yet: ${String((error as Error | null)?.message ?? error)}`));
+  }
+}
+
+async function clearLeft(entry: LeftEntry): Promise<void> {
+  if (moveOf(entry.thing) || !readLeft().some(each => each.id === entry.id)) return;
+  // (Its keys first: the entry stays, and all of it's tried again, while they can't go.)
+  if (entry.keys && !(await forgetBotKeys(entry.thing))) throw new Error("its own keys couldn't be taken away yet");
+  if (entry.left?.length) {
+    const bridge = bridgeTarget();
+    // (Its agents' folders aren't looked at without it: tried again later.)
+    if (!bridge) throw new Error("its coding agents aren't running");
+    await carry(bridge, "remove", { left: entry.left, sessions: entry.sessions });
+  }
+  removeTrashed(entry.trash);
+  forgetLeft(entry.id);
 }
 
 /** A copy here that won't be switched to from now on (`dropping`, and noted as dropped): what's
@@ -852,7 +1204,11 @@ async function clearCopy(record: MoveRecord): Promise<void> {
     await groupAction(readBridgeFile(), record.thing, "release");
   } else {
     // (None brought in yet: its engine needn't be running.)
-    if (record.sessions.length) {
+    if (record.lane) {
+      // Only what this move placed, each agent's files too, and what those replaced back.
+      if (fs.existsSync(placedOf(record.id))) await carry(readBridgeFile(), "undo", { keep: placedOf(record.id) });
+      for (const session of record.sessions) forgetDecided(session);
+    } else if (record.sessions.length) {
       const engine = readEngineFile();
       for (const session of [...record.sessions].reverse()) {
       await deleteSession(engine, session);
@@ -928,6 +1284,12 @@ export async function takeMoveMail(sender: MailSender, given: unknown): Promise<
   // Parts and their answers come many at once, and need no turn of their own (nor does word that a
   // copy's still being set up).
   if (given.op === "part" || given.op === "got" || given.op === "working" || given.op === "arrive") return moveMail(sender, given, given.id);
+  // Whether it can run there: asked and answered while the box it leaves waits, in its turn.
+  if (given.op === "check") return checkHere(sender, given, given.id);
+  if (given.op === "checked") {
+    if (record?.role === "from" && record.peer === sender.key) checking.get(given.id)?.(given);
+    return;
+  }
   return inTurn(given.id, () => moveMail(sender, given, given.id as string));
 }
 
@@ -944,8 +1306,10 @@ async function moveMail(sender: MailSender, given: Record<string, unknown>, id: 
       // so again; any other (dropped, never set up, unknown) is `dropped`, and the box it came
       // from keeps its original.
       if (mine?.role === "to" && mine.complete && !mine.dropping && mine.sessions.length + (mine.kind === "group" ? 1 : 0) > 0) {
+        // (Its newest message as it came, before anything could run it here.)
+        const last = mine.kind === "group" ? undefined : await newestMessage(mine.lane === true, mine.sessions[0]!).catch(() => undefined);
         await switchHere(mine);
-        noteEnded(id, "switched");
+        noteEnded(id, "switched", Date.now(), [], last);
         forgetMove(id);
         return void tell(sender.key, { op: "switched", id });
       }
@@ -957,7 +1321,7 @@ async function moveMail(sender: MailSender, given: Record<string, unknown>, id: 
       if (record && !mine) return;
       const failed = () => tell(sender.key, { op: "failed", id, message: `It couldn’t be set up on ${HERE}.`, ...(typeof given.hash === "string" ? { hash: given.hash } : {}) });
       if (mine?.role !== "to" || mine.dropping || !mine.complete) return void failed();
-      if (mine.setUpSince === undefined) return void tell(sender.key, { op: "arrived", id, hash: mine.hash });
+      if (mine.setUpSince === undefined) return void tell(sender.key, { op: "arrived", id, hash: mine.hash, ...(mine.digest ? { digest: mine.digest } : {}) });
       if (toSetUp.has(id)) return void tell(sender.key, { op: "working", id });
       // Cut short by a restart (nothing sets it up now): what came of it goes.
       return inTurn(id, () => drop(id)).then(() => void failed(), () => void failed());
@@ -977,8 +1341,11 @@ async function moveMail(sender: MailSender, given: Record<string, unknown>, id: 
       if (mine?.role !== "from" || mine.step !== "parts" || !Number.isInteger(given.i)) return;
       const state = outgoing.get(id);
       if (!state) return;
+      // (One lost and then come after all counts too, as it's no longer on its way.)
+      const fresh = !state.got.has(given.i as number);
       state.got.add(given.i as number);
       state.flying.delete(given.i as number);
+      if (fresh) state.window = Math.min(IN_FLIGHT, (state.window ?? IN_FLIGHT) + 1);
       const of = Math.ceil((mine.size ?? 0) / PART_BYTES);
       if (state.got.size === of) {
         changeMove(id, each => { each.sent = each.size; each.step = "arrive"; each.sentAt = Date.now(); });
@@ -991,7 +1358,7 @@ async function moveMail(sender: MailSender, given: Record<string, unknown>, id: 
     case "arrived":
       // (Of the bundle it sent last: one before it, sent again, is old news.)
       if (mine?.role !== "from" || mine.stage !== "copying" || mine.failed || (typeof given.hash === "string" && given.hash !== mine.hash)) return;
-      return arrived(mine).catch(error => takeBack(id, String((error as Error | null)?.message ?? error), 409));
+      return arrived(mine, given.digest).catch(error => takeBack(id, String((error as Error | null)?.message ?? error), 409));
     case "refused":
     case "failed":
       // (One about a bundle before the one sent last, asked again late, is old news.)
@@ -1007,6 +1374,20 @@ async function moveMail(sender: MailSender, given: Record<string, unknown>, id: 
       return;
     // Its copy there still being set up (`heard`, as it came, is all it's for).
     case "working":
+      return;
+    // Has what came from there run here yet?
+    case "ran?": {
+      if (typeof given.session !== "string" || !/^ses_[A-Za-z0-9]{1,60}$/.test(given.session)) return;
+      const since = endedAt(id);
+      // (Only one that came here, from that computer: a word of it is what removes what's there.)
+      if (since === null || endedAs(id) !== "switched") return;
+      const ran = await ranHereSince(given.lane === true, given.session, since, endedLast(id)).catch(() => null);
+      // Gone from here (moved on, or deleted): it's not coming back through that way, so the time starts.
+      if (ran !== null) tell(sender.key, { op: "ran", id, at: ran === "gone" ? Date.now() : ran });
+      return;
+    }
+    case "ran":
+      if (typeof given.at === "number") noteRan(id, sender.key, given.at);
       return;
   }
 }
@@ -1029,9 +1410,15 @@ async function letGoOf(sender: MailSender, id: string): Promise<void> {
 // Each move's next step, once in a while: a step unanswered sent again; a first offer with no answer
 // taken back (the other computer isn't there); one whose other computer was removed, ended. And your
 // other computers told what moves here, and what one quiet a while said forgotten (`elsewhere.ts`).
+/** Move folders no move here has, by when they were first seen so. */
+const orphans = new Map<string, number>();
+/** How long one's left first: longer than the bridge's packing or placing is waited for. */
+const ORPHAN_AFTER = 2 * CARRY_WAIT;
+
 export function keepMoving(now = Date.now()): void {
   const records = readMoves();
   noteWaiting(records, now);
+  keepLeft(now);
   tellMoving(hostOf(), now);
   forgetQuiet(now);
   if (groupsToWake && now - groupsLookedAt > STEP_AGAIN) {
@@ -1042,6 +1429,21 @@ export function keepMoving(now = Date.now()): void {
   let names: string[] = [];
   try { names = fs.readdirSync(MOVES).filter(name => name.endsWith(".outcome.json")); } catch {}
   for (const name of names) try { if (now - fs.statSync(path.join(MOVES, name)).mtimeMs > OUTCOME_KEPT) fs.rmSync(path.join(MOVES, name), { force: true }); } catch {}
+  // A move's folder no move here has any more (a step under way as it was taken back made it again):
+  // gone once it's been seen so for longer than a step's given.
+  let folders: string[] = [];
+  try { folders = fs.readdirSync(MOVES, { withFileTypes: true }).filter(each => each.isDirectory() && each.name.startsWith("mov_")).map(each => each.name); } catch {}
+  const known = new Set(records.map(record => record.id));
+  for (const name of [...orphans.keys()]) if (!folders.includes(name) || known.has(name)) orphans.delete(name);
+  for (const name of folders) {
+    if (known.has(name)) continue;
+    const since = orphans.get(name) ?? now;
+    orphans.set(name, since);
+    if (now - since > ORPHAN_AFTER) {
+      try { fs.rmSync(bundleOf(name), { recursive: true, force: true }); } catch {}
+      orphans.delete(name);
+    }
+  }
   for (const record of records) {
     if (!peers.has(record.peer)) {
       // Gone a while, not just left out as your computers are read again.

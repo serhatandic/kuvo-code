@@ -141,7 +141,7 @@ function runOf(doing: Doing): Run | undefined {
 }
 
 /** What the bridge keeps of each agent's conversation in a session. */
-interface Slot {
+export interface Slot {
   /** The agent's own state (its conversation's ID, to resume it). */
   state: Record<string, unknown>
   /** The last message it has seen: what comes after goes to it as a handover. */
@@ -1167,6 +1167,35 @@ export class Sessions {
     this.store.save(session.id, true)
     emit("session.created", { sessionID: session.id, session }, session.location.directory)
     return session
+  }
+
+  /** Whether it's at work now, its subagents' turns too. */
+  atWorkNow(id: string): boolean {
+    return this.active().includes(id)
+  }
+
+  /** Each agent's slot in a session, as a move carries them (carry.ts). */
+  slotsOf(id: string): Record<string, Slot> {
+    return this.slots(this.record(id))
+  }
+
+  /** Its agents' processes stopped, between turns (the next message starts them again, in the same conversation); whether any ran. */
+  closeAgents(id: string): boolean {
+    const live = this.live.get(id)
+    if (!live || isBusy(live.doing) || !live.threads.size) return false
+    clearTimeout(live.idle)
+    for (const thread of live.threads.values()) thread.close()
+    live.threads.clear()
+    return true
+  }
+
+  /** A session that came whole from another computer (carry.ts). */
+  addCarried(record: Record_) {
+    this.store.addWhole(record)
+    // Its last turn is over (one left open there isn't one here).
+    this.repair(record.session.id)
+    this.store.save(record.session.id, true)
+    emit("session.updated", { sessionID: record.session.id, session: record.session }, record.session.location.directory)
   }
 
   /** Sessions, newest first: in a folder, and under a session (`parentID`; "null" for those under none). */
@@ -2650,7 +2679,8 @@ export class Sessions {
   /** What says which files are the own of the agent running `turn` (never outside the project). */
   private ownedBy(turn: Turn): ((path: string) => boolean) | undefined {
     const agent = this.agent(turn.currentModel.providerID)
-    return agent?.ownsPath ? (path) => agent.ownsPath!(path) : undefined
+    const session = this.store.get(turn.sessionID)?.session
+    return agent?.ownsPath ? (path) => agent.ownsPath!(path, session) : undefined
   }
 
   /** The files attached to a conversation's messages, by path. */
