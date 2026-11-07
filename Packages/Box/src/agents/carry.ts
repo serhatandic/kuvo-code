@@ -399,18 +399,27 @@ export class Carrying {
   /**
    * What a moved session left here, gone, now that it's run on the other computer a while. Only what
    * its agent keeps as its own conversations (`conversationRoots`); memory only where no session here
-   * still works in the folder it's the memory of.
+   * still works in the folder it's the memory of (`back`: its own sessions, back here, keep their
+   * memory in the bot's folder now, so they don't count).
    */
-  async remove(left: LeftOf[], ownSessions: string[] = []): Promise<{ removed: string[]; kept: string[] }> {
+  async remove(left: LeftOf[], ownSessions: string[] = [], back = false): Promise<{ removed: string[]; kept: string[] }> {
     const removed: string[] = []
     const kept: string[] = []
+    // Never what a session here works on now: one that moved back has its files where they were.
+    const live = new Set(
+      this.store.all().flatMap((session) => {
+        const record = this.store.get(session.id)
+        if (!record) return []
+        return Object.entries(this.sessions.slotsOf(session.id)).flatMap(([provider, slot]) => this.laneFiles(record, provider, slot.state ?? {}, true).files?.items.map((item) => item.path) ?? [])
+      }),
+    )
     for (const lane of left) {
       const named = parseProvider(lane.provider)
       const agents = named ? this.accountsOf(named.kind) : []
       const roots = (this.agentOf(lane.provider)?.conversationRoots?.() ?? agents.flatMap((agent) => agent.conversationRoots?.() ?? [])).map((root) => root + sep)
       const ours = (path: string) => roots.some((root) => path.startsWith(root) && normalize(path) === path)
       for (const path of lane.paths) {
-        if (!ours(path)) {
+        if (!ours(path) || live.has(path)) {
           kept.push(path)
           continue
         }
@@ -418,7 +427,7 @@ export class Carrying {
         removed.push(path)
       }
       if (!lane.memory) continue
-      const shared = this.store.all().some((session) => session.location.directory === lane.directory && !ownSessions.includes(session.id))
+      const shared = this.store.all().some((session) => session.location.directory === lane.directory && !(back && ownSessions.includes(session.id)))
       if (shared || !ours(lane.memory)) {
         kept.push(lane.memory)
         continue
@@ -518,7 +527,7 @@ export async function carryRoutes(carrying: Carrying | undefined, method: string
         await carrying.undo(text("keep"))
         return json({ data: true })
       case "remove":
-        return json({ data: await carrying.remove(Array.isArray(given?.left) ? given.left : [], Array.isArray(given?.sessions) ? given.sessions : []) })
+        return json({ data: await carrying.remove(Array.isArray(given?.left) ? given.left : [], Array.isArray(given?.sessions) ? given.sessions : [], given?.back === true) })
     }
     return json({ message: "Not found" }, 404)
   } catch (error) {

@@ -1047,11 +1047,12 @@ async function switchHere(record: MoveRecord): Promise<void> {
  * goes; each agent's files were replaced by what came, but for the memory a bot now keeps in its folder. */
 async function backHere(thing: string): Promise<void> {
   for (const entry of readLeft().filter(each => each.thing === thing)) {
+    // Forgotten first: whatever below fails, nothing here is ever removed later as "left" (it runs here now).
+    forgetLeft(entry.id);
     removeTrashed(entry.trash);
     const memory = (entry.left ?? []).flatMap(each => isObject(each) && typeof each.memory === "string" ? [{ ...each, paths: [] }] : []);
     const bridge = memory.length ? bridgeTarget() : null;
-    if (bridge) await carry(bridge, "remove", { left: memory, sessions: entry.sessions });
-    forgetLeft(entry.id);
+    if (bridge) await carry(bridge, "remove", { left: memory, sessions: entry.sessions, back: true });
   }
 }
 

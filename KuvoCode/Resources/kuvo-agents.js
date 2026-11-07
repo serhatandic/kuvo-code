@@ -18943,16 +18943,22 @@ class Carrying {
       });
     await undo.undo();
   }
-  async remove(left, ownSessions = []) {
+  async remove(left, ownSessions = [], back = false) {
     const removed = [];
     const kept = [];
+    const live = new Set(this.store.all().flatMap((session) => {
+      const record = this.store.get(session.id);
+      if (!record)
+        return [];
+      return Object.entries(this.sessions.slotsOf(session.id)).flatMap(([provider, slot]) => this.laneFiles(record, provider, slot.state ?? {}, true).files?.items.map((item) => item.path) ?? []);
+    }));
     for (const lane of left) {
       const named = parseProvider(lane.provider);
       const agents = named ? this.accountsOf(named.kind) : [];
       const roots = (this.agentOf(lane.provider)?.conversationRoots?.() ?? agents.flatMap((agent) => agent.conversationRoots?.() ?? [])).map((root) => root + sep11);
       const ours = (path) => roots.some((root) => path.startsWith(root) && normalize(path) === path);
       for (const path of lane.paths) {
-        if (!ours(path)) {
+        if (!ours(path) || live.has(path)) {
           kept.push(path);
           continue;
         }
@@ -18961,7 +18967,7 @@ class Carrying {
       }
       if (!lane.memory)
         continue;
-      const shared = this.store.all().some((session) => session.location.directory === lane.directory && !ownSessions.includes(session.id));
+      const shared = this.store.all().some((session) => session.location.directory === lane.directory && !(back && ownSessions.includes(session.id)));
       if (shared || !ours(lane.memory)) {
         kept.push(lane.memory);
         continue;
@@ -19060,7 +19066,7 @@ async function carryRoutes(carrying, method, parts, body) {
         await carrying.undo(text("keep"));
         return json({ data: true });
       case "remove":
-        return json({ data: await carrying.remove(Array.isArray(given?.left) ? given.left : [], Array.isArray(given?.sessions) ? given.sessions : []) });
+        return json({ data: await carrying.remove(Array.isArray(given?.left) ? given.left : [], Array.isArray(given?.sessions) ? given.sessions : [], given?.back === true) });
     }
     return json({ message: "Not found" }, 404);
   } catch (error) {
@@ -24559,4 +24565,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 98d7d0bb88da67d2478d88b0325c56bbfec6dec4397c93e4e8ba9e1d5d23d729
+// Built from Packages/Box/src/agents 2b84fef62809f0b8f2cf2ec37c029be7f620e74bbbebd1eeefa9fdcf3f1ab2e6

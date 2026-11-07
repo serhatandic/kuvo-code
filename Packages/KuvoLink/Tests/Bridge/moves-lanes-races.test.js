@@ -70,7 +70,8 @@ const seedStarted = (session, directory) => {
   write(file, '{"type":"user","started":true}\n');
   return { session, file };
 };
-const leaves = seedBot("bot_leaves"), shares = seedBot("bot_shares"), keyLeft = seedBot("bot_keyleft");
+const leaves = seedBot("bot_leaves"), shares = seedBot("bot_shares"), keyLeft = seedBot("bot_keyleft"), back = seedBot("bot_back");
+write(path.join(memoryOf(back), "MEMORY.md"), "Still in use.\n");
 write(path.join(memoryOf(leaves), "MEMORY.md"), "The bot's.\n");
 write(path.join(path.dirname(leaves.file), leaves.id, "subagents", "agent-1.jsonl"), "{}\n");
 write(path.join(memoryOf(shares), "MEMORY.md"), "Both of them use this.\n");
@@ -377,4 +378,21 @@ test("a bot's own key that can't be taken away here as it goes isn't left for go
   link.keepMoving(Date.now() + 3 * 3600_000);
   await until(() => !fs.existsSync(key));
   await until(() => !leftHere().find(each => each.id === entry.id)?.keys);
+});
+
+test("what a move left is never removed once the conversation runs here again, whatever went wrong as it came back", async () => {
+  // As it was before it went, packed as the other computer would send it back.
+  const returning = path.join(support, "returning");
+  assert.equal((await asks("POST", "/api/kuvo/carry/pack", { root: back.session, into: returning })).status, 200);
+  const entry = await moveAway(back);
+  // Back here without the link's own tidying (it failed, or stopped midway): the same files, in use again.
+  const placed = await asks("POST", "/api/kuvo/carry/place", { from: returning, keep: path.join(support, "returning-keep"), directory: path.join(back.folder, "workspace"), root: back.session });
+  assert.equal(placed.status, 200, JSON.stringify(placed.json));
+  assert.equal((await asks("GET", `/api/session/${back.session}`)).status, 200);
+  const at = Date.now();
+  await say({ op: "ran", id: entry.id, at });
+  link.keepMoving(at + WEEK + 1);
+  await until(() => !leftHere().some(each => each.id === entry.id));
+  assert.equal(fs.readFileSync(back.file, "utf8"), '{"type":"user"}\n', "the conversation it's on here is still there");
+  assert.equal(fs.readFileSync(path.join(memoryOf(back), "MEMORY.md"), "utf8"), "Still in use.\n", "and so is its memory");
 });

@@ -18680,12 +18680,12 @@ async function switchHere(record) {
 }
 async function backHere(thing) {
   for (const entry of readLeft().filter((each) => each.thing === thing)) {
+    forgetLeft(entry.id);
     removeTrashed(entry.trash);
     const memory = (entry.left ?? []).flatMap((each) => isObject(each) && typeof each.memory === "string" ? [{ ...each, paths: [] }] : []);
     const bridge = memory.length ? bridgeTarget() : null;
     if (bridge)
-      await carry(bridge, "remove", { left: memory, sessions: entry.sessions });
-    forgetLeft(entry.id);
+      await carry(bridge, "remove", { left: memory, sessions: entry.sessions, back: true });
   }
 }
 var leftAskedAt = 0;
