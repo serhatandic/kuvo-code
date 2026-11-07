@@ -218,7 +218,8 @@ final class KeeperFollower {
         if let engineRecord, !goesNow {
             askedToStart = nil
             engine = .ready(engineRecord)
-        } else if let reason = stoppedReason() {
+        } else if let reason = stoppedReason(), KeeperRecord.read() != nil || !retryAwaited {
+            // (With no keeper left to make it, a next try isn't coming, whatever its reason says.)
             engine = .failed(reason)
         } else if KeeperRecord.read() == nil, isGone() {
             onGone()
@@ -260,6 +261,10 @@ final class KeeperFollower {
         #endif
         BackgroundWork.shared.refresh()
         return BackgroundWork.shared.state != .on
+    }
+
+    private var retryAwaited: Bool {
+        FileManager.default.fileExists(atPath: KeeperRecord.run.appending(path: "engine.retry").path(percentEncoded: false))
     }
 
     /// Why the engine stopped and isn't started again (`run/engine-stopped`), with what it wrote

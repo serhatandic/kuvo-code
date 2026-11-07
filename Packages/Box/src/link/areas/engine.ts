@@ -26,7 +26,8 @@ export const engineDown = (): string => {
   if (IS_MAC) {
     let why = "";
     try { why = fs.readFileSync(path.join(RUN, "engine-stopped"), "utf8").trim(); } catch {}
-    if (why) return `This Mac's engine isn't running. ${why} Try Again in Kuvo Code on the Mac starts it.`;
+    // (While it's tried again by itself, `run/engine.retry`, its reason says so.)
+    if (why) return `This Mac's engine isn't running. ${why}${fs.existsSync(path.join(RUN, "engine.retry")) ? "" : " Try Again in Kuvo Code on the Mac starts it."}`;
     return "This Mac's engine is starting. Try again in a moment.";
   }
   const retry = Number(fs.existsSync(path.join(RUN, "engine.retry")) ? fs.readFileSync(path.join(RUN, "engine.retry"), "utf8").trim() : NaN);

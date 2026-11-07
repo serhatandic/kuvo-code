@@ -422,6 +422,13 @@ final class AppModel {
         return windows.contains { $0[kCGWindowOwnerName as String] as? String == "UserNotificationCenter" }
     }
 
+    /// A macOS prompt is open, on screen or not (the screen locked, a Mac no one's at): for the box's
+    /// watch of its servers, which holds off for it, so this goes by any window of that program.
+    static var systemPromptOpen: Bool {
+        let windows = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]] ?? []
+        return windows.contains { $0[kCGWindowOwnerName as String] as? String == "UserNotificationCenter" }
+    }
+
     private var installer: EngineInstaller {
         EngineInstaller(root: AppInfo.supportDirectory.appending(path: "engine"))
     }
@@ -730,10 +737,20 @@ final class AppModel {
             Task { await start() }
         case .starting, .downloading:
             // Stopped while it ran: the window says it's starting again, and connects once it has.
-            guard engine == .ready else { return }
-            engineStoppedWhileRunning = true
-            disconnect()
-            engine = .starting
+            if engine == .ready {
+                engineStoppedWhileRunning = true
+                disconnect()
+                engine = .starting
+                return
+            }
+            // Tried again by itself, downloading the engine: its progress rather than the failure
+            // before it (and Try Again, which would download beside it).
+            guard starting == nil else { return }
+            switch (state, engine) {
+            case (.downloading(let progress), .failed), (.downloading(let progress), .downloading): engine = .downloading(progress: progress)
+            case (.starting, .downloading): engine = .starting
+            default: break
+            }
         case .failed(let reason):
             // A start under way hears it itself.
             guard starting == nil else { return }

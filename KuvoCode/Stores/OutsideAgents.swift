@@ -50,8 +50,22 @@ final class OutsideAgents {
         guard let server, server.exitStatus == nil else { return }
         BoxProcess.agentsChanged(server.endpoint, pid: server.processID)
     }
-    /// Starting: a second start meanwhile (the engine restarted) waits for this one.
-    @ObservationIgnored private var isStarting = false
+    /// The start under way: a second start meanwhile (the engine restarted) waits for this one,
+    /// and one stopped meanwhile (`stop`) leaves nothing running when it comes back.
+    @ObservationIgnored private var startInFlight: UUID?
+    /// Which start the server running now came from: one before it, slow to go, says nothing of it.
+    @ObservationIgnored private var runningStart: UUID?
+    /// Its process starting: stopping it ends that at once.
+    @ObservationIgnored private var starting: Task<ServerProcess, Error>?
+    /// One whose start failed, or that keeps stopping, tried again by itself: `stop` calls off the
+    /// next try.
+    @ObservationIgnored let retries = StartRetries()
+    /// When it came up, this time.
+    @ObservationIgnored private var upSince: Date?
+    /// How long it's given to say where it listens (a test's is short).
+    @ObservationIgnored var startTimeout: Duration = .seconds(60)
+    /// An exit heard, whichever server's (a test waits on it).
+    @ObservationIgnored var onExitHeard: () -> Void = {}
     @ObservationIgnored private var eventTask: Task<Void, Never>?
     @ObservationIgnored private var restarts: [Date] = []
     @ObservationIgnored private var engine: URL?
@@ -180,14 +194,18 @@ final class OutsideAgents {
     /// Starts the bridge with the engine's Bun, in your login shell's environment (so it finds
     /// `claude`, `codex` and `grok` where your terminal does).
     func start(engine: URL, environment: [String: String]) async {
-        guard server == nil, !isStarting else { return }
-        isStarting = true
-        defer { isStarting = false }
+        guard server == nil, startInFlight == nil else { return }
+        let start = UUID()
+        startInFlight = start
+        defer { if startInFlight == start { startInFlight = nil } }
+        let began = ContinuousClock.now
+        upSince = nil
         self.engine = engine
         self.environment = environment
+        // Why it was down isn't why it is now: a phone hears it's starting while it is.
+        BoxProcess.forgetAgentsStopped()
         guard let script = Self.script else {
-            failure = "The agents bridge is missing from the app."
-            onStopped?()
+            down("The agents bridge is missing from the app.")
             return
         }
         var env = environment
@@ -201,23 +219,37 @@ final class OutsideAgents {
         do {
             try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
             try FileManager.default.createDirectory(at: temporary, withIntermediateDirectories: true)
-            let server = try await ServerProcess.start(
-                executable: engine,
-                // (No `.env` from its folder, which an agent's command can write.)
-                arguments: ["run", "--config=/dev/null", "--no-env-file", script.path],
-                environment: env,
-                directory: home,
-                onExit: { [weak self] status in Task { @MainActor in self?.exited(status: status) } }
-            )
+            let directory = home, environmentNow = env, timeout = startTimeout
+            let starting = Task {
+                try await ServerProcess.start(
+                    executable: engine,
+                    // (No `.env` from its folder, which an agent's command can write.)
+                    arguments: ["run", "--config=/dev/null", "--no-env-file", script.path],
+                    environment: environmentNow,
+                    directory: directory,
+                    timeout: timeout,
+                    onExit: { [weak self] status in Task { @MainActor in self?.exited(status: status, of: start) } }
+                )
+            }
+            self.starting = starting
+            let server = try await withTaskCancellationHandler { try await starting.value } onCancel: { starting.cancel() }
+            // Stopped meanwhile: it stays stopped.
+            guard startInFlight == start else {
+                server.stop()
+                return
+            }
             self.server = server
+            runningStart = start
             // Stopped already, its exit heard before this: as `exited` would have it then.
             if let status = server.exitStatus {
-                exited(status: status)
+                exited(status: status, of: start)
                 return
             }
             let api = OpenCodeAPI(endpoint: server.endpoint)
             self.api = api
             failure = nil
+            upSince = .now
+            retries.cameUp(since: began)
             // This Mac's box finds it as a machine's does.
             BoxProcess.agentsChanged(server.endpoint, pid: server.processID)
             listen(to: api)
@@ -226,24 +258,50 @@ final class OutsideAgents {
             // Not waited for here: one that stops meanwhile is started again (see `exited`).
             Task { await loadAuto() }
         } catch {
+            guard startInFlight == start else { return }
             log.error("The agents bridge didn't start: \(error.localizedDescription, privacy: .public)")
-            failure = error.localizedDescription
-            onStopped?()
+            guard StartRetries.canHelp(error) else {
+                down(Self.reason(error))
+                return
+            }
+            tryAgain(Self.reason(error), asked: retries.wasAsked(error, since: began))
         }
+    }
+
+    /// Down, for a reason another try can help: it says so, and goes on trying.
+    private func tryAgain(_ reason: String, asked: Bool = false) {
+        guard let engine else { return }
+        let wait = retries.next(asked: asked)
+        down(StartRetries.noted(reason, asked: asked), retrying: true)
+        log.info("Trying the agents bridge again in \(wait) seconds")
+        let environment = environment
+        retries.schedule(after: wait, orAnswered: asked) { [weak self] in
+            await self?.start(engine: engine, environment: environment)
+        }
+    }
+
+    /// Down: why, here and for whoever asks this Mac's box (`run/agents-stopped`).
+    private func down(_ reason: String, retrying: Bool = false) {
+        failure = reason
+        BoxProcess.agentsStopped(reason, retrying: retrying)
+        onStopped?()
     }
 
     /// Whether it was started (there was a Bun to run it with), so it can be started again.
     var wasStarted: Bool { engine != nil || follows }
 
-    /// Started again after it stopped for good (Restart where that shows), as it was started: by
+    /// Started again at once (Restart where that shows), as it was started: by
     /// this Mac's keeper, when it's the keeper's.
     func startAgain() async {
         if follows {
             do { try await KeeperControl.send(.restartAgents) } catch { failure = error.localizedDescription }
             return
         }
-        guard server == nil, !isStarting, let engine else { return }
+        guard server == nil, let engine else { return }
+        // Whatever it's doing by itself: a try waiting its turn, or one that's held up.
+        callOffStart()
         restarts.removeAll()
+        retries.reset()
         failure = nil
         await start(engine: engine, environment: environment)
     }
@@ -257,10 +315,37 @@ final class OutsideAgents {
     }
     #endif
 
+    /// Why it didn't start, in the words of what's shown (ServerProcess's own say "the engine",
+    /// which may be fine, and this comes after "The coding agents couldn't start").
+    private static func reason(_ error: any Error) -> String {
+        switch error {
+        case ServerProcessError.exited(let status, let output):
+            "It stopped (exit code \(status)).\(output.isEmpty ? "" : "\n\n\(output)")"
+        case ServerProcessError.unreadableHandshake(let line):
+            "It said something unexpected when starting: \(line)"
+        case ServerProcessError.timedOut:
+            "It took too long to start."
+        default:
+            error.localizedDescription
+        }
+    }
+
+    /// A start under way ended, and the next try called off.
+    private func callOffStart() {
+        retries.callOff()
+        starting?.cancel()
+        starting = nil
+        startInFlight = nil
+    }
+
     func stop() {
+        callOffStart()
         eventTask?.cancel()
         eventTask = nil
         if server != nil { BoxProcess.agentsChanged(nil, pid: nil) }
+        // Stopped, nothing's trying any more, and there's no failure to tell.
+        failure = nil
+        BoxProcess.forgetAgentsStopped()
         server?.stop()
         server = nil
         api = nil
@@ -375,21 +460,24 @@ final class OutsideAgents {
         }
     }
 
-    /// It stopped by itself: started again, unless it keeps stopping.
-    private func exited(status: Int32) {
-        guard server != nil else { return }
+    /// It stopped by itself: started again, at once unless it keeps stopping.
+    private func exited(status: Int32, of start: UUID) {
+        defer { onExitHeard() }
+        guard server != nil, start == runningStart else { return }
         let output = server?.recentOutput.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         log.error("The agents bridge stopped (\(status)): \(output, privacy: .public)")
+        retries.stopped(ranFor: upSince.map { -$0.timeIntervalSinceNow } ?? 0)
         stop()
         restarts.removeAll { $0 < .now.addingTimeInterval(-300) }
-        guard restarts.count < 3, let engine else {
-            failure = "It stopped unexpectedly (exit code \(status)).\(output.isEmpty ? "" : "\n\n" + String(output.suffix(600)))"
-            onStopped?()
+        guard restarts.count < 3, !retries.isBackingOff, let engine else {
+            tryAgain("It stopped unexpectedly (exit code \(status)).\(output.isEmpty ? "" : "\n\n" + String(output.suffix(600)))")
             return
         }
         restarts.append(.now)
         let environment = environment
-        Task { await start(engine: engine, environment: environment) }
+        retries.schedule(after: nil) { [weak self] in
+            await self?.start(engine: engine, environment: environment)
+        }
     }
 
     /// Tells the bridge where the engine is.
