@@ -762,6 +762,58 @@ describe("what the engine asks in a conversation run through the bridge", () => 
   })
 })
 
+describe("summarizing a conversation run through the bridge on the engine (/compact)", () => {
+  test("the engine's own summary is asked for: its row and how it ended show, none of its words, and what's there stays", async () => {
+    const folder = mkdtempSync(join(process.env.KUVO_TEST_ROOT ?? tmpdir(), "kuvo-engine-compact-"))
+    const requests: { method: string; path: string; body?: any }[] = []
+    let heard: { event(event: any): void } | undefined
+    const link = {
+      ready: true,
+      providerName: () => "OpenAI",
+      offered: async () => ({ listed: true, ready: true, models: [] }),
+      listen: (_: string, listener: { event(event: any): void }) => ((heard = listener), () => {}),
+      request: async (method: string, path: string, body?: unknown) => {
+        requests.push({ method, path, body })
+        return method === "POST" && path === "/api/session" ? { data: { id: "eng_1" } } : {}
+      },
+    } as unknown as EngineLink
+    const agent = new EngineAgent(link, "openai")
+    const sessions = new Sessions(new Store(join(folder, "sessions")), { find: () => agent } as unknown as Roster, new Auto(folder))
+    const until = async (condition: () => boolean) => {
+      while (!condition()) await Bun.sleep(5)
+    }
+    const idles = (id: string) => sessions.messages(id).filter((message) => message.type === "idle")
+    try {
+      const id = sessions.create({ title: "Bridge", model: { providerID: "openai", id: "one" }, location: { directory: folder } }).id
+      sessions.prompt(id, { id: "msg_engine_compact_0001", text: "go", files: [], delivery: "steer" })
+      await until(() => Boolean(heard) && requests.some((request) => request.path.endsWith("/prompt")))
+      const inboxID = requests.find((request) => request.path.endsWith("/prompt"))!.body.id
+      heard!.event({ type: "session.inbox.delivered", data: { sessionID: "eng_1", inboxID } })
+      heard!.event({ type: "session.execution.succeeded", data: { sessionID: "eng_1" } })
+      await until(() => idles(id).length === 1)
+      const before = sessions.messages(id).map((message) => message.id)
+
+      expect(sessions.compact(id).state).toBe("compacting")
+      await until(() => requests.some((request) => request.path.endsWith("/compact")))
+      expect(requests.find((request) => request.path.endsWith("/compact"))).toMatchObject({ method: "POST", path: "/api/session/eng_1/compact", body: { delivery: "steer" } })
+      expect(requests.filter((request) => request.path.endsWith("/prompt"))).toHaveLength(1)
+      // The summary's own step, as the engine streams it, isn't a reply.
+      heard!.event({ type: "session.step.started", data: { sessionID: "eng_1", assistantMessageID: "m_summary", model: { providerID: "openai", id: "one" } } })
+      heard!.event({ type: "session.text.started", data: { sessionID: "eng_1", assistantMessageID: "m_summary", partID: "p_1" } })
+      heard!.event({ type: "session.execution.succeeded", data: { sessionID: "eng_1" } })
+      await until(() => idles(id).length === 2)
+
+      const after = sessions.messages(id)
+      expect(after.slice(0, before.length).map((message) => message.id)).toEqual(before)
+      expect(after.slice(before.length).map((message) => message.type)).toEqual(["compaction", "idle"])
+      expect(after.find((message) => message.type === "compaction")).toMatchObject({ status: "completed", reason: "manual" })
+    } finally {
+      sessions.closeAll()
+      rmSync(folder, { recursive: true, force: true })
+    }
+  })
+})
+
 describe("attachments", () => {
   test("a text file you attach goes in the message; a picture and a binary file stay files", () => {
     const folder = mkdtempSync(join(process.env.KUVO_TEST_ROOT ?? tmpdir(), "kuvo-attach-"))
