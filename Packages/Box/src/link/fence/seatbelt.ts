@@ -161,6 +161,8 @@ export function seatbeltProfile(policy: FencePolicy, options: SeatbeltOptions): 
   // inbox written, which the box takes in, out of its reach (kuvo-wake's `take`).
   allow("file-read-data", param("WAKES"));
   allow(HIDDEN, `(subpath (string-append (param "WAKES") "/inbox"))`);
+  // Its agent's own memory, in the bot's folder: only there does it write in that folder.
+  allow(HIDDEN, `(subpath (string-append (param "WAKES") "/memory"))`);
   // Its bot's memory, which the launcher names (MEMORY): read and written in place, never made,
   // moved or removed (so never a link, or another name for another file).
   allow("file-read-data file-write-data", `(literal (param "MEMORY"))`);

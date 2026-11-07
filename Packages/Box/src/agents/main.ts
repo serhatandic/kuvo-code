@@ -35,6 +35,7 @@ import { noteAgentsInside, untilSandboxDecided } from "./fence"
 import { useSavedLoginPath } from "./proc"
 import { setSkillSource } from "./skills"
 import { setServerSource } from "./servers"
+import { Carrying } from "./carry"
 import { Store } from "./store"
 import { server as requester } from "./groups/api"
 import { SeatServer } from "./groups/peer"
@@ -286,13 +287,14 @@ if (artifactsFolder) {
 // listens once the box has set up its sandbox: on this Mac the app starts it before the box, so an
 // agent started then would run outside the sandbox until it stops.
 await untilSandboxDecided()
+const carrying = new Carrying(sessions, store, (provider) => sessions.agent(provider), (kind) => roster.all().filter((agent) => parseProvider(agent.providerID)?.kind === kind))
 let server: ReturnType<typeof Bun.serve>
 try {
   server = Bun.serve({
     hostname: "127.0.0.1",
     port,
     idleTimeout: 0,
-    fetch: handler({ roster, sessions, auto, link, password, version, groups, goals, sideQuestions, handoffs, places, reviews, voice, artifacts, noted, restartOutside }),
+    fetch: handler({ roster, sessions, auto, link, password, version, groups, goals, sideQuestions, handoffs, places, reviews, voice, artifacts, noted, restartOutside, carrying }),
   })
 } catch (error: any) {
   console.error("couldn't listen:", error?.message ?? error)

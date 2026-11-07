@@ -775,6 +775,42 @@ async function begin(options: { permissions?: PermissionRule[]; agent?: string }
 }
 
 const steps = (id: string) => sessions.messages(id).filter((message) => message.type === "assistant") as Extract<Message, { type: "assistant" }>[]
+
+describe("a bot's Claude Code on the computer it moved to", () => {
+  const bot = (name: string, memory: boolean) => {
+    const folder = join(root, "bots", name)
+    mkdirSync(join(folder, "workspace"), { recursive: true })
+    if (memory) mkdirSync(join(folder, "memory"))
+    const id = sessions.create({ model: { providerID: provider, id: "default" }, location: { directory: join(folder, "workspace") }, metadata: { kuvo: { bot: name } } }).id
+    return { folder, id }
+  }
+  const start = async (id: string) => {
+    const sent = fake.sent.length
+    sessions.prompt(id, { id: "msg_claude_turn_0001", text: "go", files: [], delivery: "steer" })
+    await until(() => fake.sent.length === sent + 1)
+  }
+
+  test("it goes on with the same conversation, and its memory is the one in its folder", async () => {
+    const { folder, id } = bot("bot_ship", true)
+    // As it came: Claude Code had started on that conversation on the other computer.
+    sessions.slotsOf(id)[provider] = { state: { claudeSession: "0b5e1f1c-0000-4000-8000-000000000000", claudeStarted: true } }
+    await start(id)
+    expect(fake.options.resume).toBe("0b5e1f1c-0000-4000-8000-000000000000")
+    expect(fake.options.settings).toEqual({ autoMemoryDirectory: join(folder, "memory") })
+    // It's its own to read and write, without asking; another bot's isn't.
+    const own = { file_path: join(folder, "memory", "deploys.md"), content: "On Fridays." }
+    expect((await fake.hook("Write", own, "toolu_1")).decision).toBeUndefined()
+    const other = { file_path: join(homedir(), "bots", "bot_scout", "memory", "deploys.md") }
+    expect((await fake.hook("Read", other, "toolu_2")).decision).toBe("ask")
+  })
+
+  test("one with no memory in its folder keeps Claude Code's own place for it", async () => {
+    const { id } = bot("bot_old", false)
+    await start(id)
+    expect(fake.options.settings).toBeUndefined()
+  })
+})
+
 const toolCalls = (id: string) => steps(id).flatMap((message) => message.content.filter((content) => content.type === "tool")) as any[]
 
 /** Ask First, as the composer's menu sets it. */
