@@ -315,6 +315,63 @@ connection.
     - Past two minutes without one for a conversation there, only that conversation's oldest goes
       each minute, until one's delivered or ended (`retry` doesn't count) or it's found to live
       elsewhere. A box's notes are counted apart from its letters, 20 in ten minutes each.
+- **Calls** (bridge 0.9.204, to a peer whose `features` say `work.elsewhere`): `{"call": {id, from,
+  tool, args, as, made, at}}` runs one of a lead's work tools ("Work") on the box its sessions are
+  on, as that box's own tool runs it: `list_sessions`, `stop_session`, `compact_session` or
+  `answer_ask`, nothing else. `id` is `cal_…`; `from` the lead's conversation; `args` the tool's
+  (with `session`); `as` `{name, bot?: {bot, name}, rules, free}` who's calling, filled in by the
+  lead's box from its own record, never from the agent's words: its name, the bot it is, the rules
+  its conversation goes by there (that box's Settings › Permissions, then its own; more than 300 go as
+  one rule that asks about everything, so an allow can't go past one left out) and whether its
+  own commands run free of the sandbox (Full Access, or no sandbox there). `made` is when it was left,
+  `at` when this mail of it was sealed (each send, as for a note). A new top-level key, so a box from
+  before this ignores it.
+  - **Checks**: a call `at` over a day off is answered `retry` (a replay, or a clock that's off). Each
+    `id` runs once (remembered 30 days, noted once answered); one running now that comes again is
+    dropped (a list's remembered two days, as a letter's). Calls aren't counted as messages. `from` may not be a conversation on the receiving
+    box (refused); while it moves between computers, or while this box knows it to live on another
+    box than the one calling (that word may be stale), it's answered `retry`; otherwise the receiver
+    notes `from` lives on the box that called. So a lead that moved twice (A to B to C) while A was
+    away more than two days, never hearing of the second move, keeps getting `retry` from A until
+    A hears where it went: its list says A isn't answering meanwhile, and a kept stop is let go and
+    told (`[Not done]`) at 30 days. A session it doesn't have is refused (`retry` while
+    its coding agents' bridge isn't running). The tool itself then checks the session is under
+    `from` (`kuvo.startedBy`, up its line), as for one here: so sessions the user started are out of
+    reach. An allow goes only as far as `as` says the lead could go itself, with the receiving box's
+    own Don't Allow rules (its Settings › Permissions' `deny`) added, which no one gets past there;
+    the sandbox it's judged by is the session's own, there. An allow `made` over a day ago isn't
+    given, and says so. A stop or a compact kept over 31 days is refused as too old.
+  - **The answer** is a letter back (`{to: from, answers: <call id>, refused?}`) whose `id` is the
+    call's with `-a` after it, so a call that comes again is answered by one that's already been
+    seen: it reaches its lead once. `refused: true` when the tool couldn't do it (its `isError`). A
+    list's answer is `{"rows": [WorkSession & {askID?, lastReply?, context?}]}` as JSON in `text`,
+    as many as fit, with `read: {}`: it's only for the tool waiting, and dropped if none does. Any
+    other's is a `note` (`from` the answering box's name, `words` the tool's own words, `about` the
+    session) kept until it's there, as notes are; `text` is `[On <box>] <words>`. A tool waiting
+    takes `words`; when none does any more, the lead gets `text` as the box's own word.
+  - **Sender side**: a call goes in `run/outbox/sending/<id>.json` (`{call: {tool, args, as}, from,
+    to: "", peer, at, wait, quiet?}`), to `peer` only, each minute until that box answers. A
+    list is only kept while its tool waits; an allow a day; a stop, a compact or a refusal 30 days.
+    One let go for that is told to its lead (`[Not done] …`), and so is a kept one that box refuses
+    for good (`ok: false` without `retry`), unless it was sent to every box in case one had it
+    (`quiet`). One whose lead has moved on to another computer since ends, and its lead is told
+    there to ask again from where it lives. While its box isn't answering (`run/peer-reach.json`), only its oldest call goes,
+    once a minute; once that box's mail comes again, all of them go at once.
+  - **Who isn't answering** (`run/peer-reach.json`, `{<key>: since}`): a box notes a peer from the
+    moment the relay says nothing's connected at its address (`unreachable`, after something was
+    sent there), until any mail from it comes. A file, so a machine's tools, answered by a process of
+    their own, read it too. A dead connection can take the relay about a minute to notice.
+- **Rows** (bridge 0.9.204): `{"rows": {id, at, leads: {<lead>: [WorkSession & {askID?}]}}}` tells a
+  peer (one whose `features` say `work.elsewhere`) the sessions on the sending box whose lead lives
+  there now ("Work", rows from elsewhere), unasked, so it has them before this box sleeps. `id`
+  (`rws_…`) is the same while they are; `at` is when they're as of. The receiver keeps the newest
+  from each box, with the sessions they name noted as living there ("Homes"), and answers
+  `{"delivered": {id, ok: true}}`; none at all (`leads: {}`) clears what it kept. A box tells one
+  computer once in 15 seconds at most, however busy (four a minute), again each minute only while
+  unanswered, nothing while nothing changed, and nothing while that computer isn't answering
+  (`run/peer-reach.json`): what changed goes once its mail comes again. Rows older than what a box
+  kept are receipted and not kept. What's kept of a computer you removed goes. Rows aren't letters: they don't count against a
+  box's letters or notes.
 - **Leaving one**: an agent's `send_message` or `read_conversation` for an agent on another
   computer ("Agents' tools") leaves a letter in `run/outbox/sending/<id>.json`, which the link
   sends. Without the relay, letters wait for it: no box hands them to anyone over SSH (bridge
@@ -329,6 +386,10 @@ connection.
     isn't running for a conversation the engine doesn't know. After eleven minutes, or stopped, it leaves
     `<id>.gaveup`, and its letter goes on without waiting. The link notes `run/relay-down` while
     it's been off the relay half a minute, so a tool says so at once rather than wait.
+  - A machine's link watches `run/outbox/sending` (the system's own watch on macOS and Linux), so
+    what a tool leaves goes at once, not at the next round (bridge 0.9.204). A watch that dies is
+    made again at the next round, which also sends what one missed. What a box answers
+    itself (a call's answer) goes as it's left, on a Mac and on a machine.
   - Letters an older Kuvo Code left in `run/outbox` for a Mac to collect over SSH are taken on by
     the link as its own (not one a Mac renamed `.mac-<name>` to deliver).
 - **Moves**: `{"move": {op, id, …}}` carries a move between two boxes (`kuvo/moves`), and
@@ -590,6 +651,16 @@ its own, which a `SIGTERM` stops waiting.
   - An agent here gets the message straight from the box; one on another computer by a letter
     ("Peers"). Without a conversation to answer, or off the relay, a letter isn't waited for.
     `read_conversation` reads one here, or asks a peer with `letters-read` for it by letter.
+  - A letter (not a note, nor an answer) to a conversation the receiving box doesn't list to its
+    peers (its bots and latest 40) is delivered only when it's under the letter's `from`: a lead
+    following up a session it started, by address; anyone else's is refused (bridge 0.9.204). A
+    conversation here named by its address still takes a message from any conversation here.
+  - An address the lists don't name (older than the latest 40) is found on the computer that told
+    this one of it as one of a lead's sessions ("Work", rows from elsewhere), or where it's known
+    to live now ("Homes"), as well as here (bridge 0.9.204). `read_conversation` also reads a session
+    put away that's under the caller, here or there; any other put away, a subagent's or a seat
+    stays unread. A read for a box that isn't answering (`run/peer-reach.json`) is refused at once,
+    and so is one waiting when the relay says so: a read isn't kept.
 - **`POST kuvo/sessions`** `{task, title?, folder? | project? | chat?, worktree?, model?, effort?,
   mode?, approval?, wake?, startedBy?, wait? = false}` →
   `{session, title, folder, project, answer?, got?}` (`project` null for a chat; `answer` with
@@ -751,6 +822,24 @@ client shows it from the same routes.
   own, by `POST api/session/<id>/compact` where it runs), `answer_ask` (`{session, ask, decision: allow|deny,
   reason}`, or `{session, ask, answer, reason}` for a question), `list_models` (the models there's
   an account for here, `provider/model`, with their efforts; none its provider is retiring).
+  - **Across your computers** (bridge 0.9.204): a lead reaches the sessions under it on another
+    computer (a bot that moved, say) by a call ("Peers", `call`). `stop_session`, `compact_session`
+    and `answer_ask` for a session that isn't here go to the computer that told of it, or where it's
+    known to live, or to each that takes calls when nothing says (kept for those not answering, in
+    case it's there). `list_sessions` lists those here, then asks each computer that told this one of
+    the caller's sessions, under its name: live, or, when it isn't answering or doesn't answer in 20
+    seconds, what it last told, "as of" then, and that it isn't answering. A stop, a compact or an
+    answer for a computer that isn't answering is kept and done when it's back (an allow for a day),
+    and the tool says so; how it went comes to the lead as a message.
+  - **Rows from elsewhere** (`run/work/elsewhere/<key>.json`, `{at, heard, leads: {<lead>: [row]}}`):
+    what each computer told of the sessions of leads that live here. A box works out its own each
+    time its work or moves change, and each minute: every session here whose line leads up to a
+    conversation that lives on another computer now ("Homes"), at most 40 for each lead, not those
+    put away. It tells each such computer, again each minute until it says it has them
+    (`run/work/pushed.json`, `{<key>: {id, done, sent}}`), and once more with none when there are
+    none left. A lead's computer can't have rows of a move whose old box was closed before it told
+    (within one round of seeing the move): it has them once that box is back. `list_sessions` asks
+    only computers that told of the lead's sessions, so a lead with none elsewhere waits on no one.
 - **Models that can't answer** (`work/unanswering.ts`, `run/work/unanswering.json`, bridge
   0.9.198): when a session a conversation started fails at its account (the engine's
   `provider.quota` or `provider.budget-limit`: out of funds or at a plan's spend, which holds back
@@ -2687,6 +2776,7 @@ the route scenarios (`Vectors/routes/routing.json`).
 | `agent-tools` | `POST kuvo/agent-tools`: the agents' tools, answered by the box (bridge 0.9.100) |
 | `sessions.start` | `POST kuvo/sessions`: a session started with a task (bridge 0.9.100) |
 | `letters-read` | (in a peer's agents' mail) it takes a letter with `read` (bridge 0.9.100) |
+| `work.elsewhere` | (in a peer's agents' mail) it takes a lead's `call` and tells `rows` ("Peers"; bridge 0.9.204) |
 | `queue` | `kuvo/sessions/<id>/queue…`, `…/stop` and `kuvo/sessions/queues/events`: the box carries the queue (bridge 0.9.100) |
 | `queue.waits` | A Stop holds the conversation: what arrives waits on the box (`waiting`), `…/queue/add` and `DELETE …/queue/<item>` (bridge 0.9.128) |
 | `work` | a bot's work ("Work"): `kuvo/work`, `…/events`, `kuvo/bots/<id>/stop-all`, `start_session`'s and `kuvo/sessions`' new fields, the work tools, `limits` in `kuvo/bots` (bridge 0.9.106) |

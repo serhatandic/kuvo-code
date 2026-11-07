@@ -3196,6 +3196,9 @@
             "literal": "letters-read"
            },
            {
+            "literal": "work.elsewhere"
+           },
+           {
             "literal": "queue"
            },
            {
@@ -3511,6 +3514,9 @@
            },
            {
             "literal": "letters-read"
+           },
+           {
+            "literal": "work.elsewhere"
            },
            {
             "literal": "queue"
