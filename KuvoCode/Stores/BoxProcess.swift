@@ -156,6 +156,7 @@ final class BoxProcess {
         startInFlight = start
         defer { if startInFlight == start { startInFlight = nil } }
         let began = ContinuousClock.now
+        upSince = nil
         self.runtime = (runtime, environment, arguments)
         guard let script = Self.script else {
             failure = "Kuvo Code’s background service is missing from the app. Install Kuvo Code again."
@@ -253,15 +254,16 @@ final class BoxProcess {
             Self.write(Record(pid: server.processID, port: server.endpoint.url.port, password: server.endpoint.password, version: nil), to: "serve.json")
             failure = nil
             upSince = .now
+            retries.cameUp(since: began)
             onStarted()
         } catch {
             guard startInFlight == start else { return }
             log.error("This Mac's box didn't start: \(error.localizedDescription, privacy: .public)")
             guard StartRetries.canHelp(error) else {
-                failure = error.localizedDescription
+                failure = Self.reason(error)
                 return
             }
-            tryAgain(error.localizedDescription, asked: retries.wasAsked(error, since: began))
+            tryAgain(Self.reason(error), asked: retries.wasAsked(error, since: began))
         }
     }
 
@@ -269,10 +271,24 @@ final class BoxProcess {
     private func tryAgain(_ reason: String, asked: Bool = false) {
         guard let runtime else { return }
         let wait = retries.next(asked: asked)
-        failure = StartRetries.noted(reason)
+        failure = StartRetries.noted(reason, asked: asked)
         log.info("Trying this Mac's box again in \(wait) seconds")
         retries.schedule(after: wait, orAnswered: asked) { [weak self] in
             await self?.launch(runtime.executable, environment: runtime.environment, arguments: runtime.arguments)
+        }
+    }
+
+    /// Why it didn't start, in words of its own (ServerProcess's own say "the engine", which may be fine).
+    private static func reason(_ error: any Error) -> String {
+        switch error {
+        case ServerProcessError.exited(let status, let output):
+            "Kuvo Code’s background service stopped (exit code \(status)).\(output.isEmpty ? "" : "\n\n\(output)")"
+        case ServerProcessError.unreadableHandshake(let line):
+            "Kuvo Code’s background service said something unexpected when starting: \(line)"
+        case ServerProcessError.timedOut:
+            "Kuvo Code’s background service took too long to start."
+        default:
+            error.localizedDescription
         }
     }
 
@@ -349,7 +365,7 @@ final class BoxProcess {
         retries.stopped(ranFor: upSince.map { -$0.timeIntervalSinceNow } ?? 0)
         stop()
         restarts.removeAll { $0 < .now.addingTimeInterval(-300) }
-        guard restarts.count < 3, let runtime else {
+        guard restarts.count < 3, !retries.isBackingOff, let runtime else {
             tryAgain("Kuvo Code’s background service stopped unexpectedly (exit code \(status)).\(output.isEmpty ? "" : "\n\n" + String(output.suffix(600)))")
             return
         }

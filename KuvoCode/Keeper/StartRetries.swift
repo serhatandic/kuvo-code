@@ -19,6 +19,8 @@ import OpenCodeKit
     nonisolated static let steadyAfter: TimeInterval = 600
     /// Said after why it failed, as long as it's tried again.
     nonisolated static let note = "Trying again by itself."
+    /// And before that, when macOS was asking you something as it failed.
+    nonisolated static let askedNote = "macOS was asking you something, which may be holding it up."
 
     /// How it waits between tries (a test's moves on as it says).
     var clock: (Int) async -> Void = StartRetries.wait
@@ -32,6 +34,8 @@ import OpenCodeKit
 
     /// Whether a try is waiting its turn.
     var isWaiting: Bool { turn != nil }
+    /// Whether it's among the waits: it isn't started again at once until it has run as it should.
+    var isBackingOff: Bool { tried > 0 }
 
     /// How long to wait before the next try. `asked`: the last took too long while macOS asked.
     func next(asked: Bool = false) -> Int {
@@ -54,7 +58,16 @@ import OpenCodeKit
     func wasAsked(_ cause: any Error, since began: ContinuousClock.Instant) -> Bool {
         guard Self.tookTooLong(cause), let asking else { return false }
         _ = asking.look()
-        return asking.asked(since: began)
+        guard asking.asked(since: began) else { return false }
+        asking.heldTryEnded()
+        return true
+    }
+
+    /// Up, after a try begun at `began`: a question open meanwhile was answered, or wasn't holding it
+    /// up, so whatever waits on one tries now.
+    func cameUp(since began: ContinuousClock.Instant) {
+        guard let asking, asking.asked(since: began) else { return }
+        asking.answered()
     }
 
     /// `go` once its time comes (`after` seconds; at once for nil), unless called off first; and,
@@ -74,7 +87,7 @@ import OpenCodeKit
             await go()
         }
         guard orAnswered else { return }
-        asking?.whenAnswered { [weak self] in
+        asking?.whenAnswered(by: self) { [weak self] in
             guard let self, self.turn == turn else { return }
             self.turn = nil
             self.sleeper?.cancel()
@@ -85,37 +98,41 @@ import OpenCodeKit
 
     /// The try waiting its turn called off.
     func callOff() {
+        asking?.forget(self)
         turn = nil
         sleeper?.cancel()
         sleeper = nil
     }
 
     /// Why it failed, saying it's tried again: in its first paragraph, which is what a client is
-    /// told (`BoxProcess.engineGaveUp`), before what the server wrote.
-    nonisolated static func noted(_ reason: String) -> String {
+    /// told (`BoxProcess.engineGaveUp`), before what the server wrote. `asked`: it took too long
+    /// while macOS was asking, which someone coming back can do something about.
+    nonisolated static func noted(_ reason: String, asked: Bool = false) -> String {
         let end = reason.range(of: "\n\n")?.lowerBound ?? reason.endIndex
         let why = reason[..<end]
         // (A server's own words may have no stop of their own.)
         let stop = why.last.map { ".!?:".contains($0) } == false ? "." : ""
-        return why + stop + " " + note + reason[end...]
+        return why + stop + (asked ? " " + askedNote : "") + " " + note + reason[end...]
     }
 
-    /// Whether another try could go differently. One that started and stopped, took too long, or
-    /// couldn't be reached can (the Mac was busy, its database was held, the network was down);
-    /// one that can't be run, a download that was refused or damaged, or a folder that can't be
-    /// made fails the same way again.
+    /// Whether another try could go differently: anything but what fails the same way again. That's
+    /// a program that can't be run, a download that was refused or damaged, or a folder that can't
+    /// be made. What this doesn't know of is tried: a try every ten minutes costs little, and being
+    /// wrong the other way leaves it down until someone clicks.
     nonisolated static func canHelp(_ error: any Error) -> Bool {
         switch error {
-        case ServerProcessError.exited, ServerProcessError.unreadableHandshake, ServerProcessError.timedOut:
-            return true
+        case is CancellationError, is CocoaError:
+            return false
         case EngineInstallError.serverAnswered(let status):
             return status >= 500 || status == 408 || status == 429
-        case is ServerError:
-            return true
+        case is EngineInstallError:
+            return false
         case let error as URLError:
             return error.code != .cancelled && !["disk", "tls"].contains(EngineInstallError.kind(of: error))
+        case let error as POSIXError:
+            return ![POSIXErrorCode.ENOENT, .EACCES, .EPERM, .ENOEXEC, .ENOTDIR, .EISDIR].contains(error.code)
         default:
-            return false
+            return true
         }
     }
 
@@ -142,23 +159,35 @@ import OpenCodeKit
     var isOpen: () -> Bool = { AppModel.systemPromptOpen }
 
     private var lastSeen: ContinuousClock.Instant?
-    /// What goes on once a question's answered, and how many looks in a row have seen it open since.
-    private var waiting: [(looks: Int, go: () -> Void)] = []
+    /// What goes on once a question's answered, by who's waiting, and how many looks have seen one
+    /// open since the last try that was held up ended.
+    private var waiting: [ObjectIdentifier: (looks: Int, go: () -> Void)] = [:]
 
-    /// Looks now: whether one's open. One that's closed after being seen open, on looks of its own,
-    /// since a try was held up counts as answered. Fewer than that is no answer: it went with the
-    /// server told to go, and nobody's seen to it.
+    /// Looks now: whether one's open. One that closes after two looks have seen it open since a held
+    /// try last ended counts as answered. Fewer, and it may have gone with the server told to go,
+    /// with nobody seeing to it, and trying then would only raise it again.
     @discardableResult func look() -> Bool {
-        let open = isOpen()
-        if open {
+        if isOpen() {
             lastSeen = .now
-            for index in waiting.indices { waiting[index].looks += 1 }
+            for who in waiting.keys { waiting[who]?.looks += 1 }
             return true
         }
-        let answered = waiting.filter { $0.looks >= 2 }
-        waiting = waiting.filter { $0.looks < 2 }.map { (looks: 0, go: $0.go) }
-        for one in answered { one.go() }
+        let closed = waiting.values.filter { $0.looks >= 2 }
+        waiting = waiting.filter { $0.value.looks < 2 }.mapValues { (looks: 0, go: $0.go) }
+        for one in closed { one.go() }
         return false
+    }
+
+    /// A try held up by one just ended, whichever server's: what's open may go with it.
+    func heldTryEnded() {
+        for who in waiting.keys { waiting[who]?.looks = 0 }
+    }
+
+    /// One's been answered, as a server held up by it came up: whoever waits goes now.
+    func answered() {
+        let all = waiting.values
+        waiting = [:]
+        for one in all { one.go() }
     }
 
     /// Whether one's been seen open since then.
@@ -166,8 +195,13 @@ import OpenCodeKit
         lastSeen.map { $0 >= began } ?? false
     }
 
-    /// `go` once a question open from now on is answered (at most once).
-    func whenAnswered(_ go: @escaping () -> Void) {
-        waiting.append((looks: 0, go: go))
+    /// `go` once a question open from now on is answered (at most once, the last one given).
+    func whenAnswered(by who: AnyObject, _ go: @escaping () -> Void) {
+        waiting[ObjectIdentifier(who)] = (looks: 0, go: go)
+    }
+
+    /// Nothing more to do when one's answered.
+    func forget(_ who: AnyObject) {
+        waiting[ObjectIdentifier(who)] = nil
     }
 }

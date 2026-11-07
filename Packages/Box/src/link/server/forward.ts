@@ -4,6 +4,7 @@
 
 import { agentsDown } from "../areas/agents-down";
 import { engineDown, stopShell } from "../areas/engine";
+import { IS_MAC } from "../home";
 import { holdArchived } from "../areas/wakes";
 import { MOVING } from "../bots/here";
 import { frozen } from "../moves/records";
@@ -154,7 +155,7 @@ export async function* agentsRoute(context: RouteContext): AsyncGenerator<Answer
   const target = bridge();
   if (!target) {
     yield { head: { status: 503, headers: { "content-type": "application/json" } } };
-    yield { body: Buffer.from(JSON.stringify({ message: agentsDown() ?? "The coding agents aren't running on this machine." })) };
+    yield { body: Buffer.from(JSON.stringify({ message: agentsDown() ?? (IS_MAC ? "The coding agents on this Mac are starting. Try again in a moment." : "The coding agents aren't running on this machine.") })) };
     return;
   }
   return yield* forward(target, path, request, signal, agentsAllowed, namingHere(readEngine), () => "The coding agents aren't answering on this computer. Try again in a moment.", true);

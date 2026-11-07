@@ -3,10 +3,10 @@ import OpenCodeKit
 import Testing
 @testable import KuvoCode
 
-/// The engine or the coding agents' bridge couldn't start: this Mac's box tries again by itself,
-/// waiting longer each time, says so meanwhile with Try Again still there, and stops trying after a
-/// while, for you to see why. What can't change (a program that isn't there) isn't tried again; what
-/// you ask for happens at once, and what you stopped stays stopped. The servers are stand-ins (a
+/// The engine, the coding agents' bridge or the box itself couldn't start, or keeps stopping: this
+/// Mac's box goes on trying by itself for good, waiting longer each time up to ten minutes, and says
+/// so meanwhile with Try Again still there. What can't change (a program that isn't there) isn't tried
+/// again; what you ask for happens at once, and what you stopped stays stopped. The servers are stand-ins (a
 /// script, run as the real ones are) that really fail, stop and hang; waits move on as a test says.
 @MainActor
 @Suite(.serialized, .timeLimit(.minutes(1))) struct FailedStartRetryTests {
@@ -226,6 +226,8 @@ import Testing
             for process in started { kill(process, SIGKILL) }
             try await until { starts == restarted + 1 }
         }
+        // (It's among the waits now: no more at once until it has run as it should, however long
+        // those waits make its stops apart.)
         for tried in 1...3 {
             try await until { isUp() }
             for process in started { kill(process, SIGKILL) }
@@ -286,6 +288,7 @@ import Testing
         try await until { clock.asked.count == StartRetries.waits.count + 2 && clock.isWaiting }
         #expect(clock.asked == StartRetries.waits + [StartRetries.askedWait, StartRetries.askedWait])
         #expect(engineReason(keeper.engine)?.contains(StartRetries.note) == true, "never no more tries")
+        #expect(engineReason(keeper.engine)?.contains(StartRetries.askedNote) == true, "and what someone coming back can do")
     }
 
     /// A question left open is answered during the wait: the next try is now, not when the wait's
@@ -647,6 +650,92 @@ import Testing
         #expect(StartRetries.canHelp(EngineInstallError.serverAnswered(503)))
         #expect(!StartRetries.canHelp(EngineInstallError.serverAnswered(404)))
         #expect(!StartRetries.canHelp(CocoaError(.fileNoSuchFile)))
+        #expect(!StartRetries.canHelp(POSIXError(.EACCES)))
+        #expect(StartRetries.canHelp(POSIXError(.EAGAIN)), "the Mac is short of something for now")
+    }
+
+    /// When a question counts as answered, which brings a try on at once: seen open on looks of its
+    /// own since the last held try ended, whichever server's that was. One that goes with the server
+    /// told to go is no answer, or the servers' questions would chain all night.
+    @Test func whenAQuestionCountsAsAnswered() async throws {
+        let asking = SystemAsking()
+        var open = true
+        asking.isOpen = { open }
+        let clock = TestClock()
+        let waiting = StartRetries(), held = StartRetries()
+        waiting.asking = asking
+        waiting.clock = clock.wait
+        held.asking = asking
+        var went = 0
+        waiting.schedule(after: StartRetries.askedWait, orAnswered: true) { went += 1 }
+        defer { clock.goOn() }
+
+        // Seen once, and gone.
+        asking.look()
+        open = false
+        asking.look()
+        #expect(waiting.isWaiting)
+
+        // Another server's try held by it for a while, ended, and it goes with that server.
+        open = true
+        let began = ContinuousClock.now
+        for _ in 1...4 { asking.look() }
+        #expect(held.wasAsked(ServerProcessError.timedOut, since: began))
+        open = false
+        asking.look()
+        #expect(waiting.isWaiting)
+
+        // It's still there after that, and it closes: someone answered.
+        open = true
+        asking.look()
+        asking.look()
+        open = false
+        asking.look()
+        try await until { went == 1 }
+        #expect(!waiting.isWaiting)
+        clock.goOn()
+        try await until { clock.passed == 1 }
+        #expect(went == 1, "once")
+    }
+
+    /// Answered quickly, between looks, it's never seen closing: the server it held coming up is
+    /// what says so, and brings on the others waiting.
+    @Test func aServerComingUpAfterAQuestionBringsTheOthersOn() async throws {
+        let asking = SystemAsking()
+        asking.isOpen = { true }
+        let clock = TestClock()
+        let waiting = StartRetries(), held = StartRetries()
+        waiting.asking = asking
+        waiting.clock = clock.wait
+        held.asking = asking
+        var went = false
+        waiting.schedule(after: StartRetries.askedWait, orAnswered: true) { went = true; TestPulse.beat() }
+        defer { clock.goOn() }
+        let beforeAsked = ContinuousClock.now
+        held.cameUp(since: beforeAsked)
+        #expect(waiting.isWaiting, "nothing was seen open")
+        asking.look()
+        held.cameUp(since: beforeAsked)
+        try await until { went }
+    }
+
+    /// Whether a try was held by a question: it took too long, with one open while it tried, even if
+    /// that went with it before anyone could look again.
+    @Test func whatCountsAsHeldByAQuestion() {
+        let asking = SystemAsking()
+        var open = false
+        asking.isOpen = { open }
+        let retries = StartRetries()
+        retries.asking = asking
+        let began = ContinuousClock.now
+        #expect(!retries.wasAsked(ServerProcessError.timedOut, since: began), "none open")
+        open = true
+        asking.look()
+        open = false
+        #expect(retries.wasAsked(ServerProcessError.timedOut, since: began))
+        #expect(retries.wasAsked(URLError(.timedOut), since: began))
+        #expect(!retries.wasAsked(ServerProcessError.exited(status: 1, output: ""), since: began), "failed by itself")
+        #expect(!retries.wasAsked(ServerProcessError.timedOut, since: .now), "open before this try")
     }
 
     /// How long each try waits: the longest for good; an hour instead, past the usual waits, for one
@@ -671,6 +760,7 @@ import Testing
     @Test func whatItSaysWhileTrying() {
         #expect(StartRetries.noted("It stopped.\n\nwhat it wrote") == "It stopped. \(StartRetries.note)\n\nwhat it wrote")
         #expect(StartRetries.noted("service unavailable") == "service unavailable. \(StartRetries.note)")
+        #expect(StartRetries.noted("It took too long.", asked: true) == "It took too long. \(StartRetries.askedNote) \(StartRetries.note)")
     }
 
     // MARK: The bridge
@@ -945,6 +1035,7 @@ import Testing
         for tried in 1...tries {
             try await until { clock.asked.count == tried && clock.isWaiting }
             #expect(box.failure?.contains(StartRetries.note) == true, "\(box.failure ?? "")")
+            #expect(box.failure?.contains("engine") == false, "the engine may be fine: \(box.failure ?? "")")
             clock.goOn()
             try await until { starts == tried + 1 }
         }

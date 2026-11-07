@@ -199,6 +199,7 @@ final class OutsideAgents {
         startInFlight = start
         defer { if startInFlight == start { startInFlight = nil } }
         let began = ContinuousClock.now
+        upSince = nil
         self.engine = engine
         self.environment = environment
         // Why it was down isn't why it is now: a phone hears it's starting while it is.
@@ -248,6 +249,7 @@ final class OutsideAgents {
             self.api = api
             failure = nil
             upSince = .now
+            retries.cameUp(since: began)
             // This Mac's box finds it as a machine's does.
             BoxProcess.agentsChanged(server.endpoint, pid: server.processID)
             listen(to: api)
@@ -270,7 +272,7 @@ final class OutsideAgents {
     private func tryAgain(_ reason: String, asked: Bool = false) {
         guard let engine else { return }
         let wait = retries.next(asked: asked)
-        down(StartRetries.noted(reason), retrying: true)
+        down(StartRetries.noted(reason, asked: asked), retrying: true)
         log.info("Trying the agents bridge again in \(wait) seconds")
         let environment = environment
         retries.schedule(after: wait, orAnswered: asked) { [weak self] in
@@ -467,7 +469,7 @@ final class OutsideAgents {
         retries.stopped(ranFor: upSince.map { -$0.timeIntervalSinceNow } ?? 0)
         stop()
         restarts.removeAll { $0 < .now.addingTimeInterval(-300) }
-        guard restarts.count < 3, let engine else {
+        guard restarts.count < 3, !retries.isBackingOff, let engine else {
             tryAgain("It stopped unexpectedly (exit code \(status)).\(output.isEmpty ? "" : "\n\n" + String(output.suffix(600)))")
             return
         }

@@ -211,6 +211,7 @@ final class MacBoxRunner {
             BoxProcess.engineChanged(server.endpoint, version: OpenCodeEngine.version, pid: server.processID)
             agents.engineEndpoint = server.endpoint
             upSince = .now
+            retries.cameUp(since: began)
             engine = .ready(server.endpoint)
             // Started once already (above); tried again here if it didn't start then and isn't
             // waiting to by itself.
@@ -245,7 +246,7 @@ final class MacBoxRunner {
     private func tryAgain(_ reason: String, asked: Bool = false) {
         let wait = retries.next(asked: asked)
         log.info("Trying the engine again in \(wait) seconds")
-        gaveUp(StartRetries.noted(reason), retryingAfter: wait)
+        gaveUp(StartRetries.noted(reason, asked: asked), retryingAfter: wait)
         retries.schedule(after: wait, orAnswered: asked) { [weak self] in await self?.start() }
     }
 
@@ -255,12 +256,15 @@ final class MacBoxRunner {
         restarts.removeAll()
         retries.reset()
         stopEngine()
+        let restart = launch
         engine = .starting
         // The bridge and the box, down, go with it: for many, this is the only Restart there is.
         if agents.failure != nil { Task { await agents.startAgain() } }
         // (The box first, as `start` has it: it keeps the engine's settings.)
         Task {
             if box.failure != nil { await box.startAgain() }
+            // (Stopped or restarted again meanwhile: that's what stands.)
+            guard restart == launch else { return }
             await start()
         }
     }
@@ -350,7 +354,7 @@ final class MacBoxRunner {
         // Started again, as it was, at once unless it has stopped like this a few times in the last
         // minutes: then with the waits of one that won't start, saying why.
         restarts.removeAll { $0 < .now.addingTimeInterval(-300) }
-        if restarts.count < 3 {
+        if restarts.count < 3, !retries.isBackingOff {
             restarts.append(.now)
             Task { await start() }
             return

@@ -2712,8 +2712,10 @@ no window. It runs the engine, the box and the coding agents' bridge, starts eac
 stops (at once, up to three times in five minutes), and tries each again when it couldn't start or
 keeps stopping (after 15 s, 30 s, 1, 2 and 5 minutes, then every 10 minutes for good, as a machine's
 keeper waits, starting over once it ran for ten minutes; not when another try can't help: a program
-that isn't there). Past those waits, a try that took too long while macOS was asking you something
-waits an hour instead, and goes as soon as that question is answered. It records each in the box's
+that isn't there). Once among those waits, it isn't started again at once until it has run for ten
+minutes. Past those waits, a try that took too long while macOS was asking you something waits an hour
+instead, and goes as soon as that question is seen to be answered: it closed after staying open once
+the try had ended, or a server it held came up. It records each in the box's
 `run` folder,
 as a machine's keeper does, so a client finds them there:
 
@@ -2778,8 +2780,7 @@ on to that bridge, as a machine's does (bridge 0.9.65; the app did before), sayi
 this Mac are starting" or "aren't answering" when it can't; from 0.9.202, while the bridge is down,
 what `kuvo/groups…`, `kuvo/artifacts…` and `kuvo/agents/…` answer with their 503 is "This Mac's coding
 agents aren't running." with why (`run/agents-stopped`), and that Restart on the Mac starts them unless
-they're being tried again; or, when the engine whose Bun runs the bridge is what's down, what the
-engine's routes say. The box carries its group chats' mail (`seat`, "Peers")
+they're being tried again. The box carries its group chats' mail (`seat`, "Peers")
 on its relay connection, as a machine's bridge does, and tells the bridge who your machines and
 their bots are (bridge 0.9.63).
 
