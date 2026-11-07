@@ -1337,6 +1337,9 @@ test("each feature kuvo/info names is a route the machine answers, and one it do
     // (A command the sandbox stopped, told by the engine's plugin: Auto's reviewer takes it.)
     "approval.stopped": ["POST", "kuvo/sandbox/stopped"],
     "git.backups": ["GET", "kuvo/git/backups?folder=/"],
+    // (Moves with a coding agent's own conversation, and the check before one holds anything: what
+    // kuvo/moves takes besides, and a box asks of another in its mail.)
+    "moves.agents": ["GET", "kuvo/moves"], "moves.check": ["GET", "kuvo/moves/places?kind=bot&id=bot_none"],
   };
   const named = (await answer(handle, "GET", "kuvo/info")).json.features;
   assert.deepEqual([...named].sort(), Object.keys(routes).sort(), "every name has a route here, and every route here its name");
