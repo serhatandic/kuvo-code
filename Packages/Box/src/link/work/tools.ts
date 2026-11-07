@@ -258,15 +258,18 @@ export async function answerAskTool(caller: Lead, args: Record<string, unknown>,
   const shown = permission.resources.filter(each => each !== "*").join(", ") || permission.action;
   if (args.decision !== "allow" && args.decision !== "deny") return refused("Say allow or deny (decision).");
   if (args.decision === "allow") {
+    // A session in Ask First always asks the user, whatever its bot's mode: as it stands here now
+    // (a Full Access or Auto that can't be had here is the lower one), on the engine or the coding
+    // agents' bridge alike. The user sees the ask on the session; the bot may still say no. (First,
+    // so a stale allow isn't told to be given again.)
+    const mode = approvalOf(data, { agents: onBridge(target), bot: Boolean(botOfConversation(data.id) ?? worksFor(data)) });
+    if (mode.effective === "askFirst") {
+      const state = mode.held ? `"${title}" asks first for now (${mode.held.why})` : `"${title}" is in Ask First`;
+      return refused(`You can't allow that: ${state}, so the user answers every ask it makes, whatever mode you're in. The user sees the ask on "${title}" and answers it there. Tell them in a line why it's needed if it matters, and carry on with the rest. You can still deny it.`);
+    }
     // An allow given on another computer and kept while this one was away, for a day at most: by
     // then what it was given for may have changed.
     if (made !== undefined && Date.now() - made > ALLOW_LIFE) return refused(`Your allow for "${title}" wasn't given: this computer was away for over a day after you gave it, so it's out of date. Look at what it asks now (list_sessions), and answer again if it still should go ahead.`);
-    // A session in Ask First always asks the user, whatever its bot's mode: as it stands here now
-    // (a Full Access or Auto that can't be had here is the lower one), on the engine or the coding
-    // agents' bridge alike. The user sees the ask on the session; the bot may still say no.
-    if (approvalOf(data, { agents: onBridge(target), bot: Boolean(botOfConversation(data.id) ?? worksFor(data)) }).effective === "askFirst") {
-      return refused(`You can't allow that: "${title}" is in Ask First, so the user answers every ask it makes, whatever mode you're in. The user sees the ask on "${title}" and answers it there. Tell them in a line why it's needed if it matters, and carry on with the rest. You can still deny it.`);
-    }
     const folder = data.location?.directory ?? data.directory ?? "";
     const seen = await callOf(target, permission, signal);
     // What its own conversation could do without asking, as its own rules and mode say

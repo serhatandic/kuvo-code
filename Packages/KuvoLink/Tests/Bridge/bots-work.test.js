@@ -927,8 +927,20 @@ test("an Auto session that can't be Auto here (no sandbox) is in Ask First as it
   const session = startedAddress(await tool("start_session", { task: "Tidy.", project: "Tidepool" }, "ses_pixel"));
   assert.equal(sessions.get(session).metadata.kuvo.approval, "auto");
   asked.set(session, [{ ...ASKED, sessionID: session }]);
-  assert.match((await tool("answer_ask", { session, ask: "per_1", decision: "allow", reason: "Harmless." }, "ses_pixel")).text, /is in Ask First/);
+  assert.match((await tool("answer_ask", { session, ask: "per_1", decision: "allow", reason: "Harmless." }, "ses_pixel")).text, /asks first for now \(Auto needs the sandbox/);
   assert.deepEqual(replied, []);
+});
+
+test("what a subagent of a session in Ask First asks is the user's too: judged by its session's mode", async () => {
+  await inFullAccess(async () => {
+    const session = inMode(startedAddress(await tool("start_session", { task: "Review it.", project: "Tidepool" }, "ses_pixel")), "askFirst");
+    sessions.set("ses_reviewer", { id: "ses_reviewer", parentID: session, title: "Reviewer", location: { directory: tidepool }, time: { created: 1, updated: 1 } });
+    asked.set("ses_reviewer", [{ id: "per_7", sessionID: "ses_reviewer", action: "shell", resources: ["git status"] }]);
+    assert.match((await tool("answer_ask", { session, ask: "per_7", decision: "allow", reason: "Tests." }, "ses_pixel")).text, /is in Ask First/);
+    assert.deepEqual(replied, []);
+    assert.equal((await tool("answer_ask", { session, ask: "per_7", decision: "deny", reason: "No." }, "ses_pixel")).isError, false);
+    assert.deepEqual(replied.map(each => [each.session, each.decision]), [["ses_reviewer", "reject"]]);
+  });
 });
 
 test("a coding agent's session in Ask First is the user's to answer too: the bot can't allow what it asks", async t => {

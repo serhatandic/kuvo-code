@@ -17895,11 +17895,13 @@ async function answerAskTool(caller, args, targets, signal, { made } = {}) {
   if (args.decision !== "allow" && args.decision !== "deny")
     return refused("Say allow or deny (decision).");
   if (args.decision === "allow") {
+    const mode = approvalOf(data, { agents: onBridge(target), bot: Boolean(botOfConversation(data.id) ?? worksFor(data)) });
+    if (mode.effective === "askFirst") {
+      const state = mode.held ? `"${title}" asks first for now (${mode.held.why})` : `"${title}" is in Ask First`;
+      return refused(`You can't allow that: ${state}, so the user answers every ask it makes, whatever mode you're in. The user sees the ask on "${title}" and answers it there. Tell them in a line why it's needed if it matters, and carry on with the rest. You can still deny it.`);
+    }
     if (made !== undefined && Date.now() - made > ALLOW_LIFE)
       return refused(`Your allow for "${title}" wasn't given: this computer was away for over a day after you gave it, so it's out of date. Look at what it asks now (list_sessions), and answer again if it still should go ahead.`);
-    if (approvalOf(data, { agents: onBridge(target), bot: Boolean(botOfConversation(data.id) ?? worksFor(data)) }).effective === "askFirst") {
-      return refused(`You can't allow that: "${title}" is in Ask First, so the user answers every ask it makes, whatever mode you're in. The user sees the ask on "${title}" and answers it there. Tell them in a line why it's needed if it matters, and carry on with the rest. You can still deny it.`);
-    }
     const folder = data.location?.directory ?? data.directory ?? "";
     const seen = await callOf(target, permission, signal);
     const sandboxed = commandsInSandbox(target, permission);
