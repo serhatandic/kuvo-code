@@ -1,6 +1,7 @@
 // Group chats that live here
 
 import { IS_MAC } from "../home";
+import { agentsDown } from "./agents-down";
 import { listedAgents, nameMissing, refreshOwnShared } from "../server/naming";
 import type { Target } from "../../shared/records";
 import type { AnswerPiece, LinkRequest, RouteContext } from "../server/context";
@@ -64,7 +65,7 @@ export function* groupJSON(status: number, value: { message: string }): Generato
 export async function* groupsRoute(context: RouteContext): AsyncGenerator<AnswerPiece> {
   const { request, signal, route, readEngine, bridge } = context;
   const target = bridge();
-  if (!target) return yield* groupJSON(503, { message: IS_MAC ? "Group chats on this Mac are starting. Try again in a moment." : "Group chats run with the coding agents' bridge, which isn't running on this machine." });
+  if (!target) return yield* groupJSON(503, { message: agentsDown() ?? (IS_MAC ? "Group chats on this Mac are starting. Try again in a moment." : "Group chats run with the coding agents' bridge, which isn't running on this machine.") });
   // Who a message names with "&" is worked out there, from the list as it is now: worked out
   // again meanwhile, and waited for (two seconds at most) only when a name after "&" isn't
   // there yet, as a message from a phone (`namingHere`).

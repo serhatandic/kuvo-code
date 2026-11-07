@@ -75,7 +75,7 @@ import Testing
         #expect(app.engine == .ready)
         #expect(app.workspace.session("ses_keep") != nil)
 
-        // It keeps stopping: started over a few times, then it says so, with what it wrote.
+        // It keeps stopping: started over at once a few times, then it says so, with what it wrote, and waits between tries.
         var failure: String?
         for _ in 0..<5 where failure == nil {
             let before = engineStarts
@@ -83,10 +83,10 @@ import Testing
             try await until { engineStarts > before && app.engine == .ready || { if case .failed = app.engine { true } else { false } }() }
             if case .failed(let reason) = app.engine { failure = reason }
         }
-        let reason = try #require(failure, "it never stopped trying")
+        let reason = try #require(failure, "it never said so")
         #expect(reason.contains("stopped unexpectedly"))
         #expect(reason.contains("the database disk image is malformed"), "with what the engine wrote: \(reason)")
-        #expect(engineStarts <= 4, "not started over for ever: \(engineStarts) starts")
+        #expect(engineStarts <= 4, "not at once for ever: \(engineStarts) starts")
         #expect(!FileManager.default.fileExists(atPath: crashFile))
 
         // You try again: it's ready, and one stop after that is started over by itself as before,
@@ -136,7 +136,7 @@ import Testing
             try await until { engineStarts > before && app.engine == .ready || { if case .failed = app.engine { true } else { false } }() }
             if case .failed = app.engine { failed = true }
         }
-        #expect(failed, "it never stopped trying")
+        #expect(failed, "it never said so")
         #expect(app.engineIsDown)
 
         // Try Again: still down while it starts (it doesn't answer yet), and not once it's back.
@@ -152,15 +152,19 @@ import Testing
         #expect(!app.engineIsDown)
     }
 
-    /// One that keeps stopping, which the app gives up on: a phone asking this Mac's box hears it
-    /// stopped and why, not that it's starting, until it's started again.
-    @Test func aPhoneHearsThisMacsEngineStoppedOnceTheAppGivesUp() async throws {
+    /// One that keeps stopping, which the app goes on trying with waits: a phone asking this Mac's
+    /// box hears it stopped and why, and that it's being tried, not that it's starting, until it's
+    /// started again.
+    @Test func aPhoneHearsThisMacsEngineKeepsStoppingAndIsBeingTried() async throws {
         let binary = try fakeEngine(box: try #require(TestBox.node, "Node runs this Mac's box in the tests"))
         setenv("KUVO_OPENCODE_BINARY", binary.path(percentEncoded: false), 1)
         let app = AppModel()
+        let clock = FailedStartRetryTests.TestClock()
+        app.ownBox.retries.clock = clock.wait
         // The engine at its address for the box too, which reaches it itself.
         try await StubWeb.listen(port: 47998)
         defer {
+            clock.goOn()
             app.stop()
             app.host.stop()
             unsetenv("KUVO_OPENCODE_BINARY")
@@ -179,7 +183,7 @@ import Testing
             try await until { engineStarts > before && app.engine == .ready || { if case .failed = app.engine { true } else { false } }() }
             if case .failed = app.engine { failed = true }
         }
-        #expect(failed, "it never stopped trying")
+        #expect(failed, "it never said so")
         let box = try #require(app.box.endpoint, "this Mac's box runs on")
         let ask = { () async throws -> (Int?, String) in
             var request = URLRequest(url: try #require(URL(string: "api/session", relativeTo: box.url)))
@@ -189,7 +193,8 @@ import Testing
         }
         let (status, said) = try await ask()
         #expect(status == 503)
-        #expect(said.contains("This Mac's engine isn't running. It stopped unexpectedly (exit code 7), and again after starting over. Try Again in Kuvo Code on the Mac starts it."), "\(said)")
+        #expect(said.contains("This Mac's engine isn't running. It stopped unexpectedly (exit code 7), and again after starting over. \(StartRetries.note)"), "\(said)")
+        #expect(!said.contains("Try Again in Kuvo Code"), "\(said)")
         // Try Again: started, it's asked again.
         await app.restart()
         #expect(app.engine == .ready)

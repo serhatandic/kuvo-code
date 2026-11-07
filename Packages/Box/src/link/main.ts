@@ -23,6 +23,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { plainName } from "../shared/text";
 import { sleep } from "../shared/wait";
+import { HangWatch, isBridge as runsBridge } from "../shared/hang";
 import { joinPath, loginPath, saveLoginPath, savedLoginPath } from "../shared/platform";
 import { watchAsks } from "./areas/asks";
 import { watchWorkAsks } from "./work/asks";
@@ -51,7 +52,7 @@ import { keepEngineDefaults } from "./engine/defaults";
 import { watchBox } from "./engine/watch";
 import { watchMoves } from "./moves/move";
 import { writePrivate } from "./files";
-import { IS_MAC, K, NEEDED_FILE, OWN_RUNTIME, PID_FILE, REAL_BOX, RUN, scriptIs, socketKey, takeVaultSecrets, VERSION_FILE } from "./home";
+import { BRIDGE_FILE, IS_MAC, K, NEEDED_FILE, OWN_RUNTIME, PID_FILE, REAL_BOX, RUN, scriptIs, socketKey, takeVaultSecrets, VERSION_FILE } from "./home";
 import { isBridge, keepKeeper, needed, noLongerNeeded, runningBridge, startBridge } from "./keeper";
 import { noteRelay } from "./letters/leave";
 import { deliverLeftAnswers, sendOutbox } from "./letters/outbox";
@@ -258,6 +259,7 @@ async function run(): Promise<void> {
   process.on("SIGTERM", cleanUp);
   process.on("SIGINT", cleanUp);
 
+  keepBridgeAnswering();
   // Stops when nothing's paired any more, or when another bridge took over; up while the engine
   // is down too, so a phone can start it. Phones removed since lose what they have open, and the
   // box's keeper, if it went, starts again (it keeps this bridge, and the engine, running).
@@ -543,6 +545,12 @@ function firstLine(): Promise<Record<string, unknown>> {
   });
 }
 
+/** The coding agents' bridge beside this box's engine, ended should it hang (it's started again as after
+ * a crash), wherever this runs. The bridge watches the engine in turn (agents/main.ts). */
+function keepBridgeAnswering(): void {
+  new HangWatch({ name: "bridge", run: RUN, record: BRIDGE_FILE, isIt: runsBridge }).start();
+}
+
 async function serve(): Promise<void> {
   // Its password, and this Mac's vault's secrets, from the app on stdin (never its environment,
   // which any of your processes can read); a test's box, in OPENCODE_PASSWORD.
@@ -604,6 +612,7 @@ async function serve(): Promise<void> {
   forgetLeftKeys().catch(() => {});
   // And their conversations and places in group chats, where those weren't answering.
   finishDeletes(readEngineFile, bridgeTarget).catch(() => {});
+  keepBridgeAnswering();
   // Its wake-ups and watches, sent while it runs, with the app's window closed too.
   sendWakes();
   // This Mac's link to your phones and machines, once its app says it's wanted.

@@ -3,7 +3,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test"
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
-import { loginPath, processRuns, promptedFolders } from "../src/shared/platform"
+import { cpuSeconds, loginPath, macUse, processRuns, processUse, promptedFolders } from "../src/shared/platform"
 
 // Where macOS and Linux differ, each side tested on whichever system runs this: a box tells its own
 // programs from whatever took their process's number after a crash (Linux by /proc, a stand-in
@@ -369,4 +369,102 @@ const account = process.platform === "linux"
 test.skipIf(!account?.endsWith("/bash"))("Linux: a start from cron, whose shell is plain sh, reads your account's shell's PATH", () => {
   const { folder, nvm } = home()
   expect(ran(["src/link/main.ts", "login-path"], folder, { SHELL: "/bin/sh" }).split(":")).toContain(nvm)
+})
+
+// How a process and what it started use the computer, each side as its system tells it.
+
+/** A /proc of the test's own, each process's `stat` as Linux writes it. */
+function procStats(processes: { pid: number; ppid: number; state: string; name?: string; utime?: number; stime?: number; cutime?: number; cmdline?: string; threads?: string[] }[]) {
+  const folder = join(root, "proc")
+  for (const process of processes) {
+    mkdirSync(join(folder, String(process.pid)), { recursive: true })
+    const after = [process.state, process.ppid, 0, 0, 0, 0, 0, 0, 0, 0, 0, process.utime ?? 0, process.stime ?? 0, process.cutime ?? 0, 0, 20, 0, 1, 0, 0]
+    writeFileSync(join(folder, String(process.pid), "stat"), `${process.pid} (${process.name ?? "bun"}) ${after.join(" ")}\n`)
+    for (const [thread, state] of [[process.pid, process.state], ...(process.threads ?? []).map((state, index) => [process.pid + 1000 + index, state])]) {
+      mkdirSync(join(folder, String(process.pid), "task", String(thread)), { recursive: true })
+      writeFileSync(join(folder, String(process.pid), "task", String(thread), "stat"), `${thread} (${process.name ?? "bun"}) ${state} ${process.ppid}\n`)
+    }
+    writeFileSync(join(folder, String(process.pid), "cmdline"), (process.cmdline ?? "x").replaceAll(" ", "\0") + "\0")
+  }
+  // Not a process's.
+  mkdirSync(join(folder, "self"), { recursive: true })
+  return folder
+}
+
+test("Linux: a process's state and CPU time, and those of what it started and they started, from /proc", async () => {
+  const folder = procStats([
+    // (A name can hold spaces and parentheses.)
+    { pid: 100, ppid: 1, state: "S", name: "open code) (x", utime: 150, stime: 50, cutime: 900, cmdline: "/k/engine/opencode serve --port 1" },
+    { pid: 101, ppid: 100, state: "S", utime: 100, cutime: 200 },
+    { pid: 102, ppid: 101, state: "R", stime: 25 },
+    { pid: 200, ppid: 1, state: "R", utime: 9999 },
+  ])
+  const use = await processUse(100, folder)
+  expect(use).toEqual({ command: "/k/engine/opencode serve --port 1", waiting: true, seconds: 2, below: { seconds: 3.25, running: true } })
+})
+
+test("Linux: running, on a disk or paused isn't asleep; what's below it asleep isn't running", async () => {
+  for (const state of ["R", "D", "T", "Z"]) {
+    const folder = procStats([{ pid: 100, ppid: 1, state }])
+    expect((await processUse(100, folder))?.waiting).toBe(false)
+    rmSync(folder, { recursive: true })
+  }
+  const folder = procStats([{ pid: 100, ppid: 1, state: "S" }, { pid: 101, ppid: 100, state: "S" }, { pid: 102, ppid: 100, state: "Z" }])
+  expect((await processUse(100, folder))?.below.running).toBe(false)
+  expect(await processUse(999, folder)).toBeNull()
+})
+
+test("Linux: one thread at work, or on a disk, means it isn't asleep, whatever the main thread's doing", async () => {
+  for (const state of ["R", "D", "T"]) {
+    const folder = procStats([{ pid: 100, ppid: 1, state: "S", threads: ["S", state] }])
+    expect((await processUse(100, folder))?.waiting).toBe(false)
+    rmSync(folder, { recursive: true })
+  }
+  const folder = procStats([{ pid: 100, ppid: 1, state: "S", threads: ["S", "S"] }])
+  expect((await processUse(100, folder))?.waiting).toBe(true)
+})
+
+test("ps's times, as macOS and Linux print them", () => {
+  expect(cpuSeconds("0:00.12")).toBeCloseTo(0.12)
+  expect(cpuSeconds("12:34.50")).toBeCloseTo(754.5)
+  expect(cpuSeconds("123:45.67")).toBeCloseTo(7425.67)
+  expect(cpuSeconds("01:02:03")).toBe(3723)
+  expect(cpuSeconds("2-01:02:03")).toBe(176523)
+  expect(cpuSeconds("TIME")).toBeNaN()
+})
+
+test("macOS: a process and what it started, from ps's table", () => {
+  const table = [
+    "  100     1 S      0:02.50 /Applications/Kuvo Code.app/x/opencode serve --stdio --port 0",
+    "  101   100 S+     0:01.00 /bin/sh -c tool",
+    "  102   101 R      1:00.25 cc a.c",
+    "  200     1 R     50:00.00 other",
+    "  garbage line",
+  ].join("\n")
+  expect(macUse(table, 100)).toEqual({ command: "/Applications/Kuvo Code.app/x/opencode serve --stdio --port 0", waiting: true, seconds: 2.5, below: { seconds: 61.25, running: true } })
+  // Idle a while is asleep too; stopped or stuck on a disk isn't.
+  expect(macUse("  1000 1 I 0:00.01 x", 1000)?.waiting).toBe(true)
+  expect(macUse("  1000 1 T 0:00.01 x", 1000)?.waiting).toBe(false)
+  expect(macUse("  1000 1 U 0:00.01 x", 1000)?.waiting).toBe(false)
+  expect(macUse(table, 999)).toBeNull()
+})
+
+test("this system's own: a sleeping process it started, asleep, its command line told", async () => {
+  const child = Bun.spawn(["/bin/sleep", "30"], { stdout: "ignore", stderr: "ignore" })
+  try {
+    let use = await processUse(child.pid)
+    // (A moment after it starts, it may still be starting.)
+    for (let tries = 0; tries < 200 && !use?.waiting; tries++) {
+      await Bun.sleep(25)
+      use = await processUse(child.pid)
+    }
+    expect(use?.command).toContain("sleep 30")
+    expect(use?.waiting).toBe(true)
+    expect(use?.below.running).toBe(false)
+    const own = await processUse(process.pid)
+    expect(own?.below.seconds).toBeGreaterThanOrEqual(0)
+  } finally {
+    child.kill("SIGKILL")
+  }
+  expect(await processUse(gone)).toBeNull()
 })
