@@ -198,6 +198,27 @@ test("a sleep of the computer starts the count again, whatever the clock says", 
   await hung.gone
 })
 
+test("a sleep in the middle of a look starts the count from when it woke", async () => {
+  const hung = await server("hangs")
+  let sleeps = false
+  const hang = watch({ use: pid => {
+    // The lid closes while it asks: it wakes hours later, in the same look.
+    if (sleeps) now += 8 * 3_600_000
+    sleeps = false
+    return processUse(pid)
+  } })
+  sleeps = true
+  await looks(hang, 3)
+  expect(existsSync(join(run, "hung-engine.json"))).toBe(false)
+  // And once it's counting.
+  sleeps = true
+  await looks(hang, 3)
+  expect(existsSync(join(run, "hung-engine.json"))).toBe(false)
+  expect(alive(hung.child)).toBe(true)
+  await looks(hang, 1)
+  await hung.gone
+})
+
 test("an answer starts the count again", async () => {
   const hung = await server("hangs")
   const live = await server("answers")
@@ -335,16 +356,17 @@ test("each server goes by its own program", () => {
   expect(isBridge("sh -c n=0; while kill -0")).toBe(false)
 })
 
-// The real servers, each started as a box starts it, on a quick clock: that they watch at all.
+// The real servers, each started as a box starts it, on a quick clock (test/quick-hang.ts): that they
+// watch at all.
 function realServer(script: string, argument: string[], env: Record<string, string>): ChildProcess {
   const home = join(root, "home")
   mkdirSync(home, { recursive: true })
-  const child = spawn(process.execPath, [join(import.meta.dir, "..", "src", script), ...argument], {
+  const child = spawn(process.execPath, ["--preload", join(import.meta.dir, "quick-hang.ts"), join(import.meta.dir, "..", "src", script), ...argument], {
     // (Its standard input stays open: it stops once that closes.)
     stdio: ["pipe", "ignore", "ignore"],
     detached: true,
     cwd: root,
-    env: { HOME: home, PATH: process.env.PATH!, TMPDIR: root, OPENCODE_PASSWORD: "x", KUVO_TEST_HANG_EVERY: "300", ...env },
+    env: { HOME: home, PATH: process.env.PATH!, TMPDIR: root, OPENCODE_PASSWORD: "x", ...(process.env.BUN_BE_BUN ? { BUN_BE_BUN: "1", BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0" } : {}), ...env },
   })
   started.push(child)
   return child

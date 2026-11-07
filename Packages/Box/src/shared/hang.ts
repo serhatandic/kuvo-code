@@ -105,8 +105,8 @@ export class HangWatch {
   private seen: { pid: number; port: number; since: number; at: number; use: ProcessUse } | null = null;
 
   constructor(private readonly options: HangWatchOptions) {
-    // (KUVO_TEST_HANG_EVERY: a test's real server, in milliseconds, with the rest in proportion.)
-    const test = Number(process.env.KUVO_TEST_HANG_EVERY) || 0;
+    // (A test's real server, loaded with test/quick-hang.ts: never one of a real box's.)
+    const test = (globalThis as { kuvoQuickHangWatch?: number }).kuvoQuickHangWatch ?? 0;
     this.every = options.every ?? (test || LOOK_EVERY);
     this.answerWithin = options.answerWithin ?? (test ? test / 2 : ANSWER_WITHIN);
     this.hungAfter = options.hungAfter ?? (test ? test * 3 : HUNG_AFTER);
@@ -127,7 +127,6 @@ export class HangWatch {
   }
 
   private async lookOnce(): Promise<void> {
-    const began = this.now();
     const server = this.server();
     if (!server || this.stoppedOnPurpose()) {
       this.seen = null;
@@ -149,13 +148,14 @@ export class HangWatch {
     // this one), or this was held up. What it saw before says nothing of now.
     const onTime = this.seen && at >= this.seen.at && at - this.seen.at <= this.every * 2;
     const seen = onTime && this.seen?.pid === server.pid && this.seen.port === server.port ? this.seen : null;
+    // (From when this look ended: the computer may have slept since it began.)
     if (!seen) {
-      this.seen = { ...server, since: began, at, use };
+      this.seen = { ...server, since: at, at, use };
       return;
     }
     const seconds = (at - seen.at) / 1000;
     if (use.seconds - seen.use.seconds >= seconds * OWN_WORK || use.below.seconds - seen.use.below.seconds >= seconds * WORK_BELOW) {
-      this.seen = { ...server, since: began, at, use };
+      this.seen = { ...server, since: at, at, use };
       return;
     }
     this.seen = { ...seen, at, use };

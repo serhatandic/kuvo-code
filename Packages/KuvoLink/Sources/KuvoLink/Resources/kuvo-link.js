@@ -339,7 +339,7 @@ class HangWatch {
   seen = null;
   constructor(options) {
     this.options = options;
-    const test = Number(process.env.KUVO_TEST_HANG_EVERY) || 0;
+    const test = globalThis.kuvoQuickHangWatch ?? 0;
     this.every = options.every ?? (test || LOOK_EVERY);
     this.answerWithin = options.answerWithin ?? (test ? test / 2 : ANSWER_WITHIN);
     this.hungAfter = options.hungAfter ?? (test ? test * 3 : HUNG_AFTER);
@@ -358,7 +358,6 @@ class HangWatch {
     }
   }
   async lookOnce() {
-    const began = this.now();
     const server = this.server();
     if (!server || this.stoppedOnPurpose()) {
       this.seen = null;
@@ -378,12 +377,12 @@ class HangWatch {
     const onTime = this.seen && at >= this.seen.at && at - this.seen.at <= this.every * 2;
     const seen = onTime && this.seen?.pid === server.pid && this.seen.port === server.port ? this.seen : null;
     if (!seen) {
-      this.seen = { ...server, since: began, at, use };
+      this.seen = { ...server, since: at, at, use };
       return;
     }
     const seconds = (at - seen.at) / 1000;
     if (use.seconds - seen.use.seconds >= seconds * OWN_WORK || use.below.seconds - seen.use.below.seconds >= seconds * WORK_BELOW) {
-      this.seen = { ...server, since: began, at, use };
+      this.seen = { ...server, since: at, at, use };
       return;
     }
     this.seen = { ...seen, at, use };
