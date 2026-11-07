@@ -17446,7 +17446,7 @@ async function unpack(id) {
   if (kind && !kind.isDirectory())
     throw new NotTaken(`It brought ${kind.isSymbolicLink() ? "a link" : "something that isn’t a folder"} for its folder, which isn’t taken.`);
   if (brought && kind)
-    plainOnly(brought);
+    plainOnly(brought, true);
   const carried = path65.join(opened, "carry");
   let carry = null;
   if (contents.lane) {
@@ -17456,7 +17456,7 @@ async function unpack(id) {
     } catch {}
     if (!carry)
       throw new NotTaken("Its conversation didn’t come with it.");
-    plainOnly(carried);
+    plainOnly(carried, false);
   }
   return { contents, folder: kind ? brought : null, carry };
 }
@@ -17471,7 +17471,22 @@ function goesAsIs(root, entry, kind) {
   } catch {
     return false;
   }
-  return !path65.isAbsolute(target) && path65.resolve(path65.dirname(entry), target).startsWith(path65.resolve(root) + path65.sep);
+  if (path65.isAbsolute(target))
+    return false;
+  let depth = path65.relative(root, path65.dirname(entry)).split(path65.sep).filter((part) => part && part !== ".").length;
+  for (const part of target.split("/")) {
+    if (part === "..")
+      depth -= 1;
+    else if (part && part !== ".")
+      depth += 1;
+    if (depth < 0)
+      return false;
+  }
+  try {
+    return fs62.realpathSync.native(entry).startsWith(fs62.realpathSync.native(root) + path65.sep);
+  } catch {
+    return false;
+  }
 }
 function notPlainIn(folder, most = Infinity) {
   const left = [""];
@@ -17502,13 +17517,13 @@ function notPlainIn(folder, most = Infinity) {
   }
   return null;
 }
-function plainOnly(folder, root = folder) {
+function plainOnly(folder, links, root = folder) {
   for (const name of fs62.readdirSync(folder)) {
     const entry = path65.join(folder, name);
     const kind = fs62.lstatSync(entry);
     if (kind.isDirectory())
-      plainOnly(entry, root);
-    else if (!goesAsIs(root, entry, kind))
+      plainOnly(entry, links, root);
+    else if (!(links ? goesAsIs(root, entry, kind) : kind.isFile()))
       throw new NotTaken(`It brought ${kind.isSymbolicLink() ? "a link" : "something that isn’t a file"} (${path65.basename(entry)}), which isn’t taken.`);
   }
 }
@@ -17772,7 +17787,7 @@ var say = {
   background: (name, what) => `${name} has ${what} running. Wait for it to finish, or stop it, then move ${name}.`,
   onGoal: (name) => `${name} is working on a goal, which stays on this computer. Move it once the goal is done, or stop the goal first.`,
   waiting: (name) => `${name} still has messages on their way. Try again in a moment.`,
-  notPlain: (name, what) => `${name}’s folder has ${what.link ? "a link to somewhere outside it" : "something that isn’t a file"} (${what.path}), which can’t move to another computer. Remove it, then move ${name}.`,
+  notPlain: (name, what) => `${name}’s folder has ${what.link ? "a link that wouldn’t work on another computer" : "something that isn’t a file"} (${what.path}), which can’t move to another computer. Remove it, then move ${name}.`,
   busy: (name) => `${name} kept getting messages while it moved, so it stayed where it is. Try again in a moment.`,
   botsElsewhere: (chat) => `${chat}’s bots live on different computers, so it can’t go there.`,
   inBoxGroup: (name, chat) => `${name} is in “${chat}”, which lives on ${HERE} with its bots. Move the chat to a Mac first, or take ${name} out of it.`,
@@ -17790,7 +17805,7 @@ var note = {
   noAgents: "Its coding agents aren’t running",
   onGoal: "Working on a goal",
   background: "Running something",
-  notPlain: { link: "Has a link out of its folder", other: "Has something that isn’t a file" },
+  notPlain: { link: "Has a link that can’t move", other: "Has something that isn’t a file" },
   inBoxGroup: "In a group chat that lives here",
   needsUpdate: "Needs a newer Kuvo Code",
   botsNotThere: "Its bots don’t all live there",
@@ -18360,7 +18375,11 @@ async function arrived(record, placed) {
     await settle2(target, record.sessions, record.name);
     if (record.lane && placed !== outgoing.get(record.id)?.digest)
       throw new Refused(say.notSame(record.name));
-    const again = record.lane ? (await carry(target, "digest", { root: record.sessions[0] })).digest : conversationHash(await exportAll(target, record.sessions[0]));
+    const again = record.lane ? (await carry(target, "digest", { root: record.sessions[0] }).catch((error) => {
+      if (error?.status === 423)
+        return { digest: "" };
+      throw error;
+    })).digest : conversationHash(await exportAll(target, record.sessions[0]));
     const before = outgoing.get(record.id)?.exports;
     if (!still())
       return;

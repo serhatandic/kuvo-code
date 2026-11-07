@@ -511,7 +511,8 @@ A client asks the box it lives on once, and watches; the move goes on with no cl
   agent and this box's agents bridge isn't running, or that computer's box is from before
   `moves.agents`, is in a group chat that lives here with its bots, is working on a goal (a bot's, or a
   chat's own `/goal` working or paused; it stays on this box), has a command or subagent running, has
-  a link out of its folder (absolute, or out of it by `..`) or anything but files, folders and
+  a link that wouldn't work there (absolute, climbing out of its folder on its way, or, followed
+  through any link before it, ending outside it or nowhere) or anything but files, folders and such
   relative links within it (the box it goes to takes none; looked for again as it's packed), is moving already; that computer's box is
   from before moves, as the `features` its agents' mail last gave say; a group chat's bots don't all
   live on that machine, as its agents' mail says, none of them here) and `note`, the same in a few

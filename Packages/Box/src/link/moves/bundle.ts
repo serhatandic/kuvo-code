@@ -217,7 +217,7 @@ export async function unpack(id: string): Promise<{ contents: Contents; folder: 
   let kind: fs.Stats | null = null;
   if (brought) try { kind = fs.lstatSync(brought); } catch {}
   if (kind && !kind.isDirectory()) throw new NotTaken(`It brought ${kind.isSymbolicLink() ? "a link" : "something that isn’t a folder"} for its folder, which isn’t taken.`);
-  if (brought && kind) plainOnly(brought);
+  if (brought && kind) plainOnly(brought, true);
   // (The agents bridge checks each of these against what it says they are.)
   const carried = path.join(opened, "carry");
   let carry: string | null = null;
@@ -226,19 +226,30 @@ export async function unpack(id: string): Promise<{ contents: Contents; folder: 
       if (fs.lstatSync(carried).isDirectory()) carry = carried;
     } catch {}
     if (!carry) throw new NotTaken("Its conversation didn’t come with it.");
-    plainOnly(carried);
+    // (A conversation never has a link: the agents bridge sends none.)
+    plainOnly(carried, false);
   }
   return { contents, folder: kind ? brought : null, carry };
 }
 
 /** Whether `entry`, in the folder `root`, goes as it is: a file or folder, or a relative link to
- * somewhere in that folder (a project's `node_modules/.bin`, say), which goes on pointing there. */
+ * something in that folder (a project's `node_modules/.bin`, say), which goes on pointing there.
+ * Such a link never climbs out of the folder on its way (so it means the same wherever the folder
+ * is), and, followed as the computer follows it (through any other link on the way), ends in it. */
 function goesAsIs(root: string, entry: string, kind: fs.Stats): boolean {
   if (kind.isFile() || kind.isDirectory()) return true;
   if (!kind.isSymbolicLink()) return false;
   let target: string;
   try { target = fs.readlinkSync(entry); } catch { return false; }
-  return !path.isAbsolute(target) && path.resolve(path.dirname(entry), target).startsWith(path.resolve(root) + path.sep);
+  if (path.isAbsolute(target)) return false;
+  let depth = path.relative(root, path.dirname(entry)).split(path.sep).filter(part => part && part !== ".").length;
+  for (const part of target.split("/")) {
+    if (part === "..") depth -= 1;
+    else if (part && part !== ".") depth += 1;
+    if (depth < 0) return false;
+  }
+  // (`.native`: the plain one reads a `..` as text, not after the link before it.)
+  try { return fs.realpathSync.native(entry).startsWith(fs.realpathSync.native(root) + path.sep); } catch { return false; }
 }
 
 /** The first thing in `folder` that can't go to another computer (a link out of it, or something
@@ -263,14 +274,14 @@ export function notPlainIn(folder: string, most = Infinity): { path: string; lin
   return null;
 }
 
-/** Only files, folders and links within `root`: never a link to somewhere else on this computer, or
- * anything else. */
-function plainOnly(folder: string, root = folder): void {
+/** Only files and folders, and with `links` relative links within `root`: never a link to somewhere
+ * else on this computer, or anything else. */
+function plainOnly(folder: string, links: boolean, root = folder): void {
   for (const name of fs.readdirSync(folder)) {
     const entry = path.join(folder, name);
     const kind = fs.lstatSync(entry);
-    if (kind.isDirectory()) plainOnly(entry, root);
-    else if (!goesAsIs(root, entry, kind)) throw new NotTaken(`It brought ${kind.isSymbolicLink() ? "a link" : "something that isn’t a file"} (${path.basename(entry)}), which isn’t taken.`);
+    if (kind.isDirectory()) plainOnly(entry, links, root);
+    else if (!(links ? goesAsIs(root, entry, kind) : kind.isFile())) throw new NotTaken(`It brought ${kind.isSymbolicLink() ? "a link" : "something that isn’t a file"} (${path.basename(entry)}), which isn’t taken.`);
   }
 }
 

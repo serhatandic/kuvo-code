@@ -105,7 +105,7 @@ export const say = {
   background: (name: string, what: string) => `${name} has ${what} running. Wait for it to finish, or stop it, then move ${name}.`,
   onGoal: (name: string) => `${name} is working on a goal, which stays on this computer. Move it once the goal is done, or stop the goal first.`,
   waiting: (name: string) => `${name} still has messages on their way. Try again in a moment.`,
-  notPlain: (name: string, what: { path: string; link: boolean }) => `${name}’s folder has ${what.link ? "a link to somewhere outside it" : "something that isn’t a file"} (${what.path}), which can’t move to another computer. Remove it, then move ${name}.`,
+  notPlain: (name: string, what: { path: string; link: boolean }) => `${name}’s folder has ${what.link ? "a link that wouldn’t work on another computer" : "something that isn’t a file"} (${what.path}), which can’t move to another computer. Remove it, then move ${name}.`,
   busy: (name: string) => `${name} kept getting messages while it moved, so it stayed where it is. Try again in a moment.`,
   botsElsewhere: (chat: string) => `${chat}’s bots live on different computers, so it can’t go there.`,
   inBoxGroup: (name: string, chat: string) => `${name} is in “${chat}”, which lives on ${HERE} with its bots. Move the chat to a Mac first, or take ${name} out of it.`,
@@ -125,7 +125,7 @@ const note = {
   noAgents: "Its coding agents aren’t running",
   onGoal: "Working on a goal",
   background: "Running something",
-  notPlain: { link: "Has a link out of its folder", other: "Has something that isn’t a file" },
+  notPlain: { link: "Has a link that can’t move", other: "Has something that isn’t a file" },
   inBoxGroup: "In a group chat that lives here",
   needsUpdate: "Needs a newer Kuvo Code",
   botsNotThere: "Its bots don’t all live there",
@@ -715,7 +715,11 @@ async function arrived(record: MoveRecord, placed?: unknown): Promise<void> {
     // What's in place there, file by file, is what was sent: or it's not the one to go on from.
     if (record.lane && placed !== outgoing.get(record.id)?.digest) throw new Refused(say.notSame(record.name));
     const again = record.lane
-      ? (await carry<{ digest: string }>(target, "digest", { root: record.sessions[0] })).digest
+      // (A turn that started just now, the bridge's 423: changed, so it's got ready again.)
+      ? (await carry<{ digest: string }>(target, "digest", { root: record.sessions[0] }).catch(error => {
+        if ((error as { status?: number } | null)?.status === 423) return { digest: "" };
+        throw error;
+      })).digest
       : conversationHash(await exportAll(target, record.sessions[0]));
     const before = outgoing.get(record.id)?.exports;
     // Taken back meanwhile (its copy there couldn't be set up, or it took too long): nothing more.

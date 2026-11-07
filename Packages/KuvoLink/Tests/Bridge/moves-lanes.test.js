@@ -432,11 +432,11 @@ test("a bot on a second account goes to a computer without that account: it says
 
 test("a link out of a bot's folder is found before anything goes: it says which, and the bot stays as it was", { timeout: 60_000 }, async t => {
   signal = t.signal;
-  const why = "bot_out’s folder has a link to somewhere outside it (workspace/tools/bin/cli), which can’t move to another computer. Remove it, then move bot_out.";
+  const why = "bot_out’s folder has a link that wouldn’t work on another computer (workspace/tools/bin/cli), which can’t move to another computer. Remove it, then move bot_out.";
   const there = (await ask("GET", "kuvo/moves/places?kind=bot&id=bot_out")).json.places.find(place => place.key === machine.key);
   assert.equal(there.ok, false);
   assert.equal(there.why, why);
-  assert.equal(there.note, "Has a link out of its folder");
+  assert.equal(there.note, "Has a link that can’t move");
   const moved = await ask("POST", "kuvo/moves", { kind: "bot", id: "bot_out", to: machine.key });
   assert.equal(moved.status, 409);
   assert.equal(moved.json.message, why);

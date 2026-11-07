@@ -318,8 +318,14 @@ function bundleFor(thing, exports, wakeFiles = {}, links = {}) {
   const packed = fs.mkdtempSync(path.join(support, "pack-"));
   fs.writeFileSync(path.join(packed, "move.json"), JSON.stringify({ kind: "chat", thing, name: "“Notes”", wasPaused: false, folder: thing, exports }));
   fs.mkdirSync(path.join(packed, thing));
-  for (const [name, text] of Object.entries(wakeFiles)) fs.writeFileSync(path.join(packed, thing, name), text);
-  for (const [name, target] of Object.entries(links)) fs.symlinkSync(target, path.join(packed, thing, name));
+  for (const [name, text] of Object.entries(wakeFiles)) {
+    fs.mkdirSync(path.dirname(path.join(packed, thing, name)), { recursive: true });
+    fs.writeFileSync(path.join(packed, thing, name), text);
+  }
+  for (const [name, target] of Object.entries(links)) {
+    fs.mkdirSync(path.dirname(path.join(packed, thing, name)), { recursive: true });
+    fs.symlinkSync(target, path.join(packed, thing, name));
+  }
   const file = path.join(packed, "bundle.tgz");
   assert.equal(spawnSync("tar", ["-czf", file, "-C", packed, "move.json", thing]).status, 0);
   const bytes = fs.readFileSync(file);
@@ -378,6 +384,18 @@ test("a copy that brings a link (to somewhere else on this computer) isn't set u
   await say({ op: "part", id: "mov_link1", hash, i: 0, of: 1, d: bytes.toString("base64url") });
   await until(() => told.some(move => move.id === "mov_link1" && move.op === "failed"));
   assert.match(told.find(move => move.id === "mov_link1" && move.op === "failed").message, /a link/);
+  assert.ok(!fs.existsSync(path.join(wakes, thing)) && !engine.sessions.has(thing));
+});
+
+test("a copy whose links only seem to stay in its folder, one through another, isn't set up", async () => {
+  // `d/L` is its own folder `e`; `A` reads, as text, as a file in it, but is `e`'s folder's
+  // parent's: out of it.
+  const thing = "ses_link2";
+  const { bytes, hash } = bundleFor(thing, [{ info: { id: thing, title: "Notes" }, messages: [] }], { "wakes.json": "[]", "e/notes.txt": "x" }, { "d/L": "../e", A: "d/L/../../outside.txt" });
+  await say({ op: "offer", id: "mov_link2", kind: "chat", thing, name: "“Notes”", size: bytes.length, hash, wasPaused: false, from: peerKey });
+  await say({ op: "part", id: "mov_link2", hash, i: 0, of: 1, d: bytes.toString("base64url") });
+  await until(() => told.some(move => move.id === "mov_link2" && (move.op === "failed" || move.op === "arrived")));
+  assert.match(told.find(move => move.id === "mov_link2" && move.op === "failed")?.message ?? "it was set up", /a link/);
   assert.ok(!fs.existsSync(path.join(wakes, thing)) && !engine.sessions.has(thing));
 });
 
