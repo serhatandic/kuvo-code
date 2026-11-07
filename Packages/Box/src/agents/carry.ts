@@ -89,9 +89,10 @@ async function plainFiles(from: string, link: (path: string) => Error, at = ""):
   return files
 }
 
-const digestOf = (records: CarriedFile[], lanes: { provider: string; session: string; how: string; list: CarriedFile[] }[]): string => {
+const digestOf = (records: CarriedFile[], lanes: { provider: string; session: string; how: string; list: CarriedFile[] }[], said: string[] = []): string => {
   const hash = createHash("sha256")
   for (const record of records) hash.update(`r ${record.path} ${record.size} ${record.sha256}\n`)
+  for (const each of said) hash.update(`s ${each}\n`)
   for (const lane of lanes) {
     hash.update(`l ${lane.provider} ${lane.session} ${lane.how}\n`)
     for (const file of lane.list) hash.update(`f ${file.path} ${file.size} ${file.sha256}\n`)
@@ -163,12 +164,15 @@ export class Carrying {
   private async read(root: string, conversation: boolean, into?: string): Promise<{ manifest: Manifest; left: LeftOf[] }> {
     const family = this.family(root)
     const records: CarriedFile[] = []
+    // What you'd change of it as it goes: its name, its model, whether it's archived.
+    const said: string[] = []
     const lanes: Manifest["lanes"] = []
     const left: LeftOf[] = []
     let at = 0
     for (const record of family) {
       const id = record.session.id
       this.store.save(id, true)
+      said.push(JSON.stringify([id, record.session.title ?? null, record.session.model ?? null, record.session.time.archived ?? null]))
       for (const name of ["session.json", "messages.json", "agent.json"]) {
         const file = this.store.fileOf(id, name)
         const path = join("sessions", id, name)
@@ -209,7 +213,7 @@ export class Carrying {
         at++
       }
     }
-    const digest = digestOf(records, lanes)
+    const digest = digestOf(records, lanes, said)
     return {
       manifest: {
         root,

@@ -18639,10 +18639,13 @@ async function plainFiles(from, link, at = "") {
     files.push(...await plainFiles(from, link, at ? join27(at, name) : name));
   return files;
 }
-var digestOf = (records, lanes) => {
+var digestOf = (records, lanes, said = []) => {
   const hash = createHash8("sha256");
   for (const record of records)
     hash.update(`r ${record.path} ${record.size} ${record.sha256}
+`);
+  for (const each of said)
+    hash.update(`s ${each}
 `);
   for (const lane of lanes) {
     hash.update(`l ${lane.provider} ${lane.session} ${lane.how}
@@ -18715,12 +18718,14 @@ class Carrying {
   async read(root, conversation, into) {
     const family = this.family(root);
     const records = [];
+    const said = [];
     const lanes = [];
     const left = [];
     let at = 0;
     for (const record of family) {
       const id = record.session.id;
       this.store.save(id, true);
+      said.push(JSON.stringify([id, record.session.title ?? null, record.session.model ?? null, record.session.time.archived ?? null]));
       for (const name of ["session.json", "messages.json", "agent.json"]) {
         const file = this.store.fileOf(id, name);
         const path = join27("sessions", id, name);
@@ -18762,7 +18767,7 @@ class Carrying {
         at++;
       }
     }
-    const digest = digestOf(records, lanes);
+    const digest = digestOf(records, lanes, said);
     return {
       manifest: {
         root,
@@ -24613,4 +24618,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents b739258d84ce8c1246bf19fc0b113ff6064db7864466bea553cb579e8fe984fe
+// Built from Packages/Box/src/agents f5ee5907aafd8c3bf44f15f414f08cb5eaba71579a142dfaab40d82d74fa7597

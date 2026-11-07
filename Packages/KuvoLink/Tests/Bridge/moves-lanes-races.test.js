@@ -72,7 +72,7 @@ const seedStarted = (session, directory) => {
 };
 const leaves = seedBot("bot_leaves"), shares = seedBot("bot_shares"), keyLeft = seedBot("bot_keyleft"), back = seedBot("bot_back");
 write(path.join(memoryOf(back), "MEMORY.md"), "Still in use.\n");
-const over = seedBot("bot_over"), merged = seedBot("bot_merged"), many = seedBot("bot_many");
+const over = seedBot("bot_over"), merged = seedBot("bot_merged"), many = seedBot("bot_many"), named = seedBot("bot_named");
 write(path.join(memoryOf(merged), "MEMORY.md"), "What it remembers.\n");
 for (let i = 0; i < 3000; i++) write(path.join(path.dirname(many.file), many.id, "tool-results", `${i}.txt`), `output ${i}\n`);
 write(path.join(memoryOf(leaves), "MEMORY.md"), "The bot's.\n");
@@ -194,6 +194,27 @@ test("written after it was packed (a wake-up, a letter): it's noticed, and it al
   assert.notEqual(sent.at(-1).hash, sent.at(-2).hash, "with what was written");
   assert.notEqual(digests[1], digests[0]);
   assert.equal((await asks("GET", `/api/session/${late.session}`)).status, 404, "let go here once it was the same");
+});
+
+test("renamed as it goes: it goes again, with its new name", async () => {
+  let offers = 0;
+  const digests = [];
+  script = async move => {
+    if (move.op === "offer") {
+      offers++;
+      digests.push(await digestOf(named.session));
+      if (offers === 1) assert.equal((await asks("PATCH", `/api/session/${named.session}`, { title: "Renamed on the way" })).status, 200);
+      say({ op: "ready", id: move.id });
+    }
+    if (move.op === "part") {
+      say({ op: "got", id: move.id, i: move.i });
+      if (move.i === move.of - 1) say({ op: "arrived", id: move.id, hash: move.hash, digest: digests.at(-1) });
+    }
+    if (move.op === "switch") say({ op: "switched", id: move.id });
+  };
+  const moved = await ask("POST", "kuvo/moves", { kind: "bot", id: named.bot, to: labKey });
+  assert.equal(moved.status, 200, JSON.stringify(moved.json));
+  assert.equal(offers, 2, "it went again");
 });
 
 test("written to again and again: it stays where it is, as it was", async () => {
