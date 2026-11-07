@@ -11312,6 +11312,7 @@ var ENGINE_DEFAULTS = [
   { action: "external_directory", resource: "*", effect: "ask" },
   { action: "doom_loop", resource: "*", effect: "ask" }
 ];
+var rulesOf = (own) => [...ENGINE_DEFAULTS, ...permissionsHere() ?? [], ...own];
 var withDefaults = (rules) => [...ENGINE_DEFAULTS, ...rules];
 async function callOf(target, permission, signal) {
   if (!permission.call)
@@ -17709,16 +17710,16 @@ function pickModel(given, effort, models) {
 }
 
 // Packages/Box/src/link/work/tools.ts
+var onBridge = (target) => {
+  try {
+    return readEngineFile().port !== target.port;
+  } catch {
+    return false;
+  }
+};
 function leadOf(caller) {
   const bot = botOfConversation(caller.session);
-  const bridge = (() => {
-    try {
-      return readEngineFile().port !== caller.place.target.port;
-    } catch {
-      return false;
-    }
-  })();
-  const free = approvalOf(caller.place.data, { agents: bridge, bot: Boolean(bot) }).effective === "fullAccess" || !commandsInSandbox(caller.place.target, { sandboxed: true });
+  const free = approvalOf(caller.place.data, { agents: onBridge(caller.place.target), bot: Boolean(bot) }).effective === "fullAccess" || !commandsInSandbox(caller.place.target, { sandboxed: true });
   return { session: caller.session, name: caller.name, bot, rules: [...permissionsHere() ?? [], ...caller.place.data.permissions ?? []], free };
 }
 async function liveRows(lead, targets, signal, most = 40) {
@@ -17896,11 +17897,14 @@ async function answerAskTool(caller, args, targets, signal, { made } = {}) {
   if (args.decision === "allow") {
     if (made !== undefined && Date.now() - made > ALLOW_LIFE)
       return refused(`Your allow for "${title}" wasn't given: this computer was away for over a day after you gave it, so it's out of date. Look at what it asks now (list_sessions), and answer again if it still should go ahead.`);
+    if (approvalOf(data, { agents: onBridge(target), bot: Boolean(botOfConversation(data.id) ?? worksFor(data)) }).effective === "askFirst") {
+      return refused(`You can't allow that: "${title}" is in Ask First, so the user answers every ask it makes, whatever mode you're in. The user sees the ask on "${title}" and answers it there. Tell them in a line why it's needed if it matters, and carry on with the rest. You can still deny it.`);
+    }
     const folder = data.location?.directory ?? data.directory ?? "";
-    const rules = withDefaults([...caller.rules, ...caller.from ? (permissionsHere() ?? []).filter(holdsBack) : []]);
     const seen = await callOf(target, permission, signal);
     const sandboxed = commandsInSandbox(target, permission);
-    const why = allowRefusal(permission.action, permission.resources, folder ? [folder, ...projectFolders(folder)] : [], rules, ruleFor, seen, { sandboxed, free: caller.free });
+    const judged = (rules) => allowRefusal(permission.action, permission.resources, folder ? [folder, ...projectFolders(folder)] : [], rules, ruleFor, seen, { sandboxed, free: caller.free });
+    const why = judged(withDefaults(caller.rules)) ?? (caller.from ? judged(rulesOf([])) : null);
     if (why)
       return refused(`You can't allow that: you'd have to ask the user about it yourself. The user sees the ask on "${title}" and answers it there. Tell them in a line why it's needed, and carry on with the rest.`);
   }
@@ -26429,7 +26433,7 @@ import fs88 from "node:fs";
 import path92 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "0.9.204";
+var BRIDGE_VERSION = "0.9.205";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
