@@ -53,6 +53,25 @@ public struct EngineRelease: Sendable, Equatable {
     }
 }
 
+extension EngineRelease {
+    /// The same version for Macs reached over SSH, by `uname -m`: an Apple-silicon Mac's is the one
+    /// this app runs, an Intel Mac's its own. npm's checksum, checked on this Mac before upload, vouches
+    /// for it, and its maker's signature stays on it: an Apple-silicon Mac runs only signed programs.
+    public static func darwin(machine: String) -> EngineRelease? {
+        switch machine {
+        case "arm64", "aarch64": pinned
+        case "x86_64", "amd64":
+            EngineRelease(
+                version: OpenCodeEngine.version,
+                tarball: URL(string: "https://registry.npmjs.org/@opencode/cli-darwin-x64/-/cli-darwin-x64-2.2.5.tgz")!,
+                integrity: "sha512-z+wqIBXk5DVwXVdyQJHOwwnnOlFOx0LfAlx3PzubJjE/3a948KPBkJruF5zm6yyglJGzNgR3ji7oD/B/HOMD+w==",
+                teamIdentifier: pinned.teamIdentifier
+            )
+        default: nil
+        }
+    }
+}
+
 public enum EngineInstallError: LocalizedError {
     case integrityMismatch
     case badSignature(OSStatus)

@@ -79,6 +79,34 @@ import Testing
         #expect(tree.allFilesFailure == .denied)
     }
 
+    /// A machine's folder and every file under it, listed by the same script on Linux's tools and,
+    /// here, a Mac's: a link by what it leads to, names as they are, the heavy folders left out, and
+    /// only whole names when there are too many.
+    @Test func aMachinesFilesAreListedOnAMacAsOnLinux() async throws {
+        defer { done() }
+        SSHConnection.standIn = { _, script in Self.runHere(script) }
+        try FileManager.default.createDirectory(at: folder.appending(path: "node_modules/pkg"), withIntermediateDirectories: true)
+        try Data("x".utf8).write(to: folder.appending(path: "node_modules/pkg/index.js"))
+        try Data("x".utf8).write(to: folder.appending(path: "with a space.txt"))
+        try Data("x".utf8).write(to: folder.appending(path: "tab\there.txt"))
+        try FileManager.default.createSymbolicLink(at: folder.appending(path: "to-fixtures"), withDestinationURL: folder.appending(path: "fixtures"))
+        try FileManager.default.createSymbolicLink(at: folder.appending(path: "broken"), withDestinationURL: folder.appending(path: "nothing-there"))
+        let root = RemoteFolder.url(RemoteFolder.folder(folder.path, on: "devbox"))
+
+        let entries = try RemoteShell.list(root).get()
+        #expect(Dictionary(uniqueKeysWithValues: entries.map { ($0.name, $0.isDirectory) }) == [
+            "README.md": false, "secrets": true, "fixtures": true, "node_modules": true, "with a space.txt": false,
+            "tab\there.txt": false, "to-fixtures": true, "broken": false,
+        ])
+
+        let files = try RemoteShell.files(in: root, skipping: ["node_modules"], limit: 100).get()
+        #expect(Set(files) == ["README.md", "secrets/key.pem", "with a space.txt", "tab\there.txt"])
+        #expect(try RemoteShell.files(in: root, skipping: ["node_modules"], limit: 2).get().count == 2)
+        // Cut short by what the machine sends: the name it cut isn't taken for a file.
+        #expect(RemoteShell.files(Data("./a\0./b/c\0./d/e".utf8), limit: 100) == ["a", "b/c"])
+        #expect(RemoteShell.files(Data("./a-long-name".utf8), limit: 100) == [])
+    }
+
     /// A machine's folder that couldn't be read (asleep, or not let in) is read again with the rest
     /// every few seconds, and shows its files once it can be, without Try Again: as the phone's does
     /// as its computer comes back.

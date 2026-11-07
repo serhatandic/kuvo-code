@@ -81,9 +81,22 @@ clean() {
 clean
 
 # The whole log in the build folder; here, each test's result, and what went wrong.
+# What belongs to the account whatever a test's $HOME says: a run that changes it fails.
+account_state() {
+    crontab -l 2>/dev/null || true
+    if launchctl print "gui/$(id -u)/run.kuvo.code.machine" >/dev/null 2>&1; then echo "login agent loaded"; fi
+    if [ -e "$HOME/Library/LaunchAgents/run.kuvo.code.machine.plist" ]; then echo "login agent file"; fi
+}
+
 mkdir -p "$BUILD"
 status=0
+account_before=$(account_state)
 xcodebuild test "$@" > "$BUILD/test.log" 2>&1 || status=$?
+if [ "$(account_state)" != "$account_before" ]; then
+    echo "This run changed your real crontab or login agent. Before:" >&2
+    printf '%s\n' "$account_before" >&2
+    status=1
+fi
 grep -aE '(✔|✘|􀢄|􁁛).*(Test|Suite)|issue|error:|\*\* TEST' "$BUILD/test.log" | grep -v 'warning:\|\[Connection\]' || true
 if [ $status -ne 0 ]; then echo "The whole log: $BUILD/test.log" >&2; fi
 # What the tests left: their data, Trash and repositories, and the test copy's own.

@@ -81,13 +81,16 @@ export const VERSION_FILE = path.join(RUN, "link.version");
 // to a socket it can't read the folder of). The same in kuvo-browser.js.
 export const SOCKET_KEY_FILE = path.join(RUN, "socket.key");
 /** Where the sandbox's launcher notes each conversation for its SSH agent (vault/ssh.ts), and where
- * the agents are, both out of commands' sight (not in `run/fence`, which they read): a socket's path
- * is at most 104 bytes on macOS, so a Mac's are in Kuvo Code's short folder in `/tmp` (one per box),
- * which the sandbox refuses but each command's own; a machine's in its own folder. */
+ * the agents are, both out of commands' sight (not in `run/fence`, which they read): a machine's in
+ * its own folder. A socket's path is at most 104 bytes on macOS, so this Mac's app's are in Kuvo
+ * Code's short folder in `/tmp` (one per box), which the sandbox refuses but each command's own; as
+ * are those of a box on a Mac whose folder is too deep for them (a test's). */
 export const SSH_FOR = path.join(RUN, "ssh-for");
-export const SSH_AGENTS = process.platform === "darwin"
+const OWN_SSH_AGENTS = path.join(RUN, "ssh-agents");
+// (68 bytes, to be safe: what a socket's path leaves for its folder, with a slash and its name, vault/ssh.ts.)
+export const SSH_AGENTS = process.platform === "darwin" && (process.env.KUVO_BOX === "mac" || Buffer.byteLength(OWN_SSH_AGENTS) > 68)
   ? path.join("/private/tmp", `kuvo-ssh-${os.userInfo().uid}`, `agents-${crypto.createHash("sha256").update(K).digest("hex").slice(0, 8)}`)
-  : path.join(RUN, "ssh-agents");
+  : OWN_SSH_AGENTS;
 /** What the engine tells its agents of the sandbox, as it's on here or not (fence/state.ts writes it),
  * named in the settings each box starts its engine with (engine/compatibility.ts). */
 export const SANDBOX_NOTE = path.join(RUN, "fence", "agents.md");

@@ -11,9 +11,10 @@ enum BoxRelease {
     struct Manifest: Encodable {
         struct Engine: Encodable { var url: String; var integrity: String }
         var version: String
-        /// The engine's version, and its Linux builds by `uname -m`'s kinds.
+        /// The engine's version, and its builds for Linux and for Macs, by `uname -m`'s kinds.
         var engine: String
         var linux: [String: Engine]
+        var darwin: [String: Engine]
         /// Each file, by its path in `~/.kuvo-code`, with its SHA-256.
         var files: [String: String]
     }
@@ -41,12 +42,13 @@ enum BoxRelease {
             let data = try Data(contentsOf: file)
             files[String(file.standardizedFileURL.path.dropFirst(base.count))] = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
         }
-        var linux: [String: Manifest.Engine] = [:]
+        var linux: [String: Manifest.Engine] = [:], darwin: [String: Manifest.Engine] = [:]
         for kind in ["x86_64", "aarch64"] {
             if let release = EngineRelease.linux(machine: kind) { linux[kind] = .init(url: release.tarball.absoluteString, integrity: release.integrity) }
+            if let release = EngineRelease.darwin(machine: kind) { darwin[kind] = .init(url: release.tarball.absoluteString, integrity: release.integrity) }
         }
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .prettyPrinted, .withoutEscapingSlashes]
-        try encoder.encode(Manifest(version: AppInfo.version, engine: OpenCodeEngine.version, linux: linux, files: files)).write(to: folder.appending(path: "box.json"))
+        try encoder.encode(Manifest(version: AppInfo.version, engine: OpenCodeEngine.version, linux: linux, darwin: darwin, files: files)).write(to: folder.appending(path: "box.json"))
     }
 }

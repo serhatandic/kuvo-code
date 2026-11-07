@@ -1135,15 +1135,23 @@ final class Machines {
         return leave + """
         rm -rf "$K/keys" "$K/box/keys" "$K/box/bot-keys"
         # COMPAT(0.7 keeper): the keeper copies go with it. Goes 3 months after 0.8.0.
-        rm -f "$K/run/launch.env" "$K/run/launch.notes" "$K/bin/kuvo-start" "$K/bin/.kuvo-start-keeper" "$K/bin/kuvo-launch" "$K/bin/.kuvo-launch-keeper" "$K/bin/.kuvo-boot"
+        rm -f "$K/run/launch.env" "$K/run/launch.notes" "$K/bin/kuvo-start" "$K/bin/.kuvo-start-keeper" "$K/bin/kuvo-launch" "$K/bin/.kuvo-launch-keeper" "$K/bin/.kuvo-boot" "$K/bin/kuvo-setsid" "$K/run/awake.pid"
         \(RemoteServer.rebootCrontabRemoval)
+        # What macOS keeps of the browser outside its folder, in the account's preferences.
+        if [ "$(uname -s)" = Darwin ] && [ -d "$K/browser" ]; then defaults delete com.google.chrome.for.testing LastRunAppBundlePath >/dev/null 2>&1; fi
         """
     }
 
     /// Signs the coding agents there out: their sign-ins' files, under `$K` (their conversations
-    /// stay, as the engine's sessions do).
+    /// stay, as the engine's sessions do), and on a Mac Claude Code's Anthropic Console sign-ins, which
+    /// it keeps in that Mac's Keychain, each named after its folder (a Keychain that's locked keeps them).
     static let agentsSignOut = """
-        [ -d "$K/agents" ] && find "$K/agents" -path "$K/agents/runtime" -prune -o \\( -name .credentials.json -o -name auth.json -o -name 'auth.json.*' -o -name acp_token.json -o -name 'acp_token.json.*' -o -name 'oauth-token.json*' \\) -type f -exec rm -f {} + 2>/dev/null
+        [ -d "$K/agents" ] && find "$K/agents" -path "$K/agents/runtime" -prune -o \\( -name .credentials.json -o -name auth.json -o -name 'auth.json.*' -o -name acp_token.json -o -name 'acp_token.json.*' -o -name 'oauth-token.json*' -o -path "$K/agents/claude/tokens/*" \\) -type f -exec rm -f {} + 2>/dev/null
+        if [ "$(uname -s)" = Darwin ]; then
+          for d in "$K/agents/claude/home" "$K/agents/claude/console" "$K"/agents/claude/accounts/*; do
+            [ -d "$d" ] && security delete-generic-password -s "Claude Code-credentials-$(printf %s "$d" | shasum -a 256 | cut -c1-8)" >/dev/null 2>&1 </dev/null
+          done
+        fi
         true
         """
 
@@ -1517,14 +1525,26 @@ nonisolated extension RemoteShell {
     /// A folder's entries on a machine, or why they couldn't be read.
     static func list(_ url: URL) -> Result<[(name: String, isDirectory: Bool)], FolderFailure> {
         guard let (machine, path) = RemoteFolder.parse(url) else { return .failure(.missing) }
-        let script = FolderFailure.checking(path, then: "find . -mindepth 1 -maxdepth 1 -printf '%Y\\t%P\\0'")
-        return FolderFailure.checked(run(script, on: machine), machine: machine).map { data in
-            String(decoding: data, as: UTF8.self).split(separator: "\0").compactMap { line in
-                let parts = line.split(separator: "\t", maxSplits: 1)
-                guard parts.count == 2 else { return nil }
-                return (String(parts[1]), parts[0] == "d")
-            }
+        let script = FolderFailure.checking(path, then: listing)
+        return FolderFailure.checked(run(script, on: machine), machine: machine).map(entries)
+    }
+
+    /// Lists the current folder, a link by what it leads to, in what both systems' `find` understand
+    /// (macOS's has no `-printf`): a kind, a tab and a path, each ended by a NUL. `{ }`, as what's
+    /// around it sends stderr away from all of it.
+    static let listing = #"{ find -L . -mindepth 1 -maxdepth 1 -type d -exec printf 'd\t%s\0' {} + ; find -L . -mindepth 1 -maxdepth 1 ! -type d -exec printf 'f\t%s\0' {} + ; }"#
+
+    /// What `listing` printed.
+    static func entries(_ data: Data) -> [(name: String, isDirectory: Bool)] {
+        String(decoding: data, as: UTF8.self).split(separator: "\0").compactMap { line in
+            let parts = line.split(separator: "\t", maxSplits: 1)
+            guard parts.count == 2 else { return nil }
+            return (relative(parts[1]), parts[0] == "d")
         }
+    }
+
+    private static func relative(_ found: Substring) -> String {
+        String(found.hasPrefix("./") ? found.dropFirst(2) : found)
     }
 
     /// Up to `limit` bytes of a file on a machine.
@@ -1546,10 +1566,20 @@ nonisolated extension RemoteShell {
     /// why they couldn't be read.
     static func files(in url: URL, skipping skip: Set<String>, limit: Int) -> Result<[String], FolderFailure> {
         guard let (machine, path) = RemoteFolder.parse(url) else { return .failure(.missing) }
+        let script = FolderFailure.checking(path, then: fileListing(skipping: skip, limit: limit))
+        return FolderFailure.checked(run(script, on: machine), machine: machine).map { files($0, limit: limit) }
+    }
+
+    /// Finds the files under the current folder, each ended by a NUL, no more than `limit` of them
+    /// can come of it (roomy for long paths): macOS's `head` has no `-z` to count them by.
+    static func fileListing(skipping skip: Set<String>, limit: Int) -> String {
         let pruned = skip.sorted().map { "-name \(SSHConnection.quoted($0))" }.joined(separator: " -o ")
-        let script = FolderFailure.checking(path, then: "find . \\( \(pruned) \\) -prune -o -type f -printf '%P\\0' | head -z -n \(limit)")
-        return FolderFailure.checked(run(script, on: machine), machine: machine).map { data in
-            String(decoding: data, as: UTF8.self).split(separator: "\0").map(String.init)
-        }
+        return "find . \\( \(pruned) \\) -prune -o -type f -print0 | head -c \(limit * 300)"
+    }
+
+    /// What `fileListing` printed, up to `limit`, without a last path that was cut short.
+    static func files(_ data: Data, limit: Int) -> [String] {
+        let whole = data.last == 0 ? data : data[..<(data.lastIndex(of: 0).map { $0 + 1 } ?? data.startIndex)]
+        return String(decoding: whole, as: UTF8.self).split(separator: "\0").prefix(limit).map(relative)
     }
 }

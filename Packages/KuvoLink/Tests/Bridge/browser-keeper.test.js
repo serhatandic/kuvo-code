@@ -37,6 +37,7 @@ fs.createReadStream(null, { fd: 3, encoding: "utf8" }).on("data", (chunk) => {
   while ((end = buffer.indexOf("\\0")) >= 0) {
     const message = JSON.parse(buffer.slice(0, end));
     buffer = buffer.slice(end + 1);
+    if (message.method === "Input.dispatchKeyEvent") fs.appendFileSync(${JSON.stringify(path.join(home, "keys-chrome-got"))}, JSON.stringify(message.params) + "\\n");
     if (message.id !== undefined) output.write(JSON.stringify({ id: message.id, result: {}, ...(message.sessionId ? { sessionId: message.sessionId } : {}) }) + "\\0");
   }
 });
@@ -105,4 +106,54 @@ test("a process without the box's socket key hears nothing from the machine's br
   refused(await fromOutside("x".repeat(1 << 20)), "while it goes on sending");
   assert.ok(await reachable(), "it's still running");
   assert.equal((await liveView()).method, "Kuvo.hello", "and Kuvo Code's own still reach it");
+});
+
+// What clients and the agent's tools send is the same on every box (Control for ⌘, Home for ⌘←). A
+// Mac's Chrome does nothing with an editing key sent over DevTools unless it's told what the key
+// does, and its pages expect ⌘; Linux's Chrome takes it as it's sent.
+test("a key sent to the machine's browser reaches Chrome as that system's Chrome needs it", { timeout: 60_000 }, async () => {
+  await liveView();
+  const key = fs.readFileSync(path.join(home, "run", "socket.key"), "utf8").trim();
+  const CONTROL = 2, SHIFT = 8;
+  const keys = [
+    { type: "keyDown", key: "Backspace" },
+    { type: "keyDown", key: "Backspace", modifiers: CONTROL },
+    { type: "keyDown", key: "ArrowLeft", modifiers: SHIFT },
+    { type: "keyDown", key: "Home" },
+    { type: "keyDown", key: "a", modifiers: CONTROL },
+    { type: "keyDown", key: "z", modifiers: CONTROL | SHIFT },
+    { type: "keyDown", key: "v", modifiers: CONTROL },
+    { type: "keyDown", key: "v", modifiers: CONTROL | SHIFT },
+    { type: "keyDown", key: "q", text: "q" },
+    { type: "keyUp", key: "a", modifiers: CONTROL },
+  ];
+  await new Promise((resolve, reject) => {
+    const socket = net.createConnection(socketFile);
+    let heard = "";
+    socket.setEncoding("utf8");
+    socket.on("error", reject);
+    socket.on("connect", () => {
+      socket.write(JSON.stringify({ method: "Kuvo.key", params: { key } }) + "\n");
+      keys.forEach((params, at) => socket.write(JSON.stringify({ id: at + 1, method: "Input.dispatchKeyEvent", params }) + "\n"));
+    });
+    socket.on("data", chunk => {
+      heard += chunk;
+      if (heard.split("\n").filter(Boolean).some(line => JSON.parse(line).id === keys.length)) { socket.destroy(); resolve(); }
+    });
+  });
+  const got = fs.readFileSync(path.join(home, "keys-chrome-got"), "utf8").split("\n").filter(Boolean).map(line => JSON.parse(line));
+  if (process.platform !== "darwin") return assert.deepEqual(got, keys, "Linux's as they were sent");
+  const META = 4;
+  assert.deepEqual(got.map(({ key, modifiers = 0, commands }) => ({ key, modifiers, commands })), [
+    { key: "Backspace", modifiers: 0, commands: ["deleteBackward"] },
+    { key: "Backspace", modifiers: META, commands: ["deleteWordBackward"] },
+    { key: "ArrowLeft", modifiers: SHIFT, commands: ["moveLeftAndModifySelection"] },
+    { key: "Home", modifiers: 0, commands: ["moveToLeftEndOfLine"] },
+    { key: "a", modifiers: META, commands: ["selectAll"] },
+    { key: "z", modifiers: META | SHIFT, commands: ["redo"] },
+    { key: "v", modifiers: META, commands: ["paste"] },
+    { key: "v", modifiers: META | SHIFT, commands: undefined },
+    { key: "q", modifiers: 0, commands: undefined },
+    { key: "a", modifiers: META, commands: undefined },
+  ]);
 });

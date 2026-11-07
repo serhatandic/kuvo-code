@@ -173,7 +173,7 @@ struct StorageSettings: View {
                         .disabled((report?.linuxEngine ?? 0) == 0 || machineInstalling)
                 } label: {
                     Text("Downloads for machines")
-                    Text(machineInstalling ? "A machine is being set up with them now." : "The Linux engine and browser, kept to set up another machine without downloading them again.")
+                    Text(machineInstalling ? "A machine is being set up with them now." : "The engine and browser for machines, kept to set up another machine without downloading them again.")
                 }
             } header: {
                 Text("Files You Can Delete")
@@ -341,7 +341,7 @@ nonisolated struct StorageReport: Sendable {
             case .sessions: "Your sessions’ messages, and your accounts and settings."
             case .snapshots: "Copies of files the agent changed, so Undo From Here can put them back."
             case .logs: "What the engine and the app wrote down while running."
-            case .engine: "The opencode engine, and its Linux build for machines."
+            case .engine: "The opencode engine, and its builds for machines."
             case .agents: "Claude Code, Codex and the other coding agents, installed the first time each is used."
             case .worktrees: "Sessions’ own copies of a project."
             case .browser: "The panel browser’s website data and history."
