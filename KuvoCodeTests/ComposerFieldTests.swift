@@ -20,9 +20,15 @@ import Testing
         let text: String
     }
 
+    /// The text size messages are written in (Settings › Appearance), for a test to change.
+    @Observable final class Look {
+        var size = MessageFont().size
+    }
+
     struct Window: View {
         @Bindable var model: SessionModel
         let items: [Item]
+        let look: Look
 
         var body: some View {
             VStack(spacing: 0) {
@@ -35,6 +41,7 @@ import Testing
                          agent: "build", approval: .auto, model: nil, isRunning: false, keywords: [.review],
                          onSelectAgent: { _ in }, onSelectApproval: { _ in }, onSelectModel: { _ in }, onSend: {}, onStop: {})
             }
+            .environment(\.messageFont, MessageFont(size: look.size))
         }
     }
 
@@ -46,6 +53,7 @@ import Testing
     /// The composer's models: none until a test reads them from the engine.
     let catalog = Catalog()
     let model: SessionModel
+    let look = Look()
     let window = NSWindow(contentRect: NSRect(x: -20_000, y: -20_000, width: 720, height: 620), styleMask: [.titled, .resizable], backing: .buffered, defer: false)
     /// Tells `until` each time the keyboard moves in the window.
     private let watch: NSKeyValueObservation
@@ -63,7 +71,7 @@ import Testing
         // Who "&" names: this app's agents, as its box lists them.
         AgentMail.shared.app = app
         AgentMail.shared.agents = [AgentMail.Agent(session: id, name: "Quotes", kind: "session"), AgentMail.Agent(session: id + "_other", name: "Lighthouse", kind: "session")]
-        let view = Window(model: model, items: items)
+        let view = Window(model: model, items: items, look: look)
             .environment(app)
             .environment(app.workspace)
             .environment(catalog)
@@ -273,6 +281,139 @@ extension ComposerFieldTests {
         field.keyDown(with: try #require(key(String(UnicodeScalar(NSDownArrowFunctionKey)!), 125)))
         field.keyDown(with: try #require(key("\r", 36)))
         #expect(field.string.hasPrefix("/review with"))
+    }
+
+    /// Where a quote and a long answer to it are taller than the list of quotes shows.
+    enum LongAnswer: CaseIterable, Sendable {
+        /// The last of three quotes, the two before it answered, at the usual text size: as it
+        /// was seen.
+        case underOtherAnswers
+        /// The only quote, at a larger text size (Settings › Appearance).
+        case largerText
+        /// At a larger text size, with another quote under it.
+        case largerTextAboveAnotherQuote
+    }
+
+    /// A long answer to a quote, where the quote and its answer are taller than the list of
+    /// quotes shows: the line you're writing stays in view as each Return starts another, at the
+    /// end and in the middle, with nothing under the list's fade (#203). Scrolled back up with the
+    /// trackpad to read, the list stays there as it's laid out again, until you type. The window
+    /// lays itself out and draws after each key, as it does on screen.
+    @Test(arguments: LongAnswer.allCases) func theLineYouWriteStaysInView(_ setup: LongAnswer) async throws {
+        defer { done() }
+        if setup != .underOtherAnswers { look.size = 18 }
+        try await until { editing == "composer" }
+        let quote = "The keeper climbed the stairs at dusk and lit the great lamp for the ships that passed the point at night, as his father had, and his father's father before him."
+        let quotes: Int
+        switch setup {
+        case .underOtherAnswers:
+            quotes = 3
+            for earlier in ["The fog came in at noon.", "The ships answered with their horns."] {
+                model.addQuote(earlier, how: "selection")
+            }
+            model.draftQuotes[0].response = "Okay, keep it."
+            model.draftQuotes[1].response = "And the bell on the point?"
+            model.addQuote(quote, how: "selection")
+        case .largerText:
+            quotes = 1
+            model.addQuote(quote, how: "selection")
+        case .largerTextAboveAnotherQuote:
+            quotes = 2
+            model.addQuote(quote, how: "selection")
+            model.addQuote("The ships answered with their horns.", how: "selection")
+            // Quoted again: its answer has the keyboard, the other quote under it.
+            model.addQuote(quote, how: "selection")
+        }
+        try await until { editing == "quote-answer" && model.draftQuotes.count == quotes }
+        let answer = try #require(window.firstResponder as? MessageTextView)
+        try await until { answer.string.isEmpty && answer.selectedRange().location == 0 }
+        let shiftReturn = try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [.shift], timestamp: 0, windowNumber: window.windowNumber,
+                                                         context: nil, characters: "\r", charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: 36))
+        for line in 1...16 {
+            type("Line \(line), long enough that it wraps once it has gone on for a while like this", in: answer)
+            window.sendEvent(shiftReturn)
+            await laidOut()
+            if let hidden = hidden(caretOf: answer) { Issue.record("After line \(line), the caret's line is hidden: \(hidden)") }
+        }
+        // In the middle: a word added to an earlier line, the field scrolled back to it.
+        let middle = (answer.string as NSString).range(of: "Line 3,")
+        answer.setSelectedRange(NSRange(location: NSMaxRange(middle), length: 0))
+        type(" again", in: answer)
+        await laidOut()
+        if let hidden = hidden(caretOf: answer) { Issue.record("In the middle, the caret's line is hidden: \(hidden)") }
+
+        // Back to the end, then up the list to read the quotes: laid out again (the text a size
+        // larger), it stays where you scrolled it.
+        answer.setSelectedRange(NSRange(location: (answer.string as NSString).length, length: 0))
+        type("The end.", in: answer)
+        await laidOut()
+        let list = try #require(answer.enclosingScrollView?.enclosingScrollView)
+        try await trackpadToTop(list)
+        #expect(hidden(caretOf: answer) != nil, "scrolled up, past the line being written")
+        look.size += 1
+        await laidOut()
+        #expect(hidden(caretOf: answer) != nil, "the list stays where you scrolled it")
+        type(" Really.", in: answer)
+        await laidOut()
+        if let hidden = hidden(caretOf: answer) { Issue.record("Typing again, the caret's line is hidden: \(hidden)") }
+    }
+
+    /// Scrolled to its top with a trackpad: the gesture's events to the scroll view itself (as
+    /// `StepsStayOpenTests` sends them: the window finds nothing under events off screen), and
+    /// the list moved as they move it (SwiftUI's scroll view moves on frames this window, off
+    /// screen, doesn't draw).
+    private func trackpadToTop(_ scroll: NSScrollView) async throws {
+        for phase in [CGScrollPhase.began, .changed, .ended] {
+            let event = try #require(CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: phase == .changed ? 2_000 : 0, wheel2: 0, wheel3: 0))
+            event.setIntegerValueField(.scrollWheelEventScrollPhase, value: Int64(phase.rawValue))
+            event.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
+            scroll.scrollWheel(with: try #require(NSEvent(cgEvent: event)))
+            if phase == .changed {
+                scroll.contentView.scroll(to: .zero)
+                scroll.reflectScrolledClipView(scroll.contentView)
+            }
+            await laidOut()
+        }
+    }
+
+    /// The window as SwiftUI and AppKit lay it out and draw it, after what was typed.
+    private func laidOut() async {
+        for _ in 0..<3 {
+            await Task.yield()
+            window.contentView?.layoutSubtreeIfNeeded()
+            window.contentView?.displayIfNeeded()
+        }
+    }
+
+    /// What hides the line with the caret, if anything: a scroll view around it, here or further
+    /// out (the list of quotes), that it's past or under the fading edge of.
+    private func hidden(caretOf field: MessageTextView) -> String? {
+        guard let layout = field.layoutManager, let container = field.textContainer else { return "no layout" }
+        let length = (field.string as NSString).length
+        let caret = field.selectedRange().location
+        layout.ensureLayout(for: container)
+        var line = caret >= length && !layout.extraLineFragmentRect.isEmpty
+            ? layout.extraLineFragmentRect
+            : layout.lineFragmentRect(forGlyphAt: layout.glyphIndexForCharacter(at: min(caret, length - 1)), effectiveRange: nil)
+        line = line.offsetBy(dx: field.textContainerOrigin.x, dy: field.textContainerOrigin.y)
+        var view: NSView? = field.superview
+        while let clip = view {
+            if let clip = clip as? NSClipView {
+                var shown = clip.convert(clip.bounds, to: nil)
+                // The list of quotes fades where there's more past an edge: the line stays clear of it.
+                if clip.enclosingScrollView !== field.enclosingScrollView, let document = clip.documentView {
+                    let fade = QuoteList.fade
+                    if clip.bounds.minY > document.frame.minY + 1 { shown = shown.divided(atDistance: fade, from: clip.isFlipped ? .maxYEdge : .minYEdge).remainder }
+                    if clip.bounds.maxY < document.frame.maxY - 1 { shown = shown.divided(atDistance: fade, from: clip.isFlipped ? .minYEdge : .maxYEdge).remainder }
+                }
+                let caretLine = field.convert(line, to: nil)
+                if caretLine.minY < shown.minY - 0.5 || caretLine.maxY > shown.maxY + 0.5 {
+                    return "line \(caretLine) outside \(shown) of \(Swift.type(of: clip))"
+                }
+            }
+            view = clip.superview
+        }
+        return nil
     }
 
     /// Words pasted come in as words, plain.
