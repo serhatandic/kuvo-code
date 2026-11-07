@@ -29,7 +29,7 @@ import { awaitedBy } from "./awaited";
 import { tellLateAnswers } from "./asks";
 import { errorOf, failedOn, followUnanswering, holdWords, turnError } from "./unanswering";
 import { backgroundWatcher, backgroundWords, forgetStopped, FINISH_HOLD_LIMIT, readStopped, startedSince, type BackgroundEvent, type BackgroundWork } from "./background";
-import { isArchived, lastReplyOf, placeWords, startedByOf, wakesOf, workSessions, worksFor, type Listed } from "./tree";
+import { endedOnSummary, isArchived, lastReplyOf, placeWords, startedByOf, wakesOf, workSessions, worksFor, type Listed } from "./tree";
 import { projectNameOf } from "../notices/news";
 import type { Target } from "../../shared/records";
 import type { EngineSession } from "../engine/sessions";
@@ -712,6 +712,8 @@ export function workWatcher(source: Target, targets: () => Target[], { gather = 
       }
       const bot = worksFor(session)?.bot;
       if (bot) noteWorkChanged(bot);
+      // Only a summary it was asked for: not news, and not its work finishing.
+      if (event.type === "session.execution.succeeded" && await endedOnSummary(source, session.id)) return;
       // On Autopilot nothing waits: a question goes ahead on the choice it marks, or comes back declined.
       const form = event.type === "form.created" ? event.data?.form ?? event.data as unknown as EngineForm : null;
       if (form && isAutopilot(session)) {

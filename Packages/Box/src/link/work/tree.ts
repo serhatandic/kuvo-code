@@ -8,7 +8,7 @@ import { isObject } from "../../shared/json";
 import { cut } from "../../shared/text";
 import { call, engineGet } from "../engine/client";
 import { CHATS } from "../home";
-import { describePermission, projectNameOf } from "../notices/news";
+import { describePermission, lastIsSummary, projectNameOf } from "../notices/news";
 import { listBots } from "../bots/list";
 import { asksIn } from "./answers";
 import type { Target } from "../../shared/records";
@@ -128,6 +128,32 @@ export async function lastReplyOf(listed: Listed, signal?: AbortSignal): Promise
     if (text) return cut(text, 280);
   }
   return null;
+}
+
+/**
+ * How full a session's context is now, as the app's gauge reads it: what its last step sent and got
+ * back. `summarized`: it was summarized since that step, and how much is left shows at its next.
+ * Undefined when it hasn't said.
+ */
+export async function contextOf(listed: Listed, signal?: AbortSignal): Promise<{ used: number } | { summarized: true } | undefined> {
+  const page = await call(listed.target, "GET", `/api/session/${encodeURIComponent(listed.data.id)}/message?limit=20&order=desc`, undefined, signal).catch(() => null);
+  for (const message of Array.isArray(page) ? page : []) {
+    if (!isObject(message)) continue;
+    if (message.type === "compaction" && message.status === "completed") return { summarized: true };
+    if (message.type !== "assistant" || !isObject(message.tokens)) continue;
+    const { input, output, cache } = message.tokens as { input?: number; output?: number; cache?: { read?: number; write?: number } };
+    return { used: (input ?? 0) + (cache?.read ?? 0) + (cache?.write ?? 0) + (output ?? 0) };
+  }
+  return undefined;
+}
+
+/**
+ * Whether what a session just finished was only a summary you asked for (`/compact`, or a lead's
+ * compact_session), which isn't news: no reply, nothing done.
+ */
+export async function endedOnSummary(target: Target, session: string, signal?: AbortSignal): Promise<boolean> {
+  const page = await call(target, "GET", `/api/session/${encodeURIComponent(session)}/message?limit=6&order=desc`, undefined, signal).catch(() => null);
+  return lastIsSummary(page);
 }
 
 const tokensOf = (data: Listed["data"]) => (data.tokens?.input ?? 0) + (data.tokens?.output ?? 0) + (data.tokens?.reasoning ?? 0);

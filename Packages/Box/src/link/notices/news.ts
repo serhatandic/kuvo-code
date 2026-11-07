@@ -248,6 +248,8 @@ export async function noticeFor(event: EngineEvent, get: EngineAsk): Promise<Not
       let reply = "";
       try {
         const page = await get(`api/session/${encodeURIComponent(id)}/message?limit=6&order=desc`) as EngineAnswer<EngineMessage[]>;
+        // Only a summary it was asked for: not news.
+        if (lastIsSummary(page.data)) return null;
         for (const message of page.data ?? []) {
           if (message.type !== "assistant") continue;
           reply = plain((message.content ?? []).filter(part => part.type === "text").map(part => part.text).join(" "));
@@ -260,6 +262,18 @@ export async function noticeFor(event: EngineEvent, get: EngineAsk): Promise<Not
     default:
       return null;
   }
+}
+
+/**
+ * Of a session's latest messages, newest first, whether what it did last was a summary it was asked
+ * for (`/compact`, a lead's compact_session): no reply, nothing done.
+ */
+export function lastIsSummary(messages: unknown): boolean {
+  for (const message of Array.isArray(messages) ? messages as { type?: unknown; reason?: unknown; status?: unknown }[] : []) {
+    if (message?.type === "idle") continue;
+    return message?.type === "compaction" && message.reason === "manual" && message.status === "completed";
+  }
+  return false;
 }
 
 // What `hold` keeps of `engine`'s that it asked you (a permission, a question) and isn't asked any
