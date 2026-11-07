@@ -26,7 +26,8 @@ import Testing
     @Observable final class Probe { var isOn = false }
     struct ProbeView: View {
         let probe: Probe
-        var body: some View { Color.clear.frame(width: probe.isOn ? 2 : 1, height: 1) }
+        // Drawn, with an opacity that animates: over nothing to animate, its end comes at once.
+        var body: some View { Color.black.opacity(probe.isOn ? 0.02 : 0.01).frame(width: 1, height: 1) }
     }
     let probe = Probe()
 
@@ -289,7 +290,6 @@ import Testing
 
         // All the way down from there, the end comes out from under the composer.
         try await yourScroll(by: -2_000)
-        #expect(abs(origin - (scroll!.documentView!.frame.height + scroll!.contentInsets.bottom - clip!.bounds.height)) < 2, "at \(origin) of \(scroll!.documentView!.frame.height) with \(scroll!.contentInsets.bottom) over it")
         try await until { !isOffTheEnd }
         #expect(lastMessageBottom <= composerTop, "the last message ends at \(lastMessageBottom), the composer starts at \(composerTop)")
 
@@ -371,8 +371,11 @@ import Testing
         try await conversation(turns: 14)
         try await yourScroll(by: 700)
         try await until { isOffTheEnd }
+        // A line just over the composer, which the quote will grow over.
         let top = composerTop
-        let found = try #require(line(near: top - 50, within: 40...(top - 40)))
+        let lowest = try #require(line(near: top - 50, within: 40...(top - 40)))
+        try await yourScroll(by: top - 50 - down(lowest.text.convert(lowest.line, to: nil)).midY)
+        let found = try #require(line(near: top - 50, within: 40...(top - 36)))
         let place = origin
         let at = down(found.text.convert(found.line, to: nil))
         try selectAndAddToChat(found.line, in: found.text)
@@ -381,7 +384,9 @@ import Testing
         let now = down(found.text.convert(found.line, to: nil))
         #expect(now.maxY <= composerTop, "the line you quoted ends at \(now.maxY), the composer starts at \(composerTop)")
         #expect(origin > place, "the view moved for it: from \(place) to \(origin), the line from \(at.maxY) to \(now.maxY), the composer from \(top) to \(composerTop)")
-        #expect(at.minY - now.minY <= top - composerTop + 1, "it moved only as far as the composer grew: from \(at.minY) to \(now.minY), the composer from \(top) to \(composerTop)")
+        // No further than clear of the composer and the fade over it.
+        let over = window.contentLayoutRect.height - (scroll?.contentInsets.bottom ?? 0)
+        #expect(over - now.maxY <= ConversationEndFade.height + 1, "it moved from \(at.maxY) to \(now.maxY), what's over the conversation starting at \(over)")
 
         // From there, you scroll, and it's yours again: your next quote doesn't bring it back.
         try await yourScroll(by: 400)

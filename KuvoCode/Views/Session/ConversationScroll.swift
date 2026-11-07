@@ -18,7 +18,7 @@ final class ConversationScroller {
     /// Whether to keep the newest in view: true until you scroll up, true again once you scroll
     /// back to the end. Set only when it changes (`follow`): each setting draws the conversation again.
     var followsEnd = true
-    /// The end is in view (or all of it fits): no way back to it is needed, whether it's
+    /// The end is in view, over the composer: no way back to it is needed, whether it's
     /// followed or not (Find stops following it). Set only when it changes, as `followsEnd`.
     fileprivate(set) var seesEnd = true
     /// All of it fits in view: nothing to scroll. (Not until it's known.)
@@ -66,9 +66,12 @@ final class ConversationScroller {
         if heldFor.isEmpty { follow(atEnd) }
     }
 
-    /// Your scroll stopped. A nudge is still reading; moved further, you went somewhere else.
+    /// Your scroll stopped, where it says now: the change that took it there may never have been
+    /// told, as SwiftUI passes on only one a frame. While you read what you opened, a nudge is
+    /// still reading; moved further, you went somewhere else.
     fileprivate func stopped(atEnd: Bool, moved: CGFloat) {
-        if !heldFor.isEmpty, moved >= 40 { follow(atEnd) }
+        if heldFor.isEmpty || moved >= 40 { follow(atEnd) }
+        if seesEnd != atEnd { seesEnd = atEnd }
     }
 
     /// `id` opened or closed by you: back to the end once the last you left it for is closed.
@@ -206,7 +209,8 @@ struct ConversationScroll<Rows: View>: View {
             if phase == .idle, let from = scrolling.from {
                 scrolling.from = nil
                 let geometry = context.geometry
-                scroller.stopped(atEnd: geometry.isAtConversationEnd, moved: abs(geometry.contentOffset.y - from))
+                // (On its way to the end from its button, where it stops doesn't decide.)
+                if !scrolling.goesToEnd { scroller.stopped(atEnd: geometry.isAtConversationEnd, moved: abs(geometry.contentOffset.y - from)) }
             }
             // Its button's way to the end is over, with the glide it stopped: at the end, wherever
             // the rows measured on the way moved it.
