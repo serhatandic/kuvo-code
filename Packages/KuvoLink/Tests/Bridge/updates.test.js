@@ -132,7 +132,11 @@ function release({ version = "0.10.0", released = new Date(Date.now() - 10 * 86_
   const integrity = "sha512-" + crypto.createHash("sha512").update(engineData).digest("base64");
   const manifest = Buffer.from(JSON.stringify({
     kuvo: "box/1", version, released: released.toISOString(), engine: "1.1.0",
-    linux: { x86_64: { url: `${base}/engine.tgz`, integrity }, aarch64: { url: `${base}/engine.tgz`, integrity } },
+    // Each system's own build, and the other's isn't there: a box takes the one for its system.
+    ...Object.fromEntries(["linux", "darwin"].map(system => {
+      const url = (system === "darwin") === (process.platform === "darwin") ? `${base}/engine.tgz` : `${base}/another-systems-engine.tgz`;
+      return [system, { x86_64: { url, integrity }, aarch64: { url, integrity } }];
+    })),
     pack: { url: `${base}/pack.tgz`, sha256: sha256(packData), size: packData.length },
   }));
   const signature = crypto.sign(null, Buffer.concat([Buffer.from("kuvo-box v1\n"), manifest]), key);

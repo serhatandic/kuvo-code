@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import OpenCodeKit
 import Testing
@@ -31,8 +32,8 @@ import Testing
 
     /// Removing a machine takes away everything that would start its engine again or sign in there
     /// (its keeper and both of the keeper's own copies, how it launches, its keys), and leaves its
-    /// sessions. Run on a home of its own, with a crontab that answers nothing, so this Mac's
-    /// isn't touched.
+    /// sessions. Run on a home of its own, with a crontab and launchd standing in for the account's,
+    /// which that home doesn't keep it from, so this Mac's aren't touched.
     @Test func removingAMachineLeavesNothingThatStartsItAgain() throws {
         let home = AppInfo.testRoot.appending(path: "MachineHome/\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: home) }
@@ -50,6 +51,11 @@ import Testing
         try FileManager.default.createDirectory(at: tools, withIntermediateDirectories: true)
         try Data("#!/bin/sh\nexit 1\n".utf8).write(to: tools.appending(path: "crontab"))
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: tools.appending(path: "crontab").path)
+        try Data("#!/bin/sh\necho \"$*\" >>\"$HOME/launchctl\"\n".utf8).write(to: tools.appending(path: "launchctl"))
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: tools.appending(path: "launchctl").path)
+        try Data("#!/bin/sh\necho \"$*\" >>\"$HOME/defaults\"\n".utf8).write(to: tools.appending(path: "defaults"))
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: tools.appending(path: "defaults").path)
+        try FileManager.default.createDirectory(at: root.appending(path: "browser"), withIntermediateDirectories: true)
 
         let process = Process()
         process.executableURL = URL(filePath: "/bin/sh")
@@ -60,6 +66,54 @@ import Testing
         #expect(process.terminationStatus == 0)
         for path in gone { #expect(!FileManager.default.fileExists(atPath: root.appending(path: path).path), "\(path) stayed") }
         for path in kept { #expect(FileManager.default.fileExists(atPath: root.appending(path: path).path), "\(path) went") }
+        #expect(!FileManager.default.fileExists(atPath: home.appending(path: "launchctl").path), "no login agent in this home, so launchd isn't asked")
+        #expect(try String(contentsOf: home.appending(path: "defaults"), encoding: .utf8) == "delete com.google.chrome.for.testing LastRunAppBundlePath\n", "what macOS keeps of its browser")
+    }
+
+    /// Signing a Mac machine's agents out takes Claude Code's Anthropic Console sign-ins from that
+    /// Mac's Keychain, each by its folder's name, and no others. `security` stands in, as a home of
+    /// the test's own doesn't keep it from the account's real Keychain.
+    @Test func signingAMacMachineOutTakesClaudesKeychainItems() throws {
+        let home = AppInfo.testRoot.appending(path: "MachineHome/\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: home) }
+        let agents = home.appending(path: "machine/agents/claude")
+        for folder in ["home", "accounts/work"] {
+            try FileManager.default.createDirectory(at: agents.appending(path: folder), withIntermediateDirectories: true)
+        }
+        let tools = home.appending(path: "tools")
+        try FileManager.default.createDirectory(at: tools, withIntermediateDirectories: true)
+        try Data("#!/bin/sh\necho \"$*\" >>\"$HOME/security\"\n".utf8).write(to: tools.appending(path: "security"))
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: tools.appending(path: "security").path)
+
+        let process = Process()
+        process.executableURL = URL(filePath: "/bin/sh")
+        process.arguments = ["-c", Machines.agentsSignOut]
+        process.environment = ["HOME": home.path, "K": home.appending(path: "machine").path, "PATH": "\(tools.path):/usr/bin:/bin"]
+        try process.run()
+        process.waitUntilExit()
+        #expect(process.terminationStatus == 0)
+
+        func item(_ folder: URL) -> String {
+            let hash = SHA256.hash(data: Data(folder.path.utf8)).prefix(4).map { String(format: "%02x", $0) }.joined()
+            return "delete-generic-password -s Claude Code-credentials-\(hash)"
+        }
+        let asked = try String(contentsOf: home.appending(path: "security"), encoding: .utf8).split(separator: "\n").map(String.init)
+        #expect(Set(asked) == [item(agents.appending(path: "home")), item(agents.appending(path: "accounts/work"))])
+    }
+
+    /// The build of the browser a machine gets, by what it says it is, never a guess: a system it
+    /// couldn't say gets none, rather than Linux's on a Mac.
+    @Test func aMachineGetsItsOwnSystemsBrowser() throws {
+        let linux = try #require(BrowserRuntime.pinned(for: "Linux"))
+        let mac = try #require(BrowserRuntime.pinned(for: "Darwin"))
+        #expect(!linux.isMac && mac.isMac)
+        #expect(linux.id != mac.id)
+        #expect(mac.id.contains("-mac-"))
+        #expect(BrowserRuntime.pinned(for: "") == nil)
+        #expect(BrowserRuntime.pinned(for: "FreeBSD") == nil)
+        for runtime in [linux, mac] {
+            #expect(runtime.chromium.x86_64.url != runtime.chromium.aarch64.url)
+        }
     }
 
     /// The removal scripts, connected or not, both sign the agents out.

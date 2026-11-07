@@ -352,7 +352,9 @@ function macFolders(home: string): { kuvo: string[]; readable: string[] } {
   const tmp = appTemporary();
   const kuvo = [app, path.join(home, "Library", "Caches", bundle), path.join(home, "Library", "Logs", "Kuvo Code"),
     path.join(home, "Library", "WebKit", bundle), path.join(home, "Library", "HTTPStorages", bundle),
-    path.join(home, "Library", "Preferences", `${bundle}.plist`), `/private/tmp/kuvo-ssh-${os.userInfo().uid}`];
+    path.join(home, "Library", "Preferences", `${bundle}.plist`), `/private/tmp/kuvo-ssh-${os.userInfo().uid}`,
+    // A machine's box beside it, on a computer that's both.
+    path.join(home, ".kuvo-code")];
   // (And its cache folder where the caches for commands are, in the home it's given.)
   if (tmp) kuvo.push(tmp, path.dirname(sandboxCaches().npm));
   return { kuvo, readable: [path.join(app, "bin")] };
@@ -378,8 +380,10 @@ export function fencePolicy(ports: number[] = []): FencePolicy {
   const inHomes = (names: string[]) => homes.flatMap(each => names.map(name => throughLinks(path.join(each, name))));
   // opencode's sign-ins where your own XDG_DATA_HOME puts them, besides where they are by default.
   const opencodes = homes.map(each => throughLinks(opencodeAuthFile(each))).filter(each => !inHomes([".local/share/opencode/auth.json"]).includes(each));
-  // A machine's folder, and the real one if this is a test's own.
-  const own = IS_MAC ? macFolders(home) : { kuvo: [K, path.join(home, ".kuvo-code")], readable: [path.join(K, "bin")] };
+  // A machine's folder, and the real one if this is a test's own; and where it's a Mac, where its
+  // app may be too, the app's connections to your computers and its logs (its other folders are
+  // kept by name, `kuvoPatterns`).
+  const own = IS_MAC ? macFolders(home) : { kuvo: [K, path.join(home, ".kuvo-code"), ...(process.platform === "darwin" ? [`/private/tmp/kuvo-ssh-${os.userInfo().uid}`, path.join(home, "Library", "Logs", "Kuvo Code")] : [])], readable: [path.join(K, "bin")] };
   const kuvo = [...new Set(own.kuvo.map(throughLinks))];
   const kuvoReadable = own.readable.map(throughLinks);
   const commandCaches = Object.values(sandboxCaches());

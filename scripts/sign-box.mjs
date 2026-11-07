@@ -30,6 +30,7 @@ const manifest = Buffer.from(JSON.stringify({
   released: new Date().toISOString(),
   engine: box.engine,
   linux: box.linux,
+  darwin: box.darwin,
   pack: { url, sha256: crypto.createHash("sha256").update(data).digest("hex"), size: data.length },
 }));
 const signature = crypto.sign(null, Buffer.concat([Buffer.from("kuvo-box v1\n"), manifest]), key);

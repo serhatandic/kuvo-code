@@ -21,7 +21,7 @@ struct MachineForm: View {
     @State private var failure: String?
     @FocusState private var isFocused: Bool
 
-    static let about = "A Linux server you reach with SSH, like a home server or a VPS. Its projects open next to this Mac’s, and their sessions run there."
+    static let about = "A Mac or Linux server you reach with SSH, like a Mac mini or a VPS. Its projects open next to this Mac’s, and their sessions run there."
     private static let how = "Kuvo Code connects with your SSH keys and agent, and installs its engine in ~/.kuvo-code there."
 
     var body: some View {

@@ -1144,7 +1144,8 @@ did: the box keeps working as itself ("For released Macs").
 `scripts/set-box-key.sh` makes that key.
 - **What a release is**: `boxes.json` from `https://github.com/serhatandic/kuvo-code/releases/latest/download/`,
   `{manifest, signature, key}`. The manifest is `{kuvo: "box/1", version, released, engine,
-  linux: {x86_64|aarch64: {url, integrity}}, pack: {url, sha256, size}}`. The signature is
+  linux: {x86_64|aarch64: {url, integrity}}, darwin: {x86_64|aarch64: {url, integrity}},
+  pack: {url, sha256, size}}`: a box takes the engine for its own system and kind. The signature is
   Ed25519 over `"kuvo-box v1\n"` and the manifest's bytes, by a pinned key
   (`scripts/sign-box.mjs`). The pack holds `box.json` (each file's SHA-256) and the files, laid
   out as `~/.kuvo-code`.
@@ -2638,10 +2639,13 @@ the route scenarios (`Vectors/routes/routing.json`).
 | `update` | a machine only: `kuvo/update` |
 | `accounts.ended` | `kuvo/accounts/ended` and `POST kuvo/accounts/<provider>/forget` (a machine from 0.9.61) |
 | `claude-code` | a Mac only: `kuvo/claude-code` |
-| `hosts` | a Mac only for now: `kuvo/hosts…` (a machine's box can't do this yet on Linux) |
+| `hosts` | the Mac with the app only for now: `kuvo/hosts…` (a machine's box can't do this yet, on Linux or a Mac) |
 | `mac` | a Mac only: `kuvo/mac` |
 | `machines` | a Mac only: `kuvo/machines…` |
-| `usage` | a Mac only for now, while it has the usage panel: `kuvo/usage…` (a machine's box can't do this yet on Linux) |
+| `usage` | the Mac with the app only for now, while it has the usage panel: `kuvo/usage…` (a machine's box can't do this yet, on Linux or a Mac) |
+
+Here "a Mac" is the box the app runs (`KUVO_BOX=mac`), and "a machine" any box in `~/.kuvo-code`,
+on Linux or on a Mac.
 
 The engine's own routes (`api/…`), sockets and `kuvo/info` itself are always there.
 

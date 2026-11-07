@@ -3,8 +3,8 @@
 // tested (test/platform.test.ts) on whichever system runs the tests.
 //
 // Also the same rule elsewhere, in shell: the update's restore script tells the link it started
-// by its command line where there's /proc, and by its being alive where there isn't
-// (`keepForRollback`'s `restore.sh`, link/updates/update.ts).
+// by its command line, in /proc or from `ps` (`keepForRollback`'s `restore.sh`,
+// link/updates/update.ts).
 
 import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
@@ -22,17 +22,37 @@ export function alive(pid: number): boolean {
 
 /**
  * Whether `pid` runs `name` (a program's file, `kuvo-agents`, `kuvo-link.js`), not whatever took
- * its number after a crash. Linux: its command line says so. macOS, which has no /proc: that it's
- * alive (this Mac's app removes the records that name its processes as they stop). `proc`: where
- * /proc is (a test's own).
+ * its number after a crash or a restart: its command line says so. Linux: in /proc. A Mac, which has
+ * no /proc: `ps` (kept a moment, as this is asked often), or if that doesn't answer, that it's alive.
+ * This Mac's app's box and its bridge take its being alive anyway: the app removes the records that
+ * name its processes as they stop. `proc`: where /proc is (a test's own).
  */
 export function processRuns(pid: unknown, name: string, proc = "/proc"): boolean {
   if (!Number.isInteger(pid) || (pid as number) <= 1 || !alive(pid as number)) return false;
   try {
     return fs.readFileSync(`${proc}/${pid}/cmdline`, "utf8").includes(name);
   } catch {
-    return !fs.existsSync(proc);
+    if (fs.existsSync(proc)) return false;
+    if (process.env.KUVO_BOX === "mac" || (process.env.KUVO_AGENTS_HOME && !process.env.KUVO_AGENTS_REMOTE)) return true;
+    return commandLine(pid as number)?.includes(name) ?? true;
   }
+}
+
+const commandLines = new Map<number, { line: string | undefined; at: number }>();
+const COMMAND_LINE_KEPT = 2_000;
+
+/** `pid`'s command line as `ps` says (undefined: it couldn't be asked, in a sandbox, say). */
+function commandLine(pid: number): string | undefined {
+  const now = performance.now();
+  const kept = commandLines.get(pid);
+  if (kept && now - kept.at < COMMAND_LINE_KEPT) return kept.line;
+  let line: string | undefined;
+  try {
+    line = execFileSync("/bin/ps", ["-ww", "-o", "command=", "-p", String(pid)], { encoding: "utf8", timeout: 2_000, stdio: ["ignore", "pipe", "ignore"] });
+  } catch {}
+  if (commandLines.size > 200) commandLines.clear();
+  commandLines.set(pid, { line, at: now });
+  return line;
 }
 
 /**

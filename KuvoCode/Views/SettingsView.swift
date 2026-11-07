@@ -286,7 +286,7 @@ enum SettingsPage: String, CaseIterable, Identifiable {
         case .git: "Branches, commits and pull requests made from Kuvo Code."
         case .worktrees: "Folders of their own for sessions that work on a branch."
         case .archived: "Sessions you put away: still searchable, out of the sidebar."
-        case .machines: "Linux servers whose sessions run there, over SSH."
+        case .machines: "Macs and Linux servers whose sessions run there, over SSH."
         case .panel: "What the side panel starts with, and its new tab page."
         case .browser: "The panel's browser: search, history and website data."
         case .vault: "Sign-ins, keys, files and notes your agents use without ever seeing them."

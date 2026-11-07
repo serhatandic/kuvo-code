@@ -630,8 +630,28 @@ function processRuns(pid, name, proc = "/proc") {
   try {
     return fs.readFileSync(`${proc}/${pid}/cmdline`, "utf8").includes(name);
   } catch {
-    return !fs.existsSync(proc);
+    if (fs.existsSync(proc))
+      return false;
+    if (process.env.KUVO_BOX === "mac" || process.env.KUVO_AGENTS_HOME && !process.env.KUVO_AGENTS_REMOTE)
+      return true;
+    return commandLine(pid)?.includes(name) ?? true;
   }
+}
+var commandLines = new Map;
+var COMMAND_LINE_KEPT = 2000;
+function commandLine(pid) {
+  const now = performance.now();
+  const kept = commandLines.get(pid);
+  if (kept && now - kept.at < COMMAND_LINE_KEPT)
+    return kept.line;
+  let line;
+  try {
+    line = execFileSync("/bin/ps", ["-ww", "-o", "command=", "-p", String(pid)], { encoding: "utf8", timeout: 2000, stdio: ["ignore", "pipe", "ignore"] });
+  } catch {}
+  if (commandLines.size > 200)
+    commandLines.clear();
+  commandLines.set(pid, { line, at: now });
+  return line;
 }
 function loginShell(env = process.env, platform = process.platform) {
   const given = env.SHELL && path.isAbsolute(env.SHELL) ? env.SHELL : undefined;
@@ -23533,4 +23553,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents c03449497b6d75281aab7b0c27cb263c996b94e9ab2e634850042304bb6e93e4
+// Built from Packages/Box/src/agents 02a87023122ddb6cd4ec72486fc4cf4911ad573992a5e1c3af5a6df7710e53d6

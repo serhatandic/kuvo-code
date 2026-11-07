@@ -62,7 +62,8 @@ export function newerVersion(version: string | null | undefined, than: string | 
 }
 
 /** A release's manifest (in `boxes.json`, signed): its version, its engine's, when it came out,
- * its files' pack, and its engine for each Linux machine (by `uname -m`). */
+ * its files' pack, and its engine for each kind of machine: Linux's and Macs', each by `uname -m`'s
+ * kinds. */
 export interface BoxRelease {
   kuvo: "box/1";
   version: string;
@@ -70,6 +71,7 @@ export interface BoxRelease {
   released?: string;
   pack: { url: string; sha256: string };
   linux?: Record<string, { url?: string; integrity?: string } | undefined>;
+  darwin?: Record<string, { url?: string; integrity?: string } | undefined>;
 }
 
 // A release's manifest, from boxes.json as the release workflow signs it: only with a key that's
@@ -222,7 +224,7 @@ function keepForRollback(files: string[], withData: boolean): void {
     "#!/bin/sh",
     `K=${quote(K)}; B=${quote(ROLLBACK)}`,
     `p=$(cat "$K/run/.updating/pid" 2>/dev/null)`,
-    `if [ -n "$p" ] && [ "$p" != "\${KUVO_UPDATER:-}" ] && kill -0 "$p" 2>/dev/null && { [ ! -d /proc ] || grep -q kuvo-link "/proc/$p/cmdline" 2>/dev/null; }; then exit 0; fi`,
+    `if [ -n "$p" ] && [ "$p" != "\${KUVO_UPDATER:-}" ] && kill -0 "$p" 2>/dev/null && { if [ -d /proc ]; then grep -q kuvo-link "/proc/$p/cmdline" 2>/dev/null; else ps -ww -o command= -p "$p" 2>/dev/null | grep -q kuvo-link; fi; }; then exit 0; fi`,
     `sh "$K/bin/kuvo-start" stop >/dev/null 2>&1 || exit 1`,
   ];
   for (const file of files) {
@@ -382,7 +384,7 @@ export async function update({ now = false, keys = UPDATE_KEYS, url = UPDATE_URL
     if (!fs.existsSync(path.join(engineFolder, "opencode"))) {
       // (Another kind of machine has none: no kind, and no build.)
       const kind = { x64: "x86_64", arm64: "aarch64" }[os.arch() as "x64" | "arm64"];
-      const build = manifest.linux?.[kind];
+      const build = (process.platform === "darwin" ? manifest.darwin : manifest.linux)?.[kind];
       if (!build?.url || !/^sha512-/.test(build.integrity ?? "")) throw new Error("The release has no engine for this machine.");
       step("downloading the engine");
       const tarball = await fetched(build.url, 400_000_000, 900_000);

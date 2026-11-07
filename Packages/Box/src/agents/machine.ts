@@ -1,5 +1,5 @@
-// The bridge on one of your machines (Linux, over SSH), beside the machine's engine: everything it
-// and its agents keep is in Kuvo Code's folder there (`~/.kuvo-code/agents`). The agents' programs
+// The bridge on one of your machines (Linux or a Mac, over SSH), beside the machine's engine:
+// everything it and its agents keep is in Kuvo Code's folder there (`~/.kuvo-code/agents`). The agents' programs
 // are the machine's own, as on a Mac: found on its PATH (your login shell's), installed and
 // updated with their makers' installers, which put them where they would for you.
 

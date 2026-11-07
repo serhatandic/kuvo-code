@@ -7,7 +7,7 @@ import { loginPath, processRuns, promptedFolders } from "../src/shared/platform"
 
 // Where macOS and Linux differ, each side tested on whichever system runs this: a box tells its own
 // programs from whatever took their process's number after a crash (Linux by /proc, a stand-in
-// folder here; macOS, without one, by their being alive), and leaves the folders a Mac asks you
+// folder here; a Mac, without one, by what `ps` says), and leaves the folders a Mac asks you
 // about out of what it looks into.
 
 // A number no process has (past either system's highest).
@@ -41,10 +41,48 @@ test("Linux: a process that ended isn't running, whatever its command line said"
   expect(processRuns(gone, "kuvo-agents", folder)).toBe(false)
 })
 
-test("macOS, without /proc: a process that's alive is taken as the program it's said to be", () => {
+test("without /proc (a Mac): a program's own command line says, so another program that took its number isn't it", () => {
   const none = join(root, "no-proc")
-  expect(processRuns(process.pid, "kuvo-agents", none)).toBe(true)
+  const other = Bun.spawn(["sleep", "30"], { stdout: "ignore", stderr: "ignore" })
+  try {
+    expect(processRuns(other.pid, "sleep", none)).toBe(true)
+    expect(processRuns(other.pid, "kuvo-agents", none)).toBe(false)
+  } finally {
+    other.kill()
+  }
   expect(processRuns(gone, "kuvo-agents", none)).toBe(false)
+})
+
+test("the agents' bridge: beside this Mac's app it takes a process that's alive as its program, and on a Mac machine goes by what ps says", () => {
+  const none = join(root, "no-proc")
+  const other = Bun.spawn(["sleep", "30"], { stdout: "ignore", stderr: "ignore" })
+  const before = { home: process.env.KUVO_AGENTS_HOME, remote: process.env.KUVO_AGENTS_REMOTE }
+  process.env.KUVO_AGENTS_HOME = root
+  try {
+    delete process.env.KUVO_AGENTS_REMOTE
+    expect(processRuns(other.pid, "kuvo-link", none)).toBe(true)
+    process.env.KUVO_AGENTS_REMOTE = "1"
+    expect(processRuns(other.pid, "kuvo-link", none)).toBe(false)
+  } finally {
+    other.kill()
+    for (const [name, value] of [["KUVO_AGENTS_HOME", before.home], ["KUVO_AGENTS_REMOTE", before.remote]] as const) {
+      if (value === undefined) delete process.env[name]
+      else process.env[name] = value
+    }
+  }
+})
+
+test("this Mac's app's box: a process that's alive is taken as the program it's said to be", () => {
+  const none = join(root, "no-proc")
+  const before = process.env.KUVO_BOX
+  process.env.KUVO_BOX = "mac"
+  try {
+    expect(processRuns(process.pid, "kuvo-agents", none)).toBe(true)
+    expect(processRuns(gone, "kuvo-agents", none)).toBe(false)
+  } finally {
+    if (before === undefined) delete process.env.KUVO_BOX
+    else process.env.KUVO_BOX = before
+  }
 })
 
 test("on both: no number, or the system's own, is never a program of the box's", () => {
