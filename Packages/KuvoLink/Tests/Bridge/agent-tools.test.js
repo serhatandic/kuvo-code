@@ -533,6 +533,35 @@ test("a conversation waiting for the answer of a session it started gets it from
   assert.match(toLead()[0].text, /^\[Session finished\] "Task" in api \(address ses_task\)[^\n]*:\nAlso fixed the tests\./);
 });
 
+test("a starter on another computer (one that moved there since it started the session) that waits on its answer by letter gets it once: not told again that the session finished with it; a later finish is told there", async () => {
+  const { watch, runAll, whenWaiting } = await watchingTask();
+  // Lead lives on the other box now, as the sessions there list it; Task, here, still names it.
+  const other = { key: "b3RoZXItYm94LWtleS1vZi10aGlydHktdHdvLWJ5dGVz", address: "other", name: "Mac mini", kind: "machine" };
+  sessions.get("ses_task").metadata.kuvo.startedBy = "ses_away";
+  write(path.join(home, "run", "work", "homes.json"), JSON.stringify({ ses_away: { key: other.key, at: 1 } }));
+  const toAway = () => {
+    const sending = path.join(home, "run", "outbox", "sending");
+    return (fs.existsSync(sending) ? fs.readdirSync(sending) : []).map(name => JSON.parse(fs.readFileSync(path.join(sending, name), "utf8"))).filter(letter => letter.to === "ses_away");
+  };
+  fs.rmSync(path.join(home, "run", "outbox"), { recursive: true, force: true });
+  const heard = whenWaiting(() => watch({ type: "session.execution.succeeded", data: { sessionID: "ses_task" } }));
+  const answers = [];
+  const letter = { id: "ltr_waitsforitsanswer1", from: "ses_away", to: "ses_task", text: "Is the sign-in done?", at: Date.now(), wait: true };
+  await link.takeLetter(other, letter, { send: () => {}, targets: [{ port: engine.address().port, password: "p" }], answer: each => answers.push(each),
+    told: { [other.key]: { at: 1, list: [{ session: "ses_away", name: "Lead", kind: "session" }] } }, peers: [other], moved: new Map(), wait: 10 });
+  assert.deepEqual(answers.map(each => [each.to, each.text]), [["ses_away", "On it (ses_task)."]]);
+  await heard;
+  await runAll();
+  await runAll();
+  assert.deepEqual(toAway(), [], "the answer went back in its letter");
+  // Later, it finishes again with more to say: that's told there.
+  messages.get("ses_task").push({ id: "msg_zzz", type: "assistant", content: [{ type: "text", text: "Also fixed the tests." }] });
+  await watch({ type: "session.execution.succeeded", data: { sessionID: "ses_task" } });
+  await runAll();
+  assert.equal(toAway().length, 1);
+  assert.match(toAway()[0].text, /^\[Session finished\] "Task" in api \(address ses_task\)[^\n]*:\nAlso fixed the tests\./);
+});
+
 test("a session that finishes while its starter waits for its answer, and the wait's given up (its turn stopped), is told it finished once the wait ends", async () => {
   const { watch, runAll, whenWaiting, toLead } = await watchingTask();
   // Task finishes as far as the box hears, while the tool still sees it at work.

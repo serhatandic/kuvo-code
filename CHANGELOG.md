@@ -16,6 +16,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ### All Changes
 
+- An agent that writes to a session it started on another of your computers and waits for the answer now gets that answer once. Before, the same answer also came again later as "[Session finished]".
 - Kuvo Code opens again on the conversation you were in when you quit, from the first moment, instead of the latest session after a flash of the welcome screen. A conversation on a machine that isn't connected yet shows as connecting.
 - Escape closes a picture you're looking at closer, or answers an ask's Cancel, before it stops the agent at work. Before, Escape with a picture open stopped the agent and left the picture there.
 - Settings › General › Voice Input no longer shows a whole row with only a spinner while more accurate voice input gets ready; the line under the switch already says so. The same on your iPhone.
