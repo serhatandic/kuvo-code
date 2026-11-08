@@ -1115,6 +1115,12 @@ var queueFiles = (run) => ({
   lock: path7.join(run, ".queues.lock")
 });
 var boxNote = (from, line) => ({ kuvo: { note: { from, line } } });
+var wakeMark = (summary) => ({ kuvo: { wake: { summary } } });
+function wakeMarkOf(metadata) {
+  const wake = isObject(metadata) && isObject(metadata.kuvo) && isObject(metadata.kuvo.wake) ? metadata.kuvo.wake : null;
+  const summary = typeof wake?.summary === "string" ? wake.summary.replace(/\s+/g, " ").trim().slice(0, 300) : "";
+  return summary ? wakeMark(summary) : null;
+}
 var isBoxNote = (metadata) => isObject(metadata) && isObject(metadata.kuvo) && isObject(metadata.kuvo.note);
 var GOAL_OPENINGS = [
   ["[Goal started] The user approved the plan.", "Goal started"],
@@ -11707,6 +11713,7 @@ function cancelWake(folder, letters) {
     if (wakeOf(name)?.letters === letters)
       fs39.rmSync(path43.join(folder, "wakes", name), { force: true });
   }
+  fs39.rmSync(path43.join(folder, "summaries", letters), { force: true });
 }
 async function waitForTools(port, authorization, directory, signal) {
   const started = Date.now();
@@ -11856,7 +11863,8 @@ async function* answerWakes(session, action, request, readEngine, bridge, signal
     const directory = textOf(path43.join(folder, "directory"));
     if (!agents && directory)
       await waitForTools(target.port, authorization, directory, signal);
-    const message = { id: messageID(), text: WAKE_MARKER + note, delivery: "queue" };
+    const summary = LETTERS.test(chosen.letters) ? (textOf(path43.join(folder, "summaries", chosen.letters)) ?? "").trim() : "";
+    const message = { id: messageID(), text: WAKE_MARKER + note, delivery: "queue", ...summary ? { metadata: wakeMark(summary) } : {} };
     if (!keepWaiting2(session, message, { from: "Wake-up", words: note })) {
       let response;
       try {
@@ -27214,7 +27222,8 @@ async function* add({ request, bridge, readEngine, json, signal }, target, sessi
   const base = new URL(`http://127.0.0.1:${target.port}/`);
   const headers = { authorization: `Basic ${Buffer.from(`opencode:${target.password}`).toString("base64")}` };
   const toAgents = bridge()?.port === target.port;
-  const asGiven = Buffer.from(JSON.stringify({ id, text: given.text, ...Array.isArray(given.files) ? { files: given.files } : {}, delivery }));
+  const mark = wakeMarkOf(given.metadata);
+  const asGiven = Buffer.from(JSON.stringify({ id, text: given.text, ...Array.isArray(given.files) ? { files: given.files } : {}, delivery, ...mark ? { metadata: mark } : {} }));
   const fromPhoneToo = request.fromMac !== true && request.fromApp !== true;
   const attached = given.kept === true ? asGiven : await attachedIn(asGiven, session, modelInput(base, headers, signal), request.fromMac === true, !toAgents);
   const body = given.kept !== true && fromPhoneToo ? fromPhone(await namedIn(attached, session, namingHere(readEngine))) : attached;

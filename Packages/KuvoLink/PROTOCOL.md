@@ -2500,7 +2500,14 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   when it couldn't go. Each box answers for its own sessions and bots, a Mac's and a machine's
   alike, with the Mac closed too: ask the box a conversation lives on (one that keeps none answers
   an empty list). A wake-up reaches the conversation as a
-  message starting with `[Wake-up] `. `GET kuvo/wakes` lists every session with a wake-up or a
+  message starting with `[Wake-up] `, its note whole (a watch's: its note, then what its check
+  printed). When its agent gave it a summary (the tools' `summary`, `kuvo-wake … --summary`), the
+  message carries it in `metadata.kuvo.wake.summary`, one line, and so does one that waits on the
+  box (`queue/add` keeps that mark, and only that, from its `metadata`). A client's card shows the
+  summary, at most two lines, and opens to the note; without one (one from before, or none given),
+  the note's first sentence: its first line, Markdown's `*` and `` ` `` and leading `#`, `>` and
+  `-` taken out, up to the first `.`, `!`, `?` or `…` with a space or the line's end after it
+  (KuvoClient's `WakeMessage`). `GET kuvo/wakes` lists every session with a wake-up or a
   watch at once, for the marks beside them in a list: `{"sessions": [{session, next, watching,
   wakes, watches, paused}]}` (`next`, the soonest, in seconds since 1970, left out when it has
   none; `wakes`, `watches` and `paused` as `GET kuvo/wakes/<session>` says them, so a client reads

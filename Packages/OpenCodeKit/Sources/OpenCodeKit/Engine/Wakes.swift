@@ -285,11 +285,23 @@ public enum Wakes {
         let when = rest.prefix { !$0.isWhitespace }
         var note = rest.dropFirst(when.count).trimmingCharacters(in: .whitespaces)
         var every: Repeat?
-        if note.hasPrefix("--every ") {
-            let repeating = note.dropFirst("--every ".count).trimmingCharacters(in: .whitespaces)
-            let text = repeating.prefix { !$0.isWhitespace }
-            every = Repeat(String(text))
-            note = repeating.dropFirst(text.count).trimmingCharacters(in: .whitespaces)
+        // Its options, in either order: how often, and a summary (one word, or quoted), not the note's.
+        while true {
+            if note.hasPrefix("--every ") {
+                let repeating = note.dropFirst("--every ".count).trimmingCharacters(in: .whitespaces)
+                let text = repeating.prefix { !$0.isWhitespace }
+                every = Repeat(String(text))
+                note = repeating.dropFirst(text.count).trimmingCharacters(in: .whitespaces)
+            } else if note.hasPrefix("--summary ") {
+                let after = note.dropFirst("--summary ".count).drop { $0.isWhitespace }
+                if let quote = after.first, quote == "\"" || quote == "'", let end = after.dropFirst().firstIndex(of: quote) {
+                    note = after[after.index(after: end)...].trimmingCharacters(in: .whitespaces)
+                } else {
+                    note = after.drop { !$0.isWhitespace }.trimmingCharacters(in: .whitespaces)
+                }
+            } else {
+                break
+            }
         }
         if let first = note.first, first == "\"" || first == "'", note.last == first, note.count >= 2 { note = String(note.dropFirst().dropLast()) }
         return Command(verb: verb, when: when.isEmpty ? nil : String(when), note: note.isEmpty ? nil : note, every: every)
@@ -319,9 +331,12 @@ public enum Wakes {
     /// the conversation running the command, which the engine names in `OPENCODE_SESSION_ID`:
     /// its bot's, if it's a bot's conversation, or its session's.
     ///
-    ///     kuvo-wake [<bot or session>] add <when> [--every <repeat>] <note>
+    ///     kuvo-wake [<bot or session>] add <when> [--every <repeat>] [--summary <line>] <note>
     ///                          when: +30m, +2h, +1d, or 2026-10-16T09:00
     ///                          repeat: 30m, 2h, 1d, 1w (at least 5m) or weekdays, until canceled
+    ///                          summary: what its card shows (`summaries/<letters>`), sent with it
+    ///                          as `metadata.kuvo.wake.summary`; the agent reads the note whole
+    ///     kuvo-wake [<bot or session>] watch <every> <check> [--summary <line>] <note>
     ///     kuvo-wake [<bot or session>] list
     ///     kuvo-wake [<bot or session>] cancel <id>
     ///     kuvo-wake fire <bots folder> <engine.json>   sends what's due, for the bots there and the
@@ -345,11 +360,12 @@ public enum Wakes {
 
     usage() {
       echo "Usage:"
-      echo "  kuvo-wake add <when> [--every <repeat>] <note>"
+      echo "  kuvo-wake add <when> [--every <repeat>] [--summary <line>] <note>"
       echo "      when: +30m, +2h, +1d, or a time like 2026-10-16T09:00 on this computer's clock"
       echo "      repeat: 30m, 2h, 1d, 1w (at least 5m), or weekdays; it keeps coming back until canceled"
+      echo "      summary: one short line the user sees for it in the conversation; you get the whole note"
       echo "  kuvo-wake list"
-      echo "  kuvo-wake watch <every> <check> <note>"
+      echo "  kuvo-wake watch <every> <check> [--summary <line>] <note>"
       echo "      every 5m or more, 2h, 1d: runs the check, a shell command, and wakes you when what it prints changes"
       echo "  kuvo-wake cancel <id>"
       echo "Each is for the conversation that runs it; before the verb, a bot's ID or a session's (ses_...) names another."
@@ -618,6 +634,13 @@ public enum Wakes {
     delivered() { [ -f "$1/pending" ] && mv -f "$1/pending" "$1/last"; rm -f "$1/message"; }
 
     random() { LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom 2>/dev/null | head -c "$1"; }
+
+    # A wake-up's or a watch's summary, given after --summary ($1): on one line, and short (what its
+    # card shows; the agent reads the note whole). Sets `summary`, empty for none.
+    summed() {
+      summary=$(printf '%s' "$1" | tr '\n\r\t' '   ' | sed -e 's/^ *//' -e 's/ *$//')
+      [ "${#summary}" -le 300 ] || { echo "Keep the summary to one short line: it's what the user sees for it, and you get the whole note." >&2; exit 2; }
+    }
     # A folder's path as a header carries it, as encodeURIComponent does: each byte but letters,
     # digits and -_.!~*'() as %XX (UTF-8 names too).
     encoded() {
@@ -704,7 +727,7 @@ public enum Wakes {
       rm -rf "$k" "${1}.taking"
       if [ "$(uname)" = Darwin ]; then mv -f "$k_in" "${1}.taking" 2>/dev/null || return 0; k_in=${1}.taking; fi
       if [ -d "$k_in" ] && [ ! -L "$k_in" ] && (umask 077; mkdir "$k") 2>/dev/null; then
-        for k_part in wakes watches cancel; do
+        for k_part in wakes summaries watches cancel; do
           { [ -e "$k_in/$k_part" ] || [ -L "$k_in/$k_part" ]; } && mv -f "$k_in/$k_part" "$k/$k_part" 2>/dev/null
         done
         # And whatever else was left there, moved out of their reach before it goes (a command could
@@ -715,6 +738,7 @@ public enum Wakes {
           for f in "$k"/cancel/*; do
             l=${f##*/}; case $l in ''|*[!A-Za-z0-9]*) continue ;; esac
             for x in "${1}wakes/"*-"$l" "${1}wakes/"*-"$l"-*; do [ -f "$x" ] && rm -f "$x"; done
+            rm -f "${1}summaries/$l"
             [ -d "${1}watches/$l" ] && rm -rf "${1}watches/$l"
           done
         fi
@@ -727,6 +751,15 @@ public enum Wakes {
             { (umask 077; head -c 65536 "$f" >"${1}wakes/.new-$n") && mv -f "${1}wakes/.new-$n" "${1}wakes/$n"; } 2>/dev/null || rm -f "${1}wakes/.new-$n"
           done
         fi
+        # Wake-ups' summaries, by their letters.
+        if [ -d "$k/summaries" ] && [ ! -L "$k/summaries" ]; then
+          mkdir -p "${1}summaries"
+          for f in "$k"/summaries/*; do
+            n=${f##*/}; case $n in ''|*[!A-Za-z0-9]*) continue ;; esac
+            plain "$f" || continue
+            { (umask 077; head -c 4096 "$f" >"${1}summaries/.new-$n") && mv -f "${1}summaries/.new-$n" "${1}summaries/$n"; } 2>/dev/null || rm -f "${1}summaries/.new-$n"
+          done
+        fi
         if [ -d "$k/watches" ] && [ ! -L "$k/watches" ]; then
           for d in "$k"/watches/*; do
             n=${d##*/}; case $n in ''|*[!A-Za-z0-9]*) continue ;; esac
@@ -736,6 +769,7 @@ public enum Wakes {
             # Copies, as wake-ups are, and no bigger than they were checked to be.
             { mkdir "${1}watches/$n" && head -c 65536 "$d/every" >"${1}watches/$n/every" && head -c 65536 "$d/check" >"${1}watches/$n/check" \
               && head -c 65536 "$d/note" >"${1}watches/$n/note" && printf '%s' "$now" >"${1}watches/$n/next"; } 2>/dev/null || rm -rf "${1}watches/$n"
+            [ -d "${1}watches/$n" ] && plain "$d/summary" && head -c 4096 "$d/summary" >"${1}watches/$n/summary" 2>/dev/null
           done
         fi
       fi
@@ -774,7 +808,7 @@ public enum Wakes {
         [ -n "${KUVO_LINK_SCRIPT-}" ] && [ -n "${KUVO_LINK_RUNTIME-}" ] || return 1
         h_ms=$(date +%s%3N 2>/dev/null); case "$h_ms" in *[!0-9]*|'') h_ms=$((now * 1000));; esac
         h_id=msg_$(printf '%012x' $(((h_ms * 4096 + 1) & 0xFFFFFFFFFFFF)))$(random 14)
-        h_asked="{\"method\":\"POST\",\"path\":\"kuvo/sessions/$session/queue/add\",\"body\":{\"id\":\"$h_id\",\"text\":\"$(json "[Wake-up] $1")\",\"delivery\":\"queue\",\"from\":\"Wake-up\",\"words\":\"$(json "$1")\",\"kept\":true}}"
+        h_asked="{\"method\":\"POST\",\"path\":\"kuvo/sessions/$session/queue/add\",\"body\":{\"id\":\"$h_id\",\"text\":\"$(json "[Wake-up] $1")\",\"delivery\":\"queue\",\"from\":\"Wake-up\",\"words\":\"$(json "$1")\",\"kept\":true$(marked "$2")}}"
         # shellcheck disable=SC2086
         printf '%s' "$h_asked" | KUVO_HOME="${record%/*/*}" BUN_BE_BUN=1 BUN_RUNTIME_TRANSPILER_CACHE_PATH=0 "$KUVO_LINK_RUNTIME" ${KUVO_LINK_FLAGS-} "$KUVO_LINK_SCRIPT" box route 2>/dev/null | grep -qF '"status":200'
       }
@@ -834,11 +868,15 @@ public enum Wakes {
         fi
         mkdir -p "$s_to/wakes" "$s_to/watches"
         for f in "${bot}wakes/"*; do [ -f "$f" ] && mv -f "$f" "$s_to/wakes/"; done
+        for f in "${bot}summaries/"*; do [ -f "$f" ] && mkdir -p "$s_to/summaries" && mv -f "$f" "$s_to/summaries/"; done
         for f in "${bot}watches/"*/; do [ -d "$f" ] && mv -f "${f%/}" "$s_to/watches/"; done
         rm -rf "${bot%/}"
         return 1
       }
-      # Sends a wake-up's text to the bot's session; true once it's gone.
+      # The mark a wake-up's message carries with its summary ($1; none without one), which clients
+      # show in its place (KuvoClient's WakeMessage): `,"metadata":…` for a message's JSON.
+      marked() { [ -z "$1" ] || printf ',"metadata":{"kuvo":{"wake":{"summary":"%s"}}}' "$(json "$1")"; }
+      # Sends a wake-up's text to the bot's session, marked with its summary ($2); true once it's gone.
       deliver() {
         # The bot's folder's tools (its browser, integrations) first: the engine connects them
         # after it opens the folder, and a wake-up sent sooner goes without them. A folder it has
@@ -863,7 +901,7 @@ public enum Wakes {
         [ -z "$stopping" ] || return 1
         ms=$(date +%s%3N 2>/dev/null); case "$ms" in *[!0-9]*|'') ms=$((now * 1000));; esac
         id=msg_$(printf '%012x' $(((ms * 4096 + 1) & 0xFFFFFFFFFFFF)))$(random 14)
-        body="{\"id\":\"$id\",\"text\":\"$(json "[Wake-up] $1")\",\"delivery\":\"queue\"}"
+        body="{\"id\":\"$id\",\"text\":\"$(json "[Wake-up] $1")\",\"delivery\":\"queue\"$(marked "$2")}"
         url="http://127.0.0.1:$port/api/session/$session/prompt"
         # The password from its standard input (curl) or a file only this user can read (wget):
         # on a command line, any user on the machine could read it while it runs. Straight to the
@@ -944,10 +982,11 @@ public enum Wakes {
           # before it kept those, the ones it was due at); others are done.
           # One that repeats and still waits from last time (the bot busy, or waiting on you) isn't
           # queued again: it just comes back at its next time.
+          summary=$(cat "${bot}summaries/${rest%%-*}" 2>/dev/null)
           if [ -n "$paused" ]; then
-            { [ -n "$every" ] && { waiting "$(cat "$wake")" || held "$(cat "$wake")"; }; } || hold "$(cat "$wake")"
+            { [ -n "$every" ] && { waiting "$(cat "$wake")" || held "$(cat "$wake")"; }; } || hold "$(cat "$wake")" "$summary"
           else
-            { [ -n "$every" ] && waiting "$(cat "$wake")"; } || deliver "$(cat "$wake")"
+            { [ -n "$every" ] && waiting "$(cat "$wake")"; } || deliver "$(cat "$wake")" "$summary"
           fi
           if [ $? -eq 0 ]; then
             if [ -n "$every" ] && repeats "${every%@*}"; then
@@ -956,9 +995,9 @@ public enum Wakes {
                 every=$(kept "$due" "$every")
                 at=$(next "$due" "$every") && [ -n "$at" ] && echo "$at-${rest%%-*}-$every" )
               # Without a next time it's done, rather than sent again every minute.
-              case "$again" in [0-9]*-*) mv -f "$wake" "${bot}wakes/$again" ;; *) rm -f "$wake" ;; esac
+              case "$again" in [0-9]*-*) mv -f "$wake" "${bot}wakes/$again" ;; *) rm -f "$wake" "${bot}summaries/${rest%%-*}" ;; esac
             else
-              rm -f "$wake"
+              rm -f "$wake" "${bot}summaries/${rest%%-*}"
             fi
           else
             failed=1
@@ -995,7 +1034,7 @@ public enum Wakes {
         tz=$(zone "$bot")
         for letters in $( ( [ -n "$tz" ] && export TZ="$tz"; checks "${bot%/}" ) | sed -n 's/^KUVO-WATCH //p'); do
           w="${bot}watches/$letters"
-          [ -f "$w/message" ] && deliver "$(cat "$w/message")" && delivered "$w"
+          [ -f "$w/message" ] && deliver "$(cat "$w/message")" "$(cat "$w/summary" 2>/dev/null)" && delivered "$w"
         done
       done
       ) </dev/null >/dev/null 2>&1 &
@@ -1070,16 +1109,21 @@ public enum Wakes {
     case "$command" in
       add)
         due=$(seconds "$3") || { echo "Couldn't read the time \"$3\". Use +30m, +2h, +1d, or a time like 2026-10-16T09:00." >&2; exit 2; }
-        shift 3; every=
-        if [ "$1" = --every ]; then
-          repeats "$2" || { echo "Couldn't read the repeat \"$2\". Use 30m, 2h, 1d, 1w (at least 5m), or weekdays." >&2; exit 2; }
-          every=${2%@*}; shift 2
-          # On weekdays: the first one too, at the same time of day.
-          if [ "$every" = weekdays ] && ! weekday "$(day "$due")"; then
-            a_day=$(day "$due"); a_at=$(clock "$due" %H%M)
-            while ! weekday "$a_day"; do a_day=$((a_day + 1)); done
-            due=$(daytime "$a_day" "$a_at")
-          fi
+        shift 3; every= summary=
+        while [ $# -ge 2 ]; do
+          case "$1" in
+            --every)
+              repeats "$2" || { echo "Couldn't read the repeat \"$2\". Use 30m, 2h, 1d, 1w (at least 5m), or weekdays." >&2; exit 2; }
+              every=${2%@*}; shift 2 ;;
+            --summary) summed "$2"; shift 2 ;;
+            *) break ;;
+          esac
+        done
+        # On weekdays: the first one too, at the same time of day.
+        if [ "$every" = weekdays ] && ! weekday "$(day "$due")"; then
+          a_day=$(day "$due"); a_at=$(clock "$due" %H%M)
+          while ! weekday "$a_day"; do a_day=$((a_day + 1)); done
+          due=$(daytime "$a_day" "$a_at")
         fi
         note="$*"
         [ -n "$note" ] || { echo "Add a note for yourself: what to do when you wake up." >&2; exit 2; }
@@ -1089,21 +1133,29 @@ public enum Wakes {
         count=$(find "$bot/wakes" "$bot/inbox/wakes" -type f 2>/dev/null | wc -l)
         [ "$count" -lt 50 ] || { echo "You already have 50 wake-ups waiting. Cancel some first." >&2; exit 2; }
         id=$(name "$due" "${every:+$(kept "$due" "$every")}")
-        # Whole before it's in place (the box may take the inbox in meanwhile).
+        # Whole before it's in place (the box may take the inbox in meanwhile), its summary first.
+        a_l=${id#*-}; a_l=${a_l%%-*}
+        if [ -n "$summary" ]; then
+          { printf '%s' "$summary" >"$into/.new-s$a_l" && mkdir -p "$into/summaries" && mv -f "$into/.new-s$a_l" "$into/summaries/$a_l"; } 2>/dev/null \
+            || { rm -f "$into/.new-s$a_l" 2>/dev/null; echo "Couldn't keep it in $bot." >&2; exit 2; }
+        fi
         { printf '%s' "$note" >"$into/.new-$id" && mkdir -p "$into/wakes" && mv -f "$into/.new-$id" "$into/wakes/$id"; } 2>/dev/null \
-          || { rm -f "$into/.new-$id" 2>/dev/null; echo "Couldn't keep it in $bot." >&2; exit 2; }
+          || { rm -f "$into/.new-$id" "$into/summaries/$a_l" 2>/dev/null; echo "Couldn't keep it in $bot." >&2; exit 2; }
         echo "Scheduled $id for $(readable "$due")${every:+, then every $every until canceled}." ;;
       watch)
         every=$3; check=$4
         period "$every" >/dev/null || { echo "Couldn't read how often, \"$3\". Use 5m or more, 2h or 1d." >&2; exit 2; }
         [ -n "$check" ] || { echo "Give the check: a shell command that prints what you watch, and prints something else when it changes." >&2; exit 2; }
-        shift 4; note="$*"
+        shift 4; summary=
+        if [ "$1" = --summary ] && [ $# -ge 2 ]; then summed "$2"; shift 2; fi
+        note="$*"
         [ -n "$note" ] || { echo "Add a note for yourself: what to do when it changes." >&2; exit 2; }
         count=$(find "$bot/watches" "$bot/inbox/watches" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l)
         [ "$count" -lt 20 ] || { echo "You already have 20 watches. Cancel some first." >&2; exit 2; }
         made
         letters=$(random 6); w="$into/.new-$letters"
         { mkdir -p "$w" && printf '%s' "$every" >"$w/every" && printf '%s' "$check" >"$w/check" && printf '%s' "$note" >"$w/note" && printf '%s' "$now" >"$w/next" \
+          && { [ -z "$summary" ] || printf '%s' "$summary" >"$w/summary"; } \
           && mkdir -p "$into/watches" && mv "$w" "$into/watches/$letters"; } 2>/dev/null \
           || { rm -rf "$w" 2>/dev/null; echo "Couldn't keep it in $bot." >&2; exit 2; }
         echo "Watching ($letters): every $every the check runs, without you, and when what it prints changes (not the first time), you wake up with the new output. Cancel it with: $cancelling $letters" ;;
@@ -1143,6 +1195,7 @@ public enum Wakes {
         case "$letters" in *[!A-Za-z0-9]*) letters= ;; esac
         if [ -n "$letters" ]; then
           for f in "$into"/wakes/*-"$letters" "$into"/wakes/*-"$letters"-*; do [ -f "$f" ] && rm -f "$f" && found=1; done
+          [ -z "$found" ] || rm -f "$into/summaries/$letters"
           # Or a watch, by its letters alone.
           [ "$letters" = "$3" ] && [ -d "$into/watches/$letters" ] && rm -rf "$into/watches/$letters" && found=1
           # In the sandbox, one the box already took in is canceled as it takes the inbox in.
