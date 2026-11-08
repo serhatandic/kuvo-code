@@ -243,7 +243,7 @@ const voice = new VoiceWords(places)
 // Your plans' limits for each account here, read on their makers' schedules and kept between runs.
 // The engine's sign-ins too (Settings › Accounts), as the engine lists them with their secrets.
 const engineAccounts = new EngineAccounts(() => link.request("GET", "/api/credential"))
-const limits = new Limits(() => [...agentAccounts(roster.all()), ...engineAccounts.accounts()], join(home, "limits.json"), Date.now, () => engineAccounts.refresh())
+const limits = new Limits(() => [...agentAccounts(roster.all()), ...engineAccounts.accounts()], join(home, "limits.json"), Date.now, () => engineAccounts.refresh(), () => engineAccounts.answered)
 limits.alsoServices = ENGINE_SERVICES
 
 // What every conversation here makes, recorded as it's made: the engine's and this bridge's own.

@@ -10072,10 +10072,12 @@ import { dirname as dirname11 } from "path";
 class LimitsProblem extends Error {
   kind;
   until;
-  constructor(kind, message, until) {
+  sent;
+  constructor(kind, message, until, sent = true) {
     super(message);
     this.kind = kind;
     this.until = until;
+    this.sent = sent;
   }
 }
 var MINUTE = 60000;
@@ -10091,16 +10093,19 @@ class Limits {
   file;
   now;
   prepare;
+  settled;
   entries = new Map;
   holds = new Map;
+  asked = new Map;
   reading;
   timer;
   said = "";
-  constructor(accounts, file, now = Date.now, prepare) {
+  constructor(accounts, file, now = Date.now, prepare, settled = () => true) {
     this.accounts = accounts;
     this.file = file;
     this.now = now;
     this.prepare = prepare;
+    this.settled = settled;
     this.load();
     this.said = JSON.stringify(this.list());
   }
@@ -10165,7 +10170,6 @@ class Limits {
   }
   async readDue() {
     await this.prepare?.();
-    const asked = new Set;
     for (const account of this.accounts()) {
       const source = account.limits;
       this.listen(account.provider, source);
@@ -10184,17 +10188,18 @@ class Limits {
         entry.next = hold;
         continue;
       }
-      if (source.bucket && asked.has(source.bucket)) {
-        entry.next = at + MINUTE;
+      const last = source.bucket ? this.asked.get(source.bucket) ?? 0 : 0;
+      if (source.bucket && at - last < MINUTE) {
+        entry.next = last + MINUTE;
         continue;
       }
       if ((entry.problem?.kind === "expired" || entry.problem?.kind === "unreadable") && entry.signIn !== undefined && entry.signIn === source.signIn?.()) {
         entry.next = at + Math.max(source.every, FIRST_RETRY);
         continue;
       }
-      await this.readOne(source, entry);
-      if (source.bucket && entry.problem?.kind !== "expired" && entry.problem?.kind !== "unreadable" && entry.problem?.kind !== "none")
-        asked.add(source.bucket);
+      const sent = await this.readOne(source, entry);
+      if (source.bucket && sent)
+        this.asked.set(source.bucket, at);
       this.changed();
     }
     this.forgetGone();
@@ -10203,15 +10208,14 @@ class Limits {
   async readOne(source, entry) {
     const started = this.now();
     entry.next = Math.max(entry.next, started + source.every);
-    entry.checked = started;
     this.save();
     try {
       const reading = await source.read(started);
       const at = this.now();
-      entry.checked = at;
       entry.next = at + source.every;
       if (!reading)
-        return;
+        return false;
+      entry.checked = at;
       entry.plan = reading.plan ?? entry.plan;
       entry.balance = reading.balance;
       const heard = entry.windows.filter((window) => window.source === "turn" && (window.read >= started || !reading.windows.some((each) => each.id === window.id)));
@@ -10220,6 +10224,7 @@ class Limits {
       entry.signIn = undefined;
       entry.refusals = 0;
       entry.failures = 0;
+      return true;
     } catch (caught) {
       const at = this.now();
       entry.checked = at;
@@ -10250,6 +10255,7 @@ class Limits {
           entry.failures = (entry.failures ?? 0) + 1;
           entry.next = at + Math.max(source.every, Math.min(FIRST_RETRY * 2 ** (entry.failures - 1), LONGEST_RETRY));
       }
+      return problem.sent;
     }
   }
   listen(provider, source) {
@@ -10286,6 +10292,8 @@ class Limits {
     };
   }
   forgetGone() {
+    if (!this.settled())
+      return;
     const here = new Set(this.accounts().map((account) => account.provider));
     for (const provider of this.entries.keys())
       if (!here.has(provider))
@@ -10313,13 +10321,16 @@ class Limits {
       for (const [bucket, until] of Object.entries(saved.holds ?? {}))
         if (typeof until === "number")
           this.holds.set(bucket, until);
+      for (const [bucket, at] of Object.entries(saved.asked ?? {}))
+        if (typeof at === "number")
+          this.asked.set(bucket, at);
     } catch {}
   }
   kept = "";
   save() {
     if (!this.file)
       return;
-    const saved = JSON.stringify({ accounts: Object.fromEntries(this.entries), holds: Object.fromEntries(this.holds) });
+    const saved = JSON.stringify({ accounts: Object.fromEntries(this.entries), holds: Object.fromEntries(this.holds), asked: Object.fromEntries(this.asked) });
     if (saved === this.kept)
       return;
     try {
@@ -10423,12 +10434,12 @@ function claudeWindows(body) {
 }
 async function readClaudeLimits(signIn, version, now = Date.now()) {
   if (!signIn)
-    throw new LimitsProblem("none", "Not signed in to a Claude plan here.");
+    throw new LimitsProblem("none", "Not signed in to a Claude plan here.", undefined, false);
   const plan = planName(signIn.subscription, signIn.tier);
   if (signIn.expiresAt !== undefined && signIn.expiresAt <= now)
-    throw new LimitsProblem("expired", "Its sign-in has lapsed: Claude Code renews it the next time it runs here.");
+    throw new LimitsProblem("expired", "Its sign-in has lapsed: Claude Code renews it the next time it runs here.", undefined, false);
   if (signIn.scopes?.length && !signIn.scopes.includes("user:profile"))
-    throw new LimitsProblem("unreadable", "This sign-in runs Claude but can't read its plan's limits: sign in to Claude Code again here.");
+    throw new LimitsProblem("unreadable", "This sign-in runs Claude but can't read its plan's limits: sign in to Claude Code again here.", undefined, false);
   let response;
   try {
     response = await fetch(claudeUsage.url, {
@@ -12939,13 +12950,13 @@ class CodexAgent {
   async readLimits() {
     if (!this.executable())
       throw new LimitsProblem("none", "Codex isn't installed here.");
-    if (this.limitsRead && ![...this.slots.values()].some((slot) => slot.server && !slot.server.isClosed))
+    const running = [...this.slots.values()].map((slot) => slot.server).find((server) => server && !server.isClosed);
+    if (this.limitsRead && !running)
       return null;
-    this.limitsRead = true;
     let rpc;
     let account;
     try {
-      rpc = await this.rpc();
+      rpc = running ?? await this.rpc();
       account = (await rpc.request("account/read", {}, 20000))?.account;
     } catch (caught) {
       throw new LimitsProblem("failed", `Codex couldn't say: ${caught instanceof Error ? caught.message : String(caught)}`);
@@ -12966,6 +12977,7 @@ class CodexAgent {
     const snapshots = result?.rateLimitsByLimitId ? Object.values(result.rateLimitsByLimitId) : result?.rateLimits ? [result.rateLimits] : [];
     const windows = snapshots.flatMap((snapshot) => codexWindows(snapshot));
     const type = account.planType ?? snapshots.find((snapshot) => snapshot?.planType)?.planType;
+    this.limitsRead = true;
     return { windows, ...typeof type === "string" && type !== "unknown" ? { plan: codexPlan(type) } : {} };
   }
   signOut;
@@ -15941,7 +15953,7 @@ var MONTH = 43200;
 var READERS = {
   openai: { service: "codex", signIn: true, read: readChatGPT },
   xai: { service: "grok", signIn: true, read: readGrok },
-  "github-copilot": { service: "copilot", read: readCopilot },
+  "github-copilot": { service: "copilot", lasting: true, read: readCopilot },
   openrouter: { service: "openrouter", read: readOpenRouter },
   zai: { service: "zai", read: readZai },
   "zai-coding-plan": { service: "zai", read: readZai },
@@ -15956,10 +15968,13 @@ class EngineAccounts {
   constructor(credentialsNow) {
     this.credentialsNow = credentialsNow;
   }
+  answered = false;
   async refresh() {
     try {
       const answer = await this.credentialsNow();
       const list = Array.isArray(answer) ? answer : Array.isArray(answer?.data) ? answer.data : undefined;
+      if (list)
+        this.answered = true;
       if (list)
         this.credentials = list.filter((each) => each && typeof each.integrationID === "string" && each.active === true && each.value && typeof each.value === "object");
     } catch {}
@@ -15983,7 +15998,7 @@ class EngineAccounts {
             read: (now) => this.read(integration, now),
             signIn: () => {
               const value = this.credentials.find((each) => each.integrationID === integration)?.value;
-              return fingerprint(`${value?.access ?? value?.key ?? ""}:${value?.expires ?? ""}`);
+              return fingerprint(`${value?.access ?? value?.key ?? ""}:${value?.refresh ?? ""}:${value?.expires ?? ""}`);
             }
           }
         };
@@ -15996,16 +16011,16 @@ class EngineAccounts {
   async read(integration, now) {
     const credential = this.credentials.find((each) => each.integrationID === integration);
     const reader = READERS[integration];
-    const secret = credential?.value.access || credential?.value.key;
+    const secret = reader?.lasting ? credential?.value.refresh || credential?.value.key : credential?.value.access || credential?.value.key;
     if (!credential || !reader || !secret)
-      throw new LimitsProblem("none", "Not signed in here.");
-    if (credential.value.type === "oauth" && credential.value.expires && credential.value.expires <= now) {
+      throw new LimitsProblem("none", "Not signed in here.", undefined, false);
+    if (!reader.lasting && credential.value.type === "oauth" && credential.value.expires && credential.value.expires <= now) {
       throw new LimitsProblem("expired", "Its sign-in has lapsed: the engine renews it the next time a model of it runs here.");
     }
     return reader.read(secret.trim(), credential, now);
   }
 }
-async function fetched(url, headers, now, maker) {
+async function fetched(url, headers, now, maker, refused) {
   let response;
   try {
     response = await fetch(url, { headers: { Accept: "application/json", ...headers }, signal: AbortSignal.timeout(15000) });
@@ -16014,8 +16029,9 @@ async function fetched(url, headers, now, maker) {
   }
   if (response.status === 429)
     throw new LimitsProblem("rate-limited", `${maker} is turning away reads of the limits for now.`, retryAt(response.headers.get("retry-after"), now));
-  if (response.status === 401 || response.status === 403)
-    throw new LimitsProblem("expired", `${maker} turned the sign-in away: sign in again in Settings \u203A Accounts if it keeps saying so.`);
+  if (response.status === 401 || response.status === 403) {
+    throw refused?.(response.status, await response.text().catch(() => "")) ?? new LimitsProblem("expired", `${maker} turned the sign-in away: sign in again in Settings \u203A Accounts if it keeps saying so.`);
+  }
   if (!response.ok)
     throw new LimitsProblem("failed", `${maker} answered ${response.status}.`);
   try {
@@ -16158,7 +16174,7 @@ async function readZai(secret, _credential, now) {
   return { windows };
 }
 async function readOpenCodeGo(secret, _credential, now) {
-  const body = await fetched(engineEndpoints.opencodeGo, { Authorization: `Bearer ${secret}` }, now, "OpenCode");
+  const body = await fetched(engineEndpoints.opencodeGo, { Authorization: `Bearer ${secret}` }, now, "OpenCode", (status, text) => status === 403 && /EntitlementError/i.test(text) ? new LimitsProblem("none", "No OpenCode Go plan on this key.") : undefined);
   const usage = body?.usage;
   if (!usage || typeof usage !== "object")
     throw new LimitsProblem("none", "No OpenCode Go plan on this key.");
@@ -16292,7 +16308,7 @@ class GrokAgent {
       const entry = this.grokSignIn();
       if (!entry)
         throw new LimitsProblem("none", "Not signed in to Grok here.");
-      const expires = Date.parse(entry.expiresAt ?? entry.expires ?? "");
+      const expires = Date.parse(entry.expires_at ?? entry.expiresAt ?? entry.expires ?? "");
       if (Number.isFinite(expires) && expires <= now)
         throw new LimitsProblem("expired", "Its sign-in has lapsed: Grok renews it the next time it runs here.");
       return readGrok(entry.key.trim(), undefined, now);
@@ -25890,7 +25906,7 @@ var handoffs = new Handoffs(places4);
 var reviews = new Reviews(join31(home2, "reviews.json"), places4);
 var voice = new VoiceWords(places4);
 var engineAccounts = new EngineAccounts(() => link3.request("GET", "/api/credential"));
-var limits = new Limits(() => [...agentAccounts(roster.all()), ...engineAccounts.accounts()], join31(home2, "limits.json"), Date.now, () => engineAccounts.refresh());
+var limits = new Limits(() => [...agentAccounts(roster.all()), ...engineAccounts.accounts()], join31(home2, "limits.json"), Date.now, () => engineAccounts.refresh(), () => engineAccounts.answered);
 limits.alsoServices = ENGINE_SERVICES;
 var artifacts;
 var noted2;
@@ -26005,4 +26021,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents f42e04eced3138b052fbea98960b5f5809666c9542b3015beb5a729468458483
+// Built from Packages/Box/src/agents d0d82b2362c275c5bd82a09466e487587586c1014dade06176291cc303f04afd

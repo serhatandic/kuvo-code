@@ -53,7 +53,8 @@ test("each sign-in in Settings › Accounts is a row of its own, read with that 
   answers["/opencodeGo"] = () => Response.json({ usage: { rolling: { percent: 9, resetsAt: "2026-11-08T22:00:00.000Z" }, weekly: { percent: 21, resetsAt: "2026-11-12T00:00:00.000Z" } } })
   const { accounts, services } = await stated([
     credential("openai", { type: "oauth", access: "chatgpt-token", expires: NOW + 3_600_000, metadata: { accountID: "acct_1" } }),
-    credential("github-copilot", { type: "oauth", access: "gho_token" }),
+    // As the engine keeps it: GitHub's token as `refresh`, Copilot's own short-lived one as `access`, lapsed.
+    credential("github-copilot", { type: "oauth", access: "copilot-short", refresh: "gho_token", expires: NOW - 1 }),
     credential("openrouter", { type: "api", key: "or-key" }),
     credential("zai-coding-plan", { type: "api", key: "zai-key" }),
     credential("opencode-go", { type: "api", key: "go-key" }),
@@ -110,13 +111,70 @@ test("the Grok agent's own sign-in, in its folder, reads the same pool", async (
   const { join } = await import("node:path")
   const folder = mkdtempSync(join(process.env.KUVO_TEST_ROOT ?? tmpdir(), "kuvo-grok-limits-"))
   try {
-    writeFileSync(join(folder, "auth.json"), JSON.stringify({ "https://auth.x.ai": { key: "grok-token", expiresAt: "2026-11-09T20:00:00Z" } }))
+    writeFileSync(join(folder, "auth.json"), JSON.stringify({ "https://auth.x.ai": { key: "grok-token", expires_at: "2026-11-09T20:00:00Z" } }))
     answers["/grok"] = () => Response.json({ config: { currentPeriod: { type: "USAGE_PERIOD_TYPE_WEEKLY", start: "2026-11-05T00:00:00Z", end: "2026-11-12T00:00:00Z" }, creditUsagePercent: 12.5 } })
     const grok = new GrokAgent({ home: folder, temporary: folder, deps: {} as any }, { id: "a1", label: "Side", home: folder })
     const limits = new Limits(() => agentAccounts([grok]), undefined, () => NOW)
     const accounts = (((await (await limitsRoutes(limits, "POST", ["refresh"])).json()) as any).data.accounts) as AccountLimits[]
     expect(accounts.map((each) => [each.provider, each.service, each.agent, each.label, each.windows[0]?.used])).toEqual([["grok-cli@a1", "grok", "grok", "Side", 0.125]])
     expect(reads[0]!.headers.get("authorization")).toBe("Bearer grok-token")
+  } finally {
+    rmSync(folder, { recursive: true, force: true })
+  }
+})
+
+test("OpenCode Go turning a key away for having no plan lists nothing, rather than asking to sign in again", async () => {
+  answers["/opencodeGo"] = () => Response.json({ type: "error", error: { type: "EntitlementError", message: "No active subscription" } }, { status: 403 })
+  const { accounts } = await stated([credential("opencode-go", { type: "api", key: "go-key" })])
+  expect(accounts).toEqual([])
+})
+
+test("a Grok sign-in that lapsed waits for Grok to renew it, without asking xAI", async () => {
+  const { GrokAgent } = await import("../../src/agents/agents/grok")
+  const { agentAccounts } = await import("../../src/agents/limits")
+  const { mkdtempSync, writeFileSync, rmSync } = await import("node:fs")
+  const { tmpdir } = await import("node:os")
+  const { join } = await import("node:path")
+  const folder = mkdtempSync(join(process.env.KUVO_TEST_ROOT ?? tmpdir(), "kuvo-grok-limits-"))
+  try {
+    writeFileSync(join(folder, "auth.json"), JSON.stringify({ "https://auth.x.ai": { key: "grok-token", expires_at: "2026-11-08T19:00:00Z" } }))
+    const grok = new GrokAgent({ home: folder, temporary: folder, deps: {} as any }, { id: "a1", home: folder })
+    const limits = new Limits(() => agentAccounts([grok]), undefined, () => NOW)
+    const accounts = (((await (await limitsRoutes(limits, "POST", ["refresh"])).json()) as any).data.accounts) as AccountLimits[]
+    expect(accounts.map((each) => each.problem?.kind)).toEqual(["expired"])
+    expect(reads).toHaveLength(0)
+  } finally {
+    rmSync(folder, { recursive: true, force: true })
+  }
+})
+
+test("a box starting before its engine answers keeps the engine's sign-ins' holds, and asks nothing early", async () => {
+  const { mkdtempSync, rmSync } = await import("node:fs")
+  const { tmpdir } = await import("node:os")
+  const { join } = await import("node:path")
+  const folder = mkdtempSync(join(process.env.KUVO_TEST_ROOT ?? tmpdir(), "kuvo-engine-limits-"))
+  try {
+    const file = join(folder, "limits.json")
+    answers["/openrouterKey"] = () => new Response("{}", { status: 429, headers: { "retry-after": "3600" } })
+    const signedIn = [credential("openrouter", { type: "api", key: "or-key" })]
+    let at = NOW
+    const first = new EngineAccounts(async () => ({ data: signedIn }))
+    await new Limits(() => first.accounts(), file, () => at, () => first.refresh(), () => first.answered).tick()
+    expect(reads).toHaveLength(1)
+    // The box starts again; its engine isn't up yet, then it is.
+    at += 5 * 60_000
+    let up = false
+    const again = new EngineAccounts(async () => {
+      if (!up) throw new Error("The engine isn't running.")
+      return { data: signedIn }
+    })
+    const restarted = new Limits(() => again.accounts(), file, () => at, () => again.refresh(), () => again.answered)
+    await restarted.tick()
+    up = true
+    at += 60_000
+    await restarted.tick()
+    expect(reads).toHaveLength(1)
+    expect(((await (await limitsRoutes(restarted, "GET", [])).json()) as any).data.accounts[0].problem.kind).toBe("rate-limited")
   } finally {
     rmSync(folder, { recursive: true, force: true })
   }

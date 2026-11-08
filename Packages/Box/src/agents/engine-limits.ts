@@ -19,7 +19,7 @@ type Window = Omit<LimitWindow, "read" | "source">
 interface Credential {
   integrationID: string
   active: boolean
-  value: { type?: string; access?: string; key?: string; expires?: number; metadata?: Record<string, unknown> }
+  value: { type?: string; access?: string; refresh?: string; key?: string; expires?: number; metadata?: Record<string, unknown> }
 }
 
 /** Where each is read: its maker's, or a test's stand-in. */
@@ -40,13 +40,16 @@ interface Reader {
   service: LimitsService
   /** Only a sign-in (OAuth) of it, not an API key, has a plan to read. */
   signIn?: boolean
+  /** Read with the sign-in's lasting token (GitHub's, which the engine keeps as `refresh`; its
+   * `access` is Copilot's own, short-lived), so its expiry isn't the sign-in's. */
+  lasting?: boolean
   read(secret: string, credential: Credential, now: number): Promise<LimitReading>
 }
 
 const READERS: Record<string, Reader> = {
   openai: { service: "codex", signIn: true, read: readChatGPT },
   xai: { service: "grok", signIn: true, read: readGrok },
-  "github-copilot": { service: "copilot", read: readCopilot },
+  "github-copilot": { service: "copilot", lasting: true, read: readCopilot },
   openrouter: { service: "openrouter", read: readOpenRouter },
   zai: { service: "zai", read: readZai },
   "zai-coding-plan": { service: "zai", read: readZai },
@@ -64,11 +67,15 @@ export class EngineAccounts {
   /** `credentials`: the engine's sign-ins with their secrets, as `GET /api/credential` answers. */
   constructor(private readonly credentialsNow: () => Promise<unknown>) {}
 
+  /** The engine has listed its sign-ins once: until then, none is known gone. */
+  answered = false
+
   /** Asks the engine again (before each round of reads); what it said last stays when it can't say. */
   async refresh() {
     try {
       const answer: any = await this.credentialsNow()
       const list = Array.isArray(answer) ? answer : Array.isArray(answer?.data) ? answer.data : undefined
+      if (list) this.answered = true
       if (list) this.credentials = list.filter((each: any) => each && typeof each.integrationID === "string" && each.active === true && each.value && typeof each.value === "object")
     } catch {}
   }
@@ -90,7 +97,7 @@ export class EngineAccounts {
             read: (now) => this.read(integration, now),
             signIn: () => {
               const value = this.credentials.find((each) => each.integrationID === integration)?.value
-              return fingerprint(`${value?.access ?? value?.key ?? ""}:${value?.expires ?? ""}`)
+              return fingerprint(`${value?.access ?? value?.key ?? ""}:${value?.refresh ?? ""}:${value?.expires ?? ""}`)
             },
           },
         }
@@ -104,9 +111,9 @@ export class EngineAccounts {
   private async read(integration: string, now: number): Promise<LimitReading> {
     const credential = this.credentials.find((each) => each.integrationID === integration)
     const reader = READERS[integration]
-    const secret = credential?.value.access || credential?.value.key
-    if (!credential || !reader || !secret) throw new LimitsProblem("none", "Not signed in here.")
-    if (credential.value.type === "oauth" && credential.value.expires && credential.value.expires <= now) {
+    const secret = reader?.lasting ? credential?.value.refresh || credential?.value.key : credential?.value.access || credential?.value.key
+    if (!credential || !reader || !secret) throw new LimitsProblem("none", "Not signed in here.", undefined, false)
+    if (!reader.lasting && credential.value.type === "oauth" && credential.value.expires && credential.value.expires <= now) {
       throw new LimitsProblem("expired", "Its sign-in has lapsed: the engine renews it the next time a model of it runs here.")
     }
     return reader.read(secret.trim(), credential, now)
@@ -114,7 +121,7 @@ export class EngineAccounts {
 }
 
 /** The answer's JSON, or why it isn't one to read (a 429 held for as long as it says). */
-async function fetched(url: string, headers: Record<string, string>, now: number, maker: string): Promise<any> {
+async function fetched(url: string, headers: Record<string, string>, now: number, maker: string, refused?: (status: number, text: string) => LimitsProblem | undefined): Promise<any> {
   let response: Response
   try {
     response = await fetch(url, { headers: { Accept: "application/json", ...headers }, signal: AbortSignal.timeout(15_000) })
@@ -122,7 +129,9 @@ async function fetched(url: string, headers: Record<string, string>, now: number
     throw new LimitsProblem("failed", `Couldn't reach ${maker}: ${caught instanceof Error ? caught.message : String(caught)}`)
   }
   if (response.status === 429) throw new LimitsProblem("rate-limited", `${maker} is turning away reads of the limits for now.`, retryAt(response.headers.get("retry-after"), now))
-  if (response.status === 401 || response.status === 403) throw new LimitsProblem("expired", `${maker} turned the sign-in away: sign in again in Settings › Accounts if it keeps saying so.`)
+  if (response.status === 401 || response.status === 403) {
+    throw refused?.(response.status, await response.text().catch(() => "")) ?? new LimitsProblem("expired", `${maker} turned the sign-in away: sign in again in Settings › Accounts if it keeps saying so.`)
+  }
   if (!response.ok) throw new LimitsProblem("failed", `${maker} answered ${response.status}.`)
   try {
     return await response.json()
@@ -275,7 +284,9 @@ async function readZai(secret: string, _credential: Credential, now: number): Pr
 
 /** OpenCode Go: its rolling, weekly and monthly windows. */
 async function readOpenCodeGo(secret: string, _credential: Credential, now: number): Promise<LimitReading> {
-  const body = await fetched(engineEndpoints.opencodeGo, { Authorization: `Bearer ${secret}` }, now, "OpenCode")
+  // (A key without a Go plan, or one whose plan lapsed, is turned away as an entitlement: no plan.)
+  const body = await fetched(engineEndpoints.opencodeGo, { Authorization: `Bearer ${secret}` }, now, "OpenCode", (status, text) =>
+    status === 403 && /EntitlementError/i.test(text) ? new LimitsProblem("none", "No OpenCode Go plan on this key.") : undefined)
   const usage = body?.usage
   if (!usage || typeof usage !== "object") throw new LimitsProblem("none", "No OpenCode Go plan on this key.")
   const windows: Window[] = []

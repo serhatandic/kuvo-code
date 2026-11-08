@@ -86,10 +86,10 @@ export function claudeWindows(body: any): Omit<LimitWindow, "read" | "source">[]
  * expects of its reads.
  */
 export async function readClaudeLimits(signIn: ClaudeSignIn | undefined, version: string | undefined, now = Date.now()): Promise<LimitReading> {
-  if (!signIn) throw new LimitsProblem("none", "Not signed in to a Claude plan here.")
+  if (!signIn) throw new LimitsProblem("none", "Not signed in to a Claude plan here.", undefined, false)
   const plan = planName(signIn.subscription, signIn.tier)
-  if (signIn.expiresAt !== undefined && signIn.expiresAt <= now) throw new LimitsProblem("expired", "Its sign-in has lapsed: Claude Code renews it the next time it runs here.")
-  if (signIn.scopes?.length && !signIn.scopes.includes("user:profile")) throw new LimitsProblem("unreadable", "This sign-in runs Claude but can't read its plan's limits: sign in to Claude Code again here.")
+  if (signIn.expiresAt !== undefined && signIn.expiresAt <= now) throw new LimitsProblem("expired", "Its sign-in has lapsed: Claude Code renews it the next time it runs here.", undefined, false)
+  if (signIn.scopes?.length && !signIn.scopes.includes("user:profile")) throw new LimitsProblem("unreadable", "This sign-in runs Claude but can't read its plan's limits: sign in to Claude Code again here.", undefined, false)
   let response: Response
   try {
     response = await fetch(claudeUsage.url, {

@@ -66,6 +66,8 @@ export class LimitsProblem extends Error {
     message: string,
     /** When it may be read again, in ms since 1970, when its maker says. */
     readonly until?: number,
+    /** Whether a request went to its maker (false: what's kept here said so first). */
+    readonly sent = true,
   ) {
     super(message)
   }
@@ -142,6 +144,8 @@ interface Saved {
   accounts: Record<string, Entry>
   /** Makers' holds on reads, by bucket: until when, in ms. */
   holds: Record<string, number>
+  /** When each bucket was last asked, in ms. */
+  asked?: Record<string, number>
 }
 
 const MINUTE = 60_000
@@ -159,6 +163,8 @@ const FRESH_ENOUGH = MINUTE
 export class Limits {
   private entries = new Map<string, Entry>()
   private holds = new Map<string, number>()
+  /** When each maker's bucket was last asked, in ms. */
+  private asked = new Map<string, number>()
   private reading?: Promise<void>
   private timer?: ReturnType<typeof setInterval>
   private said = ""
@@ -170,6 +176,8 @@ export class Limits {
     private readonly now: () => number = Date.now,
     /** Before each round of reads: what lists the accounts asked again (the engine's sign-ins). */
     private readonly prepare?: () => Promise<void>,
+    /** Whether what lists the accounts has said them all (the engine answered): until then, none is gone. */
+    private readonly settled: () => boolean = () => true,
   ) {
     this.load()
     this.said = JSON.stringify(this.list())
@@ -249,8 +257,6 @@ export class Limits {
 
   private async readDue() {
     await this.prepare?.()
-    // One read per maker's bucket each round: a hold that just ended isn't met with every account at once.
-    const asked = new Set<string>()
     for (const account of this.accounts()) {
       const source = account.limits
       this.listen(account.provider, source)
@@ -268,8 +274,11 @@ export class Limits {
         entry.next = hold
         continue
       }
-      if (source.bucket && asked.has(source.bucket)) {
-        entry.next = at + MINUTE
+      // One read of a maker's bucket a minute, whatever asked (the timer, a refresh): a hold that
+      // just ended isn't met with every account at once.
+      const last = source.bucket ? (this.asked.get(source.bucket) ?? 0) : 0
+      if (source.bucket && at - last < MINUTE) {
+        entry.next = last + MINUTE
         continue
       }
       // A sign-in that lapsed or can't read its limits, as it was: nothing to ask its maker yet.
@@ -277,9 +286,8 @@ export class Limits {
         entry.next = at + Math.max(source.every, FIRST_RETRY)
         continue
       }
-      await this.readOne(source, entry)
-      // (One that lapsed, or can't read them, was most likely never sent: the next may go.)
-      if (source.bucket && entry.problem?.kind !== "expired" && entry.problem?.kind !== "unreadable" && entry.problem?.kind !== "none") asked.add(source.bucket)
+      const sent = await this.readOne(source, entry)
+      if (source.bucket && sent) this.asked.set(source.bucket, at)
       // Kept at once: a restart meanwhile never asks again what was just asked.
       this.changed()
     }
@@ -287,18 +295,19 @@ export class Limits {
     this.changed()
   }
 
-  private async readOne(source: LimitsSource, entry: Entry) {
+  /** Reads one account; whether a request went to its maker. */
+  private async readOne(source: LimitsSource, entry: Entry): Promise<boolean> {
     const started = this.now()
     // Not asked again before its time, even if the box stops while it waits for the answer.
     entry.next = Math.max(entry.next, started + source.every)
-    entry.checked = started
     this.save()
     try {
       const reading = await source.read!(started)
       const at = this.now()
-      entry.checked = at
       entry.next = at + source.every
-      if (!reading) return
+      // Nothing to read now: as it was.
+      if (!reading) return false
+      entry.checked = at
       entry.plan = reading.plan ?? entry.plan
       entry.balance = reading.balance
       // What it says now, in place of all it said before; a window a turn told of since it was
@@ -309,6 +318,7 @@ export class Limits {
       entry.signIn = undefined
       entry.refusals = 0
       entry.failures = 0
+      return true
     } catch (caught) {
       const at = this.now()
       entry.checked = at
@@ -342,6 +352,7 @@ export class Limits {
           entry.failures = (entry.failures ?? 0) + 1
           entry.next = at + Math.max(source.every, Math.min(FIRST_RETRY * 2 ** (entry.failures - 1), LONGEST_RETRY))
       }
+      return problem.sent
     }
   }
 
@@ -377,6 +388,7 @@ export class Limits {
 
   /** Accounts removed since: their records go. */
   private forgetGone() {
+    if (!this.settled()) return
     const here = new Set(this.accounts().map((account) => account.provider))
     for (const provider of this.entries.keys()) if (!here.has(provider)) this.entries.delete(provider)
   }
@@ -400,6 +412,7 @@ export class Limits {
         this.entries.set(provider, entry)
       }
       for (const [bucket, until] of Object.entries(saved.holds ?? {})) if (typeof until === "number") this.holds.set(bucket, until)
+      for (const [bucket, at] of Object.entries(saved.asked ?? {})) if (typeof at === "number") this.asked.set(bucket, at)
     } catch {}
   }
 
@@ -407,7 +420,7 @@ export class Limits {
 
   private save() {
     if (!this.file) return
-    const saved = JSON.stringify({ accounts: Object.fromEntries(this.entries), holds: Object.fromEntries(this.holds) } satisfies Saved)
+    const saved = JSON.stringify({ accounts: Object.fromEntries(this.entries), holds: Object.fromEntries(this.holds), asked: Object.fromEntries(this.asked) } satisfies Saved)
     if (saved === this.kept) return
     try {
       mkdirSync(dirname(this.file), { recursive: true })

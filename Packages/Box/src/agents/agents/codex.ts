@@ -162,18 +162,18 @@ export class CodexAgent implements Agent {
   private limitsRead = false
 
   /**
-   * Read once as the box starts, then only while Codex runs here anyway (an app-server is up): a
-   * read never keeps one running, nor starts one for an account nobody uses. Between, what its turns
-   * hear keeps them current.
+   * Read once as the box starts (its app-server then stops when it's idle, as any), then only through
+   * one already running for its sessions, never marked as used: a read never keeps one running, nor
+   * starts one again for an account nobody uses. Between, what its turns hear keeps them current.
    */
   private async readLimits(): Promise<LimitReading | null> {
     if (!this.executable()) throw new LimitsProblem("none", "Codex isn't installed here.")
-    if (this.limitsRead && ![...this.slots.values()].some((slot) => slot.server && !slot.server.isClosed)) return null
-    this.limitsRead = true
+    const running = [...this.slots.values()].map((slot) => slot.server).find((server) => server && !server.isClosed)
+    if (this.limitsRead && !running) return null
     let rpc: RPC
     let account: any
     try {
-      rpc = await this.rpc()
+      rpc = running ?? (await this.rpc())
       account = (await rpc.request("account/read", {}, 20_000))?.account
     } catch (caught) {
       throw new LimitsProblem("failed", `Codex couldn't say: ${caught instanceof Error ? caught.message : String(caught)}`)
@@ -192,6 +192,7 @@ export class CodexAgent implements Agent {
     const snapshots: any[] = result?.rateLimitsByLimitId ? Object.values(result.rateLimitsByLimitId) : result?.rateLimits ? [result.rateLimits] : []
     const windows = snapshots.flatMap((snapshot) => codexWindows(snapshot))
     const type = account.planType ?? snapshots.find((snapshot) => snapshot?.planType)?.planType
+    this.limitsRead = true
     return { windows, ...(typeof type === "string" && type !== "unknown" ? { plan: codexPlan(type) } : {}) }
   }
 

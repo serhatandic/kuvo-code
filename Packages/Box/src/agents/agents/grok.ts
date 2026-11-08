@@ -160,14 +160,15 @@ export class GrokAgent implements Agent {
     read: async (now) => {
       const entry = this.grokSignIn()
       if (!entry) throw new LimitsProblem("none", "Not signed in to Grok here.")
-      const expires = Date.parse(entry.expiresAt ?? entry.expires ?? "")
+      // (The Grok CLI writes `expires_at`.)
+      const expires = Date.parse(entry.expires_at ?? entry.expiresAt ?? entry.expires ?? "")
       if (Number.isFinite(expires) && expires <= now) throw new LimitsProblem("expired", "Its sign-in has lapsed: Grok renews it the next time it runs here.")
       return readGrok(entry.key.trim(), undefined, now)
     },
   }
 
   /** The sign-in Grok keeps in its home, as it is now. */
-  private grokSignIn(): { key: string; expiresAt?: string; expires?: string } | undefined {
+  private grokSignIn(): { key: string; expires_at?: string; expiresAt?: string; expires?: string } | undefined {
     const home = this.instance.home ?? process.env.GROK_HOME ?? join(homedir(), ".grok")
     try {
       const entries = JSON.parse(readFileSync(join(home, "auth.json"), "utf8")) ?? {}

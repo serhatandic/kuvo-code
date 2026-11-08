@@ -26,12 +26,18 @@ afterEach(() => {
 class Anthropic {
   answers = new Map<string, () => Response>()
   reads: { token: string; agent: string | null; beta: string | null }[] = []
+  private waiting: (() => void)[] = []
+  /** Once the next read has come. */
+  nextRead() {
+    return new Promise<void>((resolve) => this.waiting.push(resolve))
+  }
   private server = Bun.serve({
     hostname: "127.0.0.1",
     port: 0,
     fetch: (request) => {
       const token = (request.headers.get("authorization") ?? "").replace(/^Bearer /, "")
       this.reads.push({ token, agent: request.headers.get("user-agent"), beta: request.headers.get("anthropic-beta") })
+      for (const resolve of this.waiting.splice(0)) resolve()
       return this.answers.get(token)?.() ?? new Response("{}", { status: 401 })
     },
   })
@@ -247,14 +253,29 @@ describe("Claude on Linux", () => {
     const file = join(home, "limits.json")
     const own = new TestClaude(home, { id: "default", home: folder })
     const first = new Limits(() => agentAccounts([own]), file, clock.now)
+    const asked = anthropic.nextRead()
     const reading = first.tick()
-    while (anthropic.reads.length === 0) await Bun.sleep(1)
+    await asked
     // The box starts again while Anthropic hasn't answered.
     const restarted = new Limits(() => agentAccounts([new TestClaude(home, { id: "default", home: folder })]), file, clock.now)
     await restarted.tick()
     expect(anthropic.reads).toHaveLength(1)
     answer()
     await reading
+  })
+
+  test("a refresh right after a read doesn't read another Claude account within the minute", async () => {
+    const [own, work] = two()
+    anthropic.answers.set("token-own", usage(42, 18))
+    anthropic.answers.set("token-work", usage(90, 61))
+    const limits = new Limits(() => agentAccounts([own!, work!]), undefined, clock.now)
+    await limits.tick()
+    clock.pass(5_000)
+    await limits.refresh()
+    expect(anthropic.reads.map((read) => read.token)).toEqual(["token-own"])
+    clock.pass(55_000)
+    await limits.refresh()
+    expect(anthropic.reads.map((read) => read.token)).toEqual(["token-own", "token-work"])
   })
 
   test("a 429 with no time waits an hour, then longer each time", async () => {
@@ -305,8 +326,9 @@ describe("Claude on Linux", () => {
     let answer!: () => void
     anthropic.answers.set("token-own", () => new Promise<Response>((resolve) => (answer = () => resolve(usage(50, 20)()))) as any)
     clock.pass(15 * 60_000)
+    const asked = anthropic.nextRead()
     const reading = limits.tick()
-    while (anthropic.reads.length < 2) await Bun.sleep(1)
+    await asked
     own.limits.heard!({ id: "five_hour", used: 0.99 })
     answer()
     await reading
