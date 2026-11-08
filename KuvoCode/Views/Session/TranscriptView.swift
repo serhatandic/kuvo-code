@@ -892,7 +892,9 @@ private struct RowView: View, Equatable {
             // A subagent's task, in its own tab: the words of the agent that started it, not yours.
             AgentMessageRow(id: message.id, from: subagentStarter ?? "", session: "", text: SubagentTask.parse(CommandMessages.shared.text(of: message)) ?? "", at: message.time.created)
         case .user(let message) where CommandMessages.shared.text(of: message).hasPrefix(Wakes.marker):
-            WakeRow(note: String(CommandMessages.shared.text(of: message).dropFirst(Wakes.marker.count)), at: message.time.created)
+            if let wake = WakeMessage.of(text: CommandMessages.shared.text(of: message), metadata: message.metadata) {
+                WakeRow(id: message.id, wake: wake, at: message.time.created)
+            }
         case .user(let message):
             let written = CommandMessages.shared.text(of: message)
             let (text, comments, paths, references) = SentMessage.split(written)
@@ -2054,6 +2056,8 @@ private struct FoldingCard<Header: View, Accessory: View, Content: View>: View {
     let summary: String
     let startsOpen: Bool
     let help: String
+    /// How many lines of `summary` it shows folded.
+    var summaryLines = 1
     @ViewBuilder var header: Header
     @ViewBuilder var accessory: Accessory
     @ViewBuilder var content: Content
@@ -2086,8 +2090,9 @@ private struct FoldingCard<Header: View, Accessory: View, Content: View>: View {
                     withAnimation(.ui) { folds.set(id, open: !open) }
                 } label: {
                     // Centered, not on the first baseline: the first line leaving as it opens would
-                    // slide up out of line with the header while it fades.
-                    HStack(alignment: .center, spacing: 8) {
+                    // slide up out of line with the header while it fades. (Two lines of it keep to the
+                    // header's line.)
+                    HStack(alignment: summaryLines > 1 ? .firstTextBaseline : .center, spacing: 8) {
                         header
                         Image(systemName: "chevron.right")
                             .font(.caption2.weight(.semibold))
@@ -2096,7 +2101,7 @@ private struct FoldingCard<Header: View, Accessory: View, Content: View>: View {
                         if !open, !firstLine.isEmpty {
                             Text(firstLine)
                                 .foregroundStyle(.secondary)
-                                .lineLimit(1)
+                                .lineLimit(summaryLines)
                                 .truncationMode(.tail)
                         }
                     }
@@ -2199,11 +2204,21 @@ private struct GroupWorkRow: View {
     }
 }
 
-/// A bot woke itself up, as it planned: its note to itself, in place of a message from you.
+/// A conversation woke itself up, as its agent planned: its note to itself, in place of a message
+/// from you. A long one folds to its summary (KuvoClient's WakeMessage: the one its agent gave, or the
+/// note's first sentence), two lines at most, and opens to the note its agent read whole.
 struct WakeRow: View {
-    let note: String
+    let id: String
+    let wake: WakeMessage
     let at: Milliseconds
     @Environment(\.findHighlight) private var highlight
+
+    private static let help = "A wake-up the agent scheduled for itself"
+
+    /// The note, as the text of a message.
+    private func written(_ text: String, color: NSColor) -> NSAttributedString {
+        MessageMentions.attributed(FindText.marked(AttributedString(text), highlight), font: NSFont.preferredFont(forTextStyle: .callout), color: color).text
+    }
 
     /// "Woke up", then its note.
     private var words: NSAttributedString {
@@ -2211,27 +2226,46 @@ struct WakeRow: View {
         let words = NSMutableAttributedString(string: "Woke up  ", attributes: [
             .font: NSFont.systemFont(ofSize: font.pointSize, weight: .semibold), .foregroundColor: NSColor.labelColor,
         ])
-        words.append(MessageMentions.attributed(FindText.marked(AttributedString(note), highlight), font: font, color: .secondaryLabelColor).text)
+        words.append(written(wake.note, color: .secondaryLabelColor))
         return words
     }
 
+    private var time: some View {
+        Text(Date(timeIntervalSince1970: at / 1000), format: .dateTime.hour().minute())
+            .font(.caption)
+            .foregroundStyle(.tertiary)
+    }
+
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Image(systemName: "alarm")
-                .foregroundStyle(.tint)
-                .frame(width: 16)
-            // Room for what a watch saw, after its note.
-            SelectableText(text: words, lineLimit: 6)
-            Spacer(minLength: 8)
-            Text(Date(timeIntervalSince1970: at / 1000), format: .dateTime.hour().minute())
-                .font(.caption)
-                .foregroundStyle(.tertiary)
+        if wake.folds {
+            FoldingCard(id: id, summary: wake.summary, startsOpen: false, help: Self.help, summaryLines: 2) {
+                Image(systemName: "alarm")
+                    .foregroundStyle(.tint)
+                    .frame(width: 16)
+                Text("Woke up")
+                    .fontWeight(.semibold)
+                    .fixedSize()
+            } accessory: {
+                time
+            } content: {
+                SelectableText(text: written(wake.note, color: .labelColor))
+                    .padding(.leading, 24)
+            }
+        } else {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Image(systemName: "alarm")
+                    .foregroundStyle(.tint)
+                    .frame(width: 16)
+                SelectableText(text: words, lineLimit: 2)
+                Spacer(minLength: 8)
+                time
+            }
+            .font(.callout)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 9)
+            .recessedWell(RoundedRectangle(cornerRadius: 10))
+            .help(Self.help)
         }
-        .font(.callout)
-        .padding(.horizontal, 10)
-        .padding(.vertical, 9)
-        .recessedWell(RoundedRectangle(cornerRadius: 10))
-        .help("A wake-up the bot scheduled for itself")
     }
 }
 

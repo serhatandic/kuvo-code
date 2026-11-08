@@ -60,7 +60,7 @@ const TAB_IDLE = Number(process.env.KUVO_BROWSER_TAB_IDLE || 3600) * 1000;
 
 // Goes up with every change to the keeper (host mode): a newer one replaces one that's running
 // (its pages close, its sign-ins stay), and an older one never replaces a newer.
-const KEEPER = 47;
+const KEEPER = 48;
 // Passkeys: none yet, as in the panel's browser on the Mac (Passkeys.swift, the same script).
 const NO_PASSKEYS = "(() => {\n  try {\n    // Says a passkey was asked for with an event only this launch's listener, in a world of its\n    // own, knows the name of: nothing of it is left in the page's world. (Taken before the page\n    // can change them.)\n    const dispatch = EventTarget.prototype.dispatchEvent, Made = Event;\n    const tell = () => {\n      try {\n        dispatch.call(window, new Made(\"KUVO_PASSKEY_EVENT\"));\n      } catch {}\n    };\n    const none = (options) => {\n      // Asked of you, not looked for quietly as the page loads.\n      if (options.mediation !== \"conditional\") tell();\n      return Promise.reject(new DOMException(\"Passkeys can't be used in this browser.\", \"NotAllowedError\"));\n    };\n    const Container = window.CredentialsContainer;\n    if (Container && Container.prototype) {\n      const prototype = Container.prototype, get = prototype.get, create = prototype.create;\n      if (get) prototype.get = function (options) { return options && options.publicKey ? none(options) : get.call(this, options); };\n      if (create) prototype.create = function (options) { return options && options.publicKey ? none(options) : create.call(this, options); };\n    }\n    const Credential = window.PublicKeyCredential;\n    if (Credential) {\n      Credential.isUserVerifyingPlatformAuthenticatorAvailable = () => Promise.resolve(false);\n      if (Credential.isConditionalMediationAvailable) Credential.isConditionalMediationAvailable = () => Promise.resolve(false);\n    }\n  } catch {}\n})();";
 // The event it fires when a passkey is asked for (a name of this keeper's, which only the
@@ -2141,7 +2141,7 @@ async function wake(name, args, from) {
   if (name === "schedule_wake_up") {
     if (!given("when")) return text("Say when (when): +20m, +2h, +1d, or a time like 2026-10-21T09:00.", true);
     if (!given("note")) return text("Add a note for yourself (note): what to do when you wake up.", true);
-    verb = ["add", given("when"), ...(given("every") ? ["--every", given("every")] : []), given("note")];
+    verb = ["add", given("when"), ...(given("every") ? ["--every", given("every")] : []), ...(given("summary") ? ["--summary", given("summary")] : []), given("note")];
   } else if (name === "watch_for_change") {
     if (!given("every") || !given("check") || !given("note")) return text("Give how often (every), the check (a shell command) and a note for when it changes.", true);
     // A watch runs a command whenever it's due: in Ask First, only once the user was asked, as on
@@ -2152,7 +2152,7 @@ async function wake(name, args, from) {
     const asksFirst = rules.some((rule) => rule.action === "shell" && rule.effect === "ask");
     const asked = rules.some((rule) => rule.action === "kuvo-browser_watch_for_change" && rule.effect === "ask");
     if (asksFirst && (viaBridge || !asked)) return text("This conversation asks before running commands, and a watch runs its check by itself, so the user approves it first: start it with the shell command kuvo-wake watch <every> \"<check>\" \"<what to do when it changes>\" instead, which asks them.", true);
-    verb = ["watch", given("every"), given("check"), given("note")];
+    verb = ["watch", given("every"), given("check"), ...(given("summary") ? ["--summary", given("summary")] : []), given("note")];
   } else if (name === "list_wake_ups") {
     verb = ["list"];
   } else {

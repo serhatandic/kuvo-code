@@ -16,6 +16,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ### All Changes
 
+- A wake-up in a conversation shows a one- or two-line summary instead of its whole note: the summary the agent gave it, or the note's first sentence. Click it (tap it on the iPhone) to read the whole note, which the agent still gets in full.
 - In a narrow window, the composer's mode chip (Full Access, Auto…) shrinks to its icon before the model's name is cut short.
 - A wide screenshot in your message shrinks to fit a narrow conversation instead of running past its edge.
 - A bot can no longer allow what a session in Ask First asks, whatever the bot's own mode: you answer those, and the bot carries on with the rest (it can still say no, or answer a question in words). A bot that moved to another computer is held by that computer's Ask rules in Settings › Permissions too, not only its Don't Allows, for the sessions it left there: it can't allow what that computer would have asked about, like reading a `.env` or a folder outside the project.
