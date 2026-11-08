@@ -117,7 +117,23 @@ final class ClaudeProvider: ProviderRuntime {
     }
 
     func refresh() async -> ProviderSnapshot {
-        await refresh(
+        // The host states Claude's limits itself, one row per login (`HostLimits`, fork addition):
+        // no sign-in of yours is read, and Anthropic isn't asked as well (it would only count
+        // against the same hold). The panel's own Claude reading takes this Mac's own Claude login's
+        // limits, as of when, for the menu bar, the cards, notices and the host's readers; another
+        // account card, none. Spend comes from the logs, as ever.
+        if HostLimits.shared.covers(provider.id) {
+            var mapped = ClaudeMappedUsage(plan: nil, lines: [])
+            var warning: String?
+            if provider.id == "claude", let host = HostLimits.shared.lines(for: provider.id, now: now()) {
+                mapped.lines = host.lines
+                mapped.plan = host.plan
+                mapped.readAt = host.readAt
+                warning = host.notice
+            }
+            return await snapshotWithLocalUsage(mapped: mapped, warning: warning)
+        }
+        return await refresh(
             credentialReloadsRemaining: 1,
             forceDesktopFallback: false,
             previousFallbackError: nil
@@ -279,16 +295,6 @@ final class ClaudeProvider: ProviderRuntime {
         )
 
         var warning: String?
-        // The host states Claude's limits itself, one row per login (`HostLimits`, fork addition):
-        // Anthropic isn't asked here as well, which would only count against the same hold. This
-        // reading takes this Mac's own login's, for the menu bar, the cards and the notices.
-        if HostLimits.shared.covers(provider.id) {
-            if let host = HostLimits.shared.lines(for: provider.id, now: now()) {
-                mapped.lines = host.lines
-                mapped.plan = host.plan ?? mapped.plan
-            }
-            return await snapshotWithLocalUsage(mapped: mapped, warning: fallbackWarning)
-        }
         switch authStore.liveUsageAvailability(state) {
         case .available:
             mapped = try await fetchLiveUsage(

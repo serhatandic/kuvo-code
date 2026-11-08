@@ -151,6 +151,14 @@ public struct LimitsAccount: Decodable, Hashable, Sendable, Identifiable {
     public func readAt(now: Date) -> Date? {
         windows(at: now).map(\.read).min()
     }
+
+    /// How old a reading is when it's shown as out of date ("As of …" on the Mac): longer than a
+    /// box leaves between reads (10 to 15 minutes), so one read on time never is.
+    public static let outdatedAfter: TimeInterval = 30 * 60
+
+    public func isOutdated(now: Date) -> Bool {
+        readAt(now: now).map { now.timeIntervalSince($0) > Self.outdatedAfter } ?? false
+    }
 }
 
 /// One window of a plan's limit.

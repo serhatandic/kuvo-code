@@ -48,8 +48,10 @@ struct PlanLimitsTests {
         #expect(limits.accounts[1].tightest(at: now) == nil)
         #expect(limits.accounts[1].problem?.kind == "rate-limited")
         #expect(limits.accounts[0].tightest(at: now)?.id == "five_hour")
-        // As of its oldest window shown.
+        // As of its oldest window shown; out of date once that's over half an hour.
         #expect(limits.accounts[0].readAt(now: now) == Date(timeIntervalSince1970: 1_794_150_000))
+        #expect(limits.accounts[0].isOutdated(now: now))
+        #expect(!limits.accounts[0].isOutdated(now: Date(timeIntervalSince1970: 1_794_151_000)))
     }
 
     @Test func theEventCarriesTheAccountsAlone() throws {

@@ -60,8 +60,14 @@ final class BoxPlanLimits {
                 guard !Task.isCancelled, let self else { return }
                 self.boxes[key] = limits
                 self.publish()
+            } catch let error as ServerError where error.status == 404 {
+                // A box from before it read them: none from it, and this Mac's covers nothing.
+                guard !Task.isCancelled, let self else { return }
+                self.boxes[key] = nil
+                if key.isEmpty { self.forgetServices() }
+                self.publish()
             } catch {
-                // A box from before it read them (404), or one that's starting: none from it yet.
+                // One that's starting: none from it yet.
                 if !Task.isCancelled { log.info("plan limits of \(key.isEmpty ? "this Mac" : key, privacy: .public): \(String(describing: error), privacy: .public)") }
             }
         }
@@ -77,6 +83,11 @@ final class BoxPlanLimits {
                 self.publish()
             }
         }
+    }
+
+    private func forgetServices() {
+        services = []
+        UserDefaults.standard.removeObject(forKey: Self.servicesKey)
     }
 
     private func publish() {
@@ -113,7 +124,8 @@ final class BoxPlanLimits {
             balance: account.balance.map { HostLimitRow.Balance(left: $0.left, unit: $0.unit) },
             notice: account.problem?.message,
             readAt: account.readAt(now: now),
-            isLocal: machine == nil
+            isLocal: machine == nil,
+            isOwnLogin: machine == nil && account.account == "default"
         )
     }
 }

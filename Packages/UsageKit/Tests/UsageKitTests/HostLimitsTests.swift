@@ -10,7 +10,7 @@ final class HostLimitsTests: XCTestCase {
     }
 
     private func row(_ id: String, _ provider: String, _ name: String) -> HostLimitRow {
-        HostLimitRow(id: id, providerID: provider, name: name, meters: [HostLimitRow.Meter(title: "Session", fraction: 0.4)])
+        HostLimitRow(id: id, providerID: provider, name: name, meters: [HostLimitRow.Meter(title: "Session", fraction: 0.4)], isLocal: !id.hasPrefix("mini/"))
     }
 
     private func names(_ entries: [BarsEntry]) -> [String] {
@@ -42,6 +42,22 @@ final class HostLimitsTests: XCTestCase {
             // Providers the panel doesn't list here: after them.
             "Codex", "Copilot",
         ])
+    }
+
+    func testAMachinesLoginNeverTakesThisMacsBarOrItsSpend() {
+        // This Mac's box has no Claude row yet (no turn here); a machine's has one.
+        let limits = HostLimits()
+        limits.update(rows: [row("mini/claude-code", "claude", "Claude · mini")], covered: ["claude"])
+        let entries = limits.entries(groups: [group("claude"), group("cursor")]) { _ in false }
+        XCTAssertEqual(names(entries), ["panel:claude", "Claude · mini", "panel:cursor"])
+        // A phone gets the panel's own Claude: this Mac's box has no row for it.
+        XCTAssertEqual(limits.phoneGroups([group("claude"), group("cursor")]).map(\.provider.id), ["claude", "cursor"])
+    }
+
+    func testAPhoneGetsThePanelLessWhatThisMacsBoxStates() {
+        let limits = HostLimits()
+        limits.update(rows: [row("this Mac/claude-code", "claude", "Claude"), row("this Mac/openrouter", "openrouter", "OpenRouter")], covered: ["claude", "openrouter", "copilot"])
+        XCTAssertEqual(limits.phoneGroups([group("claude"), group("claude@ab12cd34"), group("copilot"), group("openrouter"), group("cursor")]).map(\.provider.id), ["copilot", "cursor"])
     }
 
     func testACoveredProviderTheHostHasNoRowForYetKeepsItsOwnBar() {
@@ -100,10 +116,12 @@ final class HostLimitsTests: XCTestCase {
         // This Mac's own login's limits, as its box states them; a machine's isn't this Mac's.
         HostLimits.shared.update(rows: [
             HostLimitRow(id: "devbox/claude-code", providerID: "claude", name: "Claude · devbox", meters: [HostLimitRow.Meter(title: "Session", fraction: 0.9)], isLocal: false),
+            // One you added, listed first (it had a turn first): not the panel's own card's.
+            HostLimitRow(id: "this Mac/claude-code@1f2e", providerID: "claude", name: "Claude · Work", meters: [HostLimitRow.Meter(title: "Session", fraction: 0.77)]),
             HostLimitRow(id: "this Mac/claude-code", providerID: "claude", name: "Claude", plan: "Max 20x", meters: [
                 HostLimitRow.Meter(title: "Session", fraction: 0.42, resetsAt: now.addingTimeInterval(3_600), periodMinutes: 300),
                 HostLimitRow.Meter(title: "Weekly", fraction: 0.18, periodMinutes: 10_080),
-            ]),
+            ], readAt: now.addingTimeInterval(-120), isOwnLogin: true),
         ], covered: ["claude"])
         defer { HostLimits.shared.update(rows: [], covered: []) }
 
@@ -112,11 +130,36 @@ final class HostLimitsTests: XCTestCase {
         // Anthropic isn't asked with your own login: the menu bar, the cards and the notices read the box's.
         XCTAssertEqual(httpClient.requests.count, 0)
         XCTAssertEqual(snapshot.plan, "Max 20x")
+        XCTAssertEqual(snapshot.refreshedAt, now.addingTimeInterval(-120))
         guard case .progress(_, let used, _, _, let resetsAt, _, _)? = snapshot.lines.first(where: { $0.label == "Session" }) else { return XCTFail("no Session") }
         XCTAssertEqual(used, 42)
         XCTAssertEqual(resetsAt, now.addingTimeInterval(3_600))
         XCTAssertNotNil(snapshot.lines.first(where: { $0.label == "Weekly" }))
         // Its spend still counts.
         XCTAssertNotNil(snapshot.lines.first(where: { $0.label == "Today" }))
+    }
+
+    func testWithNoClaudeCodeSignInOfYourOwnTheBoxsLimitsStillShow() async throws {
+        let now = OpenUsageISO8601.date(from: "2026-02-20T16:00:00.000Z")!
+        let httpClient = FakeHTTPClient(response: HTTPResponse(statusCode: 200, headers: [:], body: Data()))
+        let provider = ClaudeProvider(
+            authStore: ClaudeAuthStore(environment: FakeEnvironment(), files: FakeFiles(), keychain: FakeKeychain(), now: { now }),
+            usageClient: ClaudeUsageClient(httpClient: httpClient),
+            logUsageScanner: ClaudeLogFixture.scanner(home: try ClaudeLogFixture.makeHome(files: [:])),
+            now: { now },
+            pricing: { TestPricing.bundled }
+        )
+        HostLimits.shared.update(rows: [
+            HostLimitRow(id: "this Mac/claude-code", providerID: "claude", name: "Claude", meters: [HostLimitRow.Meter(title: "Session", fraction: 0.3)],
+                         notice: "Anthropic is turning away reads of the plan's limits for now.", isOwnLogin: true),
+        ], covered: ["claude"])
+        defer { HostLimits.shared.update(rows: [], covered: []) }
+
+        let snapshot = await provider.refresh()
+
+        XCTAssertNil(snapshot.errorCategory)
+        XCTAssertNotNil(snapshot.lines.first(where: { $0.label == "Session" }))
+        XCTAssertEqual(snapshot.warning, "Anthropic is turning away reads of the plan's limits for now.")
+        XCTAssertEqual(httpClient.requests.count, 0)
     }
 }

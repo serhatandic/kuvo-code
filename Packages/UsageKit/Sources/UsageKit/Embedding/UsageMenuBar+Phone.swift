@@ -11,12 +11,9 @@ extension UsageMenuBar {
         guard let container else { return nil }
         let store = container.dataStore
         let encoder = Self.phoneEncoder
-        // As the Bars view lists them, but for the rows the host's boxes state (the phone reads
-        // those from each box itself, `kuvo/agents/api/kuvo/limits`).
-        let groups = HostLimits.shared.entries(groups: container.layout.displayGroups) { _ in true }.compactMap { entry -> ProviderGroup? in
-            if case .group(let group) = entry { return group }
-            return nil
-        }
+        // As the Bars view lists them, less those this Mac's box states rows for (the phone reads
+        // those from the box itself, `kuvo/agents/api/kuvo/limits`).
+        let groups = HostLimits.shared.phoneGroups(container.layout.displayGroups)
         let providers = groups.compactMap { group -> PhoneUsage.Provider? in
             let provider = group.provider
             guard let snapshot = store.snapshots[provider.id] else { return nil }

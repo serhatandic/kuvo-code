@@ -19,10 +19,14 @@ public struct HostLimitRow: Sendable, Hashable, Identifiable {
     public var balance: Balance?
     /// Why it couldn't be read just now, in words to show.
     public var notice: String?
-    /// When the oldest of its meters was read: shown as "As of …" once that's long ago.
+    /// When the oldest of its meters was read: shown as "As of …" once that's long ago
+    /// (`HostLimitData.outdated`).
     public var readAt: Date?
     /// It's this Mac's own box's (its own logins are the panel's own provider's).
     public var isLocal: Bool
+    /// It's the agent's own sign-in on this Mac (not one you added): the panel's own card for the
+    /// provider takes its numbers.
+    public var isOwnLogin: Bool
 
     public struct Meter: Sendable, Hashable {
         /// "Session", "Weekly", "Sonnet", "Premium requests".
@@ -65,8 +69,9 @@ public struct HostLimitRow: Sendable, Hashable, Identifiable {
         }
     }
 
-    public init(id: String, providerID: String, name: String, plan: String? = nil, meters: [Meter], balance: Balance? = nil, notice: String? = nil, readAt: Date? = nil, isLocal: Bool = true) {
+    public init(id: String, providerID: String, name: String, plan: String? = nil, meters: [Meter], balance: Balance? = nil, notice: String? = nil, readAt: Date? = nil, isLocal: Bool = true, isOwnLogin: Bool = false) {
         self.isLocal = isLocal
+        self.isOwnLogin = isOwnLogin
         self.id = id
         self.providerID = providerID
         self.name = name
@@ -91,13 +96,17 @@ public final class HostLimits {
     @ObservationIgnored public var refresh: (() -> Void)?
 
     public func update(rows: [HostLimitRow], covered: Set<String>) {
-        let before = self.rows
+        let before = ownReading(in: self.rows, covered: self.covered)
         if self.rows != rows { self.rows = rows }
         if self.covered != covered { self.covered = covered }
-        // The panel's own readings of a covered provider take the host's numbers: read them again.
-        let changed = Set((before + rows).filter { $0.isLocal }.map { ProviderAccountID.family(of: $0.providerID) })
-            .filter { family in before.filter { $0.isLocal && ProviderAccountID.family(of: $0.providerID) == family } != rows.filter { $0.isLocal && ProviderAccountID.family(of: $0.providerID) == family } }
-        if !changed.isEmpty { onLocalChange?(changed) }
+        // The panel's own Claude reading takes this Mac's own login's numbers: read again when they
+        // change (not their read times), which asks no maker anything. (Only Claude's does.)
+        if ownReading(in: rows, covered: covered) != before { onLocalChange?(["claude"]) }
+    }
+
+    private func ownReading(in rows: [HostLimitRow], covered: Set<String>) -> [String]? {
+        guard covered.contains("claude"), let row = rows.first(where: { $0.isOwnLogin && ProviderAccountID.family(of: $0.providerID) == "claude" }) else { return nil }
+        return [row.plan ?? "", row.notice ?? ""] + row.meters.map { "\($0.title) \(Int(($0.fraction * 100).rounded())) \($0.resetsAt?.timeIntervalSince1970 ?? 0)" }
     }
 
     /// Told which covered providers' local rows changed (the panel reads those again).
@@ -105,45 +114,58 @@ public final class HostLimits {
 
     /// A covered provider's limits as the panel's own lines, from this Mac's own login's row (its
     /// agent's own sign-in, listed first): nil when the host has none for it.
-    func lines(for providerID: String, now: Date = .now) -> (lines: [MetricLine], plan: String?)? {
+    func lines(for providerID: String, now: Date = .now) -> (lines: [MetricLine], plan: String?, readAt: Date?, notice: String?)? {
         let family = ProviderAccountID.family(of: providerID)
-        guard covers(family), let row = rows.first(where: { $0.isLocal && ProviderAccountID.family(of: $0.providerID) == family }) else { return nil }
+        guard covers(family), let row = rows.first(where: { $0.isOwnLogin && ProviderAccountID.family(of: $0.providerID) == family }) else { return nil }
         let lines: [MetricLine] = row.meters.compactMap { meter in
             if let resetsAt = meter.resetsAt, resetsAt <= now { return nil }
             return .progress(label: meter.title, used: ProviderParse.clampPercent(meter.fraction * 100), limit: 100, format: .percent,
                              resetsAt: meter.resetsAt, periodDurationMs: meter.periodMinutes.map { $0 * 60_000 })
         }
-        return (lines, row.plan)
+        return (lines, row.plan, row.readAt, row.notice)
     }
 
     public func covers(_ providerID: String) -> Bool {
         covered.contains(ProviderAccountID.family(of: providerID))
     }
 
-    /// What the Bars view lists: each of the panel's providers in its order, one the host covers
-    /// and has rows for as those rows (the first with the provider's own spend under it); then the
-    /// host's rows for providers the panel doesn't list, unless you hid that provider.
+    /// What the Bars view lists: each of the panel's providers in its order, one the host covers as
+    /// this Mac's own logins' rows when it has them (the first with the provider's spend under it),
+    /// then the machines'; then the host's rows for providers the panel doesn't list, unless you
+    /// hid that provider.
     func entries(groups: [ProviderGroup], known: (String) -> Provider? = { _ in nil }, isHidden: (String) -> Bool) -> [BarsEntry] {
         var entries: [BarsEntry] = []
         var placed = Set<String>()
         for group in groups {
             let family = ProviderAccountID.family(of: group.provider.id)
-            let own = rows.filter { ProviderAccountID.family(of: $0.providerID) == family }
-            // Not covered, or covered with nothing from the host yet: the panel's own, as it was.
-            guard covers(family), !own.isEmpty, !isHidden(family) else {
+            guard !placed.contains(family + "|") else { continue }
+            let mine = rows.filter { ProviderAccountID.family(of: $0.providerID) == family }
+            let local = mine.filter(\.isLocal)
+            // This Mac's own logins in place of the panel's bar, its spend under the first; with
+            // none from this Mac's box yet, the panel's own bar, as it was. Then the machines'.
+            if covers(family), !local.isEmpty, !isHidden(family) {
+                for (index, row) in local.enumerated() { entries.append(.host(row, group.provider, spend: index == 0 ? group : nil)) }
+                placed.insert(family + "|")
+            } else {
                 entries.append(.group(group))
-                continue
-            }
-            for (index, row) in own.enumerated() where !placed.contains(row.id) {
-                entries.append(.host(row, group.provider, spend: index == 0 && !placed.contains(where: { $0.hasPrefix(family + "|") }) ? group : nil))
-                placed.insert(row.id)
+                if !covers(family) { continue }
             }
             placed.insert(family + "|")
+            for row in mine where !row.isLocal && !isHidden(family) { entries.append(.host(row, group.provider, spend: nil)) }
+            placed.formUnion(mine.map(\.id))
         }
         for row in rows where !placed.contains(row.id) && !isHidden(row.providerID) {
             entries.append(.host(row, known(row.providerID) ?? HostLimits.provider(for: row.providerID), spend: nil))
         }
         return entries
+    }
+
+    /// The panel's own bars a phone gets (`kuvo/usage`): all but those this Mac's box states rows for.
+    func phoneGroups(_ groups: [ProviderGroup]) -> [ProviderGroup] {
+        groups.filter { group in
+            let family = ProviderAccountID.family(of: group.provider.id)
+            return !(covers(family) && rows.contains { $0.isLocal && ProviderAccountID.family(of: $0.providerID) == family })
+        }
     }
 
     /// A plain provider, for a service the panel doesn't know: its mark and color by its ID.
@@ -199,11 +221,15 @@ enum HostLimitData {
         return rows
     }
 
-    /// "As of …" once what it shows was read longer ago than the panel calls Outdated.
+    /// How old a box's reading is when it says "As of": longer than the box's own spacing (10 to
+    /// 15 minutes), as the phone says it (KuvoClient's `LimitsAccount.outdatedAfter`).
+    static let outdated: TimeInterval = 30 * 60
+
+    /// "As of …" once what it shows was read longer ago than that.
     static func staleness(_ row: HostLimitRow, now: Date = .now) -> StalenessHint? {
         guard let readAt = row.readAt else { return nil }
         let age = now.timeIntervalSince(readAt)
-        guard age >= WidgetDataStore.stalenessThreshold, let duration = Formatters.compactDuration(age) else { return nil }
+        guard age >= outdated, let duration = Formatters.compactDuration(age) else { return nil }
         let when = readAt.formatted(date: Calendar.current.isDate(readAt, inSameDayAs: now) ? .omitted : .abbreviated, time: .shortened)
         return StalenessHint(label: "As of \(when)", tooltip: "Last read \(duration) ago")
     }
