@@ -408,6 +408,16 @@ private struct AttachmentPicture: View {
     /// Opens it in the viewer.
     let view: () -> Void
     @State private var image: NSImage?
+
+    init(item: AttachmentItem, height: CGFloat, maxWidth: CGFloat = 360, view: @escaping () -> Void) {
+        self.item = item
+        self.height = height
+        self.maxWidth = maxWidth
+        self.view = view
+        // One already decoded shows at once, rather than its placeholder first (as a message is
+        // drawn again).
+        _image = State(initialValue: AttachmentImages.cache.object(forKey: item.contentID as NSString))
+    }
     /// Loaded without a picture (data that isn't one, a file that's gone): no spinner then.
     @State private var isMissing = false
     @State private var isHovering = false
@@ -417,14 +427,17 @@ private struct AttachmentPicture: View {
         Group {
             if let image {
                 let size = fitted(image.size)
+                // Narrower where the conversation is narrower than it, in its own shape.
                 Image(nsImage: image)
                     .resizable()
                     .interpolation(.high)
-                    .frame(width: size.width, height: size.height)
+                    .aspectRatio(size.width / size.height, contentMode: .fit)
+                    .frame(idealWidth: size.width, maxWidth: size.width)
             } else {
                 RoundedRectangle(cornerRadius: 12)
                     .fill(.fill.tertiary)
-                    .frame(width: height * 1.4, height: height)
+                    .aspectRatio(1.4, contentMode: .fit)
+                    .frame(idealWidth: height * 1.4, maxWidth: height * 1.4)
                     .overlay {
                         if isMissing {
                             Image(systemName: "photo")

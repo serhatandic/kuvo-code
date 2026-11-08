@@ -23,7 +23,7 @@ public struct Flow: Layout {
         for row in rows(for: subviews, width: bounds.width) {
             var x = alignment == .trailing ? bounds.maxX - row.width : bounds.minX
             for index in row.indices {
-                let size = subviews[index].sizeThatFits(.unspecified)
+                let size = size(of: subviews[index], width: bounds.width)
                 subviews[index].place(at: CGPoint(x: x, y: y + (row.height - size.height) / 2), proposal: ProposedViewSize(size))
                 x += size.width + spacing
             }
@@ -39,11 +39,19 @@ public struct Flow: Layout {
 
     private struct Row { var indices: [Int] = []; var width: CGFloat = 0; var height: CGFloat = 0 }
 
+    /// A view's own size, or, wider than the room, the size it takes in that width (a picture
+    /// that can shrink does, rather than run past the edge).
+    private func size(of subview: LayoutSubview, width: CGFloat) -> CGSize {
+        let size = subview.sizeThatFits(.unspecified)
+        guard size.width > width, width.isFinite else { return size }
+        return subview.sizeThatFits(ProposedViewSize(width: width, height: nil))
+    }
+
     private func rows(for subviews: Subviews, width: CGFloat) -> [Row] {
         var rows: [Row] = []
         var current = Row()
         for index in subviews.indices {
-            let size = subviews[index].sizeThatFits(.unspecified)
+            let size = size(of: subviews[index], width: width)
             let next = current.indices.isEmpty ? size.width : current.width + spacing + size.width
             if !current.indices.isEmpty, next > width {
                 rows.append(current)
