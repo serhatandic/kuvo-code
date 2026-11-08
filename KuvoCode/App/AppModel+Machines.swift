@@ -124,8 +124,8 @@ extension AppModel {
             let body = JSONValue.object(["path": .string(file.path), "session": .string(session), "via": .string("download")])
             Task { _ = try? await api.client.send(try api.client.request("POST", "api/kuvo/artifacts/noted", body: body), as: JSONValue.self) }
         }
-        // A machine whose connection dropped while the Mac slept, and that gave up trying, gets
-        // another go once it's awake and the network is back. (NSWorkspace says so on its own
+        // A machine whose connection dropped while the Mac slept is tried again soon after it
+        // wakes, rather than when its next try comes round. (NSWorkspace says so on its own
         // notification center; watched once, though this runs with each start of the engine.)
         if wakeWatch == nil {
             wakeWatch = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
@@ -135,14 +135,33 @@ extension AppModel {
         return machines.engines.values.filter { !$0.isDisconnected }.map { connect($0) }
     }
 
-    /// What waking does: each machine that couldn't connect is tried again, a failure that won't
-    /// pass by itself too, once (a key in an agent, refused while it was locked, may work now).
+    /// What waking does: each machine that couldn't connect is tried again in a moment, from the
+    /// start of its tries (one waiting minutes for its next is back soon after the network is), a
+    /// failure that won't pass by itself too, once (a key in an agent, refused while it was
+    /// locked, may work now). Not one whose try is under way.
     func wakeMachines() {
-        for engine in machines.engines.values where !engine.isRetrying {
-            guard case .failed = engine.state else { continue }
-            engine.isRetrying = true
-            Task { await reconnect(engine) }
+        for engine in machines.engines.values {
+            guard case .failed = engine.state, !engine.isDisconnected else { continue }
+            retry(engine)
         }
+    }
+
+    /// Tries to connect `engine` again by itself, from the first of its waits; a round already
+    /// waiting ends.
+    private func retry(_ engine: MachineEngine) {
+        engine.retryLoop?.cancel()
+        engine.retryRound += 1
+        let round = engine.retryRound
+        engine.isRetrying = true
+        engine.retryLoop = Task { await reconnect(engine, round: round) }
+    }
+
+    /// No more tries by itself (Disconnect, Remove).
+    private func stopRetrying(_ engine: MachineEngine) {
+        engine.retryLoop?.cancel()
+        engine.retryLoop = nil
+        engine.retryRound += 1
+        engine.isRetrying = false
     }
 
     /// Adds a machine (a host from `~/.ssh/config`, or `user@host`) and connects to it.
@@ -416,16 +435,15 @@ extension AppModel {
             self?.connectionClosed(machine)
             // One way back at a time: a connection lost while one is tried is that one's to retry.
             guard !engine.isRetrying else { return }
-            engine.isRetrying = true
-            Task { await self?.reconnect(engine) }
+            self?.retry(engine)
         }
         return Task {
             await start(engine)
-            // Not reached the first time (the app opened before the network was up): tried again
-            // as a dropped connection is, while what waited for this goes on.
+            // Not reached the first time (the app opened before the network was up), or a start
+            // over that failed: tried again as a dropped connection is, while what waited for
+            // this goes on.
             guard case .failed = engine.state, engine.failureMayPass, !engine.isRetrying else { return }
-            engine.isRetrying = true
-            Task { await reconnect(engine) }
+            retry(engine)
         }
     }
 
@@ -442,18 +460,47 @@ extension AppModel {
         engine.alsoUsedBy = .init(macs: macs.filter { $0.key != own }.map { $0.name ?? "another Mac" }, phones: info.phones ?? 0)
     }
 
+    /// How long a machine coming back may answer without its engine coming up before that's said,
+    /// with Try Again (a restart takes a few minutes at most), in seconds.
+    static let comingBackFor = 15 * 60
+
     /// After a dropped connection (the Mac slept, the machine restarted, the network changed):
-    /// tries further apart each time, for as long as it takes, while its sessions wait, and it's
-    /// connected again the first time it answers.
-    private func reconnect(_ engine: MachineEngine) async {
-        engine.isRetrying = true
-        defer { engine.isRetrying = false }
-        await MachineClock.retry(after: MachineClock.reconnectWaits) {
-            // Connected again some other way (Try Again), or disconnected or removed meanwhile.
-            guard case .failed = engine.state, !engine.isRetired, !engine.isDisconnected else { return true }
+    /// tries further apart each time, while its sessions wait, and it's connected again the first
+    /// time it answers. For as long as it doesn't answer; for a while, while it answers but its
+    /// engine doesn't come up (`FailureKind.comingBack`); not again for what trying won't change.
+    private func reconnect(_ engine: MachineEngine, round: Int) async {
+        defer {
+            if engine.retryRound == round {
+                engine.isRetrying = false
+                engine.retryLoop = nil
+            }
+        }
+        var waited = 0
+        var comingBackSince: Int?
+        for wait in MachineClock.reconnectWaits {
+            await MachineClock.wait(wait)
+            guard !Task.isCancelled else { return }
+            waited += wait
+            switch engine.state {
+            // Connected again some other way (Connect Now), or disconnected or removed meanwhile.
+            case .ready, .preparing: return
+            // Connect Now's try under way: how it ends is seen at the next.
+            case .starting, .downloading: continue
+            case .failed: break
+            }
+            guard !engine.isRetired, !engine.isDisconnected else { return }
             await start(engine)
-            // Done, or failed in a way trying again won't change: that's said now, with Try Again.
-            return engine.isReady || !engine.failureMayPass
+            guard !engine.isReady, !Task.isCancelled else { return }
+            switch engine.failureKind {
+            case .away:
+                comingBackSince = nil
+            case .comingBack:
+                // Answering, but not coming up, for a while now: that's said, with Try Again.
+                if waited - (comingBackSince ?? waited) >= Self.comingBackFor { return }
+                comingBackSince = comingBackSince ?? waited
+            case .lasting:
+                return
+            }
         }
     }
 
@@ -563,6 +610,8 @@ extension AppModel {
     func disconnect(_ engine: MachineEngine) {
         engine.startWanted = false
         engine.isDisconnected = true
+        // It isn't tried again by itself now, nor does Settings offer Connect Now for it.
+        stopRetrying(engine)
         engine.browser.reset()
         utilities.closeMachineBrowser(engine.machine.id)
         // What runs for its connection ends now, a test copy's too, whose engine stops after.
@@ -609,7 +658,10 @@ extension AppModel {
     func removeMachine(_ id: String, uninstall: Bool = false) {
         // Left running, as Disconnect leaves it (a test or demo copy's stops).
         if !uninstall, let engine = machines.engine(id) { disconnect(engine) }
-        machines.engine(id)?.browser.reset()
+        if let engine = machines.engine(id) {
+            stopRetrying(engine)
+            engine.browser.reset()
+        }
         browserAsks.closeAll(on: id)
         utilities.closeMachineBrowser(id)
         utilities.closeTerminals(on: id)
@@ -688,9 +740,10 @@ extension AppModel {
                 // Said in the log, so one that keeps starting over is seen there.
                 Logger(subsystem: "run.kuvo.code", category: "machine").info("\(engine.machine.id, privacy: .public)'s engine starts over with this Mac's newer settings")
                 // Connecting again starts it over with them, in one start (`MachineEngine.start`),
-                // its connection, and this with it, ended first.
+                // its connection, and this with it, ended first; tried again by itself if that
+                // start fails, as a dropped connection is.
                 engine.disconnect()
-                Task { await self.start(engine) }
+                connect(engine)
                 return
             }
             await MachineClock.wait(wait)

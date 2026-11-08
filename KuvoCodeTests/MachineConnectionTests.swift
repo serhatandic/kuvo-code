@@ -589,24 +589,15 @@ import Testing
     /// time it answers it's connected again, with no Connect pressed (#285).
     @Test func aMachineThatRestartsIsConnectedAgainByItself() async throws {
         defer { done() }
-        let id = Self.name()
-        let engine = add(id, at: machine)
-        await app.connect(engine).value
-        #expect(engine.isReady)
-        try await until { clock.waits == [30, 60, 600] }
-
-        reachable.failures[id] = Self.restarting
-        engine.connectionLost("The connection to \(engine.machine.name) was lost.")
-        try await until { clock.waits == [3] }
+        let (id, engine) = try await dropped(failing: Self.restarting)
         #expect(engine.connection == .reconnecting)
         clock.pass(3)
-        try await until { !clock.waits.isEmpty || !engine.isRetrying }
-        guard engine.isRetrying else { Issue.record("given up on: “\(engine.statusText)”"); return }
+        guard let wait = try await nextTry(engine) else { Issue.record("given up on: “\(engine.statusText)”"); return }
         #expect(engine.connection == .reconnecting)
-        #expect(clock.waits == [5], "tried again in a moment")
+        #expect(wait <= 30, "tried again in a moment")
 
         reachable.failures[id] = nil
-        clock.pass(5)
+        clock.pass(wait)
         try await until { !engine.isRetrying }
         #expect(engine.isReady, "connected again, no Connect pressed")
     }
@@ -615,42 +606,66 @@ import Testing
     /// connected again once it's back, rather than given up on after half an hour.
     @Test func aMachineAwayForHoursIsConnectedAgainWhenItsBack() async throws {
         defer { done() }
-        let id = Self.name()
-        let engine = add(id, at: machine)
-        await app.connect(engine).value
-        try await until { clock.waits == [30, 60, 600] }
-
+        let (id, engine) = try await dropped()
         let api = reachable.apis[id]
         reachable.apis[id] = nil
-        engine.connectionLost("The connection to \(engine.machine.name) was lost.")
         var away = 0
         while away < 3 * 3600 {
-            try await until { clock.waits.count == 1 || !engine.isRetrying }
-            guard engine.isRetrying, let wait = clock.waits.first else { Issue.record("given up after \(away) seconds"); return }
+            guard let wait = try await nextTry(engine) else { Issue.record("given up after \(away) seconds"); return }
             #expect(wait <= 120, "no more than two minutes between tries")
             away += wait
             clock.pass(wait)
         }
-        try await until { clock.waits.count == 1 }
-        #expect(clock.waits == [120], "two minutes apart after an hour")
+        guard let wait = try await nextTry(engine) else { Issue.record("given up after \(away) seconds"); return }
         reachable.apis[id] = api
-        clock.pass(120)
+        clock.pass(wait)
         try await until { !engine.isRetrying }
         #expect(engine.isReady, "connected again, no Connect pressed")
+    }
+
+    /// The Mac wakes while a machine away for a long time waits minutes for its next try: it's
+    /// tried again in a moment, not when that try comes round.
+    @Test func aMachineAwayIsTriedAgainSoonAfterTheMacWakes() async throws {
+        defer { done() }
+        let (id, engine) = try await dropped()
+        let api = reachable.apis[id]
+        reachable.apis[id] = nil
+        var away = 0
+        while away < 2 * 3600, let wait = try await nextTry(engine) {
+            away += wait
+            clock.pass(wait)
+        }
+        #expect(try await nextTry(engine) == 120)
+
+        reachable.apis[id] = api
+        app.wakeMachines()
+        #expect(try await nextTry(engine) == 3, "tried again in a moment")
+        clock.pass(3)
+        try await until { !engine.isRetrying }
+        #expect(engine.isReady)
+    }
+
+    /// Dropped, then answering but its engine never coming up (broken there, not restarting): tried
+    /// for a while, then it says why, with Try Again, rather than “Reconnecting…” for good.
+    @Test func aMachineWhoseEngineWontComeBackSaysWhyAfterAWhile() async throws {
+        defer { done() }
+        let (_, engine) = try await dropped(failing: RemoteEngineError.exited(status: 3, output: "Error: Unexpected token in settings.json"))
+        var tried = 0
+        while let wait = try await nextTry(engine) {
+            tried += wait
+            guard tried < 2 * 3600 else { Issue.record("still trying after two hours"); return }
+            clock.pass(wait)
+        }
+        #expect(tried >= AppModel.comingBackFor, "tried while it may be restarting")
+        #expect(engine.connection == .failed)
+        #expect(engine.failure?.contains("settings.json") == true, "it says why")
     }
 
     /// Dropped, then turned away when it answers (its key, kept in an app that locked meanwhile):
     /// said at once, with Try Again, rather than tried for as long as it's away.
     @Test func aMachineThatDroppedAndRefusesItsKeySaysSo() async throws {
         defer { done() }
-        let id = Self.name()
-        let engine = add(id, at: machine)
-        await app.connect(engine).value
-        try await until { clock.waits == [30, 60, 600] }
-
-        reachable.failures[id] = RemoteEngineError.ssh(status: 255, message: "someone@\(id): Permission denied (publickey).")
-        engine.connectionLost("The connection to \(engine.machine.name) was lost.")
-        try await until { clock.waits == [3] }
+        let (_, engine) = try await dropped(failing: RemoteEngineError.ssh(status: 255, message: "someone@devbox: Permission denied (publickey)."))
         clock.pass(3)
         try await until { !engine.isRetrying }
         #expect(engine.connection == .failed)
@@ -658,9 +673,78 @@ import Testing
         #expect(clock.waits == [])
     }
 
-    /// What a machine says while it restarts and its engine can't start yet, as starting it there
-    /// over SSH fails then.
-    private static let restarting = RemoteEngineError.exited(status: 3, output: "Its engine couldn't be noted down there.")
+    /// A Mac restarting with FileVault takes only its password over SSH until someone unlocks it:
+    /// tried until then, and connected again once it's unlocked.
+    @Test func aMacWaitingToBeUnlockedIsConnectedOnceItIs() async throws {
+        defer { done() }
+        let (id, engine) = try await dropped(failing: RemoteEngineError.ssh(status: 255, message: "someone@mini: Permission denied (password,keyboard-interactive)."))
+        var waited = 3
+        clock.pass(3)
+        while waited < 3600 {
+            guard let wait = try await nextTry(engine) else { Issue.record("given up after \(waited) seconds: “\(engine.statusText)”"); return }
+            waited += wait
+            clock.pass(wait)
+        }
+        guard let wait = try await nextTry(engine) else { Issue.record("given up after \(waited) seconds"); return }
+        reachable.failures[id] = nil
+        clock.pass(wait)
+        try await until { !engine.isRetrying }
+        #expect(engine.isReady)
+    }
+
+    /// Disconnect while it's being tried again: no more tries, and Connect (not Connect Now) offered.
+    @Test func disconnectedWhileItsTriedAgainItStopsTrying() async throws {
+        defer { done() }
+        let (_, engine) = try await dropped()
+        app.disconnect(engine)
+        #expect(!engine.isRetrying)
+        #expect(engine.offer == .connect)
+        try await until { clock.waits == [] }
+        #expect(clock.waits == [])
+    }
+
+    /// First connections, where nothing says the machine works: its engine failing to start there
+    /// is said at once, with Try Again; SSH's tunnel not getting through is tried again.
+    @Test func aFirstConnectionSaysAnEngineFailureAtOnceAndTriesAgainForTheNetwork() async throws {
+        defer { done() }
+        let broken = Self.name()
+        let brokenEngine = add(broken, at: machine)
+        reachable.failures[broken] = RemoteEngineError.exited(status: 3, output: "Error: Unexpected token in settings.json")
+        await app.connect(brokenEngine).value
+        #expect(brokenEngine.connection == .failed, "said at once")
+        #expect(!brokenEngine.isRetrying)
+
+        let away = Self.name()
+        let awayEngine = add(away, at: machine)
+        reachable.failures[away] = RemoteEngineError.exited(status: 255, output: "Connection reset by peer")
+        await app.connect(awayEngine).value
+        #expect(awayEngine.isRetrying, "tried again")
+        #expect(awayEngine.connection == .reconnecting)
+    }
+
+    /// `id`, connected, then dropped as a machine restarting drops it (its tunnel ends), its next
+    /// start failing with `failure` (none: as `reachable` says), and its first try back waiting.
+    private func dropped(failing failure: Error? = nil) async throws -> (String, MachineEngine) {
+        let id = Self.name()
+        let engine = add(id, at: machine)
+        await app.connect(engine).value
+        #expect(engine.isReady)
+        try await until { clock.waits == [30, 60, 600] }
+        reachable.failures[id] = failure
+        engine.connectionLost("The connection to \(engine.machine.name) was lost.")
+        try await until { clock.waits == [3] }
+        return (id, engine)
+    }
+
+    /// How long until `engine`'s next try, once it waits for it; nil once it's stopped trying.
+    private func nextTry(_ engine: MachineEngine) async throws -> Int? {
+        try await until { clock.waits.count == 1 || !engine.isRetrying }
+        return engine.isRetrying ? clock.waits.first : nil
+    }
+
+    /// What a machine says while it restarts and its engine can't start yet: it stopped before it
+    /// listened, as starting it there over SSH fails then.
+    private static let restarting = RemoteEngineError.exited(status: 3, output: "")
 
     /// A machine that answers but can't run the engine (an unsupported system; its key refused, a
     /// changed host key) says why at once, with Try Again, rather than "Reconnecting…" for half an
