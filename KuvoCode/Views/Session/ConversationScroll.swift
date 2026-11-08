@@ -254,7 +254,8 @@ struct ConversationScroll<Rows: View>: View {
         .onScrollGeometryChange(for: EndGeometry.self) { geometry in
             EndGeometry(atEnd: geometry.isAtConversationEnd, height: geometry.contentSize.height,
                         fits: geometry.contentSize.height <= geometry.containerSize.height + 1,
-                        visible: geometry.containerSize.height, isPastEnd: geometry.contentOffset.y > geometry.conversationEnd + 1, width: geometry.containerSize.width,
+                        visible: geometry.containerSize.height, isPastEnd: geometry.contentOffset.y > geometry.roomyEnd + 1,
+                        isPastConversationEnd: geometry.contentOffset.y > geometry.conversationEnd + 1, width: geometry.containerSize.width,
                         over: geometry.contentInsets.bottom, offset: geometry.contentOffset.y,
                         isAtVeryEnd: geometry.contentOffset.y >= geometry.conversationEnd - 0.5)
         } action: { old, new in
@@ -304,7 +305,7 @@ struct ConversationScroll<Rows: View>: View {
             if overChanged {
                 if scrolling.isYours {
                     anchor.pushedOver = new.over
-                } else if scroller.followsEnd || old.isAtVeryEnd || (new.isPastEnd && anchor.stack?.isAboutToGrow != true) {
+                } else if scroller.followsEnd || old.isAtVeryEnd || (new.isPastConversationEnd && anchor.stack?.isAboutToGrow != true) {
                     anchor.scroll(to: nil)
                     anchor.pushedOver = new.over
                 } else if isShown {
@@ -313,7 +314,9 @@ struct ConversationScroll<Rows: View>: View {
                 }
             }
             // Past the end, with nothing there to see, and you're not the one scrolling: to it.
-            if new.isPastEnd, !overChanged, !scrolling.isYours, anchor.stack?.isAboutToGrow != true {
+            // (Following, past where the end is over the composer; reading further up, only past
+            // where it was always counted: see `roomyEnd`.)
+            if scroller.followsEnd ? new.isPastConversationEnd : new.isPastEnd, !overChanged, !scrolling.isYours, anchor.stack?.isAboutToGrow != true {
                 if resizing {
                     anchor.scroll(to: nil)
                     endFollower.follow { settled in if settled { toEnd(proxy) } }
@@ -570,6 +573,14 @@ extension ScrollGeometry {
         max(-contentInsets.top, contentSize.height + contentInsets.bottom - visibleRect.height)
     }
 
+    /// The end as it was always counted for being past it: as far again as what's over it. A
+    /// step closing under where you read leaves the view this far past the real end for a moment,
+    /// which AppKit takes back itself; taken to the end through the lazy stack instead, it landed
+    /// there after you'd opened the step again.
+    fileprivate var roomyEnd: CGFloat {
+        max(-contentInsets.top, contentSize.height + contentInsets.bottom - containerSize.height)
+    }
+
     /// The end is in view: over the composer, not under it, however tall that is now.
     fileprivate var isAtConversationEnd: Bool {
         contentOffset.y >= conversationEnd - 40
@@ -584,6 +595,8 @@ struct EndGeometry: Equatable {
     /// How tall the view of it is, and whether it's scrolled past its end.
     var visible: CGFloat = 0
     var isPastEnd = false
+    /// Past where the view can go with the end over the composer.
+    var isPastConversationEnd = false
     /// How wide the view is: changing, the window or a pane is being resized.
     var width: CGFloat = 0
     /// How much of the view's height is under what's over the conversation's end.
