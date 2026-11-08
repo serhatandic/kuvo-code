@@ -13,13 +13,13 @@ public struct WakeMessage: Equatable, Sendable {
     public let summary: String
 
     /// Whether its card folds to its summary and opens to the note: there's more to the note, or it's
-    /// a long one that two lines may not hold.
+    /// one that two lines on a phone may not hold. One that doesn't fold shows whole.
     public var folds: Bool {
         let whole = note.trimmingCharacters(in: .whitespacesAndNewlines)
         return summary != whole || whole.count > Self.short
     }
     /// The most a note shown whole, on its own, has.
-    static let short = 140
+    static let short = 60
 
     public init(note: String, summary: String) {
         self.note = note

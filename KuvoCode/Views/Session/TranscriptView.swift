@@ -2238,7 +2238,8 @@ struct WakeRow: View {
 
     var body: some View {
         if wake.folds {
-            FoldingCard(id: id, summary: wake.summary, startsOpen: false, help: Self.help, summaryLines: 2) {
+            // Open while you find in the conversation, so what's found shows (one you fold stays so).
+            FoldingCard(id: id, summary: wake.summary, startsOpen: highlight != nil, help: Self.help, summaryLines: 2) {
                 Image(systemName: "alarm")
                     .foregroundStyle(.tint)
                     .frame(width: 16)
@@ -2256,7 +2257,8 @@ struct WakeRow: View {
                 Image(systemName: "alarm")
                     .foregroundStyle(.tint)
                     .frame(width: 16)
-                SelectableText(text: words, lineLimit: 2)
+                // Short (WakeMessage.folds): whole.
+                SelectableText(text: words)
                 Spacer(minLength: 8)
                 time
             }

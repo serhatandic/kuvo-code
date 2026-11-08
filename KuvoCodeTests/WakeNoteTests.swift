@@ -36,10 +36,11 @@ import Testing
         AXElement.reading(true)
     }
 
-    private func show(_ text: String, summary: String? = nil) {
+    private func show(_ text: String, summary: String? = nil, finding: String? = nil) {
         let metadata: JSONValue? = summary.map { .object(["kuvo": .object(["wake": .object(["summary": .string($0)])])]) }
         let wake = WakeMessage.of(text: Wakes.marker + text, metadata: metadata)!
-        window.contentView = NSHostingView(rootView: WakeRow(id: id, wake: wake, at: 0).frame(width: 500).background(ProbeView(probe: probe)))
+        window.contentView = NSHostingView(rootView: WakeRow(id: id, wake: wake, at: 0).frame(width: 500).background(ProbeView(probe: probe))
+            .environment(\.findHighlight, finding.map { FindHighlight(query: $0, current: 0) }))
         window.orderBack(nil)
     }
 
@@ -110,6 +111,23 @@ import Testing
         show(Self.note)
         #expect(labels.contains { $0.contains("Check the harbor log.") }, "\(labels)")
         #expect(!labels.contains { $0.contains("tide tables") }, "\(labels)")
+    }
+
+    /// One sentence that two lines may not hold: its card folds, and opens to all of it.
+    @Test func aLongSentenceFoldsAndOpens() async throws {
+        defer { done() }
+        show("Check the harbor log for the tide tables of the whole week and tell the user what changed since Monday")
+        try clickTheCard()
+        let words = try #require(await laidOutNote(), "opened, the note shows")
+        #expect(words.string.hasSuffix("since Monday"))
+    }
+
+    /// Finding in the conversation: a wake-up shows open, so what's found is in sight.
+    @Test func findingShowsItOpen() async throws {
+        defer { done() }
+        show(Self.note, summary: "Check the harbor log", finding: "tide")
+        let words = try #require(await laidOutNote(), "the note shows while finding")
+        #expect(words.string == Self.note)
     }
 
     @Test func aShortNoteShowsWhole() async throws {

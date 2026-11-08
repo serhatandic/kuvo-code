@@ -639,7 +639,8 @@ public enum Wakes {
     # card shows; the agent reads the note whole). Sets `summary`, empty for none.
     summed() {
       summary=$(printf '%s' "$1" | tr '\n\r\t' '   ' | sed -e 's/^ *//' -e 's/ *$//')
-      [ "${#summary}" -le 300 ] || { echo "Keep the summary to one short line: it's what the user sees for it, and you get the whole note." >&2; exit 2; }
+      # (In bytes, as every sh counts them alike.)
+      [ "$(printf '%s' "$summary" | wc -c)" -le 300 ] || { echo "Keep the summary to one short line: it's what the user sees for it, and you get the whole note." >&2; exit 2; }
     }
     # A folder's path as a header carries it, as encodeURIComponent does: each byte but letters,
     # digits and -_.!~*'() as %XX (UTF-8 names too).
@@ -756,8 +757,9 @@ public enum Wakes {
           mkdir -p "${1}summaries"
           for f in "$k"/summaries/*; do
             n=${f##*/}; case $n in ''|*[!A-Za-z0-9]*) continue ;; esac
-            plain "$f" || continue
-            { (umask 077; head -c 4096 "$f" >"${1}summaries/.new-$n") && mv -f "${1}summaries/.new-$n" "${1}summaries/$n"; } 2>/dev/null || rm -f "${1}summaries/.new-$n"
+            # One line, and no longer than kuvo-wake keeps one (never cut, which could split a character).
+            plain "$f" && [ "$(wc -c <"$f")" -le 300 ] || continue
+            { (umask 077; tr '\n\r\t' '   ' <"$f" >"${1}summaries/.new-$n") && mv -f "${1}summaries/.new-$n" "${1}summaries/$n"; } 2>/dev/null || rm -f "${1}summaries/.new-$n"
           done
         fi
         if [ -d "$k/watches" ] && [ ! -L "$k/watches" ]; then
@@ -769,7 +771,7 @@ public enum Wakes {
             # Copies, as wake-ups are, and no bigger than they were checked to be.
             { mkdir "${1}watches/$n" && head -c 65536 "$d/every" >"${1}watches/$n/every" && head -c 65536 "$d/check" >"${1}watches/$n/check" \
               && head -c 65536 "$d/note" >"${1}watches/$n/note" && printf '%s' "$now" >"${1}watches/$n/next"; } 2>/dev/null || rm -rf "${1}watches/$n"
-            [ -d "${1}watches/$n" ] && plain "$d/summary" && head -c 4096 "$d/summary" >"${1}watches/$n/summary" 2>/dev/null
+            [ -d "${1}watches/$n" ] && plain "$d/summary" && [ "$(wc -c <"$d/summary")" -le 300 ] && tr '\n\r\t' '   ' <"$d/summary" >"${1}watches/$n/summary" 2>/dev/null
           done
         fi
       fi

@@ -30,7 +30,8 @@ struct WakeMessageTests {
             ("# Morning round\n\nRead the inbox and summarize it.", "Morning round", true),
             ("Water the plants", "Water the plants", false),
             ("Water the plants.", "Water the plants.", false),
-            // One long sentence: all of it, folded to two lines.
+            // A sentence two lines on a phone may not hold, or a long one: all of it, folded to two lines.
+            ("Check whether the nightly build on main passed, and tell the user.", "Check whether the nightly build on main passed, and tell the user.", true),
             (String(repeating: "Read the inbox and ", count: 10) + "sum it up", String(repeating: "Read the inbox and ", count: 10) + "sum it up", true),
             ("Tell the user how CI went.\n\nYour watch (AbCd12, every 10m) saw a change. Its check, gh run list, now prints:\ncompleted success",
              "Tell the user how CI went.", true),
