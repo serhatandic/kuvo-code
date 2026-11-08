@@ -490,4 +490,48 @@ import Testing
         #expect(now.maxY <= composerTop, "the line you quoted ends at \(now.maxY), the composer starts at \(composerTop)")
         #expect(abs(at.minY - now.minY - (over - height)) < 1.5, "it moved from \(at.minY) to \(now.minY), the composer grew by \(over - height)")
     }
+
+    // MARK: Pictures
+
+    /// The window as it shows before and after a quote comes, at the end and reading further up,
+    /// in each look, into KUVO_DRAFTS_OUT (with `KUVO_DRAFTS_TAG` before each name: before, after):
+    /// not a test of behavior, it runs only when that's set.
+    @Test(arguments: ["dark", "light"]) func renders(_ scheme: String) async throws {
+        defer { done() }
+        guard let out = ProcessInfo.processInfo.environment["KUVO_DRAFTS_OUT"].map({ URL(fileURLWithPath: $0) }) else { return }
+        let tag = ProcessInfo.processInfo.environment["KUVO_DRAFTS_TAG"] ?? "now"
+        try FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+        // The app's own look too, which some controls draw by.
+        let look = NSApp.appearance
+        defer { NSApp.appearance = look }
+        window.appearance = NSAppearance(named: scheme == "dark" ? .darkAqua : .aqua)
+        NSApp.appearance = window.appearance
+        try await conversation(turns: 14)
+        func shoot(_ name: String) async throws {
+            await settled()
+            let host = try #require(window.contentView)
+            host.layoutSubtreeIfNeeded()
+            host.display()
+            let rep = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+            host.cacheDisplay(in: host.bounds, to: rep)
+            // Over the window's own background, which the view leaves to it, at the capture's scale.
+            let cg = try #require(rep.cgImage)
+            let context = try #require(CGContext(data: nil, width: cg.width, height: cg.height, bitsPerComponent: 8, bytesPerRow: 0,
+                                                 space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+            context.setFillColor(scheme == "dark" ? CGColor(gray: 0.12, alpha: 1) : CGColor(gray: 0.97, alpha: 1))
+            context.fill(CGRect(x: 0, y: 0, width: cg.width, height: cg.height))
+            context.draw(cg, in: CGRect(x: 0, y: 0, width: cg.width, height: cg.height))
+            let png = try #require(context.makeImage().flatMap { NSBitmapImageRep(cgImage: $0).representation(using: .png, properties: [:]) })
+            try png.write(to: out.appending(path: "\(tag)-\(name)-\(scheme).png"))
+        }
+        try await shoot("1-at-the-end")
+        try await quote()
+        try await shoot("2-at-the-end-quoted")
+        try press("Don’t Reply to This")
+        try await until { laidOut && model.draftQuotes.isEmpty }
+        try await yourScroll(by: 700)
+        try await shoot("3-further-up")
+        try await quote()
+        try await shoot("4-further-up-quoted")
+    }
 }
