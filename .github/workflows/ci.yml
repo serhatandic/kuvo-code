@@ -16,9 +16,19 @@ concurrency:
 jobs:
   build:
     name: build and test
+    # Pushes to main, and release tags and dry runs from main (release.yml calls this; `github`
+    # is the caller's there), run on the Mac mini's self-hosted runner. Everything else, every
+    # pull request above all, runs on GitHub's: a pull request's workflow comes from its branch,
+    # so code from a fork must never be offered the Mini. The runner refuses anything else too
+    # (scripts/ci-runner-hooks/job-started.sh), and release.yml's build job picks the same way.
     # Xcode's runner images are named for the Xcode version they ship, which
     # has the Swift toolchain and the macOS SDK Kuvo Code builds against.
-    runs-on: xcode-27
+    runs-on: >-
+      ${{ github.repository == 'serhatandic/kuvo-code'
+          && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+          && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+          && fromJSON('["self-hosted", "macOS", "ARM64", "kuvo-mini"]')
+          || 'xcode-27' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -55,6 +65,12 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.4.2
+
+      # For the machines' bridge's tests (node --test). GitHub's images have a Node of their own;
+      # the Mac mini has none, so it's the same pinned one on both.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
 
       - name: Test the box's code (its link and the coding agents' bridge), and check its link and its routes' shapes are built from it
         working-directory: Packages/Box
@@ -95,6 +111,8 @@ jobs:
         run: |
           ./scripts/build-dmg.sh
           mount=$(mktemp -d)
+          # Detached even when a check fails: the Mini keeps what a run leaves mounted.
+          trap 'hdiutil detach "$mount" -force >/dev/null 2>&1 || true; rmdir "$mount" 2>/dev/null || true' EXIT
           hdiutil attach -nobrowse -readonly -mountpoint "$mount" build/KuvoCode.dmg >/dev/null
           test -d "$mount/Kuvo Code.app" || { echo "Kuvo Code.app is missing from the disk image" >&2; exit 1; }
           test "$(readlink "$mount/Applications")" = /Applications || { echo "The Applications link is missing" >&2; exit 1; }
