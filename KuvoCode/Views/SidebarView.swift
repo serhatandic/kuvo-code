@@ -598,8 +598,8 @@ struct SidebarView: View {
         }
     }
 
+    /// What comes into view in its place is the window's tabs' to say, once it's gone (`dropClosed`).
     private func delete(_ session: Session) {
-        if selection == session.id { selection = nil }
         Task {
             do { try await workspace.delete(session.id) } catch { Modal.show(error) }
         }

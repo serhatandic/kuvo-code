@@ -518,6 +518,13 @@ final class WindowTabs {
                     continue
                 }
             }
+            // The tab in view gone: the nearest on the computer whose page the sidebar shows takes
+            // its place, or none. A deletion never takes the sidebar, which follows the tab in
+            // view, to another computer's page.
+            if selection == key {
+                let next = nearest(to: key, on: app.boxInView)
+                withAnimation(.ui) { selection = next }
+            }
             close(key, remember: false)
         }
         let open = Set(keys)
@@ -526,6 +533,12 @@ final class WindowTabs {
         // A selection that isn't one of the tabs (its session went while the app was closed)
         // shows nothing; show the last tab instead.
         if let selection, !keys.contains(selection) { self.selection = keys.last }
+    }
+
+    /// The open tab nearest `key` that's on `box`: the first after it, else the last before it.
+    private func nearest(to key: TabKey, on box: SidebarBox) -> TabKey? {
+        guard let index = keys.firstIndex(of: key) else { return nil }
+        return (keys[(index + 1)...] + keys[..<index].reversed()).first { self.box(of: $0) == box }
     }
 
     // MARK: Sessions that carry on, start or begin
