@@ -648,6 +648,7 @@ extension AppModel {
     func machineFolded(_ address: String, into machine: String) {
         browserAsks.closeAll(on: address)
         utilities.closeMachineBrowser(address)
+        planLimits.stopped(address)
         phoneLink.forget(machine: address)
         workspace.machines = Set(machines.list.map(\.id))
         workspace.fold(address, into: machine)
@@ -670,6 +671,7 @@ extension AppModel {
     /// keep; `uninstall`, also stopped there, its sign-ins and keys deleted, and gone from your
     /// phones (`Machines.remove`).
     func removeMachine(_ id: String, uninstall: Bool = false) {
+        planLimits.stopped(id)
         // Left running, as Disconnect leaves it (a test or demo copy's stops).
         if !uninstall, let engine = machines.engine(id) { disconnect(engine) }
         if let engine = machines.engine(id) {

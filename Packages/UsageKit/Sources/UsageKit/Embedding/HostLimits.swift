@@ -3,8 +3,9 @@ import Observation
 
 /// Plan limits the host reads itself, one row per login (fork addition): Kuvo Code's boxes read
 /// each account's limits with their own sign-ins, and the Bars view draws a bar for each in place
-/// of the panel's own row for that provider (`covered`), which it no longer reads live (Claude's).
-/// What the panel has of those providers besides (spend, its trend) still counts in the spend bar.
+/// of the panel's own bar for that provider (`covered`), with the provider's spend and trend under
+/// the first. The panel doesn't read a covered Claude's limits itself: its reading takes this
+/// Mac's own login's from the host (`lines(for:)`), for the menu bar, the cards and its notices.
 public struct HostLimitRow: Sendable, Hashable, Identifiable {
     /// Unique across the host's rows (its box, and the account there).
     public var id: String
@@ -20,6 +21,8 @@ public struct HostLimitRow: Sendable, Hashable, Identifiable {
     public var notice: String?
     /// When the oldest of its meters was read: shown as "As of …" once that's long ago.
     public var readAt: Date?
+    /// It's this Mac's own box's (its own logins are the panel's own provider's).
+    public var isLocal: Bool
 
     public struct Meter: Sendable, Hashable {
         /// "Session", "Weekly", "Sonnet", "Premium requests".
@@ -62,7 +65,8 @@ public struct HostLimitRow: Sendable, Hashable, Identifiable {
         }
     }
 
-    public init(id: String, providerID: String, name: String, plan: String? = nil, meters: [Meter], balance: Balance? = nil, notice: String? = nil, readAt: Date? = nil) {
+    public init(id: String, providerID: String, name: String, plan: String? = nil, meters: [Meter], balance: Balance? = nil, notice: String? = nil, readAt: Date? = nil, isLocal: Bool = true) {
+        self.isLocal = isLocal
         self.id = id
         self.providerID = providerID
         self.name = name
@@ -87,33 +91,57 @@ public final class HostLimits {
     @ObservationIgnored public var refresh: (() -> Void)?
 
     public func update(rows: [HostLimitRow], covered: Set<String>) {
+        let before = self.rows
         if self.rows != rows { self.rows = rows }
         if self.covered != covered { self.covered = covered }
+        // The panel's own readings of a covered provider take the host's numbers: read them again.
+        let changed = Set((before + rows).filter { $0.isLocal }.map { ProviderAccountID.family(of: $0.providerID) })
+            .filter { family in before.filter { $0.isLocal && ProviderAccountID.family(of: $0.providerID) == family } != rows.filter { $0.isLocal && ProviderAccountID.family(of: $0.providerID) == family } }
+        if !changed.isEmpty { onLocalChange?(changed) }
+    }
+
+    /// Told which covered providers' local rows changed (the panel reads those again).
+    @ObservationIgnored var onLocalChange: ((Set<String>) -> Void)?
+
+    /// A covered provider's limits as the panel's own lines, from this Mac's own login's row (its
+    /// agent's own sign-in, listed first): nil when the host has none for it.
+    func lines(for providerID: String, now: Date = .now) -> (lines: [MetricLine], plan: String?)? {
+        let family = ProviderAccountID.family(of: providerID)
+        guard covers(family), let row = rows.first(where: { $0.isLocal && ProviderAccountID.family(of: $0.providerID) == family }) else { return nil }
+        let lines: [MetricLine] = row.meters.compactMap { meter in
+            if let resetsAt = meter.resetsAt, resetsAt <= now { return nil }
+            return .progress(label: meter.title, used: ProviderParse.clampPercent(meter.fraction * 100), limit: 100, format: .percent,
+                             resetsAt: meter.resetsAt, periodDurationMs: meter.periodMinutes.map { $0 * 60_000 })
+        }
+        return (lines, row.plan)
     }
 
     public func covers(_ providerID: String) -> Bool {
         covered.contains(ProviderAccountID.family(of: providerID))
     }
 
-    /// What the Bars view lists: each of the panel's providers in its order, those the host covers
-    /// as the host's rows for them; then the host's rows for providers the panel doesn't list,
-    /// unless you hid that provider.
+    /// What the Bars view lists: each of the panel's providers in its order, one the host covers
+    /// and has rows for as those rows (the first with the provider's own spend under it); then the
+    /// host's rows for providers the panel doesn't list, unless you hid that provider.
     func entries(groups: [ProviderGroup], known: (String) -> Provider? = { _ in nil }, isHidden: (String) -> Bool) -> [BarsEntry] {
         var entries: [BarsEntry] = []
         var placed = Set<String>()
         for group in groups {
-            let id = group.provider.id
-            if covers(id) {
-                for row in rows where ProviderAccountID.family(of: row.providerID) == ProviderAccountID.family(of: id) && !placed.contains(row.id) {
-                    entries.append(.host(row, group.provider))
-                    placed.insert(row.id)
-                }
-            } else {
+            let family = ProviderAccountID.family(of: group.provider.id)
+            let own = rows.filter { ProviderAccountID.family(of: $0.providerID) == family }
+            // Not covered, or covered with nothing from the host yet: the panel's own, as it was.
+            guard covers(family), !own.isEmpty, !isHidden(family) else {
                 entries.append(.group(group))
+                continue
             }
+            for (index, row) in own.enumerated() where !placed.contains(row.id) {
+                entries.append(.host(row, group.provider, spend: index == 0 && !placed.contains(where: { $0.hasPrefix(family + "|") }) ? group : nil))
+                placed.insert(row.id)
+            }
+            placed.insert(family + "|")
         }
         for row in rows where !placed.contains(row.id) && !isHidden(row.providerID) {
-            entries.append(.host(row, known(row.providerID) ?? HostLimits.provider(for: row.providerID)))
+            entries.append(.host(row, known(row.providerID) ?? HostLimits.provider(for: row.providerID), spend: nil))
         }
         return entries
     }
@@ -127,12 +155,14 @@ public final class HostLimits {
 /// A bar in the Bars view: one of the panel's providers, or one of the host's rows.
 enum BarsEntry: Identifiable {
     case group(ProviderGroup)
-    case host(HostLimitRow, Provider)
+    /// A host's row, drawn with its provider's mark; `spend`, the panel's own group of it, whose
+    /// spend and trend show under the first.
+    case host(HostLimitRow, Provider, spend: ProviderGroup?)
 
     var id: String {
         switch self {
         case .group(let group): group.id
-        case .host(let row, _): "host:" + row.id
+        case .host(let row, _, _): "host:" + row.id
         }
     }
 }

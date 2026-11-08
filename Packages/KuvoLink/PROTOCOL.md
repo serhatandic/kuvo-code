@@ -2644,8 +2644,9 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   `413 {"message"}` over 25 MB, or over `max` when it's given (`&max=<bytes>`: all a client would
   show of it), `400 {"message"}` for an address that isn't `file://`. Each box answers for its own files, a machine's with the Mac closed too.
 - On a Mac, `kuvo/usage`: the menu bar's usage panel as its Bars view lists it, for what the box
-  doesn't state yet (a plan's limits are every box's own, in "Plan limits"; the panel leaves out the
-  providers that box's `services` names): each provider's name, plan, brand color, mark as a PNG
+  doesn't state yet (a plan's limits are every box's own, in "Plan limits"): it leaves out the
+  providers whose limits this Mac's box states rows for (`services`, with an account listed), whose
+  spend shows under the first of them on the Mac. A client lists the box's rows, then these: each provider's name, plan, brand color, mark as a PNG
   to tint, notice, whether it's outdated, and its lines as UsageKit writes them; whether a refresh is under way and when the last one ended;
   `kuvo/usage/events` streams it as it changes, and `POST kuvo/usage/refresh` refreshes it all.
   While the usage panel isn't up, `kuvo/usage` and the refresh answer 404; the stream answers 200

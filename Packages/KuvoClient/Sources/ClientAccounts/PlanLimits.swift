@@ -120,6 +120,17 @@ public struct LimitsAccount: Decodable, Hashable, Sendable, Identifiable {
         return "\(base) · \(label)"
     }
 
+    /// Its service's brand color in light mode, "#RRGGBB", as the Mac's usage panel draws it
+    /// (UsageKit's `TotalSpendPalette`), for a client drawing its bar in a pastel of it.
+    public var brandColor: String {
+        Self.brandColors[service] ?? "#8E8E93"
+    }
+
+    static let brandColors = [
+        "claude": "#DE7356", "codex": "#10A37F", "cursor": "#13120A", "grok": "#8E8E93", "opencode": "#6E6E73",
+        "openrouter": "#6467F2", "antigravity": "#4285F4", "copilot": "#A855F7", "zai": "#2D2D2D", "ollama": "#6E6E73",
+    ]
+
     /// The coding agents, as the usage panel names their rows.
     static let agentNames = ["claude": "Claude", "codex": "Codex", "grok": "Grok", "cursor": "Cursor", "antigravity": "Antigravity"]
     /// The engine's sign-ins, by what they're the limits of.

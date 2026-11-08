@@ -17,7 +17,7 @@ final class HostLimitsTests: XCTestCase {
         entries.map { entry in
             switch entry {
             case .group(let group): "panel:\(group.provider.id)"
-            case .host(let row, _): row.name
+            case .host(let row, _, let spend): spend == nil ? row.name : "\(row.name) +spend"
             }
         }
     }
@@ -37,10 +37,19 @@ final class HostLimitsTests: XCTestCase {
         let entries = limits.entries(groups: groups) { _ in false }
 
         XCTAssertEqual(names(entries), [
-            "panel:cursor", "Claude", "Claude · Work", "Claude · mini", "panel:openrouter",
+            // The provider's own spend and trend under its first login.
+            "panel:cursor", "Claude +spend", "Claude · Work", "Claude · mini", "panel:openrouter",
             // Providers the panel doesn't list here: after them.
             "Codex", "Copilot",
         ])
+    }
+
+    func testACoveredProviderTheHostHasNoRowForYetKeepsItsOwnBar() {
+        // (Claude on a Mac before any turn there; OpenCode with a Zen key and no Go plan.)
+        let limits = HostLimits()
+        limits.update(rows: [row("this Mac/codex-cli", "codex", "Codex")], covered: ["claude", "codex", "opencode"])
+        let entries = limits.entries(groups: [group("claude"), group("opencode"), group("codex")]) { _ in false }
+        XCTAssertEqual(names(entries), ["panel:claude", "panel:opencode", "Codex +spend"])
     }
 
     func testAProviderYouHidStaysHidden() {
@@ -52,7 +61,9 @@ final class HostLimitsTests: XCTestCase {
 
     func testAMeterThatStartedOverSinceIsNotShownAsUsed() {
         let now = Date(timeIntervalSince1970: 2_000_000_000)
-        let store = WidgetDataStore(registry: WidgetRegistry(providers: [], descriptors: []), providers: [], defaults: UserDefaults(suiteName: "HostLimitsTests")!)
+        let defaults = UserDefaults(suiteName: "HostLimitsTests")!
+        defer { defaults.removePersistentDomain(forName: "HostLimitsTests") }
+        let store = WidgetDataStore(registry: WidgetRegistry(providers: [], descriptors: []), providers: [], defaults: defaults)
         let limits = HostLimitRow(id: "x", providerID: "copilot", name: "Copilot", meters: [
             HostLimitRow.Meter(title: "Session", fraction: 0.4, resetsAt: now.addingTimeInterval(-60)),
             HostLimitRow.Meter(title: "Premium requests", fraction: 0.6, resetsAt: now.addingTimeInterval(86_400), periodMinutes: 43_200, count: (used: 180, limit: 300, unit: "requests")),
@@ -86,14 +97,26 @@ final class HostLimitsTests: XCTestCase {
             now: { now },
             pricing: { TestPricing.bundled }
         )
-        HostLimits.shared.update(rows: [], covered: ["claude"])
+        // This Mac's own login's limits, as its box states them; a machine's isn't this Mac's.
+        HostLimits.shared.update(rows: [
+            HostLimitRow(id: "devbox/claude-code", providerID: "claude", name: "Claude · devbox", meters: [HostLimitRow.Meter(title: "Session", fraction: 0.9)], isLocal: false),
+            HostLimitRow(id: "this Mac/claude-code", providerID: "claude", name: "Claude", plan: "Max 20x", meters: [
+                HostLimitRow.Meter(title: "Session", fraction: 0.42, resetsAt: now.addingTimeInterval(3_600), periodMinutes: 300),
+                HostLimitRow.Meter(title: "Weekly", fraction: 0.18, periodMinutes: 10_080),
+            ]),
+        ], covered: ["claude"])
         defer { HostLimits.shared.update(rows: [], covered: []) }
 
         let snapshot = await provider.refresh()
 
+        // Anthropic isn't asked with your own login: the menu bar, the cards and the notices read the box's.
         XCTAssertEqual(httpClient.requests.count, 0)
+        XCTAssertEqual(snapshot.plan, "Max 20x")
+        guard case .progress(_, let used, _, _, let resetsAt, _, _)? = snapshot.lines.first(where: { $0.label == "Session" }) else { return XCTFail("no Session") }
+        XCTAssertEqual(used, 42)
+        XCTAssertEqual(resetsAt, now.addingTimeInterval(3_600))
+        XCTAssertNotNil(snapshot.lines.first(where: { $0.label == "Weekly" }))
         // Its spend still counts.
         XCTAssertNotNil(snapshot.lines.first(where: { $0.label == "Today" }))
-        XCTAssertNil(snapshot.lines.first(where: { $0.label == "Session" }))
     }
 }

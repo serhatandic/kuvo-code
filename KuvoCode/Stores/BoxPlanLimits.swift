@@ -99,7 +99,8 @@ final class BoxPlanLimits {
     /// One account as the panel draws it: "Claude · Work", and on a machine its name after.
     static func row(_ account: LimitsAccount, machine: String?, now: Date) -> HostLimitRow {
         HostLimitRow(
-            id: "\(machine ?? "mac")/\(account.provider)",
+            // (No machine's address has a space.)
+            id: "\(machine ?? "this Mac")/\(account.provider)",
             providerID: account.service,
             name: machine.map { "\(account.title) · \($0)" } ?? account.title,
             plan: account.plan,
@@ -111,7 +112,8 @@ final class BoxPlanLimits {
             },
             balance: account.balance.map { HostLimitRow.Balance(left: $0.left, unit: $0.unit) },
             notice: account.problem?.message,
-            readAt: account.readAt(now: now)
+            readAt: account.readAt(now: now),
+            isLocal: machine == nil
         )
     }
 }

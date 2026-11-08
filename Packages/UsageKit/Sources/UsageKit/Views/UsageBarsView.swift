@@ -125,7 +125,7 @@ struct UsageBarsView: View {
                 notice: dataStore.headerNotice(for: group.provider.id),
                 isExpanded: expanded == entry.id
             )
-        case .host(let row, let provider):
+        case .host(let row, let provider, _):
             ProviderBar(
                 provider: Provider(id: provider.id, displayName: row.name, icon: provider.icon, links: provider.links),
                 reading: hostReading(row),
@@ -141,13 +141,17 @@ struct UsageBarsView: View {
         case .group(let group):
             ProviderBarDetail(group: group)
                 .padding(.vertical, 4)
-        case .host(let row, let provider):
+        case .host(let row, let provider, let spend):
             BarDetailContent(
                 provider: provider,
                 plan: row.plan,
                 notice: row.notice,
                 staleness: HostLimitData.staleness(row),
-                rows: HostLimitData.rows(row, store: dataStore),
+                // Its windows, then what the panel has of the provider besides its limits (spend,
+                // its trend), under the first of its rows.
+                rows: HostLimitData.rows(row, store: dataStore) + (spend.map { group in
+                    group.widgets.compactMap(layout.descriptor(for:)).map(dataStore.data(for:)).filter { !$0.isBounded && $0.hasData }
+                } ?? []),
                 links: provider.visibleLinks,
                 refresh: hostLimits.refresh,
                 toggleMeterStyle: { dataStore.meterStyle.toggle() },
@@ -246,11 +250,14 @@ struct UsageBarsView: View {
         switch entry {
         case .group(let group):
             menu(for: group)
-        case .host(_, let provider):
-            Button("Hide \(provider.displayName)") {
-                container.enablement.setEnabled(false, for: provider.id)
+        case .host(_, let provider, _):
+            // (Every bar of it: Customize turns it on again. One only another computer has can't be.)
+            if container.availability.isKnownConnected(provider.id) {
+                Button("Hide \(provider.displayName)") {
+                    container.enablement.setEnabled(false, for: provider.id)
+                }
+                Divider()
             }
-            Divider()
             Button("Refresh") { hostLimits.refresh?() }
         }
     }

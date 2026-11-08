@@ -280,9 +280,14 @@ final class ClaudeProvider: ProviderRuntime {
 
         var warning: String?
         // The host states Claude's limits itself, one row per login (`HostLimits`, fork addition):
-        // Anthropic isn't asked here as well, which would only count against the same hold.
+        // Anthropic isn't asked here as well, which would only count against the same hold. This
+        // reading takes this Mac's own login's, for the menu bar, the cards and the notices.
         if HostLimits.shared.covers(provider.id) {
-            return await snapshotWithLocalUsage(mapped: mapped, warning: nil)
+            if let host = HostLimits.shared.lines(for: provider.id, now: now()) {
+                mapped.lines = host.lines
+                mapped.plan = host.plan ?? mapped.plan
+            }
+            return await snapshotWithLocalUsage(mapped: mapped, warning: fallbackWarning)
         }
         switch authStore.liveUsageAvailability(state) {
         case .available:
