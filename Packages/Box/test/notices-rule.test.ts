@@ -1,7 +1,7 @@
 import "./safety"
 import { afterEach, expect, test } from "bun:test"
 import { rmSync } from "node:fs"
-import { noticeFor } from "../src/link/notices/news"
+import { answersYou, noticeFor, turnFor } from "../src/link/notices/news"
 import { oneSentence } from "../src/link/notices/sentence"
 import { notifyUserTool, NOTIFY_LIMITS } from "../src/link/notices/notify"
 import { readTold, TOLD_FOLDER, keepTold, toldLately, watchSentByAgents } from "../src/link/notices/told"
@@ -14,6 +14,7 @@ import type { Notice } from "../src/link/notices/notice"
 // one sentence.
 
 afterEach(() => rmSync(TOLD_FOLDER, { recursive: true, force: true }))
+const yes = () => true
 
 const yours = { id: "ses_main", title: "Fix the tests", location: { directory: "/home/me/kuvo-ai" } }
 const bot = { id: "ses_bot", title: "Fixer", metadata: { kuvo: { bot: "bot_1" } }, location: { directory: "/home/me/.kuvo-code/bots/bot_1/workspace" } }
@@ -96,30 +97,30 @@ test("a reply's sentence: past headings, code and lists, a lead-in with its firs
 test("notify_user tells you once, in a sentence, and an agent in a loop can't keep at it", () => {
   const caller = { session: "ses_bot", data: bot, name: "Fixer" }
   let now = 1_000_000_000
-  const first = notifyUserTool(caller, { text: "I need your **Stripe** key to go on. The rest is done." }, now)
+  const first = notifyUserTool(caller, { text: "I need your **Stripe** key to go on. The rest is done." }, now, yes)
   expect(first.isError).toBe(false)
   const told = readTold()
   expect(told).toHaveLength(1)
   expect(told[0]).toMatchObject({ by: "agent", notice: { title: "Fixer", category: "report", body: "I need your Stripe key to go on.", thread: "ses_bot", data: { session: "ses_bot" } } })
   // The same again, or another at once: refused.
   now += NOTIFY_LIMITS.apart + 1
-  expect(notifyUserTool(caller, { text: "I need your Stripe key to go on." }, now).isError).toBe(true)
-  expect(notifyUserTool(caller, { text: "Something else entirely." }, now - NOTIFY_LIMITS.apart).isError).toBe(true)
+  expect(notifyUserTool(caller, { text: "I need your Stripe key to go on." }, now, yes).isError).toBe(true)
+  expect(notifyUserTool(caller, { text: "Something else entirely." }, now - NOTIFY_LIMITS.apart, yes).isError).toBe(true)
   // Up to the hour's limit, then refused until the hour's past.
   for (let sent = 1; sent < NOTIFY_LIMITS.hour; sent++) {
     now += NOTIFY_LIMITS.apart + 1
-    expect(notifyUserTool(caller, { text: `Update number ${sent}.` }, now).isError).toBe(false)
+    expect(notifyUserTool(caller, { text: `Update number ${sent}.` }, now, yes).isError).toBe(false)
   }
   now += NOTIFY_LIMITS.apart + 1
-  const over = notifyUserTool(caller, { text: "One more thing." }, now)
+  const over = notifyUserTool(caller, { text: "One more thing." }, now, yes)
   expect(over.isError).toBe(true)
   expect(over.text).toContain("this hour")
-  expect(notifyUserTool(caller, { text: "One more thing." }, now + 60 * 60_000).isError).toBe(false)
+  expect(notifyUserTool(caller, { text: "One more thing." }, now + 60 * 60_000, yes).isError).toBe(false)
   // Nothing to say, and a group chat's seat: refused.
-  expect(notifyUserTool({ session: "ses_x", data: { id: "ses_x" }, name: null }, { text: "  " }).isError).toBe(true)
-  expect(notifyUserTool({ session: "ses_seat", data: { id: "ses_seat", metadata: { kuvo: { seat: { group: "grp_1" } } } }, name: null }, { text: "Hi." }).isError).toBe(true)
+  expect(notifyUserTool({ session: "ses_x", data: { id: "ses_x" }, name: null }, { text: "  " }, Date.now(), yes).isError).toBe(true)
+  expect(notifyUserTool({ session: "ses_seat", data: { id: "ses_seat", metadata: { kuvo: { seat: { group: "grp_1" } } } }, name: null }, { text: "Hi." }, Date.now(), yes).isError).toBe(true)
   // Your own conversation: by its title, with its project.
-  notifyUserTool({ session: "ses_main", data: yours, name: "Fix the tests" }, { text: "Can I delete the old fixtures?" })
+  notifyUserTool({ session: "ses_main", data: yours, name: "Fix the tests" }, { text: "Can I delete the old fixtures?" }, Date.now(), yes)
   expect(readTold().at(-1)?.notice).toMatchObject({ title: "Fix the tests", subtitle: "kuvo-ai", category: "finished", body: "Can I delete the old fixtures?" })
 })
 
@@ -129,7 +130,7 @@ test("what an agent sends goes to your phones once, from the process that tells 
   try {
     // A run's news kept as told is the box's own telling: not sent again from here.
     keepTold({ title: "Fix the tests", body: "Done.", category: "finished", thread: "ses_main", data: { session: "ses_main" } })
-    notifyUserTool({ session: "ses_main", data: yours, name: null }, { text: "Can I push to main?" })
+    notifyUserTool({ session: "ses_main", data: yours, name: null }, { text: "Can I push to main?" }, Date.now(), yes)
     watch.look()
     watch.look()
     expect(sent.map(each => each.body)).toEqual(["Can I push to main?"])
@@ -149,4 +150,48 @@ test("clients read what the box told lately, to show it as their own notificatio
   const answer = JSON.parse(String((pieces[1] as { body: Buffer }).body))
   expect(answer.notices[0]).toMatchObject({ notice: { body: "All green.", category: "finished" } })
   expect(typeof answer.telling).toBe("boolean")
+})
+
+test("a long turn is read back to its start: a bot's long wake-up isn't news, your long ask is", async () => {
+  // Pages of 50, newest first, as the engine gives them, each pointing to the next.
+  const paged = (rows: unknown[]) => async (route: string) => {
+    if (!route.includes("/message?")) return { data: sessions[decodeURIComponent(route.split("/").pop()!)] }
+    const at = route.includes("cursor=") ? Number(decodeURIComponent(route.split("cursor=")[1])) : 0
+    const size = route.includes("limit=100") ? 100 : 50
+    return { data: rows.slice(at, at + size), cursor: at + size < rows.length ? { next: String(at + size) } : null }
+  }
+  const steps = Array.from({ length: 120 }, () => reply("Looking."))
+  const wake = [idle, reply("Builds are green."), ...steps, user("[Wake-up] Check the builds"), idle]
+  expect(await noticeFor({ type: "session.execution.succeeded", data: { sessionID: "ses_bot" } }, paged(wake))).toBeNull()
+  const asked = [idle, reply("Builds are green."), ...steps, user("Are the builds green?"), idle]
+  expect(await noticeFor({ type: "session.execution.succeeded", data: { sessionID: "ses_bot" } }, paged(asked))).not.toBeNull()
+})
+
+test("a turn whose start is out of reach is news in your own conversation only", () => {
+  const cut = [idle, reply("Done."), reply("Looking.")]
+  expect(turnFor(cut, false)).toBe("unknown")
+  expect(answersYou("unknown", yours as never)).toBe(true)
+  expect(answersYou("unknown", bot as never)).toBe(false)
+  expect(answersYou("unknown", started as never)).toBe(false)
+})
+
+test("notify_user: all agents together are limited too, and a box that can't tell your phones says so", () => {
+  let now = 2_000_000_000
+  for (let session = 0; session < NOTIFY_LIMITS.boxHour; session++) {
+    expect(notifyUserTool({ session: `ses_${session}`, data: yours, name: null }, { text: `Session ${session} needs you.` }, now++, yes).isError).toBe(false)
+  }
+  const many = notifyUserTool({ session: "ses_more", data: yours, name: null }, { text: "One more needs you." }, now, yes)
+  expect(many.isError).toBe(true)
+  const off = notifyUserTool({ session: "ses_off", data: yours, name: null }, { text: "Anyone there?" }, now, () => false)
+  expect(off).toMatchObject({ isError: true })
+  expect(off.text).toContain("can't be sent")
+})
+
+test("a sentence: a bold line as a heading, a short reply, an emoji at the cut", () => {
+  expect(oneSentence("**Summary**\nFixed the parser. More.")).toBe("Fixed the parser.")
+  expect(oneSentence("**Done.**")).toBe("Done.")
+  expect(oneSentence("No. The build still fails.")).toBe("No.")
+  const cut = oneSentence("🎉".repeat(200))
+  expect(Array.from(cut).length).toBeLessThanOrEqual(160)
+  expect(cut.endsWith("🎉…")).toBe(true)
 })

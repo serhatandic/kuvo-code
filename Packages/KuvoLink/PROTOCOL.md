@@ -709,9 +709,11 @@ its own, which a `SIGTERM` stops waiting.
     a word to 160 characters), titled as the conversation's news is. It's how an agent working on
     its own reaches you, as its replies then don't ("Notifications"). Kept in
     `run/notices/told.json` with `by: "agent"`, for the box's process that tells your phones to
-    send. Refused (`isError`) from a group chat's seat, with no text, within two minutes of the
-    conversation's last, past three in an hour or twelve in a day, and for the same sentence
-    again within a day.
+    send. Refused (`isError`) from a group chat's seat, with no text, where nothing would tell your
+    phones (a machine whose bridge isn't running), within two minutes of the conversation's last,
+    past three in an hour or twelve in a day, past ten in an hour from all the box's agents
+    together, and for the same sentence again within a day; looked at and kept under one lock, so
+    calls at once can't both pass.
   - Who there is: the box's own agents and its peers' (as `run/agents.json` has them), and any
     conversation here named by its address. An agent is named by its address or its name (any case
     or accents, with or without `&`).
@@ -1460,7 +1462,9 @@ What's news, each box decides alike (`notices/news.ts`), for your phones and its
 - **A reply to you** is: a run that ends after your own message (or your answer, approval or
   pick, which the box passes on), and, in a conversation of yours (not a bot's, nor one an agent
   started), one after what it left running or started coming back (a command, a subagent, its
-  sessions' news). Read from the session's latest turn: any word of yours in it makes it yours.
+  sessions' news). Read from the session's latest turn, back to its start however long it is:
+  any word of yours in it makes it yours. One whose start can't be reached counts as yours only in
+  a conversation of yours.
 - **A question, a permission or a failure** always is; a failure with its reason on one line
   ("Stopped with an error: …").
 - **What an agent sends on purpose** (`notify_user`, "Agents' tools") always is.
@@ -1564,7 +1568,8 @@ a browser's, itself).
 - **`GET kuvo/notices`** → `{"telling": bool, "notices": [{"id", "at", "notice", "by"?}, …]}`: each
   notice the box made in the last ten minutes, oldest first, as `Notice` (above, before it's masked
   and cut), `at` in ms since 1970, `by: "agent"` for one an agent sent (`notify_user`). `telling`:
-  whether the box tells its news now (this Mac's box always; a machine's while its bridge runs).
+  whether the box tells its news now (this Mac's box always; a machine's while a bridge that does
+  runs, as it marks in `run/notices/teller` with its pid; one from before doesn't).
   405 for another method.
 - **`GET kuvo/notices/events`**: the same, a line now and one each time it changes (NDJSON).
 - **A client** shows each notice of the categories that are news (`finished`, `failed`, `report`,

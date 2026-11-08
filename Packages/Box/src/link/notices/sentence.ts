@@ -16,7 +16,7 @@ export const plain = (text: unknown): string => String(text ?? "")
 export const SENTENCE_LONGEST = 160;
 
 // Words whose full stop doesn't end a sentence.
-const ABBREVIATIONS = /(?:^|\s)(?:e\.g|i\.e|etc|vs|cf|approx|incl|Mr|Mrs|Ms|Dr|St|No|Fig)\.$/i;
+const ABBREVIATIONS = /(?:^|\s)(?:e\.g|i\.e|vs|cf|approx|incl|Mr|Mrs|Ms|Dr|Fig)\.$/i;
 
 // The first sentence of a run of plain words: up to the first ".", "!", "?" or "…" with a space or
 // the end after it (not a version's dot, "v1.2", nor an abbreviation's).
@@ -30,10 +30,11 @@ function firstOf(words: string): string {
   return words;
 }
 
-// Cut at a word, ending in "…", to `longest`.
+// Cut at a word, ending in "…", to `longest` characters (never through one, an emoji's say).
 function cutAtWord(text: string, longest: number): string {
-  if (text.length <= longest) return text;
-  const room = text.slice(0, longest - 1);
+  const characters = Array.from(text);
+  if (characters.length <= longest) return text;
+  const room = characters.slice(0, longest - 1).join("");
   const space = room.lastIndexOf(" ");
   return (space > longest / 2 ? room.slice(0, space) : room).replace(/[\s,;:–—-]+$/, "") + "…";
 }
@@ -48,14 +49,18 @@ export function oneSentence(text: unknown, longest = SENTENCE_LONGEST): string {
   // Paragraphs: lines together until a blank line, a heading, a table or a rule; each list item its own.
   const paragraphs: string[] = [];
   let current: string[] = [];
+  let heading = "";
   const close = () => {
     if (current.length) paragraphs.push(plain(current.join(" ")));
     current = [];
   };
   for (const raw of lines) {
     const line = raw.trim();
-    if (!line || /^#{1,6}\s/.test(line) || line.startsWith("|") || /^([-*_])(\s*\1){2,}$/.test(line)) {
+    // (A line all in bold, as a heading's often written, is one; so is HTML's own line.)
+    if (!line || /^#{1,6}\s/.test(line) || line.startsWith("|") || /^([-*_])(\s*\1){2,}$/.test(line) || /^(\*\*|__)[^*_]+\1:?$/.test(line) || /^<\/?[a-z][^>]*>$/i.test(line)) {
       close();
+      // (A heading says it, where nothing else does: "**Done.**" alone.)
+      if (!heading && /^(#{1,6}\s|\*\*|__)/.test(line)) heading = plain(line.replace(/^#{1,6}\s+/, ""));
       continue;
     }
     const item = /^(?:[-*+]|\d+[.)])\s+(.*)$/.exec(line);
@@ -69,7 +74,7 @@ export function oneSentence(text: unknown, longest = SENTENCE_LONGEST): string {
   }
   close();
   const found = paragraphs.filter(Boolean);
-  if (!found.length) return "";
+  if (!found.length) return heading ? cutAtWord(firstOf(heading), longest) : "";
   let sentence = firstOf(found[0]);
   // "Here's what changed:" says nothing alone: with what comes first after it.
   if (sentence === found[0] && sentence.endsWith(":") && found[1]) sentence = `${sentence} ${firstOf(found[1])}`;

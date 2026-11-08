@@ -11148,7 +11148,7 @@ var showsAll = (text) => [...text].length <= SHOWN_LENGTH && masked(text) === te
 // Packages/Box/src/link/notices/sentence.ts
 var plain2 = (text) => String(text ?? "").replace(/^[ \t]{0,3}(#{1,6}|>+)[ \t]+/gm, "").replace(/!?\[([^\]]*)\]\([^)\s]*\)/g, "$1").replace(/(?<![\w*_])[*_]{1,3}(?=\S)|(?<=\S)[*_]{1,3}(?![\w*_])/g, "").replace(/`/g, "").replace(/\s+/g, " ").trim();
 var SENTENCE_LONGEST = 160;
-var ABBREVIATIONS = /(?:^|\s)(?:e\.g|i\.e|etc|vs|cf|approx|incl|Mr|Mrs|Ms|Dr|St|No|Fig)\.$/i;
+var ABBREVIATIONS = /(?:^|\s)(?:e\.g|i\.e|vs|cf|approx|incl|Mr|Mrs|Ms|Dr|Fig)\.$/i;
 function firstOf(words) {
   const ending = /[.!?…]+["”’)\]]*(?=\s|$)/g;
   for (let found = ending.exec(words);found; found = ending.exec(words)) {
@@ -11160,9 +11160,10 @@ function firstOf(words) {
   return words;
 }
 function cutAtWord(text, longest) {
-  if (text.length <= longest)
+  const characters = Array.from(text);
+  if (characters.length <= longest)
     return text;
-  const room = text.slice(0, longest - 1);
+  const room = characters.slice(0, longest - 1).join("");
   const space = room.lastIndexOf(" ");
   return (space > longest / 2 ? room.slice(0, space) : room).replace(/[\s,;:–—-]+$/, "") + "…";
 }
@@ -11173,6 +11174,7 @@ function oneSentence(text, longest = SENTENCE_LONGEST) {
 `);
   const paragraphs = [];
   let current = [];
+  let heading = "";
   const close = () => {
     if (current.length)
       paragraphs.push(plain2(current.join(" ")));
@@ -11180,8 +11182,10 @@ function oneSentence(text, longest = SENTENCE_LONGEST) {
   };
   for (const raw of lines) {
     const line = raw.trim();
-    if (!line || /^#{1,6}\s/.test(line) || line.startsWith("|") || /^([-*_])(\s*\1){2,}$/.test(line)) {
+    if (!line || /^#{1,6}\s/.test(line) || line.startsWith("|") || /^([-*_])(\s*\1){2,}$/.test(line) || /^(\*\*|__)[^*_]+\1:?$/.test(line) || /^<\/?[a-z][^>]*>$/i.test(line)) {
       close();
+      if (!heading && /^(#{1,6}\s|\*\*|__)/.test(line))
+        heading = plain2(line.replace(/^#{1,6}\s+/, ""));
       continue;
     }
     const item = /^(?:[-*+]|\d+[.)])\s+(.*)$/.exec(line);
@@ -11196,7 +11200,7 @@ function oneSentence(text, longest = SENTENCE_LONGEST) {
   close();
   const found = paragraphs.filter(Boolean);
   if (!found.length)
-    return "";
+    return heading ? cutAtWord(firstOf(heading), longest) : "";
   let sentence = firstOf(found[0]);
   if (sentence === found[0] && sentence.endsWith(":") && found[1])
     sentence = `${sentence} ${firstOf(found[1])}`;
@@ -11273,6 +11277,7 @@ function describeForm(form) {
 }
 var isBot = (session) => Boolean(session.metadata?.kuvo?.bot) || /\/bots\/bot_[^/]+\//.test(`${session.location?.directory ?? ""}/`);
 var TURN_PAGE = 50;
+var TURN_PAGES = 20;
 var beganWith = (message) => {
   if (message.type !== "user")
     return "follow";
@@ -11288,22 +11293,43 @@ var beganWith = (message) => {
     return note.from === "Your answer" || note.from === "Autopilot" ? "you" : note.from === "Its sessions" ? "follow" : "own";
   return writtenByYou(text, message.metadata) ? "you" : "own";
 };
-function turnFor(messages) {
-  const rows = (Array.isArray(messages) ? messages : []).filter((row) => typeof row?.type === "string");
-  const ofTurn = (row) => row.type === "user" || row.type === "synthetic" || row.type === "assistant";
+var rowsOf = (messages) => (Array.isArray(messages) ? messages : []).filter((row) => typeof row?.type === "string");
+var ofTurn2 = (row) => row.type === "user" || row.type === "synthetic" || row.type === "assistant";
+function turnIn2(rows) {
   const lastEnd = rows.findIndex((row) => row.type === "idle");
-  const from = lastEnd >= 0 && !rows.slice(0, lastEnd).some((row) => ofTurn(row) && row.type !== "user") ? lastEnd + 1 : 0;
-  const end = rows.findIndex((row, index) => index >= from && row.type === "idle");
-  const starters = rows.slice(from, end < 0 ? undefined : end).filter((row) => row.type === "user" || row.type === "synthetic");
-  if (!starters.length)
+  const from = lastEnd >= 0 && !rows.slice(0, lastEnd).some((row) => ofTurn2(row) && row.type !== "user") ? lastEnd + 1 : 0;
+  return { from, end: rows.findIndex((row, index) => index >= from && row.type === "idle") };
+}
+async function latestTurn(session, get) {
+  const data = [];
+  let query = `limit=${TURN_PAGE}&order=desc`;
+  for (let pages = 0;pages < TURN_PAGES; pages++) {
+    const page = await get(`api/session/${encodeURIComponent(session)}/message?${query}`).catch(() => null);
+    const rows = rowsOf(page?.data);
+    data.push(...rows);
+    const next = page?.cursor?.next ?? page?.cursor?.previous;
+    if (!rows.length || !next)
+      return { data, whole: true };
+    if (turnIn2(data).end >= 0)
+      return { data, whole: true };
+    query = `limit=100&cursor=${encodeURIComponent(next)}`;
+  }
+  return { data, whole: false };
+}
+function turnFor(messages, whole = true) {
+  const rows = rowsOf(messages);
+  const { from, end } = turnIn2(rows);
+  const kinds = rows.slice(from, end < 0 ? undefined : end).filter((row) => row.type === "user" || row.type === "synthetic").map(beganWith);
+  if (kinds.includes("you"))
     return "you";
-  const kinds = starters.map(beganWith);
-  return kinds.includes("you") ? "you" : kinds.at(-1);
+  if (end < 0 && !whole)
+    return "unknown";
+  return kinds.at(-1) ?? "you";
 }
 function answersYou(began, session) {
   if (began === "you")
     return true;
-  if (began !== "follow")
+  if (began !== "follow" && began !== "unknown")
     return false;
   return !isBot(session) && !session.metadata?.kuvo?.startedBy;
 }
@@ -11369,8 +11395,8 @@ async function noticeFor(event, get) {
       const ended = await session(id);
       if (ended.parentID || isHiddenRun(ended))
         return null;
-      const page = await get(`api/session/${encodeURIComponent(id)}/message?limit=${TURN_PAGE}&order=desc`).catch(() => null);
-      const summary = summaryAtEnd(page?.data);
+      const page = await latestTurn(id, get);
+      const summary = summaryAtEnd(page.data);
       if (summary === "failed")
         return about(ended, "failed", "Couldn't summarize the conversation.");
       if (event.type === "session.execution.failed") {
@@ -11379,11 +11405,11 @@ async function noticeFor(event, get) {
       }
       if (summary === "completed")
         return null;
-      if (!answersYou(turnFor(page?.data), ended))
+      if (!answersYou(turnFor(page.data, page.whole), ended))
         return null;
       let reply = "";
       try {
-        for (const message of page?.data ?? []) {
+        for (const message of page.data) {
           if (message.type !== "assistant")
             continue;
           reply = oneSentence((message.content ?? []).filter((part) => part.type === "text").map((part) => part.text).join(`
@@ -13731,7 +13757,7 @@ function readRows(key) {
     return null;
   }
 }
-function rowsOf(lead) {
+function rowsOf2(lead) {
   const found = [];
   for (const name of listOf(ELSEWHERE)) {
     if (!name.endsWith(".json"))
@@ -20841,7 +20867,7 @@ async function elsewhereTool(tool, lead, args, session, place) {
 }
 async function rowsEverywhere(lead, place, most = CALL_WAIT) {
   const told = readPeerAgents();
-  const kept = new Map(rowsOf(lead.session).map((each) => [each.key, each]));
+  const kept = new Map(rowsOf2(lead.session).map((each) => [each.key, each]));
   const asked = peersOf(readLink()).filter((peer) => kept.has(peer.key) && (told[peer.key]?.features ?? []).includes(CALLS_FEATURE));
   return (await Promise.all(asked.map(async (peer) => {
     const name = boxName(peer);
@@ -25623,6 +25649,18 @@ import path89 from "node:path";
 var TOLD_FOLDER = path89.join(RUN, "notices");
 var TOLD_FILE2 = path89.join(TOLD_FOLDER, "told.json");
 var TOLD_LOCK = path89.join(TOLD_FOLDER, "told.lock");
+var TELLER_FILE = path89.join(TOLD_FOLDER, "teller");
+function markTeller() {
+  try {
+    writePrivate(TELLER_FILE, String(process.pid));
+  } catch {}
+}
+function tellingNow() {
+  if (IS_MAC)
+    return true;
+  const teller = Number(textOf(TELLER_FILE));
+  return Number.isInteger(teller) && teller > 0 && teller === runningBridge();
+}
 var NEWS_KEPT = 10 * 60000;
 var SENT_KEPT = 24 * 60 * 60000;
 var MOST = 300;
@@ -25637,17 +25675,23 @@ function readTold2() {
 }
 var keptStill = (entry, now) => now - entry.at < (entry.by === "agent" ? SENT_KEPT : NEWS_KEPT);
 var toldFollowers = new Set;
-function keepTold(notice, { by, now = Date.now() } = {}) {
+function keepTold(notice, { by, now = Date.now(), unless } = {}) {
   const entry = { id: newID("ntc_"), at: now, notice, ...by ? { by } : {} };
+  let refused = null;
   try {
     locked(TOLD_LOCK, () => {
       const kept = readTold2().filter((each) => keptStill(each, now));
+      refused = unless?.(kept) ?? null;
+      if (refused)
+        return;
       kept.push(entry);
       writePrivate(TOLD_FILE2, JSON.stringify(kept.slice(-MOST)));
     });
   } catch {
     return null;
   }
+  if (refused)
+    return { refused };
   for (const told of toldFollowers)
     told();
   return entry;
@@ -25682,7 +25726,7 @@ function watchSentByAgents(tell, { every = 3000, now = Date.now } = {}) {
 }
 
 // Packages/Box/src/link/notices/notify.ts
-var NOTIFY_LIMITS = { hour: 3, day: 12, apart: 2 * 60000 };
+var NOTIFY_LIMITS = { hour: 3, day: 12, apart: 2 * 60000, boxHour: 10 };
 var HOUR = 60 * 60000;
 var DAY4 = 24 * HOUR;
 function sentNotice(session, name, sentence) {
@@ -25696,26 +25740,37 @@ function sentNotice(session, name, sentence) {
     data: { session: session.id }
   };
 }
-function notifyUserTool(caller, args, now = Date.now()) {
+function notifyUserTool(caller, args, now = Date.now(), telling = tellingNow) {
   if (caller.data.metadata?.kuvo?.seat)
     return { text: "In a group chat, say it in the chat: the user reads it there.", isError: true };
   const sentence = oneSentence(args.text);
   if (!sentence)
     return { text: "Give the text: one sentence saying what you need from the user.", isError: true };
-  const sent = readTold2().filter((each) => each.by === "agent" && each.notice.thread === caller.session);
-  const lastHour = sent.filter((each) => now - each.at < HOUR);
-  const lastDay = sent.filter((each) => now - each.at < DAY4);
-  const last = sent.at(-1);
-  if (lastDay.some((each) => each.notice.body === sentence))
-    return { text: "You already sent the user that today. They'll see it; don't send it again.", isError: true };
-  if (last && now - last.at < NOTIFY_LIMITS.apart)
-    return { text: "You notified the user a moment ago. Wait for them: put anything more in your reply.", isError: true };
-  if (lastHour.length >= NOTIFY_LIMITS.hour || lastDay.length >= NOTIFY_LIMITS.day) {
-    return { text: `You've notified the user ${lastHour.length >= NOTIFY_LIMITS.hour ? `${lastHour.length} times this hour` : `${lastDay.length} times today`}, the most there is. Put it in your reply; they'll read it there.`, isError: true };
-  }
-  const told = keepTold(sentNotice({ ...caller.data, id: caller.session }, caller.name, sentence), { by: "agent", now });
+  if (!telling())
+    return { text: "Notifications can't be sent from this computer now. Put it in your reply.", isError: true };
+  const why = (kept) => {
+    const byAgents = kept.filter((each) => each.by === "agent");
+    const sent = byAgents.filter((each) => each.notice.thread === caller.session);
+    const lastHour = sent.filter((each) => now - each.at < HOUR);
+    const lastDay = sent.filter((each) => now - each.at < DAY4);
+    const last = sent.at(-1);
+    if (lastDay.some((each) => each.notice.body === sentence))
+      return "You already sent the user that today. They'll see it; don't send it again.";
+    if (last && now - last.at < NOTIFY_LIMITS.apart)
+      return "You notified the user a moment ago. Wait for them: put anything more in your reply.";
+    if (lastHour.length >= NOTIFY_LIMITS.hour)
+      return `You've notified the user ${lastHour.length} times this hour, the most there is. Put it in your reply; they'll read it there.`;
+    if (lastDay.length >= NOTIFY_LIMITS.day)
+      return `You've notified the user ${lastDay.length} times today, the most there is. Put it in your reply; they'll read it there.`;
+    if (byAgents.filter((each) => now - each.at < HOUR).length >= NOTIFY_LIMITS.boxHour)
+      return "The user has had many notifications from agents this hour. Put it in your reply; they'll read it there.";
+    return null;
+  };
+  const told = keepTold(sentNotice({ ...caller.data, id: caller.session }, caller.name, sentence), { by: "agent", now, unless: why });
   if (!told)
     return { text: "The notification couldn't be sent just now. Put it in your reply.", isError: true };
+  if ("refused" in told)
+    return { text: told.refused, isError: true };
   return { text: `Sent to the user: “${sentence}”`, isError: false };
 }
 
@@ -27226,7 +27281,7 @@ import fs89 from "node:fs";
 import path94 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "0.9.205";
+var BRIDGE_VERSION = "0.9.206";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
@@ -27273,8 +27328,7 @@ async function* namedRoute(context) {
 }
 
 // Packages/Box/src/link/areas/notices.ts
-var telling = () => IS_MAC || runningBridge() !== null;
-var lately = () => ({ telling: telling(), ...toldLately() });
+var lately = () => ({ telling: tellingNow(), ...toldLately() });
 async function* noticesRoute(context) {
   const { request, route, signal, json } = context;
   if (request.method.toUpperCase() !== "GET")
@@ -31064,6 +31118,7 @@ async function run3() {
     return tell(notice);
   }, hold });
   watchSentByAgents(tell);
+  markTeller();
   watchSeats(() => current);
   watchMoves(() => current);
   watchAsks(tell, { answered });

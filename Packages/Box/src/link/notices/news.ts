@@ -166,15 +166,15 @@ export function describeForm(form: EngineForm): string {
 export const isBot = (session: EngineSession): boolean => Boolean(session.metadata?.kuvo?.bot) || /\/bots\/bot_[^/]+\//.test(`${session.location?.directory ?? ""}/`);
 
 
-// How many of a session's latest messages are read for its turn: its start, past the steps of a
-// long one.
+// How a session's latest messages are read for its turn: a page, then more, back to its start.
 const TURN_PAGE = 50;
+const TURN_PAGES = 20;
 
 /** What began a session's latest turn, from its messages (newest first): you (your message, or your
  * answer, approval or pick passed on), another agent (its letter or work for it), the session's own
- * accord (its wake-up or watch, a goal's word to its bot), or what it left running or started
- * (a command or subagent done, its sessions' news: `follow`). */
-export type TurnBegan = "you" | "agent" | "own" | "follow";
+ * accord (its wake-up or watch, a goal's word to its bot), what it left running or started
+ * (a command or subagent done, its sessions' news: `follow`), or `unknown`, its start out of reach. */
+export type TurnBegan = "you" | "agent" | "own" | "follow" | "unknown";
 
 const beganWith = (message: EngineMessage): TurnBegan => {
   if (message.type !== "user") return "follow";
@@ -187,28 +187,55 @@ const beganWith = (message: EngineMessage): TurnBegan => {
   return writtenByYou(text, message.metadata) ? "you" : "own";
 };
 
-/** What began the latest turn in `messages` (a session's, newest first): any word of yours in it
- * makes it yours; else what began it. One whose start is out of reach counts as yours. */
-export function turnFor(messages: unknown): TurnBegan {
-  const rows = (Array.isArray(messages) ? messages : []).filter((row): row is EngineMessage => typeof row?.type === "string");
-  const ofTurn = (row: EngineMessage) => row.type === "user" || row.type === "synthetic" || row.type === "assistant";
-  // From its end (past what's written since, a message waiting its turn) back to the end before it.
+const rowsOf = (messages: unknown): EngineMessage[] => (Array.isArray(messages) ? messages : []).filter((row): row is EngineMessage => typeof row?.type === "string");
+const ofTurn = (row: EngineMessage) => row.type === "user" || row.type === "synthetic" || row.type === "assistant";
+
+// Where the latest turn lies in `rows` (newest first): from its end (past what's written since, a
+// message waiting its turn) back to, not including, the end before it (`end`, -1 where it's not in them).
+function turnIn(rows: EngineMessage[]): { from: number; end: number } {
   const lastEnd = rows.findIndex(row => row.type === "idle");
   const from = lastEnd >= 0 && !rows.slice(0, lastEnd).some(row => ofTurn(row) && row.type !== "user") ? lastEnd + 1 : 0;
-  const end = rows.findIndex((row, index) => index >= from && row.type === "idle");
-  const starters = rows.slice(from, end < 0 ? undefined : end).filter(row => row.type === "user" || row.type === "synthetic");
-  if (!starters.length) return "you";
-  const kinds = starters.map(beganWith);
-  return kinds.includes("you") ? "you" : kinds.at(-1)!;
+  return { from, end: rows.findIndex((row, index) => index >= from && row.type === "idle") };
+}
+
+/** A session's latest messages, newest first, as far back as its latest turn begins (a long one is
+ * many steps): `whole` once that's in them, or there's nothing older. */
+async function latestTurn(session: string, get: EngineAsk): Promise<{ data: EngineMessage[]; whole: boolean }> {
+  const data: EngineMessage[] = [];
+  let query = `limit=${TURN_PAGE}&order=desc`;
+  for (let pages = 0; pages < TURN_PAGES; pages++) {
+    const page = await get(`api/session/${encodeURIComponent(session)}/message?${query}`).catch(() => null) as { data?: unknown; cursor?: { next?: string; previous?: string } | null } | null;
+    const rows = rowsOf(page?.data);
+    data.push(...rows);
+    const next = page?.cursor?.next ?? page?.cursor?.previous;
+    if (!rows.length || !next) return { data, whole: true };
+    if (turnIn(data).end >= 0) return { data, whole: true };
+    query = `limit=100&cursor=${encodeURIComponent(next)}`;
+  }
+  return { data, whole: false };
+}
+
+/** What began the latest turn in `messages` (a session's, newest first): any word of yours in it
+ * makes it yours; else what began it. `whole`: they reach back to its start (or there's nothing
+ * older); one whose start is out of reach is `unknown`, unless a word of yours is in what's there. */
+export function turnFor(messages: unknown, whole = true): TurnBegan {
+  const rows = rowsOf(messages);
+  const { from, end } = turnIn(rows);
+  const kinds = rows.slice(from, end < 0 ? undefined : end).filter(row => row.type === "user" || row.type === "synthetic").map(beganWith);
+  if (kinds.includes("you")) return "you";
+  if (end < 0 && !whole) return "unknown";
+  return kinds.at(-1) ?? "you";
 }
 
 /** NOTIFY_RULE: whether a reply is news for you. A reply to you is; one to another agent, or of the
  * session's own accord (a wake-up, a watch, a goal's word), isn't. What it left running or started
- * coming back is, in a conversation of yours (not a bot's, nor one an agent started). A question, a
- * permission or a failure always is, and so is an agent's notify_user. */
+ * coming back is, in a conversation of yours (not a bot's, nor one an agent started), and so is a
+ * turn whose start is out of reach there. A question, a permission or a failure always is, and so
+ * is an agent's notify_user. */
 export function answersYou(began: TurnBegan, session: EngineSession): boolean {
   if (began === "you") return true;
-  if (began !== "follow") return false;
+  // (Its start out of reach: news in a conversation of yours, as most turns there are yours.)
+  if (began !== "follow" && began !== "unknown") return false;
   return !isBot(session) && !session.metadata?.kuvo?.startedBy;
 }
 
@@ -289,10 +316,10 @@ export async function noticeFor(event: EngineEvent, get: EngineAsk): Promise<Not
       const ended = await session(id);
       // A subagent's run is part of its parent's.
       if (ended.parentID || isHiddenRun(ended)) return null;
-      const page = await get(`api/session/${encodeURIComponent(id)}/message?limit=${TURN_PAGE}&order=desc`).catch(() => null) as EngineAnswer<EngineMessage[]> | null;
+      const page = await latestTurn(id, get);
       // Only a summary it was asked for: that it failed, whichever way its run ended (the engine's
       // says `succeeded`), and otherwise not news.
-      const summary = summaryAtEnd(page?.data);
+      const summary = summaryAtEnd(page.data);
       if (summary === "failed") return about(ended, "failed", "Couldn't summarize the conversation.");
       if (event.type === "session.execution.failed") {
         const reason = reasonLine(data.error?.message);
@@ -300,10 +327,10 @@ export async function noticeFor(event: EngineEvent, get: EngineAsk): Promise<Not
       }
       if (summary === "completed") return null;
       // A reply is news only when it answers you (NOTIFY_RULE).
-      if (!answersYou(turnFor(page?.data), ended)) return null;
+      if (!answersYou(turnFor(page.data, page.whole), ended)) return null;
       let reply = "";
       try {
-        for (const message of page?.data ?? []) {
+        for (const message of page.data) {
           if (message.type !== "assistant") continue;
           reply = oneSentence((message.content ?? []).filter(part => part.type === "text").map(part => part.text).join("\n\n"));
           if (reply) break;

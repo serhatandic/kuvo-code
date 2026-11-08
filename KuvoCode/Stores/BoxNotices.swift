@@ -19,8 +19,6 @@ final class BoxNotices {
     private var shown: [String: Set<String>] = [:]
     /// Whether each box tells its news now (its bridge runs), as it last said.
     private var telling: [String: Bool] = [:]
-    /// Each box's follow now, so one that ended (a reconnect) leaves the next one's alone.
-    private var following: [String: UUID] = [:]
 
     /// What a box says it told (`kuvo/notices`).
     struct Told: Decodable, Equatable {
@@ -38,6 +36,19 @@ final class BoxNotices {
         }
         var telling: Bool?
         var notices: [Entry]
+
+        private enum Keys: String, CodingKey { case telling, notices }
+        /// One that can't be read: left out, not the rest with it.
+        private struct Maybe: Decodable {
+            var entry: Entry?
+            init(from decoder: Decoder) throws { entry = try? Entry(from: decoder) }
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: Keys.self)
+            telling = try container.decodeIfPresent(Bool.self, forKey: .telling)
+            notices = (try container.decodeIfPresent([Maybe].self, forKey: .notices) ?? []).compactMap(\.entry)
+        }
     }
 
     /// The kinds of news shown from here: the rest are asks, shown from their own cards.
@@ -51,16 +62,17 @@ final class BoxNotices {
     }
 
     /// `box`'s notices, from now on, until the task following it ends (a machine disconnecting, or
-    /// removed): followed while it's connected and ready. A box from before them is asked again only
+    /// removed): read as it connects, and followed while it's connected and ready. A box from before them is asked again only
     /// now and then, and words its own as it did.
     func follow(_ box: String) async {
-        let me = UUID()
-        following[box] = me
         let onThisMac = box == BoxClient.mac
         var older = false
+        var first = true
         while !Task.isCancelled {
+            // A machine's read as it connects, then again a while after its stream ends.
             if !onThisMac {
-                try? await Task.sleep(for: .seconds(older ? 300 : 30))
+                if !first { try? await Task.sleep(for: .seconds(older ? 300 : 30)) }
+                first = false
                 guard !Task.isCancelled, connected?(box) ?? (app?.machines.engine(box)?.isReady == true) else { continue }
             }
             older = false
@@ -78,7 +90,6 @@ final class BoxNotices {
             // meanwhile shows once it's heard again.)
             if onThisMac { try? await Task.sleep(for: .seconds(older ? 300 : 2)) }
         }
-        if following[box] == me { following[box] = nil }
     }
 
     /// What `box` told lately: each not shown yet, shown once (all of it, the first time it's read).

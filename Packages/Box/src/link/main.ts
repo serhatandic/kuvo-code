@@ -69,7 +69,7 @@ import { holdVault } from "./vault/holder";
 import { primeGenerations } from "./vault/store";
 import { setVaultTell } from "./vault/use";
 import { HELD_FILE, NoticeHold } from "./notices/hold";
-import { keepTold, watchSentByAgents } from "./notices/told";
+import { keepTold, markTeller, watchSentByAgents } from "./notices/told";
 import { noticeJSON, pushTo } from "./notices/notice";
 import { announce, forgetMacsAgents, refreshOwn } from "./peers/agents";
 import { forgetOldMacs, KEY, leaveMac, macsOf, noteOnline, peersOf, takeLegacyPeers } from "./peers/known";
@@ -328,6 +328,8 @@ async function run(): Promise<void> {
   watchBox({ tell: notice => { keepTold(notice); return tell(notice); }, hold });
   // And what its agents send you on purpose (notify_user), whichever process answered them.
   watchSentByAgents(tell);
+  // (So its clients know it tells them: a bridge from before didn't.)
+  markTeller();
   // What its group chats send your other computers, carried on the relay connection that's up.
   watchSeats(() => current);
   // Moves to and from your other computers, carried on the same connection.

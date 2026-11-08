@@ -57,4 +57,11 @@ import Testing
         notices.take(try told([]), from: "lab")
         #expect(notices.tells("lab"))
     }
+
+    @Test func anEntryThatCantBeReadLeavesTheRest() throws {
+        let json = #"{"telling": true, "notices": [{"id": "ntc_bad", "notice": {"category": "finished", "data": {"session": 7}}}, {"id": "ntc_ok", "at": 1, "notice": {"title": "Fix", "body": "Done.", "category": "finished", "data": {"session": "ses_main"}}}]}"#
+        let told = try JSONDecoder().decode(BoxNotices.Told.self, from: Data(json.utf8))
+        #expect(told.notices.map(\.id) == ["ntc_ok"])
+        #expect(told.telling == true)
+    }
 }

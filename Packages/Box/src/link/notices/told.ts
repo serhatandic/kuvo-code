@@ -10,13 +10,30 @@ import { isObject } from "../../shared/json";
 import { newID } from "../../shared/text";
 import { locked, textOf, writePrivate } from "../files";
 import { watchFolders } from "../follow";
-import { RUN } from "../home";
+import { IS_MAC, RUN } from "../home";
+import { runningBridge } from "../keeper";
 import type { Notice } from "./notice";
 
 /** Where what's told is kept. */
 export const TOLD_FOLDER = path.join(RUN, "notices");
 const TOLD_FILE = path.join(TOLD_FOLDER, "told.json");
 const TOLD_LOCK = path.join(TOLD_FOLDER, "told.lock");
+// The process that tells your phones (a machine's bridge) and keeps its news here, by its pid.
+const TELLER_FILE = path.join(TOLD_FOLDER, "teller");
+
+/** Marks this process as the one that tells your phones and keeps its news here (a machine's
+ * bridge, as it starts): a bridge from before it doesn't. */
+export function markTeller(): void {
+  try { writePrivate(TELLER_FILE, String(process.pid)); } catch {}
+}
+
+/** Whether this box tells its news now, and sends what agents send you: this Mac's box always; a
+ * machine's while a bridge that does runs. */
+export function tellingNow(): boolean {
+  if (IS_MAC) return true;
+  const teller = Number(textOf(TELLER_FILE));
+  return Number.isInteger(teller) && teller > 0 && teller === runningBridge();
+}
 
 /** A notice told: its id, when (ms since 1970), the notice, and `by: "agent"` for one an agent sent
  * on purpose (notify_user). */
@@ -51,18 +68,23 @@ const keptStill = (entry: ToldNotice, now: number) => now - entry.at < (entry.by
 export const toldFollowers = new Set<() => void>();
 
 /** `notice` kept as told now, with what's past its time let go: the entry kept, or null where it
- * couldn't be written. */
-export function keepTold(notice: Notice, { by, now = Date.now() }: { by?: "agent"; now?: number } = {}): ToldNotice | null {
+ * couldn't be written. `unless`, given what's kept, says why it isn't (then nothing's kept), checked
+ * while no other process changes it. */
+export function keepTold(notice: Notice, { by, now = Date.now(), unless }: { by?: "agent"; now?: number; unless?: (kept: ToldNotice[]) => string | null } = {}): ToldNotice | { refused: string } | null {
   const entry: ToldNotice = { id: newID("ntc_"), at: now, notice, ...(by ? { by } : {}) };
+  let refused: string | null = null;
   try {
     locked(TOLD_LOCK, () => {
       const kept = readTold().filter(each => keptStill(each, now));
+      refused = unless?.(kept) ?? null;
+      if (refused) return;
       kept.push(entry);
       writePrivate(TOLD_FILE, JSON.stringify(kept.slice(-MOST)));
     });
   } catch {
     return null;
   }
+  if (refused) return { refused };
   for (const told of toldFollowers) told();
   return entry;
 }
