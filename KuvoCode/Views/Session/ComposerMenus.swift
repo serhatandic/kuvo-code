@@ -187,22 +187,11 @@ struct ModeChip: View {
 
     var body: some View {
         NativeMenuButton(name: "mode", menu: makeMenu) {
-            HStack(spacing: 5) {
-                Image(systemName: approval.symbol)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Text(approval.title)
-                if holding != nil {
-                    Circle()
-                        .fill(.orange)
-                        .frame(width: 6, height: 6)
-                        .accessibilityHidden(true)
-                }
-                // The model chip's chevron: two menus side by side look alike.
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(.tertiary)
-                    .accessibilityHidden(true)
+            // Short of room, it gives way first, down to its icon, so the model keeps its name
+            // (the composer's row gives it what's left once the rest has theirs).
+            ViewThatFits(in: .horizontal) {
+                label(words: true)
+                label(words: false)
             }
             .font(.callout)
             .lineLimit(1)
@@ -214,6 +203,28 @@ struct ModeChip: View {
         .help(holding.map { "\(approval.title) asks first for now. \($0.why)" } ?? "\(approval.title): \(approval.detail.lowercasedFirst)")
         .accessibilityLabel("Mode")
         .accessibilityValue(holding != nil ? "\(approval.title), asks first for now" : approval.title)
+    }
+
+    /// The approval's icon and, with `words`, its name; the orange dot while it asks first for now.
+    private func label(words: Bool) -> some View {
+        HStack(spacing: 5) {
+            Image(systemName: approval.symbol)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            if words { Text(approval.title) }
+            if holding != nil {
+                Circle()
+                    .fill(.orange)
+                    .frame(width: 6, height: 6)
+                    .accessibilityHidden(true)
+            }
+            // The model chip's chevron: two menus side by side look alike.
+            Image(systemName: "chevron.down")
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(.tertiary)
+                .accessibilityHidden(true)
+        }
+        .fixedSize()
     }
 
     private func makeMenu() -> NSMenu {
