@@ -31,7 +31,10 @@ import Testing
             ssh.note(script, to: address)
             return nil
         }
-        MachineEngine.standIn = { [reachable] machine in reachable.apis[machine.id] }
+        MachineEngine.standIn = { [reachable] machine in
+            if let failure = reachable.failures[machine.id] { throw failure }
+            return reachable.apis[machine.id]
+        }
         MachineClock.clock = { [clock] seconds in await clock.wait(seconds) }
     }
 
@@ -581,6 +584,84 @@ import Testing
         #expect(engine.isReady)
     }
 
+    /// Connected, then the machine restarts: its connection drops (its tunnel ends), and while it
+    /// comes up again what it says (its engine not starting yet) doesn't end the trying. The first
+    /// time it answers it's connected again, with no Connect pressed (#285).
+    @Test func aMachineThatRestartsIsConnectedAgainByItself() async throws {
+        defer { done() }
+        let id = Self.name()
+        let engine = add(id, at: machine)
+        await app.connect(engine).value
+        #expect(engine.isReady)
+        try await until { clock.waits == [30, 60, 600] }
+
+        reachable.failures[id] = Self.restarting
+        engine.connectionLost("The connection to \(engine.machine.name) was lost.")
+        try await until { clock.waits == [3] }
+        #expect(engine.connection == .reconnecting)
+        clock.pass(3)
+        try await until { !clock.waits.isEmpty || !engine.isRetrying }
+        guard engine.isRetrying else { Issue.record("given up on: “\(engine.statusText)”"); return }
+        #expect(engine.connection == .reconnecting)
+        #expect(clock.waits == [5], "tried again in a moment")
+
+        reachable.failures[id] = nil
+        clock.pass(5)
+        try await until { !engine.isRetrying }
+        #expect(engine.isReady, "connected again, no Connect pressed")
+    }
+
+    /// Away for hours (switched off overnight): still tried, a couple of minutes apart, and
+    /// connected again once it's back, rather than given up on after half an hour.
+    @Test func aMachineAwayForHoursIsConnectedAgainWhenItsBack() async throws {
+        defer { done() }
+        let id = Self.name()
+        let engine = add(id, at: machine)
+        await app.connect(engine).value
+        try await until { clock.waits == [30, 60, 600] }
+
+        let api = reachable.apis[id]
+        reachable.apis[id] = nil
+        engine.connectionLost("The connection to \(engine.machine.name) was lost.")
+        var away = 0
+        while away < 3 * 3600 {
+            try await until { clock.waits.count == 1 || !engine.isRetrying }
+            guard engine.isRetrying, let wait = clock.waits.first else { Issue.record("given up after \(away) seconds"); return }
+            #expect(wait <= 120, "no more than two minutes between tries")
+            away += wait
+            clock.pass(wait)
+        }
+        try await until { clock.waits.count == 1 }
+        #expect(clock.waits == [120], "two minutes apart after an hour")
+        reachable.apis[id] = api
+        clock.pass(120)
+        try await until { !engine.isRetrying }
+        #expect(engine.isReady, "connected again, no Connect pressed")
+    }
+
+    /// Dropped, then turned away when it answers (its key, kept in an app that locked meanwhile):
+    /// said at once, with Try Again, rather than tried for as long as it's away.
+    @Test func aMachineThatDroppedAndRefusesItsKeySaysSo() async throws {
+        defer { done() }
+        let id = Self.name()
+        let engine = add(id, at: machine)
+        await app.connect(engine).value
+        try await until { clock.waits == [30, 60, 600] }
+
+        reachable.failures[id] = RemoteEngineError.ssh(status: 255, message: "someone@\(id): Permission denied (publickey).")
+        engine.connectionLost("The connection to \(engine.machine.name) was lost.")
+        try await until { clock.waits == [3] }
+        clock.pass(3)
+        try await until { !engine.isRetrying }
+        #expect(engine.connection == .failed)
+        #expect(engine.failure?.contains("SSH key") == true, "it says why")
+        #expect(clock.waits == [])
+    }
+
+    /// What a machine says while it restarts and its engine can't start yet, as starting it there
+    /// over SSH fails then.
+    private static let restarting = RemoteEngineError.exited(status: 3, output: "Its engine couldn't be noted down there.")
+
     /// A machine that answers but can't run the engine (an unsupported system; its key refused, a
     /// changed host key) says why at once, with Try Again, rather than "Reconnecting…" for half an
     /// hour while trying again won't change it.
@@ -733,6 +814,8 @@ import Testing
 @MainActor
 final class Reachable {
     var apis: [String: OpenCodeAPI] = [:]
+    /// What starting its engine there fails with, as it would over SSH, by machine.
+    var failures: [String: Error] = [:]
 }
 
 /// What a machine's box answers its routes, as `kuvo-link.js box route` prints it.

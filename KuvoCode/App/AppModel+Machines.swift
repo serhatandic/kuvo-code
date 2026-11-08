@@ -442,14 +442,15 @@ extension AppModel {
         engine.alsoUsedBy = .init(macs: macs.filter { $0.key != own }.map { $0.name ?? "another Mac" }, phones: info.phones ?? 0)
     }
 
-    /// After a dropped connection (the Mac slept, the machine restarted): tries further apart
-    /// each time, for half an hour, while its sessions wait.
+    /// After a dropped connection (the Mac slept, the machine restarted, the network changed):
+    /// tries further apart each time, for as long as it takes, while its sessions wait, and it's
+    /// connected again the first time it answers.
     private func reconnect(_ engine: MachineEngine) async {
         engine.isRetrying = true
         defer { engine.isRetrying = false }
-        await MachineClock.retry(after: [3, 10, 30, 60, 120, 120, 300, 300, 300, 300, 300]) {
-            // Connected again some other way (Try Again), or removed (which disconnects it).
-            guard case .failed = engine.state else { return true }
+        await MachineClock.retry(after: MachineClock.reconnectWaits) {
+            // Connected again some other way (Try Again), or disconnected or removed meanwhile.
+            guard case .failed = engine.state, !engine.isRetired, !engine.isDisconnected else { return true }
             await start(engine)
             // Done, or failed in a way trying again won't change: that's said now, with Try Again.
             return engine.isReady || !engine.failureMayPass
