@@ -11,12 +11,15 @@ set -eu
 cd "$(dirname "$0")/.."
 
 check_console() {
-    if [ "$1" != "$(id -un)" ]; then
-        echo "The screen is on $1's session; switch the Mac's screen to $(id -un)'s account before running app tests." >&2
-        return 1
-    fi
+    user=$(id -un)
+    case "$1" in
+        root|'') echo "No one is logged in at this Mac's screen; log in as $user before running app tests." >&2 ;;
+        "$user") return 0 ;;
+        *) echo "The screen is on $1's session; switch the Mac's screen to $user's account before running app tests." >&2 ;;
+    esac
+    return 1
 }
-check_console "$(stat -f %Su /dev/console)"
+check_console "$(stat -f %Su /dev/console 2>/dev/null || true)"
 
 # A heavy job of the Mac's (scripts/heavy.sh): it builds in KuvoCodeTests-build, so it waits for
 # the Mac's other builds, and for a busy Mac, unless whoever started it took that turn already.
@@ -38,8 +41,6 @@ if lockf -ks -t 0 "$LOCK" true; then
     echo "scripts/test-app.sh runs only while it holds $LOCK." >&2
     exit 1
 fi
-
-check_console "$(stat -f %Su /dev/console)"
 
 # The app reaches the Keychain only through `Keychain` (KuvoCode/Stores/Keychain.swift), which is
 # one in memory for the tests: a test reaching the real one would wait on macOS asking whether
@@ -100,18 +101,34 @@ caffeinate -d -u -w $$ &
 caffeinate_pid=$!
 xcode_pid=
 finished=0
+stop_new_hosts() {
+    for pid in $(host_pids); do
+        case " $hosts_before " in *" $pid "*) continue ;; esac
+        kill "$pid" 2>/dev/null || true
+    done
+}
 cleanup_run() {
     result=$?
-    trap - EXIT HUP INT TERM
+    set +e
+    trap - EXIT
+    trap '' HUP INT TERM
     if [ -n "$xcode_pid" ]; then
         kill "$xcode_pid" 2>/dev/null || true
-        wait "$xcode_pid" 2>/dev/null || true
     fi
     if [ "$finished" -eq 0 ] || [ "$result" -ne 0 ]; then
-        for pid in $(host_pids); do
-            case " $hosts_before " in *" $pid "*) continue ;; esac
-            kill "$pid" 2>/dev/null || true
+        stop_new_hosts
+    fi
+    # Do not wait indefinitely: heavy.sh sends KILL to the job group after about three seconds.
+    if [ -n "$xcode_pid" ]; then
+        tries=0
+        while kill -0 "$xcode_pid" 2>/dev/null && [ "$tries" -lt 10 ]; do
+            sleep 0.1
+            tries=$((tries + 1))
         done
+        if ! kill -0 "$xcode_pid" 2>/dev/null; then wait "$xcode_pid" 2>/dev/null; fi
+    fi
+    if [ "$finished" -eq 0 ] || [ "$result" -ne 0 ]; then
+        stop_new_hosts
     fi
     kill "$caffeinate_pid" 2>/dev/null || true
     wait "$caffeinate_pid" 2>/dev/null || true
