@@ -328,7 +328,9 @@ struct ConversationScroll<Rows: View>: View {
             // Your scrolling decides; growth below the fold doesn't. Set only when it changes: each
             // setting draws the conversation again, and this runs on every frame of a scroll.
             // (Not on its way to the end from its button: the rest of a glide doesn't decide.)
-            if scrolling.isYours { scroller.scrolled(atEnd: new.atEnd, wentUp: scrolling.from.map { new.offset < $0 - 1 } ?? true) }
+            // (Up from where your scroll started; a wheel that says nothing of its phases, up since
+            // the frame before.)
+            if scrolling.isYours { scroller.scrolled(atEnd: new.atEnd, wentUp: new.offset < (scrolling.from ?? old.offset) - 1) }
             // Shrinking too: the lazy stack's first guess at the height can be too big, and a
             // conversation would then open part of the way up.
             guard scroller.followsEnd, !scrolling.isYours, new.height != old.height else { return }

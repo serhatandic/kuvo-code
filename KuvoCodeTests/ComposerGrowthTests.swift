@@ -31,18 +31,34 @@ import Testing
     }
     let probe = Probe()
 
+    /// The session in view: another can take its place, under the same composer's room.
+    @Observable final class Shown {
+        var model: SessionModel
+        init(_ model: SessionModel) { self.model = model }
+    }
+    struct Root: View {
+        let shown: Shown
+        var body: some View { SessionView(model: shown.model) }
+    }
+    let shown: Shown
+    /// Another session, to go to and back.
+    let other = "ses_growth_other_" + UUID().uuidString
+
     static let longQuote = String(repeating: "The keeper climbed the stairs at dusk and lit the great lamp. ", count: 4)
 
     init() async throws {
         TestEnvironment.prepare()
         app.workspace.api = engine.api
-        engine.list([StubEngine.session(id, title: "Growth", directory: "/tmp/kuvo-tests-composer-growth", created: 1)])
+        engine.list([StubEngine.session(id, title: "Growth", directory: "/tmp/kuvo-tests-composer-growth", created: 1),
+                     StubEngine.session(other, title: "Other", directory: "/tmp/kuvo-tests-composer-growth", created: 2)])
         engine.conversation(id, [])
+        engine.conversation(other, [])
         await app.workspace.refresh()
         model = try #require(app.workspace.model(for: id))
+        shown = Shown(model)
         AXElement.reading(true)
         window.isReleasedWhenClosed = false
-        window.contentView = NSHostingView(rootView: AnyView(SessionView(model: model)
+        window.contentView = NSHostingView(rootView: AnyView(Root(shown: shown)
             .environment(app)
             .environment(app.workspace)
             .environment(catalog)
@@ -54,6 +70,7 @@ import Testing
     private func done() {
         for file in model.draftFiles { try? FileManager.default.removeItem(at: file) }
         Drafts.shared.remove(model.id)
+        Drafts.shared.remove(other)
         engine.stop()
         window.orderOut(nil)
         window.close()
@@ -408,6 +425,29 @@ import Testing
         try await yourScroll(by: -2_000)
         try await until { !isOffTheEnd }
         #expect(lastMessageBottom <= composerTop, "the last message ends at \(lastMessageBottom), the composer starts at \(composerTop)")
+    }
+
+    /// Read at the very top under a tall composer (two quotes), then another conversation with an
+    /// empty one and back: as you left it. (Kept out of sight, the conversation shares the
+    /// composer's room; pushed then, the top stopped it going one way and not the other.)
+    @Test func aConversationYouLeaveAndComeBackToIsAsYouLeftIt() async throws {
+        defer { done() }
+        try await conversation(turns: 14)
+        for number in 1...2 { try await quote("Quote \(number): " + Self.longQuote) }
+        let scroll = try #require(scroll)
+        let clip = try #require(clip)
+        let top = -scroll.contentInsets.top
+        for _ in 0..<40 where origin > top + 0.5 {
+            try await yourScroll(by: 3_000)
+        }
+        try #require(abs(origin - top) <= 0.5, "at the top: \(origin), its top \(top)")
+        shown.model = try #require(app.workspace.model(for: other))
+        try await until { laidOut && !labels.contains("Don’t Reply to This") }
+        await settled()
+        shown.model = model
+        try await until { laidOut && labels.contains("Don’t Reply to This") }
+        await settled()
+        #expect(abs(clip.bounds.origin.y - top) <= 0.5, "back: at \(clip.bounds.origin.y), left at the top \(top)")
     }
 
     /// Right at the end, not following it (as Find leaves it on the last message): the last
