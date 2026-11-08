@@ -238,6 +238,7 @@ public actor LinkClient {
     /// (connecting to the relay if need be) and again each time the relay connection is made,
     /// as the relay asks; nil stops sending it.
     public func register(_ registration: PushRegistration?) async {
+        letGoIfStale()
         self.registration = registration
         guard let registration else { return }
         if let relay {
@@ -271,10 +272,21 @@ public actor LinkClient {
 
     /// Back from the background: the relay connection may have died while the app was suspended,
     /// with nothing to say so until a ping goes unanswered (half a minute or more), and what's
-    /// asked meanwhile would wait on it. Let go of now: its sessions end (`closed`), and the next
-    /// request connects afresh. Whether there was one.
+    /// asked meanwhile would wait on it. Said at once, from anywhere (no wait for the actor), so
+    /// whatever's asked after it goes on a fresh connection: the next request lets go of the old
+    /// one first (its sessions end, `closed`), and of a connection still being made before.
+    public nonisolated func relayMayBeGone() {
+        stale.set()
+    }
+
+    private let stale = Flag()
+
+    /// Lets go of the relay connection if it may have died (`relayMayBeGone`). Whether it did.
     @discardableResult
-    public func relayMayBeGone() -> Bool {
+    private func letGoIfStale() -> Bool {
+        guard stale.take() else { return false }
+        connecting?.cancel()
+        connecting = nil
         guard let relay else { return false }
         relay.close()
         relayEnded(relay)
@@ -292,6 +304,7 @@ public actor LinkClient {
 
     @discardableResult
     private func open(_ host: PairedHost, pairing token: Data?) async throws -> HostHello {
+        letGoIfStale()
         let address = host.linkAddress
         if let session = sessions[address] {
             if let hello = session.hostHello { return hello }
@@ -487,6 +500,7 @@ public actor LinkClient {
     // MARK: The relay
 
     private func relayConnection() async throws -> any RelayTransport {
+        letGoIfStale()
         if let relay { return relay }
         if let connecting { return try await connecting.value }
         let (connect, url, secret) = (connect, relayURL, secret)
@@ -653,4 +667,20 @@ public enum Bridge {
 
     /// The same, where it is, for this Mac's own box to run (`kuvo-link.js serve`).
     public static var scriptURL: URL? { Bundle.module.url(forResource: "kuvo-link", withExtension: "js") }
+}
+
+/// A flag set from anywhere and taken once, for `LinkClient.relayMayBeGone`.
+private final class Flag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var isSet = false
+
+    func set() { lock.withLock { isSet = true } }
+
+    /// Whether it was set, clearing it.
+    func take() -> Bool {
+        lock.withLock {
+            defer { isSet = false }
+            return isSet
+        }
+    }
 }
