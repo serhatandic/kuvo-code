@@ -2754,7 +2754,14 @@ the last reading in its folder (`limits.json`), through a restart. A client reac
   often as its maker allows and never inside a hold, and answers as `GET` once it's read.
 - The bridge's events (`kuvo/agents/api/event`) carry `kuvo.limits.updated` `{accounts}` each time
   the list changes.
-- How often: Claude's each 15 minutes, Codex's each 10. Anthropic limits these reads for the whole
+- What's read: Claude Code's accounts (Kuvo Code's own sign-in: its token on a Mac, Claude Code's
+  file in Kuvo Code's folder on Linux), Codex's (through its app-server) and Grok's (its pool, with
+  the sign-in in its home); of the engine's, ChatGPT's (`openai`, signed in: Codex's windows),
+  SuperGrok's (`xai`, signed in), GitHub Copilot's (the month's premium requests), OpenRouter's (a
+  key's cap and the credits left), Z.ai's coding plan and OpenCode Go's. Not yet: Cursor's and
+  Antigravity's (the usage panel still shows them on a Mac), nor Ollama's, which ollama.com tells
+  only the Ollama app's own signing key.
+- How often: Claude's each 15 minutes, the rest each 10. Anthropic limits these reads for the whole
   computer, not a sign-in, and holds a reader off longer each time it asks too soon: a 429 holds
   every Claude account on the box for as long as its `Retry-After` says (an hour with no word,
   doubling up to six), through a restart.

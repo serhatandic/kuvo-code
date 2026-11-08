@@ -154,6 +154,8 @@ export class Limits {
     /** Where they're kept between runs (`limits.json` in the bridge's folder); none in a test that doesn't. */
     private readonly file?: string,
     private readonly now: () => number = Date.now,
+    /** Before each round of reads: what lists the accounts asked again (the engine's sign-ins). */
+    private readonly prepare?: () => Promise<void>,
   ) {
     this.load()
     this.said = JSON.stringify(this.list())
@@ -198,8 +200,11 @@ export class Limits {
 
   /** The services whose limits this box reads (`claude`, `codex`…), so a client knows what it covers. */
   services(): LimitsService[] {
-    return [...new Set(this.accounts().map((account) => account.service))]
+    return [...new Set([...this.accounts().map((account) => account.service), ...this.alsoServices])]
   }
+
+  /** Services read here though none may be signed in now (the engine's). */
+  alsoServices: LimitsService[] = []
 
   /**
    * Reads now each account read longer ago than a minute, unless its maker said to wait or it was
@@ -229,6 +234,7 @@ export class Limits {
   }
 
   private async readDue() {
+    await this.prepare?.()
     for (const account of this.accounts()) {
       const source = account.limits
       this.listen(account.provider, source)

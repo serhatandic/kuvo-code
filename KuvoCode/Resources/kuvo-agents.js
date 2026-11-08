@@ -10093,15 +10093,17 @@ class Limits {
   accounts;
   file;
   now;
+  prepare;
   entries = new Map;
   holds = new Map;
   reading;
   timer;
   said = "";
-  constructor(accounts, file, now = Date.now) {
+  constructor(accounts, file, now = Date.now, prepare) {
     this.accounts = accounts;
     this.file = file;
     this.now = now;
+    this.prepare = prepare;
     this.load();
     this.said = JSON.stringify(this.list());
   }
@@ -10140,8 +10142,9 @@ class Limits {
     return listed;
   }
   services() {
-    return [...new Set(this.accounts().map((account) => account.service))];
+    return [...new Set([...this.accounts().map((account) => account.service), ...this.alsoServices])];
   }
+  alsoServices = [];
   async refresh() {
     const at = this.now();
     for (const account of this.accounts()) {
@@ -10164,6 +10167,7 @@ class Limits {
     return at < hold || entry.problem?.kind === "rate-limited" && at < (entry.problem.until ?? entry.next);
   }
   async readDue() {
+    await this.prepare?.();
     for (const account of this.accounts()) {
       const source = account.limits;
       this.listen(account.provider, source);
@@ -15870,6 +15874,250 @@ function withTimeout2(promise, milliseconds) {
 import { homedir as homedir4 } from "os";
 import { mkdirSync as mkdirSync17, readFileSync as readFileSync24, writeFileSync as writeFileSync18 } from "fs";
 import { dirname as dirname14, join as join26 } from "path";
+
+// Packages/Box/src/agents/engine-limits.ts
+var engineEndpoints = {
+  chatgpt: "https://chatgpt.com/backend-api/wham/usage",
+  grok: "https://cli-chat-proxy.grok.com/v1/billing?format=credits",
+  copilot: "https://api.github.com/copilot_internal/user",
+  openrouterKey: "https://openrouter.ai/api/v1/key",
+  openrouterCredits: "https://openrouter.ai/api/v1/credits",
+  zai: "https://api.z.ai/api/monitor/usage/quota/limit",
+  opencodeGo: "https://opencode.ai/zen/go/v1/usage"
+};
+var EVERY2 = 10 * 60000;
+var MONTH = 43200;
+var READERS = {
+  openai: { service: "codex", signIn: true, read: readChatGPT },
+  xai: { service: "grok", signIn: true, read: readGrok },
+  "github-copilot": { service: "copilot", read: readCopilot },
+  openrouter: { service: "openrouter", read: readOpenRouter },
+  zai: { service: "zai", read: readZai },
+  "zai-coding-plan": { service: "zai", read: readZai },
+  "opencode-go": { service: "opencode", read: readOpenCodeGo }
+};
+var ENGINE_SERVICES = [...new Set(Object.values(READERS).map((reader) => reader.service))];
+
+class EngineAccounts {
+  credentialsNow;
+  credentials = [];
+  made = new Map;
+  constructor(credentialsNow) {
+    this.credentialsNow = credentialsNow;
+  }
+  async refresh() {
+    try {
+      const answer = await this.credentialsNow();
+      const list = Array.isArray(answer) ? answer : Array.isArray(answer?.data) ? answer.data : undefined;
+      if (list)
+        this.credentials = list.filter((each) => each && typeof each.integrationID === "string" && each.active === true && each.value && typeof each.value === "object");
+    } catch {}
+  }
+  accounts() {
+    const accounts = [];
+    for (const credential of this.credentials) {
+      const reader = READERS[credential.integrationID];
+      if (!reader)
+        continue;
+      if (reader.signIn && credential.value.type !== "oauth" && !credential.value.access)
+        continue;
+      let account = this.made.get(credential.integrationID);
+      if (!account) {
+        const integration = credential.integrationID;
+        account = {
+          provider: integration,
+          service: reader.service,
+          limits: { every: EVERY2, read: (now) => this.read(integration, now) }
+        };
+        this.made.set(integration, account);
+      }
+      accounts.push(account);
+    }
+    return accounts;
+  }
+  async read(integration, now) {
+    const credential = this.credentials.find((each) => each.integrationID === integration);
+    const reader = READERS[integration];
+    const secret = credential?.value.access || credential?.value.key;
+    if (!credential || !reader || !secret)
+      throw new LimitsProblem("none", "Not signed in here.");
+    if (credential.value.type === "oauth" && credential.value.expires && credential.value.expires <= now) {
+      throw new LimitsProblem("expired", "Its sign-in has lapsed: the engine renews it the next time a model of it runs here.");
+    }
+    return reader.read(secret.trim(), credential, now);
+  }
+}
+async function fetched(url, headers, now, maker) {
+  let response;
+  try {
+    response = await fetch(url, { headers: { Accept: "application/json", ...headers }, signal: AbortSignal.timeout(15000) });
+  } catch (caught) {
+    throw new LimitsProblem("failed", `Couldn't reach ${maker}: ${caught instanceof Error ? caught.message : String(caught)}`);
+  }
+  if (response.status === 429)
+    throw new LimitsProblem("rate-limited", `${maker} is turning away reads of the limits for now.`, retryAt(response.headers.get("retry-after"), now));
+  if (response.status === 401 || response.status === 403)
+    throw new LimitsProblem("expired", `${maker} turned the sign-in away: sign in again in Settings \u203A Accounts if it keeps saying so.`);
+  if (!response.ok)
+    throw new LimitsProblem("failed", `${maker} answered ${response.status}.`);
+  try {
+    return await response.json();
+  } catch {
+    throw new LimitsProblem("failed", `${maker}'s answer wasn't what Kuvo Code reads.`);
+  }
+}
+var number = (value) => {
+  const found = typeof value === "string" && value.trim() ? Number(value) : value;
+  return typeof found === "number" && Number.isFinite(found) ? found : undefined;
+};
+var date = (value) => {
+  if (typeof value !== "string" || !value.trim())
+    return;
+  const at = Date.parse(value);
+  return Number.isFinite(at) ? at : undefined;
+};
+var title = (value) => typeof value === "string" && value.trim() ? value.trim().split(/[_\s]+/).map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()).join(" ") : undefined;
+async function readChatGPT(secret, credential, now) {
+  const account = credential.value.metadata?.accountID;
+  const body = await fetched(engineEndpoints.chatgpt, { Authorization: `Bearer ${secret}`, ...typeof account === "string" && account ? { "ChatGPT-Account-Id": account } : {} }, now, "ChatGPT");
+  const windows = [...whamWindows(body?.rate_limit, "", undefined, now)];
+  for (const extra of Array.isArray(body?.additional_rate_limits) ? body.additional_rate_limits : []) {
+    const name = typeof extra?.limit_name === "string" ? extra.limit_name : typeof extra?.metered_feature === "string" ? extra.metered_feature : undefined;
+    if (name)
+      windows.push(...whamWindows(extra.rate_limit, `${name}.`, name, now));
+  }
+  const plan = title(body?.plan_type);
+  return { windows, ...plan ? { plan } : {} };
+}
+function whamWindows(limit, prefix, model, now) {
+  return ["primary", "secondary"].flatMap((which) => {
+    const window = limit?.[`${which}_window`];
+    const used = number(window?.used_percent);
+    if (!window || used === undefined)
+      return [];
+    const seconds = number(window.limit_window_seconds);
+    const resetsAt = number(window.reset_at) !== undefined ? number(window.reset_at) * 1000 : number(window.reset_after_seconds) !== undefined ? now + number(window.reset_after_seconds) * 1000 : undefined;
+    return [{ id: prefix + which, used: used / 100, ...seconds ? { minutes: Math.round(seconds / 60) } : {}, ...resetsAt ? { resetsAt } : {}, ...model ? { model } : {} }];
+  });
+}
+async function readGrok(secret, _credential, now) {
+  const body = await fetched(engineEndpoints.grok, { Authorization: `Bearer ${secret}`, "X-XAI-Token-Auth": "xai-grok-cli" }, now, "xAI");
+  const period = body?.config?.currentPeriod;
+  const start = date(period?.start);
+  const end = date(period?.end);
+  if (!start || !end || end <= start)
+    throw new LimitsProblem("failed", "xAI's answer wasn't what Kuvo Code reads.");
+  const used = number(body.config.creditUsagePercent) ?? 0;
+  return { windows: [{ id: "weekly", used: used / 100, minutes: Math.round((end - start) / 60000), resetsAt: end }] };
+}
+async function readCopilot(secret, _credential, now) {
+  const body = await fetched(engineEndpoints.copilot, { Authorization: `token ${secret}`, "Editor-Version": "vscode/1.96.2", "Editor-Plugin-Version": "copilot-chat/0.26.7", "User-Agent": "GitHubCopilotChat/0.26.7", "X-Github-Api-Version": "2025-04-01" }, now, "GitHub");
+  const resetsAt = date(body?.quota_reset_date) ?? date(body?.limited_user_reset_date);
+  const windows = [];
+  const snapshots = body?.quota_snapshots;
+  for (const [id, model] of [["premium_interactions", undefined], ["chat", "Chat"], ["completions", "Completions"]]) {
+    const snapshot = snapshots?.[id];
+    const entitlement = number(snapshot?.entitlement);
+    const remaining = number(snapshot?.remaining);
+    if (!snapshot || snapshot.unlimited === true || entitlement === -1 || remaining === -1 || !entitlement)
+      continue;
+    const percentLeft = number(snapshot.percent_remaining);
+    const used = percentLeft !== undefined ? 1 - percentLeft / 100 : remaining !== undefined ? 1 - remaining / entitlement : undefined;
+    if (used === undefined)
+      continue;
+    windows.push({
+      id,
+      used,
+      minutes: MONTH,
+      ...resetsAt ? { resetsAt } : {},
+      ...model ? { model } : {},
+      ...remaining !== undefined ? { amount: { used: Math.max(0, entitlement - remaining), limit: entitlement, unit: "requests" } } : {}
+    });
+  }
+  if (!snapshots) {
+    for (const [id, model] of [["chat", "Chat"], ["completions", "Completions"]]) {
+      const limit = number(body?.monthly_quotas?.[id]);
+      const remaining = number(body?.limited_user_quotas?.[id]);
+      if (!limit || remaining === undefined)
+        continue;
+      windows.push({ id, used: 1 - remaining / limit, minutes: MONTH, model, ...resetsAt ? { resetsAt } : {}, amount: { used: Math.max(0, limit - remaining), limit, unit: "requests" } });
+    }
+  }
+  const plan = title(body?.copilot_plan);
+  return { windows, ...plan ? { plan } : {} };
+}
+async function readOpenRouter(secret, _credential, now) {
+  const headers = { Authorization: `Bearer ${secret}` };
+  const key = (await fetched(engineEndpoints.openrouterKey, headers, now, "OpenRouter"))?.data;
+  const windows = [];
+  const limit = number(key?.limit);
+  if (limit && limit > 0) {
+    const left = Math.max(0, number(key.limit_remaining) ?? limit - (number(key.usage) ?? 0));
+    windows.push({ id: "key", used: 1 - left / limit, amount: { used: limit - left, limit, unit: "usd" } });
+  }
+  let balance;
+  try {
+    const credits = (await fetched(engineEndpoints.openrouterCredits, headers, now, "OpenRouter"))?.data;
+    const total = number(credits?.total_credits);
+    const spent = number(credits?.total_usage);
+    if (total !== undefined && spent !== undefined)
+      balance = { left: Math.max(0, total - spent), unit: "usd" };
+  } catch (caught) {
+    if (!windows.length)
+      throw caught;
+  }
+  const plan = key?.is_free_tier === true ? "Free tier" : key?.is_free_tier === false ? "Pay as you go" : undefined;
+  return { windows, ...balance ? { balance } : {}, ...plan ? { plan } : {} };
+}
+async function readZai(secret, _credential, now) {
+  const root = await fetched(engineEndpoints.zai, { Authorization: `Bearer ${secret}` }, now, "Z.ai");
+  if (root?.success === false && /coding plan/i.test(String(root?.msg ?? "")))
+    throw new LimitsProblem("none", "No coding plan on this key.");
+  const limits = Array.isArray(root?.data?.limits) ? root.data.limits : Array.isArray(root?.limits) ? root.limits : undefined;
+  if (!limits)
+    throw new LimitsProblem("failed", "Z.ai's answer wasn't what Kuvo Code reads.");
+  const UNIT = { 3: 60, 4: 1440, 5: 43200, 6: 10080 };
+  const windows = [];
+  for (const entry of limits) {
+    const type = entry?.type ?? entry?.name;
+    const resetsAt = number(entry?.nextResetTime);
+    if (type === "CREDIT_LIMIT" || type === "TOKENS_LIMIT") {
+      const unit = UNIT[number(entry.unit) ?? 0];
+      const count = number(entry.number);
+      const percent = number(entry.percentage);
+      if (!unit || !count || percent === undefined)
+        continue;
+      const minutes = unit * count;
+      windows.push({ id: minutes < 1440 ? "session" : `window_${minutes}`, used: percent / 100, minutes, ...resetsAt ? { resetsAt } : {} });
+    } else if (type === "TIME_LIMIT") {
+      const used = number(entry.currentValue);
+      const limit = number(entry.usage);
+      if (used === undefined || !limit)
+        continue;
+      windows.push({ id: "web_search", used: used / limit, model: "Web searches", ...resetsAt ? { resetsAt } : {}, amount: { used, limit, unit: "requests" } });
+    }
+  }
+  return { windows };
+}
+async function readOpenCodeGo(secret, _credential, now) {
+  const body = await fetched(engineEndpoints.opencodeGo, { Authorization: `Bearer ${secret}` }, now, "OpenCode");
+  const usage = body?.usage;
+  if (!usage || typeof usage !== "object")
+    throw new LimitsProblem("none", "No OpenCode Go plan on this key.");
+  const windows = [];
+  for (const [id, minutes] of [["rolling", 300], ["weekly", 10080], ["monthly", MONTH]]) {
+    const percent = number(usage[id]?.percent);
+    if (percent === undefined)
+      continue;
+    let resetsAt = date(usage[id].resetsAt);
+    if (id === "rolling" && resetsAt && resetsAt >= now + 299 * 60000)
+      resetsAt = undefined;
+    windows.push({ id, used: percent / 100, minutes, ...resetsAt ? { resetsAt } : {} });
+  }
+  return { windows, plan: "Go" };
+}
+
+// Packages/Box/src/agents/agents/grok.ts
 var places3 = [join26(homedir4(), ".grok/bin"), join26(homedir4(), ".local/bin"), "/opt/homebrew/bin", "/usr/local/bin"];
 var STATE_IN_HOME3 = [
   "sessions",
@@ -15979,6 +16227,23 @@ class GrokAgent {
     const projects = upward(directory).flatMap((folder) => [".grok", ".claude", ".cursor", ".agents"].map((name) => join26(folder, name, "skills")));
     return [join26(home, "skills"), join26(homedir4(), ".claude", "skills"), join26(homedir4(), ".cursor", "skills"), ...projects];
   }
+  limits = {
+    every: 10 * 60000,
+    read: async (now) => {
+      const home = this.instance.home ?? process.env.GROK_HOME ?? join26(homedir4(), ".grok");
+      let entries = {};
+      try {
+        entries = JSON.parse(readFileSync24(join26(home, "auth.json"), "utf8")) ?? {};
+      } catch {}
+      const entry = Object.values(entries).find((each) => typeof each?.key === "string" && each.key.trim());
+      if (!entry)
+        throw new LimitsProblem("none", "Not signed in to Grok here.");
+      const expires = Date.parse(entry.expiresAt ?? entry.expires ?? "");
+      if (Number.isFinite(expires) && expires <= now)
+        throw new LimitsProblem("expired", "Its sign-in has lapsed: Grok renews it the next time it runs here.");
+      return readGrok(entry.key.trim(), undefined, now);
+    }
+  };
   env() {
     return withOwnFolders({ ...process.env, GROK_DISABLE_AUTOUPDATER: "1", ...this.instance.home ? { GROK_HOME: this.instance.home } : {} });
   }
@@ -25561,7 +25826,9 @@ var sideQuestions = new SideQuestions(join31(home2, "side-questions.json"), plac
 var handoffs = new Handoffs(places4);
 var reviews = new Reviews(join31(home2, "reviews.json"), places4);
 var voice = new VoiceWords(places4);
-var limits = new Limits(() => agentAccounts(roster.all()), join31(home2, "limits.json"));
+var engineAccounts = new EngineAccounts(() => link3.request("GET", "/api/credential"));
+var limits = new Limits(() => [...agentAccounts(roster.all()), ...engineAccounts.accounts()], join31(home2, "limits.json"), Date.now, () => engineAccounts.refresh());
+limits.alsoServices = ENGINE_SERVICES;
 var artifacts;
 var noted2;
 if (artifactsFolder) {
@@ -25675,4 +25942,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents e2968861877313ffcbc4d7a5315eff9dbe8e4f80a42d9254ea288ecb364d45dc
+// Built from Packages/Box/src/agents 3cf333407ea5eddb0d18abe4aad4489000b6627cd8ca1b515735abd27ee74936

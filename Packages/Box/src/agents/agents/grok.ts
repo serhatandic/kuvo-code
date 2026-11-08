@@ -8,6 +8,8 @@ import { providerID, type AgentAccount } from "../accounts"
 import type { Agent, AgentContext, Account, SignInAttempt, SignInOptions, Thread } from "../agent"
 import { accountName, ContextWindows, KnownAccount, model, signOutWith, TookTooLong } from "../agent"
 import { emit } from "../events"
+import { readGrok } from "../engine-limits"
+import { LimitsProblem, type LimitsSource } from "../limits"
 import { AcpThread, questionFields } from "../acp"
 import { withOwnFolders } from "../machine"
 import { install, maintenance, update, type MaintenanceDefinition } from "../maintenance"
@@ -146,6 +148,26 @@ export class GrokAgent implements Agent {
     const home = this.instance.home ?? process.env.GROK_HOME ?? join(homedir(), ".grok")
     const projects = upward(directory).flatMap((folder) => [".grok", ".claude", ".cursor", ".agents"].map((name) => join(folder, name, "skills")))
     return [join(home, "skills"), join(homedir(), ".claude", "skills"), join(homedir(), ".cursor", "skills"), ...projects]
+  }
+
+  /**
+   * Its plan's weekly pool (limits.ts), read with the sign-in Grok keeps in its home (Kuvo Code's
+   * folder for it on a machine, or one you added), as the Grok CLI reads it; never renewed here.
+   */
+  readonly limits: LimitsSource = {
+    every: 10 * 60_000,
+    read: async (now) => {
+      const home = this.instance.home ?? process.env.GROK_HOME ?? join(homedir(), ".grok")
+      let entries: Record<string, any> = {}
+      try {
+        entries = JSON.parse(readFileSync(join(home, "auth.json"), "utf8")) ?? {}
+      } catch {}
+      const entry = Object.values(entries).find((each: any) => typeof each?.key === "string" && each.key.trim())
+      if (!entry) throw new LimitsProblem("none", "Not signed in to Grok here.")
+      const expires = Date.parse(entry.expiresAt ?? entry.expires ?? "")
+      if (Number.isFinite(expires) && expires <= now) throw new LimitsProblem("expired", "Its sign-in has lapsed: Grok renews it the next time it runs here.")
+      return readGrok(entry.key.trim(), undefined, now)
+    },
   }
 
   env(): Record<string, string | undefined> {

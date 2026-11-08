@@ -45,6 +45,7 @@ import { GroupStore } from "./groups/store"
 import { queueFiles } from "../shared/queues"
 import { HangWatch, isEngine } from "../shared/hang"
 import { agentAccounts, Limits } from "./limits"
+import { ENGINE_SERVICES, EngineAccounts } from "./engine-limits"
 
 const version = "1"
 const home = process.env.KUVO_AGENTS_HOME
@@ -240,7 +241,10 @@ const reviews = new Reviews(join(home, "reviews.json"), places)
 // The project's words for voice input to listen for, in the same conversations.
 const voice = new VoiceWords(places)
 // Your plans' limits for each account here, read on their makers' schedules and kept between runs.
-const limits = new Limits(() => agentAccounts(roster.all()), join(home, "limits.json"))
+// The engine's sign-ins too (Settings › Accounts), as the engine lists them with their secrets.
+const engineAccounts = new EngineAccounts(() => link.request("GET", "/api/credential"))
+const limits = new Limits(() => [...agentAccounts(roster.all()), ...engineAccounts.accounts()], join(home, "limits.json"), Date.now, () => engineAccounts.refresh())
+limits.alsoServices = ENGINE_SERVICES
 
 // What every conversation here makes, recorded as it's made: the engine's and this bridge's own.
 // One that fails to start leaves the rest of the bridge as it is.
