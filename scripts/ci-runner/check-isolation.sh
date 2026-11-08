@@ -44,7 +44,8 @@ gateway="$(tart exec "$vm" /sbin/route -n get default 2>/dev/null | awk '/gatewa
 
 tcp_here() { nc -z -G 3 "$1" "$2" >/dev/null 2>&1 && echo open || echo closed; }
 tcp_vm() { tart exec "$vm" /usr/bin/nc -z -G 3 "$1" "$2" >/dev/null 2>&1 && echo open || echo closed; }
-https_vm() { tart exec "$vm" /usr/bin/curl -sS -o /dev/null --max-time 15 -w '%{http_code}' "$1" 2>/dev/null || echo 000; }
+# The HTTP status, or 000 when nothing answered (curl prints 000 itself then).
+https_vm() { tart exec "$vm" /usr/bin/curl -sS -o /dev/null --max-time 15 -w '%{http_code}' "$1" 2>/dev/null; }
 
 failures=0 inconclusive=0
 blocked_row() { # what, here, vm
@@ -97,13 +98,13 @@ if [[ -n "$vm_ip" ]]; then
     done
 fi
 echo
-echo "From the VM, must be reachable (HTTP status):"
+echo "From the VM, must be reachable (HTTP status; codesign's timestamp server is plain HTTP):"
 for url in https://api.github.com https://github.com https://objects.githubusercontent.com \
-    https://ghcr.io/v2/ https://appstoreconnect.apple.com/notary/v2/submissions https://timestamp.apple.com/ts01 \
+    https://ghcr.io/v2/ https://appstoreconnect.apple.com/notary/v2/submissions http://timestamp.apple.com/ts01 \
     https://registry.npmjs.org https://pypi.org/simple/ https://nodejs.org/dist/index.json; do
     code="$(https_vm "$url")"
     verdict=ok
-    [[ "$code" != 000 ]] || { verdict=FAIL; failures=$((failures + 1)); }
+    [[ "$code" =~ ^[1-9][0-9][0-9]$ ]] || { verdict=FAIL; failures=$((failures + 1)); }
     printf '%-50s %-7s %s\n' "$url" "$code" "$verdict"
 done
 echo

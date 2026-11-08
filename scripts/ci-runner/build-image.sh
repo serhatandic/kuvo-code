@@ -67,13 +67,12 @@ tart clone "$BASE_IMAGE" "$build"
 tart set "$build" --cpu "$VM_CPUS" --memory "$VM_MEMORY_MB" --disk-size "$VM_DISK_GB"
 
 # Built with softnet too (no LAN, no Tailscale), but with the gateway's DNS: the guest's own
-# public DNS is set below. Xcode comes in read-only, for this build only; job VMs share nothing.
+# public DNS is set below. Nothing is shared with it, as with job VMs.
 log="$(mktemp -t kuvo-ci-build)"
-tart run --no-graphics --no-clipboard --no-audio --no-usb-accessories --net-softnet \
-    --dir="xcode:$XCODE:ro" "$build" > "$log" 2>&1 &
+tart run --no-graphics --no-clipboard --no-audio --no-usb-accessories --net-softnet "$build" > "$log" 2>&1 &
 run_pid=$!
 
-guest() { tart exec "$build" /bin/bash -lc "$1"; }
+guest() { tart exec "$build" /bin/bash -lc "set -euo pipefail; $1"; }
 echo "Waiting for the VM…"
 for _ in $(seq 1 120); do
     if tart exec "$build" /usr/bin/true >/dev/null 2>&1; then break; fi
@@ -83,11 +82,31 @@ done
 guest true || fail "The VM's guest agent never answered."
 
 echo "Growing its disk to ${VM_DISK_GB} GB…"
-guest 'container=$(diskutil info / | awk -F": *" "/APFS Physical Store/ { print \$2 }"); yes | sudo diskutil repairDisk "${container%s*}" >/dev/null 2>&1 || true; sudo diskutil apfs resizeContainer "$container" 0 >/dev/null; df -h / | tail -1'
+# Cirrus's image grows its container itself as it boots; this is for one that doesn't. Either way
+# the container must end up within 10 GB of the disk (macOS's own partitions take the rest).
+guest 'container=$(diskutil info / | awk -F": *" "/APFS Physical Store/ { print \$2 }")
+yes | sudo diskutil repairDisk "${container%s*}" >/dev/null 2>&1 || true
+sudo diskutil apfs resizeContainer "$container" 0 >/dev/null 2>&1 || true
+size=$(diskutil info "$container" | awk -F"[(]" "/Disk Size/ { split(\$2, a, \" \"); print a[1] }")
+[[ $((size / 1000000000)) -ge $(('"$VM_DISK_GB"' - 10)) ]] || { echo "Its container is $((size / 1000000000)) GB." >&2; exit 1; }
+df -h / | tail -1'
 
+# Streamed in through Tart's agent as a tar, which keeps the frameworks' symlinks (a --dir share
+# doesn't: copying from one fails on each with "Too many levels of symbolic links").
 echo "Copying in $XCODE…"
-guest 'sudo rm -rf /Applications/Xcode.app && sudo ditto "/Volumes/My Shared Files/xcode" /Applications/Xcode.app'
-guest 'sudo xcode-select -s /Applications/Xcode.app/Contents/Developer && sudo xcodebuild -license accept && sudo xcodebuild -runFirstLaunch && sudo DevToolsSecurity -enable && xcodebuild -version && swift --version | head -1'
+guest 'sudo rm -rf /Applications/Xcode.app /tmp/kuvo-xcode && sudo mkdir /tmp/kuvo-xcode'
+tar -C "$(dirname "$XCODE")" -cf - "$(basename "$XCODE")" \
+    | tart exec -i "$build" sudo tar -C /tmp/kuvo-xcode -xpf - \
+    || fail "Copying Xcode into the VM failed."
+guest "sudo mv '/tmp/kuvo-xcode/$(basename "$XCODE")' /Applications/Xcode.app && sudo rmdir /tmp/kuvo-xcode"
+guest 'sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+sudo xcodebuild -license accept
+sudo xcodebuild -runFirstLaunch
+sudo DevToolsSecurity -enable
+codesign --verify --deep --strict /Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild
+xcodebuild -version
+xcrun --find swift >/dev/null
+swift --version 2>&1 | head -1'
 
 # The app's tests run the box with Node from where it usually is (TestBox.node: /usr/local/bin or
 # /opt/homebrew/bin, not PATH, so setup-node's doesn't count); the base image's node@24 is keg-only.
