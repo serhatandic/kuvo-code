@@ -23,7 +23,8 @@ import ClientText
     @Test(arguments: [
         ("See https://example.com/a?b=1 now", ["https://example.com/a?b=1"]),
         ("and http://x.org", ["http://x.org"]),
-        ("www.apple.com is it", ["http://www.apple.com"]),
+        ("www.apple.com is it", ["https://www.apple.com"]),
+        ("see www.example.org/a?b=1.", ["https://www.example.org/a?b=1"]),
         ("main.swift and README.md", []),
         ("mailto:me@example.com", []),
     ])
