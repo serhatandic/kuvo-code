@@ -1200,17 +1200,20 @@ describe.skipIf(!canFence)("Codex in the box's sandbox", () => {
       settings: ["replace", join(home, "config.toml"), join(home, ".auth-Def456")],
       hooks: ["replace", join(home, "hooks.json"), join(home, ".auth-Ghi789")],
       rules: ["replace", join(home, "rules"), join(home, ".auth-Jkl012")],
+      // What every model's told (its instructions): not its state, if not settings.
+      instructions: ["replace", join(home, "AGENTS.md"), join(home, ".auth-Pqr678")],
       // Its settings by a name it writes, to write them through that.
       named: ["hardlink", join(home, "config.toml"), join(home, ".auth-Mno345")],
     }]], { permissions: askFirst })
     // (Linux grants its home whole: there, a machine's, it's Kuvo Code's own copy of Codex's.)
     const mac = process.platform === "darwin" ? "no" : "yes"
-    expect(said(id)).toBe(`signin=yes settings=${mac} hooks=${mac} rules=${mac} named=${mac}`)
+    expect(said(id)).toBe(`signin=yes settings=${mac} hooks=${mac} rules=${mac} instructions=${mac} named=${mac}`)
     expect(readFileSync(join(home, "auth.json"), "utf8")).toBe("x")
     if (mac === "no") {
       expect(readFileSync(join(home, "config.toml"), "utf8")).toBe("")
       expect(readFileSync(join(home, "hooks.json"), "utf8")).toBe("{}")
       expect(existsSync(join(home, "rules"))).toBe(false)
+      expect(existsSync(join(home, "AGENTS.md"))).toBe(false)
     }
   })
 

@@ -52,7 +52,7 @@ interface Script {
    * What it tries at each prompt, where it runs, and says (`name=yes|no`, or what it found):
    * `write`/`read` a file, `tools` (Kuvo Code's, a call through the server it was given), `app`
    * (a server's address, straight), `env` (a variable's value, or `none`); `replace` saves a file
-   * whole through a new one (the third: written, then renamed onto it).
+   * whole through a new one (the third: written, then renamed onto it), `hardlink` names it the third too.
    */
   tries?: Record<string, [string, string] | [string, string, string]>
   /**
@@ -109,6 +109,8 @@ async function attempt(how, place, through) {
     if (how === "write") require("node:fs").writeFileSync(place, "x")
     // Saved whole, as Grok saves its sign-in: a new file (\`through\`), renamed onto it.
     else if (how === "replace") require("node:fs").writeFileSync(through, "x"), require("node:fs").renameSync(through, place)
+    // Another name for it (\`through\`), a hard link.
+    else if (how === "hardlink") require("node:fs").linkSync(place, through)
     else if (how === "read") require("node:fs").readFileSync(place)
     else if (how === "link") require("node:fs").symlinkSync("/", place)
     else if (how === "linked") return require("node:fs").lstatSync(place).isSymbolicLink() ? "yes" : "no"
@@ -824,14 +826,19 @@ describe.skipIf(!canFence)("Grok in the box's sandbox", () => {
       running: ["replace", join(home, "active_sessions.json"), join(home, "active_sessions.json.tmp")],
       settings: ["replace", join(home, "config.toml"), join(home, ".4242.1.tmp")],
       hooks: ["replace", join(home, "hooks-paths"), join(home, ".4242.2.tmp")],
+      // Its models' list, which names where each model's requests go: not its state, if not settings.
+      models: ["replace", join(home, "models_cache.json"), join(home, ".4242.3.tmp")],
+      // Its settings by a name it writes, to write them through that.
+      named: ["hardlink", join(home, "config.toml"), join(home, ".4242.4.tmp")],
     }), 1, { permissions: askFirst })
     // (Linux grants its home whole: there, a machine's, it's Kuvo Code's own copy of Grok's.)
     const mac = process.platform === "darwin" ? "no" : "yes"
-    expect(words(id)).toBe(`signin=yes running=yes settings=${mac} hooks=${mac}`)
+    expect(words(id)).toBe(`signin=yes running=yes settings=${mac} hooks=${mac} models=${mac} named=${mac}`)
     expect(readFileSync(join(home, "auth.json"), "utf8")).toBe("x")
     if (mac === "no") {
       expect(readFileSync(join(home, "config.toml"), "utf8")).toBe("")
       expect(existsSync(join(home, "hooks-paths"))).toBe(false)
+      expect(existsSync(join(home, "models_cache.json"))).toBe(false)
     }
   })
 

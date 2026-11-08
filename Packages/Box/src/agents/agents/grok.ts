@@ -26,13 +26,13 @@ const places = [join(homedir(), ".grok/bin"), join(homedir(), ".local/bin"), "/o
  * the paths it loads them from, language servers, the settings xAI sends, its models' list, which
  * names where each model's requests go; its program, plugins, skills and memories).
  * A file it saves whole goes through a new one beside it, renamed into place: its sign-in through
- * `.<process>.<count>.tmp`, its running sessions' list through `active_sessions.json.tmp`. Names
- * like those it never reads, and the sandbox goes by the name a file is renamed to, so one can't
+ * `.<process>.<count>.tmp`, its running sessions' list through `active_sessions.json.tmp` (and one
+ * it can't read it keeps aside, `.corrupt`). Names like those it never reads, and the sandbox goes by the name a file is renamed to, so one can't
  * become its settings.
  */
 const STATE_IN_HOME = [
   "sessions", "logs", "memtrace", "debug", "crash",
-  "auth.json*", "agent_id", "*.lock", ".metadata_version", "worktrees.db*", "active_sessions.json*", "experiments_state.json", "*.log", "sandbox-events.jsonl",
+  "auth.json*", "agent_id", "*.lock", ".metadata_version", "worktrees.db*", "active_sessions.json", "active_sessions.json.tmp", "active_sessions.json.corrupt", "experiments_state.json", "*.log", "sandbox-events.jsonl",
   ".*.*.tmp",
 ]
 /** What it never writes in its state either: settings put there (the commands each project always allows are kept in its sessions). */

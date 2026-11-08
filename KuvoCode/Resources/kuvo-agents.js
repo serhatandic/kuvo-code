@@ -14973,7 +14973,9 @@ var STATE_IN_HOME3 = [
   "*.lock",
   ".metadata_version",
   "worktrees.db*",
-  "active_sessions.json*",
+  "active_sessions.json",
+  "active_sessions.json.tmp",
+  "active_sessions.json.corrupt",
   "experiments_state.json",
   "*.log",
   "sandbox-events.jsonl",
@@ -24760,4 +24762,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents d1adcd463d924223e9cfcfaf904f7b46fe32455858cc214a683585fdb1286e8a
+// Built from Packages/Box/src/agents b1fe82d1309f12b037424292d18cf220bfc74059935e85e9f0246653e49449ab
