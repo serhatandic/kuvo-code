@@ -271,9 +271,9 @@ import Testing
         #expect(isOpen)
     }
 
-    /// A group chat's composer is the session's: a quote leaves its last message over it, and
-    /// scrolled up, your place where it is.
-    @Test func aQuoteInAChatLeavesItsLastMessageOverTheComposerAndYourPlaceAlone() async throws {
+    /// A group chat's composer is the session's: a quote pushes its last message up over it, and
+    /// scrolled up, what you read by as much.
+    @Test func aQuoteInAChatPushesItsConversationUp() async throws {
         TestEnvironment.prepare()
         defer { Self.clean(); mac.stop(); AXElement.reading(false) }
         try saveBots([("bot_ada", "Ada", nil), ("bot_ben", "Ben", nil)])
@@ -319,7 +319,7 @@ import Testing
         _ = Drafts.shared.addQuote(String(repeating: "Some words of it. ", count: 20), to: BotGroups.tabKey(id))
         try await until { _ = stack; return scroll.contentInsets.bottom > over + 40 && abs(room - before) < 2 }
 
-        // Scrolled up, what's added next leaves your place.
+        // Scrolled up, what's added next pushes what you read by as much.
         let clip = scroll.contentView
         clip.scroll(to: NSPoint(x: 0, y: clip.bounds.minY - 900))
         scroll.reflectScrolledClipView(clip)
@@ -329,7 +329,7 @@ import Testing
         let taller = scroll.contentInsets.bottom
         _ = Drafts.shared.addQuote("Another: " + String(repeating: "Some words of it. ", count: 20), to: BotGroups.tabKey(id))
         try await until { _ = stack; return scroll.contentInsets.bottom > taller + 40 }
-        #expect(abs(clip.bounds.minY - place) < 1, "moved from \(place) to \(clip.bounds.minY)")
+        try await until { _ = stack; return abs(clip.bounds.minY - place - (scroll.contentInsets.bottom - taller)) < 1.5 }
     }
 
     /// New Group Chat from a machine's page: the chat is made by that machine's box and lives

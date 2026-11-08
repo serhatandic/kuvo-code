@@ -263,18 +263,18 @@ struct ConversationScroll<Rows: View>: View {
             // stack hasn't made rows at yet, which showed a blank conversation for a moment).
             let resizing = new.width != old.width && (anchor.scrollView?.window?.inLiveResize ?? false)
             if new.width != old.width, !resizing { makeSureOfRows(proxy) }
-            // What's over the end grew or shrank (the composer as you write or quote, the cards
-            // and bars over it): its height is only the room kept under the rows, which nothing
-            // else moves the view for. Told as it animates, frame by frame, so the conversation
-            // goes with it. Following the end, the end stays over it; with nothing left to see
-            // where the view is, back to the end; otherwise you're reading, and the view stays,
-            // but for what you just quoted.
+            // What's over the end grew or shrank (the composer as you write, quote or attach, the
+            // cards and bars over it): it pushes the conversation, so nothing sits under it. Its
+            // height is only the room kept under the rows, which nothing else moves the view for;
+            // told as it animates, frame by frame, so the conversation goes with it. Following the
+            // end, the end stays over it; with nothing left to see where the view is, back to the
+            // end; reading further up, what's over it stays there too, by the same distance.
             let overChanged = new.over != old.over
             if overChanged, !scrolling.isYours {
                 if scroller.followsEnd || (new.isPastEnd && anchor.stack?.isAboutToGrow != true) {
                     anchor.scroll(to: nil)
                 } else {
-                    anchor.keepQuotedInSight()
+                    anchor.push(by: new.over - old.over)
                 }
             }
             // Past the end, with nothing there to see, and you're not the one scrolling: to it.
@@ -290,10 +290,7 @@ struct ConversationScroll<Rows: View>: View {
             // Your scrolling decides; growth below the fold doesn't. Set only when it changes: each
             // setting draws the conversation again, and this runs on every frame of a scroll.
             // (Not on its way to the end from its button: the rest of a glide doesn't decide.)
-            if scrolling.isYours {
-                scroller.scrolled(atEnd: new.atEnd)
-                anchor.quoted = nil
-            }
+            if scrolling.isYours { scroller.scrolled(atEnd: new.atEnd) }
             // Shrinking too: the lazy stack's first guess at the height can be too big, and a
             // conversation would then open part of the way up.
             guard scroller.followsEnd, !scrolling.isYours, new.height != old.height else { return }
@@ -341,7 +338,6 @@ struct ConversationScroll<Rows: View>: View {
         .animation(.ui, value: scroller.followsEnd)
         .animation(.ui, value: scroller.seesEnd)
         .onChange(of: scroller.requests) {
-            anchor.quoted = nil
             switch scroller.request {
             case .end(let animated):
                 if animated {
@@ -613,9 +609,6 @@ final class ScrollAnchor {
     static let space = "conversation"
     /// Add to Chat, for what's selected in the conversation: a quote over the composer.
     var quote: ((String) -> Void)?
-    /// Where what you last quoted is in its row (first line's top, last line's bottom): it stays
-    /// in sight as the composer grows over it, until you scroll or go somewhere.
-    var quoted: (row: String, top: CGFloat, bottom: CGFloat)?
     /// The conversation's end, after its last row.
     static let end = "conversation-end"
     #if DEBUG
@@ -851,14 +844,19 @@ final class ScrollAnchor {
         anchor = first.map { ($0.key, $0.value.minY) }
     }
 
-    /// The lines you quoted clear of the composer and the fade above it, moving no further than
-    /// that, and never taking the first of them up past the top of the view.
-    func keepQuotedInSight() {
-        guard let quoted, let scrollView, let row = stack?.frameInDocument(of: quoted.row) else { return }
-        let view = scrollView.contentView.bounds
-        let covered = row.minY + quoted.bottom - (view.maxY - scrollView.contentInsets.bottom - ConversationEndFade.height)
-        let distance = min(covered, row.minY + quoted.top - view.minY - scrollView.contentInsets.top)
-        if distance > 0.5 { scroll(by: distance) }
+    /// What moving the view with what's over the end still owes: a spring's last frames each move
+    /// it less than the view can go, and its overshoot at the top comes back. Left out, they'd
+    /// add up to it being out of place.
+    private var pushOwed: CGFloat = 0
+
+    /// Moved with what's over the end. More than a spring's tail that the top stopped isn't owed.
+    func push(by distance: CGFloat) {
+        guard let clip = scrollView?.contentView else { return }
+        let from = clip.bounds.origin.y
+        pushOwed += distance
+        scroll(to: from + pushOwed)
+        pushOwed -= clip.bounds.origin.y - from
+        if abs(pushOwed) >= 4 { pushOwed = 0 }
     }
 
     /// This far down from where it is now (up, less than 0).

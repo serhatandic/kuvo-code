@@ -5,11 +5,11 @@ import SwiftUI
 import Testing
 @testable import KuvoCode
 
-/// What grows over a conversation's end (the composer as you quote and write) moves the
-/// conversation as it would move a message list a window shrank: following the end, the last
-/// message stays over it; reading further up, your place stays, and only what you just quoted is
-/// kept out from under it. The conversation and composer are the real ones, in a window of the
-/// test's own; selections and scrolling come as the pointer's and the trackpad's events.
+/// Whatever makes the composer taller pushes the conversation, so nothing sits under it: following
+/// the end, the last message stays over it; reading further up, what was just over it stays there,
+/// and it's all back as the composer shrinks. The conversation and composer are the real ones, in
+/// a window of the test's own; selections and scrolling come as the pointer's and the trackpad's
+/// events.
 @MainActor
 @Suite(.serialized, .timeLimit(.minutes(1))) struct ComposerGrowthTests {
     let engine = StubEngine(port: 48_205)
@@ -52,6 +52,7 @@ import Testing
     }
 
     private func done() {
+        for file in model.draftFiles { try? FileManager.default.removeItem(at: file) }
         Drafts.shared.remove(model.id)
         engine.stop()
         window.orderOut(nil)
@@ -168,7 +169,100 @@ import Testing
         await settled()
     }
 
+    /// Everything that makes what's over the conversation taller, as it comes.
+    enum Growth: String, CaseIterable, CustomTestStringConvertible {
+        case aQuote, linesYouWrite, aFileAttached, theCommandList, somethingThatFailed, aMessageWaiting
+        var testDescription: String { rawValue }
+    }
+
+    private func grow(_ growth: Growth) async throws {
+        switch growth {
+        case .aQuote:
+            model.addQuote(Self.longQuote, how: "message")
+        case .linesYouWrite:
+            let field = try #require(field)
+            field.insertText("one\ntwo\nthree\nfour\nfive\nsix", replacementRange: field.selectedRange())
+        case .aFileAttached:
+            model.draftFiles = [try #require(Attachments.write(Data("words".utf8), named: "growth-\(UUID().uuidString.prefix(8))", extension: "txt"))]
+        case .theCommandList:
+            let field = try #require(field)
+            field.insertText("/", replacementRange: field.selectedRange())
+        case .somethingThatFailed:
+            model.failure = "That didn't go through, and this says why at some length so that it takes up the room it would."
+        case .aMessageWaiting:
+            let item: [String: Any] = ["id": run + "queued", "sessionID": id, "type": "user", "delivery": "queue", "payload": ["text": "Then make the app icon"]]
+            engine.on("GET", "/api/session/\(id)/inbox") { _ in StubWeb.json(["data": [item]]) }
+            await model.load()
+        }
+    }
+
+    private func shrink(_ growth: Growth) async throws {
+        switch growth {
+        case .aQuote:
+            withAnimation(.ui) { model.draftQuotes = [] }
+        case .linesYouWrite, .theCommandList:
+            let field = try #require(field)
+            field.selectAll(nil)
+            field.deleteBackward(nil)
+        case .aFileAttached:
+            for file in model.draftFiles { try? FileManager.default.removeItem(at: file) }
+            model.draftFiles = []
+        case .somethingThatFailed:
+            model.failure = nil
+        case .aMessageWaiting:
+            engine.on("GET", "/api/session/\(id)/inbox") { _ in StubWeb.json(["data": [[String: Any]]()]) }
+            await model.load()
+        }
+    }
+
+    private var over: CGFloat { scroll?.contentInsets.bottom ?? 0 }
+
+    /// Taller by more than a nudge, and finished growing.
+    private func grown(_ growth: Growth) async throws -> CGFloat {
+        let before = over
+        try await grow(growth)
+        try await until { laidOut && over > before + 10 }
+        await settled()
+        return over - before
+    }
+
+    private func shrunk(_ growth: Growth, to height: CGFloat) async throws {
+        try await shrink(growth)
+        try await until { laidOut && abs(over - height) < 2 }
+        await settled()
+    }
+
     // MARK: Following the end
+
+    /// Each way it grows, at the end: the last message stays over it, as far as it was, and comes
+    /// back with it.
+    @Test(arguments: Growth.allCases) func growingAtTheEndPushesTheLastMessageUp(_ growth: Growth) async throws {
+        defer { done() }
+        try await conversation(turns: 14)
+        let room = roomUnderLastMessage
+        let height = over
+        let grew = try await grown(growth)
+        #expect(grew > 10)
+        #expect(abs(roomUnderLastMessage - room) < 1.5, "room \(roomUnderLastMessage), was \(room)")
+        try await shrunk(growth, to: height)
+        #expect(abs(roomUnderLastMessage - room) < 1.5, "gone: room \(roomUnderLastMessage), was \(room)")
+    }
+
+    /// Each way it grows, further up: what was just over it is still just over it, and it's back
+    /// where it was after.
+    @Test(arguments: Growth.allCases) func growingFurtherUpPushesWhatYouRead(_ growth: Growth) async throws {
+        defer { done() }
+        try await conversation(turns: 14)
+        try await yourScroll(by: 700)
+        try await until { isOffTheEnd }
+        let place = origin
+        let height = over
+        let grew = try await grown(growth)
+        #expect(abs(origin - place - grew) < 1.5, "the composer grew by \(grew); the view moved from \(place) to \(origin)")
+        #expect(isOffTheEnd, "still reading")
+        try await shrunk(growth, to: height)
+        #expect(abs(origin - place) < 1.5, "back: from \(place) to \(origin)")
+    }
 
     @Test func aQuoteAddedAtTheEndKeepsTheLastMessageOverTheComposer() async throws {
         defer { done() }
@@ -185,20 +279,6 @@ import Testing
         await settled()
         #expect(abs(roomUnderLastMessage - room) < 1.5, "room \(roomUnderLastMessage), was \(room)")
         #expect(!isOffTheEnd)
-    }
-
-    /// The composer's other growth takes the same way: writing several lines.
-    @Test func linesWrittenAtTheEndKeepTheLastMessageOverTheComposer() async throws {
-        defer { done() }
-        try await conversation(turns: 14)
-        let room = roomUnderLastMessage
-        let field = try #require(field)
-        let over = try #require(scroll).contentInsets.bottom
-        field.insertText("one\ntwo\nthree\nfour\nfive\nsix", replacementRange: field.selectedRange())
-        try await until { laidOut && (scroll?.contentInsets.bottom ?? 0) > over + 30 }
-        await settled()
-        #expect(lastMessageBottom <= composerTop, "the last message ends at \(lastMessageBottom), the composer starts at \(composerTop)")
-        #expect(abs(roomUnderLastMessage - room) < 1.5, "room \(roomUnderLastMessage), was \(room)")
     }
 
     /// The conversation moves with the composer as it animates, each frame, rather than in one
@@ -277,33 +357,55 @@ import Testing
 
     // MARK: Reading further up
 
-    /// Scrolled up, a quote leaves your place alone; what the composer now covers is still in
-    /// reach, and with the quote gone you're where you were.
-    @Test func aQuoteAddedScrolledUpLeavesYourPlace() async throws {
+    /// Each way it grows, with the view at the very top, where there's nothing above it: what's
+    /// under the composer still moves up from under it, and it's back at the very top after.
+    @Test(arguments: Growth.allCases) func growingAtTheVeryTopPushesAndComesBackExactly(_ growth: Growth) async throws {
+        defer { done() }
+        try await conversation(turns: 14)
+        let scroll = try #require(scroll)
+        let top = -scroll.contentInsets.top
+        for _ in 0..<40 where origin > top + 0.5 {
+            try await yourScroll(by: 3_000)
+        }
+        try #require(abs(origin - top) <= 0.5, "at the top: \(origin), its top \(top)")
+        let height = over
+        let grew = try await grown(growth)
+        #expect(abs(origin - top - grew) < 1.5, "the composer grew by \(grew); the view moved from \(top) to \(origin)")
+        try await shrunk(growth, to: height)
+        #expect(abs(origin - top) <= 0.5, "back: from \(top) to \(origin)")
+    }
+
+    /// Each way it grows, in a conversation too short to scroll, or that only just does: nothing
+    /// under it, and exactly as it was after.
+    @Test(arguments: Growth.allCases, [1, 3]) func growingOverAShortConversationHidesNothing(_ growth: Growth, turns: Int) async throws {
+        defer { done() }
+        try await conversation(turns: turns)
+        let place = origin
+        let bottom = lastMessageBottom
+        let height = over
+        _ = try await grown(growth)
+        #expect(roomUnderLastMessage >= 0, "the last message ends \(-roomUnderLastMessage) under what's over it")
+        #expect(!isOffTheEnd)
+        try await shrunk(growth, to: height)
+        #expect(abs(origin - place) <= 0.5, "back: from \(place) to \(origin)")
+        #expect(abs(lastMessageBottom - bottom) <= 0.5, "back: from \(bottom) to \(lastMessageBottom)")
+    }
+
+    /// What the composer pushed up from further up isn't taken back to the end, and from there,
+    /// all the way down, the end still comes out from over it.
+    @Test func theEndIsStillInReachAfterAPushFurtherUp() async throws {
         defer { done() }
         try await conversation(turns: 14)
         try await yourScroll(by: 700)
         try await until { isOffTheEnd }
-        let place = origin
         try await quote()
-        #expect(abs(origin - place) < 1, "moved from \(place) to \(origin)")
-
-        // All the way down from there, the end comes out from under the composer.
         try await yourScroll(by: -2_000)
         try await until { !isOffTheEnd }
         #expect(lastMessageBottom <= composerTop, "the last message ends at \(lastMessageBottom), the composer starts at \(composerTop)")
-
-        try await yourScroll(by: 700)
-        try await until { isOffTheEnd }
-        let reading = origin
-        try press("Don’t Reply to This")
-        try await until { laidOut && model.draftQuotes.isEmpty }
-        await settled()
-        #expect(abs(origin - reading) < 1, "moved from \(reading) to \(origin)")
     }
 
     /// A little way up is up: not taken for the end, which the composer's height once counted
-    /// towards, and carried back there by the next quote.
+    /// towards, so what grows next pushes it by as much, and doesn't carry it to the end.
     @Test func aLittleWayUpIsNotTheEnd() async throws {
         defer { done() }
         try await conversation(turns: 14)
@@ -312,8 +414,9 @@ import Testing
         #expect(origin < end - 60, "scrolled from \(end) to \(origin)")
         try await until { isOffTheEnd }
         let place = origin
+        let height = over
         try await quote()
-        #expect(abs(origin - place) < 1, "moved from \(place) to \(origin)")
+        #expect(abs(origin - place - (over - height)) < 1.5, "the composer grew by \(over - height); the view moved from \(place) to \(origin)")
     }
 
     /// With a tall composer, the end under it isn't in view, however close: you scrolled off it,
@@ -364,49 +467,23 @@ import Testing
         addToChat()
     }
 
-    /// What you quote low in the view stays in sight over the composer, the view moving no further
-    /// than that.
-    @Test func aLineQuotedLowInTheViewStaysOverTheComposer() async throws {
+    /// What you select and Add to Chat just over the composer stays just over it, and you can read on.
+    @Test func aLineQuotedJustOverTheComposerStaysJustOverIt() async throws {
         defer { done() }
         try await conversation(turns: 14)
         try await yourScroll(by: 700)
         try await until { isOffTheEnd }
-        // A line just over the composer, which the quote will grow over.
         let top = composerTop
         let lowest = try #require(line(near: top - 50, within: 40...(top - 40)))
         try await yourScroll(by: top - 50 - down(lowest.text.convert(lowest.line, to: nil)).midY)
         let found = try #require(line(near: top - 50, within: 40...(top - 36)))
-        let place = origin
+        let height = over
         let at = down(found.text.convert(found.line, to: nil))
         try selectAndAddToChat(found.line, in: found.text)
-        try await until { laidOut && (composerTop < top - 20) }
+        try await until { laidOut && over > height + 10 }
         await settled()
         let now = down(found.text.convert(found.line, to: nil))
         #expect(now.maxY <= composerTop, "the line you quoted ends at \(now.maxY), the composer starts at \(composerTop)")
-        #expect(origin > place, "the view moved for it: from \(place) to \(origin), the line from \(at.maxY) to \(now.maxY), the composer from \(top) to \(composerTop)")
-        // No further than clear of the composer and the fade over it.
-        let over = window.contentLayoutRect.height - (scroll?.contentInsets.bottom ?? 0)
-        #expect(over - now.maxY <= ConversationEndFade.height + 1, "it moved from \(at.maxY) to \(now.maxY), what's over the conversation starting at \(over)")
-
-        // From there, you scroll, and it's yours again: your next quote doesn't bring it back.
-        try await yourScroll(by: 400)
-        let reading = origin
-        try await quote("Quoted the way Reply does it: " + Self.longQuote)
-        #expect(abs(origin - reading) < 1, "moved from \(reading) to \(origin)")
-    }
-
-    /// What you quote high in the view stays where it is, with what's under it, as there's room.
-    @Test func aLineQuotedHighInTheViewLeavesYourPlace() async throws {
-        defer { done() }
-        try await conversation(turns: 14)
-        try await yourScroll(by: 700)
-        try await until { isOffTheEnd }
-        let top = composerTop
-        let found = try #require(line(near: 120, within: 60...220))
-        let place = origin
-        try selectAndAddToChat(found.line, in: found.text)
-        try await until { laidOut && (composerTop < top - 20) }
-        await settled()
-        #expect(abs(origin - place) < 1, "moved from \(place) to \(origin)")
+        #expect(abs(at.minY - now.minY - (over - height)) < 1.5, "it moved from \(at.minY) to \(now.minY), the composer grew by \(over - height)")
     }
 }
