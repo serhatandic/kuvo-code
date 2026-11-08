@@ -1,11 +1,11 @@
 #!/bin/bash
 # shellcheck disable=SC2016 # what's in single quotes expands in the VM, not here
-# The Mac mini's CI orchestrator. Runs as ci, always (a LaunchAgent setup.sh installs), one job at
-# a time, each in a VM of its own:
+# The Mac mini's CI orchestrator. Runs as ci, always (setup.sh installs it as a LaunchDaemon, so
+# no one has to log in as ci), one job at a time, each in a VM of its own:
 #
 #   1. clones the golden image (an APFS clone: instant, and nothing of it is shared after);
-#   2. boots it with softnet's network (common.sh: the internet, nothing on this Mac or the LAN)
-#      and no folders shared;
+#   2. boots it with softnet's network (common.sh: the internet, nothing on this Mac or the LAN),
+#      no folder shared, no clipboard, audio or USB;
 #   3. asks GitHub for a just-in-time runner config: one runner, one job, gone after it. The
 #      GitHub token stays here; the VM only gets that config;
 #   4. runs the runner in the VM. When it takes a job, checks on GitHub that the job is ours (a
@@ -14,10 +14,13 @@
 #      before any step;
 #   5. stops and deletes the VM when the job ends (or after JOB_LIMIT_MINUTES), and starts over.
 #
-# The next VM boots as soon as one is deleted, so it's ready for the next job.
+# The next VM boots as soon as one is deleted, so it's ready for the next job. When something
+# fails before a job ran (no boot, GitHub refusing, a runner that quits at once), it waits longer
+# each time, up to an hour, so it never hammers GitHub.
 #   /Users/Shared/kuvo-ci/paused   while it's there, no VM runs (an idle one is stopped)
 # Its log: ~/Library/Logs/kuvo-ci/orchestrator.log (and a log per VM next to it, kept a week).
 set -uo pipefail
+umask 077
 
 here="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=scripts/ci-runner/common.sh
@@ -31,16 +34,40 @@ PAUSED="$SHARED/paused"
 # gh keeps nothing of its own outside this.
 export GH_CONFIG_DIR="$HOME/.config/kuvo-ci/gh"
 export PATH="/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
-mkdir -p "$LOG_DIR" "$GH_CONFIG_DIR"
+mkdir -p "$LOG_DIR" "$GH_CONFIG_DIR" "$TART_DIR"
+# The VMs' disks (a release's signing keychain among them) are ci's alone.
+chmod 700 "$TART_DIR"
 
 log() { printf '%s %s\n' "$(date -u +%FT%TZ)" "$*"; }
+# A sleep that a stop (launchd's TERM) cuts short: bash runs a trap only between commands.
+nap() {
+    sleep "$1" &
+    wait $!
+}
 api() { GH_TOKEN="$(cat "$TOKEN_FILE")" gh api -H 'X-GitHub-Api-Version: 2022-11-28' "$@"; }
 
-vm="" vm_pid="" runner_id="" check_pid="" job_done=""
+# Apple's Virtualization framework wants an unlocked login keychain (macOS 15 and later). In a
+# login session there's one; as a daemon, ci gets one of its own with an empty password, holding
+# nothing but what the framework keeps there (Tart's FAQ, "headless machines").
+prepare_keychain() {
+    [[ "$(launchctl managername 2>/dev/null)" != Aqua ]] || return 0
+    local keychain="$HOME/Library/Keychains/kuvo-ci-vms.keychain-db"
+    mkdir -p "$HOME/Library/Keychains"
+    { [[ -f "$keychain" ]] || security create-keychain -p '' "$keychain"; } \
+        && security set-keychain-settings "$keychain" \
+        && security unlock-keychain -p '' "$keychain" \
+        && security list-keychains -d user -s "$keychain" \
+        && security default-keychain -d user -s "$keychain" \
+        && security login-keychain -d user -s "$keychain"
+}
+
+vm="" vm_pid="" exec_pid="" runner_id="" check_pid="" job_done="" job_taken=""
 
 end_job() {
     if [[ -n "$check_pid" ]]; then kill "$check_pid" 2>/dev/null; wait "$check_pid" 2>/dev/null; fi
     if [[ -n "$vm" ]]; then tart stop "$vm" --timeout 15 >/dev/null 2>&1 || true; fi
+    if [[ -n "$exec_pid" ]] && kill -0 "$exec_pid" 2>/dev/null; then kill "$exec_pid" 2>/dev/null; fi
+    if [[ -n "$exec_pid" ]]; then wait "$exec_pid" 2>/dev/null; fi
     if [[ -n "$vm_pid" ]] && kill -0 "$vm_pid" 2>/dev/null; then kill "$vm_pid" 2>/dev/null; fi
     if [[ -n "$vm_pid" ]]; then wait "$vm_pid" 2>/dev/null; fi
     if [[ -n "$vm" ]]; then tart delete "$vm" >/dev/null 2>&1 && log "[$vm] deleted"; fi
@@ -48,7 +75,7 @@ end_job() {
     if [[ -n "$runner_id" && -z "$job_done" ]]; then
         api -X DELETE "repos/$REPOSITORY/actions/runners/$runner_id" >/dev/null 2>&1 || true
     fi
-    vm="" vm_pid="" runner_id="" check_pid="" job_done=""
+    vm="" vm_pid="" exec_pid="" runner_id="" check_pid="" job_done="" job_taken=""
 }
 trap 'log "Stopping."; end_job; exit 0' TERM INT HUP
 
@@ -79,15 +106,20 @@ take_golden() {
     [[ -n "$want" ]] || { log "No golden image yet: run scripts/ci-runner/build-image.sh."; return 1; }
     if [[ "$want" == "$have" ]] && tart get "$GOLDEN" >/dev/null 2>&1; then return 0; fi
     log "Taking the golden image: $want"
-    mkdir -p "$TART_DIR/vms"
     rm -rf "$TART_DIR/vms/$GOLDEN-incoming"
+    mkdir -p "$TART_DIR/vms"
     cp -cR "$SHARED_TART/vms/$GOLDEN" "$TART_DIR/vms/$GOLDEN-incoming" || return 1
     rm -rf "$TART_DIR/vms/$GOLDEN"
     mv "$TART_DIR/vms/$GOLDEN-incoming" "$TART_DIR/vms/$GOLDEN"
     printf '%s\n' "$want" > "$LOCAL_VERSION"
+    # GitHub stops giving jobs to runners that are too far behind: a month-old image is due.
+    if [[ -n "$(find "$SHARED/golden-version" -mtime +21 2>/dev/null)" ]]; then
+        log "The golden image is over three weeks old: run scripts/ci-runner/build-image.sh (a newer runner, macOS and brew updates)."
+    fi
 }
 
-# Whether a run GitHub lists is one the Mini takes.
+# Whether a run GitHub lists is one the Mini takes. head_branch can't tell a tag from a branch
+# named like one; the VM's hook refuses such a branch (it reads refs/tags/ itself).
 allowed() { # event branch repository head-repository
     [[ "$3" == "$REPOSITORY" && "$4" == "$REPOSITORY" ]] || return 1
     case "$1" in push | workflow_dispatch) ;; *) return 1 ;; esac
@@ -95,37 +127,51 @@ allowed() { # event branch repository head-repository
 }
 
 # Once the runner has taken a job: which run is it, on GitHub's side? Stops the VM when it isn't
-# one the Mini takes. A few tries, as GitHub may take a moment to list it.
+# one the Mini takes. A few tries, as GitHub may take a moment to list it; if it never does, the
+# VM's own hook has decided already, before the job's first step.
 check_job() { # runner-id vm
-    local attempt runs id event branch repo head_repo
+    local attempt runs id event branch repo head_repo match
     for attempt in 1 2 3; do
         sleep 5
         runs="$(api "repos/$REPOSITORY/actions/runs?status=in_progress&per_page=20" \
             --jq '.workflow_runs[] | "\(.id) \(.event) \(.head_branch) \(.repository.full_name) \(.head_repository.full_name)"' 2>/dev/null)" || continue
         while read -r id event branch repo head_repo; do
             [[ -n "$id" ]] || continue
-            if api "repos/$REPOSITORY/actions/runs/$id/jobs?filter=latest&per_page=100" \
-                --jq ".jobs[] | select(.runner_id == $1) | .id" 2>/dev/null | grep -q .; then
-                if allowed "$event" "$branch" "$repo" "$head_repo"; then
-                    log "[$2] host check: run $id, $event on $branch, is ours"
-                else
-                    log "[$2] host check: run $id, $event on $branch from $head_repo, isn't one the Mini takes: stopping the VM"
-                    tart stop "$2" --timeout 0 >/dev/null 2>&1
-                fi
-                return
+            match="$(api "repos/$REPOSITORY/actions/runs/$id/jobs?filter=latest&per_page=100" \
+                --jq ".jobs[] | select(.runner_id == $1) | .id" 2>/dev/null)"
+            [[ -n "$match" ]] || continue
+            if allowed "$event" "$branch" "$repo" "$head_repo"; then
+                log "[$2] host check: run $id, $event on $branch, is ours"
+            else
+                log "[$2] host check: run $id, $event on $branch from $head_repo, isn't one the Mini takes: stopping the VM"
+                tart stop "$2" --timeout 0 >/dev/null 2>&1
             fi
+            return
         done <<< "$runs"
         log "[$2] host check: GitHub doesn't list runner $1's job yet (try $attempt)"
     done
     log "[$2] host check: couldn't find runner $1's job on GitHub; the VM's pre-job hook decided"
 }
 
+# Takes an idle VM's runner off GitHub first: if GitHub has just given it a job, it refuses
+# (busy), and the job goes on.
+retire_idle_runner() {
+    if api -X DELETE "repos/$REPOSITORY/actions/runners/$runner_id" >/dev/null 2>&1; then
+        runner_id=""
+        return 0
+    fi
+    return 1
+}
+
+# One VM, one job. Returns 0 when the runner took a job, 2 when its VM was retired while idle
+# (paused, or a new golden image), 1 for anything else (no boot, GitHub refusing, a runner that
+# stopped without a job).
 one_job() {
-    local encoded line status job_started="" fifo jit
-    vm="kuvo-ci-job-$(date -u +%Y%m%d-%H%M%S)"
+    local encoded line job_started="" fifo jit retired=""
+    vm="kuvo-ci-job-$(date -u +%Y%m%d-%H%M%S)-$RANDOM"
     tart clone "$GOLDEN" "$vm" || { log "[$vm] couldn't clone $GOLDEN"; vm=""; return 1; }
     # shellcheck disable=SC2046 # the flags are words of their own
-    tart run --no-graphics $(vm_network_flags) "$vm" > "$LOG_DIR/$vm.log" 2>&1 &
+    tart run $(vm_run_flags) "$vm" > "$LOG_DIR/$vm.log" 2>&1 &
     vm_pid=$!
     log "[$vm] booting ($VM_CPUS CPUs, $VM_MEMORY_MB MB)"
     local tries=0
@@ -150,17 +196,27 @@ one_job() {
     log "[$vm] runner $runner_id ready for a job"
 
     fifo="$(mktemp -u "${TMPDIR:-/tmp}/kuvo-ci.XXXXXX")"
-    mkfifo -m 600 "$fifo"
+    mkfifo -m 600 "$fifo" || { log "[$vm] couldn't make a pipe"; return 1; }
     printf '%s\n' "$encoded" | tart exec -i "$vm" /bin/bash -lc \
         'IFS= read -r jit; cd ~/actions-runner && exec ./run.sh --jitconfig "$jit"' > "$fifo" 2>&1 &
+    exec_pid=$!
     encoded=""
-    exec 3< "$fifo"
+    # Opening the pipe waits for the runner's side, and a child ending meanwhile (printf, at
+    # once) interrupts it: open it again until it's open.
+    local opened="" attempt
+    for attempt in 1 2 3 4 5 6 7 8 9 10; do
+        if { exec 3< "$fifo"; } 2>/dev/null; then opened=1; break; fi
+        kill -0 "$exec_pid" 2>/dev/null || break
+    done
     rm -f "$fifo"
+    [[ -n "$opened" ]] || { log "[$vm] couldn't read the runner's output"; return 1; }
     while :; do
+        line=""
         if IFS= read -r -t 30 line <&3; then
             log "[$vm] $line"
             case "$line" in
                 *"Running job:"*)
+                    job_taken=1
                     job_started=$SECONDS
                     check_job "$runner_id" "$vm" &
                     check_pid=$!
@@ -169,40 +225,55 @@ one_job() {
             esac
             continue
         fi
-        status=$?
-        ((status > 128)) || break # the runner is done (or the VM is gone)
+        # No line: the end of the runner's output, 30 seconds without one (macOS's bash 3.2 says
+        # 1 for both), or a read cut short by a child ending (the host check, say). Whether the
+        # runner's side is still there tells which.
+        [[ -z "$line" ]] || log "[$vm] $line"
+        kill -0 "$exec_pid" 2>/dev/null || break # the runner is done (or the VM is gone)
         kill -0 "$vm_pid" 2>/dev/null || break
+        sleep 0.2
         if [[ -n "$job_started" ]]; then
             if ((SECONDS - job_started > JOB_LIMIT_MINUTES * 60)); then
                 log "[$vm] the job ran over $JOB_LIMIT_MINUTES minutes: stopping it"
                 break
             fi
-        elif [[ -e "$PAUSED" ]]; then
+        elif [[ -e "$PAUSED" ]] && retire_idle_runner; then
             log "[$vm] paused: stopping the idle VM"
+            retired=1
             break
-        elif [[ "$(cat "$SHARED/golden-version" 2>/dev/null)" != "$(cat "$LOCAL_VERSION" 2>/dev/null)" ]]; then
+        elif [[ "$(cat "$SHARED/golden-version" 2>/dev/null)" != "$(cat "$LOCAL_VERSION" 2>/dev/null)" ]] && retire_idle_runner; then
             log "[$vm] a new golden image: replacing the idle VM"
+            retired=1
             break
         fi
     done
     exec 3<&-
+    [[ -z "$retired" ]] || return 2
+    [[ -n "$job_taken" ]] || { log "[$vm] the runner stopped without taking a job (see $LOG_DIR/$vm.log)"; return 1; }
     return 0
 }
 
-log "Starting: $REPOSITORY, labels ${RUNNER_LABELS[*]}, $(tart --version) with $(vm_network_flags)"
+prepare_keychain || log "Couldn't prepare a keychain for the VMs; they may not start."
+log "Starting: $REPOSITORY, labels ${RUNNER_LABELS[*]}, $(tart --version), flags: $(vm_run_flags)"
 clean_leftovers
+backoff=60
 while :; do
-    if [[ -e "$PAUSED" ]]; then sleep 60; continue; fi
+    if [[ -e "$PAUSED" ]]; then nap 60; continue; fi
     if [[ ! -s "$TOKEN_FILE" ]]; then
         log "No GitHub token in $TOKEN_FILE: run scripts/ci-runner/setup.sh."
-        sleep 300
+        nap 300
         continue
     fi
-    if ! take_golden; then sleep 300; continue; fi
-    if ! one_job; then
-        end_job
-        sleep 60 # not again at once: something's wrong (its log says what)
-        continue
-    fi
+    if ! take_golden; then nap 300; continue; fi
+    one_job
+    result=$?
     end_job
+    case "$result" in
+        0 | 2) backoff=60 ;;
+        *)
+            log "Waiting $((backoff / 60)) min before the next VM."
+            nap "$backoff"
+            backoff=$((backoff * 2 > 3600 ? 3600 : backoff * 2))
+            ;;
+    esac
 done

@@ -57,17 +57,20 @@ stop_vm() {
     fi
     run_pid=""
 }
-trap 'stop_vm; tart delete "$build" >/dev/null 2>&1 || true' EXIT
+trap 'stop_vm; tart delete "$build" >/dev/null 2>&1 || true; resume_ci' EXIT
 
 tart delete "$build" >/dev/null 2>&1 || true
 tart pull "$BASE_IMAGE"
+# Not beside CI's own VM (two macOS VMs at most, and 16 GB): CI waits while this builds.
+pause_ci
 tart clone "$BASE_IMAGE" "$build"
 tart set "$build" --cpu "$VM_CPUS" --memory "$VM_MEMORY_MB" --disk-size "$VM_DISK_GB"
 
 # Built with softnet too (no LAN, no Tailscale), but with the gateway's DNS: the guest's own
 # public DNS is set below. Xcode comes in read-only, for this build only; job VMs share nothing.
 log="$(mktemp -t kuvo-ci-build)"
-tart run --no-graphics --net-softnet --dir="xcode:$XCODE:ro" "$build" > "$log" 2>&1 &
+tart run --no-graphics --no-clipboard --no-audio --no-usb-accessories --net-softnet \
+    --dir="xcode:$XCODE:ro" "$build" > "$log" 2>&1 &
 run_pid=$!
 
 guest() { tart exec "$build" /bin/bash -lc "$1"; }
@@ -99,10 +102,23 @@ tart exec -i "$build" sudo tee /usr/local/kuvo-ci/job-started.sh < "$here/vm/job
 guest 'sudo chown -R root:wheel /usr/local/kuvo-ci && sudo chmod 755 /usr/local/kuvo-ci/job-started.sh'
 
 echo "Network and services…"
-# Public DNS, since jobs' VMs can't reach the gateway's; and no SSH server (the host uses Tart's
-# guest agent).
+# Public DNS, since jobs' VMs can't reach the gateway's. Nothing listening for anyone to come in
+# (softnet lets incoming traffic through): no SSH, Screen Sharing or Remote Management, and the
+# firewall blocking every incoming connection. The host reaches the guest through Tart's agent,
+# over the VM's own socket, not the network. The admin user keeps its password ("admin", from
+# Cirrus Labs' image), which logs it in automatically (the session the app's tests need); with
+# nothing listening, no one can use it from outside.
 guest 'networksetup -listallnetworkservices | tail -n +2 | sed "s/^\*//" | while IFS= read -r service; do sudo networksetup -setdnsservers "$service" 1.1.1.1 8.8.8.8; done; scutil --dns | grep -m2 nameserver'
-guest 'sudo launchctl disable system/com.openssh.sshd; sudo launchctl bootout system/com.openssh.sshd 2>/dev/null || true'
+guest 'set -e
+for service in com.openssh.sshd com.apple.screensharing; do
+    sudo launchctl disable "system/$service"
+    sudo launchctl bootout "system/$service" 2>/dev/null || true
+done
+sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -deactivate -stop >/dev/null 2>&1 || true
+sudo /usr/libexec/ApplicationFirewall/socketfilterfw --setglobalstate on >/dev/null
+sudo /usr/libexec/ApplicationFirewall/socketfilterfw --setblockall on >/dev/null
+sudo /usr/libexec/ApplicationFirewall/socketfilterfw --getblockall
+sudo launchctl print-disabled system | grep -E "sshd|screensharing"'
 guest "printf '%s\n' 'built $(date -u +%FT%TZ)' 'base $BASE_IMAGE' '$xcode_version' 'runner $runner_version' | sudo tee /usr/local/kuvo-ci/image.txt >/dev/null"
 guest 'brew cleanup -s >/dev/null 2>&1 || true; rm -rf ~/Library/Caches/* 2>/dev/null || true; sudo rm -rf /private/var/tmp/* 2>/dev/null || true'
 
@@ -115,6 +131,7 @@ tart delete "$GOLDEN.previous" >/dev/null 2>&1 || true
 if tart get "$GOLDEN" >/dev/null 2>&1; then tart rename "$GOLDEN" "$GOLDEN.previous"; fi
 tart rename "$build" "$GOLDEN"
 trap - EXIT
+resume_ci
 # ci reads it (and copies it, as an APFS clone) from here.
 chmod -R a+rX "$SHARED_TART/vms/$GOLDEN"
 version="$(date -u +%Y%m%dT%H%M%SZ) $xcode_version runner $runner_version"
