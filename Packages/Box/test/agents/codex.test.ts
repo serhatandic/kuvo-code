@@ -689,7 +689,7 @@ describe("A question Codex asks (request_user_input_async)", () => {
   /** What went into the turn under way. */
   const steered = () => sent().filter((message) => message.method === "turn/steer").map((message) => message.params.input[0].text)
   const said = (id: string) => steps(id).flatMap((step) => step.content.filter((part: any) => part.type === "text").map((part: any) => part.text)).join("\n")
-  /** Its card is up and its sleep has started: an answer from here is the one that ends the sleep (one before that is told again as the sleep starts, as the next test shows). */
+  /** Its card is up and its sleep has started: an answer from here is the one that ends the sleep (one before that is told again as the sleep starts, as "settled before it starts to sleep" shows). */
   const cardUpAsleep = async (id: string, cards = 1) => {
     await until(() => tools(id).some((tool) => tool.name === "sleep"))
     await until(() => sessions.forms(id).length === cards)
