@@ -328,6 +328,8 @@ enum BrowserTools {
         tool("finish_goal", "End your goal with the report: what needs the user first, then what got done and where, what it spent, and what you're still watching.",
              ["report": ["type": "string", "description": "The report, a few lines."],
               "watching": ["type": "array", "items": ["type": "string"], "description": "What you're still watching."]], required: ["report"]),
+        tool("notify_user", "Send the user a notification, on their phone and their Mac, when you need them and they may not be looking: a decision only they can make, something blocked until they act, or news they asked you to tell them. Your replies notify them only when they answer something the user asked; when you work on your own (a wake-up, a watch, another agent's message, a goal) nothing reaches them unless you use this. Not for progress or routine results: those go in your reply. It's said in one sentence, so lead with what you need. A few an hour at most; the same text isn't sent twice.",
+             ["text": ["type": "string", "description": "One sentence: what you need from the user, or the news, like \"I need your Stripe key to finish the payments step.\""]], required: ["text"]),
     ]
 
     /// The folder a conversation works in, by its session (on this Mac).
@@ -351,7 +353,7 @@ enum BrowserTools {
 
     /// The tools agents write to each other and run their sessions with, answered by this Mac's box
     /// (see `AgentMail`).
-    nonisolated static let mailTools: Set<String> = ["list_agents", "send_message", "read_conversation", "start_session", "list_sessions", "stop_session", "compact_session", "answer_ask", "list_models", "make_project", "list_projects", "propose_goal", "goal_progress", "may_spend", "finish_goal"]
+    nonisolated static let mailTools: Set<String> = ["list_agents", "send_message", "read_conversation", "start_session", "list_sessions", "stop_session", "compact_session", "answer_ask", "list_models", "make_project", "list_projects", "propose_goal", "goal_progress", "may_spend", "finish_goal", "notify_user"]
     /// Carries out their calls from this Mac's conversations.
     /// The added integrations' sites, which the browser sends the agent away from, to their tools.
     static var integrationSites: () -> [Integrations.Site] = { [] }

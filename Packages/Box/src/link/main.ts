@@ -69,6 +69,7 @@ import { holdVault } from "./vault/holder";
 import { primeGenerations } from "./vault/store";
 import { setVaultTell } from "./vault/use";
 import { HELD_FILE, NoticeHold } from "./notices/hold";
+import { keepTold, markTeller, watchSentByAgents } from "./notices/told";
 import { noticeJSON, pushTo } from "./notices/notice";
 import { announce, forgetMacsAgents, refreshOwn } from "./peers/agents";
 import { forgetOldMacs, KEY, leaveMac, macsOf, noteOnline, peersOf, takeLegacyPeers } from "./peers/known";
@@ -323,8 +324,12 @@ async function run(): Promise<void> {
   const tell = (notice: Notice): boolean => hold.tell(notice);
   const answered = (id: string): void => hold.resolve(id);
   // Its engine and the coding agents here (their sessions, and group chats that live here),
-  // through their bridge.
-  watchBox({ tell, hold });
+  // through their bridge: each notice kept as told too, for clients to show (`kuvo/notices`).
+  watchBox({ tell: notice => { keepTold(notice); return tell(notice); }, hold });
+  // And what its agents send you on purpose (notify_user), whichever process answered them.
+  watchSentByAgents(tell);
+  // (So its clients know it tells them: a bridge from before didn't.)
+  markTeller();
   // What its group chats send your other computers, carried on the relay connection that's up.
   watchSeats(() => current);
   // Moves to and from your other computers, carried on the same connection.
@@ -657,7 +662,10 @@ async function serve(): Promise<void> {
   if (readKit()) try { keepJobs(); } catch {}
   // Its bots kept told what they are as their runs start, on the engine and with the coding agents;
   // on a Mac, its news for your phones too (while the phone link's on), and its sign-ins that ended.
-  watchBox({ tell: macTell, hold: macLink.hold, bots: true, notices: IS_MAC });
+  // Each notice kept as told too, for its clients to show (`kuvo/notices`); and what its agents send
+  // you on purpose (notify_user).
+  watchBox({ tell: notice => { keepTold(notice); return macTell(notice); }, hold: macLink.hold, bots: true, notices: IS_MAC });
+  if (IS_MAC) watchSentByAgents(macTell);
   // Its bots' goals: carried on at limits' resets, what waits for you listed (and told quietly to
   // your phones), digests and reports, and this Mac kept awake while one is at work (on power).
   if (IS_MAC) watchGoals(macTell, peerTargets, { here: () => macLink.hold?.inUse ?? false });

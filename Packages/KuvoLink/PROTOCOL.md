@@ -704,6 +704,16 @@ its own, which a `SIGTERM` stops waiting.
   there, as a letter with `note`, "Peers"). 400 for another `name`.
   - A subagent, and a coding agent's engine run (`kuvo.engineFor`), act as their conversation: its
     name, folder, model, approval, and where answers go. A group chat's seat may only list and read.
+  - `notify_user` (`{text}`): tells you something on purpose, on your phones and in your clients'
+    notifications (`kuvo/notices`), as one sentence of `text` (its first, Markdown taken off, cut at
+    a word to 160 characters), titled as the conversation's news is. It's how an agent working on
+    its own reaches you, as its replies then don't ("Notifications"). Kept in
+    `run/notices/told.json` with `by: "agent"`, for the box's process that tells your phones to
+    send. Refused (`isError`) from a group chat's seat, with no text, where nothing would tell your
+    phones (a machine whose bridge isn't running), within two minutes of the conversation's last,
+    past three in an hour or twelve in a day, past ten in an hour from all the box's agents
+    together, and for the same sentence again within a day; looked at and kept under one lock, so
+    calls at once can't both pass.
   - Who there is: the box's own agents and its peers' (as `run/agents.json` has them), and any
     conversation here named by its address. An agent is named by its address or its name (any case
     or accents, with or without `&`).
@@ -1438,13 +1448,34 @@ with a mail frame, sealed with the sender's static key for the phone's. Its payl
 | `permission` | An agent asks to do something. `request` is the permission. |
 | `question` | An agent asks a question, or for a form filled in. `request` is the form. |
 | `ask` | An agent browsing asks for a sign-in, a code or a step. `ask` is it. |
-| `finished` | A run finished. |
+| `finished` | A run finished with a reply to you, or a conversation sent you something on purpose (`notify_user`). |
 | `failed` | A run stopped with an error. |
-| `report` | A bot's run finished: a wake-up's or a watch's news, a goal's digest (`quiet`) or its report. |
+| `report` | A bot's news: its reply to you, what it sent you on purpose (`notify_user`), a goal's digest (`quiet`) or its report. |
 | `blocked` | A bot's goal needs you (`quiet`, or `wake` where you asked to be woken). |
 | `message` | Something in a group chat. |
 
 A phone should ignore a category it doesn't know, and show the notification plainly.
+
+What's news, each box decides alike (`notices/news.ts`), for your phones and its clients
+(`kuvo/notices`):
+
+- **A reply to you** is: a run that ends after your own message (or your answer, approval or
+  pick, which the box passes on), and, in a conversation of yours (not a bot's, nor one an agent
+  started), one after what it left running or started coming back (a command, a subagent, its
+  sessions' news). Read from the session's latest turn, back to its start however long it is:
+  any word of yours in it makes it yours. One whose start can't be reached counts as yours only in
+  a conversation of yours.
+- **A question, a permission or a failure** always is; a failure with its reason on one line
+  ("Stopped with an error: …").
+- **What an agent sends on purpose** (`notify_user`, "Agents' tools") always is.
+- **Nothing else**: not a run of the session's own accord (its wake-up or watch, `[Wake-up]` or
+  `metadata.kuvo.wake`; a goal's word to its bot), nor one answering another agent (a letter,
+  `[Message from …]`, as a session an agent started gets its task). Those still leave the
+  conversation unread, as a muted chat does.
+
+The body is one sentence: a reply's first (past headings, code and lists; a line that leads into
+a list with its first item), its Markdown taken off, cut at a word to 160 characters; a question's
+own words; a group chat's last word the same way.
 
 The payload stays under 2,500 bytes, so the push fits the 4 KB Apple takes: a body that
 doesn't fit is cut, ending in "…". Keys are sorted, as both sides write them.
@@ -1527,6 +1558,26 @@ your phone doesn't buzz for what you're already looking at, were shown, or answe
   ask answered or gone there, whose notice, held, then never goes.
 - A phone needn't say it's in use: it leaves out what's on its screen itself, and its own lease
   would hold its own notices.
+
+### kuvo/notices
+
+What a box told lately, for clients to show as their own notifications, so what's news and how
+it's said is the box's alone (a client shows the asks it has cards for, permissions, questions and
+a browser's, itself).
+
+- **`GET kuvo/notices`** → `{"telling": bool, "notices": [{"id", "at", "notice", "by"?}, …]}`: each
+  notice the box made in the last ten minutes, oldest first, as `Notice` (above, before it's masked
+  and cut), `at` in ms since 1970, `by: "agent"` for one an agent sent (`notify_user`). `telling`:
+  whether the box tells its news now (this Mac's box always; a machine's while a bridge that does
+  runs, as it marks in `run/notices/teller` with its pid; one from before doesn't).
+  405 for another method.
+- **`GET kuvo/notices/events`**: the same, a line now and one each time it changes (NDJSON).
+- **A client** shows each notice of the categories that are news (`finished`, `failed`, `report`,
+  `message`) once, by its `id`, and none of what was listed the first time it read a box (news from
+  before it was there). Where a box says `telling: false`, or answers 404 (one from before), the
+  client words its own as it did before. The Mac does so, each notification counted as shown
+  (`kuvo/attention`); a phone needn't, as each box pushes it its notices.
+- The box keeps them in `run/notices/told.json`: the news ten minutes, what agents sent a day.
 
 ## Messages in a session
 

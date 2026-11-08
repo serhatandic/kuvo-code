@@ -22,6 +22,7 @@ import { GROUP_ROUTE, groupsRoute } from "../areas/groups";
 import { infoRoute } from "../areas/info";
 import { integrationsRoute } from "../areas/integrations";
 import { namedRoute } from "../areas/named";
+import { noticesRoute } from "../areas/notices";
 import { personalitiesDocumentRoute, personalityEventsRoute, personalityRoute } from "../areas/personalities";
 import { pairingRoute, phonesRemoveRoute, phonesRoute } from "../areas/phones";
 import { QUEUE_ROUTE, queueRoute } from "../areas/queue";
@@ -80,6 +81,7 @@ const ROUTES: (Route | Route<RegExpMatchArray>)[] = [
   { when: route => route === "kuvo/link" || route.startsWith("kuvo/link/"), answer: linkRoute },
   { when: route => route === "kuvo/attention/notice" || route === "kuvo/attention/answered", answer: appNoticeRoute },
   { when: route => route === "kuvo/attention", answer: attentionRoute },
+  { when: route => route === "kuvo/notices" || route === "kuvo/notices/events", answer: noticesRoute },
   { when: route => route === "kuvo/named", answer: namedRoute },
   { when: route => route === "kuvo/agent-tools", answer: agentToolsRoute },
   { when: route => route === "kuvo/sessions", answer: startRoute },

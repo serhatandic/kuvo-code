@@ -66,6 +66,8 @@ final class AppModel {
     /// What bots ask you before they do it (making a project), on every box.
     let botAsks = BotAsks()
     let goalPlans = GoalPlans()
+    /// What each box told you lately, shown as this Mac's notifications.
+    let boxNotices = BoxNotices()
     let botOversight = BotOversight()
     /// Voice input, for whichever composer listens.
     let dictation = Dictation()
@@ -329,6 +331,9 @@ final class AppModel {
         Sandboxes.shared.onYours = { [weak self] id in self?.workspace.reviewLeftForYou(id) }
         goalPlans.app = self
         botOversight.app = self
+        boxNotices.app = self
+        workspace.boxTellsNews = { [weak self] box in self?.boxNotices.tells(box) ?? false }
+        boxGroups.boxTellsNews = { [weak self] box in self?.boxNotices.tells(box) ?? false }
         ServiceIcons.shared.boxes = { [weak self] box in self?.goalPlans.client(box) }
         SessionModel.askBotForGoal = { [weak self] session, words in
             guard let self, let bot = self.bots.bot(forSession: session) else { return false }
@@ -550,6 +555,7 @@ final class AppModel {
                         async let sandboxAsks: Void = Sandboxes.shared.follow(BoxClient.mac)
                         async let goalsFollowed: Void = goalPlans.follow(BoxClient.mac)
                         async let oversight: Void = botOversight.follow(BoxClient.mac)
+                        async let notices: Void = boxNotices.follow(BoxClient.mac)
                         // COMPAT(0.7 mac-personalities): what an earlier Kuvo Code changed in its own copy, taken in. Goes 3 months after 0.8.0.
                         // What a 0.8.0 beta changed of your personalities where it kept them.
                         await Personalities.shared.takeFromOld()
@@ -564,6 +570,7 @@ final class AppModel {
                         await sandboxAsks
                         await goalsFollowed
                         await oversight
+                        await notices
                     }
                 }
             }
