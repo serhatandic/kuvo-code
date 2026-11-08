@@ -746,6 +746,8 @@ private struct GroupComposer: View {
             send()
             return true
         case .escape:
+            // What's open over the chat first (a picture looked at closer).
+            if OverContent.closeTop() { return true }
             guard isTalking else { return false }
             stop()
             return true

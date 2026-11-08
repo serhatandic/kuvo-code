@@ -610,7 +610,8 @@ struct Composer: View {
             if key.modifiers.contains(.command) { queue() } else { send() }
             return true
         case .escape:
-            if ConversationFind.closeOpen() { return true }
+            // What's open over the conversation first (a picture looked at closer), then Find.
+            if OverContent.closeTop() || ConversationFind.closeOpen() { return true }
             guard isRunning else { return false }
             onStop()
             return true
