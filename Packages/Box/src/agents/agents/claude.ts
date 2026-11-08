@@ -654,18 +654,31 @@ export class ClaudeAgent implements Agent {
   private windows = new ContextWindows()
 
   private listModels(list: ClaudeModelInfo[]) {
+    // Claude Code's `default` is whichever model it recommends now, listed beside that model under
+    // its own name: to a person a second row of the same model. It isn't offered; the model it
+    // stands for, on this account, is known by it too (a session, a star or a list that names it).
+    const standing = list.find((info) => info.value === "default")
+    const stands = standing && list.find((info) => info !== standing && stoodFor(standing, info))
     this.modelList = {
       at: Date.now(),
-      models: list.map((info, index) =>
-        model(this.providerID, info.value, modelName(info), {
-          family: family(modelName(info)),
-          variants: info.supportedEffortLevels,
-          images: true,
-          context: this.windows.get(info.value) ?? (/1M/i.test(info.description ?? "") ? 1_000_000 : 200_000),
-          // Listed in Claude Code's order: the first is its default.
-          released: Date.now() - index,
-        }),
-      ),
+      models: list.flatMap((info, index) => {
+        if (info === standing && stands) return []
+        // (Where nothing else lists it, it's the model it stands for, under that model's id.)
+        const alone = info === standing && standing.resolvedModel ? standing.resolvedModel : undefined
+        // Where Claude Code listed its default (the first: that is what a new session starts on).
+        const place = info === stands ? list.indexOf(standing!) : index
+        const name = info === standing ? aloneName(info) : modelName(info)
+        return [
+          model(this.providerID, alone ?? info.value, name, {
+            family: family(name),
+            variants: info.supportedEffortLevels,
+            images: true,
+            context: this.windows.get(info.value) ?? (/1M/i.test(info.description ?? "") ? 1_000_000 : 200_000),
+            released: Date.now() - place,
+            ...(info === stands || alone ? { aliases: ["default"] } : {}),
+          }),
+        ]
+      }),
     }
     emit("model.updated", {})
   }
@@ -756,11 +769,24 @@ function withTimeout<T>(promise: Promise<T>, milliseconds: number): Promise<T> {
 
 function modelName(info: { value: string; displayName: string; description?: string }): string {
   // "Default (recommended)" says less than what it is: "Opus 4.8 with 1M context · Most capable…".
-  // Said as the default, though: it's listed beside the model it stands for now ("opus"), which
-  // would read the same, and it follows Claude Code's default when that changes.
   const what = info.description?.split(" · ")[0]?.trim()
-  if (!what || !/^(opus|sonnet|haiku|fable|claude)/i.test(what)) return info.displayName
-  return info.value === "default" ? `Default (${what})` : what
+  return what && /^(opus|sonnet|haiku|fable|claude)/i.test(what) ? what : info.displayName
+}
+
+/** What Claude Code's `default` is called where nothing else lists the model it stands for: that model's name, never "Default". */
+function aloneName(info: ClaudeModelInfo): string {
+  const what = info.description?.split(" · ")[0]?.trim()
+  if (what && /^(opus|sonnet|haiku|fable|claude)/i.test(what)) return what
+  // "claude-opus-5-5" → "Opus 5.5" (a date or a window after it left out).
+  const parts = (info.resolvedModel ?? "").replace(/^claude-/, "").split("-").filter((part) => /^[a-z]+$/i.test(part) || /^\d{1,2}$/.test(part))
+  const [maker, ...version] = parts
+  return maker ? `${maker[0].toUpperCase()}${maker.slice(1)}${version.length ? " " + version.join(".") : ""}` : "Claude Code's recommended model"
+}
+
+/** Whether `info` is the model Claude Code's `default` stands for now: the same one it resolves to, or, where it doesn't say, the same name. */
+function stoodFor(standing: ClaudeModelInfo, info: ClaudeModelInfo): boolean {
+  if (standing.resolvedModel && info.resolvedModel) return standing.resolvedModel === info.resolvedModel
+  return modelName(standing) === modelName(info)
 }
 
 /** Its family, for its maker's mark and so each shows in the short list: "claude-opus". */
@@ -781,7 +807,8 @@ function updateChannel(): string {
 
 function fallbackModels(providerID: string): Model[] {
   return [
-    model(providerID, "default", "Claude Code's default", { family: "claude-default", images: true, variants: ["low", "medium", "high", "xhigh", "max"], released: 3 }),
+    // (Until Claude Code says which its default is, a session on it shows as this and goes on.)
+    model(providerID, "opus", "Opus", { family: "claude-opus", images: true, variants: ["low", "medium", "high", "xhigh", "max"], released: 3, aliases: ["default"] }),
     model(providerID, "sonnet", "Sonnet", { family: "claude-sonnet", images: true, variants: ["low", "medium", "high", "max"], released: 2 }),
     model(providerID, "haiku", "Haiku", { family: "claude-haiku", images: true, released: 1 }),
   ]

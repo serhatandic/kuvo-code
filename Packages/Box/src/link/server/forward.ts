@@ -43,13 +43,13 @@ export function modelInput(base: URL, headers: Record<string, string>, signal: A
     const response = await fetch(new URL(at, base), { headers, signal });
     return response.ok ? ((await response.json()) as { data?: unknown } | null)?.data ?? null : null;
   };
-  type Listed = { id?: unknown; providerID?: unknown; capabilities?: { input?: unknown } } | null;
+  type Listed = { id?: unknown; providerID?: unknown; aliases?: unknown; capabilities?: { input?: unknown } } | null;
   return async session => {
     const own = ((await read(`/api/session/${encodeURIComponent(session)}`)) as { model?: Listed } | null)?.model;
     const ref = own ?? ((await read("/api/model/default")) as Listed);
     if (!ref) return null;
     const model = Array.isArray(ref.capabilities?.input) ? ref
-      : (((await read("/api/model")) as Listed[] | null) ?? []).find(listed => listed?.id === ref.id && listed?.providerID === ref.providerID);
+      : (((await read("/api/model")) as Listed[] | null) ?? []).find(listed => (listed?.id === ref.id || (Array.isArray(listed?.aliases) && listed.aliases.includes(ref.id))) && listed?.providerID === ref.providerID);
     const input = model?.capabilities?.input;
     return Array.isArray(input) ? input.filter((kind): kind is string => typeof kind === "string") : null;
   };

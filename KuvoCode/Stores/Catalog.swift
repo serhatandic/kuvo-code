@@ -182,14 +182,20 @@ final class Catalog {
     func model(_ ref: ModelRef?) -> Model? {
         guard let ref else { return nil }
         if ref.providerID == OutsideAgents.autoProvider { return autoModel(ref.id) }
-        return models.first { $0.id == ref.id && $0.providerID == ref.providerID }
+        return models.first { $0.isNamed(by: ref) }
+    }
+
+    /// Whether `ref` and `other` are one model, even where one names it by another name the box
+    /// knows it by (Claude Code's `default` and the model it stands for), the effort aside.
+    func isSameModel(_ ref: ModelRef, _ other: ModelRef?) -> Bool {
+        ref.sameModel(as: other) || model(other)?.isNamed(by: ref) == true
     }
 
     /// The model, if it's one you can use now (see `offered`).
     func offeredModel(_ ref: ModelRef?) -> Model? {
         guard let ref else { return nil }
         if ref.providerID == OutsideAgents.autoProvider { return isAutoAvailable(ref.id) ? autoModel(ref.id) : nil }
-        return usable.first { $0.id == ref.id && $0.providerID == ref.providerID }
+        return usable.first { $0.isNamed(by: ref) }
     }
 
     // MARK: Auto
@@ -320,7 +326,10 @@ final class Catalog {
     /// known (just after launch; the coding agents' come after the engine's), the first of `wanted`
     /// as it is.
     func startingModel(_ wanted: ModelRef?..., scope: ModelScope = .all) -> ModelRef? {
-        let wanted = wanted.compactMap(\.self).filter { scope.allows($0.providerID) }
+        // Under the id the box lists it by, one picked by another name (Claude Code's `default`).
+        let wanted = wanted.compactMap(\.self).filter { scope.allows($0.providerID) }.map { ref in
+            ref.providerID == OutsideAgents.autoProvider ? ref : model(ref).map { ModelRef(id: $0.id, providerID: $0.providerID, variant: ref.variant) } ?? ref
+        }
         guard isLoaded else { return wanted.first ?? defaultModel?.ref }
         // Not one being retired, for a new conversation.
         if let ref = wanted.first(where: { offeredModel($0).map { !$0.isDeprecated } ?? !isKnown($0) }) { return ref }
@@ -612,7 +621,7 @@ final class Catalog {
 
         func covers(_ model: Model) -> Bool {
             guard provider == model.providerID else { return false }
-            if let held = self.model { return held == model.id }
+            if let held = self.model { return held == model.id || model.aliases?.contains(held) == true }
             guard let only else { return true }
             if let models { return models.contains(model.id) }
             return (only == "free") == model.isFree

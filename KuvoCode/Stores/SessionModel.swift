@@ -2501,13 +2501,15 @@ final class SessionModel {
 
     func selectModel(_ model: ModelRef) {
         guard canReach else { return }
-        guard !model.sameModel(as: session.model) || model.variant != session.model?.variant else { return }
+        // (One that's the model already on, by another name, is the same: a session on Claude Code's `default`.)
+        let isSame = catalog().map { $0.isSameModel(model, session.model) } ?? model.sameModel(as: session.model)
+        guard !isSame || model.variant != session.model?.variant else { return }
         // Another model while it works: the step under way stops and the run goes on with the new
         // one at once (or says why it can't), rather than the switch waiting for the next step,
         // which a stalled step never reaches. Not while it waits on you: that would lose the ask.
         // A subagent's model changes from its next step: stopping its step, even to resume, ends
         // the wait of the agent that started it, which then gives up on it.
-        let switchesNow = !isSubagent && transcript.isRunning && !model.sameModel(as: session.model) && permissions.isEmpty && forms.isEmpty
+        let switchesNow = !isSubagent && transcript.isRunning && !isSame && permissions.isEmpty && forms.isEmpty
         let previous = session.model
         session.model = model
         Task {

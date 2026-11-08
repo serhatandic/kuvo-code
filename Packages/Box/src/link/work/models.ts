@@ -14,6 +14,8 @@ export interface Usable {
   id: string;
   name: string;
   efforts: string[];
+  /** Other ids it's known by (Claude Code's `default` is whichever model it recommends now). */
+  aliases: string[];
   target: Target;
   agents: boolean;
   retiring: boolean;
@@ -26,7 +28,8 @@ function modelsIn(listed: unknown, target: Target, agents: boolean, ready: Set<s
     if (!isObject(each) || typeof each.id !== "string" || typeof each.providerID !== "string" || each.enabled === false) continue;
     if (ready && !ready.has(each.providerID)) continue;
     const efforts = Array.isArray(each.variants) ? each.variants.map(variant => (isObject(variant) ? variant.id : null)).filter((id): id is string => typeof id === "string") : [];
-    models.push({ providerID: each.providerID, id: each.id, name: typeof each.name === "string" && each.name ? each.name : each.id, efforts, target, agents, retiring: each.status === "deprecated", free: isFree(each) });
+    const aliases = Array.isArray(each.aliases) ? each.aliases.filter((alias): alias is string => typeof alias === "string") : [];
+    models.push({ providerID: each.providerID, id: each.id, aliases, name: typeof each.name === "string" && each.name ? each.name : each.id, efforts, target, agents, retiring: each.status === "deprecated", free: isFree(each) });
   }
   return models;
 }
@@ -68,12 +71,13 @@ export function pickModel(given: unknown, effort: unknown, models: Usable[]): { 
     providerID = typeof given.providerID === "string" ? given.providerID : "";
   }
   if (!id) return { refused: "Name the model as provider/model, from list_models." };
-  const matches = models.filter(model => model.id === id && (!providerID || model.providerID === providerID));
+  const matches = models.filter(model => (model.id === id || model.aliases.includes(id)) && (!providerID || model.providerID === providerID));
   if (!matches.length) {
     const known = providerID && models.some(model => model.providerID === providerID);
     return { refused: known ? `There's no ${id} among ${providerID}'s models here. Use list_models to see what there is.` : `There's no account for ${providerID || id} on ${HERE}. Use list_models to see the models you can use.` };
   }
-  const model = matches[0];
+  // (One named by its own id before one it's an alias of.)
+  const model = matches.find(each => each.id === id) ?? matches[0];
   if (effort === undefined || effort === null || effort === "") return { model, variant: null };
   if (!model.efforts.length) return { refused: `${model.name} has no efforts to choose from: leave effort out.` };
   if (typeof effort !== "string" || !model.efforts.includes(effort)) return { refused: `${model.name}'s efforts are ${model.efforts.join(", ")}.` };
