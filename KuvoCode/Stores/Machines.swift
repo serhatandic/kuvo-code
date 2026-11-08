@@ -88,8 +88,9 @@ final class MachineEngine {
         /// It didn't answer (the network, the machine away or restarting, waiting to be unlocked):
         /// tried for as long as it takes.
         case away
-        /// It answered, but its engine didn't come up, on a machine that was connected a moment
-        /// ago: it may be on its way back (restarting), so tried for a while, then said.
+        /// It answered, but didn't take this Mac's key or its engine didn't come up, on a machine
+        /// that was connected a moment ago: it may be on its way back (restarting), so tried for
+        /// a while, then said.
         case comingBack
         /// Trying again won't change it: said at once.
         case lasting
@@ -971,14 +972,15 @@ final class MachineEngine {
         }
     }
 
-    /// Whether `error` never passes by itself, on a machine that worked a moment ago: its key
-    /// refused (unlocking it, which waking tries again for, or a new one), a system the engine
-    /// doesn't run on. Anything else (its engine failing to start, a command cut off, a newer
-    /// box's engine not up yet) can be the machine restarting, for a while.
+    /// Whether `error` never passes by itself, on a machine that worked a moment ago: its host
+    /// key changed, a system the engine doesn't run on. Anything else can be the machine
+    /// restarting, for a while: its engine failing to start, a command cut off, a newer box's
+    /// engine not up yet, and this Mac's key turned away (a Mac starting up answers SSH before
+    /// it reads your keys: #285).
     static func neverPasses(_ error: Error) -> Bool {
         switch error {
         case RemoteEngineError.ssh(255, let message), RemoteEngineError.exited(255, let message):
-            isTurnedAway(message)
+            ["Host key verification failed", "REMOTE HOST IDENTIFICATION HAS CHANGED"].contains { message.localizedCaseInsensitiveContains($0) }
         case RemoteEngineError.unsupportedPlatform, RemoteEngineError.needsDeveloperTools, RemoteEngineError.needsNewerMacOS,
              RemoteEngineError.thisMac:
             true

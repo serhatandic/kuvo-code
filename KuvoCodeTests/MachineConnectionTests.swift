@@ -661,15 +661,56 @@ import Testing
         #expect(engine.failure?.contains("settings.json") == true, "it says why")
     }
 
-    /// Dropped, then turned away when it answers (its key, kept in an app that locked meanwhile):
-    /// said at once, with Try Again, rather than tried for as long as it's away.
-    @Test func aMachineThatDroppedAndRefusesItsKeySaysSo() async throws {
+    /// The Mac mini restarting, as the MacBook saw it (#285, its log of 11-08): the connection
+    /// closed, SSH refused, then timed out, then the machine answered but turned this Mac's key
+    /// away while it started up (it reads your keys only once it's up). Tried on through all of
+    /// it, and connected again by itself the first time it takes the key.
+    @Test func aMachineRestartingThatTurnsTheKeyAwayAsItStartsIsConnectedAgain() async throws {
+        defer { done() }
+        let (id, engine) = try await dropped(failing: RemoteEngineError.ssh(status: 255, message: "ssh: connect to host 192.168.1.101 port 22: Connection refused"))
+        let saw: [Error?] = [
+            RemoteEngineError.ssh(status: 255, message: "ssh: connect to host 192.168.1.101 port 22: Operation timed out"),
+            RemoteEngineError.ssh(status: 255, message: "someone@192.168.1.101: Permission denied (publickey,password,keyboard-interactive)."),
+            nil,
+        ]
+        var wait = 3
+        for next in saw {
+            clock.pass(wait)
+            guard let after = try await nextTry(engine) else { Issue.record("given up on: “\(engine.statusText)”, \(engine.failure ?? "")"); return }
+            #expect(engine.connection == .reconnecting)
+            reachable.failures[id] = next
+            wait = after
+        }
+        clock.pass(wait)
+        try await until { !engine.isRetrying }
+        #expect(engine.isReady, "connected again, no Connect pressed")
+    }
+
+    /// Dropped, then its key turned away for good (kept in an app that locked meanwhile, or taken
+    /// off the machine): tried while it may be starting up, then it says why, with Try Again.
+    @Test func aMachineThatKeepsTurningTheKeyAwaySaysSoAfterAWhile() async throws {
         defer { done() }
         let (_, engine) = try await dropped(failing: RemoteEngineError.ssh(status: 255, message: "someone@devbox: Permission denied (publickey)."))
+        var tried = 0
+        while let wait = try await nextTry(engine) {
+            tried += wait
+            guard tried < 2 * 3600 else { Issue.record("still trying after two hours"); return }
+            clock.pass(wait)
+        }
+        #expect(tried >= AppModel.comingBackFor)
+        #expect(engine.connection == .failed)
+        #expect(engine.failure?.contains("SSH key") == true, "it says why")
+    }
+
+    /// Dropped, then answering with another host key (reinstalled, or someone in between): said
+    /// at once, never tried again by itself.
+    @Test func aMachineWhoseHostKeyChangedSaysSoAtOnce() async throws {
+        defer { done() }
+        let (_, engine) = try await dropped(failing: RemoteEngineError.ssh(status: 255, message: "@@@@@@@@@@@\n@    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @\nHost key verification failed."))
         clock.pass(3)
         try await until { !engine.isRetrying }
         #expect(engine.connection == .failed)
-        #expect(engine.failure?.contains("SSH key") == true, "it says why")
+        #expect(engine.failure?.contains("host key") == true, "it says why")
         #expect(clock.waits == [])
     }
 
