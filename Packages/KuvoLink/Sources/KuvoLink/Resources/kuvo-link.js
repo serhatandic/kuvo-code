@@ -5228,7 +5228,7 @@ function readWords(file = WORDS_FILE) {
     return null;
   }
 }
-function readKit() {
+function readKit(system = process.platform) {
   const words = readWords();
   const mac = readMacKit();
   if (!words || IS_MAC && !mac)
@@ -5236,7 +5236,9 @@ function readKit() {
   const timeZone = zoneOf(mac);
   const machine = typeof mac?.machine === "string" && mac.machine || readLink()?.id || os5.hostname();
   const here = IS_MAC ? words.here.mac : words.here.machine;
-  const fill = (text) => text.replace(/⟦(place|clock|browser)⟧/g, (_, key) => String(here[key] ?? "")).replaceAll("⟦machine⟧", () => machine).replaceAll("⟦timeZone⟧", () => timeZone || "UTC");
+  const systems = here.systems ?? {};
+  const named = String(systems[system] ?? systems.other ?? "machine");
+  const fill = (text) => text.replace(/⟦(place|clock|browser)⟧/g, (_, key) => String(here[key] ?? "")).replaceAll("⟦system⟧", () => named).replaceAll("⟦machine⟧", () => machine).replaceAll("⟦timeZone⟧", () => timeZone || "UTC");
   const told = (each) => words.personalityWords.replaceAll("⟦name⟧", () => each.name).replaceAll("⟦description⟧", () => each.description);
   return {
     kuvo: 1,
