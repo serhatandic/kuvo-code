@@ -739,6 +739,8 @@ final class ScrollAnchor {
         clip.scroll(to: NSPoint(x: clip.bounds.origin.x, y: target))
         scrollView.reflectScrolledClipView(clip)
         placed = clip.bounds.origin.y
+        // What's over the end pushes on from here.
+        pushed = nil
         // SwiftUI's scroll view, told again once its update is over: told only during it, it
         // keeps where it last knew the view to be, and puts the view back there the next time
         // the conversation's size changes (earlier messages coming in above).
@@ -845,19 +847,22 @@ final class ScrollAnchor {
         anchor = first.map { ($0.key, $0.value.minY) }
     }
 
-    /// What moving the view with what's over the end still owes: a spring's last frames each move
-    /// it less than the view can go, and its overshoot at the top comes back. Left out, they'd
-    /// add up to it being out of place.
-    private var pushOwed: CGFloat = 0
+    /// Where moving the view with what's over the end means it to be, and where that put it.
+    /// Between frames, SwiftUI puts the view back on whole points; moved on from there each frame,
+    /// those roundings added up to points out of place by the time the composer stopped growing.
+    private var pushed: (target: CGFloat, placed: CGFloat)?
 
-    /// Moved with what's over the end. More than a spring's tail that the top stopped isn't owed.
+    /// Moved with what's over the end: from where the last push meant it to be, if nothing but
+    /// rounding moved it since; else from where it is. Past an edge, by more than a spring's
+    /// overshoot, isn't owed.
     func push(by distance: CGFloat) {
         guard let clip = scrollView?.contentView else { return }
-        let from = clip.bounds.origin.y
-        pushOwed += distance
-        scroll(to: from + pushOwed)
-        pushOwed -= clip.bounds.origin.y - from
-        if abs(pushOwed) >= 4 { pushOwed = 0 }
+        let now = clip.bounds.origin.y
+        var target = (pushed.flatMap { abs(now - $0.placed) <= 1 ? $0.target : nil } ?? now) + distance
+        scroll(to: target)
+        let placed = clip.bounds.origin.y
+        if abs(target - placed) > 1 { target = placed }
+        pushed = (target, placed)
     }
 
     /// This far down from where it is now (up, less than 0).
