@@ -362,6 +362,9 @@ struct Composer: View {
                                 if showsMode {
                                     ModeChip(approval: approval, shown: approvalShown, onDecisions: onDecisions, autopilot: autopilot, onSelectAutopilot: onSelectAutopilot, onSelectApproval: onSelectApproval)
                                         .disabled(isOffline)
+                                        // Gives way first, down to its icon, before the model's
+                                        // name does (the spacer comes after it).
+                                        .layoutPriority(-1)
                                 }
                                 if showsModel {
                                     ModelChip(selection: model, onSelect: onSelectModel, scope: modelScope, inUse: modelInUse, openRequest: modelMenuRequest)
@@ -374,6 +377,7 @@ struct Composer: View {
                             .transition(.opacity)
                         }
                         Spacer(minLength: 0)
+                            .layoutPriority(-2)
                         if !isShell { voiceButton }
                         actionButton
                     }
