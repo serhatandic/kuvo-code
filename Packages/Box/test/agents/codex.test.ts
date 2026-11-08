@@ -689,6 +689,11 @@ describe("A question Codex asks (request_user_input_async)", () => {
   /** What went into the turn under way. */
   const steered = () => sent().filter((message) => message.method === "turn/steer").map((message) => message.params.input[0].text)
   const said = (id: string) => steps(id).flatMap((step) => step.content.filter((part: any) => part.type === "text").map((part: any) => part.text)).join("\n")
+  /** Its card is up and its sleep has started: an answer from here is the one that ends the sleep (one before that is told again as the sleep starts, as "settled before it starts to sleep" shows). */
+  const cardUpAsleep = async (id: string, cards = 1) => {
+    await until(() => tools(id).some((tool) => tool.name === "sleep"))
+    await until(() => sessions.forms(id).length === cards)
+  }
   const thinking: [string, any] = ["item/started", { item: { type: "reasoning", id: "r1", summary: [], content: [] } }]
 
   test("its card shows above the composer with the choices, the session waits, and the choice goes back to Codex, which goes on", async () => {
@@ -785,7 +790,7 @@ describe("A question Codex asks (request_user_input_async)", () => {
 
   test("turned down by its box with words (Autopilot) while it sleeps on it: it hears them, the sleep ends and its turn goes on", async () => {
     const id = start([...asking, sleepsUntilTold, ...answered])
-    await until(() => sessions.forms(id).length === 1)
+    await cardUpAsleep(id)
     sessions.replyForm(id, sessions.forms(id)[0].id, null, "This is on Autopilot: leave it.")
     await until(() => ended(id))
     expect(steered()).toEqual(["This is on Autopilot: leave it."])
@@ -948,7 +953,7 @@ describe("A question Codex asks (request_user_input_async)", () => {
 
   test("a message you type while it works answers what's open: the cards go, and your words go into its turn", async () => {
     const id = start([...asking, sleepsUntilTold, ...answered])
-    await until(() => sessions.forms(id).length === 1)
+    await cardUpAsleep(id)
     sessions.prompt(id, { id: "msg_codex_test_004", text: "english please", files: [], delivery: "steer" })
     await until(() => ended(id))
     expect(sessions.forms(id)).toEqual([])
@@ -959,7 +964,7 @@ describe("A question Codex asks (request_user_input_async)", () => {
   test("a message you type with two cards up answers both: it hears your words, and not that one was dismissed", async () => {
     const second: [string, any] = ["item/completed", { item: { type: "agentMessage", id: "m3", text: "Which tone?", delivery: "async", questions: [{ title: "Which tone?", options: ["Plain", "Warm"] }] } }]
     const id = start([...asking, second, sleepsUntilTold, ...answered])
-    await until(() => sessions.forms(id).length === 2)
+    await cardUpAsleep(id, 2)
     sessions.prompt(id, { id: "msg_codex_test_010", text: "english and warm please", files: [], delivery: "steer" })
     await until(() => ended(id))
     expect(sessions.forms(id)).toEqual([])
@@ -968,7 +973,7 @@ describe("A question Codex asks (request_user_input_async)", () => {
 
   test("dismissed while it sleeps on it: it hears so, rather than sleep for hours", async () => {
     const id = start([...asking, sleepsUntilTold, ...answered])
-    await until(() => sessions.forms(id).length === 1)
+    await cardUpAsleep(id)
     sessions.replyForm(id, sessions.forms(id)[0].id, null)
     await until(() => ended(id))
     expect(steered()).toHaveLength(1)
