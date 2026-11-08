@@ -2069,7 +2069,8 @@ var FEATURES = [
   "approval.held",
   "approval.default",
   "approval.seen",
-  "approval.stopped"
+  "approval.stopped",
+  "limits"
 ];
 
 // Packages/Box/src/link/areas/projects.ts
@@ -25803,8 +25804,82 @@ function notifyUserTool(caller, args, now = Date.now(), telling = tellingNow) {
   return { text: `Sent to the user: “${sentence}”`, isError: false };
 }
 
+// Packages/Box/src/link/work/plan-limits.ts
+var AGENT_NAMES2 = { claude: "Claude Code", codex: "Codex", cursor: "Cursor", grok: "Grok", antigravity: "Antigravity" };
+var ENGINE_NAMES = { codex: "ChatGPT", grok: "SuperGrok", copilot: "GitHub Copilot", openrouter: "OpenRouter", zai: "Z.ai", ollama: "Ollama", opencode: "OpenCode Go" };
+function amount(value, unit) {
+  return unit === "usd" ? `$${value.toFixed(2)}` : `${Math.round(value)} ${unit === "requests" ? "requests" : "credits"}`;
+}
+function until(at, now) {
+  const minutes = Math.max(1, Math.round((at - now) / 60000));
+  if (minutes < 60)
+    return `in ${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 48)
+    return `in ${hours}h${minutes % 60 ? ` ${minutes % 60}m` : ""}`;
+  return `in ${Math.round(hours / 24)} days`;
+}
+function since(at, now) {
+  const minutes = Math.max(0, Math.round((now - at) / 60000));
+  if (minutes < 1)
+    return "just now";
+  if (minutes < 60)
+    return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  return hours < 48 ? `${hours}h ago` : `${Math.round(hours / 24)} days ago`;
+}
+function windowName(window) {
+  const minutes = typeof window.minutes === "number" ? window.minutes : undefined;
+  const length = minutes === 300 ? "5-hour window" : minutes === 10080 ? "weekly limit" : minutes && minutes >= 40000 && minutes <= 45000 ? "monthly limit" : minutes ? `${minutes >= 1440 ? `${Math.round(minutes / 1440)}-day` : `${Math.round(minutes / 60)}-hour`} window` : "limit";
+  return typeof window.model === "string" && window.model ? `${window.model} ${length}` : length;
+}
+function describePlanLimits(data, now = Date.now()) {
+  const accounts = isObject(data) && Array.isArray(data.accounts) ? data.accounts.filter(isObject) : [];
+  if (!accounts.length)
+    return `No plan limits are known on ${HERE}: no coding agent here is signed in to a plan whose limits can be read.`;
+  const lines = [`Plan limits on ${HERE} (each account's own; used is how much of the window is gone):`];
+  for (const account of accounts) {
+    const service = typeof account.agent === "string" ? AGENT_NAMES2[account.agent] ?? account.agent : ENGINE_NAMES[String(account.service)] ?? String(account.service);
+    const name = `${service}${typeof account.label === "string" && account.label ? ` (${account.label})` : ""}${typeof account.plan === "string" && account.plan ? `, ${account.plan}` : ""}, provider ${String(account.provider)}`;
+    lines.push(`- ${name}:`);
+    const windows = Array.isArray(account.windows) ? account.windows.filter(isObject) : [];
+    for (const window of windows) {
+      const resetsAt = typeof window.resetsAt === "number" ? window.resetsAt : undefined;
+      if (resetsAt && resetsAt <= now) {
+        lines.push(`  - ${windowName(window)}: started over at ${resetTime(resetsAt)}, not read since`);
+        continue;
+      }
+      const used = Math.round(Number(window.used) * 100);
+      const read = typeof window.read === "number" ? `, as of ${since(window.read, now)}` : "";
+      const counted = isObject(window.amount) ? ` (${amount(Number(window.amount.used), window.amount.unit)} of ${amount(Number(window.amount.limit), window.amount.unit)})` : "";
+      lines.push(`  - ${windowName(window)}: ${used}% used${counted}${resetsAt ? `, resets ${until(resetsAt, now)} (${resetTime(resetsAt)})` : ""}${read}`);
+    }
+    const balance = isObject(account.balance) ? account.balance : undefined;
+    if (balance)
+      lines.push(`  - credits: ${amount(Number(balance.left), balance.unit)} left${typeof balance.limit === "number" ? ` of ${amount(balance.limit, balance.unit)}` : ""}`);
+    if (!windows.length && !balance)
+      lines.push("  - none read yet");
+    const problem = isObject(account.problem) ? account.problem : undefined;
+    if (problem && typeof problem.message === "string") {
+      const next = typeof problem.until === "number" && problem.until > now ? ` Read again ${until(problem.until, now)}.` : "";
+      lines.push(`  - Not read just now: ${problem.message}${next}`);
+    }
+  }
+  return lines.join(`
+`);
+}
+async function planLimitsTool(bridge, signal) {
+  if (!bridge)
+    return { text: `The coding agents aren't running on ${HERE} now, so their plan limits can't be read. Try again in a moment.`, isError: true };
+  try {
+    return { text: describePlanLimits(await call(bridge, "GET", "/api/kuvo/limits", undefined, signal)), isError: false };
+  } catch (error) {
+    return { text: `Couldn't read the plan limits on ${HERE}: ${String(error?.message ?? error)}`, isError: true };
+  }
+}
+
 // Packages/Box/src/link/letters/tools.ts
-var AGENT_TOOLS = ["list_agents", "send_message", "read_conversation", "start_session", "list_sessions", "stop_session", "compact_session", "answer_ask", "list_models", "make_project", "list_projects", "propose_goal", "goal_progress", "may_spend", "finish_goal", "notify_user"];
+var AGENT_TOOLS = ["list_agents", "send_message", "read_conversation", "start_session", "list_sessions", "stop_session", "compact_session", "answer_ask", "list_models", "make_project", "list_projects", "propose_goal", "goal_progress", "may_spend", "finish_goal", "notify_user", "plan_limits"];
 var isAgentTool = (name) => AGENT_TOOLS.includes(name);
 var said2 = (text) => ({ text, isError: false });
 var refused2 = (text) => ({ text, isError: true });
@@ -26040,6 +26115,8 @@ async function agentTool(name, args, session, place) {
     }
     case "list_projects":
       return listProjectsTool();
+    case "plan_limits":
+      return planLimitsTool(place.bridge(), place.signal);
     case "make_project": {
       if (!root)
         return refused2("Only a conversation on this computer makes projects here.");

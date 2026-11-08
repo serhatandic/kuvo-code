@@ -13,6 +13,7 @@ import { repositoryOf } from "../../src/agents/fence"
 import { setToolServer } from "../../src/agents/kuvotools"
 import { callServer, computerServers, KEYS } from "./support/servers"
 import { Auto } from "../../src/agents/auto"
+import { agentAccounts, Limits } from "../../src/agents/limits"
 import { Queue } from "../../src/agents/queue"
 import type { Roster } from "../../src/agents/roster"
 import { Sessions } from "../../src/agents/sessions"
@@ -1959,5 +1960,20 @@ describe("Claude Code, instructions that changed as its conversation goes on", (
     await until(() => idles(id).length === 2)
     await answered(id, "after", 3)
     expect(lastSent()).toBe("after")
+  })
+})
+
+describe("the plan's limits a turn hears", () => {
+  test("Claude Code's rate-limit event in a turn keeps the account's window current for the clients", async () => {
+    const limits = new Limits(() => agentAccounts([claude]))
+    await limits.tick()
+    const { id, first } = await begin()
+    fake.out.push({ type: "rate_limit_event", rate_limit_info: { status: "allowed_warning", rateLimitType: "seven_day", utilization: 0.81, resetsAt: 1_794_200_000, surpassedThreshold: 0.75 } })
+    await until(() => limits.list().length > 0)
+    const [account] = limits.list()
+    expect(account!.provider).toBe(provider)
+    expect(account!.windows.map((window) => [window.id, window.used, window.minutes, window.resetsAt, window.source])).toEqual([["seven_day", 0.81, 10_080, 1_794_200_000_000, "turn"]])
+    fake.result([first])
+    await until(() => idles(id).length > 0)
   })
 })
