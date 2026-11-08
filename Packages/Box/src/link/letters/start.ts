@@ -14,7 +14,7 @@ import { messageID } from "../engine/sessions";
 import { BOTS, CHATS, HERE, homeFolder } from "../home";
 import { realish } from "../fence/policy";
 import { changeProjects, PROJECTS_FILE, readProjects } from "../areas/projects";
-import { readWorktrees } from "../areas/worktree-records";
+import { projectOf as projectOfFolder, readWorktrees } from "../areas/worktree-records";
 import { answerWorktrees, settleNewSession } from "../areas/worktrees";
 import { composeLetter } from "./letter";
 import { allowed, noteStarting, startedAs, startsBefore, takeBack } from "./limits";
@@ -176,14 +176,14 @@ const projectsNote = (primary: string, folders: readonly string[]) =>
 // folder that's none yet becomes one, as a Mac adds it when a session starts there. Null for chats.
 function projectOf(folder: string): { name: string; folders: readonly string[] } | null {
   if (folder === CHATS) return null;
-  const tree = readWorktrees().find(each => (each.folder ?? each.root) === folder);
-  const directory = tree?.project ?? folder;
+  // (A worktree's, removed ones too, as every client files its sessions: `worktreeProjects`.)
+  const directory = projectOfFolder(folder);
   const known = readProjects().find(each => each.directory === directory);
   // (Only once the box keeps its projects: before, they're its Mac's.)
-  if (!known && !tree && fs.existsSync(PROJECTS_FILE)) {
+  if (!known && directory === folder && fs.existsSync(PROJECTS_FILE)) {
     try { changeProjects(projects => (projects.some(each => each.directory === directory) ? projects : [{ directory, folders: [] }, ...projects])); } catch {}
   }
-  return { name: known?.name ?? path.basename(directory), folders: tree ? [] : (known?.folders ?? []) };
+  return { name: known?.name ?? path.basename(directory), folders: directory !== folder ? [] : (known?.folders ?? []) };
 }
 
 // The project `named` names here (its name, or its folder), or null.
@@ -348,7 +348,7 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
   // start).
   let madeTree: string | null = null;
   if (given.worktree === true) {
-    const project = projectDirectory ?? (folder !== CHATS ? (readWorktrees().find(each => (each.folder ?? each.root) === folder)?.project ?? folder) : null);
+    const project = projectDirectory ?? (folder !== CHATS ? projectOfFolder(folder) : null);
     if (!project) {
       giveBack();
       return no(400, "A chat has no worktree: give a project.");

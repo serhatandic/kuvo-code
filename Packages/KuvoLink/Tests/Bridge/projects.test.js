@@ -89,7 +89,8 @@ const session = (id, directory, metadata = {}) => ({ id, location: { directory }
 
 test("a project added from any client is kept on the box as it's named, and changed there", async () => {
   const handle = link.engineHandler(() => { throw new Error("no engine"); }, { name: "box" }, () => null);
-  assert.deepEqual((await ask(handle, "GET", "kuvo/projects")).json, { projects: [] });
+  // None yet; its worktree's sessions are said to be the shop's.
+  assert.deepEqual((await ask(handle, "GET", "kuvo/projects")).json, { projects: [], worktrees: { [tree]: shop } });
 
   // A link stays a link: its sessions run there, by that name.
   const linked = path.join(work, "shop-link");

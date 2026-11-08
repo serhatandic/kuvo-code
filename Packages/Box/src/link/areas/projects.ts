@@ -14,7 +14,7 @@ import { K } from "../home";
 import type { AnswerPiece, LinkRequest } from "../server/context";
 import { holdArchived } from "./wakes";
 import { stopIfWaiting } from "../work/answers";
-import { readRemovedWorktrees, readWorktrees } from "./worktree-records";
+import { worktreeFollowers, worktreeProjects } from "./worktree-records";
 
 export const PROJECTS_FILE = path.join(K, "box", "projects.json");
 const PROJECTS_LOCK = PROJECTS_FILE + ".lock";
@@ -97,8 +97,8 @@ async function atWork(target: Target, signal: AbortSignal | undefined): Promise<
  * bridge, page after page; how many weren't. None while the engine doesn't answer (`kept` null):
  * its sessions are most of them, and the project would come back with them. */
 async function archiveProject(directory: string, also: string[], readEngine: () => EngineRecord, readBridge: () => BridgeRecord, signal: AbortSignal | undefined): Promise<{ archived: number; kept: number | null }> {
-  const removed = Object.entries(readRemovedWorktrees()).filter(([, project]) => project === directory).map(([folder]) => folder);
-  const folders = [...new Set([directory, ...readWorktrees().filter(tree => tree.project === directory && typeof tree.folder === "string").map(tree => tree.folder!), ...removed, ...also])];
+  const trees = Object.entries(worktreeProjects()).filter(([, project]) => project === directory).map(([folder]) => folder);
+  const folders = [...new Set([directory, ...trees, ...also])];
   const targets: Target[] = [];
   try { targets.push(readEngine()); } catch { return { archived: 0, kept: null }; }
   // Its record left by one that ended without a word: nothing archived, the bridge's neither.
@@ -158,7 +158,7 @@ export async function* answerProjects(request: LinkRequest, readEngine: () => En
   const json = (status: number, value: unknown): AnswerPiece[] => [{ head: { status, headers: { "content-type": "application/json" } } }, { body: Buffer.from(JSON.stringify(value)) }];
   const [route, query = ""] = request.path.split("?");
   const method = request.method.toUpperCase();
-  const listed = (): Projects => ({ projects: readProjects(file) });
+  const listed = (): Projects => ({ projects: readProjects(file), worktrees: worktreeProjects() });
   if (route === "kuvo/projects/events") {
     if (method !== "GET") return yield* json(405, {});
     yield { head: { status: 200, headers: { "content-type": "application/x-ndjson" } } };
@@ -196,5 +196,7 @@ export async function* answerProjects(request: LinkRequest, readEngine: () => En
   return yield* json(405, {});
 }
 
-// Those following its projects (`kuvo/projects/events`).
+// Those following its projects (`kuvo/projects/events`): told of its worktrees' changes too, as the
+// list says which project each belongs to.
 const projectFollowers: Set<() => void> = new Set();
+worktreeFollowers.add(() => { for (const tell of projectFollowers) tell(); });

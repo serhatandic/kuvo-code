@@ -5946,6 +5946,9 @@
          }
         }
        }
+      },
+      "worktrees": {
+       "map": "string"
       }
      }
     }

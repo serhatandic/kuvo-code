@@ -142,6 +142,7 @@ import Testing
         let bar = try #require(app.botWork.report(of: pixel))
         #expect(bar.atWork.map(\.session) == row.map(\.id), "the bar counts the same session")
         #expect(BotWorkBar.title(bar) == "A session is at work")
+        #expect(app.bots.workLine(pixel, in: app.workspace) == BotWorkBar.title(bar), "its row says what the bar says, as the phone's does")
         #expect(app.botWork.reports[pixel.id]?.atWork.isEmpty == true, "from the facts, not from reading the report again")
     }
 

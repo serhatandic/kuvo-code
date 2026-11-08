@@ -1736,9 +1736,10 @@ private struct BotRow: View {
             ShimmerText(text: "Working…")
         } else if case let helpers = workspace.helpersAtWork(in: bot.sessionID), helpers > 0 {
             ShimmerText(text: helpers == 1 ? "Working on a task…" : "Working on \(helpers) tasks…")
-        } else if bots.isOverseeingWork(bot, in: workspace) {
-            // Every session it oversees, while one is at it (one waiting on you shows on its own row).
-            ShimmerText(text: Oversight.overseeing(count: AtWork.overseen(by: bot.id, in: workspace.sessions).count))
+        } else if let line = bots.workLine(bot, in: workspace) {
+            // Its sessions at work, as the bar over its composer counts them (one only waiting on
+            // you shows on its own row).
+            ShimmerText(text: line)
         } else if let place = bots.waitingFor(bot) {
             // What you changed while its machine was away, on its way once it's back.
             BotState(systemImage: "clock.arrow.circlepath", isSet: false) { Text("Changes waiting for \(place)") }
@@ -1761,9 +1762,9 @@ private struct BotRow: View {
             }
         } else if let watching = bots.watches[bot.id], !watching.isEmpty {
             BotState(systemImage: "eye") { Text(watching.count == 1 ? "Watching" : "Watching \(watching.count) things") }
-        } else if case let overseen = AtWork.overseen(by: bot.id, in: workspace.sessions), !overseen.isEmpty {
+        } else if let line = AtWork.restLine(of: bot.id, in: workspace.sessions) {
             // At rest: what it looks after, in place of its job.
-            Text(Oversight.overseeing(count: overseen.count))
+            Text(line)
         } else {
             // No job yet: it asks for one, until your message gives it.
             Text(bot.job.isEmpty ? EmptyConversationView.purposeQuestion : bot.job)

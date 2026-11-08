@@ -6,7 +6,7 @@ import path from "node:path";
 import { outsideShown } from "../../shared/text";
 import { boxNoteOf, wakeMarkOf } from "../../shared/queues";
 import { readProjects } from "../areas/projects";
-import { readRemovedWorktrees, readWorktrees } from "../areas/worktree-records";
+import { projectOf } from "../areas/worktree-records";
 import { engineGet } from "../engine/client";
 import { summaryAtEnd } from "../../shared/summaries";
 import { isHiddenRun } from "../engine/sessions";
@@ -246,8 +246,7 @@ const chatsFolder = (): string => (IS_MAC ? path.join(path.dirname(K), "Chats") 
 export function projectNameOf(directory: string | undefined): string | undefined {
   if (!directory) return undefined;
   if (directory === chatsFolder()) return "Chats";
-  const project = readWorktrees().find(each => (each.folder ?? each.root) === directory || each.root === directory)?.project
-    ?? readRemovedWorktrees()[directory] ?? directory;
+  const project = projectOf(directory);
   return readProjects().find(each => each.directory === project)?.name || path.basename(project) || undefined;
 }
 

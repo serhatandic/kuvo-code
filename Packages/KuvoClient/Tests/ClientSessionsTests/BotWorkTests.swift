@@ -37,11 +37,7 @@ struct BotWorkTests {
         #expect(report.sessions[0].model?.variant == "high")
     }
 
-    @Test func aBotsLineSaysWhereItsSessionsWork() {
-        #expect(WorkWords.atWork(count: 3, projects: ["Tidepool", "Tidepool"]) == "At work in Tidepool: 3 sessions")
-        #expect(WorkWords.atWork(count: 1, projects: ["Tidepool"]) == "At work in Tidepool: 1 session")
-        #expect(WorkWords.atWork(count: 2, projects: ["Tidepool", "kuvo-web"]) == "At work in 2 projects: 2 sessions")
-        #expect(WorkWords.atWork(count: 2, projects: []) == "At work: 2 sessions")
+    @Test func aBotsWorkIsSaidInFewWords() {
         #expect(WorkWords.asking("Wants to run a command: npx expo install expo-haptics") == "Asks to run npx expo install expo-haptics")
         #expect(WorkWords.asking("Wants to work outside the project.") == "Asks to work outside the project.")
         #expect(WorkWords.barTitle(atWork: 3, today: 5) == "3 sessions at work")

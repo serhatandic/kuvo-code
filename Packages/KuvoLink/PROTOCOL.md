@@ -3263,6 +3263,11 @@ while a box is away goes there when it's back.
   newest first. `name` only when it isn't the folder's own; `folders`, the project's other folders;
   `removed`, one Remove Project took off the list, kept with its settings for when one of its
   sessions is brought back (a client shows it then, and not before).
+  `worktrees` (bridge 0.9.207), `{"<folder>": "<project>"}`: the project each of the box's worktrees
+  belongs to, by the folder its sessions run in (and its top folder), for those it keeps, those it
+  removed that can come back and those removed before. A client files a session whose folder is
+  here under that project, never as a project of its own; the events line changes with them. A box
+  from before doesn't say: a client goes by `kuvo/worktrees` then.
 - `PUT kuvo/projects?directory=<folder>` with any of `{name, folders, run, terminal, removed}`
   adds the project or changes what's given (an empty string is none), and brings a removed one
   back unless `removed` is true (a client's copy of one it removed, with its settings):

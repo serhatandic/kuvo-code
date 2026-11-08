@@ -5613,6 +5613,27 @@ function readRemovedWorktrees() {
     return {};
   }
 }
+function worktreeProjects() {
+  let kept = {};
+  try {
+    kept = JSON.parse(fs22.readFileSync(WORKTREES_FILE, "utf8")) ?? {};
+  } catch {}
+  const projects = {};
+  if (isObject(kept.removed)) {
+    for (const [folder, project] of Object.entries(kept.removed))
+      if (typeof project === "string")
+        projects[folder] = project;
+  }
+  const records = (list) => Array.isArray(list) ? list.filter((each) => typeof each?.root === "string" && typeof each?.project === "string") : [];
+  for (const tree of records(kept.restorable))
+    projects[tree.folder ?? tree.root] = tree.project;
+  for (const tree of records(kept.worktrees)) {
+    projects[tree.root] = tree.project;
+    projects[tree.folder ?? tree.root] = tree.project;
+  }
+  return projects;
+}
+var projectOf = (directory) => worktreeProjects()[directory] ?? directory;
 function readRestorableWorktrees() {
   try {
     const list = JSON.parse(fs22.readFileSync(WORKTREES_FILE, "utf8")).restorable;
@@ -8234,7 +8255,7 @@ var PROJECT = object({
   "removed?": bool,
   "madeBy?": object({ bot: string, name: string, at: number })
 });
-var PROJECTS = object({ projects: list(PROJECT) });
+var PROJECTS = object({ projects: list(PROJECT), worktrees: map(string) });
 var PROJECT_ROUTES = [
   { route: "GET kuvo/projects", answers: { 200: PROJECTS } },
   { route: "PUT kuvo/projects", answers: { 200: object({ project: PROJECT }) } },
@@ -11340,7 +11361,7 @@ function projectNameOf(directory) {
     return;
   if (directory === chatsFolder())
     return "Chats";
-  const project = readWorktrees().find((each) => (each.folder ?? each.root) === directory || each.root === directory)?.project ?? readRemovedWorktrees()[directory] ?? directory;
+  const project = projectOf(directory);
   return readProjects().find((each) => each.directory === project)?.name || path41.basename(project) || undefined;
 }
 var stillAsked = (form, get, folder) => get(`api/session/${encodeURIComponent(form.sessionID)}/form`, folder).then((answer) => {
@@ -12101,8 +12122,8 @@ async function atWork(target, signal) {
   }
 }
 async function archiveProject(directory, also, readEngine, readBridge, signal) {
-  const removed = Object.entries(readRemovedWorktrees()).filter(([, project]) => project === directory).map(([folder]) => folder);
-  const folders = [...new Set([directory, ...readWorktrees().filter((tree) => tree.project === directory && typeof tree.folder === "string").map((tree) => tree.folder), ...removed, ...also])];
+  const trees = Object.entries(worktreeProjects()).filter(([, project]) => project === directory).map(([folder]) => folder);
+  const folders = [...new Set([directory, ...trees, ...also])];
   const targets = [];
   try {
     targets.push(readEngine());
@@ -12163,7 +12184,7 @@ async function* answerProjects(request, readEngine = readEngineFile, readBridge 
   const json = (status, value) => [{ head: { status, headers: { "content-type": "application/json" } } }, { body: Buffer.from(JSON.stringify(value)) }];
   const [route, query = ""] = request.path.split("?");
   const method = request.method.toUpperCase();
-  const listed = () => ({ projects: readProjects(file) });
+  const listed = () => ({ projects: readProjects(file), worktrees: worktreeProjects() });
   if (route === "kuvo/projects/events") {
     if (method !== "GET")
       return yield* json(405, {});
@@ -12206,6 +12227,10 @@ async function* answerProjects(request, readEngine = readEngineFile, readBridge 
   return yield* json(405, {});
 }
 var projectFollowers = new Set;
+worktreeFollowers.add(() => {
+  for (const tell of projectFollowers)
+    tell();
+});
 
 // Packages/Box/src/link/documents/work.ts
 import crypto19 from "node:crypto";
@@ -22186,7 +22211,7 @@ function branchSlug(title, limit = 40) {
   }
   return name;
 }
-async function projectOf(engine, folder, signal) {
+async function projectOf2(engine, folder, signal) {
   const located = await call(engine, "GET", "/api/location", undefined, signal, folder);
   const id = located?.project?.id;
   if (typeof id !== "string")
@@ -22352,7 +22377,7 @@ async function answerWorktrees(method, requestPath, body, engine, signal, bridge
     const base = gitIn(project, ["symbolic-ref", "--quiet", "--short", "HEAD"]);
     let id, root;
     try {
-      id = await projectOf(engine, project, signal);
+      id = await projectOf2(engine, project, signal);
       root = (await call(engine, "POST", "/api/worktree", { projectID: id }, signal, project))?.directory;
     } catch (error) {
       return { status: 502, value: message(error?.message ?? String(error)) };
@@ -22470,7 +22495,7 @@ async function removeTree(tree, removal, engine, signal, bridge, known) {
         if (refused !== null)
           throw new Error(refused);
       } else {
-        const id = await projectOf(engine, tree.project, signal);
+        const id = await projectOf2(engine, tree.project, signal);
         await call(engine, "DELETE", "/api/worktree", { projectID: id, directory: tree.root, force }, signal, tree.project);
       }
     }
@@ -25362,18 +25387,17 @@ var projectsNote = (primary, folders) => `This project spans several folders. Yo
 ${folders.map((folder) => `- ${path88.basename(folder)}: ${folder}`).join(`
 `)}
 When the user mentions one of these folders by name, they mean that folder.`;
-function projectOf2(folder) {
+function projectOf3(folder) {
   if (folder === CHATS)
     return null;
-  const tree = readWorktrees().find((each) => (each.folder ?? each.root) === folder);
-  const directory = tree?.project ?? folder;
+  const directory = projectOf(folder);
   const known = readProjects().find((each) => each.directory === directory);
-  if (!known && !tree && fs84.existsSync(PROJECTS_FILE)) {
+  if (!known && directory === folder && fs84.existsSync(PROJECTS_FILE)) {
     try {
       changeProjects((projects) => projects.some((each) => each.directory === directory) ? projects : [{ directory, folders: [] }, ...projects]);
     } catch {}
   }
-  return { name: known?.name ?? path88.basename(directory), folders: tree ? [] : known?.folders ?? [] };
+  return { name: known?.name ?? path88.basename(directory), folders: directory !== folder ? [] : known?.folders ?? [] };
 }
 function findProject(named) {
   const written = named.trim().replace(/^~(?=$|\/)/, homeFolder());
@@ -25534,7 +25558,7 @@ async function startSession(given, by, place) {
   };
   let madeTree = null;
   if (given.worktree === true) {
-    const project = projectDirectory ?? (folder !== CHATS ? readWorktrees().find((each) => (each.folder ?? each.root) === folder)?.project ?? folder : null);
+    const project = projectDirectory ?? (folder !== CHATS ? projectOf(folder) : null);
     if (!project) {
       giveBack();
       return no(400, "A chat has no worktree: give a project.");
@@ -25557,7 +25581,7 @@ async function startSession(given, by, place) {
   const asBefore = Boolean(from && !from.stored && wanted === starters && !bot);
   const applied = asBefore ? wanted : effectiveApproval(wanted, { agents }).approval;
   const got = applied !== (requested ?? wanted) && lowerOf(applied, requested ?? wanted) === applied ? applied : undefined;
-  const project = projectOf2(folder);
+  const project = projectOf3(folder);
   const title = typeof given.title === "string" && given.title.trim() ? given.title.trim() : null;
   const rules = rulesFor(applied, parent, project?.folders ?? []);
   const agent = given.mode === "plan" || given.mode === "build" ? given.mode : parent?.agent ?? null;
@@ -27284,7 +27308,7 @@ import fs89 from "node:fs";
 import path94 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "0.9.206";
+var BRIDGE_VERSION = "0.9.207";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {

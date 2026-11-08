@@ -252,9 +252,17 @@ final class Workspace {
         var base: String?
     }
 
-    /// The project a folder sessions run in belongs to: its own, or a worktree's project.
+    /// The project each worktree folder belongs to, by the folder its sessions run in, as each box
+    /// says (`worktrees` in `kuvo/projects`): the rule every client files sessions by.
+    private var boxWorktreeProjects: [String: String] = [:] {
+        didSet { projectsChanged() }
+    }
+
+    /// The project a folder sessions run in belongs to: a worktree's as its box says, else as this
+    /// Mac keeps them (a box from before: those two can go once every box says, bridge 0.9.207),
+    /// else its own.
     func projectDirectory(_ directory: String) -> String {
-        worktrees[directory]?.project ?? removedWorktrees[directory] ?? directory
+        boxWorktreeProjects[directory] ?? worktrees[directory]?.project ?? removedWorktrees[directory] ?? directory
     }
 
     func projectDirectory(of session: Session) -> String {
@@ -1403,7 +1411,9 @@ final class Workspace {
     func noteMadeBy(_ folder: String, _ maker: MadeBy) { demoMadeBy[folder] = maker }
     #endif
 
-    private struct BoxProjects: Decodable { var projects: [BoxProject] }
+    /// A box's projects, and the project each of its worktrees' folders belongs to (`worktrees`;
+    /// nil from a box from before).
+    private struct BoxProjects: Decodable { var projects: [BoxProject]; var worktrees: [String: String]? }
 
     /// The box a folder's on: a machine's id, or this Mac's.
     static func box(of directory: String) -> String { RemoteFolder.machine(of: directory) ?? BoxClient.mac }
@@ -1442,7 +1452,8 @@ final class Workspace {
             }
             await self.send(on: box, through: client)
             guard let listed = await Self.projects(of: client) else { return }
-            self.take(listed, from: box)
+            self.take(listed.projects, from: box)
+            self.take(worktreeProjects: listed.worktrees, from: box)
         }
     }
 
@@ -1468,7 +1479,11 @@ final class Workspace {
                         guard let listed = try? JSONDecoder().decode(BoxProjects.self, from: line) else { continue }
                         // One it couldn't read as it connected: what's kept here goes to it first.
                         guard Self.keepsProjects(box) else { await loadProjects(on: box); continue }
-                        await inTurn { if !self.isAway(box) { self.take(listed.projects, from: box) } }
+                        await inTurn {
+                            guard !self.isAway(box) else { return }
+                            self.take(listed.projects, from: box)
+                            self.take(worktreeProjects: listed.worktrees, from: box)
+                        }
                     }
                 } catch let refusal as BoxRefusal {
                     older = refusal.status == 404
@@ -1479,8 +1494,17 @@ final class Workspace {
         }
     }
 
-    private static func projects(of client: BoxClient) async -> [BoxProject]? {
-        try? await client.value(BoxProjects.self, "GET", "kuvo/projects").projects
+    private static func projects(of client: BoxClient) async -> BoxProjects? {
+        try? await client.value(BoxProjects.self, "GET", "kuvo/projects")
+    }
+
+    /// `box`'s word on which project each of its worktrees' folders belongs to, here, in place of
+    /// what it said before; nothing from a box from before, which leaves what this Mac keeps.
+    private func take(worktreeProjects listed: [String: String]?, from box: String) {
+        guard let listed else { return }
+        var mine = boxWorktreeProjects.filter { Self.box(of: $0.key) != box }
+        for (folder, project) in listed { mine[Self.here(folder, on: box)] = Self.here(project, on: box) }
+        if mine != boxWorktreeProjects { boxWorktreeProjects = mine }
     }
 
     /// What's changed here for `box`, sent as it is here: taken off the list once the box has it,

@@ -47,6 +47,28 @@ export function readRemovedWorktrees(): Record<string, string> {
   }
 }
 
+/** The project each worktree folder here belongs to, by the folder its sessions run in (a
+ * worktree's top folder too): those this box keeps, those removed that can come back, and those
+ * removed before, so a session that ran in one is still filed under its project. The one rule
+ * every client and this box's own notices go by. */
+export function worktreeProjects(): Record<string, string> {
+  // Read once: followers ask each second.
+  let kept: { worktrees?: unknown; removed?: unknown; restorable?: unknown } = {};
+  try { kept = JSON.parse(fs.readFileSync(WORKTREES_FILE, "utf8")) ?? {}; } catch {}
+  const projects: Record<string, string> = {};
+  if (isObject(kept.removed)) for (const [folder, project] of Object.entries(kept.removed)) if (typeof project === "string") projects[folder] = project;
+  const records = (list: unknown) => (Array.isArray(list) ? list.filter(each => typeof each?.root === "string" && typeof each?.project === "string") as WorktreeRecord[] : []);
+  for (const tree of records(kept.restorable)) projects[tree.folder ?? tree.root] = tree.project;
+  for (const tree of records(kept.worktrees)) {
+    projects[tree.root] = tree.project;
+    projects[tree.folder ?? tree.root] = tree.project;
+  }
+  return projects;
+}
+
+/** The project a folder sessions run in belongs to: a worktree's, or its own. */
+export const projectOf = (directory: string): string => worktreeProjects()[directory] ?? directory;
+
 /** A worktree removed here (in Settings, or cleaned up as its last session went) that Restore
  * Worktree can bring back (`restorable` in `box/worktrees.json`): its record, the commit its branch
  * was at (`head`), and, when something in it wasn't committed and a session that ran there was
