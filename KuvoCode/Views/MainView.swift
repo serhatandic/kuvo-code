@@ -259,7 +259,10 @@ struct MainView: View {
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in markViewed() }
         // What follows the panel and the sidebar coming and going, and the sessions in view.
         .background {
-            PaneFollower(tabs: tabs, utilities: utilities, contentWidth: contentWidth, returnKeyboard: returnKeyboard, markViewed: markViewed) { savedTabs = $0 }
+            PaneFollower(tabs: tabs, utilities: utilities, contentWidth: contentWidth, returnKeyboard: returnKeyboard, markViewed: markViewed) {
+                savedTabs = $0
+                tabs.keep()
+            }
         }
         .onChange(of: room, initial: true) { _, room in tabs.room = room }
         // New Project and Edit Project: a popup over whatever's in the window.
@@ -327,6 +330,7 @@ struct MainView: View {
             tabs.startIfEmpty()
             // What changed while the window was away, kept too.
             savedTabs = tabs.saved
+            tabs.keep()
         }
         .onChange(of: workspace.waitingCount, initial: true) { Notifier.shared.setBadge(workspace.waitingCount) }
         .onChange(of: showsBadge) { Notifier.shared.setBadge(workspace.waitingCount) }
@@ -764,7 +768,14 @@ struct MainView: View {
                 Card(title: AppInfo.name, isFocused: focus == .conversation) {
                     AppLogo(size: 16)
                 } content: {
-                    WelcomeView(openFolder: openFolder, newChat: { tabs.newSession(in: Workspace.chatsFolder) }, showProviders: { app.openSettings(.accounts) })
+                    // The welcome only once the sessions are read and none opened: until then
+                    // the latest may still open here, and the welcome would flash first.
+                    if workspace.isLoaded {
+                        WelcomeView(openFolder: openFolder, newChat: { tabs.newSession(in: Workspace.chatsFolder) }, showProviders: { app.openSettings(.accounts) })
+                    } else {
+                        Color.clear
+                            .accessibilityHidden(true)
+                    }
                 }
             }
         }
