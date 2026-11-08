@@ -1891,3 +1891,35 @@ describe("summarizing when you ask (/compact)", () => {
     expect(sessions.messages(id).filter((message) => message.type === "idle").at(-1)).toMatchObject({ outcome: "interrupted" })
   })
 })
+
+describe("Codex, instructions that changed as its thread goes on", () => {
+  test("its folder changed: the thread it goes on with is told what changed, once; unchanged, nothing extra", async () => {
+    codex = new TestCodex(fakeCodex(root, []), root)
+    const agent = codex
+    sessions = new Sessions(new Store(join(root, "sessions")), { find: (id: string | undefined) => (id === agent.providerID ? agent : undefined) } as unknown as Roster, new Auto(root))
+    const id = sessions.create({ title: "Codex", model: { providerID: agent.providerID, id: "gpt-test" }, location: { directory: root } }).id
+    const idles = () => sessions.messages(id).filter((message) => message.type === "idle").length
+    const said = () => sent().filter((message) => message.method === "turn/start").map((message) => message.params.input[0].text as string)
+    const send = async (text: string, turns: number) => {
+      sessions.prompt(id, { id: `msg_codex_told_${turns}`, text, files: [], delivery: "steer" })
+      await until(() => idles() === turns)
+    }
+    sessions.setInstruction(id, "kuvo.worktree", "You work in the worktree at /old/place/tree.")
+    await send("first", 1)
+    // A new thread has them as its developer instructions: no note.
+    expect(sent().find((message) => message.method === "thread/start").params.developerInstructions).toContain("/old/place/tree")
+    expect(said()).toEqual(["first"])
+    sessions.setInstruction(id, "kuvo.worktree", "You work in the worktree at /new/place/tree.")
+    await send("second", 2)
+    // The same thread, loaded again, keeps the ones it started with: what changed goes with the message.
+    expect(sent().filter((message) => message.method === "thread/resume")).toHaveLength(1)
+    const told = said()[1]
+    expect(told).toContain("You work in the worktree at /new/place/tree.")
+    expect(told).toMatch(/Replaced or taken out:\s+You work in the worktree at \/old\/place\/tree\./)
+    expect(told.endsWith("\n\nsecond")).toBe(true)
+    // Not its asking words, which didn't change.
+    expect(told).not.toContain("request_user_input_async")
+    await send("third", 3)
+    expect(said()[2]).toBe("third")
+  })
+})
