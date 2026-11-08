@@ -93,6 +93,8 @@ phone's copies of the Mac's design files, a piece at a time.
   at the size of the text they're in (handed in, as each app sets its own).
 - `CodeLanguage` and `CodeLine`: a code block's language name, and how wide a line of it is set.
 - `FolderIcon`: a project's folder, open or closed.
+- `Flow`: views in rows that wrap when the room runs out, against the leading or trailing edge
+  (a sent message's pictures, chips in a row).
 - `FileKind`: what kind a file is by its name (code, text, data, a picture…) and its symbol, where an
   app shows a file without its own icon.
 - `BrandMark`, `BrandMarkView`: the marks of providers, coding agents, integrations and MCP servers,

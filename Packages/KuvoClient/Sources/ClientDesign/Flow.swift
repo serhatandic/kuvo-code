@@ -2,18 +2,23 @@ import SwiftUI
 
 /// Lays views out in rows that wrap when the room runs out, each row against the leading edge,
 /// or the trailing one (like a sent message's pictures).
-struct Flow: Layout {
-    var alignment: HorizontalAlignment = .leading
-    var spacing: CGFloat
+public struct Flow: Layout {
+    public var alignment: HorizontalAlignment = .leading
+    public var spacing: CGFloat
 
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+    public init(alignment: HorizontalAlignment = .leading, spacing: CGFloat) {
+        self.alignment = alignment
+        self.spacing = spacing
+    }
+
+    public func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
         let rows = rows(for: subviews, width: proposal.width ?? .infinity)
         let width = rows.map(\.width).max() ?? 0
         let height = rows.map(\.height).reduce(0, +) + spacing * CGFloat(max(rows.count - 1, 0))
         return CGSize(width: width, height: height)
     }
 
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+    public func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
         var y = bounds.minY
         for row in rows(for: subviews, width: bounds.width) {
             var x = alignment == .trailing ? bounds.maxX - row.width : bounds.minX
@@ -27,7 +32,7 @@ struct Flow: Layout {
     }
 
     /// `.firstRowCenter` is the middle of its first row, to line a label up with it.
-    func explicitAlignment(of guide: VerticalAlignment, in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGFloat? {
+    public func explicitAlignment(of guide: VerticalAlignment, in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGFloat? {
         guard guide == .firstRowCenter, let first = rows(for: subviews, width: bounds.width).first else { return nil }
         return bounds.minY + first.height / 2
     }
@@ -59,5 +64,5 @@ extension VerticalAlignment {
     }
 
     /// A `Flow`'s first row's middle; the middle of anything else.
-    nonisolated static let firstRowCenter = VerticalAlignment(FirstRowCenter.self)
+    nonisolated public static let firstRowCenter = VerticalAlignment(FirstRowCenter.self)
 }
