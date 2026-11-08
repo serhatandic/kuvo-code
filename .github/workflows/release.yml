@@ -102,26 +102,44 @@ jobs:
   release:
     name: build and publish
     needs: verify
-    runs-on: xcode-27
+    # Tags and dry runs from main run on the Mac mini, in a fresh VM, like ci.yml's job (which
+    # says why).
+    runs-on: >-
+      ${{ github.repository == 'serhatandic/kuvo-code'
+          && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+          && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+          && vars.KUVO_MINI != 'off'
+          && fromJSON('["self-hosted", "macOS", "ARM64", "kuvo-mini"]')
+          || 'xcode-27' }}
+    # Notarization usually takes minutes; a hung one mustn't hold the Mini for hours.
+    timeout-minutes: 180
     permissions:
       contents: write
+    # Each secret goes only to the steps that use it, not to the actions (checkout, setup-node,
+    # upload-artifact) as well.
     env:
-      GH_TOKEN: ${{ github.token }}
-      MACOS_CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
-      MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+      # The certificate's fingerprint, which names it; not a key.
       MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
-      APPLE_ID: ${{ secrets.APPLE_ID }}
-      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-      APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
-      SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
-      KUVO_BOX_SIGNING_KEY: ${{ secrets.KUVO_BOX_SIGNING_KEY }}
+      HAS_BOX_SIGNING_KEY: ${{ secrets.KUVO_BOX_SIGNING_KEY != '' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
+      # For signing the box release (scripts/sign-box.mjs), the same pinned Node everywhere.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
       - name: Choose the version
         shell: bash
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+          MACOS_CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
         run: |
           set -euo pipefail
           # Without the update key, installed copies could never update past this release.
@@ -153,6 +171,9 @@ jobs:
 
       - name: Import the signing certificate
         shell: bash
+        env:
+          MACOS_CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
         run: |
           set -euo pipefail
           keychain="$RUNNER_TEMP/signing.keychain-db"
@@ -181,6 +202,10 @@ jobs:
 
       - name: Notarize
         shell: bash
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
         run: |
           set -euo pipefail
           ditto -c -k --keepParent "build/Kuvo Code.app" "$RUNNER_TEMP/notarize.zip"
@@ -194,6 +219,10 @@ jobs:
       # It's notarized on its own, so it opens without a warning too.
       - name: Build the disk image
         shell: bash
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
         run: |
           set -euo pipefail
           SIGN_IDENTITY="$MACOS_SIGNING_IDENTITY" ./scripts/build-dmg.sh
@@ -204,6 +233,9 @@ jobs:
 
       - name: Package
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
         run: |
           set -euo pipefail
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "build/Kuvo Code.app/Contents/Info.plist")" = "$VERSION"
@@ -239,8 +271,10 @@ jobs:
         # "Updates"): the files this version puts on every machine, packed, and boxes.json, a
         # manifest naming the pack and the engine's Linux builds, signed. Without the key, there's
         # none, and machines update only as a Mac connects.
-        if: env.KUVO_BOX_SIGNING_KEY != ''
+        if: env.HAS_BOX_SIGNING_KEY == 'true'
         shell: bash
+        env:
+          KUVO_BOX_SIGNING_KEY: ${{ secrets.KUVO_BOX_SIGNING_KEY }}
         run: |
           set -euo pipefail
           "build/Kuvo Code.app/Contents/MacOS/Kuvo Code" --write-box-files "$RUNNER_TEMP/box"
@@ -261,6 +295,8 @@ jobs:
       - name: Publish the release
         if: github.event_name == 'push'
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
