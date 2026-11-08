@@ -279,6 +279,11 @@ final class ClaudeProvider: ProviderRuntime {
         )
 
         var warning: String?
+        // The host states Claude's limits itself, one row per login (`HostLimits`, fork addition):
+        // Anthropic isn't asked here as well, which would only count against the same hold.
+        if HostLimits.shared.covers(provider.id) {
+            return await snapshotWithLocalUsage(mapped: mapped, warning: nil)
+        }
         switch authStore.liveUsageAvailability(state) {
         case .available:
             mapped = try await fetchLiveUsage(

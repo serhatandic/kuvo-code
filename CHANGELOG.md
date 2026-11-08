@@ -16,6 +16,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ### All Changes
 
+- The usage panel in the menu bar shows a bar for each account you're signed in to in Kuvo Code, two Claude logins as two bars ("Claude", "Claude · Work"), and a machine's accounts with its name after. Each computer reads its own accounts' limits, with the sign-ins you made in Kuvo Code, never your own Claude Code in Terminal, and keeps reading them with Kuvo Code closed. Agents can read them too (`plan_limits`), to pace long work.
 - An agent that writes to a session it started on another of your computers and waits for the answer now gets that answer once. Before, the same answer also came again later as "[Session finished]".
 - Kuvo Code opens again on the conversation you were in when you quit, from the first moment, instead of the latest session after a flash of the welcome screen. A conversation on a machine that isn't connected yet shows as connecting.
 - Escape closes a picture you're looking at closer, or answers an ask's Cancel, before it stops the agent at work. Before, Escape with a picture open stopped the agent and left the picture there.

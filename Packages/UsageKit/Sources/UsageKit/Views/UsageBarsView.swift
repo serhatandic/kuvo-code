@@ -43,6 +43,7 @@ struct UsageBarsView: View {
     @Environment(WidgetDataStore.self) private var dataStore
     @AppStorage(BarMetricSetting.key) private var barMetric = BarMetricSetting.tightest
     @AppStorage(TotalSpendSetting.key) private var showTotalSpend = true
+    private var hostLimits: HostLimits { HostLimits.shared }
     let reorderSpaceName: String
     @Binding var reorderLift: ReorderLift?
     /// The provider whose full card is open under its bar.
@@ -61,25 +62,20 @@ struct UsageBarsView: View {
                 SpendBar()
                     .padding(.bottom, 4)
             }
-            ForEach(layout.displayGroups) { group in
+            ForEach(entries) { entry in
                 VStack(alignment: .leading, spacing: 0) {
-                    ProviderBar(
-                        provider: group.provider,
-                        reading: reading(for: group),
-                        notice: dataStore.headerNotice(for: group.provider.id),
-                        isExpanded: expanded == group.id
-                    )
-                    .onTapGesture { toggle(group.id) }
-                    .contextMenu { menu(for: group) }
-                    if expanded == group.id || fold?.closing == group.id {
+                    bar(entry)
+                        .onTapGesture { toggle(entry.id) }
+                        .contextMenu { menu(for: entry) }
+                    if expanded == entry.id || fold?.closing == entry.id {
                         // As tall as the panel has made room for, laid out with the window's own
                         // height, so the bars below never run under the footer or past the
                         // window's edge, however the window keeps up; cut at its bottom edge. The
                         // space above it folds with it.
-                        detail(group)
+                        detail(entry)
                             .fixedSize(horizontal: false, vertical: true)
-                            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { measured(group.id, $0) }
-                            .containerRelativeFrame(.vertical, alignment: .top) { length, _ in shown(group.id, in: length) }
+                            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { measured(entry.id, $0) }
+                            .containerRelativeFrame(.vertical, alignment: .top) { length, _ in shown(entry.id, in: length) }
                             .clipped()
                             .transition(.fold)
                     }
@@ -87,13 +83,13 @@ struct UsageBarsView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .animation(Motion.spring, value: layout.displayGroups.map(\.provider.id))
+        .animation(Motion.spring, value: entries.map(\.id))
         // A fold the panel closed on is over: the card is open or not, as it was going.
         .onChange(of: popoverIsVisible) { _, isVisible in
             if !isVisible { fold = nil }
         }
         // Nor one whose bar went, or the panel moving to another page.
-        .onChange(of: layout.displayGroups.map(\.id)) { _, ids in
+        .onChange(of: entries.map(\.id)) { _, ids in
             if let fold, ![fold.opening, fold.closing].compactMap({ $0 }).allSatisfy(ids.contains) { self.fold = nil }
         }
         .onChange(of: layout.screen) { fold = nil }
@@ -105,16 +101,70 @@ struct UsageBarsView: View {
             for _ in 0..<8 {
                 try? await Task.sleep(for: .seconds(wait))
                 guard !Task.isCancelled else { return }
-                guard let first = layout.displayGroups.first?.id else { continue }
+                guard let first = entries.first?.id else { continue }
                 toggle(first)
             }
         }
         #endif
     }
 
-    private func detail(_ group: ProviderGroup) -> some View {
-        ProviderBarDetail(group: group)
+    /// The panel's providers, and the host's rows in place of those it covers (`HostLimits`).
+    private var entries: [BarsEntry] {
+        hostLimits.entries(groups: layout.displayGroups, known: { id in container.providers.first { $0.provider.id == id }?.provider }) { id in
+            container.availability.isKnownConnected(id) && !container.enablement.isEnabled(id)
+        }
+    }
+
+    @ViewBuilder
+    private func bar(_ entry: BarsEntry) -> some View {
+        switch entry {
+        case .group(let group):
+            ProviderBar(
+                provider: group.provider,
+                reading: reading(for: group),
+                notice: dataStore.headerNotice(for: group.provider.id),
+                isExpanded: expanded == entry.id
+            )
+        case .host(let row, let provider):
+            ProviderBar(
+                provider: Provider(id: provider.id, displayName: row.name, icon: provider.icon, links: provider.links),
+                reading: hostReading(row),
+                notice: row.notice,
+                isExpanded: expanded == entry.id
+            )
+        }
+    }
+
+    @ViewBuilder
+    private func detail(_ entry: BarsEntry) -> some View {
+        switch entry {
+        case .group(let group):
+            ProviderBarDetail(group: group)
+                .padding(.vertical, 4)
+        case .host(let row, let provider):
+            BarDetailContent(
+                provider: provider,
+                plan: row.plan,
+                notice: row.notice,
+                staleness: HostLimitData.staleness(row),
+                rows: HostLimitData.rows(row, store: dataStore),
+                links: provider.visibleLinks,
+                refresh: hostLimits.refresh,
+                toggleMeterStyle: { dataStore.meterStyle.toggle() },
+                toggleResetDisplay: { dataStore.resetDisplayMode.toggle() }
+            )
             .padding(.vertical, 4)
+        }
+    }
+
+    /// The meter a host row's bar shows, as the panel's own pick it.
+    private func hostReading(_ row: HostLimitRow) -> WidgetData? {
+        let rows = HostLimitData.rows(row, store: dataStore)
+        let meters = rows.filter(\.isBounded)
+        switch barMetric {
+        case .first: return meters.first ?? rows.first
+        case .tightest: return meters.min { $0.remainingFraction < $1.remainingFraction } ?? rows.first
+        }
     }
 
     /// A card opening (`opening`), folding (`closing`), or one for the other, with the panel; once
@@ -188,6 +238,20 @@ struct UsageBarsView: View {
             return meters.first ?? rows.first
         case .tightest:
             return meters.min { $0.remainingFraction < $1.remainingFraction } ?? rows.first
+        }
+    }
+
+    @ViewBuilder
+    private func menu(for entry: BarsEntry) -> some View {
+        switch entry {
+        case .group(let group):
+            menu(for: group)
+        case .host(_, let provider):
+            Button("Hide \(provider.displayName)") {
+                container.enablement.setEnabled(false, for: provider.id)
+            }
+            Divider()
+            Button("Refresh") { hostLimits.refresh?() }
         }
     }
 

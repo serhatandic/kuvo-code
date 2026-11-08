@@ -40,6 +40,11 @@ here.
   under them; the reading keeps its age (Outdated in the panel, left out of `PlanLimits`), and a
   window that started over since goes.
 
+- **The host's plan limits, one row per login** (`Embedding/HostLimits.swift`): Kuvo Code's boxes
+  read each account's limits with their own sign-ins, and the Bars view draws a bar for each
+  (named "Claude · Work", a machine's with its name after) in place of the panel's own row for
+  that provider; their detail draws the same way. The panel then doesn't read Claude's limits from
+  Anthropic itself (it would only count against the same hold); its spend still counts.
 - **Plan limits for the host** (`Embedding/PlanLimits.swift`): the latest limits of one provider,
   read from what the panel already has, for Kuvo Code to show beside a session.
 - **A card of the host's** (`Embedding/HostCard.swift`): shown at the foot of the dashboard, above
