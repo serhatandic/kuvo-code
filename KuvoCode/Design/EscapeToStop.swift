@@ -31,39 +31,47 @@ struct EscapeToStop: NSViewRepresentable {
             monitor = nil
             guard window != nil else { return }
             monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-                guard let self, let window = self.window, self.takes(event) else { return event }
-                // On top first: a card's Cancel, then what's open over the content, then Find.
-                if window.performKeyEquivalent(with: event) || OverContent.closeTop() || ConversationFind.closeOpen() { return nil }
+                guard let self, let window = self.window, self.isEscape(event) else { return event }
+                // What's open over the content first, wherever the keyboard is (the composer too,
+                // and before AppKit offers Escape to a card's Cancel under it), unless an input
+                // method is composing.
+                if !((window.firstResponder as? NSTextView)?.hasMarkedText() ?? false), OverContent.closeTop() { return nil }
+                guard self.takes(event) else { return event }
+                // Then a card's Cancel, then Find, then the agent stops.
+                if window.performKeyEquivalent(with: event) || ConversationFind.closeOpen() { return nil }
                 guard self.canStop else { return event }
                 self.stop()
                 return nil
             }
         }
 
-        private func takes(_ event: NSEvent) -> Bool {
+        /// Plain Escape in this window, with no sheet over it and voice input not listening (where
+        /// Escape cancels it, in the composer or the voice field).
+        private func isEscape(_ event: NSEvent) -> Bool {
             guard event.keyCode == 53,
                   event.modifierFlags.intersection(.deviceIndependentFlagsMask).subtracting(.capsLock).isEmpty,
                   let window, event.window === window, window.attachedSheet == nil else { return false }
-            // Voice input listening: Escape cancels it, in the composer or the voice field.
-            if AgentMail.shared.app?.dictation.voice != nil { return false }
+            return AgentMail.shared.app?.dictation.voice == nil
+        }
+
+        private func takes(_ event: NSEvent) -> Bool {
+            guard let window else { return false }
             let responder = window.firstResponder
             // Escape is theirs: an input method composing, a field you type in (the composer
-            // closes what's on top and stops on its own), a page, a terminal.
+            // stops on its own), a page, a terminal.
             if let text = responder as? NSTextView, text.isEditable || text.hasMarkedText() { return false }
             if responder is NSTextField || responder is WKWebView { return false }
             if let view = responder as? NSView, String(describing: type(of: view)).contains("Terminal") { return false }
-            return canStop || OverContent.isOpen || ConversationFind.hasOpen
+            return canStop || ConversationFind.hasOpen
         }
     }
 }
 
-/// What's open over the window's content (a picture looked at closer), the latest on top: Escape
-/// closes it before anything under it takes Escape, also when the keyboard didn't follow it in
-/// (it stayed in the composer, which would stop the agent).
+/// What's open over the window's content (a picture looked at closer), the latest on top: the
+/// window's Escape closes it before anything under it takes Escape, also when the keyboard didn't
+/// follow it in (it stayed in the composer, which would stop the agent).
 @MainActor enum OverContent {
     private static var open: [(id: UUID, close: () -> Void)] = []
-
-    static var isOpen: Bool { !open.isEmpty }
 
     static func opened(_ id: UUID, close: @escaping () -> Void) {
         open.removeAll { $0.id == id }

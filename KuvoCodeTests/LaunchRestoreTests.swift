@@ -83,9 +83,13 @@ import Testing
         await first.app.workspace.refresh()
         try await until { first.app.tabs.selection != nil }
         first.app.tabs.choose(.session(harbor))
-        try await until { first.app.tabs.selection == .session(harbor) }
-        // As the window keeps it with each change.
-        first.app.tabs.keep()
+        // Kept by the window as it changes, as in the app.
+        let kept = UserDefaults(suiteName: suite)
+        try await until {
+            first.window.contentView?.layoutSubtreeIfNeeded()
+            TestPulse.beat()
+            return kept?.string(forKey: WindowTabs.keptKey)?.contains(harbor) == true && first.app.tabs.selection == .session(harbor)
+        }
         quit(first.window)
 
         // The next: the harbor from the first frame, while the sessions are still being read.

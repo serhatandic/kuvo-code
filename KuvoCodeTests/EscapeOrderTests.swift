@@ -43,13 +43,12 @@ import Testing
     }
 
     /// Escape, pressed: queued, as a hand's would be, where the app's monitors see it first (the
-    /// window's Escape is one). This window is never key, so AppKit gives it no keys from the
-    /// queue: `inTheWindow` hands it what has the keyboard as AppKit does the key window.
-    private func pressEscape(inTheWindow: Bool = false) async throws {
+    /// window's Escape is one). (This window is never key, so AppKit gives it nothing the monitors
+    /// let through.)
+    private func pressEscape() async throws {
         let escape = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
                                       windowNumber: window.windowNumber, context: nil, characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}",
                                       isARepeat: false, keyCode: 53)!
-        if inTheWindow { return window.sendEvent(escape) }
         NSApp.postEvent(escape, atStart: false)
         let handled = TestClick()
         NSApp.postEvent(handled.marker(in: window), atStart: false)
@@ -113,12 +112,14 @@ import Testing
         #expect(stops.count == 1)
     }
 
-    /// The composer with the keyboard while a picture is open (it opened from the composer, and
-    /// the keyboard didn't follow it in): Escape closes the picture, then stops the agent.
-    @Test func escapeInTheComposerClosesThePictureFirst() async throws {
+    /// The composer with the keyboard while a picture is open over an ask's card (it opened from
+    /// the composer, and the keyboard didn't follow it in): Escape closes the picture, and neither
+    /// answers the card under it nor stops the agent.
+    @Test func escapeInTheComposerClosesThePictureBeforeACardUnderIt() async throws {
         defer { done() }
+        final class Cancels { var count = 0 }
         let app = AppModel()
-        let stops = stops
+        let cancels = Cancels(), stops = stops
         let composer = Composer(session: "ses_escape", text: .constant(""), files: .constant([]), quotes: .constant([]), quoteFocus: nil,
                                 agent: "build", approval: .fullAccess, model: nil, isRunning: true, keywords: [],
                                 onSelectAgent: { _ in }, onSelectApproval: { _ in }, onSelectModel: { _ in }, onSend: {}, onStop: { stops.count += 1 })
@@ -126,27 +127,30 @@ import Testing
             .environment(app)
             .environment(app.workspace)
             .environment(app.catalog)
-            .frame(width: 700, height: 200, alignment: .bottom)
-            .overlay { ImageViewerOverlay() }
-        window.contentView = NSHostingView(rootView: composer)
+        let view = VStack {
+            Button("Don’t Allow") { cancels.count += 1 }.keyboardShortcut(.cancelAction)
+            composer
+        }
+        .frame(width: 700, height: 300, alignment: .bottom)
+        .background(EscapeToStop(canStop: true) { stops.count += 1 })
+        .overlay { ImageViewerOverlay() }
+        window.contentView = NSHostingView(rootView: view)
         func field() -> MessageTextView? {
             window.contentView?.layoutSubtreeIfNeeded()
             TestPulse.beat()
             return all(in: window.contentView).first { $0.accessibilityIdentifier() == "composer" }
         }
         try await until { field()?.window != nil }
+        try await settled()
         let text = try #require(field())
-        window.makeFirstResponder(text)
 
         ImageViewer.shared.show([.local(try picture())])
         window.makeFirstResponder(text)
         #expect(window.firstResponder === text, "the composer has the keyboard")
-        try await pressEscape(inTheWindow: true)
+        try await pressEscape()
         #expect(ImageViewer.shared.request == nil, "the picture closes")
+        #expect(cancels.count == 0, "the card under it isn't answered")
         #expect(stops.count == 0, "and the agent goes on")
-
-        try await pressEscape(inTheWindow: true)
-        #expect(stops.count == 1)
     }
 
     private func all(in view: NSView?) -> [MessageTextView] {
