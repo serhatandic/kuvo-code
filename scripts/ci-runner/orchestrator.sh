@@ -39,6 +39,18 @@ mkdir -p "$LOG_DIR" "$GH_CONFIG_DIR" "$TART_DIR"
 chmod 700 "$TART_DIR"
 
 log() { printf '%s %s\n' "$(date -u +%FT%TZ)" "$*"; }
+
+# One orchestrator at a time: a second would take the first's VM for one left from a crash.
+LOCK="$TART_DIR/orchestrator.lock"
+if ! mkdir "$LOCK" 2>/dev/null; then
+    other="$(cat "$LOCK/pid" 2>/dev/null)"
+    if [[ "$other" =~ ^[0-9]+$ ]] && ps -o command= -p "$other" 2>/dev/null | grep -q 'orchestrator\.sh'; then
+        log "Another orchestrator is running (PID $other): leaving it be."
+        exit 0
+    fi
+    log "Taking over the lock of an orchestrator that's gone (PID ${other:-unknown})."
+fi
+echo $$ > "$LOCK/pid"
 # A sleep that a stop (launchd's TERM) cuts short: bash runs a trap only between commands.
 nap() {
     sleep "$1" &
@@ -70,25 +82,34 @@ end_job() {
     if [[ -n "$exec_pid" ]]; then wait "$exec_pid" 2>/dev/null; fi
     if [[ -n "$vm_pid" ]] && kill -0 "$vm_pid" 2>/dev/null; then kill "$vm_pid" 2>/dev/null; fi
     if [[ -n "$vm_pid" ]]; then wait "$vm_pid" 2>/dev/null; fi
-    if [[ -n "$vm" ]]; then tart delete "$vm" >/dev/null 2>&1 && log "[$vm] deleted"; fi
+    if [[ -n "$vm" ]]; then
+        if tart delete "$vm" >/dev/null 2>&1; then log "[$vm] deleted"; else log "[$vm] couldn't delete it: trying again before the next VM"; fi
+    fi
     # A runner that never finished a job is still registered: take it off GitHub.
     if [[ -n "$runner_id" && -z "$job_done" ]]; then
         api -X DELETE "repos/$REPOSITORY/actions/runners/$runner_id" >/dev/null 2>&1 || true
     fi
     vm="" vm_pid="" exec_pid="" runner_id="" check_pid="" job_done="" job_taken=""
 }
-trap 'log "Stopping."; end_job; exit 0' TERM INT HUP
+trap 'log "Stopping."; end_job; rm -rf "$LOCK"; exit 0' TERM INT HUP
 
-# What a crash or a restart left: VMs of ours (by their name, in ci's own Tart home), runners of
-# ours GitHub still lists as offline, logs older than a week.
-clean_leftovers() {
-    local name id
+# Job VMs left from before (by their name, in ci's own Tart home): from a crash or a restart, or
+# one that couldn't be deleted. Nothing of a job outlives it, so this runs before each VM; it
+# fails when one is still there.
+clean_vms() {
+    local name left=""
     while IFS= read -r name; do
         [[ "$name" == kuvo-ci-job-* ]] || continue
         log "Deleting a VM left from before: $name"
         tart stop "$name" --timeout 5 >/dev/null 2>&1 || true
-        tart delete "$name" >/dev/null 2>&1 || true
+        tart delete "$name" >/dev/null 2>&1 || { log "Couldn't delete $name."; left=1; }
     done < <(tart list --source local --quiet 2>/dev/null)
+    [[ -z "$left" ]]
+}
+
+# At the start: runners of ours GitHub still lists as offline, logs older than a week.
+clean_leftovers() {
+    local id
     while IFS= read -r id; do
         [[ "$id" =~ ^[0-9]+$ ]] || continue
         log "Taking an offline runner left from before off GitHub: $id"
@@ -112,9 +133,16 @@ take_golden() {
     rm -rf "$TART_DIR/vms/$GOLDEN"
     mv "$TART_DIR/vms/$GOLDEN-incoming" "$TART_DIR/vms/$GOLDEN"
     printf '%s\n' "$want" > "$LOCAL_VERSION"
-    # GitHub stops giving jobs to runners that are too far behind: a month-old image is due.
+}
+
+# GitHub stops giving jobs to runners that are too far behind: a month-old image is due. Said
+# once a day.
+age_warned=0
+warn_old_golden() {
+    ((SECONDS - age_warned > 86400 || age_warned == 0)) || return 0
     if [[ -n "$(find "$SHARED/golden-version" -mtime +21 2>/dev/null)" ]]; then
         log "The golden image is over three weeks old: run scripts/ci-runner/build-image.sh (a newer runner, macOS and brew updates)."
+        age_warned=$SECONDS
     fi
 }
 
@@ -133,7 +161,7 @@ check_job() { # runner-id vm
     local attempt runs id event branch repo head_repo match
     for attempt in 1 2 3; do
         sleep 5
-        runs="$(api "repos/$REPOSITORY/actions/runs?status=in_progress&per_page=20" \
+        runs="$(api "repos/$REPOSITORY/actions/runs?status=in_progress&per_page=100" \
             --jq '.workflow_runs[] | "\(.id) \(.event) \(.head_branch) \(.repository.full_name) \(.head_repository.full_name)"' 2>/dev/null)" || continue
         while read -r id event branch repo head_repo; do
             [[ -n "$id" ]] || continue
@@ -154,24 +182,32 @@ check_job() { # runner-id vm
 }
 
 # Takes an idle VM's runner off GitHub first: if GitHub has just given it a job, it refuses
-# (busy), and the job goes on.
+# (busy, HTTP 422), and the job goes on. Any other failure (GitHub down, the token expired) stops
+# the VM anyway; the runner, offline then, goes at the next start.
 retire_idle_runner() {
-    if api -X DELETE "repos/$REPOSITORY/actions/runners/$runner_id" >/dev/null 2>&1; then
+    local out
+    if out="$(api -X DELETE "repos/$REPOSITORY/actions/runners/$runner_id" 2>&1)"; then
         runner_id=""
         return 0
     fi
-    return 1
+    [[ "$out" != *"HTTP 422"* ]] || return 1
+    log "[$vm] couldn't take runner $runner_id off GitHub (${out:0:200}); stopping the VM anyway"
+    runner_id=""
+    return 0
 }
 
 # One VM, one job. Returns 0 when the runner took a job, 2 when its VM was retired while idle
 # (paused, or a new golden image), 1 for anything else (no boot, GitHub refusing, a runner that
 # stopped without a job).
 one_job() {
-    local encoded line job_started="" fifo jit retired=""
+    local encoded line job_started="" fifo jit retired="" flags
+    flags="$(vm_run_flags 2>&1)" || { log "No VM: $flags"; return 1; }
     vm="kuvo-ci-job-$(date -u +%Y%m%d-%H%M%S)-$RANDOM"
     tart clone "$GOLDEN" "$vm" || { log "[$vm] couldn't clone $GOLDEN"; vm=""; return 1; }
-    # shellcheck disable=SC2046 # the flags are words of their own
-    tart run $(vm_run_flags) "$vm" > "$LOG_DIR/$vm.log" 2>&1 &
+    # Paused meanwhile (pause_ci looks for a VM a moment after making the file): no VM.
+    [[ ! -e "$PAUSED" ]] || return 2
+    # shellcheck disable=SC2086 # the flags are words of their own
+    tart run $flags "$vm" > "$LOG_DIR/$vm.log" 2>&1 &
     vm_pid=$!
     log "[$vm] booting ($VM_CPUS CPUs, $VM_MEMORY_MB MB)"
     local tries=0
@@ -183,6 +219,7 @@ one_job() {
         fi
         sleep 2
     done
+    [[ ! -e "$PAUSED" ]] || return 2
 
     local label_args=() label
     for label in "${RUNNER_LABELS[@]}"; do label_args+=(-f "labels[]=$label"); done
@@ -254,7 +291,7 @@ one_job() {
 }
 
 prepare_keychain || log "Couldn't prepare a keychain for the VMs; they may not start."
-log "Starting: $REPOSITORY, labels ${RUNNER_LABELS[*]}, $(tart --version), flags: $(vm_run_flags)"
+log "Starting: $REPOSITORY, labels ${RUNNER_LABELS[*]}, Tart $(tart --version), flags: $(vm_run_flags 2>&1)"
 clean_leftovers
 backoff=60
 while :; do
@@ -264,7 +301,9 @@ while :; do
         nap 300
         continue
     fi
+    if ! clean_vms; then nap 300; continue; fi
     if ! take_golden; then nap 300; continue; fi
+    warn_old_golden
     one_job
     result=$?
     end_job

@@ -3,7 +3,8 @@
 # shellcheck disable=SC2329 # cleanup runs from the EXIT trap
 # Boots a throwaway VM from the golden image with the jobs' own flags (common.sh, vm_run_flags)
 # and checks what it can reach: nothing on this Mac (through the VM's real gateway, its LAN or
-# Tailscale address), on the LAN or on Tailscale; GitHub, Apple's notary service and the package
+# Tailscale address), on the LAN, on Tailscale or at the network's public address (the router
+# answers there); GitHub, Apple's notary service and the package
 # registries jobs use. Each "must be blocked" target is tried from this Mac first: one that's
 # closed from here too proves nothing, and counts as inconclusive. It also tries to come in from
 # this Mac. CI pauses while it runs; the VM is deleted after.
@@ -31,11 +32,13 @@ lan_if="$(route -n get default 2>/dev/null | awk '/interface:/ { print $2 }')"
 lan_ip="$(ipconfig getifaddr "$lan_if" 2>/dev/null)"
 router="$(route -n get default 2>/dev/null | awk '/gateway:/ { print $2 }')"
 tailscale_ip="$(ifconfig 2>/dev/null | awk '/inet 100\./ { print $2; exit }')"
+public_ip="$(public_ipv4)"
+flags="$(vm_run_flags)" || exit 1
 
 pause_ci
 tart clone "$IMAGE" "$vm" || exit 1
-# shellcheck disable=SC2046 # the flags are words of their own
-tart run $(vm_run_flags) "$vm" >/dev/null 2>&1 &
+# shellcheck disable=SC2086 # the flags are words of their own
+tart run $flags "$vm" >/dev/null 2>&1 &
 run_pid=$!
 for _ in $(seq 1 90); do tart exec "$vm" /usr/bin/true >/dev/null 2>&1 && break; sleep 2; done
 tart exec "$vm" /usr/bin/true >/dev/null 2>&1 || { echo "The VM didn't boot." >&2; exit 1; }
@@ -61,7 +64,7 @@ blocked_row() { # what, here, vm
 }
 
 echo "VM $vm at ${vm_ip:-?}, its gateway ${gateway:-?}; this Mac: LAN $lan_ip on $lan_if, router $router${tailscale_ip:+, Tailscale $tailscale_ip}"
-echo "Flags: $(vm_run_flags)"
+echo "Flags: $flags"
 echo "tart exec runs as: $(tart exec "$vm" /usr/bin/whoami 2>/dev/null)"
 echo
 echo "From the VM, must be blocked:"
@@ -83,6 +86,10 @@ if [[ -n "$router" ]]; then
         blocked_row "the LAN's router, $router:$port" "$(tcp_here "$router" "$port")" "$(tcp_vm "$router" "$port")"
     done
 fi
+# The router answers on the network's public address too (its admin page, forwarded ports).
+for port in 80 443; do
+    blocked_row "this network's public address, $public_ip:$port" "$(tcp_here "$public_ip" "$port")" "$(tcp_vm "$public_ip" "$port")"
+done
 if [[ -n "$tailscale_ip" ]]; then
     blocked_row "this Mac on Tailscale, $tailscale_ip:5000" "$(tcp_here "$tailscale_ip" 5000)" "$(tcp_vm "$tailscale_ip" 5000)"
     blocked_row "Tailscale's resolver, 100.100.100.100:53" "$(tcp_here 100.100.100.100 53)" "$(tcp_vm 100.100.100.100 53)"

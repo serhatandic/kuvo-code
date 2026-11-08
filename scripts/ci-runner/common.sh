@@ -3,7 +3,7 @@
 # Every job runs in a fresh macOS VM (Tart), cloned from a golden image and deleted after the job:
 #   build-image.sh    you, after a new Xcode: builds the golden image into $SHARED/tart
 #   setup.sh          you, once: installs the orchestrator as ci, with its GitHub token
-#   orchestrator.sh   ci, always (a LaunchAgent): one VM at a time, each with a one-job runner
+#   orchestrator.sh   ci, always (a LaunchDaemon): one VM at a time, each with a one-job runner
 #   check-isolation.sh  boots a throwaway VM with the jobs' network and checks what it can reach
 #   vm/job-started.sh   inside the VM: the runner's pre-job hook, refusing what isn't ours
 # shellcheck shell=bash
@@ -36,9 +36,23 @@ JOB_LIMIT_MINUTES=200
 # link-local. softnet answers DHCP itself before any rule; the guests use public DNS
 # (build-image.sh), since the gateway's isn't reachable. No clipboard, audio or USB passes
 # through, and no folder is shared.
+#
+# This network's own public address is globally routable too, and the router answers on it (its
+# admin page, any port forwarded into the LAN), so it's blocked as well, looked up as each VM
+# starts. vm_run_flags fails when it can't be found, and no VM starts.
 VM_BLOCKED="10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,100.64.0.0/10,169.254.0.0/16"
+public_ipv4() {
+    local ip
+    ip="$(dig -4 +short +time=3 +tries=2 myip.opendns.com A @resolver1.opendns.com 2>/dev/null | tail -1)"
+    [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+        || ip="$(curl -4 -fsS --proto '=https' --max-time 10 https://api.ipify.org 2>/dev/null)"
+    [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 1
+    echo "$ip"
+}
 vm_run_flags() {
-    echo "--no-graphics --no-clipboard --no-audio --no-usb-accessories --net-softnet --net-softnet-block=$VM_BLOCKED"
+    local ip
+    ip="$(public_ipv4)" || { echo "Couldn't find this network's public address to block it." >&2; return 1; }
+    echo "--no-graphics --no-clipboard --no-audio --no-usb-accessories --net-softnet --net-softnet-block=$VM_BLOCKED,$ip/32"
 }
 
 # Apple allows two macOS VMs at once, and this Mac has 16 GB: a VM of your own (an image build,
@@ -52,6 +66,9 @@ pause_ci() {
         touch "$SHARED/paused"
         paused_by_us=1
     fi
+    # The orchestrator looks for the file again just before it boots a VM: give one that was
+    # about to the moment to show up below.
+    sleep 3
     local said=""
     while ci_vm_running; do
         [[ -n "$said" ]] || echo "Waiting for CI's VM to stop (an idle one stops within a minute; a job runs to its end)…"

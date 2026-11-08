@@ -66,10 +66,12 @@ pause_ci
 tart clone "$BASE_IMAGE" "$build"
 tart set "$build" --cpu "$VM_CPUS" --memory "$VM_MEMORY_MB" --disk-size "$VM_DISK_GB"
 
-# Built with softnet too (no LAN, no Tailscale), but with the gateway's DNS: the guest's own
-# public DNS is set below. Nothing is shared with it, as with job VMs.
+# Built on the jobs' own network and flags (common.sh): nothing on this Mac, the LAN or Tailscale,
+# and nothing shared with it.
+flags="$(vm_run_flags)" || fail "No VM without its network's rules."
 log="$(mktemp -t kuvo-ci-build)"
-tart run --no-graphics --no-clipboard --no-audio --no-usb-accessories --net-softnet "$build" > "$log" 2>&1 &
+# shellcheck disable=SC2086 # the flags are words of their own
+tart run $flags "$build" > "$log" 2>&1 &
 run_pid=$!
 
 guest() { tart exec "$build" /bin/bash -lc "set -euo pipefail; $1"; }
@@ -80,6 +82,10 @@ for _ in $(seq 1 120); do
     sleep 2
 done
 guest true || fail "The VM's guest agent never answered."
+
+# Public DNS first, since the gateway's is blocked; Tart's agent needs no network to set it.
+echo "Public DNS…"
+guest 'networksetup -listallnetworkservices | tail -n +2 | sed "s/^\*//" | while IFS= read -r service; do sudo networksetup -setdnsservers "$service" 1.1.1.1 8.8.8.8; done; scutil --dns | grep -m2 nameserver'
 
 echo "Growing its disk to ${VM_DISK_GB} GB…"
 # Cirrus's image grows its container itself as it boots; this is for one that doesn't. Either way
@@ -125,14 +131,13 @@ guest 'sudo mkdir -p /usr/local/kuvo-ci'
 tart exec -i "$build" sudo tee /usr/local/kuvo-ci/job-started.sh < "$here/vm/job-started.sh" >/dev/null
 guest 'sudo chown -R root:wheel /usr/local/kuvo-ci && sudo chmod 755 /usr/local/kuvo-ci/job-started.sh'
 
-echo "Network and services…"
-# Public DNS, since jobs' VMs can't reach the gateway's. Nothing listening for anyone to come in
+echo "Services…"
+# Nothing listening for anyone to come in
 # (softnet lets incoming traffic through): no SSH, Screen Sharing or Remote Management, and the
 # firewall blocking every incoming connection. The host reaches the guest through Tart's agent,
 # over the VM's own socket, not the network. The admin user keeps its password ("admin", from
 # Cirrus Labs' image), which logs it in automatically (the session the app's tests need); with
 # nothing listening, no one can use it from outside.
-guest 'networksetup -listallnetworkservices | tail -n +2 | sed "s/^\*//" | while IFS= read -r service; do sudo networksetup -setdnsservers "$service" 1.1.1.1 8.8.8.8; done; scutil --dns | grep -m2 nameserver'
 guest 'set -e
 for service in com.openssh.sshd com.apple.screensharing; do
     sudo launchctl disable "system/$service"
@@ -155,7 +160,6 @@ tart delete "$GOLDEN.previous" >/dev/null 2>&1 || true
 if tart get "$GOLDEN" >/dev/null 2>&1; then tart rename "$GOLDEN" "$GOLDEN.previous"; fi
 tart rename "$build" "$GOLDEN"
 trap - EXIT
-resume_ci
 # ci reads it (and copies it, as an APFS clone) from here.
 chmod -R a+rX "$SHARED_TART/vms/$GOLDEN"
 version="$(date -u +%Y%m%dT%H%M%SZ) $xcode_version runner $runner_version"
@@ -163,4 +167,5 @@ printf '%s\n' "$version" > "$SHARED/golden-version.new"
 chmod 644 "$SHARED/golden-version.new"
 mv "$SHARED/golden-version.new" "$SHARED/golden-version"
 rm -f "$log"
+resume_ci
 echo "Built $GOLDEN: $version. The orchestrator takes it before its next job."
