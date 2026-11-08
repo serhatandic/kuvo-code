@@ -158,8 +158,18 @@ export class CodexAgent implements Agent {
     read: () => this.readLimits(),
   }
 
-  private async readLimits(): Promise<LimitReading> {
+  /** Its limits were read once since the box started. */
+  private limitsRead = false
+
+  /**
+   * Read once as the box starts, then only while Codex runs here anyway (an app-server is up): a
+   * read never keeps one running, nor starts one for an account nobody uses. Between, what its turns
+   * hear keeps them current.
+   */
+  private async readLimits(): Promise<LimitReading | null> {
     if (!this.executable()) throw new LimitsProblem("none", "Codex isn't installed here.")
+    if (this.limitsRead && ![...this.slots.values()].some((slot) => slot.server && !slot.server.isClosed)) return null
+    this.limitsRead = true
     let rpc: RPC
     let account: any
     try {

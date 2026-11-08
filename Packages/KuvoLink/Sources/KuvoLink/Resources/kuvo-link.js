@@ -25831,6 +25831,8 @@ function since(at, now) {
 function windowName(window) {
   const minutes = typeof window.minutes === "number" ? window.minutes : undefined;
   const length = minutes === 300 ? "5-hour window" : minutes === 10080 ? "weekly limit" : minutes && minutes >= 40000 && minutes <= 45000 ? "monthly limit" : minutes ? `${minutes >= 1440 ? `${Math.round(minutes / 1440)}-day` : `${Math.round(minutes / 60)}-hour`} window` : "limit";
+  if (typeof window.name === "string" && window.name)
+    return window.name;
   return typeof window.model === "string" && window.model ? `${window.model} ${length}` : length;
 }
 function describePlanLimits(data, now = Date.now()) {

@@ -40,6 +40,7 @@ function since(at: number, now: number): string {
 function windowName(window: Record<string, unknown>): string {
   const minutes = typeof window.minutes === "number" ? window.minutes : undefined;
   const length = minutes === 300 ? "5-hour window" : minutes === 10_080 ? "weekly limit" : minutes && minutes >= 40_000 && minutes <= 45_000 ? "monthly limit" : minutes ? `${minutes >= 1440 ? `${Math.round(minutes / 1440)}-day` : `${Math.round(minutes / 60)}-hour`} window` : "limit";
+  if (typeof window.name === "string" && window.name) return window.name;
   return typeof window.model === "string" && window.model ? `${window.model} ${length}` : length;
 }
 

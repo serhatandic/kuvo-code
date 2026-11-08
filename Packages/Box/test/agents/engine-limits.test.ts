@@ -71,7 +71,7 @@ test("each sign-in in Settings › Accounts is a row of its own, read with that 
   expect([chatgpt.get("authorization"), chatgpt.get("chatgpt-account-id")]).toEqual(["Bearer chatgpt-token", "acct_1"])
 
   // Premium requests, as a count; unlimited chat isn't a limit.
-  expect(by["github-copilot"]!.windows.map((w) => [w.id, w.used, w.amount])).toEqual([["premium_interactions", 0.6, { used: 180, limit: 300, unit: "requests" }]])
+  expect(by["github-copilot"]!.windows.map((w) => [w.id, w.name, w.used, w.amount])).toEqual([["premium_interactions", "Premium requests", 0.6, { used: 180, limit: 300, unit: "requests" }]])
   expect(by["github-copilot"]!.plan).toBe("Individual Pro")
   expect(reads.find((read) => read.path === "/copilot")!.headers.get("authorization")).toBe("token gho_token")
 
@@ -79,7 +79,7 @@ test("each sign-in in Settings › Accounts is a row of its own, read with that 
   expect(by.openrouter!.windows).toEqual([])
   expect(by.openrouter!.balance).toEqual({ left: 12.5, unit: "usd" })
 
-  expect(by["zai-coding-plan"]!.windows.map((w) => [w.id, w.used, w.minutes, w.model ?? null])).toEqual([["session", 0.12, 300, null], ["web_search", 0.4, undefined, "Web searches"]])
+  expect(by["zai-coding-plan"]!.windows.map((w) => [w.id, w.used, w.minutes, w.name ?? null])).toEqual([["session", 0.12, 300, null], ["web_search", 0.4, undefined, "Web searches"]])
   expect(by["opencode-go"]!.windows.map((w) => [w.id, w.used, w.resetsAt ?? null])).toEqual([["rolling", 0.09, Date.parse("2026-11-08T22:00:00.000Z")], ["weekly", 0.21, Date.parse("2026-11-12T00:00:00.000Z")]])
 })
 

@@ -1968,11 +1968,15 @@ describe("the plan's limits a turn hears", () => {
     const limits = new Limits(() => agentAccounts([claude]))
     await limits.tick()
     const { id, first } = await begin()
-    fake.out.push({ type: "rate_limit_event", rate_limit_info: { status: "allowed_warning", rateLimitType: "seven_day", utilization: 0.81, resetsAt: 1_794_200_000, surpassedThreshold: 0.75 } })
+    // As Claude Code 2.1.3xx tells it: every window, from the response's headers.
+    fake.out.push({ type: "rate_limit_event", rate_limit_info: { status: "allowed_warning", rateLimitType: "seven_day", utilization: 0.81, resetsAt: 1_794_200_000, surpassedThreshold: 0.75, unifiedWindows: { five_hour: { utilization: 0.3, resetsAt: 1_794_100_000 }, seven_day: { utilization: 0.81, resetsAt: 1_794_200_000, status: "allowed_warning" } } } })
     await until(() => limits.list().length > 0)
     const [account] = limits.list()
     expect(account!.provider).toBe(provider)
-    expect(account!.windows.map((window) => [window.id, window.used, window.minutes, window.resetsAt, window.source])).toEqual([["seven_day", 0.81, 10_080, 1_794_200_000_000, "turn"]])
+    expect(account!.windows.map((window) => [window.id, window.used, window.minutes, window.resetsAt, window.source])).toEqual([
+      ["five_hour", 0.3, 300, 1_794_100_000_000, "turn"],
+      ["seven_day", 0.81, 10_080, 1_794_200_000_000, "turn"],
+    ])
     fake.result([first])
     await until(() => idles(id).length > 0)
   })

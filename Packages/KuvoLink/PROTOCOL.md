@@ -2715,10 +2715,11 @@ Grok). With none to answer, the goal pauses and says so. A client reaches them a
 
 Each box reads the limits of your plans (a 5-hour window, a week, a model's own week, a month's
 requests) and credits, for each account it runs that's signed in to Kuvo Code: every coding agent's
-accounts (its own sign-in and those you added) and the engine's sign-ins. It reads them with those
-sign-ins only, never a tool's own login elsewhere on the computer (your Claude Code in Terminal, the
-Codex CLI's, the Cursor app's), and never renews a sign-in to do it: the agent or the engine that
-owns it does. The coding agents' bridge reads them, a machine's with the Mac closed too, and keeps
+accounts (its own sign-in and those you added) and the engine's sign-ins. It reads them with the
+sign-in Kuvo Code runs each with, never another login on the computer (your Claude Code in Terminal
+on a Mac, whose box runs Claude with a sign-in of its own; the Cursor app's), and never renews one:
+the agent or the engine that owns it does. (On a Mac, Codex's and Grok's own sign-ins are the ones
+in `~/.codex` and `~/.grok`, as their sessions run with them; on a machine, Kuvo Code's own.) The coding agents' bridge reads them, a machine's with the Mac closed too, and keeps
 the last reading in its folder (`limits.json`), through a restart. A client reaches them as
 `kuvo/agents/api/kuvo/limits…` (the Mac app at `api/kuvo/limits…` on the bridge itself), while
 `kuvo/info` has `agents: true` (503 otherwise), where `features` has `limits`.
@@ -2734,10 +2735,11 @@ the last reading in its folder (`limits.json`), through a restart. A client reac
     `agent` (`claude`…) and `account` (`default` for its own sign-in, else the ID of one you
     added); `label`, what you called one you added ("Work"); `plan`, in its maker's words ("Max
     20x", "Pro"), when known.
-  - `windows`: each `{id, used, resetsAt?, minutes?, model?, amount?, read, source}`. `id` is its
+  - `windows`: each `{id, used, resetsAt?, minutes?, model?, name?, amount?, read, source}`. `id` is its
     maker's name for it (`five_hour`, `seven_day`, `seven_day_sonnet`, Codex's `primary`); `used`,
     how much of it is gone, 0 to 1; `minutes`, how long it is (300, 10080) when said; `model`, the
-    model it's for ("Sonnet", "Fable"), absent for the whole plan's; `amount`, `{used, limit,
+    model it's for ("Sonnet", "Fable"), absent for the whole plan's; `name`, its maker's name for
+    what it counts where that's neither ("Premium requests", "Web searches"); `amount`, `{used, limit,
     unit}` (`requests`, `usd`, `credits`) where the limit is a count or an amount; `read`, when
     this was read; `source`, `usage` (read from its maker) or `turn` (what a turn heard on the way,
     Claude Code's and Codex's rate-limit events, which keep a window current between reads). A
@@ -2754,17 +2756,22 @@ the last reading in its folder (`limits.json`), through a restart. A client reac
   often as its maker allows and never inside a hold, and answers as `GET` once it's read.
 - The bridge's events (`kuvo/agents/api/event`) carry `kuvo.limits.updated` `{accounts}` each time
   the list changes.
-- What's read: Claude Code's accounts (Kuvo Code's own sign-in: its token on a Mac, Claude Code's
-  file in Kuvo Code's folder on Linux), Codex's (through its app-server) and Grok's (its pool, with
-  the sign-in in its home); of the engine's, ChatGPT's (`openai`, signed in: Codex's windows),
+- What's read: Claude Code's accounts, on Linux from Anthropic with Claude Code's own sign-in in
+  Kuvo Code's folder; on a Mac only from what its turns hear (Claude Code's rate-limit events, every
+  window from each response's headers), as the token Kuvo Code signs in with there can only run
+  Claude, so an account shows once it has had a turn. Codex's, through its app-server: once as the
+  box starts, then only while Codex runs there anyway, with its turns' events between. Grok's pool,
+  with the sign-in in its home; of the engine's, ChatGPT's (`openai`, signed in: Codex's windows),
   SuperGrok's (`xai`, signed in), GitHub Copilot's (the month's premium requests), OpenRouter's (a
   key's cap and the credits left), Z.ai's coding plan and OpenCode Go's. Not yet: Cursor's and
   Antigravity's (the usage panel still shows them on a Mac), nor Ollama's, which ollama.com tells
   only the Ollama app's own signing key.
 - How often: Claude's each 15 minutes, the rest each 10. Anthropic limits these reads for the whole
-  computer, not a sign-in, and holds a reader off longer each time it asks too soon: a 429 holds
-  every Claude account on the box for as long as its `Retry-After` says (an hour with no word,
-  doubling up to six), through a restart.
+  computer, not a sign-in, and holds a reader off longer each time it asks too soon: Claude's
+  accounts are read one a minute, and a 429 holds every one of them on the box for as long as its
+  `Retry-After` says (an hour with no word, doubling up to six), through a restart. A read is kept
+  as asked before it's answered, so a restart meanwhile never asks again; a sign-in that lapsed or
+  can't read its limits isn't asked again until it changes.
 - Agents read them with the tool `plan_limits` (read only): each account's windows, how much is
   used, when each resets and as of when, and why one couldn't be read just now.
 - Times are ms since 1970.

@@ -11,7 +11,7 @@
 // Ollama's isn't read: ollama.com tells its usage only to the Ollama app's own signing key, not to the
 // API key you sign in to Kuvo Code with.
 
-import { LimitsProblem, retryAt, type LimitedAccount, type LimitReading, type LimitsService, type LimitWindow } from "./limits"
+import { fingerprint, LimitsProblem, retryAt, type LimitedAccount, type LimitReading, type LimitsService, type LimitWindow } from "./limits"
 
 type Window = Omit<LimitWindow, "read" | "source">
 
@@ -85,7 +85,14 @@ export class EngineAccounts {
         account = {
           provider: integration,
           service: reader.service,
-          limits: { every: EVERY, read: (now) => this.read(integration, now) },
+          limits: {
+            every: EVERY,
+            read: (now) => this.read(integration, now),
+            signIn: () => {
+              const value = this.credentials.find((each) => each.integrationID === integration)?.value
+              return fingerprint(`${value?.access ?? value?.key ?? ""}:${value?.expires ?? ""}`)
+            },
+          },
         }
         this.made.set(integration, account)
       }
@@ -183,7 +190,7 @@ async function readCopilot(secret: string, _credential: Credential, now: number)
   const resetsAt = date(body?.quota_reset_date) ?? date(body?.limited_user_reset_date)
   const windows: Window[] = []
   const snapshots = body?.quota_snapshots
-  for (const [id, model] of [["premium_interactions", undefined], ["chat", "Chat"], ["completions", "Completions"]] as const) {
+  for (const [id, name] of [["premium_interactions", "Premium requests"], ["chat", "Chat"], ["completions", "Completions"]] as const) {
     const snapshot = snapshots?.[id]
     const entitlement = number(snapshot?.entitlement)
     const remaining = number(snapshot?.remaining)
@@ -197,17 +204,17 @@ async function readCopilot(secret: string, _credential: Credential, now: number)
       used,
       minutes: MONTH,
       ...(resetsAt ? { resetsAt } : {}),
-      ...(model ? { model } : {}),
+      name,
       ...(remaining !== undefined ? { amount: { used: Math.max(0, entitlement - remaining), limit: entitlement, unit: "requests" as const } } : {}),
     })
   }
   // An older free plan's: what's left of the month's.
   if (!snapshots) {
-    for (const [id, model] of [["chat", "Chat"], ["completions", "Completions"]] as const) {
+    for (const [id, name] of [["chat", "Chat"], ["completions", "Completions"]] as const) {
       const limit = number(body?.monthly_quotas?.[id])
       const remaining = number(body?.limited_user_quotas?.[id])
       if (!limit || remaining === undefined) continue
-      windows.push({ id, used: 1 - remaining / limit, minutes: MONTH, model, ...(resetsAt ? { resetsAt } : {}), amount: { used: Math.max(0, limit - remaining), limit, unit: "requests" } })
+      windows.push({ id, used: 1 - remaining / limit, minutes: MONTH, name, ...(resetsAt ? { resetsAt } : {}), amount: { used: Math.max(0, limit - remaining), limit, unit: "requests" } })
     }
   }
   const plan = title(body?.copilot_plan)
@@ -222,7 +229,7 @@ async function readOpenRouter(secret: string, _credential: Credential, now: numb
   const limit = number(key?.limit)
   if (limit && limit > 0) {
     const left = Math.max(0, number(key.limit_remaining) ?? limit - (number(key.usage) ?? 0))
-    windows.push({ id: "key", used: 1 - left / limit, amount: { used: limit - left, limit, unit: "usd" } })
+    windows.push({ id: "key", used: 1 - left / limit, name: "Key limit", amount: { used: limit - left, limit, unit: "usd" } })
   }
   let balance: LimitReading["balance"]
   try {
@@ -260,7 +267,7 @@ async function readZai(secret: string, _credential: Credential, now: number): Pr
       const used = number(entry.currentValue)
       const limit = number(entry.usage)
       if (used === undefined || !limit) continue
-      windows.push({ id: "web_search", used: used / limit, model: "Web searches", ...(resetsAt ? { resetsAt } : {}), amount: { used, limit, unit: "requests" } })
+      windows.push({ id: "web_search", used: used / limit, name: "Web searches", ...(resetsAt ? { resetsAt } : {}), amount: { used, limit, unit: "requests" } })
     }
   }
   return { windows }

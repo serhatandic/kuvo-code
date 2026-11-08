@@ -9865,7 +9865,7 @@ function unzipper() {
 
 // Packages/Box/src/agents/agents/claude.ts
 import { spawn as spawn5 } from "child_process";
-import { createHash as createHash6, randomUUID } from "crypto";
+import { createHash as createHash7, randomUUID } from "crypto";
 import { existsSync as existsSync13, mkdirSync as mkdirSync14, readdirSync as readdirSync12, readFileSync as readFileSync20, renameSync as renameSync11, rmdirSync as rmdirSync2, rmSync as rmSync10, statSync as statSync8, writeFileSync as writeFileSync16 } from "fs";
 import { homedir } from "os";
 import { basename as basename8, dirname as dirname12, join as join22, resolve as resolve6 } from "path";
@@ -10065,11 +10065,8 @@ function homebrewLatest(json, cask) {
   }
 }
 
-// Packages/Box/src/agents/agents/claude-limits.ts
-import { readFileSync as readFileSync19 } from "fs";
-import { join as join21 } from "path";
-
 // Packages/Box/src/agents/limits.ts
+import { createHash as createHash6 } from "crypto";
 import { mkdirSync as mkdirSync13, readFileSync as readFileSync18, renameSync as renameSync10, writeFileSync as writeFileSync15 } from "fs";
 import { dirname as dirname11 } from "path";
 class LimitsProblem extends Error {
@@ -10150,7 +10147,7 @@ class Limits {
     for (const account of this.accounts()) {
       const source = account.limits;
       const entry = this.entries.get(account.provider);
-      if (!entry || this.heldBack(source, entry, at))
+      if (!source.read || !entry || this.heldBack(source, entry, at))
         continue;
       if (entry.checked && at - entry.checked < Math.max(FRESH_ENOUGH, source.every))
         continue;
@@ -10168,6 +10165,7 @@ class Limits {
   }
   async readDue() {
     await this.prepare?.();
+    const asked = new Set;
     for (const account of this.accounts()) {
       const source = account.limits;
       this.listen(account.provider, source);
@@ -10176,6 +10174,8 @@ class Limits {
         entry = { windows: [], next: 0 };
         this.entries.set(account.provider, entry);
       }
+      if (!source.read)
+        continue;
       const at = this.now();
       if (at < entry.next)
         continue;
@@ -10184,24 +10184,42 @@ class Limits {
         entry.next = hold;
         continue;
       }
+      if (source.bucket && asked.has(source.bucket)) {
+        entry.next = at + MINUTE;
+        continue;
+      }
+      if ((entry.problem?.kind === "expired" || entry.problem?.kind === "unreadable") && entry.signIn !== undefined && entry.signIn === source.signIn?.()) {
+        entry.next = at + Math.max(source.every, FIRST_RETRY);
+        continue;
+      }
       await this.readOne(source, entry);
+      if (source.bucket && entry.problem?.kind !== "expired" && entry.problem?.kind !== "unreadable" && entry.problem?.kind !== "none")
+        asked.add(source.bucket);
+      this.changed();
     }
     this.forgetGone();
     this.changed();
   }
   async readOne(source, entry) {
+    const started = this.now();
+    entry.next = Math.max(entry.next, started + source.every);
+    entry.checked = started;
+    this.save();
     try {
-      const reading = await source.read(this.now());
+      const reading = await source.read(started);
       const at = this.now();
       entry.checked = at;
+      entry.next = at + source.every;
+      if (!reading)
+        return;
       entry.plan = reading.plan ?? entry.plan;
       entry.balance = reading.balance;
-      const heard = entry.windows.filter((window) => window.source === "turn" && !reading.windows.some((each) => each.id === window.id));
-      entry.windows = [...reading.windows.map((window) => ({ ...window, used: clamp(window.used), read: at, source: "usage" })), ...heard];
+      const heard = entry.windows.filter((window) => window.source === "turn" && (window.read >= started || !reading.windows.some((each) => each.id === window.id)));
+      entry.windows = [...reading.windows.filter((window) => !heard.some((each) => each.id === window.id)).map((window) => ({ ...window, used: clamp(window.used), read: at, source: "usage" })), ...heard];
       entry.problem = undefined;
+      entry.signIn = undefined;
       entry.refusals = 0;
       entry.failures = 0;
-      entry.next = this.nextRead(at + source.every, entry);
     } catch (caught) {
       const at = this.now();
       entry.checked = at;
@@ -10225,18 +10243,14 @@ class Limits {
           break;
         case "expired":
         case "unreadable":
+          entry.signIn = source.signIn?.();
           entry.next = at + Math.max(source.every, FIRST_RETRY);
           break;
         default:
           entry.failures = (entry.failures ?? 0) + 1;
-          entry.next = at + Math.min(FIRST_RETRY * 2 ** (entry.failures - 1), LONGEST_RETRY);
+          entry.next = at + Math.max(source.every, Math.min(FIRST_RETRY * 2 ** (entry.failures - 1), LONGEST_RETRY));
       }
     }
-  }
-  nextRead(spaced, entry) {
-    const resets = entry.windows.map((window) => window.resetsAt ?? Infinity).filter((at) => at > this.now());
-    const first = Math.min(...resets);
-    return Number.isFinite(first) ? Math.min(spaced, first + MINUTE) : spaced;
   }
   listen(provider, source) {
     if (source.heard)
@@ -10263,6 +10277,8 @@ class Limits {
         delete heard.minutes;
       if (heard.model === undefined)
         delete heard.model;
+      if (heard.name === undefined)
+        delete heard.name;
       if (heard.resetsAt === undefined)
         delete heard.resetsAt;
       entry.windows = before ? entry.windows.map((each) => each.id === window.id ? heard : each) : [...entry.windows, heard];
@@ -10299,13 +10315,17 @@ class Limits {
           this.holds.set(bucket, until);
     } catch {}
   }
+  kept = "";
   save() {
     if (!this.file)
       return;
-    const saved = { accounts: Object.fromEntries(this.entries), holds: Object.fromEntries(this.holds) };
+    const saved = JSON.stringify({ accounts: Object.fromEntries(this.entries), holds: Object.fromEntries(this.holds) });
+    if (saved === this.kept)
+      return;
     try {
       mkdirSync13(dirname11(this.file), { recursive: true });
-      writeFileSync15(this.file + ".new", JSON.stringify(saved));
+      writeFileSync15(this.file + ".new", saved);
+      this.kept = saved;
       renameSync10(this.file + ".new", this.file);
     } catch {}
   }
@@ -10344,8 +10364,13 @@ function agentAccounts(agents) {
     return [{ provider: agent.providerID, service: AGENT_SERVICES[parsed.kind], agent: { kind: parsed.kind, account: parsed.id }, ...agent.instance.label ? { label: agent.instance.label } : {}, limits: agent.limits }];
   });
 }
+function fingerprint(secret) {
+  return secret ? createHash6("sha256").update(secret).digest("hex").slice(0, 16) : undefined;
+}
 
 // Packages/Box/src/agents/agents/claude-limits.ts
+import { readFileSync as readFileSync19 } from "fs";
+import { join as join21 } from "path";
 var claudeUsage = { url: "https://api.anthropic.com/api/oauth/usage" };
 var CLAUDE_LIMITS_EVERY = 15 * 60000;
 function credentialsIn(configHome) {
@@ -10412,7 +10437,7 @@ async function readClaudeLimits(signIn, version, now = Date.now()) {
         Accept: "application/json",
         "Content-Type": "application/json",
         "anthropic-beta": "oauth-2025-04-20",
-        "User-Agent": `claude-cli/${version ?? "2.1.319"} (external, cli)`
+        ...version ? { "User-Agent": `claude-cli/${version} (external, cli)` } : {}
       },
       signal: AbortSignal.timeout(15000)
     });
@@ -10439,18 +10464,37 @@ async function readClaudeLimits(signIn, version, now = Date.now()) {
   }
   return { windows: claudeWindows(body), ...plan ? { plan } : {} };
 }
-function heardWindow(info) {
-  const id = info?.rateLimitType;
-  if (typeof id !== "string" || !/^(five_hour|seven_day(_[a-z0-9_]+)?)$/.test(id) || id === "seven_day_overage_included")
-    return;
+function heardWindows(info) {
+  const windows = [];
+  const unified = info?.unifiedWindows;
+  if (unified && typeof unified === "object") {
+    for (const [id, window] of Object.entries(unified)) {
+      const shape = HEARD[id];
+      const used = Number(window?.utilization);
+      if (!shape || !Number.isFinite(used))
+        continue;
+      const resetsAt = Number(window.resetsAt);
+      windows.push({ id: shape.id, used, minutes: shape.minutes, ...Number.isFinite(resetsAt) && resetsAt > 0 ? { resetsAt: resetsAt * 1000 } : {}, ...shape.model ? { model: shape.model } : {} });
+    }
+    if (windows.length)
+      return windows;
+  }
+  const shape = HEARD[info?.rateLimitType];
+  if (!shape)
+    return [];
   const resetsAt = typeof info.resetsAt === "number" ? info.resetsAt * 1000 : undefined;
   const used = typeof info.utilization === "number" ? info.utilization : info.status === "rejected" ? 1 : undefined;
   if (used === undefined)
-    return;
-  const minutes = id === "five_hour" ? 300 : 10080;
-  const model = id === "seven_day_sonnet" ? "Sonnet" : id === "seven_day_opus" ? "Opus" : undefined;
-  return { id, used, minutes, ...resetsAt ? { resetsAt } : {}, ...model ? { model } : {} };
+    return [];
+  return [{ id: shape.id, used, minutes: shape.minutes, ...resetsAt ? { resetsAt } : {}, ...shape.model ? { model: shape.model } : {} }];
 }
+var HEARD = {
+  five_hour: { id: "five_hour", minutes: 300 },
+  seven_day: { id: "seven_day", minutes: 10080 },
+  seven_day_sonnet: { id: "seven_day_sonnet", minutes: 10080, model: "Sonnet" },
+  seven_day_opus: { id: "seven_day_opus", minutes: 10080, model: "Opus" },
+  seven_day_overage_included: { id: "seven_day_fable", minutes: 10080, model: "Fable" }
+};
 
 // Packages/Box/src/agents/queue.ts
 class Queue {
@@ -10842,7 +10886,7 @@ class ClaudeAgent {
       written = statSync8(join22(own ?? join22(homedir(), ".claude"), ".credentials.json")).mtimeMs;
     } catch {}
     if (process.platform === "darwin")
-      written = Math.max(written, await keychainWritten(`Claude Code-credentials${own ? `-${createHash6("sha256").update(own).digest("hex").slice(0, 8)}` : ""}`));
+      written = Math.max(written, await keychainWritten(`Claude Code-credentials${own ? `-${createHash7("sha256").update(own).digest("hex").slice(0, 8)}` : ""}`));
     return written;
   }
   signsInRemotely = true;
@@ -10862,10 +10906,14 @@ class ClaudeAgent {
   get tokenFile() {
     return join22(this.context.home, "claude", "tokens", `${this.instance.id}.json`);
   }
-  limits = {
+  limits = ClaudeAgent.keychain ? { every: CLAUDE_LIMITS_EVERY } : {
     every: CLAUDE_LIMITS_EVERY,
     bucket: "anthropic",
-    read: async (now) => readClaudeLimits(this.limitsSignIn(), await this.programVersion(), now)
+    read: async (now) => {
+      const signIn = this.limitsSignIn();
+      return readClaudeLimits(signIn, signIn ? await this.programVersion() : undefined, now);
+    },
+    signIn: () => fingerprint(this.limitsSignIn()?.token)
   };
   limitsSignIn() {
     if (ClaudeAgent.keychain) {
@@ -11855,8 +11903,7 @@ ${input.text}` } : input, this.copies());
       }
       case "rate_limit_event": {
         const info = message.rate_limit_info ?? {};
-        const window = heardWindow(info);
-        if (window)
+        for (const window of heardWindows(info))
           this.agent.limits.heard?.(window);
         if (!active || lane !== active)
           return;
@@ -12888,9 +12935,13 @@ class CodexAgent {
     every: 10 * 60000,
     read: () => this.readLimits()
   };
+  limitsRead = false;
   async readLimits() {
     if (!this.executable())
       throw new LimitsProblem("none", "Codex isn't installed here.");
+    if (this.limitsRead && ![...this.slots.values()].some((slot) => slot.server && !slot.server.isClosed))
+      return null;
+    this.limitsRead = true;
     let rpc;
     let account;
     try {
@@ -15927,7 +15978,14 @@ class EngineAccounts {
         account = {
           provider: integration,
           service: reader.service,
-          limits: { every: EVERY2, read: (now) => this.read(integration, now) }
+          limits: {
+            every: EVERY2,
+            read: (now) => this.read(integration, now),
+            signIn: () => {
+              const value = this.credentials.find((each) => each.integrationID === integration)?.value;
+              return fingerprint(`${value?.access ?? value?.key ?? ""}:${value?.expires ?? ""}`);
+            }
+          }
         };
         this.made.set(integration, account);
       }
@@ -16015,7 +16073,7 @@ async function readCopilot(secret, _credential, now) {
   const resetsAt = date(body?.quota_reset_date) ?? date(body?.limited_user_reset_date);
   const windows = [];
   const snapshots = body?.quota_snapshots;
-  for (const [id, model] of [["premium_interactions", undefined], ["chat", "Chat"], ["completions", "Completions"]]) {
+  for (const [id, name] of [["premium_interactions", "Premium requests"], ["chat", "Chat"], ["completions", "Completions"]]) {
     const snapshot = snapshots?.[id];
     const entitlement = number(snapshot?.entitlement);
     const remaining = number(snapshot?.remaining);
@@ -16030,17 +16088,17 @@ async function readCopilot(secret, _credential, now) {
       used,
       minutes: MONTH,
       ...resetsAt ? { resetsAt } : {},
-      ...model ? { model } : {},
+      name,
       ...remaining !== undefined ? { amount: { used: Math.max(0, entitlement - remaining), limit: entitlement, unit: "requests" } } : {}
     });
   }
   if (!snapshots) {
-    for (const [id, model] of [["chat", "Chat"], ["completions", "Completions"]]) {
+    for (const [id, name] of [["chat", "Chat"], ["completions", "Completions"]]) {
       const limit = number(body?.monthly_quotas?.[id]);
       const remaining = number(body?.limited_user_quotas?.[id]);
       if (!limit || remaining === undefined)
         continue;
-      windows.push({ id, used: 1 - remaining / limit, minutes: MONTH, model, ...resetsAt ? { resetsAt } : {}, amount: { used: Math.max(0, limit - remaining), limit, unit: "requests" } });
+      windows.push({ id, used: 1 - remaining / limit, minutes: MONTH, name, ...resetsAt ? { resetsAt } : {}, amount: { used: Math.max(0, limit - remaining), limit, unit: "requests" } });
     }
   }
   const plan = title(body?.copilot_plan);
@@ -16053,7 +16111,7 @@ async function readOpenRouter(secret, _credential, now) {
   const limit = number(key?.limit);
   if (limit && limit > 0) {
     const left = Math.max(0, number(key.limit_remaining) ?? limit - (number(key.usage) ?? 0));
-    windows.push({ id: "key", used: 1 - left / limit, amount: { used: limit - left, limit, unit: "usd" } });
+    windows.push({ id: "key", used: 1 - left / limit, name: "Key limit", amount: { used: limit - left, limit, unit: "usd" } });
   }
   let balance;
   try {
@@ -16094,7 +16152,7 @@ async function readZai(secret, _credential, now) {
       const limit = number(entry.usage);
       if (used === undefined || !limit)
         continue;
-      windows.push({ id: "web_search", used: used / limit, model: "Web searches", ...resetsAt ? { resetsAt } : {}, amount: { used, limit, unit: "requests" } });
+      windows.push({ id: "web_search", used: used / limit, name: "Web searches", ...resetsAt ? { resetsAt } : {}, amount: { used, limit, unit: "requests" } });
     }
   }
   return { windows };
@@ -16229,13 +16287,9 @@ class GrokAgent {
   }
   limits = {
     every: 10 * 60000,
+    signIn: () => fingerprint(this.grokSignIn()?.key),
     read: async (now) => {
-      const home = this.instance.home ?? process.env.GROK_HOME ?? join26(homedir4(), ".grok");
-      let entries = {};
-      try {
-        entries = JSON.parse(readFileSync24(join26(home, "auth.json"), "utf8")) ?? {};
-      } catch {}
-      const entry = Object.values(entries).find((each) => typeof each?.key === "string" && each.key.trim());
+      const entry = this.grokSignIn();
       if (!entry)
         throw new LimitsProblem("none", "Not signed in to Grok here.");
       const expires = Date.parse(entry.expiresAt ?? entry.expires ?? "");
@@ -16244,6 +16298,15 @@ class GrokAgent {
       return readGrok(entry.key.trim(), undefined, now);
     }
   };
+  grokSignIn() {
+    const home = this.instance.home ?? process.env.GROK_HOME ?? join26(homedir4(), ".grok");
+    try {
+      const entries = JSON.parse(readFileSync24(join26(home, "auth.json"), "utf8")) ?? {};
+      return Object.values(entries).find((each) => typeof each?.key === "string" && each.key.trim());
+    } catch {
+      return;
+    }
+  }
   env() {
     return withOwnFolders({ ...process.env, GROK_DISABLE_AUTOUPDATER: "1", ...this.instance.home ? { GROK_HOME: this.instance.home } : {} });
   }
@@ -16503,7 +16566,7 @@ async function branchRoutes(places, method, parts, body) {
 }
 
 // Packages/Box/src/agents/sessions.ts
-import { createHash as createHash7 } from "crypto";
+import { createHash as createHash8 } from "crypto";
 import { spawn as spawnProcess } from "child_process";
 import { readFileSync as readFileSync25, realpathSync as realpathSync6, statSync as statSync9 } from "fs";
 import { homedir as homedir5 } from "os";
@@ -17844,7 +17907,7 @@ class Sessions {
     const directory = body.location.directory;
     const session = {
       id: newID("ses"),
-      projectID: "prj_" + createHash7("sha1").update(directory).digest("hex").slice(0, 16),
+      projectID: "prj_" + createHash8("sha1").update(directory).digest("hex").slice(0, 16),
       agent: typeof body.agent === "string" && body.agent ? body.agent : "build",
       model: body.model,
       cost: 0,
@@ -19924,7 +19987,7 @@ function followed(store, read, signal) {
 }
 
 // Packages/Box/src/agents/carry.ts
-import { createHash as createHash8 } from "crypto";
+import { createHash as createHash9 } from "crypto";
 import { createReadStream } from "fs";
 import { copyFile, lstat as lstat2, mkdir, readFile as readFile3, readdir, rename, rm, stat as stat2, writeFile } from "fs/promises";
 import { basename as basename11, dirname as dirname16, isAbsolute as isAbsolute3, join as join28, normalize, sep as sep11 } from "path";
@@ -19938,7 +20001,7 @@ class CantCarry extends Error {
   }
 }
 async function hashOf(file) {
-  const hash = createHash8("sha256");
+  const hash = createHash9("sha256");
   for await (const chunk of createReadStream(file))
     hash.update(chunk);
   return hash.digest("hex");
@@ -19956,7 +20019,7 @@ async function plainFiles(from, link, at = "") {
   return files;
 }
 var digestOf = (records, lanes, said = []) => {
-  const hash = createHash8("sha256");
+  const hash = createHash9("sha256");
   for (const record of records)
     hash.update(`r ${record.path} ${record.size} ${record.sha256}
 `);
@@ -20221,7 +20284,7 @@ class Carrying {
         if (session?.id !== id || !Array.isArray(messages))
           throw new CantCarry("its conversation didn't come whole");
         session.location = { ...session.location, directory };
-        session.projectID = "prj_" + createHash8("sha1").update(directory).digest("hex").slice(0, 16);
+        session.projectID = "prj_" + createHash9("sha1").update(directory).digest("hex").slice(0, 16);
         delete agent.snapshots;
         const lanesHere = manifest.lanes.filter((lane) => lane.session === id);
         const threads = agent.threads ?? {};
@@ -25942,4 +26005,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 3cf333407ea5eddb0d18abe4aad4489000b6627cd8ca1b515735abd27ee74936
+// Built from Packages/Box/src/agents f42e04eced3138b052fbea98960b5f5809666c9542b3015beb5a729468458483

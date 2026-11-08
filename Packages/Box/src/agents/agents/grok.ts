@@ -9,7 +9,7 @@ import type { Agent, AgentContext, Account, SignInAttempt, SignInOptions, Thread
 import { accountName, ContextWindows, KnownAccount, model, signOutWith, TookTooLong } from "../agent"
 import { emit } from "../events"
 import { readGrok } from "../engine-limits"
-import { LimitsProblem, type LimitsSource } from "../limits"
+import { fingerprint, LimitsProblem, type LimitsSource } from "../limits"
 import { AcpThread, questionFields } from "../acp"
 import { withOwnFolders } from "../machine"
 import { install, maintenance, update, type MaintenanceDefinition } from "../maintenance"
@@ -156,18 +156,25 @@ export class GrokAgent implements Agent {
    */
   readonly limits: LimitsSource = {
     every: 10 * 60_000,
+    signIn: () => fingerprint(this.grokSignIn()?.key),
     read: async (now) => {
-      const home = this.instance.home ?? process.env.GROK_HOME ?? join(homedir(), ".grok")
-      let entries: Record<string, any> = {}
-      try {
-        entries = JSON.parse(readFileSync(join(home, "auth.json"), "utf8")) ?? {}
-      } catch {}
-      const entry = Object.values(entries).find((each: any) => typeof each?.key === "string" && each.key.trim())
+      const entry = this.grokSignIn()
       if (!entry) throw new LimitsProblem("none", "Not signed in to Grok here.")
       const expires = Date.parse(entry.expiresAt ?? entry.expires ?? "")
       if (Number.isFinite(expires) && expires <= now) throw new LimitsProblem("expired", "Its sign-in has lapsed: Grok renews it the next time it runs here.")
       return readGrok(entry.key.trim(), undefined, now)
     },
+  }
+
+  /** The sign-in Grok keeps in its home, as it is now. */
+  private grokSignIn(): { key: string; expiresAt?: string; expires?: string } | undefined {
+    const home = this.instance.home ?? process.env.GROK_HOME ?? join(homedir(), ".grok")
+    try {
+      const entries = JSON.parse(readFileSync(join(home, "auth.json"), "utf8")) ?? {}
+      return Object.values<any>(entries).find((each) => typeof each?.key === "string" && each.key.trim())
+    } catch {
+      return undefined
+    }
   }
 
   env(): Record<string, string | undefined> {

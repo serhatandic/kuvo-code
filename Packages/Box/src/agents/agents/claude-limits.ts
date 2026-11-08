@@ -1,11 +1,12 @@
 // Claude's plan limits for one account (limits.ts), read as Claude Code reads them for its /usage:
 // `GET /api/oauth/usage` with the account's own sign-in, Kuvo Code's (on a Mac its token from
 // `claude setup-token`; on Linux Claude Code's own file in Kuvo Code's folder), never yours in
-// Terminal, and never renewed here: Claude Code renews its own as it runs. Anthropic limits these
-// reads hard, for the whole computer rather than a sign-in, and holds a reader off for longer each
-// time it asks too soon, so the box reads each account at most every 15 minutes and waits out every
-// 429 for as long as it says; meanwhile what a turn hears of the limits (Claude Code's rate-limit
-// events) keeps them current.
+// Terminal, and never renewed here: Claude Code renews its own as it runs. Only on Linux: a Mac's
+// token can only run Claude (`setup-token` grants no more), and Anthropic answered every read of
+// it with a 429 for hours. Anthropic limits these reads hard, for the whole computer rather than a
+// sign-in, so the box reads each account at most every 15 minutes, one at a time, and waits out a
+// 429 for as long as it says. What a turn hears (Claude Code's rate-limit events, each window as
+// every response's headers give it) keeps them current between reads, and is all a Mac has.
 
 import { readFileSync } from "node:fs"
 import { join } from "node:path"
@@ -97,7 +98,7 @@ export async function readClaudeLimits(signIn: ClaudeSignIn | undefined, version
         Accept: "application/json",
         "Content-Type": "application/json",
         "anthropic-beta": "oauth-2025-04-20",
-        "User-Agent": `claude-cli/${version ?? "2.1.319"} (external, cli)`,
+        ...(version ? { "User-Agent": `claude-cli/${version} (external, cli)` } : {}),
       },
       signal: AbortSignal.timeout(15_000),
     })
@@ -121,15 +122,38 @@ export async function readClaudeLimits(signIn: ClaudeSignIn | undefined, version
   return { windows: claudeWindows(body), ...(plan ? { plan } : {}) }
 }
 
-/** A window a turn heard of (Claude Code's `rate_limit_event`), when it says enough to keep. */
-export function heardWindow(info: any): Omit<LimitWindow, "read" | "source"> | undefined {
-  const id = info?.rateLimitType
-  if (typeof id !== "string" || !/^(five_hour|seven_day(_[a-z0-9_]+)?)$/.test(id) || id === "seven_day_overage_included") return undefined
+/**
+ * The windows a turn heard of (Claude Code's `rate_limit_event`): every window it tracks
+ * (`unifiedWindows`, read from each response's headers, from Claude Code 2.1.3xx), else the one that
+ * limits it now, when it says enough to keep.
+ */
+export function heardWindows(info: any): Omit<LimitWindow, "read" | "source">[] {
+  const windows: Omit<LimitWindow, "read" | "source">[] = []
+  const unified = info?.unifiedWindows
+  if (unified && typeof unified === "object") {
+    for (const [id, window] of Object.entries<any>(unified)) {
+      const shape = HEARD[id]
+      const used = Number(window?.utilization)
+      if (!shape || !Number.isFinite(used)) continue
+      const resetsAt = Number(window.resetsAt)
+      windows.push({ id: shape.id, used, minutes: shape.minutes, ...(Number.isFinite(resetsAt) && resetsAt > 0 ? { resetsAt: resetsAt * 1000 } : {}), ...(shape.model ? { model: shape.model } : {}) })
+    }
+    if (windows.length) return windows
+  }
+  const shape = HEARD[info?.rateLimitType]
+  if (!shape) return []
   const resetsAt = typeof info.resetsAt === "number" ? info.resetsAt * 1000 : undefined
   // How much is used, as it says; turned away with no word, all of it.
   const used = typeof info.utilization === "number" ? info.utilization : info.status === "rejected" ? 1 : undefined
-  if (used === undefined) return undefined
-  const minutes = id === "five_hour" ? 300 : 10_080
-  const model = id === "seven_day_sonnet" ? "Sonnet" : id === "seven_day_opus" ? "Opus" : undefined
-  return { id, used, minutes, ...(resetsAt ? { resetsAt } : {}), ...(model ? { model } : {}) }
+  if (used === undefined) return []
+  return [{ id: shape.id, used, minutes: shape.minutes, ...(resetsAt ? { resetsAt } : {}), ...(shape.model ? { model: shape.model } : {}) }]
+}
+
+/** Claude Code's windows, as the usage endpoint names them (its overage-included week is Fable's, as Claude Code calls it). */
+const HEARD: Record<string, { id: string; minutes: number; model?: string }> = {
+  five_hour: { id: "five_hour", minutes: 300 },
+  seven_day: { id: "seven_day", minutes: 10_080 },
+  seven_day_sonnet: { id: "seven_day_sonnet", minutes: 10_080, model: "Sonnet" },
+  seven_day_opus: { id: "seven_day_opus", minutes: 10_080, model: "Opus" },
+  seven_day_overage_included: { id: "seven_day_fable", minutes: 10_080, model: "Fable" },
 }

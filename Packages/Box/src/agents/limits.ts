@@ -8,6 +8,7 @@
 // 429 for as long as it says (every account that shares the maker's limit on reads), and tells the
 // clients when anything changes (`kuvo.limits.updated`). PROTOCOL.md, "Plan limits".
 
+import { createHash } from "node:crypto"
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs"
 import { dirname } from "node:path"
 import type { AgentKind } from "./accounts"
@@ -30,6 +31,8 @@ export interface LimitWindow {
   minutes?: number
   /** The model it's for, as its maker names it ("Sonnet", "Fable"); none for the whole plan's. */
   model?: string
+  /** Its maker's name for what it counts, where that isn't a model or the plan's time ("Premium requests", "Web searches"). */
+  name?: string
   /** A count's or an amount's own numbers, where the limit is one (300 premium requests, $50): `used` is their share. */
   amount?: { used: number; limit: number; unit: "requests" | "usd" | "credits" }
   /** When this was read, in ms since 1970. */
@@ -70,8 +73,17 @@ export class LimitsProblem extends Error {
 
 /** How an account reads its plan's limits. */
 export interface LimitsSource {
-  /** Reads them now (`now`, the box's clock); throws a `LimitsProblem` when it can't. */
-  read(now: number): Promise<LimitReading>
+  /**
+   * Reads them now (`now`, the box's clock); throws a `LimitsProblem` when it can't, and answers
+   * null when there's nothing to read now (what it has stays). None for an account whose limits only
+   * its turns tell (`heard`).
+   */
+  read?(now: number): Promise<LimitReading | null>
+  /**
+   * Its sign-in as it is now, as a fingerprint (never the secret): one that lapsed, or can't read its
+   * limits, isn't asked again until this changes.
+   */
+  signIn?(): string | undefined
   /** The least time between two reads, in ms: as often as its maker's endpoint allows. */
   every: number
   /** Accounts whose reads share one limit at their maker (Anthropic's applies to the computer, not a sign-in): one turned away holds them all. */
@@ -118,6 +130,8 @@ interface Entry {
   checked?: number
   next: number
   problem?: { kind: LimitsProblemKind; message: string; until?: number }
+  /** The sign-in a lapsed or unreadable one was, as `LimitsSource.signIn` gave it. */
+  signIn?: string
   /** Reads turned away in a row (each holds off longer). */
   refusals?: number
   /** Reads that failed in a row. */
@@ -215,7 +229,7 @@ export class Limits {
     for (const account of this.accounts()) {
       const source = account.limits
       const entry = this.entries.get(account.provider)
-      if (!entry || this.heldBack(source, entry, at)) continue
+      if (!source.read || !entry || this.heldBack(source, entry, at)) continue
       if (entry.checked && at - entry.checked < Math.max(FRESH_ENOUGH, source.every)) continue
       entry.next = Math.min(entry.next, at)
     }
@@ -235,6 +249,8 @@ export class Limits {
 
   private async readDue() {
     await this.prepare?.()
+    // One read per maker's bucket each round: a hold that just ended isn't met with every account at once.
+    const asked = new Set<string>()
     for (const account of this.accounts()) {
       const source = account.limits
       this.listen(account.provider, source)
@@ -243,6 +259,7 @@ export class Limits {
         entry = { windows: [], next: 0 }
         this.entries.set(account.provider, entry)
       }
+      if (!source.read) continue
       const at = this.now()
       if (at < entry.next) continue
       // Another account of its maker was turned away meanwhile: this one waits as long.
@@ -251,26 +268,47 @@ export class Limits {
         entry.next = hold
         continue
       }
+      if (source.bucket && asked.has(source.bucket)) {
+        entry.next = at + MINUTE
+        continue
+      }
+      // A sign-in that lapsed or can't read its limits, as it was: nothing to ask its maker yet.
+      if ((entry.problem?.kind === "expired" || entry.problem?.kind === "unreadable") && entry.signIn !== undefined && entry.signIn === source.signIn?.()) {
+        entry.next = at + Math.max(source.every, FIRST_RETRY)
+        continue
+      }
       await this.readOne(source, entry)
+      // (One that lapsed, or can't read them, was most likely never sent: the next may go.)
+      if (source.bucket && entry.problem?.kind !== "expired" && entry.problem?.kind !== "unreadable" && entry.problem?.kind !== "none") asked.add(source.bucket)
+      // Kept at once: a restart meanwhile never asks again what was just asked.
+      this.changed()
     }
     this.forgetGone()
     this.changed()
   }
 
   private async readOne(source: LimitsSource, entry: Entry) {
+    const started = this.now()
+    // Not asked again before its time, even if the box stops while it waits for the answer.
+    entry.next = Math.max(entry.next, started + source.every)
+    entry.checked = started
+    this.save()
     try {
-      const reading = await source.read(this.now())
+      const reading = await source.read!(started)
       const at = this.now()
       entry.checked = at
+      entry.next = at + source.every
+      if (!reading) return
       entry.plan = reading.plan ?? entry.plan
       entry.balance = reading.balance
-      // What it says now, in place of all it said before; a window only a turn has told of stays as heard.
-      const heard = entry.windows.filter((window) => window.source === "turn" && !reading.windows.some((each) => each.id === window.id))
-      entry.windows = [...reading.windows.map((window) => ({ ...window, used: clamp(window.used), read: at, source: "usage" as const })), ...heard]
+      // What it says now, in place of all it said before; a window a turn told of since it was
+      // asked, or that only turns tell, stays as heard.
+      const heard = entry.windows.filter((window) => window.source === "turn" && (window.read >= started || !reading.windows.some((each) => each.id === window.id)))
+      entry.windows = [...reading.windows.filter((window) => !heard.some((each) => each.id === window.id)).map((window) => ({ ...window, used: clamp(window.used), read: at, source: "usage" as const })), ...heard]
       entry.problem = undefined
+      entry.signIn = undefined
       entry.refusals = 0
       entry.failures = 0
-      entry.next = this.nextRead(at + source.every, entry)
     } catch (caught) {
       const at = this.now()
       entry.checked = at
@@ -296,21 +334,15 @@ export class Limits {
           break
         case "expired":
         case "unreadable":
-          // Nothing asked of its maker until the sign-in changes, which is only read here.
+          // Its maker isn't asked again until the sign-in changes (looked at each round, here only).
+          entry.signIn = source.signIn?.()
           entry.next = at + Math.max(source.every, FIRST_RETRY)
           break
         default:
           entry.failures = (entry.failures ?? 0) + 1
-          entry.next = at + Math.min(FIRST_RETRY * 2 ** (entry.failures - 1), LONGEST_RETRY)
+          entry.next = at + Math.max(source.every, Math.min(FIRST_RETRY * 2 ** (entry.failures - 1), LONGEST_RETRY))
       }
     }
-  }
-
-  /** The next read: at its spacing, or soon after a window starts over before then. */
-  private nextRead(spaced: number, entry: Entry) {
-    const resets = entry.windows.map((window) => window.resetsAt ?? Infinity).filter((at) => at > this.now())
-    const first = Math.min(...resets)
-    return Number.isFinite(first) ? Math.min(spaced, first + MINUTE) : spaced
   }
 
   /** What a turn of this account hears (its rate-limit events), kept as the window's latest. */
@@ -336,6 +368,7 @@ export class Limits {
       }
       if (heard.minutes === undefined) delete heard.minutes
       if (heard.model === undefined) delete heard.model
+      if (heard.name === undefined) delete heard.name
       if (heard.resetsAt === undefined) delete heard.resetsAt
       entry.windows = before ? entry.windows.map((each) => (each.id === window.id ? heard : each)) : [...entry.windows, heard]
       this.changed()
@@ -370,12 +403,16 @@ export class Limits {
     } catch {}
   }
 
+  private kept = ""
+
   private save() {
     if (!this.file) return
-    const saved: Saved = { accounts: Object.fromEntries(this.entries), holds: Object.fromEntries(this.holds) }
+    const saved = JSON.stringify({ accounts: Object.fromEntries(this.entries), holds: Object.fromEntries(this.holds) } satisfies Saved)
+    if (saved === this.kept) return
     try {
       mkdirSync(dirname(this.file), { recursive: true })
-      writeFileSync(this.file + ".new", JSON.stringify(saved))
+      writeFileSync(this.file + ".new", saved)
+      this.kept = saved
       renameSync(this.file + ".new", this.file)
     } catch {}
   }
@@ -420,4 +457,9 @@ export function agentAccounts(agents: Agent[]): LimitedAccount[] {
     if (!agent.limits || !parsed) return []
     return [{ provider: agent.providerID, service: AGENT_SERVICES[parsed.kind], agent: { kind: parsed.kind, account: parsed.id }, ...(agent.instance.label ? { label: agent.instance.label } : {}), limits: agent.limits }]
   })
+}
+
+/** A sign-in's fingerprint, to tell when it changed: never the secret itself. */
+export function fingerprint(secret: string | undefined): string | undefined {
+  return secret ? createHash("sha256").update(secret).digest("hex").slice(0, 16) : undefined
 }
