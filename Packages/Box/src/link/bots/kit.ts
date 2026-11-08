@@ -36,7 +36,10 @@ export interface BotLooks {
 
 /** Where a bot runs, as it's told: the place, its clock and its browser (`here`'s `mac` or
  * `machine`). */
-export type BotPlace = Record<"place" | "clock" | "browser", string>;
+export type BotPlace = Record<"place" | "clock" | "browser", string> & {
+  /** What a machine calls its system in `place`'s ⟦system⟧, by `process.platform` ("darwin", "linux") and "other". */
+  systems?: Record<string, string>;
+};
 
 /** A rule a new conversation gets, as the engine's settings have it. */
 export interface KitRule {
@@ -141,15 +144,18 @@ export function readWords(file = WORDS_FILE): BotWords | null {
 // library has them), or else its own. This Mac's box needs its app's kit; a machine makes bots
 // without one. An older Mac's kit has its own words too, which aren't used: the box is never older
 // than a Mac that connects.
-export function readKit(): BotKit | null {
+export function readKit(system: string = process.platform): BotKit | null {
   const words = readWords();
   const mac = readMacKit();
   if (!words || (IS_MAC && !mac)) return null;
   const timeZone = zoneOf(mac);
   const machine = (typeof mac?.machine === "string" && mac.machine) || readLink()?.id || os.hostname();
   const here = IS_MAC ? words.here.mac : words.here.machine;
-  const fill = (text: string) => text.replace(/⟦(place|clock|browser)⟧/g, (_, key: keyof BotPlace) => String(here[key] ?? ""))
-    .replaceAll("⟦machine⟧", () => machine).replaceAll("⟦timeZone⟧", () => timeZone || "UTC");
+  // A machine says which system it is, from the box's own: "the Mac", "the Linux machine".
+  const systems = here.systems ?? {};
+  const named = String(systems[system] ?? systems.other ?? "machine");
+  const fill = (text: string) => text.replace(/⟦(place|clock|browser)⟧/g, (_, key: "place" | "clock" | "browser") => String(here[key] ?? ""))
+    .replaceAll("⟦system⟧", () => named).replaceAll("⟦machine⟧", () => machine).replaceAll("⟦timeZone⟧", () => timeZone || "UTC");
   const told = (each: PresetPersonality) => words.personalityWords.replaceAll("⟦name⟧", () => each.name).replaceAll("⟦description⟧", () => each.description);
   return {
     kuvo: 1,

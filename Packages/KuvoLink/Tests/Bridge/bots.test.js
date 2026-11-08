@@ -939,16 +939,22 @@ test("a machine makes bots with its own words, whatever a Mac's kit says, filled
   }
 });
 
-test("a bot on a machine is told, in Kuvo Code's own words, that it runs on that machine, in your time zone, with a browser there that keeps working with your Mac off", () => {
+test("a bot on a machine is told, in Kuvo Code's own words, that it runs on that machine, in your time zone, with a browser there that keeps working with Kuvo Code closed", () => {
   const file = path.join(home, "bin", "bot-words.json");
   fs.copyFileSync(new URL("../../Sources/KuvoLink/Resources/bot-words.json", import.meta.url), file);
   try {
     write(path.join(bots, "kit.json"), JSON.stringify({ ...kit, machine: "lab" }));
-    const kitNow = link.readKit();
+    const kitNow = link.readKit("linux");
     const told = link.botInstructions(kitNow, "Scout", "/home/me/.kuvo-code/bots/bot_scout00001", "Your personality: Calm.", undefined);
     assert.match(told, /^You are Scout, one of the user's bots in Kuvo Code\. .* You run on the Linux machine "lab"\./);
+    // The same box on a Mac (a Mac added as a machine) names itself a Mac, and says nothing of Linux or of "the user's Mac".
+    const onMac = link.botInstructions(link.readKit("darwin"), "Scout", "/Users/me/.kuvo-code/bots/bot_scout00001", undefined, undefined);
+    assert.match(onMac, /You run on the Mac "lab"\./);
+    assert.doesNotMatch(onMac, /Linux|user's Mac is off/);
+    // A system the words don't name is a machine.
+    assert.match(link.botInstructions(link.readKit("win32"), "Scout", "/f", undefined, undefined), /You run on the machine "lab"\./);
     assert.match(told, /a time like 2026-10-16T09:00 in the user's time zone, Europe\/Istanbul,/);
-    assert.match(told, /keeps working while the user's Mac is off/);
+    assert.match(told, /keeps working when Kuvo Code isn't open on the user's own computer/);
     assert.match(told, /\n\nYour personality: Calm\.\n\n/);
     assert.match(told, /You don't have a job yet/);
     assert.match(told, /the file "\/home\/me\/\.kuvo-code\/bots\/bot_scout00001\/MEMORY\.md" is yours/);

@@ -171,9 +171,10 @@
       "browser": "tabs of your own in the user's browser on this Mac, signed in where they are"
     },
     "machine": {
-      "place": "the Linux machine \"⟦machine⟧\"",
+      "place": "the ⟦system⟧ \"⟦machine⟧\"",
+      "systems": { "darwin": "Mac", "linux": "Linux machine", "other": "machine" },
       "clock": "in the user's time zone, ⟦timeZone⟧",
-      "browser": "one on this machine, which keeps its sign-ins and keeps working while the user's Mac is off"
+      "browser": "one on this machine, which keeps its sign-ins and keeps working when Kuvo Code isn't open on the user's own computer"
     }
   },
   "job": {
