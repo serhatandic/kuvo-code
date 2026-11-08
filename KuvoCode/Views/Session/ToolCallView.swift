@@ -362,6 +362,7 @@ struct ToolCallView: View {
         case "goal_progress": return isActive ? "Updating its goal’s progress" : "Updated its goal’s progress"
         case "may_spend": return isActive ? "Checking a purchase against its budget" : "Checked a purchase against its budget"
         case "finish_goal": return isActive ? "Finishing its goal" : "Finished its goal"
+        case "notify_user": return (isActive ? "Notifying you" : "Notified you") + (string("text").map { ": \($0)" } ?? "")
         case "vault_items": return isActive ? "Looking up its vault items" : "Looked up its vault items"
         case "vault_ask": return isActive ? "Asking you for something from the vault" : "Asked you for something from the vault"
         case "vault_run": return isActive ? "Running a command with the vault’s values" : "Ran a command with the vault’s values"
@@ -481,6 +482,7 @@ struct ToolCallView: View {
         case "set_job": "person.text.rectangle"
         case "propose_goal", "goal_progress", "finish_goal": "scope"
         case "may_spend": "creditcard"
+        case "notify_user": "bell"
         case let name where name.hasPrefix("browser_"): "safari"
         default: nil
         }

@@ -2059,8 +2059,9 @@ final class Workspace {
 
     /// Bots on the machine that finished while it was out of reach (your Mac asleep, say): their
     /// news, in notifications, as if you'd been connected.
+    /// (A box that tells its news shows what it told while it was out of reach itself, `BoxNotices`.)
     private func tellMissedNews(in sessions: [Session], machine: String) {
-        let reconnected = !connectedOnce.insert(machine).inserted
+        let reconnected = !connectedOnce.insert(machine).inserted && boxTellsNews?(machine) != true
         for session in sessions where botName?(session.id) != nil {
             guard let idle = session.time.idle else { continue }
             let told = toldIdle[session.id]
@@ -2448,6 +2449,8 @@ final class Workspace {
     }
     /// A bot's name, by its session, for its notifications.
     @ObservationIgnored var botName: ((String) -> String?)?
+    /// Whether a box tells its own news (`BoxNotices`), by its id: this Mac words none of it then.
+    @ObservationIgnored var boxTellsNews: ((String) -> Bool)?
     /// A session's run ended (a bot's memory may have changed).
     @ObservationIgnored var onRunEnded: ((String) -> Void)?
 
@@ -2638,13 +2641,18 @@ final class Workspace {
                     if isBot, !summaryFailed { replyPreviews[id] = reply }
                     // Told: a reconnection won't tell it again.
                     if let idle = self.session(id)?.time.idle { toldIdle[id] = max(idle, toldIdle[id] ?? 0) }
+                    // Its box tells its news (`BoxNotices`): whether it's news, and how it's said, is
+                    // the box's. COMPAT(box-notices): what follows words it here for a box from
+                    // before it did, or whose bridge isn't running. Goes once every box does.
+                    let machine = sessionMachines[id] ?? RemoteFolder.machine(of: session.location.directory)
+                    if boxTellsNews?(machine ?? BoxClient.mac) == true { return }
                     Notifier.shared.notify(
                         session: id,
                         title: botName?(id) ?? session.title ?? "New Session",
                         subtitle: botName?(id) == nil ? projectName(session.location.directory) : nil,
                         body: summaryFailed ? "Couldn't summarize the conversation." : failed ? "Stopped with an error." : reply ?? "Finished.",
                         replies: true,
-                        push: .init(failed || summaryFailed ? .failed : isBot ? .report : .finished, machine: sessionMachines[id] ?? RemoteFolder.machine(of: session.location.directory))
+                        push: .init(failed || summaryFailed ? .failed : isBot ? .report : .finished, machine: machine)
                     )
                 }
             }
