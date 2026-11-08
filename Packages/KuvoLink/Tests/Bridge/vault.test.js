@@ -4,22 +4,23 @@
 // ever seeing a value. (This Mac's vault, in its Keychain: vault-host.test.js.)
 //
 // Run with `node --test Packages/KuvoLink/Tests/Bridge/vault.test.js`.
-import "./test-safety.js";
+import { testsFolder } from "./test-safety.js";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";
 import net from "node:net";
-import os from "node:os";
 import path from "node:path";
 import { script, sshAgentsOf } from "./bot-keys-scenarios.js";
 import { atEnd, removeAtEnd } from "./at-end.js";
 // (Each test fails at its own time limit when what it waits for never comes, rather than holding up the run.)
 import { appears, asked, before, test } from "./vault-waits.js";
 
-// (A short folder: the vault's socket lives in it, and a socket's path can't be long.)
-const root = fs.mkdtempSync(path.join(os.tmpdir(), "kv-"));
+// (A short folder: the vault's socket lives in it, and a socket's path can't be long. Not in the
+// temporary folder, which in an agent's shell is Kuvo Code's own, 70 letters deep: the socket's path
+// then goes over the 103 a socket may have, and the vault never listens.)
+const root = fs.realpathSync(testsFolder("kv"));
 const home = path.join(root, ".kuvo-code");
 // (Agents may use it: on a box whose commands are fenced. One that isn't is the last test.)
 const env = { ...process.env, HOME: root, KUVO_HOME: home, KUVO_VAULT_AGENTS: "1" };
