@@ -1639,7 +1639,7 @@ export async function resumeMoves(now = Date.now()): Promise<void> {
     // Each in its turn, as its mail and `keepMoving` are.
     if (record.stage === "finishing") await inTurn(record.id, () => finish(record.id)).catch(() => {});
     // (One asked for just now, through another process, is moved from here.)
-    else if (record.stage === "holding" && !record.step && now - record.started < 30_000) continue;
+    else if (record.stage === "holding" && (!record.step || record.step === "check") && now - record.started < 30_000) continue;
     else if (record.stage !== "switching") await inTurn(record.id, () => takeBack(record.id, `${record.name} didn’t get there. Try again.`, 409)).catch(() => {});
   }
   const moving = new Set(readMoves().map(record => record.thing));

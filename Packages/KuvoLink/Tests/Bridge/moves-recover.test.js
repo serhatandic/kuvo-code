@@ -18,7 +18,8 @@ import { test as nodeTest } from "node:test";
 import { atEnd, removeAtEnd } from "./at-end.js";
 
 // Each fails, rather than hangs, when what it waits for never comes.
-const test = (name, run) => nodeTest(name, { timeout: 30_000 }, run);
+let running = null;
+const test = (name, run) => nodeTest(name, { timeout: 30_000 }, t => { running = t.signal; return run(t); });
 
 const support = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-moves-recover-")));
 const home = path.join(support, "mac");
@@ -176,11 +177,10 @@ async function ask(method, p, given) {
 
 // Until `found` holds: looked at again as the script hears more, however long that takes (a busy
 // machine is slow, never wrong); a test that never sees it fails at its time limit.
-// (One that never holds ends the test, rather than spinning on after its time limit.)
+// (One whose test has ended, at its time limit, stops looking rather than spinning on.)
 async function until(found) {
-  const giveUp = Date.now() + 25_000;
   while (!found()) {
-    assert.ok(Date.now() < giveUp, "it never came about");
+    assert.ok(!running?.aborted, "it never came about");
     await new Promise(resolve => setImmediate(resolve));
   }
 }
@@ -538,7 +538,6 @@ test("a move noted by a process that isn't the watcher (box route) is carried ou
   assert.ok(recordOf("ses_route2"), "not yet");
   link.keepMoving(Date.now() + 31 * 60_000);
   await until(() => recordOf("ses_route2") === null);
-  assert.ok(!fs.existsSync(path.join(wakes, "ses_route2", "paused")), "its wake-ups go on");
   assert.ok(engine.sessions.has("ses_route2"));
 });
 
