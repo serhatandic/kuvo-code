@@ -973,7 +973,7 @@ function firstURL(text) {
 }
 function plain2(text) {
   return text.replace(/\x1b\[(\d*)C/g, (_, count) => " ".repeat(Math.min(Number(count || 1), 80))).replace(/\x1b\[\d*G/g, " ").replace(/\x1b\[[0-9;]*[BEFHfd]/g, `
-`).replace(/\x1b\[[0-9;?>]*[ -/]*[@-~]/g, "").replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, "").replace(/\x1b[78]/g, "");
+`).replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "").replace(/\x1b[\]P_^X][^\x07\x1b]*(?:\x07|\x1b\\)/g, "").replace(/\x1b[ -/]+[0-~]/g, "").replace(/\x1b[0-~]/g, "");
 }
 
 // Packages/Box/src/agents/artifacts/policy.ts
@@ -8454,6 +8454,332 @@ function questionFields(questions) {
 // Packages/Box/src/agents/signin.ts
 import { chmodSync as chmodSync2, existsSync as existsSync9, mkdirSync as mkdirSync10, readFileSync as readFileSync15, rmSync as rmSync7, writeFileSync as writeFileSync12 } from "fs";
 import { join as join17 } from "path";
+
+// Packages/Box/src/agents/screen.ts
+class Screen {
+  cols;
+  height;
+  onLine;
+  rows = [[]];
+  wrapped = new Set;
+  row = 0;
+  col = 0;
+  pending = false;
+  saved = { row: 0, col: 0 };
+  top = 0;
+  main;
+  carry = "";
+  dirty = false;
+  constructor(cols, height, onLine) {
+    this.cols = cols;
+    this.height = height;
+    this.onLine = onLine;
+  }
+  write(input) {
+    const text = this.carry + input;
+    this.carry = "";
+    let at = 0;
+    while (at < text.length) {
+      const char = text[at];
+      if (char === "\x1B") {
+        const end = sequenceEnd(text, at);
+        if (end < 0) {
+          if (STRINGS.includes(text[at + 1]))
+            this.carry = text.slice(at, at + 2) + (text.length - at > 2 && text.endsWith("\x1B") ? "\x1B" : "");
+          else if (text.length - at <= MAX_SEQUENCE)
+            this.carry = text.slice(at);
+          return;
+        }
+        this.escape(text.slice(at, end));
+        at = end;
+        continue;
+      }
+      const code = text.codePointAt(at);
+      const size = code > 65535 ? 2 : 1;
+      at += size;
+      if (char === "\r")
+        this.moveTo(this.row, 0);
+      else if (char === `
+` || char === "\v" || char === "\f")
+        this.moveTo(this.row + 1, this.col, "line");
+      else if (char === "\b")
+        this.moveTo(this.row, Math.max(0, this.col - 1));
+      else if (char === "\t")
+        this.moveTo(this.row, Math.min(this.cols - 1, (Math.floor(this.col / 8) + 1) * 8));
+      else if (code >= 32 && code !== 127 && !(code >= 128 && code < 160))
+        this.put(String.fromCodePoint(code));
+    }
+  }
+  text() {
+    const lines = [];
+    for (let row = 0;row < this.rows.length; row++) {
+      const start = row;
+      while (this.continues(row))
+        row++;
+      lines.push(this.join(start, row));
+    }
+    return lines.join(`
+`).replace(/\n+$/, "");
+  }
+  current() {
+    return this.line(this.row).replace(/\n$/, "");
+  }
+  line(row) {
+    let start = row;
+    while (start > 0 && this.continues(start - 1))
+      start--;
+    let end = row;
+    while (this.continues(end))
+      end++;
+    const last = this.rows[end] ?? [];
+    const complete = !this.full(end) && (end === start || this.cells(last).trim() !== "");
+    return this.join(start, end) + (complete ? `
+` : "");
+  }
+  continues(row) {
+    return row + 1 < this.rows.length && (this.wrapped.has(row) || this.full(row));
+  }
+  full(row) {
+    const cells = this.rows[row] ?? [];
+    return cells.length >= this.cols && cells[this.cols - 1] !== undefined && cells[this.cols - 1] !== " ";
+  }
+  join(start, end) {
+    let text = "";
+    for (let row = start;row <= end; row++)
+      text += this.cells(this.rows[row] ?? []);
+    return text.trimEnd();
+  }
+  cells(row) {
+    let text = "";
+    for (let col = 0;col < row.length; col++)
+      text += row[col] ?? " ";
+    return text;
+  }
+  put(char) {
+    const width = Bun.stringWidth(char);
+    if (width === 0)
+      return;
+    if (this.pending || this.col + width > this.cols) {
+      this.wrapped.add(this.row);
+      this.moveTo(this.row + 1, 0, "wrap");
+    }
+    const cells = this.rowAt(this.row);
+    cells[this.col] = char;
+    if (width === 2)
+      cells[this.col + 1] = "";
+    this.dirty = true;
+    this.col += width;
+    if (this.col >= this.cols) {
+      this.col = this.cols - 1;
+      this.pending = true;
+    }
+  }
+  rowAt(row) {
+    while (this.rows.length <= row)
+      this.rows.push([]);
+    return this.rows[row];
+  }
+  moveTo(row, col, how = "jump") {
+    row = Math.max(this.top, how === "jump" ? Math.min(row, this.top + this.height - 1) : Math.min(row, this.row + 1));
+    if (row !== this.row) {
+      const wrapping = how === "wrap";
+      if (this.dirty && !wrapping)
+        this.left();
+      this.dirty &&= wrapping;
+      this.row = row;
+      this.rowAt(row);
+      if (row >= this.top + this.height)
+        this.scroll(row - this.height + 1);
+    }
+    this.col = Math.max(0, Math.min(this.cols - 1, col));
+    this.pending = false;
+  }
+  scroll(top) {
+    this.top = top;
+    const drop = this.top - MAX_SCROLLBACK;
+    if (drop < MAX_SCROLLBACK)
+      return;
+    this.rows.splice(0, drop);
+    this.wrapped = new Set([...this.wrapped].filter((row) => row >= drop).map((row) => row - drop));
+    this.row -= drop;
+    this.top -= drop;
+    this.saved = { row: Math.max(0, this.saved.row - drop), col: this.saved.col };
+  }
+  left() {
+    this.onLine?.(this.line(this.row));
+  }
+  erase(row, from, to) {
+    const cells = this.rows[row];
+    if (!cells)
+      return;
+    for (let col = from;col < Math.min(to, cells.length); col++)
+      cells[col] = " ";
+    this.wrapped.delete(row);
+    if (row === this.row)
+      this.dirty = true;
+  }
+  escape(sequence) {
+    const kind = sequence[1];
+    if (kind === "[")
+      return this.control(sequence);
+    if (kind === "7")
+      this.saved = { row: this.row, col: this.col };
+    else if (kind === "8")
+      this.moveTo(this.saved.row, this.saved.col);
+    else if (kind === "D")
+      this.moveTo(this.row + 1, this.col, "line");
+    else if (kind === "E")
+      this.moveTo(this.row + 1, 0, "line");
+    else if (kind === "M")
+      this.moveTo(this.row - 1, this.col);
+    else if (kind === "c") {
+      for (let row = this.top;row < this.rows.length; row++)
+        this.erase(row, 0, Infinity);
+      this.moveTo(this.top, 0);
+    }
+  }
+  control(sequence) {
+    const final = sequence[sequence.length - 1];
+    const body = sequence.slice(2, -1);
+    const mark = /^[<=>?]/.test(body) ? body[0] : "";
+    const params = (mark ? body.slice(1) : body).replace(/[ -/]+$/, "").split(";").map((each) => Number.parseInt(each, 10));
+    const n = Number.isFinite(params[0]) && params[0] > 0 ? params[0] : 1;
+    const raw = Number.isFinite(params[0]) ? params[0] : 0;
+    if (mark === "?") {
+      if ((final === "h" || final === "l") && params.some((each) => each === 1049 || each === 1047 || each === 47))
+        this.otherScreen(final === "h");
+      return;
+    }
+    if (mark)
+      return;
+    switch (final) {
+      case "A":
+        return this.moveTo(this.row - n, this.col);
+      case "B":
+      case "e":
+        return this.moveTo(this.row + n, this.col);
+      case "C":
+      case "a":
+        return this.moveTo(this.row, this.col + n);
+      case "D":
+        return this.moveTo(this.row, Math.max(0, this.col - n));
+      case "E":
+        return this.moveTo(this.row + n, 0);
+      case "F":
+        return this.moveTo(this.row - n, 0);
+      case "G":
+      case "`":
+        return this.moveTo(this.row, n - 1);
+      case "d":
+        return this.moveTo(this.top + n - 1, this.col);
+      case "H":
+      case "f": {
+        const col = Number.isFinite(params[1]) && params[1] > 0 ? params[1] : 1;
+        return this.moveTo(this.top + n - 1, col - 1);
+      }
+      case "K": {
+        if (raw === 0)
+          this.erase(this.row, this.col, Infinity);
+        else if (raw === 1)
+          this.erase(this.row, 0, this.col + 1);
+        else
+          this.erase(this.row, 0, Infinity);
+        return;
+      }
+      case "J": {
+        if (raw === 0) {
+          this.erase(this.row, this.col, Infinity);
+          for (let row = this.row + 1;row < this.rows.length; row++)
+            this.erase(row, 0, Infinity);
+        } else if (raw === 1) {
+          for (let row = this.top;row < this.row; row++)
+            this.erase(row, 0, Infinity);
+          this.erase(this.row, 0, this.col + 1);
+        } else {
+          for (let row = this.top;row < this.rows.length; row++)
+            this.erase(row, 0, Infinity);
+        }
+        return;
+      }
+      case "X":
+        return this.erase(this.row, this.col, this.col + n);
+      case "P": {
+        const cells = this.rowAt(this.row);
+        cells.splice(this.col, n);
+        this.dirty = true;
+        return;
+      }
+      case "@": {
+        const cells = this.rowAt(this.row);
+        if (cells.length > this.col)
+          cells.splice(this.col, 0, ...Array(Math.min(n, this.cols - this.col)).fill(" "));
+        cells.length = Math.min(cells.length, this.cols);
+        this.dirty = true;
+        return;
+      }
+      case "s":
+        if (!body)
+          this.saved = { row: this.row, col: this.col };
+        return;
+      case "u":
+        if (!body)
+          this.moveTo(this.saved.row, this.saved.col);
+        return;
+    }
+  }
+  otherScreen(on) {
+    if (on && !this.main) {
+      if (this.dirty)
+        this.left();
+      this.main = { rows: this.rows, wrapped: this.wrapped, row: this.row, col: this.col, top: this.top };
+      this.rows = [[]];
+      this.wrapped = new Set;
+      this.row = this.col = this.top = 0;
+    } else if (!on && this.main) {
+      if (this.dirty)
+        this.left();
+      ({ rows: this.rows, wrapped: this.wrapped, row: this.row, col: this.col, top: this.top } = this.main);
+      this.main = undefined;
+    }
+    this.dirty = false;
+    this.pending = false;
+  }
+}
+var STRINGS = "]P_^X";
+var MAX_SEQUENCE = 4096;
+var MAX_SCROLLBACK = 1000;
+function sequenceEnd(text, at) {
+  const kind = text[at + 1];
+  if (kind === undefined)
+    return -1;
+  if (kind === "[") {
+    for (let index = at + 2;index < text.length; index++) {
+      const code = text.charCodeAt(index);
+      if (code >= 64 && code <= 126)
+        return index + 1;
+      if (code < 32 || code > 126)
+        return at + 2;
+    }
+    return -1;
+  }
+  if (STRINGS.includes(kind)) {
+    for (let index = at + 2;index < text.length; index++) {
+      if (text[index] === "\x07")
+        return index + 1;
+      if (text[index] === "\x1B")
+        return text[index + 1] === undefined ? -1 : text[index + 1] === "\\" ? index + 2 : index;
+    }
+    return -1;
+  }
+  let index = at + 1;
+  while (index < text.length && text.charCodeAt(index) >= 32 && text.charCodeAt(index) <= 47)
+    index++;
+  if (index >= text.length)
+    return -1;
+  return index + 1;
+}
+
+// Packages/Box/src/agents/signin.ts
 function catcher(temporary) {
   const path = join17(temporary, "bin", "kuvo-catch-url");
   if (!existsSync9(path)) {
@@ -8474,12 +8800,44 @@ async function commandSignIn(options) {
   let printed = "";
   let output = "";
   const refused = options.refusedCode ?? /invalid code/i;
-  let pastedAt;
+  let afterPaste = false;
+  let refusedLine = false;
+  let pastedAt = 0;
+  let lineFrom = 0;
+  const screen = options.terminal ? new Screen(TERMINAL.cols, TERMINAL.rows, (line) => {
+    if (afterPaste && refused.test(line))
+      refusedLine = true;
+    said(line);
+  }) : undefined;
+  const said = (line) => {
+    if (!options.onLine)
+      return;
+    options.onLine(line);
+    if (signedInBefore !== false || status.status !== "pending")
+      return;
+    options.signedIn().then((signedIn) => {
+      if (!signedIn || status.status !== "pending")
+        return;
+      succeed();
+      child.kill();
+    }, () => {});
+  };
+  const turnedAway = () => screen ? refusedLine || refused.test(screen.current()) : refused.test(output.slice(pastedAt));
   const take = (text) => {
-    printed += text;
-    output = plain2(printed);
-    options.onOutput?.(output);
-    if (options.refusedEnds && pastedAt !== undefined && status.status === "pending" && refused.test(output.slice(pastedAt))) {
+    if (screen) {
+      screen.write(text);
+      output = screen.text();
+    } else {
+      printed += text;
+      output = plain2(printed);
+      for (let end = output.indexOf(`
+`, lineFrom);end >= 0; end = output.indexOf(`
+`, lineFrom)) {
+        said(output.slice(lineFrom, end + 1));
+        lineFrom = end + 1;
+      }
+    }
+    if (options.refusedEnds && afterPaste && status.status === "pending" && turnedAway()) {
       status = { status: "failed", message: options.refusedEnds };
       child.kill();
     }
@@ -8490,7 +8848,7 @@ async function commandSignIn(options) {
     const decoder = new TextDecoder;
     const spawned = Bun.spawn([options.command, ...options.args], {
       env,
-      terminal: { cols: 1000, rows: 50, data: (_terminal, data) => take(decoder.decode(data, { stream: true })) }
+      terminal: { ...TERMINAL, data: (_terminal, data) => take(decoder.decode(data, { stream: true })) }
     });
     child = spawned;
     type = async (text) => void spawned.terminal.write(text.replace(/\n$/, "\r"));
@@ -8528,10 +8886,11 @@ async function commandSignIn(options) {
     else if (pasted)
       status = { status: "failed", message: "That code didn't work. Start again, and paste the code from the page this sign-in opens." };
     else {
-      let said = options.codePrompt ? output.replace(options.codePrompt, "") : output;
-      if (options.secret)
-        said = said.replace(options.secret, "");
-      status = { status: "failed", message: lastLines(said) || `Signing in stopped (exit code ${code}).` };
+      let words = options.secret ? output.replace(options.secret, "") : output;
+      if (options.codePrompt)
+        words = words.replace(options.codePrompt, "");
+      words = words.replace(/[\x00-\x08\x0b-\x1f\x7f]/g, "");
+      status = { status: "failed", message: lastLines(words) || `Signing in stopped (exit code ${code}).` };
     }
   });
   (async () => {
@@ -8597,15 +8956,16 @@ async function commandSignIn(options) {
       if (status.status !== "pending")
         throw new Error("That sign-in is over. Start it again.");
       pasted = true;
-      const from = output.length;
-      pastedAt = from;
+      pastedAt = output.length;
+      afterPaste = true;
+      refusedLine = false;
       await type(code.trim() + `
 `);
       for (let waited = 0;waited < 1500 && status.status === "pending"; waited += 100) {
         await Bun.sleep(100);
-        if (!options.refusedEnds && refused.test(output.slice(from))) {
+        if (!options.refusedEnds && turnedAway()) {
           pasted = false;
-          pastedAt = undefined;
+          afterPaste = false;
           throw new Error("That code couldn't be read. Copy all of it from the page, and paste it again.");
         }
       }
@@ -8621,6 +8981,7 @@ async function commandSignIn(options) {
     }
   };
 }
+var TERMINAL = { cols: 1000, rows: 50 };
 function lastLines(text) {
   return text.trim().split(`
 `).slice(-4).join(`
@@ -9835,6 +10196,7 @@ function botMemory(session) {
 var KEPT_IN_HOME = ["settings*.json", "hooks", ".mcp.json"];
 var PRINTED_TOKEN = /sk-ant-oat\d+-[A-Za-z0-9_-]{60,}(?=[^A-Za-z0-9_-])/;
 var ANY_TOKEN = /sk-ant-[A-Za-z0-9_-]+/g;
+var PRINTED_SECRET = /sk-ant-[A-Za-z0-9_-]+|^[^\S\n]*[A-Za-z0-9_-]{32,}[^\S\n]*$/gm;
 var VALUE = `"[^"]*"|'[^']*'|[^\\s"',;]+`;
 var SECRET_NAME = "[A-Za-z0-9_-]*(?:key|token(?!s)|secret|password|passwd)[A-Za-z0-9_-]*";
 var withoutSecrets = (text) => text.replace(ANY_TOKEN, "sk-ant-\u2026").replace(/:\/\/[^\s/]*@/g, "://\u2026@").replace(new RegExp(`\\b((?:proxy-)?authorization)(["']?\\s*[:=]\\s*)(?:"[^"]*"|'[^']*'|(?:(?:bearer|basic|token)\\s+)?[^\\s"',;]+)`, "gi"), "$1$2\u2026").replace(/\bBearer\s+(?!tokens?\b)[A-Za-z0-9._~+/-]+=*/gi, "Bearer \u2026").replace(new RegExp(`\\b(${SECRET_NAME})(\\s*=\\s*)(?:${VALUE})`, "gi"), "$1$2\u2026").replace(new RegExp(`(["'])(${SECRET_NAME})\\1(\\s*:\\s*)(?:${VALUE})`, "gi"), "$1$2$1$3\u2026").replace(new RegExp(`\\b((?:[A-Za-z0-9_-]+[-_])?(?:api[-_]?key|token)|[A-Za-z0-9_-]*(?:password|passwd|secret))(?<!(?:^|[\\s(])token)(\\s*:\\s*)(?:${VALUE})`, "gi"), "$1$2\u2026").replace(new RegExp(`(--${SECRET_NAME})(\\s+|=)(?:${VALUE})`, "gi"), "$1$2\u2026");
@@ -10084,6 +10446,13 @@ class ClaudeAgent {
     if (ClaudeAgent.keychain && methodID !== "console") {
       const started = Date.now();
       let handedOver = false;
+      const keep = (token) => {
+        mkdirSync13(dirname11(this.tokenFile), { recursive: true, mode: 448 });
+        const writing = `${this.tokenFile}.${process.pid}.tmp`;
+        writeFileSync15(writing, JSON.stringify({ token, made: started }), { mode: 384 });
+        renameSync10(writing, this.tokenFile);
+        handedOver = true;
+      };
       return commandSignIn({
         command: executable,
         args: ["setup-token"],
@@ -10096,19 +10465,12 @@ class ClaudeAgent {
         codePrompt: /Paste code here if prompted\s*>\s*/g,
         refusedCode: /wasn.t accepted|invalid code/i,
         refusedEnds: "Claude didn't take that code. Start again for a new one.",
-        onOutput: (output) => {
-          if (handedOver)
-            return;
-          const token = PRINTED_TOKEN.exec(output)?.[0];
-          if (!token)
-            return;
-          mkdirSync13(dirname11(this.tokenFile), { recursive: true, mode: 448 });
-          const writing = `${this.tokenFile}.${process.pid}.tmp`;
-          writeFileSync15(writing, JSON.stringify({ token, made: started }), { mode: 384 });
-          renameSync10(writing, this.tokenFile);
-          handedOver = true;
+        onLine: (line) => {
+          const token = handedOver ? undefined : PRINTED_TOKEN.exec(line)?.[0];
+          if (token)
+            keep(token);
         },
-        secret: ANY_TOKEN,
+        secret: PRINTED_SECRET,
         onComplete: () => {
           this.turnedAway = undefined;
           this.known.reset();
@@ -24758,4 +25120,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 77d6e4740882274b49ec73f4817e8b29cff197156564ec6fd73b354f6780f09a
+// Built from Packages/Box/src/agents d43cf7d585343c065fde212e3c158ceb0a84c52f8c03a975588164ab3d57cb26

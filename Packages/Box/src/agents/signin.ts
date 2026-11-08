@@ -9,6 +9,7 @@ import { join } from "node:path"
 import type { SignInAttempt } from "./agent"
 import { newID } from "./ids"
 import { firstURL, plain } from "./proc"
+import { Screen } from "./screen"
 import type { OAuthStatus } from "./wire"
 
 export interface CommandSignInOptions {
@@ -33,9 +34,10 @@ export interface CommandSignInOptions {
   pageWait?: number
   /** Where a device code is in what it prints, for showing beside the page. */
   userCode?: RegExp
-  /** What it has printed so far, each time it prints: for a sign-in it hands over rather than
-   * keeps (`claude setup-token`'s token), taken as soon as it shows. */
-  onOutput?: (output: string) => void
+  /** Each line it has printed in full, as it's seen (in a terminal, a line the cursor has left):
+   * for a sign-in it hands over rather than keeps (`claude setup-token`'s token), taken as soon as
+   * it shows, and never a line still being drawn. */
+  onLine?: (line: string) => void
   /** What it prints that's never said back (a token it hands over): left out of a failure's words. */
   secret?: RegExp
   /** Run in a terminal of its own, for a command that prints its page and takes a code only there
@@ -64,18 +66,52 @@ export async function commandSignIn(options: CommandSignInOptions): Promise<Sign
   // A value left `undefined` is unset, as in `run`.
   for (const name of Object.keys(env)) if (env[name] === undefined) delete env[name]
   // What it printed, its terminal codes taken out as a whole (one can come split over two reads).
+  // In a terminal, what its screen shows: a terminal UI redraws only what changed, jumping over the
+  // rest, so its stream has words in pieces (a token too).
   let printed = ""
   let output = ""
   const refused = options.refusedCode ?? /invalid code/i
-  // Where its output stood when the code was typed, while it's being taken.
-  let pastedAt: number | undefined
+  // Whether a code was typed and is being taken; in a terminal, whether a line it printed since
+  // turned it away.
+  let afterPaste = false
+  let refusedLine = false
+  // (In a pipe: where its output stood then, and where the next line starts.)
+  let pastedAt = 0
+  let lineFrom = 0
+  const screen = options.terminal
+    ? new Screen(TERMINAL.cols, TERMINAL.rows, (line) => {
+        if (afterPaste && refused.test(line)) refusedLine = true
+        said(line)
+      })
+    : undefined
+  /** A line it printed in full: what it hands over (a token) may sign you in then and there. */
+  const said = (line: string) => {
+    if (!options.onLine) return
+    options.onLine(line)
+    if (signedInBefore !== false || status.status !== "pending") return
+    void options.signedIn().then((signedIn) => {
+      if (!signedIn || status.status !== "pending") return
+      succeed()
+      child.kill()
+    }, () => {})
+  }
+  /** Whether what it printed since the code was typed turns it away. */
+  const turnedAway = () => (screen ? refusedLine || refused.test(screen.current()) : refused.test(output.slice(pastedAt)))
   const take = (text: string) => {
-    printed += text
-    output = plain(printed)
-    options.onOutput?.(output)
+    if (screen) {
+      screen.write(text)
+      output = screen.text()
+    } else {
+      printed += text
+      output = plain(printed)
+      for (let end = output.indexOf("\n", lineFrom); end >= 0; end = output.indexOf("\n", lineFrom)) {
+        said(output.slice(lineFrom, end + 1))
+        lineFrom = end + 1
+      }
+    }
     // A code turned away after it was checked over the network, however long that took: one that
     // takes no second code ends the sign-in.
-    if (options.refusedEnds && pastedAt !== undefined && status.status === "pending" && refused.test(output.slice(pastedAt))) {
+    if (options.refusedEnds && afterPaste && status.status === "pending" && turnedAway()) {
       status = { status: "failed", message: options.refusedEnds }
       child.kill()
     }
@@ -86,7 +122,7 @@ export async function commandSignIn(options: CommandSignInOptions): Promise<Sign
     const decoder = new TextDecoder()
     const spawned = Bun.spawn([options.command, ...options.args], {
       env,
-      terminal: { cols: 1000, rows: 50, data: (_terminal: unknown, data: Uint8Array) => take(decoder.decode(data, { stream: true })) },
+      terminal: { ...TERMINAL, data: (_terminal: unknown, data: Uint8Array) => take(decoder.decode(data, { stream: true })) },
     } as any) as any
     child = spawned
     // A terminal's Return.
@@ -123,9 +159,12 @@ export async function commandSignIn(options: CommandSignInOptions): Promise<Sign
     if (signedIn && (code === 0 || signedInBefore === false)) succeed()
     else if (pasted) status = { status: "failed", message: "That code didn't work. Start again, and paste the code from the page this sign-in opens." }
     else {
-      let said = options.codePrompt ? output.replace(options.codePrompt, "") : output
-      if (options.secret) said = said.replace(options.secret, "")
-      status = { status: "failed", message: lastLines(said) || `Signing in stopped (exit code ${code}).` }
+      // (Its secret first, before taking anything out can join a piece of it to other words.)
+      let words = options.secret ? output.replace(options.secret, "") : output
+      if (options.codePrompt) words = words.replace(options.codePrompt, "")
+      // No control characters (a terminal's codes are gone already).
+      words = words.replace(/[\x00-\x08\x0b-\x1f\x7f]/g, "")
+      status = { status: "failed", message: lastLines(words) || `Signing in stopped (exit code ${code}).` }
     }
   })
   // Signed in while the command lingers (it waits on something after the page): done then.
@@ -188,15 +227,16 @@ export async function commandSignIn(options: CommandSignInOptions): Promise<Sign
       ? async (code: string) => {
           if (status.status !== "pending") throw new Error("That sign-in is over. Start it again.")
           pasted = true
-          const from = output.length
-          pastedAt = from
+          pastedAt = output.length
+          afterPaste = true
+          refusedLine = false
           await type(code.trim() + "\n")
           // A code it can't read (part of one) is turned away at once, and it waits for another.
           for (let waited = 0; waited < 1_500 && status.status === "pending"; waited += 100) {
             await Bun.sleep(100)
-            if (!options.refusedEnds && refused.test(output.slice(from))) {
+            if (!options.refusedEnds && turnedAway()) {
               pasted = false
-              pastedAt = undefined
+              afterPaste = false
               throw new Error("That code couldn't be read. Copy all of it from the page, and paste it again.")
             }
           }
@@ -212,6 +252,9 @@ export async function commandSignIn(options: CommandSignInOptions): Promise<Sign
     },
   }
 }
+
+/** The terminal a command runs in: wide, so nothing it prints wraps. */
+const TERMINAL = { cols: 1000, rows: 50 }
 
 function lastLines(text: string): string {
   return text.trim().split("\n").slice(-4).join("\n").trim()
