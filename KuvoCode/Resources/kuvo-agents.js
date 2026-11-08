@@ -10155,6 +10155,48 @@ async function stopShell(id) {
   return true;
 }
 
+// Packages/Box/src/agents/told.ts
+function toldOf(state, key) {
+  const told = state[key];
+  return typeof told === "string" ? told : undefined;
+}
+var paragraphs = (text) => text.split(/\n{2,}/).map((part) => part.trim()).filter(Boolean);
+function instructionsNote(before, now) {
+  if (before === now)
+    return;
+  if (before === undefined) {
+    if (!now.trim())
+      return;
+    return `<system-reminder>
+Kuvo Code's instructions for you, as they are now. Where they differ from what you were told before, these hold:
+
+${now.trim()}
+</system-reminder>`;
+  }
+  const was = paragraphs(before);
+  const is = paragraphs(now);
+  const added = is.filter((part) => !was.includes(part));
+  const removed = was.filter((part) => !is.includes(part));
+  if (!added.length && !removed.length)
+    return;
+  const lines = ["<system-reminder>", "Kuvo Code changed your instructions since you were last told them."];
+  if (added.length)
+    lines.push(`Where they differ from what you were told before, this holds now:
+
+${added.join(`
+
+`)}`);
+  if (removed.length)
+    lines.push(`This no longer holds:
+
+${removed.join(`
+
+`)}`);
+  lines.push("</system-reminder>");
+  return lines.join(`
+`);
+}
+
 // Packages/Box/src/agents/agents/claude.ts
 var SDK = [{ name: "@anthropic-ai/claude-agent-sdk", version: "0.3.303" }];
 var places = [join21(homedir(), ".local/bin"), join21(homedir(), ".claude/local"), "/opt/homebrew/bin", "/usr/local/bin"];
@@ -10907,8 +10949,18 @@ class ClaudeThread {
     }
     return new Promise((resolve) => {
       this.lastHooks = hooks;
-      const message = userMessage(input, this.copies());
-      this.active = this.turnFor(turn, hooks, resolve, input.auto, new Map(input.compact ? [] : [[message.uuid, ""]]));
+      const note = input.compact ? undefined : instructionsNote(toldOf(this.state, "claudeTold"), append);
+      const message = userMessage(note ? { ...input, text: `${note}
+
+${input.text}` } : input, this.copies());
+      const answered = (result) => {
+        if (note && result.outcome !== "failed") {
+          this.state.claudeTold = append;
+          hooks.saveState();
+        }
+        resolve(result);
+      };
+      this.active = this.turnFor(turn, hooks, answered, input.auto, new Map(input.compact ? [] : [[message.uuid, ""]]));
       this.active.compacting = input.compact;
       this.input.push(message);
     });
@@ -11110,8 +11162,11 @@ class ClaudeThread {
       this.state.claudeSession = id;
       hooks.saveState();
     }
-    if (!resume)
+    if (!resume) {
       delete this.state.claudeCost;
+      this.state.claudeTold = append;
+      hooks.saveState();
+    }
     const whole = this.whole(skills, id);
     const named = botMemory(this.session);
     const ownMemory = named && existsSync13(named) ? named : undefined;
@@ -13097,6 +13152,7 @@ class CodexThread {
       this.startedOver = true;
     this.nativeID = started.thread.id;
     this.state.codexThread = this.nativeID;
+    this.state.codexTold = instructions;
     hooks.saveState();
     this.loaded = true;
     return rpc;
@@ -13314,7 +13370,11 @@ ${said(index)}`).join(`
     const rpc = await this.ensureThread(input, hooks);
     if (hooks.signal.aborted)
       return { outcome: "interrupted" };
-    const items = [{ type: "text", text: input.text, text_elements: [] }];
+    const instructions = this.instructions ?? "";
+    const note = input.compact ? undefined : instructionsNote(toldOf(this.state, "codexTold"), instructions);
+    const items = [{ type: "text", text: note ? `${note}
+
+${input.text}` : input.text, text_elements: [] }];
     const others = [];
     const fencedIn = this.fencedIn(rpc);
     for (const attached of input.files) {
@@ -13360,6 +13420,10 @@ ${others.map((path) => `- ${path}`).join(`
             this.interruptLane(threadID, lane, rpc);
             this.endSubagent(lane, "interrupted");
           }
+        }
+        if (note && result.outcome !== "failed") {
+          this.state.codexTold = instructions;
+          hooks.saveState();
         }
         resolve(result);
       };
@@ -25124,4 +25188,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 54a3cc9c673f48b776ed98bba8ace25ed0e60a83c863068246a087d37f2463f9
+// Built from Packages/Box/src/agents df0913e65748379361ceb243b1fb0e7a3c3cafe4c929ffbe7e154b38363a542e

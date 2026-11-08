@@ -1846,3 +1846,79 @@ describe("summarizing on its own, as the conversation fills up", () => {
     expect(notices(id)).toEqual([])
   })
 })
+
+describe("Claude Code, instructions that changed as its conversation goes on", () => {
+  /** What the message it was sent last says. */
+  const lastSent = () => fake.sent.at(-1).message.content.findLast((part: any) => part.type === "text").text as string
+
+  /** A message, answered: its turn over. */
+  async function answered(id: string, text: string, turns: number) {
+    sessions.prompt(id, { id: `msg_claude_told_${text}`, text, files: [], delivery: "steer" })
+    await until(() => fake.sent.length === turns)
+    fake.out.push({ type: "system", subtype: "init", session_id: fake.options.resume ?? fake.options.sessionId })
+    fake.result([fake.sent.at(-1).uuid])
+    await until(() => idles(id).length === turns)
+  }
+
+  test("moved to another folder, the conversation it goes on with is told what changed, once; unchanged, nothing extra", async () => {
+    const id = sessions.create({ model: { providerID: provider, id: "default" }, location: { directory: root } }).id
+    sessions.setInstruction(id, "kuvo.worktree", "You work in the worktree at /old/place/tree.")
+    await answered(id, "first", 1)
+    // A new conversation has them as its instructions: no note.
+    expect(fake.options.systemPrompt.append).toContain("/old/place/tree")
+    expect(lastSent()).toBe("first")
+    // It moved (another computer, another folder), and the bridge started again there.
+    sessions.closeAll()
+    sessions.setInstruction(id, "kuvo.worktree", "You work in the worktree at /new/place/tree.")
+    sessions.setInstruction(id, "kuvo.moved", "You moved to this computer from the Old Mac.")
+    fake = new FakeClaude()
+    claude = new TestClaude(fake, root)
+    sessions = withBlocks([])
+    await answered(id, "second", 1)
+    // The same conversation, which keeps the instructions it started with: what changed goes with the message.
+    expect(fake.options.resume).toBeTruthy()
+    const told = lastSent()
+    expect(told).toContain("/new/place/tree")
+    expect(told).toContain("You moved to this computer from the Old Mac.")
+    expect(told).toMatch(/no longer holds:\s+You work in the worktree at \/old\/place\/tree\./)
+    expect(told.endsWith("\n\nsecond")).toBe(true)
+    // Unchanged since: nothing more.
+    await answered(id, "third", 2)
+    expect(lastSent()).toBe("third")
+  })
+
+  test("a conversation from before Kuvo Code kept what it was told hears its instructions as they are now, once", async () => {
+    const id = sessions.create({ model: { providerID: provider, id: "default" }, location: { directory: root } }).id
+    sessions.setInstruction(id, "kuvo.moved", "You moved to this computer from the Old Mac.")
+    await answered(id, "first", 1)
+    sessions.closeAll()
+    // As a conversation kept by an older bridge: it has no word of what it was told.
+    const file = join(root, "sessions", id, "agent.json")
+    writeFileSync(file, readFileSync(file, "utf8").replace(/"claudeTold":\s*"[^"]*",?/, ""))
+    expect(readFileSync(file, "utf8")).not.toContain("claudeTold")
+    fake = new FakeClaude()
+    claude = new TestClaude(fake, root)
+    sessions = withBlocks([])
+    await answered(id, "second", 1)
+    expect(lastSent()).toContain("You moved to this computer from the Old Mac.")
+    expect(lastSent().endsWith("\n\nsecond")).toBe(true)
+    await answered(id, "third", 2)
+    expect(lastSent()).toBe("third")
+  })
+
+  test("told nothing again when only a message failed: it's said with the next", async () => {
+    const id = sessions.create({ model: { providerID: provider, id: "default" }, location: { directory: root } }).id
+    await answered(id, "first", 1)
+    sessions.setInstruction(id, "kuvo.project-folders", "The project's other folder is /elsewhere.")
+    fake.out = new Queue<any>()
+    sessions.prompt(id, { id: "msg_claude_told_f", text: "second", files: [], delivery: "steer" })
+    await until(() => fake.sent.length === 2)
+    expect(lastSent()).toContain("/elsewhere")
+    fake.result([fake.sent.at(-1).uuid], "error_during_execution", { result: "Overloaded" })
+    await until(() => idles(id).length === 2)
+    expect(idles(id)[1].outcome).toBe("failed")
+    sessions.prompt(id, { id: "msg_claude_told_g", text: "third", files: [], delivery: "steer" })
+    await until(() => fake.sent.length === 3)
+    expect(lastSent()).toContain("/elsewhere")
+  })
+})

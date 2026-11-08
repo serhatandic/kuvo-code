@@ -26,6 +26,7 @@ import { skillsFolder, skillsFor, turnedOff, upward } from "../skills"
 import { onMachine, ownFoldersScript } from "../machine"
 import { fenceAgent, fenceAttachments, fenceCopy, fenceKey, fenceOn, seatBot, fullAccessMark } from "../fence"
 import { addShell, endShell } from "../shells"
+import { instructionsNote, toldOf } from "../told"
 import { pictureData, pictureFile, withPictures } from "../pictures"
 import type { Turn } from "../turn"
 import type { FileDiff, FormField, Model, ModelRef, Session, TokenUsage } from "../wire"
@@ -1033,10 +1034,20 @@ class ClaudeThread implements Thread {
     }
     return new Promise<RunResult>((resolve) => {
       this.lastHooks = hooks
-      const message = userMessage(input, this.copies())
+      // A conversation it goes on with keeps the instructions it started with: what changed in
+      // them since is said ahead of the message, once. (Not ahead of its /compact, typed as is.)
+      const note = input.compact ? undefined : instructionsNote(toldOf(this.state, "claudeTold"), append)
+      const message = userMessage(note ? { ...input, text: `${note}\n\n${input.text}` } : input, this.copies())
+      const answered = (result: RunResult) => {
+        if (note && result.outcome !== "failed") {
+          this.state.claudeTold = append
+          hooks.saveState()
+        }
+        resolve(result)
+      }
       // The turn ends with the result that answers it (one of its own before, like a command's
       // end it took up, doesn't end it). Its /compact, typed as you would, ends with the first.
-      this.active = this.turnFor(turn, hooks, resolve, input.auto, new Map(input.compact ? [] : [[message.uuid, ""]]))
+      this.active = this.turnFor(turn, hooks, answered, input.auto, new Map(input.compact ? [] : [[message.uuid, ""]]))
       this.active.compacting = input.compact
       this.input!.push(message)
     })
@@ -1248,8 +1259,12 @@ class ClaudeThread implements Thread {
       this.state.claudeSession = id
       hooks.saveState()
     }
-    // A new conversation counts its cost from nothing.
-    if (!resume) delete this.state.claudeCost
+    // A new conversation counts its cost from nothing, and has the instructions it's given now.
+    if (!resume) {
+      delete this.state.claudeCost
+      this.state.claudeTold = append
+      hooks.saveState()
+    }
     // While the box's sandbox is on, Claude Code runs whole in it, and so does all it starts: its
     // commands, its hooks and MCP servers (yours, and a project's).
     const whole = this.whole(skills, id)

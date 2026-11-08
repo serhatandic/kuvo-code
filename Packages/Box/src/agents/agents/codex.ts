@@ -25,6 +25,7 @@ import { which } from "../proc"
 import { RPC, RPCError } from "../rpc"
 import { CodexCitations, plainCitations, type Said } from "./codex-citations"
 import { engineSkills, skillsFolder, skillsFor, skillsRoot, turnedOff, upward, within } from "../skills"
+import { instructionsNote, toldOf } from "../told"
 import type { Turn } from "../turn"
 import type { FileDiff, FormField, Model, ModelRef, OAuthStatus, Session } from "../wire"
 
@@ -1048,6 +1049,8 @@ class CodexThread implements Thread {
     if (this.nativeID && this.nativeID !== started.thread.id) this.startedOver = true
     this.nativeID = started.thread.id
     this.state.codexThread = this.nativeID
+    // A new thread has the instructions it's given now.
+    this.state.codexTold = instructions
     hooks.saveState()
     this.loaded = true
     return rpc
@@ -1284,7 +1287,11 @@ class CodexThread implements Thread {
     const rpc = await this.ensureThread(input, hooks)
     // Stopped while Codex was starting.
     if (hooks.signal.aborted) return { outcome: "interrupted" }
-    const items: any[] = [{ type: "text", text: input.text, text_elements: [] }]
+    // A thread it goes on with keeps the developer instructions it started with: what changed in
+    // them since is said ahead of the message, once. (Not as it compacts: nothing goes in then.)
+    const instructions = this.instructions ?? ""
+    const note = input.compact ? undefined : instructionsNote(toldOf(this.state, "codexTold"), instructions)
+    const items: any[] = [{ type: "text", text: note ? `${note}\n\n${input.text}` : input.text, text_elements: [] }]
     const others: string[] = []
     // In the box's sandbox, attachments are copied where it reads them: Kuvo Code's folder is hidden.
     const fencedIn = this.fencedIn(rpc)
@@ -1327,6 +1334,10 @@ class CodexThread implements Thread {
             void this.interruptLane(threadID, lane, rpc)
             this.endSubagent(lane, "interrupted")
           }
+        }
+        if (note && result.outcome !== "failed") {
+          this.state.codexTold = instructions
+          hooks.saveState()
         }
         resolve(result)
       }
