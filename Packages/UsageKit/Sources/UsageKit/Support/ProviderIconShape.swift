@@ -77,7 +77,9 @@ enum ProviderMarks {
     private static var cache: [String: ProviderMark] = [:]
     private static var missing: Set<String> = []
 
+    /// `id` is a provider's or, with several accounts, a card's (`claude@ab12cd34`): the mark is the family's.
     static func mark(for id: String) -> ProviderMark? {
+        let id = ProviderAccountID.family(of: id)
         if let cached = cache[id] { return cached }
         if missing.contains(id) { return nil }
         guard
@@ -94,7 +96,7 @@ enum ProviderMarks {
     }
 
     static func symbolFallback(for id: String) -> String {
-        switch id {
+        switch ProviderAccountID.family(of: id) {
         case "antigravity": return "paperplane"
         case "claude": return "sparkle"
         case "codex": return "circle.hexagongrid"

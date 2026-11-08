@@ -55,7 +55,7 @@ test("every item for released Macs is marked in the code", () => {
 // When each version's paths go: beta.1's when 0.8.0 ships (a Mac's own data from it, which it
 // takes in as it starts, three months after), 0.7's three months after.
 const GOES = {
-  "0.7": ["Goes 3 months after 0.8.0.", "Goes once a release with one is the newest."],
+  "0.7": ["Goes 3 months after 0.8.0.", "Goes once a release with one is the newest.", "Goes once a box tells its news without its bridge."],
   "beta.1": ["Goes when 0.8.0 ships.", "Goes 3 months after 0.8.0."],
 };
 
