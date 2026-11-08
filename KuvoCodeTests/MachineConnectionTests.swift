@@ -686,6 +686,64 @@ import Testing
         #expect(engine.isReady, "connected again, no Connect pressed")
     }
 
+    /// The same restart, with Kuvo Code opening while it's under way (after an update, or at
+    /// login): not connected yet since the app opened, but not answering a moment ago, so the key
+    /// turned away as it starts up is tried on too.
+    @Test func openedWhileAMachineRestartsItsConnectedOnceItsUp() async throws {
+        defer { done() }
+        let id = Self.name()
+        let engine = add(id, at: machine)
+        reachable.failures[id] = RemoteEngineError.ssh(status: 255, message: "ssh: connect to host 192.168.1.101 port 22: Connection refused")
+        await app.connect(engine).value
+        let saw: [Error?] = [
+            RemoteEngineError.ssh(status: 255, message: "ssh: connect to host 192.168.1.101 port 22: Operation timed out"),
+            RemoteEngineError.ssh(status: 255, message: "someone@192.168.1.101: Permission denied (publickey,password,keyboard-interactive)."),
+            nil,
+        ]
+        for next in saw {
+            guard let wait = try await nextTry(engine) else { Issue.record("given up on: “\(engine.statusText)”, \(engine.failure ?? "")"); return }
+            reachable.failures[id] = next
+            clock.pass(wait)
+        }
+        try await until { !engine.isRetrying }
+        #expect(engine.isReady, "connected once it's up, no Connect pressed")
+    }
+
+    /// Connect Now while its tries wait minutes apart, and that settles it (here: its host key
+    /// changed): said at once, rather than "Reconnecting…" until the next try comes round.
+    @Test func connectNowWhileItsTriedAgainSaysAtOnceWhatItFound() async throws {
+        defer { done() }
+        let (id, engine) = try await dropped()
+        reachable.apis[id] = nil
+        var away = 0
+        while away < 3700, let wait = try await nextTry(engine) {
+            away += wait
+            clock.pass(wait)
+        }
+        #expect(try await nextTry(engine) == 120)
+        reachable.failures[id] = RemoteEngineError.ssh(status: 255, message: "WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!\nHost key verification failed.")
+        await app.reconnectNow(engine)?.value
+        #expect(!engine.isRetrying)
+        #expect(engine.connection == .failed)
+        #expect(engine.offer == .connect)
+        try await until { clock.waits == [] }
+    }
+
+    /// A key turned away for good, said after a while; then the Mac wakes: tried once more (an
+    /// agent's key may be unlocked now), and said again at once, not after another while.
+    @Test func aKeyTurnedAwayForGoodIsTriedOnceMoreOnWakeAndSaidAgain() async throws {
+        defer { done() }
+        let (_, engine) = try await dropped(failing: RemoteEngineError.ssh(status: 255, message: "someone@devbox: Permission denied (publickey)."))
+        while let wait = try await nextTry(engine) { clock.pass(wait) }
+        #expect(engine.connection == .failed)
+
+        app.wakeMachines()
+        #expect(try await nextTry(engine) == 3)
+        clock.pass(3)
+        #expect(try await nextTry(engine) == nil, "said again at once")
+        #expect(engine.connection == .failed)
+    }
+
     /// Dropped, then its key turned away for good (kept in an app that locked meanwhile, or taken
     /// off the machine): tried while it may be starting up, then it says why, with Try Again.
     @Test func aMachineThatKeepsTurningTheKeyAwaySaysSoAfterAWhile() async throws {

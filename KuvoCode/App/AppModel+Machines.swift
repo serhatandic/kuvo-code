@@ -439,11 +439,21 @@ extension AppModel {
         }
         return Task {
             await start(engine)
-            // Not reached the first time (the app opened before the network was up), or a start
-            // over that failed: tried again as a dropped connection is, while what waited for
-            // this goes on.
-            guard case .failed = engine.state, engine.failureMayPass, !engine.isRetrying else { return }
-            retry(engine)
+            switch engine.state {
+            // Settled by this start (Connect Now while tries waited): they end, and what's shown
+            // is how it is now, not "Reconnecting…" until the next try comes round.
+            case .ready:
+                if engine.isRetrying { stopRetrying(engine) }
+            case .failed where !engine.failureMayPass:
+                if engine.isRetrying { stopRetrying(engine) }
+            // Not reached (the app opened before the network was up, a start over that failed, a
+            // Connect Now that didn't get there): tried again as a dropped connection is, from
+            // the first of its waits, while what waited for this goes on.
+            case .failed:
+                retry(engine)
+            default:
+                break
+            }
         }
     }
 
@@ -475,12 +485,10 @@ extension AppModel {
                 engine.retryLoop = nil
             }
         }
-        var waited = 0
-        var comingBackSince: Int?
         for wait in MachineClock.reconnectWaits {
             await MachineClock.wait(wait)
             guard !Task.isCancelled else { return }
-            waited += wait
+            if let since = engine.comingBackWaited { engine.comingBackWaited = since + wait }
             switch engine.state {
             // Connected again some other way (Connect Now), or disconnected or removed meanwhile.
             case .ready, .preparing: return
@@ -493,11 +501,12 @@ extension AppModel {
             guard !engine.isReady, !Task.isCancelled else { return }
             switch engine.failureKind {
             case .away:
-                comingBackSince = nil
+                engine.comingBackWaited = nil
             case .comingBack:
-                // Answering, but not coming up, for a while now: that's said, with Try Again.
-                if waited - (comingBackSince ?? waited) >= Self.comingBackFor { return }
-                comingBackSince = comingBackSince ?? waited
+                // Answering, but not coming up, for a while now (over every round of tries):
+                // that's said, with Try Again.
+                if let since = engine.comingBackWaited, since >= Self.comingBackFor { return }
+                engine.comingBackWaited = engine.comingBackWaited ?? 0
             case .lasting:
                 return
             }
@@ -523,6 +532,8 @@ extension AppModel {
         for _ in 0..<240 where api == nil { try? await Task.sleep(for: .milliseconds(250)) }
         // Removed a moment ago and added again: after the removal there has finished.
         await machines.waitForRemoval(of: engine.machine.id)
+        // Disconnected while it waited (its tries ended): nothing goes there.
+        guard !Task.isCancelled, !engine.isDisconnected else { return }
         // Removed, or disconnected, while it started (or since): its connection ended, and nothing
         // of yours goes there.
         guard let connection = await engine.start(machineLaunch(engine), cache: AppInfo.supportDirectory.appending(path: "engine-linux")) else { return }

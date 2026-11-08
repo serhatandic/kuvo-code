@@ -83,6 +83,13 @@ final class MachineEngine {
     /// It was connected since the app opened: a machine that works, so what goes wrong while it
     /// comes back (it's restarting, its engine coming up) passes, but for what never would.
     @ObservationIgnored private var wasConnected = false
+    /// Its last try didn't get an answer (`away`): one that answers now is on its way back too,
+    /// though it wasn't connected since the app opened (the app opened as it restarted, #285).
+    @ObservationIgnored private var lastTryAway = false
+    /// How long it's answered without coming up (`comingBack`), in seconds waited between tries,
+    /// over every round of tries, so a wake or Connect Now doesn't start it over; nil once it
+    /// didn't answer, or connected.
+    @ObservationIgnored var comingBackWaited: Int?
 
     enum FailureKind {
         /// It didn't answer (the network, the machine away or restarting, waiting to be unlocked):
@@ -498,6 +505,7 @@ final class MachineEngine {
             guard connections == attempt else { return nil }
             guard let api else {
                 failureKind = .away
+                lastTryAway = true
                 state = .failed("Couldn’t reach \(machine.name).")
                 return nil
             }
@@ -680,19 +688,24 @@ final class MachineEngine {
     /// there), where nearly anything can fail for a moment, and a Mac restarting with FileVault
     /// answers only for its password until it's unlocked.
     private func failed(_ error: Error) {
-        failureKind = if Self.mayPass(error) || wasConnected && Self.waitsToBeUnlocked(error) {
+        // Known to work: connected since the app opened, or not answering a moment ago.
+        let works = wasConnected || lastTryAway
+        failureKind = if Self.mayPass(error) || works && Self.waitsToBeUnlocked(error) {
             .away
-        } else if wasConnected && !Self.neverPasses(error) {
+        } else if works && !Self.neverPasses(error) {
             .comingBack
         } else {
             .lasting
         }
+        lastTryAway = failureKind == .away
         state = .failed(error.localizedDescription)
     }
 
     /// It's up: a connection begins.
     private func connected() -> MachineConnection {
         wasConnected = true
+        lastTryAway = false
+        comingBackWaited = nil
         activeConnection?.end()
         let connection = MachineConnection()
         activeConnection = connection
@@ -956,6 +969,7 @@ final class MachineEngine {
     func connectionLost(_ reason: String) {
         disconnect()
         failureKind = .away
+        lastTryAway = true
         state = .failed(reason)
         onExit()
     }
