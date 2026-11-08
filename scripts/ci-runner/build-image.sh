@@ -89,6 +89,11 @@ echo "Copying in $XCODE…"
 guest 'sudo rm -rf /Applications/Xcode.app && sudo ditto "/Volumes/My Shared Files/xcode" /Applications/Xcode.app'
 guest 'sudo xcode-select -s /Applications/Xcode.app/Contents/Developer && sudo xcodebuild -license accept && sudo xcodebuild -runFirstLaunch && sudo DevToolsSecurity -enable && xcodebuild -version && swift --version | head -1'
 
+# The app's tests run the box with Node from where it usually is (TestBox.node: /usr/local/bin or
+# /opt/homebrew/bin, not PATH, so setup-node's doesn't count); the base image's node@24 is keg-only.
+echo "Node where the app's tests look for it…"
+guest 'set -e; [[ -x /opt/homebrew/bin/node ]] || brew link --force --overwrite node@24 >/dev/null; /opt/homebrew/bin/node --version'
+
 echo "Installing GitHub's runner $runner_version…"
 guest "set -euo pipefail
 rm -rf ~/actions-runner && mkdir -p ~/actions-runner && cd ~/actions-runner
