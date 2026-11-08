@@ -19356,11 +19356,12 @@ function keepMoving(now = Date.now()) {
       tell(record.peer, { op: "drop", id: record.id });
       continue;
     }
-    if (record.stage === "holding" && record.holdSince !== undefined && now - record.holdSince > HOLDING_AT_MOST) {
+    const holdingSince = record.holdSince ?? (!record.step || record.step === "check" ? record.started : undefined);
+    if (record.stage === "holding" && holdingSince !== undefined && now - holdingSince > HOLDING_AT_MOST) {
       takeBack2(record.id, say.slow(record.name), 409).catch(() => {});
       continue;
     }
-    if (record.stage === "holding" && !record.step) {
+    if (record.stage === "holding" && (!record.step || record.step === "check")) {
       drive(record.id);
       continue;
     }
@@ -19475,7 +19476,7 @@ async function resumeMoves(now = Date.now()) {
       continue;
     if (record.stage === "finishing")
       await inTurn(record.id, () => finish(record.id)).catch(() => {});
-    else if (record.stage === "holding" && !record.step && now - record.started < 30000)
+    else if (record.stage === "holding" && (!record.step || record.step === "check") && now - record.started < 30000)
       continue;
     else if (record.stage !== "switching")
       await inTurn(record.id, () => takeBack2(record.id, `${record.name} didn’t get there. Try again.`, 409)).catch(() => {});
