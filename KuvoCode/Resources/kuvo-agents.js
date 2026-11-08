@@ -10179,22 +10179,24 @@ ${now.trim()}
   const removed = was.filter((part) => !is.includes(part));
   if (!added.length && !removed.length)
     return;
-  const lines = ["<system-reminder>", "Kuvo Code changed your instructions since you were last told them."];
+  const parts = ["Kuvo Code changed your instructions since you were last told them."];
   if (added.length)
-    lines.push(`Where they differ from what you were told before, this holds now:
+    parts.push(`Where they differ from what you were told before, this holds now:
 
 ${added.join(`
 
 `)}`);
   if (removed.length)
-    lines.push(`This no longer holds:
+    parts.push(`Replaced or taken out:
 
 ${removed.join(`
 
 `)}`);
-  lines.push("</system-reminder>");
-  return lines.join(`
-`);
+  return `<system-reminder>
+${parts.join(`
+
+`)}
+</system-reminder>`;
 }
 
 // Packages/Box/src/agents/agents/claude.ts
@@ -10949,21 +10951,26 @@ class ClaudeThread {
     }
     return new Promise((resolve) => {
       this.lastHooks = hooks;
-      const note = input.compact ? undefined : instructionsNote(toldOf(this.state, "claudeTold"), append);
+      const note = input.compact || input.text.trimStart().startsWith("/") ? undefined : instructionsNote(toldOf(this.state, "claudeTold"), append);
       const message = userMessage(note ? { ...input, text: `${note}
 
 ${input.text}` } : input, this.copies());
+      let active;
       const answered = (result) => {
-        if (note && result.outcome !== "failed") {
+        if (note && (result.outcome !== "failed" || !active?.steered.has(message.uuid))) {
           this.state.claudeTold = append;
           hooks.saveState();
         }
         resolve(result);
       };
-      this.active = this.turnFor(turn, hooks, answered, input.auto, new Map(input.compact ? [] : [[message.uuid, ""]]));
+      this.active = active = this.turnFor(turn, hooks, answered, input.auto, new Map(input.compact ? [] : [[message.uuid, ""]]));
       this.active.compacting = input.compact;
       this.input.push(message);
     });
+  }
+  promptRendered() {
+    if (this.opened)
+      this.state.claudeTold = this.opened.append;
   }
   turnFor(turn, hooks, resolve, auto, steered) {
     const active = { turn, hooks, resolve, streamed: new Set, blockTools: new Map, calls: new Map, subagents: new Map, auto, steered };
@@ -11347,6 +11354,7 @@ ${input.text}` } : input, this.copies());
           this.environment(message.session_id);
         this.state.claudeSession = message.session_id;
         this.state.claudeStarted = true;
+        this.promptRendered();
         this.active?.hooks.saveState();
       }
       return;
@@ -11464,6 +11472,8 @@ ${input.text}` } : input, this.copies());
         return this.systemFrame(active, lane, message);
       case "conversation_reset":
         delete this.state.claudeCost;
+        this.promptRendered();
+        this.lastHooks?.saveState();
         turn.notice("Claude Code started its conversation over.");
         return;
       case "auth_status":
@@ -11490,6 +11500,10 @@ ${input.text}` } : input, this.copies());
           turn.toolProgress(message.tool_use_id, { summary: message.summary ?? message.description, lastTool: message.last_tool_name });
         return;
       case "compact_boundary":
+        if (!message.parent_tool_use_id) {
+          this.promptRendered();
+          this.lastHooks?.saveState();
+        }
         if (!active?.compacting)
           turn.compacted(true);
         return;
@@ -13421,7 +13435,7 @@ ${others.map((path) => `- ${path}`).join(`
             this.endSubagent(lane, "interrupted");
           }
         }
-        if (note && result.outcome !== "failed") {
+        if (note && (result.outcome !== "failed" || active.turnID)) {
           this.state.codexTold = instructions;
           hooks.saveState();
         }
@@ -25188,4 +25202,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents df0913e65748379361ceb243b1fb0e7a3c3cafe4c929ffbe7e154b38363a542e
+// Built from Packages/Box/src/agents 1bb6eec6211ccba215f0176cd14a20bd30bf19517c271c5c15fc6ebbd0e04c0f

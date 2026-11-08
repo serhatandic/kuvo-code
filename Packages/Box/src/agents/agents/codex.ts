@@ -1335,7 +1335,8 @@ class CodexThread implements Thread {
             this.endSubagent(lane, "interrupted")
           }
         }
-        if (note && result.outcome !== "failed") {
+        // (Said once its turn took the message.)
+        if (note && (result.outcome !== "failed" || active.turnID)) {
           this.state.codexTold = instructions
           hooks.saveState()
         }

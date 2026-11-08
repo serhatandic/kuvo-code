@@ -1034,12 +1034,15 @@ class ClaudeThread implements Thread {
     }
     return new Promise<RunResult>((resolve) => {
       this.lastHooks = hooks
-      // A conversation it goes on with keeps the instructions it started with: what changed in
-      // them since is said ahead of the message, once. (Not ahead of its /compact, typed as is.)
-      const note = input.compact ? undefined : instructionsNote(toldOf(this.state, "claudeTold"), append)
+      // A conversation it goes on with keeps the instructions it started with (until it's
+      // summarized): what changed in them since is said ahead of the message, once. Not ahead of
+      // a command (its /compact, a skill's), which goes as typed: the next message says it.
+      const note = input.compact || input.text.trimStart().startsWith("/") ? undefined : instructionsNote(toldOf(this.state, "claudeTold"), append)
       const message = userMessage(note ? { ...input, text: `${note}\n\n${input.text}` } : input, this.copies())
+      let active: Active | undefined
       const answered = (result: RunResult) => {
-        if (note && result.outcome !== "failed") {
+        // (Said once it took the message, not one it never got to.)
+        if (note && (result.outcome !== "failed" || !active?.steered.has(message.uuid))) {
           this.state.claudeTold = append
           hooks.saveState()
         }
@@ -1047,10 +1050,18 @@ class ClaudeThread implements Thread {
       }
       // The turn ends with the result that answers it (one of its own before, like a command's
       // end it took up, doesn't end it). Its /compact, typed as you would, ends with the first.
-      this.active = this.turnFor(turn, hooks, answered, input.auto, new Map(input.compact ? [] : [[message.uuid, ""]]))
+      this.active = active = this.turnFor(turn, hooks, answered, input.auto, new Map(input.compact ? [] : [[message.uuid, ""]]))
       this.active.compacting = input.compact
       this.input!.push(message)
     })
+  }
+
+  /**
+   * Claude Code rendered its instructions again, as it was started with them (a new conversation,
+   * or one it summarized, as it keeps them until then): that's what it was told.
+   */
+  private promptRendered() {
+    if (this.opened) this.state.claudeTold = this.opened.append
   }
 
   /** A turn here; as it ends, its subagents in the background are kept, to go on in their sessions. */
@@ -1493,6 +1504,8 @@ class ClaudeThread implements Thread {
         if (this.sandboxedNow && typeof message.session_id === "string") this.environment(message.session_id)
         this.state.claudeSession = message.session_id
         this.state.claudeStarted = true
+        // A new conversation (its first, or its /clear) has the instructions it was started with.
+        this.promptRendered()
         this.active?.hooks.saveState()
       }
       return
@@ -1603,6 +1616,8 @@ class ClaudeThread implements Thread {
         return this.systemFrame(active, lane, message)
       case "conversation_reset":
         delete this.state.claudeCost
+        this.promptRendered()
+        this.lastHooks?.saveState()
         turn.notice("Claude Code started its conversation over.")
         return
       case "auth_status":
@@ -1626,7 +1641,12 @@ class ClaudeThread implements Thread {
         if (typeof message.tool_use_id === "string" && (message.summary || message.description)) turn.toolProgress(message.tool_use_id, { summary: message.summary ?? message.description, lastTool: message.last_tool_name })
         return
       case "compact_boundary":
-        // Summarized. (One you asked for shows as that, whichever way it ends.)
+        // Summarized: its instructions are as it was started with again. (One you asked for shows
+        // as that, whichever way it ends.)
+        if (!message.parent_tool_use_id) {
+          this.promptRendered()
+          this.lastHooks?.saveState()
+        }
         if (!active?.compacting) turn.compacted(true)
         return
       case "status": {

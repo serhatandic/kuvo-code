@@ -1880,7 +1880,7 @@ describe("Claude Code, instructions that changed as its conversation goes on", (
     const told = lastSent()
     expect(told).toContain("/new/place/tree")
     expect(told).toContain("You moved to this computer from the Old Mac.")
-    expect(told).toMatch(/no longer holds:\s+You work in the worktree at \/old\/place\/tree\./)
+    expect(told).toMatch(/Replaced or taken out:\s+You work in the worktree at \/old\/place\/tree\./)
     expect(told.endsWith("\n\nsecond")).toBe(true)
     // Unchanged since: nothing more.
     await answered(id, "third", 2)
@@ -1906,7 +1906,21 @@ describe("Claude Code, instructions that changed as its conversation goes on", (
     expect(lastSent()).toBe("third")
   })
 
-  test("told nothing again when only a message failed: it's said with the next", async () => {
+  test("changed while Claude Code runs: a command you type goes as typed, and the next message says what changed", async () => {
+    const id = sessions.create({ model: { providerID: provider, id: "default" }, location: { directory: root } }).id
+    await answered(id, "first", 1)
+    // Its worktree changed: it starts again, going on with the same conversation.
+    sessions.setInstruction(id, "kuvo.worktree", "You work in the worktree at /a/tree.")
+    fake.out = new Queue<any>()
+    await answered(id, "/review", 2)
+    expect(fake.options.resume).toBeTruthy()
+    expect(lastSent()).toBe("/review")
+    await answered(id, "go on", 3)
+    expect(lastSent()).toContain("You work in the worktree at /a/tree.")
+    expect(lastSent().endsWith("\n\ngo on")).toBe(true)
+  })
+
+  test("a message Claude Code never took: what changed goes with the next; one it took and failed on isn't said again", async () => {
     const id = sessions.create({ model: { providerID: provider, id: "default" }, location: { directory: root } }).id
     await answered(id, "first", 1)
     sessions.setInstruction(id, "kuvo.project-folders", "The project's other folder is /elsewhere.")
@@ -1914,11 +1928,36 @@ describe("Claude Code, instructions that changed as its conversation goes on", (
     sessions.prompt(id, { id: "msg_claude_told_f", text: "second", files: [], delivery: "steer" })
     await until(() => fake.sent.length === 2)
     expect(lastSent()).toContain("/elsewhere")
-    fake.result([fake.sent.at(-1).uuid], "error_during_execution", { result: "Overloaded" })
+    // It stops before it takes it.
+    fake.crash(new Error("Claude Code process exited with code 1"))
     await until(() => idles(id).length === 2)
     expect(idles(id)[1].outcome).toBe("failed")
+    fake.out = new Queue<any>()
     sessions.prompt(id, { id: "msg_claude_told_g", text: "third", files: [], delivery: "steer" })
     await until(() => fake.sent.length === 3)
     expect(lastSent()).toContain("/elsewhere")
+    // This time it takes it, and fails on it (Claude's API overloaded).
+    fake.out.push({ type: "system", subtype: "init", session_id: fake.options.resume })
+    fake.result([fake.sent.at(-1).uuid], "error_during_execution", { result: "Overloaded" })
+    await until(() => idles(id).length === 3)
+    expect(idles(id)[2].outcome).toBe("failed")
+    await answered(id, "fourth", 4)
+    expect(lastSent()).toBe("fourth")
+  })
+
+  test("once Claude Code summarized its conversation, what it has is what it was started with: nothing more to say", async () => {
+    const id = sessions.create({ model: { providerID: provider, id: "default" }, location: { directory: root } }).id
+    await answered(id, "first", 1)
+    sessions.setInstruction(id, "kuvo.worktree", "You work in the worktree at /b/tree.")
+    fake.out = new Queue<any>()
+    // Your command, as typed, and Claude Code summarizes.
+    sessions.prompt(id, { id: "msg_claude_told_c", text: "/compact", files: [], delivery: "steer" })
+    await until(() => fake.sent.length === 2)
+    expect(lastSent()).toBe("/compact")
+    fake.out.push({ type: "system", subtype: "compact_boundary", compact_metadata: { trigger: "manual", pre_tokens: 100 }, parent_tool_use_id: null })
+    fake.result([fake.sent.at(-1).uuid])
+    await until(() => idles(id).length === 2)
+    await answered(id, "after", 3)
+    expect(lastSent()).toBe("after")
   })
 })

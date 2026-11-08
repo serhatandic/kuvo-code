@@ -1915,7 +1915,7 @@ describe("Codex, instructions that changed as its thread goes on", () => {
     expect(sent().filter((message) => message.method === "thread/resume")).toHaveLength(1)
     const told = said()[1]
     expect(told).toContain("You work in the worktree at /new/place/tree.")
-    expect(told).toMatch(/no longer holds:\s+You work in the worktree at \/old\/place\/tree\./)
+    expect(told).toMatch(/Replaced or taken out:\s+You work in the worktree at \/old\/place\/tree\./)
     expect(told.endsWith("\n\nsecond")).toBe(true)
     // Not its asking words, which didn't change.
     expect(told).not.toContain("request_user_input_async")

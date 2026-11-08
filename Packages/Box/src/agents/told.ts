@@ -33,9 +33,8 @@ export function instructionsNote(before: string | undefined, now: string): strin
   const removed = was.filter((part) => !is.includes(part))
   // (Only their spacing or order changed.)
   if (!added.length && !removed.length) return undefined
-  const lines = ["<system-reminder>", "Kuvo Code changed your instructions since you were last told them."]
-  if (added.length) lines.push(`Where they differ from what you were told before, this holds now:\n\n${added.join("\n\n")}`)
-  if (removed.length) lines.push(`This no longer holds:\n\n${removed.join("\n\n")}`)
-  lines.push("</system-reminder>")
-  return lines.join("\n")
+  const parts = ["Kuvo Code changed your instructions since you were last told them."]
+  if (added.length) parts.push(`Where they differ from what you were told before, this holds now:\n\n${added.join("\n\n")}`)
+  if (removed.length) parts.push(`Replaced or taken out:\n\n${removed.join("\n\n")}`)
+  return `<system-reminder>\n${parts.join("\n\n")}\n</system-reminder>`
 }
