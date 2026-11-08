@@ -18,8 +18,8 @@ import { atEnd, removeAtEnd } from "./at-end.js";
 import { appears, asked, before, test } from "./vault-waits.js";
 
 // (A short folder: the vault's socket lives in it, and a socket's path can't be long. Not in the
-// temporary folder, which in an agent's shell is Kuvo Code's own, 70 letters deep: the socket's path
-// then goes over the 103 a socket may have, and the vault never listens.)
+// temporary folder: where the system's can't be used (an agent's shell may write only in Kuvo Code's
+// own, 70 letters deep), the socket's path goes over the 103 a socket may have, and the vault never listens.)
 const root = fs.realpathSync(testsFolder("kv"));
 const home = path.join(root, ".kuvo-code");
 // (Agents may use it: on a box whose commands are fenced. One that isn't is the last test.)
