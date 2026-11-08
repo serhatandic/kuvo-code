@@ -20,6 +20,7 @@ import ClientText
 
 /// Web addresses in what you write: those written as one, not words that look like a domain.
 @Suite struct WebLinksTests {
+    // The "www." cases guard systems whose link detector picks http for them (before macOS 27).
     @Test(arguments: [
         ("See https://example.com/a?b=1 now", ["https://example.com/a?b=1"]),
         ("and http://x.org", ["http://x.org"]),
