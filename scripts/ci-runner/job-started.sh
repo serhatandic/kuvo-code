@@ -11,8 +11,10 @@
 #
 # Refusing means stopping the job's worker. A hook that only fails is the job's first step
 # failing: steps marked `if: always()`, and actions' `pre:` steps, would still run. So it stops
-# its own job's Runner.Worker (found by walking up from this script, checked by its path, killed
-# by its PID, never by name); the runner reports the job failed and waits for the next one.
+# its own job's Runner.Worker: the one among this script's own parents, killed by its PID, never
+# a search by name. The runner reports the job failed and waits for the next one. If it can't
+# find or stop it, it takes the runner offline instead (launchctl bootout of its own service),
+# which ends the job too. Why it refused is also kept in ~ci/Library/Logs/kuvo-ci-refusals.log.
 #
 # It refuses every job, too, when an earlier one left something in ci's account to run later
 # (common.sh, account_tampered): that needs a person to look. Read what it names and what's in
@@ -28,19 +30,28 @@ set -uo pipefail
 
 refuse() {
     echo "::error title=Refused by the Mac mini::$1"
+    # Kept here too: the worker is stopped before it sends this step's log to GitHub.
+    mkdir -p "$HOME/Library/Logs" 2>/dev/null || true
+    echo "$(date -u '+%Y-%m-%dT%H:%M:%SZ') run ${GITHUB_RUN_ID:-?} (${GITHUB_WORKFLOW_REF:-?}): $1" \
+        >> "$REFUSALS_LOG" 2>/dev/null || true
+    # Only this script's own ancestors: bash, the job's Runner.Worker, its Listener, launchd.
     local pid=$$ command
     while [[ "${pid:-1}" -gt 1 ]]; do
         pid="$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')"
         [[ -n "$pid" ]] || break
         command="$(ps -o comm= -p "$pid" 2>/dev/null)"
-        # bin, or bin.<version> while the runner updates itself.
-        if [[ "$command" == "$RUNNER_DIR"/bin/Runner.Worker || "$command" == "$RUNNER_DIR"/bin.*/Runner.Worker ]]; then
+        if [[ "${command##*/}" == Runner.Worker ]]; then
             echo "Stopping this job's worker ($pid) so none of its steps run."
-            kill -KILL "$pid"
-            exit 1
+            kill -KILL "$pid" && exit 1
+            break
         fi
     done
-    echo "::error::Couldn't find this job's Runner.Worker to stop it."
+    # Not found, or not stopped: then the runner itself stops (its own service, by its label),
+    # and the job with it. It stays offline until someone looks, or ci logs in again.
+    echo "::error::Couldn't stop this job's worker: taking the Mac mini's runner offline instead."
+    echo "$(date -u '+%Y-%m-%dT%H:%M:%SZ') couldn't stop the worker; took the runner offline" \
+        >> "$REFUSALS_LOG" 2>/dev/null || true
+    launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null
     exit 1
 }
 

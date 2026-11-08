@@ -12,6 +12,9 @@ RUNNER_DIR="${KUVO_RUNNER_DIR:-$HOME/actions-runner}"
 WORK_DIR="$RUNNER_DIR/_work"
 LABEL="actions.runner.${REPOSITORY%%/*}-${REPOSITORY##*/}.$RUNNER_NAME"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
+# Why the pre-job hook refused a job, since GitHub may never get the stopped job's log.
+# shellcheck disable=SC2034 # used by job-started.sh
+REFUSALS_LOG="$HOME/Library/Logs/kuvo-ci-refusals.log"
 # What jobs find on PATH: Xcode's tools in /usr/bin, and gh from Homebrew (the release job
 # publishes with it). Bun and Node come from the workflows' setup actions.
 JOB_PATH="/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"

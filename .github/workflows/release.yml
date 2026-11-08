@@ -244,6 +244,8 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          # gh's settings of its own, not ones in ci's home an earlier job on the Mini could set.
+          GH_CONFIG_DIR: ${{ runner.temp }}/gh
           SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
         run: |
           set -euo pipefail
@@ -272,7 +274,8 @@ jobs:
             cat "$RUNNER_TEMP/view.err" >&2
             exit 1
           fi
-          python3 ./scripts/merge-appcast.py "$RUNNER_TEMP/item.xml" "$RUNNER_TEMP/current/appcast.xml" > dist/appcast.xml
+          # Isolated (-I): no user site-packages, which an earlier job on the Mini could have added to.
+          python3 -I ./scripts/merge-appcast.py "$RUNNER_TEMP/item.xml" "$RUNNER_TEMP/current/appcast.xml" > dist/appcast.xml
           cat dist/appcast.xml
 
       - name: Package the box release
@@ -306,6 +309,7 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_CONFIG_DIR: ${{ runner.temp }}/gh
         run: |
           set -euo pipefail
           if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then

@@ -94,10 +94,12 @@ as_ci() {
         || fail "svc.sh didn't install the service as $PLIST, which this script starts."
     # In ci's own login session (the window server the app's tests need), not a new one of its
     # own; and started again whenever it stops, which it also does on its own after a long time
-    # without GitHub.
+    # without GitHub, at most every 5 minutes (a runner GitHub has removed stops each time).
     plutil -remove SessionCreate "$PLIST" >/dev/null 2>&1 || true
     plutil -remove KeepAlive "$PLIST" >/dev/null 2>&1 || true
+    plutil -remove ThrottleInterval "$PLIST" >/dev/null 2>&1 || true
     plutil -insert KeepAlive -bool true "$PLIST"
+    plutil -insert ThrottleInterval -integer 300 "$PLIST"
     plutil -lint "$PLIST" >/dev/null
     echo "Installed $PLIST."
 }
