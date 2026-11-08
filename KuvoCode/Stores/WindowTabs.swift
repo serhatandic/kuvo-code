@@ -387,6 +387,15 @@ final class WindowTabs {
         }
     }
 
+    /// ⌘W outside Settings: closes the tab in view. False when no tab is open, for the window to
+    /// close, as a browser's does; with tabs open but none in view (the last one on the computer the
+    /// sidebar shows was deleted), nothing goes.
+    func closeInView() -> Bool {
+        guard let selection else { return !keys.isEmpty }
+        close(selection)
+        return true
+    }
+
     /// Closes every tab but `key`, or all of them when it's nil.
     func closeAll(except key: TabKey?) {
         // Reopened last first, so the leftmost comes back last.
@@ -463,7 +472,11 @@ final class WindowTabs {
     /// Settings' tabs aside: the next or previous tab, around the ends.
     func cycle(by offset: Int) {
         guard !keys.isEmpty else { return }
-        let index = selection.flatMap { keys.firstIndex(of: $0) } ?? 0
+        // None in view: the first, going on, or the last, going back.
+        guard let index = selection.flatMap({ keys.firstIndex(of: $0) }) else {
+            withAnimation(.ui) { selection = offset > 0 ? keys.first : keys.last }
+            return
+        }
         withAnimation(.ui) { selection = keys[(index + offset + keys.count) % keys.count] }
     }
 

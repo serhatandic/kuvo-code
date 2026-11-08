@@ -43,9 +43,10 @@ import Testing
         mini.list([
             StubEngine.session("ses_mini_chat", title: "Trip plans", directory: kept + "/chats"),
             StubEngine.session("ses_mini_a", title: "Fix the build", directory: "/srv/app"),
+            StubEngine.session("ses_mini_b", title: "Release notes", directory: "/srv/app"),
             StubEngine.session("ses_tempbot", title: "Temp", directory: kept + "/bots/bot_temp000001"),
         ])
-        for id in ["ses_mini_chat", "ses_mini_a", "ses_tempbot"] { mini.on("DELETE", "/api/session/\(id)", json: [:]) }
+        for id in ["ses_mini_chat", "ses_mini_a", "ses_mini_b", "ses_tempbot"] { mini.on("DELETE", "/api/session/\(id)", json: [:]) }
         // Its bot, as its box lists it, until it's deleted there.
         let deleted = Guarded(false)
         let temp = #"{"id":"bot_temp000001","session":"ses_tempbot","name":"Temp","look":{"color":"sky","shape":"round","face":"calm"},"folder":"\#(kept)/bots/bot_temp000001"}"#
@@ -70,7 +71,7 @@ import Testing
         #expect(app.workspace.session("ses_mini_a") != nil && app.workspace.session("ses_mac_a") != nil)
 
         // This Mac's tabs between the machine's, the bot's in view, and the sidebar on the machine.
-        for id in ["ses_mini_chat", "ses_mac_a", "ses_mini_a", "ses_tempbot", "ses_mac_b"] { tabs.open(.session(id)) }
+        for id in ["ses_mini_b", "ses_mini_chat", "ses_mac_a", "ses_mini_a", "ses_tempbot", "ses_mac_b"] { tabs.open(.session(id)) }
         tabs.open(.session("ses_tempbot"))
         UserDefaults.standard.set(machine, forKey: SidebarBox.inViewKey)
         #expect(sidebarShows == .machine(machine))
@@ -79,21 +80,29 @@ import Testing
         try await app.bots.delete(bot)
         // (As the window does when the list changes.)
         tabs.dropClosed()
-        #expect(keys == ["ses_mini_chat", "ses_mac_a", "ses_mini_a", "ses_mac_b"], "\(keys)")
+        #expect(keys == ["ses_mini_b", "ses_mini_chat", "ses_mac_a", "ses_mini_a", "ses_mac_b"], "\(keys)")
         #expect(tabs.selection == .session("ses_mini_a"), "the machine's tab nearest it, past this Mac's: \(String(describing: tabs.selection))")
         #expect(sidebarShows == .machine(machine))
 
-        // A session there (the sidebar's Delete), then its last chat.
+        // A session there (the sidebar's Delete), then its last two (from your phone, say): gone
+        // in one go.
         try await app.workspace.delete("ses_mini_a")
         tabs.dropClosed()
         #expect(tabs.selection == .session("ses_mini_chat"), "\(String(describing: tabs.selection))")
         #expect(sidebarShows == .machine(machine))
 
         try await app.workspace.delete("ses_mini_chat")
+        try await app.workspace.delete("ses_mini_b")
         tabs.dropClosed()
         #expect(keys == ["ses_mac_a", "ses_mac_b"], "this Mac's tabs stay open: \(keys)")
         #expect(tabs.selection == nil, "nothing's left open on the machine: \(String(describing: tabs.selection))")
-        #expect(sidebarShows == .machine(machine))
+
+        // With none in view, ⌘W closes nothing (the window stays, and its terminals with it), and
+        // ⌃Tab starts from the first tab.
+        #expect(tabs.closeInView(), "the window isn't closed")
+        #expect(keys == ["ses_mac_a", "ses_mac_b"])
+        tabs.cycle(by: 1)
+        #expect(tabs.selection == .session("ses_mac_a"))
     }
 
     private var keys: [String] { tabs.keys.map(\.text) }
