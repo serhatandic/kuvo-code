@@ -565,6 +565,26 @@ private func collect(_ stream: LinkResponse) async throws -> (status: Int, heade
         #expect(runs.value == 1)
     }
 
+    /// The phone's connection died without closing while the app was in the background (iOS
+    /// suspends it): let go of as the app comes back, the next request goes on a new connection
+    /// at once, rather than waiting on the dead one until its check fails.
+    @Test(.timeLimit(.minutes(1))) func aRelayThatDiedInTheBackgroundIsLetGoOfAsTheAppComesBack() async throws {
+        let relay = MemoryRelay()
+        let host = TestHost(relay: relay, handle: echo)
+        let secret = RelaySecret()
+        let client = LinkClient(relay: URL(string: "wss://relay.test")!, key: LinkKey(), secret: secret, name: "Test iPhone", app: "0.0.1", connect: relay.connect)
+        await client.setClockForTesting(ManualClock().link)
+        let paired = try await client.pair(host.link)
+
+        relay.deafen(secret.address)
+        #expect(await client.relayMayBeGone())
+        // Time never moves here: only a new connection answers.
+        let answered = try await collect(client.send(LinkRequest(method: "POST", path: "api/x", body: Data("back".utf8)), to: paired))
+        #expect(answered.status == 200 && answered.body == Data("back".utf8))
+        #expect(await client.relayMayBeGone(), "one to let go of again")
+        #expect(!(await client.relayMayBeGone()), "none now")
+    }
+
     /// A relay from before `gone`: a stream that only listens isn't told the Mac started again.
     /// The host still turns away the old session when the phone next sends on it, so that request
     /// fails (and the stream with it), and the next one runs on a new session.

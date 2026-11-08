@@ -269,6 +269,18 @@ public actor LinkClient {
     private var heardWatchers: [AsyncStream<Void>.Continuation] = []
     #endif
 
+    /// Back from the background: the relay connection may have died while the app was suspended,
+    /// with nothing to say so until a ping goes unanswered (half a minute or more), and what's
+    /// asked meanwhile would wait on it. Let go of now: its sessions end (`closed`), and the next
+    /// request connects afresh. Whether there was one.
+    @discardableResult
+    public func relayMayBeGone() -> Bool {
+        guard let relay else { return false }
+        relay.close()
+        relayEnded(relay)
+        return true
+    }
+
     /// Ends every session and the relay connection.
     public func disconnect() {
         for session in sessions.values { end(session, with: .closed) }
