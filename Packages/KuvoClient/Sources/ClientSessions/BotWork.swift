@@ -309,14 +309,6 @@ public enum WorkWords {
     /// The mark on a project a bot made: "Made by Pixel".
     public static func madeBy(_ name: String) -> String { "Made by \(name)" }
 
-    /// The line under a bot's name while its sessions work: "At work in Tidepool: 3 sessions".
-    public static func atWork(count: Int, projects: [String]) -> String {
-        let sessions = count == 1 ? "1 session" : "\(count) sessions"
-        let places = Array(NSOrderedSet(array: projects)) as? [String] ?? projects
-        guard let first = places.first else { return "At work: " + sessions }
-        return places.count == 1 ? "At work in \(first): \(sessions)" : "At work in \(places.count) projects: \(sessions)"
-    }
-
     /// What a session asks, as its bot's work says it: "Asks to run npx expo install".
     public static func asking(_ what: String) -> String {
         for (said, says) in [("Wants to run a command: ", "Asks to run "), ("Wants to edit files: ", "Asks to edit "), ("Wants to ", "Asks to ")] where what.hasPrefix(said) {

@@ -76,6 +76,23 @@ struct AtWorkTests {
         #expect(AtWork.sessions(of: "pixel", in: sessions) { $0 == "ses_1" }.count == 1)
     }
 
+    /// A bot's row says what the bar over its composer says, on the Mac and the phone alike: how
+    /// many of its sessions are at work, wherever they are (#240: the phone said "At work in 3
+    /// projects: 3 sessions", counting worktrees as projects, where the Mac said something else).
+    @Test func aBotsRowSaysHowManyOfItsSessionsAreAtWorkAsItsBarDoes() throws {
+        let sessions = try ["ses_1", "ses_2", "ses_3", "ses_done"].map { try session($0) } + [try session("ses_mine", by: nil)]
+        let working: (String) -> Bool = { ["ses_1", "ses_2", "ses_mine"].contains($0) }
+        let asking: (String) -> Bool = { $0 == "ses_3" }
+        let line = AtWork.workLine(of: "pixel", paused: false, in: sessions, isWorking: working, isAsking: asking)
+        #expect(line == "3 sessions at work")
+        let bar = try report([("ses_1", "working"), ("ses_2", "working"), ("ses_3", "asking"), ("ses_done", "finished")]).standing(working: working, asking: asking)
+        #expect(line == WorkWords.barTitle(atWork: bar.atWork.count, today: bar.today.started), "the row and the bar say the same")
+        #expect(AtWork.workLine(of: "pixel", paused: false, in: sessions, isWorking: { $0 == "ses_2" }, isAsking: { _ in false }) == "A session is at work")
+        // Paused, or only waiting on you: its row says that instead.
+        #expect(AtWork.workLine(of: "pixel", paused: true, in: sessions, isWorking: working, isAsking: asking) == nil)
+        #expect(AtWork.workLine(of: "pixel", paused: false, in: sessions, isWorking: { _ in false }, isAsking: asking) == nil)
+    }
+
     @Test func aReportFromABoxThatSaysNothingOfWorkingTodayStillReads() throws {
         let json = #"{"bot": "pixel", "sessions": [], "answered": [], "today": {"started": 0, "tokens": 0}}"#
         #expect(try JSONDecoder().decode(BotWorkReport.self, from: Data(json.utf8)).today.started == 0)

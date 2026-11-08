@@ -40,6 +40,15 @@ public enum AtWork {
     public static func isOverseeingWork(_ bot: String, paused: Bool, in sessions: some Sequence<Session>, isWorking: (String) -> Bool) -> Bool {
         !paused && overseen(by: bot, in: sessions).contains { isWorking($0.id) }
     }
+
+    /// The line under a bot's name while it oversees work (`isOverseeingWork`): how many of its
+    /// sessions are at it, working or waiting on you, in the words of the bar over its composer
+    /// ("3 sessions at work"), so its row says the same on every client; nil while it doesn't.
+    public static func workLine(of bot: String, paused: Bool, in sessions: some Sequence<Session>, isWorking: (String) -> Bool, isAsking: (String) -> Bool) -> String? {
+        let overseen = overseen(by: bot, in: sessions)
+        guard !paused, overseen.contains(where: { isWorking($0.id) }) else { return nil }
+        return WorkWords.barTitle(atWork: overseen.filter { isWorking($0.id) || isAsking($0.id) }.count, today: 0)
+    }
 }
 
 extension BotWorkReport {
