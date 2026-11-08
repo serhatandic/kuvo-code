@@ -6,7 +6,7 @@ import { boxNoteOf } from "../src/shared/queues"
 
 // A lead told of a session whose turn ended while what it left running goes on hears it's still
 // working, not finished; what is shown for it, and how an old message is read, agree.
-const session = { id: "ses_1", title: "Tests", directory: "/tmp/kuvo-news-kinds", time: { created: Date.now() - 5 * 60_000 } }
+const session = { id: "ses_1", title: "Tests", directory: "/tmp/kuvo-news-kinds", time: { created: Date.now() - 5 * 60_000, updated: Date.now() - 5 * 60_000 } }
 const target = { kind: "engine" } as never
 const running = { commands: [{ id: "sh_1", command: "npm test", started: Date.now() }], subagents: [], tasks: [] } as never
 const done = { type: "session.execution.succeeded", data: { sessionID: "ses_1" } } as never

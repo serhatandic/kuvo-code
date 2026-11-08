@@ -17241,6 +17241,8 @@ async function makeOnce(given, readEngine, readBridge, machine) {
   try {
     fs61.mkdirSync(path64.join(folder, "workspace"), { recursive: true });
     fs61.mkdirSync(path64.join(folder, "wakes"), { recursive: true });
+    if (!project)
+      fs61.mkdirSync(path64.join(folder, "memory"), { recursive: true });
     fs61.writeFileSync(path64.join(folder, "MEMORY.md"), kit.memory.replaceAll("⟦name⟧", name));
     const rules = [...kit.rules ?? [], { action: "external_directory", resource: path64.join(folder, "*"), effect: "allow" }];
     const made = await call(target, "POST", "/api/session", { title: name, location: { directory }, model, permissions: rules, metadata: { kuvo: { bot: id } } }, AbortSignal.timeout(BOT_STEP));
@@ -17450,7 +17452,7 @@ async function unpack(id) {
   if (kind && !kind.isDirectory())
     throw new NotTaken(`It brought ${kind.isSymbolicLink() ? "a link" : "something that isn’t a folder"} for its folder, which isn’t taken.`);
   if (brought && kind)
-    plainOnly(brought);
+    plainOnly(brought, true);
   const carried = path65.join(opened, "carry");
   let carry = null;
   if (contents.lane) {
@@ -17460,17 +17462,74 @@ async function unpack(id) {
     } catch {}
     if (!carry)
       throw new NotTaken("Its conversation didn’t come with it.");
-    plainOnly(carried);
+    plainOnly(carried, false);
   }
   return { contents, folder: kind ? brought : null, carry };
 }
-function plainOnly(folder) {
+function goesAsIs(root, entry, kind) {
+  if (kind.isFile() || kind.isDirectory())
+    return true;
+  if (!kind.isSymbolicLink())
+    return false;
+  let target;
+  try {
+    target = fs62.readlinkSync(entry);
+  } catch {
+    return false;
+  }
+  if (path65.isAbsolute(target))
+    return false;
+  let depth = path65.relative(root, path65.dirname(entry)).split(path65.sep).filter((part) => part && part !== ".").length;
+  for (const part of target.split("/")) {
+    if (part === "..")
+      depth -= 1;
+    else if (part && part !== ".")
+      depth += 1;
+    if (depth < 0)
+      return false;
+  }
+  try {
+    return fs62.realpathSync.native(entry).startsWith(fs62.realpathSync.native(root) + path65.sep);
+  } catch {
+    return false;
+  }
+}
+function notPlainIn(folder, most = Infinity) {
+  const left = [""];
+  let looked = 0;
+  while (left.length) {
+    const at = left.pop();
+    let names;
+    try {
+      names = fs62.readdirSync(path65.join(folder, at));
+    } catch {
+      continue;
+    }
+    for (const name of names) {
+      if (++looked > most)
+        return null;
+      const inside = at ? path65.join(at, name) : name;
+      let kind;
+      try {
+        kind = fs62.lstatSync(path65.join(folder, inside));
+      } catch {
+        continue;
+      }
+      if (kind.isDirectory())
+        left.push(inside);
+      else if (!goesAsIs(folder, path65.join(folder, inside), kind))
+        return { path: inside, link: kind.isSymbolicLink() };
+    }
+  }
+  return null;
+}
+function plainOnly(folder, links, root = folder) {
   for (const name of fs62.readdirSync(folder)) {
     const entry = path65.join(folder, name);
     const kind = fs62.lstatSync(entry);
     if (kind.isDirectory())
-      plainOnly(entry);
-    else if (!kind.isFile())
+      plainOnly(entry, links, root);
+    else if (!(links ? goesAsIs(root, entry, kind) : kind.isFile()))
       throw new NotTaken(`It brought ${kind.isSymbolicLink() ? "a link" : "something that isn’t a file"} (${path65.basename(entry)}), which isn’t taken.`);
   }
 }
@@ -17516,6 +17575,16 @@ async function groupAction(bridge, group, action) {
     throw Object.assign(new Error(typeof answer.value?.message === "string" ? answer.value.message : `Its group chats answered ${answer.status}.`), { status: answer.status });
   return answer.value?.data ?? null;
 }
+
+// Packages/Box/src/shared/carry.ts
+var CARRIED_AGENTS = new Set(["claude-code", "codex-cli"]);
+var AGENT_NAMES = {
+  "claude-code": "Claude Code",
+  "codex-cli": "Codex",
+  cursor: "Cursor",
+  "grok-cli": "Grok",
+  antigravity: "Antigravity"
+};
 
 // Packages/Box/src/link/moves/elsewhere.ts
 import fs63 from "node:fs";
@@ -17724,6 +17793,7 @@ var say = {
   background: (name, what) => `${name} has ${what} running. Wait for it to finish, or stop it, then move ${name}.`,
   onGoal: (name) => `${name} is working on a goal, which stays on this computer. Move it once the goal is done, or stop the goal first.`,
   waiting: (name) => `${name} still has messages on their way. Try again in a moment.`,
+  notPlain: (name, what) => `${name}’s folder has ${what.link ? "a link that wouldn’t work on another computer" : "something that isn’t a file"} (${what.path}), which can’t move to another computer. Remove it, then move ${name}.`,
   busy: (name) => `${name} kept getting messages while it moved, so it stayed where it is. Try again in a moment.`,
   botsElsewhere: (chat) => `${chat}’s bots live on different computers, so it can’t go there.`,
   inBoxGroup: (name, chat) => `${name} is in “${chat}”, which lives on ${HERE} with its bots. Move the chat to a Mac first, or take ${name} out of it.`,
@@ -17741,6 +17811,7 @@ var note = {
   noAgents: "Its coding agents aren’t running",
   onGoal: "Working on a goal",
   background: "Running something",
+  notPlain: { link: "Has a link that can’t move", other: "Has something that isn’t a file" },
   inBoxGroup: "In a group chat that lives here",
   needsUpdate: "Needs a newer Kuvo Code",
   botsNotThere: "Its bots don’t all live there",
@@ -17853,6 +17924,9 @@ async function movable(kind, thing, signal) {
     const running = runningOf([here.session]);
     if (running)
       return { name, why: say.background(name, running), note: note.background };
+    const odd = notPlainIn(here.folder, 50000);
+    if (odd)
+      return { name, why: say.notPlain(name, odd), note: odd.link ? note.notPlain.link : note.notPlain.other };
     if (!IS_MAC) {
       let bridge = null;
       try {
@@ -17943,7 +18017,10 @@ async function staysOf(kind, thing, what, signal) {
   const goals = proposedGoals().filter((goal) => own(goal.session, goal.bot)).length;
   if (goals)
     stays.goals = goals;
-  if (what.lane)
+  const agent = what.model?.providerID.split("@")[0] ?? "";
+  if (what.lane && AGENT_NAMES[agent] && !CARRIED_AGENTS.has(agent))
+    stays.startsOver = AGENT_NAMES[agent];
+  else if (what.lane)
     stays.agent = true;
   return stays;
 }
@@ -18063,15 +18140,16 @@ function unhold(folder, wasPaused, pausedAs) {
   } catch {}
 }
 async function settle2(target, sessions, name) {
+  let busy = false;
   for (let tries = 0;tries < SETTLE_FOR; tries++) {
     const active = await call(target, "GET", "/api/session/active", undefined, engineWait()).catch(() => ({}));
-    const busy = isObject(active) && sessions.some((session) => (session in active));
+    busy = isObject(active) && sessions.some((session) => (session in active));
     const inbox = sessions[0] && !queueOf(sessions[0]).paused ? await call(target, "GET", `/api/session/${encodeURIComponent(sessions[0])}/inbox`, undefined, engineWait()).catch(() => []) : [];
     if (!busy && !(Array.isArray(inbox) && inbox.length))
       return;
     await new Promise((resolve) => setTimeout(resolve, 1000));
   }
-  throw new Refused(say.waiting(name));
+  throw new Refused(busy ? say.working(name) : say.waiting(name));
 }
 
 class Refused extends Error {
@@ -18138,9 +18216,16 @@ async function carryOn(id) {
     const running = runningOf(record.sessions);
     if (running)
       throw new Refused(say.background(record.name, running));
+    const odd = record.folder && fs65.existsSync(record.folder) ? notPlainIn(record.folder) : null;
+    if (odd)
+      throw new Refused(say.notPlain(record.name, odd));
     if (record.lane) {
       const packed = await carry(target, "pack", { root: record.sessions[0], into: path68.join(bundleOf(id), "carry"), most: MOST_BUNDLE }).catch((error) => {
-        throw error?.status === 413 ? new Refused(say.tooBig(record.name)) : new Refused(say.cantCarry(record.name, String(error?.message ?? error)));
+        const why = String(error?.message ?? error);
+        const status = error?.status;
+        if (status === 423)
+          throw new Refused(say.working(record.name));
+        throw status === 413 ? new Refused(say.tooBig(record.name)) : new Refused(say.cantCarry(record.name, why));
       });
       digest = packed.digest;
       record.sessions = packed.sessions.map((each) => each.id);
@@ -18296,7 +18381,11 @@ async function arrived(record, placed) {
     await settle2(target, record.sessions, record.name);
     if (record.lane && placed !== outgoing.get(record.id)?.digest)
       throw new Refused(say.notSame(record.name));
-    const again = record.lane ? (await carry(target, "digest", { root: record.sessions[0] })).digest : conversationHash(await exportAll(target, record.sessions[0]));
+    const again = record.lane ? (await carry(target, "digest", { root: record.sessions[0] }).catch((error) => {
+      if (error?.status === 423)
+        return { digest: "" };
+      throw error;
+    })).digest : conversationHash(await exportAll(target, record.sessions[0]));
     const before = outgoing.get(record.id)?.exports;
     if (!still())
       return;

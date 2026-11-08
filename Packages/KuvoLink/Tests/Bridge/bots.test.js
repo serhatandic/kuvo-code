@@ -467,6 +467,10 @@ test("with the Mac closed, a bot is made here as New Bot makes it: its folder, c
     assert.deepEqual(herald.json.bot.look, words.templates[0].look);
     const plain = engine.asked.find(each => each.url === `/api/experimental/session/${herald.json.bot.session}/instructions/entries/kuvo.bot`).body.value;
     assert.ok(plain.includes("Straight Shooter") && !plain.includes("⟦") && !plain.includes("projects"));
+    // What Claude Code remembers for one with a folder of its own is kept in it, so it moves with it;
+    // in a project, it's the project's.
+    assert.ok(fs.statSync(path.join(bots, herald.json.bot.id, "memory")).isDirectory());
+    assert.ok(!fs.existsSync(path.join(folder, "memory")));
   } finally {
     engine.close();
   }

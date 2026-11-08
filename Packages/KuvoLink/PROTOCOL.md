@@ -513,7 +513,10 @@ A client asks the box it lives on once, and watches; the move goes on with no cl
   it can go there now, with why not in words to show (it works in a project, talks with a coding
   agent and this box's agents bridge isn't running, or that computer's box is from before
   `moves.agents`, is in a group chat that lives here with its bots, is working on a goal (a bot's, or a
-  chat's own `/goal` working or paused; it stays on this box), is moving already; that computer's box is
+  chat's own `/goal` working or paused; it stays on this box), has a command or subagent running, has
+  a link that wouldn't work there (absolute, climbing out of its folder on its way, or, followed
+  through any link before it, ending outside it or nowhere) or anything but files, folders and such
+  relative links within it (the box it goes to takes none; looked for again as it's packed), is moving already; that computer's box is
   from before moves, as the `features` its agents' mail last gave say; a group chat's bots don't all
   live on that machine, as its agents' mail says, none of them here) and `note`, the same in a few
   words for beside the computer's name in a menu. `404 {message}` when it isn't here. A group chat
@@ -523,11 +526,13 @@ A client asks the box it lives on once, and watches; the move goes on with no cl
   them from where it goes), its unanswered asks (`work/asks`) and the goals it proposed and you
   haven't started (they're here again if it comes back), and `agent: true` when its coding agent's
   own copy of its conversation is kept here as the way back (removed a week after it first runs
-  there). Clients put it in Move's question (`MoveWords.question`, its `stays`), with the words
+  there): Claude Code's and Codex's go with it. `startsOver: "<agent>"` instead, for one whose
+  coding agent can't take its own conversation along (Cursor, Grok, Antigravity): that agent starts
+  a new conversation there, handed what was said so far. Clients put it in Move's question (`MoveWords.question`, its `stays`), with the words
   that each computer's vault, integrations and browser sign-ins stay with it.
 - `POST kuvo/moves {kind, id, to}` (`to`: the box's key, as `places` gives it) answers once the move
-  ends: `200 {move}` (it lives there now); `409 {message}` refused or taken back, as it was (working,
-  working on a goal,
+  ends: `200 {move}` (it lives there now); `409 {message}` refused or taken back, as it was (still in
+  a turn after a minute's wait, working on a goal,
   messages still on their way, kept getting messages while it moved, too big, refused there);
   `503 {message}` the other computer didn't answer; `404 {message}` it isn't here, or that isn't one
   of your computers. A client that goes doesn't stop it. `note` beside `move` (feature
@@ -608,8 +613,8 @@ until it's answered:
    comes (beside the bundle), so one it gets after starting again counts those before.
 4. Once all are there and its SHA-256 matches, the box it goes to puts it in place, held, in the
    move's turn (a step about it that comes meanwhile waits), saying `working` now and each minute
-   until it's done: the folder where it keeps them (only files and folders: a link or anything else
-   in it or for it, or a `move.json` that isn't a file of its own, and it's refused), `paused` saying `moving`,
+   until it's done: the folder where it keeps them (only files, folders and relative links within it: a
+   link out of it or anything else in it or for it, or a `move.json` that isn't a file of its own, and it's refused), `paused` saying `moving`,
    a chat's `directory` its chats folder; each conversation imported under its own ID (noted first;
    they must be one conversation and its subagents', rooted at the chat or at the conversation a
    bot's folder names, none of them on this box already); their `queues` kept paused in place of

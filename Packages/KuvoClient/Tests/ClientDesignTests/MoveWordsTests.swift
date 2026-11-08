@@ -67,4 +67,10 @@ struct MoveWordsTests {
         #expect(MoveWords.question(kind: "chat", name: "this chat", place: "lab", placeIsMac: false, from: nil, fromMachine: false, stays: .init(asks: 2)).message
             .contains("Its 2 unanswered questions stay here."))
     }
+
+    @Test func aBotWhoseCodingAgentCantTakeItsConversationAlongSaysItStartsANewOne() {
+        let bot = MoveWords.question(kind: "bot", name: "Ada", place: "lab", placeIsMac: false, from: nil, fromMachine: false, stays: .init(startsOver: "Grok"))
+        #expect(bot.message.hasPrefix("Its memory, files, wake-ups and conversation go there, and it carries on there; its seats in group chats start afresh there. "
+            + "Grok starts a new conversation there, handed what was said so far. Nothing goes to it while it moves."))
+    }
 }

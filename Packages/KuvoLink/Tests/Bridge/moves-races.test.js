@@ -52,7 +52,7 @@ const server = http.createServer((request, response) => {
     // (Those at the top, `parentID=null`, only those another conversation started: the work lists'.)
     const parent = url.searchParams.get("parentID");
     if (url.pathname === "/api/session" && parent) return send(200, [...engine.sessions.values()].filter(each => parent === "null" ? !each.parentID && each.metadata : each.parentID === parent).map(listed));
-    if (url.pathname === "/api/session/active") return send(200, {});
+    if (url.pathname === "/api/session/active") return send(200, engine.active ?? {});
     if (url.pathname === "/api/provider") return send(200, [{ id: "opencode" }]);
     if (url.pathname === "/api/experimental/session/import") {
       const bring = () => {
@@ -318,8 +318,14 @@ function bundleFor(thing, exports, wakeFiles = {}, links = {}) {
   const packed = fs.mkdtempSync(path.join(support, "pack-"));
   fs.writeFileSync(path.join(packed, "move.json"), JSON.stringify({ kind: "chat", thing, name: "“Notes”", wasPaused: false, folder: thing, exports }));
   fs.mkdirSync(path.join(packed, thing));
-  for (const [name, text] of Object.entries(wakeFiles)) fs.writeFileSync(path.join(packed, thing, name), text);
-  for (const [name, target] of Object.entries(links)) fs.symlinkSync(target, path.join(packed, thing, name));
+  for (const [name, text] of Object.entries(wakeFiles)) {
+    fs.mkdirSync(path.dirname(path.join(packed, thing, name)), { recursive: true });
+    fs.writeFileSync(path.join(packed, thing, name), text);
+  }
+  for (const [name, target] of Object.entries(links)) {
+    fs.mkdirSync(path.dirname(path.join(packed, thing, name)), { recursive: true });
+    fs.symlinkSync(target, path.join(packed, thing, name));
+  }
   const file = path.join(packed, "bundle.tgz");
   assert.equal(spawnSync("tar", ["-czf", file, "-C", packed, "move.json", thing]).status, 0);
   const bytes = fs.readFileSync(file);
@@ -378,6 +384,18 @@ test("a copy that brings a link (to somewhere else on this computer) isn't set u
   await say({ op: "part", id: "mov_link1", hash, i: 0, of: 1, d: bytes.toString("base64url") });
   await until(() => told.some(move => move.id === "mov_link1" && move.op === "failed"));
   assert.match(told.find(move => move.id === "mov_link1" && move.op === "failed").message, /a link/);
+  assert.ok(!fs.existsSync(path.join(wakes, thing)) && !engine.sessions.has(thing));
+});
+
+test("a copy whose links only seem to stay in its folder, one through another, isn't set up", async () => {
+  // `d/L` is its own folder `e`; `A` reads, as text, as a file in it, but is the file next to its
+  // folder (one there: refused for where it goes, not for going nowhere).
+  const thing = "ses_link2";
+  const { bytes, hash } = bundleFor(thing, [{ info: { id: thing, title: "Notes" }, messages: [] }], { "wakes.json": "[]", "e/notes.txt": "x" }, { "d/L": "../e", A: "d/L/../../move.json" });
+  await say({ op: "offer", id: "mov_link2", kind: "chat", thing, name: "“Notes”", size: bytes.length, hash, wasPaused: false, from: peerKey });
+  await say({ op: "part", id: "mov_link2", hash, i: 0, of: 1, d: bytes.toString("base64url") });
+  await until(() => told.some(move => move.id === "mov_link2" && (move.op === "failed" || move.op === "arrived")));
+  assert.match(told.find(move => move.id === "mov_link2" && move.op === "failed")?.message ?? "it was set up", /a link/);
   assert.ok(!fs.existsSync(path.join(wakes, thing)) && !engine.sessions.has(thing));
 });
 
@@ -1223,6 +1241,23 @@ test("asked with its coding agents here on a model none of them has: the engine'
     fs.rmSync(file, { force: true });
     bridge.close();
   }
+});
+
+nodeTest("still in its turn after the wait: it says it's working, not that messages are on their way, and it stays as it was", { timeout: 120_000 }, async () => {
+  chat("ses_busy1");
+  engine.active = { ses_busy1: { type: "busy" } };
+  const sent = [];
+  script = move => { if (move.op === "offer" || move.op === "part") sent.push(move.op); };
+  try {
+    const moved = await ask("POST", "kuvo/moves", { kind: "chat", id: "ses_busy1", to: peerKey });
+    assert.deepEqual(sent, [], "nothing went");
+    assert.equal(moved.status, 409);
+    assert.equal(moved.json.message, "“Trip plans” is working. Move it once it’s done.");
+  } finally {
+    engine.active = null;
+    script = () => {};
+  }
+  await asItWas("ses_busy1");
 });
 
 // ---- A bot's own keys ----

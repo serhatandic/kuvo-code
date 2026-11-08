@@ -159,6 +159,10 @@ async function makeOnce(given: GivenBot | null | undefined, readEngine: () => Ta
   try {
     fs.mkdirSync(path.join(folder, "workspace"), { recursive: true });
     fs.mkdirSync(path.join(folder, "wakes"), { recursive: true });
+    // What Claude Code remembers for it, kept in its own folder (its `autoMemoryDirectory`), so it
+    // goes wherever the bot goes, rather than in Claude Code's folder for its workspace. Not for a
+    // bot that works in a project: there it's the project's.
+    if (!project) fs.mkdirSync(path.join(folder, "memory"), { recursive: true });
     fs.writeFileSync(path.join(folder, "MEMORY.md"), kit.memory.replaceAll("⟦name⟧", name));
     const rules = [...(kit.rules ?? []), { action: "external_directory", resource: path.join(folder, "*"), effect: "allow" }];
     // The session it made, as far as its id.

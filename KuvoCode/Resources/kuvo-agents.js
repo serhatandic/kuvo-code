@@ -11800,7 +11800,7 @@ function describe(status) {
 // Packages/Box/src/agents/agents/codex.ts
 import { existsSync as existsSync14, lstatSync as lstatSync4, mkdirSync as mkdirSync14, readdirSync as readdirSync13, readFileSync as readFileSync19, readlinkSync, rmSync as rmSync11, symlinkSync as symlinkSync2 } from "fs";
 import { homedir as homedir2 } from "os";
-import { join as join22 } from "path";
+import { basename as basename10, join as join22 } from "path";
 
 // Packages/Box/src/agents/agents/codex-citations.ts
 import { basename as basename9 } from "path";
@@ -11962,6 +11962,38 @@ var KEPT_IN_HOME2 = ["*.toml", ".env", "hooks.json", "rules"];
 var noComputerUse = ["unified-computer-use@openai-bundled", "computer-use@openai-bundled"];
 var SHARED = "";
 var ACCOUNT = "account";
+var CODEX_THREAD = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+var ROLLOUT = /^(?:\d{4}\/\d{2}\/\d{2}\/)?rollout-[0-9A-Za-z:.-]+\.jsonl$/;
+function rolloutOf(home, id) {
+  const named = (name) => name.startsWith("rollout-") && name.endsWith(`-${id}.jsonl`);
+  const list = (folder) => {
+    try {
+      return readdirSync13(folder);
+    } catch {
+      return [];
+    }
+  };
+  const sessions = join22(home, "sessions");
+  const made = /^[0-9a-f]{8}-[0-9a-f]{4}-7/i.test(id) ? parseInt(id.replace(/-/g, "").slice(0, 12), 16) : NaN;
+  if (Number.isFinite(made))
+    for (const off of [0, -1, 1]) {
+      const day = new Date(made + off * 86400000);
+      const folder = join22(sessions, String(day.getFullYear()), String(day.getMonth() + 1).padStart(2, "0"), String(day.getDate()).padStart(2, "0"));
+      const found = list(folder).find(named);
+      if (found)
+        return join22(folder, found);
+    }
+  const archived = list(join22(home, "archived_sessions")).find(named);
+  if (archived)
+    return join22(home, "archived_sessions", archived);
+  for (const year of list(sessions).sort().reverse())
+    for (const month of list(join22(sessions, year)).sort().reverse())
+      for (const day of list(join22(sessions, year, month)).sort().reverse()) {
+        const found = list(join22(sessions, year, month, day)).find(named);
+        if (found)
+          return join22(sessions, year, month, day, found);
+      }
+}
 
 class CodexAgent {
   context;
@@ -12448,6 +12480,25 @@ class CodexAgent {
   }
   get home() {
     return this.instance.home ?? process.env.CODEX_HOME ?? this.yourCodex;
+  }
+  conversationFiles(state) {
+    const id = state.codexThread;
+    if (typeof id !== "string")
+      return null;
+    if (!CODEX_THREAD.test(id))
+      return { items: [], missing: true };
+    const file = rolloutOf(this.home, id);
+    if (!file)
+      return { items: [], missing: true };
+    const day = /^rollout-(\d{4})-(\d{2})-(\d{2})T/.exec(basename10(file));
+    return { items: [{ path: file, name: day ? join22(day[1], day[2], day[3], basename10(file)) : basename10(file) }] };
+  }
+  conversationPlace() {
+    const sessions = join22(this.home, "sessions");
+    return { item: (name) => ROLLOUT.test(name) ? join22(sessions, name) : null };
+  }
+  conversationRoots() {
+    return [join22(this.home, "sessions"), join22(this.home, "archived_sessions")];
   }
   accountFolder() {
     const folder = join22(this.home, "sessions");
@@ -18674,7 +18725,9 @@ function followed(store, read, signal) {
 import { createHash as createHash8 } from "crypto";
 import { createReadStream } from "fs";
 import { copyFile, lstat as lstat2, mkdir, readFile as readFile3, readdir, rename, rm, stat as stat2, writeFile } from "fs/promises";
-import { basename as basename10, dirname as dirname15, isAbsolute as isAbsolute3, join as join27, normalize, sep as sep11 } from "path";
+import { basename as basename11, dirname as dirname15, isAbsolute as isAbsolute3, join as join27, normalize, sep as sep11 } from "path";
+var WORKING = 423;
+
 class CantCarry extends Error {
   status;
   constructor(message, status = 409) {
@@ -18762,7 +18815,7 @@ class Carrying {
     return { files };
   }
   async laneList(at, files) {
-    const link = (path) => new CantCarry(`its conversation has something that isn't a plain file (${basename10(path)})`);
+    const link = (path) => new CantCarry(`its conversation has something that isn't a plain file (${basename11(path)})`);
     const out = [];
     const take = async (from, into) => {
       for (const { path, size } of await plainFiles(from, link)) {
@@ -18846,7 +18899,7 @@ class Carrying {
     const family = this.family(root);
     const working = family.filter(({ session }) => this.sessions.atWorkNow(session.id));
     if (working.length)
-      throw new CantCarry("it's working");
+      throw new CantCarry("it's working", WORKING);
     const closed = family.map(({ session }) => this.sessions.closeAgents(session.id)).some(Boolean);
     if (!closed)
       return;
@@ -19116,7 +19169,7 @@ class Undo {
     if (there && merges) {
       if (await hashOf(dest).catch(() => "") === file.sha256)
         return;
-      dest = join27(dirname15(dest), `moved-${file.sha256.slice(0, 8)}-${basename10(dest)}`);
+      dest = join27(dirname15(dest), `moved-${file.sha256.slice(0, 8)}-${basename11(dest)}`);
       there = await lstat2(dest).then(() => true, () => false);
       if (there)
         return;
@@ -24681,4 +24734,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 747da7a695825ca4a4dd61e68a60e2da397bf305f127aa0ac1b9ad2b1c2ade10
+// Built from Packages/Box/src/agents f52bc93dbb60031cfd8a30ed540c94d11dbdbb3ceffa5720f2c57b0ad202c86e
