@@ -145,8 +145,10 @@ struct SpeechModelRow: View {
         }
     }
 
+    /// A row under it only for a bar or a button: getting ready, its status line says so, and
+    /// the mic's ring shows it.
     private var hasActions: Bool {
-        canRemove || (model.isOn && model.state != .absent && model.state != .ready && model.state != .unsupported)
+        canRemove || (model.isOn && ![.absent, .preparing, .ready, .unsupported].contains(model.state))
     }
 
     /// What's here of it can go once it isn't coming or being made ready.
@@ -159,8 +161,7 @@ struct SpeechModelRow: View {
             case .paused: Button("Resume") { model.download() }
             case .failed: Button("Try Again") { model.download() }
             case .lowSpace: Button("Manage Storage…") { NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.settings.Storage")!) }
-            case .preparing: Spinner(size: 13)
-            case .absent, .ready, .unsupported: EmptyView()
+            case .absent, .preparing, .ready, .unsupported: EmptyView()
             }
         }
         if canRemove {
