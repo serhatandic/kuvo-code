@@ -144,7 +144,7 @@ final class KeeperBoxTools {
         case "schedule_wake_up":
             guard let when = given("when") else { return ("Say when (when): +20m, +2h, +1d, or a time like 2026-10-21T09:00.", true) }
             guard let note = given("note") else { return ("Add a note for yourself (note): what to do when you wake up.", true) }
-            verb = ["add", when] + (given("every").map { ["--every", $0] } ?? []) + [note]
+            verb = ["add", when] + (given("every").map { ["--every", $0] } ?? []) + (given("summary").map { ["--summary", $0] } ?? []) + [note]
         case "watch_for_change":
             // A watch runs a command whenever it's due: in Ask First, only once you've been asked
             // (the engine asks for the tool in a conversation made since it does; not for one from
@@ -156,7 +156,7 @@ final class KeeperBoxTools {
             guard let every = given("every"), let check = given("check"), let note = given("note") else {
                 return ("Give how often (every), the check (a shell command) and a note for when it changes.", true)
             }
-            verb = ["watch", every, check, note]
+            verb = ["watch", every, check] + (given("summary").map { ["--summary", $0] } ?? []) + [note]
         case "list_wake_ups":
             verb = ["list"]
         case "cancel_wake_up":

@@ -104,6 +104,25 @@ import Testing
         #expect(!app.wakeUps.paused.contains(id))
     }
 
+    /// The agent gives its wake-up and its watch a summary, the one line its card shows: kept beside
+    /// the note, which stays whole for the agent.
+    @Test func theAgentsSummaryIsKeptForTheCard() async throws {
+        let box = try await start()
+        defer { done(box) }
+        let note = "Look at the last CI run. If it failed, read the log and tell the user what broke."
+        let made = await app.wakeUps.call("schedule_wake_up", arguments: ["when": "+2h", "note": note, "summary": "Check CI"], caller: id)
+        #expect(!made.isError, "\(made.text)")
+        let wake = try #require(FileManager.default.contentsOfDirectory(atPath: folder(id, "wakes")).first)
+        let letters = try #require(Wakes.Pending(id: wake, note: "")).letters
+        #expect(try String(contentsOfFile: folder(id, "wakes", wake), encoding: .utf8) == note)
+        #expect(try String(contentsOfFile: folder(id, "summaries", letters), encoding: .utf8) == "Check CI")
+
+        let watched = await app.wakeUps.call("watch_for_change", arguments: ["every": "10m", "check": "cat state.txt", "note": "Tell the user what changed", "summary": "State changed"], caller: id)
+        #expect(!watched.isError, "\(watched.text)")
+        let watch = try #require(FileManager.default.contentsOfDirectory(atPath: folder(id, "watches")).first)
+        #expect(try String(contentsOfFile: folder(id, "watches", watch, "summary"), encoding: .utf8) == "State changed")
+    }
+
     /// A phone lists every session that waits at once, for the marks beside them in its list: the
     /// soonest wake-up, and whether it watches.
     @Test func aPhoneSeesWhichSessionsWait() async throws {

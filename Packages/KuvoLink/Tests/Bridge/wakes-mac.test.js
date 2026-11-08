@@ -11,6 +11,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
+import { execFile } from "node:child_process";
 import { atEnd, removeAtEnd } from "./at-end.js";
 
 const support = fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-mac-wakes-"));
@@ -60,7 +61,8 @@ const engine = http.createServer((request, response) => {
     const chunks = [];
     request.on("data", chunk => chunks.push(chunk));
     request.on("end", () => {
-      prompted.push({ session: asked[1], text: JSON.parse(Buffer.concat(chunks).toString()).text });
+      const { text, metadata } = JSON.parse(Buffer.concat(chunks).toString());
+      prompted.push({ session: asked[1], text, metadata });
       reply(200, {});
     });
     return;
@@ -208,7 +210,66 @@ test("this computer's box sends a wake-up when it's due, with kuvo-wake fire, as
     await stop();
   }
   assert.deepEqual(prompted.filter(each => each.session === "ses_due").map(each => each.text), ["[Wake-up] Send the weekly summary"]);
+  assert.equal(prompted.find(each => each.session === "ses_due").metadata, undefined, "one without a summary goes as it always did");
   assert.deepEqual(fs.readdirSync(path.join(folder, "wakes")), [], "sent, so it's gone and never goes twice");
+});
+
+// The wake-up's own kuvo-wake, as its agent's tool runs it (`WakeUps.call`): `add` with a summary.
+const kuvoWake = (folder, ...args) => new Promise((resolve, reject) => execFile(process.env.KUVO_WAKE_COMMAND, [folder, ...args], { encoding: "utf8" },
+  (error, out, said) => error ? reject(new Error(said || error.message)) : resolve(out)));
+
+test("a wake-up with a summary reaches its agent whole, marked with the summary its card shows", async t => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const folder = conversation(t, "ses_summed", { folder: true });
+  const note = "Look at the last CI run. If it failed, read the log, fix what broke and tell the user.\n\nThen check the deploy.";
+  await kuvoWake(folder, "add", "+2h", "--summary", "Check CI and the deploy", note);
+  // Due now, as its time comes.
+  const [name] = fs.readdirSync(path.join(folder, "wakes"));
+  fs.renameSync(path.join(folder, "wakes", name), path.join(folder, "wakes", `${now() - 5}-${name.slice(name.indexOf("-") + 1)}`));
+  const stop = link.sendWakes();
+  try {
+    t.mock.timers.tick(500);
+  } finally {
+    await stop();
+  }
+  const sent = prompted.filter(each => each.session === "ses_summed");
+  assert.deepEqual(sent.map(each => each.text), [`[Wake-up] ${note}`], "the agent reads the note whole");
+  assert.deepEqual(sent[0].metadata, { kuvo: { wake: { summary: "Check CI and the deploy" } } });
+  assert.deepEqual(fs.readdirSync(path.join(folder, "summaries")), [], "its summary goes with it");
+});
+
+test("one woken now keeps its summary", async t => {
+  const folder = conversation(t, "ses_summed_now", { folder: true });
+  await kuvoWake(folder, "add", "+2h", "--summary", "Water the plants", "Water the plants on the balcony, then the ones inside.");
+  const [wake] = (await ask("GET", "kuvo/wakes/ses_summed_now")).json.wakes;
+  assert.equal((await ask("POST", "kuvo/wakes/ses_summed_now/now", { wake: wake.id })).status, 200);
+  const sent = prompted.filter(each => each.session === "ses_summed_now");
+  assert.deepEqual(sent.map(each => each.text), ["[Wake-up] Water the plants on the balcony, then the ones inside."]);
+  assert.deepEqual(sent[0].metadata, { kuvo: { wake: { summary: "Water the plants" } } });
+});
+
+test("one kept waiting while you stopped its conversation keeps its summary", async t => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const stopped = conversation(t, "ses_summed_stopped", { folder: true });
+  const queues = path.join(support, "box", "run", "queues.json");
+  t.after(() => fs.rmSync(queues, { force: true }));
+  fs.writeFileSync(queues, JSON.stringify({ ses_summed_stopped: { paused: true, held: [] } }));
+  await kuvoWake(stopped, "add", "+2h", "--summary", "Send the digest", "Send the weekly digest to the team.");
+  const [name] = fs.readdirSync(path.join(stopped, "wakes"));
+  fs.renameSync(path.join(stopped, "wakes", name), path.join(stopped, "wakes", `${now() - 5}-${name.slice(name.indexOf("-") + 1)}`));
+  const stop = link.sendWakes();
+  try {
+    t.mock.timers.tick(500);
+  } finally {
+    await stop();
+  }
+  assert.deepEqual(prompted.filter(each => each.session === "ses_summed_stopped"), []);
+  const [waiting] = link.queueOf("ses_summed_stopped").waiting;
+  assert.deepEqual([waiting.from, waiting.text], ["Wake-up", "Send the weekly digest to the team."]);
+  // As it goes to the engine once you resume it.
+  const kept = JSON.parse(fs.readFileSync(path.join(support, "box", "run", "waiting", `${waiting.id}.json`), "utf8"));
+  assert.equal(kept.text, "[Wake-up] Send the weekly digest to the team.");
+  assert.deepEqual(kept.metadata, { kuvo: { wake: { summary: "Send the digest" } } });
 });
 
 test("a wake-up due in a conversation you stopped waits on the box, shown as a wake-up, and one that repeats isn't kept twice", async t => {

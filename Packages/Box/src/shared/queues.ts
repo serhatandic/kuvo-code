@@ -67,6 +67,18 @@ export interface Outgoing {
  * whole text. */
 export const boxNote = (from: string, line: string) => ({ kuvo: { note: { from, line } } });
 
+/** The mark on a wake-up's message (`metadata.kuvo.wake`), with the summary its agent gave it, which
+ * clients show in its card in place of the whole note (KuvoClient's WakeMessage); the agent reads the
+ * whole text. Kept by `kuvo-wake` (`summaries/<letters>`, a watch's `summary`), which sends it. */
+export const wakeMark = (summary: string) => ({ kuvo: { wake: { summary } } });
+
+/** The wake-up mark in `metadata`, as `wakeMark` made it, and nothing else of it; null for none. */
+export function wakeMarkOf(metadata: unknown): ReturnType<typeof wakeMark> | null {
+  const wake = isObject(metadata) && isObject(metadata.kuvo) && isObject(metadata.kuvo.wake) ? metadata.kuvo.wake : null;
+  const summary = typeof wake?.summary === "string" ? wake.summary.replace(/\s+/g, " ").trim().slice(0, 300) : "";
+  return summary ? wakeMark(summary) : null;
+}
+
 /** Whether a message the engine has (its `metadata`) is one the box wrote (`boxNote`). */
 export const isBoxNote = (metadata: unknown): boolean => isObject(metadata) && isObject(metadata.kuvo) && isObject(metadata.kuvo.note);
 

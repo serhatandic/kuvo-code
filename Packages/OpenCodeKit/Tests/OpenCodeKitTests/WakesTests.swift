@@ -53,12 +53,48 @@ struct WakesTests {
         #expect(try sh("\"\(wake)\" \"\(bot.path)\" list", in: k).output.contains("No wake-ups"))
     }
 
+    /// A summary for the card, kept by the wake-up's letters (a watch's in its folder), on one line,
+    /// and gone with it; the note stays whole.
+    @Test(arguments: WakesTests.shells)
+    func keepsASummaryForTheCard(shell: String) throws {
+        let k = try folder()
+        defer { try? FileManager.default.removeItem(at: k) }
+        #expect(try sh(Wakes.installScript, in: k).status == 0)
+        let bot = k.appending(path: "bots/bot_test")
+        try FileManager.default.createDirectory(at: bot, withIntermediateDirectories: true)
+        let run = { (command: String) in try self.sh("\(shell) \"$K/bin/kuvo-wake\" \"\(bot.path)\" \(command)", in: k) }
+        let read = { (path: String) in try? String(contentsOf: bot.appending(path: path), encoding: .utf8) }
+
+        #expect(try run("add +2h --every 1d --summary 'Check CI\nand the deploy' 'Look at the last run. If it failed, read the log and tell the user.'").status == 0)
+        let name = try #require(try FileManager.default.contentsOfDirectory(atPath: bot.appending(path: "wakes").path).first)
+        let wake = try #require(Wakes.Pending(id: name, note: ""))
+        #expect(wake.every == .days(1))
+        #expect(read("wakes/\(name)") == "Look at the last run. If it failed, read the log and tell the user.")
+        #expect(read("summaries/\(wake.letters)") == "Check CI and the deploy")
+        #expect(try run("cancel \(wake.letters)").status == 0)
+        #expect(read("summaries/\(wake.letters)") == nil, "it goes with its wake-up")
+
+        let long = String(repeating: "a", count: 301)
+        #expect(try run("add +2h --summary '\(long)' 'note'").status == 2)
+        #expect(try run("add +2h 'Without one'").status == 0)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: bot.appending(path: "summaries").path).isEmpty)
+
+        #expect(try run("watch 10m 'cat state.txt' --summary 'CI finished' 'Tell the user how CI went'").status == 0)
+        let letters = try #require(try FileManager.default.contentsOfDirectory(atPath: bot.appending(path: "watches").path).first)
+        #expect(read("watches/\(letters)/summary") == "CI finished")
+        #expect(read("watches/\(letters)/note") == "Tell the user how CI went")
+    }
+
     @Test func readsTheCommandsABotRuns() {
         let add = Wakes.command(in: #"kuvo-wake bot_abc add +2h "check whether CI passed""#)
         #expect(add == Wakes.Command(verb: .add, when: "+2h", note: "check whether CI passed"))
         let full = Wakes.command(in: #""/Users/me/Library/Application Support/x/bin/kuvo-wake" bot_abc add 2026-10-16T09:00 'morning report'"#)
         #expect(full?.when == "2026-10-16T09:00")
         #expect(full?.note == "morning report")
+        // Its summary is the card's, not the note.
+        let summed = Wakes.command(in: #"kuvo-wake add +2h --summary "Check CI" --every 1d "check whether CI passed and tell the user""#)
+        #expect(summed == Wakes.Command(verb: .add, when: "+2h", note: "check whether CI passed and tell the user", every: .days(1)))
+        #expect(Wakes.command(in: #"kuvo-wake add +2h --summary short 'the note'"#)?.note == "the note")
         #expect(Wakes.command(in: "kuvo-wake bot_abc list")?.verb == .list)
         #expect(Wakes.command(in: "kuvo-wake bot_abc cancel 1792080986-CkytYD")?.verb == .cancel)
         #expect(Wakes.command(in: "npm test") == nil)

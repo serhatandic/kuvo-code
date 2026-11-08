@@ -6,6 +6,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { BridgeRecord, EngineRecord, Target } from "../../shared/records";
 import type { Wake, WakeList, Wakes, Watch } from "../../shared/routes/wakes";
+import { wakeMark } from "../../shared/queues";
 import { oneLine } from "../../shared/text";
 import { sleep } from "../../shared/wait";
 import { isMoving, MOVING } from "../bots/here";
@@ -261,12 +262,14 @@ async function whereIs(session: string, readEngine: () => EngineRecord, bridge: 
   return agents && there ? { target: agents, found: there, agents: true } : null;
 }
 
-// Takes a wake-up off the schedule by its letters, which a repeating one keeps as its time moves on.
+// Takes a wake-up off the schedule by its letters, which a repeating one keeps as its time moves on,
+// with its summary.
 function cancelWake(folder: string, letters: string): void {
   if (!LETTERS.test(letters)) return;
   for (const name of listOf(path.join(folder, "wakes"))) {
     if (wakeOf(name)?.letters === letters) fs.rmSync(path.join(folder, "wakes", name), { force: true });
   }
+  fs.rmSync(path.join(folder, "summaries", letters), { force: true });
 }
 
 // Until the MCP servers of the folder a conversation works in are connected, twenty seconds at
@@ -424,7 +427,9 @@ export async function* answerWakes(session: string, action: WakeAction | undefin
     const authorization = `Basic ${Buffer.from(`opencode:${target.password}`).toString("base64")}`;
     const directory = textOf(path.join(folder, "directory"));
     if (!agents && directory) await waitForTools(target.port, authorization, directory, signal);
-    const message = { id: messageID(), text: WAKE_MARKER + note, delivery: "queue" as const };
+    // With the summary its agent gave it, as kuvo-wake sends it at its time.
+    const summary = LETTERS.test(chosen.letters) ? (textOf(path.join(folder, "summaries", chosen.letters)) ?? "").trim() : "";
+    const message = { id: messageID(), text: WAKE_MARKER + note, delivery: "queue" as const, ...(summary ? { metadata: wakeMark(summary) } : {}) };
     // Its conversation stopped by you: it waits there with the queue, and goes once it goes on.
     if (!keepWaiting(session, message, { from: "Wake-up", words: note })) {
       let response: Response;
