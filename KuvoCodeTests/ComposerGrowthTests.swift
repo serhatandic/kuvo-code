@@ -281,25 +281,29 @@ import Testing
         #expect(!isOffTheEnd)
     }
 
-    /// The conversation moves with the composer as it animates, each frame, rather than in one
-    /// jump before or after it: what's between them stays the same all the way.
+    /// The conversation moves with the composer as it animates (a quote going, here), each frame,
+    /// rather than in one jump before or after it: what's between them stays the same all the way.
+    /// Seen as each pass of the main run loop leaves it, which is what's drawn.
     @Test func theConversationGoesWithTheComposerAllTheWay() async throws {
         defer { done() }
         try await conversation(turns: 14)
+        try await quote()
         let scroll = try #require(scroll)
         let clip = try #require(clip)
-        clip.postsBoundsChangedNotifications = true
         let height = try #require(scroll.documentView).frame.height
         var steps: [(origin: CGFloat, gap: CGFloat)] = []
-        let watch = NotificationCenter.default.addObserver(forName: NSView.boundsDidChangeNotification, object: clip, queue: nil) { _ in
+        let observer = CFRunLoopObserverCreateWithHandler(kCFAllocatorDefault, CFRunLoopActivity.beforeWaiting.rawValue, true, 0) { _, _ in
             MainActor.assumeIsolated {
                 if steps.last?.origin != clip.bounds.origin.y {
                     steps.append((clip.bounds.origin.y, clip.bounds.maxY - scroll.contentInsets.bottom - height))
                 }
             }
         }
-        defer { NotificationCenter.default.removeObserver(watch) }
-        try await quote()
+        CFRunLoopAddObserver(CFRunLoopGetMain(), observer, .commonModes)
+        defer { CFRunLoopRemoveObserver(CFRunLoopGetMain(), observer, .commonModes) }
+        try press("Don’t Reply to This")
+        try await until { laidOut && model.draftQuotes.isEmpty }
+        await settled()
         #expect(steps.count >= 4, "in \(steps.count) steps: \(steps)")
         #expect(steps.allSatisfy { abs($0.gap) < 2 }, "apart along the way: \(steps)")
     }
