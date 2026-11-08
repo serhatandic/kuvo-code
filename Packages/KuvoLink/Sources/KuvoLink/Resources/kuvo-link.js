@@ -13631,7 +13631,7 @@ async function takeLetter(sender, letter, { send, targets, answer = () => {}, to
   send(sender, { delivered: { id, ok: true } });
   if (letter.wait !== true)
     return;
-  const text = await answerTo(place.target, letter.to, prompt, { wait });
+  const text = await answerTo(place.target, letter.to, prompt, { wait, by: letter.from });
   if (text)
     answer({ from: letter.to, to: letter.from, text, answers: id, peer: sender.key });
 }
