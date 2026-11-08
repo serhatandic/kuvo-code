@@ -52,9 +52,14 @@ export function readRemovedWorktrees(): Record<string, string> {
  * removed before, so a session that ran in one is still filed under its project. The one rule
  * every client and this box's own notices go by. */
 export function worktreeProjects(): Record<string, string> {
-  const projects: Record<string, string> = { ...readRemovedWorktrees() };
-  for (const tree of readRestorableWorktrees()) projects[tree.folder ?? tree.root] = tree.project;
-  for (const tree of readWorktrees()) {
+  // Read once: followers ask each second.
+  let kept: { worktrees?: unknown; removed?: unknown; restorable?: unknown } = {};
+  try { kept = JSON.parse(fs.readFileSync(WORKTREES_FILE, "utf8")) ?? {}; } catch {}
+  const projects: Record<string, string> = {};
+  if (isObject(kept.removed)) for (const [folder, project] of Object.entries(kept.removed)) if (typeof project === "string") projects[folder] = project;
+  const records = (list: unknown) => (Array.isArray(list) ? list.filter(each => typeof each?.root === "string" && typeof each?.project === "string") as WorktreeRecord[] : []);
+  for (const tree of records(kept.restorable)) projects[tree.folder ?? tree.root] = tree.project;
+  for (const tree of records(kept.worktrees)) {
     projects[tree.root] = tree.project;
     projects[tree.folder ?? tree.root] = tree.project;
   }

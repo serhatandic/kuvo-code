@@ -49,6 +49,13 @@ public enum AtWork {
         guard !paused, overseen.contains(where: { isWorking($0.id) }) else { return nil }
         return WorkWords.barTitle(atWork: overseen.filter { isWorking($0.id) || isAsking($0.id) }.count, today: 0)
     }
+
+    /// The line under a bot's name at rest, in place of its job: how many sessions it oversees
+    /// ("Overseeing 4 sessions"); nil for none.
+    public static func restLine(of bot: String, in sessions: some Sequence<Session>) -> String? {
+        let overseen = overseen(by: bot, in: sessions)
+        return overseen.isEmpty ? nil : Oversight.overseeing(count: overseen.count)
+    }
 }
 
 extension BotWorkReport {

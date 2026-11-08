@@ -259,7 +259,8 @@ final class Workspace {
     }
 
     /// The project a folder sessions run in belongs to: a worktree's as its box says, else as this
-    /// Mac keeps them (a box from before), else its own.
+    /// Mac keeps them (a box from before: those two can go once every box says, bridge 0.9.207),
+    /// else its own.
     func projectDirectory(_ directory: String) -> String {
         boxWorktreeProjects[directory] ?? worktrees[directory]?.project ?? removedWorktrees[directory] ?? directory
     }

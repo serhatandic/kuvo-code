@@ -5614,10 +5614,20 @@ function readRemovedWorktrees() {
   }
 }
 function worktreeProjects() {
-  const projects = { ...readRemovedWorktrees() };
-  for (const tree of readRestorableWorktrees())
+  let kept = {};
+  try {
+    kept = JSON.parse(fs22.readFileSync(WORKTREES_FILE, "utf8")) ?? {};
+  } catch {}
+  const projects = {};
+  if (isObject(kept.removed)) {
+    for (const [folder, project] of Object.entries(kept.removed))
+      if (typeof project === "string")
+        projects[folder] = project;
+  }
+  const records = (list) => Array.isArray(list) ? list.filter((each) => typeof each?.root === "string" && typeof each?.project === "string") : [];
+  for (const tree of records(kept.restorable))
     projects[tree.folder ?? tree.root] = tree.project;
-  for (const tree of readWorktrees()) {
+  for (const tree of records(kept.worktrees)) {
     projects[tree.root] = tree.project;
     projects[tree.folder ?? tree.root] = tree.project;
   }
@@ -25380,15 +25390,14 @@ When the user mentions one of these folders by name, they mean that folder.`;
 function projectOf3(folder) {
   if (folder === CHATS)
     return null;
-  const tree = readWorktrees().find((each) => (each.folder ?? each.root) === folder);
-  const directory = tree?.project ?? folder;
+  const directory = projectOf(folder);
   const known = readProjects().find((each) => each.directory === directory);
-  if (!known && !tree && fs84.existsSync(PROJECTS_FILE)) {
+  if (!known && directory === folder && fs84.existsSync(PROJECTS_FILE)) {
     try {
       changeProjects((projects) => projects.some((each) => each.directory === directory) ? projects : [{ directory, folders: [] }, ...projects]);
     } catch {}
   }
-  return { name: known?.name ?? path88.basename(directory), folders: tree ? [] : known?.folders ?? [] };
+  return { name: known?.name ?? path88.basename(directory), folders: directory !== folder ? [] : known?.folders ?? [] };
 }
 function findProject(named) {
   const written = named.trim().replace(/^~(?=$|\/)/, homeFolder());
@@ -25549,7 +25558,7 @@ async function startSession(given, by, place) {
   };
   let madeTree = null;
   if (given.worktree === true) {
-    const project = projectDirectory ?? (folder !== CHATS ? readWorktrees().find((each) => (each.folder ?? each.root) === folder)?.project ?? folder : null);
+    const project = projectDirectory ?? (folder !== CHATS ? projectOf(folder) : null);
     if (!project) {
       giveBack();
       return no(400, "A chat has no worktree: give a project.");

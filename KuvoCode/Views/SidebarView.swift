@@ -1762,9 +1762,9 @@ private struct BotRow: View {
             }
         } else if let watching = bots.watches[bot.id], !watching.isEmpty {
             BotState(systemImage: "eye") { Text(watching.count == 1 ? "Watching" : "Watching \(watching.count) things") }
-        } else if case let overseen = AtWork.overseen(by: bot.id, in: workspace.sessions), !overseen.isEmpty {
+        } else if let line = AtWork.restLine(of: bot.id, in: workspace.sessions) {
             // At rest: what it looks after, in place of its job.
-            Text(Oversight.overseeing(count: overseen.count))
+            Text(line)
         } else {
             // No job yet: it asks for one, until your message gives it.
             Text(bot.job.isEmpty ? EmptyConversationView.purposeQuestion : bot.job)
