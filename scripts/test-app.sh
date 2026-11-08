@@ -10,6 +10,14 @@
 set -eu
 cd "$(dirname "$0")/.."
 
+check_console() {
+    if [ "$1" != "$(id -un)" ]; then
+        echo "The screen is on $1's session; switch the Mac's screen to $(id -un)'s account before running app tests." >&2
+        return 1
+    fi
+}
+check_console "$(stat -f %Su /dev/console)"
+
 # A heavy job of the Mac's (scripts/heavy.sh): it builds in KuvoCodeTests-build, so it waits for
 # the Mac's other builds, and for a busy Mac, unless whoever started it took that turn already.
 if ! scripts/heavy.sh --holds mac; then
@@ -30,6 +38,8 @@ if lockf -ks -t 0 "$LOCK" true; then
     echo "scripts/test-app.sh runs only while it holds $LOCK." >&2
     exit 1
 fi
+
+check_console "$(stat -f %Su /dev/console)"
 
 # The app reaches the Keychain only through `Keychain` (KuvoCode/Stores/Keychain.swift), which is
 # one in memory for the tests: a test reaching the real one would wait on macOS asking whether
@@ -80,6 +90,39 @@ clean() {
 }
 clean
 
+# Snapshot only the test executable, never the installed app. The lock excludes other runs.
+HOST="$BUILD/Build/Products/Debug/Kuvo Code.app/Contents/MacOS/Kuvo Code"
+host_pids() {
+    ps -axo pid=,comm= | awk -v host="$HOST" 'index($0, host) && substr($0, index($0, host)) == host { print $1 }'
+}
+hosts_before=$(host_pids | tr '\n' ' ')
+caffeinate -d -u -w $$ &
+caffeinate_pid=$!
+xcode_pid=
+finished=0
+cleanup_run() {
+    result=$?
+    trap - EXIT HUP INT TERM
+    if [ -n "$xcode_pid" ]; then
+        kill "$xcode_pid" 2>/dev/null || true
+        wait "$xcode_pid" 2>/dev/null || true
+    fi
+    if [ "$finished" -eq 0 ] || [ "$result" -ne 0 ]; then
+        for pid in $(host_pids); do
+            case " $hosts_before " in *" $pid "*) continue ;; esac
+            kill "$pid" 2>/dev/null || true
+        done
+    fi
+    kill "$caffeinate_pid" 2>/dev/null || true
+    wait "$caffeinate_pid" 2>/dev/null || true
+    clean
+    exit "$result"
+}
+trap cleanup_run EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
 # The whole log in the build folder; here, each test's result, and what went wrong.
 # What belongs to the account whatever a test's $HOME says: a run that changes it fails.
 account_state() {
@@ -91,7 +134,10 @@ account_state() {
 mkdir -p "$BUILD"
 status=0
 account_before=$(account_state)
-xcodebuild test "$@" > "$BUILD/test.log" 2>&1 || status=$?
+xcodebuild test "$@" > "$BUILD/test.log" 2>&1 &
+xcode_pid=$!
+wait "$xcode_pid" || status=$?
+xcode_pid=
 if [ "$(account_state)" != "$account_before" ]; then
     echo "This run changed your real crontab or login agent. Before:" >&2
     printf '%s\n' "$account_before" >&2
@@ -99,6 +145,5 @@ if [ "$(account_state)" != "$account_before" ]; then
 fi
 grep -aE '(✔|✘|􀢄|􁁛).*(Test|Suite)|issue|error:|\*\* TEST' "$BUILD/test.log" | grep -v 'warning:\|\[Connection\]' || true
 if [ $status -ne 0 ]; then echo "The whole log: $BUILD/test.log" >&2; fi
-# What the tests left: their data, Trash and repositories, and the test copy's own.
-clean
+finished=1
 exit $status
