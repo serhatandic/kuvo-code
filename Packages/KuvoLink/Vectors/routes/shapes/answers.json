@@ -3106,6 +3106,12 @@
             "literal": "moves"
            },
            {
+            "literal": "moves.agents"
+           },
+           {
+            "literal": "moves.check"
+           },
+           {
             "literal": "named"
            },
            {
@@ -3424,6 +3430,12 @@
            },
            {
             "literal": "moves"
+           },
+           {
+            "literal": "moves.agents"
+           },
+           {
+            "literal": "moves.check"
            },
            {
             "literal": "named"
@@ -4342,6 +4354,31 @@
    }
   },
   {
+   "route": "GET kuvo/machines",
+   "answers": {
+    "200": {
+     "object": {
+      "machines": {
+       "list": {
+        "object": {
+         "id": "string",
+         "name": "string",
+         "otherAddresses": {
+          "list": "string"
+         },
+         "connection": "string",
+         "status": "string"
+        }
+       }
+      },
+      "hosts": {
+       "list": "string"
+      }
+     }
+    }
+   }
+  },
+  {
    "route": "GET kuvo/hosts",
    "answers": {
     "200": {
@@ -4545,6 +4582,15 @@
          "why?": "string",
          "note?": "string"
         }
+       }
+      },
+      "stays?": {
+       "object": {
+        "sessions?": "number",
+        "asks?": "number",
+        "goals?": "number",
+        "agent?": "bool",
+        "startsOver?": "string"
        }
       }
      }
@@ -8285,6 +8331,44 @@
      "object": {
       "changed": {
        "map": "number"
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/work/background",
+   "answers": {
+    "200": {
+     "object": {
+      "sessions": {
+       "map": {
+        "object": {
+         "commands": "number",
+         "subagents": "number",
+         "tasks": "number",
+         "since": "number"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/work/background/events",
+   "answers": {
+    "200": {
+     "object": {
+      "sessions": {
+       "map": {
+        "object": {
+         "commands": "number",
+         "subagents": "number",
+         "tasks": "number",
+         "since": "number"
+        }
+       }
       }
      }
     }

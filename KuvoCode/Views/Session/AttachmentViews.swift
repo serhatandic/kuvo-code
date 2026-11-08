@@ -404,7 +404,7 @@ struct StepPictures: View {
 private struct AttachmentPicture: View {
     let item: AttachmentItem
     let height: CGFloat
-    var maxWidth: CGFloat = 360
+    let maxWidth: CGFloat
     /// Opens it in the viewer.
     let view: () -> Void
     @State private var image: NSImage?
@@ -413,18 +413,31 @@ private struct AttachmentPicture: View {
     @State private var isHovering = false
     @Environment(\.colorScheme) private var scheme
 
+    init(item: AttachmentItem, height: CGFloat, maxWidth: CGFloat = 360, view: @escaping () -> Void) {
+        self.item = item
+        self.height = height
+        self.maxWidth = maxWidth
+        self.view = view
+        // One already decoded shows at once, rather than its placeholder first (as a message is
+        // drawn again).
+        _image = State(initialValue: AttachmentImages.cache.object(forKey: item.contentID as NSString))
+    }
+
     var body: some View {
         Group {
             if let image {
                 let size = fitted(image.size)
+                // Narrower where the conversation is narrower than it, in its own shape.
                 Image(nsImage: image)
                     .resizable()
                     .interpolation(.high)
-                    .frame(width: size.width, height: size.height)
+                    .aspectRatio(size.width / size.height, contentMode: .fit)
+                    .frame(idealWidth: size.width, maxWidth: size.width)
             } else {
                 RoundedRectangle(cornerRadius: 12)
                     .fill(.fill.tertiary)
-                    .frame(width: height * 1.4, height: height)
+                    .aspectRatio(1.4, contentMode: .fit)
+                    .frame(idealWidth: height * 1.4, maxWidth: height * 1.4)
                     .overlay {
                         if isMissing {
                             Image(systemName: "photo")
@@ -460,7 +473,8 @@ private struct AttachmentPicture: View {
     private func fitted(_ size: CGSize) -> CGSize {
         guard size.width > 0, size.height > 0 else { return CGSize(width: height, height: height) }
         let scale = min(maxWidth / size.width, height / size.height, 1)
-        return CGSize(width: (size.width * scale).rounded(), height: (size.height * scale).rounded())
+        // At least a point each way: a thin banner keeps a shape to draw in.
+        return CGSize(width: max(1, (size.width * scale).rounded()), height: max(1, (size.height * scale).rounded()))
     }
 }
 

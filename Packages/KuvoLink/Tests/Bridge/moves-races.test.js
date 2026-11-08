@@ -48,9 +48,12 @@ const server = http.createServer((request, response) => {
     const given = chunks.length ? JSON.parse(Buffer.concat(chunks).toString("utf8")) : {};
     const url = new URL(request.url, "http://x");
     const send = (status, data) => response.writeHead(status, { "content-type": "application/json" }).end(JSON.stringify({ data }));
-    const listed = each => ({ id: each.id, title: each.title, directory: each.directory, location: { directory: each.directory } });
-    if (url.pathname === "/api/session" && url.searchParams.get("parentID")) return send(200, [...engine.sessions.values()].filter(each => each.parentID === url.searchParams.get("parentID")).map(listed));
-    if (url.pathname === "/api/session/active") return send(200, {});
+    const listed = each => ({ id: each.id, title: each.title, directory: each.directory, location: { directory: each.directory }, ...(each.metadata ? { metadata: each.metadata } : {}), ...(each.time ? { time: each.time } : {}) });
+    // (Those at the top, `parentID=null`, only those another conversation started: the work lists'.)
+    const parent = url.searchParams.get("parentID");
+    if (url.pathname === "/api/session" && parent) return send(200, [...engine.sessions.values()].filter(each => parent === "null" ? !each.parentID && each.metadata : each.parentID === parent).map(listed));
+    if (url.pathname === "/api/session/active") return send(200, engine.active ?? {});
+    if (url.pathname === "/api/provider") return send(200, [{ id: "opencode" }]);
     if (url.pathname === "/api/experimental/session/import") {
       const bring = () => {
         if (engine.sessions.has(given.info.id)) return response.writeHead(409).end("{}");
@@ -72,10 +75,11 @@ const server = http.createServer((request, response) => {
       }
       return session ? send(200, { info: { id: session.id, title: session.title, ...(session.parentID ? { parentID: session.parentID } : {}) }, messages: session.messages }) : send(404, null);
     }
-    const match = url.pathname.match(/^\/api\/session\/([^/]+)(\/inbox|\/interrupt|\/prompt)?$/);
+    const match = url.pathname.match(/^\/api\/session\/([^/]+)(\/inbox|\/interrupt|\/prompt|\/message)?$/);
     const session = match && engine.sessions.get(match[1]);
     if (!session) return send(404, null);
     if (match[2] === "/inbox") return send(200, []);
+    if (match[2] === "/message") return send(200, session.replies ?? []);
     if (match[2]) return send(200, true);
     if (request.method === "DELETE") {
       if (engine.down || engine.downFor === session.id) {
@@ -215,8 +219,11 @@ test("parts that come twice set a copy up once; a part after the switch changes 
   assert.equal(told.filter(move => move.id === id && (move.op === "arrived" || move.op === "failed")).map(move => move.op).join(), "arrived");
   // Held until the switch: not this box's yet.
   assert.deepEqual((await ask("GET", "kuvo/moves")).json.away, ["ses_in1"]);
+  engine.sessions.get("ses_in1").replies = [{ id: "msg_in1last", type: "assistant", time: { created: 1 } }];
   await say({ op: "switch", id });
   assert.ok(told.some(move => move.id === id && move.op === "switched"));
+  // What it came with, noted: only what's after it is its running here.
+  assert.equal(JSON.parse(fs.readFileSync(path.join(movesFolder, "ended.json"), "utf8"))[id]?.last, "msg_in1last");
   assert.deepEqual((await ask("GET", "kuvo/moves")).json, { moves: [], away: [] });
   // A late repeat of the part: nothing set up again, nothing held.
   await say(part);
@@ -273,6 +280,33 @@ test("a part its relay connection didn't take (closing as it was sent) goes agai
   }
 });
 
+test("every part on its way lost at once (the relay dropped them all) goes again, and it isn't stuck until it's given up on", async () => {
+  chat("ses_race16");
+  // Enough to fill what can be on its way at once, however well it packs.
+  engine.sessions.get("ses_race16").messages[0].parts[0].text = crypto.randomBytes(800_000).toString("base64");
+  const lost = new Set();
+  let losing = true;
+  script = move => {
+    if (move.op === "offer") say({ op: "ready", id: move.id });
+    if (move.op === "part") {
+      if (losing) return void lost.add(move.i);
+      say({ op: "got", id: move.id, i: move.i });
+      if (move.i === move.of - 1) say({ op: "arrived", id: move.id });
+    }
+    if (move.op === "switch") say({ op: "switched", id: move.id });
+  };
+  const moving = ask("POST", "kuvo/moves", { kind: "chat", id: "ses_race16", to: peerKey });
+  await until(() => lost.size === 16);
+  losing = false;
+  const before = told.length;
+  link.keepMoving(Date.now() + 25_000);
+  assert.ok(told.slice(before).some(move => move.op === "part" && lost.has(move.i)), "those it lost go again");
+  // Half as many at once, on a connection that lost them: a slow one isn't sent it all over and over.
+  assert.equal(told.slice(before).filter(move => move.op === "part").length, 8);
+  const moved = await moving;
+  assert.equal(moved.status, 200, JSON.stringify(moved.json));
+});
+
 test("a step for a move this box doesn't have is answered dropped, never switched", async () => {
   await say({ op: "switch", id: "mov_nothere1" });
   await say({ op: "drop", id: "mov_nothere2" });
@@ -284,8 +318,14 @@ function bundleFor(thing, exports, wakeFiles = {}, links = {}) {
   const packed = fs.mkdtempSync(path.join(support, "pack-"));
   fs.writeFileSync(path.join(packed, "move.json"), JSON.stringify({ kind: "chat", thing, name: "“Notes”", wasPaused: false, folder: thing, exports }));
   fs.mkdirSync(path.join(packed, thing));
-  for (const [name, text] of Object.entries(wakeFiles)) fs.writeFileSync(path.join(packed, thing, name), text);
-  for (const [name, target] of Object.entries(links)) fs.symlinkSync(target, path.join(packed, thing, name));
+  for (const [name, text] of Object.entries(wakeFiles)) {
+    fs.mkdirSync(path.dirname(path.join(packed, thing, name)), { recursive: true });
+    fs.writeFileSync(path.join(packed, thing, name), text);
+  }
+  for (const [name, target] of Object.entries(links)) {
+    fs.mkdirSync(path.dirname(path.join(packed, thing, name)), { recursive: true });
+    fs.symlinkSync(target, path.join(packed, thing, name));
+  }
   const file = path.join(packed, "bundle.tgz");
   assert.equal(spawnSync("tar", ["-czf", file, "-C", packed, "move.json", thing]).status, 0);
   const bytes = fs.readFileSync(file);
@@ -344,6 +384,18 @@ test("a copy that brings a link (to somewhere else on this computer) isn't set u
   await say({ op: "part", id: "mov_link1", hash, i: 0, of: 1, d: bytes.toString("base64url") });
   await until(() => told.some(move => move.id === "mov_link1" && move.op === "failed"));
   assert.match(told.find(move => move.id === "mov_link1" && move.op === "failed").message, /a link/);
+  assert.ok(!fs.existsSync(path.join(wakes, thing)) && !engine.sessions.has(thing));
+});
+
+test("a copy whose links only seem to stay in its folder, one through another, isn't set up", async () => {
+  // `d/L` is its own folder `e`; `A` reads, as text, as a file in it, but is the file next to its
+  // folder (one there: refused for where it goes, not for going nowhere).
+  const thing = "ses_link2";
+  const { bytes, hash } = bundleFor(thing, [{ info: { id: thing, title: "Notes" }, messages: [] }], { "wakes.json": "[]", "e/notes.txt": "x" }, { "d/L": "../e", A: "d/L/../../move.json" });
+  await say({ op: "offer", id: "mov_link2", kind: "chat", thing, name: "“Notes”", size: bytes.length, hash, wasPaused: false, from: peerKey });
+  await say({ op: "part", id: "mov_link2", hash, i: 0, of: 1, d: bytes.toString("base64url") });
+  await until(() => told.some(move => move.id === "mov_link2" && (move.op === "failed" || move.op === "arrived")));
+  assert.match(told.find(move => move.id === "mov_link2" && move.op === "failed")?.message ?? "it was set up", /a link/);
   assert.ok(!fs.existsSync(path.join(wakes, thing)) && !engine.sessions.has(thing));
 });
 
@@ -941,3 +993,315 @@ test("a copy all here and set up, whose other computer went quiet before it swit
   assert.ok(told.some(move => move.id === id && move.op === "switched"));
   assert.equal(await listed(), undefined);
 }));
+
+// ---- What a move leaves here: kept as the way back, then removed ----
+
+const WEEK = 7 * 24 * 3600_000;
+const leftHere = () => {
+  try { return JSON.parse(fs.readFileSync(path.join(movesFolder, "left.json"), "utf8")); } catch { return []; }
+};
+const leftBy = thing => leftHere().find(each => each.thing === thing);
+async function movedAwayChat(id) {
+  chat(id);
+  script = move => {
+    if (move.op === "offer") say({ op: "ready", id: move.id });
+    if (move.op === "part") {
+      say({ op: "got", id: move.id, i: move.i });
+      if (move.i === move.of - 1) say({ op: "arrived", id: move.id });
+    }
+    if (move.op === "switch") say({ op: "switched", id: move.id });
+  };
+  const moved = await ask("POST", "kuvo/moves", { kind: "chat", id, to: peerKey });
+  assert.equal(moved.status, 200, JSON.stringify(moved.json));
+  assert.ok(!engine.sessions.has(id), "it went");
+  const entry = leftBy(id);
+  assert.ok(entry?.trash && fs.existsSync(path.join(entry.trash, "conversation.json")), "and what it was is kept, as the way back");
+  return entry;
+}
+
+test("what a move left stays until a week after it first ran on the other computer, then it's gone; only that computer's word counts", async () => {
+  const entry = await movedAwayChat("ses_left1");
+  const before = told.length;
+  link.keepMoving(Date.now() + 2 * 3600_000);
+  assert.ok(told.slice(before).some(move => move.op === "ran?" && move.id === entry.id && move.session === "ses_left1"), "it asks whether it's run there");
+  // Never heard, however long: it stays.
+  link.keepMoving(Date.now() + 90 * 24 * 3600_000);
+  assert.ok(fs.existsSync(entry.trash));
+  const at = Date.now();
+  await link.takeMoveMail(studio, { op: "ran", id: entry.id, at });
+  link.keepMoving(at + 2 * WEEK);
+  assert.ok(fs.existsSync(entry.trash), "another computer's word isn't that one's");
+  assert.equal(leftBy("ses_left1").ranAt, undefined);
+
+  await say({ op: "ran", id: entry.id, at });
+  link.keepMoving(at + WEEK - 1);
+  assert.ok(fs.existsSync(entry.trash), "not before the week's up");
+  link.keepMoving(at + WEEK + 1);
+  await until(() => !fs.existsSync(entry.trash));
+  await until(() => !leftBy("ses_left1"));
+});
+
+test("while it's on its way back, and as that's taken back, nothing it left goes; after that, it goes as it would have", async () => {
+  const entry = await movedAwayChat("ses_left2");
+  const at = Date.now();
+  await say({ op: "ran", id: entry.id, at });
+  const one = bundleFor("ses_left2", [{ info: { id: "ses_left2", title: "Trip plans" }, messages: [] }]);
+  await say({ op: "offer", id: "mov_left2", kind: "chat", thing: "ses_left2", name: "“Trip plans”", size: one.bytes.length, hash: one.hash, wasPaused: false, from: peerKey });
+  await until(() => told.some(move => move.id === "mov_left2" && move.op === "ready"));
+  link.keepMoving(at + 2 * WEEK);
+  assert.ok(fs.existsSync(entry.trash), "on its way, it's kept");
+  assert.ok(leftBy("ses_left2"));
+  await say({ op: "drop", id: "mov_left2" });
+  await until(() => told.some(move => move.id === "mov_left2" && move.op === "dropped"));
+  assert.ok(fs.existsSync(entry.trash), "taken back, it's kept until the next look");
+  link.keepMoving(at + 2 * WEEK);
+  await until(() => !fs.existsSync(entry.trash));
+});
+
+test("moved back before the week's up: what came is the one, the older copy goes, and nothing here is removed later", async () => {
+  const entry = await movedAwayChat("ses_left3");
+  const one = bundleFor("ses_left3", [{ info: { id: "ses_left3", title: "Trip plans, further on" }, messages: [] }]);
+  await say({ op: "offer", id: "mov_left3", kind: "chat", thing: "ses_left3", name: "“Trip plans”", size: one.bytes.length, hash: one.hash, wasPaused: false, from: peerKey });
+  await say({ op: "part", id: "mov_left3", hash: one.hash, i: 0, of: 1, d: one.bytes.toString("base64url") });
+  await until(() => told.some(move => move.id === "mov_left3" && move.op === "arrived"));
+  assert.ok(fs.existsSync(entry.trash), "not yet: it could still be taken back");
+  await say({ op: "switch", id: "mov_left3" });
+  await until(() => told.some(move => move.id === "mov_left3" && move.op === "switched"));
+  assert.ok(!fs.existsSync(entry.trash));
+  assert.equal(leftBy("ses_left3"), undefined);
+  link.keepMoving(Date.now() + 2 * WEEK);
+  assert.equal(engine.sessions.get("ses_left3")?.title, "Trip plans, further on");
+});
+
+test("asked whether what came here has run: when it first did since it came; not yet, no word; gone from here, the time starts", async () => {
+  const file = path.join(movesFolder, "ended.json");
+  const at = Date.now() - 3600_000;
+  let kept = {};
+  try { kept = JSON.parse(fs.readFileSync(file, "utf8")); } catch {}
+  Object.assign(kept, { mov_ran1: { as: "switched", at }, mov_ran2: { as: "switched", at }, mov_ran3: { as: "switched", at }, mov_ran4: { as: "dropped", at } });
+  fs.writeFileSync(file, JSON.stringify(kept));
+  engine.sessions.set("ses_ran1", { id: "ses_ran1", title: "Ran", directory: chats, messages: [], replies: [{ type: "assistant", time: { created: at + 500 } }, { type: "assistant", time: { created: at + 100 } }, { type: "assistant", time: { created: at - 100 } }, { type: "user", time: { created: at + 50 } }] });
+  engine.sessions.set("ses_ran2", { id: "ses_ran2", title: "Not yet", directory: chats, messages: [], replies: [{ type: "assistant", time: { created: at - 100 } }] });
+  const heard = id => told.filter(move => move.id === id && move.op === "ran");
+  await say({ op: "ran?", id: "mov_ran1", session: "ses_ran1" });
+  assert.deepEqual(heard("mov_ran1").map(move => move.at), [at + 100]);
+  await say({ op: "ran?", id: "mov_ran2", session: "ses_ran2" });
+  assert.deepEqual(heard("mov_ran2"), []);
+  const asked = Date.now();
+  await say({ op: "ran?", id: "mov_ran3", session: "ses_notHere" });
+  assert.ok(heard("mov_ran3")[0]?.at >= asked);
+  // One let go of, or one it never had, isn't a word of anything.
+  await say({ op: "ran?", id: "mov_ran4", session: "ses_ran1" });
+  await say({ op: "ran?", id: "mov_ran5", session: "ses_ran1" });
+  assert.deepEqual([...heard("mov_ran4"), ...heard("mov_ran5")], []);
+});
+
+test("what came with it doesn't count as having run here, whatever the other computer's clock said", async () => {
+  const file = path.join(movesFolder, "ended.json");
+  const at = Date.now() - 3600_000;
+  const kept = JSON.parse(fs.readFileSync(file, "utf8"));
+  Object.assign(kept, { mov_skew: { as: "switched", at, last: "msg_came2" } });
+  fs.writeFileSync(file, JSON.stringify(kept));
+  // Its last reply there, timed by a clock an hour and more ahead of this one.
+  const came = [{ id: "msg_came2", type: "assistant", time: { created: at + 5_000_000 } }, { id: "msg_came1", type: "user", time: { created: at + 4_000_000 } }];
+  engine.sessions.set("ses_skew", { id: "ses_skew", title: "Skewed", directory: chats, messages: [], replies: came });
+  const heard = () => told.filter(move => move.id === "mov_skew" && move.op === "ran");
+  await say({ op: "ran?", id: "mov_skew", session: "ses_skew" });
+  assert.deepEqual(heard(), [], "nothing's run here yet");
+  // It runs here: its first reply here is when.
+  engine.sessions.get("ses_skew").replies = [{ id: "msg_here1", type: "assistant", time: { created: at + 60_000 } }, { id: "msg_here0", type: "user", time: { created: at + 50_000 } }, ...came];
+  await say({ op: "ran?", id: "mov_skew", session: "ses_skew" });
+  assert.deepEqual(heard().map(move => move.at), [at + 60_000]);
+});
+
+test("asked where it can go, it says what stays here: the sessions it started, what it asked you, the goal it proposed", async () => {
+  chat("ses_stays1");
+  chat("ses_stays2");
+  engine.sessions.set("ses_stays1w", { id: "ses_stays1w", title: "Its work", directory: chats, messages: [], metadata: { kuvo: { startedBy: "ses_stays1", depth: 1 } }, time: { created: 2 } });
+  engine.sessions.set("ses_stays1ww", { id: "ses_stays1ww", title: "Its work's work", directory: chats, messages: [], metadata: { kuvo: { startedBy: "ses_stays1w", depth: 2 } }, time: { created: 3 } });
+  const work = path.join(home, "run", "work");
+  fs.mkdirSync(work, { recursive: true });
+  const asked = { id: "ask_stays1", action: "makeProject", session: "ses_stays1", name: "“Trip plans”", project: "trip", folderName: "trip", folder: null, at: Date.now(), given: { name: "trip" } };
+  fs.writeFileSync(path.join(work, "asks.json"), JSON.stringify({ asks: [asked] }));
+  fs.writeFileSync(path.join(work, "goals.json"), JSON.stringify({ goals: [{ id: "goal_stays1", bot: "", session: "ses_stays1", name: "Book it", state: "proposed", proposed: Date.now(), projects: [] }] }));
+  try {
+    const places = await ask("GET", "kuvo/moves/places?kind=chat&id=ses_stays1");
+    assert.equal(places.status, 200, JSON.stringify(places.json));
+    assert.deepEqual(places.json.stays, { sessions: 2, asks: 1, goals: 1 });
+    // Another chat, with none of it: nothing said.
+    assert.equal((await ask("GET", "kuvo/moves/places?kind=chat&id=ses_stays2")).json.stays, undefined);
+  } finally {
+    fs.rmSync(path.join(work, "asks.json"), { force: true });
+    fs.rmSync(path.join(work, "goals.json"), { force: true });
+    for (const id of ["ses_stays1", "ses_stays2", "ses_stays1w", "ses_stays1ww"]) engine.sessions.delete(id);
+  }
+});
+
+test("a move's folder that no move here has is cleared away after a while, never one a move has", async () => {
+  const orphan = path.join(movesFolder, "mov_orphan1");
+  fs.mkdirSync(path.join(orphan, "carry", "lanes"), { recursive: true });
+  fs.writeFileSync(path.join(orphan, "carry", "lanes", "big"), "a copy of a conversation");
+  const at = Date.now();
+  link.keepMoving(at);
+  link.keepMoving(at + 10 * 60_000);
+  assert.ok(fs.existsSync(orphan), "not at once: a step may still be making it");
+  link.keepMoving(at + 21 * 60_000);
+  assert.ok(!fs.existsSync(orphan));
+});
+
+// ---- Whether it can run there, asked first ----
+
+async function checking(run) {
+  const file = path.join(home, "run", "peer-agents.json");
+  fs.writeFileSync(file, JSON.stringify({ [peerKey]: { at: Date.now(), kind: "machine", list: [], features: ["sessions", "bots", "moves", "moves.agents", "moves.check"] } }));
+  try { return await run(); } finally { fs.rmSync(file, { force: true }); }
+}
+
+test("the other computer says first whether it can run it: refused there, nothing was held here, and its words are said", () => checking(async () => {
+  chat("ses_chk1");
+  let asked = null;
+  const said = "The coding agents on lab aren’t running. Try again once they are.";
+  script = async move => {
+    // (Others' mail, like a word of what an earlier move left, isn't this move's.)
+    if (move.op !== "check" && move.id !== asked?.id) return;
+    if (move.op !== "check") return assert.fail(`nothing more goes once it's refused: ${move.op}`);
+    asked = move;
+    // While it's asked, nothing's held here: a prompt goes, its wake-ups go on.
+    assert.ok(!fs.existsSync(path.join(wakes, "ses_chk1", "paused")), "its wake-ups aren't held");
+    const prompted = await ask("POST", "api/session/ses_chk1/prompt", { text: "Still here?" });
+    assert.notEqual(prompted.status, 409, "a prompt isn't refused as moving");
+    say({ op: "checked", id: move.id, ok: false, message: said });
+  };
+  const moved = await ask("POST", "kuvo/moves", { kind: "chat", id: "ses_chk1", to: peerKey });
+  assert.equal(moved.status, 409);
+  assert.equal(moved.json.message, said);
+  assert.equal(asked?.kind, "chat");
+  assert.deepEqual(told.filter(move => move.id === asked.id).map(move => move.op), ["check"]);
+  await asItWas("ses_chk1");
+}));
+
+test("it can run there, another way: the move goes, and its answer says how", () => checking(async () => {
+  chat("ses_chk2");
+  const note = "On lab, Trip plans uses the Claude Code account signed in there (ada@example.com).";
+  script = move => {
+    if (move.op === "check") say({ op: "checked", id: move.id, ok: true, note });
+    if (move.op === "offer") say({ op: "ready", id: move.id });
+    if (move.op === "part") {
+      say({ op: "got", id: move.id, i: move.i });
+      if (move.i === move.of - 1) say({ op: "arrived", id: move.id });
+    }
+    if (move.op === "switch") say({ op: "switched", id: move.id });
+  };
+  const moved = await ask("POST", "kuvo/moves", { kind: "chat", id: "ses_chk2", to: peerKey });
+  assert.equal(moved.status, 200, JSON.stringify(moved.json));
+  assert.equal(moved.json.note, note);
+  assert.ok(!engine.sessions.has("ses_chk2"));
+}));
+
+test("asked whether it can run what's coming: not with its coding agents down, nor on a model with no sign-in here; else yes", async () => {
+  const answerTo = async (id, given) => {
+    await say({ op: "check", id, kind: "bot", name: "Ada", ...given });
+    await until(() => told.some(move => move.id === id && move.op === "checked"));
+    return told.find(move => move.id === id && move.op === "checked");
+  };
+  const agents = await answerTo("mov_chk3", { lane: true, model: { providerID: "claude-code", id: "default" } });
+  assert.equal(agents.ok, false);
+  assert.match(agents.message, /coding agents on this Mac aren’t running/);
+  const signedOut = await answerTo("mov_chk4", { model: { providerID: "anthropic", id: "claude-opus-5-5" } });
+  assert.equal(signedOut.ok, false);
+  assert.equal(signedOut.message, "Ada uses claude-opus-5-5, which needs a sign-in on this Mac. Sign in to it in Settings › Accounts there, or choose another model, then move Ada.");
+  const fine = await answerTo("mov_chk5", { model: { providerID: "opencode", id: "big-pickle" } });
+  assert.equal(fine.ok, true);
+  // It keeps nothing of them: they're only questions.
+  assert.deepEqual((await ask("GET", "kuvo/moves")).json, { moves: [], away: [] });
+});
+
+test("asked with its coding agents here on a model none of them has: the engine's sign-ins answer, not 'isn't installed'", async () => {
+  const bridge = http.createServer((request, response) => {
+    const send = data => response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ data }));
+    if (request.url.startsWith("/api/session/active")) return send({});
+    if (request.url.startsWith("/api/integration")) return send([{ id: "claude-code", name: "Claude Code", metadata: { installed: true }, connections: [{}] }]);
+    response.writeHead(404).end("{}");
+  });
+  await new Promise(resolve => bridge.listen(0, "127.0.0.1", resolve));
+  const file = path.join(home, "run", "bridge.json");
+  fs.writeFileSync(file, JSON.stringify({ port: bridge.address().port, password: "pw" }));
+  try {
+    const answerTo = async (id, model) => {
+      await say({ op: "check", id, kind: "bot", name: "Ada", lane: true, model });
+      await until(() => told.some(move => move.id === id && move.op === "checked"));
+      return told.find(move => move.id === id && move.op === "checked");
+    };
+    const signedOut = await answerTo("mov_chk6", { providerID: "anthropic", id: "claude-opus-5-5" });
+    assert.equal(signedOut.ok, false);
+    assert.match(signedOut.message, /needs a sign-in on this Mac/);
+    assert.equal((await answerTo("mov_chk7", { providerID: "opencode", id: "big-pickle" })).ok, true);
+    assert.equal((await answerTo("mov_chk8", { providerID: "claude-code", id: "default" })).ok, true);
+  } finally {
+    fs.rmSync(file, { force: true });
+    bridge.close();
+  }
+});
+
+nodeTest("still in its turn after the wait: it says it's working, not that messages are on their way, and it stays as it was", { timeout: 120_000 }, async () => {
+  chat("ses_busy1");
+  engine.active = { ses_busy1: { type: "busy" } };
+  const sent = [];
+  script = move => { if (move.op === "offer" || move.op === "part") sent.push(move.op); };
+  try {
+    const moved = await ask("POST", "kuvo/moves", { kind: "chat", id: "ses_busy1", to: peerKey });
+    assert.deepEqual(sent, [], "nothing went");
+    assert.equal(moved.status, 409);
+    assert.equal(moved.json.message, "“Trip plans” is working. Move it once it’s done.");
+  } finally {
+    engine.active = null;
+    script = () => {};
+  }
+  await asItWas("ses_busy1");
+});
+
+// ---- A bot's own keys ----
+
+test("a bot whose own key can't be kept here isn't set up: it's said back, and nothing of it stays", async () => {
+  const packed = fs.mkdtempSync(path.join(support, "pack-"));
+  const thing = "bot_keyed1", session = "ses_keyed1";
+  fs.writeFileSync(path.join(packed, "move.json"), JSON.stringify({ kind: "bot", thing, name: "Kay", wasPaused: false, folder: thing, exports: [{ info: { id: session, title: "Kay" }, messages: [] }], keys: { "not-here": { TOKEN: "secret" } } }));
+  fs.mkdirSync(path.join(packed, thing, "workspace"), { recursive: true });
+  fs.writeFileSync(path.join(packed, thing, "bot.json"), JSON.stringify({ kuvo: 1, id: thing, name: "Kay", model: { id: "big-pickle", providerID: "opencode" } }));
+  fs.writeFileSync(path.join(packed, thing, "session"), `${session}\n`);
+  const file = path.join(packed, "bundle.tgz");
+  assert.equal(spawnSync("tar", ["-czf", file, "-C", packed, "move.json", thing]).status, 0);
+  const bytes = fs.readFileSync(file), hash = crypto.createHash("sha256").update(bytes).digest("base64url");
+  await say({ op: "offer", id: "mov_keyed1", kind: "bot", thing, name: "Kay", size: bytes.length, hash, wasPaused: false, from: peerKey });
+  await say({ op: "part", id: "mov_keyed1", hash, i: 0, of: 1, d: bytes.toString("base64url") });
+  await until(() => told.some(move => move.id === "mov_keyed1" && (move.op === "failed" || move.op === "arrived")));
+  const failed = told.find(move => move.id === "mov_keyed1" && move.op === "failed");
+  assert.ok(failed, "never arrived: the box it came from keeps it, with its key");
+  assert.match(failed.message, /own key for not-here couldn’t be kept there/);
+  assert.doesNotMatch(failed.message, /secret/);
+  assert.ok(!engine.sessions.has(session));
+  assert.ok(!fs.existsSync(path.join(support, "bots", thing)));
+});
+
+// ---- What still runs ----
+
+test("one with a command still running in the background doesn't move (it would end): it says why, and stays as it was", async () => {
+  chat("ses_bg1");
+  const file = path.join(home, "run", "work", "background.json");
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify({ engine: { sessions: { ses_bg1: { commands: [{ id: "cmd_1", command: "npm run dev", started: Date.now() }], subagents: [], tasks: [] } }, folders: [] } }));
+  try {
+    const places = (await ask("GET", "kuvo/moves/places?kind=chat&id=ses_bg1")).json.places;
+    const lab = places.find(place => place.key === peerKey);
+    assert.equal(lab.ok, false);
+    assert.equal(lab.why, "“Trip plans” has a command running. Wait for it to finish, or stop it, then move “Trip plans”.");
+    assert.equal(lab.note, "Running something");
+    script = move => assert.fail(`nothing goes while it runs: ${move.op}`);
+    const moved = await ask("POST", "kuvo/moves", { kind: "chat", id: "ses_bg1", to: peerKey });
+    assert.equal(moved.status, 409);
+    assert.match(moved.json.message, /has a command running/);
+    await asItWas("ses_bg1");
+  } finally {
+    fs.rmSync(file, { force: true });
+  }
+});

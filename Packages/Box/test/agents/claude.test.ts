@@ -708,14 +708,16 @@ describe("Claude Code, nothing dropped", () => {
       { type: "system", subtype: "brand_new_thing", content: "Something new to read." },
       { type: "system", subtype: "post_turn_summary", summary: "Already shown." },
     ])
-    expect(notices(id)).toEqual(["Claude Code summarized the conversation to make room.", "Claude's API is overloaded: trying again (2/10).", "Something new to read."])
+    expect(notices(id)).toEqual(["Claude's API is overloaded: trying again (2/10).", "Something new to read."])
+    expect(sessions.messages(id).filter((message) => message.type === "compaction")).toMatchObject([{ status: "completed", reason: "auto" }])
   })
 
   test("several hooks failing the same way at the same moment show as one row, and the same failure again later as another", async () => {
     const failed = { type: "system", subtype: "hook_response", hook_name: "SessionStart:compact", hook_event: "SessionStart", outcome: "error", stderr: "Failed to run" }
     const id = await turn(() => [failed, failed, failed, failed, { type: "system", subtype: "compact_boundary", compact_metadata: { trigger: "auto" } }, failed])
     const row = "Your SessionStart:compact hook failed: Failed to run."
-    expect(notices(id)).toEqual([row, "Claude Code summarized the conversation to make room.", row])
+    expect(notices(id)).toEqual([row, row])
+    expect(sessions.messages(id).map((message) => message.type)).toEqual(["user", "synthetic", "compaction", "synthetic", "idle"])
   })
 })
 
@@ -740,27 +742,74 @@ describe("Claude Code's models", () => {
   test("each holds what Claude Code says it does on your plan, which its list doesn't say", async () => {
     fake.models = listed
     fake.windows = { default: 1_000_000, "claude-haiku-4-5": 200_000, "opus[1m]": 1_000_000 }
-    const want = { default: 1_000_000, opus: 1_000_000, "claude-haiku-4-5": 200_000, "opus[1m]": 1_000_000 }
+    const want = { opus: 1_000_000, "claude-haiku-4-5": 200_000, "opus[1m]": 1_000_000 }
     expect(await windows(new TestClaude(fake, root), want)).toEqual(want)
     expect(fake.asked).toEqual(["default", "claude-haiku-4-5", "opus[1m]"])
   })
 
-  test("its default reads apart from the model it stands for now, which Claude Code lists too", async () => {
+  /** The models as listed once Claude Code has said which it has. */
+  async function offered(claude: ClaudeAgent) {
+    let models = await claude.models()
+    for (const start = Date.now(); Date.now() - start < 3_000 && !models.some((model) => model.id === "claude-haiku-4-5"); await Bun.sleep(20)) models = await claude.models()
+    return models
+  }
+
+  test("its default isn't offered: the model it stands for is, known by that name too", async () => {
     fake.models = listed
+    const models = await offered(new TestClaude(fake, root))
+    expect(models.map((model) => model.id)).toEqual(["opus", "claude-haiku-4-5", "opus[1m]"])
+    expect(Object.fromEntries(models.map((model) => [model.id, model.aliases ?? []]))).toEqual({ opus: ["default"], "claude-haiku-4-5": [], "opus[1m]": [] })
+  })
+
+  test("what its default stands for is whatever this account's Claude Code says, never assumed", async () => {
+    fake.models = [
+      { value: "default", resolvedModel: "claude-sonnet-5-5", displayName: "Default (recommended)", description: "Sonnet 5.5 · Everyday" },
+      { value: "opus", resolvedModel: "claude-opus-5-5", displayName: "Opus 5.5", description: "Best for complex tasks" },
+      { value: "sonnet", resolvedModel: "claude-sonnet-5-5", displayName: "Sonnet 5.5", description: "Everyday" },
+      { value: "claude-haiku-4-5", displayName: "Haiku 4.5", description: "Haiku 4.5 · Fast" },
+    ]
+    const models = await offered(new TestClaude(fake, root))
+    expect(Object.fromEntries(models.map((model) => [model.id, model.aliases ?? []]))).toEqual({ opus: [], sonnet: ["default"], "claude-haiku-4-5": [] })
+    // Where its default was listed, a new session starts on: so Sonnet stays first.
+    expect([...models].sort((x, y) => y.time.released - x.time.released)[0].id).toBe("sonnet")
+  })
+
+  test("a default nothing else lists is that model, under its own id", async () => {
+    fake.models = [
+      { value: "default", resolvedModel: "claude-fable-5-1", displayName: "Default (recommended)", description: "Fable 5.1 · Newest" },
+      { value: "claude-haiku-4-5", displayName: "Haiku 4.5", description: "Haiku 4.5 · Fast" },
+    ]
+    const models = await offered(new TestClaude(fake, root))
+    expect(models.map((model) => [model.id, model.name, model.aliases ?? []])).toEqual([["claude-fable-5-1", "Fable 5.1", ["default"]], ["claude-haiku-4-5", "Haiku 4.5", []]])
+  })
+
+  test("a default described without a model's name is named by the model it resolves to, never \"Default\"", async () => {
+    fake.models = [
+      { value: "default", resolvedModel: "claude-opus-5-5", displayName: "Default (recommended)", description: "Use the default model (currently Opus)" },
+      { value: "claude-haiku-4-5", displayName: "Haiku 4.5", description: "Haiku 4.5 · Fast" },
+    ]
+    const models = await offered(new TestClaude(fake, root))
+    expect(models.map((model) => [model.id, model.name])).toEqual([["claude-opus-5-5", "Opus 5.5"], ["claude-haiku-4-5", "Haiku 4.5"]])
+  })
+
+  test("before Claude Code has listed its models, the usual ones still answer to its default", async () => {
     const claude = new TestClaude(fake, root)
-    let names: Record<string, string> = {}
-    for (const start = Date.now(); Date.now() - start < 3_000 && !names.opus; await Bun.sleep(20)) {
-      names = Object.fromEntries((await claude.models()).map((model) => [model.id, model.name]))
-    }
-    expect(names).toEqual({ default: "Default (Opus 5.5)", opus: "Opus 5.5", "claude-haiku-4-5": "Haiku 4.5", "opus[1m]": "Opus 4.8 with 1M context" })
-    // Each its own kind, so neither folds the other away under Older models.
-    const families = new Set((await claude.models()).filter((model) => model.id === "default" || model.id === "opus").map((model) => model.family))
-    expect(families.size).toBe(2)
+    const models = await claude.models()
+    expect(models.filter((model) => model.aliases?.includes("default")).map((model) => model.id)).toEqual(["opus"])
+    expect(models.some((model) => model.id === "default" || /default/i.test(model.name))).toBe(false)
+  })
+
+  test("a session already on its default goes on: Claude Code's own default is what it runs", async () => {
+    fake.models = listed
+    const { id, first } = await begin()
+    expect(fake.options.model).toBeUndefined()
+    expect(sessions.get(id).model).toMatchObject({ providerID: provider, id: "default" })
+    fake.result([first])
   })
 
   test("an older Claude Code that doesn't say: as its list says", async () => {
     fake.models = listed
-    const want = { default: 200_000, opus: 200_000, "claude-haiku-4-5": 200_000, "opus[1m]": 1_000_000 }
+    const want = { opus: 200_000, "claude-haiku-4-5": 200_000, "opus[1m]": 1_000_000 }
     expect(await windows(new TestClaude(fake, root), want)).toEqual(want)
   })
 })
@@ -775,6 +824,42 @@ async function begin(options: { permissions?: PermissionRule[]; agent?: string }
 }
 
 const steps = (id: string) => sessions.messages(id).filter((message) => message.type === "assistant") as Extract<Message, { type: "assistant" }>[]
+
+describe("a bot's Claude Code on the computer it moved to", () => {
+  const bot = (name: string, memory: boolean) => {
+    const folder = join(root, "bots", name)
+    mkdirSync(join(folder, "workspace"), { recursive: true })
+    if (memory) mkdirSync(join(folder, "memory"))
+    const id = sessions.create({ model: { providerID: provider, id: "default" }, location: { directory: join(folder, "workspace") }, metadata: { kuvo: { bot: name } } }).id
+    return { folder, id }
+  }
+  const start = async (id: string) => {
+    const sent = fake.sent.length
+    sessions.prompt(id, { id: "msg_claude_turn_0001", text: "go", files: [], delivery: "steer" })
+    await until(() => fake.sent.length === sent + 1)
+  }
+
+  test("it goes on with the same conversation, and its memory is the one in its folder", async () => {
+    const { folder, id } = bot("bot_ship", true)
+    // As it came: Claude Code had started on that conversation on the other computer.
+    sessions.slotsOf(id)[provider] = { state: { claudeSession: "0b5e1f1c-0000-4000-8000-000000000000", claudeStarted: true } }
+    await start(id)
+    expect(fake.options.resume).toBe("0b5e1f1c-0000-4000-8000-000000000000")
+    expect(fake.options.settings).toEqual({ autoMemoryDirectory: join(folder, "memory") })
+    // It's its own to read and write, without asking; another bot's isn't.
+    const own = { file_path: join(folder, "memory", "deploys.md"), content: "On Fridays." }
+    expect((await fake.hook("Write", own, "toolu_1")).decision).toBeUndefined()
+    const other = { file_path: join(homedir(), "bots", "bot_scout", "memory", "deploys.md") }
+    expect((await fake.hook("Read", other, "toolu_2")).decision).toBe("ask")
+  })
+
+  test("one with no memory in its folder keeps Claude Code's own place for it", async () => {
+    const { id } = bot("bot_old", false)
+    await start(id)
+    expect(fake.options.settings).toBeUndefined()
+  })
+})
+
 const toolCalls = (id: string) => steps(id).flatMap((message) => message.content.filter((content) => content.type === "tool")) as any[]
 
 /** Ask First, as the composer's menu sets it. */
@@ -1619,5 +1704,145 @@ describe("summarizing when you ask (/compact)", () => {
     compacts(fake)
     await until(() => idles(id).length === 2)
     expect(words(id)).toEqual(["Your SessionStart:compact hook failed: Failed to run."])
+  })
+
+  test("shows as one row, not a second one for what Claude Code says as it summarizes", async () => {
+    const id = await afterATurn()
+    sessions.compact(id)
+    await until(() => fake.sent.length === 2)
+    compacts(fake)
+    await until(() => idles(id).length === 2)
+    expect(sessions.messages(id).filter((message) => message.type === "compaction")).toMatchObject([{ status: "completed", reason: "manual" }])
+  })
+})
+
+describe("summarizing on its own, as the conversation fills up", () => {
+  // What Claude Code 2.1.319 sends as it summarizes by itself partway through a turn: `status:
+  // "compacting"` (again every 30 seconds while it waits), then `status: null` with how it went,
+  // then the boundary. One with no result (it stopped, or found nothing to summarize) ends with a
+  // bare `status: null`.
+  const compacting = { type: "system", subtype: "status", status: "compacting" }
+  const over = (result?: "success" | "failed", more: Record<string, unknown> = {}) => ({ type: "system", subtype: "status", status: null, ...(result ? { compact_result: result } : {}), ...more })
+  const boundary = { type: "system", subtype: "compact_boundary", compact_metadata: { trigger: "auto", pre_tokens: 180000, post_tokens: 12000 } }
+  const summaries = (id: string) => sessions.messages(id).filter((message) => message.type === "compaction") as Extract<Message, { type: "compaction" }>[]
+  const notices = (id: string) => sessions.messages(id).flatMap((message: any) => (message.type === "synthetic" ? [message.text] : []))
+  let told: { type: string; data: any }[] = []
+  let unsubscribe = () => {}
+  beforeEach(() => {
+    told = []
+    unsubscribe = subscribe((event) => {
+      if (event.type.startsWith("session.compaction.")) told.push({ type: event.type, data: event.data })
+    })
+  })
+  afterEach(() => unsubscribe())
+
+  /** A turn at work (a command run), then Claude Code summarizing: the session's id and Claude Code's for the message. */
+  async function summarizing() {
+    const { id, first } = await begin()
+    fake.streams([first], [{ type: "tool_use", id: "toolu_1", name: "Bash", input: { command: "ls" } }])
+    fake.toolResult("toolu_1", "a.ts")
+    fake.out.push(compacting)
+    await until(() => summaries(id).length === 1)
+    return { id, first }
+  }
+
+  test("while it runs the conversation says so, last, as it happens; it ends as one finished row, the turn going on after it", async () => {
+    const { id, first } = await summarizing()
+    expect(summaries(id)).toMatchObject([{ status: "running", reason: "auto" }])
+    // Last in the conversation, so the line under it says it too.
+    expect(sessions.messages(id).at(-1)).toMatchObject({ type: "compaction", status: "running" })
+    expect(told).toMatchObject([{ type: "session.compaction.started", data: { reason: "auto" } }])
+    // Said again as it waits: still the one.
+    fake.out.push(compacting)
+    fake.out.push(over("success"))
+    fake.out.push({ type: "system", subtype: "init", session_id: "claude-1" })
+    fake.out.push(boundary)
+    fake.streams([first], [{ type: "text", text: "Listed." }])
+    fake.result([first])
+    await until(() => idles(id).length === 1)
+    expect(idles(id)[0].outcome).toBe("succeeded")
+    expect(summaries(id)).toMatchObject([{ status: "completed", reason: "auto", time: { completed: expect.any(Number) } }])
+    expect(told.map((event) => event.type)).toEqual(["session.compaction.started", "session.compaction.ended"])
+    expect(notices(id)).toEqual([])
+    expect(sessions.messages(id).map((message) => message.type)).toEqual(["user", "assistant", "compaction", "assistant", "idle"])
+    expect(texts(id)).toEqual(["Listed."])
+  })
+
+  test("one that fails says so on its row, once, and the turn goes on", async () => {
+    const { id, first } = await summarizing()
+    fake.out.push(over("failed", { compact_error: "Conversation too long." }))
+    fake.out.push({ type: "system", subtype: "notification", key: "error-compacting-conversation", text: "Error compacting conversation", priority: "immediate" })
+    fake.streams([first], [{ type: "text", text: "Carrying on." }])
+    fake.result([first])
+    await until(() => idles(id).length === 1)
+    expect(idles(id)[0].outcome).toBe("succeeded")
+    expect(summaries(id)).toMatchObject([{ status: "failed", reason: "auto" }])
+    expect(told.map((event) => event.type)).toEqual(["session.compaction.started", "session.compaction.failed"])
+    expect(notices(id)).toEqual(["Error compacting conversation"])
+  })
+
+  test("one that ends with nothing summarized doesn't stay under way while the turn goes on", async () => {
+    const { id, first } = await summarizing()
+    fake.out.push(over())
+    fake.streams([first], [{ type: "text", text: "Carrying on." }])
+    await until(() => texts(id).length === 1)
+    expect(summaries(id)).toMatchObject([{ status: "failed" }])
+    fake.result([first])
+    await until(() => idles(id).length === 1)
+    expect(summaries(id)).toHaveLength(1)
+  })
+
+  test("one it lets go of and begins again at once (or a permission mode set meanwhile) is still the one row", async () => {
+    const { id, first } = await summarizing()
+    fake.out.push(over())
+    fake.out.push({ type: "system", subtype: "status", status: null, permissionMode: "default" })
+    fake.out.push(compacting)
+    fake.out.push(over("success"))
+    fake.out.push(boundary)
+    fake.streams([first], [{ type: "text", text: "Listed." }])
+    fake.result([first])
+    await until(() => idles(id).length === 1)
+    expect(summaries(id)).toMatchObject([{ status: "completed", reason: "auto" }])
+    expect(told.map((event) => event.type)).toEqual(["session.compaction.started", "session.compaction.ended"])
+  })
+
+  test("Stop during it: the turn ends stopped and the row isn't left under way", async () => {
+    const { id, first } = await summarizing()
+    fake.onInterrupt = () => fake.result([first], "error_during_execution")
+    await sessions.interrupt(id, false)
+    await until(() => idles(id).length === 1)
+    expect(idles(id)[0].outcome).toBe("interrupted")
+    expect(summaries(id)).toMatchObject([{ status: "failed" }])
+    expect(told.map((event) => event.type)).toEqual(["session.compaction.started", "session.compaction.failed"])
+  })
+
+  test("Claude Code quitting during it: the row isn't left under way", async () => {
+    const { id } = await summarizing()
+    fake.crash(new Error("Claude Code exited with code 1"))
+    await until(() => idles(id).length === 1)
+    expect(summaries(id)).toMatchObject([{ status: "failed" }])
+  })
+
+  test("a message you send meanwhile goes to Claude Code, and the row stays the one until it's done", async () => {
+    const { id, first } = await summarizing()
+    sessions.prompt(id, { id: "msg_claude_meanwhile", text: "and the tests too", files: [], delivery: "steer" })
+    await until(() => fake.sent.length === 2)
+    expect(summaries(id)).toMatchObject([{ status: "running" }])
+    // After the row, which still says it's summarizing.
+    expect(sessions.messages(id).map((message) => message.type)).toEqual(["user", "assistant", "compaction", "user"])
+    fake.out.push(over("success"))
+    fake.out.push(boundary)
+    fake.result([first, fake.sent[1].uuid])
+    await until(() => idles(id).length === 1)
+    expect(summaries(id)).toMatchObject([{ status: "completed" }])
+  })
+
+  test("told only once it's done (no word as it began): one finished row, not a note", async () => {
+    const { id, first } = await begin()
+    fake.out.push(boundary)
+    fake.result([first])
+    await until(() => idles(id).length === 1)
+    expect(summaries(id)).toMatchObject([{ status: "completed", reason: "auto" }])
+    expect(notices(id)).toEqual([])
   })
 })

@@ -67,6 +67,18 @@ export interface Outgoing {
  * whole text. */
 export const boxNote = (from: string, line: string) => ({ kuvo: { note: { from, line } } });
 
+/** The mark on a wake-up's message (`metadata.kuvo.wake`), with the summary its agent gave it, which
+ * clients show in its card in place of the whole note (KuvoClient's WakeMessage); the agent reads the
+ * whole text. Kept by `kuvo-wake` (`summaries/<letters>`, a watch's `summary`), which sends it. */
+export const wakeMark = (summary: string) => ({ kuvo: { wake: { summary } } });
+
+/** The wake-up mark in `metadata`, as `wakeMark` made it, and nothing else of it; null for none. */
+export function wakeMarkOf(metadata: unknown): ReturnType<typeof wakeMark> | null {
+  const wake = isObject(metadata) && isObject(metadata.kuvo) && isObject(metadata.kuvo.wake) ? metadata.kuvo.wake : null;
+  const summary = typeof wake?.summary === "string" ? wake.summary.replace(/\s+/g, " ").trim().slice(0, 300) : "";
+  return summary ? wakeMark(summary) : null;
+}
+
 /** Whether a message the engine has (its `metadata`) is one the box wrote (`boxNote`). */
 export const isBoxNote = (metadata: unknown): boolean => isObject(metadata) && isObject(metadata.kuvo) && isObject(metadata.kuvo.note);
 
@@ -78,7 +90,7 @@ const GOAL_OPENINGS: [start: string, line: string][] = [
   ["[Goal] Nothing of the goal is at work now.", "Reminded to carry on"], ["[Goal resumed] The user resumed the goal you paused.", "Goal resumed"],
 ];
 const ANSWERED = "[The user answered] ";
-const SESSION_NEWS = /^\[Session (finished|failed|asks)\] "([^"\n]*)"/;
+const SESSION_NEWS = /^\[Session (finished|still working|failed|asks)\] "([^"\n]*)"/;
 
 /** The note a user message in a conversation is, if the box wrote it: who it's from and its line,
  * as its mark says, or, from before it was marked, as clients read it by how it opens. */
@@ -95,7 +107,7 @@ export function boxNoteOf(text: string, metadata: unknown): { from: string; line
   // (As `wakeLineShown` says it: one session's, or how many.)
   const told = text.split("\n\n").filter(part => SESSION_NEWS.test(part)).length;
   if (told !== 1) return { from: "Its sessions", line: `${told} updates from its sessions` };
-  const what = news[1] === "finished" ? "finished" : news[1] === "failed" ? "stopped with an error" : "asks something";
+  const what = news[1] === "finished" ? "finished" : news[1] === "still working" ? "still working" : news[1] === "failed" ? "stopped with an error" : "asks something";
   return { from: "Its sessions", line: `“${news[2] || "New Session"}” ${what}` };
 }
 

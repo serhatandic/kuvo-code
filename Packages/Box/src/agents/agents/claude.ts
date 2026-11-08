@@ -4,12 +4,12 @@
 
 import { spawn } from "node:child_process"
 import { createHash, randomUUID } from "node:crypto"
-import { existsSync, mkdirSync, readFileSync, renameSync, rmdirSync, rmSync, statSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmdirSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { homedir } from "node:os"
-import { dirname, join, resolve } from "node:path"
+import { basename, dirname, join, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
 import { providerID, type AgentAccount } from "../accounts"
-import type { Agent, AgentContext, Account, MessageInput, OwnTurn, RunInput, RunResult, SignInAttempt, SignInOptions, SubagentMessages, SubagentRun, Thread, TurnHooks, PromptFile } from "../agent"
+import type { Agent, AgentContext, Account, ConversationFiles, ConversationPlace, MessageInput, OwnTurn, RunInput, RunResult, SignInAttempt, SignInOptions, SubagentMessages, SubagentRun, Thread, TurnHooks, PromptFile } from "../agent"
 import type { Limit } from "../auto"
 import { accountName, ContextWindows, failure, KnownAccount, model, signOutWith, TookTooLong } from "../agent"
 import { fileDiff, fromPatch } from "../diff"
@@ -50,6 +50,22 @@ const STATE_IN_HOME = [
   "statsig", "telemetry", "debug", "cache", "paste-cache", "image-cache", "state", "logs", "uploads",
   "stats-cache.json*", "mcp-needs-auth-cache.json*", ".credentials.json*", ".claude.json*", "*.lock",
 ]
+/** A conversation's name in its settings folder, as Claude Code gives it. */
+const CONVERSATION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+const CONVERSATION_ITEM = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(\.jsonl$|$|\/)/i
+
+/** The folder's name under `projects`, as Claude Code makes it. (One too long for a name it cuts short
+ * with a sum of its own: such a conversation is still found by its ID, and goes with no memory of its folder's.) */
+const projectSlug = (directory: string) => directory.replace(/[^a-zA-Z0-9]/g, "-")
+
+/** A bot's memory in its own folder, for the bot's own conversation in its `workspace`. */
+function botMemory(session: Session): string | undefined {
+  const bot = (session.metadata?.kuvo as { bot?: unknown } | undefined)?.bot
+  const directory = session.location.directory
+  if (typeof bot !== "string" || basename(directory) !== "workspace" || basename(dirname(directory)) !== bot) return undefined
+  return join(dirname(directory), "memory")
+}
+
 /** What it never writes in its state either: settings put there. */
 const KEPT_IN_HOME = ["settings*.json", "hooks", ".mcp.json"]
 
@@ -475,14 +491,84 @@ export class ClaudeAgent implements Agent {
    * Its own files: in its settings folder, its plans, each project's memory (which it reads and
    * writes on its own) and what it saved of a long output, which it's told to read back
    * (`projects/<project>/<session>/tool-results`); and its background commands' output, in /tmp's
-   * `claude-<uid>` when it has no temporary folder of its own (in the sandbox).
+   * `claude-<uid>` when it has no temporary folder of its own (in the sandbox); and a bot's memory
+   * in its folder, for the bot's own conversation.
    */
-  ownsPath(path: string): boolean {
+  ownsPath(path: string, session?: Session): boolean {
     const file = resolve(path)
+    const memory = session && botMemory(session)
+    if (memory && file.startsWith(memory + "/")) return true
     const settings = this.configHome
     if (file.startsWith(settings + "/") && /^(plans\/[^/]+\.md|projects\/[^/]+\/memory\/.+|projects\/[^/]+\/[^/]+\/tool-results\/.+)$/.test(file.slice(settings.length + 1))) return true
     const uid = process.getuid?.()
     return uid !== undefined && ["/tmp", "/private/tmp"].some((tmp) => file.startsWith(`${tmp}/claude-${uid}/`) && /^[^/]+\/[^/]+\/tasks\/[^/]+$/.test(file.slice(`${tmp}/claude-${uid}/`.length)))
+  }
+
+  /** Where its conversations in a folder are kept, in its settings folder. */
+  private projectFolder(directory: string, home = this.configHome) {
+    return join(home, "projects", projectSlug(directory))
+  }
+
+  /** The settings folders a conversation of its may be in: the one it runs with now first. */
+  private homesItMayUse() {
+    return [...new Set([this.configHome, ...(this.instance.home ? [] : [this.consoleHome, process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude")])])]
+  }
+
+  /** Its conversation for a move: `<id>.jsonl`, the folder beside it (subagents, what it saved of long
+   * outputs), and what it remembers, unless that's in the bot's own folder and goes with it. Claude
+   * Code finds a conversation by its ID, whichever folder's it's in. */
+  conversationFiles(state: Record<string, unknown>, session: Session): ConversationFiles | null {
+    const id = state.claudeSession
+    if (typeof id !== "string" || !state.claudeStarted) return null
+    if (!CONVERSATION_ID.test(id)) return { items: [], missing: true }
+    let folder: string | undefined
+    for (const home of this.homesItMayUse()) {
+      const named = this.projectFolder(session.location.directory, home)
+      if (existsSync(join(named, `${id}.jsonl`))) {
+        folder = named
+        break
+      }
+    }
+    if (!folder) {
+      for (const home of this.homesItMayUse()) {
+        const projects = join(home, "projects")
+        const found = (() => {
+          try {
+            return readdirSync(projects).find((name) => existsSync(join(projects, name, `${id}.jsonl`)))
+          } catch {
+            return undefined
+          }
+        })()
+        if (found) {
+          folder = join(projects, found)
+          break
+        }
+      }
+    }
+    if (!folder) return { items: [], missing: true }
+    const beside = join(folder, id)
+    const ownMemory = botMemory(session)
+    const memory = ownMemory && existsSync(ownMemory) ? undefined : join(this.homesItMayUse().find((home) => folder.startsWith(home + "/")) ?? this.configHome, "projects", projectSlug(session.location.directory), "memory")
+    return {
+      items: [{ path: join(folder, `${id}.jsonl`), name: `${id}.jsonl` }, ...(existsSync(beside) ? [{ path: beside, name: id }] : [])],
+      ...(memory && existsSync(memory) ? { memory, ...(ownMemory ? {} : { memoryShared: true }) } : {}),
+    }
+  }
+
+  /** Where a conversation that came goes here: a bot's memory in its own folder (which goes wherever
+   * it goes), a chat's with the others' in the chats folder, which all of them share. */
+  conversationPlace(_state: Record<string, unknown>, session: Session): ConversationPlace {
+    const folder = this.projectFolder(session.location.directory)
+    const own = botMemory(session)
+    return {
+      item: (name) => (CONVERSATION_ITEM.test(name) ? join(folder, name) : null),
+      memory: own ?? join(folder, "memory"),
+      memoryMerges: !own,
+    }
+  }
+
+  conversationRoots() {
+    return this.homesItMayUse().map((home) => join(home, "projects"))
   }
 
   /** Where Claude Code reads skills itself: its settings folder's, and a project's `.claude/skills`. */
@@ -568,18 +654,31 @@ export class ClaudeAgent implements Agent {
   private windows = new ContextWindows()
 
   private listModels(list: ClaudeModelInfo[]) {
+    // Claude Code's `default` is whichever model it recommends now, listed beside that model under
+    // its own name: to a person a second row of the same model. It isn't offered; the model it
+    // stands for, on this account, is known by it too (a session, a star or a list that names it).
+    const standing = list.find((info) => info.value === "default")
+    const stands = standing && list.find((info) => info !== standing && stoodFor(standing, info))
     this.modelList = {
       at: Date.now(),
-      models: list.map((info, index) =>
-        model(this.providerID, info.value, modelName(info), {
-          family: family(modelName(info)),
-          variants: info.supportedEffortLevels,
-          images: true,
-          context: this.windows.get(info.value) ?? (/1M/i.test(info.description ?? "") ? 1_000_000 : 200_000),
-          // Listed in Claude Code's order: the first is its default.
-          released: Date.now() - index,
-        }),
-      ),
+      models: list.flatMap((info, index) => {
+        if (info === standing && stands) return []
+        // (Where nothing else lists it, it's the model it stands for, under that model's id.)
+        const alone = info === standing && standing.resolvedModel ? standing.resolvedModel : undefined
+        // Where Claude Code listed its default (the first: that is what a new session starts on).
+        const place = info === stands ? list.indexOf(standing!) : index
+        const name = info === standing ? aloneName(info) : modelName(info)
+        return [
+          model(this.providerID, alone ?? info.value, name, {
+            family: family(name),
+            variants: info.supportedEffortLevels,
+            images: true,
+            context: this.windows.get(info.value) ?? (/1M/i.test(info.description ?? "") ? 1_000_000 : 200_000),
+            released: Date.now() - place,
+            ...(info === stands || alone ? { aliases: ["default"] } : {}),
+          }),
+        ]
+      }),
     }
     emit("model.updated", {})
   }
@@ -670,11 +769,24 @@ function withTimeout<T>(promise: Promise<T>, milliseconds: number): Promise<T> {
 
 function modelName(info: { value: string; displayName: string; description?: string }): string {
   // "Default (recommended)" says less than what it is: "Opus 4.8 with 1M context · Most capable…".
-  // Said as the default, though: it's listed beside the model it stands for now ("opus"), which
-  // would read the same, and it follows Claude Code's default when that changes.
   const what = info.description?.split(" · ")[0]?.trim()
-  if (!what || !/^(opus|sonnet|haiku|fable|claude)/i.test(what)) return info.displayName
-  return info.value === "default" ? `Default (${what})` : what
+  return what && /^(opus|sonnet|haiku|fable|claude)/i.test(what) ? what : info.displayName
+}
+
+/** What Claude Code's `default` is called where nothing else lists the model it stands for: that model's name, never "Default". */
+function aloneName(info: ClaudeModelInfo): string {
+  const what = info.description?.split(" · ")[0]?.trim()
+  if (what && /^(opus|sonnet|haiku|fable|claude)/i.test(what)) return what
+  // "claude-opus-5-5" → "Opus 5.5" (a date or a window after it left out).
+  const parts = (info.resolvedModel ?? "").replace(/^claude-/, "").split("-").filter((part) => /^[a-z]+$/i.test(part) || /^\d{1,2}$/.test(part))
+  const [maker, ...version] = parts
+  return maker ? `${maker[0].toUpperCase()}${maker.slice(1)}${version.length ? " " + version.join(".") : ""}` : "Claude Code's recommended model"
+}
+
+/** Whether `info` is the model Claude Code's `default` stands for now: the same one it resolves to, or, where it doesn't say, the same name. */
+function stoodFor(standing: ClaudeModelInfo, info: ClaudeModelInfo): boolean {
+  if (standing.resolvedModel && info.resolvedModel) return standing.resolvedModel === info.resolvedModel
+  return modelName(standing) === modelName(info)
 }
 
 /** Its family, for its maker's mark and so each shows in the short list: "claude-opus". */
@@ -695,7 +807,8 @@ function updateChannel(): string {
 
 function fallbackModels(providerID: string): Model[] {
   return [
-    model(providerID, "default", "Claude Code's default", { family: "claude-default", images: true, variants: ["low", "medium", "high", "xhigh", "max"], released: 3 }),
+    // (Until Claude Code says which its default is, a session on it shows as this and goes on.)
+    model(providerID, "opus", "Opus", { family: "claude-opus", images: true, variants: ["low", "medium", "high", "xhigh", "max"], released: 3, aliases: ["default"] }),
     model(providerID, "sonnet", "Sonnet", { family: "claude-sonnet", images: true, variants: ["low", "medium", "high", "max"], released: 2 }),
     model(providerID, "haiku", "Haiku", { family: "claude-haiku", images: true, released: 1 }),
   ]
@@ -1136,6 +1249,8 @@ class ClaudeThread implements Thread {
     // While the box's sandbox is on, Claude Code runs whole in it, and so does all it starts: its
     // commands, its hooks and MCP servers (yours, and a project's).
     const whole = this.whole(skills, id)
+    const named = botMemory(this.session)
+    const ownMemory = named && existsSync(named) ? named : undefined
     this.input = new Queue()
     const tools = fenceOn() ? relayedTools(this.session.id, this) : kuvoTools(this.session.id)
     this.opened = { model: modelID, effort, plan, append, program: this.agent.program, tools: tools?.key, skills, fence: fenceKey() + fullAccessMark(this.session.id) }
@@ -1156,6 +1271,8 @@ class ClaudeThread implements Thread {
         systemPrompt: { type: "preset", preset: "claude_code", ...(append ? { append } : {}) },
         ...(skills ? { plugins: [{ type: "local" as const, path: skills, skipMcpDiscovery: true }] } : {}),
         ...(resume ? { resume: id } : { sessionId: id }),
+        // A bot's memory in its own folder, once it's there.
+        ...(ownMemory ? { settings: { autoMemoryDirectory: ownMemory } as any } : {}),
         // Its commands know their conversation, as the engine's do (kuvo-wake schedules for it).
         env: { ...this.agent.env(), OPENCODE_SESSION_ID: this.session.id, ...whole?.env },
         // Its own sandbox off while the box's is on (yours, or a project's settings, may turn it
@@ -1426,7 +1543,7 @@ class ClaudeThread implements Thread {
             if (block.type === "text" && block.text && !failing) turn.text(block.text)
             else if (block.type === "thinking" && block.thinking) turn.reasoning(block.thinking)
             else if (block.type === "redacted_thinking") turn.reasoning("(The model kept this thinking to itself.)")
-            else if (block.type === "compaction") this.noticeLater(lane, "Claude summarized the conversation to make room.")
+            else if (block.type === "compaction") turn.compacted(true)
           }
         }
         if (id && !lane.streamed.has(id)) turn.endBlock()
@@ -1490,16 +1607,22 @@ class ClaudeThread implements Thread {
         if (typeof message.tool_use_id === "string" && (message.summary || message.description)) turn.toolProgress(message.tool_use_id, { summary: message.summary ?? message.description, lastTool: message.last_tool_name })
         return
       case "compact_boundary":
-        // (One you asked for shows as that, whichever way it ends.)
-        if (!active?.compacting) this.noticeLater(lane, "Claude Code summarized the conversation to make room.")
+        // Summarized. (One you asked for shows as that, whichever way it ends.)
+        if (!active?.compacting) turn.compacted(true)
         return
       case "status": {
-        if (message.compact_result !== "failed") return
-        const failed = `Claude Code couldn't summarize the conversation${message.compact_error ? `: ${String(message.compact_error).replace(/\.$/, "")}` : ""}.`
+        // One it makes by itself: `compacting` as it begins (and again while it waits), then a
+        // `null` status with how it went. A bare `null` one says no more than that it isn't
+        // summarizing now: it may begin again at once (the same row), or the model answers next
+        // (which ends the row: see Turn.startStep), or the turn ends.
         if (active?.compacting) {
+          if (message.compact_result !== "failed") return
           active.compactFailed = true
-          active.problem = failed
-        } else turn.notice(failed)
+          active.problem = `Claude Code couldn't summarize the conversation${message.compact_error ? `: ${String(message.compact_error).replace(/\.$/, "")}` : ""}.`
+          return
+        }
+        if (message.status === "compacting") turn.compacting()
+        else if (message.compact_result === "success" || message.compact_result === "failed") turn.compacted(message.compact_result === "success")
         return
       }
       case "api_retry":
@@ -1548,11 +1671,6 @@ class ClaudeThread implements Thread {
     if (!this.sandboxedNow || !about.length) return said.trim() ? `: ${said.trim()}` : ""
     const why = about.some((line) => line.includes("mkdir")) ? "Claude Code can't start this one in the sandbox" : "the sandbox doesn't let a hook set environment variables with CLAUDE_ENV_FILE"
     return `: ${[...lines.filter((line) => !line.includes("session-env") && line.trim()), why].join("\n")}`
-  }
-
-  /** A note now, or after the words being written (a notice ends the step under way). */
-  private noticeLater(lane: Lane, text: string) {
-    lane.turn.notice(text)
   }
 
   /** A note, once per kind for this Claude Code. */

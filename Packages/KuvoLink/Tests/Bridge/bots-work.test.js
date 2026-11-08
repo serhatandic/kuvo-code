@@ -51,6 +51,8 @@ function setBots({ pixelWork } = {}) {
 let sessions, prompts, made, asked, replied, interrupted, active, busy, restarts;
 // A session's latest messages where a test says, newest first; what's asked of `/compact`, and how each answers.
 let kept, compacted, compacting;
+// The questions sessions ask (a form each), and how each was answered.
+let forms, answeredForms;
 // Sessions given a task stay at work (`staysAtWork`); none is made until the sessions at work were
 // looked at `holdMaking` times, so starts asked for at once all look before any is made.
 let staysAtWork, holdMaking, activeLooks, held;
@@ -72,6 +74,8 @@ function resetEngine() {
   replied = [];
   interrupted = [];
   kept = new Map();
+  forms = new Map();
+  answeredForms = [];
   compacted = [];
   compacting = new Map();
   active = new Set();
@@ -173,7 +177,13 @@ const standIn = onBridge => (request, response) => {
       return reply({});
     }
     if (one?.[2] === "/permission") return reply({ data: (asked.get(id) ?? []).map(withSource) });
-    if (one?.[2] === "/form") return reply({ data: [] });
+    if (one?.[2] === "/form") return reply({ data: forms.get(id) ?? [] });
+    const formReply = one?.[2]?.match(/^\/form\/([^/]+)\/reply$/);
+    if (formReply) {
+      answeredForms.push({ session: id, form: decodeURIComponent(formReply[1]), ...JSON.parse(body) });
+      forms.set(id, (forms.get(id) ?? []).filter(each => each.id !== decodeURIComponent(formReply[1])));
+      return reply({});
+    }
     const answer = one?.[2]?.match(/^\/permission\/([^/]+)\/reply$/);
     if (answer) {
       replied.push({ session: id, permission: decodeURIComponent(answer[1]), ...JSON.parse(body) });
@@ -213,6 +223,16 @@ function route(method, pathname, body) {
   });
 }
 const tool = async (name, args, session) => (await route("POST", "kuvo/agent-tools", { name, arguments: args, session })).body;
+// A session put in another mode than the one it started in, as a client sets one: its approval
+// and the rules the box makes for it. A session in Ask First is always the user's to answer,
+// whatever its bot's mode, and one started here runs in Auto, which asks first while the sandbox
+// isn't running: the tests of what a bot's own rules let it allow put its sessions in Accept Edits.
+const MODE_RULES = { askFirst: [{ action: "shell", resource: "*", effect: "ask" }, { action: "edit", resource: "*", effect: "ask" }], acceptEdits: [{ action: "shell", resource: "*", effect: "ask" }], auto: [], fullAccess: [] };
+function inMode(session, approval = "acceptEdits") {
+  const was = sessions.get(session);
+  sessions.set(session, { ...was, permissions: MODE_RULES[approval], metadata: { ...was.metadata, kuvo: { ...was.metadata?.kuvo, approval, applied: approval } } });
+  return session;
+}
 const startedAddress = said => said.text.match(/\(address (ses_\w+)\)/)?.[1];
 
 test("a bot starts a session in a project, on the model, effort and mode it picks, marked as its work, with the session's half of the playbook", async () => {
@@ -434,7 +454,7 @@ test("compact_session summarizes only a session of the caller's own, and says pl
 });
 
 test("a bot answers its sessions' asks as its own conversation could go ahead, recorded on the session: a push too, as in any conversation", async () => {
-  const session = startedAddress(await tool("start_session", { task: "Add haptics.", title: "Haptics", project: "Tidepool" }, "ses_pixel"));
+  const session = inMode(startedAddress(await tool("start_session", { task: "Add haptics.", title: "Haptics", project: "Tidepool" }, "ses_pixel")));
   asked.set(session, [
     { id: "per_1", sessionID: session, action: "shell", resources: ["git diff --stat"], source: { type: "tool", messageID: "msg_1", id: "call_1" } },
     { id: "per_2", sessionID: session, action: "shell", resources: ["git push origin main"], source: { type: "tool", messageID: "msg_1", id: "call_2" } },
@@ -462,7 +482,7 @@ test("a bot answers its sessions' asks as its own conversation could go ahead, r
 // Pixel's isn't Pixel looking after it.
 test("a client sees what a bot does to each of its sessions, as it does it, and nothing for a session that isn't its", async () => {
   fs.rmSync(path.join(home, "run", "work", "oversight.json"), { force: true });
-  const session = startedAddress(await tool("start_session", { task: "Add haptics.", title: "Haptics", project: "Tidepool" }, "ses_pixel"));
+  const session = inMode(startedAddress(await tool("start_session", { task: "Add haptics.", title: "Haptics", project: "Tidepool" }, "ses_pixel")));
   assert.ok(session);
   assert.equal((await tool("send_message", { to: session, text: "Use the light taps." }, "ses_pixel")).isError, false);
   assert.equal((await tool("read_conversation", { of: session }, "ses_pixel")).isError, false);
@@ -486,7 +506,7 @@ test("a client sees what a bot does to each of its sessions, as it does it, and 
 });
 
 test("a bot that asks first can't allow what it would have to ask about itself", async () => {
-  const session = startedAddress(await tool("start_session", { task: "Tidy.", project: "Tidepool" }, "ses_mira"));
+  const session = inMode(startedAddress(await tool("start_session", { task: "Tidy.", project: "Tidepool" }, "ses_mira")));
   asked.set(session, [{ id: "per_1", sessionID: session, action: "shell", resources: ["git status"] }]);
   const said = await tool("answer_ask", { session, ask: "per_1", decision: "allow", reason: "Tests are fine." }, "ses_mira");
   assert.equal(said.isError, true);
@@ -513,7 +533,7 @@ test("list_models lists the models there are accounts for, with their efforts", 
 
 test("a client sees a bot's work: its sessions, the answers it gave and today's count", async () => {
   setBots({ pixelWork: { limits: { atOnce: 3 } } });
-  const session = startedAddress(await tool("start_session", { task: "Add haptics.", title: "Haptics", project: "Tidepool" }, "ses_pixel"));
+  const session = inMode(startedAddress(await tool("start_session", { task: "Add haptics.", title: "Haptics", project: "Tidepool" }, "ses_pixel")));
   asked.set(session, [{ id: "per_1", sessionID: session, action: "shell", resources: ["git status"] }]);
   await tool("answer_ask", { session, ask: "per_1", decision: "allow", reason: "Tests." }, "ses_pixel");
   active = new Set([session]);
@@ -541,8 +561,8 @@ test("a client stops all of a bot's work at once", async () => {
 test("what a bot may allow is what its own conversation could do without asking: anything its rules let through, and nothing where it would ask", async () => {
   const lines = ["sh -c 'git push'", "git push --force origin main", "gh pr create --fill", "npx vercel deploy --prod", "npm publish", "stripe charges create --amount 500", "sendmail ada@example.com",
     "curl -X POST https://example.com", "rm -rf build", "ssh host", "git config core.hooksPath .hooks", "cd .. && ls"];
-  const pixel = startedAddress(await tool("start_session", { task: "Ship it.", project: "Tidepool" }, "ses_pixel"));
-  const mira = startedAddress(await tool("start_session", { task: "Ship it.", project: "Tidepool" }, "ses_mira"));
+  const pixel = inMode(startedAddress(await tool("start_session", { task: "Ship it.", project: "Tidepool" }, "ses_pixel")));
+  const mira = inMode(startedAddress(await tool("start_session", { task: "Ship it.", project: "Tidepool" }, "ses_mira")));
   for (const session of [pixel, mira]) asked.set(session, lines.map((command, at) => ({ id: `per_${at}`, sessionID: session, action: "shell", resources: [command] })));
   for (const [at, command] of lines.entries()) {
     const allowed = await tool("answer_ask", { session: pixel, ask: `per_${at}`, decision: "allow", reason: "Part of the plan." }, "ses_pixel");
@@ -554,7 +574,7 @@ test("what a bot may allow is what its own conversation could do without asking:
 });
 
 test("a bot allows another tool, a read or an edit as its own rules do, a file outside the project only where it may work there, and its level counts part by part", async () => {
-  const session = startedAddress(await tool("start_session", { task: "Tidy.", project: "Tidepool" }, "ses_pixel"));
+  const session = inMode(startedAddress(await tool("start_session", { task: "Tidy.", project: "Tidepool" }, "ses_pixel")));
   asked.set(session, [
     { id: "per_1", sessionID: session, action: "github_push_files", resources: ["*"] },
     { id: "per_2", sessionID: session, action: "read", resources: [path.join(tidepool, ".env")] },
@@ -572,7 +592,7 @@ test("a bot allows another tool, a read or an edit as its own rules do, a file o
   const own = sessions.get("ses_pixel").permissions;
   sessions.get("ses_pixel").permissions = [{ action: "shell", resource: "*", effect: "ask" }, { action: "shell", resource: "git *", effect: "allow" }];
   try {
-    const level = startedAddress(await tool("start_session", { task: "Test.", project: "Tidepool" }, "ses_pixel"));
+    const level = inMode(startedAddress(await tool("start_session", { task: "Test.", project: "Tidepool" }, "ses_pixel")));
     asked.set(level, [{ id: "per_6", sessionID: level, action: "shell", resources: ["git status && ls"] }, { id: "per_7", sessionID: level, action: "shell", resources: ["git status && git diff"] }]);
     const both = await tool("answer_ask", { session: level, ask: "per_6", decision: "allow", reason: "Tests." }, "ses_pixel");
     assert.match(both.text, /ask the user about it yourself/, "ls is asked about on its own");
@@ -583,7 +603,7 @@ test("a bot allows another tool, a read or an edit as its own rules do, a file o
 });
 
 test("a bot that asks first can't allow a folder outside the project, which it would be asked about itself", async () => {
-  const session = startedAddress(await tool("start_session", { task: "Tidy.", project: "Tidepool" }, "ses_mira"));
+  const session = inMode(startedAddress(await tool("start_session", { task: "Tidy.", project: "Tidepool" }, "ses_mira")));
   asked.set(session, [{ id: "per_1", sessionID: session, action: "external_directory", resources: [path.join(home, ".ssh", "*")] }]);
   const said = await tool("answer_ask", { session, ask: "per_1", decision: "allow", reason: "It needs the keys." }, "ses_mira");
   assert.equal(said.isError, true);
@@ -591,7 +611,7 @@ test("a bot that asks first can't allow a folder outside the project, which it w
 });
 
 test("what a session's subagent asks, the bot answers on the subagent", async () => {
-  const session = startedAddress(await tool("start_session", { task: "Review it.", project: "Tidepool" }, "ses_pixel"));
+  const session = inMode(startedAddress(await tool("start_session", { task: "Review it.", project: "Tidepool" }, "ses_pixel")));
   sessions.set("ses_reviewer", { id: "ses_reviewer", parentID: session, title: "Reviewer", location: { directory: tidepool }, time: { created: 1, updated: 1 } });
   asked.set("ses_reviewer", [{ id: "per_7", sessionID: "ses_reviewer", action: "shell", resources: ["git status"] }]);
   const listed = await tool("list_sessions", {}, "ses_pixel");
@@ -602,7 +622,7 @@ test("what a session's subagent asks, the bot answers on the subagent", async ()
 });
 
 test("two answers given at once on one session are both kept", async () => {
-  const session = startedAddress(await tool("start_session", { task: "Add haptics.", project: "Tidepool" }, "ses_pixel"));
+  const session = inMode(startedAddress(await tool("start_session", { task: "Add haptics.", project: "Tidepool" }, "ses_pixel")));
   asked.set(session, [{ id: "per_1", sessionID: session, action: "shell", resources: ["git status"] }, { id: "per_2", sessionID: session, action: "shell", resources: ["git log --oneline -5"] }]);
   await Promise.all([
     tool("answer_ask", { session, ask: "per_1", decision: "allow", reason: "Tests." }, "ses_pixel"),
@@ -647,7 +667,7 @@ test("a bot's work further back than the latest two hundred sessions is still it
 });
 
 test("a bot lets a session edit any file in the project, as its own conversation would, but not one a link leads out of it to, nor start one working in your home folder", async () => {
-  const session = startedAddress(await tool("start_session", { task: "Tidy.", project: "Tidepool" }, "ses_pixel"));
+  const session = inMode(startedAddress(await tool("start_session", { task: "Tidy.", project: "Tidepool" }, "ses_pixel")));
   fs.rmSync(path.join(tidepool, "linkout"), { force: true });
   fs.symlinkSync(home, path.join(tidepool, "linkout"));
   const edits = [".git/hooks/pre-commit", "package.json", "Makefile", ".husky/pre-commit", "opencode.json", ".claude/settings.json", "src/app.ts", "docs/plan.md"];
@@ -681,7 +701,7 @@ test("a coding agent's session that runs in the sandbox lets a bot allow its com
   t.after(() => fs.rmSync(path.join(home, "run", "bridge.json"), { force: true }));
   t.after(() => fs.rmSync(path.join(home, "run", "fence"), { recursive: true, force: true }));
   // Pixel's session, its conversation now with a coding agent on the bridge.
-  const session = startedAddress(await tool("start_session", { task: "Add haptics.", title: "Haptics", project: "Tidepool" }, "ses_pixel"));
+  const session = inMode(startedAddress(await tool("start_session", { task: "Add haptics.", title: "Haptics", project: "Tidepool" }, "ses_pixel")));
   sessions.get(session).bridge = true;
   // The bridge says which asks come from an agent run whole in the sandbox now.
   asked.set(session, [
@@ -787,7 +807,7 @@ test("where its sessions' commands run in the sandbox, a bot allows what its own
     assert.ok(fs.existsSync(path.join(home, "run", "fence", "on")), "the sandbox is set up and checked here");
     fs.utimesSync(plugin, 0, 0);
 
-    const session = startedAddress(await tool("start_session", { task: "Add haptics.", title: "Haptics", project: "Tidepool" }, "ses_pixel"));
+    const session = inMode(startedAddress(await tool("start_session", { task: "Add haptics.", title: "Haptics", project: "Tidepool" }, "ses_pixel")));
     const commands = {
       install: "npm install && npm test 2>&1 | tail -n 20",
       build: "cd ios && xcodebuild -scheme Tidepool build",
@@ -815,7 +835,7 @@ test("where its sessions' commands run in the sandbox, a bot allows what its own
     // where the bot's own don't, so that comes to you.
     write(path.join(home, "run", "bridge.json"), JSON.stringify({ port: bridge.address().port, password: "b", pid: await runningAs("kuvo-agents", t) }));
     t.after(() => fs.rmSync(path.join(home, "run", "bridge.json"), { force: true }));
-    const agent = startedAddress(await tool("start_session", { task: "Add haptics.", title: "Haptics", project: "Tidepool" }, "ses_pixel"));
+    const agent = inMode(startedAddress(await tool("start_session", { task: "Add haptics.", title: "Haptics", project: "Tidepool" }, "ses_pixel")));
     sessions.get(agent).bridge = true;
     asked.set(agent, [{ id: "outside", sessionID: agent, action: "shell", resources: ["npm test"] }, { id: "inside", sessionID: agent, action: "shell", resources: ["git push origin main"], sandboxed: true }]);
     const outside = await tool("answer_ask", { session: agent, ask: "outside", decision: "allow", reason: "Part of the plan." }, "ses_pixel");
@@ -840,7 +860,101 @@ test("where its sessions' commands run in the sandbox, a bot allows what its own
     fs.rmSync(plugin, { force: true });
   }
   // Without it, a bot allows as its own conversation runs without it.
-  const session = startedAddress(await tool("start_session", { task: "Add haptics.", title: "Haptics", project: "Tidepool" }, "ses_pixel"));
+  const session = inMode(startedAddress(await tool("start_session", { task: "Add haptics.", title: "Haptics", project: "Tidepool" }, "ses_pixel")));
   asked.set(session, [{ id: "install", sessionID: session, action: "shell", resources: ["npm install"] }]);
   assert.equal((await tool("answer_ask", { session, ask: "install", decision: "allow", reason: "Part of the plan." }, "ses_pixel")).isError, false);
+});
+
+// A session in Ask First always asks the user, whatever its bot's mode (PROTOCOL.md, "Work",
+// Answering asks): a bot in Full Access or Auto can't allow what it asks, though it may still say
+// no, and answer a question in words.
+const FULL = { kuvo: { bot: "bot_pixel00001", approval: "fullAccess", applied: "fullAccess" } };
+const inFullAccess = async fn => {
+  write(path.join(home, "box", "approval.json"), JSON.stringify({ fullAccess: true }));
+  const own = sessions.get("ses_pixel");
+  sessions.set("ses_pixel", { ...own, metadata: FULL });
+  try {
+    await fn();
+  } finally {
+    sessions.set("ses_pixel", own);
+    fs.rmSync(path.join(home, "box", "approval.json"), { force: true });
+  }
+};
+const ASKED = { id: "per_1", action: "shell", resources: ["git status"] };
+
+test("a bot in Full Access can't allow what a session in Ask First asks: the user answers it, and the bot may still deny or answer a question in words", async () => {
+  await inFullAccess(async () => {
+    const session = inMode(startedAddress(await tool("start_session", { task: "Tidy.", title: "Tidy", project: "Tidepool" }, "ses_pixel")), "askFirst");
+    asked.set(session, [{ ...ASKED, sessionID: session }, { id: "per_2", sessionID: session, action: "shell", resources: ["git log"] }]);
+    forms.set(session, [{ id: "frm_1", title: "Name", fields: [{ key: "name", type: "string", description: "What should it be called?" }] }]);
+    const said = await tool("answer_ask", { session, ask: "per_1", decision: "allow", reason: "Harmless." }, "ses_pixel");
+    assert.equal(said.isError, true);
+    assert.match(said.text, /^You can't allow that: "Tidy" is in Ask First, so the user answers every ask it makes/);
+    // The ask is still open for the user, and nothing was recorded as allowed.
+    assert.deepEqual(replied, []);
+    assert.equal(asked.get(session).some(each => each.id === "per_1"), true);
+    assert.equal(sessions.get(session).metadata.kuvo.answers, undefined);
+    // It may deny, and answer a question in words.
+    assert.equal((await tool("answer_ask", { session, ask: "per_2", decision: "deny", reason: "Not needed." }, "ses_pixel")).isError, false);
+    assert.deepEqual(replied, [{ session, permission: "per_2", decision: "reject", message: "Pixel: Not needed." }]);
+    assert.equal((await tool("answer_ask", { session, ask: "frm_1", answer: "Tidy", reason: "The plan names it." }, "ses_pixel")).isError, false);
+    assert.deepEqual(answeredForms, [{ session, form: "frm_1", answer: { name: "Tidy" } }]);
+    // The same session in Accept Edits: the bot's own conversation goes ahead, so it may.
+    inMode(session, "acceptEdits");
+    assert.deepEqual(await tool("answer_ask", { session, ask: "per_1", decision: "allow", reason: "Harmless." }, "ses_pixel"), { text: "Allowed: git status.", isError: false });
+  });
+});
+
+test("a session in Full Access, Accept Edits or Auto that asks is the bot's to allow, as before", async () => {
+  await inFullAccess(async () => {
+    // (Auto is Auto only where the sandbox runs: a test box can say it does.)
+    process.env.KUVO_TEST_SANDBOX_ON = "1";
+    try {
+      for (const mode of ["fullAccess", "acceptEdits", "auto"]) {
+        replied.length = 0;
+        const session = inMode(startedAddress(await tool("start_session", { task: `Tidy ${mode}.`, project: "Tidepool" }, "ses_pixel")), mode);
+        asked.set(session, [{ ...ASKED, sessionID: session }]);
+        assert.deepEqual(await tool("answer_ask", { session, ask: "per_1", decision: "allow", reason: "Harmless." }, "ses_pixel"), { text: "Allowed: git status.", isError: false }, mode);
+        assert.deepEqual(replied, [{ session, permission: "per_1", decision: "once" }], mode);
+      }
+    } finally {
+      delete process.env.KUVO_TEST_SANDBOX_ON;
+    }
+  });
+});
+
+test("an Auto session that can't be Auto here (no sandbox) is in Ask First as it runs: the bot can't allow what it asks", async () => {
+  const session = startedAddress(await tool("start_session", { task: "Tidy.", project: "Tidepool" }, "ses_pixel"));
+  assert.equal(sessions.get(session).metadata.kuvo.approval, "auto");
+  asked.set(session, [{ ...ASKED, sessionID: session }]);
+  assert.match((await tool("answer_ask", { session, ask: "per_1", decision: "allow", reason: "Harmless." }, "ses_pixel")).text, /asks first for now \(Auto needs the sandbox/);
+  assert.deepEqual(replied, []);
+});
+
+test("what a subagent of a session in Ask First asks is the user's too: judged by its session's mode", async () => {
+  await inFullAccess(async () => {
+    const session = inMode(startedAddress(await tool("start_session", { task: "Review it.", project: "Tidepool" }, "ses_pixel")), "askFirst");
+    sessions.set("ses_reviewer", { id: "ses_reviewer", parentID: session, title: "Reviewer", location: { directory: tidepool }, time: { created: 1, updated: 1 } });
+    asked.set("ses_reviewer", [{ id: "per_7", sessionID: "ses_reviewer", action: "shell", resources: ["git status"] }]);
+    assert.match((await tool("answer_ask", { session, ask: "per_7", decision: "allow", reason: "Tests." }, "ses_pixel")).text, /is in Ask First/);
+    assert.deepEqual(replied, []);
+    assert.equal((await tool("answer_ask", { session, ask: "per_7", decision: "deny", reason: "No." }, "ses_pixel")).isError, false);
+    assert.deepEqual(replied.map(each => [each.session, each.decision]), [["ses_reviewer", "reject"]]);
+  });
+});
+
+test("a coding agent's session in Ask First is the user's to answer too: the bot can't allow what it asks", async t => {
+  write(path.join(home, "run", "bridge.json"), JSON.stringify({ port: bridge.address().port, password: "b", pid: await runningAs("kuvo-agents", t) }));
+  t.after(() => fs.rmSync(path.join(home, "run", "bridge.json"), { force: true }));
+  await inFullAccess(async () => {
+    const agent = inMode(startedAddress(await tool("start_session", { task: "Tidy.", title: "Agent", project: "Tidepool" }, "ses_pixel")), "askFirst");
+    sessions.get(agent).bridge = true;
+    asked.set(agent, [{ ...ASKED, sessionID: agent }]);
+    const said = await tool("answer_ask", { session: agent, ask: "per_1", decision: "allow", reason: "Harmless." }, "ses_pixel");
+    assert.equal(said.isError, true);
+    assert.match(said.text, /"Agent" is in Ask First/);
+    assert.deepEqual(replied, []);
+    inMode(agent, "acceptEdits");
+    assert.equal((await tool("answer_ask", { session: agent, ask: "per_1", decision: "allow", reason: "Harmless." }, "ses_pixel")).isError, false);
+  });
 });

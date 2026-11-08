@@ -34,12 +34,33 @@ public enum MoveWords {
         ("Moving to \(place)", "Waiting for \(computer) to come back. It carries on then, or stays where it was if \(computer) stays away a long time. You can write meanwhile, and send once it’s moved.")
     }
 
+    /// What of a bot or chat stays on the computer it leaves, as its box says it (`kuvo/moves/places`,
+    /// `stays`): the sessions it started, its unanswered questions, the goals it proposed, and
+    /// whether its coding agent's copy of its conversation is kept there as the way back, or which
+    /// coding agent can't take its own conversation along and starts a new one (`startsOver`).
+    public struct Stays: Decodable, Equatable, Sendable {
+        public var sessions: Int?
+        public var asks: Int?
+        public var goals: Int?
+        public var agent: Bool?
+        public var startsOver: String?
+
+        public init(sessions: Int? = nil, asks: Int? = nil, goals: Int? = nil, agent: Bool? = nil, startsOver: String? = nil) {
+            self.sessions = sessions
+            self.asks = asks
+            self.goals = goals
+            self.agent = agent
+            self.startsOver = startsOver
+        }
+    }
+
     /// Move to Computer's question before a move: "Move “Trip plans” to lab?", with what goes and
     /// what's left. `kind`: "bot", "chat" or "group"; `name`: as a title says it (quoted, or "this
     /// chat"); `place`: where to, by name, `placeIsMac` whether that's a Mac, `toHere` whether it's
     /// the computer asking; `from`: the computer it leaves, by name (nil: the one asking), and
-    /// whether that's a machine (its trash is Kuvo Code's own there).
-    public static func question(kind: String, name: String, place: String, placeIsMac: Bool, toHere: Bool = false, from: String?, fromMachine: Bool) -> (title: String, message: String) {
+    /// whether that's a machine (its trash is Kuvo Code's own there); `stays`: what of it stays
+    /// there, as its box said.
+    public static func question(kind: String, name: String, place: String, placeIsMac: Bool, toHere: Bool = false, from: String?, fromMachine: Bool, stays: Stays? = nil) -> (title: String, message: String) {
         let what = switch kind {
         case "bot": "Its memory, files, wake-ups and conversation go there, and it carries on there; its seats in group chats start afresh there."
         case "group" where toHere: "Its messages and meeting come here, and it carries on here while this Mac is on; its bots stay where they are."
@@ -49,10 +70,45 @@ public enum MoveWords {
         }
         let left = from.map { " on \($0)" } ?? " here"
         let trash = fromMachine ? "Kuvo Code’s trash folder " + (from == nil ? "here" : "there") : "the Trash"
-        let leaves = kind == "group"
-            ? "Nothing goes to it while it moves. What it leaves\(left) goes to \(trash)."
-            : "Nothing goes to it while it moves. Its folder\(left) goes to \(trash), with a copy of its conversation in it."
-        return ("Move \(name) to \(place)?", "\(what) \(leaves)")
+        if kind == "group" {
+            return ("Move \(name) to \(place)?", "\(what) Nothing goes to it while it moves. What it leaves\(left) goes to \(trash).")
+        }
+        let folder = stays?.agent == true
+            ? "Its folder\(left) goes to \(trash), and its coding agent’s copy of its conversation stays\(left) until a week after it first runs there."
+            : "Its folder\(left) goes to \(trash), with a copy of its conversation in it."
+        var sentences = [what]
+        if let agent = stays?.startsOver {
+            sentences.append("\(agent) starts a new conversation there, handed what was said so far.")
+        }
+        sentences += ["Nothing goes to it while it moves.", folder]
+        let started = stays?.sessions ?? 0
+        let kept = [
+            counted(started, one: "the session it started", many: "sessions it started", the: true),
+            counted(stays?.asks ?? 0, one: "its unanswered question", many: "unanswered questions", the: false),
+            counted(stays?.goals ?? 0, one: "the goal it proposed", many: "goals it proposed", the: true),
+        ].compactMap { $0 }
+        if !kept.isEmpty {
+            let many = kept.count > 1 || started > 1 || (stays?.asks ?? 0) > 1 || (stays?.goals ?? 0) > 1
+            let reach = started == 0 ? "" : ", and it still reaches " + (started == 1 ? "that session" : "those sessions") + " from there"
+            sentences.append(capitalizedFirst(joined(kept)) + (many ? " stay" : " stays") + left + reach + ".")
+        }
+        sentences.append("Vault items, integrations and browser sign-ins stay\(left).")
+        return ("Move \(name) to \(place)?", sentences.joined(separator: " "))
+    }
+
+    /// "the session it started", "the 2 sessions it started", "its 3 unanswered questions"; nil for none.
+    private static func counted(_ count: Int, one: String, many: String, the: Bool) -> String? {
+        guard count > 0 else { return nil }
+        return count == 1 ? one : (the ? "the" : "its") + " \(count) \(many)"
+    }
+
+    /// "a", "a and b", "a, b and c".
+    private static func joined(_ items: [String]) -> String {
+        items.count <= 1 ? items.first ?? "" : items.dropLast().joined(separator: ", ") + " and " + items.last!
+    }
+
+    private static func capitalizedFirst(_ text: String) -> String {
+        text.prefix(1).uppercased() + text.dropFirst()
     }
 
     /// What a move asked of `from` (a computer, by name) says when the connection went before its

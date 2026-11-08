@@ -63,7 +63,10 @@ import Testing
         app.botWork.boxes = { _ in box }
         app.goalPlans.boxes = { _ in box }
         app.workspace.api = engine.api
-        engine.list([StubEngine.session("ses_pixel", title: "Pixel", directory: "/tmp/kuvo-tests-goal-work", created: 1)])
+        // The box says Sign-in works, and the app shows it so only while its engine runs it (`AtWork`).
+        engine.list([StubEngine.session("ses_pixel", title: "Pixel", directory: "/tmp/kuvo-tests-goal-work", created: 1),
+                     StubEngine.session("ses_signin", title: "Sign-in", directory: "/Users/me/tidepool", created: 2)],
+                    running: ["ses_signin"])
         engine.conversation("ses_pixel", [])
         await app.workspace.refresh()
         model = try #require(app.workspace.model(for: "ses_pixel"))
@@ -100,12 +103,9 @@ import Testing
         return AXElement.all(in: window.contentView)
     }
 
-    /// The chip on the goal's line: the bar's words, and where it takes you.
+    /// The chip on the goal's line, whatever it says: found by where it takes you.
     private var chip: AXElement? {
-        elements.first { element in
-            element.label == "A session is at work"
-                && ["Shows all of Pixel’s work today", "A session is at work: all of Pixel’s work today"].contains(element.help ?? "")
-        }
+        elements.first { $0.help?.hasSuffix("all of Pixel’s work today") == true || $0.help == "Shows all of Pixel’s work today" }
     }
 
     /// The work bar's own All, which only the bar has.
@@ -114,7 +114,7 @@ import Testing
     @Test func theGoalsLineHasTheBotsSessionsAndTheirBarIsBackOnceItsPutAway() async throws {
         defer { done() }
         try await until { chip != nil || app.goalPlans.plan(for: "ses_pixel") == nil }
-        #expect(chip != nil, "the chip on the goal's line, among \(elements.compactMap(\.label))")
+        #expect(chip?.label == "A session is at work", "the chip on the goal's line says its session works, among \(elements.compactMap(\.label))")
         #expect(workBar == nil, "no work bar under the goal: its line says it")
         #expect(app.goalPlans.plan(for: "ses_pixel") != nil)
 

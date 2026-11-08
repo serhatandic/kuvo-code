@@ -177,6 +177,8 @@ struct AXElement {
     var label: String? { object.accessibilityLabel?() ?? nil }
     var help: String? { object.accessibilityHelp?() ?? nil }
     var frame: NSRect { object.accessibilityFrame?() ?? .zero }
+    /// Whether VoiceOver says it's selected (a row's check mark).
+    var isSelected: Bool { object.isAccessibilitySelected?() ?? false }
     func press() -> Bool { object.accessibilityPerformPress?() ?? false }
     var children: [AXElement] { ((object.accessibilityChildren?() ?? nil) ?? []).map { AXElement(object: $0 as AnyObject) } }
 

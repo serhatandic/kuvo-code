@@ -1,8 +1,8 @@
 // What a box takes of another box's calls for the sessions a lead left on it, and from whom
 // (PROTOCOL.md, "Peers", `call`; design section 6): only from your own computers; only for a lead
 // that isn't one of its own, nor known to live on another computer; only that lead's sessions; an
-// allow only as far as the lead could go itself and never past this box's Don't Allow rules; and
-// nothing a call can't reach. A call sent again is run once and answered once, and calls aren't
+// allow only as far as the lead could go itself and as far as this box's own rules (Ask and Don't
+// Allow alike) would let it, and never for a session in Ask First; and nothing a call can't reach. A call sent again is run once and answered once, and calls aren't
 // counted as messages. Its rows of a lead's sessions go to that lead's computer only, until it has
 // them; calls kept for a box that's away go one a minute, and what's let go is told to the lead.
 //
@@ -88,7 +88,11 @@ async function engine(sessions) {
 }
 
 const by = { bot: "bot_foreman0001", name: "Foreman" };
-const left = (title, extra = {}) => ({ title, metadata: { kuvo: { startedBy: "ses_lead", depth: 1, by } }, ...extra });
+// A session the lead left here, in Accept Edits unless said (one in Ask First is always the user's to
+// answer, so an allow for it is refused whatever the lead's rules say, and one started here runs in Auto,
+// which asks first while no sandbox runs).
+const MODES = { askFirst: [{ action: "shell", resource: "*", effect: "ask" }, { action: "edit", resource: "*", effect: "ask" }], acceptEdits: [{ action: "shell", resource: "*", effect: "ask" }] };
+const left = (title, extra = {}, approval = "acceptEdits") => ({ title, permissions: MODES[approval], metadata: { kuvo: { startedBy: "ses_lead", depth: 1, by, approval, applied: approval } }, ...extra });
 let eng;
 beforeEach(async () => {
   fs.rmSync(run, { recursive: true, force: true });
@@ -400,4 +404,51 @@ test("rows don't go to a computer that isn't answering: what changed goes once i
   link.receiveMail(link.sealOneWay(Buffer.from(JSON.stringify({ at: T })), mini.key, link.publicOf(here.key)).message, host);
   await link.pushRows(host, link.readLink(), [eng.target], T + 10 * MINUTE + 3000);
   assert.equal(sent.length, 1);
+});
+
+// What an allow for a session on this box must pass: the lead's rules and this box's own, each on its own.
+const allowing = (session, ask, as = {}) => callOf("answer_ask", { session, ask, decision: "allow", reason: "Needed." }, { as: { name: "Foreman", bot: by, free: true, rules: [], ...as } });
+const sayOf = async call => {
+  await take(call);
+  return answerOf(call).note.words;
+};
+const boxRules = permissions => write(path.join(home, "box", "opencode.json"), { permissions });
+const STATUS = { id: "per_1", action: "shell", resources: ["git status"] };
+
+test("a session in Ask First is the user's to answer, whatever the lead's mode: the lead can't allow it from another computer, but may deny it", async () => {
+  eng.all.set("ses_careful", { id: "ses_careful", time: { created: 1, updated: 1 }, directory: "/work", ...left("Careful", {}, "askFirst") });
+  eng.seen.asks.set("ses_careful", [STATUS, { id: "per_2", action: "shell", resources: ["git log"] }]);
+  assert.match(await sayOf(allowing("ses_careful", "per_1")), /^You can't allow that: "Careful" is in Ask First/);
+  assert.deepEqual(eng.seen.replied, []);
+  // The lead's no still goes.
+  assert.equal(await sayOf(callOf("answer_ask", { session: "ses_careful", ask: "per_2", decision: "deny", reason: "No." })), "Denied: git log. \"Careful\" is told why.");
+  assert.deepEqual(eng.seen.replied.map(each => [each.ask, each.decision]), [["per_2", "reject"]]);
+  // The same, in Accept Edits: given.
+  eng.seen.asks.set("ses_billing", [STATUS]);
+  assert.equal(await sayOf(allowing("ses_billing", "per_1")), "Allowed: git status.");
+});
+
+test("this box's own Ask rules stop an allow from another computer too, not only its Don't Allow: moving a bot never loosens it", async () => {
+  eng.seen.asks.set("ses_billing", [STATUS, { id: "per_2", action: "shell", resources: ["git push origin main"] }]);
+  // This box asks before a command it names: the lead's rules (none) don't change that.
+  boxRules([{ action: "shell", resource: "git status", effect: "ask" }]);
+  assert.match(await sayOf(allowing("ses_billing", "per_1")), /^You can't allow that: you'd have to ask the user/);
+  // A Don't Allow, as before.
+  boxRules([{ action: "shell", resource: "git push*", effect: "deny" }]);
+  assert.match(await sayOf(allowing("ses_billing", "per_2")), /^You can't allow that: you'd have to ask the user/);
+  assert.deepEqual(eng.seen.replied, []);
+  // Asking about everything but `git status`, which it allows: that one passes, and the rest doesn't.
+  boxRules([{ action: "shell", resource: "*", effect: "ask" }, { action: "shell", resource: "git status", effect: "allow" }]);
+  assert.equal(await sayOf(allowing("ses_billing", "per_1")), "Allowed: git status.");
+  assert.match(await sayOf(allowing("ses_billing", "per_2")), /^You can't allow that/);
+  assert.deepEqual(eng.seen.replied.map(each => each.ask), ["per_1"]);
+});
+
+test("this box allowing something doesn't undo the lead's own Ask: each is judged on its own", async () => {
+  eng.seen.asks.set("ses_billing", [STATUS]);
+  boxRules([{ action: "shell", resource: "*", effect: "allow" }]);
+  assert.match(await sayOf(allowing("ses_billing", "per_1", { rules: [{ action: "shell", resource: "*", effect: "ask" }] })), /^You can't allow that: you'd have to ask the user/);
+  // The lead asks about everything but `git status`, and this box allows it too: given.
+  assert.equal(await sayOf(allowing("ses_billing", "per_1", { rules: [{ action: "shell", resource: "*", effect: "ask" }, { action: "shell", resource: "git status", effect: "allow" }] })), "Allowed: git status.");
+  assert.deepEqual(eng.seen.replied.map(each => each.ask), ["per_1"]);
 });

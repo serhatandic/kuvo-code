@@ -576,8 +576,13 @@ class CursorThread implements Thread {
         turn.toolProgress(id, { output })
         return
       }
+      // Summarizing by itself, as the conversation fills up. (Cursor's SDK 1.0.35 keeps these
+      // from its onDelta, so none come yet.)
+      case "summary-started":
+        turn.compacting()
+        return
       case "summary-completed":
-        turn.notice("Cursor summarized the conversation to make room.")
+        turn.compacted(true)
         return
       case "turn-ended":
         if (lane === active && update.usage) active.usage = update.usage

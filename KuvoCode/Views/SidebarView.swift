@@ -2011,8 +2011,6 @@ struct MoveToComputerItems: View {
         case .chat(let session): (session.title ?? "").isEmpty ? "this chat" : "“\(session.title ?? "")”"
         case .group(let group): "“\(group.name)”"
         }
-        let question = MoveWords.question(kind: kind, name: name, place: place.name, placeIsMac: place.kind == "mac", toHere: place.key == app.phoneLink.macKey,
-                                          from: here.map { app.machines.engine($0)?.machine.name ?? $0 }, fromMachine: here != nil)
         Task {
             // Asked again as it's picked: what the menu showed may be old, or this Mac's own guess.
             let now = await app.moves.loadPlaces(kind, id, from: here, fresh: true)
@@ -2026,6 +2024,10 @@ struct MoveToComputerItems: View {
                 Modal.show(Moves.Failure.refused(why))
                 return
             }
+            // What stays here, as its box said just now.
+            let question = MoveWords.question(kind: kind, name: name, place: place.name, placeIsMac: place.kind == "mac", toHere: place.key == app.phoneLink.macKey,
+                                              from: here.map { app.machines.engine($0)?.machine.name ?? $0 }, fromMachine: here != nil,
+                                              stays: app.moves.stays(of: id, from: here))
             let confirmed = await Modal.run {
                 let alert = NSAlert()
                 alert.messageText = question.title

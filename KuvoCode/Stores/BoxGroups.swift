@@ -72,6 +72,8 @@ final class BoxGroups {
     /// Machines whose bridge runs group chats (an older one doesn't yet).
     private(set) var running: Set<String> = []
     @ObservationIgnored weak var app: AppModel?
+    /// Whether a box tells its own news (`BoxNotices`), by its id: a group chat's isn't worded here then.
+    @ObservationIgnored var boxTellsNews: ((String) -> Bool)?
     /// The settings each computer was last given, so they go again only when they change.
     @ObservationIgnored private var settingsGiven: [String: Data] = [:]
     /// Chats being read whole now, and what their computer said of them meanwhile, so the read
@@ -432,6 +434,9 @@ final class BoxGroups {
             case "kuvo.group.met":
                 let met = try decoded(event, as: Met.self)
                 Analytics.shared.track("group_met")
+                // Its box tells its news (`BoxNotices`). COMPAT(box-notices): worded here for a box
+                // from before it did, or whose bridge isn't running.
+                if boxTellsNews?(machine ?? BoxClient.mac) == true { return }
                 guard let last = met.last else {
                     Notifier.shared.notify(session: BotGroups.tabKey(met.id), title: met.name, body: "The meeting came, but no one could take part.",
                                            push: .init(.message, group: met.id, machine: machine))
@@ -441,6 +446,7 @@ final class BoxGroups {
                                        body: Self.metLine(last), replies: true, push: .init(.message, group: met.id, machine: machine))
             case "kuvo.group.done":
                 let done = try decoded(event, as: Done.self)
+                if boxTellsNews?(machine ?? BoxClient.mac) == true { return }
                 Notifier.shared.notify(session: BotGroups.tabKey(done.id), title: done.name, subtitle: "\(done.who) finished its part",
                                        body: ReplyPreview.line(done.text), replies: true, push: .init(.message, group: done.id, machine: machine))
             case "kuvo.group.trashed":

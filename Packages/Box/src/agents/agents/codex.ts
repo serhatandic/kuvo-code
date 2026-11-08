@@ -5,9 +5,9 @@
 
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, rmSync, symlinkSync } from "node:fs"
 import { homedir } from "node:os"
-import { join } from "node:path"
+import { basename, join } from "node:path"
 import { providerID, type AgentAccount } from "../accounts"
-import type { Agent, AgentContext, Account, MessageInput, RunInput, RunResult, SignInAttempt, SignInOptions, SubagentMessages, SubagentRun, Thread, TurnHooks, PromptFile } from "../agent"
+import type { Agent, AgentContext, Account, ConversationFiles, ConversationPlace, MessageInput, RunInput, RunResult, SignInAttempt, SignInOptions, SubagentMessages, SubagentRun, Thread, TurnHooks, PromptFile } from "../agent"
 import type { Limit } from "../auto"
 import { accountName, ContextWindows, failure, KnownAccount, model, signOutWith } from "../agent"
 import { fileDiff, fromPatch } from "../diff"
@@ -71,6 +71,42 @@ interface Slot {
   /** The box's sandbox as it started with it (`fenceKey`). */
   fence?: string
   lastUse: number
+}
+
+/** A Codex thread's ID, and its rollout's name in `sessions` (`<year>/<month>/<day>/rollout-<when>-<id>.jsonl`). */
+const CODEX_THREAD = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+const ROLLOUT = /^(?:\d{4}\/\d{2}\/\d{2}\/)?rollout-[0-9A-Za-z:.-]+\.jsonl$/
+
+/** Thread `id`'s rollout in `home`: in `sessions` by day, or `archived_sessions`. */
+export function rolloutOf(home: string, id: string): string | undefined {
+  const named = (name: string) => name.startsWith("rollout-") && name.endsWith(`-${id}.jsonl`)
+  const list = (folder: string) => {
+    try {
+      return readdirSync(folder)
+    } catch {
+      return []
+    }
+  }
+  // A thread's file is under the day it started, which its id says (a UUIDv7's first 48 bits are
+  // when it was made), as this computer's clock gave it.
+  const sessions = join(home, "sessions")
+  const made = /^[0-9a-f]{8}-[0-9a-f]{4}-7/i.test(id) ? parseInt(id.replace(/-/g, "").slice(0, 12), 16) : NaN
+  if (Number.isFinite(made))
+    for (const off of [0, -1, 1]) {
+      const day = new Date(made + off * 86_400_000)
+      const folder = join(sessions, String(day.getFullYear()), String(day.getMonth() + 1).padStart(2, "0"), String(day.getDate()).padStart(2, "0"))
+      const found = list(folder).find(named)
+      if (found) return join(folder, found)
+    }
+  const archived = list(join(home, "archived_sessions")).find(named)
+  if (archived) return join(home, "archived_sessions", archived)
+  // (Else every day, newest first.)
+  for (const year of list(sessions).sort().reverse())
+    for (const month of list(join(sessions, year)).sort().reverse())
+      for (const day of list(join(sessions, year, month)).sort().reverse()) {
+        const found = list(join(sessions, year, month, day)).find(named)
+        if (found) return join(sessions, year, month, day, found)
+      }
 }
 
 export class CodexAgent implements Agent {
@@ -633,6 +669,29 @@ export class CodexAgent implements Agent {
   /** Its home (CODEX_HOME): an added account's own, or yours. */
   get home(): string {
     return this.instance.home ?? process.env.CODEX_HOME ?? this.yourCodex
+  }
+
+  /** Its conversation for a move: the thread's rollout, which Codex finds by its ID in any home's
+   * `sessions` (tested: `thread/resume` of one copied to another home, from another folder, goes on
+   * with what came before). What it remembers across threads is its home's, and stays. */
+  conversationFiles(state: Record<string, unknown>): ConversationFiles | null {
+    const id = state.codexThread
+    if (typeof id !== "string") return null
+    if (!CODEX_THREAD.test(id)) return { items: [], missing: true }
+    const file = rolloutOf(this.home, id)
+    if (!file) return { items: [], missing: true }
+    const day = /^rollout-(\d{4})-(\d{2})-(\d{2})T/.exec(basename(file))
+    return { items: [{ path: file, name: day ? join(day[1]!, day[2]!, day[3]!, basename(file)) : basename(file) }] }
+  }
+
+  /** Where a thread's rollout that came goes here: its home's `sessions`, by its day, as Codex keeps them. */
+  conversationPlace(): ConversationPlace {
+    const sessions = join(this.home, "sessions")
+    return { item: (name) => (ROLLOUT.test(name) ? join(sessions, name) : null) }
+  }
+
+  conversationRoots() {
+    return [join(this.home, "sessions"), join(this.home, "archived_sessions")]
   }
 
   /**
@@ -1695,6 +1754,11 @@ class CodexThread implements Thread {
     const active = lane
     const turn = lane.turn
     switch (item?.type) {
+      case "contextCompaction":
+        // It summarizes the conversation by itself (it's filling up), until the item completes.
+        // (One you asked for shows as that.)
+        if (this.active?.turn !== turn || !this.active.compacting) turn.compacting()
+        return
       case "sleep":
         // It waits a while on purpose.
         active.toolsSinceText = true
@@ -1915,8 +1979,8 @@ class CodexThread implements Thread {
         turn.toolSucceeded(item.id, withPictures("", [pictureFile(item.path)]))
         return
       case "contextCompaction":
-        // (One you asked for shows as that.)
-        if (this.active?.turn !== turn || !this.active.compacting) turn.notice("Codex summarized the conversation to make room.")
+        // Summarized. (One you asked for shows as that.)
+        if (this.active?.turn !== turn || !this.active.compacting) turn.compacted(true)
         return
       case "enteredReviewMode":
         turn.notice(`Reviewing${typeof item.review === "string" && item.review ? `: ${item.review}` : ""}`)

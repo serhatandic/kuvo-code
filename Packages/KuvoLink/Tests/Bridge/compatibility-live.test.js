@@ -61,15 +61,23 @@ test("with no accounts, a box's engine answers a first message on its default mo
     };
     // It answers 503 while it boots.
     const chosen = await waitFor(async () => { const answer = await api("GET", "api/model/default"); return answer.status === 200 && answer.json.data; }, "the engine to start");
-    return { target: { port, password: "pw", pid: child.pid }, api, chosen, stop };
+    // The providers whose models it lists. (Its default is whichever model came out newest, and its
+    // catalog of free ones refreshes a few seconds after it starts, so the default says nothing sure
+    // about Copilot; a provider that counts as set up has its models listed.)
+    const providers = async () => {
+      const answer = (await api("GET", "api/model")).json;
+      const listed = Array.isArray(answer) ? answer : answer?.data ?? [];
+      return new Set(listed.map(model => model.providerID));
+    };
+    return { target: { port, password: "pw", pid: child.pid }, api, chosen, providers, stop };
   };
 
   // A box an older Kuvo Code left Copilot's Claude models on, learned from what that layer itself
-  // put in the engine's list: its engine's default is Copilot's, with no account to run it.
+  // put in the engine's list: its engine lists Copilot's models and can make one its default, with no account to run it.
   const setting = { compatibility: { supportsThinkingBlockBinding: false } };
   fs.writeFileSync(`${root}/box/run/compatibility.json`, JSON.stringify({ providers: { "github-copilot": { models: { "claude-opus-5.5": setting, "claude-sonnet-5.5": setting } } } }));
   const before = await startEngine();
-  assert.equal(before.chosen.providerID, "github-copilot", "The engine no longer makes Copilot its default when its settings name it: the layer may not need its account check");
+  assert.ok((await before.providers()).has("github-copilot"), "The engine no longer counts Copilot as set up when its settings name it: the layer may not need its account check");
   // The box learns from it (it may not say what accounts it has for a moment after it starts).
   await waitFor(async () => { await link.learnCompatibility(before.target); return true; }, "the box to learn from its engine");
   assert.equal(JSON.parse(link.engineConfigContent(undefined)).providers?.["github-copilot"], undefined);
@@ -77,6 +85,8 @@ test("with no accounts, a box's engine answers a first message on its default mo
 
   // Its next start, as a new box's first: the default is one that answers.
   const after = await startEngine();
+  const listed = await after.providers();
+  assert.ok(listed.has("opencode") && !listed.has("github-copilot"), "The engine still lists Copilot's models with no account");
   assert.equal(after.chosen.providerID, "opencode", `The engine's default is ${after.chosen.providerID}/${after.chosen.id}, which has no account here`);
   const session = (await after.api("POST", "api/session", { location: { directory: work } })).json.data;
   await after.api("POST", `api/session/${session.id}/prompt`, { id: "msg_compatibilitylive0001", text: "Say hi in three words.", delivery: "steer" });

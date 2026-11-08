@@ -108,14 +108,14 @@ test("a group chat's seat says nothing of its own: its chat tells your phones wh
   const sessions = {
     ses_seat: { id: "ses_seat", title: "Scout", metadata: { kuvo: { seat: { group: "grp_1", bot: "bot_1" } } }, location: { directory: "/home/me/.kuvo-code/bots/bot_1/workspace" } },
   };
-  const get = async route => ({ data: route.endsWith("/message?limit=6&order=desc") ? [] : sessions[decodeURIComponent(route.split("/").pop())] });
+  const get = async route => ({ data: route.endsWith("/message?limit=50&order=desc") ? [] : sessions[decodeURIComponent(route.split("/").pop())] });
   assert.equal(await link.noticeFor({ type: "permission.asked", data: { id: "per_1", sessionID: "ses_seat", action: "shell", resources: ["ls"] } }, get), null);
   assert.equal(await link.noticeFor({ type: "session.execution.succeeded", data: { sessionID: "ses_seat" } }, get), null);
 });
 
 test("a summary you asked for tells your phones nothing; a reply after it, or one that failed, does", async () => {
   const session = { id: "ses_task", title: "Task", location: { directory: "/home/me/work/web" } };
-  const ending = page => async route => ({ data: route.endsWith("/message?limit=6&order=desc") ? page : session });
+  const ending = page => async route => ({ data: route.endsWith("/message?limit=50&order=desc") ? page : session });
   const finished = { type: "session.execution.succeeded", data: { sessionID: "ses_task" } };
   const idle = { type: "idle", outcome: "succeeded" };
   const summary = { type: "compaction", status: "completed", reason: "manual" };

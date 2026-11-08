@@ -585,7 +585,10 @@ import Testing
         app.moves.boxes = { _ in box.client(engine: engine.url) }
         // A chat of this Mac's, where its box keeps them.
         let chat = StubEngine.session("ses_trip", title: "Trip plans", directory: AppInfo.supportDirectory.appending(path: "Chats").path(percentEncoded: false))
-        engine.list([chat])
+        // And a session it started, which stays here as it moves.
+        let work = StubEngine.session("ses_tripwork", title: "Flights", directory: AppInfo.supportDirectory.appending(path: "Chats").path(percentEncoded: false), created: 2,
+                                      extra: ["metadata": ["kuvo": ["startedBy": "ses_trip", "depth": 1]]])
+        engine.list([chat, work])
         engine.on("GET", "/api/session/ses_trip", json: chat)
         let following = Task { await app.moves.follow() }
         defer { following.cancel() }
@@ -600,6 +603,8 @@ import Testing
         #expect(places.first?.ok == true && places.first?.why == nil)
         #expect(app.moves.places(of: "ses_trip", from: nil) == places)
         #expect(app.moves.places(of: "ses_trip", from: "lab") == nil, "only as the box it lives on said")
+        // With what of it stays here, for Move's question.
+        #expect(app.moves.stays(of: "ses_trip", from: nil) == MoveWords.Stays(sessions: 1))
         // Read again with nothing changed (ahead, as the panel slides in, say): the sidebar's menus
         // aren't drawn again.
         nonisolated final class Heard: @unchecked Sendable { var changed = false }

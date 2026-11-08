@@ -227,11 +227,13 @@ enum BrowserTools {
         tool("schedule_wake_up", "Come back to this conversation later, even while the user is away: at `when`, it gets your note as a message starting with \"[Wake-up]\", and you carry on from it. Use it to look again at something later (a build in 20 minutes, a reply tomorrow), or with every, again and again until it's canceled. Never say you can't come back later or run on a timer: schedule a wake-up instead.",
              ["when": ["type": "string", "description": "+20m, +2h, +1d, or a time like 2026-10-21T09:00 on the user's clock; at least a minute from now."],
               "note": ["type": "string", "description": "What to do then, as a note to yourself, starting with what to do. It comes to this conversation, in its folder, so leave those out."],
-              "every": ["type": "string", "description": "To have it come back until it's canceled: 30m, 2h, 1d, 1w (at least 5m), or weekdays. Days, weeks and weekdays keep its time of day. When it's due now too, also do the first round now."]], required: ["when", "note"]),
+              "every": ["type": "string", "description": "To have it come back until it's canceled: 30m, 2h, 1d, 1w (at least 5m), or weekdays. Days, weeks and weekdays keep its time of day. When it's due now too, also do the first round now."],
+              "summary": ["type": "string", "description": "One short line for the user, like \"Check whether CI passed\": what they see for it in the conversation, while you get the whole note."]], required: ["when", "note"]),
         tool("watch_for_change", "Wait for something to change without checking yourself (CI finishing, a deploy, a status page, a price, a file): every so often its check, a shell command, runs without you, and this conversation wakes with your note and the new output only when what the check prints changes (not the first time). Make it print just what you watch, like gh run list --limit 1 --json status,conclusion -q '.[0] | .status + \" \" + .conclusion' or curl -s <url> | grep -o '<the part that matters>', so a clock or an ad on the page doesn't count as a change. It runs in this conversation's folder for at most a minute; only what it prints counts, and printing nothing counts too. A run is skipped when a curl, wget or gh in it fails, or when it prints nothing and exits 2 or more. To watch whether a site is up, print its status code: curl -s -o /dev/null -w '%{http_code}' <url>.",
              ["every": ["type": "string", "description": "How often: 5m or more, 2h, 1d."],
               "check": ["type": "string", "description": "The shell command that prints what you watch."],
-              "note": ["type": "string", "description": "What to do when it changes."]], required: ["every", "check", "note"]),
+              "note": ["type": "string", "description": "What to do when it changes."],
+              "summary": ["type": "string", "description": "One short line for the user, like \"Check whether CI passed\": what they see for it in the conversation, while you get the whole note."]], required: ["every", "check", "note"]),
         tool("list_wake_ups", "List this conversation's wake-ups and watches, with their ids, to check what's scheduled before adding one (never keep two for the same thing)."),
         tool("cancel_wake_up", "Cancel one of this conversation's wake-ups or watches, by its id from list_wake_ups (or the one schedule_wake_up or watch_for_change gave). To change a schedule, cancel it and schedule the new one.",
              ["id": ["type": "string", "description": "Its id."]], required: ["id"]),
@@ -258,7 +260,7 @@ enum BrowserTools {
               "archive": ["type": "boolean", "description": "Also archive it."]], required: ["session"]),
         tool("compact_session", "Summarize the conversation of one of the sessions you started, to free up its context, as the user's /compact does: now, or when its turn ends. Nothing is lost from what the user sees. Only your own: for another, ask the user. Some coding agents can't be asked, and it says so.",
              ["session": ["type": "string", "description": "Its address."]], required: ["session"]),
-        tool("answer_ask", "Answer what one of your sessions asks: a permission (allow or deny), or a question (answer, in words). You may allow what your own conversation could do without asking, in its mode and with its rules. What it would have to ask about comes to the user, as answer_ask tells you: tell them in a line, and they answer it on the session. You can always deny, saying why. Your answer and reason are shown to the user on the session.",
+        tool("answer_ask", "Answer what one of your sessions asks: a permission (allow or deny), or a question (answer, in words). You may allow what your own conversation could do without asking, in its mode and with its rules, but never in a session that is in Ask First: the user answers all of those. What it would have to ask about comes to the user, as answer_ask tells you: tell them in a line, and they answer it on the session. You can always deny, saying why. Your answer and reason are shown to the user on the session.",
              ["session": ["type": "string", "description": "The session's address."],
               "ask": ["type": "string", "description": "The ask's id, from the [Session asks] message or list_sessions."],
               "decision": ["type": "string", "enum": ["allow", "deny"], "description": "For a permission."],
@@ -326,6 +328,8 @@ enum BrowserTools {
         tool("finish_goal", "End your goal with the report: what needs the user first, then what got done and where, what it spent, and what you're still watching.",
              ["report": ["type": "string", "description": "The report, a few lines."],
               "watching": ["type": "array", "items": ["type": "string"], "description": "What you're still watching."]], required: ["report"]),
+        tool("notify_user", "Send the user a notification, on their phone and their Mac, when you need them and they may not be looking: a decision only they can make, something blocked until they act, or news they asked you to tell them. Your replies notify them only when they answer something the user asked; when you work on your own (a wake-up, a watch, another agent's message, a goal) nothing reaches them unless you use this. Not for progress or routine results: those go in your reply. It's said in one sentence, so lead with what you need. A few an hour at most; the same text isn't sent twice.",
+             ["text": ["type": "string", "description": "One sentence: what you need from the user, or the news, like \"I need your Stripe key to finish the payments step.\""]], required: ["text"]),
     ]
 
     /// The folder a conversation works in, by its session (on this Mac).
@@ -349,7 +353,7 @@ enum BrowserTools {
 
     /// The tools agents write to each other and run their sessions with, answered by this Mac's box
     /// (see `AgentMail`).
-    nonisolated static let mailTools: Set<String> = ["list_agents", "send_message", "read_conversation", "start_session", "list_sessions", "stop_session", "compact_session", "answer_ask", "list_models", "make_project", "list_projects", "propose_goal", "goal_progress", "may_spend", "finish_goal"]
+    nonisolated static let mailTools: Set<String> = ["list_agents", "send_message", "read_conversation", "start_session", "list_sessions", "stop_session", "compact_session", "answer_ask", "list_models", "make_project", "list_projects", "propose_goal", "goal_progress", "may_spend", "finish_goal", "notify_user"]
     /// Carries out their calls from this Mac's conversations.
     /// The added integrations' sites, which the browser sends the agent away from, to their tools.
     static var integrationSites: () -> [Integrations.Site] = { [] }

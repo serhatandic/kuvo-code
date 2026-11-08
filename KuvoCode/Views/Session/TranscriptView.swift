@@ -596,6 +596,8 @@ struct TranscriptView: View {
                 followsHeard = step.time.completed == nil && !step.content.isEmpty && !toolRuns
             case .user(let message)?: quiet = message.time.created
             case .synthetic(let notice)?, .system(let notice)?: quiet = notice.time.created
+            // A summary just done: nothing from the model since.
+            case .compaction(let summary)?: quiet = summary.time.completed
             default: break
             }
             // A tool or a subagent at work shows it, moving: this line holds still meanwhile.
@@ -603,7 +605,7 @@ struct TranscriptView: View {
             if case .assistant(let step)? = messages.last {
                 stepWorks = step.content.contains { if case .tool(let call) = $0 { !call.state.isFinished } else { false } }
             }
-            rows.append(.working(since: turn.started, quiet: quiet, followsHeard: followsHeard, holds: stepWorks))
+            rows.append(.working(since: turn.started, quiet: quiet, followsHeard: followsHeard, holds: stepWorks, summarizing: messages.summaryUnderWay?.time.created))
         }
         return rows
     }
@@ -719,7 +721,16 @@ enum Row: Identifiable, Hashable {
     /// `quiet`: since when nothing has come back from the model.
     /// `followsHeard`: quiet since the model last sent anything, which new words move on without
     /// the rows being made again (see `RowView.heard`).
-    case working(since: Milliseconds?, quiet: Milliseconds?, followsHeard: Bool, holds: Bool)
+    /// `summarizing`: since when it's been summarizing the conversation, which it says instead.
+    case working(since: Milliseconds?, quiet: Milliseconds?, followsHeard: Bool, holds: Bool, summarizing: Milliseconds?)
+
+    /// The line under the conversation at `now` (see `WorkingLine`), with " · Esc to stop" after its
+    /// time.
+    static func working(since: Milliseconds?, quiet: Milliseconds?, summarizing: Milliseconds? = nil, now: Date) -> String {
+        let line = WorkingLine.words(since: since, quiet: quiet, summarizing: summarizing, now: now)
+        guard let seconds = WorkingLine.seconds(since: line.since, now: now) else { return line.words }
+        return line.words + " \(MessageTime.duration(seconds)) · Esc to stop"
+    }
 
     /// A reply's words in it, on a row of them.
     var words: String? {
@@ -867,23 +878,6 @@ private struct RowView: View, Equatable {
         MessageTime.sentAt(Date(timeIntervalSince1970: created / 1000))
     }
 
-    /// "Working… 12s · Esc to stop"; once the model has said nothing for a while, that it's
-    /// waiting for it, which a provider that never answers can make last many minutes.
-    static func working(since: Milliseconds?, quiet: Milliseconds?, now: Date) -> String {
-        if let quiet, now.timeIntervalSince1970 - quiet / 1000 >= 20 {
-            return "Waiting for the model to answer…" + elapsed(since: quiet, now: now)
-        }
-        return "Working…" + elapsed(since: since, now: now)
-    }
-
-    /// " 12s", " 1m 5s" after a few seconds, then " · Esc to stop".
-    static func elapsed(since: Milliseconds?, now: Date) -> String {
-        guard let since else { return "" }
-        let seconds = Int(now.timeIntervalSince1970 - since / 1000)
-        guard seconds >= 2 else { return "" }
-        return " \(MessageTime.duration(seconds)) · Esc to stop"
-    }
-
     var body: some View {
         switch row {
         case .user(let message) where AgentMail.parse(CommandMessages.shared.text(of: message)) != nil:
@@ -898,7 +892,9 @@ private struct RowView: View, Equatable {
             // A subagent's task, in its own tab: the words of the agent that started it, not yours.
             AgentMessageRow(id: message.id, from: subagentStarter ?? "", session: "", text: SubagentTask.parse(CommandMessages.shared.text(of: message)) ?? "", at: message.time.created)
         case .user(let message) where CommandMessages.shared.text(of: message).hasPrefix(Wakes.marker):
-            WakeRow(note: String(CommandMessages.shared.text(of: message).dropFirst(Wakes.marker.count)), at: message.time.created)
+            if let wake = WakeMessage.of(text: CommandMessages.shared.text(of: message), metadata: message.metadata) {
+                WakeRow(id: message.id, wake: wake, at: message.time.created)
+            }
         case .user(let message):
             let written = CommandMessages.shared.text(of: message)
             let (text, comments, paths, references) = SentMessage.split(written)
@@ -962,7 +958,7 @@ private struct RowView: View, Equatable {
             .background(.quaternary.opacity(0.5), in: .capsule)
             .frame(maxWidth: .infinity)
             .help("Sending a message makes the undo final")
-        case .working(let since, let quiet, let followsHeard, let holds):
+        case .working(let since, let quiet, let followsHeard, let holds, let summarizing):
             HStack(spacing: 8) {
                 // A bot shows itself at work.
                 if let bot {
@@ -972,7 +968,7 @@ private struct RowView: View, Equatable {
                 TimelineView(.periodic(from: .now, by: 1)) { context in
                     let latest = heard()
                     // Against the engine's clock, as its times are: a machine's may be behind.
-                    let text = Self.working(since: since, quiet: followsHeard ? latest.last ?? quiet : quiet, now: context.date.addingTimeInterval(-latest.offset / 1000))
+                    let text = Row.working(since: since, quiet: followsHeard ? latest.last ?? quiet : quiet, summarizing: summarizing, now: context.date.addingTimeInterval(-latest.offset / 1000))
                     Group {
                         if holds {
                             Text(text).foregroundStyle(.secondary)
@@ -2060,6 +2056,8 @@ private struct FoldingCard<Header: View, Accessory: View, Content: View>: View {
     let summary: String
     let startsOpen: Bool
     let help: String
+    /// How many lines of `summary` it shows folded.
+    var summaryLines = 1
     @ViewBuilder var header: Header
     @ViewBuilder var accessory: Accessory
     @ViewBuilder var content: Content
@@ -2092,8 +2090,9 @@ private struct FoldingCard<Header: View, Accessory: View, Content: View>: View {
                     withAnimation(.ui) { folds.set(id, open: !open) }
                 } label: {
                     // Centered, not on the first baseline: the first line leaving as it opens would
-                    // slide up out of line with the header while it fades.
-                    HStack(alignment: .center, spacing: 8) {
+                    // slide up out of line with the header while it fades. (Two lines of it keep to the
+                    // header's line.)
+                    HStack(alignment: summaryLines > 1 ? .firstTextBaseline : .center, spacing: 8) {
                         header
                         Image(systemName: "chevron.right")
                             .font(.caption2.weight(.semibold))
@@ -2102,7 +2101,7 @@ private struct FoldingCard<Header: View, Accessory: View, Content: View>: View {
                         if !open, !firstLine.isEmpty {
                             Text(firstLine)
                                 .foregroundStyle(.secondary)
-                                .lineLimit(1)
+                                .lineLimit(summaryLines)
                                 .truncationMode(.tail)
                         }
                     }
@@ -2205,11 +2204,21 @@ private struct GroupWorkRow: View {
     }
 }
 
-/// A bot woke itself up, as it planned: its note to itself, in place of a message from you.
+/// A conversation woke itself up, as its agent planned: its note to itself, in place of a message
+/// from you. A long one folds to its summary (KuvoClient's WakeMessage: the one its agent gave, or the
+/// note's first sentence), two lines at most, and opens to the note its agent read whole.
 struct WakeRow: View {
-    let note: String
+    let id: String
+    let wake: WakeMessage
     let at: Milliseconds
     @Environment(\.findHighlight) private var highlight
+
+    private static let help = "A wake-up the agent scheduled for itself"
+
+    /// The note, as the text of a message.
+    private func written(_ text: String, color: NSColor) -> NSAttributedString {
+        MessageMentions.attributed(FindText.marked(AttributedString(text), highlight), font: NSFont.preferredFont(forTextStyle: .callout), color: color).text
+    }
 
     /// "Woke up", then its note.
     private var words: NSAttributedString {
@@ -2217,27 +2226,48 @@ struct WakeRow: View {
         let words = NSMutableAttributedString(string: "Woke up  ", attributes: [
             .font: NSFont.systemFont(ofSize: font.pointSize, weight: .semibold), .foregroundColor: NSColor.labelColor,
         ])
-        words.append(MessageMentions.attributed(FindText.marked(AttributedString(note), highlight), font: font, color: .secondaryLabelColor).text)
+        words.append(written(wake.note, color: .secondaryLabelColor))
         return words
     }
 
+    private var time: some View {
+        Text(Date(timeIntervalSince1970: at / 1000), format: .dateTime.hour().minute())
+            .font(.caption)
+            .foregroundStyle(.tertiary)
+    }
+
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Image(systemName: "alarm")
-                .foregroundStyle(.tint)
-                .frame(width: 16)
-            // Room for what a watch saw, after its note.
-            SelectableText(text: words, lineLimit: 6)
-            Spacer(minLength: 8)
-            Text(Date(timeIntervalSince1970: at / 1000), format: .dateTime.hour().minute())
-                .font(.caption)
-                .foregroundStyle(.tertiary)
+        if wake.folds {
+            // Open while you find in the conversation, so what's found shows (one you fold stays so).
+            FoldingCard(id: id, summary: wake.summary, startsOpen: highlight != nil, help: Self.help, summaryLines: 2) {
+                Image(systemName: "alarm")
+                    .foregroundStyle(.tint)
+                    .frame(width: 16)
+                Text("Woke up")
+                    .fontWeight(.semibold)
+                    .fixedSize()
+            } accessory: {
+                time
+            } content: {
+                SelectableText(text: written(wake.note, color: .labelColor))
+                    .padding(.leading, 24)
+            }
+        } else {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Image(systemName: "alarm")
+                    .foregroundStyle(.tint)
+                    .frame(width: 16)
+                // Short (WakeMessage.folds): whole.
+                SelectableText(text: words)
+                Spacer(minLength: 8)
+                time
+            }
+            .font(.callout)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 9)
+            .recessedWell(RoundedRectangle(cornerRadius: 10))
+            .help(Self.help)
         }
-        .font(.callout)
-        .padding(.horizontal, 10)
-        .padding(.vertical, 9)
-        .recessedWell(RoundedRectangle(cornerRadius: 10))
-        .help("A wake-up the bot scheduled for itself")
     }
 }
 

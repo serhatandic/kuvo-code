@@ -12,7 +12,12 @@ export const MOVE_STAGE = words("holding", "copying", "switching", "finishing");
 /** A computer it could go to: its box's key, its name and kind, and whether it can go there now
  * (with why not, in words to show, and `note`, the same in a few words, for beside its name). */
 export const MOVE_PLACE = object({ key: string, name: string, kind: words("mac", "machine"), ok: bool, "why?": string, "note?": string });
-export const MOVE_PLACES = object({ places: list(MOVE_PLACE) });
+/** What of a bot or chat stays on this computer as it moves (each left out when none): the sessions
+ * it started (it still reaches them from there), what it asked you that's unanswered, the goals it
+ * proposed, and `agent` when its coding agent's own copy of its conversation is kept here as the way
+ * back, until a week after it first runs there. */
+export const MOVE_STAYS = object({ "sessions?": number, "asks?": number, "goals?": number, "agent?": bool, "startsOver?": string });
+export const MOVE_PLACES = object({ places: list(MOVE_PLACE), "stays?": MOVE_STAYS });
 
 /** A move under way, as either box says it: what moves (`thing`, `name`), from which box to which
  * (keys), whether this box is where it was (`from`) or where it's going (`to`), how far it is, its
@@ -51,6 +56,7 @@ export type MoveKind = Infer<typeof MOVE_KIND>;
 export type MoveStage = Infer<typeof MOVE_STAGE>;
 export type MovePlace = Infer<typeof MOVE_PLACE>;
 export type MovePlaces = Infer<typeof MOVE_PLACES>;
+export type MoveStays = Infer<typeof MOVE_STAYS>;
 export type Move = Infer<typeof MOVE>;
 export type MovesElsewhere = Infer<typeof MOVES_ELSEWHERE>;
 export type Moves = Infer<typeof MOVES>;

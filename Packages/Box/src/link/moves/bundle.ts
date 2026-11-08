@@ -47,6 +47,11 @@ export interface Contents {
   queues?: Record<string, unknown>;
   /** The calls its conversations made on Autopilot, by session. */
   decided?: Record<string, unknown>;
+  /** It talks with a coding agent: its conversations are in the bundle's `carry` folder as the agents
+   * bridge packed them (`exports` is empty), these. */
+  lane?: { sessions: string[]; root: string };
+  /** Where it was: the computer's name, and its folder (bots and chats). */
+  was?: { place: string; folder?: string };
 }
 
 // A chat's folder here: conversations of no project (this Mac's app's own, a machine's in its box).
@@ -172,21 +177,24 @@ export async function pack(id: string, contents: Contents): Promise<{ file: stri
   const staging = path.join(folder, "pack");
   const moveJSON = JSON.stringify(contents);
   const original = contents.folder ? folderOf(contents.kind, contents.thing) : null;
-  if (Buffer.byteLength(moveJSON) + (original ? bytesIn(original, MOST_BUNDLE) : 0) > MOST_BUNDLE) throw new TooBig();
+  const carried = contents.lane ? path.join(folder, "carry") : null;
+  if (Buffer.byteLength(moveJSON) + (original ? bytesIn(original, MOST_BUNDLE) : 0) + (carried ? bytesIn(carried, MOST_BUNDLE) : 0) > MOST_BUNDLE) throw new TooBig();
   fs.rmSync(staging, { recursive: true, force: true });
   fs.mkdirSync(staging, { recursive: true, mode: 0o700 });
   fs.writeFileSync(path.join(staging, "move.json"), moveJSON, { mode: 0o600 });
   const file = path.join(folder, "bundle.tgz");
   const args = [...(process.platform === "darwin" ? ["--no-mac-metadata", "--no-xattrs"] : []), "-czf", file, "-C", staging, "move.json"];
   if (original) args.push("-C", path.dirname(original), path.basename(original));
+  if (carried) args.push("-C", folder, "carry");
   await run("tar", args);
   fs.rmSync(staging, { recursive: true, force: true });
+  if (carried) fs.rmSync(carried, { recursive: true, force: true });
   return { file, size: fs.statSync(file).size, hash: await hashOf(file) };
 }
 
 /** The bundle that came for move `id`, opened: what it holds, and the folder it brought (in the
  * move's own folder, until it's put in place). */
-export async function unpack(id: string): Promise<{ contents: Contents; folder: string | null }> {
+export async function unpack(id: string): Promise<{ contents: Contents; folder: string | null; carry: string | null }> {
   const folder = bundleOf(id);
   const opened = path.join(folder, "opened");
   fs.rmSync(opened, { recursive: true, force: true });
@@ -209,22 +217,78 @@ export async function unpack(id: string): Promise<{ contents: Contents; folder: 
   let kind: fs.Stats | null = null;
   if (brought) try { kind = fs.lstatSync(brought); } catch {}
   if (kind && !kind.isDirectory()) throw new NotTaken(`It brought ${kind.isSymbolicLink() ? "a link" : "something that isn’t a folder"} for its folder, which isn’t taken.`);
-  if (brought && kind) plainOnly(brought);
-  return { contents, folder: kind ? brought : null };
+  if (brought && kind) plainOnly(brought, true);
+  // (The agents bridge checks each of these against what it says they are.)
+  const carried = path.join(opened, "carry");
+  let carry: string | null = null;
+  if (contents.lane) {
+    try {
+      if (fs.lstatSync(carried).isDirectory()) carry = carried;
+    } catch {}
+    if (!carry) throw new NotTaken("Its conversation didn’t come with it.");
+    // (A conversation never has a link: the agents bridge sends none.)
+    plainOnly(carried, false);
+  }
+  return { contents, folder: kind ? brought : null, carry };
 }
 
-function plainOnly(folder: string): void {
+/** Whether `entry`, in the folder `root`, goes as it is: a file or folder, or a relative link to
+ * something in that folder (a project's `node_modules/.bin`, say), which goes on pointing there.
+ * Such a link never climbs out of the folder on its way (so it means the same wherever the folder
+ * is), and, followed as the computer follows it (through any other link on the way), ends in it. */
+function goesAsIs(root: string, entry: string, kind: fs.Stats): boolean {
+  if (kind.isFile() || kind.isDirectory()) return true;
+  if (!kind.isSymbolicLink()) return false;
+  let target: string;
+  try { target = fs.readlinkSync(entry); } catch { return false; }
+  if (path.isAbsolute(target)) return false;
+  let depth = path.relative(root, path.dirname(entry)).split(path.sep).filter(part => part && part !== ".").length;
+  for (const part of target.split("/")) {
+    if (part === "..") depth -= 1;
+    else if (part && part !== ".") depth += 1;
+    if (depth < 0) return false;
+  }
+  // (`.native`: the plain one reads a `..` as text, not after the link before it.)
+  try { return fs.realpathSync.native(entry).startsWith(fs.realpathSync.native(root) + path.sep); } catch { return false; }
+}
+
+/** The first thing in `folder` that can't go to another computer (a link out of it, or something
+ * that isn't a file), by its path in it; null when there's none, or when there's more than `most`
+ * to look through (looked for again as it's packed). */
+export function notPlainIn(folder: string, most = Infinity): { path: string; link: boolean } | null {
+  const left = [""];
+  let looked = 0;
+  while (left.length) {
+    const at = left.pop()!;
+    let names: string[];
+    try { names = fs.readdirSync(path.join(folder, at)); } catch { continue; }
+    for (const name of names) {
+      if (++looked > most) return null;
+      const inside = at ? path.join(at, name) : name;
+      let kind: fs.Stats;
+      try { kind = fs.lstatSync(path.join(folder, inside)); } catch { continue; }
+      if (kind.isDirectory()) left.push(inside);
+      else if (!goesAsIs(folder, path.join(folder, inside), kind)) return { path: inside, link: kind.isSymbolicLink() };
+    }
+  }
+  return null;
+}
+
+/** Only files and folders, and with `links` relative links within `root`: never a link to somewhere
+ * else on this computer, or anything else. */
+function plainOnly(folder: string, links: boolean, root = folder): void {
   for (const name of fs.readdirSync(folder)) {
     const entry = path.join(folder, name);
     const kind = fs.lstatSync(entry);
-    if (kind.isDirectory()) plainOnly(entry);
-    else if (!kind.isFile()) throw new NotTaken(`It brought ${kind.isSymbolicLink() ? "a link" : "something that isn’t a file"} (${path.basename(entry)}), which isn’t taken.`);
+    if (kind.isDirectory()) plainOnly(entry, links, root);
+    else if (!(links ? goesAsIs(root, entry, kind) : kind.isFile())) throw new NotTaken(`It brought ${kind.isSymbolicLink() ? "a link" : "something that isn’t a file"} (${path.basename(entry)}), which isn’t taken.`);
   }
 }
 
-/** `folder` to Kuvo Code's trash here (on a Mac, on to the Finder's Trash), as a deleted bot goes. */
-export async function toTrash(folder: string): Promise<void> {
-  if (!fs.existsSync(folder)) return;
+/** `folder` to Kuvo Code's trash here (on a Mac, on to the Finder's Trash), as a deleted bot goes:
+ * where it is now, while that's this box's trash. */
+export async function toTrash(folder: string): Promise<string | undefined> {
+  if (!fs.existsSync(folder)) return undefined;
   const now = new Date();
   const two = (number: number) => String(number).padStart(2, "0");
   const when = `${now.getFullYear()}${two(now.getMonth() + 1)}${two(now.getDate())}-${two(now.getHours())}${two(now.getMinutes())}${two(now.getSeconds())}`;
@@ -236,6 +300,7 @@ export async function toTrash(folder: string): Promise<void> {
     await hostTrash(trashed).catch(() => {});
     if (!fs.existsSync(trashed)) try { fs.rmdirSync(trash); } catch {}
   }
+  return fs.existsSync(trashed) ? trashed : undefined;
 }
 
 /** Each export into `engine` at `directory`, under its own ID (until `signal` gives up on it). */
@@ -252,7 +317,7 @@ export async function deleteSession(engine: Target, id: string): Promise<void> {
   try {
     await call(engine, "DELETE", `/api/session/${encodeURIComponent(id)}`, undefined, engineWait());
   } catch (error) {
-    if (!/404|not found/i.test(String((error as Error | null)?.message ?? error))) throw error;
+    if ((error as { status?: number } | null)?.status !== 404 && !/404|not found/i.test(String((error as Error | null)?.message ?? error))) throw error;
   }
 }
 

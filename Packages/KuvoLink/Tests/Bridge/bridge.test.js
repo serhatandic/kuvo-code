@@ -1035,7 +1035,7 @@ test("engine events become notifications, as the Mac words them", async () => {
   const get = async route => {
     if (route === "api/session/active") return { data: ["ses_main"] };
     if (route.endsWith("/message?limit=8&order=desc")) return route.includes("ses_main") ? working : { data: [] };
-    if (route.endsWith("/message?limit=6&order=desc")) return messages;
+    if (route.endsWith("/message?limit=50&order=desc")) return messages;
     const id = decodeURIComponent(route.split("/").pop());
     if (!sessions[id]) throw new Error("404");
     return { data: sessions[id] };
@@ -1082,7 +1082,7 @@ test("engine events become notifications, as the Mac words them", async () => {
 test("a summary's news: one that failed says only that, one that went through is none, and one during a run is that run's", async () => {
   const session = { id: "ses_s", title: "Sign-in", location: { directory: "/home/me/kuvo-ai" } };
   let page;
-  const get = async route => route.endsWith("/message?limit=6&order=desc") ? { data: page } : { data: session };
+  const get = async route => route.endsWith("/message?limit=50&order=desc") ? { data: page } : { data: session };
   const ends = { type: "session.execution.succeeded", data: { sessionID: "ses_s" } };
   const said = { type: "assistant", content: [{ type: "text", text: "All done." }] };
   const end = outcome => ({ type: "idle", outcome });
@@ -1337,6 +1337,9 @@ test("each feature kuvo/info names is a route the machine answers, and one it do
     // (A command the sandbox stopped, told by the engine's plugin: Auto's reviewer takes it.)
     "approval.stopped": ["POST", "kuvo/sandbox/stopped"],
     "git.backups": ["GET", "kuvo/git/backups?folder=/"],
+    // (Moves with a coding agent's own conversation, and the check before one holds anything: what
+    // kuvo/moves takes besides, and a box asks of another in its mail.)
+    "moves.agents": ["GET", "kuvo/moves"], "moves.check": ["GET", "kuvo/moves/places?kind=bot&id=bot_none"],
   };
   const named = (await answer(handle, "GET", "kuvo/info")).json.features;
   assert.deepEqual([...named].sort(), Object.keys(routes).sort(), "every name has a route here, and every route here its name");
@@ -1595,14 +1598,17 @@ test("a phone answers what an agent asks for while it browses on a machine, with
   assert.equal(await link.answerAsk("ask-1", { type: "declined" }, path.join(run, "browser.sock")), false);
 });
 
-test("a group chat that lives on a machine tells your phones its news, as the Mac words it", () => {
+test("a group chat that lives on a machine tells your phones its news, in a sentence", () => {
   const met = link.groupNotice({ type: "kuvo.group.met", data: { id: "grp_1", name: "Standup", who: "Ada", last: { kind: "wrapUp", text: "**Done**: shipped the fix." } } });
   assert.deepEqual(met, { title: "Standup", subtitle: "Ada\u2019s wrap-up", body: "Done: shipped the fix.", category: "message", thread: "grp_1", data: { group: "grp_1" } });
   assert.equal(link.groupNotice({ type: "kuvo.group.met", data: { id: "grp_1", name: "Standup", who: "Ada", last: { kind: "message", text: "Hi" } } }).subtitle, "Ada");
   assert.equal(link.groupNotice({ type: "kuvo.group.met", data: { id: "grp_1", name: "Standup" } }).body, "The meeting came, but no one could take part.");
-  const done = link.groupNotice({ type: "kuvo.group.done", data: { id: "grp_1", name: "Standup", who: "Ada", text: "x".repeat(400) } });
+  // What it said, in its first sentence, cut at a word to a lock screen's couple of lines.
+  const done = link.groupNotice({ type: "kuvo.group.done", data: { id: "grp_1", name: "Standup", who: "Ada", text: "Shipped the fix to staging. Then I ran the checks." } });
   assert.equal(done.subtitle, "Ada finished its part");
-  assert.equal(done.body.length, 220);
+  assert.equal(done.body, "Shipped the fix to staging.");
+  const long = link.groupNotice({ type: "kuvo.group.done", data: { id: "grp_1", name: "Standup", who: "Ada", text: "word ".repeat(100) } });
+  assert.ok(long.body.length <= 160 && long.body.endsWith("\u2026"));
   assert.equal(link.groupNotice({ type: "kuvo.group.done", data: {} }), null);
 });
 

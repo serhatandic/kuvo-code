@@ -46,6 +46,17 @@ export class Store {
     return this.records.get(id)
   }
 
+  /** Where one of a session's files is kept (`session.json`, `messages.json`, `agent.json`). */
+  fileOf(id: string, name: string): string {
+    return join(this.root, id, name)
+  }
+
+  /** A session that came whole from another computer. */
+  addWhole(record: Record_) {
+    this.records.set(record.session.id, record)
+    this.save(record.session.id, true)
+  }
+
   /** When its conversation was last written (ms), if it has been. */
   writtenAt(id: string): number | undefined {
     try {
