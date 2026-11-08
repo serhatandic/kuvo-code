@@ -1,4 +1,5 @@
 import AppKit
+import ClientSessions
 import OpenCodeKit
 import SwiftUI
 
@@ -30,32 +31,10 @@ enum ToolApproval: String, CaseIterable, Codable {
         set { UserDefaults.standard.set(newValue.rawValue, forKey: key) }
     }
 
-    var title: String {
-        switch self {
-        case .askFirst: "Ask First"
-        case .acceptEdits: "Accept Edits"
-        case .auto: "Auto"
-        case .fullAccess: "Full Access"
-        }
-    }
-
-    var detail: String {
-        switch self {
-        case .askFirst: "Asks before edits and commands"
-        case .acceptEdits: "Edits on its own, asks before commands"
-        case .auto: "Works on its own; a reviewer holds back real damage"
-        case .fullAccess: "No sandbox, never asks"
-        }
-    }
-
-    var symbol: String {
-        switch self {
-        case .askFirst: "hand.raised"
-        case .acceptEdits: "pencil.line"
-        case .auto: "checkmark.shield"
-        case .fullAccess: "bolt"
-        }
-    }
+    // Its words, the same on every client (KuvoClient's ApprovalWords).
+    var title: String { ApprovalWords.title(rawValue) }
+    var detail: String { ApprovalWords.detail(rawValue) }
+    var symbol: String { ApprovalWords.symbol(rawValue) }
 
     /// A conversation's, as it's kept with it; one from before (or a box that doesn't keep them)
     /// as its rules say: asking before commands is Ask First, nothing asking is Auto, until its
@@ -256,7 +235,7 @@ struct ModeChip: View {
         }
         if let onDecisions {
             menu.addItem(.separator())
-            menu.addItem(ActionItem("Auto's Decisions…", subtitle: "What it allowed and held back here", image: NSImage(systemSymbolName: "list.bullet.rectangle", accessibilityDescription: nil)) { onDecisions() })
+            menu.addItem(ActionItem("Auto's Decisions…", subtitle: ApprovalWords.decisions, image: NSImage(systemSymbolName: "list.bullet.rectangle", accessibilityDescription: nil)) { onDecisions() })
         }
         menu.checksOnTrailingSide(checked)
         return menu
