@@ -747,8 +747,17 @@ struct BottomStack: View {
         .readableColumn()
         #if DEBUG
         .onAppear {
-            // KUVO_DEMO_QUOTE=<text>[||<text>…]: replying to those.
-            if let quotes = ProcessInfo.processInfo.environment["KUVO_DEMO_QUOTE"] {
+            // KUVO_DEMO_QUOTE_AFTER=<seconds>: with KUVO_DEMO_QUOTE, quoted that long after it
+            // shows, as Add to Chat does, and removed as long after that.
+            if let quotes = ProcessInfo.processInfo.environment["KUVO_DEMO_QUOTE"], let after = ProcessInfo.processInfo.environment["KUVO_DEMO_QUOTE_AFTER"].flatMap(Double.init) {
+                Task {
+                    try? await Task.sleep(for: .seconds(after))
+                    for quote in quotes.components(separatedBy: "||") { model.addQuote(quote, how: "demo") }
+                    try? await Task.sleep(for: .seconds(after))
+                    withAnimation(.ui) { model.draftQuotes = [] }
+                }
+            } else if let quotes = ProcessInfo.processInfo.environment["KUVO_DEMO_QUOTE"] {
+                // KUVO_DEMO_QUOTE=<text>[||<text>…]: replying to those.
                 model.draftQuotes = quotes.components(separatedBy: "||").map { Drafts.Quote(text: $0) }
                 // KUVO_DEMO_QUOTE_ANSWER=<text>: the ones before the last answered, and this typed
                 // into the last one's answer a word at a time, each "|" starting a new line.

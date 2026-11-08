@@ -864,9 +864,11 @@ client shows it from the same routes.
   `kuvo: {startedBy, by: {bot, name}, depth, wake?}`: the bot it works for, how deep it is
   (1 for one the bot started), and what its starter hears of it (a bot: both, or only its asks
   when it waited for the answer). A finish heard while its starter waits for its answer
-  (`send_message` with `wait`) waits for that wait to end, and is told unless the wait ended with
-  that same reply, which came to it in the tool; a failure is told at once. (Each wait is a file in
-  `run/work/awaited`, kept by whichever process waits, with its reply's id for a minute after.)
+  (`send_message` with `wait`, on the session's box or by a letter from another) waits for that wait
+  to end, and is told unless the wait ended with that same reply, which came to it in the tool; a
+  failure is told at once. (Each wait is a file in `run/work/awaited` on the session's box, kept by
+  whichever process waits there, the tool's or the one answering a letter, with its reply's id for
+  a minute after.) Only its starter's wait counts: a turn someone else asked for is told as usual.
   What a starter hears is gathered a few seconds and sent as one
   message (an ask to be read at its next step), kept in `run/work/wakes.json` until it's sent (for a
   conversation the engine doesn't know while the coding agents' bridge isn't running, 30 days at most,

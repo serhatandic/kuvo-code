@@ -2292,7 +2292,7 @@ export const codexNotifications = {
     "warning", "guardianWarning", "deprecationNotice", "configWarning",
   ],
   ignored: [
-    "thread/status/changed", "thread/readState/changed", "thread/archived", "thread/unarchived", "thread/deleted", "thread/reverted",
+    "thread/status/changed", "thread/readState/changed", "thread/section/changed", "thread/archived", "thread/unarchived", "thread/deleted", "thread/reverted",
     "thread/name/updated", "thread/settings/updated", "thread/goal/updated", "thread/goal/cleared", "thread/compacted", "turn/diff/updated",
     "turn/moderationMetadata", "item/fileChange/outputDelta", "item/autoApprovalReview/started", "item/autoApprovalReview/completed",
     "skills/changed", "app/list/updated", "project/changed", "fs/changed", "mcpServer/oauthLogin/completed", "mcpServer/event/stream/notification",

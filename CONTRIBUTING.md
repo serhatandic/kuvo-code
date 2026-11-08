@@ -91,6 +91,8 @@ it, set `KUVO_OPENCODE_BINARY` to its path in the scheme's environment.
 
 ### Tests
 
+The account running `scripts/test-app.sh` must own the Mac's screen.
+
 The app, the engine client and the usage tracker have tests:
 
 ```sh
@@ -529,6 +531,7 @@ env -i HOME="$HOME" USER="$USER" LOGNAME="$USER" PATH=/usr/bin:/bin:/usr/sbin:/s
 | `KUVO_DEMO_COMMENT` | Add a review comment to the session in view, as `<path in the project>:<line>:<text>` |
 | `KUVO_DEMO_VOICE` | With `KUVO_DEMO_SESSION`: voice input listening for it with sample words, `composer` (in the composer) or `field` (the voice field), without the microphone; `tip`, the one-time tip about more accurate voice input, from the mic |
 | `KUVO_DEMO_WHISPER` | Whisper's download as if it were `downloading`, `paused`, `waiting`, `failed`, `space`, `preparing` or `ready`, without the network (the ring on the mic, Settings › General › Voice Input); `download` starts the real download, into the copy's own folder |
+| `KUVO_DEMO_QUOTE_AFTER` | With `KUVO_DEMO_QUOTE`: the quotes added this many seconds after the session shows, as Add to Chat adds them, and removed as long after that, to watch the conversation move with the composer |
 | `KUVO_DEMO_QUOTES` | With `KUVO_DEMO_SESSION`: that many quotes to answer in its composer (a session's or a group chat's, as `group:<id>`) |
 | `KUVO_DEMO_FIND` | With `KUVO_DEMO_SESSION`: Find in it, looking for these words |
 | `KUVO_DEMO_CONNECTED` | With `KUVO_DEMO_SETTINGS=integrations`: that integration's sign-in sheet, on its last step |
