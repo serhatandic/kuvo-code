@@ -17,7 +17,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 ### All Changes
 
 - Kuvo Code opens again on the conversation you were in when you quit, from the first moment, instead of the latest session after a flash of the welcome screen. A conversation on a machine that isn't connected yet shows as connecting.
-- Escape closes what's open first: a picture you're looking at closer, or a card's Cancel, before it stops the agent at work. Before, Escape with a picture open stopped the agent and left the picture there.
+- Escape closes a picture you're looking at closer, or answers an ask's Cancel, before it stops the agent at work. Before, Escape with a picture open stopped the agent and left the picture there.
 - Settings › General › Voice Input no longer shows a whole row with only a spinner while more accurate voice input gets ready; the line under the switch already says so. The same on your iPhone.
 - The Mode menu says what each mode does in fewer words (Full Access: "No sandbox, no asks"), the same words your iPhone shows.
 - A bot's row in the sidebar now says how many of its sessions are at work, in the same words as the bar over its composer ("3 sessions at work"), and reads the same on your iPhone.

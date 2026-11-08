@@ -3,9 +3,9 @@ import SwiftUI
 import WebKit
 
 /// Escape stops the agent at work in the window's conversation, wherever the keyboard is, as the
-/// composer's Escape does, once nothing on top takes it: a card's Cancel (its Escape shortcut),
-/// then what's open over the content (a picture looked at closer, `OverContent`), then an open
-/// Find bar. Not when what has the keyboard takes Escape itself (a text field, a page in the
+/// composer's Escape does, once nothing on top takes it: what's open over the content first (a
+/// picture looked at closer, `OverContent`), then a card's Cancel (its Escape shortcut), then an
+/// open Find bar. Not when what has the keyboard takes Escape itself (a text field, a page in the
 /// panel, a terminal), nor with a sheet; popovers, menus and other windows have their own keys.
 struct EscapeToStop: NSViewRepresentable {
     var canStop: Bool
@@ -33,10 +33,11 @@ struct EscapeToStop: NSViewRepresentable {
             monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
                 guard let self, let window = self.window, self.isEscape(event) else { return event }
                 // What's open over the content first, wherever the keyboard is (the composer too,
-                // and before AppKit offers Escape to a card's Cancel under it), unless an input
-                // method is composing.
+                // and before AppKit offers Escape to a card's Cancel under it), over voice input
+                // too, unless an input method is composing.
                 if !((window.firstResponder as? NSTextView)?.hasMarkedText() ?? false), OverContent.closeTop() { return nil }
-                guard self.takes(event) else { return event }
+                // Voice input listening: Escape cancels it, in the composer or the voice field.
+                guard AgentMail.shared.app?.dictation.voice == nil, self.takes(event) else { return event }
                 // Then a card's Cancel, then Find, then the agent stops.
                 if window.performKeyEquivalent(with: event) || ConversationFind.closeOpen() { return nil }
                 guard self.canStop else { return event }
@@ -45,13 +46,11 @@ struct EscapeToStop: NSViewRepresentable {
             }
         }
 
-        /// Plain Escape in this window, with no sheet over it and voice input not listening (where
-        /// Escape cancels it, in the composer or the voice field).
+        /// Plain Escape in this window, with no sheet over it.
         private func isEscape(_ event: NSEvent) -> Bool {
-            guard event.keyCode == 53,
-                  event.modifierFlags.intersection(.deviceIndependentFlagsMask).subtracting(.capsLock).isEmpty,
-                  let window, event.window === window, window.attachedSheet == nil else { return false }
-            return AgentMail.shared.app?.dictation.voice == nil
+            guard let window else { return false }
+            return event.keyCode == 53 && event.window === window && window.attachedSheet == nil
+                && event.modifierFlags.intersection(.deviceIndependentFlagsMask).subtracting(.capsLock).isEmpty
         }
 
         private func takes(_ event: NSEvent) -> Bool {

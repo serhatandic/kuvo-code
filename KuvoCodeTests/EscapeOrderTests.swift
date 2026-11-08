@@ -115,6 +115,9 @@ import Testing
     /// The composer with the keyboard while a picture is open over an ask's card (it opened from
     /// the composer, and the keyboard didn't follow it in): Escape closes the picture, and neither
     /// answers the card under it nor stops the agent.
+    /// (The window's Escape takes it before AppKit's own pass would offer it to the card; this
+    /// window is never key, so what it let through would go nowhere here: the card's check
+    /// catches only the window's Escape offering it to the card before the picture.)
     @Test func escapeInTheComposerClosesThePictureBeforeACardUnderIt() async throws {
         defer { done() }
         final class Cancels { var count = 0 }
