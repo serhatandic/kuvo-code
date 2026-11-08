@@ -155,8 +155,9 @@ import Testing
         }
         workspace.fold("old-address", into: "lab")
         await workspace.loadProjects(on: "lab")
-        let lab = try await #require(workspace.boxes?("lab")).value([String: [Workspace.BoxProject]].self, "GET", "kuvo/projects")
-        #expect(lab["projects"]?.map(\.directory) == ["/home/me/app"])
+        struct Listed: Decodable { var projects: [Workspace.BoxProject] }
+        let lab = try await #require(workspace.boxes?("lab")).value(Listed.self, "GET", "kuvo/projects")
+        #expect(lab.projects.map(\.directory) == ["/home/me/app"])
         #expect(workspace.folders == [RemoteFolder.folder("/home/me/app", on: "lab")])
     }
 
@@ -235,6 +236,23 @@ import Testing
             ((request.body["metadata"] as? [String: Any])?["kuvo.archived"] as? Bool) == true ? String(request.path.split(separator: "/").last ?? "") : nil
         })
         #expect(patched == ["ses_shop", "ses_tree"])
+    }
+
+    /// A session in a worktree its box keeps (made by a bot, a phone or another client) is filed
+    /// under its project as the box says, the same rule a phone goes by, though this Mac keeps no
+    /// record of the worktree itself (#239).
+    @Test func aSessionInAWorktreeShowsUnderTheProjectItsBoxNames() async throws {
+        defer { done() }
+        let tree = work.appending(path: "trees/swift-wolf").path
+        try FileManager.default.createDirectory(at: BoxProcess.home.appending(path: "box"), withIntermediateDirectories: true)
+        let records = ["worktrees": [["project": shop, "root": tree, "folder": tree, "branch": "kuvo/swift-wolf"]]]
+        try JSONSerialization.data(withJSONObject: records).write(to: BoxProcess.home.appending(path: "box/worktrees.json"))
+        engine.list([StubEngine.session("ses_shop", directory: shop, created: 20), StubEngine.session("ses_tree", directory: tree, created: 10)])
+        let workspace = workspace()
+        await workspace.refresh()
+        await workspace.loadProjects(on: BoxClient.mac)
+        #expect(workspace.projects.first { $0.directory == shop }?.sessions.map(\.id) == ["ses_shop", "ses_tree"])
+        #expect(!workspace.projects.contains { $0.directory == tree }, "the worktree isn't a project of its own")
     }
 
     /// Worktrees this Mac kept before its box kept them go to the box, so Remove Project there
