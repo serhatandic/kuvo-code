@@ -18,7 +18,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 - A bot's row in the sidebar now says how many of its sessions are at work, in the same words as the bar over its composer ("3 sessions at work"), and reads the same on your iPhone.
 - Claude Code and Codex now hear when their instructions from Kuvo Code change partway through a conversation. Before, a bot that moved to another computer kept working with the old computer's paths, and so did a session whose worktree or project folders changed. Now the next message tells the agent what changed, once.
-- A bot on a Mac you added as a computer is now told it runs on "the Mac" with that name, not on a Linux machine, and its browser line no longer talks about your Mac being off.
+- A bot on a Mac you added as a computer is now told it runs on a "Mac machine" with that name, not on a Linux machine, and its browser line no longer talks about your Mac being off.
 - Moving a bot off a computer you added as a machine (asked from the Mac app) no longer hangs at "checking" forever: it goes on once the box's link is running, and is given up on after half an hour if it can't.
 - Signing in to Codex 0.167 or later works with the sandbox on, on a Mac and on a Mac you added as a machine; before, Codex's page said "credentials could not be saved locally" (persist_failed). Grok keeps a renewed sign-in in the sandbox too, instead of losing it.
 - Connecting Claude Code on a Mac (this one or a Mac added as a machine) no longer fails after you finish on Claude's page with a message ending in `CLAUDE_CODE_OAUTH_TOKEN=<token>`: the sign-in now reads what Claude Code draws on its screen, so its token is caught whole. A failed sign-in's message no longer shows stray terminal codes.

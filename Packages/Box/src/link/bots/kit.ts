@@ -144,6 +144,7 @@ export function readWords(file = WORDS_FILE): BotWords | null {
 // library has them), or else its own. This Mac's box needs its app's kit; a machine makes bots
 // without one. An older Mac's kit has its own words too, which aren't used: the box is never older
 // than a Mac that connects.
+// `system` is a platform name, only a test passes it: a box says which system it is from its own.
 export function readKit(system: string = process.platform): BotKit | null {
   const words = readWords();
   const mac = readMacKit();

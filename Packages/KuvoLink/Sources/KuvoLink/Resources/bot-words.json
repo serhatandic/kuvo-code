@@ -172,7 +172,7 @@
     },
     "machine": {
       "place": "the ⟦system⟧ \"⟦machine⟧\"",
-      "systems": { "darwin": "Mac", "linux": "Linux machine", "other": "machine" },
+      "systems": { "darwin": "Mac machine", "linux": "Linux machine", "other": "machine" },
       "clock": "in the user's time zone, ⟦timeZone⟧",
       "browser": "one on this machine, which keeps its sign-ins and keeps working when Kuvo Code isn't open on the user's own computer"
     }
