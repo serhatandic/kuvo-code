@@ -2667,7 +2667,7 @@ final class Workspace {
                     if let idle = self.session(id)?.time.idle { toldIdle[id] = max(idle, toldIdle[id] ?? 0) }
                     // Its box tells its news (`BoxNotices`): whether it's news, and how it's said, is
                     // the box's; what follows words it here for a box from before it did, or whose bridge isn't running.
-                    // COMPAT(0.7 box-notices): the Mac wording a box's news itself. Goes once a release with one is the newest.
+                    // COMPAT(0.7 box-notices): the Mac wording a box's news itself. Goes once a box tells its news without its bridge.
                     let machine = sessionMachines[id] ?? RemoteFolder.machine(of: session.location.directory)
                     if boxTellsNews?(machine ?? BoxClient.mac) == true { return }
                     Notifier.shared.notify(

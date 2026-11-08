@@ -62,7 +62,6 @@ import Testing
             drawn = views(in: host).contains { $0 is ReplyPieceView }
             await Task.yield()
         }
-        for _ in 0..<500 { await Task.yield() }
         // Only for the picture: let the cross-fade finish. The check above doesn't wait on a clock.
         if ProcessInfo.processInfo.environment["KUVO_SHOTS_OUT"] != nil { try await Task.sleep(for: .seconds(1)) }
         host.layoutSubtreeIfNeeded()
