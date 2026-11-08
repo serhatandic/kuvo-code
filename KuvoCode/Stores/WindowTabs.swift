@@ -151,6 +151,12 @@ final class WindowTabs {
     private(set) var groupFocus = 0
     /// The window put back what its scene kept, once this launch.
     @ObservationIgnored private(set) var isRestored = false
+    /// Where the tabs are kept for the next launch (`keep`). The scene's own storage isn't enough:
+    /// macOS drops it when you quit, unless "Close windows when quitting an application" is off,
+    /// and the window came back on the latest session, after a moment of the welcome. None while
+    /// testing, so one test's tabs aren't the next one's; a test sets its own.
+    @ObservationIgnored var keptIn: UserDefaults? = AppInfo.isHostingTests ? nil : .standard
+    static let keptKey = "windowTabs"
 
     private unowned let app: AppModel
     private var workspace: Workspace { app.workspace }
@@ -804,6 +810,12 @@ final class WindowTabs {
     /// The same, as JSON.
     var saved: String { snapshot.text }
 
+    /// Keeps the tabs as they are now for the next launch.
+    func keep() {
+        let saved = saved
+        if keptIn?.string(forKey: Self.keptKey) != saved { keptIn?.set(saved, forKey: Self.keptKey) }
+    }
+
     /// Before the tabs were kept as JSON: the tabs' keys a line each, the one in view, and the
     /// pairs a `<tab>=<session>` line each, in scene storage of their own; and the sidebar, kept
     /// there until it was kept with them.
@@ -823,12 +835,13 @@ final class WindowTabs {
         }
     }
 
-    /// Puts back what the window kept (`saved`, or the older way when there's none yet), once a
-    /// launch. Tabs opened before (a folder opened with Kuvo Code as it launched) stay, the last
-    /// of them in view.
+    /// Puts back what the window kept (`keep`'s, else its scene's `text`, else the older way),
+    /// once a launch. Tabs opened before (a folder opened with Kuvo Code as it launched) stay, the
+    /// last of them in view.
     func restore(_ text: String, older: Older) {
         guard !isRestored else { return }
         isRestored = true
+        let text = keptIn?.string(forKey: Self.keptKey) ?? text
         let saved = text.isEmpty ? older.saved : (try? JSONDecoder().decode(Saved.self, from: Data(text.utf8))) ?? Saved()
         let opened = keys
         var restored: [TabKey] = []

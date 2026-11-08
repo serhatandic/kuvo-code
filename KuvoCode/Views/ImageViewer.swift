@@ -23,11 +23,16 @@ final class ImageViewer {
         withAnimation(.easeOut(duration: 0.16)) {
             request = Request(items: pictures, index: min(max(0, index), pictures.count - 1))
         }
+        OverContent.opened(Self.layer) { [weak self] in self?.close() }
     }
 
     func close() {
+        OverContent.closed(Self.layer)
         withAnimation(.easeOut(duration: 0.14)) { request = nil }
     }
+
+    /// It, among what's open over the window (`OverContent`), which Escape closes first.
+    private static let layer = UUID()
 }
 
 /// The title bar's items, dimmed with the window while the viewer is open (it can't reach over
