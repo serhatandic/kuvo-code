@@ -66,6 +66,12 @@ your keychain, serves it from `127.0.0.1`, and points the Kuvo Code in /Applicat
 **Check for Updates…** there to go through the update window, the install, the restart and
 What's New. Ctrl-C stops the server and puts the real feed back.
 
+Pushes to `main`, release tags and release dry runs from `main` run on the maintainer's
+self-hosted Mac runner (labels `self-hosted, macOS, ARM64, kuvo-mini`); pull requests always run
+on GitHub's own runners, so a pull request's code never reaches that Mac. The runner refuses any
+other job before its steps start, and tidies up after each one (`scripts/ci-runner/`, whose
+`setup.sh` installs it).
+
 A release also carries what remote machines run, for them to update themselves
 with, once the `KUVO_BOX_SIGNING_KEY` secret (an Ed25519 key) is set
 (`scripts/set-box-key.sh` makes it once, keeps it in your login keychain, uploads
