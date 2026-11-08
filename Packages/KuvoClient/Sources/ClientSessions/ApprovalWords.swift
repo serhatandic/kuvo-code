@@ -17,7 +17,7 @@ public enum ApprovalWords {
         case "askFirst": "Asks before it acts"
         case "acceptEdits": "Asks before commands"
         case "fullAccess": "No sandbox, no asks"
-        default: "A reviewer stops harm"
+        default: "Sandbox, then review"
         }
     }
 
@@ -31,7 +31,7 @@ public enum ApprovalWords {
     }
 
     /// Autopilot, beside the modes: it decides for itself and leaves what needs you for the end.
-    public static let autopilot = "Asks you at the end"
+    public static let autopilot = "Decides, asks later"
     /// Auto's Decisions…, under the modes once it has some.
     public static let decisions = "Allowed and held back"
 }
