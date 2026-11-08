@@ -17,6 +17,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 ### All Changes
 
 - A machine that drops (it restarted, slept, or the network changed) now connects again by itself as soon as it answers, however long it was away. Before, a Mac coming back from a restart could stop at "Couldn't connect" until you clicked Connect, because for a moment as it starts up it turns your SSH key away; and a machine away for more than half an hour was given up on. If it keeps turning your key away, or its engine won't start, for a while, it stops and says why, with Try Again; a changed host key is said at once. Waking your Mac tries again right away. Your iPhone shows the same.
+- An agent that writes to a session it started on another of your computers and waits for the answer now gets that answer once. Before, the same answer also came again later as "[Session finished]".
 - Kuvo Code opens again on the conversation you were in when you quit, from the first moment, instead of the latest session after a flash of the welcome screen. A conversation on a machine that isn't connected yet shows as connecting.
 - Escape closes a picture you're looking at closer, or answers an ask's Cancel, before it stops the agent at work. Before, Escape with a picture open stopped the agent and left the picture there.
 - Settings › General › Voice Input no longer shows a whole row with only a spinner while more accurate voice input gets ready; the line under the switch already says so. The same on your iPhone.
