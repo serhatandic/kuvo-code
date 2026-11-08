@@ -74,6 +74,8 @@ log="$(mktemp -t kuvo-ci-build)"
 tart run $flags "$build" > "$log" 2>&1 &
 run_pid=$!
 
+# Each step stops at its first failure (a reader that stops early, like grep -m or head, would
+# fail it too: use awk or sed instead).
 guest() { tart exec "$build" /bin/bash -lc "set -euo pipefail; $1"; }
 echo "Waiting for the VM…"
 for _ in $(seq 1 120); do
@@ -85,7 +87,7 @@ guest true || fail "The VM's guest agent never answered."
 
 # Public DNS first, since the gateway's is blocked; Tart's agent needs no network to set it.
 echo "Public DNS…"
-guest 'networksetup -listallnetworkservices | tail -n +2 | sed "s/^\*//" | while IFS= read -r service; do sudo networksetup -setdnsservers "$service" 1.1.1.1 8.8.8.8; done; scutil --dns | grep -m2 nameserver'
+guest 'networksetup -listallnetworkservices | tail -n +2 | sed "s/^\*//" | while IFS= read -r service; do sudo networksetup -setdnsservers "$service" 1.1.1.1 8.8.8.8; done; scutil --dns | awk "/nameserver/ && n++ < 2"'
 
 echo "Growing its disk to ${VM_DISK_GB} GB…"
 # Cirrus's image grows its container itself as it boots; this is for one that doesn't. Either way
@@ -112,7 +114,7 @@ sudo DevToolsSecurity -enable
 codesign --verify --deep --strict /Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild
 xcodebuild -version
 xcrun --find swift >/dev/null
-swift --version 2>&1 | head -1'
+swift --version 2>&1 | sed -n 1p'
 
 # The app's tests run the box with Node from where it usually is (TestBox.node: /usr/local/bin or
 # /opt/homebrew/bin, not PATH, so setup-node's doesn't count); the base image's node@24 is keg-only.
