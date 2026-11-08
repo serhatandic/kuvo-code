@@ -57,6 +57,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - A bot whose sessions are at work no longer looks asleep (or idle) in the sidebar, its tab and its header: it looks at work while any session it oversees works, as its row's "Overseeing" line already said.
 - The header of an agent's message card ("From …") has a highlight under the pointer whose corners now sit evenly inside the card's, and its one-line preview no longer slides out of line with the header as the card opens.
 - A Markdown file in the Artifacts popover shows drawn (headings, bold, code, lists, diagrams), as in the panel's Files, instead of its raw `#` and backticks.
+- A Markdown file with more than one version now opens drawn in the Artifacts popover too, not as its raw changes; turn on Show Changes to see what changed.
 - Claude's row in the usage menu, and on your phone, shows Claude's logo again when you have more than one Claude login, instead of a dashed square.
 - A bot's steps that have nothing to do with the browser (checking its sessions, setting its job, looking up its vault) now say what they did, instead of "Used the browser", and the line over a turn's steps counts every step it opens to.
 - A step where an agent reads another agent's conversation, or writes to it, says whom by name, never by its address.

@@ -941,7 +941,8 @@ struct ArtifactDetail: View {
     @State private var artifact: Artifact?
     @State private var failure: String?
     @State private var at: Int?
-    @State private var showsChanges = true
+    /// What changed is shown first, but not for Markdown: that opens drawn like the side panel's file view, and Show Changes is one click away.
+    @State private var showsChanges: Bool
     /// Restore asked, waiting for your yes in place: the version.
     @State private var restoring: ArtifactVersion?
     @State private var isRestoring = false
@@ -950,6 +951,15 @@ struct ArtifactDetail: View {
     @State private var saving = false
     @Environment(AppModel.self) private var app
     @Environment(\.colorScheme) private var scheme
+
+    init(things: MadeThings, header: ArtifactHeader, back: String, close: @escaping () -> Void, done: @escaping () -> Void) {
+        self.things = things
+        self.header = header
+        self.back = back
+        self.close = close
+        self.done = done
+        _showsChanges = State(initialValue: !FileViewer.isMarkdown(named: header.name))
+    }
 
     /// The bot it was made for, by name.
     private var owner: String? { header.where.bots.first.flatMap { app.bots.bot($0)?.name } }
