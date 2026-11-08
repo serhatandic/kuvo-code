@@ -63,7 +63,10 @@ import Testing
         app.botWork.boxes = { _ in box }
         app.goalPlans.boxes = { _ in box }
         app.workspace.api = engine.api
-        engine.list([StubEngine.session("ses_pixel", title: "Pixel", directory: "/tmp/kuvo-tests-goal-work", created: 1)])
+        // The box says Sign-in works, and the app shows it so only while its engine runs it (`AtWork`).
+        engine.list([StubEngine.session("ses_pixel", title: "Pixel", directory: "/tmp/kuvo-tests-goal-work", created: 1),
+                     StubEngine.session("ses_signin", title: "Sign-in", directory: "/tmp/kuvo-tests-goal-work", created: 2)],
+                    running: ["ses_signin"])
         engine.conversation("ses_pixel", [])
         await app.workspace.refresh()
         model = try #require(app.workspace.model(for: "ses_pixel"))

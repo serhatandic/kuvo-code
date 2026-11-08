@@ -15,6 +15,9 @@ import Testing
     var support: URL { AppInfo.supportDirectory }
 
     init() {
+        // First: the run's first use of the test folder clears it (a stand-in engine's start does
+        // too), which would take the files a test wrote before it.
+        TestEnvironment.prepare()
         Self.clean()
     }
 
