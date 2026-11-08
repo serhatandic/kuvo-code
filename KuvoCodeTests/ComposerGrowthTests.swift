@@ -139,19 +139,21 @@ import Testing
     /// Scrolled with a trackpad: up by this much, or down when it's negative. (To the scroll view
     /// itself: the window finds nothing under events off screen.)
     private func yourScroll(by delta: CGFloat) async throws {
-        let scroll = try #require(scroll)
-        func send(_ amount: CGFloat, _ phase: CGScrollPhase) throws {
-            let event = try #require(CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: Int32(amount), wheel2: 0, wheel3: 0))
-            event.setIntegerValueField(.scrollWheelEventScrollPhase, value: Int64(phase.rawValue))
-            event.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
-            scroll.scrollWheel(with: try #require(NSEvent(cgEvent: event)))
-        }
         try send(0, .began)
         await settled()
         try send(delta, .changed)
         await settled()
         try send(0, .ended)
         await settled()
+    }
+
+    /// One of a trackpad's scroll events, up by `amount` (down, less than 0).
+    private func send(_ amount: CGFloat, _ phase: CGScrollPhase) throws {
+        let scroll = try #require(scroll)
+        let event = try #require(CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: Int32(amount), wheel2: 0, wheel3: 0))
+        event.setIntegerValueField(.scrollWheelEventScrollPhase, value: Int64(phase.rawValue))
+        event.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
+        scroll.scrollWheel(with: try #require(NSEvent(cgEvent: event)))
     }
 
     private func press(_ label: String) throws {
@@ -406,6 +408,38 @@ import Testing
         try await yourScroll(by: -2_000)
         try await until { !isOffTheEnd }
         #expect(lastMessageBottom <= composerTop, "the last message ends at \(lastMessageBottom), the composer starts at \(composerTop)")
+    }
+
+    /// Right at the end, not following it (as Find leaves it on the last message): the last
+    /// message stays over the composer as it grows, and as it shrinks again.
+    @Test func rightAtTheEndWithoutFollowingTheLastMessageStaysOverTheComposer() async throws {
+        defer { done() }
+        try await conversation(turns: 14)
+        let room = roomUnderLastMessage
+        let height = over
+        try #require(ScrollAnchor.shownAnchor).stopFollowing()
+        _ = try await grown(.linesYouWrite)
+        #expect(abs(roomUnderLastMessage - room) < 1.5, "grown: room \(roomUnderLastMessage), was \(room)")
+        try await shrunk(.linesYouWrite, to: height)
+        #expect(abs(roomUnderLastMessage - room) < 1.5, "shrunk: room \(roomUnderLastMessage), was \(room)")
+    }
+
+    /// What comes in while you scroll at the end (down there, a bounce) takes the end further, not
+    /// you away from it: still following, and at the end once you let go.
+    @Test func whatComesInUnderYourScrollAtTheEndIsStillFollowed() async throws {
+        defer { done() }
+        try await conversation(turns: 14)
+        let room = roomUnderLastMessage
+        try send(0, .began)
+        await settled()
+        try send(-30, .changed)
+        await settled()
+        // Two more turns, a screen and more, come in meanwhile.
+        try await conversation(turns: 16)
+        try send(0, .ended)
+        await settled()
+        try await until { laidOut && abs(roomUnderLastMessage - room) < 1.5 }
+        #expect(!isOffTheEnd, "it still follows the end")
     }
 
     /// A little way up is up: not taken for the end, which the composer's height once counted

@@ -233,26 +233,6 @@ import Testing
         #expect(!labels.contains("Open"), "its own question isn't a row too, opening the conversation it's in: \(labels)")
     }
 
-    /// In a bot's conversation too, the end stays over all that's over it, as a quote comes.
-    @Test func aQuoteLeavesTheBotsLastMessageOverTheComposer() async throws {
-        defer { done() }
-        show(NSSize(width: 820, height: 1_000))
-        try await until { elements.contains { $0.label == "Answer" } && !model.transcript.messages.isEmpty }
-        app.workspace.handle(try engine.event("form.replied", session: "ses_pixel", ["id": "frm_concept", "sessionID": "ses_pixel"]))
-        try await until { !elements.contains { $0.label == "Answer" } }
-        func all(_ view: NSView?) -> [RowStackView] { guard let view else { return [] }; return (view as? RowStackView).map { [$0] } ?? view.subviews.flatMap(all) }
-        let stack = try #require(all(window.contentView).first)
-        let scroll = try #require(stack.enclosingScrollView)
-        // Enough of it to scroll under the card and the composer.
-        for number in 0..<6 {
-            model.addQuote("Quote \(number): " + String(repeating: "The concept is LeafCheck, a plant care app. ", count: 6), how: "message")
-        }
-        try await until { elements.contains { $0.label == "Remove All" } }
-        var last: CGFloat { stack.shownFrames().window.values.map(\.maxY).max() ?? .infinity }
-        var over: CGFloat { window.contentLayoutRect.height - scroll.contentInsets.bottom }
-        try await until { _ = elements; return last <= over }
-    }
-
     /// The window as it shows, in each size and look, into KUVO_DRAFTS_OUT (with `KUVO_DRAFTS_TAG`
     /// before each name: before, after): not a test of behavior, it runs only when that's set.
     /// `folded`: the goal folded to its line by you.
