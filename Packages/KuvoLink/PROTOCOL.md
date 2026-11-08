@@ -4621,6 +4621,10 @@ before connects (the box notes one: `run/attached`).
 - **Updates**: the newest release on GitHub (0.7.2) has no `boxes.json`, which a box takes as
   "current", not a failure, until a release that has one is the newest.
   <!-- compat: 0.7 no-boxes-json -->
+- **Its news**: a box from before `kuvo/notices`, or whose bridge isn't running, doesn't tell its
+  news, so the Mac words it for that box itself (the finished-run and group-chat notices it shows).
+  A box that does tell it is read through `kuvo/notices` alone.
+  <!-- compat: 0.7 box-notices -->
 
 **This Mac's own group chats, from 0.5 to 0.8.0-beta.1.** Those Macs ran their group chats in the
 app (`groups.json`, each chat's messages in `groups/<id>.json`). A Mac with this version moves

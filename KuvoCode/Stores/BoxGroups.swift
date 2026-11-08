@@ -434,8 +434,8 @@ final class BoxGroups {
             case "kuvo.group.met":
                 let met = try decoded(event, as: Met.self)
                 Analytics.shared.track("group_met")
-                // Its box tells its news (`BoxNotices`). COMPAT(box-notices): worded here for a box
-                // from before it did, or whose bridge isn't running.
+                // Its box tells its news (`BoxNotices`), and what follows words it here for a box from before it did, or whose bridge isn't running.
+                // COMPAT(0.7 box-notices): the Mac wording a box's news itself. Goes once a release with one is the newest.
                 if boxTellsNews?(machine ?? BoxClient.mac) == true { return }
                 guard let last = met.last else {
                     Notifier.shared.notify(session: BotGroups.tabKey(met.id), title: met.name, body: "The meeting came, but no one could take part.",
