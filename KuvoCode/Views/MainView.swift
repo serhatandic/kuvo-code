@@ -915,7 +915,7 @@ struct MainView: View {
     }
 
     /// ⌘W: in Settings, closes its tab, and with one left goes back to the sessions. With no tab
-    /// left, it closes the window, as it does in browsers.
+    /// open, it closes the window, as it does in browsers.
     private func closeAnyTab() {
         if app.showsSettings {
             if app.settingsTabs.tabs.count > 1 {
@@ -923,9 +923,7 @@ struct MainView: View {
             } else {
                 closeSettings()
             }
-        } else if let selection {
-            tabs.close(selection)
-        } else {
+        } else if !tabs.closeInView() {
             NSApp.keyWindow?.performClose(nil)
         }
     }
