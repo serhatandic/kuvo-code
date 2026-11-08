@@ -103,7 +103,7 @@ export function testsFolder(prefix) {
 // folders here too, and what's after a machine's test run's prefix isn't a process's number.)
 function clearLeftovers() {
   for (const name of fs.readdirSync(testsRoot)) {
-    const pid = /^(ku|sb|sa|outside)-(\d+)(-|$)/.exec(name)?.[2];
+    const pid = /^(ku|sb|sa|kv|outside)-(\d+)(-|$)/.exec(name)?.[2];
     if (!pid) continue;
     try {
       process.kill(Number(pid), 0);
