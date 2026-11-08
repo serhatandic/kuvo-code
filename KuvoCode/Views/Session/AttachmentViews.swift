@@ -404,10 +404,14 @@ struct StepPictures: View {
 private struct AttachmentPicture: View {
     let item: AttachmentItem
     let height: CGFloat
-    var maxWidth: CGFloat = 360
+    let maxWidth: CGFloat
     /// Opens it in the viewer.
     let view: () -> Void
     @State private var image: NSImage?
+    /// Loaded without a picture (data that isn't one, a file that's gone): no spinner then.
+    @State private var isMissing = false
+    @State private var isHovering = false
+    @Environment(\.colorScheme) private var scheme
 
     init(item: AttachmentItem, height: CGFloat, maxWidth: CGFloat = 360, view: @escaping () -> Void) {
         self.item = item
@@ -418,10 +422,6 @@ private struct AttachmentPicture: View {
         // drawn again).
         _image = State(initialValue: AttachmentImages.cache.object(forKey: item.contentID as NSString))
     }
-    /// Loaded without a picture (data that isn't one, a file that's gone): no spinner then.
-    @State private var isMissing = false
-    @State private var isHovering = false
-    @Environment(\.colorScheme) private var scheme
 
     var body: some View {
         Group {
@@ -473,7 +473,8 @@ private struct AttachmentPicture: View {
     private func fitted(_ size: CGSize) -> CGSize {
         guard size.width > 0, size.height > 0 else { return CGSize(width: height, height: height) }
         let scale = min(maxWidth / size.width, height / size.height, 1)
-        return CGSize(width: (size.width * scale).rounded(), height: (size.height * scale).rounded())
+        // At least a point each way: a thin banner keeps a shape to draw in.
+        return CGSize(width: max(1, (size.width * scale).rounded()), height: max(1, (size.height * scale).rounded()))
     }
 }
 

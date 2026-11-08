@@ -19,21 +19,26 @@ import Testing
         return .stored(Message.User.Attachment(mime: "image/png", name: "Screenshot.png", data: png.base64EncodedString()), id: UUID().uuidString)
     }
 
-    /// The pictures' width in a column `room` points wide, once they've loaded.
-    private func width(of items: [AttachmentItem], in room: CGFloat) async -> CGFloat {
+    /// The pictures' size in the narrowest conversation (MainView's least, inside the transcript's
+    /// insets), laid out as your message lays them out: against its right edge, past its margin.
+    private func size(of items: [AttachmentItem]) async -> (shown: CGSize, room: CGFloat) {
         // Decoded first, as a message drawn again has them.
         for item in items { _ = await item.loadImage() }
-        let host = NSHostingController(rootView: MessageAttachments(items: items))
-        return host.sizeThatFits(in: CGSize(width: room, height: 4000)).width
+        let conversation: CGFloat = 380 - 14 * 2
+        let host = NSHostingController(rootView: MessageAttachments(items: items)
+            .frame(maxWidth: .infinity, alignment: .trailing)
+            .padding(.leading, 80))
+        return (host.sizeThatFits(in: CGSize(width: conversation, height: 4000)), conversation)
     }
 
     @Test func aWideScreenshotShrinksToTheNarrowestConversation() async throws {
-        // The narrowest conversation's room for your message, past its margins.
-        let room: CGFloat = 260
-        let one = await width(of: [try Self.screenshot(.systemTeal)], in: room)
-        #expect(one <= room, "one screenshot takes \(one) points")
-        #expect(one > 200, "the picture itself, not its placeholder")
-        let two = await width(of: [try Self.screenshot(.systemTeal), try Self.screenshot(.systemOrange)], in: room)
-        #expect(two <= room, "two screenshots take \(two) points")
+        // A message's frame takes the conversation's width whatever its pictures do: their
+        // height tells whether they fit the room past the margin, in their own shape (not the
+        // placeholder's), or kept their full size and ran past the edge.
+        let (one, room) = await size(of: [try Self.screenshot(.systemTeal)])
+        let fitted = (room - 80) * 600 / 1290
+        #expect(abs(one.height - fitted) <= 1, "one screenshot is \(one), not \(room - 80) wide")
+        let (two, _) = await size(of: [try Self.screenshot(.systemTeal), try Self.screenshot(.systemOrange)])
+        #expect(abs(two.height - (fitted * 2 + 6)) <= 2, "two screenshots, one to a row: \(two)")
     }
 }
