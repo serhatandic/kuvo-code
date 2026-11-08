@@ -16,6 +16,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ### All Changes
 
+- Moving a bot to another computer, started from a computer you added as a machine, no longer hangs at "checking" forever: it goes on once the box's link is running, and is given up on after half an hour if it can't.
 - Signing in to Codex 0.167 or later works with the sandbox on, on a Mac and on a Mac you added as a machine; before, Codex's page said "credentials could not be saved locally" (persist_failed). Grok keeps a renewed sign-in in the sandbox too, instead of losing it.
 - Connecting Claude Code on a Mac (this one or a Mac added as a machine) no longer fails after you finish on Claude's page with a message ending in `CLAUDE_CODE_OAUTH_TOKEN=<token>`: the sign-in now reads what Claude Code draws on its screen, so its token is caught whole. A failed sign-in's message no longer shows stray terminal codes.
 - Notifications only come for what needs you: a reply to something you asked, a question, a failure, or a note an agent sends you on purpose. A bot's wake-ups, a session's own timers and a session answering the bot that started it no longer buzz your phone or Mac; they still show as unread. Each notification says it in one sentence (the reply's first, or what failed and why). Agents get a new tool, notify_user, to tell you something when they work on their own, at most a few an hour. On the Mac and the iPhone, from every computer.

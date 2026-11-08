@@ -1511,12 +1511,15 @@ export function keepMoving(now = Date.now()): void {
     }
     // Getting it ready stuck (its engine or group chats not answering): taken back now, not in its
     // turn (which waits on what's stuck), so whoever asked hears.
-    if (record.stage === "holding" && record.holdSince !== undefined && now - record.holdSince > HOLDING_AT_MOST) {
+    // (One noted by another process, `box route`, and not yet driven has no `holdSince`: counted
+    // from when it began.)
+    const holdingSince = record.holdSince ?? (!record.step || record.step === "check" ? record.started : undefined);
+    if (record.stage === "holding" && holdingSince !== undefined && now - holdingSince > HOLDING_AT_MOST) {
       takeBack(record.id, say.slow(record.name), 409).catch(() => {});
       continue;
     }
-    // One asked for through another process: moved from here.
-    if (record.stage === "holding" && !record.step) {
+    // One asked for through another process (`box route`): moved from here, from its check or its start.
+    if (record.stage === "holding" && (!record.step || record.step === "check")) {
       drive(record.id);
       continue;
     }

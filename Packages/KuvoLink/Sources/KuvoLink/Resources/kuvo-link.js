@@ -19356,11 +19356,12 @@ function keepMoving(now = Date.now()) {
       tell(record.peer, { op: "drop", id: record.id });
       continue;
     }
-    if (record.stage === "holding" && record.holdSince !== undefined && now - record.holdSince > HOLDING_AT_MOST) {
+    const holdingSince = record.holdSince ?? (!record.step || record.step === "check" ? record.started : undefined);
+    if (record.stage === "holding" && holdingSince !== undefined && now - holdingSince > HOLDING_AT_MOST) {
       takeBack2(record.id, say.slow(record.name), 409).catch(() => {});
       continue;
     }
-    if (record.stage === "holding" && !record.step) {
+    if (record.stage === "holding" && (!record.step || record.step === "check")) {
       drive(record.id);
       continue;
     }

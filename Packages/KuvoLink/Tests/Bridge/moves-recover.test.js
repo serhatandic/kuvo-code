@@ -176,8 +176,13 @@ async function ask(method, p, given) {
 
 // Until `found` holds: looked at again as the script hears more, however long that takes (a busy
 // machine is slow, never wrong); a test that never sees it fails at its time limit.
+// (One that never holds ends the test, rather than spinning on after its time limit.)
 async function until(found) {
-  while (!found()) await new Promise(resolve => setImmediate(resolve));
+  const giveUp = Date.now() + 25_000;
+  while (!found()) {
+    assert.ok(Date.now() < giveUp, "it never came about");
+    await new Promise(resolve => setImmediate(resolve));
+  }
 }
 
 const movesFolder = path.join(home, "run", "moves");
@@ -506,6 +511,35 @@ test("getting it ready to move stuck (this box's engine not answering): it's tak
   }
   assert.ok(!told.slice(before).some(move => move.op === "offer"), "never offered");
   assert.ok(engine.sessions.has("ses_hang1"));
+});
+
+test("a move noted by a process that isn't the watcher (box route) is carried out by the watcher, from its check; one stuck there with no hold time is taken back after half an hour", async () => {
+  chat("ses_route1");
+  chat("ses_route2");
+  const record = (id, thing, started) => ({ id, kind: "chat", thing, name: "Trip plans", from: "", to: peerKey, role: "from", stage: "holding", step: "check", sessions: [thing], peer: peerKey, wasPaused: true, tries: 0, started });
+  // lab answers the check; the move goes on to the offer, which lab then refuses.
+  script = move => {
+    if (move.op === "check") say({ op: "checked", id: move.id, ok: true });
+    if (move.op === "drop") say({ op: "dropped", id: move.id });
+  };
+  const before = told.length;
+  writeRecord(record("mov_route1", "ses_route1", Date.now()));
+  link.keepMoving();
+  await until(() => told.slice(before).some(move => move.op === "offer" && move.id === "mov_route1"));
+  await until(() => recordOf("ses_route1")?.stage === "copying");
+  say({ op: "refused", id: "mov_route1", hash: recordOf("ses_route1").hash, message: "Not now." });
+  await until(() => recordOf("ses_route1") === null);
+  assert.ok(engine.sessions.has("ses_route1"), "it stays here, refused");
+
+  // Never answered, and no hold time yet: half an hour after it began, it's taken back, not left for good.
+  script = () => {};
+  writeRecord(record("mov_route2", "ses_route2", Date.now()));
+  link.keepMoving(Date.now() + 29 * 60_000);
+  assert.ok(recordOf("ses_route2"), "not yet");
+  link.keepMoving(Date.now() + 31 * 60_000);
+  await until(() => recordOf("ses_route2") === null);
+  assert.ok(!fs.existsSync(path.join(wakes, "ses_route2", "paused")), "its wake-ups go on");
+  assert.ok(engine.sessions.has("ses_route2"));
 });
 
 test("one whose files come to more than 1 GB is refused before anything of it is packed, saying so plainly", async () => {
