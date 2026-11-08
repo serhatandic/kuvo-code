@@ -530,8 +530,9 @@ final class ScrollingFlag {
 
 extension ScrollGeometry {
     /// Where the view is with the conversation's end just over what's over it (the composer).
+    /// (The container leaves out what's over the end; the visible rect is all of the view.)
     fileprivate var conversationEnd: CGFloat {
-        max(-contentInsets.top, contentSize.height + contentInsets.bottom - containerSize.height)
+        max(-contentInsets.top, contentSize.height + contentInsets.bottom - visibleRect.height)
     }
 
     /// The end is in view: over the composer, not under it, however tall that is now.
