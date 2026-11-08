@@ -16,6 +16,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ### All Changes
 
+- The Mode menu says what each mode does in fewer words (Full Access: "No sandbox, no asks"), the same words your iPhone shows.
 - A bot's row in the sidebar now says how many of its sessions are at work, in the same words as the bar over its composer ("3 sessions at work"), and reads the same on your iPhone.
 - Claude Code and Codex now hear when their instructions from Kuvo Code change partway through a conversation. Before, a bot that moved to another computer kept working with the old computer's paths, and so did a session whose worktree or project folders changed. Now the next message tells the agent what changed, once.
 - Moving a bot off a computer you added as a machine (asked from the Mac app) no longer hangs at "checking" forever: it goes on once the box's link is running, and is given up on after half an hour if it can't.
