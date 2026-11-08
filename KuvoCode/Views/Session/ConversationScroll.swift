@@ -18,7 +18,7 @@ final class ConversationScroller {
     /// Whether to keep the newest in view: true until you scroll up, true again once you scroll
     /// back to the end. Set only when it changes (`follow`): each setting draws the conversation again.
     var followsEnd = true
-    /// The end is in view (or all of it fits): no way back to it is needed, whether it's
+    /// The end is in view, over the composer: no way back to it is needed, whether it's
     /// followed or not (Find stops following it). Set only when it changes, as `followsEnd`.
     fileprivate(set) var seesEnd = true
     /// All of it fits in view: nothing to scroll. (Not until it's known.)
@@ -66,9 +66,12 @@ final class ConversationScroller {
         if heldFor.isEmpty { follow(atEnd) }
     }
 
-    /// Your scroll stopped. A nudge is still reading; moved further, you went somewhere else.
+    /// Your scroll stopped, where it says now: the change that took it there may never have been
+    /// told, as SwiftUI passes on only one a frame. While you read what you opened, a nudge is
+    /// still reading; moved further, you went somewhere else.
     fileprivate func stopped(atEnd: Bool, moved: CGFloat) {
-        if !heldFor.isEmpty, moved >= 40 { follow(atEnd) }
+        if heldFor.isEmpty || moved >= 40 { follow(atEnd) }
+        if seesEnd != atEnd { seesEnd = atEnd }
     }
 
     /// `id` opened or closed by you: back to the end once the last you left it for is closed.
@@ -206,7 +209,8 @@ struct ConversationScroll<Rows: View>: View {
             if phase == .idle, let from = scrolling.from {
                 scrolling.from = nil
                 let geometry = context.geometry
-                scroller.stopped(atEnd: geometry.visibleRect.maxY >= geometry.contentSize.height - 40, moved: abs(geometry.contentOffset.y - from))
+                // (On its way to the end from its button, where it stops doesn't decide.)
+                if !scrolling.goesToEnd { scroller.stopped(atEnd: geometry.isAtConversationEnd, moved: abs(geometry.contentOffset.y - from)) }
             }
             // Its button's way to the end is over, with the glide it stopped: at the end, wherever
             // the rows measured on the way moved it.
@@ -221,13 +225,13 @@ struct ConversationScroll<Rows: View>: View {
         }
         // One watcher for both, as SwiftUI passes on only one change a frame from each.
         .onScrollGeometryChange(for: EndGeometry.self) { geometry in
-            let end = max(-geometry.contentInsets.top, geometry.contentSize.height + geometry.contentInsets.bottom - geometry.containerSize.height)
-            return EndGeometry(atEnd: geometry.visibleRect.maxY >= geometry.contentSize.height - 40, height: geometry.contentSize.height,
-                               fits: geometry.contentSize.height <= geometry.containerSize.height + 1,
-                               visible: geometry.containerSize.height, isPastEnd: geometry.contentOffset.y > end + 1, width: geometry.containerSize.width)
+            EndGeometry(atEnd: geometry.isAtConversationEnd, height: geometry.contentSize.height,
+                        fits: geometry.contentSize.height <= geometry.containerSize.height + 1,
+                        visible: geometry.containerSize.height, isPastEnd: geometry.contentOffset.y > geometry.conversationEnd + 1, width: geometry.containerSize.width,
+                        over: geometry.contentInsets.bottom)
         } action: { old, new in
             scroller.fits = new.fits
-            if scroller.seesEnd != (new.atEnd || new.fits) { scroller.seesEnd = new.atEnd || new.fits }
+            if scroller.seesEnd != new.atEnd { scroller.seesEnd = new.atEnd }
             // Thinking that was under way is done: for a moment, the conversation getting much
             // shorter is it folding. (Seen here, as the layout that makes it shorter.)
             if fold.thinking != thinking {
@@ -259,8 +263,22 @@ struct ConversationScroll<Rows: View>: View {
             // stack hasn't made rows at yet, which showed a blank conversation for a moment).
             let resizing = new.width != old.width && (anchor.scrollView?.window?.inLiveResize ?? false)
             if new.width != old.width, !resizing { makeSureOfRows(proxy) }
+            // What's over the end grew or shrank (the composer as you write, quote or attach, the
+            // cards and bars over it): it pushes the conversation, so nothing sits under it. Its
+            // height is only the room kept under the rows, which nothing else moves the view for;
+            // told as it animates, frame by frame, so the conversation goes with it. Following the
+            // end, the end stays over it; with nothing left to see where the view is, back to the
+            // end; reading further up, what's over it stays there too, by the same distance.
+            let overChanged = new.over != old.over
+            if overChanged, !scrolling.isYours {
+                if scroller.followsEnd || (new.isPastEnd && anchor.stack?.isAboutToGrow != true) {
+                    anchor.scroll(to: nil)
+                } else {
+                    anchor.push(by: new.over - old.over)
+                }
+            }
             // Past the end, with nothing there to see, and you're not the one scrolling: to it.
-            if new.isPastEnd, !scrolling.isYours, anchor.stack?.isAboutToGrow != true {
+            if new.isPastEnd, !overChanged, !scrolling.isYours, anchor.stack?.isAboutToGrow != true {
                 if resizing {
                     anchor.scroll(to: nil)
                     endFollower.follow { settled in if settled { toEnd(proxy) } }
@@ -510,6 +528,19 @@ final class ScrollingFlag {
     var isYours: Bool { isOn && !goesToEnd }
 }
 
+extension ScrollGeometry {
+    /// Where the view is with the conversation's end just over what's over it (the composer).
+    /// (The container leaves out what's over the end; the visible rect is all of the view.)
+    fileprivate var conversationEnd: CGFloat {
+        max(-contentInsets.top, contentSize.height + contentInsets.bottom - visibleRect.height)
+    }
+
+    /// The end is in view: over the composer, not under it, however tall that is now.
+    fileprivate var isAtConversationEnd: Bool {
+        contentOffset.y >= conversationEnd - 40
+    }
+}
+
 /// Whether the end is in view, and how tall the conversation is.
 struct EndGeometry: Equatable {
     var atEnd: Bool
@@ -520,6 +551,8 @@ struct EndGeometry: Equatable {
     var isPastEnd = false
     /// How wide the view is: changing, the window or a pane is being resized.
     var width: CGFloat = 0
+    /// How much of the view's height is under what's over the conversation's end.
+    var over: CGFloat = 0
 }
 
 /// Keeps the end in view as the conversation grows. Scrolling makes the lazy stack make the rows
@@ -810,6 +843,21 @@ final class ScrollAnchor {
         if first?.key != anchor?.id { Self.note("anchor \(first?.key ?? "none of \(rows.count)") at \(Int(offset))") }
         #endif
         anchor = first.map { ($0.key, $0.value.minY) }
+    }
+
+    /// What moving the view with what's over the end still owes: a spring's last frames each move
+    /// it less than the view can go, and its overshoot at the top comes back. Left out, they'd
+    /// add up to it being out of place.
+    private var pushOwed: CGFloat = 0
+
+    /// Moved with what's over the end. More than a spring's tail that the top stopped isn't owed.
+    func push(by distance: CGFloat) {
+        guard let clip = scrollView?.contentView else { return }
+        let from = clip.bounds.origin.y
+        pushOwed += distance
+        scroll(to: from + pushOwed)
+        pushOwed -= clip.bounds.origin.y - from
+        if abs(pushOwed) >= 4 { pushOwed = 0 }
     }
 
     /// This far down from where it is now (up, less than 0).

@@ -16,6 +16,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ### All Changes
 
+- The composer no longer covers the end of the conversation: whatever makes it taller (a quote, several lines, an attachment, a list or card over it) pushes the conversation up with it, also while you're reading further up, and it all comes back as the composer shrinks. Scrolling a little way up now counts as leaving the end, however tall the composer is.
 - Kuvo Code opens again on the conversation you were in when you quit, from the first moment, instead of the latest session after a flash of the welcome screen. A conversation on a machine that isn't connected yet shows as connecting.
 - Escape closes a picture you're looking at closer, or answers an ask's Cancel, before it stops the agent at work. Before, Escape with a picture open stopped the agent and left the picture there.
 - Settings › General › Voice Input no longer shows a whole row with only a spinner while more accurate voice input gets ready; the line under the switch already says so. The same on your iPhone.
