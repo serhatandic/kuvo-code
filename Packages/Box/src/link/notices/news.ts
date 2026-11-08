@@ -3,7 +3,8 @@
 
 import os from "node:os";
 import path from "node:path";
-import { cut, outsideShown } from "../../shared/text";
+import { outsideShown } from "../../shared/text";
+import { boxNoteOf, wakeMarkOf } from "../../shared/queues";
 import { readProjects } from "../areas/projects";
 import { readRemovedWorktrees, readWorktrees } from "../areas/worktree-records";
 import { engineGet } from "../engine/client";
@@ -13,6 +14,8 @@ import { sessionsWaitingOnServer } from "../work/answers";
 import { isAutopilot } from "../work/autopilot";
 import { IS_MAC, K } from "../home";
 import { masked, showsAll } from "./mask";
+import { oneSentence, plain, reasonLine } from "./sentence";
+import { writtenByYou } from "../engine/queue";
 import type { Fields } from "../../shared/json";
 import type { Target } from "../../shared/records";
 import type { EngineAnswer, UncheckedAnswer } from "../engine/client";
@@ -53,7 +56,7 @@ export interface EngineForm {
 
 /** What an engine event carries, as this reads it: a permission asked, a form (under `form`, or
  * as it is), or the session whose run ended. */
-export type EngineEventData = Partial<PermissionAsked> & { form?: EngineForm };
+export type EngineEventData = Partial<PermissionAsked> & { form?: EngineForm; error?: { message?: unknown } | null };
 
 /** An engine's event, as this reads it: its type, what it carries, and the folder it came from. */
 export interface EngineEvent {
@@ -75,23 +78,17 @@ export interface GroupEvent {
   };
 }
 
-/** A message in a session, as far as this reads it: its blocks of text and tools. */
+/** A message in a session, as far as this reads it: its blocks of text and tools, and a message
+ * written to it, its text and marks. */
 interface EngineMessage {
   type: string;
+  text?: unknown;
+  metadata?: unknown;
   content?: { type: string; text?: string; name?: string; state?: { status?: string; input?: { code?: unknown } } }[];
 }
 
 /** Asks the engine `route`: its JSON, whatever came. */
 export type EngineAsk = (route: string, folder?: string) => Promise<unknown>;
-
-// Markdown's marks taken off, not the words (as ReplyPreview does on the Mac): headings and
-// quotes at a line's start, emphasis around words, code ticks, a link's address.
-const plain = (text: unknown): string => String(text ?? "")
-  .replace(/^[ \t]{0,3}(#{1,6}|>+)[ \t]+/gm, "")
-  .replace(/!?\[([^\]]*)\]\([^)\s]*\)/g, "$1")
-  .replace(/(?<![\w*_])[*_]{1,3}(?=\S)|(?<=\S)[*_]{1,3}(?![\w*_])/g, "")
-  .replace(/`/g, "")
-  .replace(/\s+/g, " ").trim();
 
 // "Wants to run a command: npm test", as the Mac says it: every one it covers (a command line's
 // commands each, as Allow takes them all), up to four, then how many more. With `home` (for people:
@@ -165,8 +162,55 @@ export function describeForm(form: EngineForm): string {
   return "Has a question for you.";
 }
 
-const isBot = (session: EngineSession): boolean => Boolean(session.metadata?.kuvo?.bot) || /\/bots\/bot_[^/]+\//.test(`${session.location?.directory ?? ""}/`);
+/** Whether a session is a bot's own conversation. */
+export const isBot = (session: EngineSession): boolean => Boolean(session.metadata?.kuvo?.bot) || /\/bots\/bot_[^/]+\//.test(`${session.location?.directory ?? ""}/`);
 
+
+// How many of a session's latest messages are read for its turn: its start, past the steps of a
+// long one.
+const TURN_PAGE = 50;
+
+/** What began a session's latest turn, from its messages (newest first): you (your message, or your
+ * answer, approval or pick passed on), another agent (its letter or work for it), the session's own
+ * accord (its wake-up or watch, a goal's word to its bot), or what it left running or started
+ * (a command or subagent done, its sessions' news: `follow`). */
+export type TurnBegan = "you" | "agent" | "own" | "follow";
+
+const beganWith = (message: EngineMessage): TurnBegan => {
+  if (message.type !== "user") return "follow";
+  const text = typeof message.text === "string" ? message.text : "";
+  if (wakeMarkOf(message.metadata) || text.startsWith("[Wake-up]")) return "own";
+  if (text.startsWith("[Message from ") || text.startsWith("[Work from ")) return "agent";
+  if (text.startsWith("[The user ") || text.startsWith("[Decision changed]")) return "you";
+  const note = boxNoteOf(text, message.metadata);
+  if (note) return note.from === "Your answer" || note.from === "Autopilot" ? "you" : note.from === "Its sessions" ? "follow" : "own";
+  return writtenByYou(text, message.metadata) ? "you" : "own";
+};
+
+/** What began the latest turn in `messages` (a session's, newest first): any word of yours in it
+ * makes it yours; else what began it. One whose start is out of reach counts as yours. */
+export function turnFor(messages: unknown): TurnBegan {
+  const rows = (Array.isArray(messages) ? messages : []).filter((row): row is EngineMessage => typeof row?.type === "string");
+  const ofTurn = (row: EngineMessage) => row.type === "user" || row.type === "synthetic" || row.type === "assistant";
+  // From its end (past what's written since, a message waiting its turn) back to the end before it.
+  const lastEnd = rows.findIndex(row => row.type === "idle");
+  const from = lastEnd >= 0 && !rows.slice(0, lastEnd).some(row => ofTurn(row) && row.type !== "user") ? lastEnd + 1 : 0;
+  const end = rows.findIndex((row, index) => index >= from && row.type === "idle");
+  const starters = rows.slice(from, end < 0 ? undefined : end).filter(row => row.type === "user" || row.type === "synthetic");
+  if (!starters.length) return "you";
+  const kinds = starters.map(beganWith);
+  return kinds.includes("you") ? "you" : kinds.at(-1)!;
+}
+
+/** NOTIFY_RULE: whether a reply is news for you. A reply to you is; one to another agent, or of the
+ * session's own accord (a wake-up, a watch, a goal's word), isn't. What it left running or started
+ * coming back is, in a conversation of yours (not a bot's, nor one an agent started). A question, a
+ * permission or a failure always is, and so is an agent's notify_user. */
+export function answersYou(began: TurnBegan, session: EngineSession): boolean {
+  if (began === "you") return true;
+  if (began !== "follow") return false;
+  return !isBot(session) && !session.metadata?.kuvo?.startedBy;
+}
 
 // This box's chats, conversations of no project: a machine's in its folder, a Mac's beside its box.
 const chatsFolder = (): string => (IS_MAC ? path.join(path.dirname(K), "Chats") : path.join(K, "chats"));
@@ -245,23 +289,28 @@ export async function noticeFor(event: EngineEvent, get: EngineAsk): Promise<Not
       const ended = await session(id);
       // A subagent's run is part of its parent's.
       if (ended.parentID || isHiddenRun(ended)) return null;
-      const page = await get(`api/session/${encodeURIComponent(id)}/message?limit=6&order=desc`).catch(() => null) as EngineAnswer<EngineMessage[]> | null;
+      const page = await get(`api/session/${encodeURIComponent(id)}/message?limit=${TURN_PAGE}&order=desc`).catch(() => null) as EngineAnswer<EngineMessage[]> | null;
       // Only a summary it was asked for: that it failed, whichever way its run ended (the engine's
       // says `succeeded`), and otherwise not news.
       const summary = summaryAtEnd(page?.data);
       if (summary === "failed") return about(ended, "failed", "Couldn't summarize the conversation.");
-      if (event.type === "session.execution.failed") return about(ended, "failed", "Stopped with an error.");
+      if (event.type === "session.execution.failed") {
+        const reason = reasonLine(data.error?.message);
+        return about(ended, "failed", reason ? `Stopped with an error: ${reason}` : "Stopped with an error.");
+      }
       if (summary === "completed") return null;
+      // A reply is news only when it answers you (NOTIFY_RULE).
+      if (!answersYou(turnFor(page?.data), ended)) return null;
       let reply = "";
       try {
         for (const message of page?.data ?? []) {
           if (message.type !== "assistant") continue;
-          reply = plain((message.content ?? []).filter(part => part.type === "text").map(part => part.text).join(" "));
+          reply = oneSentence((message.content ?? []).filter(part => part.type === "text").map(part => part.text).join("\n\n"));
           if (reply) break;
         }
       } catch {}
-      // What it said last, as long as the Mac shows it.
-      return about(ended, isBot(ended) ? "report" : "finished", reply ? cut(reply, 220) : "Finished.");
+      // What it said first, in a sentence.
+      return about(ended, isBot(ended) ? "report" : "finished", reply || "Finished.");
     }
     default:
       return null;
@@ -302,8 +351,8 @@ export function groupNotice(event: GroupEvent): Notice | null {
   if (event.type === "kuvo.group.met") {
     if (!data.last) return { ...about, body: "The meeting came, but no one could take part." };
     const who = data.who ? (data.last.kind === "wrapUp" ? `${data.who}’s wrap-up` : String(data.who)) : undefined;
-    return { ...about, subtitle: who, body: cut(plain(data.last.text), 220) };
+    return { ...about, subtitle: who, body: oneSentence(data.last.text) };
   }
-  if (event.type === "kuvo.group.done") return { ...about, subtitle: `${data.who} finished its part`, body: cut(plain(data.text), 220) };
+  if (event.type === "kuvo.group.done") return { ...about, subtitle: `${data.who} finished its part`, body: oneSentence(data.text) };
   return null;
 }

@@ -3,7 +3,8 @@
 // them (send_message), read one's conversation (read_conversation) and start a session
 // (start_session), and run the sessions it started as you would (list_sessions, stop_session, compact_session,
 // answer_ask, list_models, make_project, list_projects: `work/tools.ts`, PROTOCOL.md "Work"; and a bot's
-// goal: propose_goal, goal_progress, may_spend, finish_goal, "Work › Goals"). Every box answers them alike (`POST kuvo/agent-tools`): this Mac's app and a
+// goal: propose_goal, goal_progress, may_spend, finish_goal, "Work › Goals"; and telling you something on
+// purpose, notify_user, `notices/notify.ts`). Every box answers them alike (`POST kuvo/agent-tools`): this Mac's app and a
 // machine's kuvo-browser.js only pass the call on. A message reaches its conversation as input that
 // says who sent it, and the agent there takes it up; with `wait`, the sender gets its answer back.
 // One on another computer goes there by mail (PROTOCOL.md, "Peers"). You name one with "&".
@@ -26,6 +27,7 @@ import { allowed, takeBack } from "./limits";
 import { OUTSIDE, seatRefusal, startedWords, startSession } from "./start";
 import { answerTo } from "./take";
 import { noteOversightBy } from "../work/oversight";
+import { notifyUserTool } from "../notices/notify";
 import { answerAskTool, describeList, finishGoalTool, goalProgressTool, leadOf, listModelsTool, listProjectsTool, liveRows, makeProjectTool, maySpendTool, proposeGoalTool, compactSessionTool, stopSessionTool } from "../work/tools";
 import { under, workSessions } from "../work/tree";
 import { rowsBox } from "../work/elsewhere";
@@ -50,7 +52,7 @@ export interface ToolPlace {
 }
 
 /** The tools, by name. */
-export const AGENT_TOOLS = ["list_agents", "send_message", "read_conversation", "start_session", "list_sessions", "stop_session", "compact_session", "answer_ask", "list_models", "make_project", "list_projects", "propose_goal", "goal_progress", "may_spend", "finish_goal"] as const;
+export const AGENT_TOOLS = ["list_agents", "send_message", "read_conversation", "start_session", "list_sessions", "stop_session", "compact_session", "answer_ask", "list_models", "make_project", "list_projects", "propose_goal", "goal_progress", "may_spend", "finish_goal", "notify_user"] as const;
 export type AgentToolName = (typeof AGENT_TOOLS)[number];
 export const isAgentTool = (name: unknown): name is AgentToolName => AGENT_TOOLS.includes(name as AgentToolName);
 
@@ -306,6 +308,9 @@ export async function agentTool(name: AgentToolName, args: Record<string, unknow
       if (!root) return refused("Only a conversation on this computer makes projects here.");
       return makeProjectTool({ ...root, name: nameOf(root.session, all) }, args, { signal: place.signal, ...(place.step ? { every: place.step } : {}) });
     }
+    case "notify_user":
+      if (!root) return refused("Only a conversation on this computer can notify the user from here.");
+      return notifyUserTool({ session: root.session, data: root.place.data, name: all.agents.find(agent => agent.session === root.session)?.name ?? null }, args);
     case "propose_goal":
     case "goal_progress":
     case "may_spend":
