@@ -85,6 +85,8 @@ it, set `KUVO_OPENCODE_BINARY` to its path in the scheme's environment.
 
 ### Tests
 
+The account running `scripts/test-app.sh` must own the Mac's screen.
+
 The app, the engine client and the usage tracker have tests:
 
 ```sh

@@ -70,10 +70,38 @@ final class MachineEngine {
     private(set) var isLive = false
     /// Waiting to try again by itself, after the connection dropped.
     var isRetrying = false
-    /// Its last failure may pass by itself (the network, the machine away), so trying again is
-    /// worth it; not one trying again won't change (its key refused, a changed host key, a system
-    /// the engine doesn't run on), which is said at once, with Try Again.
-    private(set) var failureMayPass = true
+    /// The tries to connect again under way (`AppModel.retry`), and which round of them it is: a
+    /// round started over (the Mac woke) or ended (Disconnect) leaves the flag to the next one.
+    @ObservationIgnored var retryLoop: Task<Void, Never>?
+    @ObservationIgnored var retryRound = 0
+    /// How its last failure may pass, for trying again.
+    private(set) var failureKind = FailureKind.away
+    /// Its last failure may pass by itself, so trying again is worth it; not one trying again
+    /// won't change (its key refused, a changed host key, a system the engine doesn't run on),
+    /// which is said at once, with Try Again.
+    var failureMayPass: Bool { failureKind != .lasting }
+    /// It was connected since the app opened: a machine that works, so what goes wrong while it
+    /// comes back (it's restarting, its engine coming up) passes, but for what never would.
+    @ObservationIgnored private var wasConnected = false
+    /// Its last try didn't get an answer (`away`): one that answers now is on its way back too,
+    /// though it wasn't connected since the app opened (the app opened as it restarted, #285).
+    @ObservationIgnored private var lastTryAway = false
+    /// How long it's answered without coming up (`comingBack`), in seconds waited between tries,
+    /// over every round of tries, so a wake or Connect Now doesn't start it over; nil once it
+    /// didn't answer, or connected.
+    @ObservationIgnored var comingBackWaited: Int?
+
+    enum FailureKind {
+        /// It didn't answer (the network, the machine away or restarting, waiting to be unlocked):
+        /// tried for as long as it takes.
+        case away
+        /// It answered, but didn't take this Mac's key or its engine didn't come up, on a machine
+        /// that was connected a moment ago: it may be on its way back (restarting), so tried for
+        /// a while, then said.
+        case comingBack
+        /// Trying again won't change it: said at once.
+        case lasting
+    }
     /// Disconnect was pressed (here or from a phone): it isn't connected again by itself, as this
     /// Mac's engine starts again, until it's connected.
     var isDisconnected = false
@@ -466,10 +494,18 @@ final class MachineEngine {
         #if DEBUG
         if let standIn = Self.standIn {
             state = .starting
-            let api = await standIn(machine)
+            let api: OpenCodeAPI?
+            do {
+                api = try await standIn(machine)
+            } catch {
+                guard connections == attempt else { return nil }
+                failed(error)
+                return nil
+            }
             guard connections == attempt else { return nil }
             guard let api else {
-                failureMayPass = true
+                failureKind = .away
+                lastTryAway = true
                 state = .failed("Couldn’t reach \(machine.name).")
                 return nil
             }
@@ -481,7 +517,7 @@ final class MachineEngine {
         #endif
         // A stand-in (a name under `.invalid`, a demo copy's) is never contacted.
         guard !machine.connection.isNeverContacted else {
-            failureMayPass = false
+            failureKind = .lasting
             state = .failed("Couldn’t reach \(machine.name).")
             return nil
         }
@@ -642,14 +678,34 @@ final class MachineEngine {
             log.error("\(self.machine.destination, privacy: .public) didn't start: \(error.localizedDescription, privacy: .public)")
             server?.disconnect()
             server = nil
-            failureMayPass = Self.mayPass(error)
-            state = .failed(error.localizedDescription)
+            failed(error)
         }
         return nil
     }
 
+    /// A start that failed with `error`: said, and how it may pass (`FailureKind`). One that was
+    /// connected since the app opened may be on its way back (restarting, its engine starting
+    /// there), where nearly anything can fail for a moment, and a Mac restarting with FileVault
+    /// answers only for its password until it's unlocked.
+    private func failed(_ error: Error) {
+        // Known to work: connected since the app opened, or not answering a moment ago.
+        let works = wasConnected || lastTryAway
+        failureKind = if Self.mayPass(error) || works && Self.waitsToBeUnlocked(error) {
+            .away
+        } else if works && !Self.neverPasses(error) {
+            .comingBack
+        } else {
+            .lasting
+        }
+        lastTryAway = failureKind == .away
+        state = .failed(error.localizedDescription)
+    }
+
     /// It's up: a connection begins.
     private func connected() -> MachineConnection {
+        wasConnected = true
+        lastTryAway = false
+        comingBackWaited = nil
         activeConnection?.end()
         let connection = MachineConnection()
         activeConnection = connection
@@ -681,8 +737,8 @@ final class MachineEngine {
 
     #if DEBUG
     /// For the app's tests: the engine a machine's connection reaches (nil: it can't be reached),
-    /// in place of starting one there over SSH. It has no live feed.
-    static var standIn: ((Machine) async -> OpenCodeAPI?)?
+    /// in place of starting one there over SSH; or what starting it there threw. It has no live feed.
+    static var standIn: ((Machine) async throws -> OpenCodeAPI?)?
 
     /// A demo copy's stand-in machine (`DemoMachines`), shown as `status` says, as if its
     /// connection had got there: nothing is started or sent anywhere.
@@ -690,7 +746,7 @@ final class MachineEngine {
         isRetrying = false
         isStopped = false
         isLive = false
-        failureMayPass = false
+        failureKind = .lasting
         // (The state first: some of them clear the step.)
         switch status {
         case "connected", "reading":
@@ -900,7 +956,7 @@ final class MachineEngine {
                 guard !Task.isCancelled else { return }
                 guard !answered else { continue }
                 log.error("\(self.machine.destination, privacy: .public)'s engine stopped answering through its tunnel")
-                lost("The connection to \(machine.name) was lost.")
+                connectionLost("The connection to \(machine.name) was lost.")
                 return
             }
             // It answered every time: the next time the feed goes down, check again.
@@ -908,24 +964,56 @@ final class MachineEngine {
         }
     }
 
-    /// The connection is gone: say so, and let the app connect again.
-    private func lost(_ reason: String) {
+    /// The connection is gone without being asked to (its tunnel ended, or its engine stopped
+    /// answering through it): say so, and let the app connect again.
+    func connectionLost(_ reason: String) {
         disconnect()
-        failureMayPass = true
+        failureKind = .away
+        lastTryAway = true
         state = .failed(reason)
         onExit()
     }
 
-    /// Whether `error` may pass by itself: SSH not getting through (255), but for its key or
-    /// the machine's turned away; a download, or the engine taking too long.
+    /// Whether `error` may pass by itself: SSH not getting through (255, on a command or the
+    /// engine's tunnel), but for its key or the machine's turned away; a download, or the engine
+    /// taking too long.
     static func mayPass(_ error: Error) -> Bool {
         switch error {
-        case RemoteEngineError.ssh(let status, let message):
-            let refused = ["Host key verification failed", "Permission denied", "Too many authentication failures"]
-            return status == 255 && !refused.contains { message.localizedCaseInsensitiveContains($0) }
-        case RemoteEngineError.timedOut, is URLError: return true
-        default: return false
+        case RemoteEngineError.ssh(255, let message), RemoteEngineError.exited(255, let message):
+            !isTurnedAway(message)
+        case RemoteEngineError.timedOut, is URLError: true
+        default: false
         }
+    }
+
+    /// Whether `error` never passes by itself, on a machine that worked a moment ago: its host
+    /// key changed, a system the engine doesn't run on. Anything else can be the machine
+    /// restarting, for a while: its engine failing to start, a command cut off, a newer box's
+    /// engine not up yet, and this Mac's key turned away (a Mac starting up answers SSH before
+    /// it reads your keys: #285).
+    static func neverPasses(_ error: Error) -> Bool {
+        switch error {
+        case RemoteEngineError.ssh(255, let message), RemoteEngineError.exited(255, let message):
+            ["Host key verification failed", "REMOTE HOST IDENTIFICATION HAS CHANGED"].contains { message.localizedCaseInsensitiveContains($0) }
+        case RemoteEngineError.unsupportedPlatform, RemoteEngineError.needsDeveloperTools, RemoteEngineError.needsNewerMacOS,
+             RemoteEngineError.thisMac:
+            true
+        default: false
+        }
+    }
+
+    /// Whether SSH was turned away by a machine that takes no keys just now, only a password: a Mac
+    /// restarted with FileVault answers so until someone unlocks it, then takes this Mac's key.
+    static func waitsToBeUnlocked(_ error: Error) -> Bool {
+        guard case RemoteEngineError.ssh(255, let message) = error,
+              let methods = message.firstMatch(of: /Permission denied \(([^)]*)\)/)?.1 else { return false }
+        return !methods.localizedCaseInsensitiveContains("publickey")
+    }
+
+    /// What SSH says when the machine was reached and turned this Mac away (its key, its host key).
+    private static func isTurnedAway(_ message: String) -> Bool {
+        ["Host key verification failed", "Permission denied", "Too many authentication failures", "REMOTE HOST IDENTIFICATION HAS CHANGED"]
+            .contains { message.localizedCaseInsensitiveContains($0) }
     }
 
     private func exited(status: Int32) {
@@ -933,7 +1021,7 @@ final class MachineEngine {
         guard !isStopping, server != nil else { return }
         let output = server?.recentOutput.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         log.error("\(self.machine.destination, privacy: .public) closed with status \(status): \(output, privacy: .public)")
-        lost("The connection to \(machine.name) was lost.\(output.isEmpty ? "" : "\n\n" + String(output.suffix(400)))")
+        connectionLost("The connection to \(machine.name) was lost.\(output.isEmpty ? "" : "\n\n" + String(output.suffix(400)))")
     }
 }
 
