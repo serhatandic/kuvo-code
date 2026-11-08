@@ -11969,6 +11969,7 @@ var STATE_IN_HOME2 = [
   "thread-writer-locks",
   "generated_images",
   "auth.json*",
+  ".auth-*",
   "installation_id",
   "version.json",
   "history.jsonl",
@@ -14973,9 +14974,12 @@ var STATE_IN_HOME3 = [
   ".metadata_version",
   "worktrees.db*",
   "active_sessions.json",
+  "active_sessions.json.tmp",
+  "active_sessions.json.corrupt",
   "experiments_state.json",
   "*.log",
-  "sandbox-events.jsonl"
+  "sandbox-events.jsonl",
+  ".*.*.tmp"
 ];
 var KEPT_IN_HOME3 = ["*.toml", "hooks-paths", "disabled-hooks", "*.sh"];
 
@@ -24758,4 +24762,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 77d6e4740882274b49ec73f4817e8b29cff197156564ec6fd73b354f6780f09a
+// Built from Packages/Box/src/agents b1fe82d1309f12b037424292d18cf220bfc74059935e85e9f0246653e49449ab

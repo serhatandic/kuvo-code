@@ -39,10 +39,13 @@ const outputLimit = 30_000
  * instructions (its settings, hooks and rules; its plugins, their repository in `.tmp`, its helpers
  * in `tmp`, the scripts it sources in `shell_snapshots`; its models' instructions; the ChatGPT
  * app's state and socket). (Its memories' database it opens as it starts, so it writes that too.)
+ * Its sign-in it saves whole (from 0.167): a new file beside it (`.auth-` and six letters), then
+ * renamed onto `auth.json`. A name like that it never reads, and the sandbox goes by the name a
+ * file is renamed to, so one can't become its settings.
  */
 const STATE_IN_HOME = [
   "sessions", "archived_sessions", "log", "logs", "cache", "sqlite", "thread-writer-locks", "generated_images",
-  "auth.json*", "installation_id", "version.json", "history.jsonl", ".personality_migration", ".sandbox_migration", "*.lock",
+  "auth.json*", ".auth-*", "installation_id", "version.json", "history.jsonl", ".personality_migration", ".sandbox_migration", "*.lock",
   "state_*.sqlite*", "logs_*.sqlite*", "goals_*.sqlite*", "queue_*.sqlite*", "thread_history_*.sqlite*", "memories_*.sqlite*",
 ]
 /** What it never writes in its state either: settings put there. */
