@@ -17,12 +17,11 @@ jobs:
   build:
     name: build and test
     # Pushes to main, and release tags and dry runs from main (release.yml calls this; `github`
-    # is the caller's there), run on the Mac mini's self-hosted runner. Everything else, every
-    # pull request above all, runs on GitHub's: a pull request's workflow comes from its branch,
-    # so code from a fork must never be offered the Mini. The runner refuses anything else too
-    # (scripts/ci-runner/job-started.sh), and release.yml's build job picks the same way. The
-    # repository variable KUVO_MINI set to `off` sends everything to GitHub's runners, for when
-    # the Mini is away.
+    # is the caller's there), run on the Mac mini, each job in a fresh macOS VM
+    # (scripts/ci-runner/). Everything else, every pull request above all, runs on GitHub's: a
+    # pull request's workflow comes from its branch, so code from a fork must never be offered
+    # the Mini (which refuses one anyway, on the host and in the VM). The repository variable
+    # KUVO_MINI set to `off` sends everything to GitHub's runners, for when the Mini is away.
     # Xcode's runner images are named for the Xcode version they ship, which
     # has the Swift toolchain and the macOS SDK Kuvo Code builds against.
     runs-on: >-
@@ -32,7 +31,7 @@ jobs:
           && vars.KUVO_MINI != 'off'
           && fromJSON('["self-hosted", "macOS", "ARM64", "kuvo-mini"]')
           || 'xcode-27' }}
-    # The Mini has one runner: a hung step mustn't hold every run behind it for GitHub's six hours.
+    # The Mini runs one job at a time: a hung step mustn't hold the rest for GitHub's six hours.
     timeout-minutes: 180
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -54,8 +53,8 @@ jobs:
           git diff --exit-code THIRD_PARTY_LICENSES.txt \
             || { echo "Run scripts/third-party-licenses.sh and commit the result." >&2; exit 1; }
 
-      # OpenCodeKit's launcher tests and the machines' bridge's tests run Node. GitHub's images
-      # have one of their own; the Mac mini has none, so it's the same pinned one on both.
+      # OpenCodeKit's launcher tests and the machines' bridge's tests run Node: the same pinned
+      # one on GitHub's runners and in the Mac mini's VMs.
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
@@ -116,8 +115,6 @@ jobs:
         run: |
           ./scripts/build-dmg.sh
           mount=$(mktemp -d)
-          # Detached even when a check fails: the Mini keeps what a run leaves mounted.
-          trap 'hdiutil detach "$mount" -force >/dev/null 2>&1 || true; rmdir "$mount" 2>/dev/null || true' EXIT
           hdiutil attach -nobrowse -readonly -mountpoint "$mount" build/KuvoCode.dmg >/dev/null
           test -d "$mount/Kuvo Code.app" || { echo "Kuvo Code.app is missing from the disk image" >&2; exit 1; }
           test "$(readlink "$mount/Applications")" = /Applications || { echo "The Applications link is missing" >&2; exit 1; }

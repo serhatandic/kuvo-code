@@ -1,0 +1,208 @@
+#!/bin/bash
+# shellcheck disable=SC2016 # what's in single quotes expands in the VM, not here
+# The Mac mini's CI orchestrator. Runs as ci, always (a LaunchAgent setup.sh installs), one job at
+# a time, each in a VM of its own:
+#
+#   1. clones the golden image (an APFS clone: instant, and nothing of it is shared after);
+#   2. boots it with softnet's network (common.sh: the internet, nothing on this Mac or the LAN)
+#      and no folders shared;
+#   3. asks GitHub for a just-in-time runner config: one runner, one job, gone after it. The
+#      GitHub token stays here; the VM only gets that config;
+#   4. runs the runner in the VM. When it takes a job, checks on GitHub that the job is ours (a
+#      push to main, a release tag, a run started by hand from main or a tag, of this repository)
+#      and stops the VM if not. The VM's own pre-job hook (vm/job-started.sh) refuses it too,
+#      before any step;
+#   5. stops and deletes the VM when the job ends (or after JOB_LIMIT_MINUTES), and starts over.
+#
+# The next VM boots as soon as one is deleted, so it's ready for the next job.
+#   /Users/Shared/kuvo-ci/paused   while it's there, no VM runs (an idle one is stopped)
+# Its log: ~/Library/Logs/kuvo-ci/orchestrator.log (and a log per VM next to it, kept a week).
+set -uo pipefail
+
+here="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=scripts/ci-runner/common.sh
+. "$here/common.sh"
+
+TOKEN_FILE="$HOME/.config/kuvo-ci/github-token"
+TART_DIR="${TART_HOME:-$HOME/.tart}"
+LOCAL_VERSION="$TART_DIR/$GOLDEN-version"
+LOG_DIR="$HOME/Library/Logs/kuvo-ci"
+PAUSED="$SHARED/paused"
+# gh keeps nothing of its own outside this.
+export GH_CONFIG_DIR="$HOME/.config/kuvo-ci/gh"
+export PATH="/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+mkdir -p "$LOG_DIR" "$GH_CONFIG_DIR"
+
+log() { printf '%s %s\n' "$(date -u +%FT%TZ)" "$*"; }
+api() { GH_TOKEN="$(cat "$TOKEN_FILE")" gh api -H 'X-GitHub-Api-Version: 2022-11-28' "$@"; }
+
+vm="" vm_pid="" runner_id="" check_pid="" job_done=""
+
+end_job() {
+    if [[ -n "$check_pid" ]]; then kill "$check_pid" 2>/dev/null; wait "$check_pid" 2>/dev/null; fi
+    if [[ -n "$vm" ]]; then tart stop "$vm" --timeout 15 >/dev/null 2>&1 || true; fi
+    if [[ -n "$vm_pid" ]] && kill -0 "$vm_pid" 2>/dev/null; then kill "$vm_pid" 2>/dev/null; fi
+    if [[ -n "$vm_pid" ]]; then wait "$vm_pid" 2>/dev/null; fi
+    if [[ -n "$vm" ]]; then tart delete "$vm" >/dev/null 2>&1 && log "[$vm] deleted"; fi
+    # A runner that never finished a job is still registered: take it off GitHub.
+    if [[ -n "$runner_id" && -z "$job_done" ]]; then
+        api -X DELETE "repos/$REPOSITORY/actions/runners/$runner_id" >/dev/null 2>&1 || true
+    fi
+    vm="" vm_pid="" runner_id="" check_pid="" job_done=""
+}
+trap 'log "Stopping."; end_job; exit 0' TERM INT HUP
+
+# What a crash or a restart left: VMs of ours (by their name, in ci's own Tart home), runners of
+# ours GitHub still lists as offline, logs older than a week.
+clean_leftovers() {
+    local name id
+    while IFS= read -r name; do
+        [[ "$name" == kuvo-ci-job-* ]] || continue
+        log "Deleting a VM left from before: $name"
+        tart stop "$name" --timeout 5 >/dev/null 2>&1 || true
+        tart delete "$name" >/dev/null 2>&1 || true
+    done < <(tart list --source local --quiet 2>/dev/null)
+    while IFS= read -r id; do
+        [[ "$id" =~ ^[0-9]+$ ]] || continue
+        log "Taking an offline runner left from before off GitHub: $id"
+        api -X DELETE "repos/$REPOSITORY/actions/runners/$id" >/dev/null 2>&1 || true
+    done < <(api "repos/$REPOSITORY/actions/runners?per_page=100" \
+        --jq ".runners[] | select((.name | startswith(\"kuvo-ci-job-\")) and .status == \"offline\") | .id" 2>/dev/null)
+    find "$LOG_DIR" -name 'kuvo-ci-job-*.log' -mtime +7 -delete 2>/dev/null || true
+}
+
+# The golden image build-image.sh made, copied (as an APFS clone) when it's new.
+take_golden() {
+    local want have
+    want="$(cat "$SHARED/golden-version" 2>/dev/null)"
+    have="$(cat "$LOCAL_VERSION" 2>/dev/null)"
+    [[ -n "$want" ]] || { log "No golden image yet: run scripts/ci-runner/build-image.sh."; return 1; }
+    if [[ "$want" == "$have" ]] && tart get "$GOLDEN" >/dev/null 2>&1; then return 0; fi
+    log "Taking the golden image: $want"
+    mkdir -p "$TART_DIR/vms"
+    rm -rf "$TART_DIR/vms/$GOLDEN-incoming"
+    cp -cR "$SHARED_TART/vms/$GOLDEN" "$TART_DIR/vms/$GOLDEN-incoming" || return 1
+    rm -rf "$TART_DIR/vms/$GOLDEN"
+    mv "$TART_DIR/vms/$GOLDEN-incoming" "$TART_DIR/vms/$GOLDEN"
+    printf '%s\n' "$want" > "$LOCAL_VERSION"
+}
+
+# Whether a run GitHub lists is one the Mini takes.
+allowed() { # event branch repository head-repository
+    [[ "$3" == "$REPOSITORY" && "$4" == "$REPOSITORY" ]] || return 1
+    case "$1" in push | workflow_dispatch) ;; *) return 1 ;; esac
+    [[ "$2" == main || "$2" =~ ^v[0-9] ]]
+}
+
+# Once the runner has taken a job: which run is it, on GitHub's side? Stops the VM when it isn't
+# one the Mini takes. A few tries, as GitHub may take a moment to list it.
+check_job() { # runner-id vm
+    local attempt runs id event branch repo head_repo
+    for attempt in 1 2 3; do
+        sleep 5
+        runs="$(api "repos/$REPOSITORY/actions/runs?status=in_progress&per_page=20" \
+            --jq '.workflow_runs[] | "\(.id) \(.event) \(.head_branch) \(.repository.full_name) \(.head_repository.full_name)"' 2>/dev/null)" || continue
+        while read -r id event branch repo head_repo; do
+            [[ -n "$id" ]] || continue
+            if api "repos/$REPOSITORY/actions/runs/$id/jobs?filter=latest&per_page=100" \
+                --jq ".jobs[] | select(.runner_id == $1) | .id" 2>/dev/null | grep -q .; then
+                if allowed "$event" "$branch" "$repo" "$head_repo"; then
+                    log "[$2] host check: run $id, $event on $branch, is ours"
+                else
+                    log "[$2] host check: run $id, $event on $branch from $head_repo, isn't one the Mini takes: stopping the VM"
+                    tart stop "$2" --timeout 0 >/dev/null 2>&1
+                fi
+                return
+            fi
+        done <<< "$runs"
+        log "[$2] host check: GitHub doesn't list runner $1's job yet (try $attempt)"
+    done
+    log "[$2] host check: couldn't find runner $1's job on GitHub; the VM's pre-job hook decided"
+}
+
+one_job() {
+    local encoded line status job_started="" fifo jit
+    vm="kuvo-ci-job-$(date -u +%Y%m%d-%H%M%S)"
+    tart clone "$GOLDEN" "$vm" || { log "[$vm] couldn't clone $GOLDEN"; vm=""; return 1; }
+    # shellcheck disable=SC2046 # the flags are words of their own
+    tart run --no-graphics $(vm_network_flags) "$vm" > "$LOG_DIR/$vm.log" 2>&1 &
+    vm_pid=$!
+    log "[$vm] booting ($VM_CPUS CPUs, $VM_MEMORY_MB MB)"
+    local tries=0
+    until tart exec "$vm" /usr/bin/true >/dev/null 2>&1; do
+        tries=$((tries + 1))
+        if [[ $tries -gt 90 ]] || ! kill -0 "$vm_pid" 2>/dev/null; then
+            log "[$vm] didn't boot (see $LOG_DIR/$vm.log)"
+            return 1
+        fi
+        sleep 2
+    done
+
+    local label_args=() label
+    for label in "${RUNNER_LABELS[@]}"; do label_args+=(-f "labels[]=$label"); done
+    jit="$(api -X POST "repos/$REPOSITORY/actions/runners/generate-jitconfig" \
+        -f name="$vm" -F runner_group_id=1 "${label_args[@]}" -f work_folder=_work \
+        --jq '"\(.runner.id) \(.encoded_jit_config)"' 2>&1)" \
+        || { log "[$vm] GitHub refused a runner config: ${jit:0:200}"; return 1; }
+    runner_id="${jit%% *}"
+    encoded="${jit#* }"
+    jit=""
+    log "[$vm] runner $runner_id ready for a job"
+
+    fifo="$(mktemp -u "${TMPDIR:-/tmp}/kuvo-ci.XXXXXX")"
+    mkfifo -m 600 "$fifo"
+    printf '%s\n' "$encoded" | tart exec -i "$vm" /bin/bash -lc \
+        'IFS= read -r jit; cd ~/actions-runner && exec ./run.sh --jitconfig "$jit"' > "$fifo" 2>&1 &
+    encoded=""
+    exec 3< "$fifo"
+    rm -f "$fifo"
+    while :; do
+        if IFS= read -r -t 30 line <&3; then
+            log "[$vm] $line"
+            case "$line" in
+                *"Running job:"*)
+                    job_started=$SECONDS
+                    check_job "$runner_id" "$vm" &
+                    check_pid=$!
+                    ;;
+                *"completed with result"*) job_done=1 ;;
+            esac
+            continue
+        fi
+        status=$?
+        ((status > 128)) || break # the runner is done (or the VM is gone)
+        kill -0 "$vm_pid" 2>/dev/null || break
+        if [[ -n "$job_started" ]]; then
+            if ((SECONDS - job_started > JOB_LIMIT_MINUTES * 60)); then
+                log "[$vm] the job ran over $JOB_LIMIT_MINUTES minutes: stopping it"
+                break
+            fi
+        elif [[ -e "$PAUSED" ]]; then
+            log "[$vm] paused: stopping the idle VM"
+            break
+        elif [[ "$(cat "$SHARED/golden-version" 2>/dev/null)" != "$(cat "$LOCAL_VERSION" 2>/dev/null)" ]]; then
+            log "[$vm] a new golden image: replacing the idle VM"
+            break
+        fi
+    done
+    exec 3<&-
+    return 0
+}
+
+log "Starting: $REPOSITORY, labels ${RUNNER_LABELS[*]}, $(tart --version) with $(vm_network_flags)"
+clean_leftovers
+while :; do
+    if [[ -e "$PAUSED" ]]; then sleep 60; continue; fi
+    if [[ ! -s "$TOKEN_FILE" ]]; then
+        log "No GitHub token in $TOKEN_FILE: run scripts/ci-runner/setup.sh."
+        sleep 300
+        continue
+    fi
+    if ! take_golden; then sleep 300; continue; fi
+    if ! one_job; then
+        end_job
+        sleep 60 # not again at once: something's wrong (its log says what)
+        continue
+    fi
+    end_job
+done

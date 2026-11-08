@@ -1,116 +1,43 @@
-# What the Mac mini's runner setup and hooks share (scripts/ci-runner/setup.sh, job-started.sh,
-# job-completed.sh). Sourced, never run. Each function only touches what the runner's own user
-# (`ci`) made: its keychain search list, disk images it mounted from its own folders, the runner's
-# work folder.
+# What the Mac mini's CI scripts share (scripts/ci-runner/). Sourced, never run.
+#
+# Every job runs in a fresh macOS VM (Tart), cloned from a golden image and deleted after the job:
+#   build-image.sh    you, after a new Xcode: builds the golden image into $SHARED/tart
+#   setup.sh          you, once: installs the orchestrator as ci, with its GitHub token
+#   orchestrator.sh   ci, always (a LaunchAgent): one VM at a time, each with a one-job runner
+#   check-isolation.sh  boots a throwaway VM with the jobs' network and checks what it can reach
+#   vm/job-started.sh   inside the VM: the runner's pre-job hook, refusing what isn't ours
 # shellcheck shell=bash
+# shellcheck disable=SC2034 # each script uses its own share of these
 
 REPOSITORY="serhatandic/kuvo-code"
-RUNNER_NAME="kuvo-mini"
+# The runner's labels; the workflows' `runs-on` asks for all four.
+RUNNER_LABELS=(self-hosted macOS ARM64 kuvo-mini)
+RUNNER_PREFIX="kuvo-mini"
+
+# Yours, read-only to everyone else: the scripts ci runs, and the golden image it copies.
 SHARED="/Users/Shared/kuvo-ci"
-# The runner's folder, and what of it jobs work in (setup.sh puts it there).
-RUNNER_DIR="${KUVO_RUNNER_DIR:-$HOME/actions-runner}"
-WORK_DIR="$RUNNER_DIR/_work"
-LABEL="actions.runner.${REPOSITORY%%/*}-${REPOSITORY##*/}.$RUNNER_NAME"
-PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
-# Why the pre-job hook refused a job, since GitHub may never get the stopped job's log.
-# shellcheck disable=SC2034 # used by job-started.sh
-REFUSALS_LOG="$HOME/Library/Logs/kuvo-ci-refusals.log"
-# What jobs find on PATH: Xcode's tools in /usr/bin, and gh from Homebrew (the release job
-# publishes with it). Bun and Node come from the workflows' setup actions.
-JOB_PATH="/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+SHARED_TART="$SHARED/tart"
+GOLDEN="kuvo-ci-golden"
+# What the golden image is built from: Cirrus Labs' macOS 27 base image (brew, gh, Node 24,
+# Tart's guest agent, the admin user), pinned by digest. Xcode comes from this Mac's.
+BASE_IMAGE="ghcr.io/cirruslabs/macos-golden-gate-base@sha256:4859ea9483a1f6e377301f23a5243798044266a373fc36635e9dcd045e09292f"
 
-# The runner's .env, every line of it: the runner hands these to every step, so the hook checks
-# nobody added to it.
-runner_env() {
-    echo "LANG=en_US.UTF-8"
-    echo "ACTIONS_RUNNER_HOOK_JOB_STARTED=$SHARED/job-started.sh"
-    echo "ACTIONS_RUNNER_HOOK_JOB_COMPLETED=$SHARED/job-completed.sh"
+# One job at a time (Apple allows two macOS VMs; this Mac has 16 GB and is also yours to use).
+VM_CPUS="${KUVO_CI_CPUS:-8}"
+VM_MEMORY_MB="${KUVO_CI_MEMORY_MB:-8192}"
+VM_DISK_GB="${KUVO_CI_DISK_GB:-100}"
+# The longest a job may run before its VM is stopped (the workflows' own limit is 180 minutes).
+JOB_LIMIT_MINUTES=200
+
+# The VMs' network: softnet lets a VM reach only globally routable addresses (GitHub, Apple's
+# notary service, package registries) and the vmnet gateway, which is this Mac. That gateway is
+# blocked too, so a VM can't reach this Mac's own services; the guests use public DNS instead of
+# the gateway's (build-image.sh). The LAN, Tailscale and other private ranges, and other VMs,
+# are softnet's default refusals already.
+vmnet_gateway() {
+    defaults read /Library/Preferences/SystemConfiguration/com.apple.vmnet Shared_Net_Address 2>/dev/null \
+        || echo 192.168.64.1
 }
-
-# What a job may have left in ci's account to run later, or to change what later jobs run: the
-# runner's .env and .path not as setup.sh wrote them, login agents besides the runner's, a
-# crontab. Prints what it found; fails if anything.
-account_tampered() {
-    local found=0 agent
-    if [[ "$(cat "$RUNNER_DIR/.env" 2>/dev/null)" != "$(runner_env)" ]]; then
-        echo "The runner's .env isn't as setup.sh wrote it."
-        found=1
-    fi
-    if [[ "$(cat "$RUNNER_DIR/.path" 2>/dev/null)" != "$JOB_PATH" ]]; then
-        echo "The runner's .path isn't as setup.sh wrote it."
-        found=1
-    fi
-    for agent in "$HOME"/Library/LaunchAgents/*; do
-        [[ -e "$agent" && "$agent" != "$PLIST" ]] || continue
-        echo "A login agent besides the runner's: $agent"
-        found=1
-    done
-    if [[ -n "$(crontab -l 2>/dev/null)" ]]; then
-        echo "ci has a crontab."
-        found=1
-    fi
-    return "$found"
-}
-
-# Signing keychains a release job left (release.yml's "Clean up signing" deletes its own; this is
-# for a job that was stopped before it could), and search list entries for keychains that are gone.
-clean_signing() {
-    local line path kept=() changed=
-    while IFS= read -r line; do
-        path="$(sed 's/^ *"//; s/"$//' <<< "$line")"
-        [[ -n "$path" ]] || continue
-        if [[ "$path" == "$WORK_DIR/"* && "$(basename "$path")" == signing*.keychain-db ]]; then
-            echo "Deleting a signing keychain a job left: $path"
-            security delete-keychain "$path" 2>/dev/null || true
-            changed=1
-        elif [[ ! -e "$path" ]]; then
-            echo "Dropping a keychain that's gone from the search list: $path"
-            changed=1
-        else
-            kept+=("$path")
-        fi
-    done < <(security list-keychains -d user)
-    if [[ -n "$changed" && ${#kept[@]} -gt 0 ]]; then
-        security list-keychains -d user -s "${kept[@]}" || true
-    fi
-    # And any keychain file a job left in the work folder (the runner empties _temp itself, but
-    # only once the next job starts).
-    find "$WORK_DIR" -maxdepth 2 -name 'signing*.keychain-db' -type f -delete 2>/dev/null || true
-}
-
-# Disk images still mounted from this user's folders (its home, its temporary and cache folders):
-# a job that failed between attaching one and detaching it.
-detach_images() {
-    local info i path dev user_tmp
-    user_tmp="$(getconf DARWIN_USER_TEMP_DIR 2>/dev/null || true)"
-    user_tmp="${user_tmp%/}"
-    user_tmp="${user_tmp%/*}" # /var/folders/xx/yyyy, which holds T (temporary) and C (cache)
-    info="$(mktemp)"
-    hdiutil info -plist > "$info" 2>/dev/null || { rm -f "$info"; return 0; }
-    i=0
-    while path="$(plutil -extract "images.$i.image-path" raw -o - "$info" 2>/dev/null)"; do
-        if [[ "$path" == "$HOME/"* || ( -n "$user_tmp" && "$path" == "$user_tmp/"* ) ]]; then
-            local j=0
-            while dev="$(plutil -extract "images.$i.system-entities.$j.dev-entry" raw -o - "$info" 2>/dev/null)"; do
-                if [[ "$dev" =~ ^/dev/disk[0-9]+$ ]]; then
-                    echo "Detaching $path ($dev), which a job left mounted"
-                    hdiutil detach "$dev" -force >/dev/null 2>&1 || true
-                    break
-                fi
-                j=$((j + 1))
-            done
-        fi
-        i=$((i + 1))
-    done
-    rm -f "$info"
-}
-
-# Room left on the disk, with a warning in the run's summary when it's getting low.
-report_disk() {
-    local free_gb
-    free_gb="$(df -g "$HOME" | awk 'NR == 2 { print $4 }')"
-    echo "Free on the disk: ${free_gb} GB"
-    if [[ -n "$free_gb" && "$free_gb" -lt "${KUVO_RUNNER_MIN_FREE_GB:-40}" ]]; then
-        echo "::warning title=Mac mini disk::Only ${free_gb} GB free on the Mac mini's disk."
-    fi
+vm_network_flags() {
+    echo "--net-softnet --net-softnet-block=$(vmnet_gateway)/32"
 }

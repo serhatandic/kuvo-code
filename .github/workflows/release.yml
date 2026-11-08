@@ -102,7 +102,8 @@ jobs:
   release:
     name: build and publish
     needs: verify
-    # The Mac mini's runner for tags and dry runs from main, like ci.yml's job (which says why).
+    # Tags and dry runs from main run on the Mac mini, in a fresh VM, like ci.yml's job (which
+    # says why).
     runs-on: >-
       ${{ github.repository == 'serhatandic/kuvo-code'
           && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
@@ -110,13 +111,12 @@ jobs:
           && vars.KUVO_MINI != 'off'
           && fromJSON('["self-hosted", "macOS", "ARM64", "kuvo-mini"]')
           || 'xcode-27' }}
-    # Notarization usually takes minutes; a hung one mustn't hold the Mini's only runner for hours.
+    # Notarization usually takes minutes; a hung one mustn't hold the Mini for hours.
     timeout-minutes: 180
     permissions:
       contents: write
-    # Each secret goes only to the steps that use it, never to the actions (checkout, setup-node,
-    # upload-artifact) or the runner's own Node that runs them: on the Mac mini those persist
-    # from job to job.
+    # Each secret goes only to the steps that use it, not to the actions (checkout, setup-node,
+    # upload-artifact) as well.
     env:
       # The certificate's fingerprint, which names it; not a key.
       MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
@@ -126,7 +126,7 @@ jobs:
         with:
           persist-credentials: false
 
-      # For signing the box release (scripts/sign-box.mjs): the Mac mini has no Node of its own.
+      # For signing the box release (scripts/sign-box.mjs), the same pinned Node everywhere.
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
@@ -176,30 +176,21 @@ jobs:
           MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
         run: |
           set -euo pipefail
-          # Only this user may read what's written here (the p12 above all). The keychain is this
-          # run's own, and "Clean up signing" below deletes it, even when a step fails: the Mac
-          # mini's runner keeps its user's keychains and search list from run to run.
-          umask 077
-          keychain="$RUNNER_TEMP/signing-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT.keychain-db"
-          echo "SIGNING_KEYCHAIN=$keychain" >> "$GITHUB_ENV"
+          keychain="$RUNNER_TEMP/signing.keychain-db"
           password="$(openssl rand -base64 24)"
           security create-keychain -p "$password" "$keychain"
           security set-keychain-settings -lut 21600 "$keychain"
           security unlock-keychain -p "$password" "$keychain"
           echo "$MACOS_CERTIFICATE_P12" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
           security import "$RUNNER_TEMP/certificate.p12" -k "$keychain" -P "$MACOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
-          rm "$RUNNER_TEMP/certificate.p12"
-          # Unless the key's partition list lets Apple's tools in, codesign asks to use it, and
-          # where nobody can answer (a runner's service) fails with errSecInternalComponent.
           security set-key-partition-list -S apple-tool:,apple: -k "$password" "$keychain" >/dev/null
-          # Add ours to the search list, keeping the keychains already there (and saying which,
-          # for "Clean up signing" to put back).
+          # Add ours to the search list, keeping the keychains already there.
           existing=()
           while IFS= read -r line; do
             existing+=("$(sed 's/^ *"//; s/"$//' <<< "$line")")
           done < <(security list-keychains -d user)
-          printf '%s\n' "${existing[@]}" > "$RUNNER_TEMP/keychains-before"
           security list-keychains -d user -s "$keychain" "${existing[@]}"
+          rm "$RUNNER_TEMP/certificate.p12"
 
       - name: Build the app
         shell: bash
@@ -244,8 +235,6 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          # gh's settings of its own, not ones in ci's home an earlier job on the Mini could set.
-          GH_CONFIG_DIR: ${{ runner.temp }}/gh
           SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
         run: |
           set -euo pipefail
@@ -274,8 +263,7 @@ jobs:
             cat "$RUNNER_TEMP/view.err" >&2
             exit 1
           fi
-          # Isolated (-I): no user site-packages, which an earlier job on the Mini could have added to.
-          python3 -I ./scripts/merge-appcast.py "$RUNNER_TEMP/item.xml" "$RUNNER_TEMP/current/appcast.xml" > dist/appcast.xml
+          python3 ./scripts/merge-appcast.py "$RUNNER_TEMP/item.xml" "$RUNNER_TEMP/current/appcast.xml" > dist/appcast.xml
           cat dist/appcast.xml
 
       - name: Package the box release
@@ -309,7 +297,6 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          GH_CONFIG_DIR: ${{ runner.temp }}/gh
         run: |
           set -euo pipefail
           if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
@@ -361,25 +348,3 @@ jobs:
               sleep 10
             done
           fi
-
-      # A hosted runner is thrown away after the job; the Mac mini's isn't. So whatever happened
-      # above, the signing keychain goes (and with it the certificate's key), the search list is
-      # put back as it was, and the files with secrets or builds in them are deleted.
-      - name: Clean up signing
-        if: always()
-        shell: bash
-        run: |
-          set -uo pipefail
-          if [[ -n "${SIGNING_KEYCHAIN:-}" ]]; then
-            security delete-keychain "$SIGNING_KEYCHAIN" 2>/dev/null || true
-          fi
-          if [[ -s "$RUNNER_TEMP/keychains-before" ]]; then
-            kept=()
-            while IFS= read -r path; do
-              if [[ -e "$path" ]]; then kept+=("$path"); fi
-            done < "$RUNNER_TEMP/keychains-before"
-            if ((${#kept[@]})); then security list-keychains -d user -s "${kept[@]}" || true; fi
-          fi
-          rm -rf "$RUNNER_TEMP/certificate.p12" "$RUNNER_TEMP/notarize.zip" "$RUNNER_TEMP/box" \
-            "$RUNNER_TEMP/keychains-before"
-          security list-keychains -d user
