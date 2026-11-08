@@ -500,14 +500,14 @@ struct LiveRemoteEngineTests {
         #expect(try await RemoteServer.running(on: connection)?.pid == again.pid)
         #expect(try await connection.run("crontab -l 2>/dev/null || true") == before, "a test's folder leaves the crontab alone")
 
-        // Two at once after a restart: one keeper, one engine.
+        // Two at once after a restart: one keeper, one engine. (Counted with wc: a Mac's pgrep has no -c.)
         _ = try await connection.run("pkill -f '[/]\\.kuvo-code-test/' || true; kill \(again.pid) 2>/dev/null; sleep 1; true")
         _ = try await connection.run("sh \"$HOME/.kuvo-code-test/bin/kuvo-start\" & sh \"$HOME/.kuvo-code-test/bin/kuvo-start\"; wait")
         _ = try #require(try await runningSoon { $0.pid != again.pid })
         try await Task.sleep(for: .seconds(2))
-        let engines = try await connection.run("pgrep -fc '[.]kuvo-code-test/engine/.*/opencode serve' || true")
+        let engines = try await connection.run("pgrep -f '[.]kuvo-code-test/engine/.*/opencode serve' | wc -l")
         #expect(engines.trimmingCharacters(in: .whitespacesAndNewlines) == "1")
-        let keepers = try await connection.run("pgrep -fc '[.]kuvo-code-test/bin/kuvo-start keep' || true")
+        let keepers = try await connection.run("pgrep -f '[.]kuvo-code-test/bin/kuvo-start keep' | wc -l")
         #expect(keepers.trimmingCharacters(in: .whitespacesAndNewlines) == "1")
 
         // One stopped on purpose (an older Mac's Stop) stays stopped.
