@@ -231,7 +231,7 @@ struct SidebarView: View {
         }
         // A tab on another box: its page slides in, so what's in view has its row in sight.
         .onChange(of: selection) { _, tag in
-            guard let tag, let shown = box(of: tag), shown != box, boxes.contains(shown) else { return }
+            guard let tag, let shown = tabs.box(of: TabKey(tag)), shown != box, boxes.contains(shown) else { return }
             withAnimation(.spring(response: 0.38, dampingFraction: 0.9)) { boxID = shown.id }
         }
         // Another session picked: a rename in another row ends, keeping what was typed.
@@ -322,17 +322,6 @@ struct SidebarView: View {
     }
 
     private func boxName(_ box: SidebarBox) -> String { app.name(of: box) }
-
-    /// The box what's in view (a tab: a session, a bot, a group chat, a draft, a terminal) is on;
-    /// nil for what's on none.
-    private func box(of tag: String) -> SidebarBox? {
-        if let directory = Self.draftDirectory(from: tag) { return SidebarBox(directory: directory) }
-        if let session = workspace.session(workspace.root(of: tag)) { return SidebarBox(directory: session.location.directory) }
-        if let bot = bots.list.first(where: { $0.sessionID == tag }) { return SidebarBox(machine: bot.machine) }
-        if let group = groups.list.first(where: { BotGroups.tabKey($0.id) == tag }) { return SidebarBox(machine: groups.machine(of: group.id)) }
-        if let terminal = app.mainTerminals.opened.first(where: { $0.key == tag }) { return SidebarBox(directory: terminal.entry.directory) }
-        return nil
-    }
 
     /// One box's page: what's on that computer.
     @ViewBuilder private func page(_ box: SidebarBox) -> some View {

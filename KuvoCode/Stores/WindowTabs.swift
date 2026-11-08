@@ -247,6 +247,24 @@ final class WindowTabs {
         worksBeside ? splitModel?.session.location.directory ?? activeDirectory : activeDirectory
     }
 
+    /// The computer a tab is on (a session's, a bot's, a group chat's, a draft's, a terminal's);
+    /// nil for one that's on none known. The sidebar's page slides to it as the tab comes into view.
+    func box(of key: TabKey) -> SidebarBox? {
+        switch key {
+        case .draft(let folder):
+            return SidebarBox(directory: folder)
+        case .session(let id):
+            if let session = workspace.session(workspace.root(of: id)) { return SidebarBox(directory: session.location.directory) }
+            if let bot = app.bots.list.first(where: { $0.sessionID == id }) { return SidebarBox(machine: bot.machine) }
+            return nil
+        case .group(let id):
+            guard app.chats.group(id) != nil else { return nil }
+            return SidebarBox(machine: app.chats.machine(of: id))
+        case .terminal:
+            return terminals.entry(key.text).map { SidebarBox(directory: $0.directory) }
+        }
+    }
+
     /// A folder when it's a project's: not the chats' folder or a bot's own.
     static func project(_ directory: String?) -> String? {
         directory.flatMap { Workspace.isChat($0) || Workspace.isBotFolder($0) ? nil : $0 }
