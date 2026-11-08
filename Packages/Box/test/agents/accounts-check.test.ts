@@ -431,8 +431,9 @@ esac
       ClaudeAgent.keychain = keychain
     }
   })
-  /** A Claude Code whose setup-token prints its token as `printed` says (after `good#state`). */
-  function setupToken(printed: string) {
+  /** A Claude Code whose setup-token prints its token as `printed` says (after `good#state`), and
+   * then does as `after` says. */
+  function setupToken(printed: string, after = "read wait") {
     writeFileSync(join(bin, "claude"), `#!/bin/sh
 case "$1" in
   setup-token)
@@ -440,7 +441,7 @@ case "$1" in
     read code
     [ "$code" = "good#state" ] || { printf "OAuth error: That code wasn't accepted. Press Enter to retry.\\n"; read again; printf 'https://claude.com/cai/oauth/authorize?code=true&again\\n'; read wait; exit 1; }
     printf '${printed}'
-    read wait ;;
+    ${after} ;;
   auth) echo '{"loggedIn":true,"authMethod":"claude.ai","email":"ada@example.com"}' ;;
 esac
 `)
@@ -457,6 +458,76 @@ esac
       for (let waited = 0; waited < 10_000 && sign.status().status === "pending"; waited += 50) await Bun.sleep(50)
       expect(sign.status().status).toBe("complete")
       expect(agent.env().CLAUDE_CODE_OAUTH_TOKEN).toBe(TOKEN)
+    } finally {
+      ClaudeAgent.keychain = keychain
+    }
+  })
+
+  // A token shaped like a real one: sk-ant-oat01- and 100 more.
+  const LONG = "sk-ant-oat01-" + "Ab3_xY9-kQ".repeat(10)
+  /** Signs in with `good#state`, and waits for the end. */
+  async function signInWith(printed: string, after?: string) {
+    setupToken(printed, after)
+    ClaudeAgent.keychain = true
+    try {
+      const agent = new ClaudeAgent(context())
+      const sign = await agent.signIn("claudeai", { remote: true })
+      await sign.complete!("good#state")
+      for (let waited = 0; waited < 10_000 && sign.status().status === "pending"; waited += 50) await Bun.sleep(50)
+      return { status: sign.status(), token: agent.env().CLAUDE_CODE_OAUTH_TOKEN, sign }
+    } finally {
+      ClaudeAgent.keychain = keychain
+    }
+  }
+
+  test("a token Claude Code draws over its last screen, jumping over the cells that didn't change, is kept whole", async () => {
+    // Its screen redraws only what changed: where the line before had the same characters (the
+    // pasted code, here), it jumps over them, with ESC[nG and ESC[nC.
+    const before = "x".repeat(40) + LONG.slice(40, 44) + "x".repeat(26) + LONG.slice(70, 73) + "xxxx"
+    const redrawn = `${LONG.slice(0, 40)}\\033[45G${LONG.slice(44, 70)}\\033[3C${LONG.slice(73)}\\033[K`
+    const { status, token } = await signInWith(`\\n${before}\\r${redrawn}\\n\\nStore this token securely.\\n`)
+    expect(status.status).toBe("complete")
+    expect(token).toBe(LONG)
+  })
+
+  test("a token among a terminal's codes (colors, a link, keyboard modes, a character set) is kept whole", async () => {
+    const link = (text: string) => `\\033]8;;https://claude.ai\\033\\\\${text}\\033]8;;\\033\\\\`
+    const { status, token } = await signInWith(`\\033[1m\\033[38;5;174m${link(LONG)}\\033[39m\\033[22m\\033(B\\n\\nStore this token securely.\\n\\033[<u\\033(B`)
+    expect(status.status).toBe("complete")
+    expect(token).toBe(LONG)
+  })
+
+  test("a token cut short is never kept: its line still being drawn when it stops", async () => {
+    const ended = await signInWith(LONG.slice(0, 90), "exit 1")
+    expect(ended.token).toBeUndefined()
+    expect(ended.status.status).toBe("failed")
+  })
+
+  test("a failed sign-in's words have no terminal codes, and nothing of a token", async () => {
+    // It stops before any code is pasted: its last words are what's said.
+    writeFileSync(join(bin, "claude"), `#!/bin/sh
+case "$1" in
+  setup-token)
+    printf 'https://claude.com/cai/oauth/authorize?code=true\\n\\nPaste code here if prompted > '
+    printf '\\r\\033[2K${LONG.slice(0, 70)}\\n${LONG.slice(70)}\\n\\n\\033[31mOAuth error: Request failed\\033[39m\\n\\033[<u\\033(B'
+    exit 1 ;;
+  auth) echo '{"loggedIn":true,"authMethod":"claude.ai","email":"ada@example.com"}' ;;
+esac
+`)
+    chmodSync(join(bin, "claude"), 0o755)
+    ClaudeAgent.keychain = true
+    try {
+      const agent = new ClaudeAgent(context())
+      const sign = await agent.signIn("claudeai", { remote: true })
+      for (let waited = 0; waited < 10_000 && sign.status().status === "pending"; waited += 50) await Bun.sleep(50)
+      const status = sign.status()
+      expect(status.status).toBe("failed")
+      const message = (status as { message: string }).message
+      expect(message).toContain("OAuth error: Request failed")
+      expect(message).not.toMatch(/[\x00-\x08\x0b-\x1f\x7f]|\[<u|\(B/)
+      expect(message).not.toContain(LONG.slice(20, 40))
+      expect(message).not.toContain(LONG.slice(75, 95))
+      expect(agent.env().CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined()
     } finally {
       ClaudeAgent.keychain = keychain
     }

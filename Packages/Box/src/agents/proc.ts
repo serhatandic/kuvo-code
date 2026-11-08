@@ -167,7 +167,11 @@ export function plain(text: string): string {
     .replace(/\x1b\[\d*G/g, " ")
     // A move to another line (a terminal UI's next line) is a line break.
     .replace(/\x1b\[[0-9;]*[BEFHfd]/g, "\n")
-    .replace(/\x1b\[[0-9;?>]*[ -/]*[@-~]/g, "")
-    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, "")
-    .replace(/\x1b[78]/g, "")
+    // Any other control sequence: colors, keyboard modes and queries (`ESC[<u`, `ESC[>0q`).
+    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
+    // Strings: a title, a link, a query's answer.
+    .replace(/\x1b[\]P_^X][^\x07\x1b]*(?:\x07|\x1b\\)/g, "")
+    // A character set (`ESC(B`), and the rest of the short ones.
+    .replace(/\x1b[ -/]+[0-~]/g, "")
+    .replace(/\x1b[0-~]/g, "")
 }

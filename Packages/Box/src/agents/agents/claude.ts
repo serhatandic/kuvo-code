@@ -77,11 +77,14 @@ interface Status {
   apiProvider?: string
 }
 
-/** `claude setup-token`'s token in what it printed, once all of it has (in a terminal wide enough
- * that it's on one line). */
+/** `claude setup-token`'s token on a line it has printed in full (its terminal is wide enough that
+ * it's on one line; one that wrapped comes joined), with something after it: never one cut short. */
 const PRINTED_TOKEN = /sk-ant-oat\d+-[A-Za-z0-9_-]{60,}(?=[^A-Za-z0-9_-])/
 /** Any of Claude's tokens, never said back in a failure's words. */
 const ANY_TOKEN = /sk-ant-[A-Za-z0-9_-]+/g
+/** What's never said back of `claude setup-token`'s output: its token, and a line that's only a
+ * long run of a token's characters (one cut over two lines, the rest of it). */
+const PRINTED_SECRET = /sk-ant-[A-Za-z0-9_-]+|^[^\S\n]*[A-Za-z0-9_-]{32,}[^\S\n]*$/gm
 /** A value after a name: quoted, or up to what ends it. */
 const VALUE = `"[^"]*"|'[^']*'|[^\\s"',;]+`
 /** A name that holds a secret (`max_tokens` holds a count). */
@@ -416,6 +419,14 @@ export class ClaudeAgent implements Agent {
     if (ClaudeAgent.keychain && methodID !== "console") {
       const started = Date.now()
       let handedOver = false
+      const keep = (token: string) => {
+        mkdirSync(dirname(this.tokenFile), { recursive: true, mode: 0o700 })
+        // Whole or not at all, for a session starting meanwhile.
+        const writing = `${this.tokenFile}.${process.pid}.tmp`
+        writeFileSync(writing, JSON.stringify({ token, made: started }), { mode: 0o600 })
+        renameSync(writing, this.tokenFile)
+        handedOver = true
+      }
       return commandSignIn({
         command: executable,
         args: ["setup-token"],
@@ -430,18 +441,11 @@ export class ClaudeAgent implements Agent {
         refusedCode: /wasn.t accepted|invalid code/i,
         // It asks for Enter to start over, with a new page: so does the app.
         refusedEnds: "Claude didn't take that code. Start again for a new one.",
-        onOutput: (output) => {
-          if (handedOver) return
-          const token = PRINTED_TOKEN.exec(output)?.[0]
-          if (!token) return
-          mkdirSync(dirname(this.tokenFile), { recursive: true, mode: 0o700 })
-          // Whole or not at all, for a session starting meanwhile.
-          const writing = `${this.tokenFile}.${process.pid}.tmp`
-          writeFileSync(writing, JSON.stringify({ token, made: started }), { mode: 0o600 })
-          renameSync(writing, this.tokenFile)
-          handedOver = true
+        onLine: (line) => {
+          const token = handedOver ? undefined : PRINTED_TOKEN.exec(line)?.[0]
+          if (token) keep(token)
         },
-        secret: ANY_TOKEN,
+        secret: PRINTED_SECRET,
         onComplete: () => {
           this.turnedAway = undefined
           this.known.reset()
