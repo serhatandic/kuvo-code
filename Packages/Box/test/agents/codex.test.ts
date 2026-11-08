@@ -27,7 +27,8 @@ afterAll(() => rmSync(base, { recursive: true, force: true }))
 const untilStopped: [string, any] = ["(works until stopped)", {}]
 /** In a turn's events: a summary Codex is asked for after it goes on until it's stopped. */
 const summaryUntilStopped: [string, any] = ["(its summary works until stopped)", {}]
-/** In a turn's events: Codex (and so what it runs) writes or reads each place (`name: ["write" | "read", path]`), and says which it could. */
+/** In a turn's events: Codex (and so what it runs) writes or reads each place (`name: ["write" | "read", path]`; `["replace", path, temp]`
+ * saves it whole through `temp`, `["hardlink", path, other]` names it `other` too), and says which it could. */
 const tries = "(tries)"
 /** In a turn's events: Codex sleeps, for hours, until new input comes for the turn (one that came before the sleep doesn't count, as with the real one). */
 const sleepsUntilTold: [string, any] = ["(sleeps until told)", {}]
@@ -116,7 +117,7 @@ async function turn() {
     }
     if (method === ${JSON.stringify(tries)}) {
       const done = []
-      for (const [name, [how, named]] of Object.entries(params)) {
+      for (const [name, [how, named, through]] of Object.entries(params)) {
         // "(attached)": the picture the turn was given.
         const place = named === "(attached)" ? input.find((item) => item.type === "localImage")?.path : named
         if (how === "connect") {
@@ -133,6 +134,10 @@ async function turn() {
         }
         done.push((() => { try {
           if (how === "write") require("node:fs").writeFileSync(place, "x")
+          // Saved whole, as Codex saves its sign-in: a new file (\`through\`), renamed onto it.
+          else if (how === "replace") require("node:fs").writeFileSync(through, "x"), require("node:fs").renameSync(through, place)
+          // Another name for it (\`through\`), a hard link.
+          else if (how === "hardlink") require("node:fs").linkSync(place, through)
           else require("node:fs").readFileSync(place)
           return name + "=yes"
         } catch {
@@ -1186,6 +1191,27 @@ describe.skipIf(!canFence)("Codex in the box's sandbox", () => {
     // (Linux grants its home whole: there, a machine's, it's Kuvo Code's own copy of Codex's.)
     const mac = process.platform === "darwin" ? "no" : "yes"
     expect(said(id)).toBe(`project=yes own=yes signin=yes state=yes settings=${mac} other=${mac} kept=${mac} plugin=${mac} snapshot=${mac} models=${mac} elsewhere=no kuvo=no`)
+  })
+
+  test("Codex saves its sign-in in it as it does from 0.167, through a new file renamed onto auth.json; a file by that name never becomes its settings", async () => {
+    writeFileSync(join(home, "hooks.json"), "{}")
+    const id = await run([[tries, {
+      signin: ["replace", join(home, "auth.json"), join(home, ".auth-AbC123")],
+      settings: ["replace", join(home, "config.toml"), join(home, ".auth-Def456")],
+      hooks: ["replace", join(home, "hooks.json"), join(home, ".auth-Ghi789")],
+      rules: ["replace", join(home, "rules"), join(home, ".auth-Jkl012")],
+      // Its settings by a name it writes, to write them through that.
+      named: ["hardlink", join(home, "config.toml"), join(home, ".auth-Mno345")],
+    }]], { permissions: askFirst })
+    // (Linux grants its home whole: there, a machine's, it's Kuvo Code's own copy of Codex's.)
+    const mac = process.platform === "darwin" ? "no" : "yes"
+    expect(said(id)).toBe(`signin=yes settings=${mac} hooks=${mac} rules=${mac} named=${mac}`)
+    expect(readFileSync(join(home, "auth.json"), "utf8")).toBe("x")
+    if (mac === "no") {
+      expect(readFileSync(join(home, "config.toml"), "utf8")).toBe("")
+      expect(readFileSync(join(home, "hooks.json"), "utf8")).toBe("{}")
+      expect(existsSync(join(home, "rules"))).toBe(false)
+    }
   })
 
   test("a bot on Codex keeps its memory from the sandbox, and nothing else of its folder or another bot's", async () => {

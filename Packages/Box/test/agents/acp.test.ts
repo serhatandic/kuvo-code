@@ -51,9 +51,10 @@ interface Script {
   /**
    * What it tries at each prompt, where it runs, and says (`name=yes|no`, or what it found):
    * `write`/`read` a file, `tools` (Kuvo Code's, a call through the server it was given), `app`
-   * (a server's address, straight), `env` (a variable's value, or `none`).
+   * (a server's address, straight), `env` (a variable's value, or `none`); `replace` saves a file
+   * whole through a new one (the third: written, then renamed onto it).
    */
-  tries?: Record<string, [string, string]>
+  tries?: Record<string, [string, string] | [string, string, string]>
   /**
    * As it starts, it reads the folder it's started in, as Google's agent does (Python's
    * `os.getcwd()`); one it can't read ends it there, with `fails` (a traceback) on its stderr.
@@ -101,11 +102,13 @@ if (${JSON.stringify(Boolean(script.readsItsFolder || script.fails))}) {
   }
 }
 let servers = []
-async function attempt(how, place) {
+async function attempt(how, place, through) {
   if (how === "env") return process.env[place] ?? "none"
   if (how === "arg") return process.argv.includes(place) ? "yes" : "no"
   try {
     if (how === "write") require("node:fs").writeFileSync(place, "x")
+    // Saved whole, as Grok saves its sign-in: a new file (\`through\`), renamed onto it.
+    else if (how === "replace") require("node:fs").writeFileSync(through, "x"), require("node:fs").renameSync(through, place)
     else if (how === "read") require("node:fs").readFileSync(place)
     else if (how === "link") require("node:fs").symlinkSync("/", place)
     else if (how === "linked") return require("node:fs").lstatSync(place).isSymbolicLink() ? "yes" : "no"
@@ -168,7 +171,7 @@ process.stdin.on("data", (chunk) => {
       const id = message.id
       void (async () => {
         const found = []
-        for (const [name, [how, place]] of Object.entries(tries)) found.push(name + "=" + (await attempt(how, place)))
+        for (const [name, [how, place, through]] of Object.entries(tries)) found.push(name + "=" + (await attempt(how, place, through)))
         update("s1", { sessionUpdate: "agent_message_chunk", content: { type: "text", text: found.join(" ") } })
         send({ id, result: { stopReason: "end_turn" } })
       })()
@@ -782,7 +785,7 @@ describe.skipIf(!canFence)("Grok in the box's sandbox", () => {
   })
 
   /** Grok whose prompts try `tries` where it runs. */
-  const trying = (tries: Record<string, [string, string]>) => new TestGrok(program(fakeAcp([], [], undefined, { tries }), join(root, "grok")), root)
+  const trying = (tries: Record<string, [string, string] | [string, string, string]>) => new TestGrok(program(fakeAcp([], [], undefined, { tries }), join(root, "grok")), root)
 
   test("Grok runs whole in it: what it runs, even a command you allowed, writes the session's folder and Grok's own state, never its settings, hooks or program (on a Mac), nor elsewhere, and can't read Kuvo Code's folder", async () => {
     const id = await run(trying({
@@ -812,6 +815,24 @@ describe.skipIf(!canFence)("Grok in the box's sandbox", () => {
     // (Linux grants its home whole: there, a machine's, it's Kuvo Code's own copy of Grok's.)
     const mac = process.platform === "darwin" ? "no" : "yes"
     expect(words(id)).toBe(`project=yes state=yes signin=yes lock=yes settings=${mac} hooks=${mac} shared=${mac} statusline=${mac} grants=${mac} link=${mac} models=${mac} program=${mac} elsewhere=no kuvo=no sandbox=off memory=0 leader=yes key=xai-test`)
+  })
+
+  test("Grok saves its sign-in and its running sessions in it, each through a new file renamed into place; a file by such a name never becomes its settings", async () => {
+    writeFileSync(join(home, "config.toml"), "")
+    const id = await run(trying({
+      signin: ["replace", join(home, "auth.json"), join(home, ".4242.0.tmp")],
+      running: ["replace", join(home, "active_sessions.json"), join(home, "active_sessions.json.tmp")],
+      settings: ["replace", join(home, "config.toml"), join(home, ".4242.1.tmp")],
+      hooks: ["replace", join(home, "hooks-paths"), join(home, ".4242.2.tmp")],
+    }), 1, { permissions: askFirst })
+    // (Linux grants its home whole: there, a machine's, it's Kuvo Code's own copy of Grok's.)
+    const mac = process.platform === "darwin" ? "no" : "yes"
+    expect(words(id)).toBe(`signin=yes running=yes settings=${mac} hooks=${mac}`)
+    expect(readFileSync(join(home, "auth.json"), "utf8")).toBe("x")
+    if (mac === "no") {
+      expect(readFileSync(join(home, "config.toml"), "utf8")).toBe("")
+      expect(existsSync(join(home, "hooks-paths"))).toBe(false)
+    }
   })
 
   test("Kuvo Code's tools reach it through the bridge, as its own session's; the app's server itself it can't use", async () => {
