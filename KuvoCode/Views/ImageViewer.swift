@@ -225,7 +225,10 @@ private struct ImageLightbox: View {
                             }
                             url = written
                         }
-                        if NSWorkspace.shared.open(url) {
+                        if Attachments.canRun(url) {
+                            NSWorkspace.shared.activateFileViewerSelecting([url])
+                            ImageViewer.shared.close()
+                        } else if NSWorkspace.shared.open(url) {
                             ImageViewer.shared.close()
                         } else {
                             actionError = "No app could open this picture."
@@ -332,7 +335,11 @@ struct PictureCanvas: View {
                     .frame(width: max(1, size.width * fit * current), height: max(1, size.height * fit * current))
                     .frame(minWidth: room.width, minHeight: room.height)
             }
-            .onAppear { fitScale = fit; focused = true }
+            .onAppear {
+                fitScale = fit
+                // A file can finish loading while someone is typing in the composer.
+                if !(NSApp.keyWindow?.firstResponder is NSTextView) { focused = true }
+            }
             .onChange(of: fit) { _, value in fitScale = value }
             .gesture(MagnifyGesture().onChanged { pinch = $0.magnification }.onEnded { _ in
                 scale = current
