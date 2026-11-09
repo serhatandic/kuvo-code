@@ -91,6 +91,26 @@ import Testing
         #expect(FileManager.default.isExecutableFile(atPath: browser.appending(path: "current/chrome").path))
     }
 
+    /// What's sent has no browser in it: it fails, saying so, and the browser in use stays in use.
+    @Test func aBundleWithNoBrowserFailsAndLeavesTheOneInUse() throws {
+        defer { try? FileManager.default.removeItem(at: home) }
+        let earlier = "154.0.1-mac-old"
+        try FileManager.default.createDirectory(at: browser.appending(path: earlier), withIntermediateDirectories: true)
+        try Data("#!/bin/sh\n".utf8).write(to: browser.appending(path: "\(earlier)/chrome"))
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: browser.appending(path: "\(earlier)/chrome").path)
+        try FileManager.default.createSymbolicLink(atPath: browser.appending(path: "current").path, withDestinationPath: earlier)
+        let empty = home.appending(path: "empty")
+        try FileManager.default.createDirectory(at: empty, withIntermediateDirectories: true)
+        try Data("notes".utf8).write(to: empty.appending(path: "README"))
+        let archive = home.appending(path: "empty.tar.gz")
+        #expect(try run("/usr/bin/tar", ["czf", archive.path, "-C", empty.path, "."]) == 0)
+
+        #expect(try run("/bin/sh", ["-c", MachineBrowserInstaller.sending(build)], input: archive) != 0)
+
+        #expect(try FileManager.default.destinationOfSymbolicLink(atPath: browser.appending(path: "current").path) == earlier)
+        #expect(FileManager.default.isExecutableFile(atPath: browser.appending(path: "current/chrome").path))
+    }
+
     /// `tail -f` on `file` by its real path: a process whose command line names the build.
     private func follow(_ file: URL) throws -> Process {
         let real = try #require(realpath(file.path, nil))

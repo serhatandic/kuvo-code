@@ -220,9 +220,9 @@ nonisolated enum MachineBrowserInstaller {
             has() { [ -x "$B/$1/chrome" ] || [ -x "$B/$1/chrome-headless-shell" ]; }
             # The same build, already running (another Mac put it there meanwhile), stays as it is.
             if running "\(id)" && has "\(id)"; then rm -rf "$B/.staging"; else rm -rf "$B/\(id)"; mv "$B/.staging" "$B/\(id)"; fi
-            ln -sfn "\(id)" "$B/current"
-            # Never said to be done while the browser in use isn't there.
+            # Never said to be done while the browser isn't there, nor put in use: the one in use stays.
             has "\(id)" || { echo "The browser didn't arrive whole on the machine." >&2; exit 1; }
+            ln -sfn "\(id)" "$B/current"
             \(clearOldBuilds(keeping: id))
             """
     }

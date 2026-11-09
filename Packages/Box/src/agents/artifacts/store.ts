@@ -12,7 +12,7 @@
 // always kept once the disk's free space is down to its floor.
 
 import { createHash, createHmac, randomBytes } from "node:crypto"
-import { appendFileSync, chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs"
+import { appendFileSync, closeSync, existsSync, fchmodSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { basename, join, sep } from "node:path"
 import { fromPatch, unified } from "../diff"
 import { isBinary, isText, kindOf, typeOf, type Kind } from "./kinds"
@@ -436,10 +436,16 @@ export class ArtifactStore {
         mode = statSync(artifact.path).mode & 0o7777
       } catch {}
       // A file of its own, made new (never one there already, nor through a link someone left
-      // by that name: written through, then put in place, it would give the file another name).
+      // by that name: written through, then put in place, it would give the file another name),
+      // its mode set on what it opened, never on whatever has that name by then.
       rmSync(artifact.path + ".kuvo-restore", { force: true })
-      writeFileSync(artifact.path + ".kuvo-restore", bytes, { flag: "wx" })
-      if (mode !== undefined) chmodSync(artifact.path + ".kuvo-restore", mode)
+      const made = openSync(artifact.path + ".kuvo-restore", "wx", 0o600)
+      try {
+        writeFileSync(made, bytes)
+        if (mode !== undefined) fchmodSync(made, mode)
+      } finally {
+        closeSync(made)
+      }
       renameSync(artifact.path + ".kuvo-restore", artifact.path)
     } catch (error: any) {
       rmSync(artifact.path + ".kuvo-restore", { force: true })

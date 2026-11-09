@@ -191,7 +191,7 @@ import { join as join7, relative as relative2, sep as sep5 } from "path";
 
 // Packages/Box/src/agents/artifacts/store.ts
 import { createHash, createHmac, randomBytes as randomBytes2 } from "crypto";
-import { appendFileSync, chmodSync, existsSync as existsSync3, mkdirSync as mkdirSync3, readdirSync as readdirSync3, readFileSync as readFileSync3, renameSync as renameSync2, rmSync as rmSync3, statSync as statSync3, writeFileSync as writeFileSync3 } from "fs";
+import { appendFileSync, closeSync, existsSync as existsSync3, fchmodSync, mkdirSync as mkdirSync3, openSync, readdirSync as readdirSync3, readFileSync as readFileSync3, renameSync as renameSync2, rmSync as rmSync3, statSync as statSync3, writeFileSync as writeFileSync3 } from "fs";
 import { basename as basename4, join as join6, sep as sep4 } from "path";
 
 // Packages/Box/src/agents/diff.ts
@@ -1444,9 +1444,14 @@ class ArtifactStore {
         mode = statSync3(artifact.path).mode & 4095;
       } catch {}
       rmSync3(artifact.path + ".kuvo-restore", { force: true });
-      writeFileSync3(artifact.path + ".kuvo-restore", bytes, { flag: "wx" });
-      if (mode !== undefined)
-        chmodSync(artifact.path + ".kuvo-restore", mode);
+      const made = openSync(artifact.path + ".kuvo-restore", "wx", 384);
+      try {
+        writeFileSync3(made, bytes);
+        if (mode !== undefined)
+          fchmodSync(made, mode);
+      } finally {
+        closeSync(made);
+      }
       renameSync2(artifact.path + ".kuvo-restore", artifact.path);
     } catch (error) {
       rmSync3(artifact.path + ".kuvo-restore", { force: true });
@@ -6523,7 +6528,7 @@ function ancestors(path) {
 
 // Packages/Box/src/agents/agents/antigravity.ts
 import { createHash as createHash5 } from "crypto";
-import { chmodSync as chmodSync3, existsSync as existsSync11, mkdirSync as mkdirSync12, readdirSync as readdirSync11, readFileSync as readFileSync17, renameSync as renameSync9, rmSync as rmSync9, statSync as statSync7, writeFileSync as writeFileSync14 } from "fs";
+import { chmodSync as chmodSync2, existsSync as existsSync11, mkdirSync as mkdirSync12, readdirSync as readdirSync11, readFileSync as readFileSync17, renameSync as renameSync9, rmSync as rmSync9, statSync as statSync7, writeFileSync as writeFileSync14 } from "fs";
 import { dirname as dirname10, join as join19 } from "path";
 import { pathToFileURL as pathToFileURL2 } from "url";
 
@@ -8453,7 +8458,7 @@ function questionFields(questions) {
 }
 
 // Packages/Box/src/agents/signin.ts
-import { chmodSync as chmodSync2, existsSync as existsSync9, mkdirSync as mkdirSync10, readFileSync as readFileSync15, rmSync as rmSync7, writeFileSync as writeFileSync12 } from "fs";
+import { chmodSync, existsSync as existsSync9, mkdirSync as mkdirSync10, readFileSync as readFileSync15, rmSync as rmSync7, writeFileSync as writeFileSync12 } from "fs";
 import { join as join17 } from "path";
 
 // Packages/Box/src/agents/screen.ts
@@ -8788,7 +8793,7 @@ function catcher(temporary) {
     writeFileSync12(path, `#!/bin/sh
 printf '%s\\n' "$1" >> "$KUVO_URL_FILE"
 `);
-    chmodSync2(path, 493);
+    chmodSync(path, 493);
   }
   return path;
 }
@@ -9594,7 +9599,7 @@ class AntigravityAgent {
         throw new Error(`Couldn't unpack Antigravity's agent: ${unzipped.stderr.trim()}`);
       rmSync9(archive, { force: true });
       for (const name of [executableName, harnessName])
-        chmodSync3(join19(staging, name), 493);
+        chmodSync2(join19(staging, name), 493);
       writeFileSync14(join19(staging, ".complete"), JSON.stringify({ version, sha256: release.sha256 }));
       rmSync9(this.folder, { recursive: true, force: true });
       renameSync9(staging, this.folder);
@@ -26108,4 +26113,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents c43acc65758a05e01434b25c8cb283f13258db6ff448a4b66303275f9509340c
+// Built from Packages/Box/src/agents 9e44b22d4bbd68fbd95f1473e767417906e16445efd312432549f6e99de67c85
