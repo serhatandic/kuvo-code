@@ -64,6 +64,7 @@ private struct ImageLightbox: View {
     @State private var image: NSImage?
     @State private var loadFailed = false
     @State private var retry = 0
+    @State private var actionError: String?
     /// Pinched or double-clicked in; 1 is fitted to the window.
     @State private var scale: CGFloat = 1
     @State private var fitScale: CGFloat = 1
@@ -128,6 +129,13 @@ private struct ImageLightbox: View {
             }
             .frame(width: proxy.size.width, height: proxy.size.height)
         }
+        .alert("Picture Unavailable", isPresented: Binding(
+            get: { actionError != nil }, set: { if !$0 { actionError = nil } }
+        )) {
+            Button("OK", role: .cancel) { actionError = nil }
+        } message: {
+            Text(actionError ?? "")
+        }
         .focusable()
         .focusEffectDisabled()
         .focused($isFocused)
@@ -181,10 +189,19 @@ private struct ImageLightbox: View {
                     Button("Zoom Out") { scale = max(scale / 1.25, 1) }
                 }
                 Button("Download", systemImage: "arrow.down.to.line") {
-                    guard let source = item.localURL(), let data = try? Data(contentsOf: source) else { return }
                     let panel = NSSavePanel()
                     panel.nameFieldStringValue = item.name
-                    if panel.runModal() == .OK, let url = panel.url { try? data.write(to: url) }
+                    if panel.runModal() == .OK, let url = panel.url {
+                        let selected = item
+                        Task {
+                            guard let data = await selected.readBytes() else {
+                                actionError = "The picture couldn’t be read. Please try again."
+                                return
+                            }
+                            do { try data.write(to: url) }
+                            catch { actionError = "The picture couldn’t be saved: \(error.localizedDescription)" }
+                        }
+                    }
                 }
                 .disabled(image == nil)
                 Button(copied ? "Copied" : "Copy", systemImage: copied ? "checkmark" : "doc.on.doc", action: copy)
@@ -192,8 +209,28 @@ private struct ImageLightbox: View {
                     .disabled(image == nil)
                     .help("Copy the picture (⌘C)")
                 Button("Open in Preview", systemImage: "arrow.up.forward.app") {
-                    item.open()
-                    ImageViewer.shared.close()
+                    let selected = item
+                    Task {
+                        let url: URL
+                        if let local = selected.fileURL {
+                            url = local
+                        } else {
+                            guard let data = await selected.readBytes() else {
+                                actionError = "The picture couldn’t be read. Please try again."
+                                return
+                            }
+                            guard let written = Attachments.writeReceived(data, named: selected.name, type: selected.type) else {
+                                actionError = "The picture couldn’t be saved for opening."
+                                return
+                            }
+                            url = written
+                        }
+                        if NSWorkspace.shared.open(url) {
+                            ImageViewer.shared.close()
+                        } else {
+                            actionError = "No app could open this picture."
+                        }
+                    }
                 }
                 .help("Open in its app")
                 if item.fileURL != nil {
