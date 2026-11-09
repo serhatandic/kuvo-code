@@ -7,48 +7,86 @@
 # answers there); GitHub, Apple's notary service and the package
 # registries jobs use. Each "must be blocked" target is tried from this Mac first: one that's
 # closed from here too proves nothing, and counts as inconclusive. It also tries to come in from
-# this Mac. CI pauses while it runs; the VM is deleted after.
+# this Mac. The VM is deleted after.
 #
-#   TART_HOME=/Users/Shared/kuvo-ci/tart scripts/ci-runner/check-isolation.sh
-#   IMAGE   what to boot (default: kuvo-ci-golden)
+# Run it as ci, the way the orchestrator runs VMs (its Tart, its softnet, its PATH), with CI
+# paused (a VM of CI's own would be the third), after setup.sh and after any Tart or softnet
+# upgrade:
+#
+#   touch /Users/Shared/kuvo-ci/paused
+#   sudo -u ci -i /usr/local/kuvo-ci/scripts/check-isolation.sh
+#   rm /Users/Shared/kuvo-ci/paused
+#
+# Only as ci once setup.sh has run. Before it (Homebrew's softnet still setuid), it can run as you
+# with TART_HOME=/Users/Shared/kuvo-ci/tart, the golden image's own home; after, it refuses rather
+# than let Tart ask to make Homebrew's softnet setuid again.
+#   IMAGE   what to boot, from /Users/Shared/kuvo-ci/tart (default: kuvo-ci-golden)
 set -uo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=scripts/ci-runner/common.sh
 . "$here/common.sh"
+if [[ "$(id -un)" == "$CI_USER" ]]; then
+    export PATH="$CI_PATH"
+    prepare_keychain --force || echo "Couldn't prepare ci's keychain for the VM; it may not start." >&2
+fi
+
+# A softnet that isn't setuid root makes Tart ask for your password to make it so, which would
+# give Homebrew's (runnable by anyone) the bit back: refuse instead.
+softnet="$(command -v softnet)" && softnet="$(readlink -f "$softnet")"
+if [[ -z "$softnet" || "$(stat -f %u "$softnet" 2>/dev/null)" != 0 || ! -u "$softnet" ]]; then
+    echo "The softnet on your PATH (${softnet:-none}) isn't setuid root, and Tart would ask to make it so." >&2
+    echo "Run this as ci: sudo -u ci -i $CI_SCRIPTS/check-isolation.sh" >&2
+    exit 1
+fi
 
 IMAGE="${IMAGE:-$GOLDEN}"
+TART_DIR="${TART_HOME:-$HOME/.tart}"
 vm="kuvo-ci-isolation-$$"
+source_vm="$IMAGE"
 run_pid=""
 cleanup() {
-    tart stop "$vm" --timeout 5 >/dev/null 2>&1 || true
+    run_limited 30 tart stop "$vm" --timeout 5 >/dev/null 2>&1
     if [[ -n "$run_pid" ]]; then kill "$run_pid" 2>/dev/null; wait "$run_pid" 2>/dev/null; fi
-    tart delete "$vm" >/dev/null 2>&1 || true
+    run_limited 120 tart delete "$vm" >/dev/null 2>&1
+    if [[ "$source_vm" != "$IMAGE" ]]; then
+        run_limited 120 tart delete "$source_vm" >/dev/null 2>&1 || rm -rf "${TART_DIR:?}/vms/$source_vm"
+    fi
     resume_ci
 }
 trap cleanup EXIT
+# A command in the VM, for at most 30 seconds.
+in_vm() { run_limited 30 tart exec "$vm" "$@"; }
 
 lan_if="$(route -n get default 2>/dev/null | awk '/interface:/ { print $2 }')"
 lan_ip="$(ipconfig getifaddr "$lan_if" 2>/dev/null)"
 router="$(route -n get default 2>/dev/null | awk '/gateway:/ { print $2 }')"
 tailscale_ip="$(ifconfig 2>/dev/null | awk '/inet 100\./ { print $2; exit }')"
-public_ip="$(public_ipv4)"
-flags="$(vm_run_flags)" || exit 1
+public_ip="$(public_ipv4)" || { echo "Couldn't find this network's public address (two lookups over HTTPS must agree)." >&2; exit 1; }
+flags="$(vm_run_flags "$public_ip")" || exit 1
 
-pause_ci
-tart clone "$IMAGE" "$vm" || exit 1
+pause_ci || exit 1
+# From another Tart home (ci's): an APFS clone of the image first, as the orchestrator takes it.
+if [[ ! "$TART_DIR" -ef "$SHARED_TART" ]]; then
+    source_vm="kuvo-ci-isolation-source-$$"
+    mkdir -p "$TART_DIR/vms"
+    run_limited 900 cp -cR "$SHARED_TART/vms/$IMAGE" "$TART_DIR/vms/$source_vm" || { echo "Couldn't copy $IMAGE." >&2; exit 1; }
+    vm_bundle_ok "$TART_DIR/vms/$source_vm" || { echo "$IMAGE holds something that isn't a file or a folder (a symlink?)." >&2; exit 1; }
+fi
+run_limited 300 tart clone "$source_vm" "$vm" || exit 1
+echo "Booting $IMAGE ($(cat "$SHARED/golden-version" 2>/dev/null)) with $(command -v tart) and $(command -v softnet), as $(id -un)…"
 # shellcheck disable=SC2086 # the flags are words of their own
 tart run $flags "$vm" >/dev/null 2>&1 &
 run_pid=$!
-for _ in $(seq 1 90); do tart exec "$vm" /usr/bin/true >/dev/null 2>&1 && break; sleep 2; done
-tart exec "$vm" /usr/bin/true >/dev/null 2>&1 || { echo "The VM didn't boot." >&2; exit 1; }
-vm_ip="$(tart exec "$vm" /usr/sbin/ipconfig getifaddr en0 2>/dev/null)"
-gateway="$(tart exec "$vm" /sbin/route -n get default 2>/dev/null | awk '/gateway:/ { print $2 }')"
+for _ in $(seq 1 90); do in_vm /usr/bin/true >/dev/null 2>&1 && break; kill -0 "$run_pid" 2>/dev/null || break; sleep 2; done
+in_vm /usr/bin/true >/dev/null 2>&1 || { echo "The VM didn't boot." >&2; exit 1; }
+vm_ip="$(in_vm /usr/sbin/ipconfig getifaddr en0 2>/dev/null)"
+gateway="$(in_vm /sbin/route -n get default 2>/dev/null | awk '/gateway:/ { print $2 }')"
 
 tcp_here() { nc -z -G 3 "$1" "$2" >/dev/null 2>&1 && echo open || echo closed; }
-tcp_vm() { tart exec "$vm" /usr/bin/nc -z -G 3 "$1" "$2" >/dev/null 2>&1 && echo open || echo closed; }
+tcp_vm() { in_vm /usr/bin/nc -z -G 3 "$1" "$2" >/dev/null 2>&1 && echo open || echo closed; }
 # The HTTP status, or 000 when nothing answered (curl prints 000 itself then).
-https_vm() { tart exec "$vm" /usr/bin/curl -sS -o /dev/null --max-time 15 -w '%{http_code}' "$1" 2>/dev/null; }
+https_vm() { in_vm /usr/bin/curl -sS -o /dev/null --max-time 15 -w '%{http_code}' "$1" 2>/dev/null; }
 
 failures=0 inconclusive=0
 blocked_row() { # what, here, vm
@@ -65,14 +103,14 @@ blocked_row() { # what, here, vm
 
 echo "VM $vm at ${vm_ip:-?}, its gateway ${gateway:-?}; this Mac: LAN $lan_ip on $lan_if, router $router${tailscale_ip:+, Tailscale $tailscale_ip}"
 echo "Flags: $flags"
-echo "tart exec runs as: $(tart exec "$vm" /usr/bin/whoami 2>/dev/null)"
+echo "tart exec runs as: $(in_vm /usr/bin/whoami 2>/dev/null)"
 echo
 echo "From the VM, must be blocked:"
 if [[ -n "$gateway" ]]; then
     for port in 5000 7000; do
         blocked_row "this Mac as the VM's gateway, $gateway:$port" "$(tcp_here "$gateway" "$port")" "$(tcp_vm "$gateway" "$port")"
     done
-    dns_vm="$(tart exec "$vm" /usr/bin/dig +time=2 +tries=1 +short "@$gateway" github.com 2>/dev/null | grep -cE '^[0-9.]+$')"
+    dns_vm="$(in_vm /usr/bin/dig +time=2 +tries=1 +short "@$gateway" github.com 2>/dev/null | grep -cE '^[0-9.]+$')"
     dns_here="$(dig +time=2 +tries=1 +short "@$gateway" github.com 2>/dev/null | grep -cE '^[0-9.]+$')"
     blocked_row "DNS at the VM's gateway, $gateway:53/udp" "$([[ $dns_here -gt 0 ]] && echo open || echo closed)" "$([[ $dns_vm -gt 0 ]] && echo open || echo closed)"
 fi
@@ -115,7 +153,7 @@ for url in https://api.github.com https://github.com https://objects.githubuserc
     printf '%-50s %-7s %s\n' "$url" "$code" "$verdict"
 done
 echo
-echo "The VM's DNS servers: $(tart exec "$vm" /bin/sh -c 'scutil --dns | awk "/nameserver\\[/ { print \$3 }" | sort -u | tr "\n" " "')"
+echo "The VM's DNS servers: $(in_vm /bin/sh -c 'scutil --dns | awk "/nameserver\\[/ { print \$3 }" | sort -u | tr "\n" " "')"
 echo
 if [[ $failures -eq 0 ]]; then
     echo "Isolation holds ($inconclusive inconclusive: closed from this Mac as well)."

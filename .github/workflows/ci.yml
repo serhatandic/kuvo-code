@@ -23,11 +23,18 @@ jobs:
     # the Mini (which refuses one anyway, on the host and in the VM). The repository variable
     # KUVO_MINI set to `off` sends everything to GitHub's runners, for when the Mini is away.
     # Xcode's runner images are named for the Xcode version they ship, which
-    # has the Swift toolchain and the macOS SDK Kuvo Code builds against.
+    # has the Swift toolchain and the macOS SDK Kuvo Code builds against. The tags are
+    # refs/tags/v[0-9]*, spelled out (expressions have no patterns), the same rule as the VM's
+    # hook and the host's check (scripts/ci-runner/common.sh).
     runs-on: >-
       ${{ github.repository == 'serhatandic/kuvo-code'
           && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
-          && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+          && (github.ref == 'refs/heads/main'
+              || startsWith(github.ref, 'refs/tags/v0') || startsWith(github.ref, 'refs/tags/v1')
+              || startsWith(github.ref, 'refs/tags/v2') || startsWith(github.ref, 'refs/tags/v3')
+              || startsWith(github.ref, 'refs/tags/v4') || startsWith(github.ref, 'refs/tags/v5')
+              || startsWith(github.ref, 'refs/tags/v6') || startsWith(github.ref, 'refs/tags/v7')
+              || startsWith(github.ref, 'refs/tags/v8') || startsWith(github.ref, 'refs/tags/v9'))
           && vars.KUVO_MINI != 'off'
           && fromJSON('["self-hosted", "macOS", "ARM64", "kuvo-mini"]')
           || 'xcode-27' }}
