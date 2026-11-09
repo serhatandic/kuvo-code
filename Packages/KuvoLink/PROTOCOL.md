@@ -363,7 +363,10 @@ connection.
   - **Who isn't answering** (`run/peer-reach.json`, `{<key>: since}`): a box notes a peer from the
     moment the relay says nothing's connected at its address (`unreachable`, after something was
     sent there), until any mail from it comes. A file, so a machine's tools, answered by a process of
-    their own, read it too. A dead connection can take the relay about a minute to notice.
+    their own, read it too. A dead connection can take the relay about a minute to notice. When
+    a peer's connection went (`gone`) is kept beside it (`run/peer-gone.json`, `{<key>: at}`): the
+    relay says it only to what sent something there that got there, so it tells a call that got
+    to a box before it went from one the relay dropped.
 - **Starts** (bridge 0.9.209, to a peer whose `features` say `work.elsewhere.start`): calls that
   start work, or read what there is to start it with: `start_session`, `list_models` and
   `list_projects` ("Work", Across your computers). The receiving box takes them only while you let
@@ -413,9 +416,10 @@ connection.
     receiving box's name.
   - **Sender side**: a start, or a read of what's there, is never kept for a box that isn't
     answering: the tool says at once it may be asleep, off or offline and nothing was started (so
-    too when the relay says it isn't there before the call ever went to it). One not answered in
-    time (45 seconds for a start, 20 for a read), or that went to that box and then the relay says
-    it isn't there (whether or not it said it had it: a box keeps a start, then says `delivered
+    too when the relay says it isn't there before the call ever went to it, or drops the call
+    itself: `unreachable` with no `gone` from it since the call went). One not answered in
+    time (45 seconds for a start, 20 for a read), or that got to that box and then the relay says
+    it isn't there (a `gone` since it went; whether or not it said it had it: a box keeps a start, then says `delivered
     {ok: true}`, before it makes anything, but that word can be lost), is taken out of the outbox, so it's never started late or twice: the
     tool says it couldn't confirm, to check `list_sessions` before trying again. The lead's box notes where the session lives ("Homes") and that the lead
     started work there (`run/work/started-elsewhere.json`, `{<lead>: {<key>: at}}`, 30 days), so

@@ -61,3 +61,21 @@ export function noteHeard(key: string): boolean {
 
 /** Since when the box `key` hasn't answered, or null when nothing says it doesn't. */
 export const awaySince = (key: string, reach = readReach()): number | null => reach[key] ?? null;
+
+// When each box's relay connection last went (`run/peer-gone.json`, `{<key>: at}`): the relay says
+// `gone` only to those that sent something on it, that got there. So something sent to a box that
+// came back `unreachable` with no `gone` since never got there; with one, it may have.
+export const PEER_GONE = path.join(RUN, "peer-gone.json");
+
+/** The relay says the connection at `address`, which something from here got to, went. */
+export function noteGone(address: Buffer, now = Date.now()): void {
+  const peer = peersOf(readLink()).find(each => each.address === address.toString("base64url"));
+  if (!peer) return;
+  try {
+    fs.mkdirSync(RUN, { recursive: true, mode: 0o700 });
+    locked(LOCK, () => writePrivate(PEER_GONE, JSON.stringify({ ...readReach(PEER_GONE), [peer.key]: now })));
+  } catch {}
+}
+
+/** When the box `key`'s connection last went, as far as this box heard, or null. */
+export const goneAt = (key: string): number | null => readReach(PEER_GONE)[key] ?? null;

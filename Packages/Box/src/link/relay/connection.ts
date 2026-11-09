@@ -1,20 +1,22 @@
 // The relay connection: one at a time, served until it ends.
 
 import { addressOf, EMPTY } from "../crypto/keys";
-import { noteUnreachable } from "../peers/reach";
+import { noteGone, noteUnreachable } from "../peers/reach";
 import { readRelay, relayHello, relaySend } from "./frames";
 import type { RelayMessage } from "./frames";
 import type { LinkHost } from "./host";
 
 // What the relay sends once it's welcomed this connection, for `host`: something for it, or a phone
 // gone (unreachable, or its connection went or was replaced), whose sessions end with nothing more
-// sent; another of your computers unreachable is noted for its tools to say so (`peers/reach.ts`).
+// sent; another of your computers unreachable is noted for its tools to say so, and one gone for
+// them to tell what got there (`peers/reach.ts`).
 // What this connection sends itself, to check it's alive, is only that.
 export function fromRelay(host: Pick<LinkHost, "receive" | "forget">, message: RelayMessage, self: Buffer): void {
   if (message.address.equals(self)) return;
   if (message.kind === "deliver") host.receive(message.address, message.payload);
   if (message.kind === "unreachable" || message.kind === "gone") host.forget(message.address);
   if (message.kind === "unreachable") noteUnreachable(message.address);
+  if (message.kind === "gone") noteGone(message.address);
 }
 
 // After a relay connection, how many tries in a row haven't held, and how long to wait before the

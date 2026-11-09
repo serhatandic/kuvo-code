@@ -9558,6 +9558,17 @@ function noteHeard(key) {
   return back;
 }
 var awaySince = (key, reach = readReach()) => reach[key] ?? null;
+var PEER_GONE = path39.join(RUN, "peer-gone.json");
+function noteGone(address, now = Date.now()) {
+  const peer = peersOf(readLink()).find((each) => each.address === address.toString("base64url"));
+  if (!peer)
+    return;
+  try {
+    fs37.mkdirSync(RUN, { recursive: true, mode: 448 });
+    locked(LOCK6, () => writePrivate(PEER_GONE, JSON.stringify({ ...readReach(PEER_GONE), [peer.key]: now })));
+  } catch {}
+}
+var goneAt = (key) => readReach(PEER_GONE)[key] ?? null;
 
 // Packages/Box/src/link/work/homes.ts
 import fs38 from "node:fs";
@@ -19055,6 +19066,7 @@ async function callPeer(peer, tool, args, lead, place, { keep, quiet = false, mo
   try {
     went = JSON.parse(fs66.readFileSync(left, "utf8")).sentTo === peer.key;
   } catch {}
+  const reached = went && (goneAt(peer.key) ?? 0) >= sent;
   if (!answer && isOpenTool(tool)) {
     fs66.rmSync(path68.join(SENDING, `${id}.json`), { force: true });
     letterTries.delete(id);
@@ -19065,7 +19077,7 @@ async function callPeer(peer, tool, args, lead, place, { keep, quiet = false, mo
     return { answer: { text: answer.note, isError: false } };
   if (answer && "text" in answer && typeof answer.text === "string")
     return { answer: { text: answer.text, isError: answer.isError === true } };
-  return { away: unreachable ? AWAY : "it didn't answer in time", kept: keep && !place.signal?.aborted, sent: had || went || !unreachable };
+  return { away: unreachable ? AWAY : "it didn't answer in time", kept: keep && !place.signal?.aborted, sent: had || reached || !unreachable };
 }
 async function awaitAnswer(id, peer, sent, place, { most, cut, every = 250 }) {
   const stop = new AbortController;
@@ -25991,6 +26003,8 @@ function fromRelay(host, message, self) {
     host.forget(message.address);
   if (message.kind === "unreachable")
     noteUnreachable(message.address);
+  if (message.kind === "gone")
+    noteGone(message.address);
 }
 function nextTry(attempt, welcomed, heldFor) {
   const next = welcomed && heldFor >= 60000 ? 0 : attempt + 1;
