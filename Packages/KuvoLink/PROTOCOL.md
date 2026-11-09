@@ -46,8 +46,11 @@ One WebSocket per device, binary messages, first byte the kind:
 
 Known kinds keep their lengths, and a device skips a kind it doesn't know once it's welcomed, so a
 new kind goes only after welcome. A device never sends `0x07`. The relay handles a connection's
-sends in the order they come, so its `unreachable`s come back in that order too (a box tells a
-start the relay dropped by it: "Starts", Sender side).
+sends in the order they come, and what it sends back for them comes in that same order, as one
+stream: each `unreachable`, and each `deliver` of a send to the connection's own address. Boxes
+rely on it to tell a start the relay dropped from one that got there ("Starts", Sender side), so a
+relay that answers sends to your own address ahead of `unreachable`s for sends before them could
+have a start that got there said not to have started.
 
 **Gone.** The relay keeps, for each connection, the devices that sent it something on that connection
 (at most 1,024) and the connections it sent to (at most 256); past either, nothing more is recorded.

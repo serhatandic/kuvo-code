@@ -19044,6 +19044,8 @@ function sendCall(host, id, file, call, { link, now, offline, peers, away }) {
   }
   if (offline || now - (letterTries.get(id) ?? 0) < 60000)
     return;
+  if (!stillThere(file, null))
+    return void letterTries.delete(id);
   letterTries.set(id, now);
   const mailed = { id, from: call.from, tool: call.call.tool, args: call.call.args, as: call.call.as, made, at: now };
   const bytes = mailFor(peer, { call: mailed, at: now }, link);
@@ -19082,10 +19084,12 @@ function stillThere(file, text) {
       fs67.writeSync(fd, bytes, 0, bytes.length, 0);
       fs67.ftruncateSync(fd, bytes.length);
     }
-  } catch {} finally {
+    return fs67.fstatSync(fd).nlink > 0;
+  } catch {
+    return false;
+  } finally {
     fs67.closeSync(fd);
   }
-  return true;
 }
 function reply(id, failed) {
   if (IS_MAC)

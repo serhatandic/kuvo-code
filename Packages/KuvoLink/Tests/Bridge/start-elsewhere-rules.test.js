@@ -716,11 +716,27 @@ test("a start its tool stopped waiting for, as the outbox picked it up, doesn't 
   const file = path.join(run, "outbox", "sending", `${id}.json`);
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const call = { peer: mini.pub, from: "ses_lead", wait: true, at: Date.now(), call: { tool: "start_session", args: { computer: "mini", project: "api", task: "Fix the sign-in." }, as: {} } };
-  // The outbox read it; meanwhile its tool took it out of the outbox.
+  // The outbox read it; meanwhile its tool took it out of the outbox. The first time it'd go, and
+  // again (as a link started again sends what was waiting).
+  const sent = [];
+  const send = (each, now) => link.sendCall({ send: bytes => { sent.push(bytes); return true; } }, id, file, each, { link: link.readLink(), now, offline: false, peers: [mini.peer], away: new Set() });
+  send(call, Date.now());
+  send({ ...call, sentTo: mini.pub }, Date.now() + 61_000);
+  assert.equal(sent.length, 0, "not sent");
+  assert.equal(fs.existsSync(file), false, "not back in the outbox");
+});
+
+test("a start whose outbox file can't be written as it goes doesn't go: where it went couldn't be kept", async () => {
+  leadHere();
+  const id = "cal_kept00000000001";
+  const file = path.join(run, "outbox", "sending", `${id}.json`);
+  const call = { peer: mini.pub, from: "ses_lead", wait: true, at: Date.now(), call: { tool: "start_session", args: { computer: "mini", project: "api", task: "Fix the sign-in." }, as: {} } };
+  write(file, call);
+  fs.chmodSync(file, 0o400);
   const sent = [];
   link.sendCall({ send: bytes => { sent.push(bytes); return true; } }, id, file, call, { link: link.readLink(), now: Date.now(), offline: false, peers: [mini.peer], away: new Set() });
   assert.equal(sent.length, 0, "not sent");
-  assert.equal(fs.existsSync(file), false, "not back in the outbox");
+  fs.chmodSync(file, 0o600);
 });
 
 test("a start that got to its computer, then this box's own relay connection dropped while it waited, may have started", async t => {

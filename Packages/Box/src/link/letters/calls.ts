@@ -170,6 +170,9 @@ export function sendCall(host: Pick<LinkHost, "send">, id: string, file: string,
     away.add(peer.key);
   }
   if (offline || now - (letterTries.get(id) ?? 0) < 60_000) return;
+  // One its tool took out meanwhile (it stopped waiting, and says so) doesn't go: before anything's
+  // made for it, as making its mail counts as something sent to that box (`relay/dropped.ts`).
+  if (!stillThere(file, null)) return void letterTries.delete(id);
   letterTries.set(id, now);
   const mailed: MailedCall = { id, from: call.from, tool: call.call.tool, args: call.call.args, as: call.call.as, made, at: now };
   const bytes = mailFor(peer, { call: mailed, at: now }, link);
@@ -179,8 +182,8 @@ export function sendCall(host: Pick<LinkHost, "send">, id: string, file: string,
     return;
   }
   const first = call.sentTo !== peer.key;
-  // Kept as gone to that box in its own file, which is never made again: where its tool took it out
-  // meanwhile (it stopped waiting, and says so), it doesn't go at all.
+  // Kept as gone to that box in its own file, which is never made again; where that can't be kept,
+  // or its tool took it out since, it doesn't go.
   if (!stillThere(file, first ? JSON.stringify({ ...call, sentTo: peer.key }) : null)) return void letterTries.delete(id);
   // A start or a read the first time it goes: whether the relay drops it, fenced off from what went
   // before (`relay/dropped.ts`). One sent again (this box's link started again as its tool waited)
@@ -194,7 +197,9 @@ export function sendCall(host: Pick<LinkHost, "send">, id: string, file: string,
 }
 
 // Whether the outbox file `file` is still there, written over with `text` where given: opened as it
-// is, never made again (a rename over it would bring back one taken out meanwhile).
+// is, never made again (a rename over it would bring back one taken out meanwhile). Not where the
+// write fails, nor where it was taken out as it was written (on a machine its tool is a process of
+// its own); what's left is the moment between this and the send.
 function stillThere(file: string, text: string | null): boolean {
   let fd: number;
   try { fd = fs.openSync(file, "r+"); } catch { return false; }
@@ -204,8 +209,12 @@ function stillThere(file: string, text: string | null): boolean {
       fs.writeSync(fd, bytes, 0, bytes.length, 0);
       fs.ftruncateSync(fd, bytes.length);
     }
-  } catch {} finally { fs.closeSync(fd); }
-  return true;
+    return fs.fstatSync(fd).nlink > 0;
+  } catch {
+    return false;
+  } finally {
+    fs.closeSync(fd);
+  }
 }
 
 // A tool waiting for call `id` hears it failed (on a machine through `run/replies`, on this Mac in memory).
