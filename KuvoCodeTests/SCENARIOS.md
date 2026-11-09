@@ -132,7 +132,7 @@ for Linux's tools).
 | Notifications only for what needs you, each in one sentence: a reply to you, a question, a failure, an agent's notify_user (limited); never a bot's wake-up, a session's own timer or a session answering an agent; the Mac shows each box's own (`kuvo/notices`) | BoxNoticesTests | the box's test/notices-rule.test.ts (each case of the rule, the sentence, notify_user's limit, the list clients follow); macOS showing them |
 | ⌘K: find a session in any project, a file in this one, or an action | CommandPaletteTests | its window and keys (UI) |
 | K2 Menu commands and shortcuts | | menus and keys (UI; the end-to-end runs check each against Settings › Keyboard Shortcuts) |
-| K4 The menu bar's usage panel: which accounts count there | UsageAccountsTests, UsageKit's own tests | the panel asking the providers' services (UsageKit's own tests, against a fake of each) |
+| K4 The menu bar's usage panel: which accounts count there, one row per account across your computers with the newest numbers (an account a box can't name, its own row) | UsageAccountsTests, BoxPlanLimitsTests, UsageKit's own tests; KuvoClient's PlanLimitsTests (the listing rule both apps use); the box's test/agents/limits.test.ts and engine-limits.test.ts (who each account is) | the panel asking the providers' services (UsageKit's own tests, against a fake of each) |
 | K5 Storage: what takes room | StorageReportTests | |
 | L50 Quit mid-job, open again | InterruptedRunTests | |
 | The panel's terminal | TerminalColorsTests (in KuvoClient's ClientDesign) | |
