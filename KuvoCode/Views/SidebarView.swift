@@ -1024,8 +1024,8 @@ struct SidebarView: View {
             } else if let elsewhere = look.elsewhere, !Workspace.isArchived(session) {
                 // Started from another computer: which, in a word, at the title's end; pointed at,
                 // who and where. The title always wins: in a row too narrow for both, it goes.
-                TitleWithTail(session.title ?? "New Session") {
-                    sessionTitle(session, in: place)
+                TitleWithTail(session.title ?? "New Session") { words in
+                    sessionTitle(session, in: place, words: words)
                 } tail: {
                     Text(elsewhere)
                         .sidebarFont(11)
@@ -1036,10 +1036,11 @@ struct SidebarView: View {
                         .truncationMode(.tail)
                         .frame(maxWidth: 80, alignment: .trailing)
                         .fixedSize(horizontal: true, vertical: false)
-                        .help(look.origin)
                         // (The row's hint says it whole.)
                         .accessibilityHidden(true)
                 }
+                // Who and where, pointed at, the note shown or not.
+                .help(look.origin)
             } else {
                 sessionTitle(session, in: place)
             }
@@ -1077,7 +1078,8 @@ struct SidebarView: View {
     }
 
     /// A session's title in its row: a bot's face before it where its lane doesn't show it.
-    private func sessionTitle(_ session: Session, in place: Place) -> some View {
+    /// `words`: in place of its title (what of it is kept, to measure by).
+    private func sessionTitle(_ session: Session, in place: Place, words: String? = nil) -> some View {
         HStack(spacing: 6) {
             // A bot's work: its face, still, before the title; in a project, its lane shows
             // it instead, the session staying yours.
@@ -1086,7 +1088,7 @@ struct SidebarView: View {
                     .help("Started by \(bot.name)")
                     .accessibilityLabel("\(bot.name)’s work")
             }
-            Text(session.title ?? "New Session")
+            Text(words ?? session.title ?? "New Session")
                 .fontWeight(session.isUnread ? .semibold : .regular)
                 .foregroundStyle(Workspace.isArchived(session) ? .secondary : .primary)
                 .lineLimit(1)
