@@ -182,6 +182,9 @@ import Testing
     /// can read right and still be drawn as it was on the page before).
     private func drawn() throws -> NSBitmapImageRep {
         window.displayIfNeeded()
+        // Drawn as Core Animation commits it, as the screen's next frame would (`displayIfNeeded`
+        // alone leaves that to a real frame landing).
+        CATransaction.flush()
         let frame = try #require(window.contentView?.superview)
         let layer = try #require(frame.layer)
         let size = frame.bounds.size

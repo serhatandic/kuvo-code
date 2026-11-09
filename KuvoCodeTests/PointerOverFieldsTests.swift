@@ -41,7 +41,8 @@ import Testing
         window.orderBack(nil)
         WindowServer.pointerIsOver(window)
         var turns = 0
-        // Laid out, and the fields' rectangles given (AppKit asks for them once it has drawn).
+        // Laid out, and the fields' rectangles given, as AppKit asks for them once the pointer is
+        // in the window (`WindowServer.appKitsTurn`).
         while !isReady, turns < 400 {
             window.contentView?.layoutSubtreeIfNeeded()
             window.displayIfNeeded()
