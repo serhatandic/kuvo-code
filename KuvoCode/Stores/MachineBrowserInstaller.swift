@@ -217,9 +217,12 @@ nonisolated enum MachineBrowserInstaller {
             tar xzf - -C "$B/.staging"
             # Which Kuvo Code put it there, so an older one leaves it in place.
             echo "\(version)" >"$B/.staging/kuvo-version"
+            has() { [ -x "$B/$1/chrome" ] || [ -x "$B/$1/chrome-headless-shell" ]; }
             # The same build, already running (another Mac put it there meanwhile), stays as it is.
-            if running "\(id)"; then rm -rf "$B/.staging"; else rm -rf "$B/\(id)"; mv "$B/.staging" "$B/\(id)"; fi
+            if running "\(id)" && has "\(id)"; then rm -rf "$B/.staging"; else rm -rf "$B/\(id)"; mv "$B/.staging" "$B/\(id)"; fi
             ln -sfn "\(id)" "$B/current"
+            # Never said to be done while the browser in use isn't there.
+            has "\(id)" || { echo "The browser didn't arrive whole on the machine." >&2; exit 1; }
             \(clearOldBuilds(keeping: id))
             """
     }

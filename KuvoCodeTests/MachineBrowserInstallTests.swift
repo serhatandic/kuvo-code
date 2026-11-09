@@ -63,13 +63,10 @@ import Testing
         // The same build, sent meanwhile by another Mac, and a browser running from it.
         try FileManager.default.createDirectory(at: browser.appending(path: build), withIntermediateDirectories: true)
         try Data("#!/bin/sh\n# running\n".utf8).write(to: browser.appending(path: "\(build)/chrome"))
-        // (Started by a path in the build, as the browser is: a process of its own, stopped below.)
-        let running = Process()
-        running.executableURL = URL(filePath: "/usr/bin/tail")
-        running.arguments = ["-f", browser.appending(path: "\(build)/chrome").path]
-        running.standardOutput = FileHandle.nullDevice
-        running.standardError = FileHandle.nullDevice
-        try running.run()
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: browser.appending(path: "\(build)/chrome").path)
+        // (Started by the build's real path, as the browser is, through any link on the way (macOS's
+        // /var is /private/var): a process of its own, stopped below.)
+        let running = try follow(browser.appending(path: "\(build)/chrome"))
         defer { running.terminate(); running.waitUntilExit() }
 
         #expect(try run("/bin/sh", ["-c", MachineBrowserInstaller.sending(build)], input: bundle(saying: "new")) == 0)
@@ -77,5 +74,33 @@ import Testing
         #expect(launcher(of: build) == "#!/bin/sh\n# running\n", "the running build isn't replaced under it")
         #expect(try FileManager.default.destinationOfSymbolicLink(atPath: browser.appending(path: "current").path) == build)
         #expect(!FileManager.default.fileExists(atPath: browser.appending(path: ".staging").path))
+    }
+
+    /// Something runs with the build's folder in its command line, but the browser isn't in it (its
+    /// folder went from under it): the build sent is put there, never thrown away for it.
+    @Test func aBuildWithNoBrowserInItIsReplacedWhateverRunsFromIt() throws {
+        defer { try? FileManager.default.removeItem(at: home) }
+        try FileManager.default.createDirectory(at: browser.appending(path: build), withIntermediateDirectories: true)
+        try Data("left".utf8).write(to: browser.appending(path: "\(build)/notes"))
+        let running = try follow(browser.appending(path: "\(build)/notes"))
+        defer { running.terminate(); running.waitUntilExit() }
+
+        #expect(try run("/bin/sh", ["-c", MachineBrowserInstaller.sending(build)], input: bundle(saying: "new")) == 0)
+
+        #expect(launcher(of: build) == "#!/bin/sh\n# new\n")
+        #expect(FileManager.default.isExecutableFile(atPath: browser.appending(path: "current/chrome").path))
+    }
+
+    /// `tail -f` on `file` by its real path: a process whose command line names the build.
+    private func follow(_ file: URL) throws -> Process {
+        let real = try #require(realpath(file.path, nil))
+        defer { free(real) }
+        let process = Process()
+        process.executableURL = URL(filePath: "/usr/bin/tail")
+        process.arguments = ["-f", String(cString: real)]
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        try process.run()
+        return process
     }
 }
