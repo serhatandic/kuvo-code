@@ -6,17 +6,17 @@ import SwiftUI
 /// (its hover text and VoiceOver hint still say what the note would). The note is drawn as given,
 /// at its own width; the title takes the rest, cut at its end.
 public struct TitleWithTail<Title: View, Tail: View>: View {
-    /// What of the title it keeps at least, beside the note.
-    private let kept: String
+    private let text: String
     private let spacing: CGFloat
-    private let title: Title
+    private let title: (String) -> Title
     private let tail: Tail
 
-    /// `text`: the title's words, as `title` draws them, in the same font.
-    public init(_ text: String, spacing: CGFloat = 6, @ViewBuilder title: () -> Title, @ViewBuilder tail: () -> Tail) {
-        kept = Self.kept(of: text)
+    /// `title`: the row's title drawn with the words it's given (`text`, or what of it is kept,
+    /// to measure by), with all it has beside them: a face before it, its weight.
+    public init(_ text: String, spacing: CGFloat = 6, @ViewBuilder title: @escaping (String) -> Title, @ViewBuilder tail: () -> Tail) {
+        self.text = text
         self.spacing = spacing
-        self.title = title()
+        self.title = title
         self.tail = tail()
     }
 
@@ -30,14 +30,14 @@ public struct TitleWithTail<Title: View, Tail: View>: View {
         ViewThatFits(in: .horizontal) {
             HStack(spacing: spacing) {
                 // (Measures by what the title keeps; it's drawn over that, in all the room left.)
-                Text(kept)
-                    .lineLimit(1)
+                title(Self.kept(of: text))
                     .hidden()
+                    .accessibilityHidden(true)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .overlay(alignment: .leading) { title }
+                    .overlay(alignment: .leading) { title(text) }
                 tail
             }
-            title
+            title(text)
         }
     }
 }

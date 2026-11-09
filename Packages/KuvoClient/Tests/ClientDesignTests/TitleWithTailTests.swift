@@ -9,10 +9,13 @@ import Testing
 struct TitleWithTailTests {
     private let title = "Fix the flaky upload test"
 
-    /// Whether the note (drawn red here) shows in a row `width` wide.
-    private func showsNote(in width: CGFloat) throws -> Bool {
-        let row = TitleWithTail(title) {
-            Text(title).lineLimit(1)
+    /// Whether the note (drawn red here) shows in a row `width` wide; `face`: that wide before the title.
+    private func showsNote(in width: CGFloat, face: CGFloat = 0) throws -> Bool {
+        let row = TitleWithTail(title) { words in
+            HStack(spacing: 6) {
+                if face > 0 { Color.blue.frame(width: face, height: 10) }
+                Text(words).lineLimit(1)
+            }
         } tail: {
             Color.red.frame(width: 50, height: 10)
         }
@@ -38,6 +41,12 @@ struct TitleWithTailTests {
 
     @Test func aRowTooNarrowForBothIsTheTitlesAlone() throws {
         #expect(try !showsNote(in: 100))
+    }
+
+    /// What's before the title (a bot's face) counts against its room too.
+    @Test func aFaceBeforeTheTitleLeavesItLessRoom() throws {
+        #expect(try showsNote(in: 160))
+        #expect(try !showsNote(in: 160, face: 60))
     }
 
     @Test func whatTheTitleKeepsIsAboutItsFirstTwelveCharacters() {
