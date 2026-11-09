@@ -16,6 +16,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ### All Changes
 
+- The side panel stays open or closed in each conversation as you left it there: closing it in one no longer closes it in all the others, and switching to a bot no longer opens it where you'd never had it open. A conversation you haven't been in yet starts as the one you were in, and an agent showing you a file opens the panel only in its own conversation. The sessions list on the left is still one for the whole window.
 - A bot on Claude Code saves its memory again on a Mac. Since the sandbox came in, every change it made to its `MEMORY.md` there was refused with "Operation not permitted", so it kept notes elsewhere or not at all. Bots on Codex, Grok, Cursor and Kuvo Code's own engine weren't affected.
 - Your computers' names over the sidebar take less room, as on your iPhone: the one in view first, larger and bold, then your other computers faded beside it, and "+3" for those that don't fit. Picking one slides it to the front. A long name is cut at its end rather than in the middle. Settings' sidebar shows them the same way.
 - A bot or chat you move to another computer while Kuvo Code is open works there at once: what you send it goes to that computer, and it opens on that computer's page in the sidebar. Before, a bot on a coding agent (Claude Code, Codex and others) moved away from this Mac could keep answering "No session" and open on this Mac's page until you quit and opened Kuvo Code again.

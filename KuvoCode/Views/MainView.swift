@@ -166,8 +166,9 @@ struct MainView: View {
             // Leaving Settings closes the sites you were signing in to.
             if !shows { app.settingsTabs.closeSites(machines: app.machines) }
         }
-        // The agent started browsing: show it.
-        .onChange(of: utilities.revealRequest) { withAnimation(.ui) { tabs.showPanel() } }
+        // The agent started browsing: show it. The panel's open already, in the conversation it
+        // was for (by now maybe another's in view): room is made for it.
+        .onChange(of: utilities.revealRequest) { withAnimation(.ui) { tabs.keep(.changes) } }
         // Hiding the tab bar takes the whole row away and the cards reach the top. The sidebar
         // button stays, so the window's buttons keep a toolbar's height, centered on the cards'
         // header row, and the sidebar is a click away. The panel is still ⌥⌘0, and sessions ⌘K.
@@ -1352,8 +1353,13 @@ private struct PaneFollower: View {
             // is in view too.
             .onChange(of: tabs.sessionsSeen) { if NSApp.isActive { markViewed() } }
             // The panel follows what's in view, all at once: the conversations, the half you work in,
-            // its place, and the bots in view.
-            .onChange(of: tabs.inView, initial: true) { _, inView in utilities.inView = inView }
+            // its place, and the bots in view. Open or closed as it was in the conversation now in
+            // view, at once, as the conversation itself is.
+            .onChange(of: tabs.inView, initial: true) { _, inView in
+                var switching = Transaction()
+                switching.disablesAnimations = true
+                withTransaction(switching) { utilities.inView = inView }
+            }
             .onChange(of: tabs.snapshot) { _, saved in save(saved.text) }
             .allowsHitTesting(false)
             .accessibilityHidden(true)
