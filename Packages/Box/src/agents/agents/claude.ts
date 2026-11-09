@@ -13,7 +13,9 @@ import type { Agent, AgentContext, Account, ConversationFiles, ConversationPlace
 import type { Limit } from "../auto"
 import { accountName, ContextWindows, failure, KnownAccount, model, signOutWith, TookTooLong } from "../agent"
 import { fileDiff, fromPatch } from "../diff"
-import { install, maintenance, update, type MaintenanceDefinition } from "../maintenance"
+import { install, installedVersion, maintenance, update, type MaintenanceDefinition } from "../maintenance"
+import { fingerprint, type LimitsSource } from "../limits"
+import { CLAUDE_LIMITS_EVERY, credentialsIn, heardWindows, readClaudeLimits, type ClaudeSignIn } from "./claude-limits"
 import { emit } from "../events"
 import { run, which } from "../proc"
 import { Queue } from "../queue"
@@ -402,6 +404,47 @@ export class ClaudeAgent implements Agent {
 
   get tokenFile() {
     return join(this.context.home, "claude", "tokens", `${this.instance.id}.json`)
+  }
+
+  /**
+   * Its plan's limits (claude-limits.ts), with Kuvo Code's own sign-in only: never yours in
+   * Terminal. On Linux they're read from Anthropic, whose limit on reads is the computer's, so one
+   * turned away holds every Claude account here (`bucket`); on a Mac its token can't read them, so
+   * only what its turns hear tells them.
+   */
+  readonly limits: LimitsSource = ClaudeAgent.keychain
+    ? { every: CLAUDE_LIMITS_EVERY }
+    : {
+        every: CLAUDE_LIMITS_EVERY,
+        bucket: "anthropic",
+        read: async (now) => {
+          const signIn = this.limitsSignIn()
+          return readClaudeLimits(signIn, signIn ? await this.programVersion() : undefined, now)
+        },
+        signIn: () => fingerprint(this.limitsSignIn()?.token),
+      }
+
+  /**
+   * The sign-in its limits are read with: on a Mac Kuvo Code's own token; on Linux Claude Code's own
+   * file in Kuvo Code's folder for it (`instance.home`), never one in your home.
+   */
+  limitsSignIn(): ClaudeSignIn | undefined {
+    if (ClaudeAgent.keychain) {
+      const token = this.token()
+      return token ? { token } : undefined
+    }
+    return this.instance.home ? credentialsIn(this.instance.home) : undefined
+  }
+
+  private version?: { at: number; value?: string }
+
+  /** Claude Code's version here, asked at most hourly. */
+  protected async programVersion(): Promise<string | undefined> {
+    if (this.version && Date.now() - this.version.at < 3_600_000) return this.version.value
+    const executable = this.executable()
+    const value = executable ? await installedVersion(executable).catch(() => undefined) : undefined
+    this.version = { at: Date.now(), value }
+    return value
   }
 
   /** Kuvo Code's own token, on a Mac, while it has one. */
@@ -1588,8 +1631,10 @@ class ClaudeThread implements Thread {
         return
       }
       case "rate_limit_event": {
-        if (!active || lane !== active) return
         const info = message.rate_limit_info ?? {}
+        // Where the plan stands, for its limits (limits.ts), whichever turn heard it.
+        for (const window of heardWindows(info)) this.agent.limits.heard?.(window)
+        if (!active || lane !== active) return
         // Close to a limit: said once, so the stop doesn't come out of nowhere.
         if (info.status === "allowed_warning") {
           const used = typeof info.utilization === "number" ? ` (${Math.round(info.utilization * 100)}% used)` : ""

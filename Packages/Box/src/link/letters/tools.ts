@@ -28,6 +28,7 @@ import { OUTSIDE, seatRefusal, startedWords, startSession } from "./start";
 import { answerTo } from "./take";
 import { noteOversightBy } from "../work/oversight";
 import { notifyUserTool } from "../notices/notify";
+import { planLimitsTool } from "../work/plan-limits";
 import { answerAskTool, describeList, finishGoalTool, goalProgressTool, leadOf, listModelsTool, listProjectsTool, liveRows, makeProjectTool, maySpendTool, proposeGoalTool, compactSessionTool, stopSessionTool } from "../work/tools";
 import { under, workSessions } from "../work/tree";
 import { rowsBox } from "../work/elsewhere";
@@ -52,7 +53,7 @@ export interface ToolPlace {
 }
 
 /** The tools, by name. */
-export const AGENT_TOOLS = ["list_agents", "send_message", "read_conversation", "start_session", "list_sessions", "stop_session", "compact_session", "answer_ask", "list_models", "make_project", "list_projects", "propose_goal", "goal_progress", "may_spend", "finish_goal", "notify_user"] as const;
+export const AGENT_TOOLS = ["list_agents", "send_message", "read_conversation", "start_session", "list_sessions", "stop_session", "compact_session", "answer_ask", "list_models", "make_project", "list_projects", "propose_goal", "goal_progress", "may_spend", "finish_goal", "notify_user", "plan_limits"] as const;
 export type AgentToolName = (typeof AGENT_TOOLS)[number];
 export const isAgentTool = (name: unknown): name is AgentToolName => AGENT_TOOLS.includes(name as AgentToolName);
 
@@ -304,6 +305,8 @@ export async function agentTool(name: AgentToolName, args: Record<string, unknow
     }
     case "list_projects":
       return listProjectsTool();
+    case "plan_limits":
+      return planLimitsTool(place.bridge(), place.signal);
     case "make_project": {
       if (!root) return refused("Only a conversation on this computer makes projects here.");
       return makeProjectTool({ ...root, name: nameOf(root.session, all) }, args, { signal: place.signal, ...(place.step ? { every: place.step } : {}) });

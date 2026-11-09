@@ -3,6 +3,7 @@
 
 import type { AgentAccount } from "./accounts"
 import type { Limit } from "./auto"
+import type { LimitsSource } from "./limits"
 import type { InstallResult, Maintenance, UpdateResult } from "./maintenance"
 import type { Deps } from "./deps"
 import type { Turn, Outcome } from "./turn"
@@ -398,6 +399,8 @@ export interface Agent {
   removeAccount?(): Promise<void>
   /** Stops what it keeps running (an app-server): its account is gone. */
   shutdown?(): void
+  /** Its plan's limits, read from its sign-in (limits.ts); none for an agent whose limits aren't read here. */
+  readonly limits?: LimitsSource
   /** The version of its program you have, the newest, and how it's updated (an agent you install). */
   maintenance?(fresh?: boolean): Promise<Maintenance>
   /** Updates its program through the installer that owns it. */

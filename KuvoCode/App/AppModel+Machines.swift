@@ -409,12 +409,14 @@ extension AppModel {
         engine.agents.onEvent = { [weak self, weak engine] event in
             // Its group chats, as it runs them.
             if event.type.hasPrefix("kuvo.group.") { self?.boxGroups.handle(event, machine: machine); return }
+            self?.planLimits.handle(event, machine: machine)
             engine?.catalog.handle(event)
             self?.workspace.handleAgents(event, machine: machine)
         }
         engine.agents.onHandoff = { [weak self] handoff in Task { await self?.workspace.openHandoff(handoff) } }
         engine.agents.onConnected = { [weak self, weak engine] in
             guard let self, let engine else { return }
+            planLimits.connected(machine, api: engine.agents.api)
             Task {
                 await engine.catalog.refreshAgents()
                 _ = await self.workspace.refresh(engine)
@@ -636,6 +638,7 @@ extension AppModel {
     private func connectionClosed(_ machine: String) {
         workspace.forget(machine)
         boxGroups.disconnected(machine)
+        planLimits.stopped(machine)
     }
 
     /// Stops a machine's engine and forgets the machine, and its sessions' tabs with it. Its
@@ -645,6 +648,7 @@ extension AppModel {
     func machineFolded(_ address: String, into machine: String) {
         browserAsks.closeAll(on: address)
         utilities.closeMachineBrowser(address)
+        planLimits.stopped(address)
         phoneLink.forget(machine: address)
         workspace.machines = Set(machines.list.map(\.id))
         workspace.fold(address, into: machine)
@@ -667,6 +671,7 @@ extension AppModel {
     /// keep; `uninstall`, also stopped there, its sign-ins and keys deleted, and gone from your
     /// phones (`Machines.remove`).
     func removeMachine(_ id: String, uninstall: Bool = false) {
+        planLimits.stopped(id)
         // Left running, as Disconnect leaves it (a test or demo copy's stops).
         if !uninstall, let engine = machines.engine(id) { disconnect(engine) }
         if let engine = machines.engine(id) {

@@ -22,6 +22,7 @@ import { newID } from "../ids"
 import { onMachine, ownFoldersConfig } from "../machine"
 import { install, maintenance, update, type MaintenanceDefinition } from "../maintenance"
 import { which } from "../proc"
+import { LimitsProblem, type LimitReading, type LimitsSource, type LimitWindow } from "../limits"
 import { RPC, RPCError } from "../rpc"
 import { CodexCitations, plainCitations, type Said } from "./codex-citations"
 import { engineSkills, skillsFolder, skillsFor, skillsRoot, turnedOff, upward, within } from "../skills"
@@ -147,6 +148,54 @@ export class CodexAgent implements Agent {
   private rootsSet = new WeakMap<RPC, string>()
   /** Your plan's usage windows as Codex last said, by limit ("codex" is the plan's; others, a model's). */
   rateLimits = new Map<string, any>()
+
+  /**
+   * Its plan's limits, as Codex reads them from ChatGPT with its own sign-in (`account/rateLimits/read`
+   * on your account's app-server), every ten minutes; what a turn hears between (`account/rateLimits/updated`).
+   */
+  readonly limits: LimitsSource = {
+    every: 10 * 60_000,
+    read: () => this.readLimits(),
+  }
+
+  /** Its limits were read once since the box started. */
+  private limitsRead = false
+
+  /**
+   * Read once as the box starts (its app-server then stops when it's idle, as any), then only through
+   * one already running for its sessions, never marked as used: a read never keeps one running, nor
+   * starts one again for an account nobody uses. Between, what its turns hear keeps them current.
+   */
+  private async readLimits(): Promise<LimitReading | null> {
+    if (!this.executable()) throw new LimitsProblem("none", "Codex isn't installed here.")
+    const running = [...this.slots.values()].map((slot) => slot.server).find((server) => server && !server.isClosed)
+    if (this.limitsRead && !running) return null
+    let rpc: RPC
+    let account: any
+    try {
+      rpc = running ?? (await this.rpc())
+      account = (await rpc.request("account/read", {}, 20_000))?.account
+    } catch (caught) {
+      throw new LimitsProblem("failed", `Codex couldn't say: ${caught instanceof Error ? caught.message : String(caught)}`)
+    }
+    // It answered: not started again for this, whatever it said.
+    this.limitsRead = true
+    // Signed out, or an API key: no plan to read.
+    if (account?.type !== "chatgpt") throw new LimitsProblem("none", account ? "An API key has no plan limits." : "Not signed in to Codex here.")
+    let result: any
+    try {
+      result = await rpc.request("account/rateLimits/read", {}, 30_000)
+    } catch (caught) {
+      const words = caught instanceof Error ? caught.message : String(caught)
+      if (/\b429\b|too many/i.test(words)) throw new LimitsProblem("rate-limited", "ChatGPT is turning away reads of the plan's limits for now.")
+      if (/\b401\b|unauthori[sz]ed|sign in again|expired/i.test(words)) throw new LimitsProblem("expired", "ChatGPT turned its sign-in away: sign in to Codex again here.")
+      throw new LimitsProblem("failed", `Codex couldn't read the plan's limits: ${words}`)
+    }
+    const snapshots: any[] = result?.rateLimitsByLimitId ? Object.values(result.rateLimitsByLimitId) : result?.rateLimits ? [result.rateLimits] : []
+    const windows = snapshots.flatMap((snapshot) => codexWindows(snapshot))
+    const type = account.planType ?? snapshots.find((snapshot) => snapshot?.planType)?.planType
+    return { windows, ...(typeof type === "string" && type !== "unknown" ? { plan: codexPlan(type) } : {}) }
+  }
 
   /** Its own sign-in on a machine: Kuvo Code's, in its folder there, so signed out here. */
   signOut?: () => Promise<void>
@@ -417,6 +466,8 @@ export class CodexAgent implements Agent {
     if (method === "account/rateLimits/updated") {
       const snapshot = params?.rateLimits
       if (snapshot) this.rateLimits.set(snapshot.limitId ?? "codex", snapshot)
+      // Where the plan stands, for its limits (limits.ts).
+      if (snapshot) for (const window of codexWindows(snapshot)) this.limits.heard?.(window)
       return
     }
     // An agent a session's Codex spawned: its thread says which it came from as it starts.
@@ -2401,4 +2452,30 @@ function codexInput(input: { text: string; files: PromptFile[] }, fencedIn?: str
   }
   if (others.length) items[0].text += `\n\nAttached files:\n${others.map((path) => `- ${path}`).join("\n")}`
   return items
+}
+
+/** A Codex rate-limit snapshot's windows: the plan's (`primary`, `secondary`), or a model's own (`<limit>.primary`, with its name). */
+export function codexWindows(snapshot: any): Omit<LimitWindow, "read" | "source">[] {
+  if (!snapshot || typeof snapshot !== "object") return []
+  const limit = typeof snapshot.limitId === "string" && snapshot.limitId ? snapshot.limitId : "codex"
+  const model = limit === "codex" ? undefined : (snapshot.limitName ?? snapshot.normalModelSlug ?? limit)
+  return (["primary", "secondary"] as const).flatMap((which) => {
+    const window = snapshot[which]
+    const used = Number(window?.usedPercent)
+    if (!window || !Number.isFinite(used)) return []
+    const minutes = Number(window.windowDurationMins)
+    const resets = Number(window.resetsAt)
+    return [{
+      id: limit === "codex" ? which : `${limit}.${which}`,
+      used: used / 100,
+      ...(Number.isFinite(minutes) && minutes > 0 ? { minutes } : {}),
+      ...(Number.isFinite(resets) && resets > 0 ? { resetsAt: resets * 1000 } : {}),
+      ...(typeof model === "string" && model ? { model } : {}),
+    }]
+  })
+}
+
+/** "Plus", "Pro": a ChatGPT plan's name, from Codex's word for it. */
+export function codexPlan(type: string): string {
+  return type.split("_").map((word) => word.charAt(0).toUpperCase() + word.slice(1)).join(" ")
 }
