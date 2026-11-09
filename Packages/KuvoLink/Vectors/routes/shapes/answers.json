@@ -4559,6 +4559,15 @@
          }
         }
        }
+      },
+      "moved?": {
+       "list": {
+        "object": {
+         "session": "string",
+         "key": "string",
+         "at": "number"
+        }
+       }
       }
      }
     }

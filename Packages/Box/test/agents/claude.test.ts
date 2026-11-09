@@ -8,6 +8,7 @@ import { homedir, tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { handler } from "../../src/agents/server"
 import { ClaudeAgent } from "../../src/agents/agents/claude"
+import { Carrying } from "../../src/agents/carry"
 import { subscribe } from "../../src/agents/events"
 import { repositoryOf } from "../../src/agents/fence"
 import { setToolServer } from "../../src/agents/kuvotools"
@@ -858,6 +859,72 @@ describe("a bot's Claude Code on the computer it moved to", () => {
     const { id } = bot("bot_old", false)
     await start(id)
     expect(fake.options.settings).toBeUndefined()
+  })
+})
+
+describe("a conversation on Claude Code's default, moved to a computer where that's another model", () => {
+  // Claude Code's `default` stands for whichever model it recommends on that computer's account:
+  // Opus 5.5 on one, Sonnet 5.5 on the other (as on the user's MacBook and Mac mini, 2026-11-08).
+  const listing = (stands: "opus" | "sonnet") => [
+    { value: "default", resolvedModel: `claude-${stands}-5-5`, displayName: "Default (recommended)", description: `${stands === "opus" ? "Opus" : "Sonnet"} 5.5 · Recommended` },
+    { value: "opus", resolvedModel: "claude-opus-5-5", displayName: "Opus 5.5", description: "Opus 5.5 · Most capable" },
+    { value: "sonnet", resolvedModel: "claude-sonnet-5-5", displayName: "Sonnet 5.5", description: "Sonnet 5.5 · Everyday" },
+  ]
+  /** A computer's agents bridge as far as a move goes: its sessions, its Claude Code, and what carries them. */
+  const computer = (name: string, models: unknown[]) => {
+    const home = mkdtempSync(join(base, `${name}-`))
+    const claudeHere = new TestClaude(new FakeClaude(), home)
+    claudeHere.fake.models = models
+    const store = new Store(join(home, "sessions"))
+    const roster = { find: (id: string | undefined) => (id === claudeHere.providerID ? claudeHere : undefined) } as unknown as Roster
+    const its = new Sessions(store, roster, new Auto(home), undefined, async () => [])
+    return { home, claude: claudeHere, sessions: its, carrying: new Carrying(its, store, (id) => its.agent(id), () => [claudeHere]) }
+  }
+  /** What a picker there calls a session's model: as that computer's Claude Code lists it. */
+  const named = async (where: ReturnType<typeof computer>, id: string) => {
+    // (Once it has said which it has: its usual ones meanwhile.)
+    await where.claude.concreteModel("default")
+    return (await where.claude.models()).find((model) => model.id === id || model.aliases?.includes(id))?.name
+  }
+  const move = async (from: ReturnType<typeof computer>, to: ReturnType<typeof computer>, id: string) => {
+    const bundle = join(from.home, "bundle")
+    await from.carrying.pack(id, bundle)
+    const work = join(to.home, "work")
+    mkdirSync(work, { recursive: true })
+    return await to.carrying.place(bundle, join(to.home, "kept"), work, id)
+  }
+
+  test("it goes on there on the model it ran on here, and shows that model's name there too", async () => {
+    const macBook = computer("macbook", listing("opus")), mini = computer("mini", listing("sonnet"))
+    try {
+      const id = macBook.sessions.create({ model: { providerID: provider, id: "default", variant: "high" }, location: { directory: macBook.home } }).id
+      expect(await named(macBook, "default")).toBe("Opus 5.5")
+      const placed = await move(macBook, mini, id)
+      expect(mini.sessions.get(id).model).toEqual({ providerID: provider, id: "opus", variant: "high" })
+      expect(await named(mini, mini.sessions.get(id).model!.id)).toBe("Opus 5.5")
+      // What it came as, for the link to make the bot's own model the same.
+      expect(placed.came).toEqual({ providerID: provider, id: "default", variant: "high" })
+      // (Its original is as it was: a move taken back leaves it on the default you chose.)
+      expect(macBook.sessions.get(id).model?.id).toBe("default")
+    } finally {
+      macBook.sessions.closeAll()
+      mini.sessions.closeAll()
+    }
+  })
+
+  test("one on a model of its own goes on it; and where Claude Code hasn't said what its default is, it stays on the default, never a guess", async () => {
+    const macBook = computer("macbook", listing("opus")), mini = computer("mini", listing("sonnet"))
+    const quiet = computer("quiet", [])
+    try {
+      const own = macBook.sessions.create({ model: { providerID: provider, id: "sonnet" }, location: { directory: macBook.home } }).id
+      await move(macBook, mini, own)
+      expect(mini.sessions.get(own).model).toEqual({ providerID: provider, id: "sonnet" })
+      const unsaid = quiet.sessions.create({ model: { providerID: provider, id: "default" }, location: { directory: quiet.home } }).id
+      await move(quiet, mini, unsaid)
+      expect(mini.sessions.get(unsaid).model).toEqual({ providerID: provider, id: "default" })
+    } finally {
+      for (const each of [macBook, mini, quiet]) each.sessions.closeAll()
+    }
   })
 })
 

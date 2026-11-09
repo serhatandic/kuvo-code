@@ -17,6 +17,9 @@ import path from "node:path";
 import { test as nodeTest } from "node:test";
 import { atEnd, removeAtEnd } from "./at-end.js";
 
+// What's under way, as `kuvo/moves` says it (not what moved away lately, `moved`, which stays two days).
+const underWay = ({ moved: _moved, ...rest } = {}) => rest;
+
 // Each fails, rather than hangs, when what it waits for never comes.
 const test = (name, run) => nodeTest(name, { timeout: 10_000 }, run);
 
@@ -98,11 +101,11 @@ function writeRecord(record) {
 
 test("a move between two other computers shows here as they say it, and goes once each says it's over", async () => {
   const events = follow();
-  assert.deepEqual(await events.next(), { moves: [], away: [] });
+  assert.deepEqual(underWay(await events.next()), { moves: [], away: [] });
   const leaving = move("mov_lp1", lab.key, pi.key, "from", "copying", { sent: 30_000, size: 90_000 });
   mail(lab, { moving: { moves: [leaving] } });
-  assert.deepEqual(await ask("kuvo/moves"), { moves: [], away: [], elsewhere: [{ box: lab.key, moves: [leaving] }] });
-  assert.deepEqual(await events.next(), { moves: [], away: [], elsewhere: [{ box: lab.key, moves: [leaving] }] }, "a client following this box hears it");
+  assert.deepEqual(underWay(await ask("kuvo/moves")), { moves: [], away: [], elsewhere: [{ box: lab.key, moves: [leaving] }] });
+  assert.deepEqual(underWay(await events.next()), { moves: [], away: [], elsewhere: [{ box: lab.key, moves: [leaving] }] }, "a client following this box hears it");
   const arriving = move("mov_lp1", lab.key, pi.key, "to", "copying");
   mail(pi, { moving: { moves: [arriving] } });
   const both = await ask("kuvo/moves");
@@ -111,7 +114,7 @@ test("a move between two other computers shows here as they say it, and goes onc
   mail(lab, { moving: { moves: [] } });
   assert.deepEqual((await ask("kuvo/moves")).elsewhere, [{ box: pi.key, moves: [arriving] }]);
   mail(pi, { moving: { moves: [] } });
-  assert.deepEqual(await ask("kuvo/moves"), { moves: [], away: [] });
+  assert.deepEqual(underWay(await ask("kuvo/moves")), { moves: [], away: [] });
   events.stop();
 });
 
@@ -149,16 +152,16 @@ test("what a computer said goes once it's been quiet a few minutes; what isn't a
 
 test("a computer gone quiet mid-move: a client following this box hears its move go, at the look after the few minutes", async () => {
   const events = follow();
-  assert.deepEqual(await events.next(), { moves: [], away: [] });
+  assert.deepEqual(underWay(await events.next()), { moves: [], away: [] });
   const one = move("mov_g1", lab.key, pi.key, "from", "copying");
   mail(lab, { moving: { moves: [one] } });
-  assert.deepEqual(await events.next(), { moves: [], away: [], elsewhere: [{ box: lab.key, moves: [one] }] });
+  assert.deepEqual(underWay(await events.next()), { moves: [], away: [], elsewhere: [{ box: lab.key, moves: [one] }] });
   // A look within the few minutes changes nothing; the one after them tells it's gone (a client
   // reading lab meanwhile reads it until then, and no longer).
   link.keepMoving(Date.now() + 60_000);
   link.keepMoving(Date.now() + 4 * 60_000);
-  assert.deepEqual(await events.next(), { moves: [], away: [] });
-  assert.deepEqual(await ask("kuvo/moves"), { moves: [], away: [] });
+  assert.deepEqual(underWay(await events.next()), { moves: [], away: [] });
+  assert.deepEqual(underWay(await ask("kuvo/moves")), { moves: [], away: [] });
   events.stop();
 });
 

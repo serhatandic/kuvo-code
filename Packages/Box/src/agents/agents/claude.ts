@@ -190,6 +190,8 @@ export class ClaudeAgent implements Agent {
   turnedAway?: { written?: number }
   private modelList?: { at: number; models: Model[] }
   private loadingModels?: Promise<void>
+  /** Told as Claude Code lists its models. */
+  private listed: (() => void)[] = []
   /** Counts updates of Claude Code: a session's Claude Code started before the last one starts again. */
   program = 0
 
@@ -663,6 +665,23 @@ export class ClaudeAgent implements Agent {
     return this.modelList?.models ?? fallbackModels(this.providerID)
   }
 
+  async concreteModel(id: string): Promise<string | undefined> {
+    // Only as Claude Code listed them here (its usual ones meanwhile are a guess): asked first, if it
+    // hasn't said yet, until it lists them (not how much each holds, asked after).
+    if (!this.modelList) {
+      void this.models()
+      const loading = this.loadingModels
+      await new Promise<void>((resolve) => {
+        this.listed.push(resolve)
+        if (loading) loading.then(() => resolve(), () => resolve())
+        else resolve()
+      })
+    }
+    const models = this.modelList?.models ?? []
+    if (models.some((model) => model.id === id)) return undefined
+    return models.find((model) => model.aliases?.includes(id))?.id
+  }
+
   private async loadModels() {
     const sdk = await this.sdk()
     const abort = new AbortController()
@@ -728,6 +747,7 @@ export class ClaudeAgent implements Agent {
         ]
       }),
     }
+    for (const told of this.listed.splice(0)) told()
     emit("model.updated", {})
   }
 

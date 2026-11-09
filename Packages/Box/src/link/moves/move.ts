@@ -1035,15 +1035,16 @@ async function bringIn(record: MoveRecord, signal: AbortSignal): Promise<string[
   changeMove(record.id, each => { each.sessions = sessions; each.was = was; });
   let infos: (Partial<EngineSession> & { id: string })[];
   if (contents.lane) {
-    const placed = await carry<{ digest: string; sessions: string[]; model?: { providerID?: string }; infos: { id: string; metadata?: Record<string, unknown> }[] }>(engine, "place", { from: carried, keep: placedOf(record.id), directory, root }, signal).catch(error => {
+    const placed = await carry<{ digest: string; sessions: string[]; model?: { providerID?: string; id?: string }; came?: { providerID?: string; id?: string }; infos: { id: string; metadata?: Record<string, unknown> }[] }>(engine, "place", { from: carried, keep: placedOf(record.id), directory, root }, signal).catch(error => {
       if ((error as { status?: number } | null)?.status === 409) throw new NotTaken(String((error as Error).message));
       throw error;
     });
     sessions = [...new Set([...sessions, ...placed.sessions])];
     changeMove(record.id, each => { each.digest = placed.digest; each.sessions = sessions; });
     infos = placed.infos as typeof infos;
-    // Its account isn't on this computer: the bot goes on with the one its conversation went to.
-    if (record.kind === "bot" && placed.model?.providerID) rewriteModel(place, placed.model.providerID);
+    // Its account isn't on this computer: the bot goes on with the one its conversation went to. And
+    // on the model it ran on, where it named it by an alias that stands for another one here.
+    if (record.kind === "bot" && placed.model?.providerID) rewriteModel(place, placed.model, placed.came);
   } else {
     await importAll(engine, contents.exports, directory, signal);
     infos = contents.exports.flatMap(exported => isObject(exported) && isObject(exported.info) ? [exported.info as Partial<EngineSession> & { id: string }] : []);
@@ -1071,13 +1072,19 @@ async function bringIn(record: MoveRecord, signal: AbortSignal): Promise<string[
 /** What the bridge keeps of what it placed for a move, until it's over (never in what's opened). */
 const placedOf = (id: string) => path.join(bundleOf(id), "carried");
 
-/** The account a moved bot's model is on, as its conversation's now is here. */
-function rewriteModel(folder: string, provider: string): void {
+/** The account a moved bot's model is on, as its conversation's now is here (`now`), and the model:
+ * the one its conversation went on with, when the bot named the same as its conversation did as it
+ * came (`came`; an alias such as Claude Code's `default`, which stands for another model here). */
+function rewriteModel(folder: string, now: { providerID?: string; id?: string }, came?: { providerID?: string; id?: string }): void {
   try {
     const file = path.join(folder, "bot.json");
     const described: unknown = JSON.parse(fs.readFileSync(file, "utf8"));
-    if (!isObject(described) || !isObject(described.model) || described.model.providerID === provider) return;
-    described.model.providerID = provider;
+    if (!isObject(described) || !isObject(described.model) || typeof now.providerID !== "string") return;
+    const model = described.model;
+    const same = typeof came?.id === "string" && model.id === came.id && model.providerID === came.providerID;
+    const id = same && typeof now.id === "string" && now.id ? now.id : model.id;
+    if (model.providerID === now.providerID && model.id === id) return;
+    described.model = { ...model, providerID: now.providerID, id };
     writePrivate(file, JSON.stringify(described, null, 2));
   } catch {}
 }

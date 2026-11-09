@@ -1916,12 +1916,14 @@ function movedAway(now = Date.now()) {
 function noteMovedAway(sessions, key, now = Date.now()) {
   const kept = movedAway(now).filter((each) => !sessions.includes(each.session));
   writePrivate(MOVED_FILE, JSON.stringify([...kept, ...sessions.map((session) => ({ session, key, at: now }))]));
+  movesChanged();
 }
 function forgetMovedAway(sessions, now = Date.now()) {
   const kept = movedAway(now);
   if (!kept.some((each) => sessions.includes(each.session)))
     return;
   writePrivate(MOVED_FILE, JSON.stringify(kept.filter((each) => !sessions.includes(each.session))));
+  movesChanged();
 }
 var ENDED_FILE = path10.join(MOVES, "ended.json");
 var ENDED_FOR = { dropped: 7 * 24 * 3600000, switched: 365 * 24 * 3600000 };
@@ -18927,7 +18929,7 @@ async function bringIn(record, signal) {
     });
     infos = placed.infos;
     if (record.kind === "bot" && placed.model?.providerID)
-      rewriteModel(place, placed.model.providerID);
+      rewriteModel(place, placed.model, placed.came);
   } else {
     await importAll(engine, contents.exports, directory, signal);
     infos = contents.exports.flatMap((exported) => isObject(exported) && isObject(exported.info) ? [exported.info] : []);
@@ -18953,13 +18955,18 @@ async function bringIn(record, signal) {
   return sessions;
 }
 var placedOf = (id) => path68.join(bundleOf(id), "carried");
-function rewriteModel(folder, provider) {
+function rewriteModel(folder, now, came) {
   try {
     const file = path68.join(folder, "bot.json");
     const described = JSON.parse(fs65.readFileSync(file, "utf8"));
-    if (!isObject(described) || !isObject(described.model) || described.model.providerID === provider)
+    if (!isObject(described) || !isObject(described.model) || typeof now.providerID !== "string")
       return;
-    described.model.providerID = provider;
+    const model = described.model;
+    const same = typeof came?.id === "string" && model.id === came.id && model.providerID === came.providerID;
+    const id = same && typeof now.id === "string" && now.id ? now.id : model.id;
+    if (model.providerID === now.providerID && model.id === id)
+      return;
+    described.model = { ...model, providerID: now.providerID, id };
     writePrivate(file, JSON.stringify(described, null, 2));
   } catch {}
 }
@@ -27389,7 +27396,7 @@ import fs89 from "node:fs";
 import path94 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "0.9.207";
+var BRIDGE_VERSION = "0.9.208";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
@@ -29542,13 +29549,15 @@ var KINDS4 = ["bot", "chat", "group"];
 var movesNow = () => {
   const peers = peersOf(readLink());
   const elsewhere = movesElsewhere(peers);
+  const moved = movedAway().map(({ session, key, at }) => ({ session, key, at }));
   return {
     moves: listedMoves().map((record) => {
       const place = plainName(peers.find((peer) => peer.key === record.peer)?.name ?? "");
       return { ...shownMove(record), ...place ? { place } : {} };
     }),
     away: awaySessions(),
-    ...elsewhere.length ? { elsewhere } : {}
+    ...elsewhere.length ? { elsewhere } : {},
+    ...moved.length ? { moved } : {}
   };
 };
 async function* movesRoute(context) {

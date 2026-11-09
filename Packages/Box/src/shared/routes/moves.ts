@@ -45,10 +45,16 @@ export const MOVE = object({
  * `box`): one between two machines is seen on every box. */
 export const MOVES_ELSEWHERE = object({ box: string, moves: list(MOVE) });
 
+/** A conversation that moved away from this box in the last two days (`session`), the box it went
+ * to (`key`), and when (`at`, ms). */
+export const MOVED_AWAY = object({ session: string, key: string, at: number });
+
 /** The moves under way here, the conversations this box's engine lists that don't live here (a
- * copy not switched to yet, or an original still going), for clients to leave out, and the moves
- * your other computers said they have under way (left out when none). */
-export const MOVES = object({ moves: list(MOVE), away: list(string), "elsewhere?": list(MOVES_ELSEWHERE) });
+ * copy not switched to yet, or an original still going), for clients to leave out, the moves
+ * your other computers said they have under way (left out when none), and the conversations that
+ * moved away from here lately (left out when none): a client that has a row of one from this box,
+ * or hears of one from it, leaves it out too, and finds it where it went. */
+export const MOVES = object({ moves: list(MOVE), away: list(string), "elsewhere?": list(MOVES_ELSEWHERE), "moved?": list(MOVED_AWAY) });
 /** A move that ended well: where it went. */
 export const MOVED = object({ move: MOVE });
 
@@ -59,6 +65,7 @@ export type MovePlaces = Infer<typeof MOVE_PLACES>;
 export type MoveStays = Infer<typeof MOVE_STAYS>;
 export type Move = Infer<typeof MOVE>;
 export type MovesElsewhere = Infer<typeof MOVES_ELSEWHERE>;
+export type MovedAwayShown = Infer<typeof MOVED_AWAY>;
 export type Moves = Infer<typeof MOVES>;
 
 export const MOVE_ROUTES: RouteShape[] = [

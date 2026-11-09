@@ -17,6 +17,7 @@ import { before, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { atEnd, removeAtEnd } from "./at-end.js";
 import { NO_BUN, testBun } from "./bun-for-tests.js";
+import { standInClaude } from "./claude-stand-in.js";
 import { relayStandIn } from "./relay-stand-in.js";
 
 const script = fileURLToPath(new URL("../../Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url));
@@ -79,13 +80,12 @@ const running = new Map();
 async function startBridge(which) {
   // (A Mac without a token of its own keeps a Console sign-in's folder; this one has its CLAUDE_CONFIG_DIR.)
   write(path.join(which.agents, "claude", "tokens", "default.json"), { token: "stand-in" });
-  // Claude Code there, signed in (a move checks that first): a stand-in that says so, never a turn.
-  const claudeCode = path.join(which.root, ".local", "bin", "claude");
-  write(claudeCode, `#!/bin/sh\n[ "$1" = auth ] && echo '{"loggedIn":true,"authMethod":"claude.ai"}' && exit 0\nexit 1\n`);
-  fs.chmodSync(claudeCode, 0o755);
+  // Claude Code there, signed in (a move checks that first), listing its models, never a turn. Its
+  // `default` is Opus on the Mac and Sonnet on the machine (as on two accounts of different plans).
+  const claudeBin = standInClaude({ root: which.root, agents: which.agents, stands: which === mac ? "opus" : "sonnet" });
   const child = spawn(bun, [bridgeScript], {
     env: {
-      PATH: process.env.PATH, HOME: which.root, TMPDIR: process.env.TMPDIR ?? os.tmpdir(), BUN_BE_BUN: "1", BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0",
+      PATH: `${claudeBin}:${process.env.PATH}`, HOME: which.root, TMPDIR: process.env.TMPDIR ?? os.tmpdir(), BUN_BE_BUN: "1", BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0",
       KUVO_AGENTS_HOME: which.agents, OPENCODE_PASSWORD: "pw", CLAUDE_CONFIG_DIR: which.claude,
       KUVO_GROUPS: path.join(which.root, "groups"), KUVO_BOTS: which.bots, KUVO_TRASH: path.join(which.home, "trash"), KUVO_ARTIFACTS: path.join(which.root, "artifacts"),
     },
@@ -367,8 +367,16 @@ test("a Claude Code bot moves with its conversation and memory, and comes back t
   // And not on two computers: its session is gone from here (nothing here can run it), and its folder.
   assert.equal(await sessionThere(mac, "ses_ada"), false);
   assert.equal(fs.existsSync(path.join(mac.bots, "bot_ada")), false);
-  assert.deepEqual((await ask("GET", "kuvo/moves")).json, bare());
+  // And this box says so, with where they went, for a client that still has a row of them from here
+  // (the Mac app open through the move): it leaves those out, and finds them on the machine.
+  const { moved: movedAway, ...rest } = (await ask("GET", "kuvo/moves")).json;
+  assert.deepEqual(rest, bare());
+  assert.deepEqual(movedAway.map(each => [each.session, each.key]).sort(), [["ses_ada", machine.key], ["ses_adasub", machine.key]]);
   assert.deepEqual((await askMachine("GET", "kuvo/moves")).json, bare());
+  // On Claude Code's default, which is Opus here and Sonnet there: it goes on there on Opus, as it
+  // ran here, and so does the bot's own model (#306).
+  assert.deepEqual(there.json.data.model, { id: "opus", providerID: "claude-code" });
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(lab.bots, "bot_ada", "bot.json"), "utf8")).model, { id: "opus", providerID: "claude-code" });
 
   // Something new there, then back.
   fs.appendFileSync(path.join(placed, `${adaClaude}.jsonl`), '{"type":"user","cwd":"the machine"}\n');
@@ -381,6 +389,9 @@ test("a Claude Code bot moves with its conversation and memory, and comes back t
   assert.equal(fs.readFileSync(path.join(mac.bots, "bot_ada", "memory", "learned-there.md"), "utf8"), "Learned on the machine.\n");
   assert.deepEqual(agentState(mac, "ses_ada").threads["claude-code"].state, { claudeSession: adaClaude, claudeStarted: true });
   assert.equal(await sessionThere(lab, "ses_ada"), false, "and nothing's left running there");
+  // Back here, it lives here again: this box no longer says it moved away.
+  await eventually(async () => !(await ask("GET", "kuvo/moves")).json.moved?.some(each => each.session === "ses_ada"));
+  assert.ok((await askMachine("GET", "kuvo/moves")).json.moved?.some(each => each.session === "ses_ada" && each.key === macAddress), "the machine says it went back");
   assert.equal((await asks(lab, "GET", "/api/session/active")).json.data.ses_ada, undefined);
 });
 
