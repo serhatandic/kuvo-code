@@ -1816,6 +1816,28 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     when the engine wouldn't remove one, which stays, its plan still said to have ended, and `503
     {message}` when the engine can't list them; one already gone, removed meanwhile, is removed). Every box from bridge 0.9.61
     (`accounts.ended`); a Mac before answered them itself.
+  - `POST kuvo/accounts/<provider>/refresh` is Refresh Models: the engine's lists of models made
+    afresh without a restart, and what providers need from it learned again from them and applied
+    ("Settings per box"), at once. opencode reads an account's models (GitHub Copilot's, with the
+    models your plan has) as it opens a folder, and again only when the account in use changes, so
+    the box closes each folder the engine has open (`DELETE api/debug/location`), which it opens
+    afresh as it's next used: at once where nothing's going on, and once its work is done where
+    something is (a run, a question or a permission waiting on you, a terminal, a running command),
+    which closing would cut: those are kept in `run/models-due.json` for that engine and closed as
+    its events say their work ended (a run's end, a terminal's or a command's, a question
+    answered). It answers `200 {waiting: [folder]}`, the folders still to get them; the engine's
+    own folder, whose list the model pickers read, is among them only while something goes on
+    there, and a client says the rest get them once their work is done. Each folder is looked at
+    again just before it's closed, so a run started meanwhile keeps it open. Those left are closed
+    as the box follows its engine's events (on a machine, while its bridge runs; otherwise by the
+    next refresh, which looks at every open folder). Clients' pickers follow the engine's
+    `model.updated`. It helps only the providers whose lists opencode reads from your account as a
+    folder opens, and again only when the account in use changes: `GET kuvo/accounts/refreshable`
+    → `{providers: [id]}` (GitHub Copilot, GitLab Duo, Modal, DigitalOcean, OpenCode), which a
+    client offers it for, on the account in use. The rest come from models.dev's catalog, which
+    the engine reads again by itself: `409 {message}` for those. `404 {message}` for one the engine
+    doesn't have; `503 {message}` while it can't be asked, or when it has no way to close a folder,
+    which only a restart does then. Every box with `accounts.refresh`.
   - `GET kuvo/accounts/found` → `{agents, opencode, shell, connected}`: what the computer already has, for
     the first launch's Bring your subscriptions. `agents`: the coding agents' programs (`{id, name,
     installed, signedIn, label?}`, `label` who it's signed in as). `opencode`: an opencode used
@@ -2996,6 +3018,7 @@ the route scenarios (`Vectors/routes/routing.json`).
 | --- | --- |
 | `accounts.credentials` | `kuvo/accounts/credentials` |
 | `accounts.found` | `kuvo/accounts/found`, `…/found/use` |
+| `accounts.refresh` | `GET kuvo/accounts/refreshable` and `POST kuvo/accounts/<provider>/refresh` (Refresh Models) |
 | `agents` | `kuvo/agents/api/…`: the coding agents (`agents` in `kuvo/info` says whether their bridge is up now) |
 | `asks` | `kuvo/asks`, `…/events`, and answering one |
 | `attention` | `kuvo/attention` |
@@ -3535,23 +3558,41 @@ as `{status, bodyBase64, type}`. (`kuvo-link.js box read | change` are the same,
 ("This Mac's box").
 
 What some providers need from the engine until opencode handles it is each box's own too: a
-settings layer its engine starts with, on top of everything else (`OPENCODE_CONFIG_CONTENT`), never
-in your settings. Today that's GitHub Copilot's Claude models named with
+settings file of the box's own beside yours in its engine's settings folder (`opencode/opencode.jsonc`
+under the engine's `XDG_CONFIG_HOME`: a machine's `~/.kuvo-code/config`, this Mac's
+`KUVO_ENGINE_CONFIG`), never in your settings. opencode reads it with `opencode.json` and reads it
+again as it changes, so what the box learns applies to the engine running now, with no restart: a
+conversation going on uses it from its next message. (opencode 2.2.5 reads `OPENCODE_CONFIG_CONTENT`
+only as it starts, `POST api/location/reload` stops every terminal and command and drops the
+questions waiting on you, `PATCH api/experimental/config` takes only `shell`, and a machine's
+`OPENCODE_CONFIG` is your settings.) The file's first line starts `// Kept by Kuvo Code`; one there
+without it (yours) is never changed, and the box doesn't apply what it learned then (its log says
+so once). A Kuvo Code from before this file never reads or removes it: after a downgrade, delete it
+if you sign out of Copilot. An engine started before a box kept it there has the old layer in
+`OPENCODE_CONFIG_CONTENT` until its next start. Today it's
+GitHub Copilot's Claude models named with
 `{"compatibility": {"supportsThinkingBlockBinding": false}}` (anomalyco/opencode#55160), only
 while the box has a Copilot account: named in an engine's settings with none, Copilot counts as set
 up there and its newest model becomes the engine's default, which fails every message left to it.
+With nothing to name, there's no file.
 The box learns them from its own engine: `GET /api/integration/github-copilot` (an account when its
 `connections` aren't empty; an answer it can't read leaves what it learned, and it asks again with
 the engine's next event: one just started answers 404 for a moment), then `GET /api/model`
 (Copilot's models whose id starts `claude-` and that have a `family`; an account whose models
-haven't come yet leaves what it learned), as it finds the engine and every ten minutes at most
-while it's at work (on a machine, while its bridge runs: it has peers or phones), and keeps the
-layer in `run/compatibility.json` (nothing until it has learned, and nothing with no account). What
-it learns goes to the engine's next start; the box doesn't restart it for that. Whatever starts the engine asks the box: `kuvo-link.js
-engine-config` prints the `OPENCODE_CONFIG_CONTENT` it's run with, the layer merged on top, having
-brought a machine's integrations up to date first (see `kuvo/integrations`). This Mac's app runs it as it starts its engine, and a machine's start scripts do, so an engine started
-after a restart with no Mac there gets it too; a box too old to know it starts its engine as
-before. A Mac sends none.
+haven't come yet leaves what it learned), as it finds the engine; at once as the engine says an
+account was added, removed, signed in to again or switched to (`credential.updated`,
+`credential.switched`, `integration.updated`) and as its models change (`model.updated`: an account's come a moment after
+its sign-in); every ten minutes at most besides while it's at work; and as a provider's models are
+refreshed (`kuvo/accounts/<provider>/refresh`). On a machine, that's while its bridge runs (it has
+peers or phones). It keeps what it learned in `run/compatibility.json` too. Whatever starts the
+engine asks the box first: `kuvo-link.js engine-config` prints the `OPENCODE_CONFIG_CONTENT` it's
+run with (the sandbox's note added, nothing of the providers', which would hold an old list over the
+file until a restart), having brought a machine's integrations up to date (see
+`kuvo/integrations`) and, where it's told the engine's settings folder (a machine's start scripts
+export its `XDG_CONFIG_HOME`), the file to what the box learned (one an older box learned before it
+kept it there). This Mac's app runs it as it starts its engine, after its box, which keeps the file
+as it starts; a machine's start scripts do, so an engine started after a restart with no Mac there
+reads it too. A box too old to know it starts its engine as before. A Mac sends none.
 
 A machine's engine, its coding agents and its link find programs on the PATH your login shell sets
 up there (`~/.local/bin` from your profile, nvm's node from `.bashrc`), not the bare one a start over
