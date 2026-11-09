@@ -196,9 +196,15 @@ public final class VoiceInput {
         guard let language = await DictationTranscriber.supportedLocale(equivalentTo: locale) else { return fail(.unsupported, run: run) }
         let transcriber = DictationTranscriber(locale: language, contentHints: [], transcriptionOptions: [.punctuation],
                                                reportingOptions: [.volatileResults, .frequentFinalization], attributeOptions: [.audioTimeRange])
-        // Its model for your language, the first time.
+        // Its model for your language, the first time (not for a test's microphone that refuses,
+        // which mustn't wait on a download).
+        #if DEBUG
+        let fetchesModel = !Self.microphoneRefuses
+        #else
+        let fetchesModel = true
+        #endif
         do {
-            if let request = try await AssetInventory.assetInstallationRequest(supporting: [transcriber]) {
+            if fetchesModel, let request = try await AssetInventory.assetInstallationRequest(supporting: [transcriber]) {
                 let progress = request.progress
                 let watching = Task { @MainActor [weak self] in
                     while !Task.isCancelled, self?.run == run, self?.isPreparing == true {
@@ -233,7 +239,8 @@ public final class VoiceInput {
             let (stream, continuation) = AsyncStream<AnalyzerInput>.makeStream()
             let analyzer = SpeechAnalyzer(modules: [transcriber])
             try await analyzer.prepareToAnalyze(in: format)
-            guard self.run == run else { return }
+            // Canceled while it got ready: it lets go of the model it prepared.
+            guard self.run == run else { return await analyzer.cancelAndFinishNow() }
             self.analyzer = analyzer
             inputs = continuation
             results = Task { [weak self] in await self?.read(transcriber, run: run) }
@@ -472,11 +479,20 @@ public final class VoiceInput {
     /// whoever looks into it.
     static func failure(of error: Error, _ stage: Stage) -> Failure {
         log.error("Voice input stopped at \(String(describing: stage), privacy: .public): \(String(describing: error), privacy: .public)")
-        if (error as? VoiceError) == .noMicrophone { return .other("Voice input can’t hear a microphone. Check that one is connected, then try again.") }
+        if (error as? VoiceError) == .noMicrophone {
+            #if os(iOS)
+            // An iPhone has its microphone: something else holds it (a call, another app).
+            return .other("Voice input can’t use the microphone while something else is using it. Try again once it’s free.")
+            #else
+            return .other("Voice input can’t hear a microphone. Check that one is connected, then try again.")
+            #endif
+        }
         let words = error.localizedDescription
         if words.localizedCaseInsensitiveContains("authoriz") { return .speechDenied }
         return switch stage {
-        case .gettingReady: .other("Voice input couldn’t get ready. Check that you’re online, then try again.")
+        case .gettingReady where (error as NSError).domain == NSURLErrorDomain:
+            .other("Voice input couldn’t download what it needs for your language. Check that you’re online, then try again.")
+        case .gettingReady: .other("Voice input couldn’t get ready. Try again.")
         case .microphone: .other("Voice input couldn’t use the microphone. Try again.")
         case .listening(let wroteSome): stopped(wroteSome: wroteSome)
         }
