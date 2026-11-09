@@ -131,9 +131,16 @@ test("with no accounts, a box's engine answers a first message on its default mo
 
 // GitHub Copilot's API for one account, as it answers: the models the account has (`models`), and
 // messages, refusing what Copilot refuses (`thinking.block_binding`); `asked` keeps what each
-// message asked for.
+// message asked for. `hold()` keeps its answers back (a reply taking its time) until `release()`.
 async function copilotStandIn(models) {
-  const copilot = { models, asked: [] };
+  const copilot = { models, asked: [], held: null, heldAsked: [] };
+  copilot.hold = () => {
+    let release;
+    copilot.held = new Promise(resolve => { release = resolve; });
+    copilot.release = () => { copilot.held = null; release(); };
+  };
+  // The next message held back, once it has come.
+  copilot.nextHeld = () => new Promise(resolve => copilot.heldAsked.push(resolve));
   const listed = id => ({
     id, name: id, version: id, model_picker_enabled: true, supported_endpoints: ["/v1/messages"],
     capabilities: { family: id.replace(/-[\d.]+$/, ""), limits: { max_context_window_tokens: 200000, max_output_tokens: 32000, max_prompt_tokens: 168000 }, supports: { tool_calls: true, streaming: true, adaptive_thinking: true, reasoning_effort: ["low", "medium", "high"] } },
@@ -141,7 +148,11 @@ async function copilotStandIn(models) {
   const server = http.createServer((request, response) => {
     let body = "";
     request.on("data", chunk => { body += chunk; });
-    request.on("end", () => {
+    request.on("end", async () => {
+      if (request.url === "/v1/messages" && copilot.held) {
+        for (const resolve of copilot.heldAsked.splice(0)) resolve();
+        await copilot.held;
+      }
       if (request.url === "/models") return response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ data: copilot.models.map(listed) }));
       if (request.url !== "/v1/messages") return response.writeHead(404).end();
       const asked = JSON.parse(body);
@@ -170,7 +181,12 @@ async function copilotStandIn(models) {
 test("a Copilot account signed in to: its Claude models work at once, with no restart; one it gets later works once you refresh its models; signed out, it's gone at once", { skip: !binary && "OPENCODE_TEST_BINARY isn't set", timeout: 600_000 }, async t => {
   fs.rmSync(`${box}/run/compatibility.json`, { force: true });
   const copilot = await copilotStandIn(["claude-opus-5.5", "gpt-6"]);
+  // Your own settings, in the same folder as the box's file (as on a Mac): a provider of your own.
+  fs.mkdirSync(`${box}/config/opencode`, { recursive: true });
+  fs.writeFileSync(`${box}/config/opencode/opencode.json`, JSON.stringify({ provider: { lab: { name: "Lab", npm: "@ai-sdk/openai-compatible", options: { baseURL: "http://127.0.0.1:9/v1", apiKey: "none" }, models: { "lab-one": { name: "Lab One" } } } } }));
   const engine = await startEngine();
+  const yours = async () => (await engine.models()).some(model => model.providerID === "lab" && model.id === "lab-one");
+  assert.ok(await yours(), "The engine doesn't read your own settings");
   // The box, watching its engine as it does.
   const stop = new AbortController();
   t.after(() => stop.abort());
@@ -184,6 +200,8 @@ test("a Copilot account signed in to: its Claude models work at once, with no re
   assert.equal(added.status, 200, JSON.stringify(added.json));
   const compatible = id => async () => (await engine.models()).some(model => model.providerID === "github-copilot" && model.id === id && model.compatibility?.supportsThinkingBlockBinding === false);
   await waitFor(compatible("claude-opus-5.5"), "the engine to have what Copilot's Claude models need");
+  // Yours still apply beside it.
+  assert.ok(await yours(), "Your own settings went with the box's file beside them");
 
   // A conversation on it, with thinking on (the engine adds the field Copilot refuses to those).
   const session = (await engine.api("POST", "api/session", { location: { directory: work } })).json.data;
@@ -196,9 +214,21 @@ test("a Copilot account signed in to: its Claude models work at once, with no re
   // Copilot gives the account another model; the engine doesn't know until its models are asked of again.
   copilot.models = ["claude-opus-5.5", "claude-sonnet-5.6", "gpt-6"];
   assert.ok(!(await engine.models()).some(model => model.id === "claude-sonnet-5.6"));
+  // Refreshed while a turn is under way in the conversation's folder: that folder isn't cut.
+  copilot.hold();
+  const asking = copilot.nextHeld();
+  const running = engine.say(session.id, "Take your time.");
+  await asking;
   const refreshed = [];
   for await (const part of link.engineHandler(() => engine.target)({ method: "POST", path: "kuvo/accounts/github-copilot/refresh", headers: {}, body: Buffer.alloc(0) }, {}, undefined)) refreshed.push(part);
   assert.equal(refreshed[0].head.status, 200);
+  const waiting = JSON.parse(Buffer.concat(refreshed.filter(part => part.body).map(part => part.body)).toString()).waiting;
+  assert.ok(waiting.includes(work), `The folder at work was closed: ${JSON.stringify(waiting)}`);
+  copilot.release();
+  turn = await running;
+  assert.equal(turn.idle.outcome, "succeeded", `The turn under way was cut: ${turn.failed?.error?.message}`);
+  // Its work done, the box closes it: it opens afresh, with the new model.
+  await waitFor(async () => !fs.existsSync(`${box}/run/models-due.json`), "the box to close the folder once its turn ended");
   await waitFor(compatible("claude-sonnet-5.6"), "the engine to list the new model, with what it needs");
   // In the conversation going on, on the same engine.
   await engine.api("POST", `api/session/${session.id}/model`, { model: { providerID: "github-copilot", id: "claude-sonnet-5.6", variant: "high" } });
@@ -211,6 +241,7 @@ test("a Copilot account signed in to: its Claude models work at once, with no re
   // Signed out: Copilot's gone from the engine at once, so none of its models is the default.
   await engine.api("DELETE", `api/credential/${added.json.data.id}`);
   await waitFor(async () => !(await engine.providers()).has("github-copilot"), "the engine to drop Copilot");
+  assert.ok(await yours(), "Your own settings went with the box's file");
   stop.abort();
   await engine.stop();
 });

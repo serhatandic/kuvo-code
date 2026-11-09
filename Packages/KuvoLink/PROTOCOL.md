@@ -1827,9 +1827,13 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     its events say their work ended (a run's end, a terminal's or a command's, a question
     answered). It answers `200 {waiting: [folder]}`, the folders still to get them; the engine's
     own folder, whose list the model pickers read, is among them only while something goes on
-    there. Clients' pickers follow the engine's `model.updated`. The list is every provider's: the
-    provider named is the row it was asked from (`404 {}` for one the engine doesn't have, `503
-    {message}` while it can't be asked). Every box with `accounts.refresh`.
+    there. Each folder is looked at again just before it's closed, so a run started meanwhile keeps
+    it open. Clients' pickers follow the engine's `model.updated`. The list is every provider's:
+    what it changes is the lists opencode reads from an account as a folder opens (GitHub
+    Copilot's; GitLab Duo's, Modal's and DigitalOcean's too), while models.dev's catalog refreshes
+    by itself; the provider named is the row it was asked from (`404 {}` for one the engine doesn't
+    have, `503 {message}` while it can't be asked, or when it has no way to close a folder, which
+    only a restart does then). Every box with `accounts.refresh`.
   - `GET kuvo/accounts/found` → `{agents, opencode, shell, connected}`: what the computer already has, for
     the first launch's Bring your subscriptions. `agents`: the coding agents' programs (`{id, name,
     installed, signedIn, label?}`, `label` who it's signed in as). `opencode`: an opencode used
@@ -3551,8 +3555,11 @@ again as it changes, so what the box learns applies to the engine running now, w
 conversation going on uses it from its next message. (opencode 2.2.5 reads `OPENCODE_CONFIG_CONTENT`
 only as it starts, `POST api/location/reload` stops every terminal and command and drops the
 questions waiting on you, `PATCH api/experimental/config` takes only `shell`, and a machine's
-`OPENCODE_CONFIG` is your settings.) The file starts with a comment that says it's Kuvo Code's; one
-there without it (yours) is never changed, and the box doesn't apply what it learned then. Today it's
+`OPENCODE_CONFIG` is your settings.) The file's first line starts `// Kept by Kuvo Code`; one there
+without it (yours) is never changed, and the box doesn't apply what it learned then (its log says
+so once). A Kuvo Code from before this file never reads or removes it: after a downgrade, delete it
+if you sign out of Copilot. An engine started before a box kept it there has the old layer in
+`OPENCODE_CONFIG_CONTENT` until its next start. Today it's
 GitHub Copilot's Claude models named with
 `{"compatibility": {"supportsThinkingBlockBinding": false}}` (anomalyco/opencode#55160), only
 while the box has a Copilot account: named in an engine's settings with none, Copilot counts as set
@@ -3564,7 +3571,7 @@ the engine's next event: one just started answers 404 for a moment), then `GET /
 (Copilot's models whose id starts `claude-` and that have a `family`; an account whose models
 haven't come yet leaves what it learned), as it finds the engine; at once as the engine says an
 account was added, removed, signed in to again or switched to (`credential.updated`,
-`credential.switched`) and as its models change (`model.updated`: an account's come a moment after
+`credential.switched`, `integration.updated`) and as its models change (`model.updated`: an account's come a moment after
 its sign-in); every ten minutes at most besides while it's at work; and as a provider's models are
 refreshed (`kuvo/accounts/<provider>/refresh`). On a machine, that's while its bridge runs (it has
 peers or phones). It keeps what it learned in `run/compatibility.json` too. Whatever starts the

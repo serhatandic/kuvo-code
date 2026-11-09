@@ -29,8 +29,10 @@ export const COMPATIBILITY_FILE = path.join(RUN, "compatibility.json");
  * this Mac's app's engine's (KUVO_ENGINE_CONFIG), or in this box's folder on a machine. */
 export const ENGINE_LAYER_FILE = path.join(ENGINE_CONFIG || path.join(K, "config"), "opencode", "opencode.jsonc");
 
-// What the file starts with: whose it is, so the box only ever changes its own.
-const LAYER_HEADER = "// Kept by Kuvo Code: what some providers need from the engine, as this computer learned it from its\n// engine. Your settings are in opencode.json beside it. Changes here are replaced.\n";
+// What the file starts with: whose it is (`LAYER_MARK`, which never changes, so a box knows its own
+// file whatever an older one wrote under it), so the box only ever changes its own.
+const LAYER_MARK = "// Kept by Kuvo Code";
+const LAYER_HEADER = `${LAYER_MARK}: what some providers need from this engine, as this computer learned it from\n// it. Not your settings, which Kuvo Code keeps apart; changes here are replaced.\n`;
 
 /** Whether this process knows where its engine's settings are, to write the layer there: this
  * Mac's box (KUVO_ENGINE_CONFIG), a machine's box as it runs, or `engine-config` from a machine's
@@ -44,13 +46,20 @@ export function knowsEngineSettings(environment: NodeJS.ProcessEnv = process.env
   return real(named) === real(path.join(K, "config"));
 }
 
+// Said once: a file of yours where the box keeps its own.
+let saidNotOurs = false;
+
 /** The engine's copy of the layer brought to `layer` (what this box learned, by default): written
  * when there's one, gone when there's none, so the engine reads it again at once. A file there
  * that isn't the box's (one you wrote) is left as it is. True when it changed. */
 export function applyCompatibility(layer: Record<string, unknown> = readCompatibility(), file = ENGINE_LAYER_FILE): boolean {
   let there: string | null = null;
   try { there = fs.readFileSync(file, "utf8"); } catch {}
-  if (there !== null && !there.startsWith(LAYER_HEADER)) return false;
+  if (there !== null && !there.startsWith(LAYER_MARK)) {
+    if (!saidNotOurs) console.error(`Kuvo Code: ${file} isn't Kuvo Code's, so what GitHub Copilot's Claude models need from the engine isn't applied. Move it aside to let Kuvo Code keep it.`);
+    saidNotOurs = true;
+    return false;
+  }
   if (!Object.keys(layer).length) {
     if (there === null) return false;
     fs.rmSync(file, { force: true });

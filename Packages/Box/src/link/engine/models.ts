@@ -97,8 +97,9 @@ async function atWork(engine: Target, folders: string[]): Promise<Set<string>> {
   return busy;
 }
 
-/** Closes `folder` on the engine: its next use opens it afresh. */
-async function close(engine: Target, folder: string): Promise<boolean> {
+/** Closes `folder` on the engine: its next use opens it afresh. "unsupported" when the engine
+ * has no way to (an opencode without `api/debug/location`'s DELETE). */
+async function close(engine: Target, folder: string): Promise<"closed" | "failed" | "unsupported"> {
   const query = new URLSearchParams({ "location[directory]": folder });
   const response = await fetch(`http://127.0.0.1:${engine.port}/api/debug/location?${query}`, {
     method: "DELETE",
@@ -106,15 +107,25 @@ async function close(engine: Target, folder: string): Promise<boolean> {
     signal: AbortSignal.timeout(30_000),
   }).catch(() => null);
   response?.body?.cancel();
-  return Boolean(response?.ok);
+  if (response?.ok) return "closed";
+  return response?.status === 404 || response?.status === 405 ? "unsupported" : "failed";
 }
 
-/** Closes those of `folders` where nothing's going on; the rest, it says. */
+/** The engine can't close a folder: a refresh can't be done without a restart. */
+class CantClose extends Error {}
+
+/** Closes those of `folders` where nothing's going on, each looked at just before it's closed (a
+ * run started meanwhile in one keeps it open); the rest, it says. */
 async function closeQuiet(engine: Target, folders: string[]): Promise<string[]> {
-  const busy = await atWork(engine, folders);
   const waiting: string[] = [];
   for (const folder of folders) {
-    if (busy.has(folder) || !(await close(engine, folder))) waiting.push(folder);
+    if ((await atWork(engine, [folder])).has(folder)) {
+      waiting.push(folder);
+      continue;
+    }
+    const closed = await close(engine, folder);
+    if (closed === "unsupported") throw new CantClose();
+    if (closed === "failed") waiting.push(folder);
   }
   return waiting;
 }
@@ -133,7 +144,13 @@ export async function refreshModels(engine: EngineRecord, provider: string, file
   if (!known?.ok) return unreachable;
   let folders: string[];
   try { folders = await openFolders(engine); } catch { return unreachable; }
-  const waiting = await closeQuiet(engine, folders);
+  let waiting: string[];
+  try {
+    waiting = await closeQuiet(engine, folders);
+  } catch (error) {
+    if (error instanceof CantClose) return { status: 503, message: "This engine can't ask for its models again without restarting. Restart it in Settings › Engine." };
+    throw error;
+  }
   const before = readDue(file);
   const kept = before?.engine === engineOf(engine) ? before.folders : [];
   writeDue(file, { engine: engineOf(engine), folders: [...new Set([...kept, ...waiting])] });
@@ -155,22 +172,31 @@ export function settleDueModels(engine: Target & Pick<EngineRecord, "pid">, file
     return settling;
   }
   settling = (async () => {
-    do {
-      settleAgain = false;
-      const due = readDue(file);
-      if (!due) return;
-      if (due.engine !== engineOf(engine)) return writeDue(file, null);
-      const open = await openFolders(engine).catch(() => null);
-      if (!open) return;
-      const still = due.folders.filter(folder => open.includes(folder));
-      const waiting = await closeQuiet(engine, still);
-      // As it is now: one noted meanwhile stays.
-      const now = readDue(file);
-      const added = now?.engine === due.engine ? now.folders.filter(folder => !due.folders.includes(folder)) : [];
-      writeDue(file, { engine: due.engine, folders: [...waiting, ...added] });
-      if (waiting.length < still.length) await learnCompatibility(engine).catch(() => {});
-    } while (settleAgain);
-  })().finally(() => { settling = null; });
+    // (Once `settling` is set: a call from here on waits for it, or has it look again.)
+    await null;
+    try {
+      do {
+        settleAgain = false;
+        const due = readDue(file);
+        if (!due) return;
+        if (due.engine !== engineOf(engine)) return writeDue(file, null);
+        const open = await openFolders(engine).catch(() => null);
+        if (!open) return;
+        const still = due.folders.filter(folder => open.includes(folder));
+        const waiting = await closeQuiet(engine, still).catch(() => null);
+        // One that can't close them at all keeps none for later.
+        if (!waiting) return writeDue(file, null);
+        // As it is now: one noted meanwhile stays.
+        const now = readDue(file);
+        const added = now?.engine === due.engine ? now.folders.filter(folder => !due.folders.includes(folder)) : [];
+        writeDue(file, { engine: due.engine, folders: [...waiting, ...added] });
+        if (waiting.length < still.length) await learnCompatibility(engine).catch(() => {});
+      } while (settleAgain);
+    } finally {
+      // Cleared at once after its last look, with nothing in between: one asked for after starts anew.
+      settling = null;
+    }
+  })();
   return settling;
 }
 

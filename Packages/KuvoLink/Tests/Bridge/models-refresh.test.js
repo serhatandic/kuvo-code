@@ -61,6 +61,8 @@ async function engineWith(account, folders) {
     }
     if (url.pathname === "/api/debug/location" && request.method === "GET") return send(200, [...engine.open.keys()].map(directory => ({ directory })));
     if (url.pathname === "/api/debug/location" && request.method === "DELETE") {
+      // An engine without a way to close a folder.
+      if (engine.cantClose) return response.writeHead(405).end();
       const closed = url.searchParams.get("location[directory]");
       engine.open.delete(closed);
       engine.closed.push(closed);
@@ -179,13 +181,20 @@ test("folders left at work by a refresh aren't closed on an engine started since
   assert.equal(fs.existsSync(path.join(home, "run", "models-due.json")), false);
 });
 
-test("Refresh Models for a provider the engine doesn't have, or with the engine down, says so; nothing is closed", async () => {
+test("Refresh Models for a provider the engine doesn't have, on an engine that can't close a folder, or with the engine down, says so; nothing is closed", async () => {
   const engine = await engineWith(["claude-opus-5.6"], { "/w/quiet": {} });
   const ask = asker(engine);
   const unknown = await ask("POST", "kuvo/accounts/no-such-provider/refresh");
   assert.equal(unknown.status, 404);
   assert.equal((await ask("GET", "kuvo/accounts/github-copilot/refresh")).status, 405);
   assert.deepEqual(engine.closed, []);
+  // One that can't close a folder can't make its lists afresh without a restart: it says so, and
+  // keeps none for later.
+  engine.cantClose = true;
+  const cant = await ask("POST", "kuvo/accounts/github-copilot/refresh");
+  assert.equal(cant.status, 503);
+  assert.match(cant.json.message, /restart/i);
+  assert.equal(fs.existsSync(path.join(home, "run", "models-due.json")), false);
   const down = link.engineHandler(() => { throw new Error("no engine"); });
   const parts = [];
   for await (const part of down({ method: "POST", path: "kuvo/accounts/github-copilot/refresh", headers: {}, body: Buffer.alloc(0) }, {}, undefined)) parts.push(part);

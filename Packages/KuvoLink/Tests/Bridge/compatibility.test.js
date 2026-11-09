@@ -34,7 +34,14 @@ const layerFile = (folder = home) => path.join(folder, "config", "opencode", "op
 // An engine whose models are `models`, with a Copilot account there or not (`copilot`; `null`: its
 // accounts can't be read, as one just started for a moment), and whose events can be followed.
 async function engineWith(models, { copilot = true } = {}) {
-  const engine = { models, copilot, followers: [], awaiting: [] };
+  const engine = { models, copilot, followers: [], awaiting: [], held: null, modelsAsked: [] };
+  // Its answer for its models held back until `release()`, and a wait for the next one asked.
+  engine.holdModels = () => {
+    let release;
+    engine.held = new Promise(resolve => { release = resolve; });
+    engine.release = () => { engine.held = null; release(); };
+  };
+  engine.nextModelsAsked = () => new Promise(resolve => engine.modelsAsked.push(resolve));
   // An event for whoever follows it.
   engine.say = (type = "session.updated") => { for (const follower of engine.followers) follower.write(`data: ${JSON.stringify({ type, data: {} })}\n\n`); };
   engine.nextFollower = () => new Promise(resolve => engine.awaiting.push(resolve));
@@ -46,8 +53,15 @@ async function engineWith(models, { copilot = true } = {}) {
       for (const resolve of engine.awaiting.splice(0)) resolve();
       return;
     }
-    // As the engine answers it: its models under `data`.
-    if (request.url === "/api/model") return response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ data: engine.models }));
+    // As the engine answers it: its models under `data`, as they are when it's asked (held back
+    // a while, `holdModels`).
+    if (request.url === "/api/model") {
+      const models = engine.models;
+      const answer = () => response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ data: models }));
+      if (!engine.held) return answer();
+      for (const resolve of engine.modelsAsked.splice(0)) resolve();
+      return void engine.held.then(answer);
+    }
     // Its accounts with Copilot: none, or one signed in to (`null`: it can't say).
     if (request.url === "/api/integration/github-copilot" && engine.copilot !== null) {
       const connections = engine.copilot ? [{ id: "cred_copilot", label: "GitHub Copilot", method: "device" }] : [];
@@ -172,6 +186,29 @@ test("a Copilot account added while the engine has nothing else going on is lear
   box.stop();
   assert.equal(fs.existsSync(layerFile()), false);
   assert.equal(JSON.parse(fs.readFileSync(path.join(home, "run", "compatibility.json"), "utf8")).providers, undefined);
+});
+
+test("models that change while the box is reading the engine's list are learned too, right after", async t => {
+  fresh(t);
+  const engine = await engineWith([{ providerID: "github-copilot", id: "claude-opus-5.6", family: "claude-opus" }]);
+  const box = watch(t, engine);
+  await box.first;
+  assert.deepEqual(copilotModels(engineReads()), ["claude-opus-5.6"]);
+  // Signed in again: the box reads the list, which is slow to come...
+  engine.holdModels();
+  const asked = engine.nextModelsAsked();
+  engine.say("credential.switched");
+  await asked;
+  // ...and meanwhile the account's new model comes.
+  engine.models = [...engine.models, { providerID: "github-copilot", id: "claude-sonnet-5.6", family: "claude-sonnet" }];
+  engine.say("model.updated");
+  const stale = box.learned();
+  engine.release();
+  await stale;
+  const caughtUp = box.learned();
+  await caughtUp;
+  box.stop();
+  assert.deepEqual(copilotModels(engineReads()), ["claude-opus-5.6", "claude-sonnet-5.6"]);
 });
 
 test("an engine with no Copilot account there: the box forgets Copilot's models, though the engine lists them while its settings name Copilot", async t => {

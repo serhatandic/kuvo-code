@@ -23465,8 +23465,9 @@ import fs78 from "node:fs";
 import path82 from "node:path";
 var COMPATIBILITY_FILE = path82.join(RUN, "compatibility.json");
 var ENGINE_LAYER_FILE = path82.join(ENGINE_CONFIG || path82.join(K, "config"), "opencode", "opencode.jsonc");
-var LAYER_HEADER = `// Kept by Kuvo Code: what some providers need from the engine, as this computer learned it from its
-// engine. Your settings are in opencode.json beside it. Changes here are replaced.
+var LAYER_MARK = "// Kept by Kuvo Code";
+var LAYER_HEADER = `${LAYER_MARK}: what some providers need from this engine, as this computer learned it from
+// it. Not your settings, which Kuvo Code keeps apart; changes here are replaced.
 `;
 function knowsEngineSettings(environment = process.env) {
   if (ENGINE_CONFIG)
@@ -23483,13 +23484,18 @@ function knowsEngineSettings(environment = process.env) {
   };
   return real(named) === real(path82.join(K, "config"));
 }
+var saidNotOurs = false;
 function applyCompatibility(layer = readCompatibility(), file = ENGINE_LAYER_FILE) {
   let there = null;
   try {
     there = fs78.readFileSync(file, "utf8");
   } catch {}
-  if (there !== null && !there.startsWith(LAYER_HEADER))
+  if (there !== null && !there.startsWith(LAYER_MARK)) {
+    if (!saidNotOurs)
+      console.error(`Kuvo Code: ${file} isn't Kuvo Code's, so what GitHub Copilot's Claude models need from the engine isn't applied. Move it aside to let Kuvo Code keep it.`);
+    saidNotOurs = true;
     return false;
+  }
   if (!Object.keys(layer).length) {
     if (there === null)
       return false;
@@ -23720,13 +23726,24 @@ async function close(engine, folder) {
     signal: AbortSignal.timeout(30000)
   }).catch(() => null);
   response?.body?.cancel();
-  return Boolean(response?.ok);
+  if (response?.ok)
+    return "closed";
+  return response?.status === 404 || response?.status === 405 ? "unsupported" : "failed";
+}
+
+class CantClose extends Error {
 }
 async function closeQuiet(engine, folders) {
-  const busy = await atWork2(engine, folders);
   const waiting = [];
   for (const folder of folders) {
-    if (busy.has(folder) || !await close(engine, folder))
+    if ((await atWork2(engine, [folder])).has(folder)) {
+      waiting.push(folder);
+      continue;
+    }
+    const closed = await close(engine, folder);
+    if (closed === "unsupported")
+      throw new CantClose;
+    if (closed === "failed")
       waiting.push(folder);
   }
   return waiting;
@@ -23748,7 +23765,14 @@ async function refreshModels(engine, provider, file = MODELS_DUE_FILE) {
   } catch {
     return unreachable;
   }
-  const waiting = await closeQuiet(engine, folders);
+  let waiting;
+  try {
+    waiting = await closeQuiet(engine, folders);
+  } catch (error) {
+    if (error instanceof CantClose)
+      return { status: 503, message: "This engine can't ask for its models again without restarting. Restart it in Settings › Engine." };
+    throw error;
+  }
   const before = readDue(file);
   const kept = before?.engine === engineOf(engine) ? before.folders : [];
   writeDue(file, { engine: engineOf(engine), folders: [...new Set([...kept, ...waiting])] });
@@ -23763,27 +23787,32 @@ function settleDueModels(engine, file = MODELS_DUE_FILE) {
     return settling;
   }
   settling = (async () => {
-    do {
-      settleAgain2 = false;
-      const due = readDue(file);
-      if (!due)
-        return;
-      if (due.engine !== engineOf(engine))
-        return writeDue(file, null);
-      const open = await openFolders(engine).catch(() => null);
-      if (!open)
-        return;
-      const still = due.folders.filter((folder) => open.includes(folder));
-      const waiting = await closeQuiet(engine, still);
-      const now = readDue(file);
-      const added = now?.engine === due.engine ? now.folders.filter((folder) => !due.folders.includes(folder)) : [];
-      writeDue(file, { engine: due.engine, folders: [...waiting, ...added] });
-      if (waiting.length < still.length)
-        await learnCompatibility(engine).catch(() => {});
-    } while (settleAgain2);
-  })().finally(() => {
-    settling = null;
-  });
+    await null;
+    try {
+      do {
+        settleAgain2 = false;
+        const due = readDue(file);
+        if (!due)
+          return;
+        if (due.engine !== engineOf(engine))
+          return writeDue(file, null);
+        const open = await openFolders(engine).catch(() => null);
+        if (!open)
+          return;
+        const still = due.folders.filter((folder) => open.includes(folder));
+        const waiting = await closeQuiet(engine, still).catch(() => null);
+        if (!waiting)
+          return writeDue(file, null);
+        const now = readDue(file);
+        const added = now?.engine === due.engine ? now.folders.filter((folder) => !due.folders.includes(folder)) : [];
+        writeDue(file, { engine: due.engine, folders: [...waiting, ...added] });
+        if (waiting.length < still.length)
+          await learnCompatibility(engine).catch(() => {});
+      } while (settleAgain2);
+    } finally {
+      settling = null;
+    }
+  })();
   return settling;
 }
 var modelsDue = (file = MODELS_DUE_FILE) => fs79.existsSync(file);
@@ -24531,7 +24560,7 @@ async function* serverEvents(body) {
 }
 var STEER_AFTER = 3000;
 var LEARN_EVERY = 600000;
-var LEARN_NOW = new Set(["credential.updated", "credential.switched", "model.updated"]);
+var LEARN_NOW = new Set(["credential.updated", "credential.switched", "integration.updated", "model.updated"]);
 function steering(background, { after = STEER_AFTER, now = Date.now, schedule = setTimeout, cancel = clearTimeout, signal } = {}) {
   const sessions = new Map;
   const users = new Set;
@@ -24649,13 +24678,13 @@ async function watchEvents(read, tell, signal, answered = () => {}, { bots = fal
   let attempt = 0;
   let lastLearned = 0;
   let learning = false;
-  let learnAgain = false;
+  let learnAgain = null;
   const learn = (source, now = false) => {
     if (!learns)
       return;
     if (learning) {
       if (now)
-        learnAgain = true;
+        learnAgain = source;
       return;
     }
     if (!now && Date.now() - lastLearned < LEARN_EVERY)
@@ -24666,10 +24695,10 @@ async function watchEvents(read, tell, signal, answered = () => {}, { bots = fal
     }, () => {}).finally(() => {
       learning = false;
       learned();
-      if (learnAgain) {
-        learnAgain = false;
-        learn(source, true);
-      }
+      const again = learnAgain;
+      learnAgain = null;
+      if (again)
+        learn(again, true);
     });
   };
   if (learns) {

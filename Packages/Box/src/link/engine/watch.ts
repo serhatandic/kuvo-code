@@ -150,7 +150,7 @@ const LEARN_EVERY = 600_000;
 // The engine's events after which it reads them again at once: an account added, removed, signed in
 // to again or switched to, and the engine's list of models changed (an account's models come a
 // moment after its sign-in).
-const LEARN_NOW = new Set(["credential.updated", "credential.switched", "model.updated"]);
+const LEARN_NOW = new Set(["credential.updated", "credential.switched", "integration.updated", "model.updated"]);
 export function steering(background: (session: string) => unknown, { after = STEER_AFTER, now = Date.now, schedule = setTimeout, cancel = clearTimeout, signal }: SteeringOptions = {}): (event: SteeringEvent) => void {
   const sessions = new Map<string, SteeredSession>(); // session → { names: call → tool, blocking: call → when it started, steers: messages waiting for its next step }
   const users = new Set<string>(); // messages sent as a message (steered or queued) that wait
@@ -283,7 +283,7 @@ export async function watchEvents(read: () => Target, tell: (notice: Notice) => 
   let attempt = 0;
   let lastLearned = 0;
   let learning = false;
-  let learnAgain = false;
+  let learnAgain: Target | null = null;
   // Counted once it's learned: one the engine couldn't answer yet (just started) goes again with
   // its next event. `now`: at once, whenever it last did (an account added, removed or signed in
   // to again, or its models changed), and once more after one under way, which may have read
@@ -291,7 +291,8 @@ export async function watchEvents(read: () => Target, tell: (notice: Notice) => 
   const learn = (source: Target, now = false) => {
     if (!learns) return;
     if (learning) {
-      if (now) learnAgain = true;
+      // (With the engine as it was found last.)
+      if (now) learnAgain = source;
       return;
     }
     if (!now && Date.now() - lastLearned < LEARN_EVERY) return;
@@ -299,10 +300,9 @@ export async function watchEvents(read: () => Target, tell: (notice: Notice) => 
     learnCompatibility(source).then(() => { lastLearned = Date.now(); }, () => {}).finally(() => {
       learning = false;
       learned();
-      if (learnAgain) {
-        learnAgain = false;
-        learn(source, true);
-      }
+      const again = learnAgain;
+      learnAgain = null;
+      if (again) learn(again, true);
     });
   };
   // What its engine applies at once (`applyCompatibility`), as this box last learned it: a box
