@@ -99,7 +99,7 @@ const ROUTES: (Route | Route<RegExpMatchArray>)[] = [
   { when: route => route.match(/^kuvo\/engine\/(start|restart)$/), answer: engineControlRoute },
   { when: route => route === "kuvo/sign-in/return", answer: signInReturnRoute },
   { when: (route, request) => request.path.startsWith(AGENTS), answer: agentsRoute },
-  { when: route => route === "kuvo/accounts/ended" || /^kuvo\/accounts\/[^/]+\/forget$/.test(route), answer: accountsRoute },
+  { when: route => route === "kuvo/accounts/ended" || route === "kuvo/accounts/refreshable" || /^kuvo\/accounts\/[^/]+\/(forget|refresh)$/.test(route), answer: accountsRoute },
   { when: route => route === "kuvo/accounts/credentials", answer: credentialsRoute },
   { when: route => route === "kuvo/accounts/found" || route === "kuvo/accounts/found/use", answer: foundRoute },
   { when: route => route === "kuvo/personalities/events", answer: personalityEventsRoute },

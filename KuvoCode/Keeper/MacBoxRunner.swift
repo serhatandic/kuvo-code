@@ -173,8 +173,8 @@ final class MacBoxRunner {
             // longer than a while): no coding agent runs outside it. This Mac's group chats run there,
             // and show (and meet) from now, while the engine starts.
             startAgents(engine: binary)
-            // What some providers need until opencode handles it, on top, as the box learned it
-            // from its engine (as a machine's start adds it).
+            // What the engine starts with, as the box gives it (as a machine's start asks it). (What
+            // some providers need, the box keeps beside the engine's settings, where it reads it.)
             shell["OPENCODE_CONFIG_CONTENT"] = await box.engineConfig(engine: binary, content: shell["OPENCODE_CONFIG_CONTENT"], environment: shell)
             #if DEBUG
             // KUVO_PERF_PROVIDER: the stand-in model a group chat's discussion is measured on (PerfGroups).

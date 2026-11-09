@@ -35,11 +35,11 @@ import type { LinkState } from "../state";
 // The rest the app answers, through the host.
 export const MAC_BOX_ROUTES = ["kuvo/artifacts", "kuvo/projects", "kuvo/worktrees", "kuvo/plugins", "kuvo/folders", "kuvo/programs", "kuvo/providers", "kuvo/wakes", "kuvo/config", "kuvo/mcp/catalog", "kuvo/skills", "kuvo/skill-library",
   "kuvo/skill-trash", "kuvo/integrations", "kuvo/keys", "kuvo/bots", "kuvo/personalities", "kuvo/phones", "kuvo/attention", "kuvo/accounts/ended",
-  "kuvo/accounts/credentials", "kuvo/accounts/found", "kuvo/file", "kuvo/sign-in/return", "kuvo/named", "kuvo/groups", "kuvo/agent-tools", "kuvo/moves", "kuvo/work", "kuvo/work-queue", "kuvo/vault", "kuvo/sandbox",
+  "kuvo/accounts/refreshable", "kuvo/accounts/credentials", "kuvo/accounts/found", "kuvo/file", "kuvo/sign-in/return", "kuvo/named", "kuvo/groups", "kuvo/agent-tools", "kuvo/moves", "kuvo/work", "kuvo/work-queue", "kuvo/vault", "kuvo/sandbox",
   "kuvo/approval", "kuvo/search", "kuvo/git"];
-// (A plan signed out from a phone, `kuvo/accounts/<id>/forget`, a command stopped,
+// (A plan signed out from a phone, `kuvo/accounts/<id>/forget`, its models asked of again (`…/refresh`), a command stopped,
 // `kuvo/shell/<id>/stop`, a session started with a task, a session's queue and its approval: the box's too.)
-const macAnswersAlso = (route: string): boolean => /^kuvo\/accounts\/[^/]+\/forget$/.test(route) || /^kuvo\/shell\/[^/]+\/stop$/.test(route)
+const macAnswersAlso = (route: string): boolean => /^kuvo\/accounts\/[^/]+\/(forget|refresh)$/.test(route) || /^kuvo\/shell\/[^/]+\/stop$/.test(route)
   || route === "kuvo/sessions" || QUEUE_ROUTE.test(route) || SESSION_APPROVAL_ROUTE.test(route) || SESSION_DECISIONS_ROUTE.test(route);
 export const macAnswers = (route: string): boolean => MAC_BOX_ROUTES.some(area => route === area || route.startsWith(`${area}/`)) || macAnswersAlso(route);
 
