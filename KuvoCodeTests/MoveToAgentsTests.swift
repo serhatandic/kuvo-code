@@ -34,7 +34,7 @@ import Testing
     }
 
     /// This Mac's box, which finds the engine and the bridge, as the app's stores reach it.
-    private func box(for workspace: Workspace) async throws -> TestBox {
+    private func startBox(for workspace: Workspace) async throws -> TestBox {
         let box = try await TestBox(engine: engine.url)
         try await box.agents(at: bridge.url)
         workspace.boxes = { [engine] _ in box.client(engine: engine.url) }
@@ -91,7 +91,7 @@ import Testing
     }
 
     @Test func theConversationCarriesOnWithTheAgents() async throws {
-        let box = try await box(for: workspace)
+        let box = try await startBox(for: workspace)
         defer { done(box) }
         let conversation = [
             text("msg_01", "Add a settings page", created: 1), reply("msg_02", "Added SettingsView.", created: 2),
@@ -131,7 +131,7 @@ import Testing
     /// the conversation where it is, not archived, what you were typing in it, nothing left with the
     /// coding agents, and why, from the box.
     @Test func aMoveThatFailsLeavesItAsItWas() async throws {
-        let box = try await box(for: workspace)
+        let box = try await startBox(for: workspace)
         defer { done(box) }
         let session = StubEngine.session(id, title: "Settings", directory: folder)
         engine.list([session])
@@ -158,7 +158,7 @@ import Testing
     /// stays in the composer, says why, and goes to the new session with all you'd written, to
     /// the last moment, none of it also left behind in the old one.
     @Test func whatYouSendWhileItMovesGoesWithIt() async throws {
-        let box = try await box(for: workspace)
+        let box = try await startBox(for: workspace)
         defer { done(box) }
         let session = StubEngine.session(id, title: "Settings", directory: folder)
         engine.list([session])
@@ -197,7 +197,7 @@ import Testing
         let app = AppModel()
         app.workspace.api = engine.api
         app.workspace.agents = agents
-        let box = try await box(for: app.workspace)
+        let box = try await startBox(for: app.workspace)
         defer { done(box) }
         // As the app has it (AppModel.start).
         app.workspace.onMovedToAgents = { [weak app] from, to in await app?.movedToAgents(from: from, to: to) ?? false }

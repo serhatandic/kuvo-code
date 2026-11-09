@@ -155,11 +155,10 @@ import Testing
         let record = try Data(contentsOf: HostInterface.file)
         try await app.start()
         keeper.useApp(try #require(app.address))
-        let told = AsyncStream<Void> { continuation in
-            app.restarted = { [keeper, app] in
-                keeper.useApp(app.address ?? [:])
-                continuation.yield()
-            }
+        let (told, tell) = AsyncStream<Void>.makeStream()
+        app.restarted = { [keeper, app] in
+            keeper.useApp(app.address ?? [:])
+            tell.yield()
         }
         #expect(try await ask("/sites/signed-in", [:], password: password, at: environment).status == 200, "the app, through the keeper")
 

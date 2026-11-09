@@ -22898,6 +22898,12 @@ async function carryToAgents(id, model, readEngine, agents) {
       }
       kept = true;
     } else {
+      const now = (await engineGet(engine, route).catch(() => null))?.data;
+      if (now?.metadata?.["kuvo.carriedTo"]) {
+        await call(agents, "DELETE", `/api/session/${encodeURIComponent(moved)}`).catch(() => {});
+        made = null;
+        return no(409, "It’s with the coding agents already.");
+      }
       try {
         await call(engine, "PATCH", `/${route}`, { metadata: { ...session.metadata ?? {}, "kuvo.archived": true, "kuvo.carriedTo": moved } });
       } catch (error) {

@@ -317,7 +317,7 @@ test("every area the app sends to this Mac's box, the box answers a phone itself
 test("a phone moving a conversation to the coding agents, or reading its Autopilot, is answered by this Mac's box, whether the app answers or not", async () => {
   const { it } = await paired();
   const asked = app.asked.length;
-  const codex = { model: { id: "gpt-5.5", providerID: "codex" } };
+  const codex = { model: { id: "gpt-5.5", providerID: "codex-cli" } };
   for (const away of [false, true]) {
     app.away = away;
     try {

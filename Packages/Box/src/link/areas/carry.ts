@@ -201,6 +201,14 @@ export async function carryToAgents(id: string, model: unknown, readEngine: () =
       }
       kept = true;
     } else {
+      // Carried on meanwhile by another of this box's processes (a client's `box route` beside a
+      // phone's): that one stands, and this one's goes.
+      const now = (await engineGet(engine, route).catch(() => null) as EngineAnswer<EngineSession> | null)?.data;
+      if (now?.metadata?.["kuvo.carriedTo"]) {
+        await call(agents, "DELETE", `/api/session/${encodeURIComponent(moved)}`).catch(() => {});
+        made = null;
+        return no(409, "It’s with the coding agents already.");
+      }
       // Archived, and marked as carried on, so it isn't carried twice: it's the new one's from here.
       // (One the engine took without saying so is taken.)
       try {
