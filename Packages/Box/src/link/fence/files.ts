@@ -569,7 +569,7 @@ export function agentsNote(platform: "darwin" | "linux", tmuxFits = true): strin
         ]
       : []),
     "",
-    "`npm`, `pnpm`, `uv` and corepack use caches of Kuvo Code's own here (`$npm_config_cache`, `$pnpm_config_cache_dir`, `$UV_CACHE_DIR`, `$COREPACK_HOME`): leave them as they are. `npx -y <package>`, `pnpm dlx` and `uvx` (with an installed Python) fetch what they need.",
+    "`npm`, `pnpm`, `uv` and corepack use caches of Kuvo Code's own here (`$npm_config_cache`, `$pnpm_config_cache_dir`, `$UV_CACHE_DIR`, `$COREPACK_HOME`): leave them as they are. `npx -y <package>`, `pnpm dlx` and `uvx` fetch what they need (`uvx` with a Python that's installed).",
     "",
     ...(tmuxFits
       ? []

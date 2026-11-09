@@ -4382,7 +4382,7 @@ function agentsNote(platform, tmuxFits = true) {
       "- Commands can't open apps (`open`) or start launchd jobs."
     ] : [],
     "",
-    "`npm`, `pnpm`, `uv` and corepack use caches of Kuvo Code's own here (`$npm_config_cache`, `$pnpm_config_cache_dir`, `$UV_CACHE_DIR`, `$COREPACK_HOME`): leave them as they are. `npx -y <package>`, `pnpm dlx` and `uvx` (with an installed Python) fetch what they need.",
+    "`npm`, `pnpm`, `uv` and corepack use caches of Kuvo Code's own here (`$npm_config_cache`, `$pnpm_config_cache_dir`, `$UV_CACHE_DIR`, `$COREPACK_HOME`): leave them as they are. `npx -y <package>`, `pnpm dlx` and `uvx` fetch what they need (`uvx` with a Python that's installed).",
     "",
     ...tmuxFits ? [] : ["This computer's home folder's path is too long for tmux in the sandbox: its socket in `$TMPDIR` would pass the system's limit, so tmux fails with \"File name too long\", as can other programs that make a socket there. Don't start tmux with sandbox_ask instead: outside the sandbox it would be the user's own. For another program that needs a socket, ask with sandbox_ask, or tell the user why it can't run in the sandbox here.", ""],
     "`ssh` and git over SSH use only the keys the user lets this conversation use from Kuvo Code's vault, through `$SSH_AUTH_SOCK`. With none, use HTTPS or ask the user.",
@@ -5243,9 +5243,6 @@ function readKit(system = process.platform) {
   const timeZone = zoneOf(mac);
   const machine = typeof mac?.machine === "string" && mac.machine || readLink()?.id || os5.hostname();
   const here = IS_MAC ? words.here.mac : words.here.machine;
-  const systems = here.systems ?? {};
-  const named = String(systems[system] ?? systems.other ?? "machine");
-  const fill = (text) => text.replace(/⟦(place|clock|browser)⟧/g, (_, key) => String(here[key] ?? "")).replaceAll("⟦system⟧", () => named).replaceAll("⟦machine⟧", () => machine).replaceAll("⟦timeZone⟧", () => timeZone || "UTC");
   const told = (each) => words.personalityWords.replaceAll("⟦name⟧", () => each.name).replaceAll("⟦description⟧", () => each.description);
   return {
     kuvo: 1,
@@ -5256,9 +5253,7 @@ function readKit(system = process.platform) {
     ],
     personalityWords: words.personalityWords,
     looks: words.looks,
-    instructions: fill(words.instructions.join(`
-
-`)),
+    instructions: wordsHere(words, here, system, machine, timeZone),
     job: { none: String(words.job.none ?? ""), line: String(words.job.line ?? ""), details: String(words.job.details ?? "") },
     projectNote: words.projectNote,
     identityNote: words.identityNote,
@@ -5270,6 +5265,13 @@ function readKit(system = process.platform) {
     timeZone: timeZone || "UTC",
     ...typeof mac?.zoneinfo === "string" ? { zoneinfo: mac.zoneinfo } : {}
   };
+}
+function wordsHere(words, here, system, machine, timeZone) {
+  const systems = here.systems ?? {};
+  const named = String(systems[system] ?? systems.other ?? "machine");
+  return words.instructions.join(`
+
+`).replace(/⟦(place|clock|browser)⟧/g, (_, key) => String(here[key] ?? "")).replaceAll("⟦system⟧", () => named).replaceAll("⟦machine⟧", () => machine).replaceAll("⟦timeZone⟧", () => timeZone || "UTC");
 }
 function readMacKit() {
   try {
@@ -30155,7 +30157,7 @@ var VAULT_TOOLS = [
   },
   {
     name: "vault_run",
-    description: 'Run a shell command in your project\'s folder with values from the vault in its environment, never on its command line: each variable gets an item\'s value (`"GITHUB_TOKEN": "GitHub token"`, or `"Item.field"` for one field), and a file item\'s gets the path of a temporary copy, removed when the command ends. Vault values are hidden in its output. Use the variables in the command (`curl -H "Authorization: Bearer $GITHUB_TOKEN" …`); never print them.',
+    description: 'Run a shell command in your project\'s folder with values from the vault in its environment, never on its command line: each variable gets an item\'s value (`"GITHUB_TOKEN": "GitHub token"`, or `"Item.field"` for one field), and a file item\'s variable gets the path of a temporary copy, removed when the command ends. Vault values are hidden in its output. Use the variables in the command (`curl -H "Authorization: Bearer $GITHUB_TOKEN" …`); never print them.',
     inputSchema: {
       type: "object",
       properties: {

@@ -25,17 +25,17 @@ struct ToolCopyBudgetTests {
         let names = tools.map { "mcp__kuvo-browser__" + ($0["name"] as? String ?? "") }.joined(separator: "\n")
         let instructions = [true, false].map { BrowserTools.instructions(machine: $0, vault: true) }.max { $0.utf8.count < $1.utf8.count } ?? ""
 
-        // The engine sends every schema with each call, and so (as far as is known) do Cursor, Grok
-        // and Antigravity; Codex doesn't pass the server's instructions on; Claude Code defers the
-        // schemas behind its tool search.
+        // The engine sends every schema and the server's instructions with each call, as Codex does
+        // and (as far as is known) Cursor, Grok and Antigravity. Claude Code defers the schemas behind
+        // its tool search, on by default; where it's off (models before Opus 4 and Sonnet 4,
+        // ENABLE_TOOL_SEARCH set to false or auto, experimental betas turned off), it sends them all,
+        // as the others do.
         let carried = [
-            "the engine, Cursor, Grok and Antigravity": tokens(schemas) + tokens(instructions),
-            "Codex": tokens(schemas),
+            "the engine, Codex, Cursor, Grok and Antigravity": tokens(schemas) + tokens(instructions),
             "Claude Code": tokens(names) + tokens(instructions),
         ]
         let budget = [
-            "the engine, Cursor, Grok and Antigravity": 9_300,
-            "Codex": 8_150,
+            "the engine, Codex, Cursor, Grok and Antigravity": 9_400,
             "Claude Code": 1_600,
         ]
         for (kind, limit) in budget {

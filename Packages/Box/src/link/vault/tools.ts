@@ -50,7 +50,7 @@ export const VAULT_TOOLS = [
   },
   {
     name: "vault_run",
-    description: "Run a shell command in your project's folder with values from the vault in its environment, never on its command line: each variable gets an item's value (`\"GITHUB_TOKEN\": \"GitHub token\"`, or `\"Item.field\"` for one field), and a file item's gets the path of a temporary copy, removed when the command ends. Vault values are hidden in its output. Use the variables in the command (`curl -H \"Authorization: Bearer $GITHUB_TOKEN\" …`); never print them.",
+    description: "Run a shell command in your project's folder with values from the vault in its environment, never on its command line: each variable gets an item's value (`\"GITHUB_TOKEN\": \"GitHub token\"`, or `\"Item.field\"` for one field), and a file item's variable gets the path of a temporary copy, removed when the command ends. Vault values are hidden in its output. Use the variables in the command (`curl -H \"Authorization: Bearer $GITHUB_TOKEN\" …`); never print them.",
     inputSchema: {
       type: "object",
       properties: {
