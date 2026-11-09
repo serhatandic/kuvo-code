@@ -1,6 +1,7 @@
 import AVFoundation
 import Foundation
 import Observation
+import OSLog
 import Speech
 
 /// Voice input, as each way of showing it uses it (the composer listening, or the voice field):
@@ -87,6 +88,8 @@ public final class VoiceInput {
     @ObservationIgnored private var meter = VoiceLevel()
     #if os(iOS)
     @ObservationIgnored private var interruption: (any NSObjectProtocol)?
+    /// The phone's audio is set up (or being set up) for this, to let go of once it stops.
+    @ObservationIgnored private var holdsSession = false
     #endif
     /// Counts each start: what comes from an earlier one (a cancel, then a start) is dropped.
     @ObservationIgnored private(set) var run = 0
@@ -195,9 +198,15 @@ public final class VoiceInput {
         guard let language = await DictationTranscriber.supportedLocale(equivalentTo: locale) else { return fail(.unsupported, run: run) }
         let transcriber = DictationTranscriber(locale: language, contentHints: [], transcriptionOptions: [.punctuation],
                                                reportingOptions: [.volatileResults, .frequentFinalization], attributeOptions: [.audioTimeRange])
+        // Its model for your language, the first time (not for a test's microphone that refuses,
+        // which mustn't wait on a download).
+        #if DEBUG
+        let fetchesModel = !Self.microphoneRefuses
+        #else
+        let fetchesModel = true
+        #endif
         do {
-            // Its model for your language, the first time.
-            if let request = try await AssetInventory.assetInstallationRequest(supporting: [transcriber]) {
+            if fetchesModel, let request = try await AssetInventory.assetInstallationRequest(supporting: [transcriber]) {
                 let progress = request.progress
                 let watching = Task { @MainActor [weak self] in
                     while !Task.isCancelled, self?.run == run, self?.isPreparing == true {
@@ -208,17 +217,33 @@ public final class VoiceInput {
                 defer { watching.cancel() }
                 try await request.downloadAndInstall()
             }
+        } catch {
             guard self.run == run else { return }
-            try startSession()
-            let engine = AVAudioEngine()
-            let input = engine.inputNode
-            let natural = input.outputFormat(forBus: 0)
+            return fail(Self.failure(of: error, .gettingReady), run: run)
+        }
+        guard self.run == run else { return }
+        // The microphone, as it hears once the phone's audio is set for recording (before, it may
+        // have no input, or another route's rate): AirPods' own, when they're in.
+        let engine: AVAudioEngine
+        let input: AVAudioInputNode
+        let natural: AVAudioFormat
+        do {
+            try await startSession(run: run)
+            engine = AVAudioEngine()
+            input = engine.inputNode
+            natural = try Self.microphoneFormat(of: input)
+        } catch {
+            guard self.run == run else { return }
+            return fail(Self.failure(of: error, .microphone), run: run)
+        }
+        self.engine = engine
+        do {
             guard let format = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [transcriber], considering: natural) else { return fail(.unsupported, run: run) }
             let (stream, continuation) = AsyncStream<AnalyzerInput>.makeStream()
             let analyzer = SpeechAnalyzer(modules: [transcriber])
             try await analyzer.prepareToAnalyze(in: format)
-            guard self.run == run else { return }
-            self.engine = engine
+            // Canceled while it got ready: it lets go of the model it prepared.
+            guard self.run == run else { return await analyzer.cancelAndFinishNow() }
             self.analyzer = analyzer
             inputs = continuation
             results = Task { [weak self] in await self?.read(transcriber, run: run) }
@@ -235,14 +260,18 @@ public final class VoiceInput {
             Self.tap(input, natural: natural, format: format, deliver: { continuation.yield(AnalyzerInput(buffer: $0)) }) { [weak self] rms in
                 Task { @MainActor in self?.heard(rms: rms, run: run) }
             }
-            engine.prepare()
-            try engine.start()
+            do {
+                engine.prepare()
+                try engine.start()
+            } catch {
+                return fail(Self.failure(of: error, .microphone), run: run)
+            }
             phase = .listening
             listeningSince = .now
             try await analyzer.start(inputSequence: stream)
         } catch {
             guard self.run == run else { return }
-            fail(Self.failure(of: error), run: run)
+            fail(Self.failure(of: error, .listening(wroteSome: !transcript.isEmpty)), run: run)
         }
     }
 
@@ -255,7 +284,7 @@ public final class VoiceInput {
             }
         } catch {
             guard self.run == run, phase == .listening else { return }
-            fail(Self.failure(of: error), run: run)
+            fail(Self.failure(of: error, .listening(wroteSome: !transcript.isEmpty)), run: run)
         }
     }
 
@@ -268,10 +297,11 @@ public final class VoiceInput {
             guard await Self.microphoneAllowed() else { return fail(.microphoneDenied, run: run) }
             guard self.run == run else { return }
             do {
-                try startMicrophone(continuation, run: run)
+                try await startMicrophone(continuation, run: run)
             } catch {
                 continuation.finish()
-                return fail(.other("Voice input couldn’t use the microphone. Try again."), run: run)
+                guard self.run == run else { return }
+                return fail(Self.failure(of: error, .microphone), run: run)
             }
             samples = continuation
         }
@@ -294,11 +324,11 @@ public final class VoiceInput {
     }
 
     /// The microphone on, its samples (16 kHz, mono) into `continuation`.
-    private func startMicrophone(_ continuation: AsyncStream<[Float]>.Continuation, run: Int) throws {
-        try startSession()
+    private func startMicrophone(_ continuation: AsyncStream<[Float]>.Continuation, run: Int) async throws {
+        try await startSession(run: run)
         let engine = AVAudioEngine()
         let input = engine.inputNode
-        let natural = input.outputFormat(forBus: 0)
+        let natural = try Self.microphoneFormat(of: input)
         let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: Double(PhraseCutter.rate), channels: 1, interleaved: false)!
         self.engine = engine
         Self.tap(input, natural: natural, format: format, deliver: { buffer in
@@ -320,16 +350,67 @@ public final class VoiceInput {
             // After Done, it ends with what was written; before, it says so, and what was
             // written stays for Done to take.
             guard phase != .finishing else { return }
-            fail(.other(transcript.isEmpty ? "Voice input stopped before anything was written. Try again." : "Voice input stopped. What was written so far is kept."), run: run)
+            fail(Self.stopped(wroteSome: !transcript.isEmpty), run: run)
         }
     }
 
-    /// The phone's audio, set for listening.
-    private func startSession() throws {
+    #if os(iOS)
+    /// The phone's audio, set for listening: recording, in the default mode, with AirPods'
+    /// microphone too when they're in; each of them iOS takes for recording. It asked for others'
+    /// audio ducked, in the spoken-audio mode, which iOS takes only for a category that plays
+    /// (`AVAudioSessionTypes.h`), and on an iPhone it refused the whole setting (OSStatus -50):
+    /// voice input stopped before it listened, every time (#363). Recording quiets what else plays
+    /// anyway, as the system's own dictation does, and lets it play on once it's done.
+    nonisolated public static func setUpSession(_ session: AVAudioSession = .sharedInstance()) throws {
+        try session.setCategory(.record, mode: .default, options: [.allowBluetoothHFP])
+        try session.setActive(true, options: .notifyOthersOnDeactivation)
+    }
+
+    /// The phone's audio is set up and let go of here, one after the other, off the main thread:
+    /// each blocks until the system's audio answers, which can take long enough to freeze the app
+    /// (iOS 27 warns of it on the main thread), and one start's let-go must never land after the
+    /// next one's set-up.
+    private static let sessionQueue = DispatchQueue(label: "run.kuvo.voice.session")
+
+    private static func setUpSessionInTurn() async throws {
+        try await withCheckedThrowingContinuation { (done: CheckedContinuation<Void, any Error>) in
+            sessionQueue.async {
+                do {
+                    try setUpSession()
+                    done.resume()
+                } catch {
+                    done.resume(throwing: error)
+                }
+            }
+        }
+    }
+
+    private static func letGoOfSessionInTurn() {
+        sessionQueue.async { try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation) }
+    }
+    #endif
+
+    #if DEBUG
+    /// For the apps' tests: the microphone refuses to come on, as an iPhone's audio did with
+    /// OSStatus -50 (#363), once the phone's audio is set up (and so let go of again), before the
+    /// microphone itself is asked for (a simulator would use the Mac's).
+    public static var microphoneRefuses = false
+    #endif
+
+    /// The phone's audio, set for listening (for start `run`: canceled meanwhile, it throws).
+    private func startSession(run: Int) async throws {
         #if os(iOS)
-        // AirPods' microphone too, when they're in.
-        try AVAudioSession.sharedInstance().setCategory(.record, mode: .spokenAudio, options: [.duckOthers, .allowBluetoothHFP])
-        try AVAudioSession.sharedInstance().setActive(true, options: .notifyOthersOnDeactivation)
+        // Held from here: a cancel while it's set up lets go of it after.
+        holdsSession = true
+        try await Self.setUpSessionInTurn()
+        // Canceled while it was set up: the cancel's let-go comes after it, and nothing listens.
+        try Task.checkCancellation()
+        guard self.run == run else { throw CancellationError() }
+        #endif
+        #if DEBUG
+        if Self.microphoneRefuses { throw NSError(domain: NSOSStatusErrorDomain, code: -50) }
+        #endif
+        #if os(iOS)
         // A call, Siri or an alarm takes the microphone: what was said so far is kept, rather
         // than listening on to nothing.
         interruption = NotificationCenter.default.addObserver(forName: AVAudioSession.interruptionNotification, object: nil, queue: .main) { [weak self] note in
@@ -357,6 +438,10 @@ public final class VoiceInput {
     private func fail(_ failure: Failure, run: Int) {
         guard self.run == run else { return }
         stopMicrophone()
+        // Apple's dictation lets go of its model, as when it's canceled: nothing more comes.
+        let analyzer = analyzer
+        Task { await analyzer?.cancelAndFinishNow() }
+        results?.cancel()
         clear()
         phase = .failed(failure)
     }
@@ -373,7 +458,12 @@ public final class VoiceInput {
         #if os(iOS)
         if let interruption { NotificationCenter.default.removeObserver(interruption) }
         interruption = nil
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        // Only audio it set up: a start that stopped before (the microphone not allowed, the
+        // model's download) leaves the app's audio as it was.
+        if holdsSession {
+            holdsSession = false
+            Self.letGoOfSessionInTurn()
+        }
         #endif
     }
 
@@ -413,11 +503,66 @@ public final class VoiceInput {
         }
     }
 
-    private static func failure(of error: Error) -> Failure {
-        let words = error.localizedDescription
-        if words.localizedCaseInsensitiveContains("not authorized") || words.localizedCaseInsensitiveContains("authoriz") { return .speechDenied }
-        return .other("Voice input stopped: \(words)")
+    /// Where voice input was when something went wrong, for what it says.
+    enum Stage: Equatable {
+        /// Getting Apple's dictation ready for your language.
+        case gettingReady
+        /// Turning the microphone on.
+        case microphone
+        /// Listening: some words written, or none yet.
+        case listening(wroteSome: Bool)
     }
+
+    /// What it says when `error` stopped it at `stage`: in plain words, never the system's own
+    /// (“The operation couldn’t be completed. (OSStatus error -50.)”), which goes to the log, for
+    /// whoever looks into it.
+    static func failure(of error: Error, _ stage: Stage) -> Failure {
+        log.error("Voice input stopped at \(String(describing: stage), privacy: .public): \(String(describing: error), privacy: .public)")
+        if (error as? VoiceError) == .noMicrophone {
+            #if os(iOS)
+            return .other("Voice input couldn’t hear the microphone. Try again.")
+            #else
+            return .other("Voice input can’t hear a microphone. Check that one is connected, then try again.")
+            #endif
+        }
+        let words = error.localizedDescription
+        if words.localizedCaseInsensitiveContains("authoriz") { return .speechDenied }
+        return switch stage {
+        case .gettingReady where isNetwork(error):
+            .other("Voice input couldn’t download what it needs for your language. Check that you’re online, then try again.")
+        case .gettingReady: .other("Voice input couldn’t get ready. Try again.")
+        case .microphone: .other("Voice input couldn’t use the microphone. Try again.")
+        case .listening(let wroteSome): stopped(wroteSome: wroteSome)
+        }
+    }
+
+    /// The network failed it, said by the error or one it wraps (a download's own error, around
+    /// the connection's).
+    static func isNetwork(_ error: any Error) -> Bool {
+        let error = error as NSError
+        if error.domain == NSURLErrorDomain { return true }
+        return error.underlyingErrors.contains { isNetwork($0) }
+    }
+
+    /// Stopped while it listened: what was written, if anything, stays for Done to take.
+    static func stopped(wroteSome: Bool) -> Failure {
+        .other(wroteSome ? "Voice input stopped. What was written so far is kept." : "Voice input stopped before anything was written. Try again.")
+    }
+
+    /// The microphone's own format, to tap it with: none (no rate or channels, as with no input
+    /// to record from) is an error here, rather than a tap the audio engine ends the app over.
+    nonisolated static func microphoneFormat(of input: AVAudioNode) throws -> AVAudioFormat {
+        let format = input.outputFormat(forBus: 0)
+        guard format.sampleRate > 0, format.channelCount > 0 else { throw VoiceError.noMicrophone }
+        return format
+    }
+
+    private static let log = Logger(subsystem: Bundle.main.bundleIdentifier ?? "run.kuvo.code", category: "voice")
+}
+
+enum VoiceError: Error, Equatable {
+    /// No microphone to listen with.
+    case noMicrophone
 }
 
 /// The microphone's samples, on the audio thread: how loud they are, and each converted to the

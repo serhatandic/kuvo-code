@@ -95,8 +95,8 @@ nonisolated enum AttachmentItem: Identifiable, Sendable {
     func loadImage() async -> NSImage? {
         let key = contentID as NSString
         if let cached = AttachmentImages.cache.object(forKey: key) { return cached }
-        if case .remote(let path, let machine) = self {
-            guard let data = try? await BoxClient.machine(machine).file(path), let image = NSImage(data: data) else { return nil }
+        if let remote = remoteLocation {
+            guard let data = try? await BoxClient.machine(remote.machine).file(remote.path), let image = NSImage(data: data) else { return nil }
             AttachmentImages.cache.setObject(image, forKey: key)
             return image
         }
@@ -134,9 +134,16 @@ nonisolated enum AttachmentItem: Identifiable, Sendable {
     }
 
     func readBytes() async -> Data? {
-        if case .remote(let path, let machine) = self { return try? await BoxClient.machine(machine).file(path) }
+        if let remote = remoteLocation { return try? await BoxClient.machine(remote.machine).file(remote.path) }
         if let url = fileURL { return try? Data(contentsOf: url) }
         if case .stored(let file, _) = self { return file.bytes }
+        return nil
+    }
+
+    private var remoteLocation: (machine: String, path: String)? {
+        if case .remote(let path, let machine) = self { return (machine, path) }
+        if case .stored(let file, _) = self, case .uri(let uri) = file.source,
+           let url = URL(string: uri) { return RemoteFolder.parse(url) }
         return nil
     }
 
@@ -357,6 +364,16 @@ struct MadePictureRow: View {
         return groups
     }
 
+    /// The file a show_file step shows, at `path` in a conversation in `directory` (a machine's,
+    /// or this Mac's): that step's, as an image a step made is, so a picture the agent changed and
+    /// shows again isn't drawn as an earlier step had it (#132), and as the phone keeps it. A
+    /// machine's is never read from this Mac's disk, though this Mac has a file at that path too.
+    static func shown(_ path: String, in directory: String?, step: String) -> AttachmentItem {
+        let url = RemoteFolder.fileURL(path, in: directory ?? "/")
+        let mime = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType ?? "application/octet-stream"
+        return .stored(Message.User.Attachment(mime: mime, name: (path as NSString).lastPathComponent, source: .uri(url.absoluteString)), id: "\(step)-shown")
+    }
+
     var body: some View {
         if Self.isShownFile(call) { shownFile } else { made }
     }
@@ -369,9 +386,9 @@ struct MadePictureRow: View {
             let url = RemoteFolder.fileURL(path, in: directory ?? "/")
             VStack(alignment: .leading, spacing: 6) {
                 if UTType(filenameExtension: url.pathExtension)?.conforms(to: .image) == true {
-                    StepPictures(items: [ShownPictures.item(url)], height: 420, maxWidth: 560)
+                    StepPictures(items: [Self.shown(path, in: directory, step: call.id)], height: 420, maxWidth: 560)
                 } else {
-                    AttachmentRow(item: .path(path)) { app.utilities.show(url) }
+                    AttachmentRow(item: Self.shown(path, in: directory, step: call.id)) { app.utilities.show(url) }
                 }
                 if let caption = call.state.input?["caption"]?.string, !caption.isEmpty {
                     Text(caption)
@@ -429,7 +446,7 @@ struct ShownPictures: View {
     var body: some View {
         let items = calls.compactMap { call -> AttachmentItem? in
             guard let path = call.state.input?["path"]?.string else { return nil }
-            return Self.item(RemoteFolder.fileURL(path, in: directory))
+            return MadePictureRow.shown(path, in: directory, step: call.id)
         }
         StepPictures(items: items, height: items.count == 1 ? 420 : 140, maxWidth: items.count == 1 ? 560 : 220,
                      captions: calls.compactMap { call in
@@ -588,16 +605,18 @@ private struct AttachmentRow: View {
         .clickablePointer()
         .onHover { isHovering = $0 }
         .animation(.easeOut(duration: 0.12), value: isHovering)
-        .contextMenu { AttachmentMenu(item: item) }
+        .contextMenu { AttachmentMenu(item: item, open: open) }
         .help(item.fileURL?.path ?? item.name)
     }
 }
 
 private struct AttachmentMenu: View {
     let item: AttachmentItem
+    /// What Open does for one that isn't on this Mac (a machine's file, in the panel).
+    var open: (() -> Void)?
 
     var body: some View {
-        Button("Open") { item.open() }
+        Button("Open") { if item.fileURL == nil, let open { open() } else { item.open() } }
         Button("Show in Finder") { item.revealInFinder() }
             .disabled(item.fileURL == nil)
     }
