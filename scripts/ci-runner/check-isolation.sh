@@ -3,7 +3,7 @@
 # shellcheck disable=SC2329 # cleanup runs from the EXIT trap
 # Boots a throwaway VM from the golden image with the jobs' own flags (common.sh, vm_run_flags)
 # and checks what it can reach: nothing on this Mac (through the VM's real gateway, its LAN or
-# Tailscale address), on the LAN, on Tailscale or at the network's public address (the router
+# Tailscale address), online tailnet peers on SSH, on the LAN or at the network's public address (the router
 # answers there); GitHub, Apple's notary service and the package
 # registries jobs use. Each "must be blocked" target is tried from this Mac first: one that's
 # closed from here too proves nothing, and counts as inconclusive. It also tries to come in from
@@ -14,7 +14,8 @@
 # upgrade:
 #
 #   touch /Users/Shared/kuvo-ci/paused
-#   sudo -u ci -i /usr/local/kuvo-ci/scripts/check-isolation.sh
+#   peers="$(/usr/local/kuvo-ci/scripts/check-isolation.sh --discover-peers)"
+#   sudo -u ci -i /usr/local/kuvo-ci/scripts/check-isolation.sh --peers "$peers"
 #   rm /Users/Shared/kuvo-ci/paused
 #
 # Only as ci once setup.sh has run. Before it (Homebrew's softnet still setuid), it can run as you
@@ -28,48 +29,87 @@ here="$(cd "$(dirname "$0")" && pwd)"
 . "$here/common.sh"
 if [[ "$(id -un)" == "$CI_USER" ]]; then
     export PATH="$CI_PATH"
-    prepare_keychain --force || echo "Couldn't prepare ci's keychain for the VM; it may not start." >&2
 fi
 
-# Print at most two online peers as IPv4<TAB>name; never print status metadata.
+# Print up to two SSH-reachable online peers as a comma-separated IPv4:name list.
 tailnet_peers() {
-    local cli status peers
+    local cli status peers ip name selected="" count=0
     cli="$(command -v tailscale 2>/dev/null)"
     [[ -n "$cli" ]] || cli=/Applications/Tailscale.app/Contents/MacOS/Tailscale
-    [[ -x "$cli" ]] || return 1
-    if status="$("$cli" status --json 2>/dev/null)" && peers="$(printf '%s' "$status" | /usr/bin/python3 -c '
-import ipaddress, json, sys
+    [[ -x "$cli" ]] || { echo failed; return; }
+    if status="$(run_limited 10 "$cli" status --json 2>/dev/null)" && peers="$(printf '%s' "$status" | /usr/bin/python3 -I -c '
+import ipaddress, json, re, sys
 try:
     data = json.load(sys.stdin)
     if data.get("BackendState") != "Running": sys.exit(1)
     for peer in data.get("Peer", {}).values():
-        if not peer.get("Online"): continue
+        if not peer.get("Online") or peer.get("ExitNodeOption") or peer.get("ShareeNode"): continue
         for address in peer.get("TailscaleIPs", []):
             ip = ipaddress.ip_address(address)
             if ip.version == 4 and ip in ipaddress.ip_network("100.64.0.0/10"):
-                name = str(peer.get("HostName") or "peer").split("\n")[0].split("\t")[0]
+                name = re.sub(r"[^A-Za-z0-9._-]", "", str(peer.get("HostName") or "peer")) or "peer"
                 print(str(ip) + "\t" + name)
                 break
 except (ValueError, TypeError, AttributeError):
     sys.exit(1)
 ')"; then
-        printf '%s\n' "$peers" | awk 'NF && NR <= 2'
-        return 0
+        :
+    elif status="$(run_limited 10 "$cli" status 2>/dev/null)"; then
+        if ! printf '%s\n' "$status" | awk '$1 ~ /^100\.[0-9]+\.[0-9]+\.[0-9]+$/ { found=1; exit } END { exit !found }'; then
+            echo failed
+            return
+        fi
+        peers="$(printf '%s\n' "$status" | awk '
+            /^#/ { next }
+            $1 ~ /^100\.[0-9]+\.[0-9]+\.[0-9]+$/ && $2 != "" {
+                if (!self_seen++) next
+                if ($0 ~ /[[:space:]]offline/ || $0 ~ /exit node|shared/) next
+                split($1, octet, ".")
+                if (octet[2] >= 64 && octet[2] <= 127 && octet[3] <= 255 && octet[4] <= 255) {
+                    gsub(/[^A-Za-z0-9._-]/, "", $2)
+                    print $1 "\t" ($2 == "" ? "peer" : $2)
+                }
+            }')"
+    else
+        echo failed
+        return
     fi
-    status="$("$cli" status 2>/dev/null)" || return 1
-    # The first address line is this Mac; subsequent address lines are peers.
-    printf '%s\n' "$status" | awk '
-        /^#/ { next }
-        $1 ~ /^100\.[0-9]+\.[0-9]+\.[0-9]+$/ && $2 != "" {
-            if (!self_seen++) next
-            if ($0 ~ /(^|[[:space:]])offline([[:space:]]|$)/) next
-            split($1, octet, ".")
-            if (octet[2] >= 64 && octet[2] <= 127 && octet[3] <= 255 && octet[4] <= 255) {
-                print $1 "\t" $2
-                if (++count == 2) exit
-            }
-        }'
+    while IFS=$'\t' read -r ip name; do
+        [[ -n "$ip" ]] || continue
+        nc -z -G 3 "$ip" 22 >/dev/null 2>&1 || continue
+        selected="${selected:+$selected,}$ip:$name"
+        count=$((count + 1))
+        [[ $count -lt 2 ]] || break
+    done <<< "$peers"
+    echo "${selected:-none}"
 }
+
+if [[ "${1:-}" == --discover-peers && $# -eq 1 ]]; then
+    tailnet_peers
+    exit 0
+fi
+peer_arg="${2:-missing}"
+if [[ $# -gt 0 && ( $# -ne 2 || "$1" != --peers ) ]]; then
+    echo "Usage: $0 [--discover-peers | --peers LIST]" >&2
+    exit 1
+fi
+if [[ "$peer_arg" != missing && "$peer_arg" != failed && "$peer_arg" != none && ! "$peer_arg" =~ ^100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.([0-9]{1,3})\.([0-9]{1,3}):[A-Za-z0-9._-]+(,100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.([0-9]{1,3})\.([0-9]{1,3}):[A-Za-z0-9._-]+)?$ ]]; then
+    echo "Invalid peer list." >&2
+    exit 1
+fi
+if [[ "$peer_arg" != missing && "$peer_arg" != failed && "$peer_arg" != none ]]; then
+    IFS=, read -r -a peer_list <<< "$peer_arg"
+    for peer in "${peer_list[@]}"; do
+        IFS=. read -r _ _ third fourth <<< "${peer%%:*}"
+        if (( 10#$third > 255 || 10#$fourth > 255 )); then
+            echo "Invalid peer address." >&2
+            exit 1
+        fi
+    done
+fi
+if [[ "$(id -un)" == "$CI_USER" ]]; then
+    prepare_keychain --force || echo "Couldn't prepare ci's keychain for the VM; it may not start." >&2
+fi
 
 # A softnet that isn't setuid root makes Tart ask for your password to make it so, which would
 # give Homebrew's (runnable by anyone) the bit back: refuse instead.
@@ -171,14 +211,20 @@ done
 if [[ -n "$tailscale_ip" ]]; then
     blocked_row "this Mac on Tailscale, $tailscale_ip:5000" "$(tcp_here "$tailscale_ip" 5000)" "$(tcp_vm "$tailscale_ip" 5000)"
     blocked_row "Tailscale's resolver, 100.100.100.100:53" "$(tcp_here 100.100.100.100 53)" "$(tcp_vm 100.100.100.100 53)"
-    peers="$(tailnet_peers)" || peers=""
-    if [[ -n "$peers" ]]; then
-        while IFS=$'\t' read -r peer_ip peer_name; do
-            blocked_row "tailnet peer $peer_name, $peer_ip:22" "$(tcp_here "$peer_ip" 22)" "$(tcp_vm "$peer_ip" 22)"
-        done <<< "$peers"
-    else
-        echo "Tailnet peers: inconclusive (no online peers discovered)"
+    if [[ "$peer_arg" == failed || "$peer_arg" == missing || "$peer_arg" == none ]]; then
+        case "$peer_arg" in
+            failed) reason="Tailscale CLI failed" ;;
+            missing) reason="peer discovery not supplied" ;;
+            none) reason="no eligible online peers with SSH reachable from this Mac" ;;
+        esac
+        echo "Tailnet peers: inconclusive ($reason)"
         inconclusive=$((inconclusive + 1))
+    else
+        IFS=, read -r -a peers <<< "$peer_arg"
+        for peer in "${peers[@]}"; do
+            peer_ip="${peer%%:*}" peer_name="${peer#*:}"
+            blocked_row "tailnet peer $peer_name, $peer_ip:22" "$(tcp_here "$peer_ip" 22)" "$(tcp_vm "$peer_ip" 22)"
+        done
     fi
 fi
 echo
