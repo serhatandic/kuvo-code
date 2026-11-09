@@ -1078,10 +1078,22 @@ client shows it from the same routes.
   - **Which agents can say**: the engine's own agents say all of it (`GET api/shell` one folder at
     a time, `shell.created`, `shell.exited`, and child sessions in `/api/session/active`). Only
     folders with something at work are asked, because asking starts a folder's tools. Claude Code:
-    commands, subagents and tasks. Codex: subagents, not background terminals. Antigravity:
-    subagents, which is how its own timers run. Grok and Cursor: subagents only within a turn. What
-    an agent can't report doesn't count: the session shows as not at work, and its lead is told at
-    the end of its turn, so nothing hangs on it.
+    commands, subagents and tasks. Codex: subagents, and commands it left running in background
+    terminals as tasks (listed again every 30 seconds while any runs: Codex doesn't say when one
+    ends, and isn't woken by it, as in its own CLI). Grok: what it keeps going in the background
+    (its commands and subagents) as tasks. Antigravity: subagents, which is how its own timers run.
+    Cursor: subagents only within a turn. What an agent can't report doesn't count: the session
+    shows as not at work, and its lead is told at the end of its turn, so nothing hangs on it.
+  - **Kept going, and lost**: a session's agent process is kept while what it left running goes
+    (it isn't closed 15 minutes after its last turn), since that work goes with it. For the agents
+    that are woken as such work ends (Claude Code, Grok), when it ends unfinished with their process
+    instead, the bridge wakes the session itself, with a `synthetic` note saying what stopped (and
+    the end of what it printed, when known): `metadata` `{source: "shell", state: "error", signal:
+    "SIGTERM"}` (`source: "agent"` when none of it was a command), `description` the command. That's
+    when the process ends by itself between turns (killed from outside, or crashed), and as the
+    bridge stops, when the note waits in the session's queue (`metadata.kuvo.lostWork`, when) and
+    wakes it once the bridge is back, if that's within a day. When the agent starts again for your
+    next message (an update, its settings changed), that message says so instead.
   - **The bridge's side**: `GET api/session/background` → `{data: {<session>: {commands: [{id,
     command, started}], subagents: [{id, since}], tasks: [{id, since}]}}}`, `DELETE
     api/session/<id>/background` ends them all, and the event `session.background.updated` says to
