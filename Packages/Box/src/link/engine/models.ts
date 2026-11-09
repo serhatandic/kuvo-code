@@ -20,6 +20,11 @@ import { learnCompatibility } from "./compatibility";
 
 export const MODELS_DUE_FILE = path.join(RUN, "models-due.json");
 
+/** The providers whose models opencode (2.2.5) reads from your account as it opens a folder, and
+ * again only when the account in use changes: those a refresh brings new models to. (The rest come
+ * from models.dev's catalog, which the engine reads again by itself every few minutes.) */
+export const REFRESHABLE = ["digitalocean", "github-copilot", "gitlab", "modal", "opencode"];
+
 /** The engine's events after which a folder that was at work may be done: the box looks again. */
 export const WORK_ENDS = new Set([
   "session.execution.succeeded", "session.execution.failed", "session.execution.interrupted",
@@ -28,8 +33,9 @@ export const WORK_ENDS = new Set([
 ]);
 
 /** What `refreshModels` came to: done, with the folders that get it once their work is done
- * (`waiting`); no such provider; or the engine not answering. */
-export type ModelsRefresh = { status: 200; waiting: string[] } | { status: 404 } | { status: 503; message: string };
+ * (`waiting`); no such provider, or one whose models don't come from your account; or the engine
+ * not answering, or unable to. */
+export type ModelsRefresh = { status: 200; waiting: string[] } | { status: 404 | 409 | 503; message: string };
 
 /** Which engine it is: a restarted one opened every folder afresh. */
 const engineOf = (engine: Target & Pick<EngineRecord, "pid">): string => `${engine.pid ?? ""}:${engine.port}`;
@@ -134,13 +140,14 @@ async function closeQuiet(engine: Target, folders: string[]): Promise<string[]> 
  * open closed where nothing's going on, the rest noted for once their work is done; then what
  * providers need learned from its list as it is now, and applied. */
 export async function refreshModels(engine: EngineRecord, provider: string, file = MODELS_DUE_FILE): Promise<ModelsRefresh> {
+  if (!REFRESHABLE.includes(provider)) return { status: 409, message: "Its models come from a catalog the engine reads again by itself: they show within a few minutes." };
   const unreachable = { status: 503 as const, message: "The engine isn't answering. Try again in a moment." };
   const known = await fetch(`http://127.0.0.1:${engine.port}/api/integration/${encodeURIComponent(provider)}`, {
     headers: { authorization: `Basic ${Buffer.from(`opencode:${engine.password}`).toString("base64")}` },
     signal: AbortSignal.timeout(10_000),
   }).catch(() => null);
   known?.body?.cancel();
-  if (known?.status === 404) return { status: 404 };
+  if (known?.status === 404) return { status: 404, message: "That provider isn't on this computer's engine any more." };
   if (!known?.ok) return unreachable;
   let folders: string[];
   try { folders = await openFolders(engine); } catch { return unreachable; }

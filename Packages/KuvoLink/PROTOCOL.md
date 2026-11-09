@@ -1827,13 +1827,17 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     its events say their work ended (a run's end, a terminal's or a command's, a question
     answered). It answers `200 {waiting: [folder]}`, the folders still to get them; the engine's
     own folder, whose list the model pickers read, is among them only while something goes on
-    there. Each folder is looked at again just before it's closed, so a run started meanwhile keeps
-    it open. Clients' pickers follow the engine's `model.updated`. The list is every provider's:
-    what it changes is the lists opencode reads from an account as a folder opens (GitHub
-    Copilot's; GitLab Duo's, Modal's and DigitalOcean's too), while models.dev's catalog refreshes
-    by itself; the provider named is the row it was asked from (`404 {}` for one the engine doesn't
-    have, `503 {message}` while it can't be asked, or when it has no way to close a folder, which
-    only a restart does then). Every box with `accounts.refresh`.
+    there, and a client says the rest get them once their work is done. Each folder is looked at
+    again just before it's closed, so a run started meanwhile keeps it open. Those left are closed
+    as the box follows its engine's events (on a machine, while its bridge runs; otherwise by the
+    next refresh, which looks at every open folder). Clients' pickers follow the engine's
+    `model.updated`. It helps only the providers whose lists opencode reads from your account as a
+    folder opens, and again only when the account in use changes: `GET kuvo/accounts/refreshable`
+    → `{providers: [id]}` (GitHub Copilot, GitLab Duo, Modal, DigitalOcean, OpenCode), which a
+    client offers it for, on the account in use. The rest come from models.dev's catalog, which
+    the engine reads again by itself: `409 {message}` for those. `404 {message}` for one the engine
+    doesn't have; `503 {message}` while it can't be asked, or when it has no way to close a folder,
+    which only a restart does then. Every box with `accounts.refresh`.
   - `GET kuvo/accounts/found` → `{agents, opencode, shell, connected}`: what the computer already has, for
     the first launch's Bring your subscriptions. `agents`: the coding agents' programs (`{id, name,
     installed, signedIn, label?}`, `label` who it's signed in as). `opencode`: an opencode used
@@ -3008,7 +3012,7 @@ the route scenarios (`Vectors/routes/routing.json`).
 | --- | --- |
 | `accounts.credentials` | `kuvo/accounts/credentials` |
 | `accounts.found` | `kuvo/accounts/found`, `…/found/use` |
-| `accounts.refresh` | `POST kuvo/accounts/<provider>/refresh` (Refresh Models) |
+| `accounts.refresh` | `GET kuvo/accounts/refreshable` and `POST kuvo/accounts/<provider>/refresh` (Refresh Models) |
 | `agents` | `kuvo/agents/api/…`: the coding agents (`agents` in `kuvo/info` says whether their bridge is up now) |
 | `asks` | `kuvo/asks`, `…/events`, and answering one |
 | `attention` | `kuvo/attention` |

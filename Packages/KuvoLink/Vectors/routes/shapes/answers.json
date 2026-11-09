@@ -4001,6 +4001,18 @@
    }
   },
   {
+   "route": "GET kuvo/accounts/refreshable",
+   "answers": {
+    "200": {
+     "object": {
+      "providers": {
+       "list": "string"
+      }
+     }
+    }
+   }
+  },
+  {
    "route": "POST kuvo/accounts/:provider/refresh",
    "answers": {
     "200": {

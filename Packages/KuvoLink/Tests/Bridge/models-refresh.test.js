@@ -181,11 +181,20 @@ test("folders left at work by a refresh aren't closed on an engine started since
   assert.equal(fs.existsSync(path.join(home, "run", "models-due.json")), false);
 });
 
-test("Refresh Models for a provider the engine doesn't have, on an engine that can't close a folder, or with the engine down, says so; nothing is closed", async () => {
+test("Refresh Models for a provider whose models don't come from your account, one the engine doesn't have, on an engine that can't close a folder, or with the engine down, says so; nothing is closed", async () => {
   const engine = await engineWith(["claude-opus-5.6"], { "/w/quiet": {} });
   const ask = asker(engine);
-  const unknown = await ask("POST", "kuvo/accounts/no-such-provider/refresh");
+  // A client offers it for the providers whose models come from your account alone.
+  const offered = await ask("GET", "kuvo/accounts/refreshable");
+  assert.ok(offered.json.providers.includes("github-copilot") && !offered.json.providers.includes("anthropic"));
+  // One whose models come from the catalog, which the engine reads again by itself.
+  const catalog = await ask("POST", "kuvo/accounts/anthropic/refresh");
+  assert.equal(catalog.status, 409);
+  assert.match(catalog.json.message, /by itself/);
+  // One the engine doesn't have (removed meanwhile): said in words.
+  const unknown = await ask("POST", "kuvo/accounts/gitlab/refresh");
   assert.equal(unknown.status, 404);
+  assert.match(unknown.json.message, /isn't on this computer's engine/);
   assert.equal((await ask("GET", "kuvo/accounts/github-copilot/refresh")).status, 405);
   assert.deepEqual(engine.closed, []);
   // One that can't close a folder can't make its lists afresh without a restart: it says so, and

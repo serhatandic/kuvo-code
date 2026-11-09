@@ -23653,6 +23653,7 @@ import path85 from "node:path";
 import fs79 from "node:fs";
 import path84 from "node:path";
 var MODELS_DUE_FILE = path84.join(RUN, "models-due.json");
+var REFRESHABLE = ["digitalocean", "github-copilot", "gitlab", "modal", "opencode"];
 var WORK_ENDS = new Set([
   "session.execution.succeeded",
   "session.execution.failed",
@@ -23749,6 +23750,8 @@ async function closeQuiet(engine, folders) {
   return waiting;
 }
 async function refreshModels(engine, provider, file = MODELS_DUE_FILE) {
+  if (!REFRESHABLE.includes(provider))
+    return { status: 409, message: "Its models come from a catalog the engine reads again by itself: they show within a few minutes." };
   const unreachable = { status: 503, message: "The engine isn't answering. Try again in a moment." };
   const known = await fetch(`http://127.0.0.1:${engine.port}/api/integration/${encodeURIComponent(provider)}`, {
     headers: { authorization: `Basic ${Buffer.from(`opencode:${engine.password}`).toString("base64")}` },
@@ -23756,7 +23759,7 @@ async function refreshModels(engine, provider, file = MODELS_DUE_FILE) {
   }).catch(() => null);
   known?.body?.cancel();
   if (known?.status === 404)
-    return { status: 404 };
+    return { status: 404, message: "That provider isn't on this computer's engine any more." };
   if (!known?.ok)
     return unreachable;
   let folders;
@@ -23898,6 +23901,11 @@ async function forgetPlan(engine, id) {
 }
 async function* accountsRoute(context) {
   const { request, route, readEngine, json } = context;
+  if (route === "kuvo/accounts/refreshable") {
+    if (!["GET", "HEAD"].includes(request.method.toUpperCase()))
+      return yield* json(405, {});
+    return yield* json(200, { providers: REFRESHABLE });
+  }
   let engine = null;
   try {
     engine = readEngine();
@@ -23923,7 +23931,7 @@ async function* accountsRoute(context) {
     return yield* json(404, {});
   if (action === "refresh") {
     const refreshed = await refreshModels(engine, id).catch(() => ({ status: 503, message: "The engine isn't answering. Try again in a moment." }));
-    return yield* json(refreshed.status, refreshed.status === 200 ? { waiting: refreshed.waiting } : ("message" in refreshed) ? { message: refreshed.message } : {});
+    return yield* json(refreshed.status, refreshed.status === 200 ? { waiting: refreshed.waiting } : { message: refreshed.message });
   }
   const forgot = await forgetPlan(engine, id).catch(() => ({ status: 503, message: "The engine isn't answering. Try again in a moment." }));
   return yield* json(forgot.status, "message" in forgot ? { message: forgot.message } : {});
@@ -30932,7 +30940,7 @@ var ROUTES = [
   { when: (route) => route.match(/^kuvo\/engine\/(start|restart)$/), answer: engineControlRoute },
   { when: (route) => route === "kuvo/sign-in/return", answer: signInReturnRoute },
   { when: (route, request) => request.path.startsWith(AGENTS), answer: agentsRoute },
-  { when: (route) => route === "kuvo/accounts/ended" || /^kuvo\/accounts\/[^/]+\/(forget|refresh)$/.test(route), answer: accountsRoute },
+  { when: (route) => route === "kuvo/accounts/ended" || route === "kuvo/accounts/refreshable" || /^kuvo\/accounts\/[^/]+\/(forget|refresh)$/.test(route), answer: accountsRoute },
   { when: (route) => route === "kuvo/accounts/credentials", answer: credentialsRoute },
   { when: (route) => route === "kuvo/accounts/found" || route === "kuvo/accounts/found/use", answer: foundRoute },
   { when: (route) => route === "kuvo/personalities/events", answer: personalityEventsRoute },
@@ -31195,6 +31203,7 @@ var MAC_BOX_ROUTES = [
   "kuvo/phones",
   "kuvo/attention",
   "kuvo/accounts/ended",
+  "kuvo/accounts/refreshable",
   "kuvo/accounts/credentials",
   "kuvo/accounts/found",
   "kuvo/file",
