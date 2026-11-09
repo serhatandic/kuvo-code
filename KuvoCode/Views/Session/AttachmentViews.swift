@@ -171,6 +171,7 @@ struct ComposerAttachment: View {
     var route: Attachments.Route = .content
     /// A picture's place among the message's pictures: its name in the message, "[Image 2]".
     var number: Int?
+    var pictures: [URL] = []
     let remove: () -> Void
     @State private var isHovering = false
 
@@ -225,14 +226,20 @@ struct ComposerAttachment: View {
         .onHover { isHovering = $0 }
         // A picture opens in the viewer.
         .contentShape(.rect(cornerRadius: 10))
-        .onTapGesture { if item.isImage { ImageViewer.shared.show([item]) } }
+        .onTapGesture { showPicture(item) }
         .help(reason.map { "\(url.path)\n\($0)" } ?? url.path)
         // One element for VoiceOver, whose remove button is there only on hover.
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(title)
         .accessibilityValue(detail)
         .accessibilityAction(named: "Remove", remove)
-        .accessibilityAction { if item.isImage { ImageViewer.shared.show([item]) } }
+        .accessibilityAction { showPicture(item) }
+    }
+
+    private func showPicture(_ item: AttachmentItem) {
+        guard item.isImage else { return }
+        let images = pictures.isEmpty ? [url] : pictures
+        ImageViewer.shared.show(images.map(AttachmentItem.local), at: images.firstIndex(of: url) ?? 0)
     }
 
     private var reason: String? {

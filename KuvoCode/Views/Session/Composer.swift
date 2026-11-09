@@ -227,7 +227,7 @@ struct Composer: View {
             if !files.isEmpty {
                 AttachmentStrip(files: files) { file in
                     ComposerAttachment(url: file, route: Attachments.route(file, for: currentModel, onMachine: RemoteFolder.machine(of: folders.first ?? "") != nil),
-                                       number: imageFiles.firstIndex(of: file).map { $0 + 1 }) { detach(file) }
+                                       number: imageFiles.firstIndex(of: file).map { $0 + 1 }, pictures: imageFiles) { detach(file) }
                 }
             }
 
