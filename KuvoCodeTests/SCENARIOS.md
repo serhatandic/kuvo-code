@@ -76,6 +76,7 @@ for Linux's tools).
 | A reply's lines as chat apps draw them: none under its headings, `---` as one thin line (the phone's ReplyRulesTests are the same) | ReplyRulesTests | how the line looks (a look before and after) |
 | D4 A chat moved into a project | SessionLifecycleTests | |
 | E, B15, L36 The agent's browser; a screenshot you ask to see, in the conversation | BrowserToolServerTests | |
+| What every agent carries of Kuvo Code's tools and words on each call stays within its budget, per agent kind | ToolCopyBudgetTests; the box's words: the Box package's tool-copy-budget.test.ts | |
 | E2, L31 It fills in a form | BrowserFormTests | |
 | E3, E7, L22 It uploads a file to a site | BrowserUploadTests | a machine's browser's upload (its Chrome, on the machine) |
 | L25 The page saved as a PDF to share | PagePDFTests | |
