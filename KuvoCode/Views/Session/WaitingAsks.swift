@@ -31,41 +31,27 @@ enum WaitingAsk: Identifiable {
     }
 }
 
-/// Which of them shows: the one you went to while it waits, else the first.
-struct WaitingAskPosition: Equatable {
-    let index: Int
-    let count: Int
-
-    init?(ids: [String], picked: String?) {
-        guard !ids.isEmpty else { return nil }
-        index = picked.flatMap(ids.firstIndex(of:)) ?? 0
-        count = ids.count
-    }
-
-    /// "2 of 3", where more than one waits.
-    var words: String? { count > 1 ? "\(index + 1) of \(count)" : nil }
-}
-
 /// The ask in the composer's place: "1 of 3" with the way to the others over it, where more wait.
+/// Which shows is KuvoClient's `AskPlace`, as on the phone.
 struct AskInComposer<Content: View>: View {
-    let position: WaitingAskPosition
+    let place: AskPlace
     let go: (Int) -> Void
     @ViewBuilder var content: Content
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if let words = position.words {
+            if let words = place.words, let index = place.index {
                 HStack(spacing: 4) {
                     Text(words)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .monospacedDigit()
                     Spacer()
-                    Button { go(position.index - 1) } label: { Image(systemName: "chevron.left") }
-                        .disabled(position.index == 0)
+                    Button { go(index - 1) } label: { Image(systemName: "chevron.left") }
+                        .disabled(index == 0)
                         .accessibilityLabel("Previous Ask")
-                    Button { go(position.index + 1) } label: { Image(systemName: "chevron.right") }
-                        .disabled(position.index == position.count - 1)
+                    Button { go(index + 1) } label: { Image(systemName: "chevron.right") }
+                        .disabled(index == place.waiting.count - 1)
                         .accessibilityLabel("Next Ask")
                 }
                 .buttonStyle(.borderless)

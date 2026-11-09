@@ -6,8 +6,9 @@ import OpenCodeKit
 import SwiftUI
 
 /// The agent wants to do something that needs your OK, in the composer's place: what Allow allows,
-/// a line to tell it what to do instead, and the answers. Return allows it once; Escape goes to the
-/// line, and again says no.
+/// then its answers numbered, as in Claude Code and Codex (and on the phone): 1 Allow Once,
+/// 2 Always Allow…, 3 Don't Allow, 4 Tell It What to Do Instead… (a line to write in). The number
+/// keys pick them, Return allows once, and Escape goes to the line, and again says no.
 struct PermissionCard: View {
     let request: PermissionRequest
     /// For a command: the whole command line, pipes and all, which the request names in parts.
@@ -15,18 +16,26 @@ struct PermissionCard: View {
     let directory: String
     /// A coding agent's conversation (Claude Code, Codex), where Always lasts for it, not the project.
     var forConversation = false
+    /// What to do instead, as you write it, kept with the ask (paging away and back keeps it);
+    /// the card's own where nothing keeps it.
+    var instead: Binding<String>?
     /// The answer, and for Don't Allow what to do instead, when you wrote it.
     let reply: (PermissionRequest.Decision, String?) -> Void
     @Environment(\.takesCardKeys) private var takesKeys
     @Environment(\.cardRoom) private var room
+    @Environment(\.isEnabled) private var isEnabled
     /// Files whose changes you asked to see all of.
     @State private var shownWhole: Set<String> = []
-    /// What to do instead, as you write it.
-    @State private var instead = ""
+    @State private var ownInstead = ""
+    /// "Tell It What to Do Instead…" opened its line.
+    @State private var writesInstead = false
     @FocusState private var isWritingInstead: Bool
     /// Its keys answer only once the keyboard has been still a moment, after it shows and after
     /// each key typed: Return ending a message you were writing as it came doesn't allow it.
     @State private var typing = KeysTyped()
+    /// The number keys, while it takes keys.
+    @State private var monitor: Any?
+    @State private var windowBox = WindowBox()
     /// A long command shown whole, and how tall it is whole and as shown.
     @State private var showsAll = false
     @State private var wholeHeight: CGFloat = 0
@@ -37,6 +46,8 @@ struct PermissionCard: View {
     /// A file's lines shown before Show All: enough to read, not so many that a huge new file
     /// holds the window up.
     private static let linesShown = 400
+
+    private var words: Binding<String> { instead ?? $ownInstead }
 
     var body: some View {
         // Read from its metadata once a drawing, not for each use.
@@ -107,86 +118,116 @@ struct PermissionCard: View {
                 }
             }
 
-            // Don't Allow, with what to do instead: the agent hears it as your message.
-            TextField("Or tell it what to do instead…", text: $instead, axis: .vertical)
-                .textFieldStyle(.plain)
-                .lineLimit(1...4)
-                .focused($isWritingInstead)
-                .onSubmit(refuse)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 8)
-                .recessedWell(RoundedRectangle(cornerRadius: 10))
-                .accessibilityLabel("What to do instead")
-                .accessibilityHint("Return says no, and tells the agent this instead")
-
-            // The same words and layout as the sandbox's card, so the two read as one family.
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 8) {
-                    dontAllow
-                    Spacer()
-                    alwaysButton(whole: true)
-                    allowOnce
-                }
-                // A narrow window: Always on a row of its own, its name whole as long as it fits.
-                VStack(alignment: .trailing, spacing: 8) {
-                    HStack(spacing: 8) {
-                        dontAllow
-                        Spacer()
-                        allowOnce
+            // Its answers, numbered (KuvoClient's words, as on the phone).
+            VStack(spacing: 2) {
+                let always = always
+                ForEach(PermissionAnswer.allCases, id: \.self) { choice in
+                    if choice == .instead, writesInstead || !words.wrappedValue.isEmpty {
+                        insteadLine
+                            .padding(.horizontal, ChoiceRow.inset)
+                            .padding(.top, 2)
+                            .transition(.opacity)
+                    } else {
+                        ChoiceRow(number: choice.rawValue,
+                                  label: Text(choice.title(always)) + (choice.named(always).map { Text(" ") + Text($0).monospaced() } ?? Text(""))) { pick(choice) }
+                            .help(choice == .always ? always.help : choice == .once ? "Return" : "")
+                            .accessibilityLabel(choice.spoken(always))
                     }
-                    alwaysButton(whole: false)
                 }
             }
-            .buttonStyle(.glass)
-            .controlSize(.large)
+            // The rows' fill reaches out past the column, so their numbers line up with the title.
+            .padding(.horizontal, -ChoiceRow.inset)
         }
         .padding(16)
+        .background(returnKey)
         .background(escape)
+        .background(WindowReader(box: windowBox))
+        .animation(.ui, value: writesInstead)
         .onChange(of: request.id) { typing.restart() }
         // (What you write in its line is the card's own.)
-        .onChange(of: isWritingInstead) { _, writing in typing.ignores = writing }
+        .onChange(of: isWritingInstead) { _, writing in
+            typing.ignores = writing
+            if !writing, words.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { writesInstead = false }
+        }
+        .onChange(of: isEnabled, initial: true) { _, enabled in windowBox.isEnabled = enabled }
+        .onChange(of: takesKeys, initial: true) { _, takes in
+            if takes {
+                monitor = monitor ?? NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in key(event) ? nil : event }
+            } else if let monitor {
+                NSEvent.removeMonitor(monitor)
+                self.monitor = nil
+            }
+        }
         .onAppear { typing.start() }
-        .onDisappear { typing.stop() }
+        .onDisappear {
+            typing.stop()
+            if let monitor { NSEvent.removeMonitor(monitor) }
+            monitor = nil
+        }
     }
 
-    private var dontAllow: some View {
-        Button("Don’t Allow", role: .cancel, action: refuse)
-            .help(words.isEmpty ? "" : "Says no, and tells the agent what you wrote")
+    /// 4's line: Don't Allow, with what to do instead; Return says it.
+    private var insteadLine: some View {
+        TextField(PermissionAnswer.insteadPlaceholder, text: words, axis: .vertical)
+            .textFieldStyle(.plain)
+            .lineLimit(1...4)
+            .focused($isWritingInstead)
+            .onSubmit(refuse)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .recessedWell(RoundedRectangle(cornerRadius: 10), isFocused: isWritingInstead)
+            .accessibilityLabel("What to do instead")
+            .accessibilityHint("Return says no, and tells the agent this instead")
     }
 
-    private var allowOnce: some View {
-        Button("Allow Once") { reply(.once, nil) }
-            .buttonStyle(.glassProminent)
-            // (Return in the line says no instead.)
+    private func pick(_ choice: PermissionAnswer) {
+        switch choice {
+        case .once: reply(.once, nil)
+        case .always: reply(.always, nil)
+        case .reject: reply(.reject, nil)
+        case .instead: writeInstead()
+        }
+    }
+
+    /// Opens 4's line, with the keyboard.
+    private func writeInstead() {
+        writesInstead = true
+        DispatchQueue.main.async { isWritingInstead = true }
+    }
+
+    /// Return: Allow Once (in the line, it says no instead).
+    private var returnKey: some View {
+        Button("") { reply(.once, nil) }
             .keyboardShortcut(takesKeys && typing.isQuiet && !isWritingInstead ? .defaultAction : nil)
+            .frame(width: 0, height: 0)
+            .opacity(0)
+            .accessibilityHidden(true)
     }
 
     /// Escape: to the line, to say what to do instead; there, no.
     private var escape: some View {
-        Button("") { if isWritingInstead { refuse() } else { isWritingInstead = true } }
+        Button("") { if isWritingInstead { refuse() } else { writeInstead() } }
             .keyboardShortcut(takesKeys && typing.isQuiet ? .cancelAction : nil)
             .frame(width: 0, height: 0)
             .opacity(0)
             .accessibilityHidden(true)
     }
 
-    private var words: String { instead.trimmingCharacters(in: .whitespacesAndNewlines) }
-
-    private func refuse() {
-        reply(.reject, words.isEmpty ? nil : words)
+    /// A number key picks its answer, while nothing you type in has the keyboard (the line, a
+    /// terminal, a page keep theirs) and the keyboard's been still a moment.
+    private func key(_ event: NSEvent) -> Bool {
+        guard let window = windowBox.window, event.window === window, windowBox.isEnabled, takesKeys, typing.isQuiet, !isWritingInstead,
+              QuestionKeys.isFree(window.firstResponder, in: window),
+              event.modifierFlags.intersection([.command, .control, .option]).isEmpty,
+              let number = event.characters?.first?.wholeNumberValue, let choice = PermissionAnswer(rawValue: number) else { return false }
+        pick(choice)
+        return true
     }
 
-    /// Named by what it saves: every edit, a command's kind, a folder; whole in its hover text.
-    private func alwaysButton(whole: Bool) -> some View {
-        let always = always
-        return Button { reply(.always, nil) } label: {
-            Text("\(always.title)\(always.named.map { Text(" ") + Text($0).monospaced() } ?? Text(""))")
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .fixedSize(horizontal: whole, vertical: false)
-        }
-        .help(always.help)
-        .accessibilityLabel(always.spoken)
+    private var trimmedWords: String { words.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+    private func refuse() {
+        reply(.reject, trimmedWords.isEmpty ? nil : trimmedWords)
     }
 
     private var subject: String {
@@ -480,7 +521,7 @@ private struct QuestionPager: View {
     /// words.
     private func key(_ event: NSEvent) -> Bool {
         guard let window = windowBox.window, event.window === window, windowBox.isEnabled, !isWriting,
-              Self.isFree(window.firstResponder, in: window),
+              QuestionKeys.isFree(window.firstResponder, in: window),
               event.modifierFlags.intersection([.command, .control, .option]).isEmpty,
               questions.indices.contains(index),
               let characters = event.characters, let character = characters.first,
@@ -499,12 +540,6 @@ private struct QuestionPager: View {
         return true
     }
 
-    /// Nothing that takes typing has the keyboard: the window does, or SwiftUI's own host
-    /// view (a control, not a field). A text field, the terminal or a page keeps its keys.
-    private static func isFree(_ responder: NSResponder?, in window: NSWindow) -> Bool {
-        guard let responder, responder !== window else { return true }
-        return String(describing: type(of: responder)).contains("HostingView")
-    }
 
     // MARK: Answers
 
@@ -611,59 +646,41 @@ private struct QuestionPager: View {
     }
 }
 
-/// One of a question's choices: its number and its words.
-private struct ChoiceRow: View {
+/// A numbered choice (a question's, a permission's answer): its number and its words, drawn as on
+/// the phone (KuvoClient's `ChoiceRowLabel`), for the pointer.
+struct ChoiceRow: View {
     let number: Int
-    let option: FormField.Option
-    let isSelected: Bool
-    let isMultiple: Bool
+    let label: Text
+    var detail: String?
+    var isSelected = false
+    var isMultiple = false
     let action: () -> Void
-    @Environment(\.accent) private var accent
+
+    init(number: Int, label: Text, detail: String? = nil, isSelected: Bool = false, isMultiple: Bool = false, action: @escaping () -> Void) {
+        self.number = number
+        self.label = label
+        self.detail = detail
+        self.isSelected = isSelected
+        self.isMultiple = isMultiple
+        self.action = action
+    }
+
+    init(number: Int, option: FormField.Option, isSelected: Bool, isMultiple: Bool, action: @escaping () -> Void) {
+        self.init(number: number, label: Text(option.label), detail: ChoiceText.detail(option.description, label: option.label),
+                  isSelected: isSelected, isMultiple: isMultiple, action: action)
+    }
 
     var body: some View {
         Button(action: action) {
-            // The number in the middle of the whole choice, its description too.
-            HStack(alignment: .center, spacing: 10) {
-                badge
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(option.label)
-                        .foregroundStyle(.primary)
-                    if let description = ChoiceText.detail(option.description, label: option.label) {
-                        Text(description)
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                Spacer(minLength: 8)
-            }
-            .padding(.horizontal, Self.inset)
-            .padding(.vertical, 8)
-            .pickHighlight(RoundedRectangle(cornerRadius: 10), isOn: isSelected)
+            ChoiceRowLabel(number: number, label: label, detail: detail, isSelected: isSelected, isMultiple: isMultiple, numberSize: 11)
+                .padding(.horizontal, Self.inset)
+                .padding(.vertical, 8)
+                .pickHighlight(RoundedRectangle(cornerRadius: 10), isOn: isSelected)
         }
         .buttonStyle(.plain)
         .clickablePointer()
     }
 
-    private var badge: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 6)
-                .fill(isSelected ? accent : Color.primary.opacity(0.06))
-            RoundedRectangle(cornerRadius: 6)
-                .strokeBorder(isSelected ? .clear : Color.primary.opacity(0.12))
-            if isSelected && isMultiple {
-                Image(systemName: "checkmark")
-                    .font(.system(size: 10, weight: .bold))
-                    .foregroundStyle(.white)
-            } else {
-                Text(number <= 9 ? "\(number)" : "")
-                    .font(.system(size: 11, weight: .medium).monospacedDigit())
-                    .foregroundStyle(isSelected ? .white : .secondary)
-            }
-        }
-        .frame(width: Self.badgeSize, height: Self.badgeSize)
-    }
-
-    private static let badgeSize: CGFloat = 22
     /// How far its content sits inside its fill.
     static let inset: CGFloat = 10
 }
@@ -764,6 +781,16 @@ extension EnvironmentValues {
 }
 
 
+/// Where a card's keys (a number, typing) go to it.
+enum QuestionKeys {
+    /// Nothing that takes typing has the keyboard: the window does, or SwiftUI's own host
+    /// view (a control, not a field). A text field, the terminal or a page keeps its keys.
+    static func isFree(_ responder: NSResponder?, in window: NSWindow) -> Bool {
+        guard let responder, responder !== window else { return true }
+        return String(describing: type(of: responder)).contains("HostingView")
+    }
+}
+
 /// The window a view is in, for what it does with AppKit (watching keys there).
 final class WindowBox {
     weak var window: NSWindow?
@@ -813,6 +840,8 @@ struct AllowedWell<Content: View>: View {
 /// Whether the app's keyboard has been quiet a moment (Return and Escape aside): a card's keys
 /// wait for typing meant for something else to stop. Changes only as typing starts and stops.
 @MainActor @Observable final class KeysTyped {
+    /// How long still counts as quiet (a test's own, nothing).
+    static var quietAfter = Duration.milliseconds(600)
     private(set) var isQuiet = false
     /// Typing that's the card's own (its line) doesn't count.
     @ObservationIgnored var ignores = false
@@ -823,10 +852,15 @@ struct AllowedWell<Content: View>: View {
         restart()
         guard monitor == nil else { return }
         monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            // (Return, keypad Enter, Escape: the card's own answers.)
-            if let self, !ignores, ![36, 76, 53].contains(event.keyCode) { restart() }
+            // (Return, keypad Enter, Escape and the number keys: the card's own answers.)
+            if let self, !ignores, ![36, 76, 53].contains(event.keyCode), !Self.isAnswer(event) { restart() }
             return event
         }
+    }
+
+    /// 1 to 9 alone: a card's number keys.
+    private static func isAnswer(_ event: NSEvent) -> Bool {
+        event.modifierFlags.intersection([.command, .control, .option]).isEmpty && (event.characters?.first?.wholeNumberValue).map { (1...9).contains($0) } == true
     }
 
     /// Quiet again a moment from now.
@@ -834,7 +868,7 @@ struct AllowedWell<Content: View>: View {
         if isQuiet { isQuiet = false }
         wait?.cancel()
         wait = Task { [weak self] in
-            guard (try? await Task.sleep(for: .milliseconds(600))) != nil else { return }
+            guard (try? await Task.sleep(for: Self.quietAfter)) != nil else { return }
             self?.isQuiet = true
         }
     }

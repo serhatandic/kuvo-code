@@ -1,10 +1,11 @@
+import ClientSessions
 import Foundation
 import OpenCodeKit
 import Testing
 @testable import KuvoCode
 
 /// An ask takes the composer's place (B10, draft B): one at a time, "1 of 3" where more wait, the
-/// one you went to staying until it's answered (here or on another client), then the first left;
+/// one you went to staying until it's answered (here or on another client), then the next after it;
 /// none left, the composer and its draft come back. Don't Allow can carry what to do instead.
 /// The engine is stubbed.
 @MainActor
@@ -37,21 +38,25 @@ import Testing
         for (request, command) in [("per_1", "npm install"), ("per_2", "npm test"), ("per_3", "git push")] {
             workspace.handle(try engine.event("permission.asked", asked(request, command)))
         }
-        var ids = model.permissions.map(\.id)
-        #expect(WaitingAskPosition(ids: ids, picked: nil)?.words == "1 of 3")
+        // Which shows, as the conversation's composer place keeps it.
+        var place = AskPlace()
+        place.update(model.permissions.map(\.id) + model.forms.map(\.id))
+        #expect(place.words == "1 of 3")
         // You went to the second; the first is answered on your phone meanwhile.
-        #expect(WaitingAskPosition(ids: ids, picked: "per_2")?.words == "2 of 3")
+        place.show(1)
+        #expect(place.words == "2 of 3")
         workspace.handle(try engine.event("permission.replied", ["sessionID": id, "requestID": "per_1"]))
-        ids = model.permissions.map(\.id)
-        #expect(WaitingAskPosition(ids: ids, picked: "per_2")?.words == "1 of 2", "still the one you went to")
-        // It's answered there too: the first left shows.
+        place.update(model.permissions.map(\.id))
+        #expect(place.words == "1 of 2", "still the one you went to")
+        #expect(place.shown == "per_2")
+        // It's answered there too: the next after it shows.
         workspace.handle(try engine.event("permission.replied", ["sessionID": id, "requestID": "per_2"]))
-        ids = model.permissions.map(\.id)
-        let last = try #require(WaitingAskPosition(ids: ids, picked: "per_2"))
-        #expect(last.words == nil, "one alone has no count")
-        #expect(ids[last.index] == "per_3")
+        place.update(model.permissions.map(\.id))
+        #expect(place.words == nil, "one alone has no count")
+        #expect(place.shown == "per_3")
         workspace.handle(try engine.event("permission.replied", ["sessionID": id, "requestID": "per_3"]))
-        #expect(WaitingAskPosition(ids: model.permissions.map(\.id), picked: nil) == nil, "none: the composer is back")
+        place.update(model.permissions.map(\.id))
+        #expect(place.shown == nil, "none: the composer is back")
         #expect(model.draftText == "And then add tests", "with what you'd written")
     }
 
