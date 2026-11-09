@@ -44,6 +44,8 @@ import { GroupRunner } from "./groups/runner"
 import { GroupStore } from "./groups/store"
 import { queueFiles } from "../shared/queues"
 import { HangWatch, isEngine } from "../shared/hang"
+import { agentAccounts, Limits } from "./limits"
+import { ENGINE_SERVICES, EngineAccounts } from "./engine-limits"
 
 const version = "1"
 const home = process.env.KUVO_AGENTS_HOME
@@ -238,6 +240,11 @@ const handoffs = new Handoffs(places)
 const reviews = new Reviews(join(home, "reviews.json"), places)
 // The project's words for voice input to listen for, in the same conversations.
 const voice = new VoiceWords(places)
+// Your plans' limits for each account here, read on their makers' schedules and kept between runs.
+// The engine's sign-ins too (Settings › Accounts), as the engine lists them with their secrets.
+const engineAccounts = new EngineAccounts(() => link.request("GET", "/api/credential"))
+const limits = new Limits(() => [...agentAccounts(roster.all()), ...engineAccounts.accounts()], join(home, "limits.json"), Date.now, () => engineAccounts.refresh(), () => engineAccounts.answered)
+limits.alsoServices = ENGINE_SERVICES
 
 // What every conversation here makes, recorded as it's made: the engine's and this bridge's own.
 // One that fails to start leaves the rest of the bridge as it is.
@@ -287,6 +294,7 @@ if (artifactsFolder) {
 // listens once the box has set up its sandbox: on this Mac the app starts it before the box, so an
 // agent started then would run outside the sandbox until it stops.
 await untilSandboxDecided()
+limits.start()
 const carrying = new Carrying(sessions, store, (provider) => sessions.agent(provider), (kind) => roster.all().filter((agent) => parseProvider(agent.providerID)?.kind === kind))
 let server: ReturnType<typeof Bun.serve>
 try {
@@ -294,7 +302,7 @@ try {
     hostname: "127.0.0.1",
     port,
     idleTimeout: 0,
-    fetch: handler({ roster, sessions, auto, link, password, version, groups, goals, sideQuestions, handoffs, places, reviews, voice, artifacts, noted, restartOutside, carrying }),
+    fetch: handler({ roster, sessions, auto, link, password, version, groups, goals, sideQuestions, handoffs, places, reviews, voice, artifacts, noted, restartOutside, carrying, limits }),
   })
 } catch (error: any) {
   console.error("couldn't listen:", error?.message ?? error)

@@ -135,7 +135,7 @@ export function install(name: string, command: string, temporary: string, found:
   })
 }
 
-async function installedVersion(executable: string): Promise<string | undefined> {
+export async function installedVersion(executable: string): Promise<string | undefined> {
   const ran = await run(executable, ["--version"], { timeout: 15_000 }).catch(() => undefined)
   return ran ? versionIn(plain(ran.stdout + " " + ran.stderr)) : undefined
 }

@@ -356,6 +356,7 @@ struct ToolCallView: View {
         case "answer_ask": return isActive ? "Answering a session" : "Answered a session"
         case "list_models": return isActive ? "Looking up the models" : "Looked up the models"
         case "list_projects": return isActive ? "Looking up the projects" : "Looked up the projects"
+        case "plan_limits": return isActive ? "Reading the plan limits" : "Read the plan limits"
         case "make_project": return (isActive ? "Making " : "Made ") + (string("name").map { "the project “\($0)”" } ?? "a project")
         case "set_job": return (isActive ? "Setting its job" : "Set its job") + (string("summary").map { ": \($0)" } ?? "")
         case "propose_goal": return (isActive ? "Proposing " : "Proposed ") + (string("title").map { "the goal “\($0)”" } ?? "a goal")
@@ -478,6 +479,7 @@ struct ToolCallView: View {
         case "answer_ask": "checkmark.bubble"
         case "list_models": "cpu"
         case "list_projects": "folder"
+        case "plan_limits": "gauge.with.dots.needle.50percent"
         case "make_project": "folder.badge.plus"
         case "set_job": "person.text.rectangle"
         case "propose_goal", "goal_progress", "finish_goal": "scope"

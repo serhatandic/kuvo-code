@@ -57,6 +57,8 @@ final class AppModel {
     /// Other computers whose engines run over SSH, next to this Mac's.
     let machines = Machines()
     let usage = UsageAccounts()
+    /// Each box's plan limits, one row per login in the usage panel.
+    let planLimits = BoxPlanLimits()
     /// Bots: named agents with one job each, on this Mac or a machine.
     let bots = Bots()
     /// Bots' and sessions' wake-ups and watches.
@@ -860,12 +862,14 @@ final class AppModel {
         agents.onEvent = { [weak self] event in
             // This Mac's group chats, as it runs them.
             if event.type.hasPrefix("kuvo.group.") { self?.boxGroups.handle(event, machine: nil); return }
+            self?.planLimits.handle(event, machine: nil)
             self?.catalog.handle(event)
             self?.workspace.handleAgents(event)
         }
         // A handoff asked for here, done: its new conversation opens, wherever the window is.
         agents.onHandoff = { [weak self] handoff in Task { await self?.workspace.openHandoff(handoff) } }
         agents.onStopped = { [weak self] in
+            self?.planLimits.stopped(nil)
             self?.catalog.forgetAgents()
             self?.workspace.agentsStopped()
             self?.boxGroups.disconnected(nil)
@@ -876,6 +880,7 @@ final class AppModel {
                 // This Mac's group chats first: they're what shows from the cache meanwhile. Up
                 // before this Mac's engine (it usually is), they're read once the stores are told
                 // of each other (`wireStores`).
+                planLimits.connected(nil, api: agents.api)
                 if boxGroups.app == nil { chatsWaitForStores = true } else { await boxGroups.connected(nil) }
                 await catalog.refreshAgents()
                 await workspace.refreshAgents()

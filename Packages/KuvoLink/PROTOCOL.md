@@ -2643,9 +2643,11 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   {"message"}` for one that isn't there or isn't a file, `403 {"message"}` for one it can't read,
   `413 {"message"}` over 25 MB, or over `max` when it's given (`&max=<bytes>`: all a client would
   show of it), `400 {"message"}` for an address that isn't `file://`. Each box answers for its own files, a machine's with the Mac closed too.
-- On a Mac, `kuvo/usage`: the menu bar's usage panel as its Bars view lists it (each provider's
-  name, plan, brand color, mark as a PNG to tint, notice, whether it's outdated, and its lines as
-  UsageKit writes them), whether a refresh is under way and when the last one ended;
+- On a Mac, `kuvo/usage`: the menu bar's usage panel as its Bars view lists it, for what the box
+  doesn't state yet (a plan's limits are every box's own, in "Plan limits"): it leaves out the
+  providers whose limits this Mac's box states rows for (`services`, with an account listed), whose
+  spend shows under the first of them on the Mac. A client lists the box's rows, then these: each provider's name, plan, brand color, mark as a PNG
+  to tint, notice, whether it's outdated, and its lines as UsageKit writes them; whether a refresh is under way and when the last one ended;
   `kuvo/usage/events` streams it as it changes, and `POST kuvo/usage/refresh` refreshes it all.
   While the usage panel isn't up, `kuvo/usage` and the refresh answer 404; the stream answers 200
   with an empty line and stays open, saying nothing more until it's up. Lines that JSON can't carry are left out. Times are
@@ -2709,6 +2711,76 @@ Grok). With none to answer, the goal pauses and says so. A client reaches them a
 - "/goal" in a composer: `/goal <condition>` sets it, `/goal` alone shows it, and `/goal pause`,
   `/goal resume` and `/goal clear` (or `stop`, `off`, `reset`, `none`, `cancel`) do what they say
   (OpenCodeKit's `GoalCommand`, for every client alike).
+
+### Plan limits
+
+Each box reads the limits of your plans (a 5-hour window, a week, a model's own week, a month's
+requests) and credits, for each account it runs that's signed in to Kuvo Code: every coding agent's
+accounts (its own sign-in and those you added) and the engine's sign-ins. It reads them with the
+sign-in Kuvo Code runs each with, never another login on the computer (your Claude Code in Terminal
+on a Mac, whose box runs Claude with a sign-in of its own; the Cursor app's), and never renews one:
+the agent or the engine that owns it does. (On a Mac, Codex's and Grok's own sign-ins are the ones
+in `~/.codex` and `~/.grok`, as their sessions run with them; on a machine, Kuvo Code's own.) The coding agents' bridge reads them, a machine's with the Mac closed too, and keeps
+the last reading in its folder (`limits.json`), through a restart. A client reaches them as
+`kuvo/agents/api/kuvo/limits…` (the Mac app at `api/kuvo/limits…` on the bridge itself), while
+`kuvo/info` has `agents: true` (503 otherwise), where `features` has `limits`.
+
+- `GET kuvo/agents/api/kuvo/limits` → `{data: {accounts: [account], services}}`. `services`: what
+  this box reads the limits of (`claude`, `codex`, `grok`, `cursor`, `antigravity`, `copilot`,
+  `openrouter`, `zai`, `ollama`, `opencode`), whether or not one is signed in now: a client shows
+  those from here, and anything else from where it had them before. An account is listed once it's
+  been read (or a turn told of it); one with no plan limits to read (signed out, an API key) isn't.
+  Each `account`:
+  - `provider` (`claude-code`, `claude-code@1f2e3d4c` for one you added, the engine's
+    `github-copilot`…), `service` (its mark and color, as above), and for a coding agent's,
+    `agent` (`claude`…) and `account` (`default` for its own sign-in, else the ID of one you
+    added); `label`, what you called one you added ("Work"); `plan`, in its maker's words ("Max
+    20x", "Pro"), when known.
+  - `windows`: each `{id, used, resetsAt?, minutes?, model?, name?, amount?, read, source}`. `id` is its
+    maker's name for it (`five_hour`, `seven_day`, `seven_day_sonnet`, Codex's `primary`); `used`,
+    how much of it is gone, 0 to 1; `minutes`, how long it is (300, 10080) when said; `model`, the
+    model it's for ("Sonnet", "Fable"), absent for the whole plan's; `name`, its maker's name for
+    what it counts where that's neither ("Premium requests", "Web searches"); `amount`, `{used, limit,
+    unit}` (`requests`, `usd`, `credits`) where the limit is a count or an amount; `read`, when
+    this was read; `source`, `usage` (read from its maker) or `turn` (what a turn heard on the way,
+    Claude Code's and Codex's rate-limit events, which keep a window current between reads). A
+    window whose `resetsAt` has passed has started over since: show it as not read yet, not as
+    used.
+  - `balance` `{left, limit?, unit}`: credits left to spend, where the account has them.
+  - `checked`, when its maker last answered (with its limits or a problem; absent for an account
+    only its turns tell of); `next`, when it's read again (absent for one that's never read).
+  - `problem` `{kind, message, until?}` when the last read didn't work, with `windows` as last
+    read (each with its `read`): `rate-limited` (its maker turned the read away; `until`, when it's
+    read again), `expired` (its sign-in lapsed or was turned away: its agent renews it the next
+    time it runs), `unreadable` (the sign-in can run the agent but not read its plan's limits) or
+    `failed`. Show `message` as it is.
+- `POST kuvo/agents/api/kuvo/limits/refresh` reads now each account read over a minute ago, as
+  often as its maker allows and never inside a hold, and answers as `GET` with what's read within
+  a couple of seconds; what comes later comes as `kuvo.limits.updated`.
+- The bridge's events (`kuvo/agents/api/event`) carry `kuvo.limits.updated` `{accounts}` each time
+  the list changes.
+- What's read: Claude Code's accounts, on Linux from Anthropic with Claude Code's own sign-in in
+  Kuvo Code's folder; on a Mac only from what its turns hear (Claude Code's rate-limit events, every
+  window from each response's headers), as the token Kuvo Code signs in with there can only run
+  Claude, so an account shows once it has had a turn. Codex's, through its app-server: once as the
+  box starts, then only while Codex runs there anyway, with its turns' events between. Grok's pool,
+  with the sign-in in its home; of the engine's, ChatGPT's (`openai`, signed in: Codex's windows),
+  SuperGrok's (`xai`, signed in), GitHub Copilot's (the month's premium requests), OpenRouter's (a
+  key's cap and the credits left), Z.ai's coding plan and OpenCode Go's. Not yet: Cursor's and
+  Antigravity's (the usage panel still shows them on a Mac), nor Ollama's, which ollama.com tells
+  only the Ollama app's own signing key.
+- How often: Claude's each 15 minutes, the rest each 10. Anthropic limits these reads for the whole
+  computer, not a sign-in, and holds a reader off longer each time it asks too soon: Claude's
+  accounts are read one a minute (counted before the request goes, through a restart too), and a
+  429 holds every one of them on the box for as long as its `Retry-After` says (an hour with no
+  word, doubling with each 429 of any of them, up to six), through a restart. An API key a maker
+  turns away is tried again later, with longer waits; a sign-in that lapsed isn't asked again
+  until it changes. A read is kept
+  as asked before it's answered, so a restart meanwhile never asks again; a sign-in that lapsed or
+  can't read its limits isn't asked again until it changes.
+- Agents read them with the tool `plan_limits` (read only): each account's windows, how much is
+  used, when each resets and as of when, and why one couldn't be read just now.
+- Times are ms since 1970.
 
 ### Side questions, handoffs and reviews
 
@@ -2961,7 +3033,8 @@ the route scenarios (`Vectors/routes/routing.json`).
 | `hosts` | a Mac only: `kuvo/hosts…` (with its app closed its box still lists them, and `DELETE` says the app must be open) |
 | `mac` | a Mac only: `kuvo/mac` |
 | `machines` | a Mac only: `kuvo/machines…` (with its app closed its box still lists them, and the rest says the app must be open) |
-| `usage` | the Mac with the app only for now, while it has the usage panel: `kuvo/usage…` (a machine's box can't do this yet, on Linux or a Mac) |
+| `usage` | the Mac with the app only for now, while it has the usage panel: `kuvo/usage…`, spend and what the box doesn't state of a plan yet (a machine's box can't do this yet, on Linux or a Mac) |
+| `limits` | `kuvo/agents/api/kuvo/limits…` and `plan_limits`: each account's plan limits ("Plan limits") |
 
 Here "a Mac" is the box the app runs (`KUVO_BOX=mac`), and "a machine" any box in `~/.kuvo-code`,
 on Linux or on a Mac.

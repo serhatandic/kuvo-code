@@ -526,9 +526,14 @@ final class WidgetDataStore {
         cache.persistPending()
     }
 
+    /// The host's plan limits changed (`HostLimits`): the readings are drawn again with them.
+    func hostLimitsChanged() {
+        rebuildRenderedSnapshots()
+    }
+
     private func rebuildRenderedSnapshots() {
         guard !peerHistoryDocuments.isEmpty else {
-            snapshots = localSnapshots
+            snapshots = HostLimits.shared.applied(to: localSnapshots, now: now())
             return
         }
         let renderDate = now()
@@ -562,7 +567,7 @@ final class WidgetDataStore {
                 now: renderDate
             )
         }
-        snapshots = rendered
+        snapshots = HostLimits.shared.applied(to: rendered, now: renderDate)
     }
 
     /// The provider's latest refresh error, or `nil` when its last refresh succeeded.

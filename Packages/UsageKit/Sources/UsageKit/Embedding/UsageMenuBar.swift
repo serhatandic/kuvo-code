@@ -24,6 +24,9 @@ public final class UsageMenuBar {
     /// Puts the item in the menu bar and starts refreshing. `openHostApp` brings the host's main
     /// window forward (the menus' "Open Kuvo Code").
     public func start(openHostApp: @escaping @MainActor () -> Void) {
+        // A covered provider's reading takes this Mac's own login's limits from the host: drawn
+        // again as they change (nothing is asked of its maker).
+        HostLimits.shared.onChange = { [weak self] in self?.container?.dataStore.hostLimitsChanged() }
         guard !started else { return }
         started = true
         openHost = openHostApp

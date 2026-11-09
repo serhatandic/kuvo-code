@@ -99,6 +99,8 @@ struct PopoverFooter: View {
     private func refreshNow() {
         guard !isUpdating else { return }
         Task { await dataStore.refreshOnUserRequest() }
+        // And the plan limits the host's boxes read (as often as each maker allows).
+        HostLimits.shared.refresh?()
     }
 
     private func updateStatusText(now: Date) -> String {

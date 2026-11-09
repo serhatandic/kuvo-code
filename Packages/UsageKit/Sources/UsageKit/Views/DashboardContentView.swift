@@ -40,7 +40,7 @@ struct DashboardContentView: View {
         .scrollPosition($scrollPosition)
     }
 
-    private var showsBars: Bool { style == .bars && !layout.displayGroups.isEmpty }
+    private var showsBars: Bool { style == .bars && (!layout.displayGroups.isEmpty || !HostLimits.shared.rows.isEmpty) }
 
     @ViewBuilder
     private var widgetContent: some View {
