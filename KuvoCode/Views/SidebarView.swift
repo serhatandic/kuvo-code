@@ -121,7 +121,7 @@ struct SidebarView: View {
 
                 if boxes.count > 1, search.isEmpty {
                     BoxNameStrip(boxes: boxes, selected: boxBinding)
-                        .padding(.top, 8)
+                        .padding(.top, 6)
                 }
 
             }

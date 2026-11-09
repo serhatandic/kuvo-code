@@ -1,60 +1,269 @@
 import AppKit
 import CoreGraphics
+import OpenCodeKit
 import SwiftUI
 import Testing
 @testable import KuvoCode
 
-/// The sidebar's computers by name, above their pages: as many as fit, in order, and a count for
-/// the rest; the one in view always among them; all of them, and no count, when they fit.
+/// The sidebar's computers by name, above their pages, on one line as the phone's strip has them
+/// (#232): the one in view first, the others after it in turn (past the last, the first again),
+/// as many as show whole, and "+3" for the rest; picking one brings it first. A name too long for
+/// the line is cut at its end, never in the middle. Read as VoiceOver reads it, in a window of the
+/// test's own: the names it finds are those that show whole, left to right.
 @MainActor
-struct BoxStripTests {
-    /// Eight computers' names, 70 pt each, with a 40-pt count.
-    private func shown(room: CGFloat, selected: Int, widths: [CGFloat] = Array(repeating: 70, count: 8)) -> [Int] {
-        BoxNameStrip.shown(widths: widths, room: room, more: 40, spacing: 2, selected: selected)
+@Suite(.serialized, .timeLimit(.minutes(1))) struct BoxStripTests {
+    let app = AppModel()
+
+    init() { TestEnvironment.prepare() }
+
+    @Observable final class Picked {
+        var box: SidebarBox
+        init(_ box: SidebarBox) { self.box = box }
     }
 
-    @Test func asManyAsFitThenACount() {
-        // 3 × 72 + 40 = 256 fits in 260; a fourth doesn't.
-        #expect(shown(room: 260, selected: 0) == [0, 1, 2])
-        #expect(shown(room: 260, selected: 2) == [0, 1, 2])
+    private struct Host: View {
+        let boxes: [SidebarBox]
+        @Bindable var picked: Picked
+
+        var body: some View {
+            BoxNameStrip(boxes: boxes, selected: $picked.box)
+        }
     }
 
-    @Test func theOneInViewIsAlwaysThere() {
-        // Picked from the count's menu: it takes the last place, the others keep theirs.
-        #expect(shown(room: 260, selected: 6) == [0, 1, 6])
-        // Wider than the one it replaces: it takes as many places as it needs.
-        var widths = Array(repeating: CGFloat(70), count: 8)
-        widths[6] = 140
-        #expect(shown(room: 260, selected: 6, widths: widths) == [0, 6])
-        // Too wide even alone: it shows, and the count.
-        widths[6] = 400
-        #expect(shown(room: 260, selected: 6, widths: widths) == [6])
+    /// The strip, `width` wide, over `names`' machines (stand-ins with no engine, so each is as a
+    /// connected one is), the one at `inView` picked.
+    final class Strip {
+        let window: NSWindow
+        let picked: Picked
+        let names: [String]
+
+        init(app: AppModel, names: [String], width: CGFloat, inView: Int = 0) {
+            AXElement.reading(true)
+            self.names = names
+            let boxes = names.map { SidebarBox.machine($0) }
+            picked = Picked(boxes[inView])
+            window = NSWindow(contentRect: NSRect(x: -20_000, y: -20_000, width: width, height: 60), styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = NSHostingView(rootView: Host(boxes: boxes, picked: picked).environment(app)
+                .frame(width: width, height: 60, alignment: .topLeading))
+            window.orderBack(nil)
+            window.contentView?.layoutSubtreeIfNeeded()
+        }
+
+        func close() {
+            window.orderOut(nil)
+            window.close()
+            window.contentView = nil
+            AXElement.reading(false)
+        }
+
+        /// What VoiceOver finds in it, as it lays out now (and a beat on the main queue's next turn,
+        /// for `until` to look again after SwiftUI's update).
+        var elements: [AXElement] {
+            window.contentView?.layoutSubtreeIfNeeded()
+            DispatchQueue.main.async { TestPulse.beat() }
+            return AXElement.all(in: window.contentView)
+        }
+
+        /// The names that show, left to right: those VoiceOver reads (it skips those that don't).
+        var shown: [AXElement] {
+            elements.filter { $0.label.map(names.contains) == true && $0.isRead }.sorted { $0.frame.minX < $1.frame.minX }
+        }
+
+        var shownNames: [String] { shown.compactMap(\.label) }
+
+        /// "+3".
+        var count: AXElement? { elements.first { $0.label?.hasSuffix(" more") == true } }
+
+        /// Measured and laid out: the names show once it knows what fits.
+        var isLaidOut: Bool { !shown.isEmpty }
+
+        /// A click on what VoiceOver calls `label`, sent through the window.
+        func click(_ label: String) throws {
+            let element = try #require(elements.first { $0.label == label }, "“\(label)” among \(shownNames)")
+            let point = window.convertPoint(fromScreen: NSPoint(x: element.frame.midX, y: element.frame.midY))
+            for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+                let event = try #require(NSEvent.mouseEvent(with: type, location: point, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                                            windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: type == .leftMouseDown ? 1 : 0))
+                window.sendEvent(event)
+            }
+        }
+
+        /// The strip as drawn, and how many pixels a point is.
+        func picture() throws -> (image: CGImage, scale: CGFloat) {
+            let host = try #require(window.contentView)
+            host.layoutSubtreeIfNeeded()
+            host.display()
+            let rep = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+            host.cacheDisplay(in: host.bounds, to: rep)
+            let image = try #require(rep.cgImage)
+            return (image, CGFloat(image.width) / host.bounds.width)
+        }
     }
 
-    @Test func allWhenTheyFit() {
-        let two: [CGFloat] = [70, 70]
-        #expect(shown(room: 150, selected: 1, widths: two) == [0, 1])
-        // Before the room is known, all of them, rather than none.
-        #expect(shown(room: 0, selected: 0) == Array(0..<8))
+    private static let five = ["mini-local", "devbox", "gpu-box", "staging", "lab"]
+
+    /// 1, 2 and 4 machines besides the one in view, in a narrow sidebar and a wide one.
+    @Test(arguments: [2, 3, 5], [220, 360] as [CGFloat])
+    func theOneInViewFirstThenTheOthersAndACountForTheRest(computers: Int, width: CGFloat) async throws {
+        let names = Array(Self.five.prefix(computers))
+        let strip = Strip(app: app, names: names, width: width, inView: 1)
+        defer { strip.close() }
+        try await until { strip.isLaidOut }
+        let line = Array(names[1...] + names[..<1])
+        let shown = strip.shown
+        #expect(strip.shownNames == Array(line.prefix(shown.count)), "the one in view first, then the others in turn: \(strip.shownNames)")
+        #expect(shown.first?.isSelected == true)
+        let rest = names.count - shown.count
+        if rest == 0 {
+            #expect(strip.count == nil, "no count while every name shows: \(strip.shownNames), \(strip.count?.label ?? "")")
+        } else {
+            let count = try #require(strip.count, "\(rest) don't show: \(strip.shownNames)")
+            #expect(count.label == "\(rest) more")
+            #expect(count.help == line.suffix(rest).formatted(.list(type: .and)), "the count stands for those that don't show, in turn")
+            for name in shown { #expect(name.frame.maxX <= count.frame.minX + 0.5, "\(name.label ?? ""), whole, before the count") }
+        }
+        // Short names, wide: all of them when they fit (five such fit, just); five narrow never do.
+        if width == 360, computers <= 3 { #expect(rest == 0) }
+        if computers == 5, width == 220 { #expect(rest > 0, "\(strip.shownNames) \(strip.shown.map(\.frame))") }
     }
 
-    /// A long name is cut where its width ends, never drawn over the name beside it.
-    @Test func aLongNameIsCutNotSpilled() throws {
-        let name = Text("build-server-in-the-basement-with-a-very-long-name.local")
-            .font(.system(size: 12.5, weight: .semibold))
-            .lineLimit(1)
-            .truncationMode(.middle)
-            .modifier(BoxNameStrip.NameWidth())
-        let renderer = ImageRenderer(content: HStack(spacing: 0) { name; Spacer(minLength: 0) }.frame(width: 400, height: 20))
-        renderer.scale = 1
-        let image = try #require(renderer.cgImage)
+    @Test func clickingANameBringsItFirst() async throws {
+        let names = Array(Self.five.prefix(4))
+        let strip = Strip(app: app, names: names, width: 360)
+        defer { strip.close() }
+        try await until { strip.shownNames.count >= 2 }
+        let next = strip.shownNames[1]
+        #expect(next == "devbox")
+
+        try strip.click(next)
+        #expect(strip.picked.box == .machine("devbox"))
+        // Once the line has slid a step: the one that was first goes round to the end.
+        let line = ["devbox", "gpu-box", "staging", "mini-local"]
+        try await until { strip.shownNames.first == "devbox" && strip.shownNames == Array(line.prefix(strip.shownNames.count)) }
+        #expect(strip.shown.first?.isSelected == true)
+    }
+
+    /// Picked from the count's menu (or swiped to, or a tab's): it comes first, and the line goes
+    /// round after it.
+    @Test func oneThatDidntShowComesFirstOncePicked() async throws {
+        let strip = Strip(app: app, names: Self.five, width: 220)
+        defer { strip.close() }
+        try await until { strip.count != nil }
+        #expect(!strip.shownNames.contains("lab"))
+
+        strip.picked.box = .machine("lab")
+        try await until { strip.shownNames.first == "lab" }
+        let line = ["lab", "mini-local", "devbox", "gpu-box", "staging"]
+        #expect(strip.shownNames == Array(line.prefix(strip.shownNames.count)), "\(strip.shownNames)")
+        let count = try #require(strip.count)
+        #expect(count.help == line.dropFirst(strip.shownNames.count).formatted(.list(type: .and)))
+    }
+
+    /// A long name in view is cut at its end, before the count: its start reads as it does whole,
+    /// and VoiceOver says it whole.
+    @Test func aLongNameIsCutAtItsEndNeverInTheMiddle() async throws {
+        let long = "build-server-in-the-basement-with-a-very-long-name"
+        let strip = Strip(app: app, names: [long, "devbox"], width: 220)
+        defer { strip.close() }
+        try await until { strip.count != nil }
+        let name = try #require(strip.shown.first)
+        #expect(name.label == long)
+        let count = try #require(strip.count)
+        #expect(strip.shownNames == [long])
+        #expect(name.frame.maxX <= count.frame.minX + 0.5)
+
+        // The ink of the name as drawn, against the name drawn whole: the same from its start for
+        // most of the way (a cut in the middle would differ from halfway), and nothing past the
+        // name's end, where the count is.
+        let (image, scale) = try strip.picture()
+        let host = try #require(strip.window.contentView)
+        let frame = strip.window.convertFromScreen(name.frame)
+        let drawn = Self.inkedColumns(image, rows: Self.rows(of: frame, in: host, scale: scale))
+        let whole = try Self.wholeName(long, scale: scale)
+        let start = try #require(drawn.first), wholeStart = try #require(whole.first)
+        let countStart = Int(strip.window.convertFromScreen(count.frame).minX * scale)
+        let shownWidth = (drawn.filter { $0 < countStart }.max() ?? start) - start
+        let compared = Int(Double(shownWidth) * 0.8)
+        let shifted = Set(drawn.filter { $0 - start < compared }.map { $0 - start })
+        let reference = Set(whole.filter { $0 - wholeStart < compared }.map { $0 - wholeStart })
+        let differing = shifted.symmetricDifference(reference).count
+        #expect(differing <= 3 * Int(scale), "the cut name reads as the whole one for 80% of its width (\(differing) columns differ)")
+        #expect(shownWidth < whole.last! - wholeStart, "it is cut")
+    }
+
+    /// A machine that isn't connected says so, in the line and through the count.
+    @Test func aMachineThatIsntConnectedSaysSo() async throws {
+        SSHConnection.standIn = { _, _ in nil }
+        let away = app.machines.add("gpu-box-\(UUID().uuidString.prefix(6).lowercased()).invalid")
+        let failed = app.machines.add("lab-\(UUID().uuidString.prefix(6).lowercased()).invalid")
+        defer {
+            app.removeMachine(away.machine.id)
+            app.removeMachine(failed.machine.id)
+            SSHConnection.standIn = nil
+        }
+        away.showStandIn("notConnected")
+        failed.showStandIn("failed")
+        let names = ["mini-local", "devbox", "staging", away.machine.id, failed.machine.id]
+        let strip = Strip(app: app, names: names, width: 220, inView: 3)
+        defer { strip.close() }
+        let awayName = app.name(of: .machine(away.machine.id)), failedName = app.name(of: .machine(failed.machine.id))
+        try await until { strip.count != nil && strip.elements.contains { $0.label == awayName } }
+        let shown = try #require(strip.elements.first { $0.label == awayName })
+        #expect(shown.isSelected)
+        #expect(shown.value == away.statusText, "the one in view, not connected, says so")
+        let count = try #require(strip.count)
+        #expect(count.value?.contains("\(failedName), \(failed.statusText)") == true, "\(count.value ?? "")")
+    }
+
+    // MARK: Pictures
+
+    /// The pixel rows `frame` (in the window, from its bottom) covers in the host's picture.
+    private static func rows(of frame: NSRect, in host: NSView, scale: CGFloat) -> Range<Int> {
+        let top = Int((host.bounds.height - frame.maxY) * scale), bottom = Int((host.bounds.height - frame.minY) * scale)
+        return max(top, 0)..<max(bottom, top + 1)
+    }
+
+    /// The columns with ink among `rows`.
+    private static func inkedColumns(_ image: CGImage, rows: Range<Int>) -> [Int] {
         let width = image.width, height = image.height
         var pixels = [UInt8](repeating: 0, count: width * height * 4)
-        let context = try #require(CGContext(data: &pixels, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
-                                             space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        guard let context = CGContext(data: &pixels, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
+                                      space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return [] }
         context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
-        let inked = (0..<width).filter { x in (0..<height).contains { y in pixels[(y * width + x) * 4 + 3] > 0 } }
-        #expect(!inked.isEmpty)
-        #expect((inked.max() ?? 0) <= 150, "drawn out to \(inked.max() ?? 0) pt")
+        let rows = rows.clamped(to: 0..<height)
+        return (0..<width).filter { x in rows.contains { y in pixels[(y * width + x) * 4 + 3] > 40 } }
+    }
+
+    /// The name drawn whole, as the strip draws the one in view: its inked columns.
+    private static func wholeName(_ name: String, scale: CGFloat) throws -> [Int] {
+        let text = Text(name).sidebarFont(BoxNameStrip.size, weight: .bold).fixedSize().foregroundStyle(.primary)
+        let host = NSHostingView(rootView: text.padding(4))
+        let window = NSWindow(contentRect: NSRect(x: -20_000, y: -20_000, width: 600, height: 40), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        defer { window.close() }
+        host.layoutSubtreeIfNeeded()
+        host.display()
+        let rep = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+        host.cacheDisplay(in: host.bounds, to: rep)
+        let image = try #require(rep.cgImage)
+        #expect(CGFloat(image.width) / host.bounds.width == scale, "drawn at the strip's scale")
+        return inkedColumns(image, rows: 0..<image.height)
+    }
+}
+
+extension AXElement {
+    /// Whether VoiceOver reads it: not one hidden from it, which stays in the tree, ignored.
+    var isRead: Bool {
+        let selector = #selector(NSAccessibilityProtocol.isAccessibilityElement)
+        return object.responds(to: selector) ? (object.isAccessibilityElement?() ?? true) : true
+    }
+
+    /// What VoiceOver says after its label.
+    var value: String? {
+        let selector = #selector(NSAccessibilityProtocol.accessibilityValue)
+        guard object.responds(to: selector) else { return nil }
+        return object.perform(selector)?.takeUnretainedValue() as? String
     }
 }
