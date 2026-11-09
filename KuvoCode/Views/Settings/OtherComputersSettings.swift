@@ -14,6 +14,8 @@ struct OtherComputersSettings: View {
     let reading: Reading
     /// Why the last change didn't go through (the page clears it as it reads again).
     @Binding var failure: String?
+    /// Reads it again, where it couldn't be read.
+    let tryAgain: () -> Void
     /// A change on its way: the switch waits.
     @State private var changing = false
 
@@ -33,8 +35,13 @@ struct OtherComputersSettings: View {
             }
         } else if case .failed(let why) = reading {
             Section {
-                Text("Couldn’t read whether your other computers can start work on \(name). \(why)")
-                    .foregroundStyle(.red)
+                HStack(alignment: .firstTextBaseline) {
+                    Text("Couldn’t read whether your other computers can start work on \(name). \(why)")
+                        .foregroundStyle(.red)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer()
+                    Button("Try Again", action: tryAgain).controlSize(.small)
+                }
             } header: {
                 Text("Your Other Computers")
             }

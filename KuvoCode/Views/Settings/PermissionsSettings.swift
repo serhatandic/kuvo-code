@@ -15,6 +15,8 @@ struct PermissionsSettings: View {
     /// and why the last change didn't go through.
     @State private var otherComputers = OtherComputersSettings.Reading.reading
     @State private var otherComputersFailure: String?
+    /// Reads of it asked for again (Try Again), so its read starts over.
+    @State private var otherComputersAttempt = 0
 
     /// An approval saved with Always, and the engine that keeps it: this Mac's, or a machine's.
     struct Saved: Identifiable {
@@ -54,7 +56,7 @@ struct PermissionsSettings: View {
             // the folders its commands may write in besides their own.
             SandboxSettings(part: .notice)
 
-            OtherComputersSettings(reading: otherComputers, failure: $otherComputersFailure)
+            OtherComputersSettings(reading: otherComputers, failure: $otherComputersFailure) { otherComputersAttempt += 1 }
 
             SandboxSettings(part: .allowed)
 
@@ -135,7 +137,7 @@ struct PermissionsSettings: View {
         // Again once its engine answers (a machine's, connecting as the page opened).
         .task(id: app.isReady(box)) { if app.isReady(box) { await loadSaved() } }
         // Whether your other computers may start work here, as its box says now.
-        .task(id: app.isReady(box)) { await readOtherComputers() }
+        .task(id: "\(app.isReady(box)) \(otherComputersAttempt)") { await readOtherComputers() }
         // Its sandbox, as it changes while the page is open.
         .task(id: box) { await Sandboxes.shared.watchState(box.machine ?? BoxClient.mac) }
         // A machine's folder for a rule, from its own folders.
@@ -156,10 +158,9 @@ struct PermissionsSettings: View {
         ("integration.use", "MCP server, skill or plugin"),
     ]
 
-    /// This computer's engine's approvals: Always in a session saves it in the engine of the
-    /// computer it's on.
     /// Whether your other computers may start work here, as its box says now: read each time it
-    /// connects, nothing from before shown meanwhile, an old change's failure gone with it.
+    /// connects (and on Try Again), nothing from before shown meanwhile, an old change's failure
+    /// gone with it.
     private func readOtherComputers() async {
         otherComputers = .reading
         otherComputersFailure = nil
@@ -174,6 +175,8 @@ struct PermissionsSettings: View {
         }
     }
 
+    /// This computer's engine's approvals: Always in a session saves it in the engine of the
+    /// computer it's on.
     private func loadSaved() async {
         let engines: [(api: OpenCodeAPI, engine: MachineEngine?)] = app.api(for: box).map { [($0, app.machines.engine(box.machine))] } ?? []
         saved = await Self.saved(from: engines, sessions: workspace.sessions) { saved = $0 }
