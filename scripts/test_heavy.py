@@ -1,4 +1,5 @@
-"""scripts/heavy.sh: jobs of different kinds run together, two of one kind queue, a job started the
+"""scripts/heavy.sh: jobs of different kinds run together, two of one kind queue (two phone jobs that
+handle slots run at once, each with a simulator of its own), a job started the
 old way (under the one lock for every kind) holds up every kind, and a busy Mac holds a job back.
 Each test has locks of its own (KUVO_HEAVY_DIR), and asks with KUVO_HEAVY_WAIT=0, which says what a
 job would wait for instead of waiting."""
@@ -25,10 +26,11 @@ class Held:
         self.running, self.go = os.path.join(folder, "running"), os.path.join(folder, "go")
         os.mkfifo(self.running)
         os.mkfifo(self.go)
-        script = f'echo yes > "{self.running}"; read x < "{self.go}"'
+        # What the job sees of its slot, said when it's running.
+        script = f'echo "${{KUVO_TEST_SIMULATOR-}}|${{KUVO_HEAVY_SLOT-}}|${{KUVO_HEAVY_BUILD_SUFFIX-}}" > "{self.running}"; read x < "{self.go}"'
         self.process = subprocess.Popen(command + ["/bin/sh", "-c", script], env=env)
         with open(self.running) as running:
-            running.read()
+            self.seen = running.read().strip()
 
     def let_go(self):
         with open(self.go, "w") as go:
@@ -72,6 +74,120 @@ class HeavyTests(unittest.TestCase):
     def test_a_job_inside_its_kinds_job_runs_at_once(self):
         nested = f'KUVO_HEAVY_WAIT=0 "{HEAVY}" mac true'
         result = subprocess.run([HEAVY, "mac", "/bin/sh", "-c", nested], env=self.env, timeout=30)
+        self.assertEqual(result.returncode, 0)
+
+    def phone_slots(self, **env):
+        """The environment of a caller that handles slots."""
+        return dict(self.env, KUVO_HEAVY_SLOTS="2", **env)
+
+    def old_lock(self, kind="phone"):
+        return os.path.join(self.locks, f"kuvo-code-heavy-{kind}-{os.getuid()}.lock")
+
+    def test_two_phone_jobs_run_at_once_each_on_its_own_simulator_and_a_third_waits(self):
+        env = self.phone_slots()
+        first = Held([HEAVY, "phone"], env)
+        try:
+            second = Held([HEAVY, "phone"], env)
+            try:
+                self.assertEqual(first.seen, "Kuvo Code Tests|1|")
+                self.assertEqual(second.seen, "Kuvo Code Tests 2|2|-2")
+                code, said = self.run_heavy("phone", "true", KUVO_HEAVY_SLOTS="2")
+                self.assertEqual(code, WAITS)
+                self.assertIn("Another phone job is running", said)
+                # Another kind isn't held up by either.
+                self.assertEqual(self.run_heavy("box", "true")[0], 0)
+            finally:
+                second.let_go()
+        finally:
+            first.let_go()
+        self.assertEqual(self.run_heavy("phone", "true", KUVO_HEAVY_SLOTS="2")[0], 0)
+
+    def test_a_third_phone_job_takes_whichever_slot_frees_first(self):
+        env = self.phone_slots()
+        first, second = Held([HEAVY, "phone"], env), Held([HEAVY, "phone"], env)
+        third = None
+        try:
+            third = subprocess.Popen([HEAVY, "phone", "/bin/sh", "-c", 'echo "$KUVO_TEST_SIMULATOR"'], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            self.assertIn("Waiting for another phone job", third.stderr.readline())
+            self.assertIsNone(third.poll(), "it ran with both slots taken")
+            second.let_go()  # the second slot frees, not the first
+            out, _ = third.communicate(timeout=30)
+            self.assertEqual((third.returncode, out), (0, "Kuvo Code Tests 2\n"))
+        finally:
+            first.let_go()
+            if third is not None and third.poll() is None:
+                third.kill()
+                third.wait()
+
+    def test_a_job_that_started_before_slots_holds_slot_one_alone(self):
+        """An older script holds the one phone lock it always did: it and a new job on slot 1
+        exclude each other, and a new job takes slot 2 beside it."""
+        env = self.phone_slots()
+        old = Held(["lockf", "-k", self.old_lock()], env)
+        try:
+            new = Held([HEAVY, "phone"], env)
+            try:
+                self.assertEqual(new.seen, "Kuvo Code Tests 2|2|-2")
+                self.assertEqual(self.run_heavy("phone", "true", KUVO_HEAVY_SLOTS="2")[0], WAITS)
+            finally:
+                new.let_go()
+        finally:
+            old.let_go()
+        # A new job on slot 1 holds that lock for an old-style one, which waits for it.
+        new = Held([HEAVY, "phone"], env)
+        try:
+            self.assertEqual(new.seen, "Kuvo Code Tests|1|")
+            taken = subprocess.run(["lockf", "-ks", "-t", "0", self.old_lock(), "true"], timeout=30)
+            self.assertNotEqual(taken.returncode, 0, "an old-style job would start beside it")
+            # …and another new one goes to slot 2 meanwhile.
+            other = Held([HEAVY, "phone"], env)
+            try:
+                self.assertEqual(other.seen, "Kuvo Code Tests 2|2|-2")
+            finally:
+                other.let_go()
+        finally:
+            new.let_go()
+
+    def test_a_caller_that_does_not_handle_slots_only_ever_gets_slot_one(self):
+        first = Held([HEAVY, "phone"], self.env)
+        try:
+            self.assertEqual(first.seen, "Kuvo Code Tests|1|")
+            code, said = self.run_heavy("phone", "true")
+            self.assertEqual(code, WAITS)
+            self.assertIn("Another phone job is running", said)
+            # Not even when slot 2 is free: only for a caller that handles slots.
+            self.assertEqual(self.run_heavy("phone", "true", KUVO_HEAVY_SLOTS="2")[0], 0)
+        finally:
+            first.let_go()
+        # Slot 2 held, a caller of the old kind takes slot 1, and doesn't mind.
+        second = Held([HEAVY, "phone"], self.phone_slots())
+        third = Held([HEAVY, "phone"], self.phone_slots())
+        try:
+            self.assertEqual(self.run_heavy("phone", "true")[0], WAITS)
+        finally:
+            third.let_go()
+            second.let_go()
+
+    def test_a_job_inside_a_phone_job_runs_at_once_on_the_same_simulator(self):
+        env = self.phone_slots()
+        # Inside a job on slot 1 or slot 2, a script asking whether its turn is held gets yes, and a
+        # nested job sees that job's simulator.
+        holds = lambda *command, **e: subprocess.run(command, env=dict(env, **e), timeout=30).returncode
+        sim = lambda *command: subprocess.run(command, env=dict(env, KUVO_HEAVY_WAIT="0"), capture_output=True, text=True, timeout=30).stdout.strip()
+        self.assertEqual(holds(HEAVY, "--holds", "phone"), 1)
+        self.assertEqual(holds(HEAVY, "phone", HEAVY, "--holds", "phone"), 0)
+        inner = ["/bin/sh", "-c", f'"{HEAVY}" phone /bin/sh -c \'echo "$KUVO_TEST_SIMULATOR"\'']
+        self.assertEqual(sim(HEAVY, "phone", *inner), "Kuvo Code Tests")
+        slot_one = Held(["lockf", "-k", self.old_lock()], env)  # slot 1 taken, so the next job is on slot 2
+        try:
+            self.assertEqual(sim(HEAVY, "phone", *inner), "Kuvo Code Tests 2")
+            self.assertEqual(holds(HEAVY, "phone", HEAVY, "--holds", "phone"), 0)
+        finally:
+            slot_one.let_go()
+
+    def test_a_phone_job_under_a_slot_one_lock_of_an_older_script_runs_at_once(self):
+        old = self.old_lock()
+        result = subprocess.run(["lockf", "-k", old, HEAVY, "phone", "true"], env=dict(self.phone_slots(), KUVO_HEAVY_WAIT="0"), timeout=30)
         self.assertEqual(result.returncode, 0)
 
     def test_a_script_can_ask_whether_its_kinds_turn_is_held(self):

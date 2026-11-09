@@ -15,8 +15,23 @@
 # turn comes, a job also waits while the Mac is busy (its load over the last minute above
 # KUVO_HEAVY_LOAD, 40 unless set), so it stays usable.
 #
+# phone has two slots, so two phone jobs can run at once, each on a simulator of its own (the Mac
+# mini has room for it). Slot 1 is the lock above, unchanged, with the simulator "Kuvo Code Tests";
+# slot 2 is kuvo-code-heavy-phone-2-<uid>.lock, with "Kuvo Code Tests 2". A job that takes a slot
+# finds out which in KUVO_TEST_SIMULATOR (the simulator's name), KUVO_HEAVY_SLOT (1 or 2) and
+# KUVO_HEAVY_BUILD_SUFFIX ("" or "-2", for a build folder of its own: two builds in one folder break).
+# A script that started before slots existed holds slot 1 alone, as always, so it and a new job
+# on slot 1 still exclude each other, and a job on slot 2 runs beside it.
+#
+# Slot 2 is only for a caller that handles slots (KUVO_HEAVY_SLOTS=2): an older caller would take it
+# and still build in slot 1's folder and drive slot 1's simulator, beside whoever holds slot 1.
+# With it, a job takes whichever slot is free first, slot 1 before slot 2, and when both are busy it
+# waits for whichever frees first (looking once a second).
+#
+#   KUVO_HEAVY_SLOTS=2  phone jobs may take either slot (1, the default, only slot 1)
+#
 # A job inside one that holds its kind's lock already (a test run its caller started with this
-# helper) runs at once. So does one under the single lock every heavy job took before
+# helper, in either slot) runs at once. So does one under the single lock every heavy job took before
 # (kuvo-code-heavy-<uid>.lock). Its day is over (KUVO_HEAVY_OLD_UNTIL, the last day a job took it
 # as it ran, so one in an older checkout couldn't start beside it): kinds run side by side.
 #
@@ -44,6 +59,13 @@ case "$kind" in mac | phone | box) ;; *) usage ;; esac
 DIR="${KUVO_HEAVY_DIR:-$(getconf DARWIN_USER_TEMP_DIR 2>/dev/null || echo /tmp/)}"
 DIR="${DIR%/}"
 LOCK="$DIR/kuvo-code-heavy-$kind-$(id -u).lock"
+# Phone's second slot; no other kind has one. SLOTS is how many this caller may take.
+LOCK2=
+SLOTS=1
+if [ "$kind" = phone ]; then
+    LOCK2="$DIR/kuvo-code-heavy-$kind-2-$(id -u).lock"
+    [ "${KUVO_HEAVY_SLOTS:-1}" = 2 ] && SLOTS=2
+fi
 OLD="$DIR/kuvo-code-heavy-$(id -u).lock"
 MAX_LOAD="${KUVO_HEAVY_LOAD:-40}"
 WAITS="${KUVO_HEAVY_WAIT:-1}"
@@ -72,14 +94,20 @@ held() {
     return 1
 }
 
-# Whether this process is the one a job's `lockf` just started for its turn (below): `ps` says so
-# from the lock above it; without it, the job named its own process, which is lockf's parent now.
+# Whether this process is the one a job's `lockf` just started for its turn on lock $1 (below):
+# `ps` says so from the lock above it; without it, the job named its own process, which is lockf's
+# parent now.
 just_taken() {
     if can_ps; then
-        held "$LOCK"
+        held "$1"
     else
-        [ "${KUVO_HEAVY_HOLDING:-}" = "$LOCK:$PPID" ] && ! lockf -ks -t 0 "$LOCK" true
+        [ "${KUVO_HEAVY_HOLDING:-}" = "$1:$PPID" ] && ! lockf -ks -t 0 "$1" true
     fi
+}
+
+# Whether this runs inside a job of this kind (in either slot) or of the old single lock.
+holds_any() {
+    held "$LOCK" || { [ -n "$LOCK2" ] && held "$LOCK2"; } || held "$OLD"
 }
 
 # Not waiting (KUVO_HEAVY_WAIT=0): says what for, and stops.
@@ -89,15 +117,33 @@ cannot_wait() {
 }
 
 if [ -n "$holds" ]; then
-    held "$LOCK" || held "$OLD"
+    holds_any
     exit
 fi
 
-if case "${KUVO_HEAVY_HOLDING:-}" in "$LOCK" | "$LOCK":*) true ;; *) false ;; esac && just_taken; then
+# The lock whose turn this process has just taken (below), if any.
+TAKEN=
+for candidate in "$LOCK" "$LOCK2"; do
+    [ -n "$candidate" ] || continue
+    case "${KUVO_HEAVY_HOLDING:-}" in "$candidate" | "$candidate":*) ;; *) continue ;; esac
+    if just_taken "$candidate"; then
+        TAKEN=$candidate
+        break
+    fi
+done
+
+if [ -n "$TAKEN" ]; then
     # Its turn, just taken (below).
     unset KUVO_HEAVY_HOLDING
     # What runs under this turn knows it holds the lock, for when `ps` can't say.
-    KUVO_HEAVY_HELD="${KUVO_HEAVY_HELD:-} $LOCK:$PPID"
+    KUVO_HEAVY_HELD="${KUVO_HEAVY_HELD:-} $TAKEN:$PPID"
+    if [ "$kind" = phone ]; then
+        if [ "$TAKEN" = "$LOCK2" ]; then
+            export KUVO_TEST_SIMULATOR="Kuvo Code Tests 2" KUVO_HEAVY_SLOT=2 KUVO_HEAVY_BUILD_SUFFIX=-2
+        else
+            export KUVO_TEST_SIMULATOR="Kuvo Code Tests" KUVO_HEAVY_SLOT=1 KUVO_HEAVY_BUILD_SUFFIX=
+        fi
+    fi
     # While jobs were still started the old way, under one lock for every kind (older checkouts'
     # test-app.sh), one of these waited for them, and held that lock too as it ran.
     if [ "$(date +%Y%m%d)" -le "${KUVO_HEAVY_OLD_UNTIL:-20261026}" ]; then
@@ -111,10 +157,27 @@ if case "${KUVO_HEAVY_HOLDING:-}" in "$LOCK" | "$LOCK":*) true ;; *) false ;; es
     export KUVO_HEAVY_HELD
 else
     # Inside a job that holds the lock already: on at once.
-    if held "$LOCK" || held "$OLD"; then
+    if holds_any; then
         exec "$@"
     fi
     # Its kind's turn.
+    if [ "$SLOTS" = 2 ]; then
+        # The first free slot, slot 1 first. Taking one is `lockf` on it, the job's own parent as
+        # before; between the look and the `lockf` another job can take that slot, and this one then
+        # waits for it, which is all the harm of it.
+        said=
+        while :; do
+            for slot in "$LOCK" "$LOCK2"; do
+                if lockf -ks -t 0 "$slot" true; then
+                    KUVO_HEAVY_HOLDING="$slot:$$" exec lockf -k "$slot" /bin/sh "$0" "$kind" "$@"
+                fi
+            done
+            [ "$WAITS" = 0 ] && cannot_wait "Another $kind job is running in each of its two slots."
+            [ -n "$said" ] || echo "Waiting for another $kind job to finish…" >&2
+            said=1
+            sleep 1
+        done
+    fi
     if ! lockf -ks -t 0 "$LOCK" true; then
         [ "$WAITS" = 0 ] && cannot_wait "Another $kind job is running."
         echo "Waiting for another $kind job to finish…" >&2
