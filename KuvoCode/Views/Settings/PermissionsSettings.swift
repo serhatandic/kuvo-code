@@ -11,6 +11,10 @@ struct PermissionsSettings: View {
     @State private var saved: [Saved] = []
     /// A rule's folder being chosen on a machine: what to do with it.
     @State private var choosingFolder: ((_ path: String, _ home: String) -> Void)?
+    /// Whether your other computers may start work here: how its read went since it last connected,
+    /// and why the last change didn't go through.
+    @State private var otherComputers = OtherComputersSettings.Reading.reading
+    @State private var otherComputersFailure: String?
 
     /// An approval saved with Always, and the engine that keeps it: this Mac's, or a machine's.
     struct Saved: Identifiable {
@@ -50,7 +54,7 @@ struct PermissionsSettings: View {
             // the folders its commands may write in besides their own.
             SandboxSettings(part: .notice)
 
-            OtherComputersSettings()
+            OtherComputersSettings(reading: otherComputers, failure: $otherComputersFailure)
 
             SandboxSettings(part: .allowed)
 
@@ -131,7 +135,7 @@ struct PermissionsSettings: View {
         // Again once its engine answers (a machine's, connecting as the page opened).
         .task(id: app.isReady(box)) { if app.isReady(box) { await loadSaved() } }
         // Whether your other computers may start work here, as its box says now.
-        .task(id: app.isReady(box)) { if app.isReady(box) { try? await workspace.readApprovalHere(onBox: box.machine ?? BoxClient.mac) } }
+        .task(id: app.isReady(box)) { await readOtherComputers() }
         // Its sandbox, as it changes while the page is open.
         .task(id: box) { await Sandboxes.shared.watchState(box.machine ?? BoxClient.mac) }
         // A machine's folder for a rule, from its own folders.
@@ -154,6 +158,22 @@ struct PermissionsSettings: View {
 
     /// This computer's engine's approvals: Always in a session saves it in the engine of the
     /// computer it's on.
+    /// Whether your other computers may start work here, as its box says now: read each time it
+    /// connects, nothing from before shown meanwhile, an old change's failure gone with it.
+    private func readOtherComputers() async {
+        otherComputers = .reading
+        otherComputersFailure = nil
+        guard app.isReady(box) else { return }
+        do {
+            try await workspace.readApprovalHere(onBox: box.machine ?? BoxClient.mac)
+            otherComputers = .read
+        } catch {
+            // (Not when the page went away meanwhile; no way to it is its not being connected.)
+            guard !Task.isCancelled else { return }
+            otherComputers = .failed(error is CancellationError ? "\(app.name(of: box)) isn’t connected." : error.localizedDescription)
+        }
+    }
+
     private func loadSaved() async {
         let engines: [(api: OpenCodeAPI, engine: MachineEngine?)] = app.api(for: box).map { [($0, app.machines.engine(box.machine))] } ?? []
         saved = await Self.saved(from: engines, sessions: workspace.sessions) { saved = $0 }

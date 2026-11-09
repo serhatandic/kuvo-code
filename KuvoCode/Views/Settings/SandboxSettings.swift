@@ -23,10 +23,10 @@ struct SandboxSettings: View {
     @State private var isAdding = false
     @State private var confirmsRestart = false
 
-    /// Which of it to draw: all of it, or its line (`notice`) and Also Allowed (`allowed`) apart,
-    /// for the page to put a group between them.
-    enum Part { case all, notice, allowed }
-    var part: Part = .all
+    /// Which of it to draw: its line (`notice`) or Also Allowed (`allowed`), apart, for the page to
+    /// put a group between them.
+    enum Part { case notice, allowed }
+    let part: Part
 
     private var sandboxes: Sandboxes { .shared }
     private var id: String { box.machine ?? BoxClient.mac }

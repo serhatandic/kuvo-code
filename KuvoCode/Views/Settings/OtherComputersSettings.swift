@@ -4,15 +4,20 @@ import SwiftUI
 /// start sessions on this computer, as its box keeps it (`kuvo/approval`'s `otherComputers`: off on
 /// the Mac with the app until you turn it on, on for a machine). The box enforces it; this only
 /// shows it and changes it. A box from before it says so instead. Read by the page as it opens and
-/// as the computer connects (`PermissionsSettings`); while it isn't connected, it says so.
+/// each time the computer connects (`PermissionsSettings`, into `reading`); while it isn't
+/// connected, or until it's read again, no switch, so what it said before never shows as now.
 struct OtherComputersSettings: View {
     @Environment(AppModel.self) private var app
     @Environment(\.settingsBox) private var box
     @Environment(Workspace.self) private var workspace
-    /// Why the last change didn't go through.
-    @State private var failure: String?
+    /// How the page's read of it went since the computer last connected.
+    let reading: Reading
+    /// Why the last change didn't go through (the page clears it as it reads again).
+    @Binding var failure: String?
     /// A change on its way: the switch waits.
     @State private var changing = false
+
+    enum Reading: Equatable { case reading, read, failed(String) }
 
     private var id: String { box.machine ?? BoxClient.mac }
 
@@ -26,14 +31,32 @@ struct OtherComputersSettings: View {
             } header: {
                 Text("Your Other Computers")
             }
-        } else if let here = workspace.approvalsHere[id] {
+        } else if case .failed(let why) = reading {
+            Section {
+                Text("Couldn’t read whether your other computers can start work on \(name). \(why)")
+                    .foregroundStyle(.red)
+            } header: {
+                Text("Your Other Computers")
+            }
+        } else if reading == .read, let here = workspace.approvalsHere[id] {
             if let allowed = here.otherComputers {
                 Section {
-                    Toggle(isOn: Binding(get: { allowed }, set: { change(to: $0) })) {
-                        Text("Let your other computers start work here")
-                        Text("Their bots and agents can start sessions on \(name).")
+                    let title = "Let your other computers start work here"
+                    let detail = "Their bots and agents can start sessions on \(name)."
+                    LabeledContent {
+                        HStack(spacing: 8) {
+                            // (The switch goes over once its box says so: meanwhile, a sign it's on its way.)
+                            if changing { ProgressView().controlSize(.small).accessibilityHidden(true) }
+                            Toggle(title, isOn: Binding(get: { allowed }, set: { change(to: $0) }))
+                                .toggleStyle(.switch)
+                                .labelsHidden()
+                                .disabled(changing)
+                                .accessibilityHint(detail)
+                        }
+                    } label: {
+                        Text(title)
+                        Text(detail)
                     }
-                    .disabled(changing)
                 } header: {
                     Text("Your Other Computers")
                 } footer: {
@@ -51,6 +74,17 @@ struct OtherComputersSettings: View {
                     Text("Starting work here from your other computers needs a newer Kuvo Code on \(name).")
                         .foregroundStyle(.secondary)
                 }
+            }
+        } else {
+            // Being read: its place kept, so the page doesn't jump when it comes.
+            Section {
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.small)
+                    Text("Reading…")
+                }
+                .foregroundStyle(.secondary)
+            } header: {
+                Text("Your Other Computers")
             }
         }
     }
