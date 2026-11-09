@@ -90,8 +90,11 @@ const whoOf = (given: unknown): Who | null => {
   return typeof given.session === "string" && typeof given.name === "string" ? { session: given.session, name: given.name } : null;
 };
 
-// An item as it was read, checked: null for one that isn't.
-function itemOf(given: unknown, owner: string): Item | null {
+/** A file's name as an item keeps it: a name of its own, never a path. */
+export const FILE_NAME = /^(?!\.\.?$)[^/\\\0]{1,200}$/;
+
+/** An item as it was read (or as a move brought it), checked: null for one that isn't. */
+export function itemOf(given: unknown, owner: string): Item | null {
   if (!isObject(given) || typeof given.id !== "string" || !ITEM_ID.test(given.id) || typeof given.title !== "string" || typeof given.category !== "string") return null;
   const created = isObject(given.created) && typeof given.created.at === "number" ? { at: given.created.at, by: whoOf(given.created.by) ?? { user: true } as Who } : { at: 0, by: { user: true } as Who };
   const updated = isObject(given.updated) && typeof given.updated.at === "number" ? { at: given.updated.at, by: whoOf(given.updated.by) ?? created.by } : created;
@@ -106,7 +109,7 @@ function itemOf(given: unknown, owner: string): Item | null {
     order: typeof given.order === "number" && Number.isFinite(given.order) ? given.order : 0,
     ...(isObject(given.progress) ? { progress: { ...(typeof given.progress.value === "number" ? { value: given.progress.value } : {}), ...(typeof given.progress.note === "string" ? { note: given.progress.note } : {}) } } : {}),
     notes: list<Note>(given.notes, each => typeof each.at === "number" && typeof each.text === "string" && whoOf(each.by) !== null),
-    files: list<KeptFile>(given.files, each => typeof each.name === "string" && typeof each.size === "number"),
+    files: list<KeptFile>(given.files, each => typeof each.name === "string" && FILE_NAME.test(each.name) && typeof each.size === "number"),
     links: list<Link>(given.links, each => typeof each.url === "string"),
     sessions: list<Linked>(given.sessions, each => typeof each.session === "string" && SESSION.test(each.session)),
     ...(Array.isArray(given.handed) ? { handed: list<Handed>(given.handed, each => typeof each.from === "string" && typeof each.to === "string") } : {}),
@@ -173,9 +176,14 @@ export class Book {
     return [...this.queues.values()].flatMap(queue => queue.items);
   }
 
-  /** The item with this id or number, and its queue. */
+  /** The item with this id or number (the first, where two computers gave one number twice). */
   find(ref: { id?: string; number?: number }): Item | null {
-    return this.items().find(item => (ref.id ? item.id === ref.id : item.number === ref.number)) ?? null;
+    return this.findAll(ref)[0] ?? null;
+  }
+
+  /** Every item with this id or number. */
+  findAll(ref: { id?: string; number?: number }): Item[] {
+    return matching(this.items(), ref);
   }
 
   /** `item` moved into `owner`'s queue. */
@@ -225,6 +233,9 @@ export function noteQueuesChanged(): void {
   for (const tell of queueFollowers) tell();
 }
 
+/** The items `ref` names, by id or number. */
+export const matching = (items: Item[], ref: { id?: string; number?: number }): Item[] => items.filter(item => (ref.id ? item.id === ref.id : item.number === ref.number));
+
 /** The folder an item's files are kept in. */
 export const filesOf = (item: string) => path.join(FILES, item);
 
@@ -235,11 +246,17 @@ export function placeIn(items: Item[], category: string, { top = false }: { top?
   return top ? Math.min(...orders) - 1 : Math.max(...orders) + 1;
 }
 
-/** The place just before (or after) `beside` in its category. */
-export function placeBeside(items: Item[], beside: Item, after: boolean): number {
-  const sorted = items.filter(item => item.category === beside.category && !item.removed && item.id !== beside.id).map(item => item.order).sort((a, b) => a - b);
-  const neighbor = after ? sorted.find(order => order > beside.order) : [...sorted].reverse().find(order => order < beside.order);
-  return neighbor === undefined ? beside.order + (after ? 1 : -1) : (beside.order + neighbor) / 2;
+/** The place just before (or after) `beside` in its category, for `moving`. Where two places are
+ * too close to put one between, the category is numbered afresh first, in the order it has. */
+export function placeBeside(items: Item[], beside: Item, after: boolean, moving?: Item): number {
+  const others = () => items.filter(item => item.category === beside.category && !item.removed && item.id !== beside.id && item.id !== moving?.id).map(item => item.order).sort((a, b) => a - b);
+  const neighbor = () => (after ? others().find(order => order > beside.order) : [...others()].reverse().find(order => order < beside.order));
+  let next = neighbor();
+  if (next !== undefined && Math.abs(next - beside.order) < 1e-6) {
+    items.filter(item => item.category === beside.category && !item.removed).sort((a, b) => a.order - b.order).forEach((item, index) => { item.order = index; });
+    next = neighbor();
+  }
+  return next === undefined ? beside.order + (after ? 1 : -1) : (beside.order + next) / 2;
 }
 
 /** A note of who handed an item to whom, the last few kept. */

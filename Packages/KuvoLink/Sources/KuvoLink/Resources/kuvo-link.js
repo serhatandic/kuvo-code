@@ -2,7 +2,7 @@
 
 // Packages/Box/src/link/main.ts
 import { spawn as spawn12 } from "node:child_process";
-import crypto44 from "node:crypto";
+import crypto45 from "node:crypto";
 import fs109 from "node:fs";
 import os15 from "node:os";
 import path111 from "node:path";
@@ -14014,6 +14014,7 @@ var whoOf = (given) => {
     return { user: true };
   return typeof given.session === "string" && typeof given.name === "string" ? { session: given.session, name: given.name } : null;
 };
+var FILE_NAME = /^(?!\.\.?$)[^/\\\0]{1,200}$/;
 function itemOf(given, owner) {
   if (!isObject(given) || typeof given.id !== "string" || !ITEM_ID.test(given.id) || typeof given.title !== "string" || typeof given.category !== "string")
     return null;
@@ -14030,7 +14031,7 @@ function itemOf(given, owner) {
     order: typeof given.order === "number" && Number.isFinite(given.order) ? given.order : 0,
     ...isObject(given.progress) ? { progress: { ...typeof given.progress.value === "number" ? { value: given.progress.value } : {}, ...typeof given.progress.note === "string" ? { note: given.progress.note } : {} } } : {},
     notes: list(given.notes, (each) => typeof each.at === "number" && typeof each.text === "string" && whoOf(each.by) !== null),
-    files: list(given.files, (each) => typeof each.name === "string" && typeof each.size === "number"),
+    files: list(given.files, (each) => typeof each.name === "string" && FILE_NAME.test(each.name) && typeof each.size === "number"),
     links: list(given.links, (each) => typeof each.url === "string"),
     sessions: list(given.sessions, (each) => typeof each.session === "string" && SESSION2.test(each.session)),
     ...Array.isArray(given.handed) ? { handed: list(given.handed, (each) => typeof each.from === "string" && typeof each.to === "string") } : {},
@@ -14081,7 +14082,10 @@ class Book {
     return [...this.queues.values()].flatMap((queue) => queue.items);
   }
   find(ref) {
-    return this.items().find((item) => ref.id ? item.id === ref.id : item.number === ref.number) ?? null;
+    return this.findAll(ref)[0] ?? null;
+  }
+  findAll(ref) {
+    return matching2(this.items(), ref);
   }
   give(item, owner) {
     const from = this.load(item.owner);
@@ -14128,6 +14132,7 @@ function noteQueuesChanged() {
   for (const tell of queueFollowers2)
     tell();
 }
+var matching2 = (items, ref) => items.filter((item) => ref.id ? item.id === ref.id : item.number === ref.number);
 var filesOf = (item) => path52.join(FILES2, item);
 function placeIn(items, category, { top = false } = {}) {
   const orders = items.filter((item) => item.category === category && !item.removed).map((item) => item.order);
@@ -14135,10 +14140,17 @@ function placeIn(items, category, { top = false } = {}) {
     return 0;
   return top ? Math.min(...orders) - 1 : Math.max(...orders) + 1;
 }
-function placeBeside(items, beside, after) {
-  const sorted = items.filter((item) => item.category === beside.category && !item.removed && item.id !== beside.id).map((item) => item.order).sort((a, b) => a - b);
-  const neighbor = after ? sorted.find((order) => order > beside.order) : [...sorted].reverse().find((order) => order < beside.order);
-  return neighbor === undefined ? beside.order + (after ? 1 : -1) : (beside.order + neighbor) / 2;
+function placeBeside(items, beside, after, moving) {
+  const others = () => items.filter((item) => item.category === beside.category && !item.removed && item.id !== beside.id && item.id !== moving?.id).map((item) => item.order).sort((a, b) => a - b);
+  const neighbor = () => after ? others().find((order) => order > beside.order) : [...others()].reverse().find((order) => order < beside.order);
+  let next = neighbor();
+  if (next !== undefined && Math.abs(next - beside.order) < 0.000001) {
+    items.filter((item) => item.category === beside.category && !item.removed).sort((a, b) => a.order - b.order).forEach((item, index) => {
+      item.order = index;
+    });
+    next = neighbor();
+  }
+  return next === undefined ? beside.order + (after ? 1 : -1) : (beside.order + next) / 2;
 }
 function noteHanded(item, from, to, at) {
   item.handedBy ??= from;
@@ -14154,19 +14166,20 @@ var MOST_GIVEN = 500;
 var MOST_RANGES = 400;
 var ASK_ID = /^wqn_[A-Za-z0-9_-]{8,40}$/;
 var isRange = (each) => Array.isArray(each) && each.length === 2 && each.every((n) => Number.isInteger(n) && n > 0) && each[0] <= each[1];
-function rangesOf(numbers) {
-  const sorted = [...new Set(numbers)].filter((n) => Number.isInteger(n) && n > 0).sort((a, b) => a - b);
+var joined = (...all) => {
+  const sorted = all.flat().filter(isRange).map(([from, to]) => [from, to]).sort((a, b) => a[0] - b[0]);
   const ranges = [];
-  for (const n of sorted) {
+  for (const [from, to] of sorted) {
     const last = ranges[ranges.length - 1];
-    if (last && n === last[1] + 1)
-      last[1] = n;
+    if (last && from <= last[1] + 1)
+      last[1] = Math.max(last[1], to);
     else
-      ranges.push([n, n]);
+      ranges.push([from, to]);
   }
   return ranges;
-}
-var joined = (...all) => rangesOf(all.flat().flatMap(([from, to]) => Array.from({ length: Math.min(to - from + 1, 1e5) }, (_, i) => from + i)));
+};
+var rangesOf = (numbers) => joined([...numbers].filter((n) => Number.isInteger(n) && n > 0).map((n) => [n, n]));
+var overlap = (ranges, within) => joined(ranges.flatMap(([from, to]) => within.flatMap(([a, b]) => Math.max(from, a) <= Math.min(to, b) ? [[Math.max(from, a), Math.min(to, b)]] : [])));
 var inRanges = (ranges, n) => ranges.some(([from, to]) => n >= from && n <= to);
 var cleanRanges = (value) => Array.isArray(value) ? value.filter(isRange).slice(0, MOST_RANGES) : [];
 function readNumbers(file = NUMBERS_FILE) {
@@ -14236,14 +14249,9 @@ function takeNumber(primary, { file = NUMBERS_FILE, now = Date.now(), link = rea
 function grantOn(kept, by, claims) {
   const before = kept.granted?.[by] ?? [];
   const next = kept.next ?? 1;
-  const granted = [];
-  for (const [from, to] of claims)
-    for (let n = from;n <= to && granted.length < 1e5; n++)
-      if (n >= next || inRanges(before, n))
-        granted.push(n);
-  const ranges = rangesOf(granted);
-  if (granted.length) {
-    kept.next = Math.max(next, Math.max(...granted) + 1);
+  const ranges = joined(overlap(claims, [[next, Number.MAX_SAFE_INTEGER]]), overlap(claims, before));
+  if (ranges.length) {
+    kept.next = Math.max(next, ranges[ranges.length - 1][1] + 1);
     kept.granted = { ...kept.granted ?? {}, [by]: joined(before, ranges).slice(-MOST_RANGES) };
   }
   return ranges;
@@ -15935,7 +15943,7 @@ var DELETERS = new Set(["rm", "rmdir", "unlink", "shred", "srm", "trash"]);
 var SHELLS = /^((ba|z|da|k|fi)?sh|eval)$/;
 var inside2 = (where, wall) => where === wall || where.startsWith(wall + "/");
 var holds = (folder, wall) => folder === "/" || wall.startsWith(folder + "/");
-var matching2 = (where, patterns = []) => patterns.some((each) => new RegExp(each).test(where));
+var matching3 = (where, patterns = []) => patterns.some((each) => new RegExp(each).test(where));
 var nameOf = (word) => word.split("/").pop() ?? "";
 var homeWord = (text) => text.replace(/^(~|\$HOME|\$\{HOME\})(?=\/|$)/, homeFolder());
 function pathOf(word, folder) {
@@ -16026,7 +16034,7 @@ function atLogin(where, home) {
   return LOGIN.some((wall) => inside2(rest, wall)) || !rest.includes("/") && LOGIN_PREFIXES.some((prefix) => rest.startsWith(prefix));
 }
 function inKuvo(where, policy, own = []) {
-  return (policy.kuvo.some((wall) => inside2(where, wall)) || matching2(where, policy.kuvoPatterns)) && !own.some((folder) => inside2(where, folder));
+  return (policy.kuvo.some((wall) => inside2(where, wall)) || matching3(where, policy.kuvoPatterns)) && !own.some((folder) => inside2(where, folder));
 }
 function ownInside(own, policy) {
   const temporaries = new Set(own.map(commandTemporary).filter((each) => Boolean(each)));
@@ -16034,7 +16042,7 @@ function ownInside(own, policy) {
     if (temporaries.has(folder))
       return [folder];
     const at = realish(folder);
-    const walled = policy.kuvo.some((wall) => inside2(at, wall) || inside2(wall, at)) || matching2(at, policy.kuvoPatterns);
+    const walled = policy.kuvo.some((wall) => inside2(at, wall) || inside2(wall, at)) || matching3(at, policy.kuvoPatterns);
     return !walled || conversationPlace(at) ? [at] : [];
   });
 }
@@ -16058,7 +16066,7 @@ function keptFromSessions(folder, policy = fencePolicy()) {
     return reach("your secrets");
   if (policy.kuvo.some((each) => holds(at, each)))
     return reach("Kuvo Code's own folders");
-  const walled = policy.kuvo.some((each) => inside2(at, each) && !homes.some((home) => inside2(home, each))) || matching2(at, policy.kuvoPatterns);
+  const walled = policy.kuvo.some((each) => inside2(at, each) && !homes.some((home) => inside2(home, each))) || matching3(at, policy.kuvoPatterns);
   if (walled && !conversationPlace(at))
     return reach("Kuvo Code's own folders");
   if (homes.some((home) => atLogin(at, home)) || [...homes.flatMap((home) => LOGIN.map((each) => `${home}/${each}`)), ...SYSTEM_LOGIN].some((each) => holds(at, each)))
@@ -17888,13 +17896,18 @@ function categoryNamed(given) {
   return categories().find((each) => each.id === wanted || each.name.toLowerCase() === wanted) ?? null;
 }
 var slugOf = (name) => name.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40);
-var change3 = (work) => locked(LOCK11, () => {
-  const custom = readCustom();
-  const outcome = work(custom);
+var change3 = (work) => {
+  const outcome = locked(LOCK11, () => {
+    const custom = readCustom();
+    const outcome = work(custom);
+    if ("done" in outcome)
+      writePrivate(CATEGORIES_FILE, JSON.stringify({ custom: custom.map(({ id, name }) => ({ id, name })) }));
+    return outcome;
+  });
   if ("done" in outcome)
-    writePrivate(CATEGORIES_FILE, JSON.stringify({ custom: custom.map(({ id, name }) => ({ id, name })) }));
+    noteQueuesChanged();
   return outcome;
-});
+};
 function addCategory(name, after) {
   const named = plainName(name).slice(0, MOST_NAME);
   if (!named)
@@ -17965,10 +17978,14 @@ function removeCategory(which, used) {
   });
 }
 function keepCategory(id, name) {
-  if (!CUSTOM_ID.test(id) || readCustom().some((each) => each.id === id))
-    return;
-  change3((custom) => {
-    if (custom.some((each) => each.id === id) || custom.length >= MOST_CUSTOM)
+  if (!CUSTOM_ID.test(id))
+    return false;
+  if (readCustom().some((each) => each.id === id))
+    return true;
+  return "done" in change3((custom) => {
+    if (custom.some((each) => each.id === id))
+      return { done: custom.find((each) => each.id === id) };
+    if (custom.length >= MOST_CUSTOM)
       return { refused: "" };
     const made = { id, name: plainName(name).slice(0, MOST_NAME) || id.slice(4), builtIn: false };
     custom.push(made);
@@ -18002,16 +18019,20 @@ var filesSize = (carried) => (carried?.withFiles ?? []).reduce((sum, id) => {
     return sum;
   }
 }, 0);
+var packedOf = (carried) => Object.fromEntries((carried?.items ?? []).map((item) => [item.id, item.updated.at]));
 function placeWorkQueues(carried, owners, opened) {
   if (!isObject(carried) || !Array.isArray(carried.items))
     return;
   const allowed = new Set(owners);
-  const items = carried.items.filter((each) => isObject(each) && typeof each.owner === "string" && allowed.has(each.owner) && typeof each.id === "string" && /^wqi_[A-Za-z0-9_-]{20}$/.test(each.id));
+  const items = carried.items.flatMap((each) => isObject(each) && typeof each.owner === "string" && allowed.has(each.owner) ? [itemOf(each, each.owner)] : []).filter((each) => each !== null);
   if (!items.length)
     return;
   for (const each of Array.isArray(carried.categories) ? carried.categories : [])
     if (isObject(each) && typeof each.id === "string" && typeof each.name === "string")
       keepCategory(each.id, each.name);
+  for (const item of items)
+    if (!categoryNamed(item.category))
+      item.category = "next";
   changeQueues((book) => {
     for (const item of items) {
       const before = book.find({ id: item.id });
@@ -18019,24 +18040,29 @@ function placeWorkQueues(carried, owners, opened) {
         book.queue(before.owner).items = book.queue(before.owner).items.filter((each) => each.id !== item.id);
       book.queue(item.owner).items.push(item);
       const from = opened ? path68.join(opened, "work-queue", item.id) : null;
-      if (from && fs64.existsSync(from)) {
-        fs64.rmSync(filesOf(item.id), { recursive: true, force: true });
-        fs64.mkdirSync(path68.dirname(filesOf(item.id)), { recursive: true, mode: 448 });
-        fs64.cpSync(from, filesOf(item.id), { recursive: true });
+      fs64.rmSync(filesOf(item.id), { recursive: true, force: true });
+      for (const file of item.files) {
+        if (!from || !FILE_NAME.test(file.name))
+          continue;
+        try {
+          fs64.mkdirSync(filesOf(item.id), { recursive: true, mode: 448 });
+          fs64.copyFileSync(path68.join(from, file.name), path68.join(filesOf(item.id), file.name));
+        } catch {}
       }
     }
   });
 }
-function forgetWorkQueues(owners) {
+function forgetWorkQueues(owners, packed) {
   const gone = new Set(owners);
   changeQueues((book) => {
     for (const owner of gone) {
       if (!OWNER.test(owner))
         continue;
       const queue = book.queue(owner);
-      for (const item of queue.items)
+      const going = queue.items.filter((item) => !packed || packed[item.id] === item.updated.at);
+      for (const item of going)
         fs64.rmSync(filesOf(item.id), { recursive: true, force: true });
-      queue.items = [];
+      queue.items = queue.items.filter((item) => !going.includes(item));
     }
   });
 }
@@ -18980,6 +19006,10 @@ async function carryOn(id) {
   const contents = { kind: record.kind, thing: record.thing, name: record.name, exports, wasPaused: record.wasPaused };
   if (record.kind === "group") {
     contents.group = await groupAction(readBridgeFile(), record.thing, "hold");
+    const workQueue = packWorkQueues([record.thing]);
+    if (workQueue)
+      contents.workQueue = workQueue;
+    record.workQueue = packedOf(workQueue);
     const members = isObject(contents.group?.group) && Array.isArray(contents.group.group.members) ? contents.group.group.members : [];
     record.members = members.filter((member) => typeof member === "string");
   } else {
@@ -19027,6 +19057,7 @@ async function carryOn(id) {
     const workQueue = packWorkQueues(record.sessions);
     if (workQueue)
       contents.workQueue = workQueue;
+    record.workQueue = packedOf(workQueue);
     if (record.folder)
       contents.folder = path72.basename(record.folder);
     if (record.kind === "bot") {
@@ -19050,7 +19081,7 @@ async function carryOn(id) {
     return;
   outgoing.set(id, { got: new Set, flying: new Map, exports: fingerprint(digest, queues), digest });
   const now = changeMove(id, (each) => {
-    Object.assign(each, { leftOf: record.leftOf, sessions: record.sessions, wasPaused: record.wasPaused, pausedAs: record.pausedAs, members: record.members, hash: bundle.hash, size: bundle.size, sent: 0, stage: "copying", step: "offer", offered: true, sentAt: Date.now(), holdSince: undefined });
+    Object.assign(each, { leftOf: record.leftOf, sessions: record.sessions, wasPaused: record.wasPaused, pausedAs: record.pausedAs, members: record.members, workQueue: record.workQueue, hash: bundle.hash, size: bundle.size, sent: 0, stage: "copying", step: "offer", offered: true, sentAt: Date.now(), holdSince: undefined });
   });
   if (now)
     offer(now);
@@ -19203,6 +19234,7 @@ async function finish(id) {
     return;
   if (record.kind === "group") {
     await groupAction(readBridgeFile(), record.thing, "release");
+    forgetWorkQueues([record.thing], record.workQueue ?? {});
   } else {
     const engine = record.lane ? readBridgeFile() : readEngineFile();
     const place = record.folder ?? path72.join(K, `moved-${record.thing}`);
@@ -19239,7 +19271,7 @@ async function finish(id) {
     }
     for (const session of record.sessions)
       forgetQueue(session);
-    forgetWorkQueues(record.sessions);
+    forgetWorkQueues(record.sessions, record.workQueue ?? {});
     const keysLeft = record.kind === "bot" && !await answerBotKeys("DELETE", `kuvo/bots/${record.thing}/keys`, null, null).then((answer) => answer.status === 200, () => false);
     const trash = await toTrash(place);
     noteLeft({ id, thing: record.thing, kind: record.kind, to: record.to, at: Date.now(), sessions: [...record.sessions], ...record.lane ? { lane: true } : {}, ...trash ? { trash } : {}, ...record.leftOf?.length ? { left: record.leftOf } : {}, ...keysLeft ? { keys: true } : {} });
@@ -19486,6 +19518,7 @@ async function bringIn(record, signal) {
     const answer = await askGroups(readBridgeFile(), "PUT", `/${encodeURIComponent(record.thing)}`, { group: held.group, messages: held.messages, status: "held" }, engineWait(signal));
     if (answer.status !== 200)
       throw new Error(typeof answer.value?.message === "string" ? answer.value.message : `Its group chats answered ${answer.status}.`);
+    placeWorkQueues(contents.workQueue, [record.thing], opened);
     return [];
   }
   const place = folderOf(record.kind, record.thing);
@@ -19720,6 +19753,7 @@ async function clearCopy(record) {
   incoming.delete(record.id);
   if (record.kind === "group") {
     await groupAction(readBridgeFile(), record.thing, "release");
+    forgetWorkQueues([record.thing]);
   } else {
     if (record.lane) {
       if (fs68.existsSync(placedOf(record.id)))
@@ -28388,24 +28422,27 @@ function givenItems(given) {
   return { items, skipped };
 }
 function importItems(book, owner, items, who, primary, now = Date.now()) {
-  const have = new Set(book.items().flatMap((item) => [item.number, item.wanted]).filter((n) => n !== undefined));
-  const outcome = { added: 0, byCategory: {}, skipped: [], waiting: 0 };
+  const have = new Map(book.items().flatMap((item) => [item.number, item.wanted].filter((n) => n !== undefined).map((n) => [n, item.title])));
+  const outcome = { added: 0, byCategory: {}, skipped: [], waiting: 0, renumbered: [] };
   const made = [];
+  const fresh = [];
   for (const each of items) {
-    if (have.has(each.number)) {
+    const taken = have.get(each.number);
+    if (taken !== undefined && taken.toLowerCase() === each.title.toLowerCase()) {
       outcome.skipped.push(`#${each.number} (already in the Work Queue here)`);
       continue;
     }
-    have.add(each.number);
+    if (taken === undefined)
+      have.set(each.number, each.title);
     const item = {
       id: newItemID(),
       owner,
-      wanted: each.number,
+      ...taken === undefined ? { wanted: each.number } : {},
       title: each.title,
       body: each.body,
       category: each.category,
       order: placeIn(book.items(), each.category),
-      notes: [],
+      notes: taken === undefined ? [] : [{ at: now, by: { user: true }, text: `Imported as #${each.number}, a number already given to another item here, so it has a new one.` }],
       files: [],
       links: [],
       sessions: [],
@@ -28414,13 +28451,17 @@ function importItems(book, owner, items, who, primary, now = Date.now()) {
       ...each.category === "done" ? { doneAt: now } : {}
     };
     book.queue(owner).items.push(item);
-    made.push(item);
+    if (taken === undefined)
+      made.push(item);
+    else
+      fresh.push({ from: each.number, item });
     outcome.added++;
     outcome.byCategory[each.category] = (outcome.byCategory[each.category] ?? 0) + 1;
   }
   const { granted } = claimNumbers(primary, made.map((item) => item.wanted));
   numberWaiting(book, primary, granted, { now });
   outcome.waiting = made.filter((item) => item.number === undefined).length;
+  outcome.renumbered = fresh.map(({ from, item }) => item.number !== undefined ? `#${from} is #${item.number}` : `#${from} waits for a new number`);
   outcome.skipped = outcome.skipped.slice(0, MOST_SKIPPED_SAID);
   return outcome;
 }
@@ -28430,6 +28471,7 @@ function importWords(outcome, skipped, names) {
   return [
     outcome.added ? `Imported ${outcome.added} item${outcome.added === 1 ? "" : "s"} with their numbers: ${parts.join(", ")}.` : "Nothing was imported.",
     outcome.waiting ? `${outcome.waiting} wait${outcome.waiting === 1 ? "s" : ""} for the primary computer to grant ${outcome.waiting === 1 ? "its number" : "their numbers"}; until then ${outcome.waiting === 1 ? "it shows" : "they show"} as new.` : "",
+    outcome.renumbered.length ? `Imported with a new number, theirs being another item's here already: ${outcome.renumbered.join(", ")}.` : "",
     all.length ? `Left out (${all.length}): ${all.slice(0, MOST_SKIPPED_SAID).join("; ")}${all.length > MOST_SKIPPED_SAID ? "; …" : ""}.` : ""
   ].filter(Boolean).join(" ");
 }
@@ -28438,6 +28480,7 @@ function importWords(outcome, skipped, names) {
 import fs94 from "node:fs";
 import os9 from "node:os";
 import path100 from "node:path";
+import crypto37 from "node:crypto";
 
 // Packages/Box/src/link/work-queue/view.ts
 async function factsOf(targets, signal) {
@@ -28458,16 +28501,18 @@ function refOf(given) {
   const number = text.match(/^#?(\d{1,7})$/);
   return number ? { number: Number(number[1]) } : null;
 }
-async function sessionsNamed(ids, facts, targets) {
+async function sessionsNamed(ids, facts, targets, cache) {
   const byID = new Map(facts.all.map((each) => [each.data.id, each.data]));
   const bots = listBots();
   const found = new Map;
   for (const id of new Set(ids)) {
     if (!id.startsWith("ses_"))
       continue;
-    let data = byID.get(id);
-    if (!data && targets.length)
+    let data = byID.get(id) ?? cache?.get(id);
+    if (!data && targets.length && !cache?.has(id)) {
       data = (await placeOfSession(id, targets).catch(() => null))?.data;
+      cache?.set(id, data);
+    }
     const bot = bots.find((each) => each.session === id);
     const works = worksFor(data);
     const startedBy = startedByOf(data);
@@ -28506,9 +28551,9 @@ function summaryOf(item, working, titles) {
 function wholeOf(item, working, titles) {
   return { ...summaryOf(item, working, titles), body: item.body, notes: item.notes, files: item.files, links: item.links, handed: item.handed ?? [] };
 }
-async function ownersOf(owner, items, facts, targets) {
+async function ownersOf(owner, items, facts, targets, cache) {
   const keys = new Set([owner, ...items.map((item) => item.owner), ...items.flatMap((item) => item.handedBy ? [item.handedBy] : [])]);
-  const named = await sessionsNamed([...keys, ...items.flatMap((item) => item.sessions.map((each) => each.session))], facts, targets);
+  const named = await sessionsNamed([...keys, ...items.flatMap((item) => item.sessions.map((each) => each.session))], facts, targets, cache);
   const bots = listBots();
   const owners = [...keys].map((key) => {
     if (key.startsWith("grp_"))
@@ -28536,7 +28581,7 @@ function agoWords(at, now = Date.now()) {
     return `${hours}h ago`;
   return `${Math.round(hours / 24)}d ago`;
 }
-var nameOf4 = (item) => item.number !== undefined ? `#${item.number} "${item.title}"` : `"${item.title}" (no number yet${item.wanted ? `: asked for #${item.wanted}` : ""})`;
+var nameOf4 = (item) => item.number !== undefined ? `#${item.number} "${item.title}"` : `"${item.title}" (${item.id}, no number yet${item.wanted ? `: asked for #${item.wanted}` : ""})`;
 
 // Packages/Box/src/link/work-queue/ops.ts
 var LINKS_EACH = 3;
@@ -28547,6 +28592,7 @@ class Refusal extends Error {
 var refuse = (words) => {
   throw new Refusal(words);
 };
+var STAGING = path100.join(path100.dirname(FILES2), "staging");
 var real = (place) => {
   try {
     return fs94.realpathSync(place);
@@ -28555,7 +28601,7 @@ var real = (place) => {
   }
 };
 var within2 = (file, folder) => file === folder || file.startsWith(folder.endsWith(path100.sep) ? folder : folder + path100.sep);
-function attachable(given, places) {
+function stageFile(given, places, staging) {
   if (!path100.isAbsolute(given))
     refuse(`Give ${given} as a full path.`);
   const file = real(given) ?? refuse(`There's no file at ${given}.`);
@@ -28568,12 +28614,54 @@ function attachable(given, places) {
     refuse(`${given} isn't in this conversation's folder, its project or a temporary folder: only files from there are kept with an item.`);
   if (path100.relative(root, file).split(path100.sep).some((part) => part.startsWith(".")))
     refuse(`${given} is hidden (a name starting with a dot): it isn't kept with an item.`);
-  const kind = fs94.lstatSync(file);
-  if (!kind.isFile())
+  const checked = fs94.lstatSync(file);
+  if (!checked.isFile())
     refuse(`${given} isn't a file.`);
-  if (kind.size > MOST_FILE)
+  if (checked.size > MOST_FILE)
     refuse(`${given} is over ${Math.round(MOST_FILE / 1e6)} MB: too big to keep with an item.`);
-  return { file, size: kind.size };
+  let handle;
+  try {
+    handle = fs94.openSync(file, fs94.constants.O_RDONLY | (fs94.constants.O_NOFOLLOW ?? 0) | (fs94.constants.O_NONBLOCK ?? 0));
+  } catch {
+    return refuse(`${given} can't be read.`);
+  }
+  try {
+    const opened = fs94.fstatSync(handle);
+    if (!opened.isFile() || opened.dev !== checked.dev || opened.ino !== checked.ino)
+      refuse(`${given} changed as it was read: try again.`);
+    if (opened.nlink !== 1)
+      refuse(`${given} has other names (a hard link): it isn't kept with an item.`);
+    const size = Math.min(opened.size, MOST_FILE);
+    const bytes = Buffer.alloc(size);
+    let read = 0;
+    while (read < size) {
+      const got = fs94.readSync(handle, bytes, read, size - read, read);
+      if (!got)
+        break;
+      read += got;
+    }
+    fs94.mkdirSync(staging, { recursive: true, mode: 448 });
+    const staged = path100.join(staging, `${crypto37.randomBytes(8).toString("hex")}`);
+    fs94.writeFileSync(staged, bytes.subarray(0, read), { mode: 384 });
+    return { staged, name: path100.basename(file), size: read };
+  } finally {
+    fs94.closeSync(handle);
+  }
+}
+function stageFiles2(given, places) {
+  const named = given === undefined ? [] : (Array.isArray(given) ? given : [given]).map((each) => typeof each === "string" ? each.trim() : "").filter(Boolean);
+  if (named.length && !places)
+    refuse("Only an agent's own files are kept with an item.");
+  if (named.length > MOST_FILES)
+    refuse(`An item keeps ${MOST_FILES} files at most.`);
+  const staging = path100.join(STAGING, crypto37.randomBytes(8).toString("hex"));
+  const clear = () => fs94.rmSync(staging, { recursive: true, force: true });
+  try {
+    return { staged: named.map((each) => stageFile(each, places, staging)), clear };
+  } catch (error) {
+    clear();
+    throw error;
+  }
 }
 var TYPES2 = {
   ".png": "image/png",
@@ -28592,25 +28680,6 @@ var TYPES2 = {
   ".mov": "video/quicktime"
 };
 var typeOf = (name) => TYPES2[path100.extname(name).toLowerCase()] ?? "application/octet-stream";
-var FILE_NAME = /^[^/\\\0]{1,200}$/;
-function keepFile(item, file, size, now) {
-  if (item.files.length >= MOST_FILES)
-    refuse(`${nameOf4(item)} has ${MOST_FILES} files already: remove some first.`);
-  const base = path100.basename(file).replace(/[\\\0]/g, "_").slice(-200) || "file";
-  let name = base;
-  const ext = path100.extname(base);
-  for (let n = 2;item.files.some((each) => each.name === name); n++)
-    name = `${base.slice(0, base.length - ext.length)} ${n}${ext}`;
-  const folder = filesOf(item.id);
-  fs94.mkdirSync(folder, { recursive: true, mode: 448 });
-  const handle = fs94.openSync(file, fs94.constants.O_RDONLY | (fs94.constants.O_NOFOLLOW ?? 0));
-  try {
-    fs94.writeFileSync(path100.join(folder, name), fs94.readFileSync(handle), { mode: 384 });
-  } finally {
-    fs94.closeSync(handle);
-  }
-  return { name, size, type: typeOf(name), at: now };
-}
 var text3 = (value, most, what) => {
   if (typeof value !== "string")
     return refuse(`${what} should be text.`);
@@ -28646,6 +28715,10 @@ function linkSession2(book, item, session, now) {
   }
   item.sessions.push({ session, since: now });
 }
+function applyFileOps(acting) {
+  for (const op of acting.fileOps.splice(0))
+    op();
+}
 var openIn = (book, owner) => book.queue(owner).items.filter((item) => !item.removed && item.category !== "done").length;
 function addItem2(book, owner, fields, acting, primary) {
   const title = plainName(text3(fields.title ?? "", MOST_TITLE * 4, "The title")).slice(0, MOST_TITLE);
@@ -28677,7 +28750,8 @@ function addItem2(book, owner, fields, acting, primary) {
     item.number = number;
   return item;
 }
-function changeItem2(book, item, fields, { who, files, now }) {
+function changeItem2(book, item, fields, acting) {
+  const { who, now } = acting;
   if (fields.title !== undefined) {
     const title = plainName(text3(fields.title, MOST_TITLE * 4, "The title")).slice(0, MOST_TITLE);
     if (!title)
@@ -28701,16 +28775,16 @@ function changeItem2(book, item, fields, { who, files, now }) {
   }
   const beside = (given) => {
     const found = book.items().find((each) => !each.removed && (each.id === given || (typeof given === "string" || typeof given === "number") && String(each.number) === String(given).replace(/^#/, "")));
-    if (!found)
-      refuse(`There's no item ${String(given)} to put it beside.`);
+    if (!found || found.id === item.id)
+      refuse(`There's no other item ${String(given)} to put it beside.`);
     if (found.category !== item.category)
       refuse(`${nameOf4(found)} is in another category: move it there first (category).`);
     return found;
   };
   if (fields.before !== undefined)
-    item.order = placeBeside(book.items(), beside(fields.before), false);
+    item.order = placeBeside(book.items(), beside(fields.before), false, item);
   else if (fields.after !== undefined)
-    item.order = placeBeside(book.items(), beside(fields.after), true);
+    item.order = placeBeside(book.items(), beside(fields.after), true, item);
   else if (fields.top === true && fields.category === undefined)
     item.order = placeIn(book.items().filter((each) => each.id !== item.id), item.category, { top: true });
   if (fields.progress !== undefined) {
@@ -28749,20 +28823,26 @@ function changeItem2(book, item, fields, { who, files, now }) {
     if (item.links.length > MOST_LINKS)
       refuse(`An item keeps ${MOST_LINKS} links at most.`);
   }
-  if (fields.remove_files !== undefined) {
-    const gone = new Set((Array.isArray(fields.remove_files) ? fields.remove_files : [fields.remove_files]).map(String));
-    for (const name of gone)
-      if (item.files.some((file) => file.name === name))
-        fs94.rmSync(path100.join(filesOf(item.id), name), { force: true });
-    item.files = item.files.filter((file) => !gone.has(file.name));
-  }
-  if (fields.files !== undefined) {
-    const given = (Array.isArray(fields.files) ? fields.files : [fields.files]).map((each) => typeof each === "string" ? each.trim() : "").filter(Boolean);
-    if (given.length && !files)
-      refuse("Only an agent's own files are kept with an item.");
-    const checked = given.map((each) => attachable(each, files));
-    for (const { file, size } of checked)
-      item.files.push(keepFile(item, file, size, now));
+  const gone = new Set(fields.remove_files === undefined ? [] : (Array.isArray(fields.remove_files) ? fields.remove_files : [fields.remove_files]).map(String));
+  const staged = fields.files === undefined ? [] : acting.staged ?? refuse("Only an agent's own files are kept with an item.");
+  const left = item.files.filter((file) => !gone.has(file.name));
+  if (left.length + staged.length > MOST_FILES)
+    refuse(`An item keeps ${MOST_FILES} files at most: take some away first (remove_files).`);
+  for (const file of item.files)
+    if (gone.has(file.name))
+      acting.fileOps.push(() => fs94.rmSync(path100.join(filesOf(item.id), file.name), { force: true }));
+  item.files = left;
+  for (const each of staged) {
+    const base = each.name.replace(/[\\\0]/g, "_").slice(-200).replace(/^\.+/, "") || "file";
+    const ext = path100.extname(base);
+    let name = base;
+    for (let n = 2;item.files.some((file) => file.name === name); n++)
+      name = `${base.slice(0, base.length - ext.length)} ${n}${ext}`;
+    item.files.push({ name, size: each.size, type: typeOf(name), at: now });
+    acting.fileOps.push(() => {
+      fs94.mkdirSync(filesOf(item.id), { recursive: true, mode: 448 });
+      fs94.renameSync(each.staged, path100.join(filesOf(item.id), name));
+    });
   }
   item.updated = { at: now, by: who };
 }
@@ -28773,6 +28853,8 @@ function removeItem2(item, who, now) {
 }
 function restoreItem(book, item, who, now) {
   delete item.removed;
+  if (!categoryNamed(item.category))
+    item.category = "next";
   item.order = placeIn(book.items(), item.category);
   item.updated = { at: now, by: who };
 }
@@ -28890,22 +28972,37 @@ var QUEUE_TOOL_NAMES = QUEUE_TOOLS.map((tool) => tool.name);
 var QUEUE_INSTRUCTIONS = " Your Work Queue keeps your work items (queue_list, queue_add, queue_update, queue_hand): it's how you and the user track work in Kuvo Code, in place of a backlog file. When the user asks for a new item, or work comes up to do later, add it there. Refer to items as #243 (the user sees a chip); outside ones with their source, like gh:owner/repo#12. When you start on one, link yourself (working: true), keep progress_note to what's being done, and mark it done when it is; hand an item to a session you start for it with queue_hand.";
 var why3 = (error) => String(error?.message ?? error);
 var placesOf2 = (folder) => ({ own: folder ?? null, others: folder ? readProjects().find((each) => each.directory === folder)?.folders ?? [] : [] });
-async function queueCaller(caller) {
+async function groupLivesHere(group, readBridge) {
+  try {
+    const answer = await askGroups(readBridge(), "GET", `/${encodeURIComponent(group)}`, undefined, AbortSignal.timeout(1e4));
+    return answer.status === 200 ? true : answer.status === 404 ? false : null;
+  } catch {
+    return null;
+  }
+}
+async function queueCaller(caller, readBridge) {
   if (!caller.root)
     return { refused: "Only a conversation on this computer has a Work Queue here." };
   const name = caller.botName ?? caller.sessionName ?? "An agent";
   if (caller.seat) {
     if (!caller.group)
       return { refused: "A group chat's seat keeps the group's queue, and this one's group isn't known here." };
-    return { owner: `grp_${caller.group.replace(/^grp_/, "")}`, session: caller.root, who: { session: caller.root, name }, files: placesOf2(caller.folder), seat: true };
+    const group = `grp_${caller.group.replace(/^grp_/, "")}`;
+    const lives = await groupLivesHere(group, readBridge);
+    if (lives === null)
+      return { refused: `${HERE[0].toUpperCase()}${HERE.slice(1)} can't tell where this group chat lives right now. Try again in a moment.` };
+    if (!lives)
+      return { refused: "This group chat lives on another of the user's computers, and its Work Queue is kept there: a seat on this one can't change it yet. Say what to add in the chat, and the seat there adds it." };
+    return { owner: group, session: caller.root, who: { session: caller.root, name }, files: placesOf2(caller.folder), seat: true };
   }
   return { owner: caller.root, session: caller.root, who: { session: caller.root, name }, files: placesOf2(caller.folder), seat: false };
 }
-function itemFor(book, given, caller, overseen) {
+function itemFor(items, given, caller, overseen) {
   const ref = refOf(given);
   if (!ref)
-    throw new Refusal("Say which item (item), by its number, like #243.");
-  const item = book.find(ref);
+    throw new Refusal("Say which item (item), by its number, like #243 (or the id an item without one was given).");
+  const found = matching2(items, ref);
+  const item = found.find((each) => inView(caller.owner, each, overseen)) ?? found[0];
   if (!item)
     throw new Refusal(`There's no item ${"number" in ref ? `#${ref.number}` : ref.id} in the Work Queue on ${HERE}. queue_list shows yours.`);
   if (!inView(caller.owner, item, overseen))
@@ -28918,7 +29015,7 @@ async function callQueueTool(name, args, session, readEngine, readBridge, target
     return refused3(`There's no tool ${String(name)}.`);
   if (typeof session !== "string" || !await isCalling(session, [name], args, readEngine, readBridge))
     return refused3("Only a conversation's own tool call can change its Work Queue, and this one isn't running in it.");
-  const found = await queueCaller(await callerOf(session, readEngine, readBridge));
+  const found = await queueCaller(await callerOf(session, readEngine, readBridge), readBridge);
   if ("refused" in found)
     return refused3(found.refused);
   try {
@@ -28938,29 +29035,30 @@ var change4 = (work) => {
 };
 async function run3(name, args, caller, targets, signal) {
   const now = Date.now();
-  const acting = { who: caller.who, files: caller.files, now };
+  const acting = { who: caller.who, now, fileOps: [] };
   const facts = await factsOf(targets, signal);
   const overseen = overseenBy(caller.owner, facts.all);
   switch (name) {
     case "queue_list":
       return said3(await listWords(caller, args, facts, overseen, targets));
     case "queue_show": {
-      const item = itemFor(new BookReader, args.item, caller, overseen);
+      const item = itemFor(readAll2().flatMap((queue) => queue.items), args.item, caller, overseen);
       return said3(await showWords(item, facts, targets, caller));
     }
     case "queue_add": {
-      const item = change4((book) => {
+      const item = withFiles(args, caller, acting, () => change4((book) => {
         const made = addItem2(book, caller.owner, args, acting, primaryOf());
         if (args.working === true && !caller.seat)
           linkSession2(book, made, caller.session, now);
+        applyFileOps(acting);
         return made;
-      });
+      }));
       const where = categories().find((each) => each.id === item.category)?.name ?? item.category;
-      return said3(item.number !== undefined ? `Added #${item.number} "${item.title}" to ${where}${args.working === true ? ", linked to you: it shows In progress while you work" : ""}. Refer to it as #${item.number}.` : `Added "${item.title}" to ${where}. It has no number yet: ${HERE} gets one from your primary computer, which isn't answering now. Name it by its title meanwhile.`);
+      return said3(item.number !== undefined ? `Added #${item.number} "${item.title}" to ${where}${args.working === true ? ", linked to you: it shows In progress while you work" : ""}. Refer to it as #${item.number}.` : `Added "${item.title}" to ${where}. It has no number yet: ${HERE} gets one from the user's primary computer, which isn't answering now. Name it as ${item.id} meanwhile.`);
     }
     case "queue_update": {
-      const item = change4((book) => {
-        const item = itemFor(book, args.item, caller, overseen);
+      const item = withFiles(args, caller, acting, () => change4((book) => {
+        const item = itemFor(book.items(), args.item, caller, overseen);
         if (item.removed)
           throw new Refusal(deletedWords(item));
         changeItem2(book, item, args, acting);
@@ -28975,8 +29073,9 @@ async function run3(name, args, caller, targets, signal) {
           item.sessions = item.sessions.filter((each) => each.session !== caller.session);
         const unlinked = new Set(named(args.unlink));
         item.sessions = item.sessions.filter((each) => !unlinked.has(each.session));
+        applyFileOps(acting);
         return item;
-      });
+      }));
       const where = categories().find((each) => each.id === item.category)?.name ?? item.category;
       return said3(item.category === "done" ? `Marked ${nameOf4(item)} done.` : `Changed ${nameOf4(item)} (${where}${item.sessions.length ? `, ${item.sessions.length} session${item.sessions.length === 1 ? "" : "s"} linked` : ""}).`);
     }
@@ -28985,7 +29084,7 @@ async function run3(name, args, caller, targets, signal) {
       if ("refused" in to)
         return refused3(to.refused);
       const item = change4((book) => {
-        const item = itemFor(book, args.item, caller, overseen);
+        const item = itemFor(book.items(), args.item, caller, overseen);
         if (item.removed)
           throw new Refusal(deletedWords(item));
         handItem(book, item, to.owner, caller.who, now);
@@ -28995,7 +29094,7 @@ async function run3(name, args, caller, targets, signal) {
     }
     case "queue_remove": {
       const item = change4((book) => {
-        const item = itemFor(book, args.item, caller, overseen);
+        const item = itemFor(book.items(), args.item, caller, overseen);
         if (args.undo === true) {
           if (!item.removed)
             throw new Refusal(`${nameOf4(item)} isn't deleted.`);
@@ -29030,11 +29129,15 @@ async function run3(name, args, caller, targets, signal) {
   }
   return refused3(`There's no tool ${name}.`);
 }
-
-class BookReader {
-  items = readAll2().flatMap((queue) => queue.items);
-  find(ref) {
-    return this.items.find((item) => ref.id ? item.id === ref.id : item.number === ref.number) ?? null;
+function withFiles(args, caller, acting, work) {
+  if (args.files === undefined)
+    return work();
+  const { staged, clear } = stageFiles2(args.files, caller.files);
+  acting.staged = staged;
+  try {
+    return work();
+  } finally {
+    clear();
   }
 }
 async function handTarget(given, caller, targets) {
@@ -29142,14 +29245,17 @@ Handed: ${item.handed.map((each) => `${title(each.from)} → ${title(each.to)} $
 // Packages/Box/src/link/areas/work-queue.ts
 var WORK_QUEUE_ROUTE = /^kuvo\/work-queue(?:\/(tools|events|refs|categories|import|items\/([^/]+)(?:\/(move|restore|files\/([^/]+)))?))?$/;
 var YOU = { user: true };
+
+class Missing extends Refusal {
+}
 var ONLY_CLIENTS = "Only Kuvo Code on your Mac or iPhone can do this: agents change the Work Queue with their tools.";
 var fromClient = ({ request, phone }) => Boolean(phone?.key || request.fromApp || request.fromMac);
 var queryOf = (request) => new URLSearchParams(request.path.split("?")[1] ?? "");
-async function viewOf(owner, targets, facts, signal) {
+async function viewOf(owner, targets, facts, signal, cache) {
   const known = facts ?? await factsOf(targets, signal);
   const overseen = overseenBy(owner, known.all);
   const all = readAll2().flatMap((queue) => queue.items).filter((item) => inView(owner, item, overseen));
-  const { owners, titles } = await ownersOf(owner, all, known, targets);
+  const { owners, titles } = await ownersOf(owner, all, known, targets, cache);
   const place = new Map(categories().map((each, index) => [each.id, index]));
   const sorted = (items) => items.sort((a, b) => (place.get(a.category) ?? 99) - (place.get(b.category) ?? 99) || a.order - b.order).map((item) => summaryOf(item, known.working, titles));
   return {
@@ -29166,7 +29272,7 @@ function changed2(work, json) {
     return json(200, { item: summaryOf(item, new Set, new Map) });
   } catch (error) {
     if (error instanceof Refusal)
-      return json(error.message.startsWith("There's no item") ? 404 : 400, { message: error.message });
+      return json(error instanceof Missing ? 404 : 400, { message: error.message });
     throw error;
   }
 }
@@ -29206,7 +29312,7 @@ async function* workQueueRoute(context, match) {
       return yield* json(405, {});
     if (!fromClient(context))
       return yield* json(403, { message: ONLY_CLIENTS });
-    const used = (id) => readAll2().flatMap((queue) => queue.items).filter((item) => item.category === id && !item.removed).length;
+    const used = (id) => readAll2().flatMap((queue) => queue.items).filter((item) => item.category === id).length;
     const outcome = typeof given.add === "string" ? addCategory(given.add, given.after) : given.rename !== undefined ? renameCategory(given.rename, given.to) : given.remove !== undefined ? removeCategory(given.remove, used) : { refused: "Send {add, after}, {rename, to} or {remove}." };
     if ("refused" in outcome)
       return yield* json(400, { message: outcome.refused });
@@ -29242,7 +29348,7 @@ async function* workQueueRoute(context, match) {
   const ref = refOf(decodeURIComponent(rawItem ?? ""));
   if (!ref)
     return yield* json(404, { message: "There's no such item." });
-  const find = (items) => items.find((each) => ("id" in ref) ? each.id === ref.id : each.number === ref.number) ?? null;
+  const find = (items) => matching2(items, ref)[0] ?? null;
   if (action === undefined && method === "GET") {
     const item = find(readAll2().flatMap((queue) => queue.items));
     if (!item)
@@ -29274,7 +29380,7 @@ async function* workQueueRoute(context, match) {
     numberWaiting(book, primary, null);
     const item = find(book.items());
     if (!item)
-      throw new Refusal("There's no item like that.");
+      throw new Missing("There's no item like that.");
     work(item, book);
     return item;
   });
@@ -29296,32 +29402,10 @@ async function* workQueueRoute(context, match) {
     return yield* changed2(inBook((item, book) => {
       if (item.removed)
         throw new Refusal("It's deleted: bring it back first.");
-      if (given.category !== undefined) {
-        const category = categoryFor(given.category);
-        if (category !== item.category) {
-          item.category = category;
-          item.order = placeIn(book.items(), category, { top: given.top === true });
-          if (category === "done") {
-            item.doneAt = now;
-            item.sessions = [];
-          } else {
-            delete item.doneAt;
-          }
-        }
-      }
-      const beside = given.before ?? given.after;
-      if (beside !== undefined) {
-        const named = refOf(beside);
-        const other = named && book.items().find((each) => !each.removed && ("id" in named ? each.id === named.id : each.number === named.number));
-        if (!other || other.id === item.id)
-          throw new Refusal("There's no item like that to put it beside.");
-        if (other.category !== item.category)
-          throw new Refusal("That item is in another category.");
-        item.order = placeBeside(book.items(), other, given.after !== undefined);
-      } else if (given.top === true && given.category === undefined) {
-        item.order = placeIn(book.items().filter((each) => each.id !== item.id), item.category, { top: true });
-      }
-      item.updated = { at: now, by: YOU };
+      const { category, before, after, top } = given;
+      if ([before, after].some((each) => each !== undefined && refOf(each) === null))
+        throw new Refusal("There's no item like that to put it beside.");
+      changeItem2(book, item, { category, before, after, top }, { who: YOU, now, fileOps: [] });
     }), json);
   }
   return yield* json(405, {});
@@ -29334,29 +29418,31 @@ async function* followView(owner, targets, signal) {
     wake?.();
   };
   queueFollowers2.add(told);
-  const watching = watchFolders([path101.join(WORK_QUEUE, "queues")], told, { recursive: false });
+  const watching = watchFolders([path101.join(WORK_QUEUE, "queues"), WORK_QUEUE], told, { recursive: false });
   signal?.addEventListener("abort", () => wake?.(), { once: true });
   let last = "";
   let facts = null;
   let factsAt = 0;
+  let titles = new Map;
   try {
     while (!signal?.aborted) {
       if (!facts || dirty || Date.now() - factsAt > 30000) {
         facts = await factsOf(targets, signal);
         factsAt = Date.now();
+        titles = new Map;
       } else {
         const known = facts;
         facts = { all: known.all, working: await atWorkNow(targets, signal).catch(() => known.working) };
       }
       dirty = false;
-      const line = JSON.stringify(await viewOf(owner, targets, facts, signal));
+      const line = JSON.stringify(await viewOf(owner, targets, facts, signal, titles));
       if (line !== last) {
         yield { body: Buffer.from(line + `
 `) };
         last = line;
       }
-      if (signal?.aborted)
-        break;
+      if (signal?.aborted || dirty)
+        continue;
       await new Promise((done) => {
         const timer = setTimeout(done, 3000);
         wake = () => {
@@ -29572,7 +29658,7 @@ async function* autopilotRoute(context) {
 
 // Packages/Box/src/link/fence/outside.ts
 import { spawn as spawn11 } from "node:child_process";
-import crypto37 from "node:crypto";
+import crypto38 from "node:crypto";
 import fs99 from "node:fs";
 import os10 from "node:os";
 import path104 from "node:path";
@@ -29790,7 +29876,7 @@ var KINDS3 = [
   [/^job-creation/, "job"],
   [/^(appleevent-send|mach-lookup)/, "app"]
 ];
-var commandSum = (command) => crypto37.createHash("sha256").update(command).digest("hex").slice(0, 16);
+var commandSum = (command) => crypto38.createHash("sha256").update(command).digest("hex").slice(0, 16);
 async function stopsFor(session, command, minutes = 3, signal) {
   if (process.platform !== "darwin" || !/^ses_[A-Za-z0-9_]{1,80}$/.test(session) || signal?.aborted)
     return [];
@@ -30036,18 +30122,18 @@ async function callSandboxTool(name, args, caller, signal) {
 }
 
 // Packages/Box/src/link/vault/holder.ts
-import crypto40 from "node:crypto";
+import crypto41 from "node:crypto";
 import fs103 from "node:fs";
 import net4 from "node:net";
 import path107 from "node:path";
 
 // Packages/Box/src/link/vault/ssh.ts
-import crypto39 from "node:crypto";
+import crypto40 from "node:crypto";
 import fs102 from "node:fs";
 import path106 from "node:path";
 
 // Packages/Box/src/link/vault/ssh-agent.ts
-import crypto38 from "node:crypto";
+import crypto39 from "node:crypto";
 import fs100 from "node:fs";
 import net3 from "node:net";
 var FAILURE = 5;
@@ -30160,12 +30246,12 @@ function openSSHKey(data) {
   if (type === "ssh-ed25519") {
     const pub = inner.bytes();
     const both = inner.bytes();
-    return crypto38.createPrivateKey({ key: { kty: "OKP", crv: "Ed25519", d: b64url(both.subarray(0, 32)), x: b64url(pub) }, format: "jwk" });
+    return crypto39.createPrivateKey({ key: { kty: "OKP", crv: "Ed25519", d: b64url(both.subarray(0, 32)), x: b64url(pub) }, format: "jwk" });
   }
   if (type === "ssh-rsa") {
     const [n, e, d, qi, p, q] = [inner.bytes(), inner.bytes(), inner.bytes(), inner.bytes(), inner.bytes(), inner.bytes()].map(unsigned);
     const big = { d: bigOf(d), p: bigOf(p), q: bigOf(q) };
-    return crypto38.createPrivateKey({
+    return crypto39.createPrivateKey({
       key: {
         kty: "RSA",
         n: b64url(n),
@@ -30188,7 +30274,7 @@ function openSSHKey(data) {
     const { jwk, size } = CURVES[curve];
     if (point[0] !== 4 || point.length !== 1 + 2 * size)
       throw new Error("That isn't a private key.");
-    return crypto38.createPrivateKey({
+    return crypto39.createPrivateKey({
       key: { kty: "EC", crv: jwk, x: b64url(point.subarray(1, 1 + size)), y: b64url(point.subarray(1 + size)), d: b64url(bufOf(bigOf(d), size)) },
       format: "jwk"
     });
@@ -30205,7 +30291,7 @@ function privateKeyOf(text) {
     if (/ENCRYPTED/.test(trimmed))
       throw new Error("This key has a passphrase: Kuvo Code's agent uses keys without one (ssh-keygen -p takes it off a copy).");
     try {
-      key = crypto38.createPrivateKey(trimmed);
+      key = crypto39.createPrivateKey(trimmed);
     } catch {
       throw new Error("That isn't a private key.");
     }
@@ -30215,14 +30301,14 @@ function privateKeyOf(text) {
 function signWith(agentKey, data, flags) {
   const { key, type } = agentKey;
   if (type === "ssh-ed25519")
-    return Buffer.concat([str(type), str(crypto38.sign(null, data, key))]);
+    return Buffer.concat([str(type), str(crypto39.sign(null, data, key))]);
   if (type === "ssh-rsa") {
     const [name, hash] = flags & RSA_SHA2_512 ? ["rsa-sha2-512", "sha512"] : flags & RSA_SHA2_256 ? ["rsa-sha2-256", "sha256"] : ["ssh-rsa", "sha1"];
-    return Buffer.concat([str(name), str(crypto38.sign(hash, data, key))]);
+    return Buffer.concat([str(name), str(crypto39.sign(hash, data, key))]);
   }
   const curve = type.replace("ecdsa-sha2-", "");
   const { hash, size } = CURVES[curve];
-  const both = crypto38.sign(hash, data, { key, dsaEncoding: "ieee-p1363" });
+  const both = crypto39.sign(hash, data, { key, dsaEncoding: "ieee-p1363" });
   return Buffer.concat([str(type), str(Buffer.concat([mpint(both.subarray(0, size)), mpint(both.subarray(size))]))]);
 }
 var message = (type, ...parts) => {
@@ -30492,7 +30578,7 @@ var noteUse = (item, caller, use, how) => note2({ what: "used", ...itemOf2(item)
 
 // Packages/Box/src/link/vault/ssh.ts
 var isSshKey = (item) => item.kind === "key" && item.fields.includes("private_key");
-var sumOf2 = (text) => crypto39.createHash("sha256").update(text).digest("hex").slice(0, 32);
+var sumOf2 = (text) => crypto40.createHash("sha256").update(text).digest("hex").slice(0, 32);
 var REFUSED_FOR = 30000;
 var NOTE_KEPT = 30 * 24 * 60 * 60000;
 var IDLE = 60 * 60000;
@@ -30647,7 +30733,7 @@ function keepSshAgents() {
       for (const old of fs102.readdirSync(SSH_AGENTS))
         if (old.startsWith(prefix))
           fs102.rmSync(path106.join(SSH_AGENTS, old), { force: true });
-      const socket = path106.join(SSH_AGENTS, `${prefix}${crypto39.randomBytes(9).toString("base64url")}.sock`);
+      const socket = path106.join(SSH_AGENTS, `${prefix}${crypto40.randomBytes(9).toString("base64url")}.sock`);
       const agent = { folder, server: serveAgent(socket, sourceFor(callerFor(note, folder))), used: Date.now() };
       agent.server.on("connection", () => {
         agent.used = Date.now();
@@ -30699,8 +30785,8 @@ var heldHere = (route) => /^kuvo\/(vault|sandbox\/(asks|tools|allowed|stopped))(
 var MOST3 = 8 * 1024 * 1024;
 var KEY3 = "x-kuvo-vault-key";
 var AUTH = "x-kuvo-vault-auth";
-var nonce = () => crypto40.randomBytes(18).toString("base64url");
-var covered = (theirs, method, route, body) => `${theirs}\x00${method.toUpperCase()}\x00${route}\x00${crypto40.createHash("sha256").update(body).digest("base64url")}`;
+var nonce = () => crypto41.randomBytes(18).toString("base64url");
+var covered = (theirs, method, route, body) => `${theirs}\x00${method.toUpperCase()}\x00${route}\x00${crypto41.createHash("sha256").update(body).digest("base64url")}`;
 function holdVault(handle) {
   holding = true;
   fs103.mkdirSync(RUN, { recursive: true, mode: 448 });
@@ -31750,7 +31836,7 @@ async function* linkRoute(context) {
 }
 
 // Packages/Box/src/link/areas/vault.ts
-import crypto42 from "node:crypto";
+import crypto43 from "node:crypto";
 
 // Packages/Box/src/link/vault/fill.ts
 var refused4 = (status, message) => ({ status, value: { message } });
@@ -31814,7 +31900,7 @@ async function fill(given, caller, signal) {
 }
 
 // Packages/Box/src/link/vault/tools.ts
-import crypto41 from "node:crypto";
+import crypto42 from "node:crypto";
 import fs107 from "node:fs";
 import os12 from "node:os";
 import path109 from "node:path";
@@ -32041,7 +32127,7 @@ async function runWith(caller, args, signal) {
       return may.leftUndone ? { text: may.message, isError: false } : failed2(may.message);
     allowed.set(item.id, may.how);
   }
-  const scratch = path109.join(RUN_FOLDER, crypto41.randomBytes(8).toString("hex"));
+  const scratch = path109.join(RUN_FOLDER, crypto42.randomBytes(8).toString("hex"));
   const env = commandEnv();
   const hidden = [];
   try {
@@ -32152,9 +32238,9 @@ function provedMac(given, tag = "kuvo-vault-key", rest = "") {
   if (usedProofs.has(nonce))
     return null;
   try {
-    const key = crypto42.createPublicKey({ key: Buffer.concat([ED_SPKI2, Buffer.from(sign, "base64url")]), format: "der", type: "spki" });
+    const key = crypto43.createPublicKey({ key: Buffer.concat([ED_SPKI2, Buffer.from(sign, "base64url")]), format: "der", type: "spki" });
     const signature = Buffer.from(given.proof, "base64url");
-    const good = signature.length === 64 && typeof link?.id === "string" && crypto42.verify(null, Buffer.from(`${tag}\x00${link.id}\x00${at}\x00${nonce}${rest}`), key, signature);
+    const good = signature.length === 64 && typeof link?.id === "string" && crypto43.verify(null, Buffer.from(`${tag}\x00${link.id}\x00${at}\x00${nonce}${rest}`), key, signature);
     if (good)
       usedProofs.set(nonce, now + 2 * PROOF_FOR);
     return good ? mac : null;
@@ -32172,7 +32258,7 @@ function provedRequest(request) {
   } catch {
     return null;
   }
-  const hash = crypto42.createHash("sha256").update(request.body ?? Buffer.alloc(0)).digest("hex");
+  const hash = crypto43.createHash("sha256").update(request.body ?? Buffer.alloc(0)).digest("hex");
   return provedMac(given, `kuvo-vault-request`, `\x00${request.method.toUpperCase()}\x00${request.path}\x00${hash}`);
 }
 var idOf5 = (part) => {
@@ -32809,14 +32895,14 @@ async function runMacLink() {
 }
 
 // Packages/Box/src/link/server/serve.ts
-import crypto43 from "node:crypto";
+import crypto44 from "node:crypto";
 import http from "node:http";
 import os14 from "node:os";
 function serveBox(password, handle = engineHandler(readEngineFile, { name: os14.hostname() })) {
   const expected = Buffer.from("Basic " + Buffer.from(`opencode:${password}`).toString("base64"));
   return http.createServer(async (request, response) => {
     const given = Buffer.from(request.headers.authorization ?? "");
-    if (given.length !== expected.length || !crypto43.timingSafeEqual(given, expected)) {
+    if (given.length !== expected.length || !crypto44.timingSafeEqual(given, expected)) {
       response.writeHead(401);
       return response.end();
     }
@@ -33338,7 +33424,7 @@ async function setup() {
   const before = readPersonalities();
   let link = null, work = null, library = before;
   updateLink((current) => {
-    const next = current ?? { secret: crypto44.randomBytes(32).toString("base64url"), key: newKey().toString("base64url"), phones: [] };
+    const next = current ?? { secret: crypto45.randomBytes(32).toString("base64url"), key: newKey().toString("base64url"), phones: [] };
     next.sign ??= newSigningSeed();
     if (mac) {
       next.mac = mac;
@@ -33429,7 +33515,7 @@ function leave(mac) {
 }
 function pair(relay) {
   const link = updateLink((current) => {
-    const next = current ?? { secret: crypto44.randomBytes(32).toString("base64url"), key: newKey().toString("base64url"), name: os15.hostname(), phones: [] };
+    const next = current ?? { secret: crypto45.randomBytes(32).toString("base64url"), key: newKey().toString("base64url"), name: os15.hostname(), phones: [] };
     next.sign ??= newSigningSeed();
     if (relay)
       next.relay = relay;

@@ -21,6 +21,9 @@ export const MOVED_FOR = 2 * 24 * 3600_000;
 export interface MoveRecord extends Move {
   /** The other box's key. */
   peer: string;
+  /** The Work Queue's items it carries, as they were packed (`updated.at`, by id): forgotten here
+   * once it's over, unless changed since. */
+  workQueue?: Record<string, number>;
   wasPaused: boolean;
   folder?: string;
   hash?: string;

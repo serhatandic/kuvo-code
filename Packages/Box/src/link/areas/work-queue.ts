@@ -12,8 +12,8 @@ import { atWorkNow } from "../work/background";
 import { addCategory, categories, removeCategory, renameCategory } from "../work-queue/categories";
 import { importItems, importWords, parseBacklog, readBacklogFiles } from "../work-queue/import";
 import { numberWaiting, primaryOf } from "../work-queue/numbers";
-import { categoryFor, FILE_NAME, Refusal, removeItem, restoreItem } from "../work-queue/ops";
-import { changeQueues, filesOf, OWNER, placeBeside, placeIn, queueFollowers, readAll, WORK_QUEUE, type Item } from "../work-queue/store";
+import { changeItem, Refusal, removeItem, restoreItem } from "../work-queue/ops";
+import { changeQueues, FILE_NAME, filesOf, matching, OWNER, queueFollowers, readAll, WORK_QUEUE, type Item } from "../work-queue/store";
 import { callQueueTool, QUEUE_INSTRUCTIONS, QUEUE_TOOLS } from "../work-queue/tools";
 import { factsOf, inProgress, inView, overseenBy, ownersOf, refOf, summaryOf, wholeOf, type Facts } from "../work-queue/view";
 import type { AnswerPiece, RouteContext } from "../server/context";
@@ -22,6 +22,8 @@ import type { Target } from "../../shared/records";
 export const WORK_QUEUE_ROUTE = /^kuvo\/work-queue(?:\/(tools|events|refs|categories|import|items\/([^/]+)(?:\/(move|restore|files\/([^/]+)))?))?$/;
 
 const YOU = { user: true } as const;
+// An item a client named that isn't here.
+class Missing extends Refusal {}
 const ONLY_CLIENTS = "Only Kuvo Code on your Mac or iPhone can do this: agents change the Work Queue with their tools.";
 
 // A paired phone, this Mac's app, or Kuvo Code on another computer (`box route`): you.
@@ -30,11 +32,11 @@ const queryOf = (request: RouteContext["request"]) => new URLSearchParams(reques
 
 /** An owner's view, as `kuvo/work-queue` gives it: the categories, its items and those it oversees
  * or handed on (summaries), whose each is, and what's deleted among them. */
-export async function viewOf(owner: string, targets: Target[], facts?: Facts, signal?: AbortSignal) {
+export async function viewOf(owner: string, targets: Target[], facts?: Facts, signal?: AbortSignal, cache?: Map<string, unknown>) {
   const known = facts ?? await factsOf(targets, signal);
   const overseen = overseenBy(owner, known.all);
   const all = readAll().flatMap(queue => queue.items).filter(item => inView(owner, item, overseen));
-  const { owners, titles } = await ownersOf(owner, all, known, targets);
+  const { owners, titles } = await ownersOf(owner, all, known, targets, cache);
   // (In the categories' order, then each one's own.)
   const place = new Map(categories().map((each, index) => [each.id, index]));
   const sorted = (items: Item[]) => items.sort((a, b) => (place.get(a.category) ?? 99) - (place.get(b.category) ?? 99) || a.order - b.order).map(item => summaryOf(item, known.working, titles));
@@ -53,7 +55,7 @@ function changed(work: () => Item, json: RouteContext["json"]): AnswerPiece[] {
     const item = work();
     return json(200, { item: summaryOf(item, new Set(), new Map()) });
   } catch (error) {
-    if (error instanceof Refusal) return json(error.message.startsWith("There's no item") ? 404 : 400, { message: error.message });
+    if (error instanceof Refusal) return json(error instanceof Missing ? 404 : 400, { message: error.message });
     throw error;
   }
 }
@@ -91,7 +93,8 @@ export async function* workQueueRoute(context: RouteContext, match: RegExpMatchA
     if (method === "GET") return yield* json(200, { categories: categories() });
     if (method !== "POST") return yield* json(405, {});
     if (!fromClient(context)) return yield* json(403, { message: ONLY_CLIENTS });
-    const used = (id: string) => readAll().flatMap(queue => queue.items).filter(item => item.category === id && !item.removed).length;
+    // (Deleted ones too: brought back, they'd have nowhere to go.)
+    const used = (id: string) => readAll().flatMap(queue => queue.items).filter(item => item.category === id).length;
     const outcome = typeof given.add === "string" ? addCategory(given.add, given.after)
       : given.rename !== undefined ? renameCategory(given.rename, given.to)
       : given.remove !== undefined ? removeCategory(given.remove, used)
@@ -125,7 +128,7 @@ export async function* workQueueRoute(context: RouteContext, match: RegExpMatchA
   // One item.
   const ref = refOf(decodeURIComponent(rawItem ?? ""));
   if (!ref) return yield* json(404, { message: "There's no such item." });
-  const find = (items: Item[]) => items.find(each => ("id" in ref ? each.id === ref.id : each.number === ref.number)) ?? null;
+  const find = (items: Item[]) => matching(items, ref)[0] ?? null;
   if (action === undefined && method === "GET") {
     const item = find(readAll().flatMap(queue => queue.items));
     if (!item) return yield* json(404, { message: "There's no such item." });
@@ -153,7 +156,7 @@ export async function* workQueueRoute(context: RouteContext, match: RegExpMatchA
   const inBook = (work: (item: Item, book: Parameters<Parameters<typeof changeQueues>[0]>[0]) => void) => () => changeQueues(book => {
     numberWaiting(book, primary, null);
     const item = find(book.items());
-    if (!item) throw new Refusal("There's no item like that.");
+    if (!item) throw new Missing("There's no item like that.");
     work(item, book);
     return item;
   });
@@ -172,30 +175,10 @@ export async function* workQueueRoute(context: RouteContext, match: RegExpMatchA
   if (action === "move" && method === "POST") {
     return yield* changed(inBook((item, book) => {
       if (item.removed) throw new Refusal("It's deleted: bring it back first.");
-      if (given.category !== undefined) {
-        const category = categoryFor(given.category);
-        if (category !== item.category) {
-          item.category = category;
-          item.order = placeIn(book.items(), category, { top: given.top === true });
-          if (category === "done") {
-            item.doneAt = now;
-            item.sessions = [];
-          } else {
-            delete item.doneAt;
-          }
-        }
-      }
-      const beside = given.before ?? given.after;
-      if (beside !== undefined) {
-        const named = refOf(beside);
-        const other = named && book.items().find(each => !each.removed && ("id" in named ? each.id === named.id : each.number === named.number));
-        if (!other || other.id === item.id) throw new Refusal("There's no item like that to put it beside.");
-        if (other.category !== item.category) throw new Refusal("That item is in another category.");
-        item.order = placeBeside(book.items(), other, given.after !== undefined);
-      } else if (given.top === true && given.category === undefined) {
-        item.order = placeIn(book.items().filter(each => each.id !== item.id), item.category, { top: true });
-      }
-      item.updated = { at: now, by: YOU };
+      // (Only where it goes: what it says is the agents' to change.)
+      const { category, before, after, top } = given;
+      if ([before, after].some(each => each !== undefined && refOf(each) === null)) throw new Refusal("There's no item like that to put it beside.");
+      changeItem(book, item, { category, before, after, top }, { who: YOU, now, fileOps: [] });
     }), json);
   }
   return yield* json(405, {});
@@ -212,11 +195,14 @@ async function* followView(owner: string, targets: Target[], signal?: AbortSigna
     wake?.();
   };
   queueFollowers.add(told);
-  const watching = watchFolders([path.join(WORK_QUEUE, "queues")], told, { recursive: false });
+  // (The queues, and the categories beside them.)
+  const watching = watchFolders([path.join(WORK_QUEUE, "queues"), WORK_QUEUE], told, { recursive: false });
   signal?.addEventListener("abort", () => wake?.(), { once: true });
   let last = "";
   let facts: Facts | null = null;
   let factsAt = 0;
+  // Titles of sessions the list doesn't have, looked up once a half minute at most.
+  let titles = new Map<string, unknown>();
   try {
     while (!signal?.aborted) {
       // Who's under whom, looked at again with each change and every half minute; who's at work,
@@ -224,17 +210,18 @@ async function* followView(owner: string, targets: Target[], signal?: AbortSigna
       if (!facts || dirty || Date.now() - factsAt > 30_000) {
         facts = await factsOf(targets, signal);
         factsAt = Date.now();
+        titles = new Map();
       } else {
         const known: Facts = facts;
         facts = { all: known.all, working: await atWorkNow(targets, signal).catch(() => known.working) };
       }
       dirty = false;
-      const line = JSON.stringify(await viewOf(owner, targets, facts, signal));
+      const line = JSON.stringify(await viewOf(owner, targets, facts, signal, titles));
       if (line !== last) {
         yield { body: Buffer.from(line + "\n") };
         last = line;
       }
-      if (signal?.aborted) break;
+      if (signal?.aborted || dirty) continue;
       await new Promise<void>(done => {
         const timer = setTimeout(done, 3000);
         wake = () => { clearTimeout(timer); done(); };

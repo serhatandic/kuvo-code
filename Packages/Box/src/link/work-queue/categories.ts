@@ -7,7 +7,7 @@ import path from "node:path";
 import { isObject } from "../../shared/json";
 import { plainName } from "../../shared/text";
 import { locked, textOf, writePrivate } from "../files";
-import { WORK_QUEUE } from "./store";
+import { noteQueuesChanged, WORK_QUEUE } from "./store";
 
 export const CATEGORIES_FILE = path.join(WORK_QUEUE, "categories.json");
 const LOCK = path.join(WORK_QUEUE, ".categories.lock");
@@ -53,12 +53,17 @@ const slugOf = (name: string) => name.toLowerCase().normalize("NFKD").replace(/[
 /** What a change says: done (with the categories now), or why not. */
 export type CategoryOutcome = { done: Category } | { refused: string };
 
-const change = (work: (custom: Category[]) => CategoryOutcome): CategoryOutcome => locked(LOCK, () => {
-  const custom = readCustom();
-  const outcome = work(custom);
-  if ("done" in outcome) writePrivate(CATEGORIES_FILE, JSON.stringify({ custom: custom.map(({ id, name }) => ({ id, name })) }));
+const change = (work: (custom: Category[]) => CategoryOutcome): CategoryOutcome => {
+  const outcome = locked(LOCK, () => {
+    const custom = readCustom();
+    const outcome = work(custom);
+    if ("done" in outcome) writePrivate(CATEGORIES_FILE, JSON.stringify({ custom: custom.map(({ id, name }) => ({ id, name })) }));
+    return outcome;
+  });
+  // (Every queue's view names them.)
+  if ("done" in outcome) noteQueuesChanged();
   return outcome;
-});
+};
 
 /** A custom category added, after the one `after` names (else after the other custom ones). */
 export function addCategory(name: unknown, after?: unknown): CategoryOutcome {
@@ -117,11 +122,14 @@ export function removeCategory(which: unknown, used: (id: string) => number): Ca
   });
 }
 
-/** One a hand-off or a move brought that this box doesn't have yet: added under its own id. */
-export function keepCategory(id: string, name: string): void {
-  if (!CUSTOM_ID.test(id) || readCustom().some(each => each.id === id)) return;
-  change(custom => {
-    if (custom.some(each => each.id === id) || custom.length >= MOST_CUSTOM) return { refused: "" };
+/** One a move brought that this box doesn't have yet: added under its own id. Whether it's here
+ * now (one more than this box keeps isn't). */
+export function keepCategory(id: string, name: string): boolean {
+  if (!CUSTOM_ID.test(id)) return false;
+  if (readCustom().some(each => each.id === id)) return true;
+  return "done" in change(custom => {
+    if (custom.some(each => each.id === id)) return { done: custom.find(each => each.id === id)! };
+    if (custom.length >= MOST_CUSTOM) return { refused: "" };
     const made = { id, name: plainName(name).slice(0, MOST_NAME) || id.slice(4), builtIn: false };
     custom.push(made);
     return { done: made };

@@ -41,6 +41,7 @@ const sessions = new Map([
   ["ses_other", { id: "ses_other", title: "Release notes", location: { directory: project }, time: { created: 3, updated: 4 } }],
   ["ses_scout", { id: "ses_scout", title: "Scout", location: { directory: path.join(home, "bots", "bot_scout00001", "workspace") }, time: { created: 1, updated: 3 } }],
   ["ses_seat", { id: "ses_seat", title: "Seat", location: { directory: project }, metadata: { kuvo: { seat: { group: "grp_team", bot: "bot_scout00001" } } }, time: { created: 1, updated: 2 } }],
+  ["ses_farseat", { id: "ses_farseat", title: "Seat", location: { directory: project }, metadata: { kuvo: { seat: { group: "grp_far", bot: "bot_scout00001" } } }, time: { created: 1, updated: 2 } }],
 ]);
 let active = new Set();
 const calling = new Map();
@@ -66,6 +67,15 @@ const engine = http.createServer((request, response) => {
 await new Promise(resolve => engine.listen(0, "127.0.0.1", resolve));
 atEnd(() => { engine.closeAllConnections(); engine.close(); });
 write(path.join(home, "run", "engine.json"), JSON.stringify({ port: engine.address().port, password: "p", version: "0.0.0" }));
+// The coding agents' bridge, as far as group chats go: grp_team lives here, any other elsewhere.
+const groups = http.createServer((request, response) => {
+  const here = request.url === "/api/kuvo/groups/grp_team";
+  response.writeHead(here ? 200 : 404, { "content-type": "application/json" });
+  response.end(JSON.stringify(here ? { data: { id: "grp_team" } } : { message: "No such chat." }));
+});
+await new Promise(resolve => groups.listen(0, "127.0.0.1", resolve));
+atEnd(() => { groups.closeAllConnections(); groups.close(); });
+write(path.join(home, "run", "bridge.json"), JSON.stringify({ port: groups.address().port, password: "p", pid: process.pid }));
 const bot = path.join(home, "bots", "bot_scout00001");
 write(path.join(bot, "bot.json"), JSON.stringify({ kuvo: 1, id: "bot_scout00001", name: "Scout", job: "", look: { color: "sky", shape: "round", face: "calm" }, created: "2026-10-01T09:00:00Z", updated: "2026-10-01T09:00:00Z" }));
 write(path.join(bot, "session"), "ses_scout");
@@ -77,8 +87,20 @@ beforeEach(() => {
   calling.clear();
 });
 
-// The box's answer to one request, as a machine's tool asks it: a process of its own.
-function route(method, pathname, body) {
+// The box's answer to one request, from a client (as Kuvo Code on another computer asks it):
+// answered here, by the real routes.
+const handle = link.engineHandler();
+async function route(method, pathname, body) {
+  const pieces = [];
+  for await (const piece of handle({ method, path: pathname, headers: {}, body: body === undefined ? undefined : Buffer.from(JSON.stringify(body)), fromMac: true }, undefined)) pieces.push(piece);
+  const head = pieces.find(each => each.head).head;
+  const bytes = Buffer.concat(pieces.filter(each => each.body).map(each => each.body));
+  let parsed = bytes.toString();
+  try { parsed = JSON.parse(parsed); } catch {}
+  return { status: head.status, body: parsed, raw: bytes.toString(), type: head.headers["content-type"] };
+}
+// The same, as a machine's tool asks it: a process of its own (`kuvo-link.js box route`).
+function spawnRoute(method, pathname, body) {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [script, "box", "route"], { env: { ...process.env, KUVO_HOME: home, HOME: home, TMPDIR: home }, stdio: ["pipe", "pipe", "inherit"] });
     let out = "";
@@ -136,6 +158,10 @@ test("only a call the conversation is making runs: a command naming a session ca
   assert.equal(forged.isError, true);
   assert.match(forged.text, /^Only a conversation's own tool call/);
   assert.equal((await view("ses_lead")).items.length, 0);
+  // As a machine's tool server asks it, from a process of its own, a real call goes ahead.
+  calling.set("ses_lead", { name: "queue_add", args: { title: "Real" } });
+  const real = (await spawnRoute("POST", "kuvo/work-queue/tools", { name: "queue_add", arguments: { title: "Real" }, session: "ses_lead" })).body;
+  assert.equal(real.text, 'Added #1 "Real" to Next. Refer to it as #1.');
 });
 
 test("an item is In progress while a session linked to it is at work, and Done unlinks everyone", async () => {
@@ -290,6 +316,25 @@ test("categories: the four built in, custom ones an agent adds between Later and
   fs.rmSync(path.join(queues, "categories.json"), { force: true });
 });
 
+test("an item brought back into a category that's gone goes to Next", async () => {
+  await tool("queue_categories", { add: "Bugs" }, "ses_lead");
+  await tool("queue_add", { title: "Crash", category: "Bugs" }, "ses_lead");
+  await route("DELETE", "kuvo/work-queue/items/1");
+  const used = await route("POST", "kuvo/work-queue/categories", { remove: "Bugs" });
+  assert.equal(used.status, 400, "what's deleted still counts");
+  // (As one kept from before deleted items counted: the category gone all the same.)
+  fs.rmSync(path.join(queues, "categories.json"), { force: true });
+  assert.equal((await route("POST", "kuvo/work-queue/items/1/restore")).body.item.category, "next");
+});
+
+test("an item moved into the same place again and again keeps its place", async () => {
+  for (const title of ["A", "B", "C"]) await tool("queue_add", { title }, "ses_lead");
+  for (let round = 0; round < 70; round++) {
+    assert.equal((await route("POST", `kuvo/work-queue/items/${round % 2 ? 2 : 3}/move`, { after: 1 })).status, 200);
+  }
+  assert.deepEqual((await view("ses_lead")).items.map(item => item.title), ["A", "B", "C"]);
+});
+
 test("files kept with an item come only from the conversation's own folders, and clients read them back", async () => {
   write(path.join(project, "shots", "login.png"), "PNG-bytes");
   write(path.join(project, ".env"), "SECRET=1");
@@ -308,6 +353,20 @@ test("files kept with an item come only from the conversation's own folders, and
     assert.match(refused.text, why);
   }
   assert.equal((await route("GET", "kuvo/work-queue/items/1")).body.item.files.length, 1, "nothing refused was kept");
+  // A change that's refused leaves the files as they were, the one it would take away too.
+  const mixed = await tool("queue_update", { item: 1, remove_files: ["login.png"], files: ["/etc/hosts"] }, "ses_lead");
+  assert.equal(mixed.isError, true);
+  assert.deepEqual([(await route("GET", "kuvo/work-queue/items/1")).body.item.files.length, (await route("GET", "kuvo/work-queue/items/1/files/login.png")).raw], [1, "PNG-bytes"]);
+  // A file with another name elsewhere (a hard link) isn't taken; one in a temporary folder is.
+  fs.linkSync(path.join(project, "shots", "login.png"), path.join(project, "shots", "again.png"));
+  assert.match((await tool("queue_update", { item: 1, files: [path.join(project, "shots", "again.png")] }, "ses_lead")).text, /has other names/);
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-work-queue-scratch-"));
+  removeAtEnd(scratch);
+  write(path.join(scratch, "chart.png"), "CHART");
+  assert.equal((await tool("queue_update", { item: 1, files: [path.join(scratch, "chart.png")], remove_files: ["login.png"] }, "ses_lead")).isError, false);
+  assert.deepEqual((await route("GET", "kuvo/work-queue/items/1")).body.item.files.map(file => file.name), ["chart.png"]);
+  assert.equal((await route("GET", "kuvo/work-queue/items/1/files/login.png")).status, 404);
+  assert.deepEqual(fs.readdirSync(path.join(queues, "staging")), [], "nothing read is left waiting");
   assert.equal((await route("GET", "kuvo/work-queue/items/1/files/..%2F..%2Fengine.json")).status, 404);
 });
 
@@ -329,6 +388,11 @@ test("a group chat's seats keep the group's queue", async () => {
   assert.equal((await tool("queue_hand", { item: 1, to: "Scout" }, "ses_seat")).isError, false);
   assert.deepEqual((await view("grp_team")).items.map(item => item.owner), ["ses_scout"]);
   assert.deepEqual((await view("ses_scout")).items.map(item => item.title), ["Decide the launch date"]);
+  // A seat of a group chat that lives on another computer: its queue is kept there.
+  const far = await tool("queue_add", { title: "Split" }, "ses_farseat");
+  assert.equal(far.isError, true);
+  assert.match(far.text, /lives on another of the user's computers/);
+  assert.equal((await view("grp_far")).items.length, 0);
 });
 
 test("an agent imports its old backlog with its numbers; new items number after them", async () => {
@@ -341,8 +405,12 @@ test("an agent imports its old backlog with its numbers; new items number after 
   assert.equal(imported.text, "Imported 2 items with their numbers: 1 in Next, 1 in Done. Left out (2): #7 (there's no category nowhere); an item with no number.");
   const next = await tool("queue_add", { title: "After the import" }, "ses_lead");
   assert.equal(numberIn(next.text), 244);
-  const again = await tool("queue_import", { items: [{ number: 243, title: "Twice" }] }, "ses_lead");
+  const again = await tool("queue_import", { items: [{ number: 243, title: "The work queue" }] }, "ses_lead");
   assert.match(again.text, /Nothing was imported\. Left out \(1\): #243 \(already in the Work Queue here\)/);
+  // Another item under a number given here already: kept, with a new number and a note.
+  const clash = await tool("queue_import", { items: [{ number: 244, title: "Something else" }] }, "ses_lead");
+  assert.match(clash.text, /Imported 1 item with their numbers: 1 in Next\. Imported with a new number, theirs being another item's here already: #244 is #245\./);
+  assert.match((await route("GET", "kuvo/work-queue/items/245")).body.item.notes[0].text, /^Imported as #244/);
 });
 
 test("a client imports BACKLOG.md files from the box: list lines starting with #n, categories from headings and sorted lines, the details file's text as bodies", async () => {
@@ -424,6 +492,10 @@ test("a machine with no number left keeps its items waiting, shown without one, 
   assert.equal(item.number, undefined);
   assert.ok(link.readNumbers(path.join(queues, "numbers.json")).asking, "an ask waits to go to the primary");
   assert.match((await tool("queue_list", {}, "ses_lead")).text, /\(1 open, 1 waiting for a number\)/);
+  // Named by the id it was told, it can still be worked on.
+  assert.match(added.text, new RegExp(`Name it as ${item.id} meanwhile`));
+  const done = await tool("queue_update", { item: item.id, category: "done" }, "ses_lead");
+  assert.equal(done.text, `Marked "Offline idea" (${item.id}, no number yet) done.`);
 });
 
 test("an import on a machine waits for the primary to grant its numbers: granted ones keep theirs, one handed out already gets a new one, with a note", async () => {
@@ -453,8 +525,12 @@ test("a move carries its conversations' queues and their files, and the box it l
   const staging = path.join(home, "staging");
   fs.mkdirSync(path.join(staging, "work-queue"), { recursive: true });
   fs.cpSync(path.join(queues, "files", carried.withFiles[0]), path.join(staging, "work-queue", carried.withFiles[0]), { recursive: true });
-  link.forgetWorkQueues(["ses_scout"]);
-  assert.equal((await view("ses_scout")).items.length, 0);
+  // One handed into it after it was packed stays here, rather than be lost.
+  await tool("queue_add", { title: "Handed in late" }, "ses_lead");
+  await tool("queue_hand", { item: 3, to: "Scout" }, "ses_lead");
+  link.forgetWorkQueues(["ses_scout"], Object.fromEntries(carried.items.map(item => [item.id, item.updated.at])));
+  assert.deepEqual((await view("ses_scout")).items.map(item => item.title), ["Handed in late"]);
+  await tool("queue_remove", { item: 3 }, "ses_lead");
   assert.equal(fs.existsSync(path.join(queues, "files", carried.withFiles[0])), false);
   // As it arrives on the other box: under the same owner and number, an owner it didn't carry left out.
   link.placeWorkQueues({ ...carried, items: [...carried.items, { ...carried.items[0], id: "wqi_AAAAAAAAAAAAAAAAAAAA", owner: "ses_lead" }] }, ["ses_scout"], staging);
@@ -462,6 +538,7 @@ test("a move carries its conversations' queues and their files, and the box it l
   assert.deepEqual(back.items.map(item => [item.title, item.number]), [["Carried", 1]]);
   assert.equal((await route("GET", "kuvo/work-queue/items/1/files/plan.md")).raw, "# Plan");
   assert.deepEqual((await view("ses_lead")).items.map(item => item.title), ["Stays"]);
+  assert.equal((await view("ses_lead")).removed.length, 1);
   // A conversation carried on as another takes its queue.
   link.carryWorkQueue("ses_scout", "ses_other");
   assert.deepEqual((await view("ses_other")).items.map(item => item.title), ["Carried"]);
@@ -478,6 +555,9 @@ test("a client follows a queue: a line now, and one when it changes (another pro
   assert.deepEqual((await nextView()).items.map(item => item.title), ["Watched", "Another"]);
   active = new Set(["ses_lead"]);
   assert.deepEqual((await nextView()).items.map(item => item.inProgress), [true, false]);
+  await route("POST", "kuvo/work-queue/categories", { add: "Bugs" });
+  assert.deepEqual((await nextView()).categories.map(each => each.name), ["Next", "Later", "Bugs", "Parked", "Done"]);
+  fs.rmSync(path.join(queues, "categories.json"), { force: true });
   stop.abort();
   await lines.return();
 });

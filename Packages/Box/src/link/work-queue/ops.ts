@@ -5,13 +5,14 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import crypto from "node:crypto";
 import { isObject } from "../../shared/json";
 import { plainName } from "../../shared/text";
 import { BOTS, K } from "../home";
 import { categoryNamed } from "./categories";
 import { takeNumber, type Primary } from "./numbers";
 import {
-  filesOf, MOST_BODY, MOST_FILE, MOST_FILES, MOST_ITEMS, MOST_LINKS, MOST_NOTE, MOST_NOTES, MOST_TITLE, newItemID, noteHanded, placeBeside, placeIn,
+  FILES, filesOf, MOST_BODY, MOST_FILE, MOST_FILES, MOST_ITEMS, MOST_LINKS, MOST_NOTE, MOST_NOTES, MOST_TITLE, newItemID, noteHanded, placeBeside, placeIn,
   type Book, type Item, type KeptFile, type Who,
 } from "./store";
 import { nameOf } from "./view";
@@ -23,6 +24,9 @@ const MOST_PROGRESS_NOTE = 300;
 export class Refusal extends Error {}
 const refuse = (words: string): never => { throw new Refusal(words); };
 
+// Where files an agent named wait, read, until the change that keeps them.
+const STAGING = path.join(path.dirname(FILES), "staging");
+
 /** Where an agent's files may come from: its conversation's folder, its project's other folders,
  * and the temporary folders; never Kuvo Code's own (but for its own folder there, a bot's). */
 export interface FilePlaces { own: string | null; others: readonly string[] }
@@ -32,9 +36,11 @@ const real = (place: string): string | null => {
 };
 const within = (file: string, folder: string) => file === folder || file.startsWith(folder.endsWith(path.sep) ? folder : folder + path.sep);
 
-/** A file an agent named, checked: where it really is (links followed), and that it's a plain file
- * of a size the queue keeps, in one of `places`, with no hidden folder or file on the way. */
-export function attachable(given: string, places: FilePlaces): { file: string; size: number } {
+/** A file an agent named, read into `staging` (outside the queue's lock): checked where it really
+ * is (links followed) to be a plain file of a size the queue keeps, in one of `places`, with no
+ * hidden folder or file on the way; then opened without following a link or waiting on it, and
+ * kept only if what was opened is that same file, with no other name (a hard link elsewhere). */
+export function stageFile(given: string, places: FilePlaces, staging: string): Staged {
   if (!path.isAbsolute(given)) refuse(`Give ${given} as a full path.`);
   const file = real(given) ?? refuse(`There's no file at ${given}.`);
   const own = places.own ? real(places.own) : null;
@@ -44,10 +50,53 @@ export function attachable(given: string, places: FilePlaces): { file: string; s
   const ownOK = own !== null && root === own;
   if (!root || (!ownOK && boxes.some(box => within(file, box)))) refuse(`${given} isn't in this conversation's folder, its project or a temporary folder: only files from there are kept with an item.`);
   if (path.relative(root!, file).split(path.sep).some(part => part.startsWith("."))) refuse(`${given} is hidden (a name starting with a dot): it isn't kept with an item.`);
-  const kind = fs.lstatSync(file);
-  if (!kind.isFile()) refuse(`${given} isn't a file.`);
-  if (kind.size > MOST_FILE) refuse(`${given} is over ${Math.round(MOST_FILE / 1_000_000)} MB: too big to keep with an item.`);
-  return { file, size: kind.size };
+  const checked = fs.lstatSync(file);
+  if (!checked.isFile()) refuse(`${given} isn't a file.`);
+  if (checked.size > MOST_FILE) refuse(`${given} is over ${Math.round(MOST_FILE / 1_000_000)} MB: too big to keep with an item.`);
+  let handle: number;
+  try {
+    handle = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0));
+  } catch {
+    return refuse(`${given} can't be read.`);
+  }
+  try {
+    const opened = fs.fstatSync(handle);
+    if (!opened.isFile() || opened.dev !== checked.dev || opened.ino !== checked.ino) refuse(`${given} changed as it was read: try again.`);
+    if (opened.nlink !== 1) refuse(`${given} has other names (a hard link): it isn't kept with an item.`);
+    const size = Math.min(opened.size, MOST_FILE);
+    const bytes = Buffer.alloc(size);
+    let read = 0;
+    while (read < size) {
+      const got = fs.readSync(handle, bytes, read, size - read, read);
+      if (!got) break;
+      read += got;
+    }
+    fs.mkdirSync(staging, { recursive: true, mode: 0o700 });
+    const staged = path.join(staging, `${crypto.randomBytes(8).toString("hex")}`);
+    fs.writeFileSync(staged, bytes.subarray(0, read), { mode: 0o600 });
+    return { staged, name: path.basename(file), size: read };
+  } finally {
+    fs.closeSync(handle);
+  }
+}
+
+/** A file read for an item, waiting in the staging folder until the change that keeps it. */
+export interface Staged { staged: string; name: string; size: number }
+
+/** The files an agent named, read before the queue's lock is taken: what was read, and a way to
+ * clear what's left of it. */
+export function stageFiles(given: unknown, places: FilePlaces | null): { staged: Staged[]; clear: () => void } {
+  const named = given === undefined ? [] : (Array.isArray(given) ? given : [given]).map(each => (typeof each === "string" ? each.trim() : "")).filter(Boolean);
+  if (named.length && !places) refuse("Only an agent's own files are kept with an item.");
+  if (named.length > MOST_FILES) refuse(`An item keeps ${MOST_FILES} files at most.`);
+  const staging = path.join(STAGING, crypto.randomBytes(8).toString("hex"));
+  const clear = () => fs.rmSync(staging, { recursive: true, force: true });
+  try {
+    return { staged: named.map(each => stageFile(each, places!, staging)), clear };
+  } catch (error) {
+    clear();
+    throw error;
+  }
 }
 
 const TYPES: Record<string, string> = {
@@ -55,25 +104,6 @@ const TYPES: Record<string, string> = {
   ".pdf": "application/pdf", ".md": "text/markdown", ".txt": "text/plain", ".json": "application/json", ".csv": "text/csv", ".mp4": "video/mp4", ".mov": "video/quicktime",
 };
 export const typeOf = (name: string) => TYPES[path.extname(name).toLowerCase()] ?? "application/octet-stream";
-export const FILE_NAME = /^[^/\\\0]{1,200}$/;
-
-// `file` copied into the item's folder under a name of its own there (read without following a link).
-function keepFile(item: Item, file: string, size: number, now: number): KeptFile {
-  if (item.files.length >= MOST_FILES) refuse(`${nameOf(item)} has ${MOST_FILES} files already: remove some first.`);
-  const base = path.basename(file).replace(/[\\\0]/g, "_").slice(-200) || "file";
-  let name = base;
-  const ext = path.extname(base);
-  for (let n = 2; item.files.some(each => each.name === name); n++) name = `${base.slice(0, base.length - ext.length)} ${n}${ext}`;
-  const folder = filesOf(item.id);
-  fs.mkdirSync(folder, { recursive: true, mode: 0o700 });
-  const handle = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
-  try {
-    fs.writeFileSync(path.join(folder, name), fs.readFileSync(handle), { mode: 0o600 });
-  } finally {
-    fs.closeSync(handle);
-  }
-  return { name, size, type: typeOf(name), at: now };
-}
 
 const text = (value: unknown, most: number, what: string): string => {
   if (typeof value !== "string") return refuse(`${what} should be text.`);
@@ -127,8 +157,14 @@ export interface Fields {
   remove_files?: unknown;
 }
 
-/** Who acts, and from where: the session to link with `working`, and where its files may come from. */
-export interface Acting { who: Who; files: FilePlaces | null; now: number }
+/** Who acts, when, the files it read for the change (`stageFiles`), and what's to be done on disk
+ * once the change is sure (`applyFileOps`). */
+export interface Acting { who: Who; now: number; staged?: Staged[]; fileOps: (() => void)[] }
+
+/** What a change does on disk, done once nothing more can refuse it. */
+export function applyFileOps(acting: Acting): void {
+  for (const op of acting.fileOps.splice(0)) op();
+}
 
 const openIn = (book: Book, owner: string) => book.queue(owner).items.filter(item => !item.removed && item.category !== "done").length;
 
@@ -163,7 +199,8 @@ export function addItem(book: Book, owner: string, fields: Fields, acting: Actin
 }
 
 /** `item` changed as `fields` say. */
-export function changeItem(book: Book, item: Item, fields: Fields, { who, files, now }: Acting): void {
+export function changeItem(book: Book, item: Item, fields: Fields, acting: Acting): void {
+  const { who, now } = acting;
   if (fields.title !== undefined) {
     const title = plainName(text(fields.title, MOST_TITLE * 4, "The title")).slice(0, MOST_TITLE);
     if (!title) refuse("A title can't be empty.");
@@ -185,12 +222,12 @@ export function changeItem(book: Book, item: Item, fields: Fields, { who, files,
   }
   const beside = (given: unknown) => {
     const found = book.items().find(each => !each.removed && (each.id === given || (typeof given === "string" || typeof given === "number") && String(each.number) === String(given).replace(/^#/, "")));
-    if (!found) refuse(`There's no item ${String(given)} to put it beside.`);
+    if (!found || found.id === item.id) refuse(`There's no other item ${String(given)} to put it beside.`);
     if (found!.category !== item.category) refuse(`${nameOf(found!)} is in another category: move it there first (category).`);
     return found!;
   };
-  if (fields.before !== undefined) item.order = placeBeside(book.items(), beside(fields.before), false);
-  else if (fields.after !== undefined) item.order = placeBeside(book.items(), beside(fields.after), true);
+  if (fields.before !== undefined) item.order = placeBeside(book.items(), beside(fields.before), false, item);
+  else if (fields.after !== undefined) item.order = placeBeside(book.items(), beside(fields.after), true, item);
   else if (fields.top === true && fields.category === undefined) item.order = placeIn(book.items().filter(each => each.id !== item.id), item.category, { top: true });
   if (fields.progress !== undefined) {
     if (fields.progress === null) {
@@ -220,17 +257,24 @@ export function changeItem(book: Book, item: Item, fields: Fields, { who, files,
     for (const link of linksOf(fields.links)) if (!item.links.some(each => each.url === link.url)) item.links.push(link);
     if (item.links.length > MOST_LINKS) refuse(`An item keeps ${MOST_LINKS} links at most.`);
   }
-  if (fields.remove_files !== undefined) {
-    const gone = new Set((Array.isArray(fields.remove_files) ? fields.remove_files : [fields.remove_files]).map(String));
-    for (const name of gone) if (item.files.some(file => file.name === name)) fs.rmSync(path.join(filesOf(item.id), name), { force: true });
-    item.files = item.files.filter(file => !gone.has(file.name));
-  }
-  if (fields.files !== undefined) {
-    const given = (Array.isArray(fields.files) ? fields.files : [fields.files]).map(each => (typeof each === "string" ? each.trim() : "")).filter(Boolean);
-    if (given.length && !files) refuse("Only an agent's own files are kept with an item.");
-    // (All checked before any is kept.)
-    const checked = given.map(each => attachable(each, files!));
-    for (const { file, size } of checked) item.files.push(keepFile(item, file, size, now));
+  // Files: everything checked first; what's on disk changes only as the change is kept
+  // (`applyFileOps`), those taken away before those added.
+  const gone = new Set(fields.remove_files === undefined ? [] : (Array.isArray(fields.remove_files) ? fields.remove_files : [fields.remove_files]).map(String));
+  const staged = fields.files === undefined ? [] : acting.staged ?? refuse("Only an agent's own files are kept with an item.");
+  const left = item.files.filter(file => !gone.has(file.name));
+  if (left.length + staged.length > MOST_FILES) refuse(`An item keeps ${MOST_FILES} files at most: take some away first (remove_files).`);
+  for (const file of item.files) if (gone.has(file.name)) acting.fileOps.push(() => fs.rmSync(path.join(filesOf(item.id), file.name), { force: true }));
+  item.files = left;
+  for (const each of staged) {
+    const base = each.name.replace(/[\\\0]/g, "_").slice(-200).replace(/^\.+/, "") || "file";
+    const ext = path.extname(base);
+    let name = base;
+    for (let n = 2; item.files.some(file => file.name === name); n++) name = `${base.slice(0, base.length - ext.length)} ${n}${ext}`;
+    item.files.push({ name, size: each.size, type: typeOf(name), at: now });
+    acting.fileOps.push(() => {
+      fs.mkdirSync(filesOf(item.id), { recursive: true, mode: 0o700 });
+      fs.renameSync(each.staged, path.join(filesOf(item.id), name));
+    });
   }
   item.updated = { at: now, by: who };
 }
@@ -242,9 +286,10 @@ export function removeItem(item: Item, who: Who, now: number): void {
   item.updated = { at: now, by: who };
 }
 
-/** `item` brought back, at the end of its category. */
+/** `item` brought back, at the end of its category (Next, for one whose category is gone). */
 export function restoreItem(book: Book, item: Item, who: Who, now: number): void {
   delete item.removed;
+  if (!categoryNamed(item.category)) item.category = "next";
   item.order = placeIn(book.items(), item.category);
   item.updated = { at: now, by: who };
 }

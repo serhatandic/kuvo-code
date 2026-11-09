@@ -2880,7 +2880,9 @@ kuvo/work-queue/import` `{owner, files: [paths]}` (Markdown files on the box: ea
 starting with `#N` is an item, in the category of the nearest heading above it that names one
 (Done, Shelved/Parked, Later/Ideas), else Next, Done with `[x]`; a line `NOW:`/`LATER:`/… with
 refs sets theirs; the first line naming a number gives its title, every line naming it its body)
-→ `{added, byCategory, waiting, skipped, said}`. Each change answers `{item}`.
+→ `{added, byCategory, waiting, skipped, said}`. An import skips a number here already under the
+same title; under another title, the item is imported with a new number and a note. Each change
+answers `{item}`; a category removed only once nothing, deleted items included, is in it.
 
 **Tools**: `GET kuvo/work-queue/tools` → `{tools, instructions}` (MCP definitions, and what the
 tool servers add to what they tell agents); `POST kuvo/work-queue/tools {name, arguments, session}`
@@ -2889,10 +2891,14 @@ tool servers (this Mac's app, a machine's `kuvo-browser.js`) list them and pass 
 call. `queue_list`, `queue_show`, `queue_add`, `queue_update`, `queue_hand` (into a session's
 queue on this box, linked to it), `queue_remove` (`undo` brings back an agent's delete; only you
 bring back yours), `queue_categories` (list, or add one), `queue_import` (items an agent read from
-an old backlog, with their numbers). A caller's queue is its conversation's (a subagent's is its
-conversation's; a seat's, its group chat's); it changes what's in its view. Files an agent keeps
-with an item come only from its conversation's folder, its project's folders or a temporary
-folder (links followed, nothing hidden, nothing of Kuvo Code's but its own folder), 25 MB each.
+an old backlog, with their numbers). `item` is a number (`#243` or `243`), or the id of one that has
+none yet (the tool says it). A caller's queue is its conversation's (a subagent's is its
+conversation's; a seat's, its group chat's, while the chat lives on this box: a seat of one that
+lives elsewhere is refused); it changes what's in its view (by a number two computers gave twice,
+the one in its view). Files an agent keeps with an item come only from its conversation's folder,
+its project's folders or a temporary folder (links followed, nothing hidden, no other name by a
+hard link, nothing of Kuvo Code's but its own folder), 25 MB each; they're read before the change
+and kept with it, all or none.
 
 **Numbers**: one `#n` per item, unique across your computers, handed out by the primary: the box of
 the Mac that set this one up (a Mac's own box, and a box with no Mac, is its own), kept once it's
@@ -2905,9 +2911,11 @@ grants those at or above its counter (or granted that box before) and moves its 
 an imported item waits without a number until then, and one refused gets the next number, with a
 note. An item made with no number left waits too, and takes one, oldest first, when a block comes.
 
-**Moves**: a move carries its conversations' queues and their files (`move.json`'s `workQueue`,
-the files in the bundle's `work-queue/<item>/`), put in place under the same owners and numbers;
-the box it left forgets them once it's over. A conversation carried on as another takes its queue.
+**Moves**: a move carries its conversations' queues (a group chat's, its own) and their files
+(`move.json`'s `workQueue`, the files in the bundle's `work-queue/<item>/`), put in place under the
+same owners and numbers, each item checked as this box's own are (a category it can't keep is
+Next); once it's over, the box it left forgets the items it packed, as they were then (one handed
+in or changed since stays). A conversation carried on as another takes its queue.
 
 ### Side questions, handoffs and reviews
 

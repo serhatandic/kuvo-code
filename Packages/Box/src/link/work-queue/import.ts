@@ -19,6 +19,8 @@ export interface ImportOutcome {
   byCategory: Record<string, number>;
   skipped: string[];
   waiting: number;
+  /** Those whose number was another item's here already, with the one they have now. */
+  renumbered: string[];
 }
 
 const MOST_SKIPPED_SAID = 40;
@@ -149,27 +151,30 @@ export function givenItems(given: unknown): { items: Imported[]; skipped: string
   return { items, skipped };
 }
 
-/** `items` put in `owner`'s queue with their numbers claimed: a number this box has already is
- * skipped; on the primary, one it can't grant gets a new number (and a note saying so). */
+/** `items` put in `owner`'s queue with their numbers claimed. One here already under its number
+ * and title was imported before, and is skipped; a number this box gave something else gets a new
+ * one (with a note); on the primary, so does one it can't grant. */
 export function importItems(book: Book, owner: string, items: Imported[], who: Who, primary: Primary, now = Date.now()): ImportOutcome {
-  const have = new Set(book.items().flatMap(item => [item.number, item.wanted]).filter((n): n is number => n !== undefined));
-  const outcome: ImportOutcome = { added: 0, byCategory: {}, skipped: [], waiting: 0 };
+  const have = new Map(book.items().flatMap(item => [item.number, item.wanted].filter((n): n is number => n !== undefined).map(n => [n, item.title] as const)));
+  const outcome: ImportOutcome = { added: 0, byCategory: {}, skipped: [], waiting: 0, renumbered: [] };
   const made: Item[] = [];
+  const fresh: { from: number; item: Item }[] = [];
   for (const each of items) {
-    if (have.has(each.number)) {
+    const taken = have.get(each.number);
+    if (taken !== undefined && taken.toLowerCase() === each.title.toLowerCase()) {
       outcome.skipped.push(`#${each.number} (already in the Work Queue here)`);
       continue;
     }
-    have.add(each.number);
+    if (taken === undefined) have.set(each.number, each.title);
     const item: Item = {
       id: newItemID(),
       owner,
-      wanted: each.number,
+      ...(taken === undefined ? { wanted: each.number } : {}),
       title: each.title,
       body: each.body,
       category: each.category,
       order: placeIn(book.items(), each.category),
-      notes: [],
+      notes: taken === undefined ? [] : [{ at: now, by: { user: true }, text: `Imported as #${each.number}, a number already given to another item here, so it has a new one.` }],
       files: [],
       links: [],
       sessions: [],
@@ -178,13 +183,15 @@ export function importItems(book: Book, owner: string, items: Imported[], who: W
       ...(each.category === "done" ? { doneAt: now } : {}),
     };
     book.queue(owner).items.push(item);
-    made.push(item);
+    if (taken === undefined) made.push(item);
+    else fresh.push({ from: each.number, item });
     outcome.added++;
     outcome.byCategory[each.category] = (outcome.byCategory[each.category] ?? 0) + 1;
   }
   const { granted } = claimNumbers(primary, made.map(item => item.wanted!));
   numberWaiting(book, primary, granted, { now });
   outcome.waiting = made.filter(item => item.number === undefined).length;
+  outcome.renumbered = fresh.map(({ from, item }) => (item.number !== undefined ? `#${from} is #${item.number}` : `#${from} waits for a new number`));
   outcome.skipped = outcome.skipped.slice(0, MOST_SKIPPED_SAID);
   return outcome;
 }
@@ -196,6 +203,7 @@ export function importWords(outcome: ImportOutcome, skipped: string[], names: (i
   return [
     outcome.added ? `Imported ${outcome.added} item${outcome.added === 1 ? "" : "s"} with their numbers: ${parts.join(", ")}.` : "Nothing was imported.",
     outcome.waiting ? `${outcome.waiting} wait${outcome.waiting === 1 ? "s" : ""} for the primary computer to grant ${outcome.waiting === 1 ? "its number" : "their numbers"}; until then ${outcome.waiting === 1 ? "it shows" : "they show"} as new.` : "",
+    outcome.renumbered.length ? `Imported with a new number, theirs being another item's here already: ${outcome.renumbered.join(", ")}.` : "",
     all.length ? `Left out (${all.length}): ${all.slice(0, MOST_SKIPPED_SAID).join("; ")}${all.length > MOST_SKIPPED_SAID ? "; …" : ""}.` : "",
   ].filter(Boolean).join(" ");
 }

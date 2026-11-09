@@ -13,8 +13,9 @@ import { callerOf, isCalling } from "../vault/who";
 import { addCategory, categories, categoryNamed } from "./categories";
 import { importItems, importWords, givenItems } from "./import";
 import { numberWaiting, primaryOf } from "./numbers";
-import { addItem, changeItem, handItem, linkSession, Refusal, removeItem, restoreItem, type Acting, type Fields, type FilePlaces } from "./ops";
-import { changeQueues, readAll, type Book, type Item, type Who } from "./store";
+import { addItem, applyFileOps, changeItem, handItem, linkSession, Refusal, removeItem, restoreItem, stageFiles, type Acting, type Fields, type FilePlaces } from "./ops";
+import { changeQueues, matching, readAll, type Book, type Item, type Who } from "./store";
+import { askGroups } from "../areas/groups";
 import { agoWords, factsOf, inProgress, inView, nameOf, overseenBy, ownersOf, refOf, sessionsNamed, type Facts } from "./view";
 import type { BridgeRecord, EngineRecord, Target } from "../../shared/records";
 import type { Caller } from "../vault/who";
@@ -142,21 +143,39 @@ const why = (error: unknown) => String((error as Error | null)?.message ?? error
 // Where the conversation's files may come from: its folder, and its project's other folders.
 const placesOf = (folder: string | undefined): FilePlaces => ({ own: folder ?? null, others: folder ? readProjects().find(each => each.directory === folder)?.folders ?? [] : [] });
 
-async function queueCaller(caller: Caller): Promise<QueueCaller | { refused: string }> {
+// Whether the group chat lives on this computer (its coding agents' bridge runs it), or null when
+// the bridge can't say.
+async function groupLivesHere(group: string, readBridge: () => BridgeRecord): Promise<boolean | null> {
+  try {
+    const answer = await askGroups(readBridge(), "GET", `/${encodeURIComponent(group)}`, undefined, AbortSignal.timeout(10_000));
+    return answer.status === 200 ? true : answer.status === 404 ? false : null;
+  } catch {
+    return null;
+  }
+}
+
+async function queueCaller(caller: Caller, readBridge: () => BridgeRecord): Promise<QueueCaller | { refused: string }> {
   if (!caller.root) return { refused: "Only a conversation on this computer has a Work Queue here." };
   const name = caller.botName ?? caller.sessionName ?? "An agent";
   if (caller.seat) {
     if (!caller.group) return { refused: "A group chat's seat keeps the group's queue, and this one's group isn't known here." };
-    return { owner: `grp_${caller.group.replace(/^grp_/, "")}`, session: caller.root, who: { session: caller.root, name }, files: placesOf(caller.folder), seat: true };
+    const group = `grp_${caller.group.replace(/^grp_/, "")}`;
+    // (Kept on the computer the group chat lives on: a seat elsewhere can't write to it yet.)
+    const lives = await groupLivesHere(group, readBridge);
+    if (lives === null) return { refused: `${HERE[0].toUpperCase()}${HERE.slice(1)} can't tell where this group chat lives right now. Try again in a moment.` };
+    if (!lives) return { refused: "This group chat lives on another of the user's computers, and its Work Queue is kept there: a seat on this one can't change it yet. Say what to add in the chat, and the seat there adds it." };
+    return { owner: group, session: caller.root, who: { session: caller.root, name }, files: placesOf(caller.folder), seat: true };
   }
   return { owner: caller.root, session: caller.root, who: { session: caller.root, name }, files: placesOf(caller.folder), seat: false };
 }
 
-// The item a call names, in the caller's view, or why not.
-function itemFor(book: Pick<Book, "find">, given: unknown, caller: QueueCaller, overseen: Set<string>): Item {
+// The item a call names, in the caller's view (where two computers gave a number twice, the one
+// in its view), or why not.
+function itemFor(items: Item[], given: unknown, caller: QueueCaller, overseen: Set<string>): Item {
   const ref = refOf(given);
-  if (!ref) throw new Refusal("Say which item (item), by its number, like #243.");
-  const item = book.find(ref);
+  if (!ref) throw new Refusal("Say which item (item), by its number, like #243 (or the id an item without one was given).");
+  const found = matching(items, ref);
+  const item = found.find(each => inView(caller.owner, each, overseen)) ?? found[0];
   if (!item) throw new Refusal(`There's no item ${"number" in ref ? `#${ref.number}` : ref.id} in the Work Queue on ${HERE}. queue_list shows yours.`);
   if (!inView(caller.owner, item, overseen)) throw new Refusal(`${nameOf(item)} isn't in your Work Queue, nor in a session's you oversee: ask the conversation it belongs to, or the user.`);
   return item;
@@ -171,7 +190,7 @@ const deletedWords = (item: Item) => ("user" in item.removed!.by
 export async function callQueueTool(name: unknown, args: Record<string, unknown>, session: unknown, readEngine: () => EngineRecord, readBridge: () => BridgeRecord, targets: Target[], signal?: AbortSignal): Promise<ToolAnswer> {
   if (typeof name !== "string" || !QUEUE_TOOL_NAMES.includes(name)) return refused(`There's no tool ${String(name)}.`);
   if (typeof session !== "string" || !await isCalling(session, [name], args, readEngine, readBridge)) return refused("Only a conversation's own tool call can change its Work Queue, and this one isn't running in it.");
-  const found = await queueCaller(await callerOf(session, readEngine, readBridge));
+  const found = await queueCaller(await callerOf(session, readEngine, readBridge), readBridge);
   if ("refused" in found) return refused(found.refused);
   try {
     return await run(name, args, found, targets, signal);
@@ -192,30 +211,31 @@ const change = <T>(work: (book: Book) => T): T => {
 
 async function run(name: string, args: Record<string, unknown>, caller: QueueCaller, targets: Target[], signal?: AbortSignal): Promise<ToolAnswer> {
   const now = Date.now();
-  const acting: Acting = { who: caller.who, files: caller.files, now };
+  const acting: Acting = { who: caller.who, now, fileOps: [] };
   const facts = await factsOf(targets, signal);
   const overseen = overseenBy(caller.owner, facts.all);
   switch (name) {
     case "queue_list":
       return said(await listWords(caller, args, facts, overseen, targets));
     case "queue_show": {
-      const item = itemFor(new BookReader(), args.item, caller, overseen);
+      const item = itemFor(readAll().flatMap(queue => queue.items), args.item, caller, overseen);
       return said(await showWords(item, facts, targets, caller));
     }
     case "queue_add": {
-      const item = change(book => {
+      const item = withFiles(args, caller, acting, () => change(book => {
         const made = addItem(book, caller.owner, args as Fields, acting, primaryOf());
         if (args.working === true && !caller.seat) linkSession(book, made, caller.session, now);
+        applyFileOps(acting);
         return made;
-      });
+      }));
       const where = categories().find(each => each.id === item.category)?.name ?? item.category;
       return said(item.number !== undefined
         ? `Added #${item.number} "${item.title}" to ${where}${args.working === true ? ", linked to you: it shows In progress while you work" : ""}. Refer to it as #${item.number}.`
-        : `Added "${item.title}" to ${where}. It has no number yet: ${HERE} gets one from your primary computer, which isn't answering now. Name it by its title meanwhile.`);
+        : `Added "${item.title}" to ${where}. It has no number yet: ${HERE} gets one from the user's primary computer, which isn't answering now. Name it as ${item.id} meanwhile.`);
     }
     case "queue_update": {
-      const item = change(book => {
-        const item = itemFor(book, args.item, caller, overseen);
+      const item = withFiles(args, caller, acting, () => change(book => {
+        const item = itemFor(book.items(), args.item, caller, overseen);
         if (item.removed) throw new Refusal(deletedWords(item));
         changeItem(book, item, args as Fields, acting);
         const named = (value: unknown) => (Array.isArray(value) ? value : value === undefined ? [] : [value]).map(String).filter(each => /^ses_[A-Za-z0-9]{1,60}$/.test(each));
@@ -226,8 +246,9 @@ async function run(name: string, args: Record<string, unknown>, caller: QueueCal
         if (args.working === false) item.sessions = item.sessions.filter(each => each.session !== caller.session);
         const unlinked = new Set(named(args.unlink));
         item.sessions = item.sessions.filter(each => !unlinked.has(each.session));
+        applyFileOps(acting);
         return item;
-      });
+      }));
       const where = categories().find(each => each.id === item.category)?.name ?? item.category;
       return said(item.category === "done" ? `Marked ${nameOf(item)} done.` : `Changed ${nameOf(item)} (${where}${item.sessions.length ? `, ${item.sessions.length} session${item.sessions.length === 1 ? "" : "s"} linked` : ""}).`);
     }
@@ -235,7 +256,7 @@ async function run(name: string, args: Record<string, unknown>, caller: QueueCal
       const to = await handTarget(args.to, caller, targets);
       if ("refused" in to) return refused(to.refused);
       const item = change(book => {
-        const item = itemFor(book, args.item, caller, overseen);
+        const item = itemFor(book.items(), args.item, caller, overseen);
         if (item.removed) throw new Refusal(deletedWords(item));
         handItem(book, item, to.owner, caller.who, now);
         return item;
@@ -244,7 +265,7 @@ async function run(name: string, args: Record<string, unknown>, caller: QueueCal
     }
     case "queue_remove": {
       const item = change(book => {
-        const item = itemFor(book, args.item, caller, overseen);
+        const item = itemFor(book.items(), args.item, caller, overseen);
         if (args.undo === true) {
           if (!item.removed) throw new Refusal(`${nameOf(item)} isn't deleted.`);
           if ("user" in item.removed.by) throw new Refusal(deletedWords(item));
@@ -275,11 +296,16 @@ async function run(name: string, args: Record<string, unknown>, caller: QueueCal
   return refused(`There's no tool ${name}.`);
 }
 
-// The queues as they are, for a look that changes nothing.
-class BookReader {
-  private readonly items = readAll().flatMap(queue => queue.items);
-  find(ref: { id?: string; number?: number }): Item | null {
-    return this.items.find(item => (ref.id ? item.id === ref.id : item.number === ref.number)) ?? null;
+// `work`, with the files the call names read first (outside the queue's lock), and what's left of
+// them cleared after.
+function withFiles<T>(args: Record<string, unknown>, caller: QueueCaller, acting: Acting, work: () => T): T {
+  if (args.files === undefined) return work();
+  const { staged, clear } = stageFiles(args.files, caller.files);
+  acting.staged = staged;
+  try {
+    return work();
+  } finally {
+    clear();
   }
 }
 

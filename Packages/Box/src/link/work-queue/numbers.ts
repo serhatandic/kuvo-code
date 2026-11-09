@@ -57,18 +57,21 @@ export type Primary = { self: true } | { peer: Peer } | { away: true };
 
 const isRange = (each: unknown): each is [number, number] => Array.isArray(each) && each.length === 2 && each.every(n => Number.isInteger(n) && n > 0) && each[0] <= each[1];
 
-/** `numbers` as runs. */
-export function rangesOf(numbers: Iterable<number>): Ranges {
-  const sorted = [...new Set(numbers)].filter(n => Number.isInteger(n) && n > 0).sort((a, b) => a - b);
+/** Runs sorted, and those that touch or overlap joined. */
+const joined = (...all: Ranges[]): Ranges => {
+  const sorted = all.flat().filter(isRange).map(([from, to]): [number, number] => [from, to]).sort((a, b) => a[0] - b[0]);
   const ranges: Ranges = [];
-  for (const n of sorted) {
+  for (const [from, to] of sorted) {
     const last = ranges[ranges.length - 1];
-    if (last && n === last[1] + 1) last[1] = n;
-    else ranges.push([n, n]);
+    if (last && from <= last[1] + 1) last[1] = Math.max(last[1], to);
+    else ranges.push([from, to]);
   }
   return ranges;
-}
-const joined = (...all: Ranges[]): Ranges => rangesOf(all.flat().flatMap(([from, to]) => Array.from({ length: Math.min(to - from + 1, 100_000) }, (_, i) => from + i)));
+};
+/** `numbers` as runs. */
+export const rangesOf = (numbers: Iterable<number>): Ranges => joined([...numbers].filter(n => Number.isInteger(n) && n > 0).map((n): [number, number] => [n, n]));
+/** What of `ranges` is also in `within`. */
+const overlap = (ranges: Ranges, within: Ranges): Ranges => joined(ranges.flatMap(([from, to]) => within.flatMap(([a, b]): Ranges => (Math.max(from, a) <= Math.min(to, b) ? [[Math.max(from, a), Math.min(to, b)]] : []))));
 export const inRanges = (ranges: Ranges, n: number) => ranges.some(([from, to]) => n >= from && n <= to);
 const cleanRanges = (value: unknown): Ranges => (Array.isArray(value) ? value.filter(isRange).slice(0, MOST_RANGES) : []);
 
@@ -145,11 +148,9 @@ export function takeNumber(primary: Primary, { file = NUMBERS_FILE, now = Date.n
 function grantOn(kept: Numbers, by: string, claims: Ranges): Ranges {
   const before = kept.granted?.[by] ?? [];
   const next = kept.next ?? 1;
-  const granted: number[] = [];
-  for (const [from, to] of claims) for (let n = from; n <= to && granted.length < 100_000; n++) if (n >= next || inRanges(before, n)) granted.push(n);
-  const ranges = rangesOf(granted);
-  if (granted.length) {
-    kept.next = Math.max(next, Math.max(...granted) + 1);
+  const ranges = joined(overlap(claims, [[next, Number.MAX_SAFE_INTEGER]]), overlap(claims, before));
+  if (ranges.length) {
+    kept.next = Math.max(next, ranges[ranges.length - 1][1] + 1);
     kept.granted = { ...(kept.granted ?? {}), [by]: joined(before, ranges).slice(-MOST_RANGES) };
   }
   return ranges;

@@ -7,10 +7,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { isObject } from "../../shared/json";
 import { categories, keepCategory } from "./categories";
-import { changeQueues, filesOf, OWNER, readQueue, type Item } from "./store";
+import { categoryNamed } from "./categories";
+import { changeQueues, FILE_NAME, filesOf, itemOf, OWNER, readQueue, type Item } from "./store";
 
 /** What a move carries: each owner's items, the custom categories they're in, and which items
- * have files (packed beside `move.json`, in `work-queue/<item>/`). */
+ * have files (packed beside `move.json`, in `work-queue/<item>/`). The box it leaves keeps which
+ * items went, as they were (`packed`), to forget only those once it's over. */
 export interface CarriedQueues {
   items: Item[];
   categories: { id: string; name: string }[];
@@ -45,39 +47,49 @@ export const filesSize = (carried: CarriedQueues | undefined): number => (carrie
   }
 }, 0);
 
+/** Which items a move packed, by id, as they were then (`updated.at`). */
+export const packedOf = (carried: CarriedQueues | null): Record<string, number> => Object.fromEntries((carried?.items ?? []).map(item => [item.id, item.updated.at]));
+
 /** What came with a move put in place: the items of `owners` it brought (any other owner's left
- * out), their files from `opened/work-queue`, and the custom categories they're in. */
+ * out, and each checked as one read from this box's own files), their files from
+ * `opened/work-queue`, and the custom categories they're in (Next for one this box can't keep). */
 export function placeWorkQueues(carried: unknown, owners: readonly string[], opened: string | null): void {
   if (!isObject(carried) || !Array.isArray(carried.items)) return;
   const allowed = new Set(owners);
-  const items = carried.items.filter((each): each is Item => isObject(each) && typeof each.owner === "string" && allowed.has(each.owner) && typeof each.id === "string" && /^wqi_[A-Za-z0-9_-]{20}$/.test(each.id));
+  const items = carried.items.flatMap(each => (isObject(each) && typeof each.owner === "string" && allowed.has(each.owner) ? [itemOf(each, each.owner)] : [])).filter((each): each is Item => each !== null);
   if (!items.length) return;
   for (const each of Array.isArray(carried.categories) ? carried.categories : []) if (isObject(each) && typeof each.id === "string" && typeof each.name === "string") keepCategory(each.id, each.name);
+  for (const item of items) if (!categoryNamed(item.category)) item.category = "next";
   changeQueues(book => {
     for (const item of items) {
       const before = book.find({ id: item.id });
       if (before) book.queue(before.owner).items = book.queue(before.owner).items.filter(each => each.id !== item.id);
       book.queue(item.owner).items.push(item);
       const from = opened ? path.join(opened, "work-queue", item.id) : null;
-      if (from && fs.existsSync(from)) {
-        fs.rmSync(filesOf(item.id), { recursive: true, force: true });
-        fs.mkdirSync(path.dirname(filesOf(item.id)), { recursive: true, mode: 0o700 });
-        fs.cpSync(from, filesOf(item.id), { recursive: true });
+      fs.rmSync(filesOf(item.id), { recursive: true, force: true });
+      for (const file of item.files) {
+        if (!from || !FILE_NAME.test(file.name)) continue;
+        try {
+          fs.mkdirSync(filesOf(item.id), { recursive: true, mode: 0o700 });
+          fs.copyFileSync(path.join(from, file.name), path.join(filesOf(item.id), file.name));
+        } catch {}
       }
     }
   });
 }
 
-/** The queues of `owners` gone from here (their files too): the move took them, or a copy that
- * came is taken back. */
-export function forgetWorkQueues(owners: readonly string[]): void {
+/** The queues of `owners` gone from here (their files too): a copy that came is taken back; or,
+ * with `packed`, the move took them: only the items it packed, as they were then (one handed in
+ * or changed since stays, rather than be lost). */
+export function forgetWorkQueues(owners: readonly string[], packed?: Record<string, number>): void {
   const gone = new Set(owners);
   changeQueues(book => {
     for (const owner of gone) {
       if (!OWNER.test(owner)) continue;
       const queue = book.queue(owner);
-      for (const item of queue.items) fs.rmSync(filesOf(item.id), { recursive: true, force: true });
-      queue.items = [];
+      const going = queue.items.filter(item => !packed || packed[item.id] === item.updated.at);
+      for (const item of going) fs.rmSync(filesOf(item.id), { recursive: true, force: true });
+      queue.items = queue.items.filter(item => !going.includes(item));
     }
   });
 }

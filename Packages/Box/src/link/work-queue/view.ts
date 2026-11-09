@@ -58,14 +58,17 @@ export interface OwnerFacts {
 }
 
 /** Titles and who-started-whom of the sessions named, looked up where the list doesn't have them. */
-export async function sessionsNamed(ids: Iterable<string>, facts: Facts, targets: Target[]): Promise<Map<string, { title: string; startedBy?: string; bot?: { id: string; name: string } }>> {
+export async function sessionsNamed(ids: Iterable<string>, facts: Facts, targets: Target[], cache?: Map<string, unknown>): Promise<Map<string, { title: string; startedBy?: string; bot?: { id: string; name: string } }>> {
   const byID = new Map(facts.all.map(each => [each.data.id, each.data]));
   const bots = listBots();
   const found = new Map<string, { title: string; startedBy?: string; bot?: { id: string; name: string } }>();
   for (const id of new Set(ids)) {
     if (!id.startsWith("ses_")) continue;
-    let data = byID.get(id) as Listed["data"] | undefined;
-    if (!data && targets.length) data = (await placeOfSession(id, targets).catch(() => null))?.data as Listed["data"] | undefined;
+    let data = (byID.get(id) ?? cache?.get(id)) as Listed["data"] | undefined;
+    if (!data && targets.length && !cache?.has(id)) {
+      data = (await placeOfSession(id, targets).catch(() => null))?.data as Listed["data"] | undefined;
+      cache?.set(id, data);
+    }
     const bot = bots.find(each => each.session === id);
     const works = worksFor(data);
     const startedBy = startedByOf(data);
@@ -142,9 +145,9 @@ export function wholeOf(item: Item, working: Set<string>, titles: Map<string, { 
 }
 
 /** The owners of `items`, and `owner` itself, as a view names them. */
-export async function ownersOf(owner: string, items: Item[], facts: Facts, targets: Target[]): Promise<{ owners: OwnerFacts[]; titles: Map<string, { title: string; startedBy?: string; bot?: { id: string; name: string } }> }> {
+export async function ownersOf(owner: string, items: Item[], facts: Facts, targets: Target[], cache?: Map<string, unknown>): Promise<{ owners: OwnerFacts[]; titles: Map<string, { title: string; startedBy?: string; bot?: { id: string; name: string } }> }> {
   const keys = new Set([owner, ...items.map(item => item.owner), ...items.flatMap(item => item.handedBy ? [item.handedBy] : [])]);
-  const named = await sessionsNamed([...keys, ...items.flatMap(item => item.sessions.map(each => each.session))], facts, targets);
+  const named = await sessionsNamed([...keys, ...items.flatMap(item => item.sessions.map(each => each.session))], facts, targets, cache);
   const bots = listBots();
   const owners: OwnerFacts[] = [...keys].map(key => {
     if (key.startsWith("grp_")) return { owner: key, kind: "group", title: null };
@@ -172,5 +175,5 @@ export function agoWords(at: number, now = Date.now()): string {
 }
 
 /** An item as tools name it: `#243 "Title"`, or `"Title" (new, no number yet)`. */
-export const nameOf = (item: Pick<Item, "number" | "title" | "wanted">): string =>
-  item.number !== undefined ? `#${item.number} "${item.title}"` : `"${item.title}" (no number yet${item.wanted ? `: asked for #${item.wanted}` : ""})`;
+export const nameOf = (item: Pick<Item, "number" | "title" | "wanted" | "id">): string =>
+  item.number !== undefined ? `#${item.number} "${item.title}"` : `"${item.title}" (${item.id}, no number yet${item.wanted ? `: asked for #${item.wanted}` : ""})`;
