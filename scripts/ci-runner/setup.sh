@@ -22,8 +22,8 @@
 #      serhatandic/kuvo-code only, Administration: read and write, Actions: read, 90 days),
 #      checks it, and keeps it as ci in ~ci/.config/kuvo-ci/github-token, which only ci can
 #      read. Press Return to keep the one it has.
-#   4. Keeps the VMs' disks out of Time Machine, makes /Users/Shared/kuvo-ci/run (ci's; its
-#      status file), installs the orchestrator (sudo) and starts it.
+#   4. Keeps the VMs' disks out of Time Machine, makes /usr/local/kuvo-ci-run (ci's; its status
+#      file, for anyone to read), installs the orchestrator (sudo) and starts it.
 #
 # The golden image comes from scripts/ci-runner/build-image.sh, before or after this; the
 # orchestrator waits for it. Running this again is safe: it puts everything back and restarts the
@@ -94,9 +94,9 @@ ${daemon_keys}    <key>EnvironmentVariables</key>
     <key>ProcessType</key>
     <string>Interactive</string>
     <key>StandardOutPath</key>
-    <string>$2/Library/Logs/kuvo-ci/orchestrator.log</string>
+    <string>/dev/null</string>
     <key>StandardErrorPath</key>
-    <string>$2/Library/Logs/kuvo-ci/orchestrator.log</string>
+    <string>/dev/null</string>
 </dict>
 </plist>
 PLIST
@@ -145,6 +145,12 @@ as_ci() { # agent|daemon
     fi
 }
 
+# Whether a Tart.app is intact and signed by Cirrus Labs (Developer ID, team $TART_TEAM).
+tart_signed_by_cirrus() {
+    /usr/bin/codesign --verify --strict \
+        -R="anchor apple generic and certificate leaf[subject.OU] = \"$TART_TEAM\"" "$1"
+}
+
 # ---- As you: the group and the tree (sudo). -------------------------------------------------
 install_group() {
     if ! dscl . -read "/Groups/$SOFTNET_GROUP" PrimaryGroupID >/dev/null 2>&1; then
@@ -168,8 +174,11 @@ install_tree() { # Tart.app softnet
     # Built next to the old tree, then swapped in, so ci never runs from half of one.
     sudo /bin/rm -rf "$CI_ROOT.new"
     sudo /usr/bin/install -d -o root -g wheel -m 755 "$CI_ROOT.new" "$CI_ROOT.new/bin" "$CI_ROOT.new/scripts" "$CI_ROOT.new/scripts/vm"
-    sudo /usr/bin/ditto --norsrc "$tart_app" "$CI_ROOT.new/Tart.app"
+    # No ACLs, extended attributes or quarantine come along: an ACL on Homebrew's copy would let
+    # you change root's.
+    sudo /usr/bin/ditto --noacl --noextattr --noqtn "$tart_app" "$CI_ROOT.new/Tart.app"
     sudo /usr/sbin/chown -R root:wheel "$CI_ROOT.new/Tart.app"
+    sudo /bin/chmod -RN "$CI_ROOT.new/Tart.app"
     sudo /bin/chmod -R go-w "$CI_ROOT.new/Tart.app"
     sudo /usr/bin/install -o root -g wheel -m 755 "$staging/tart" "$CI_ROOT.new/bin/tart"
     sudo /usr/bin/install -o root -g "$SOFTNET_GROUP" -m 4750 "$softnet" "$CI_ROOT.new/bin/softnet"
@@ -181,7 +190,7 @@ install_tree() { # Tart.app softnet
     if [[ -e "$CI_ROOT" ]]; then sudo /bin/mv "$CI_ROOT" "$CI_ROOT.old"; fi
     sudo /bin/mv "$CI_ROOT.new" "$CI_ROOT"
     sudo /bin/rm -rf "$CI_ROOT.old"
-    /usr/bin/codesign --verify --strict "$CI_ROOT/Tart.app" || fail "The copy of Tart.app in $CI_ROOT doesn't pass codesign --verify."
+    tart_signed_by_cirrus "$CI_ROOT/Tart.app" || fail "The copy of Tart.app in $CI_ROOT isn't signed by Cirrus Labs (codesign --verify)."
     verify_tree || fail "$CI_ROOT isn't as it should be (above)."
     echo "Installed $CI_ROOT: Tart $("$CI_BIN/tart" --version), softnet root:$SOFTNET_GROUP 4750."
 }
@@ -202,7 +211,7 @@ as_admin() { # agent|daemon
     softnet="$(brew --prefix softnet 2>/dev/null)/bin/softnet"
     softnet="$(readlink -f "$softnet" 2>/dev/null || true)"
     [[ -f "$softnet" ]] || fail "softnet isn't installed: brew install openai/tools/softnet"
-    /usr/bin/codesign --verify --strict "$tart_app" || fail "Homebrew's Tart.app doesn't pass codesign --verify."
+    tart_signed_by_cirrus "$tart_app" || fail "Homebrew's Tart.app isn't signed by Cirrus Labs (codesign --verify): reinstall it."
 
     # Yours, and nobody else's to change: /Users/Shared lets anyone make things, so mkdir makes
     # the folder (and fails on anything planted there), and one that's there must be yours.
@@ -237,7 +246,9 @@ as_admin() { # agent|daemon
     fi
     # The scripts ci ran before, from your folder: gone, so nothing runs them by mistake.
     rm -rf "$SHARED/scripts"
-    # ci's, for its status file: anyone can read it.
+    # ci's, for its status file: anyone can read it. In root's /usr/local, where nothing can be
+    # planted for this sudo to follow.
+    if [[ -L "$SHARED_RUN" ]]; then sudo /bin/rm -f "$SHARED_RUN"; fi
     sudo /usr/bin/install -d -o "$CI_USER" -g staff -m 755 "$SHARED_RUN"
     if [[ -d "$SHARED_TART" ]]; then tmutil addexclusion "$SHARED_TART" 2>/dev/null || echo "Couldn't keep $SHARED_TART out of Time Machine."; fi
 
@@ -271,6 +282,9 @@ as_admin() { # agent|daemon
     echo "Its status: $SHARED_RUN/status; its log: $ci_home/Library/Logs/kuvo-ci/orchestrator.log"
     echo "Pin what it copied, so an upgrade is one you choose: brew pin tart softnet. After you"
     echo "upgrade either, run this again, then check-isolation.sh (see its header)."
+    echo
+    echo "Homebrew's softnet isn't setuid any more. A VM you run yourself with --net-softnet makes"
+    echo "Tart ask for your password to make it setuid again: say no (CI runs its own copy)."
 }
 
 case "${1:-}" in

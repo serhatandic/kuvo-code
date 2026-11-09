@@ -22,9 +22,9 @@
 # fails before a job ran (no boot, GitHub refusing, a runner that quits at once), it waits longer
 # each time, up to an hour, so it never hammers GitHub; at the hour it says so loudly.
 #   /Users/Shared/kuvo-ci/paused      while it's there, no VM runs (an idle one is stopped)
-#   /Users/Shared/kuvo-ci/run/status  what it's doing, for anyone to read
-# Its log: ~/Library/Logs/kuvo-ci/orchestrator.log (one older one kept as .1; a log per VM next
-# to it, kept a week).
+#   /usr/local/kuvo-ci-run/status     what it's doing, for anyone to read
+# Its log: ~/Library/Logs/kuvo-ci/orchestrator.log, which it opens itself (one older one kept as
+# .1; a log per VM next to it, kept a week). Lines that need you start with "!!!".
 set -uo pipefail
 umask 077
 export LC_ALL=C
@@ -52,7 +52,10 @@ API_SECONDS=30
 CONFIRM_SECONDS=90
 MARKER_SECONDS=60
 BUSY_EVERY=60
+# GitHub saying nothing of the runner for this long (and no job known) stops the VM.
+UNKNOWN_SECONDS=180
 IP_EVERY=300
+IP_FAILURES_MAX=3
 BOOT_SECONDS=180
 IDLE_LIMIT_MINUTES=60
 VM_LIMIT_MINUTES=$((IDLE_LIMIT_MINUTES + JOB_LIMIT_MINUTES + 10))
@@ -64,18 +67,41 @@ READ_SECONDS=5
 
 log() { printf '%s %s\n' "$(date -u +%FT%TZ)" "$*"; }
 
-# What the orchestrator is doing, for anyone to read (setup.sh makes $SHARED_RUN ci's). Written
-# only into a folder of ci's own, never through a symlink.
+# What the orchestrator is doing, for anyone to read (setup.sh makes $SHARED_RUN ci's, in root's
+# /usr/local). Written from inside that folder, once it's ci's own: only ci can make files there.
 status() { # state message
-    local dir="$SHARED_RUN"
-    [[ -d "$dir" && ! -L "$dir" && -O "$dir" ]] || return 0
-    {
-        printf 'state: %s\n' "$1"
-        printf 'since: %s\n' "$(date -u +%FT%TZ)"
-        printf 'message: %s\n' "$2"
-        [[ ! -s "$STATE_DIR/token-expiration" ]] || printf 'token expires: %s\n' "$(cat "$STATE_DIR/token-expiration")"
-        [[ -z "${vm:-}" ]] || printf 'vm: %s\n' "$vm"
-    } > "$dir/status.new" 2>/dev/null && chmod 644 "$dir/status.new" && mv -f "$dir/status.new" "$dir/status"
+    local expiry
+    expiry="$(cat "$STATE_DIR/token-expiration" 2>/dev/null)"
+    (
+        [[ ! -L "$SHARED_RUN" ]] && cd "$SHARED_RUN" 2>/dev/null && [[ -O . ]] || exit 0
+        rm -f status.new
+        {
+            printf 'state: %s\n' "$1"
+            printf 'since: %s\n' "$(date -u +%FT%TZ)"
+            printf 'message: %s\n' "$2"
+            [[ -z "$expiry" ]] || printf 'token expires: %s\n' "$expiry"
+            [[ -z "${vm:-}" ]] || printf 'vm: %s\n' "$vm"
+        } > status.new 2>/dev/null && chmod 644 status.new && mv -f status.new status
+    )
+}
+
+# A small file of yours (the golden image's version), read only when it's a regular file: a pipe
+# put there would hold the read, and the loop's checks with it.
+read_version() { # path
+    [[ -f "$1" && ! -L "$1" ]] || return 1
+    head -c 512 "$1" 2>/dev/null
+}
+
+# Waits up to $2 seconds for a child to end, then reaps it.
+wait_gone() { # pid seconds
+    local _
+    for ((_ = 0; _ < $2; _++)); do
+        kill -0 "$1" 2>/dev/null || break
+        nap 1
+    done
+    kill -0 "$1" 2>/dev/null && return 1
+    wait "$1" 2>/dev/null
+    return 0
 }
 
 # A sleep that a stop (launchd's TERM) cuts short: bash runs a trap only between commands.
@@ -135,6 +161,17 @@ warn_token_expiry() {
     token_warned=$SECONDS
 }
 
+# Said once a day while Homebrew's softnet is setuid root again (Tart puts the bit back, asking
+# for your password, when you run a softnet VM outside CI): anyone can run that one.
+softnet_warned=-86400
+warn_homebrew_softnet() {
+    local softnet
+    ((SECONDS - softnet_warned >= 86400)) || return 0
+    softnet="$(homebrew_softnet_setuid)" || return 0
+    log "!!! Homebrew's softnet is setuid root again ($softnet), so anyone can run it: sudo chmod u-s $softnet (CI runs its own copy)."
+    softnet_warned=$SECONDS
+}
+
 # The orchestrator's own log, rotated when it gets big (launchd opened it; this reopens it).
 rotate_log() {
     local size
@@ -164,11 +201,15 @@ stop_vm() {
 }
 
 end_job() {
-    if [[ -n "$check_pid" ]]; then kill "$check_pid" 2>/dev/null; wait "$check_pid" 2>/dev/null; fi
+    if [[ -n "$check_pid" ]]; then kill "$check_pid" 2>/dev/null; wait_gone "$check_pid" 10; fi
     stop_vm
     if [[ -n "$exec_pid" ]] && kill -0 "$exec_pid" 2>/dev/null; then kill "$exec_pid" 2>/dev/null; fi
-    if [[ -n "$exec_pid" ]]; then wait "$exec_pid" 2>/dev/null; fi
-    if [[ -n "$vm_pid" ]]; then wait "$vm_pid" 2>/dev/null; fi
+    if [[ -n "$exec_pid" ]]; then
+        wait_gone "$exec_pid" 15 || { kill -KILL "$exec_pid" 2>/dev/null; wait_gone "$exec_pid" 5 || log "[$vm] tart exec ($exec_pid) won't end"; }
+    fi
+    if [[ -n "$vm_pid" ]]; then
+        wait_gone "$vm_pid" 15 || { kill -KILL "$vm_pid" 2>/dev/null; wait_gone "$vm_pid" 5 || log "[$vm] the VM's process ($vm_pid) won't end"; }
+    fi
     if [[ -n "$vm" ]]; then
         if run_limited 120 tart delete "$vm" >/dev/null 2>&1; then log "[$vm] deleted"; else log "[$vm] couldn't delete it: trying again before the next VM"; fi
     fi
@@ -211,8 +252,8 @@ clean_leftovers() {
 # The golden image build-image.sh made, copied (as an APFS clone) when it's new.
 take_golden() {
     local want have
-    want="$(cat "$SHARED/golden-version" 2>/dev/null)"
-    have="$(cat "$LOCAL_VERSION" 2>/dev/null)"
+    want="$(read_version "$SHARED/golden-version")"
+    have="$(read_version "$LOCAL_VERSION")"
     [[ -n "$want" ]] || { log "No golden image yet: run scripts/ci-runner/build-image.sh."; return 1; }
     if [[ "$want" == "$have" ]] && run_limited 60 tart get "$GOLDEN" >/dev/null 2>&1; then return 0; fi
     log "Taking the golden image: $want"
@@ -221,6 +262,13 @@ take_golden() {
     if ! run_limited 900 cp -cR "$SHARED_TART/vms/$GOLDEN" "$TART_DIR/vms/$GOLDEN-incoming"; then
         rm -rf "$TART_DIR/vms/$GOLDEN-incoming"
         log "Couldn't copy the golden image."
+        return 1
+    fi
+    # Its disk, its NVRAM and its config are files: a symlink would point ci's VMs at whatever it
+    # names.
+    if [[ -n "$(find -P "$TART_DIR/vms/$GOLDEN-incoming" ! -type f ! -type d -print 2>/dev/null | head -1)" ]]; then
+        rm -rf "$TART_DIR/vms/$GOLDEN-incoming"
+        log "!!! The golden image holds something that isn't a file or a folder (a symlink?): not taking it."
         return 1
     fi
     rm -rf "$TART_DIR/vms/$GOLDEN"
@@ -312,7 +360,7 @@ retire_idle_runner() {
         2* | 404) runner_id="" ;;
         422) echo busy; return ;;
         *)
-            log "[$vm] couldn't take runner $runner_id off GitHub ($(api_error "$out")); stopping the VM anyway"
+            log "[$vm] couldn't take runner $runner_id off GitHub ($(api_error "$out")); stopping the VM anyway" >&2
             runner_id=""
             ;;
     esac
@@ -395,6 +443,7 @@ one_job() {
     # says it's ours (confirmed) and the VM's hook left its marker (hook_ok).
     local job_started="" hinted="" verdict="" run_id="" confirm_by="" marker_by="" next_marker=0
     local hook_ok="" stop="" retired="" last_busy=$SECONDS last_ip=$SECONDS state now
+    local last_known=$SECONDS ip_failures=0
     local verdict_file="$work/verdict"
     while :; do
         line=""
@@ -424,10 +473,15 @@ one_job() {
         if [[ -z "$stop" && -z "$job_started" ]] && { [[ -n "$hinted" ]] || ((now - last_busy >= BUSY_EVERY)); }; then
             last_busy=$now
             state="$(runner_state "$runner_id")"
+            [[ "$state" == unknown ]] || last_known=$now
             case "$state" in
                 busy | gone) job_started=$now ;;
                 *) [[ -z "$hinted" ]] || job_started=$now ;;
             esac
+            # GitHub silent for a while: the runner may have a job no one checked. Stop.
+            if [[ -z "$job_started" ]] && ((now - last_known > UNKNOWN_SECONDS)); then
+                stop="GitHub hasn't said for $UNKNOWN_SECONDS seconds whether runner $runner_id has a job"
+            fi
             [[ -z "$job_started" ]] || log "[$vm] runner $runner_id has a job (GitHub: $state${hinted:+; the runner said so})"
         fi
 
@@ -469,7 +523,7 @@ one_job() {
             local why=""
             if [[ -e "$PAUSED" ]]; then
                 why="paused: stopping the idle VM"
-            elif [[ "$(cat "$SHARED/golden-version" 2>/dev/null)" != "$(cat "$LOCAL_VERSION" 2>/dev/null)" ]]; then
+            elif [[ "$(read_version "$SHARED/golden-version")" != "$(read_version "$LOCAL_VERSION")" ]]; then
                 why="a new golden image: replacing the idle VM"
             elif ((now - booted_at > IDLE_LIMIT_MINUTES * 60)); then
                 why="idle for $IDLE_LIMIT_MINUTES minutes: replacing the VM"
@@ -494,9 +548,15 @@ one_job() {
             last_ip=$now
             local new_ip
             if new_ip="$(public_ipv4)"; then
+                ip_failures=0
                 [[ "$new_ip" == "$ip" ]] || stop="this network's public address moved from $ip to $new_ip, which the VM may reach"
             else
-                log "[$vm] couldn't look up this network's public address (the two lookups failed or disagreed); trying again in $((IP_EVERY / 60)) minutes"
+                ip_failures=$((ip_failures + 1))
+                if ((ip_failures >= IP_FAILURES_MAX)); then
+                    stop="this network's public address couldn't be checked $ip_failures times in a row (it may have moved)"
+                else
+                    log "[$vm] couldn't look up this network's public address (the two lookups failed or disagreed); trying again in $((IP_EVERY / 60)) minutes"
+                fi
             fi
         fi
 
@@ -517,6 +577,9 @@ one_job() {
 main() {
     trap 'log "Stopping."; end_job; status stopped "the orchestrator stopped"; rm -rf "$LOCK"; exit 0' TERM INT HUP
     mkdir -p "$LOG_DIR" "$TART_DIR" "$STATE_DIR"
+    # Its own log, opened as ci (launchd's StandardOutPath is /dev/null: launchd would open a
+    # path in ci's folder as root).
+    exec >> "$LOG_FILE" 2>&1
     # The VMs' disks (a release's signing keychain among them) are ci's alone.
     chmod 700 "$TART_DIR"
     rotate_log
@@ -556,6 +619,7 @@ main() {
     while :; do
         rotate_log
         warn_token_expiry
+        warn_homebrew_softnet
         if [[ -e "$PAUSED" ]]; then
             status paused "paused ($PAUSED is there)"
             nap 60

@@ -18,7 +18,8 @@
 #   rm /Users/Shared/kuvo-ci/paused
 #
 # As someone else, it uses their Tart and softnet (TART_HOME=/Users/Shared/kuvo-ci/tart: the
-# golden image's own home) and pauses CI itself; softnet must be one they can run.
+# golden image's own home) and pauses CI itself, only when that softnet is setuid root already
+# (it refuses rather than let Tart make Homebrew's setuid again).
 #   IMAGE   what to boot, from /Users/Shared/kuvo-ci/tart (default: kuvo-ci-golden)
 set -uo pipefail
 
@@ -28,6 +29,15 @@ here="$(cd "$(dirname "$0")" && pwd)"
 if [[ "$(id -un)" == "$CI_USER" ]]; then
     export PATH="$CI_PATH"
     prepare_keychain --force || echo "Couldn't prepare ci's keychain for the VM; it may not start." >&2
+fi
+
+# A softnet that isn't setuid root makes Tart ask for your password to make it so, which would
+# give Homebrew's (runnable by anyone) the bit back: refuse instead.
+softnet="$(command -v softnet)" && softnet="$(readlink -f "$softnet")"
+if [[ -z "$softnet" || "$(stat -f %u "$softnet" 2>/dev/null)" != 0 || ! -u "$softnet" ]]; then
+    echo "The softnet on your PATH (${softnet:-none}) isn't setuid root, and Tart would ask to make it so." >&2
+    echo "Run this as ci: sudo -u ci -i $CI_SCRIPTS/check-isolation.sh" >&2
+    exit 1
 fi
 
 IMAGE="${IMAGE:-$GOLDEN}"

@@ -131,8 +131,9 @@ t_fork_job_stopped() {
     done_test
 }
 
-t_branch_named_like_a_tag_is_refused_by_name() {
-    new_test branch_rules ""
+t_host_takes_only_main_and_release_tags() {
+    # A branch named like a tag passes here (head_branch can't tell); the hook reads GITHUB_REF.
+    new_test host_rule ""
     (
         . "$ci/orchestrator.sh"
         ok() { allowed "$@" || echo "  FAIL: refused $*"; }
@@ -374,6 +375,69 @@ t_watchdog() {
     done_test
 }
 
+t_github_silent_about_the_runner_stops_the_vm() {
+    new_test runner_state_unknown "vm_sleep 60"
+    scenario '{"token": "github_pat_TEST", "busy": "error"}'
+    run_job "UNKNOWN_SECONDS=3"
+    expect_log "GitHub hasn't said for 3 seconds whether runner 42 has a job: stopping the VM"
+    vm_gone || fail "the VM is still there"
+}
+
+t_address_that_cant_be_checked_stops_the_vm() {
+    new_test address_unknown "vm_sleep 60"
+    scenario '{"token": "github_pat_TEST", "busy": false}'
+    run_job 'IP_EVERY=1; public_ipv4() { if [[ -e "$t/looked" ]]; then return 1; else touch "$t/looked"; echo 203.0.113.7; fi; }'
+    expect_log "couldn't look up this network's public address"
+    expect_log "public address couldn't be checked 3 times in a row (it may have moved): stopping the VM"
+}
+
+t_failed_retire_is_logged() {
+    new_test retire_fails 'vm_sleep 2; touch "$KUVO_TEST_ROOT/shared/paused"; vm_sleep 60'
+    scenario '{"token": "github_pat_TEST", "busy": false, "delete_status": 500}'
+    run_job
+    expect_log "couldn't take runner 42 off GitHub (HTTP 500: nope); stopping the VM anyway"
+    expect_log "paused: stopping the idle VM"
+    expect_rc 2
+}
+
+t_golden_image_with_a_symlink_or_pipe_is_refused() {
+    new_test golden_checks ""
+    mkdir -p "$t/shared/tart/vms/kuvo-ci-golden"
+    echo config > "$t/shared/tart/vms/kuvo-ci-golden/config.json"
+    ln -s "$t/token" "$t/shared/tart/vms/kuvo-ci-golden/disk.img"
+    echo v2 > "$t/shared/golden-version"
+    (
+        . "$ci/orchestrator.sh"
+        export PATH="$t/bin:/usr/bin:/bin:/usr/sbin:/sbin" KUVO_TEST_TART="$t/tart"
+        SHARED="$t/shared" SHARED_TART="$t/shared/tart" TART_DIR="$t/tart" LOCAL_VERSION="$t/tart/golden-version"
+        take_golden
+        echo "symlink rc=$?"
+        rm "$SHARED/golden-version"
+        mkfifo "$SHARED/golden-version"
+        run_limited 10 take_golden
+        echo "pipe rc=$?"
+    ) > "$t/log" 2>&1
+    expect_log "isn't a file or a folder (a symlink?): not taking it."
+    expect_log "symlink rc=1"
+    expect_log "No golden image yet"
+    expect_log "pipe rc=1"
+    [[ ! -e "$t/tart/vms/kuvo-ci-golden" && ! -e "$t/tart/vms/kuvo-ci-golden-incoming" ]] || fail "the image was taken"
+}
+
+# With the real dscl: groups on every Mac (wheel: root only; admin: root and you).
+t_softnet_group_check() {
+    new_test softnet_group ""
+    (
+        . "$ci/common.sh"
+        SOFTNET_GROUP=wheel CI_USER=root softnet_group_ok && echo "wheel ok"
+        SOFTNET_GROUP=admin CI_USER=root softnet_group_ok || echo "admin refused"
+        SOFTNET_GROUP=kuvo-ci-no-such-group CI_USER=root softnet_group_ok || echo "missing refused"
+    ) > "$t/log" 2>&1
+    expect_log "wheel ok"
+    expect_log "admin refused"
+    expect_log "missing refused"
+}
+
 t_tree_check_refuses_a_tree_that_isnt_roots() {
     new_test tree_check ""
     mkdir -p "$t/tree/bin" "$t/tree/scripts"
@@ -413,17 +477,20 @@ t_hook() {
     done_test
 }
 
-tests=(t_allowed_job_runs t_fork_job_stopped t_branch_named_like_a_tag_is_refused_by_name
+tests=(t_allowed_job_runs t_fork_job_stopped t_host_takes_only_main_and_release_tags
     t_github_cant_tell_stops_the_vm t_github_silent_stops_the_vm t_job_not_listed_stops_the_vm
     t_missing_marker_stops_the_vm t_marker_of_another_run_stops_the_vm t_job_found_from_github_alone
     t_guest_cant_forge_host_lines t_hard_cap_from_boot t_failed_stop_kills_the_vm t_boot_that_hangs
     t_pause_retires_an_idle_vm t_retiring_a_busy_runner_checks_its_job t_refused_runner_config_logs_no_body
     t_public_address_moving_stops_the_vm t_no_vm_without_space_or_address t_token_expiry_warns
     t_bad_token_never_reaches_curl t_status_never_follows_a_symlink t_watchdog
-    t_tree_check_refuses_a_tree_that_isnt_roots t_hook)
+    t_tree_check_refuses_a_tree_that_isnt_roots t_hook t_github_silent_about_the_runner_stops_the_vm
+    t_address_that_cant_be_checked_stops_the_vm t_failed_retire_is_logged
+    t_golden_image_with_a_symlink_or_pipe_is_refused t_softnet_group_check)
 if [[ $# -gt 0 ]]; then tests=("$@"); fi
 for name in "${tests[@]}"; do
     "$name"
+    done_test
     if [[ -n "$failed_here" ]]; then
         failed=$((failed + 1))
         sed 's/^/    | /' "$t/log"

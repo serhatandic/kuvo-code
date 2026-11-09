@@ -35,8 +35,11 @@ CI_USER="${CI_USER:-ci}"
 SHARED="/Users/Shared/kuvo-ci"
 SHARED_TART="$SHARED/tart"
 # ci's, readable by everyone: what the orchestrator is doing (status), for you to look at
-# without sudo.
-SHARED_RUN="$SHARED/run"
+# without sudo. In root's /usr/local, not in your folder above: setup.sh makes it with sudo, and
+# nothing can be planted where it goes.
+SHARED_RUN="/usr/local/kuvo-ci-run"
+# Tart's signer (Cirrus Labs): the copy ci runs must be theirs.
+TART_TEAM="9M2P8L4D89"
 GOLDEN="kuvo-ci-golden"
 # What the golden image is built from: Cirrus Labs' macOS 27 base image (brew, gh, Node 24,
 # Tart's guest agent, the admin user), pinned by digest. Xcode comes from this Mac's.
@@ -134,17 +137,37 @@ verify_tree() {
         echo "$CI_BIN/softnet isn't root:$SOFTNET_GROUP, mode 4750." >&2
         return 1
     fi
-    gid="$(/usr/bin/dscl . -read "/Groups/$SOFTNET_GROUP" PrimaryGroupID 2>/dev/null | /usr/bin/awk '{ print $2 }')"
-    members="$(/usr/bin/dscl . -read "/Groups/$SOFTNET_GROUP" GroupMembership 2>/dev/null | /usr/bin/sed 's/^GroupMembership: *//')"
-    others="$(/usr/bin/dscl . -list /Users PrimaryGroupID 2>/dev/null | /usr/bin/awk -v gid="$gid" '$2 == gid { print $1 }')"
-    if [[ ! "$gid" =~ ^[0-9]+$ || "$members" != "$CI_USER" || -n "$others" ]] \
-        || /usr/bin/dscl . -read "/Groups/$SOFTNET_GROUP" NestedGroups >/dev/null 2>&1; then
-        echo "The group $SOFTNET_GROUP must have $CI_USER as its only member (it has: ${members:-nobody}${others:+, and as their own group: $others})." >&2
+    # ACLs: stat and find -perm don't see them, ls -le does (a line like " 0: user:… allow write").
+    if /bin/ls -leR "$CI_ROOT" 2>/dev/null | /usr/bin/grep -qE '^ [0-9]+: '; then
+        echo "In $CI_ROOT, something has an ACL." >&2
         return 1
     fi
+    softnet_group_ok || return 1
     for dir in "$CI_BIN/tart" "$CI_ROOT/Tart.app/Contents/MacOS/tart" "$CI_SCRIPTS/orchestrator.sh" "$CI_SCRIPTS/common.sh"; do
         [[ -f "$dir" ]] || { echo "$dir is missing." >&2; return 1; }
     done
+}
+
+# Whether $SOFTNET_GROUP has $CI_USER as its only member: no other member, no nested group, no
+# one else's own group. (dscl says 0 for a key that isn't there: it's what it prints that counts.)
+softnet_group_ok() {
+    local gid members others nested
+    gid="$(/usr/bin/dscl . -read "/Groups/$SOFTNET_GROUP" PrimaryGroupID 2>/dev/null | /usr/bin/awk '$1 == "PrimaryGroupID:" { print $2 }')"
+    members="$(/usr/bin/dscl . -read "/Groups/$SOFTNET_GROUP" GroupMembership 2>/dev/null | /usr/bin/sed -n 's/^GroupMembership: *//p')"
+    nested="$(/usr/bin/dscl . -read "/Groups/$SOFTNET_GROUP" NestedGroups 2>/dev/null | /usr/bin/sed -n 's/^NestedGroups: *//p')"
+    others="$(/usr/bin/dscl . -list /Users PrimaryGroupID 2>/dev/null | /usr/bin/awk -v gid="$gid" -v me="$CI_USER" '$2 == gid && $1 != me { print $1 }')"
+    if [[ ! "$gid" =~ ^[0-9]+$ || "$members" != "$CI_USER" || -n "$others" || -n "$nested" ]]; then
+        echo "The group $SOFTNET_GROUP must have $CI_USER as its only member (it has: ${members:-nobody}${others:+; as their own group: ${others//$'\n'/ }}${nested:+; nested groups: $nested})." >&2
+        return 1
+    fi
+}
+
+# Homebrew's softnet, when it's setuid root again: anyone can run it then. Tart puts the bit back
+# by itself (asking for your password) when you run a VM with --net-softnet outside CI.
+homebrew_softnet_setuid() {
+    local softnet
+    softnet="$(/usr/bin/readlink -f /opt/homebrew/bin/softnet 2>/dev/null)" || return 1
+    [[ -f "$softnet" && -u "$softnet" ]] && echo "$softnet"
 }
 
 # Apple's Virtualization framework wants an unlocked login keychain (macOS 15 and later). In a
