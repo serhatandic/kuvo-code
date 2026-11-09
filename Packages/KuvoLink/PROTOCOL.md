@@ -371,6 +371,7 @@ connection.
   app until you say, on for a machine), else `ok: false` with why ("<box> doesn't take work from
   your other computers. Ask the user to allow it in Settings › Permissions on <box>."). Stops,
   answers, compacts and lists aren't held by it: they reach only work a lead already has there.
+  Nor are moves (Move to Computer) or a group chat's seats: it's about starts alone, for now.
   - **`as.start`** (a start's, filled in by the lead's box from its own record): `{approval, held,
     agent: "plan"|null, model, autopilot, works: {bot, name}|null, own, depth, line, limits, homes}`:
     the lead's approval as it comes to there now (never the one kept, nor what the agent asked), its
@@ -385,19 +386,25 @@ connection.
     lead's means nothing there), on the lead's model where there's an account for it there, else
     the engine's default, said so; never past the lead's approval nor past what that box gives (Full
     Access only where confirmed there, Auto only where its sandbox runs: the lead's answer says
-    why); with the receiving box's Settings › Permissions and the lead's `held` after them, kept as
-    `kuvo.held` so they hold however its rules are made again. It's marked `kuvo.startedBy` (the
+    why), and kept as no more than that box gives as it's made (Full Access, where it isn't
+    confirmed there, is kept as Auto, so the session never rises to it later); with the receiving
+    box's Settings › Permissions and the lead's `held` after them, kept as `kuvo.held` so they hold
+    however its rules are made again (and carried with it onto the coding agents, with `lead`,
+    `line` and `call`). Its switch is looked at again just before the session is made. It's marked `kuvo.startedBy` (the
     lead), `by`, `depth`, `wake` (a bot's own: finished and asks; `wait` across computers becomes
     hearing it finish), `line` (when it says more than `startedBy`), `limits` (where the bot isn't),
     `call` (the call's id), and `lead: {box, key, name}` (the lead's computer, as the receiver names
     it, and the lead's name, for clients' "Started from"). Its task comes as a message from "<lead>
     on <box>". The lead is noted to live on the box that called ("Homes"), so news of the session
     goes there. A start's call `made` over a day off is refused.
-  - **Once**: each start is kept in `run/calls/<id>.json` as it goes (what it's to be made with,
-    then that it's made, marked, told its task, and its answer), so one that comes again is
-    answered as it was, and one cut short by the box going down is finished from the step it got
-    to at the next round (a session marked with its `kuvo.call` is found rather than made again; a
-    task already there isn't sent again), its lead told by the call's answer. One a day old that
+  - **Once**: each start is kept in `run/calls/<id>.json` as it goes (the worktree made for it,
+    what it's to be made with, whether on the engine or the coding agents' bridge but never where
+    either is nor its password, then that it's made, marked, told its task, and its answer), so one
+    that comes again is answered as it was, and one cut short by the box going down is finished
+    from the step it got to at a later round, once its engine answers, wherever it is now (a
+    session marked with its `kuvo.call` is found rather than made again, and while that can't be
+    asked it waits; a worktree made for it is used, not a second; a task already there isn't sent
+    again), its lead told by the call's answer. One a day old that
     wasn't made yet isn't started, nor one whose box has stopped taking starts or was removed since,
     and the lead hears why. Kept 30 days.
   - **The answer** is a note, as for a stop, so a start whose tool stopped waiting reaches its lead
@@ -405,10 +412,10 @@ connection.
     receiving box's name.
   - **Sender side**: a start, or a read of what's there, is never kept for a box that isn't
     answering: the tool says at once it may be asleep, off or offline and nothing was started (so
-    too when the relay says it isn't there before that box said it has the call: a box keeps a
-    start, then says `delivered {ok: true}`, before it makes anything, and again once it's done).
-    One not answered in time (45 seconds for a start, 20 for a read), or whose box said it had it
-    and then stopped answering, is taken out of the outbox, so it's never started late or twice: the
+    too when the relay says it isn't there before the call ever went to it). One not answered in
+    time (45 seconds for a start, 20 for a read), or that went to that box and then the relay says
+    it isn't there (whether or not it said it had it: a box keeps a start, then says `delivered
+    {ok: true}`, before it makes anything, but that word can be lost), is taken out of the outbox, so it's never started late or twice: the
     tool says it couldn't confirm, to check `list_sessions` before trying again. The lead's box notes where the session lives ("Homes") and that the lead
     started work there (`run/work/started-elsewhere.json`, `{<lead>: {<key>: at}}`, 30 days), so
     its `list_sessions` asks there before that computer's first rows come.

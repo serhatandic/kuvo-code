@@ -171,9 +171,9 @@ test("in the lead's mode, with no more approval than the lead has nor more than 
     const made = eng.seen.made.at(-1);
     return { kuvo: eng.all.get(made.id).metadata.kuvo, agent: made.agent, words: answerOf(call).note.words, refused: answerOf(call).refused };
   };
-  // Full Access there, not confirmed here: less, and the lead hears why.
+  // Full Access there, not confirmed here: less, kept as no more than that, and the lead hears why.
   const unconfirmed = await kuvoOf({}, {});
-  assert.equal(unconfirmed.kuvo.approval, "fullAccess");
+  assert.equal(unconfirmed.kuvo.approval, "auto");
   assert.notEqual(unconfirmed.kuvo.applied, "fullAccess");
   assert.match(unconfirmed.words, /Full Access hasn't been allowed on that computer yet: only the user can allow it, by picking Full Access once in a session there\./);
   // Confirmed here: Full Access.
@@ -543,4 +543,115 @@ test("Stop All goes by when it was given, on the other computer's clock: a sessi
   const call = { id: callID(), from: "ses_lead", tool: "stop_work", args: { before: T + ahead }, as: { name: "Foreman", rules: [], free: false }, made: T + ahead, at: T + ahead };
   await take(call);
   assert.deepEqual(eng.seen.interrupted, ["ses_old"]);
+});
+
+// ---- Found in the security review ----
+
+test("a start cut short is finished on its engine as it is now, after it started again elsewhere: found, not made twice; never while the engine isn't answering; and nothing keeps its password", async () => {
+  const whole = startCall();
+  await take(whole);
+  const kept = read(path.join(run, "calls", `${whole.id}.json`));
+  assert.equal(kept.making.target, undefined, "where the engine was isn't kept");
+  assert.doesNotMatch(fs.readFileSync(path.join(run, "calls", `${whole.id}.json`), "utf8"), /"password"/);
+  // The engine started again on another port, with another password.
+  const moved = await engine({});
+  write(path.join(run, "engine.json"), moved.target);
+  // Made as the box went down, before its journal heard; kept by a box from before, with where its
+  // engine was then.
+  moved.all.set("ses_ghost", { id: "ses_ghost", time: { created: Date.now(), updated: Date.now() }, directory: kept.making.folder, metadata: { kuvo: { call: "cal_moved0000000001", startedBy: "ses_lead" } } });
+  const journal = { ...structuredClone(kept), id: "cal_moved0000000001", made: Date.now(), at: Date.now() };
+  for (const key of ["done", "session", "marked", "prompted"]) delete journal[key];
+  journal.making.target = eng.target;
+  journal.making.prompt.id = "msg_moved";
+  write(path.join(run, "calls", `${journal.id}.json`), journal);
+  const answered = [];
+  // Its engine not answering yet, as it starts again: left for a later round, not refused for good.
+  await link.resumeStarts((each, done) => answered.push([each.id, done]), Date.now(), { readEngine: () => ({ port: 1, password: "old" }), bridge: () => null });
+  assert.deepEqual(answered, []);
+  assert.equal(read(path.join(run, "calls", `${journal.id}.json`)).done, undefined);
+  assert.equal(moved.seen.made.length + eng.seen.made.length, 1, "nothing made meanwhile");
+  // Answering: the session it made is found there and told its task, once.
+  await link.resumeStarts((each, done) => answered.push([each.id, done]), Date.now(), { readEngine: () => moved.target, bridge: () => null });
+  assert.deepEqual([moved.seen.made.length, eng.seen.made.length], [0, 1], "not made again");
+  assert.deepEqual(moved.seen.prompts.map(each => [each.to, each.id]), [["ses_ghost", "msg_moved"]]);
+  assert.equal(answered.length, 1);
+  assert.match(answered[0][1].text, /^Started "Sign-in" in api \(address ses_ghost\)/);
+  const after = fs.readFileSync(path.join(run, "calls", `${journal.id}.json`), "utf8");
+  assert.doesNotMatch(after, /"password"|"target"/, "the old journal's engine and password are gone");
+});
+
+test("one started for a lead on another computer never rises to Full Access later, when Full Access is confirmed here for something else", async () => {
+  const call = startCall();
+  await take(call);
+  const id = eng.seen.made[0].id;
+  // (Auto, which asks first while the sandbox isn't running, as it isn't in this test.)
+  assert.equal(eng.all.get(id).metadata.kuvo.approval, "auto");
+  assert.notEqual(eng.all.get(id).metadata.kuvo.applied, "fullAccess");
+  // You confirm Full Access here, for a session of your own; every conversation's rules are made again.
+  confirmFullAccess();
+  await link.reapplyApprovals(eng.target, null);
+  await link.reapplyApprovals(eng.target, null, true);
+  assert.equal(eng.all.get(id).metadata.kuvo.approval, "auto");
+  assert.notEqual(eng.all.get(id).metadata.kuvo.applied, "fullAccess");
+  assert.notEqual(link.approvalOf(eng.all.get(id), { agents: false, bot: true }).effective, "fullAccess");
+});
+
+test("a start under way when you switch your other computers off here isn't made", async () => {
+  const call = startCall();
+  // Switched off as the start reads what's here, after its call was let in: the engine, through a
+  // stand-in in front of it that switches it off as the start asks which accounts it has.
+  let switched = false;
+  const proxy = http.createServer((request, response) => {
+    if (request.url === "/api/provider" && !switched) { switched = true; link.allowOtherComputers(false); }
+    const forward = http.request({ host: "127.0.0.1", port: eng.target.port, path: request.url, method: request.method, headers: request.headers }, answer => {
+      response.writeHead(answer.statusCode, answer.headers);
+      answer.pipe(response);
+    });
+    request.pipe(forward);
+  });
+  await new Promise(resolve => proxy.listen(0, "127.0.0.1", resolve));
+  atEnd(() => { proxy.closeAllConnections(); proxy.close(); });
+  const via = { port: proxy.address().port, password: "pw" };
+  const said = [];
+  await link.takeCall(mini.peer, call, { send: (_to, message) => said.push(message.delivered), targets: [via], bridge: true, places: { readEngine: () => via, bridge: () => null } });
+  assert.equal(switched, true);
+  assert.equal(eng.seen.made.length, 0, "nothing made");
+  assert.equal(answerOf(call).refused, true);
+  assert.equal(answerOf(call).note.words, "devbox doesn't take work from your other computers. Ask the user to allow it in Settings › Permissions on devbox.");
+  link.allowOtherComputers(true);
+});
+
+test("a start that went out and got no word back before its computer stopped answering may have started: said so, and its count is kept", async () => {
+  leadHere();
+  const counts = () => (read(path.join(run, "tool-limits.json"))?.botSessions?.["bot:bot_foreman0001"] ?? []).length;
+  const before = counts();
+  const going = tool("start_session", { computer: "mini", project: "api", task: "Fix the sign-in." });
+  let name;
+  while (!(name = sending().find(each => read(path.join(run, "outbox", "sending", each))?.call?.tool === "start_session"))) await new Promise(resolve => setTimeout(resolve, 5));
+  // It went to mini (no word back), then the relay says mini isn't there.
+  const file = path.join(run, "outbox", "sending", name);
+  write(file, { ...read(file), sentTo: mini.pub });
+  write(path.join(run, "peer-reach.json"), { [mini.pub]: Date.now() });
+  const said = await going;
+  assert.match(said.text, /^Couldn't confirm the session started on mini: it stopped answering .* It may still have started/);
+  assert.doesNotMatch(said.text, /nothing was started/);
+  assert.equal(counts(), before + 1, "it may have started: still counted");
+});
+
+test("a start cut short after its worktree was made goes on in that worktree, not a second", async () => {
+  // The worktree it made, kept with its call, as the box went down before it made the session.
+  const tree = path.join(home, "worktrees", "api-sign-in");
+  fs.mkdirSync(tree, { recursive: true });
+  const call = startCall({ worktree: true });
+  const journal = { id: call.id, from: "ses_lead", sender: mini.pub, computer: "mini", name: "Foreman", given: { task: "Fix the sign-in.", project: "api", title: "Sign-in", worktree: true }, start: startAs(), made: Date.now(), at: Date.now(),
+    tree: { folder: tree, root: tree, branch: "kuvo/sign-in" } };
+  write(path.join(run, "calls", `${call.id}.json`), journal);
+  const answered = [];
+  await link.resumeStarts((each, done) => answered.push([each.id, done]), Date.now(), { readEngine: () => eng.target, bridge: () => null });
+  // (api isn't a git repository: a second worktree couldn't be made at all.)
+  assert.equal(answered.length, 1);
+  assert.equal(answered[0][1].refused, false, answered[0][1].text);
+  assert.equal(eng.seen.made.length, 1);
+  assert.equal(eng.seen.made[0].directory, tree);
+  assert.match(answered[0][1].text, /worktree kuvo\/sign-in/);
 });

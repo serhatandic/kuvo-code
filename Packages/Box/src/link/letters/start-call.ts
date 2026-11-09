@@ -39,7 +39,7 @@ import type { WorkLimits, WorksFor } from "../../shared/routes/work";
 import type { Peer } from "../peers/known";
 import type { Approval } from "../work/approval";
 import type { Caller, Lead } from "../work/tools";
-import type { Making, RemoteLead, StartGiven } from "./start";
+import type { MadeTree, Making, RemoteLead, StartGiven } from "./start";
 import type { ToolAnswer, ToolPlace } from "./tools";
 
 /** What a start's call asks for, as start_session takes it: never a step of a goal, nor where. */
@@ -253,8 +253,9 @@ export const AWAY_WORDS = "it may be asleep, off or offline";
 export const CALLS = path.join(RUN, "calls");
 
 /** A start's call, as it's kept here: from whom (the lead, its box and that box's name), what it
- * asked and who it is (`given`, `as`), when it was made, where it's got to (`making`, then the
- * session made, marked, told its task), and once it's done, what it said. */
+ * asked and who it is (`given`, `as`), when it was made, where it's got to (the worktree made for
+ * it, `making`, then the session made, marked, told its task), and once it's done, what it said.
+ * Never where the engine is, nor its password: those change each time it starts. */
 export interface StartJournal {
   id: string;
   from: string;
@@ -265,6 +266,7 @@ export interface StartJournal {
   start: StartAs;
   made: number;
   at: number;
+  tree?: MadeTree;
   making?: Making;
   session?: string;
   marked?: boolean;
@@ -276,7 +278,13 @@ const journalFile = (id: string) => path.join(CALLS, `${id}.json`);
 export function readJournal(id: string): StartJournal | null {
   try {
     const kept = JSON.parse(fs.readFileSync(journalFile(id), "utf8"));
-    return isObject(kept) && kept.id === id ? kept as unknown as StartJournal : null;
+    if (!isObject(kept) || kept.id !== id) return null;
+    // (One kept by a box before: where its engine was then, and its password, aren't kept on.)
+    if (isObject(kept.making) && "target" in kept.making) {
+      delete kept.making.target;
+      keepJournal(kept as unknown as StartJournal);
+    }
+    return kept as unknown as StartJournal;
   } catch {
     return null;
   }
@@ -290,13 +298,17 @@ export const keepJournal = (journal: StartJournal) => {
  * round that finishes those cut short, leaves it be. */
 export const startsRunning = new Set<string>();
 
+type Places = { readEngine: () => Target; bridge: () => Target | null };
+
 /** A lead on another computer starting a session here (`takeCall`'s, once it's checked who it's
- * from): started once, kept as it goes, and what it said. */
-export async function takeStart(journal: StartJournal, places: { readEngine: () => Target; bridge: () => Target | null }): Promise<{ text: string; refused: boolean }> {
+ * from): started once, kept as it goes, and what it said; null where one cut short can't be
+ * finished now (its engine isn't answering): it's left for a later round, never started again. */
+export async function takeStart(journal: StartJournal, places: Places): Promise<{ text: string; refused: boolean } | null> {
   if (journal.done) return journal.done;
   startsRunning.add(journal.id);
   try {
     const done = await finishStart(journal, places);
+    if (!done) return null;
     journal.done = done;
     keepJournal(journal);
     return done;
@@ -305,25 +317,43 @@ export async function takeStart(journal: StartJournal, places: { readEngine: () 
   }
 }
 
+// Where a start's session is now: the coding agents' bridge, or the engine, as each says it is
+// now (both get a new address and password each time they start); null where it isn't running.
+function targetOf(making: Pick<Making, "agents">, places: Places): Target | null {
+  try { return making.agents ? places.bridge() : places.readEngine(); } catch { return null; }
+}
+
+// The session a start's call made, as its mark says: its address, null for none made, or
+// undefined where the engine couldn't be asked (so it's never taken for none, and made twice).
+async function sessionOf(journal: StartJournal, places: Places): Promise<string | null | undefined> {
+  const target = journal.making ? targetOf(journal.making, places) : null;
+  return target ? madeFor(target, journal.id).catch(() => undefined) : undefined;
+}
+
 // The start, from where it got to: not made yet (or made with nothing to show for it), started;
-// made, marked and told its task as far as it wasn't.
-async function finishStart(journal: StartJournal, places: { readEngine: () => Target; bridge: () => Target | null }): Promise<{ text: string; refused: boolean }> {
+// made, marked and told its task as far as it wasn't. Null where its engine can't be asked now.
+async function finishStart(journal: StartJournal, places: Places): Promise<{ text: string; refused: boolean } | null> {
   keepJournal(journal);
   if (journal.making && !journal.session) {
-    const found = await madeFor(journal.making.target, journal.id).catch(() => null);
+    const found = await sessionOf(journal, places);
+    if (found === undefined) return null;
     if (found) journal.session = found;
   }
   if (journal.making && journal.session) {
     const making = journal.making;
     const session = journal.session;
+    const target = targetOf(making, places);
+    if (!target) return null;
     if (!journal.marked) {
-      journal.marked = await markMade(making, session);
+      journal.marked = await markMade(making, target, session);
       keepJournal(journal);
     }
     if (!journal.prompted) {
       try {
-        if (!(await toldAlready(making, session))) await promptMade(making, session);
+        if (!(await toldAlready(target, making, session))) await promptMade(making, target, session);
       } catch (error) {
+        // (Its engine not answering yet: a later round, within a day of the call.)
+        if (Date.now() - journal.made < LETTER_LIFE && !(await answers(target))) return null;
         return { text: `Started a session (address ${session}), but the task didn't reach it: ${String((error as Error | null)?.message ?? error)}`, refused: true };
       }
       journal.prompted = true;
@@ -338,8 +368,9 @@ async function finishStart(journal: StartJournal, places: { readEngine: () => Ta
     line: journal.start.line, limits: journal.start.limits,
   };
   const outcome = await startSession(journal.given as StartGiven, { session: journal.from, place: null, name: journal.name, remote }, {
-    readEngine: places.readEngine, bridge: places.bridge,
+    readEngine: places.readEngine, bridge: places.bridge, ...(journal.tree ? { tree: journal.tree } : {}),
     steps: {
+      tree: tree => { journal.tree = tree; keepJournal(journal); },
       making: making => { journal.making = making; keepJournal(journal); },
       made: session => { journal.session = session; keepJournal(journal); },
       marked: () => { journal.marked = true; keepJournal(journal); },
@@ -358,9 +389,12 @@ async function madeFor(target: Target, id: string): Promise<string | null> {
   return typeof found?.id === "string" ? found.id : null;
 }
 
+// Whether `target` answers now.
+const answers = (target: Target): Promise<boolean> => engineCall(target, "GET", "/api/provider").then(() => true, () => false);
+
 // Whether the session was given its task already (its message with the task's id is there).
-async function toldAlready(making: Making, session: string): Promise<boolean> {
-  const page = await engineCall(making.target, "GET", `/api/session/${encodeURIComponent(session)}/message?limit=20&order=desc`) as unknown;
+async function toldAlready(target: Target, making: Making, session: string): Promise<boolean> {
+  const page = await engineCall(target, "GET", `/api/session/${encodeURIComponent(session)}/message?limit=20&order=desc`) as unknown;
   const list = Array.isArray(page) ? page : isObject(page) && Array.isArray(page.data) ? page.data : [];
   return list.some((each: unknown) => isObject(each) && each.id === making.prompt.id);
 }
@@ -383,7 +417,12 @@ export async function resumeStarts(answer: (journal: StartJournal, done: { text:
     // it got.)
     if (!otherComputersAllowed() || !peersOf(readLink()).some(peer => peer.key === journal.sender)) {
       const why = !otherComputersAllowed() ? "this computer stopped taking work from your other computers" : "your computer was removed from this one";
-      if (journal.making && !journal.session) journal.session = await madeFor(journal.making.target, journal.id).catch(() => null) ?? undefined;
+      if (journal.making && !journal.session) {
+        // (Whether it was made can't be told while its engine isn't answering: a later round.)
+        const found = await sessionOf(journal, places);
+        if (found === undefined) continue;
+        if (found) journal.session = found;
+      }
       journal.done = journal.making && journal.session && journal.prompted
         ? { text: startedWords({ started: { session: journal.session, ...journal.making.started, ...(journal.marked ? {} : { wakes: undefined }) } }, false).text, refused: false }
         : journal.session
@@ -399,10 +438,12 @@ export async function resumeStarts(answer: (journal: StartJournal, done: { text:
       answer(journal, journal.done);
       continue;
     }
+    // (Its engine, or the coding agents' bridge for one of theirs, not answering yet, as it's just
+    // starting again: a later round, so it's never refused for good, nor made twice.)
     let engine: Target | null = null;
     try { engine = places.readEngine(); } catch {}
-    // (Its engine isn't running yet: the next round.)
-    if (!engine) continue;
+    const bridge = journal.making?.agents ? targetOf(journal.making, places) : null;
+    if (!engine || !(await answers(engine)) || (journal.making?.agents && (!bridge || !(await answers(bridge))))) continue;
     const done = await takeStart(journal, places).catch(() => null);
     if (done) answer(journal, done);
   }

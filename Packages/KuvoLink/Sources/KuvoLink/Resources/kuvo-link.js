@@ -17979,6 +17979,8 @@ function approvalGiven(given) {
     return defaultApproval();
   return isApproval(given) ? given : undefined;
 }
+var ownName = () => plainName(IS_MAC ? macLink.config?.name : readLink()?.name) || (IS_MAC ? "the Mac" : "a machine");
+var takesNoWork = () => `${ownName()} doesn't take work from your other computers. Ask the user to allow it in Settings › Permissions on ${ownName()}.`;
 var SEAT = "Not from a group chat: talk it through here; the work is handed out after the wrap-up.";
 var seatRefusal = () => ({ status: 403, message: SEAT });
 var isBotFolder = (folder) => folder.startsWith(path65.resolve(BOTS) + "/");
@@ -18167,22 +18169,35 @@ async function startSession(given, by, place) {
     went(null);
   };
   let madeTree = null;
+  const removeTree = async () => {
+    if (madeTree)
+      await answerWorktrees("POST", "kuvo/worktrees/remove", { path: madeTree, discard: true }, engine, place.signal).catch(() => {});
+  };
   if (given.worktree === true) {
     const project = projectDirectory ?? (folder !== CHATS ? projectOf(folder) : null);
     if (!project) {
       giveBack();
       return no(400, "A chat has no worktree: give a project.");
     }
-    const made = await answerWorktrees("POST", "kuvo/worktrees", { project }, engine, place.signal).catch((error) => ({ status: 502, value: { message: String(error?.message ?? error) } }));
-    const tree = made.value;
-    if (made.status !== 200 || typeof tree.folder !== "string") {
-      giveBack();
-      return no(made.status === 409 ? 400 : 502, `Couldn't make a worktree of ${path65.basename(project)}: ${String(tree.message ?? "it failed")}`);
+    const before = place.tree && fs63.existsSync(place.tree.folder) ? place.tree : null;
+    if (before) {
+      folder = before.folder;
+      madeTree = before.root;
+      if (before.branch)
+        picked.push(`worktree ${before.branch}`);
+    } else {
+      const made = await answerWorktrees("POST", "kuvo/worktrees", { project }, engine, place.signal).catch((error) => ({ status: 502, value: { message: String(error?.message ?? error) } }));
+      const tree = made.value;
+      if (made.status !== 200 || typeof tree.folder !== "string") {
+        giveBack();
+        return no(made.status === 409 ? 400 : 502, `Couldn't make a worktree of ${path65.basename(project)}: ${String(tree.message ?? "it failed")}`);
+      }
+      folder = tree.folder;
+      madeTree = typeof tree.root === "string" ? tree.root : null;
+      if (typeof tree.branch === "string")
+        picked.push(`worktree ${tree.branch}`);
+      place.steps?.tree?.({ folder, root: madeTree, ...typeof tree.branch === "string" ? { branch: tree.branch } : {} });
     }
-    folder = tree.folder;
-    madeTree = typeof tree.root === "string" ? tree.root : null;
-    if (typeof tree.branch === "string")
-      picked.push(`worktree ${tree.branch}`);
   }
   const agents = Boolean(bridge && target.port === bridge.port);
   const from = by?.place ? approvalOf(by.place.data, { agents: Boolean(bridge && by.place.target.port === bridge.port), bot: Boolean(bot) }) : null;
@@ -18191,6 +18206,7 @@ async function startSession(given, by, place) {
   const asBefore = Boolean(from && !from.stored && wanted === starters && !bot);
   const effective = effectiveApproval(wanted, { agents });
   const applied = asBefore ? wanted : effective.approval;
+  const kept = remote && wanted === "fullAccess" && unavailable("fullAccess") ? "auto" : wanted;
   const got = applied !== (requested ?? wanted) && lowerOf(applied, requested ?? wanted) === applied ? applied : undefined;
   const project = projectOf3(folder);
   const title = typeof given.title === "string" && given.title.trim() ? given.title.trim() : null;
@@ -18205,10 +18221,10 @@ async function startSession(given, by, place) {
     ...remote ? { call: remote.call, lead: { box: remote.computer, key: remote.key, name: by.name }, ...brought.length ? { held: brought } : {} } : {}
   };
   const starter = Boolean(by?.place || remote);
-  const marks = { ...starter ? { startedBy: by.session } : {}, ...asBefore ? {} : { approval: wanted, applied }, ...autopilot ? { autopilot: true } : {}, ...marksOfLine };
+  const marks = { ...starter ? { startedBy: by.session } : {}, ...asBefore ? {} : { approval: kept, applied }, ...autopilot ? { autopilot: true } : {}, ...marksOfLine };
   const waits = given.wait === true && !remote;
   const wakes = wakesFrom(given.wait === true && remote ? given.wake ?? "both" : given.wake, remote ? remote.own : Boolean(ownBot), waits);
-  const kuvo = { ...starter ? { startedBy: by.session, ...bot ? { by: bot, depth } : {}, ...wakes.length ? { wake: wakes } : {} } : {}, ...asBefore ? {} : { approval: wanted, applied }, ...autopilot ? { autopilot: true } : {}, ...marksOfLine };
+  const kuvo = { ...starter ? { startedBy: by.session, ...bot ? { by: bot, depth } : {}, ...wakes.length ? { wake: wakes } : {} } : {}, ...asBefore ? {} : { approval: kept, applied }, ...autopilot ? { autopilot: true } : {}, ...marksOfLine };
   const from_ = remote ? `${by.name} on ${remote.computer}` : by?.name ?? "";
   const text = by ? composeLetter(from_, by.session, task, waits) + (bot ? `
 
@@ -18216,7 +18232,6 @@ ${sessionNote(bot.name)}${goal ? `
 
 ${goalNote}` : ""}` : "") : task;
   const making = {
-    target,
     agents,
     asBefore,
     autopilot,
@@ -18236,6 +18251,11 @@ ${goalNote}` : ""}` : "") : task;
       ...remote && got && effective.held ? { held: heldThere(wanted, applied, agents) } : {}
     }
   };
+  if (remote && !otherComputersAllowed()) {
+    giveBack();
+    await removeTree();
+    return no(403, takesNoWork());
+  }
   place.steps?.making?.(making);
   let session;
   try {
@@ -18249,11 +18269,10 @@ ${goalNote}` : ""}` : "") : task;
       rememberApproval(requested);
   } catch (error) {
     giveBack();
-    if (madeTree)
-      await answerWorktrees("POST", "kuvo/worktrees/remove", { path: madeTree, discard: true }, engine, place.signal).catch(() => {});
+    await removeTree();
     return no(502, `Couldn't start a session in ${folder}: ${String(error?.message ?? error)}`);
   }
-  const marked = await markMade(making, session, place.signal);
+  const marked = await markMade(making, target, session, place.signal);
   if (marked)
     place.steps?.marked?.();
   if ((by?.place || remote) && bot)
@@ -18264,7 +18283,7 @@ ${goalNote}` : ""}` : "") : task;
     linkSession(bot.bot, given.step, session);
   const id = making.prompt.id;
   try {
-    await promptMade(making, session);
+    await promptMade(making, target, session);
   } catch (error) {
     went(session, true);
     return no(502, `Started a session (address ${session}), but the task didn't reach it: ${String(error?.message ?? error)}`, session);
@@ -18311,8 +18330,7 @@ async function heldByLimits(bot, limits, depth, goal, targets, signal) {
   }
   return { refused: { status: 429, message: past.daily ? `${past.words} Ask the user to raise it (Edit Bot › Work), or go on tomorrow.` : past.words } };
 }
-async function markMade(making, session, signal) {
-  const { target } = making;
+async function markMade(making, target, session, signal) {
   const address = encodeURIComponent(session);
   if (making.folders.length) {
     await call(target, "PUT", `/api/experimental/session/${address}/instructions/entries/kuvo.project-folders`, { value: projectsNote(making.folder, making.folders) }).catch(() => {});
@@ -18326,8 +18344,8 @@ async function markMade(making, session, signal) {
   await noteFullAccess(session).catch(() => {});
   return marked;
 }
-async function promptMade(making, session) {
-  await asked(making.target, "POST", `api/session/${encodeURIComponent(session)}/prompt`, { id: making.prompt.id, text: making.prompt.text, delivery: "steer" });
+async function promptMade(making, target, session) {
+  await asked(target, "POST", `api/session/${encodeURIComponent(session)}/prompt`, { id: making.prompt.id, text: making.prompt.text, delivery: "steer" });
 }
 function elsewhereOf(bot, here) {
   const own = botHere(bot)?.session;
@@ -18560,7 +18578,13 @@ var journalFile = (id) => path66.join(CALLS, `${id}.json`);
 function readJournal(id) {
   try {
     const kept = JSON.parse(fs64.readFileSync(journalFile(id), "utf8"));
-    return isObject(kept) && kept.id === id ? kept : null;
+    if (!isObject(kept) || kept.id !== id)
+      return null;
+    if (isObject(kept.making) && "target" in kept.making) {
+      delete kept.making.target;
+      keepJournal(kept);
+    }
+    return kept;
   } catch {
     return null;
   }
@@ -18576,6 +18600,8 @@ async function takeStart(journal, places) {
   startsRunning.add(journal.id);
   try {
     const done = await finishStart(journal, places);
+    if (!done)
+      return null;
     journal.done = done;
     keepJournal(journal);
     return done;
@@ -18583,25 +18609,45 @@ async function takeStart(journal, places) {
     startsRunning.delete(journal.id);
   }
 }
+function targetOf(making, places) {
+  try {
+    return making.agents ? places.bridge() : places.readEngine();
+  } catch {
+    return null;
+  }
+}
+async function sessionOf(journal, places) {
+  const target = journal.making ? targetOf(journal.making, places) : null;
+  return target ? madeFor3(target, journal.id).catch(() => {
+    return;
+  }) : undefined;
+}
 async function finishStart(journal, places) {
   keepJournal(journal);
   if (journal.making && !journal.session) {
-    const found = await madeFor3(journal.making.target, journal.id).catch(() => null);
+    const found = await sessionOf(journal, places);
+    if (found === undefined)
+      return null;
     if (found)
       journal.session = found;
   }
   if (journal.making && journal.session) {
     const making = journal.making;
     const session = journal.session;
+    const target = targetOf(making, places);
+    if (!target)
+      return null;
     if (!journal.marked) {
-      journal.marked = await markMade(making, session);
+      journal.marked = await markMade(making, target, session);
       keepJournal(journal);
     }
     if (!journal.prompted) {
       try {
-        if (!await toldAlready(making, session))
-          await promptMade(making, session);
+        if (!await toldAlready(target, making, session))
+          await promptMade(making, target, session);
       } catch (error) {
+        if (Date.now() - journal.made < LETTER_LIFE && !await answers(target))
+          return null;
         return { text: `Started a session (address ${session}), but the task didn't reach it: ${String(error?.message ?? error)}`, refused: true };
       }
       journal.prompted = true;
@@ -18628,7 +18674,12 @@ async function finishStart(journal, places) {
   const outcome = await startSession(journal.given, { session: journal.from, place: null, name: journal.name, remote }, {
     readEngine: places.readEngine,
     bridge: places.bridge,
+    ...journal.tree ? { tree: journal.tree } : {},
     steps: {
+      tree: (tree) => {
+        journal.tree = tree;
+        keepJournal(journal);
+      },
       making: (making) => {
         journal.making = making;
         keepJournal(journal);
@@ -18656,8 +18707,9 @@ async function madeFor3(target, id) {
   const found = list.find((each) => isObject(each) && isObject(each.metadata) && isObject(each.metadata.kuvo) && each.metadata.kuvo.call === id);
   return typeof found?.id === "string" ? found.id : null;
 }
-async function toldAlready(making, session) {
-  const page = await call(making.target, "GET", `/api/session/${encodeURIComponent(session)}/message?limit=20&order=desc`);
+var answers = (target) => call(target, "GET", "/api/provider").then(() => true, () => false);
+async function toldAlready(target, making, session) {
+  const page = await call(target, "GET", `/api/session/${encodeURIComponent(session)}/message?limit=20&order=desc`);
   const list = Array.isArray(page) ? page : isObject(page) && Array.isArray(page.data) ? page.data : [];
   return list.some((each) => isObject(each) && each.id === making.prompt.id);
 }
@@ -18677,8 +18729,13 @@ async function resumeStarts(answer, now = Date.now(), places = { readEngine: rea
       continue;
     if (!otherComputersAllowed() || !peersOf(readLink()).some((peer) => peer.key === journal.sender)) {
       const why = !otherComputersAllowed() ? "this computer stopped taking work from your other computers" : "your computer was removed from this one";
-      if (journal.making && !journal.session)
-        journal.session = await madeFor3(journal.making.target, journal.id).catch(() => null) ?? undefined;
+      if (journal.making && !journal.session) {
+        const found = await sessionOf(journal, places);
+        if (found === undefined)
+          continue;
+        if (found)
+          journal.session = found;
+      }
       journal.done = journal.making && journal.session && journal.prompted ? { text: startedWords({ started: { session: journal.session, ...journal.making.started, ...journal.marked ? {} : { wakes: undefined } } }, false).text, refused: false } : journal.session ? { text: `Started a session (address ${journal.session}), but it wasn't given its task: ${why} first.`, refused: true } : { text: `The session wasn't started: ${why} before it was made.`, refused: true };
       keepJournal(journal);
       answer(journal, journal.done);
@@ -18694,7 +18751,8 @@ async function resumeStarts(answer, now = Date.now(), places = { readEngine: rea
     try {
       engine = places.readEngine();
     } catch {}
-    if (!engine)
+    const bridge = journal.making?.agents ? targetOf(journal.making, places) : null;
+    if (!engine || !await answers(engine) || journal.making?.agents && (!bridge || !await answers(bridge)))
       continue;
     const done = await takeStart(journal, places).catch(() => null);
     if (done)
@@ -18815,7 +18873,6 @@ function callLife(call) {
   return NOTE_MEMORY;
 }
 var boxName = computerName;
-var ownName = () => plainName(IS_MAC ? macLink.config?.name : readLink()?.name) || (IS_MAC ? "the Mac" : "a machine");
 var verbOf = (tool) => tool === "stop_session" || tool === "stop_work" ? "stop" : tool === "compact_session" ? "summary" : tool === "answer_ask" ? "answer" : tool === "start_session" ? "start" : "list";
 var isOpenTool = (tool) => OPEN_TOOLS.includes(tool);
 var waitedFor = (tool) => tool === "list_sessions" || isOpenTool(tool);
@@ -18922,7 +18979,12 @@ async function callPeer(peer, tool, args, lead, place, { keep, quiet = false, mo
   const sent = Date.now();
   const id = leaveCall(peer.key, lead.session, call, { wait: true, quiet });
   const { answer, unreachable } = await awaitAnswer(id, peer.key, sent, place, { most, cut: READ_BY_MAIL });
-  const had = !fs66.existsSync(path68.join(SENDING, `${id}.json`));
+  const left = path68.join(SENDING, `${id}.json`);
+  const had = !fs66.existsSync(left);
+  let went = false;
+  try {
+    went = JSON.parse(fs66.readFileSync(left, "utf8")).sentTo === peer.key;
+  } catch {}
   if (!answer && isOpenTool(tool)) {
     fs66.rmSync(path68.join(SENDING, `${id}.json`), { force: true });
     letterTries.delete(id);
@@ -18933,7 +18995,7 @@ async function callPeer(peer, tool, args, lead, place, { keep, quiet = false, mo
     return { answer: { text: answer.note, isError: false } };
   if (answer && "text" in answer && typeof answer.text === "string")
     return { answer: { text: answer.text, isError: answer.isError === true } };
-  return { away: unreachable ? AWAY : "it didn't answer in time", kept: keep && !place.signal?.aborted, sent: had || !unreachable };
+  return { away: unreachable ? AWAY : "it didn't answer in time", kept: keep && !place.signal?.aborted, sent: had || went || !unreachable };
 }
 async function awaitAnswer(id, peer, sent, place, { most, cut, every = 250 }) {
   const stop = new AbortController;
@@ -19067,7 +19129,7 @@ async function takeCall(sender, given, { send, targets, answer = leaveCallAnswer
   if (id in lettersSeen(now) || `note:${id}` in lettersSeen(now))
     return send(sender, { delivered: { id, ok: true } });
   if (isOpenTool(tool) && !otherComputersAllowed())
-    return no(`${ownName()} doesn't take work from your other computers. Ask the user to allow it in Settings › Permissions on ${ownName()}.`);
+    return no(takesNoWork());
   if (tool === "start_session" && (!as.start || as.start.line.at(-1) !== from))
     return no("That isn't a call.");
   if (tool === "start_session" && Math.abs(now - made) > LETTER_LIFE)
@@ -19109,6 +19171,8 @@ async function takeCall(sender, given, { send, targets, answer = leaveCallAnswer
         keepJournal(journal);
       send(sender, { delivered: { id, ok: true } });
       const done = await takeStart(journal, places);
+      if (!done)
+        return;
       if (!done.refused)
         noteLineHomes(as.start.homes, as.start.line, now);
       answer(answerIdOf(id), { to: from, text: done.text, peer: sender.key, answers: id, words: done.text, refused: done.refused, list: false });
@@ -23771,8 +23835,9 @@ async function carryToAgents(id, model, readEngine, agents, signal) {
     }
     const renamed = Object.fromEntries(waiting.map((item) => [item.id, messageID()]));
     const kuvo = bot ? session.metadata?.kuvo ?? { bot: bot.described.id } : {};
-    const { approval, applied, autopilot } = session.metadata?.kuvo ?? {};
-    const marks = { kuvo: { ...approval ? { approval } : {}, ...applied ? { applied } : {}, ...autopilot === true ? { autopilot } : {}, ...kuvo, carriedFrom: id } };
+    const { approval, applied, autopilot, held, lead, line, call: started } = session.metadata?.kuvo ?? {};
+    const fromAfar = { ...Array.isArray(held) && held.length ? { held } : {}, ...isObject(lead) ? { lead } : {}, ...Array.isArray(line) ? { line } : {}, ...typeof started === "string" ? { call: started } : {} };
+    const marks = { kuvo: { ...approval ? { approval } : {}, ...applied ? { applied } : {}, ...autopilot === true ? { autopilot } : {}, ...fromAfar, ...kuvo, carriedFrom: id } };
     const moved = await call(agents, "POST", "/api/session/import", {
       title: session.title,
       agent: session.agent,
@@ -32446,6 +32511,7 @@ export {
   answerWorktrees,
   answered2 as answered,
   applySettings,
+  approvalOf,
   askAnswer,
   askNotice,
   atWorkNow,

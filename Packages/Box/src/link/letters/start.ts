@@ -11,7 +11,9 @@ import { isObject } from "../../shared/json";
 import { asked, call, engineGet } from "../engine/client";
 import { writtenByYou } from "../engine/queue";
 import { messageID } from "../engine/sessions";
-import { BOTS, CHATS, HERE, homeFolder } from "../home";
+import { BOTS, CHATS, HERE, homeFolder, IS_MAC } from "../home";
+import { macLink, readLink } from "../state";
+import { plainName } from "../../shared/text";
 import { realish } from "../fence/policy";
 import { changeProjects, PROJECTS_FILE, readProjects } from "../areas/projects";
 import { projectOf as projectOfFolder, readWorktrees } from "../areas/worktree-records";
@@ -24,7 +26,7 @@ import { noteOversight } from "../work/oversight";
 import { botLimits, limitsFrom, pastLimit } from "../work/limits";
 import { describeModels, pickModel, usableModels } from "../work/models";
 import { failedOn, holdOf, holdWords, turnError, unansweringNow } from "../work/unanswering";
-import { approvalOf, approvalRules, defaultApproval, effectiveApproval, isApproval, lowerOf, rememberApproval, unavailable } from "../work/approval";
+import { approvalOf, approvalRules, defaultApproval, effectiveApproval, isApproval, lowerOf, otherComputersAllowed, rememberApproval, unavailable } from "../work/approval";
 import { holdsBack } from "../bots/tell";
 import { rowsOfLeads } from "../work/elsewhere";
 import { settleAgain } from "../areas/approval";
@@ -102,20 +104,28 @@ export interface RemoteLead {
 }
 
 /** What a session's start keeps of itself as it goes, so it can be finished from the step it got
- * to (a call's journal, `start-call.ts`): what it's made with, before it's made; then that it's
- * made, marked and told its task. */
+ * to (a call's journal, `start-call.ts`): the worktree made for it, once it's made; what it's made
+ * with, before it's made; then that it's made, marked and told its task. */
 export interface StartSteps {
+  tree?: (tree: MadeTree) => void;
   making?: (making: Making) => void;
   made?: (session: string) => void;
   marked?: () => void;
   prompted?: () => void;
 }
 
-/** A session about to be made, as it's to be finished: where, its marks once it's made (`kuvo`),
- * what it's told (`prompt`), whether it's on the coding agents' bridge and on Autopilot, its
+/** A worktree made for a start: its folder, what removes it again (`root`), its branch. */
+export interface MadeTree {
+  folder: string;
+  root: string | null;
+  branch?: string;
+}
+
+/** A session about to be made, as it's to be finished: its marks once it's made (`kuvo`), what
+ * it's told (`prompt`), whether it's on the coding agents' bridge (else the engine: never the
+ * address of either, which changes each time it starts, nor its password) and on Autopilot, its
  * project's other folders, and what the start says of it. */
 export interface Making {
-  target: Target;
   agents: boolean;
   asBefore: boolean;
   autopilot: boolean;
@@ -172,6 +182,8 @@ export interface StartPlace {
   step?: number;
   signal?: AbortSignal;
   steps?: StartSteps;
+  /** The worktree a start cut short made already: it goes on in that one, not a second. */
+  tree?: MadeTree;
 }
 
 /** What a session a bot started is told with its task: its half of the playbook (PROTOCOL.md,
@@ -200,6 +212,11 @@ function approvalGiven(given: unknown): Approval | null | undefined {
   if (given === "approveAll") return defaultApproval();
   return isApproval(given) ? given : undefined;
 }
+
+/** What this box calls itself to your other computers: a machine by its name, this Mac by its own. */
+export const ownName = (): string => plainName(IS_MAC ? macLink.config?.name : readLink()?.name) || (IS_MAC ? "the Mac" : "a machine");
+/** Why a call that starts work isn't taken here: its switch is off. */
+export const takesNoWork = (): string => `${ownName()} doesn't take work from your other computers. Ask the user to allow it in Settings › Permissions on ${ownName()}.`;
 
 const SEAT = "Not from a group chat: talk it through here; the work is handed out after the wrap-up.";
 export const seatRefusal = (): StartRefusal => ({ status: 403, message: SEAT });
@@ -402,21 +419,33 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
   // In a worktree of its project's, on a branch of its own (taken away again should the session not
   // start).
   let madeTree: string | null = null;
+  const removeTree = async () => {
+    if (madeTree) await answerWorktrees("POST", "kuvo/worktrees/remove", { path: madeTree, discard: true }, engine, place.signal).catch(() => {});
+  };
   if (given.worktree === true) {
     const project = projectDirectory ?? (folder !== CHATS ? projectOfFolder(folder) : null);
     if (!project) {
       giveBack();
       return no(400, "A chat has no worktree: give a project.");
     }
-    const made = await answerWorktrees("POST", "kuvo/worktrees", { project }, engine, place.signal).catch((error: unknown) => ({ status: 502, value: { message: String((error as Error | null)?.message ?? error) } }));
-    const tree = made.value as { folder?: unknown; branch?: unknown; message?: unknown };
-    if (made.status !== 200 || typeof tree.folder !== "string") {
-      giveBack();
-      return no(made.status === 409 ? 400 : 502, `Couldn't make a worktree of ${path.basename(project)}: ${String(tree.message ?? "it failed")}`);
+    // (One a start cut short made: that one, still there.)
+    const before = place.tree && fs.existsSync(place.tree.folder) ? place.tree : null;
+    if (before) {
+      folder = before.folder;
+      madeTree = before.root;
+      if (before.branch) picked.push(`worktree ${before.branch}`);
+    } else {
+      const made = await answerWorktrees("POST", "kuvo/worktrees", { project }, engine, place.signal).catch((error: unknown) => ({ status: 502, value: { message: String((error as Error | null)?.message ?? error) } }));
+      const tree = made.value as { folder?: unknown; branch?: unknown; message?: unknown };
+      if (made.status !== 200 || typeof tree.folder !== "string") {
+        giveBack();
+        return no(made.status === 409 ? 400 : 502, `Couldn't make a worktree of ${path.basename(project)}: ${String(tree.message ?? "it failed")}`);
+      }
+      folder = tree.folder;
+      madeTree = typeof (tree as { root?: unknown }).root === "string" ? (tree as { root: string }).root : null;
+      if (typeof tree.branch === "string") picked.push(`worktree ${tree.branch}`);
+      place.steps?.tree?.({ folder, root: madeTree, ...(typeof tree.branch === "string" ? { branch: tree.branch } : {}) });
     }
-    folder = tree.folder;
-    madeTree = typeof (tree as { root?: unknown }).root === "string" ? (tree as { root: string }).root : null;
-    if (typeof tree.branch === "string") picked.push(`worktree ${tree.branch}`);
   }
   // Its approval: the one asked for, never above the starter's (an agent outside any conversation
   // here asks first); from a client, this computer's default unless it says (and what it says is
@@ -433,6 +462,10 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
   const asBefore = Boolean(from && !from.stored && wanted === starters && !bot);
   const effective = effectiveApproval(wanted, { agents });
   const applied = asBefore ? wanted : effective.approval;
+  // (Kept, for a lead on another computer, as no more than this computer gives it now: Full Access
+  // only where it's confirmed here, so it never rises to that later, when Full Access is confirmed
+  // here for something else. Auto stays Auto, asking while the sandbox isn't running, as here.)
+  const kept: Approval = remote && wanted === "fullAccess" && unavailable("fullAccess") ? "auto" : wanted;
   const got = applied !== (requested ?? wanted) && lowerOf(applied, requested ?? wanted) === applied ? applied : undefined;
   const project = projectOf(folder);
   const title = typeof given.title === "string" && given.title.trim() ? given.title.trim() : null;
@@ -452,18 +485,24 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
     ...(remote ? { call: remote.call, lead: { box: remote.computer, key: remote.key, name: by!.name }, ...(brought.length ? { held: brought } : {}) } : {}) };
   // (Kept with it as it's made, so the box never takes it for one a client made without saying.)
   const starter = Boolean(by?.place || remote);
-  const marks = { ...(starter ? { startedBy: by!.session } : {}), ...(asBefore ? {} : { approval: wanted, applied }), ...(autopilot ? { autopilot: true } : {}), ...marksOfLine };
+  const marks = { ...(starter ? { startedBy: by!.session } : {}), ...(asBefore ? {} : { approval: kept, applied }), ...(autopilot ? { autopilot: true } : {}), ...marksOfLine };
   const waits = given.wait === true && !remote;
   const wakes = wakesFrom(given.wait === true && remote ? given.wake ?? "both" : given.wake, remote ? remote.own : Boolean(ownBot), waits);
   // What its starter hears of it, only once it's marked so: none for an agent outside any
   // conversation here, or for a mark the engine didn't take (it's told to write to it instead).
-  const kuvo = { ...(starter ? { startedBy: by!.session, ...(bot ? { by: bot, depth } : {}), ...(wakes.length ? { wake: wakes } : {}) } : {}), ...(asBefore ? {} : { approval: wanted, applied }), ...(autopilot ? { autopilot: true } : {}), ...marksOfLine };
+  const kuvo = { ...(starter ? { startedBy: by!.session, ...(bot ? { by: bot, depth } : {}), ...(wakes.length ? { wake: wakes } : {}) } : {}), ...(asBefore ? {} : { approval: kept, applied }), ...(autopilot ? { autopilot: true } : {}), ...marksOfLine };
   const from_ = remote ? `${by!.name} on ${remote.computer}` : by?.name ?? "";
   const text = by ? composeLetter(from_, by.session, task, waits) + (bot ? `\n\n${sessionNote(bot.name)}${goal ? `\n\n${goalNote}` : ""}` : "") : task;
-  const making: Making = { target, agents, asBefore, autopilot, kuvo, prompt: { id: messageID(), text }, folders: [...(project?.folders ?? [])], folder,
+  const making: Making = { agents, asBefore, autopilot, kuvo, prompt: { id: messageID(), text }, folders: [...(project?.folders ?? [])], folder,
     started: { title, folder, project: project?.name ?? null, ...(picked.length ? { picked: picked.join(" · ") } : {}), ...(got ? { got } : {}), ...(wakes.length ? { wakes } : {}), ...(warning ? { warning } : {}), ...(modelNote ? { model: modelNote } : {}),
       // (Less than its lead's because of this computer: why, for a lead on another.)
       ...(remote && got && effective.held ? { held: heldThere(wanted, applied, agents) } : {}) } };
+  // (Switched off while it was got ready: not made. A worktree made for it goes again.)
+  if (remote && !otherComputersAllowed()) {
+    giveBack();
+    await removeTree();
+    return no(403, takesNoWork());
+  }
   place.steps?.making?.(making);
   let session: string;
   try {
@@ -476,10 +515,10 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
     if (!by && requested) rememberApproval(requested);
   } catch (error) {
     giveBack();
-    if (madeTree) await answerWorktrees("POST", "kuvo/worktrees/remove", { path: madeTree, discard: true }, engine, place.signal).catch(() => {});
+    await removeTree();
     return no(502, `Couldn't start a session in ${folder}: ${String((error as Error | null)?.message ?? error)}`);
   }
-  const marked = await markMade(making, session, place.signal);
+  const marked = await markMade(making, target, session, place.signal);
   if (marked) place.steps?.marked?.();
   if ((by?.place || remote) && bot) noteWorkChanged(bot.bot);
   // Started by the bot itself, for clients to show it looking after its new session: now, before
@@ -488,7 +527,7 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
   if (bot && goal && given.step !== undefined && given.step !== null) linkSession(bot.bot, given.step, session);
   const id = making.prompt.id;
   try {
-    await promptMade(making, session);
+    await promptMade(making, target, session);
   } catch (error) {
     went(session, true);
     return no(502, `Started a session (address ${session}), but the task didn't reach it: ${String((error as Error | null)?.message ?? error)}`, session);
@@ -543,11 +582,10 @@ export async function heldByLimits(bot: WorksFor, limits: WorkLimits, depth: num
   return { refused: { status: 429, message: past.daily ? `${past.words} Ask the user to raise it (Edit Bot › Work), or go on tomorrow.` : past.words } };
 }
 
-/** A session just made, finished as it's to be (each step can be taken again): its project's other
- * folders and Autopilot told it, its worktree's branch named, its marks put on, its rules made for
- * what its approval comes to now, and Full Access noted. Whether its marks are on. */
-export async function markMade(making: Making, session: string, signal?: AbortSignal): Promise<boolean> {
-  const { target } = making;
+/** A session just made on `target`, finished as it's to be (each step can be taken again): its
+ * project's other folders and Autopilot told it, its worktree's branch named, its marks put on, its
+ * rules made for what its approval comes to now, and Full Access noted. Whether its marks are on. */
+export async function markMade(making: Making, target: Target, session: string, signal?: AbortSignal): Promise<boolean> {
   const address = encodeURIComponent(session);
   if (making.folders.length) {
     await call(target, "PUT", `/api/experimental/session/${address}/instructions/entries/kuvo.project-folders`, { value: projectsNote(making.folder, making.folders) }).catch(() => {});
@@ -562,9 +600,9 @@ export async function markMade(making: Making, session: string, signal?: AbortSi
   return marked;
 }
 
-/** A session just made, given its task (it throws where that didn't reach it). */
-export async function promptMade(making: Making, session: string): Promise<void> {
-  await asked(making.target, "POST", `api/session/${encodeURIComponent(session)}/prompt`, { id: making.prompt.id, text: making.prompt.text, delivery: "steer" });
+/** A session just made on `target`, given its task (it throws where that didn't reach it). */
+export async function promptMade(making: Making, target: Target, session: string): Promise<void> {
+  await asked(target, "POST", `api/session/${encodeURIComponent(session)}/prompt`, { id: making.prompt.id, text: making.prompt.text, delivery: "steer" });
 }
 
 // The rows your other computers last told of `bot`'s work: of its own conversation, and of its

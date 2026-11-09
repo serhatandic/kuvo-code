@@ -173,7 +173,7 @@ export { answerResumed, callAs, callsBack, takeCall } from "./letters/calls";
 export { computerOf, resumeStarts, stopBotWorkElsewhere } from "./letters/start-call";
 export { agentTool } from "./letters/tools";
 export { stopBotWork } from "./work/stop";
-export { allowOtherComputers, otherComputersAllowed } from "./work/approval";
+export { allowOtherComputers, approvalOf, otherComputersAllowed } from "./work/approval";
 export { reapplyApprovals } from "./areas/approval";
 export { pushRows, takeRows } from "./work/elsewhere";
 export { readReach } from "./peers/reach";
