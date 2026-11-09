@@ -1,13 +1,14 @@
 import Foundation
 import Observation
 
-/// Plan limits the host reads itself, one row per login (fork addition): Kuvo Code's boxes read
-/// each account's limits with their own sign-ins, and the Bars view draws a bar for each in place
+/// Plan limits the host reads itself, one row per account (fork addition): Kuvo Code's boxes read
+/// each account's limits with their own sign-ins, the host lists each account once however many
+/// of them have it, and the Bars view draws a bar for each in place
 /// of the panel's own bar for that provider (`covered`), with the provider's spend and trend under
 /// the first. The panel doesn't read a covered Claude's limits itself: its reading takes this
 /// Mac's own login's from the host (`lines(for:)`), for the menu bar, the cards and its notices.
 public struct HostLimitRow: Sendable, Hashable, Identifiable {
-    /// Unique across the host's rows (its box, and the account there).
+    /// Unique across the host's rows (the account, or its box and the account there).
     public var id: String
     /// The panel's provider whose mark and color it takes (`claude`, `codex`, `copilot`…).
     public var providerID: String
@@ -22,8 +23,12 @@ public struct HostLimitRow: Sendable, Hashable, Identifiable {
     /// When the oldest of its meters was read: shown as "As of …" once that's long ago
     /// (`HostLimitData.outdated`).
     public var readAt: Date?
-    /// It's this Mac's own box's (its own logins are the panel's own provider's).
+    /// One of its boxes is this Mac's (its own logins are the panel's own provider's).
     public var isLocal: Bool
+    /// The computers it's from where none is this Mac ("hetzner, lokum"): added to its name where
+    /// the panel shows a bar of that name of its own (its card for a provider this Mac has no row
+    /// of yet).
+    public var place: String?
     /// It's the agent's own sign-in on this Mac (not one you added): the panel's own card for the
     /// provider takes its numbers.
     public var isOwnLogin: Bool
@@ -69,8 +74,9 @@ public struct HostLimitRow: Sendable, Hashable, Identifiable {
         }
     }
 
-    public init(id: String, providerID: String, name: String, plan: String? = nil, meters: [Meter], balance: Balance? = nil, notice: String? = nil, readAt: Date? = nil, isLocal: Bool = true, isOwnLogin: Bool = false) {
+    public init(id: String, providerID: String, name: String, plan: String? = nil, meters: [Meter], balance: Balance? = nil, notice: String? = nil, readAt: Date? = nil, isLocal: Bool = true, isOwnLogin: Bool = false, place: String? = nil) {
         self.isLocal = isLocal
+        self.place = place
         self.isOwnLogin = isOwnLogin
         self.id = id
         self.providerID = providerID
@@ -165,12 +171,19 @@ public final class HostLimits {
     }
 
     /// What the Bars view lists: each of the panel's providers in its order, one the host covers as
-    /// this Mac's own logins' rows when it has them (the first with the provider's spend under it),
-    /// then the machines'; then the host's rows for providers the panel doesn't list, unless you
-    /// hid that provider.
+    /// the rows this Mac has a share in when it has them (the first with the provider's spend under
+    /// it), then the rest; then the host's rows for providers the panel doesn't list, unless you
+    /// hid that provider. A row beside a bar of the panel's own of its name says where it's from.
     func entries(groups: [ProviderGroup], known: (String) -> Provider? = { _ in nil }, isHidden: (String) -> Bool) -> [BarsEntry] {
         var entries: [BarsEntry] = []
         var placed = Set<String>()
+        var shown = Set<String>()
+        let host = { (row: HostLimitRow, provider: Provider, spend: ProviderGroup?) -> BarsEntry in
+            var row = row
+            if let place = row.place, shown.contains(row.name) { row.name += " · \(place)" }
+            shown.insert(row.name)
+            return .host(row, provider, spend: spend)
+        }
         for group in groups {
             let family = ProviderAccountID.family(of: group.provider.id)
             guard !placed.contains(family + "|") else { continue }
@@ -179,18 +192,19 @@ public final class HostLimits {
             // This Mac's own logins in place of the panel's bar, its spend under the first; with
             // none from this Mac's box yet, the panel's own bar, as it was. Then the machines'.
             if covers(family), !local.isEmpty, !isHidden(family) {
-                for (index, row) in local.enumerated() { entries.append(.host(row, group.provider, spend: index == 0 ? group : nil)) }
+                for (index, row) in local.enumerated() { entries.append(host(row, group.provider, index == 0 ? group : nil)) }
                 placed.insert(family + "|")
             } else {
                 entries.append(.group(group))
+                shown.insert(group.provider.displayName)
                 if !covers(family) { continue }
             }
             placed.insert(family + "|")
-            for row in mine where !row.isLocal && !isHidden(family) { entries.append(.host(row, group.provider, spend: nil)) }
+            for row in mine where !row.isLocal && !isHidden(family) { entries.append(host(row, group.provider, nil)) }
             placed.formUnion(mine.map(\.id))
         }
         for row in rows where !placed.contains(row.id) && !isHidden(row.providerID) {
-            entries.append(.host(row, known(row.providerID) ?? HostLimits.provider(for: row.providerID), spend: nil))
+            entries.append(host(row, known(row.providerID) ?? HostLimits.provider(for: row.providerID), nil))
         }
         return entries
     }

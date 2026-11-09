@@ -364,15 +364,33 @@ extension UsageListing {
             Account(id: group.id, account: merged(group.members.map(\.account)),
                     sources: group.members.map { Account.Source(box: $0.box.key, provider: $0.account.provider) })
         }
-        // Two rows of one name (two accounts, or one whose boxes can't say it's the same): those not
-        // on this computer say where they're from.
-        let names = listed.map(\.account.title)
-        let repeated = Set(Dictionary(grouping: names, by: { $0 }).filter { $0.value.count > 1 }.keys)
-        for index in listed.indices where repeated.contains(names[index]) {
-            let members = groups[index].members
-            guard !members.contains(where: { $0.box.name == nil }), let box = members.first?.box.name else { continue }
-            listed[index].account.name = "\(names[index]) · \(box)"
+        // Two rows of one name (two accounts, or one whose boxes can't say it's the same) are told
+        // apart: a row whose sign-in on this computer is the engine's by the service's name
+        // ("ChatGPT"); a row not on this computer by its boxes' names; rows still alike (each on
+        // this computer) by their other boxes'.
+        var names = listed.map(\.account.title)
+        let mine = { (index: Int) in groups[index].members.filter { $0.box.name == nil }.map(\.account) }
+        let elsewhere = { (index: Int) -> String? in
+            var seen = Set<String>()
+            let boxes = groups[index].members.compactMap(\.box.name).filter { seen.insert($0).inserted }
+            return boxes.isEmpty ? nil : boxes.joined(separator: ", ")
         }
+        func alike() -> Set<String> { Set(Dictionary(grouping: names, by: { $0 }).filter { $0.value.count > 1 }.keys) }
+        var clash = alike()
+        for index in listed.indices where clash.contains(names[index]) {
+            let here = mine(index)
+            guard let engine = here.first, !here.contains(where: { $0.agent != nil }) else { continue }
+            names[index] = engine.title
+        }
+        clash = alike()
+        for index in listed.indices where clash.contains(names[index]) && mine(index).isEmpty {
+            if let boxes = elsewhere(index) { names[index] += " · \(boxes)" }
+        }
+        clash = alike()
+        for index in listed.indices where clash.contains(names[index]) {
+            if let boxes = elsewhere(index) { names[index] += " · \(boxes)" }
+        }
+        for index in listed.indices where names[index] != listed[index].account.title { listed[index].account.name = names[index] }
         return listed
     }
 
@@ -411,6 +429,6 @@ extension LimitsWindow {
     /// the engine's), which may name it differently: what it counts, and how long it is.
     var limit: String {
         if model == nil, name == nil, minutes == nil { return "id:" + id }
-        return "\(model ?? "")|\(name ?? "")|\(minutes.map(String.init) ?? "")"
+        return "\(model?.lowercased() ?? "")|\(name ?? "")|\(minutes.map(String.init) ?? "")"
     }
 }

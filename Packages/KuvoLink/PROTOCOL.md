@@ -2792,11 +2792,18 @@ the last reading in its folder (`limits.json`), through a restart. A client reac
 - Listing them (KuvoClient's `UsageListing`, as the Mac and the phone do): one row per account
   across the boxes a client lists, in their order (its own computer's first): rows of one
   `service` with one `identity` are one row, from any box, and a row without one is its box's
-  own. Each window is the one read last (`read`) among them; the plan, the credits and `checked`
-  are those of the newest; a `problem` shows only when every box has one. Its name is the coding
-  agent's ("Claude", "Codex") where one is among them, else the service's ("ChatGPT"), with the
-  first `label` among them ("Claude · Work"); where two rows would have the same name, those not
-  on the client's own computer add the name of the box they're from ("Claude · hetzner").
+  own. Two windows are one limit when they have the same `model` (ignoring case), `name` and
+  `minutes` (by `id` where a window has none of the three): a coding agent and the engine name a
+  model's own limit differently. Each is the one read last (`read`) among them. The newest
+  reading is the one checked last (`checked`, else its newest window's `read`): the plan and the
+  credits are its, where it has them, else the next newest's; `checked` is the latest and `next`
+  the earliest; a `problem` shows only when every box has one, the newest's. Its name is the
+  coding agent's ("Claude", "Codex") where one is among them, else the service's ("ChatGPT"),
+  with the first `label` among them ("Claude · Work"). Where two rows would have one name: a row
+  whose own computer's sign-in is the engine's takes the service's name ("ChatGPT"); rows not on
+  the client's own computer add the names of the boxes they're from ("Claude · hetzner, lokum"),
+  as does one beside a row the client shows of its own of that name (the Mac panel's own card);
+  rows still alike add their other boxes' names.
 - What's read: Claude Code's accounts, on Linux from Anthropic with Claude Code's own sign-in in
   Kuvo Code's folder; on a Mac only from what its turns hear (Claude Code's rate-limit events, every
   window from each response's headers), as the token Kuvo Code signs in with there can only run

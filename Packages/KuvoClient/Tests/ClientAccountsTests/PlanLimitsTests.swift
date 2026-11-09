@@ -130,7 +130,7 @@ struct PlanLimitsTests {
             .init(key: "lokum", name: "lokum", accounts: try box(claude("aaaaaaaaaaaaaaaa", used: 0.5, read: 1_794_161_000))),
             .init(key: "old", name: "old-box", accounts: try box(#"{"provider": "codex-cli", "agent": "codex", "windows": []}"#)),
         ])
-        #expect(rows.map(\.account.title) == ["Claude", "Claude · hetzner", "Codex"])
+        #expect(rows.map(\.account.title) == ["Claude", "Claude · hetzner, lokum", "Codex"])
         #expect(rows[1].sources.map(\.box) == ["hetzner", "lokum"])
     }
 
@@ -168,5 +168,31 @@ struct PlanLimitsTests {
         #expect(account.plan == "Pro")
         #expect(account.windows.map(\.title) == ["Session", "GPT-5.3-Codex-Spark", "Weekly"])
         #expect(account.windows.map(\.used) == [0.30, 0.07, 0.60])
+    }
+
+    @Test func rowsOfOneNameAreToldApart() throws {
+        let codex = { (provider: String, identity: String, agent: Bool) -> String in
+            #"{"provider": "\#(provider)", "service": "codex", \#(agent ? #""agent": "codex", "account": "default","# : "") "identity": "\#(identity)", "windows": [{"id": "primary", "used": 0.5, "minutes": 300, "read": 1794160000000, "source": "usage"}]}"#
+        }
+        // This Mac's Codex is one account and its ChatGPT sign-in another, which hetzner's Codex is
+        // signed in to: "Codex" and "ChatGPT", as this Mac names them.
+        let rows = UsageListing.accounts([
+            .init(key: "mac", name: nil, accounts: try box([codex("codex-cli", "1111111111111111", true), codex("openai", "2222222222222222", false)].joined(separator: ","))),
+            .init(key: "hetzner", name: "hetzner", accounts: try box(codex("codex-cli", "2222222222222222", true))),
+        ])
+        #expect(rows.map(\.account.title) == ["Codex", "ChatGPT"])
+
+        // A row from two machines names both; one model's limit named in another case is one.
+        let named = UsageListing.accounts([
+            .init(key: "mac", name: nil, accounts: try box(claude(nil, used: 0.4, read: 1_794_160_000))),
+            .init(key: "hetzner", name: "hetzner", accounts: try box(claude("aaaaaaaaaaaaaaaa", used: 0.5, read: 1_794_161_000))),
+            .init(key: "lokum", name: "lokum", accounts: try box(claude("aaaaaaaaaaaaaaaa", used: 0.5, read: 1_794_161_000))),
+        ])
+        #expect(named.map(\.account.title) == ["Claude", "Claude · hetzner, lokum"])
+        let spark = { (model: String, read: Double) in
+            #"{"provider": "p\#(Int(read))", "service": "codex", "identity": "3333333333333333", "windows": [{"id": "x\#(Int(read))", "used": 0.1, "minutes": 300, "model": "\#(model)", "read": \#(read), "source": "usage"}]}"#
+        }
+        let one = UsageListing.accounts([.init(key: "mac", name: nil, accounts: try box([spark("GPT-5.3-Codex-Spark", 1), spark("gpt-5.3-codex-spark", 2)].joined(separator: ",")))])
+        #expect(one.map { $0.account.windows.count } == [1])
     }
 }

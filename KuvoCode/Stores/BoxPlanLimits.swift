@@ -163,7 +163,15 @@ final class BoxPlanLimits {
             notice: account.problem?.message,
             readAt: account.readAt(now: now),
             isLocal: listed.sources.contains { $0.box.isEmpty },
-            isOwnLogin: own
+            isOwnLogin: own,
+            // (The panel adds it beside a bar of its own of that name.)
+            place: listed.sources.contains { $0.box.isEmpty } ? nil : Self.places(listed.sources)
         )
+    }
+
+    /// The machines a row is from, by name ("hetzner, lokum").
+    static func places(_ sources: [UsageListing.Account.Source]) -> String {
+        var seen = Set<String>()
+        return sources.map(\.box).filter { seen.insert($0).inserted }.joined(separator: ", ")
     }
 }

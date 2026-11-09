@@ -73,7 +73,8 @@ struct UsageRowsShots {
         for (name, url) in Self.boxes {
             planLimits.connected(name.isEmpty ? nil : name, api: OpenCodeAPI(endpoint: ServerEndpoint(url: URL(string: url)!, password: "test")))
         }
-        try await until { HostLimits.shared.rows.contains { $0.providerID == "opencode" } && HostLimits.shared.rows.contains { $0.providerID == "claude" && $0.isLocal } }
+        // Every box's answer in: a row each before (#336), one per account after.
+        try await until { HostLimits.shared.rows.count == (prefix == "before" ? 10 : 6) }
         for dark in [false, true] {
             let png = try picture(dark: dark)
             try png.write(to: URL(fileURLWithPath: out).appending(path: "\(prefix)-mac-\(dark ? "dark" : "light").png"))

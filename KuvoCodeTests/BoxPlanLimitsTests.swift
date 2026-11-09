@@ -8,7 +8,7 @@ import UsageKit
 /// machine's state (`api/kuvo/limits`), this Mac's own logins marked as the panel's own, a
 /// machine's named after it, gone when it goes, and nothing covered by a box from before them.
 @MainActor
-@Suite(.serialized) struct BoxPlanLimitsTests {
+@Suite(.serialized, .timeLimit(.minutes(1))) struct BoxPlanLimitsTests {
     private static let mac = "http://127.0.0.1:47961"
     private static let devbox = "http://127.0.0.1:47962"
 
@@ -77,7 +77,7 @@ import UsageKit
             Self.account("claude-code@a7", "claude", agent: "claude", label: "Athas", identity: "a7a7a7a7a7a7a7a7", used: 0.2),
             Self.account("codex-cli", "codex", agent: "codex", identity: "c0dec0dec0dec0de", used: 0.85, minutesAgo: 1),
         ]))
-        // An older box, which doesn't say who its accounts are: its row stays.
+        // mini's Grok doesn't say who it is (as from an older box): its row stays its own.
         try StubWeb.answer(mini + "/api/kuvo/limits", json: Self.limits([
             Self.account("claude-code", "claude", agent: "claude", identity: "c1a0dec1a0dec1a0", used: 0.50, minutesAgo: 5),
             Self.account("grok-cli", "grok", agent: "grok", used: 0.97),
@@ -86,16 +86,19 @@ import UsageKit
         planLimits.connected(nil, api: api(Self.mac))
         planLimits.connected("hetzner", api: api(hetzner))
         planLimits.connected("mini-local", api: api(mini))
-        try await until { HostLimits.shared.rows.contains { $0.name == "Grok" } && HostLimits.shared.rows.contains { $0.name == "Claude" } }
+        // (Before, the rows never came to this: each box's own, named after it.)
+        try await until { HostLimits.shared.rows.map(\.name) == ["Codex", "Claude", "Claude · Athas", "Grok"] }
 
         let rows = HostLimits.shared.rows
-        #expect(rows.map(\.name) == ["Codex", "Claude", "Claude · Athas", "Grok"])
         // The newest reading: hetzner's Codex, read a minute ago.
         #expect(rows[0].meters.map(\.fraction) == [0.85])
         #expect(rows[1].meters.map(\.fraction) == [0.53])
         // Codex is this Mac's too, and its engine sign-in is the one the panel's own card takes.
         #expect(rows.map(\.isLocal) == [true, false, false, false])
         #expect(rows.filter(\.isOwnLogin).map(\.name) == ["Codex"])
+        // This Mac has no Claude of its own here: beside the panel's own Claude bar, the account's
+        // says which computers it's from (HostLimits.entries).
+        #expect(rows.map(\.place) == [nil, "hetzner, mini-local", "hetzner", "mini-local"])
     }
 
     @Test func aBoxFromBeforeThemCoversNothing() async throws {
