@@ -221,8 +221,9 @@ export class Limits {
     for (const account of this.accounts()) {
       const entry = this.entries.get(account.provider)
       if (!entry || entry.problem?.kind === "none") continue
-      // Nothing read yet, and nothing heard: not one to show until it's tried.
-      if (!entry.checked && !entry.windows.length) continue
+      // Nothing read yet, and nothing heard: not one to show until it's tried (one signed in to
+      // another account since says so).
+      if (!entry.checked && !entry.windows.length && !entry.problem) continue
       const problem = entry.problem ? { kind: entry.problem.kind, message: entry.problem.message, ...(entry.problem.until ? { until: entry.problem.until } : {}) } : undefined
       listed.push({
         provider: account.provider,
@@ -406,8 +407,11 @@ export class Limits {
       entry.plan = undefined
       entry.balance = undefined
       entry.checked = undefined
-      entry.problem = undefined
+      // Listed meanwhile, saying why it has no numbers (a maker's hold can keep it unread for hours).
+      entry.problem = { kind: "failed", message: "Signed in to another account here: its limits show once they're read." }
       entry.signIn = undefined
+      entry.refusals = 0
+      entry.failures = 0
       entry.next = 0
     }
     entry.identity = identity

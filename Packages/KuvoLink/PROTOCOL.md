@@ -2762,8 +2762,10 @@ the last reading in its folder (`limits.json`), through a restart. A client reac
     Claude's account and organization (Linux only: a Mac's Claude token doesn't say who it's
     for), ChatGPT's account and workspace member, xAI's user, GitHub's login (from Copilot's
     answer), and an API key for OpenRouter, Z.ai and OpenCode Go. Absent where it isn't known, and
-    from a box from before it: list that row as its box's own. Signed in as
-    another account since, the box drops what it kept of the one before.
+    from a box from before it: list that row as its box's own. Where it changes (signed in
+    as another account there), the box drops what it kept of the one before, and the row says so
+    (`problem`, `failed`) until the new one is read; Codex is read only through a Codex signed in
+    as it is now.
   - `windows`: each `{id, used, resetsAt?, minutes?, model?, name?, amount?, read, source}`. `id` is its
     maker's name for it (`five_hour`, `seven_day`, `seven_day_sonnet`, Codex's `primary`); `used`,
     how much of it is gone, 0 to 1; `minutes`, how long it is (300, 10080) when said; `model`, the

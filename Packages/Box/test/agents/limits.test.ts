@@ -581,6 +581,42 @@ describe("who each account is, the same from every computer", () => {
       codex.shutdown?.()
     }
   })
+
+  test("Codex signed in to another account while one still runs: not read through it, said so, then read once it starts again", async () => {
+    const access = (user: string) => token({ "https://api.openai.com/auth": { chatgpt_account_id: `acct-${user}`, chatgpt_user_id: user } })
+    const codexHome = join(home, "codex-accounts", "a1")
+    mkdirSync(codexHome, { recursive: true })
+    const signIn = (user: string) => writeFileSync(join(codexHome, "auth.json"), JSON.stringify({ tokens: { access_token: access(user), account_id: `acct-${user}` } }))
+    signIn("ada")
+    // (The stand-in answers the same numbers whoever it is: what matters is whose they're said to be.)
+    const launcher = fakeCodex(home, { type: "chatgpt", planType: "plus" }, { rateLimits: { limitId: "codex", primary: { usedPercent: 70, windowDurationMins: 300, resetsAt: 1_794_200_000 } } })
+    const codex = new (class extends CodexAgent {
+      override executable() {
+        return launcher
+      }
+    })({ home, temporary: home, deps: {} as any }, { id: "a1", home: codexHome })
+    try {
+      const limits = new Limits(() => agentAccounts([codex]), undefined, clock.now)
+      const first = (await route(limits, "POST", ["refresh"])).accounts[0]!
+      expect(first.windows.map((each) => each.used)).toEqual([0.7])
+      // Signed in as Bob in Terminal; the Codex running reads Ada's sign-in still.
+      signIn("bob")
+      clock.pass(60_000)
+      await limits.tick()
+      const switched = (await route(limits)).accounts[0]!
+      expect(switched.identity).not.toBe(first.identity!)
+      expect(switched.windows).toEqual([])
+      expect(switched.problem?.message).toBe("Signed in to another account here: its limits show once they're read.")
+      // It stops (nothing used it); the next read starts one with Bob's sign-in.
+      codex.shutdown?.()
+      clock.pass(10 * 60_000)
+      await limits.tick()
+      const read = (await route(limits)).accounts[0]!
+      expect([read.identity, read.windows.map((each) => each.used), read.problem]).toEqual([switched.identity, [0.7], undefined])
+    } finally {
+      codex.shutdown?.()
+    }
+  })
 })
 
 describe("plan_limits, an agent's read of them", () => {

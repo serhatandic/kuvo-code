@@ -9872,7 +9872,7 @@ function unzipper() {
 // Packages/Box/src/agents/agents/claude.ts
 import { spawn as spawn5 } from "child_process";
 import { createHash as createHash7, randomUUID } from "crypto";
-import { existsSync as existsSync13, mkdirSync as mkdirSync14, readdirSync as readdirSync12, readFileSync as readFileSync20, renameSync as renameSync11, rmdirSync as rmdirSync2, rmSync as rmSync10, statSync as statSync8, writeFileSync as writeFileSync16 } from "fs";
+import { existsSync as existsSync13, mkdirSync as mkdirSync14, readdirSync as readdirSync12, readFileSync as readFileSync20, renameSync as renameSync11, rmdirSync as rmdirSync2, rmSync as rmSync10, statSync as statSync9, writeFileSync as writeFileSync16 } from "fs";
 import { homedir } from "os";
 import { basename as basename8, dirname as dirname12, join as join22, resolve as resolve6 } from "path";
 import { pathToFileURL as pathToFileURL3 } from "url";
@@ -10132,7 +10132,7 @@ class Limits {
       const entry = this.entries.get(account.provider);
       if (!entry || entry.problem?.kind === "none")
         continue;
-      if (!entry.checked && !entry.windows.length)
+      if (!entry.checked && !entry.windows.length && !entry.problem)
         continue;
       const problem = entry.problem ? { kind: entry.problem.kind, message: entry.problem.message, ...entry.problem.until ? { until: entry.problem.until } : {} } : undefined;
       listed.push({
@@ -10292,8 +10292,10 @@ class Limits {
       entry.plan = undefined;
       entry.balance = undefined;
       entry.checked = undefined;
-      entry.problem = undefined;
+      entry.problem = { kind: "failed", message: "Signed in to another account here: its limits show once they're read." };
       entry.signIn = undefined;
+      entry.refusals = 0;
+      entry.failures = 0;
       entry.next = 0;
     }
     entry.identity = identity;
@@ -10460,7 +10462,7 @@ function xaiIdentity(...tokens) {
 var text2 = (value) => typeof value === "string" && value.trim() ? value.trim().toLowerCase() : undefined;
 
 // Packages/Box/src/agents/agents/claude-limits.ts
-import { readFileSync as readFileSync19 } from "fs";
+import { readFileSync as readFileSync19, statSync as statSync8 } from "fs";
 import { join as join21 } from "path";
 var claudeUsage = { url: "https://api.anthropic.com/api/oauth/usage" };
 var CLAUDE_LIMITS_EVERY = 15 * 60000;
@@ -10481,8 +10483,23 @@ function credentialsIn(configHome) {
   }
 }
 function claudeIdentity(configHome) {
+  const file = join21(configHome, ".claude.json");
   try {
-    const account = JSON.parse(readFileSync19(join21(configHome, ".claude.json"), "utf8"))?.oauthAccount;
+    const { mtimeMs, size } = statSync8(file);
+    const known = identities.get(file);
+    if (known && known.mtimeMs === mtimeMs && known.size === size)
+      return known.identity;
+    const identity = identityIn(readFileSync19(file, "utf8"));
+    identities.set(file, { mtimeMs, size, identity });
+    return identity;
+  } catch {
+    return;
+  }
+}
+var identities = new Map;
+function identityIn(text) {
+  try {
+    const account = JSON.parse(text)?.oauthAccount;
     const uuid = typeof account?.accountUuid === "string" ? account.accountUuid.trim().toLowerCase() : "";
     if (!uuid)
       return;
@@ -10979,7 +10996,7 @@ class ClaudeAgent {
   async credentialsWritten() {
     if (ClaudeAgent.keychain) {
       try {
-        return statSync8(this.tokenFile).mtimeMs;
+        return statSync9(this.tokenFile).mtimeMs;
       } catch {
         return 0;
       }
@@ -10987,7 +11004,7 @@ class ClaudeAgent {
     const own = this.instance.home ?? process.env.CLAUDE_CONFIG_DIR;
     let written = 0;
     try {
-      written = statSync8(join22(own ?? join22(homedir(), ".claude"), ".credentials.json")).mtimeMs;
+      written = statSync9(join22(own ?? join22(homedir(), ".claude"), ".credentials.json")).mtimeMs;
     } catch {}
     if (process.platform === "darwin")
       written = Math.max(written, await keychainWritten(`Claude Code-credentials${own ? `-${createHash7("sha256").update(own).digest("hex").slice(0, 8)}` : ""}`));
@@ -13074,22 +13091,27 @@ class CodexAgent {
       return;
     }
   }
-  limitsRead = false;
+  limitsRead;
+  signedInAs = new WeakMap;
   async readLimits() {
     if (!this.executable())
       throw new LimitsProblem("none", "Codex isn't installed here.");
-    const running = [...this.slots.values()].map((slot) => slot.server).find((server) => server && !server.isClosed);
-    if (this.limitsRead && !running)
+    const now = this.chatGPTAccount();
+    const current = (server) => !!server && !server.isClosed && this.signedInAs.get(server) === now;
+    const running = [...this.slots.values()].map((slot) => slot.server).find(current);
+    if (this.limitsRead && this.limitsRead.as === now && !running)
       return null;
     let rpc;
     let account;
     try {
       rpc = running ?? await this.rpc();
+      if (!current(rpc))
+        return null;
       account = (await rpc.request("account/read", {}, 20000))?.account;
     } catch (caught) {
       throw new LimitsProblem("failed", `Codex couldn't say: ${caught instanceof Error ? caught.message : String(caught)}`);
     }
-    this.limitsRead = true;
+    this.limitsRead = { as: now };
     if (account?.type !== "chatgpt")
       throw new LimitsProblem("none", account ? "An API key has no plan limits." : "Not signed in to Codex here.");
     let result;
@@ -13272,6 +13294,7 @@ class CodexAgent {
     const args = ["app-server", ...noComputerUse.flatMap((plugin) => ["-c", `plugins.${plugin}.enabled=false`])];
     const env = { ...this.instance.home ? { CODEX_HOME: this.instance.home } : {}, ...thread ? { OPENCODE_SESSION_ID: thread.session.id } : {}, ...fence?.env };
     const rpc = new RPC(fence ? [fence.command, ...args] : [executable, ...args], { cwd: fence ? directory : this.context.temporary, env });
+    this.signedInAs.set(rpc, this.chatGPTAccount());
     slot.fence = fenceNow;
     if (fence)
       this.fencedServers.add(rpc);
@@ -13340,7 +13363,7 @@ class CodexAgent {
       const snapshot = params?.rateLimits;
       if (snapshot)
         this.rateLimits.set(snapshot.limitId ?? "codex", snapshot);
-      if (snapshot)
+      if (snapshot && from && this.signedInAs.get(from) === this.chatGPTAccount())
         for (const window of codexWindows(snapshot))
           this.limits.heard?.(window);
       return;
@@ -16731,7 +16754,7 @@ async function branchRoutes(places, method, parts, body) {
 // Packages/Box/src/agents/sessions.ts
 import { createHash as createHash8 } from "crypto";
 import { spawn as spawnProcess } from "child_process";
-import { readFileSync as readFileSync25, realpathSync as realpathSync6, statSync as statSync9 } from "fs";
+import { readFileSync as readFileSync25, realpathSync as realpathSync6, statSync as statSync10 } from "fs";
 import { homedir as homedir5 } from "os";
 import { dirname as dirname15, join as join27, resolve as resolve7 } from "path";
 import { fileURLToPath as fileURLToPath2 } from "url";
@@ -17784,7 +17807,7 @@ function outsideRefusable(ask, paths, folders) {
 }
 function isFolder(path, action) {
   try {
-    return statSync9(path).isDirectory();
+    return statSync10(path).isDirectory();
   } catch {
     return action === "list" || action === "glob";
   }
@@ -19853,7 +19876,7 @@ function withTextFiles(text, files) {
     let contents;
     if (!file.mime.startsWith("image/") && file.mime !== "application/pdf") {
       try {
-        const bytes = file.data ? Buffer.from(file.data, "base64") : file.path && statSync9(file.path).isFile() && statSync9(file.path).size <= textFileLimit ? readFileSync25(file.path) : undefined;
+        const bytes = file.data ? Buffer.from(file.data, "base64") : file.path && statSync10(file.path).isFile() && statSync10(file.path).size <= textFileLimit ? readFileSync25(file.path) : undefined;
         if (bytes && !bytes.includes(0))
           contents = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
       } catch {}
@@ -25677,7 +25700,7 @@ ${all}`;
 }
 
 // Packages/Box/src/agents/store.ts
-import { mkdirSync as mkdirSync19, readdirSync as readdirSync15, readFileSync as readFileSync29, renameSync as renameSync15, rmSync as rmSync14, statSync as statSync10, writeFileSync as writeFileSync21 } from "fs";
+import { mkdirSync as mkdirSync19, readdirSync as readdirSync15, readFileSync as readFileSync29, renameSync as renameSync15, rmSync as rmSync14, statSync as statSync11, writeFileSync as writeFileSync21 } from "fs";
 import { join as join30 } from "path";
 
 class Store {
@@ -25718,7 +25741,7 @@ class Store {
   }
   writtenAt(id) {
     try {
-      return statSync10(join30(this.root, id, "messages.json")).mtimeMs;
+      return statSync11(join30(this.root, id, "messages.json")).mtimeMs;
     } catch {
       return;
     }
@@ -26198,4 +26221,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 6334bede152435bf6c248db8bd1b1d892c05504edbfa1657ba443e8bd347c5e8
+// Built from Packages/Box/src/agents d72357c137559fd85faf339f34071bae65ac5dbb812515f2b5694981771958a2

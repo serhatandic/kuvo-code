@@ -232,3 +232,27 @@ test("each sign-in says who it is, the same on every computer: a key by the key,
     rmSync(folder, { recursive: true, force: true })
   }
 })
+
+test("signed in to Copilot as another GitHub account, what was kept of the one before isn't shown as this one's", async () => {
+  let login = "ada"
+  let remaining = 120
+  answers["/copilot"] = () => Response.json({ login, copilot_plan: "individual", quota_reset_date: "2026-12-01", quota_snapshots: { premium_interactions: { entitlement: 300, remaining, percent_remaining: (remaining / 300) * 100 } } })
+  let now = NOW
+  let value = { type: "oauth", access: "copilot-short", refresh: "gho_ada", expires: NOW - 1 }
+  const engine = new EngineAccounts(async () => ({ data: [credential("github-copilot", value)] }))
+  const limits = new Limits(() => engine.accounts(), undefined, () => now, () => engine.refresh())
+  const listed = async () => (((await (await limitsRoutes(limits, "GET", [])).json()) as any).data.accounts as AccountLimits[])[0]!
+  await limits.tick()
+  const ada = await listed()
+  expect(ada.windows[0]!.amount?.used).toBe(180)
+  // Signed in again as Bob, who has used less.
+  login = "bob"
+  remaining = 290
+  value = { ...value, refresh: "gho_bob" }
+  now += 11 * 60_000
+  await limits.tick()
+  const bob = await listed()
+  expect(bob.identity).not.toBe(ada.identity!)
+  expect(bob.windows.map((each) => each.amount?.used)).toEqual([10])
+  expect(bob.problem).toBeUndefined()
+})
