@@ -4,7 +4,7 @@ import SwiftUI
 /// start sessions on this computer, as its box keeps it (`kuvo/approval`'s `otherComputers`: off on
 /// the Mac with the app until you turn it on, on for a machine). The box enforces it; this only
 /// shows it and changes it. A box from before it says so instead. Read by the page as it opens and
-/// as the computer connects (`PermissionsSettings`); until then, nothing shows.
+/// as the computer connects (`PermissionsSettings`); while it isn't connected, it says so.
 struct OtherComputersSettings: View {
     @Environment(AppModel.self) private var app
     @Environment(\.settingsBox) private var box
@@ -18,7 +18,15 @@ struct OtherComputersSettings: View {
 
     var body: some View {
         let name = app.name(of: box)
-        if let here = workspace.approvalsHere[id] {
+        if !app.isReady(box) {
+            // Away, or still connecting: what it said before may not be so now, so no switch.
+            Section {
+                Text("Whether your other computers can start work on \(name) shows once it’s connected.")
+                    .foregroundStyle(.secondary)
+            } header: {
+                Text("Your Other Computers")
+            }
+        } else if let here = workspace.approvalsHere[id] {
             if let allowed = here.otherComputers {
                 Section {
                     Toggle(isOn: Binding(get: { allowed }, set: { change(to: $0) })) {
@@ -55,7 +63,10 @@ struct OtherComputersSettings: View {
                 try await workspace.allowOtherComputers(on, onBox: id)
                 failure = nil
             } catch {
-                failure = "Couldn’t change it: \(error.localizedDescription)"
+                let why = error is CancellationError ? "\(app.name(of: box)) isn’t connected." : error.localizedDescription
+                failure = "Couldn’t change it: \(why)"
+                // (The switch only goes back: said out loud too.)
+                AccessibilityNotification.Announcement(failure ?? "").post()
             }
         }
     }
