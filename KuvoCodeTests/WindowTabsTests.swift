@@ -462,6 +462,31 @@ import Testing
         #expect(tabs.workedBesideID == "ses_agent", "you go on working in it")
     }
 
+    /// Moved to the coding agents from your iPhone (its box carried it) while it's in a tab here
+    /// with something you were writing: the new one takes its tab, and what you wrote goes with it.
+    @Test func aSessionMovedFromAPhoneTakesItsTabAndWhatYouWrote() async throws {
+        defer {
+            done()
+            Drafts.shared.remove("ses_engine")
+            Drafts.shared.remove("ses_agent")
+        }
+        // As the app has it (AppModel.startMachines).
+        app.followSessions()
+        await sessions(["ses_a", "ses_engine"])
+        tabs.open(.session("ses_a"))
+        tabs.open(.session("ses_engine"))
+        Drafts.shared["ses_engine"] = Drafts.Draft(text: "and a font size")
+        bridge.list([StubEngine.session("ses_agent", title: "Settings", directory: folder, extra: ["metadata": ["kuvoAgent": "claude"]])])
+
+        // As its box leaves it, read again here.
+        await sessions(["ses_a", "ses_engine"], extra: ["ses_engine": ["metadata": ["kuvo.archived": true, "kuvo.carriedTo": "ses_agent"]]])
+
+        try await until { keys == ["ses_a", "ses_agent"] }
+        #expect(tabs.selection == .session("ses_agent"))
+        #expect(Drafts.shared["ses_agent"].text == "and a font size")
+        #expect(Drafts.shared["ses_engine"].isEmpty, "not also left in the archived one")
+    }
+
     /// One with no tab opens in one, as any session does.
     @Test func aSessionMovedWithoutATabOpens() async throws {
         defer { done() }

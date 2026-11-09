@@ -191,8 +191,8 @@ final class AppModel {
 
     /// A conversation carried on with the coding agents (`Workspace.moveToAgents`): its panel goes
     /// with it, its terminals, pages and files as they were. (A bot's is carried by its box.)
-    func movedToAgents(from old: String, to new: Session) async -> Bool {
-        utilities.handOver(from: old, to: new.id)
+    func movedToAgents(from old: String, to new: String) async -> Bool {
+        utilities.handOver(from: old, to: new)
         return false
     }
 

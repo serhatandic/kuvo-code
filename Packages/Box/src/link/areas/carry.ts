@@ -8,7 +8,8 @@ import { botHere, isModel, isMoving, MOVING } from "../bots/here";
 import { readKit, runsWithAgents } from "../bots/kit";
 import { tellBot, toldNow } from "../bots/tell";
 import { call, engineGet } from "../engine/client";
-import { carryQueue } from "../engine/queue";
+import { carryQueue, queueOf, resumeQueue } from "../engine/queue";
+import { beginCarry, endCarry, isSessionID } from "../engine/carrying";
 import { conversationOf } from "../engine/conversations";
 import { messageID } from "../engine/sessions";
 import { listOf } from "../files";
@@ -57,9 +58,6 @@ export interface AgentFile {
   name?: string;
 }
 
-// Conversations being carried on with the coding agents now (`carryToAgents`): one at a time each.
-const carrying = new Set<string>();
-
 // A file a waiting message brings (the engine's form of it), as the agents' bridge takes one.
 const promptFiles = (payload: WaitingPayload | undefined): AgentFile[] => (Array.isArray(payload?.files) ? payload.files : []).map(file => {
   const name = typeof file?.name === "string" ? { name: file.name } : {};
@@ -70,6 +68,17 @@ const promptFiles = (payload: WaitingPayload | undefined): AgentFile[] => (Array
 
 /** `kuvo/sessions/<id>/agents`: a conversation carried on with the coding agents, on every box. */
 export const CARRY_ROUTE = /^kuvo\/sessions\/([^/]+)\/agents$/;
+
+// How long the engine has to mark the conversation as carried on.
+const COMMIT_TIMEOUT = 30_000;
+
+// Why a move failed, in words: the engine's or the coding agents' own, or that one of them didn't
+// answer (a request that timed out, or a connection refused).
+function failedWords(error: unknown): string {
+  const name = (error as Error | null)?.name;
+  if (name === "TimeoutError" || name === "AbortError" || error instanceof TypeError) return "The coding agents or the engine didn’t answer, so nothing moved. Try again in a moment.";
+  return (error as Error | null)?.message ?? String(error);
+}
 
 // How long the coding agents' bridge has to take a conversation: it takes one at once, so one that
 // says nothing for this long is stuck, and what it may have made goes.
@@ -97,6 +106,7 @@ async function dropCopies(agents: Target, id: string, directory: string | undefi
 export async function carryToAgents(id: string, model: unknown, readEngine: () => Target, agents: Target | null | undefined): Promise<CarryAnswer> {
   const no = (status: OtherStatus, message: string): CarryAnswer => ({ status, value: { message } });
   if (!isModel(model) || !runsWithAgents(model)) return no(400, "That isn’t a coding agent’s model.");
+  if (!isSessionID(id)) return no(404, "That conversation isn’t there any more.");
   let engine: Target | undefined;
   try { engine = readEngine(); } catch {}
   if (!engine) return no(503, "The engine isn’t running.");
@@ -120,13 +130,18 @@ export async function carryToAgents(id: string, model: unknown, readEngine: () =
     if (integration?.metadata?.installed === false) return no(422, `${name} isn’t installed on ${HERE}: install it in Settings › Accounts, or choose another model.`);
     if (!integration?.connections?.length) return no(422, `${name} needs a sign-in on ${HERE}: sign in in Settings › Accounts, or choose another model.`);
   }
-  if (carrying.has(id)) return no(409, "It’s being carried on with the coding agents already.");
-  carrying.add(id);
+  if (!beginCarry(id)) return no(409, "It’s being carried on with the coding agents already.");
   const directory = session.location?.directory ?? session.directory;
   const started = Date.now();
   // The new one, until the engine's is marked as carried on there (from then on, it's the one).
   let made: string | null = null;
   let kept = false;
+  // Whether the engine's was marked can't be told (the engine stopped answering as it was): the
+  // new one stays, rather than leave the engine's pointing at nothing.
+  let unsure = false;
+  // A run it stopped, its queue not paused before: going on as it was, if the move fails.
+  const wasPaused = queueOf(id).paused;
+  let stopped = false;
   try {
     // From here on it goes to its end, whatever becomes of the client's request: cut off halfway,
     // it would be in two places, or what waited would run twice.
@@ -135,6 +150,7 @@ export async function carryToAgents(id: string, model: unknown, readEngine: () =
       // Not partway through a turn (one a client started again from what waited, since).
       const active: Record<string, unknown> = (await engineGet(engine, "api/session/active").catch(() => null) as EngineAnswer<Record<string, unknown>> | null)?.data ?? {};
       if (id in active) {
+        stopped = true;
         await call(engine, "POST", `/${route}/interrupt`).catch(() => {});
         await call(engine, "POST", `/api/experimental/session/${encodeURIComponent(id)}/wait`).catch(() => {});
       }
@@ -210,23 +226,27 @@ export async function carryToAgents(id: string, model: unknown, readEngine: () =
         return no(409, "It’s with the coding agents already.");
       }
       // Archived, and marked as carried on, so it isn't carried twice: it's the new one's from here.
-      // (One the engine took without saying so is taken.)
+      // (One the engine took without saying so is taken; one it may have taken stays unsure.)
       try {
-        await call(engine, "PATCH", `/${route}`, { metadata: { ...(session.metadata ?? {}), "kuvo.archived": true, "kuvo.carriedTo": moved } });
+        await call(engine, "PATCH", `/${route}`, { metadata: { ...(session.metadata ?? {}), "kuvo.archived": true, "kuvo.carriedTo": moved } }, AbortSignal.timeout(COMMIT_TIMEOUT));
       } catch (error) {
-        const now = (await engineGet(engine, route).catch(() => null) as EngineAnswer<EngineSession> | null)?.data;
-        if (now?.metadata?.["kuvo.carriedTo"] !== moved) throw error;
+        const now = (await engineGet(engine, route).catch(() => undefined) as EngineAnswer<EngineSession> | null | undefined);
+        if (now === undefined) {
+          unsure = true;
+          throw new Error(`The engine stopped answering as it was archived here, so it may be with the coding agents already. Look in the list before trying again.`);
+        }
+        if (now?.data?.metadata?.["kuvo.carriedTo"] !== moved) throw error;
       }
       kept = true;
     }
-    // Stopped by you, it stays stopped there, with what waited on the box.
+    // At once, before anything it waits for: what follows the conversation goes on in the new one,
+    // before a client that heard it archived holds it there. Stopped by you, its queue stays
+    // stopped there, with what waited on the box; Autopilot's calls come along.
     carryQueue(id, moved, renamed);
-    for (const item of waiting) await call(engine, "DELETE", `/${route}/inbox/${encodeURIComponent(item.id)}`).catch(() => {});
     carryDecided(id, moved);
-    if (bot) {
-      await call(engine, "DELETE", `/${route}`).catch(() => {});
-    } else {
-      // Its wake-ups and watches go with it, as on a Mac (WakeUps.carry).
+    if (!bot) {
+      // Its wake-ups and watches go with it, as on a Mac (WakeUps.carry); held as archived by a
+      // client meanwhile, they aren't in the new one, which isn't.
       const from = path.join(SESSION_WAKES, id), to = path.join(SESSION_WAKES, moved);
       if (fs.existsSync(path.join(from, "session")) && !fs.existsSync(to)) {
         try {
@@ -234,17 +254,21 @@ export async function carryToAgents(id: string, model: unknown, readEngine: () =
           fs.writeFileSync(path.join(to, "session"), moved);
           fs.writeFileSync(path.join(to, "directory"), directory ?? "");
           fs.writeFileSync(path.join(to, "via"), "bridge");
+          if (fs.readFileSync(path.join(to, "paused"), "utf8") === "archived") fs.rmSync(path.join(to, "paused"), { force: true });
         } catch {}
       }
-      try { holdArchived(id, true); } catch {}
     }
+    for (const item of waiting) await call(engine, "DELETE", `/${route}/inbox/${encodeURIComponent(item.id)}`).catch(() => {});
+    if (bot) await call(engine, "DELETE", `/${route}`).catch(() => {});
+    else try { holdArchived(id, true); } catch {}
     return { status: 200, value: { session: moved } };
   } catch (error) {
-    // Nothing of it stays: the new one goes, and the engine's goes on as it was.
-    if (made && !kept) await call(agents, "DELETE", `/api/session/${encodeURIComponent(made)}`).catch(() => {});
-    return no(502, (error as Error | null)?.message ?? String(error));
+    // Nothing of it stays: the new one goes, and the engine's goes on as it was, its queue too.
+    if (made && !kept && !unsure) await call(agents, "DELETE", `/api/session/${encodeURIComponent(made)}`).catch(() => {});
+    if (!kept && !unsure && stopped && !wasPaused) await resumeQueue(engine, id).catch(() => {});
+    return no(502, unsure ? (error as Error).message : failedWords(error));
   } finally {
-    carrying.delete(id);
+    endCarry(id);
   }
 }
 

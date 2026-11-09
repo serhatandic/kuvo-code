@@ -103,6 +103,8 @@ final class HostInterface {
         if (try? await start()) != nil {
             retrying?.cancel()
             retrying = nil
+            // (At a new address: the keeper's told, as after a retry.)
+            if !tellsBox { restarted?() }
             return true
         }
         if tellsBox { Self.forget() }

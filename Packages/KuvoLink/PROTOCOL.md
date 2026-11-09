@@ -1878,14 +1878,20 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   opens on the Mac. The session's wake-ups and watches go with it, the engine's is marked
   `kuvo.carriedTo` (the new one's id) as it's archived, the new one `kuvo.carriedFrom` (the old
   one's id, under `kuvo` in its metadata) and its approval and Autopilot, and it's told its
-  worktree (`kuvo.worktree`) and its project's other folders (`kuvo.project-folders`), as a session
-  started there is. It's all or nothing (bridge 0.9.209): once started it goes to its end,
-  whatever becomes of the request, and until the engine's is marked (a bot's, its record names the new one) anything that
-  fails deletes the new one again (and any the bridge made from it without saying so: its sessions
-  marked `carriedFrom` this one, made since), so the conversation stays as it was, with what
-  waited, and can be tried again; a failed move never leaves a copy. A session archived so takes
-  its queue on the box with it, once (paused, stopped by you, it stays so in the new one, with what
-  waited on the box). One brought back keeps the mark and its own queue, archived again too (the
+  worktree (`kuvo.worktree`) and its project's other folders (`kuvo.project-folders`; one in a
+  worktree too). One carry at a time for each conversation, whichever of the box's processes runs
+  it (a phone's in the long-running one, a client's `box route` in its own): a mark in
+  `run/carrying/<id>` holds it, and another answers 409 meanwhile. It's all or nothing (bridge
+  0.9.209): once started it goes to its end, whatever becomes of the request, and until the
+  engine's is marked (a bot's, its record names the new one) anything that fails deletes the new
+  one again (and any the bridge made from it without saying so: its sessions marked `carriedFrom`
+  this one, made since), and a run it stopped goes on as before (its queue resumed, unless it was
+  paused already), so the conversation stays as it was, with what waited, and can be tried again;
+  a failed move never leaves a copy. Only when the engine stops answering as it's marked, so
+  whether it took it can't be told, the new one stays, and the 502 says to look before trying
+  again. A client with it open follows `kuvo.carriedTo` as it's archived, whoever moved it: the
+  new one takes its place there, with its draft. A session archived so takes its queue on the box
+  with it, once (paused, stopped by you, it stays so in the new one, with what waited on the box). One brought back keeps the mark and its own queue, archived again too (the
   box keeps the carries it made in `run/queues-carried.json`). Changing a bot's model to one of the
   agents' (`PATCH kuvo/bots/<id>`) carries its conversation on with them the same way; a Mac takes
   in a machine's bot's new conversation as it next connects.

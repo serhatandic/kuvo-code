@@ -1683,17 +1683,17 @@ final class Workspace {
         guard let moved = try await carryToAgents(id, model: model) else { return nil }
         Analytics.shared.track("session_moved_to_agents", Analytics.model(provider: model.providerID, model: model.id))
         // Its tab (or its place beside one) takes the new one, before the old one goes.
-        let swapped = tabs?.swap(from: id, to: moved.id) == true
+        let swapped = tabs?.swap(from: id, to: moved) == true
         // What you wrote goes with it, all of it to the last moment, and isn't also left behind.
-        Drafts.shared[moved.id] = Drafts.shared[id]
+        Drafts.shared[moved] = Drafts.shared[id]
         Drafts.shared.remove(id)
         // One something else keeps (a bot's conversation): it takes the new session, in its place.
         let kept = await onMovedToAgents?(id, moved) == true
         // With no tab of it, it opens as any session does; a bot's that wasn't open stays so.
-        if !swapped, !kept, opens { tabs?.open(.session(moved.id)) }
+        if !swapped, !kept, opens { tabs?.open(.session(moved)) }
         // Archived by its box, as it's shown here from now on.
         if !kept, let api = api(forSession: id), let archived = try? await api.session(id) { upsert(archived) }
-        return moved
+        return session(moved)
     }
 
     /// A bot's conversation carried on with the coding agents by its box (the new one), nil for one
@@ -1702,7 +1702,7 @@ final class Workspace {
 
     /// Told when a conversation moved to the coding agents (from, to): true when something else
     /// keeps it, which then takes it over; the app sets it.
-    @ObservationIgnored var onMovedToAgents: ((_ from: String, _ to: Session) async -> Bool)?
+    @ObservationIgnored var onMovedToAgents: ((_ from: String, _ to: String) async -> Bool)?
 
     /// Sessions known to be the agents bridge's before it has told of them (a bot's conversation,
     /// a seat in a group chat): asked there from the start.
@@ -1716,9 +1716,9 @@ final class Workspace {
     /// An engine session's conversation carried on with the coding agents by its box
     /// (`POST kuvo/sessions/<id>/agents`, PROTOCOL.md), here or on a machine, as a phone's pick has it
     /// carried: the whole conversation and what was waiting, its wake-ups and Autopilot, and the
-    /// engine's archived, or nothing at all when it can't (its box says why). The new session, as its
-    /// bridge has it; nil: it isn't there.
-    func carryToAgents(_ id: String, model: ModelRef) async throws -> Session? {
+    /// engine's archived, or nothing at all when it can't (its box says why). The new session's id
+    /// (listed here once its bridge says, at once where it can be read); nil: it isn't there.
+    func carryToAgents(_ id: String, model: ModelRef) async throws -> String? {
         guard let session = session(id) else { return nil }
         let directory = session.location.directory
         let escaped = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed.subtracting(CharacterSet(charactersIn: "/"))) ?? id
@@ -1728,10 +1728,10 @@ final class Workspace {
         // (On a machine, its own bridge, beside its engine.)
         if let bridge = agents(forFolder: directory)?.api, let moved = try? await bridge.session(carried.session) {
             upsert(moved)
-            return moved
+        } else {
+            await refreshAgents()
         }
-        await refreshAgents()
-        return self.session(carried.session)
+        return carried.session
     }
 
     /// A session was deleted: its panel goes with it. The app sets it.
