@@ -105,3 +105,21 @@ import Testing
     engine.stop()
     #expect(levels.withLock { $0 } >= 3)
 }
+
+// What stopped it is said in plain words, with what to do, never in the system's own (#363: an
+// iPhone showed "Voice input stopped: The operation couldn’t be completed. (OSStatus error -50.)").
+@MainActor
+@Test func whatStoppedItIsSaidInPlainWords() {
+    let refused = NSError(domain: NSOSStatusErrorDomain, code: -50)
+    let stages: [VoiceInput.Stage] = [.gettingReady, .microphone, .listening(wroteSome: false), .listening(wroteSome: true)]
+    for stage in stages {
+        let words = VoiceInput.failure(of: refused, stage).message
+        #expect(!words.contains("OSStatus") && !words.contains("-50") && !words.contains("couldn’t be completed"), "\(stage): \(words)")
+    }
+    #expect(VoiceInput.failure(of: refused, .microphone).message == "Voice input couldn’t use the microphone. Try again.")
+    // Stopped after some words, they're kept for Done.
+    #expect(VoiceInput.failure(of: refused, .listening(wroteSome: true)).message == "Voice input stopped. What was written so far is kept.")
+    // Speech recognition not allowed still says where to allow it.
+    let notAllowed = NSError(domain: "SFSpeechErrorDomain", code: 1, userInfo: [NSLocalizedDescriptionKey: "Speech recognition is not authorized"])
+    #expect(VoiceInput.failure(of: notAllowed, .listening(wroteSome: false)) == .speechDenied)
+}
