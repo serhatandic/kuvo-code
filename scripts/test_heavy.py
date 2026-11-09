@@ -501,19 +501,19 @@ class StoppingTests(unittest.TestCase):
         self.pids.append(pid)
         return pid
 
-    def start(self, job, kind="box", env=None, child="sleep 300"):
+    def start(self, job, kind="box", env=None, child="sleep 300", stderr=None):
         """Runs `job` (shell) under heavy.sh once it has started a child of its own (`child`, which
         sleeps) and said so. Returns the process and the child's pid."""
         self.fresh()  # folders of their own for each job: one job's leftovers aren't the next one's
         ready, pidfile = (os.path.join(self.folder, name) for name in ("ready", "pid"))
         script = f'{child} & echo $! > "{pidfile}"; echo "${{KUVO_HEAVY_SLOT-}}" > "{self.folder}/slot"; echo yes > "{ready}"; {job}'
-        process = self.run_job(["/bin/sh", "-c", script], kind, env)
+        process = self.run_job(["/bin/sh", "-c", script], kind, env, stderr)
         self.ready()
         return process, self.child("pid")
 
-    def run_job(self, command, kind="box", env=None):
+    def run_job(self, command, kind="box", env=None, stderr=None):
         """In a session of its own, as a harness runs a command, and not under a shell's `&`."""
-        return subprocess.Popen([HEAVY, kind, *command], env=env or self.env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, start_new_session=True,
+        return subprocess.Popen([HEAVY, kind, *command], env=env or self.env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=stderr, start_new_session=True,
                                 preexec_fn=lambda: signal.signal(signal.SIGINT, signal.SIG_DFL))
 
     def test_stopping_it_stops_what_its_command_started(self):
@@ -586,6 +586,39 @@ class StoppingTests(unittest.TestCase):
             first.send_signal(signal.SIGTERM)
             first.wait(timeout=30)
             self.over(first)
+
+    def test_a_job_past_its_time_limit_is_stopped_and_says_what_was_running(self):
+        """A job that hangs (here, one waiting for good on a child that takes no TERM) is stopped
+        once its time is up, all of it, and its turn is free again: it can't hold its kind for hours.
+        (The job never ends by itself, so only its limit ends it; two seconds is plenty for it to
+        start its child and say so, which takes milliseconds.)"""
+        env = dict(self.env, KUVO_HEAVY_LIMIT="2s")
+        process, child = self.start("wait", env=env, child=self.STUBBORN, stderr=subprocess.PIPE)
+        self.assertEqual(process.wait(timeout=30), 124)
+        said = process.stderr.read().decode()
+        process.stderr.close()
+        self.over(process)
+        self.gone(child, "a child of a job past its time limit is still running")
+        self.assertIn("this box job ran past its time limit (2s) and was stopped: /bin/sh -c", said)
+        self.assertIn("KUVO_HEAVY_LIMIT", said)
+        free = subprocess.run([HEAVY, "box", "true"], env=self.env, capture_output=True, timeout=30)
+        self.assertEqual(free.returncode, 0, "its turn is still held")
+
+    def test_a_job_within_its_limit_ends_as_it_would_have(self):
+        """With a limit, a job that ends in time keeps its own answer and leaves nothing behind (the
+        timer included: the job's output reaches its end only once every process holding it has)."""
+        env = dict(self.env, KUVO_HEAVY_LIMIT="2h")
+        process, child = self.start("exit 7", env=env)
+        self.assertEqual(process.wait(timeout=30), 7)
+        self.over(process)
+        self.gone(child, "a background child of a finished command is still running")
+
+    def test_a_limit_that_isnt_a_time_is_refused(self):
+        for given in ("soon", "1.5m", "5ms", "m"):
+            with self.subTest(given):
+                result = subprocess.run([HEAVY, "box", "true"], env=dict(self.env, KUVO_HEAVY_LIMIT=given), capture_output=True, text=True, timeout=30)
+                self.assertEqual(result.returncode, 64)
+                self.assertIn("KUVO_HEAVY_LIMIT is a time like 90m", result.stderr)
 
     def test_the_old_way_lock_changes_nothing(self):
         env = dict(self.env, KUVO_HEAVY_OLD_UNTIL="20991231")

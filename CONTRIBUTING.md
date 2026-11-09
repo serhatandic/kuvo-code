@@ -189,6 +189,13 @@ the job's group is left behind to clean up. Never stop a process by name or patt
 you started, by its PID (`$!`, a pid file) or by a process group you created, never the one you
 were started in. On macOS every option goes before the pattern, in `pgrep` too.
 
+Every job has a time limit, so a hung one can't hold its kind's turn for hours: `mac` and `phone`
+45 minutes, `mac-build` 30, `box` 20, counted while it runs (not while it waits for its turn).
+Past it, its group is stopped (TERM, then KILL), it says what was running, and the helper exits
+124. `KUVO_HEAVY_LIMIT` gives one job another (`90m`, `600s`, `2h`; `0` for none). A job inside
+one of its kind runs within that one's limit (one of another kind has its own too), and one in a
+terminal has none.
+
 `KuvoCodeTests` tries what the app does on its own code, scenario by scenario:
 Discard in Changes on throwaway git repositories, say, checking what's on disk
 after. The app hosting them starts nothing (no window, engine or menu bar item),
