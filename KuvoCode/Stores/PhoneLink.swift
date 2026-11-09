@@ -1000,7 +1000,7 @@ final class PhoneLink {
 
     /// What this Mac answers, one name per route or group of routes a client might check
     /// (PROTOCOL.md, "Features"): what a machine's bridge has too (its `FEATURES`, but
-    /// `engine.start` and `update`), and the Mac's own. `usage` is added while the usage panel is.
+    /// `engine.start`, `update` and `browser`), and the Mac's own. `usage` is added while the usage panel is.
     static let features = [
         "accounts.credentials", "accounts.found", "agents", "artifacts", "asks", "attention", "bots", "bots.edit", "bots.events", "bots.job", "bots.keys", "bots.make", "branch", "btw", "btw.threads", "config", "config.apply", "engine.restart",
         "file", "folders", "folders.files", "git", "git.merge", "git.pull-request", "git.pull-request.draft", "git.push", "goals", "groups", "groups.delete", "groups.edit", "groups.joinable", "groups.make", "groups.seats", "handoff", "integrations", "keys", "mcp.catalog", "moves", "moves.agents", "moves.check",

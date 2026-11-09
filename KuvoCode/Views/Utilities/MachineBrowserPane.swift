@@ -171,7 +171,7 @@ private struct SetupCard: View {
             VStack(spacing: 6) {
                 Text("Setting Up the Browser on \(machine)")
                     .font(.system(size: 15, weight: .semibold))
-                Text("Kuvo Code puts a browser and everything it needs in ~/.kuvo-code on the machine. Nothing is installed on the system.")
+                Text("\(machine) downloads a browser and everything it needs from Google into ~/.kuvo-code. Nothing is installed on the system.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -192,7 +192,7 @@ private struct SetupCard: View {
                 }
                 .frame(width: 220)
             } else {
-                Text("Sending it to \(machine)…")
+                Text("Putting it together…")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

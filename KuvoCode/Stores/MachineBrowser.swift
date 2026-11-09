@@ -11,14 +11,15 @@ import os
 }
 
 /// A machine's browser: a Chromium kept running on the machine (`kuvo-browser.js`), which the
-/// agents there browse with, so it carries on while this Mac is off. Kuvo Code sets it up when it
-/// connects to the machine. Its pages are the panel's browser tabs while a session on the machine
+/// agents there browse with, so it carries on while this Mac is off. The machine's box sets it up
+/// itself; this Mac shows how that goes. Its pages are the panel's browser tabs while a session on the machine
 /// is in view: the one you look at shows live, and you can click and type in it yourself.
 @Observable
 final class MachineBrowser {
     enum Setup: Equatable {
         case unknown
-        /// Downloading, by the fraction done; nil while it's being sent to the machine.
+        /// The machine's box setting it up: downloading, by the fraction done; nil while it checks or
+        /// puts it together.
         case installing(Double?)
         case ready
         case failed(String)
@@ -255,9 +256,6 @@ final class MachineBrowser {
         resume()
     }
 
-    /// Where this Mac keeps the browser for machines, put together, so the next needs no download.
-    static var cache: URL { AppInfo.supportDirectory.appending(path: "browser-linux") }
-
     private var isWanted: Bool { keepers > 0 || viewers > 0 }
 
     func page(_ id: String?) -> Page? {
@@ -272,7 +270,7 @@ final class MachineBrowser {
 
     // MARK: Setting it up
 
-    /// Makes sure the machine has the browser, installing it if not. Once at a time.
+    /// Makes sure the machine has the browser, its box setting it up if not. Once at a time.
     func prepare() async {
         if setup == .ready { return }
         if let preparing { return await preparing.value }
@@ -301,37 +299,40 @@ final class MachineBrowser {
             return
         }
         let connection = machine.connection
-        // A connection that drops on the way (sending a couple of hundred megabytes takes a
-        // while) is tried twice more, rather than leaving the machine without its browser until
-        // the next launch.
-        for attempt in 1...3 {
+        // The machine's box sets the browser up itself (PROTOCOL.md, "The browser on a machine"):
+        // this asks it to, and follows how it goes. A connection that drops on the way is tried
+        // twice more.
+        var asked = false
+        var drops = 0
+        while true {
             do {
-                let system = try await MachineBrowserInstaller.system(on: connection)
-                guard let runtime = BrowserRuntime.pinned(for: system) else { throw MachineBrowserError.notPinned }
-                if try await MachineBrowserInstaller.isInstalled(runtime, on: connection) {
+                guard let status = try await MachineBrowserInstaller.status(start: !asked, on: connection) else {
+                    // An older box: its helper sets the browser up when it's first used.
                     setup = .ready
                     return
                 }
-                setup = .installing(0)
-                let architecture = try await MachineBrowserInstaller.architecture(on: connection)
-                let bundle = try await MachineBrowserInstaller.bundle(for: architecture, runtime: runtime, cache: Self.cache) { fraction in
-                    Task { @MainActor in
-                        if case .installing(let done?) = self.setup, fraction > done { self.setup = .installing(fraction) }
-                    }
+                asked = true
+                drops = 0
+                if status.installed != nil || status.state == "ready" {
+                    setup = .ready
+                    return
                 }
-                setup = .installing(nil)
-                try await MachineBrowserInstaller.send(bundle, runtime, to: connection)
-                setup = .ready
-                log.notice("\(self.machine.destination, privacy: .public) has the browser \(runtime.id, privacy: .public)")
-                return
-            } catch where attempt < 3 && Self.dropped(error) {
-                log.notice("\(self.machine.destination, privacy: .public): SSH dropped setting up the browser, trying again")
-                try? await Task.sleep(for: .seconds(5 * attempt))
+                if !status.isUnderWay {
+                    log.error("\(self.machine.destination, privacy: .public) couldn't get the browser: \(status.message ?? status.state, privacy: .public)")
+                    setup = .failed(status.message ?? "\(machine.name) couldn’t set up its browser.")
+                    return
+                }
+                setup = .installing(status.state == "downloading" ? status.progress ?? 0 : nil)
+            } catch where drops < 2 && Self.dropped(error) {
+                drops += 1
+                log.notice("\(self.machine.destination, privacy: .public): SSH dropped asking about the browser, trying again")
             } catch {
                 log.error("\(self.machine.destination, privacy: .public) couldn't get the browser: \(error.localizedDescription, privacy: .public)")
                 setup = .failed(error.localizedDescription)
                 return
             }
+            try? await Task.sleep(for: .seconds(2))
+            if Task.isCancelled { return }
         }
     }
 
@@ -502,6 +503,7 @@ final class MachineBrowser {
     private func handle(_ method: String, _ params: [String: Any], _ sessionID: String?) {
         switch method {
         case "Kuvo.hello":
+            if case .installing = setup { setup = .ready }
             // This Mac can answer what agents ask in the browser.
             link?.fire("Kuvo.viewing")
             activeID = params["targetId"] as? String
@@ -524,6 +526,11 @@ final class MachineBrowser {
             // Pages whose site asked for a passkey before this connection.
             for (page, site) in params["passkeys"] as? [String: String] ?? [:] where !closedPasskeyNotes.contains(page + "|" + site) { passkeyPages[page] = site }
             Task { await begin() }
+        case "Kuvo.installing":
+            // The box sets the browser up again (it went, or didn't start) as this connects.
+            if ["checking", "downloading", "installing"].contains(params["state"] as? String ?? "") {
+                setup = .installing((params["progress"] as? NSNumber)?.doubleValue)
+            }
         case "Kuvo.asked":
             asked(params)
         case "Kuvo.pointer":
@@ -560,7 +567,7 @@ final class MachineBrowser {
             link?.stop()
             link = nil
             if params["kind"] as? String == "missing" {
-                // Set up again: the machine lost it, or never had it.
+                // Asked of its box again (it says why it couldn't).
                 state = .idle
                 setup = .unknown
                 Task { await prepare() }
@@ -891,7 +898,7 @@ final class MachineBrowser {
 
     /// A new page, at `address` if given: its ID once the browser has opened it, or nil if it
     /// couldn't. Waits for the browser to be set up and connected first (the first time on a
-    /// machine, that's a download and an upload).
+    /// machine, that's its download).
     func newPage(_ address: String? = nil) async -> String? {
         connectWhenReady()
         let deadline = ContinuousClock.now + .seconds(900)

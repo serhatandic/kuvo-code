@@ -1,0 +1,26 @@
+{
+ "text": {
+  "sha256": "564605fec76046f53a1ee82fa233bea5fe5ec13be1d82c1f055d21a8a1ff6b28",
+  "size": 300000
+ },
+ "random": {
+  "sha256": "6efddbbd0227e5e0780b3330ac1aae2f0065b535a1609c35f52036f065bf7b11",
+  "size": 100000
+ },
+ "props": {
+  "sha256": "762ac5a6a9c7420aa525d227c8480acc25e95d96a67fb275276c16cecee2f34a",
+  "size": 240000
+ },
+ "lc4": {
+  "sha256": "ea95f4f856ab49f01cd6fa8cb072f13124514707ccf65d1d921e74aca79d1133",
+  "size": 190000
+ },
+ "large": {
+  "sha256": "dc37804bd1b2bfed59b80801ee89a9b0488bc9b3e561d783b134d9c17b10383e",
+  "size": 4395000
+ },
+ "empty": {
+  "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "size": 0
+ }
+}

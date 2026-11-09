@@ -46,6 +46,8 @@ import Testing
               [ -f "$KUVO_HOME/bin/.old-link" ] && { echo "Usage: kuvo-link.js run | serve" >&2; exit 2; }
               env | sort >"$HOME/engine-config.env"
               printf '{"learned":"%s","given":%s}' "$KUVO_HOME" "${OPENCODE_CONFIG_CONTENT:-null}"; exit 0 ;;
+            *"kuvo-link.js browser")
+              echo "$*" >>"$HOME/browser-setups"; exit 0 ;;
             *"kuvo-link.js login-path")
               [ -f "$KUVO_HOME/bin/.old-link" ] && { echo "Usage: kuvo-link.js run | serve" >&2; exit 2; }
               printf '%s' "$HOME/.nvm/bin:$PATH"; exit 0 ;;
@@ -318,6 +320,19 @@ import Testing
         let environment = try String(contentsOf: home.appending(path: "link.env"), encoding: .utf8)
         #expect(environment.contains("XDG_CACHE_HOME=\(root.path)/cache") && environment.contains("TMPDIR=\(root.path)/tmp"))
         #expect(environment.contains("LANG=tr_TR.UTF-8"), "as Kuvo Code last started it")
+    }
+
+    /// The browser agents use there: the box sets it up itself as its keeper starts (a newer Kuvo
+    /// Code may pin a newer one), and again while it isn't there, with or without a Mac.
+    @Test func theBoxSetsUpItsBrowserAsItsKeeperStarts() throws {
+        defer { cleanUp() }
+        try write(root.appending(path: "bin/kuvo-link.js"), "// the box\n")
+        try start()
+        let setups = home.appending(path: "browser-setups")
+        until { (try? String(contentsOf: setups, encoding: .utf8))?.contains("browser install") == true }
+        let asked = try String(contentsOf: setups, encoding: .utf8)
+        #expect(asked.contains("kuvo-link.js browser install"))
+        #expect(!asked.contains("--now"), "it waits after a failure, as the box does")
     }
 
     /// A `.env` in the box's folders (which an agent's command can write) sets nothing for its

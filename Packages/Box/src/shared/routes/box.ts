@@ -63,6 +63,20 @@ export const UPDATE = object({
   blocked: nullable(string),
 });
 
+/** The browser agents use on a machine (`kuvo/browser`, PROTOCOL.md, "The browser on a machine"):
+ * `missing` (none, and none being set up), `checking`, `downloading` (with `progress`, 0 to 1),
+ * `installing`, `ready`, or `failed` (`message`, and when it tries again by itself, ms, or null for
+ * never). `chromium` is the version this box pins, `installed` the one in use (an older one works
+ * while a newer one is set up). */
+export const BROWSER = object({
+  state: words("missing", "checking", "downloading", "installing", "ready", "failed"),
+  chromium: nullable(string),
+  installed: nullable(string),
+  progress: nullable(number),
+  message: nullable(string),
+  retryAt: nullable(number),
+});
+
 /** The phones paired here, `you` being the one asking. */
 export const PHONES = object({ phones: list(object({ key: string, name: string, added: nullable(number), pairing: string, you: bool })) });
 /** A link for another phone to pair with (good once), and when it ends, in seconds since 1970. */
@@ -103,6 +117,7 @@ export type MachineInfo = Extract<BoxInfo, { kind: "machine" }>;
 export type UpdateStatus = Infer<typeof UPDATE>;
 export type UpdateStep = Infer<typeof STEP>;
 export type LastUpdate = Infer<typeof LAST_UPDATE>;
+export type BrowserStatus = Infer<typeof BROWSER>;
 export type Phones = Infer<typeof PHONES>;
 export type Named = Infer<typeof NAMED>;
 export type Credentials = Infer<typeof CREDENTIALS>;
@@ -112,6 +127,8 @@ export const BOX_ROUTES: RouteShape[] = [
   { route: "GET kuvo/info", answers: { 200: INFO } },
   { route: "GET kuvo/update", answers: { 200: UPDATE } },
   { route: "POST kuvo/update", answers: { 202: UPDATE } },
+  { route: "GET kuvo/browser", answers: { 200: BROWSER } },
+  { route: "POST kuvo/browser", answers: { 202: BROWSER } },
   { route: "GET kuvo/file", answers: { 200: BYTES } },
   { route: "GET kuvo/phones", answers: { 200: PHONES } },
   { route: "POST kuvo/phones/remove", answers: { 200: NOTHING } },
