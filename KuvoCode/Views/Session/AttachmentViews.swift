@@ -68,9 +68,20 @@ nonisolated enum AttachmentItem: Identifiable, Sendable {
     }
 
     /// Changes with what it shows: a message's copy from the engine takes the place of the one
-    /// it was sent with, under the same id. Cheap, as views compare it each time they update.
+    /// it was sent with, under the same id, and a file on this Mac changed where it is (a chart an
+    /// agent redrew and shows again) is not its earlier self. Cheap, as views compare it each time
+    /// they update.
     var contentID: String {
-        guard case .stored(let file, let id) = self else { return id }
+        guard case .stored(let file, let id) = self else {
+            let url: URL? = switch self {
+            // A URL of its own, read now: one that's kept keeps what it read before.
+            case .local(let url): url.isFileURL ? URL(filePath: url.path(percentEncoded: false)) : nil
+            case .path(let path): URL(filePath: path)
+            case .stored: nil
+            }
+            guard let values = try? url?.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey]) else { return id }
+            return [id, values.contentModificationDate.map { String($0.timeIntervalSinceReferenceDate) } ?? "", values.fileSize.map(String.init) ?? ""].joined(separator: "|")
+        }
         let source = switch file.source {
         case .uri(let uri)? where uri.hasPrefix("data:"): Self.sample(uri)
         case .uri(let uri)?: uri
