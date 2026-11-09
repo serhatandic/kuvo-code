@@ -16877,107 +16877,10 @@ async function finishGoalTool(caller, args, targets) {
 import fs64 from "node:fs";
 import path66 from "node:path";
 
-// Packages/Box/src/link/letters/limits.ts
-import fs60 from "node:fs";
-import path63 from "node:path";
-var LIMITS2 = {
-  messages: { most: 20, within: 600000 },
-  sessions: { most: 6, within: 600000 },
-  botSessions: { most: 40, within: 600000 }
-};
-var LIMITS_FILE = path63.join(RUN, "tool-limits.json");
-var LIMITS_LOCK = path63.join(RUN, ".tool-limits.lock");
-var STARTING_FOR = 120000;
-function changeCounts(now, change, file) {
-  return locked(LIMITS_LOCK, () => {
-    let counts = {};
-    try {
-      counts = JSON.parse(fs60.readFileSync(file, "utf8")) ?? {};
-    } catch {}
-    for (const kind of Object.keys(LIMITS2)) {
-      const byKey = counts[kind] ?? {};
-      for (const [key, times] of Object.entries(byKey)) {
-        const lately = Array.isArray(times) ? times.filter((at) => typeof at === "number" && now - at < LIMITS2[kind].within) : [];
-        if (lately.length)
-          byKey[key] = lately;
-        else
-          delete byKey[key];
-      }
-      counts[kind] = byKey;
-    }
-    const starting = {};
-    for (const [bot, starts] of Object.entries(isObject(counts.starting) ? counts.starting : {})) {
-      const lately = Object.entries(isObject(starts) ? starts : {}).filter(([, start]) => isObject(start) && typeof start.at === "number" && now - start.at < STARTING_FOR);
-      if (lately.length)
-        starting[bot] = Object.fromEntries(lately);
-    }
-    counts.starting = starting;
-    const value = change(counts);
-    try {
-      writePrivate(file, JSON.stringify(counts));
-    } catch {}
-    return value;
-  });
-}
-function allowed2(kind, key, now = Date.now(), file = LIMITS_FILE) {
-  return changeCounts(now, (counts) => {
-    const lately = counts[kind][key] ?? [];
-    if (lately.length >= LIMITS2[kind].most)
-      return null;
-    counts[kind][key] = [...lately, now];
-    return now;
-  }, file);
-}
-function takeBack2(kind, key, at, file = LIMITS_FILE) {
-  changeCounts(Date.now(), (counts) => {
-    const lately = counts[kind][key] ?? [];
-    const index = lately.indexOf(at);
-    if (index >= 0)
-      lately.splice(index, 1);
-    if (lately.length)
-      counts[kind][key] = lately;
-    else
-      delete counts[kind][key];
-  }, file);
-}
-function noteStarting(bot, now = Date.now(), file = LIMITS_FILE) {
-  const token = `${now}-${Math.random().toString(36).slice(2, 10)}`;
-  return changeCounts(now, (counts) => {
-    const starts = counts.starting[bot] ?? {};
-    counts.starting[bot] = { ...starts, [token]: { at: now } };
-    return { token, before: Object.keys(starts) };
-  }, file);
-}
-function startsBefore(bot, before, file = LIMITS_FILE) {
-  return changeCounts(Date.now(), (counts) => {
-    const starts = counts.starting[bot] ?? {};
-    return before.flatMap((token) => starts[token] ? [starts[token]] : []);
-  }, file);
-}
-function startedAs(bot, token, session, prompted = false, file = LIMITS_FILE) {
-  changeCounts(Date.now(), (counts) => {
-    const starts = counts.starting[bot] ?? {};
-    if (!starts[token])
-      return;
-    if (session)
-      starts[token] = { ...starts[token], session, ...prompted ? { prompted } : {} };
-    else
-      delete starts[token];
-    if (Object.keys(starts).length)
-      counts.starting[bot] = starts;
-    else
-      delete counts.starting[bot];
-  }, file);
-}
-
-// Packages/Box/src/link/letters/start.ts
-import fs63 from "node:fs";
-import path65 from "node:path";
-
 // Packages/Box/src/link/areas/worktrees.ts
 import { spawnSync as spawnSync7 } from "node:child_process";
-import fs61 from "node:fs";
-import path64 from "node:path";
+import fs60 from "node:fs";
+import path63 from "node:path";
 function freeBranch(folder, name) {
   for (let suffix = 1;suffix <= 20; suffix++) {
     const candidate = suffix === 1 ? name : `${name}-${suffix}`;
@@ -17135,10 +17038,10 @@ async function answerWorktrees(method, requestPath, body, engine, signal, bridge
     const worktrees = [];
     for (const tree of list) {
       const here = sessions.filter((session) => inside3(session.location?.directory ?? session.directory, tree.root));
-      const entry = { path: tree.root, folder: tree.folder ?? tree.root, project: tree.project, projectName: path64.basename(tree.project), branch: tree.branch, sessions: here.length, working: here.some((session) => active.has(session.id)) };
+      const entry = { path: tree.root, folder: tree.folder ?? tree.root, project: tree.project, projectName: path63.basename(tree.project), branch: tree.branch, sessions: here.length, working: here.some((session) => active.has(session.id)) };
       if (tree.base)
         entry.base = tree.base;
-      if (fs61.existsSync(tree.root)) {
+      if (fs60.existsSync(tree.root)) {
         const status = await gitLater(tree.root, ["status", "--porcelain", "--untracked-files=normal", "--ignore-submodules=none"]);
         if (status !== null) {
           entry.uncommitted = status.length > 0;
@@ -17158,7 +17061,7 @@ async function answerWorktrees(method, requestPath, body, engine, signal, bridge
     return { status: route.startsWith("kuvo/worktrees") ? 405 : 404, value: {} };
   if (route === "kuvo/worktrees") {
     const project = body?.project;
-    if (typeof project !== "string" || !path64.isAbsolute(project) || !fs61.existsSync(project))
+    if (typeof project !== "string" || !path63.isAbsolute(project) || !fs60.existsSync(project))
       return { status: 400, value: message(`Send the project's folder on this machine as {"project"}.`) };
     if (!engine?.port)
       return { status: 503, value: message("The engine isn't running.") };
@@ -17179,23 +17082,23 @@ async function answerWorktrees(method, requestPath, body, engine, signal, bridge
     }
     if (typeof root !== "string")
       return { status: 502, value: message("The engine didn't make it.") };
-    const branch = freeBranch(root, prefix + path64.basename(root));
+    const branch = freeBranch(root, prefix + path63.basename(root));
     if (!branch || gitAsked(root, ["switch", "--quiet", "-c", branch]) === null && gitIn(root, ["symbolic-ref", "--quiet", "--short", "HEAD"]) !== branch) {
       await call(engine, "DELETE", "/api/worktree", { projectID: id, directory: root, force: true }, signal, project).catch(() => {});
       return { status: 502, value: message(prefix ? `A branch starting with “${prefix}” couldn’t be made in this repository. Change the branch prefix in Settings › Git, then try again.` : "Its branch couldn't be made.") };
     }
     if (prefix !== kept)
       writePrivate(BRANCH_PREFIX_FILE, JSON.stringify({ branchPrefix: prefix }));
-    const tree = { project, root, folder: subpath ? path64.join(root, subpath.replace(/\/$/, "")) : root, branch, ...base ? { base } : {}, made: branch, prefix };
+    const tree = { project, root, folder: subpath ? path63.join(root, subpath.replace(/\/$/, "")) : root, branch, ...base ? { base } : {}, made: branch, prefix };
     updateWorktrees((list) => [...list.filter((each) => each.root !== root), tree]);
     return { status: 200, value: tree };
   }
   if (route === "kuvo/worktrees/record") {
     const given = { project: body?.project, root: body?.root, folder: typeof body?.folder === "string" ? body.folder : body?.root, branch: body?.branch, ...typeof body?.base === "string" ? { base: body.base } : {} };
-    const absolute = (folder) => typeof folder === "string" && path64.isAbsolute(folder);
+    const absolute = (folder) => typeof folder === "string" && path63.isAbsolute(folder);
     if (!absolute(given.project) || !absolute(given.root) || !absolute(given.folder) || typeof given.branch !== "string" || !given.branch)
       return { status: 400, value: message("Send {project, root, folder?, branch, base?}.") };
-    if (!fs61.existsSync(given.root))
+    if (!fs60.existsSync(given.root))
       return { status: 404, value: message("That worktree isn't on this machine any more.") };
     updateWorktrees((list) => list.some((each) => each.root === given.root) ? list : [...list, given]);
     return { status: 200, value: {} };
@@ -17211,7 +17114,7 @@ async function answerWorktrees(method, requestPath, body, engine, signal, bridge
 }
 var isArchived2 = (session) => Boolean(session.time?.archived || session.metadata?.["kuvo.archived"] === true || session.metadata?.kuvo?.archived === true);
 var folderOf2 = (session) => session.location?.directory ?? session.directory;
-var snapshotRef = (root, commit) => `refs/kuvo/worktrees/${path64.basename(root).replace(/[^A-Za-z0-9_-]+/g, "-")}-${commit.slice(0, 12)}`;
+var snapshotRef = (root, commit) => `refs/kuvo/worktrees/${path63.basename(root).replace(/[^A-Za-z0-9_-]+/g, "-")}-${commit.slice(0, 12)}`;
 var dropSnapshot = (project, root, commit) => gitIn(project, ["update-ref", "-d", snapshotRef(root, commit), commit]);
 function snapshot(root, branch) {
   const status = gitIn(root, ["status", "--porcelain", "--untracked-files=all", "--ignore-submodules=none"]);
@@ -17222,7 +17125,7 @@ function snapshot(root, branch) {
   const gitFolder = gitIn(root, ["rev-parse", "--absolute-git-dir"]);
   if (!gitFolder)
     return;
-  const index = path64.join(gitFolder, "kuvo-snapshot-index");
+  const index = path63.join(gitFolder, "kuvo-snapshot-index");
   const env = { GIT_INDEX_FILE: index };
   try {
     if (gitAsked(root, ["read-tree", "HEAD"], env) === null || gitAsked(root, ["add", "-A"], env) === null)
@@ -17233,13 +17136,13 @@ function snapshot(root, branch) {
       return;
     return commit;
   } finally {
-    fs61.rmSync(index, { force: true });
+    fs60.rmSync(index, { force: true });
   }
 }
 function listedRestorable(tree) {
-  const branchThere = fs61.existsSync(tree.project) && gitIn(tree.project, ["rev-parse", "--verify", "--quiet", `refs/heads/${tree.branch}`]) !== null;
+  const branchThere = fs60.existsSync(tree.project) && gitIn(tree.project, ["rev-parse", "--verify", "--quiet", `refs/heads/${tree.branch}`]) !== null;
   const saved = Boolean(tree.snapshot);
-  const headThere = !branchThere && fs61.existsSync(tree.project) && gitIn(tree.project, ["cat-file", "-e", `${tree.head}^{commit}`]) !== null;
+  const headThere = !branchThere && fs60.existsSync(tree.project) && gitIn(tree.project, ["cat-file", "-e", `${tree.head}^{commit}`]) !== null;
   const entry = { project: tree.project, root: tree.root, folder: tree.folder ?? tree.root, branch: tree.branch, restorable: branchThere || saved || headThere, saved };
   if (tree.base) {
     entry.base = tree.base;
@@ -17261,7 +17164,7 @@ async function removeTree(tree, removal, engine, signal, bridge, known) {
   if (removal.forget && sessions.some((session) => inside3(folderOf2(session), tree.root))) {
     return { status: 409, value: message(`A session works in the worktree of ${tree.branch}, so it stays. Remove it with the session, or in Settings › Worktrees.`) };
   }
-  const gone = !fs61.existsSync(tree.root);
+  const gone = !fs60.existsSync(tree.root);
   if (!removal.discard && !removal.keep && !gone && gitIn(tree.root, ["status", "--porcelain", "--untracked-files=normal", "--ignore-submodules=none"]) !== "") {
     return { status: 409, value: message(`The worktree of ${tree.branch} has changes that aren’t committed, so it stays. Commit them, or remove it in Settings › Worktrees, which throws them away.`) };
   }
@@ -17281,7 +17184,7 @@ async function removeTree(tree, removal, engine, signal, bridge, known) {
     return { status: 409, value: message(`What isn’t committed in the worktree of ${tree.branch} couldn’t be kept, so it stays.`) };
   try {
     if (gone) {
-      if (fs61.existsSync(tree.project))
+      if (fs60.existsSync(tree.project))
         gitIn(tree.project, ["worktree", "prune"]);
     } else {
       const force = removal.discard || removal.keep;
@@ -17309,9 +17212,9 @@ async function restoreTree(folder, engine, signal, bridge) {
   const tree = readRestorableWorktrees().find((each) => (each.folder ?? each.root) === folder || each.root === folder);
   if (!tree)
     return { status: 404, value: message("It can’t come back any more.") };
-  if (!fs61.existsSync(tree.project))
+  if (!fs60.existsSync(tree.project))
     return { status: 409, value: message("Its project folder is gone.") };
-  if (fs61.existsSync(tree.root) && fs61.readdirSync(tree.root).length)
+  if (fs60.existsSync(tree.root) && fs60.readdirSync(tree.root).length)
     return { status: 409, value: message("Something else is in its folder now.") };
   const saved = tree.snapshot && gitIn(tree.project, ["cat-file", "-e", `${tree.snapshot}^{commit}`]) !== null ? tree.snapshot : undefined;
   const branchThere = gitIn(tree.project, ["rev-parse", "--verify", "--quiet", `refs/heads/${tree.branch}`]) !== null;
@@ -17321,7 +17224,7 @@ async function restoreTree(folder, engine, signal, bridge) {
   gitIn(tree.project, ["worktree", "prune"]);
   const made = branchThere ? spawnGit(tree.project, ["worktree", "add", tree.root, tree.branch]) : spawnGit(tree.project, ["worktree", "add", "-b", tree.branch, tree.root, tree.head]);
   if (made !== null) {
-    if (fs61.existsSync(tree.root))
+    if (fs60.existsSync(tree.root))
       gitIn(tree.project, ["worktree", "remove", "--force", tree.root]);
     if (!branchThere)
       gitIn(tree.project, ["branch", "-D", tree.branch]);
@@ -17419,13 +17322,13 @@ async function sweep(signal, given, givenBridge) {
   if (!orphans.length)
     return;
   for (const tree of orphans)
-    if (tree.snapshot && fs61.existsSync(tree.project))
+    if (tree.snapshot && fs60.existsSync(tree.project))
       dropSnapshot(tree.project, tree.root, tree.snapshot);
   updateWorktrees((list) => list, undefined, (list) => list.filter((each) => !orphans.some((gone) => gone.root === each.root)));
 }
 async function worktreesWhere(directory, engine, signal, projects = readProjects().filter((each) => !each.removed).map((each) => each.directory)) {
   const value = typeof directory === "string" && directory !== "" ? directory : null;
-  const answer = { directory: value, default: path64.join(ENGINE_DATA, "worktree"), home: homeFolder(), projects: [] };
+  const answer = { directory: value, default: path63.join(ENGINE_DATA, "worktree"), home: homeFolder(), projects: [] };
   const ids = new Map;
   if (engine?.port) {
     try {
@@ -17436,24 +17339,24 @@ async function worktreesWhere(directory, engine, signal, projects = readProjects
     } catch {}
   }
   for (const project of projects) {
-    if (!fs61.existsSync(project))
+    if (!fs60.existsSync(project))
       continue;
     const common = await gitLater(project, ["rev-parse", "--git-common-dir"]);
     if (!common)
       continue;
-    const gitFolder = path64.resolve(project, common);
-    if (path64.basename(gitFolder) !== ".git")
+    const gitFolder = path63.resolve(project, common);
+    if (path63.basename(gitFolder) !== ".git")
       continue;
-    const checkout = realOr(path64.dirname(gitFolder));
+    const checkout = realOr(path63.dirname(gitFolder));
     const id = ids.get(checkout);
     if (id === null || id === undefined && !await gitLater(project, ["rev-list", "-n", "1", "--all"]))
       continue;
-    const folder = value === null ? id ? path64.join(answer.default, id.slice(0, 6)) : null : value.startsWith("~/") ? path64.join(answer.home, value.slice(2)) : path64.resolve(checkout, value);
-    const entry = { project, name: path64.basename(project), folder };
+    const folder = value === null ? id ? path63.join(answer.default, id.slice(0, 6)) : null : value.startsWith("~/") ? path63.join(answer.home, value.slice(2)) : path63.resolve(checkout, value);
+    const entry = { project, name: path63.basename(project), folder };
     if (folder) {
       entry.exists = (() => {
         try {
-          return fs61.statSync(folder).isDirectory();
+          return fs60.statSync(folder).isDirectory();
         } catch {
           return false;
         }
@@ -17462,7 +17365,7 @@ async function worktreesWhere(directory, engine, signal, projects = readProjects
         entry.canMake = canMake(folder);
       if (inside3(folder, checkout)) {
         entry.inside = true;
-        entry.ignored = await gitLater(checkout, ["check-ignore", "-q", path64.join(folder, "worktree")]) !== null;
+        entry.ignored = await gitLater(checkout, ["check-ignore", "-q", path63.join(folder, "worktree")]) !== null;
       }
     }
     answer.projects.push(entry);
@@ -17472,9 +17375,9 @@ async function worktreesWhere(directory, engine, signal, projects = readProjects
 }
 function apart(projects, home) {
   const parents = (project) => {
-    const folder = path64.dirname(project);
-    const inHome = folder === home || folder.startsWith(home + path64.sep);
-    const names = (inHome ? folder.slice(home.length) : folder).split(path64.sep).filter(Boolean);
+    const folder = path63.dirname(project);
+    const inHome = folder === home || folder.startsWith(home + path63.sep);
+    const names = (inHome ? folder.slice(home.length) : folder).split(path63.sep).filter(Boolean);
     return (inHome ? ["~", ...names] : names).reverse();
   };
   for (const name of new Set(projects.map((each) => each.name))) {
@@ -17496,20 +17399,20 @@ function apart(projects, home) {
 }
 function realOr(folder) {
   try {
-    return fs61.realpathSync(folder);
+    return fs60.realpathSync(folder);
   } catch {
     return folder;
   }
 }
 function canMake(folder) {
-  for (let at = path64.dirname(folder);; at = path64.dirname(at)) {
+  for (let at = path63.dirname(folder);; at = path63.dirname(at)) {
     try {
-      if (!fs61.statSync(at).isDirectory())
+      if (!fs60.statSync(at).isDirectory())
         return false;
-      fs61.accessSync(at, fs61.constants.W_OK);
+      fs60.accessSync(at, fs60.constants.W_OK);
       return true;
     } catch (error) {
-      if (error?.code !== "ENOENT" || at === path64.dirname(at))
+      if (error?.code !== "ENOENT" || at === path63.dirname(at))
         return false;
     }
   }
@@ -17535,6 +17438,103 @@ async function* worktreesRoute(context) {
   const { status, value } = await answerWorktrees(request.method.toUpperCase(), request.path, parsed(request.body), engine, signal);
   return yield* json(status, value);
 }
+
+// Packages/Box/src/link/letters/limits.ts
+import fs61 from "node:fs";
+import path64 from "node:path";
+var LIMITS2 = {
+  messages: { most: 20, within: 600000 },
+  sessions: { most: 6, within: 600000 },
+  botSessions: { most: 40, within: 600000 }
+};
+var LIMITS_FILE = path64.join(RUN, "tool-limits.json");
+var LIMITS_LOCK = path64.join(RUN, ".tool-limits.lock");
+var STARTING_FOR = 120000;
+function changeCounts(now, change, file) {
+  return locked(LIMITS_LOCK, () => {
+    let counts = {};
+    try {
+      counts = JSON.parse(fs61.readFileSync(file, "utf8")) ?? {};
+    } catch {}
+    for (const kind of Object.keys(LIMITS2)) {
+      const byKey = counts[kind] ?? {};
+      for (const [key, times] of Object.entries(byKey)) {
+        const lately = Array.isArray(times) ? times.filter((at) => typeof at === "number" && now - at < LIMITS2[kind].within) : [];
+        if (lately.length)
+          byKey[key] = lately;
+        else
+          delete byKey[key];
+      }
+      counts[kind] = byKey;
+    }
+    const starting = {};
+    for (const [bot, starts] of Object.entries(isObject(counts.starting) ? counts.starting : {})) {
+      const lately = Object.entries(isObject(starts) ? starts : {}).filter(([, start]) => isObject(start) && typeof start.at === "number" && now - start.at < STARTING_FOR);
+      if (lately.length)
+        starting[bot] = Object.fromEntries(lately);
+    }
+    counts.starting = starting;
+    const value = change(counts);
+    try {
+      writePrivate(file, JSON.stringify(counts));
+    } catch {}
+    return value;
+  });
+}
+function allowed2(kind, key, now = Date.now(), file = LIMITS_FILE) {
+  return changeCounts(now, (counts) => {
+    const lately = counts[kind][key] ?? [];
+    if (lately.length >= LIMITS2[kind].most)
+      return null;
+    counts[kind][key] = [...lately, now];
+    return now;
+  }, file);
+}
+function takeBack2(kind, key, at, file = LIMITS_FILE) {
+  changeCounts(Date.now(), (counts) => {
+    const lately = counts[kind][key] ?? [];
+    const index = lately.indexOf(at);
+    if (index >= 0)
+      lately.splice(index, 1);
+    if (lately.length)
+      counts[kind][key] = lately;
+    else
+      delete counts[kind][key];
+  }, file);
+}
+function noteStarting(bot, now = Date.now(), file = LIMITS_FILE) {
+  const token = `${now}-${Math.random().toString(36).slice(2, 10)}`;
+  return changeCounts(now, (counts) => {
+    const starts = counts.starting[bot] ?? {};
+    counts.starting[bot] = { ...starts, [token]: { at: now } };
+    return { token, before: Object.keys(starts) };
+  }, file);
+}
+function startsBefore(bot, before, file = LIMITS_FILE) {
+  return changeCounts(Date.now(), (counts) => {
+    const starts = counts.starting[bot] ?? {};
+    return before.flatMap((token) => starts[token] ? [starts[token]] : []);
+  }, file);
+}
+function startedAs(bot, token, session, prompted = false, file = LIMITS_FILE) {
+  changeCounts(Date.now(), (counts) => {
+    const starts = counts.starting[bot] ?? {};
+    if (!starts[token])
+      return;
+    if (session)
+      starts[token] = { ...starts[token], session, ...prompted ? { prompted } : {} };
+    else
+      delete starts[token];
+    if (Object.keys(starts).length)
+      counts.starting[bot] = starts;
+    else
+      delete counts.starting[bot];
+  }, file);
+}
+
+// Packages/Box/src/link/letters/start.ts
+import fs63 from "node:fs";
+import path65 from "node:path";
 
 // Packages/Box/src/link/letters/take.ts
 import fs62 from "node:fs";
@@ -18594,20 +18594,29 @@ var keepJournal = (journal) => {
   writePrivate(journalFile(journal.id), JSON.stringify(journal));
 };
 var startsRunning = new Set;
+var LOOK2 = 5000;
 async function takeStart(journal, places) {
   if (journal.done)
     return journal.done;
+  if (startsRunning.has(journal.id))
+    return null;
   startsRunning.add(journal.id);
   try {
-    const done = await finishStart(journal, places);
-    if (!done)
-      return null;
-    journal.done = done;
-    keepJournal(journal);
-    return done;
+    return await settle3(journal, places);
   } finally {
     startsRunning.delete(journal.id);
   }
+}
+async function settle3(journal, places) {
+  const done = await finishStart(journal, places);
+  if (!done)
+    return null;
+  return finished(journal, done);
+}
+function finished(journal, done) {
+  journal.done = done;
+  keepJournal(journal);
+  return done;
 }
 function targetOf(making, places) {
   try {
@@ -18618,7 +18627,7 @@ function targetOf(making, places) {
 }
 async function sessionOf(journal, places) {
   const target = journal.making ? targetOf(journal.making, places) : null;
-  return target ? madeFor3(target, journal.id).catch(() => {
+  return target ? madeFor3(target, journal.id, AbortSignal.timeout(LOOK2)).catch(() => {
     return;
   }) : undefined;
 }
@@ -18701,13 +18710,51 @@ async function finishStart(journal, places) {
   const words = startedWords(outcome, false);
   return { text: words.text, refused: words.isError };
 }
-async function madeFor3(target, id) {
-  const page = await call(target, "GET", "/api/session?limit=50&order=desc&parentID=null");
+async function madeFor3(target, id, signal) {
+  const page = await call(target, "GET", "/api/session?limit=50&order=desc&parentID=null", undefined, signal);
   const list = Array.isArray(page) ? page : isObject(page) && Array.isArray(page.data) ? page.data : [];
   const found = list.find((each) => isObject(each) && isObject(each.metadata) && isObject(each.metadata.kuvo) && each.metadata.kuvo.call === id);
   return typeof found?.id === "string" ? found.id : null;
 }
-var answers = (target) => call(target, "GET", "/api/provider").then(() => true, () => false);
+var answers = (target) => call(target, "GET", "/api/provider", undefined, AbortSignal.timeout(LOOK2)).then(() => true, () => false);
+async function ready(journal, places) {
+  let engine = null;
+  try {
+    engine = places.readEngine();
+  } catch {}
+  if (!engine || !await answers(engine))
+    return false;
+  if (journal.making)
+    return !journal.making.agents || await bridgeAnswers(places);
+  if (process.uptime() < 300 && hasBridge() && !await bridgeAnswers(places))
+    return false;
+  return true;
+}
+var bridgeAnswers = async (places) => {
+  let bridge = null;
+  try {
+    bridge = places.bridge();
+  } catch {}
+  return Boolean(bridge && await answers(bridge));
+};
+var hasBridge = () => {
+  try {
+    return Boolean(readBridgeFile());
+  } catch {
+    return false;
+  }
+};
+async function dropTree(journal, places) {
+  if (!journal.tree || journal.session)
+    return;
+  let engine = null;
+  try {
+    engine = places.readEngine();
+  } catch {}
+  if (journal.tree.root)
+    await answerWorktrees("POST", "kuvo/worktrees/remove", { path: journal.tree.root, discard: true }, engine, undefined).catch(() => {});
+  delete journal.tree;
+}
 async function toldAlready(target, making, session) {
   const page = await call(target, "GET", `/api/session/${encodeURIComponent(session)}/message?limit=20&order=desc`);
   const list = Array.isArray(page) ? page : isObject(page) && Array.isArray(page.data) ? page.data : [];
@@ -18727,37 +18774,40 @@ async function resumeStarts(answer, now = Date.now(), places = { readEngine: rea
     }
     if (startsRunning.has(journal.id))
       continue;
-    if (!otherComputersAllowed() || !peersOf(readLink()).some((peer) => peer.key === journal.sender)) {
-      const why = !otherComputersAllowed() ? "this computer stopped taking work from your other computers" : "your computer was removed from this one";
-      if (journal.making && !journal.session) {
-        const found = await sessionOf(journal, places);
-        if (found === undefined)
-          continue;
-        if (found)
-          journal.session = found;
-      }
-      journal.done = journal.making && journal.session && journal.prompted ? { text: startedWords({ started: { session: journal.session, ...journal.making.started, ...journal.marked ? {} : { wakes: undefined } } }, false).text, refused: false } : journal.session ? { text: `Started a session (address ${journal.session}), but it wasn't given its task: ${why} first.`, refused: true } : { text: `The session wasn't started: ${why} before it was made.`, refused: true };
-      keepJournal(journal);
-      answer(journal, journal.done);
-      continue;
-    }
-    if (now - journal.made > LETTER_LIFE && !journal.session) {
-      journal.done = { text: `The session wasn't started: this computer went down while starting it, and it's been over a day since you asked. Start it again if it's still needed.`, refused: true };
-      keepJournal(journal);
-      answer(journal, journal.done);
-      continue;
-    }
-    let engine = null;
+    startsRunning.add(journal.id);
     try {
-      engine = places.readEngine();
-    } catch {}
-    const bridge = journal.making?.agents ? targetOf(journal.making, places) : null;
-    if (!engine || !await answers(engine) || journal.making?.agents && (!bridge || !await answers(bridge)))
-      continue;
-    const done = await takeStart(journal, places).catch(() => null);
-    if (done)
-      answer(journal, done);
+      const done = await resumeOne(journal, places, now);
+      if (done)
+        answer(journal, done);
+    } catch {} finally {
+      startsRunning.delete(journal.id);
+    }
   }
+}
+async function resumeOne(journal, places, now) {
+  const off = !otherComputersAllowed() ? "this computer stopped taking work from your other computers" : !peersOf(readLink()).some((peer) => peer.key === journal.sender) ? "your computer was removed from this one" : null;
+  const old = now - journal.made > LETTER_LIFE;
+  if (!off && !old)
+    return await ready(journal, places) ? settle3(journal, places) : null;
+  let unknown = false;
+  if (journal.making && !journal.session) {
+    const found = await sessionOf(journal, places);
+    if (found === undefined && off)
+      return null;
+    if (found)
+      journal.session = found;
+    unknown = found === undefined;
+  }
+  if (!journal.session && !unknown)
+    await dropTree(journal, places);
+  const why = off ?? "this computer went down while starting it, and it's been over a day since you asked";
+  if (journal.making && journal.session && journal.prompted)
+    return finished(journal, { text: startedWords({ started: { session: journal.session, ...journal.making.started, ...journal.marked ? {} : { wakes: undefined } } }, false).text, refused: false });
+  if (journal.session)
+    return finished(journal, { text: `Started a session (address ${journal.session}), but it wasn't given its task: ${why}. Write to it with send_message, or start it again if it's still needed.`, refused: true });
+  if (unknown)
+    return finished(journal, { text: `It may not have been started: ${why}, and whether the session was made can't be told now. If it was, it wasn't given its task. Check with list_sessions before you start it again.`, refused: true });
+  return finished(journal, { text: `The session wasn't started: ${why}${off ? " before it was made" : ""}.${off ? "" : " Start it again if it's still needed."}`, refused: true });
 }
 async function stopLineWork(lead, before, targets, signal) {
   const work = under(lead, await workSessions(targets, signal)).filter((each) => (each.data.time?.created ?? 0) <= before);
@@ -23835,8 +23885,18 @@ async function carryToAgents(id, model, readEngine, agents, signal) {
     }
     const renamed = Object.fromEntries(waiting.map((item) => [item.id, messageID()]));
     const kuvo = bot ? session.metadata?.kuvo ?? { bot: bot.described.id } : {};
-    const { approval, applied, autopilot, held, lead, line, call: started } = session.metadata?.kuvo ?? {};
-    const fromAfar = { ...Array.isArray(held) && held.length ? { held } : {}, ...isObject(lead) ? { lead } : {}, ...Array.isArray(line) ? { line } : {}, ...typeof started === "string" ? { call: started } : {} };
+    const { approval, applied, autopilot, held, lead, line, call: started, startedBy, wake, by, depth, limits } = session.metadata?.kuvo ?? {};
+    const fromAfar = isObject(lead) ? {
+      lead,
+      ...Array.isArray(held) && held.length ? { held } : {},
+      ...Array.isArray(line) ? { line } : {},
+      ...typeof started === "string" ? { call: started } : {},
+      ...typeof startedBy === "string" ? { startedBy } : {},
+      ...Array.isArray(wake) ? { wake } : {},
+      ...isObject(by) ? { by } : {},
+      ...typeof depth === "number" ? { depth } : {},
+      ...isObject(limits) ? { limits } : {}
+    } : {};
     const marks = { kuvo: { ...approval ? { approval } : {}, ...applied ? { applied } : {}, ...autopilot === true ? { autopilot } : {}, ...fromAfar, ...kuvo, carriedFrom: id } };
     const moved = await call(agents, "POST", "/api/session/import", {
       title: session.title,
@@ -32755,6 +32815,7 @@ export {
   tidyWorktrees,
   toolRun,
   translateSettings,
+  under,
   update,
   updateLink,
   updateNight,

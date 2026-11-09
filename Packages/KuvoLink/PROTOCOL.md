@@ -404,9 +404,10 @@ connection.
     from the step it got to at a later round, once its engine answers, wherever it is now (a
     session marked with its `kuvo.call` is found rather than made again, and while that can't be
     asked it waits; a worktree made for it is used, not a second; a task already there isn't sent
-    again), its lead told by the call's answer. One a day old that
-    wasn't made yet isn't started, nor one whose box has stopped taking starts or was removed since,
-    and the lead hears why. Kept 30 days.
+    again), its lead told by the call's answer. One a day old isn't
+    finished any more, nor one whose box has stopped taking starts or was removed since: the lead
+    hears how far it got (made but not given its task, or that it may have been made where its
+    engine can't be asked), and a worktree made for one that wasn't made goes. Kept 30 days.
   - **The answer** is a note, as for a stop, so a start whose tool stopped waiting reaches its lead
     as a message; `list_models` and `list_projects` answer as a list does (`read: {}`), in the
     receiving box's name.

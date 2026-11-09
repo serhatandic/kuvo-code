@@ -15,7 +15,7 @@
 // Run with `node --test Packages/KuvoLink/Tests/Bridge/start-elsewhere-rules.test.js`.
 import "./test-safety.js";
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";
@@ -70,6 +70,19 @@ async function engine(sessions) {
         return reply(session);
       }
       if (url.pathname === "/api/session/active") return reply(Object.fromEntries([...active].map(id => [id, {}])));
+      // Worktrees, as the engine makes them with git, for the folder a request is about.
+      const raw = (value, status = 200) => response.writeHead(status, { "content-type": "application/json" }).end(JSON.stringify(value));
+      const about = decodeURIComponent(request.headers["x-opencode-directory"] ?? "");
+      if (url.pathname === "/api/location") return raw({ directory: about, project: { id: `prj:${about}` } });
+      if (url.pathname === "/api/worktree" && request.method === "POST") {
+        const folder = path.join(home, "worktrees", `tree-${++next}`);
+        execFileSync("git", ["worktree", "add", "-q", "--detach", folder], { cwd: given.projectID.slice(4) });
+        return raw({ directory: folder });
+      }
+      if (url.pathname === "/api/worktree" && request.method === "DELETE") {
+        try { execFileSync("git", ["worktree", "remove", "--force", given.directory], { cwd: given.projectID.slice(4) }); } catch { return raw({ message: "git refused" }, 400); }
+        return raw({});
+      }
       if (url.pathname === "/api/provider") return reply([{ id: "p" }]);
       if (url.pathname === "/api/model") return reply([{ id: "m1", providerID: "p", name: "Model One" }]);
       if (url.pathname.startsWith("/api/experimental/")) return reply({});
@@ -654,4 +667,90 @@ test("a start cut short after its worktree was made goes on in that worktree, no
   assert.equal(eng.seen.made.length, 1);
   assert.equal(eng.seen.made[0].directory, tree);
   assert.match(answered[0][1].text, /worktree kuvo\/sign-in/);
+});
+
+// ---- Found in review of those fixes ----
+
+// A journal kept as a whole start's would be at the step `change` leaves it at.
+async function cutShort(id, change, args = {}) {
+  const whole = startCall(args);
+  await take(whole);
+  const kept = { ...structuredClone(read(path.join(run, "calls", `${whole.id}.json`))), id, made: Date.now(), at: Date.now() };
+  for (const key of ["done", "making", "session", "marked", "prompted"]) delete kept[key];
+  change(kept);
+  write(path.join(run, "calls", `${id}.json`), kept);
+  return kept;
+}
+
+test("two rounds at once, as an engine just starting again takes its time to answer, make a start cut short once", async () => {
+  await cutShort("cal_twice0000000001", () => {});
+  // The engine, slow to answer which accounts it has as it starts again.
+  const slow = http.createServer((request, response) => {
+    const forward = () => {
+      const on = http.request({ host: "127.0.0.1", port: eng.target.port, path: request.url, method: request.method, headers: request.headers }, answer => {
+        response.writeHead(answer.statusCode, answer.headers);
+        answer.pipe(response);
+      });
+      request.pipe(on);
+    };
+    if (request.url === "/api/provider") setTimeout(forward, 300); else forward();
+  });
+  await new Promise(resolve => slow.listen(0, "127.0.0.1", resolve));
+  atEnd(() => { slow.closeAllConnections(); slow.close(); });
+  const via = { port: slow.address().port, password: "pw" };
+  const made = eng.seen.made.length;
+  const answered = [];
+  const round = () => link.resumeStarts((each, done) => answered.push([each.id, done]), Date.now(), { readEngine: () => via, bridge: () => null });
+  await Promise.all([round(), round(), round()]);
+  assert.equal(eng.seen.made.length - made, 1, "one session");
+  assert.equal(answered.length, 1, "and one answer");
+});
+
+test("a day on, one cut short is said as far as it got, without its engine: made but not told; or may have been made, where that can't be asked", async () => {
+  const dayAgo = Date.now() - DAY - 60_000;
+  const down = { readEngine: () => ({ port: 1, password: "pw" }), bridge: () => null };
+  const answered = [];
+  const resume = places => link.resumeStarts((each, done) => answered.push([each.id, done]), Date.now(), places);
+  // Made and marked, but not told its task, and its engine hasn't answered since.
+  await cutShort("cal_untold000000001", each => {
+    each.making = structuredClone(read(path.join(run, "calls", `${eng.seen.made.at(-1).metadata.kuvo.call}.json`)).making);
+    each.session = "ses_untold";
+    each.marked = true;
+    each.made = dayAgo;
+  });
+  // Being made as the box went down: whether it was can't be asked.
+  await cutShort("cal_maybe0000000001", each => {
+    each.making = structuredClone(read(path.join(run, "calls", `${eng.seen.made.at(-1).metadata.kuvo.call}.json`)).making);
+    each.made = dayAgo;
+  });
+  const made = eng.seen.made.length;
+  await resume(down);
+  assert.equal(eng.seen.made.length, made);
+  const said = Object.fromEntries(answered.map(([id, done]) => [id, done]));
+  assert.match(said.cal_untold000000001.text, /^Started a session \(address ses_untold\), but it wasn't given its task: this computer went down while starting it, and it's been over a day since you asked\./);
+  assert.match(said.cal_maybe0000000001.text, /^It may not have been started: .*whether the session was made can't be told now\./);
+  assert.doesNotMatch(said.cal_maybe0000000001.text, /wasn't started/);
+  // Done, so the next round leaves them be (and they go in time).
+  await resume(down);
+  assert.equal(answered.length, 2);
+});
+
+test("the worktree made for a start that's then not to be made, as you switched starts off meanwhile, goes again", async () => {
+  // The project, a repository, and a worktree the box made for the start before it went down.
+  const api = path.join(home, "projects", "api");
+  const env = { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" };
+  execFileSync("git", ["init", "-q", "-b", "main"], { cwd: api, env });
+  fs.writeFileSync(path.join(api, "README.md"), "# API\n");
+  execFileSync("git", ["add", "-A"], { cwd: api, env });
+  execFileSync("git", ["commit", "-q", "-m", "First"], { cwd: api, env });
+  const tree = (await link.answerWorktrees("POST", "kuvo/worktrees", { project: api }, eng.target, undefined, null)).value;
+  assert.ok(tree.root && fs.existsSync(tree.root), JSON.stringify(tree));
+  write(path.join(run, "calls", "cal_tree00000000001.json"), { id: "cal_tree00000000001", from: "ses_lead", sender: mini.pub, computer: "mini", name: "Foreman", given: { task: "Fix the sign-in.", project: "api", worktree: true }, start: startAs(), made: Date.now(), at: Date.now(),
+    tree: { folder: tree.folder, root: tree.root, branch: tree.branch } });
+  link.allowOtherComputers(false);
+  const answered = [];
+  await link.resumeStarts((each, done) => answered.push([each.id, done]), Date.now(), { readEngine: () => eng.target, bridge: () => null });
+  link.allowOtherComputers(true);
+  assert.match(answered[0][1].text, /^The session wasn't started: this computer stopped taking work from your other computers before it was made\./);
+  assert.equal(fs.existsSync(tree.root), false, "its worktree is gone");
 });

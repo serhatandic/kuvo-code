@@ -13,7 +13,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { isObject } from "../../shared/json";
 import { plainName } from "../../shared/text";
-import { bridgeTarget, call as engineCall, readEngineFile } from "../engine/client";
+import { bridgeTarget, call as engineCall, readBridgeFile, readEngineFile } from "../engine/client";
+import { answerWorktrees } from "../areas/worktrees";
 import { listOf, writePrivate } from "../files";
 import { HERE, IS_MAC, RUN } from "../home";
 import { holdsBack } from "../bots/tell";
@@ -299,22 +300,38 @@ export const keepJournal = (journal: StartJournal) => {
 export const startsRunning = new Set<string>();
 
 type Places = { readEngine: () => Target; bridge: () => Target | null };
+type Done = { text: string; refused: boolean };
+
+// (How long a look at the engine waits: one just starting again may take a while to answer.)
+const LOOK = 5_000;
 
 /** A lead on another computer starting a session here (`takeCall`'s, once it's checked who it's
- * from): started once, kept as it goes, and what it said; null where one cut short can't be
- * finished now (its engine isn't answering): it's left for a later round, never started again. */
-export async function takeStart(journal: StartJournal, places: Places): Promise<{ text: string; refused: boolean } | null> {
+ * from): started once, kept as it goes, and what it said; null where it's being done already
+ * (the round that finishes those cut short answers it), or one cut short can't be finished now
+ * (its engine isn't answering): it's left for a later round, never started again. */
+export async function takeStart(journal: StartJournal, places: Places): Promise<Done | null> {
   if (journal.done) return journal.done;
+  // (Taken before anything's awaited, so two never do it at once.)
+  if (startsRunning.has(journal.id)) return null;
   startsRunning.add(journal.id);
   try {
-    const done = await finishStart(journal, places);
-    if (!done) return null;
-    journal.done = done;
-    keepJournal(journal);
-    return done;
+    return await settle(journal, places);
   } finally {
     startsRunning.delete(journal.id);
   }
+}
+
+// The start, finished as far as it can be now, and kept done once it is.
+async function settle(journal: StartJournal, places: Places): Promise<Done | null> {
+  const done = await finishStart(journal, places);
+  if (!done) return null;
+  return finished(journal, done);
+}
+
+function finished(journal: StartJournal, done: Done): Done {
+  journal.done = done;
+  keepJournal(journal);
+  return done;
 }
 
 // Where a start's session is now: the coding agents' bridge, or the engine, as each says it is
@@ -327,7 +344,7 @@ function targetOf(making: Pick<Making, "agents">, places: Places): Target | null
 // undefined where the engine couldn't be asked (so it's never taken for none, and made twice).
 async function sessionOf(journal: StartJournal, places: Places): Promise<string | null | undefined> {
   const target = journal.making ? targetOf(journal.making, places) : null;
-  return target ? madeFor(target, journal.id).catch(() => undefined) : undefined;
+  return target ? madeFor(target, journal.id, AbortSignal.timeout(LOOK)).catch(() => undefined) : undefined;
 }
 
 // The start, from where it got to: not made yet (or made with nothing to show for it), started;
@@ -382,15 +399,42 @@ async function finishStart(journal: StartJournal, places: Places): Promise<{ tex
 }
 
 // The session a start's call made, as its mark says (`kuvo.call`), among the latest on `target`.
-async function madeFor(target: Target, id: string): Promise<string | null> {
-  const page = await engineCall(target, "GET", "/api/session?limit=50&order=desc&parentID=null") as unknown;
+async function madeFor(target: Target, id: string, signal?: AbortSignal): Promise<string | null> {
+  const page = await engineCall(target, "GET", "/api/session?limit=50&order=desc&parentID=null", undefined, signal) as unknown;
   const list = Array.isArray(page) ? page : isObject(page) && Array.isArray(page.data) ? page.data : [];
   const found = list.find((each: unknown) => isObject(each) && isObject(each.metadata) && isObject(each.metadata.kuvo) && each.metadata.kuvo.call === id) as { id?: unknown } | undefined;
   return typeof found?.id === "string" ? found.id : null;
 }
 
-// Whether `target` answers now.
-const answers = (target: Target): Promise<boolean> => engineCall(target, "GET", "/api/provider").then(() => true, () => false);
+// Whether `target` answers now (soon: one that takes too long, as it starts, doesn't yet).
+const answers = (target: Target): Promise<boolean> => engineCall(target, "GET", "/api/provider", undefined, AbortSignal.timeout(LOOK)).then(() => true, () => false);
+
+// Whether a start cut short can go on now: its engine answers, and the coding agents' bridge for
+// one of theirs; or, for one not got ready yet, while this box has only just started, the bridge
+// too where it has one (coming up with it, its models aren't there to be picked meanwhile).
+async function ready(journal: StartJournal, places: Places): Promise<boolean> {
+  let engine: Target | null = null;
+  try { engine = places.readEngine(); } catch {}
+  if (!engine || !(await answers(engine))) return false;
+  if (journal.making) return !journal.making.agents || await bridgeAnswers(places);
+  if (process.uptime() < 300 && hasBridge() && !(await bridgeAnswers(places))) return false;
+  return true;
+}
+const bridgeAnswers = async (places: Places): Promise<boolean> => {
+  let bridge: Target | null = null;
+  try { bridge = places.bridge(); } catch {}
+  return Boolean(bridge && await answers(bridge));
+};
+const hasBridge = (): boolean => { try { return Boolean(readBridgeFile()); } catch { return false; } };
+
+// The worktree made for a start that was never made, taken away again.
+async function dropTree(journal: StartJournal, places: Places): Promise<void> {
+  if (!journal.tree || journal.session) return;
+  let engine: Target | null = null;
+  try { engine = places.readEngine(); } catch {}
+  if (journal.tree.root) await answerWorktrees("POST", "kuvo/worktrees/remove", { path: journal.tree.root, discard: true }, engine, undefined).catch(() => {});
+  delete journal.tree;
+}
 
 // Whether the session was given its task already (its message with the task's id is there).
 async function toldAlready(target: Target, making: Making, session: string): Promise<boolean> {
@@ -413,40 +457,40 @@ export async function resumeStarts(answer: (journal: StartJournal, done: { text:
       continue;
     }
     if (startsRunning.has(journal.id)) continue;
-    // (Switched off since, or the computer it's from removed: not finished here; said as far as
-    // it got.)
-    if (!otherComputersAllowed() || !peersOf(readLink()).some(peer => peer.key === journal.sender)) {
-      const why = !otherComputersAllowed() ? "this computer stopped taking work from your other computers" : "your computer was removed from this one";
-      if (journal.making && !journal.session) {
-        // (Whether it was made can't be told while its engine isn't answering: a later round.)
-        const found = await sessionOf(journal, places);
-        if (found === undefined) continue;
-        if (found) journal.session = found;
-      }
-      journal.done = journal.making && journal.session && journal.prompted
-        ? { text: startedWords({ started: { session: journal.session, ...journal.making.started, ...(journal.marked ? {} : { wakes: undefined }) } }, false).text, refused: false }
-        : journal.session
-          ? { text: `Started a session (address ${journal.session}), but it wasn't given its task: ${why} first.`, refused: true }
-          : { text: `The session wasn't started: ${why} before it was made.`, refused: true };
-      keepJournal(journal);
-      answer(journal, journal.done);
-      continue;
+    // (Taken before anything's awaited, so two rounds never do it at once.)
+    startsRunning.add(journal.id);
+    try {
+      const done = await resumeOne(journal, places, now);
+      if (done) answer(journal, done);
+    } catch {} finally {
+      startsRunning.delete(journal.id);
     }
-    if (now - journal.made > LETTER_LIFE && !journal.session) {
-      journal.done = { text: `The session wasn't started: this computer went down while starting it, and it's been over a day since you asked. Start it again if it's still needed.`, refused: true };
-      keepJournal(journal);
-      answer(journal, journal.done);
-      continue;
-    }
-    // (Its engine, or the coding agents' bridge for one of theirs, not answering yet, as it's just
-    // starting again: a later round, so it's never refused for good, nor made twice.)
-    let engine: Target | null = null;
-    try { engine = places.readEngine(); } catch {}
-    const bridge = journal.making?.agents ? targetOf(journal.making, places) : null;
-    if (!engine || !(await answers(engine)) || (journal.making?.agents && (!bridge || !(await answers(bridge))))) continue;
-    const done = await takeStart(journal, places).catch(() => null);
-    if (done) answer(journal, done);
   }
+}
+
+// A start cut short, as far as it can go now: said as far as it got where it's not to be finished
+// here any more (switched off since, the computer it's from removed, a day gone); else finished
+// from where it got to once its engine answers. Null: a later round.
+async function resumeOne(journal: StartJournal, places: Places, now: number): Promise<Done | null> {
+  const off = !otherComputersAllowed() ? "this computer stopped taking work from your other computers"
+    : !peersOf(readLink()).some(peer => peer.key === journal.sender) ? "your computer was removed from this one" : null;
+  const old = now - journal.made > LETTER_LIFE;
+  if (!off && !old) return await ready(journal, places) ? settle(journal, places) : null;
+  // (Whether it was made, as far as its engine says; it may not answer.)
+  let unknown = false;
+  if (journal.making && !journal.session) {
+    const found = await sessionOf(journal, places);
+    // (Switched off or removed: asked again later, as it may answer then.)
+    if (found === undefined && off) return null;
+    if (found) journal.session = found;
+    unknown = found === undefined;
+  }
+  if (!journal.session && !unknown) await dropTree(journal, places);
+  const why = off ?? "this computer went down while starting it, and it's been over a day since you asked";
+  if (journal.making && journal.session && journal.prompted) return finished(journal, { text: startedWords({ started: { session: journal.session, ...journal.making.started, ...(journal.marked ? {} : { wakes: undefined }) } }, false).text, refused: false });
+  if (journal.session) return finished(journal, { text: `Started a session (address ${journal.session}), but it wasn't given its task: ${why}. Write to it with send_message, or start it again if it's still needed.`, refused: true });
+  if (unknown) return finished(journal, { text: `It may not have been started: ${why}, and whether the session was made can't be told now. If it was, it wasn't given its task. Check with list_sessions before you start it again.`, refused: true });
+  return finished(journal, { text: `The session wasn't started: ${why}${off ? " before it was made" : ""}.${off ? "" : " Start it again if it's still needed."}`, refused: true });
 }
 
 // ---- Stop All, on your other computers ----
