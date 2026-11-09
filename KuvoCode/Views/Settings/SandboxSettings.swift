@@ -23,15 +23,20 @@ struct SandboxSettings: View {
     @State private var isAdding = false
     @State private var confirmsRestart = false
 
+    /// Which of it to draw: all of it, or its line (`notice`) and Also Allowed (`allowed`) apart,
+    /// for the page to put a group between them.
+    enum Part { case all, notice, allowed }
+    var part: Part = .all
+
     private var sandboxes: Sandboxes { .shared }
     private var id: String { box.machine ?? BoxClient.mac }
 
     var body: some View {
         if let state = sandboxes.states[id] {
-            notice(state)
+            if part != .allowed { notice(state) }
             // (Nothing to allow where it can't sandbox commands at all.)
-            if state.able { allowed }
-        } else if !sandboxes.without.contains(id) {
+            if state.able, part != .notice { allowed }
+        } else if part != .allowed, !sandboxes.without.contains(id) {
             // Not read yet, or it couldn't be: a line in its place, so the page doesn't jump.
             Section {
             } header: {

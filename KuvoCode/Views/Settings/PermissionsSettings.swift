@@ -46,9 +46,13 @@ struct PermissionsSettings: View {
 
     var body: some View {
         ScrollingSettingsForm {
-            SandboxSettings()
+            // The sandbox's line, then whether your other computers may start work here, then
+            // the folders its commands may write in besides their own.
+            SandboxSettings(part: .notice)
 
             OtherComputersSettings()
+
+            SandboxSettings(part: .allowed)
 
             Section {
                 ActionChoices(path: Self.path)
