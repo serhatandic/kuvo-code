@@ -320,7 +320,8 @@ final class Bots {
         app?.wakeUps.forget(key: bot.id)
         app?.botWork.forget(bot.id)
         app?.utilities.closeTabs(of: bot.id)
-        app?.workspace.drop(bot.sessionID)
+        // (Only its row there: one where it lives now, if it moved, stays.)
+        app?.workspace.drop(bot.sessionID, on: .some(bot.machine))
         show()
     }
 
