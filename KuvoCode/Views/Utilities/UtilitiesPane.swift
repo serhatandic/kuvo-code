@@ -1,5 +1,6 @@
 import AppKit
 import ClientDesign
+import ClientSessions
 import SwiftUI
 
 /// The right panel: a card whose header is a strip of tabs (Changes, files, terminals,
@@ -35,6 +36,9 @@ struct UtilitiesPane: View {
                     // strip off every tab; the panel scrolls without them, as the sidebar does.
                     .scrollIndicators(.never)
             }
+        }
+        .task(id: followsQueue ? queueKey : nil) {
+            if followsQueue { await app.workQueues.follow(queueKey) }
         }
     }
 
@@ -138,8 +142,20 @@ struct UtilitiesPane: View {
         case .browser: utilities.browsers[tab.id]?.displayTitle ?? "New Tab"
         case .machinePage(let machine, let page):
             app.machines.engine(machine)?.browser.page(page)?.name ?? "New Tab"
+        case .workQueue:
+            app.workQueues.views[queueKey].map { "Work Queue · " + WorkQueue.count(WorkQueue.openCount($0)).lowercased() } ?? "Work Queue"
         }
     }
+
+    /// The Work Queue view the panel shows (see `WorkQueuePanel`): followed while its tab is open,
+    /// so the tab's count stays current on another tab too.
+    private var queueKey: WorkQueues.Key {
+        let owner = utilities.queueOwner
+        let scope: WorkQueues.Scope = owner == nil ? .all : app.workQueues.scopes[utilities.panelKey] ?? .own
+        return WorkQueues.Key(box: utilities.queueBox, owner: scope == .all ? WorkQueueView.all : owner ?? WorkQueueView.all)
+    }
+
+    private var followsQueue: Bool { utilities.visibleTabs.contains { $0.kind == .workQueue } }
 
     private func icon(for tab: Utilities.Tab) -> TabGlyph {
         switch tab.kind {
@@ -158,6 +174,7 @@ struct UtilitiesPane: View {
             } else {
                 .symbol("globe")
             }
+        case .workQueue: .symbol("checklist")
         }
     }
 
@@ -230,6 +247,8 @@ struct UtilitiesPane: View {
                 } else {
                     placeholder("Machine Removed", symbol: "server.rack", detail: "\(machine) isn’t one of your machines anymore. Close this tab.")
                 }
+            case .workQueue:
+                WorkQueuePanel(utilities: utilities)
             }
         } else {
             // A panel with no tab for a moment (its conversation is going): the strip stays at the

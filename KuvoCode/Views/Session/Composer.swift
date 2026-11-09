@@ -257,6 +257,7 @@ struct Composer: View {
                     marks: !isShell,
                     images: imageFiles.count,
                     token: token,
+                    refs: isShell || !text.contains("#") ? [:] : app.workQueues.refs(in: text, box: app.utilities.queueBox),
                     example: example,
                     onKey: key,
                     onFocus: { focused in

@@ -21,6 +21,8 @@ final class Utilities {
         case browser
         /// A page of a machine's browser; nil for a new tab that hasn't gone anywhere yet.
         case machinePage(String, String?)
+        /// The Work Queue: the conversation's own items (and its sessions'), or every item.
+        case workQueue
     }
 
     struct Tab: Identifiable, Hashable {
@@ -246,6 +248,30 @@ final class Utilities {
             add(Tab(kind: .changes, owner: panelKey), at: tabs.firstIndex { isVisible($0) } ?? 0)
         }
     }
+
+    /// Shows the Work Queue tab, opening it if it isn't open: beside Changes, Files and Terminal.
+    func showWorkQueue() {
+        Analytics.shared.track("panel_opened", ["tool": "work-queue"])
+        if let tab = visibleTabs.first(where: { $0.kind == .workQueue }) {
+            selection = tab.id
+        } else {
+            add(Tab(kind: .workQueue, owner: panelKey))
+        }
+    }
+
+    /// Whose Work Queue the panel in view shows: the group chat's (`grp_…`), else the session you
+    /// work in's conversation (a subagent's is the session that started it); nil for a panel
+    /// that's no conversation's (a new session's draft, a terminal).
+    var queueOwner: String? {
+        if let group = inView.group { return BotGroups.groupID(fromTab: group) ?? group }
+        guard let session = workingSession else { return nil }
+        let shown = shownIn(session)
+        return shown.hasPrefix("ses_") ? shown : session
+    }
+
+    /// The box the panel's Work Queue is on: the machine the session you work in runs on, else
+    /// this Mac's.
+    var queueBox: String { place ?? BoxClient.mac }
 
     func newTerminal(in directory: String?, environment: [String: String]) {
         Analytics.shared.track("panel_opened", ["tool": "terminal"])
@@ -817,8 +843,8 @@ final class Utilities {
     /// A panel under another name: its tabs, the one you'd chosen there, its run terminals and
     /// what an agent showed you meanwhile.
     private func movePanel(from: String, to: String) {
-        // A panel has one Changes tab and one file tree.
-        for tab in tabs where tab.owner == from && (tab.kind == .changes || tab.kind == .file(nil)) && tabs.contains(where: { $0.owner == to && $0.kind == tab.kind }) {
+        // A panel has one Changes tab, one file tree and one Work Queue.
+        for tab in tabs where tab.owner == from && (tab.kind == .changes || tab.kind == .file(nil) || tab.kind == .workQueue) && tabs.contains(where: { $0.owner == to && $0.kind == tab.kind }) {
             remove(tab.id, refills: false)
         }
         for index in tabs.indices where tabs[index].owner == from { tabs[index].owner = to }

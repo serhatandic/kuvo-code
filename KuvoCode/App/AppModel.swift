@@ -71,6 +71,7 @@ final class AppModel {
     /// What each box told you lately, shown as this Mac's notifications.
     let boxNotices = BoxNotices()
     let botOversight = BotOversight()
+    let workQueues = WorkQueues()
     /// Voice input, for whichever composer listens.
     let dictation = Dictation()
     // COMPAT(0.7 mac-group-chats): `GroupMigration.run` before the box's group chats start. Goes 3 months after 0.8.0.
@@ -333,6 +334,7 @@ final class AppModel {
         Sandboxes.shared.onYours = { [weak self] id in self?.workspace.reviewLeftForYou(id) }
         goalPlans.app = self
         botOversight.app = self
+        workQueues.app = self
         boxNotices.app = self
         workspace.boxTellsNews = { [weak self] box in self?.boxNotices.tells(box) ?? false }
         boxGroups.boxTellsNews = { [weak self] box in self?.boxNotices.tells(box) ?? false }

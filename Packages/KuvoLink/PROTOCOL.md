@@ -2901,6 +2901,15 @@ its project's folders or a temporary folder (links followed, nothing hidden, no 
 hard link, nothing of Kuvo Code's but its own folder), 25 MB each; they're read before the change
 and kept with it, all or none.
 
+**References in messages** (for chips, the same in every client: KuvoClient's `WorkItemRefs`):
+`#243` names item 243 when the `#` is at the start or after a space or one of `([{"'/,–-`, with 1
+to 6 digits and then no letter, digit or underscore; not inside a code span or block, a Markdown
+link or a web address, and not after "PR", "MR", "pull request", "issue" or "step" (someone
+else's numbers; outside sources get a prefix, `gh:owner/repo#12`). A client asks `refs` for the
+numbers in a message and draws each one the box knows as a chip (its category's color, a ring in
+progress, a check when done, `#243` and the title on one line), leaving one it doesn't know as
+written; the message's words never change. A chip opens the item.
+
 **Numbers**: one `#n` per item, unique across your computers, handed out by the primary: the box of
 the Mac that set this one up (a Mac's own box, and a box with no Mac, is its own), kept once it's
 first used. The primary numbers its own items from its counter; another box numbers from blocks of

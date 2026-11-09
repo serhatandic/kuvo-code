@@ -219,6 +219,26 @@ struct ToolCallView: View {
 
     private func string(_ key: String) -> String? { input?[key]?.string }
 
+    /// A Work Queue tool's call, in words: the item by its number ("#243"), or a new one by title.
+    private func queueSummary(_ name: String) -> String {
+        let item = input?["item"]?.number.flatMap { Int(exactly: $0.rounded()) }.map { "#\($0)" }
+            ?? string("item").map { $0.hasPrefix("#") || Int($0) == nil ? $0 : "#" + $0 } ?? "an item"
+        let title = string("title").map { "“\($0)”" } ?? "an item"
+        switch name {
+        case "queue_list": return isActive ? "Reading the Work Queue" : "Read the Work Queue"
+        case "queue_show": return (isActive ? "Reading " : "Read ") + item
+        case "queue_add": return (isActive ? "Adding " : "Added ") + title + " to the Work Queue"
+        case "queue_update":
+            if string("category") == "done" { return (isActive ? "Marking " : "Marked ") + item + " done" }
+            return (isActive ? "Updating " : "Updated ") + item
+        case "queue_hand": return (isActive ? "Handing " : "Handed ") + item + (string("to").map { " to \($0)" } ?? " on")
+        case "queue_remove": return input?["undo"]?.bool == true ? (isActive ? "Bringing back " : "Brought back ") + item : (isActive ? "Deleting " : "Deleted ") + item
+        case "queue_categories": return string("add").map { (isActive ? "Adding the category " : "Added the category ") + "“\($0)”" } ?? (isActive ? "Reading the categories" : "Read the categories")
+        case "queue_import": return isActive ? "Importing a backlog into the Work Queue" : "Imported a backlog into the Work Queue"
+        default: return "Used the Work Queue"
+        }
+    }
+
     private func relative(_ path: String?) -> String? {
         guard let path else { return nil }
         // A machine's engine names files as they are there, without the ssh:// prefix.
@@ -367,6 +387,7 @@ struct ToolCallView: View {
         case "vault_items": return isActive ? "Looking up its vault items" : "Looked up its vault items"
         case "vault_ask": return isActive ? "Asking you for something from the vault" : "Asked you for something from the vault"
         case "vault_run": return isActive ? "Running a command with the vault’s values" : "Ran a command with the vault’s values"
+        case let name where name.hasPrefix("queue_"): return queueSummary(name)
         case let name where name.hasPrefix("browser_"): return "Used the browser"
         // One this list doesn't know yet: by its own name, never as the browser.
         case let name: return "Used " + name.replacingOccurrences(of: "_", with: " ")

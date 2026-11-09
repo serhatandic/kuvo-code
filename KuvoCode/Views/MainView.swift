@@ -954,6 +954,7 @@ struct MainView: View {
             togglePanel: { withAnimation(.ui) { tabs.showPanel(!panelOnScreen) } },
             showChanges: { showInPanel { utilities.showChanges() } },
             showFiles: { showInPanel { utilities.showFiles() } },
+            showWorkQueue: { showInPanel { utilities.showWorkQueue() } },
             newTerminal: { showInPanel { utilities.newTerminal(in: focusedDirectory, environment: app.shellEnvironment) } },
             run: runProject,
             newBrowser: { showInPanel { utilities.newBrowser() } },
@@ -1009,6 +1010,7 @@ struct MainView: View {
         add("New Terminal in Panel", "terminal", "⌃`", actions.newTerminal)
         add("New Browser Tab", "globe", "⌥⌘B", actions.newBrowser)
         add("Show Changes", "plusminus", "⌥⌘I", actions.showChanges)
+        add("Show Work Queue", "checklist", "⌥⌘U", actions.showWorkQueue)
         if actions.hasProject {
             add("Open Quickly…", "doc.text.magnifyingglass", "⇧⌘O", actions.openQuickly)
         }
