@@ -4,25 +4,29 @@ import OpenCodeKit
 import Testing
 @testable import KuvoCode
 
-/// A bot on Claude Code moved from this Mac to your machine with Kuvo Code open (#305, the user's
-/// move of 2026-11-08): its conversation lives on the machine's agents bridge from then on, under
-/// the same session ID. Its row here is the machine's alone, the sidebar shows it there, a message
-/// written in its open conversation goes there, and an event from the machine about it is read
-/// there; its model is the one it ran on, shown as that machine names it. Before, a row of this
-/// Mac's from before the move stayed first: messages went to this Mac's bridge, which had deleted
-/// the conversation ("No session"), and the bot opened on this Mac's page. This Mac's bridge's
-/// deletion of its copy is tried both ways: dropped while this Mac's box still says the move is
-/// finishing, and heard before this Mac's box has said anything.
+/// A bot on Claude Code moved between this Mac and your machine with Kuvo Code open (#305, the
+/// user's move of 2026-11-08): its conversation lives on the other computer's agents bridge from
+/// then on, under the same session ID. Its row here is that computer's alone, the sidebar shows it
+/// there, a message written in its open conversation goes there, and an event from there about it
+/// is read there; its model is the one it ran on, shown as that computer names it. Its tab stays
+/// open all through the move. Before, a row of the computer it left stayed first: messages went to
+/// that computer's bridge, which had deleted the conversation ("No session"), and the bot opened on
+/// that computer's page, until Kuvo Code was opened again. The old bridge's deletion of its copy is
+/// tried both ways (dropped as the move finishes; heard while this Mac's box still says the copy is
+/// on its way), and so are an event from where it went before that computer's list is read again,
+/// and Kuvo Code opened again with the list it kept from before the move.
 /// Both engines, both agents bridges and both boxes' answers are stand-ins; SSH answers nothing.
 @MainActor
 @Suite(.serialized, .timeLimit(.minutes(1))) struct MovedAwayTests {
     let app = AppModel()
-    let mac = StubEngine(port: 47921)
-    let macBridge = StubEngine(port: 47922, alongside: true)
-    let mini = StubEngine(port: 47923, alongside: true)
-    let miniBridge = StubEngine(port: 47924, alongside: true)
+    let mac = StubEngine(port: 47861)
+    let macBridge = StubEngine(port: 47862, alongside: true)
+    let mini = StubEngine(port: 47863, alongside: true)
+    let miniBridge = StubEngine(port: 47864, alongside: true)
     let machine = "mini-\(UUID().uuidString.prefix(8).lowercased()).invalid"
     let miniKey = String(repeating: "N", count: 43)
+    /// This Mac's box's key among your computers.
+    var macKey: String { app.phoneLink.macKey ?? String(repeating: "C", count: 43) }
     let id = "ses_foreman"
     let bot = "bot_foreman01"
     let kept = "/home/me/\(RemoteEngineInstaller.root)"
@@ -68,11 +72,20 @@ import Testing
          "aliases": stands ? ["default"] : []]
     }
 
-    /// Foreman's conversation as a box's agents bridge lists it, in `directory`, on `model`.
-    private func conversation(in directory: String, model: String) -> [String: Any] {
-        StubEngine.session(id, title: "Kuvo Foreman", directory: directory, extra: [
+    /// Foreman's conversation as a computer's agents bridge lists it (nil: this Mac's), on `model`.
+    private func conversation(on place: String?, model: String) -> [String: Any] {
+        let directory = place == nil ? "/kuvo-tests-none/\(bot)/workspace" : kept + "/bots/\(bot)/workspace"
+        return StubEngine.session(id, title: "Kuvo Foreman", directory: directory, extra: [
             "metadata": ["kuvoAgent": "claude", "kuvo": ["bot": bot]], "model": ["id": model, "providerID": "claude-code", "variant": "high"],
         ])
+    }
+
+    /// Foreman listed on that computer's bridge (nil: this Mac's) alone, as it is when it lives there.
+    private func lives(on place: String?, model: String) {
+        let bridge = place == nil ? macBridge : miniBridge
+        (place == nil ? miniBridge : macBridge).list([])
+        bridge.list([conversation(on: place, model: model)])
+        bridge.on("GET", "/api/session/\(id)", json: ["data": conversation(on: place, model: model)])
     }
 
     /// Each box's answers: its bots, and its moves.
@@ -83,7 +96,7 @@ import Testing
                     let onMachine = box == machine
                     let body: String? = switch request.path {
                     case "kuvo/bots":
-                        said.botOn == onMachine ? #"{"bots":[{"id":"\#(bot)","session":"\#(id)","name":"Kuvo Foreman","look":{"color":"sky","shape":"round","face":"calm"},"folder":"\#(onMachine ? kept + "/bots/" + bot : "/kuvo-tests-none/" + bot)"}]}"# : #"{"bots":[]}"#
+                        said.botOn == onMachine ? #"{"bots":[{"id":"\#(bot)","session":"\#(id)","name":"Kuvo Foreman","look":{"color":"sky","shape":"round","face":"calm"},"agents":true,"folder":"\#(onMachine ? kept + "/bots/" + bot : "/kuvo-tests-none/" + bot)"}]}"# : #"{"bots":[]}"#
                     case "kuvo/moves": onMachine ? said.machineMoves : said.macMoves
                     default: nil
                     }
@@ -95,12 +108,24 @@ import Testing
         }
     }
 
-    private func move(_ role: String, stage: String) -> String {
-        #"{"moves":[{"id":"mov_foreman1","kind":"bot","thing":"\#(bot)","from":"mac-key","to":"\#(miniKey)","role":"\#(role)","stage":"\#(stage)","sessions":["\#(id)"],"place":"mini"}],"away":["\#(id)"]}"#
+    /// Foreman's move as a box says it: `role` on that box, at `stage`, and away from there when
+    /// it doesn't live there (a copy not switched to, an original switched away from).
+    private func move(_ role: String, stage: String, toMac: Bool = false) -> String {
+        let (from, to) = toMac ? (miniKey, macKey) : (macKey, miniKey)
+        let switched = stage == "switching" || stage == "finishing"
+        let away = (role == "to") != switched ? #"["\#(id)"]"# : "[]"
+        return #"{"moves":[{"id":"mov_foreman1","kind":"bot","thing":"\#(bot)","from":"\#(from)","to":"\#(to)","role":"\#(role)","stage":"\#(stage)","sessions":["\#(id)"],"place":"mini"}],"away":\#(away)}"#
     }
 
-    /// This Mac with Foreman on it, its conversation open in a tab, and the machine connected.
-    private func start(open: Bool = true) async throws -> MachineEngine {
+    /// A box that moved Foreman away (to `key`) lately, and has nothing under way.
+    private func movedAway(to key: String) -> String {
+        #"{"moves":[],"away":[],"moved":[{"session":"\#(id)","key":"\#(key)","at":1794200000000}]}"#
+    }
+
+    private let nothing = #"{"moves":[],"away":[]}"#
+
+    /// Foreman on this Mac (nil) or the machine, its conversation open in a tab, the machine connected.
+    private func start(on place: String? = nil, open: Bool = true) async throws -> MachineEngine {
         app.moves.app = app
         app.bots.app = app
         app.phoneLink.standIn(machine: machine, key: miniKey)
@@ -108,7 +133,8 @@ import Testing
         app.bots.boxes = boxes
         app.moves.boxes = boxes
         app.bots.reachable = { _ in true }
-        macBridge.list([conversation(in: "/kuvo-tests-none/\(bot)/workspace", model: "default")])
+        said.botOn = place != nil
+        lives(on: place, model: "default")
         macBridge.on("DELETE", "/api/session/\(id)", json: [:])
         await app.workspace.refresh()
         await app.workspace.refreshAgents()
@@ -118,16 +144,17 @@ import Testing
         await app.connect(engine).value
         engine.agents.connect(miniBridge.api.client.endpoint, folderPrefix: RemoteFolder.prefix(for: machine))
         await engine.catalog.refreshAgents()
+        _ = await app.workspace.refresh(engine)
         await app.bots.refresh(BoxClient.mac)
         await app.bots.refresh(machine)
         await app.moves.reloadAll()
-        #expect(app.bots.bot(bot)?.machine == nil)
+        #expect(app.bots.bot(bot)?.machine == place)
+        #expect(rows.count == 1)
         if open {
             app.tabs.open(.session(id))
             _ = try #require(app.workspace.model(for: id))
+            #expect(sidebarShows == SidebarBox(machine: place))
         }
-        #expect(shown == "Opus 5.5", "before it moves, as this Mac's Claude Code names its default")
-        #expect(open ? sidebarShows == .mac : true)
         return engine
     }
 
@@ -144,108 +171,189 @@ import Testing
     /// The page the sidebar slides to as its tab comes into view (`SidebarView`).
     private var sidebarShows: SidebarBox? { app.tabs.box(of: .session(id)) }
 
-    /// After the move: one row, the machine's; the sidebar there; a message written in its open
-    /// conversation goes to the machine's bridge alone; an event from the machine is read there.
-    private func expectItLivesOnTheMachine(_ engine: MachineEngine) async throws {
+    /// Its tab, as the window keeps it once the list changed (`MainView` drops closed tabs then).
+    private var tabIsOpen: Bool {
+        app.tabs.dropClosed()
+        return app.tabs.keys.contains(.session(id))
+    }
+
+    /// After the move: one row, that computer's (nil: this Mac's); the sidebar there; its tab still
+    /// open; a message written in its open conversation goes to that computer's bridge alone; an
+    /// event from there is read there.
+    private func expectItLives(on place: String?) async throws {
+        let (there, left) = place == nil ? (macBridge, miniBridge) : (miniBridge, macBridge)
         do {
-            try await until { rows.count == 1 && rows.first.map { RemoteFolder.machine(of: $0.location.directory) } == machine }
+            try await until { rows.count == 1 && rows.first.map { RemoteFolder.machine(of: $0.location.directory) } == place }
         } catch {
             Issue.record("its rows: \(rows.map(\.location.directory))")
             throw error
         }
-        #expect(sidebarShows == .machine(machine))
-        #expect(app.bots.bot(bot)?.machine == machine)
-        #expect(shown == "Opus 5.5", "the model it ran on, as the machine names it (not its default there, Sonnet)")
+        #expect(sidebarShows == SidebarBox(machine: place))
+        #expect(tabIsOpen)
 
         // (Held until both computers' lists are read, as the move ends: a message meanwhile stays in the composer.)
         try await until { !app.moves.held.contains(id) && !app.moves.held.contains(bot) }
         let open = try #require(app.workspace.model(for: id))
         open.send("Hey, I moved you. All good?", for: nil)
         do {
-            try await until { !miniBridge.requests("POST", "/api/session/\(id)/prompt").isEmpty }
+            try await until { !there.requests("POST", "/api/session/\(id)/prompt").isEmpty }
         } catch {
-            Issue.record("the machine's bridge was asked \(miniBridge.asked.filter { $0.hasPrefix("POST") }), this Mac's \(macBridge.asked.filter { $0.hasPrefix("POST") }), engines \(mini.asked.filter { $0.hasPrefix("POST") }) \(mac.asked.filter { $0.hasPrefix("POST") }); \(String(describing: open.failure))")
+            Issue.record("asked \(there.asked.filter { $0.hasPrefix("POST") }) where it lives, \(left.asked.filter { $0.hasPrefix("POST") }) where it was; \(String(describing: open.failure))")
             throw error
         }
-        #expect(macBridge.requests("POST", "/api/session/\(id)/prompt").isEmpty, "nothing goes to the box it left: \(macBridge.asked)")
+        #expect(left.requests("POST", "/api/session/\(id)/prompt").isEmpty, "nothing goes to the computer it left")
 
-        // Full Access switched on there, say: read there, not here.
-        let readHere = macBridge.requests("GET", "/api/session/\(id)").count
-        let readThere = miniBridge.requests("GET", "/api/session/\(id)").count
-        app.workspace.handleAgents(try miniBridge.event("session.metadata.updated", session: id), machine: machine)
+        // Full Access switched on there, say: read there, not where it was.
+        let readLeft = left.requests("GET", "/api/session/\(id)").count
+        let readThere = there.requests("GET", "/api/session/\(id)").count
+        app.workspace.handleAgents(try there.event("session.metadata.updated", session: id), machine: place)
         await app.workspace.reloading[id]?.value
-        #expect(miniBridge.requests("GET", "/api/session/\(id)").count > readThere)
-        #expect(macBridge.requests("GET", "/api/session/\(id)").count == readHere)
+        #expect(there.requests("GET", "/api/session/\(id)").count > readThere)
+        #expect(left.requests("GET", "/api/session/\(id)").count == readLeft)
         #expect(rows.count == 1)
     }
 
-    /// The order the user's move had: this Mac's box says the move is finishing (and the machine,
-    /// read a moment before, that its copy isn't switched to yet) as this Mac's bridge deletes its
-    /// copy, which is dropped; then this Mac's box says it moved away, and the machine lists it.
+    /// The order the user's move had: this Mac's box says the move is switching, then finishing
+    /// (the machine, read a moment before, that its copy isn't switched to yet), as this Mac's
+    /// bridge deletes its copy, which is dropped; then this Mac's box says it moved away, and the
+    /// machine lists it. Its tab stays open all along.
     @Test func aCodingAgentsBotMovedAwayWithTheAppOpenLivesOnTheMachine() async throws {
         defer { done() }
         let engine = try await start()
+        #expect(shown == "Opus 5.5", "before it moves, as this Mac's Claude Code names its default")
 
         said.machineMoves = move("to", stage: "copying")
-        said.macMoves = move("from", stage: "finishing")
+        said.macMoves = move("from", stage: "switching")
         await app.moves.reload(machine)
         await app.moves.reload(BoxClient.mac)
         #expect(app.workspace.isAway(id, from: nil) && app.workspace.isAway(id, from: machine), "away from both, as each box says")
+        #expect(tabIsOpen && rows.count == 1, "listed nowhere else yet: its row and tab stay")
+        said.macMoves = move("from", stage: "finishing")
+        await app.moves.reload(BoxClient.mac)
         // This Mac's bridge lets its copy go.
         macBridge.list([])
         app.workspace.handleAgents(try macBridge.event("session.deleted", session: id), machine: nil)
+        #expect(tabIsOpen && rows.count == 1)
 
         // There: the machine has it, on the model it ran on here.
-        miniBridge.list([conversation(in: kept + "/bots/\(bot)/workspace", model: "opus")])
-        miniBridge.on("GET", "/api/session/\(id)", json: ["data": conversation(in: kept + "/bots/\(bot)/workspace", model: "opus")])
+        lives(on: machine, model: "opus")
         said.botOn = true
-        said.machineMoves = #"{"moves":[],"away":[]}"#
-        said.macMoves = #"{"moves":[],"away":[],"moved":[{"session":"\#(id)","key":"\#(miniKey)","at":1794200000000}]}"#
+        said.machineMoves = nothing
+        said.macMoves = movedAway(to: miniKey)
         await app.moves.reload(BoxClient.mac)
         await app.moves.reload(machine)
-        try await expectItLivesOnTheMachine(engine)
+        try await expectItLives(on: machine)
+        #expect(app.bots.bot(bot)?.machine == machine)
+        #expect(shown == "Opus 5.5", "the model it ran on, as the machine names it (not its default there, Sonnet)")
+        _ = engine
     }
 
-    /// The other order: the machine read first (its row beside this Mac's), and this Mac's bridge's
-    /// deletion heard before this Mac's box has said anything of the move. Only this Mac's row goes.
-    @Test func itsOldBoxsDeletionHeardFirstTakesOnlyThatBoxsRow() async throws {
+    /// The race the other way: the machine switched and was read (its row beside this Mac's), while
+    /// this Mac's box was last heard saying its copy was on its way, and this Mac's bridge's deletion
+    /// comes before its box says more. Only this Mac's row goes; then, this Mac's bot list read
+    /// before the machine's, the machine's row still stays.
+    @Test func itsOldBoxsDeletionHeardEarlyTakesOnlyThatBoxsRow() async throws {
         defer { done() }
-        // Not open: nothing follows it there on its own.
+        // (Not open: an open one would follow the machine's row as soon as it's listed.)
         let engine = try await start(open: false)
+        said.macMoves = move("from", stage: "copying")
+        await app.moves.reload(BoxClient.mac)
+        #expect(Moves.isFrozen(id))
 
-        miniBridge.list([conversation(in: kept + "/bots/\(bot)/workspace", model: "opus")])
-        miniBridge.on("GET", "/api/session/\(id)", json: ["data": conversation(in: kept + "/bots/\(bot)/workspace", model: "opus")])
-        said.botOn = true
-        await app.workspace.refresh(engine)
+        lives(on: machine, model: "opus")
+        _ = await app.workspace.refresh(engine)
         #expect(rows.count == 2, "this Mac's, from before, and the machine's")
-        macBridge.list([])
         app.workspace.handleAgents(try macBridge.event("session.deleted", session: id), machine: nil)
         #expect(rows.map { RemoteFolder.machine(of: $0.location.directory) } == [machine], "the machine's stays")
 
+        said.botOn = true
+        said.macMoves = movedAway(to: miniKey)
+        await app.moves.reload(BoxClient.mac)
         await app.bots.refresh(BoxClient.mac)
         await app.bots.refresh(machine)
         app.tabs.open(.session(id))
-        try await expectItLivesOnTheMachine(engine)
+        try await expectItLives(on: machine)
     }
 
-    /// Kuvo Code opened again after the move, its list of this Mac's conversations as it kept it
-    /// from before (with this Mac's row of the bot): this Mac's box says it moved away, and that row
-    /// goes before this Mac's agents bridge has even answered, and isn't kept again.
+    /// The move heard of only as over (this Mac's box says it moved away, as when Kuvo Code opens
+    /// again), and an event from the machine about it comes before the machine's list is read
+    /// again: it's read on the machine, and lives there from then on.
+    @Test func anEventFromWhereItWentFindsItThere() async throws {
+        defer { done() }
+        _ = try await start()
+        lives(on: machine, model: "opus")
+        said.botOn = true
+        said.macMoves = movedAway(to: miniKey)
+        await app.moves.reload(BoxClient.mac)
+        #expect(rows.count == 1 && tabIsOpen, "its only row stays until it's listed where it went")
+        app.workspace.handleAgents(try miniBridge.event("session.metadata.updated", session: id), machine: machine)
+        await app.workspace.reloading[id]?.value
+        await app.bots.refresh(machine)
+        try await expectItLives(on: machine)
+    }
+
+    /// Kuvo Code opened again after the move with the lists it kept before it (this Mac's with the
+    /// bot's row in it): this Mac's box says it moved away, and only the machine's row is left, the
+    /// sidebar there, before this Mac's agents bridge has even answered; this Mac's list kept for
+    /// the next launch leaves it out.
     @Test func aRowKeptFromBeforeTheMoveDoesntComeBackAtLaunch() async throws {
         defer { done() }
         let engine = try await start()
-        miniBridge.list([conversation(in: kept + "/bots/\(bot)/workspace", model: "opus")])
+        let here = try #require(app.workspace.session(id))
+        lives(on: machine, model: "opus")
         said.botOn = true
-        said.macMoves = #"{"moves":[],"away":[],"moved":[{"session":"\#(id)","key":"\#(miniKey)","at":1794200000000}]}"#
-        // This Mac's bridge not answering (starting), as at launch.
-        macBridge.on("GET", "/api/session", json: [:], status: 503)
+        said.macMoves = movedAway(to: miniKey)
         await app.moves.reload(BoxClient.mac)
-        #expect(rows.isEmpty || rows.allSatisfy { RemoteFolder.machine(of: $0.location.directory) == machine })
+        await app.moves.reload(machine)
+        // (Read as it connects.)
+        _ = await app.workspace.refresh(engine)
+        try await until { rows.first.map { RemoteFolder.machine(of: $0.location.directory) } == machine }
+        let there = try #require(app.workspace.session(id))
         await app.workspace.refresh()
+        await SessionCopies.written()
         #expect(!SessionCopies.localSessions().contains { $0.id == id }, "this Mac's list as kept for the next launch leaves it out")
-        await app.workspace.refresh(engine)
-        try await until { rows.count == 1 }
-        #expect(sidebarShows == .machine(machine))
+
+        // As the version before this kept them.
+        SessionCopies.saveLocalSessions([here])
+        SessionCopies.saveSessions([there], of: machine)
+        await SessionCopies.written()
+        let relaunched = AppModel()
+        relaunched.moves.app = relaunched
+        relaunched.bots.app = relaunched
+        relaunched.moves.boxes = boxes()
+        relaunched.bots.boxes = boxes()
+        relaunched.phoneLink.standIn(machine: machine, key: miniKey)
+        #expect(relaunched.workspace.session(id).map { RemoteFolder.machine(of: $0.location.directory) } == .some(nil), "this Mac's row from before, first")
+        relaunched.workspace.machines = [machine]
+        await relaunched.moves.reload(BoxClient.mac)
+        #expect(relaunched.workspace.sessions.filter { $0.id == id }.map { RemoteFolder.machine(of: $0.location.directory) } == [machine])
+        relaunched.tabs.open(.session(id))
+        #expect(relaunched.tabs.box(of: .session(id)) == .machine(machine))
+    }
+
+    /// The way back: on the machine with its conversation open, moved to this Mac. Once the machine
+    /// says it moved away, it lives here.
+    @Test func movedBackToThisMacItLivesHere() async throws {
+        defer { done() }
+        _ = try await start(on: machine)
+        said.macMoves = move("to", stage: "copying", toMac: true)
+        said.machineMoves = move("from", stage: "finishing", toMac: true)
+        await app.moves.reload(BoxClient.mac)
+        await app.moves.reload(machine)
+        #expect(tabIsOpen && rows.count == 1)
+        app.workspace.handleAgents(try miniBridge.event("session.deleted", session: id), machine: machine)
+        #expect(tabIsOpen && rows.count == 1)
+
+        lives(on: nil, model: "opus")
+        said.botOn = false
+        said.macMoves = nothing
+        said.machineMoves = movedAway(to: macKey)
+        await app.moves.reload(machine)
+        await app.moves.reload(BoxClient.mac)
+        // (This Mac's box tells its bots as they change: `Bots.follow`.)
+        await app.bots.refresh(BoxClient.mac)
+        try await expectItLives(on: nil)
+        #expect(app.bots.bot(bot)?.machine == nil)
     }
 }
 

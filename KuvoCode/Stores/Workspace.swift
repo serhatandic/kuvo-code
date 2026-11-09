@@ -148,6 +148,8 @@ final class Workspace {
     /// sidebar and the conversation open at launch show at once.
     private(set) var sessions: [Session] = SessionCopies.localSessions() {
         didSet {
+            // (A row of one where it lives now just came: the one from the box it left goes.)
+            leaveOutMovedAway()
             projectsChanged()
             if isLoaded { keepLocalList() }
         }
@@ -1815,11 +1817,12 @@ final class Workspace {
     }
 
     /// A session gone from its engine (deleted by its box, a bot's): what's here of it goes.
-    /// `on`: the box a bot that's gone from it was listed on (nil: this Mac's). A row of its
-    /// conversation on another box (it moved there) stays, and only that box's goes.
+    /// `on`: the box a bot that's gone from it was listed on (nil: this Mac's). When that box says
+    /// its conversation moved away, a row of it on another box (where it went) stays, and only
+    /// that box's goes.
     func drop(_ id: String, on box: String?? = nil) {
         guard !Moves.isFrozen(id) else { return }
-        if case let .some(machine) = box, sessions.contains(where: { $0.id == id && RemoteFolder.machine(of: $0.location.directory) != machine }) {
+        if case let .some(machine) = box, isAway(id, from: machine), sessions.contains(where: { $0.id == id && RemoteFolder.machine(of: $0.location.directory) != machine }) {
             sessions.removeAll { $0.id == id && RemoteFolder.machine(of: $0.location.directory) == machine }
             if let machine { keepList(of: machine) }
             if let model = models[id], RemoteFolder.machine(of: model.session.location.directory) == machine, let there = session(id), let api = api(for: there) {
@@ -2621,10 +2624,14 @@ final class Workspace {
                 reloading[id] = nil
             }
         case "session.deleted":
-            // Its original, left where it was as it moved to another computer (`Moves`): the
-            // conversation lives on there, as it is. Only this box's row of it goes (one listed
-            // before it moved), whichever is first: never the row of the box it went to.
-            if sessions.contains(where: { $0.id == id && RemoteFolder.machine(of: $0.location.directory) != machine }) {
+            // Its original, let go of by the box it moved away from (`Moves`), or one moving: the
+            // conversation lives on where it went. Only this box's row of it goes (one listed before
+            // it moved), whichever is first, never the row of the box it went to; and while it's
+            // moving, not its only row (it stays until it's listed where it went, its tab with it).
+            let leaving = isAway(id, from: machine) || Moves.isFrozen(id)
+            let elsewhere = sessions.contains { $0.id == id && RemoteFolder.machine(of: $0.location.directory) != machine }
+            if leaving, !elsewhere, session(id) != nil { break }
+            if leaving, elsewhere {
                 let before = sessions.count
                 sessions.removeAll { $0.id == id && RemoteFolder.machine(of: $0.location.directory) == machine }
                 if sessions.count != before, let machine { keepList(of: machine) }
@@ -2634,7 +2641,8 @@ final class Workspace {
                 }
                 break
             }
-            if session(id) == nil, let found = subSession(id), RemoteFolder.machine(of: found.location.directory) != machine { break }
+            // Listed (first) on another box than the one that deleted it: it lives on there.
+            if let found = session(id) ?? subSession(id), RemoteFolder.machine(of: found.location.directory) != machine { break }
             // Deleted elsewhere (another Mac, the phone): its panel's tabs go too, a terminal's
             // connection with them.
             onDeleted?(id)
@@ -3173,10 +3181,12 @@ final class Workspace {
     @ObservationIgnored private(set) var reloading: [String: Task<Void, Never>] = [:]
 
     /// `from`: the box an event about it came from (`BoxClient.mac`'s, nil, or a machine's), when
-    /// that's where to read it: its row here is another box's (listed before it moved there), so
-    /// it's read where it lives now, and its row and an open conversation go there.
+    /// that's where to read it: its row here is another box's, one that box says it moved away
+    /// from (listed before it moved), so it's read where it lives now, and its row and an open
+    /// conversation go there.
     private func reload(_ id: String, depth: Int = 0, from box: String?? = nil) async {
-        if case let .some(machine) = box, let row = session(id), RemoteFolder.machine(of: row.location.directory) != machine {
+        if case let .some(machine) = box, let row = session(id), RemoteFolder.machine(of: row.location.directory) != machine,
+           isAway(id, from: RemoteFolder.machine(of: row.location.directory)) {
             let there = bridgeSessions.contains(id) ? (machine.map { machineAgents($0)?.api } ?? agents?.api) : (machine.map(machineAPI) ?? api)
             guard let there, let session = try? await there.session(id) else { return }
             guard RemoteFolder.machine(of: session.location.directory) == machine, !isAway(id, from: machine) else { return }
@@ -3475,24 +3485,34 @@ final class Workspace {
         movedAway[id]?.contains(machine ?? BoxClient.mac) == true
     }
 
-    /// Rows of conversations from a box they don't live on (the one they left): gone, with what's
-    /// kept of that box's list. An open one goes on where it lives now, once that's listed (here,
-    /// or as its box is read: `refresh`, `refreshAgents`, an event from it), so nothing sent from it
-    /// goes to the box it left.
+    /// Rows of conversations from a box they don't live on (the one they left, listed before they
+    /// moved), once a row from where they live now is there too: gone, with what's kept of that
+    /// box's list, and an open one goes on where it lives, so nothing sent from it goes to the box
+    /// it left. Never its only row: until it's listed where it went (a move ends with both
+    /// computers' lists read, `Moves.ended`), it stays as it was, its tab with it.
     private func leaveOutMovedAway() {
-        let isStale = { (session: Session) in self.isAway(session.id, from: RemoteFolder.machine(of: session.location.directory)) }
-        let stale = sessions.filter(isStale)
+        guard !movedAway.isEmpty, !leavingOut else { return }
+        let boxOf = { (session: Session) in RemoteFolder.machine(of: session.location.directory) }
+        let moving = sessions.filter { movedAway[$0.id] != nil }
+        guard !moving.isEmpty else { return }
+        let lives = Set(moving.filter { !isAway($0.id, from: boxOf($0)) }.map(\.id))
+        let isStale = { (session: Session) in lives.contains(session.id) && self.isAway(session.id, from: boxOf(session)) }
+        let stale = moving.filter(isStale)
         guard !stale.isEmpty else { return }
+        leavingOut = true
+        defer { leavingOut = false }
         sessions.removeAll(where: isStale)
         for machine in Set(stale.compactMap { RemoteFolder.machine(of: $0.location.directory) }) { keepList(of: machine) }
         for session in stale {
             if remoteSessions[session.id]?.machine == RemoteFolder.machine(of: session.location.directory), remoteSessions.removeValue(forKey: session.id) != nil {
                 Self.saveRemoteSessions(remoteSessions)
             }
-            guard let there = self.session(session.id), let api = api(for: there) else { continue }
+            guard let model = models[session.id], boxOf(model.session) == boxOf(session), let there = self.session(session.id), let api = api(for: there) else { continue }
             moved([there], api: api)
         }
     }
+    /// While `leaveOutMovedAway` changes the list (it's told of each change).
+    @ObservationIgnored private var leavingOut = false
 
     /// Conversations carried on on another computer (`Moves`), under the same IDs, on `api`: their
     /// rows, and an open one's conversation, go there from now on, whatever's sent from it too.

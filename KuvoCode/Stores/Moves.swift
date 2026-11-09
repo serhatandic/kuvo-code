@@ -673,7 +673,14 @@ final class Moves {
         if arriving != Self.arriving { Self.arriving = arriving }
         if frozen != Self.frozen { Self.frozen = frozen }
         if frozen != held { held = frozen }
-        if app?.workspace.movedAway != away { app?.workspace.movedAway = away }
+        if let app, app.workspace.movedAway != away {
+            // A box that no longer says one doesn't live there (it came back, or its copy there was
+            // let go of): its list read again, which left it out till now.
+            let before = app.workspace.movedAway
+            let back = Set(before.flatMap { session, boxes in boxes.subtracting(away[session] ?? []) })
+            app.workspace.movedAway = away
+            if !back.isEmpty { Task { await rereadSessions(on: back.sorted().map { $0 == BoxClient.mac ? nil : $0 }) } }
+        }
     }
 
     /// A machine out of reach, its moves unread: not a read that failed a moment (its connection up).
