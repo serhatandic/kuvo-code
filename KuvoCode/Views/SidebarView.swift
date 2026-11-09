@@ -894,9 +894,9 @@ struct SidebarView: View {
     }
 
     /// Where a branch came from, for VoiceOver: "Branched from Timer cycle".
-    static func origin(of session: Session, in workspace: Workspace) -> String {
+    static func origin(of session: Session, in workspace: Workspace, nested: Bool = true) -> String {
         let title = Branches.origin(of: session).flatMap { workspace.session($0.id)?.title }
-        return Branches.hint(of: session, from: title) ?? ""
+        return Branches.rowHint(of: session, nested: nested, from: title)
     }
 
     /// Highlighted where it was picked; picked elsewhere (a tab, a new session), in its project.
@@ -959,7 +959,7 @@ struct SidebarView: View {
                                   isEditing: renaming == RenameTarget(id: session.id, place: place),
                                   branches: branches, folded: folded, branchInset: branchInset, isUnfolded: isUnfolded(session.id), isSearching: !search.isEmpty,
                                   isUnread: session.isUnread || workspace.hasNewSubSessions(session.id),
-                                  origin: branchInset == nil ? "" : Self.origin(of: session, in: workspace))
+                                  origin: Self.origin(of: session, in: workspace, nested: branchInset != nil))
         return StillRow(look: look) { sessionRowContent(look) }.equatable()
     }
 

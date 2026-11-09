@@ -68,6 +68,15 @@ public enum Branches {
         return hint(origin.kind, from: "another conversation")
     }
 
+    /// What a session's row tells VoiceOver of where it came from (`title`: that conversation's,
+    /// where it's listed here): nested under it, that; at the top, only a lead on another computer
+    /// that isn't listed here, since nothing above it says so.
+    public static func rowHint(of session: Session, nested: Bool, from title: String?) -> String {
+        if nested { return hint(of: session, from: title) ?? "" }
+        guard title == nil, origin(of: session)?.kind == .started, lead(of: session) != nil else { return "" }
+        return hint(of: session, from: nil) ?? ""
+    }
+
     /// The sidebar's hint for a conversation that came from `title`'s.
     public static func hint(_ kind: Kind, from title: String) -> String {
         switch kind {

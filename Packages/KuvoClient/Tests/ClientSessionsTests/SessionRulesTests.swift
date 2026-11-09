@@ -134,6 +134,11 @@ struct SessionRulesTests {
         #expect(Branches.hint(of: here, from: nil) == "Started from another conversation")
         #expect(Branches.lead(of: here) == nil)
         #expect(Branches.hint(of: try session("ses_mine"), from: nil) == nil)
+        // Its row: at the top of the list (nothing above it here), it still says who and where;
+        // one started here by a conversation that isn't listed says nothing there, as before.
+        #expect(Branches.rowHint(of: far, nested: false, from: nil) == "Started from Foreman on Mini")
+        #expect(Branches.rowHint(of: here, nested: false, from: nil) == "")
+        #expect(Branches.rowHint(of: far, nested: true, from: "Foreman") == "Started from Foreman")
     }
 
     /// Sessions an agent started from a conversation (its start_session tool, on a Mac or a
