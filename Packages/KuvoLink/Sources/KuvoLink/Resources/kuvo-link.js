@@ -18310,7 +18310,10 @@ async function heldByLimits(bot, limits, depth, goal, targets, signal) {
   const today = work.filter((each) => (each.data.time?.created ?? 0) >= midnight);
   const workIDs = new Set(work.map((each) => each.data.id));
   const todayIDs = new Set(today.map((each) => each.data.id));
-  const startedToday = today.filter((each) => typeof each.data.metadata?.["kuvo.carriedTo"] !== "string").length;
+  const startedToday = today.filter((each) => {
+    const to = each.data.metadata?.["kuvo.carriedTo"];
+    return typeof to !== "string" || !workIDs.has(to);
+  }).length;
   const far = elsewhereOf(bot.bot, workIDs).filter((row) => !workIDs.has(row.session));
   const farToday = far.filter((row) => row.started >= midnight);
   const tokens = today.reduce((sum, each) => sum + (each.data.tokens?.input ?? 0) + (each.data.tokens?.output ?? 0) + (each.data.tokens?.reasoning ?? 0), 0) + farToday.reduce((sum, row) => sum + row.tokens, 0);
@@ -18752,8 +18755,8 @@ async function dropTree(journal, places) {
   try {
     engine = places.readEngine();
   } catch {}
-  const removed = !journal.tree.root ? 200 : (await answerWorktrees("POST", "kuvo/worktrees/remove", { path: journal.tree.root, discard: true }, engine, undefined).catch(() => null))?.status;
-  if (removed === 200 || removed === 404)
+  const removed = !journal.tree.root ? 200 : (await answerWorktrees("POST", "kuvo/worktrees/remove", { path: journal.tree.root, discard: true, forget: true }, engine, undefined).catch(() => null))?.status;
+  if (removed === 200 || removed === 404 || removed === 409)
     delete journal.tree;
 }
 async function toldAlready(target, making, session) {

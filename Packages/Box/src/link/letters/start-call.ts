@@ -427,15 +427,16 @@ const bridgeAnswers = async (places: Places): Promise<boolean> => {
 };
 const hasBridge = (): boolean => { try { return Boolean(readBridgeFile()); } catch { return false; } };
 
-// The worktree made for a start that was never made, taken away again; kept with its journal
-// while it can't be (its engine not running yet), for a later round to try again.
+// The worktree made for a start that was never made, taken away again, unless a session is in it
+// after all (one made as the box went down, whose journal never heard: it stays, for good); kept
+// with its journal while that can't be told (its engine not running yet), for a later round.
 async function dropTree(journal: StartJournal, places: Places): Promise<void> {
   if (!journal.tree || journal.session) return;
   let engine: Target | null = null;
   try { engine = places.readEngine(); } catch {}
-  const removed = !journal.tree.root ? 200 : (await answerWorktrees("POST", "kuvo/worktrees/remove", { path: journal.tree.root, discard: true }, engine, undefined).catch(() => null))?.status;
-  // (Gone already, as far as this box knows: nothing more to do.)
-  if (removed === 200 || removed === 404) delete journal.tree;
+  const removed = !journal.tree.root ? 200 : (await answerWorktrees("POST", "kuvo/worktrees/remove", { path: journal.tree.root, discard: true, forget: true }, engine, undefined).catch(() => null))?.status;
+  // (Gone, gone already as far as this box knows, or a session's: nothing more to do.)
+  if (removed === 200 || removed === 404 || removed === 409) delete journal.tree;
 }
 
 // Whether the session was given its task already (its message with the task's id is there).

@@ -558,8 +558,9 @@ export async function heldByLimits(bot: WorksFor, limits: WorkLimits, depth: num
   const today = work.filter(each => (each.data.time?.created ?? 0) >= midnight);
   const workIDs = new Set(work.map(each => each.data.id));
   const todayIDs = new Set(today.map(each => each.data.id));
-  // (One carried on with the coding agents is one start: its copy there counts, not the one left.)
-  const startedToday = today.filter(each => typeof each.data.metadata?.["kuvo.carriedTo"] !== "string").length;
+  // (One carried on with the coding agents is one start: the copy left counts only where the one it
+  // was carried to isn't counted as the bot's.)
+  const startedToday = today.filter(each => { const to = each.data.metadata?.["kuvo.carriedTo"]; return typeof to !== "string" || !workIDs.has(to); }).length;
   // Its sessions on your other computers too, as those last told this one.
   const far = elsewhereOf(bot.bot, workIDs).filter(row => !workIDs.has(row.session));
   const farToday = far.filter(row => row.started >= midnight);

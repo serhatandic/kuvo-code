@@ -735,8 +735,8 @@ test("a day on, one cut short is said as far as it got, without its engine: made
   assert.equal(answered.length, 2);
 });
 
-test("the worktree made for a start that's then not to be made, as you switched starts off meanwhile, goes again", async () => {
-  // The project, a repository, and a worktree the box made for the start before it went down.
+// The project api, a repository, and a worktree of it the box made for a start before it went down.
+async function apiWorktree() {
   const api = path.join(home, "projects", "api");
   const env = { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" };
   execFileSync("git", ["init", "-q", "-b", "main"], { cwd: api, env });
@@ -745,6 +745,11 @@ test("the worktree made for a start that's then not to be made, as you switched 
   execFileSync("git", ["commit", "-q", "-m", "First"], { cwd: api, env });
   const tree = (await link.answerWorktrees("POST", "kuvo/worktrees", { project: api }, eng.target, undefined, null)).value;
   assert.ok(tree.root && fs.existsSync(tree.root), JSON.stringify(tree));
+  return tree;
+}
+
+test("the worktree made for a start that's then not to be made, as you switched starts off meanwhile, goes again", async () => {
+  const tree = await apiWorktree();
   write(path.join(run, "calls", "cal_tree00000000001.json"), { id: "cal_tree00000000001", from: "ses_lead", sender: mini.pub, computer: "mini", name: "Foreman", given: { task: "Fix the sign-in.", project: "api", worktree: true }, start: startAs(), made: Date.now(), at: Date.now(),
     tree: { folder: tree.folder, root: tree.root, branch: tree.branch } });
   link.allowOtherComputers(false);
@@ -773,4 +778,36 @@ test("a bot's session carried on with the coding agents is one of its starts for
   await take(call);
   assert.equal(answerOf(call).refused, undefined, answerOf(call).note.words);
   assert.equal(eng.seen.made.length, 1);
+});
+
+test("a worktree made for a start that may have been made stays where a session is in it after all, idle, never told its task", async () => {
+  const tree = await apiWorktree();
+  // A day on: being made as the box went down, and its engine can't be asked.
+  await cutShort("cal_idle00000000001", each => {
+    each.making = { ...structuredClone(read(path.join(run, "calls", `${eng.seen.made.at(-1).metadata.kuvo.call}.json`)).making), folder: tree.folder };
+    each.tree = { folder: tree.folder, root: tree.root, branch: tree.branch };
+    each.made = Date.now() - DAY - 60_000;
+  });
+  const answered = [];
+  await link.resumeStarts((each, done) => answered.push([each.id, done]), Date.now(), { readEngine: () => ({ port: 1, password: "pw" }), bridge: () => null });
+  assert.match(answered.at(-1)[1].text, /^It may not have been started/);
+  // It was: its session is in the worktree (made with a mark its journal never heard of, as the
+  // box went down), idle. The next round leaves the worktree be.
+  eng.all.set("ses_idle", { id: "ses_idle", time: { created: Date.now(), updated: Date.now() }, directory: tree.folder, metadata: {} });
+  await link.resumeStarts((each, done) => answered.push([each.id, done]), Date.now(), { readEngine: () => eng.target, bridge: () => null });
+  assert.ok(fs.existsSync(tree.root), "the session's worktree stays");
+  assert.equal(read(path.join(run, "calls", "cal_idle00000000001.json")).tree, undefined, "and isn't tried again");
+});
+
+test("a bot's own session here carried on with the coding agents is still one of its starts for the day", async () => {
+  // Started by the bot here, and carried on: its copy there isn't marked as the bot's.
+  const now = Date.now();
+  eng.all.set("ses_mine", { id: "ses_mine", time: { created: now, updated: now }, directory: "/work", metadata: { "kuvo.archived": true, "kuvo.carriedTo": "ses_mine2", kuvo: { startedBy: "ses_lead", by, depth: 1 } } });
+  eng.all.set("ses_mine2", { id: "ses_mine2", time: { created: now, updated: now }, directory: "/work", metadata: { kuvo: { carriedFrom: "ses_mine" } } });
+  // One a day, as you set: that one was it.
+  const call = startCall({}, { limits: { perDay: 1 } });
+  await take(call);
+  assert.equal(answerOf(call).refused, true);
+  assert.match(answerOf(call).note.words, /new session a day at most/);
+  assert.equal(eng.seen.made.length, 0);
 });
