@@ -139,6 +139,11 @@ struct SessionRulesTests {
         #expect(Branches.rowHint(of: far, nested: false, from: nil) == "Started from Foreman on Mini")
         #expect(Branches.rowHint(of: here, nested: false, from: nil) == "")
         #expect(Branches.rowHint(of: far, nested: true, from: "Foreman") == "Started from Foreman")
+        // Its row's end says where, only while nothing above it here does.
+        #expect(Branches.tail(of: far, nested: false, from: nil) == "from Mini")
+        #expect(Branches.tail(of: far, nested: false, from: "Foreman") == nil)
+        #expect(Branches.tail(of: far, nested: true, from: nil) == nil)
+        #expect(Branches.tail(of: here, nested: false, from: nil) == nil)
     }
 
     /// Sessions an agent started from a conversation (its start_session tool, on a Mac or a

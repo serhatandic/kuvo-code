@@ -959,7 +959,8 @@ struct SidebarView: View {
                                   isEditing: renaming == RenameTarget(id: session.id, place: place),
                                   branches: branches, folded: folded, branchInset: branchInset, isUnfolded: isUnfolded(session.id), isSearching: !search.isEmpty,
                                   isUnread: session.isUnread || workspace.hasNewSubSessions(session.id),
-                                  origin: Self.origin(of: session, in: workspace, nested: branchInset != nil))
+                                  origin: Self.origin(of: session, in: workspace, nested: branchInset != nil),
+                                  elsewhere: Branches.tail(of: session, nested: branchInset != nil, from: Branches.origin(of: session).flatMap { workspace.session($0.id)?.title }))
         return StillRow(look: look) { sessionRowContent(look) }.equatable()
     }
 
@@ -982,6 +983,8 @@ struct SidebarView: View {
         let isUnread: Bool
         /// Where a branch came from, for VoiceOver (from the list too).
         let origin: String
+        /// Started by a lead on another computer that isn't listed here: "from Mini", at its end.
+        var elsewhere: String? = nil
     }
 
     private func sessionRowContent(_ look: SessionRowLook) -> some View {
@@ -1029,6 +1032,19 @@ struct SidebarView: View {
                     .foregroundStyle(.tertiary)
             } else {
                 HStack(spacing: 6) {
+                    // Started from another computer: which, in a word; pointed at, who and where.
+                    if let elsewhere = look.elsewhere {
+                        Text(elsewhere)
+                            .sidebarFont(11)
+                            .foregroundStyle(.tertiary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .frame(maxWidth: 90, alignment: .trailing)
+                            .fixedSize(horizontal: elsewhere.count < 14, vertical: false)
+                            .help(look.origin)
+                            // (The row's hint says it whole.)
+                            .accessibilityHidden(true)
+                    }
                     if look.isSearching, Workspace.isChat(session.location.directory), let machine = RemoteFolder.machine(of: session.location.directory) {
                         Image(systemName: "server.rack")
                             .sidebarFont(10)

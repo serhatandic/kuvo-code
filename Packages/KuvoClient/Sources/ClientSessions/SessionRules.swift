@@ -77,6 +77,14 @@ public enum Branches {
         return hint(of: session, from: nil) ?? ""
     }
 
+    /// What a session's row shows at its end when a lead on another computer started it and that
+    /// lead isn't listed here (`title` nil), at the top of the list: "from Mini". Pointed at, or
+    /// read by VoiceOver, its `rowHint` says the whole.
+    public static func tail(of session: Session, nested: Bool, from title: String?) -> String? {
+        guard !nested, title == nil, origin(of: session)?.kind == .started, let lead = lead(of: session) else { return nil }
+        return "from " + lead.computer
+    }
+
     /// The sidebar's hint for a conversation that came from `title`'s.
     public static func hint(_ kind: Kind, from title: String) -> String {
         switch kind {
