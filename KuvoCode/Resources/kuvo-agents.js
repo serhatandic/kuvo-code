@@ -7483,7 +7483,7 @@ class AcpThread {
     if (this.rpc && !this.rpc.isClosed && this.spawnedWith === key && this.rpc !== this.stale)
       return this.rpc;
     if (this.rpc && !this.rpc.isClosed && this.tasks.size)
-      this.cut = this.taskWork();
+      this.cut.push(...this.taskWork());
     this.close();
     const launch = await this.flavor.command(mode);
     const whole = this.wholeLaunch(launch.argv, launch.env, launch.cleanEnv, skills);
@@ -11628,6 +11628,8 @@ class ClaudeThread {
       const command = input.compact || input.text.trimStart().startsWith("/");
       const note = command ? undefined : instructionsNote(toldOf(this.state, "claudeTold"), append);
       const lostNote = this.cut.length && !command ? lostWorkNote("Claude Code started again before this message.", this.cut.splice(0)) : undefined;
+      if (this.cut.length && command)
+        this.onWorkLost?.(this.cut.splice(0));
       const ahead = [lostNote, note].filter(Boolean).join(`
 
 `);
@@ -13936,6 +13938,7 @@ class CodexThread {
   }
   terminals = [];
   terminalsRead;
+  listFailures = 0;
   get liveTerminals() {
     return this.server && !this.server.isClosed ? this.terminals : [];
   }
@@ -13957,16 +13960,20 @@ class CodexThread {
     if (server && !server.isClosed && threadID) {
       try {
         listed = [];
+        const seen = new Set;
         let cursor;
         do {
           const answer = await server.request("thread/backgroundTerminals/list", { threadId: threadID, ...cursor ? { cursor } : {} }, 30000);
           for (const terminal of Array.isArray(answer?.data) ? answer.data : [])
             if (typeof terminal?.processId === "string")
               listed.push({ id: terminal.processId, command: String(terminal.command ?? "") });
-          cursor = typeof answer?.nextCursor === "string" && answer.nextCursor ? answer.nextCursor : undefined;
-        } while (cursor);
+          cursor = typeof answer?.nextCursor === "string" && answer.nextCursor && !seen.has(answer.nextCursor) ? answer.nextCursor : undefined;
+          if (cursor)
+            seen.add(cursor);
+        } while (cursor && seen.size < 20);
+        this.listFailures = 0;
       } catch {
-        listed = server.isClosed ? [] : undefined;
+        listed = server.isClosed || ++this.listFailures >= 5 ? [] : undefined;
       }
     }
     if (server !== this.server || this.inTurn)
@@ -17428,17 +17435,17 @@ function safeJSON(text) {
 var AGENTS_TEXT_BYTES = 200000;
 
 // Packages/Box/src/agents/sessions.ts
-function lostWorkInput(why, lost, delivery = "steer") {
+function lostWorkInput(why, lost, delivery = "steer", restarted = false) {
   const command = lost.find((work) => work.kind === "command");
   const first = (command ?? lost[0]).what.split(`
 `)[0];
   const more = lost.length > 1 ? ` (and ${lost.length - 1} more)` : "";
-  const metadata = { source: command ? "shell" : "agent", state: "error", signal: "SIGTERM", kuvo: { lostWork: Date.now(), work: lost } };
+  const metadata = { source: command ? "shell" : "agent", state: "error", signal: "SIGTERM", kuvo: { lostWork: Date.now(), work: lost, ...restarted ? { restarted: true } : {} } };
   return { id: newID("msg"), text: lostWorkNote(why, lost), files: [], delivery, synthetic: { description: command ? `${first}${more}` : `Background work stopped: ${first}${more}`, metadata } };
 }
 function lostWorkOf(input) {
   const kept = input.synthetic?.metadata?.kuvo;
-  return typeof kept?.lostWork === "number" ? { at: kept.lostWork, work: Array.isArray(kept.work) ? kept.work : [] } : undefined;
+  return typeof kept?.lostWork === "number" ? { at: kept.lostWork, work: Array.isArray(kept.work) ? kept.work : [], restarted: kept.restarted === true } : undefined;
 }
 function isBusy(doing) {
   return doing.kind !== "idle" && doing.kind !== "deleting";
@@ -18336,21 +18343,15 @@ class Sessions {
     if (!live || isBusy(live.doing) || !live.threads.size)
       return false;
     clearTimeout(live.idle);
-    const lost = [...live.threads].flatMap(([provider, thread]) => (thread.wakingWork ?? []).map((work) => ({ provider, work })));
     for (const thread of live.threads.values())
       thread.close();
     live.threads.clear();
-    const record = this.store.get(id);
-    if (lost.length && record && !record.session.parentID)
-      this.queueLost(id, record, lostWorkInput(`This conversation moved to another computer, and ${this.agentName(lost[0].provider)} stopped on the one it was on.`, lost.map(({ work }) => work)));
     return true;
   }
   addCarried(record) {
     this.store.addWhole(record);
     this.repair(record.session.id);
     this.store.save(record.session.id, true);
-    if (!record.session.revert && this.queue(record).some((input) => lostWorkOf(input) && input.delivery === "steer"))
-      this.wake(record.session.id);
     emit("session.updated", { sessionID: record.session.id, session: record.session }, record.session.location.directory);
   }
   list(directory, parentID) {
@@ -18598,13 +18599,17 @@ class Sessions {
     delete record.agent.revertAt;
     delete record.agent.revertFiles;
     const lost = this.queue(record).filter((input) => lostWorkOf(input) && input.delivery === "queue");
-    for (const input of lost)
+    for (const input of lost) {
       input.delivery = "steer";
+      emit("session.inbox.delivery.changed", { sessionID: id, inboxID: input.id, delivery: "steer" }, directory);
+    }
     this.store.save(id, true);
     emit("session.revert.cleared", { sessionID: id }, directory);
+    if (lost.length)
+      live.go = true;
     if (live.doing === reverting)
       this.free(id, live);
-    if (lost.length)
+    else if (lost.length)
       this.wake(id);
   }
   mustBeIdle(id, live) {
@@ -18642,7 +18647,7 @@ class Sessions {
     for (const input of waiting)
       this.cancelInput(id, input.id);
     if (work.length)
-      this.queueLost(id, record, lostWorkInput(`${name ?? "Its agent"} started over with this conversation as it is now (an undo was made final).`, work, "queue"));
+      this.queueLost(id, record, lostWorkInput(`${name ?? this.agentName(record.session.model?.providerID ?? "")} stopped while it had work going in the background (an undo made final starts it over).`, work, "queue"));
     this.store.save(id, true);
     emit("session.revert.committed", { sessionID: id, to: revert.messageID }, record.session.location.directory);
   }
@@ -20017,7 +20022,7 @@ ${live.agentPrompt}` : ""
       const record = this.store.get(id);
       if (!lost.length || !record || record.session.parentID)
         continue;
-      const input = lostWorkInput(`Kuvo Code stopped (it quit or restarted), and ${this.agentName(lost[0].provider)} with it.`, lost.map(({ work }) => work));
+      const input = lostWorkInput(`Kuvo Code stopped (it quit or restarted), and ${this.agentName(lost[0].provider)} with it.`, lost.map(({ work }) => work), "steer", true);
       this.queue(record).push(input);
       this.store.save(id, true);
     }
@@ -20027,20 +20032,21 @@ ${live.agentPrompt}` : ""
       const record = this.store.get(session.id);
       if (!record)
         continue;
-      const queue = this.queue(record);
-      const waiting = queue.filter((input) => lostWorkOf(input));
+      const waiting = this.queue(record).filter((input) => lostWorkOf(input)?.restarted);
       if (!waiting.length)
         continue;
-      const fresh = waiting.filter((input) => now - lostWorkOf(input).at < timing.lostWorkWake);
-      for (const input of waiting)
-        if (!fresh.includes(input))
-          this.cancelInput(session.id, input.id);
-      if (record.session.revert) {
-        for (const input of fresh)
-          input.delivery = "queue";
-        if (fresh.length)
-          this.store.save(session.id, true);
-      } else if (fresh.length)
+      let wakes = false;
+      for (const input of waiting) {
+        const kuvo = input.synthetic.metadata.kuvo;
+        const soon = now - lostWorkOf(input).at < timing.lostWorkWake && !record.session.revert;
+        delete kuvo.restarted;
+        this.store.save(session.id, true);
+        if (soon)
+          wakes = true;
+        else
+          this.setDelivery(session.id, input.id, "queue");
+      }
+      if (wakes)
         this.wake(session.id);
     }
   }
@@ -26447,4 +26453,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 44b78260b0360b5e126bc3a7ef294d27b0d9859540bd91693db0d50dd4f4d4e5
+// Built from Packages/Box/src/agents f72cc9b43524cdfc08c97d95d223baf73e2368c16cb978fc9d9fb2c06f058c95
