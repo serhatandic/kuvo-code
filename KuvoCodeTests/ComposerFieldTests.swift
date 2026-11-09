@@ -376,12 +376,16 @@ extension ComposerFieldTests {
         }
     }
 
-    /// The window as SwiftUI and AppKit lay it out and draw it, after what was typed.
+    /// The window as SwiftUI and AppKit lay it out and draw it, after what was typed, as the
+    /// screen's next frame would. On macOS 27 a view's `viewWillDraw` comes as Core Animation
+    /// commits, not from `displayIfNeeded`; the field brings the caret's line into view there, so
+    /// without the flush that waited on a real frame landing between keys.
     private func laidOut() async {
         for _ in 0..<3 {
             await Task.yield()
             window.contentView?.layoutSubtreeIfNeeded()
             window.contentView?.displayIfNeeded()
+            CATransaction.flush()
         }
     }
 

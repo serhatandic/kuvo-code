@@ -57,8 +57,9 @@ final class ScrolledConversation {
     }
 
     /// Every text in view has the tracking area it claims the pointer through. AppKit adds a new
-    /// view's on its run loop's next turn, not as it's laid out, and always before it hands over a
-    /// move of the real pointer; a move told to a text without one would reach nothing.
+    /// view's on its run loop's next turn (`WindowServer.appKitsTurn`), not as it's laid out, and
+    /// always before it hands over a move of the real pointer; a move told to a text without one
+    /// would reach nothing.
     private var textsTrackThePointer: Bool {
         texts.filter { $0.window != nil }.allSatisfy { text in text.trackingAreas.contains { $0.options.contains(.mouseMoved) } }
     }
@@ -112,6 +113,7 @@ final class ScrolledConversation {
         while !ready(), turns < 400 {
             window.contentView?.layoutSubtreeIfNeeded()
             window.displayIfNeeded()
+            WindowServer.appKitsTurn(over: window)
             await Task.yield()
             turns += 1
         }
@@ -408,7 +410,9 @@ final class ScrolledConversation {
     }
 
     /// Scrolled to rows not in view before: once the run loop has turned, as it does before the
-    /// pointer's next move, the I-beam shows on their words.
+    /// pointer's next move, the I-beam shows on their words. (That AppKit gives the rows their
+    /// tracking areas then is AppKit's part, taken here by `appKitsTurn`: the rows' own part is
+    /// what this checks.)
     @Test func rowsScrolledIntoViewShowTheIBeam() async throws {
         defer { scene.done() }
         let shown = Set(scene.texts.map(ObjectIdentifier.init))
@@ -575,9 +579,10 @@ final class ScrolledConversation {
     }
 }
 
-/// The window server's answer to which window is under a point on the screen, while a scene is up:
-/// its window, as the user's window is under their pointer (a test's is off the screen, under
-/// nothing), or a menu opened over it. AppKit's text views ask it before they show their I-beam on
+/// The window server's answer to which window is under a point on the screen, while a scene is up
+/// (and AppKit's turn that follows the pointer coming into a window, `appKitsTurn`):
+/// its window, as the user's window is under their pointer (a test's never is), or a menu opened
+/// over it. AppKit's text views ask it before they show their I-beam on
 /// a move, and so does every view claiming the pointer (`PointerClaim`).
 @MainActor enum WindowServer {
     private static var over: Int?
@@ -586,6 +591,24 @@ final class ScrolledConversation {
     /// The pointer gone from `window`: the real answer again, unless another scene's window has it.
     static func pointerLeft(_ window: NSWindow) {
         if over == window.windowNumber { over = nil }
+    }
+
+    /// AppKit's turn over `window` before it hands on the pointer's next event there: the views'
+    /// cursor rectangles given again and their tracking areas updated. AppKit (on macOS 27.2)
+    /// takes it only for a window the window server has sent an event of the pointer's, once the
+    /// pointer has come into it, and then for the views that moved or changed size; a test's
+    /// window, never under the real pointer, would get no tracking areas and no cursor rectangles
+    /// at all. A scene takes it each time its window settles, for every view, which is more than
+    /// AppKit does: each view's own `updateTrackingAreas` still decides what it tracks.
+    static func appKitsTurn(over window: NSWindow) {
+        window.resetCursorRects()
+        func update(_ view: NSView) {
+            view.updateTrackingAreas()
+            view.subviews.forEach(update)
+        }
+        var root = window.contentView
+        while let parent = root?.superview { root = parent }
+        root.map(update)
     }
 
     static func pointerIsOver(_ window: NSWindow?) {
