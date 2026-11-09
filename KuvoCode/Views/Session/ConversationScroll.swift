@@ -57,9 +57,15 @@ final class ConversationScroller {
         heldFor = []
         if followsEnd != follows {
             followsEnd = follows
+            followChanged?(follows)
             sees(atEnd: atEnd)
         }
     }
+
+    /// Told as soon as following the end starts or stops: the rows keep what you read in place
+    /// by it. (Told only as the view moved, they went on following once a scroll up had stopped,
+    /// as where it stopped decides: what changed above what you read then moved it.)
+    @ObservationIgnored fileprivate var followChanged: ((Bool) -> Void)?
 
     /// The steps you opened while following the end, which you left it to read. Going anywhere
     /// yourself since (each way goes through `follow`) means you left it for good.
@@ -180,11 +186,11 @@ struct ConversationScroll<Rows: View>: View {
             .environment(\.scrollAnchor, anchor)
             .onAppear {
                 anchor.stopFollowing = { [scroller] in scroller.follow(false) }
-                anchor.reading = { [scroller, weak anchor] id, isOpen in
-                    scroller.reading(id, isOpen: isOpen)
-                    // At once: the next row to come mustn't count as followed.
-                    anchor?.isFollowingEnd = scroller.followsEnd
-                }
+                anchor.reading = { [scroller] id, isOpen in scroller.reading(id, isOpen: isOpen) }
+                // At once, whatever started or stopped it: the next row to come mustn't count as
+                // followed, nor what changes above what you read.
+                anchor.isFollowingEnd = scroller.followsEnd
+                scroller.followChanged = { [weak anchor] in anchor?.isFollowingEnd = $0 }
                 anchor.quote = quote
             }
             .padding(.horizontal, Metrics.gutter)
@@ -343,7 +349,6 @@ struct ConversationScroll<Rows: View>: View {
         // Where it's scrolled to, for going to a place (a plain value, read only then).
         .onScrollGeometryChange(for: ScrollSpot.Geometry.self) { ScrollSpot.Geometry(offset: $0.contentOffset.y, height: $0.containerSize.height) } action: { _, new in
             spot.geometry = new
-            anchor.isFollowingEnd = scroller.followsEnd
             anchor.viewMoved(offset: new.offset, height: new.height)
             if let nearTop, !scroller.followsEnd, new.offset < new.height * 2 { nearTop() }
         }
