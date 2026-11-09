@@ -226,11 +226,12 @@ public final class VoiceInput {
         let input: AVAudioInputNode
         let natural: AVAudioFormat
         do {
-            try startSession()
+            try await startSession(run: run)
             engine = AVAudioEngine()
             input = engine.inputNode
             natural = try Self.microphoneFormat(of: input)
         } catch {
+            guard self.run == run else { return }
             return fail(Self.failure(of: error, .microphone), run: run)
         }
         self.engine = engine
@@ -294,9 +295,10 @@ public final class VoiceInput {
             guard await Self.microphoneAllowed() else { return fail(.microphoneDenied, run: run) }
             guard self.run == run else { return }
             do {
-                try startMicrophone(continuation, run: run)
+                try await startMicrophone(continuation, run: run)
             } catch {
                 continuation.finish()
+                guard self.run == run else { return }
                 return fail(Self.failure(of: error, .microphone), run: run)
             }
             samples = continuation
@@ -320,8 +322,8 @@ public final class VoiceInput {
     }
 
     /// The microphone on, its samples (16 kHz, mono) into `continuation`.
-    private func startMicrophone(_ continuation: AsyncStream<[Float]>.Continuation, run: Int) throws {
-        try startSession()
+    private func startMicrophone(_ continuation: AsyncStream<[Float]>.Continuation, run: Int) async throws {
+        try await startSession(run: run)
         let engine = AVAudioEngine()
         let input = engine.inputNode
         let natural = try Self.microphoneFormat(of: input)
@@ -357,9 +359,32 @@ public final class VoiceInput {
     /// (`AVAudioSessionTypes.h`), and on an iPhone it refused the whole setting (OSStatus -50):
     /// voice input stopped before it listened, every time (#363). Recording quiets what else plays
     /// anyway, as the system's own dictation does, and lets it play on once it's done.
-    public static func setUpSession(_ session: AVAudioSession = .sharedInstance()) throws {
+    nonisolated public static func setUpSession(_ session: AVAudioSession = .sharedInstance()) throws {
         try session.setCategory(.record, mode: .default, options: [.allowBluetoothHFP])
         try session.setActive(true, options: .notifyOthersOnDeactivation)
+    }
+
+    /// The phone's audio is set up and let go of here, one after the other, off the main thread:
+    /// each blocks until the system's audio answers, which can take long enough to freeze the app
+    /// (iOS 27 warns of it on the main thread), and one start's let-go must never land after the
+    /// next one's set-up.
+    private static let sessionQueue = DispatchQueue(label: "run.kuvo.voice.session")
+
+    private static func setUpSessionInTurn() async throws {
+        try await withCheckedThrowingContinuation { (done: CheckedContinuation<Void, any Error>) in
+            sessionQueue.async {
+                do {
+                    try setUpSession()
+                    done.resume()
+                } catch {
+                    done.resume(throwing: error)
+                }
+            }
+        }
+    }
+
+    private static func letGoOfSessionInTurn() {
+        sessionQueue.async { try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation) }
     }
     #endif
 
@@ -370,13 +395,16 @@ public final class VoiceInput {
     public static var microphoneRefuses = false
     #endif
 
-    /// The phone's audio, set for listening.
-    private func startSession() throws {
+    /// The phone's audio, set for listening (for start `run`: canceled meanwhile, it throws).
+    private func startSession(run: Int) async throws {
         #if DEBUG
         if Self.microphoneRefuses { throw NSError(domain: NSOSStatusErrorDomain, code: -50) }
         #endif
         #if os(iOS)
-        try Self.setUpSession()
+        try await Self.setUpSessionInTurn()
+        // Canceled while it was set up: the cancel's let-go comes after it, and nothing listens.
+        try Task.checkCancellation()
+        guard self.run == run else { throw CancellationError() }
         // A call, Siri or an alarm takes the microphone: what was said so far is kept, rather
         // than listening on to nothing.
         interruption = NotificationCenter.default.addObserver(forName: AVAudioSession.interruptionNotification, object: nil, queue: .main) { [weak self] note in
@@ -424,7 +452,7 @@ public final class VoiceInput {
         #if os(iOS)
         if let interruption { NotificationCenter.default.removeObserver(interruption) }
         interruption = nil
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        Self.letGoOfSessionInTurn()
         #endif
     }
 
