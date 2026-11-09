@@ -134,7 +134,9 @@ final class WindowTabs {
     /// Out of room, the side cards give way in this order: the one opened last stays.
     private(set) var givesWay: [PaneLayout.Pane] = [.split, .changes, .sessions]
     /// The side panel is wanted, in the conversation in view: each has its own (`Utilities.isOpen`).
-    var showsPanel: Bool { app.utilities.isOpen }
+    var showsPanel: Bool { app.utilities.isOpen(in: openView) }
+    /// Goes up as the panel's opened or closed (`Utilities.openTurns`), for it to slide.
+    var panelTurns: Int { app.utilities.openTurns }
     /// The sidebar is wanted.
     private(set) var showsSidebar = true
     /// The panel over the conversation, for room.
@@ -275,6 +277,13 @@ final class WindowTabs {
 
     /// What the side panel follows: the conversations in view, the one you work in, its place,
     /// and this Mac's bots in view (a bot's conversation, or a group chat's).
+    /// What says whether the panel is open in the conversation in view (`Utilities.openKey`), as
+    /// the window has it now.
+    private var openView: Utilities.InView {
+        Utilities.InView(session: sessionID, group: groupID.map { TabKey.group($0).text },
+                         draft: sessionID == nil && groupID == nil ? selection?.text : nil, tabPanel: sessionID.map(app.utilities.panelOf))
+    }
+
     var inView: Utilities.InView {
         let groups = app.chats
         let bots = app.bots
@@ -670,7 +679,7 @@ final class WindowTabs {
     /// Shows or hides the panel; showing one that's wanted but out of room makes room for it, as
     /// the one opened last.
     func showPanel(_ shows: Bool = true) {
-        app.utilities.setOpen(shows)
+        app.utilities.setOpen(shows, in: openView)
         if shows { keep(.changes) }
     }
 
@@ -914,7 +923,7 @@ final class WindowTabs {
         if selection == nil { selection = saved.selection.flatMap { keys.contains($0) ? $0 : nil } ?? keys.last }
         // Each conversation's panel as it was; a version before kept one for the window, which
         // they all start as.
-        app.utilities.restoreOpen(saved.panels.map { ($0.key, $0.open) }, last: saved.showsPanel)
+        app.utilities.restoreOpen(saved.panels.map { ($0.key, $0.open) }, last: saved.showsPanel, in: openView)
         showsSidebar = saved.showsSidebar ?? older.showsSidebar
     }
 }

@@ -1269,7 +1269,9 @@ private struct WindowCards<Sessions: View, Conversation: View, Split: View, Pane
                 }
             }
         }
-        .animation(.ui, value: tabs.showsPanel)
+        // Opened or closed, it slides; open or closed in the conversation you switch to, it's
+        // there at once, as the conversation is.
+        .animation(.ui, value: tabs.panelTurns)
         .animation(.ui, value: tabs.panelExpanded)
     }
 }
@@ -1353,13 +1355,8 @@ private struct PaneFollower: View {
             // is in view too.
             .onChange(of: tabs.sessionsSeen) { if NSApp.isActive { markViewed() } }
             // The panel follows what's in view, all at once: the conversations, the half you work in,
-            // its place, and the bots in view. Open or closed as it was in the conversation now in
-            // view, at once, as the conversation itself is.
-            .onChange(of: tabs.inView, initial: true) { _, inView in
-                var switching = Transaction()
-                switching.disablesAnimations = true
-                withTransaction(switching) { utilities.inView = inView }
-            }
+            // its place, and the bots in view.
+            .onChange(of: tabs.inView, initial: true) { _, inView in utilities.inView = inView }
             .onChange(of: tabs.snapshot) { _, saved in save(saved.text) }
             .allowsHitTesting(false)
             .accessibilityHidden(true)

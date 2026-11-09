@@ -193,13 +193,17 @@ final class Utilities {
     // MARK: Open or closed
 
     /// Whether each conversation's panel is open (by `openKey`), the one in view last last. Kept
-    /// with the window's tabs for the next launch (`WindowTabs.Saved`), the latest `keptOpen`.
+    /// with the window's tabs for the next launch (`WindowTabs.Saved`), the latest `keptOpen`. A
+    /// draft's stays when its tab closes, as its tabs do, for when it's opened again.
     private(set) var openPanels: [String: Bool] = [:]
     private(set) var openOrder: [String] = []
     /// Whether the panel of the conversation in view is open; one that's never been in view
-    /// starts as the one before it was.
+    /// starts as the one before it was. With none in view, the one you were in last.
     private(set) var lastOpen = false
     static let keptOpen = 300
+    /// Goes up each time the panel's opened or closed, not as you switch conversations: the
+    /// window slides it then, and shows it as it is in the one you switch to at once.
+    private(set) var openTurns = 0
 
     /// The conversation the panel is open or closed for: the group chat in view, else the tab's
     /// session (a bot's by its ID, a subagent's by the session that started it; a split's two
@@ -209,15 +213,28 @@ final class Utilities {
         view.group ?? view.tabPanel ?? view.session.map(panelOf) ?? view.draft ?? ""
     }
 
-    /// The panel is open in the conversation in view.
-    var isOpen: Bool { openPanels[openKey(of: inView)] ?? lastOpen }
+    /// The panel is open in the conversation in `view`: the window's own, which can be ahead of
+    /// the panel's (a tab opened just now). One the panel hasn't been in starts as the one it's
+    /// in; the one it's in, found just now to be another's (a bot's), stays as it is on screen.
+    func isOpen(in view: InView) -> Bool {
+        let key = openKey(of: view), current = openKey(of: inView)
+        if key != current, isRenamed(from: inView, to: view) { return openPanels[current] ?? lastOpen }
+        return openPanels[key] ?? lastOpen
+    }
 
-    /// Opens or closes the panel, for the conversation in view only.
-    func setOpen(_ open: Bool) {
-        let key = openKey(of: inView)
-        openPanels[key] = open
-        touch(key)
-        lastOpen = open
+    /// The same conversation under another name: the tab's session found to be another's (a
+    /// bot's, the session that started it).
+    private func isRenamed(from old: InView, to new: InView) -> Bool {
+        old.group == nil && new.group == nil && old.session != nil && old.session == new.session && panelOf(openKey(of: old)) == openKey(of: new)
+    }
+
+    /// Opens or closes the panel, for the conversation in view only: the window's own `view`, if
+    /// given, which can be ahead of the panel's (a tab opened just now).
+    func setOpen(_ open: Bool, in view: InView? = nil) {
+        let key = openKey(of: view ?? inView)
+        record(open, for: key)
+        if key.isEmpty || key == openKey(of: inView) { lastOpen = open }
+        openTurns += 1
     }
 
     /// Opens the panel of the conversation in view, for what needs it there.
@@ -226,7 +243,9 @@ final class Utilities {
         revealRequest += 1
     }
 
-    private func touch(_ key: String) {
+    private func record(_ open: Bool, for key: String) {
+        guard !key.isEmpty else { return }
+        openPanels[key] = open
         openOrder.removeAll { $0 == key }
         openOrder.append(key)
         guard openOrder.count > Self.keptOpen else { return }
@@ -234,49 +253,46 @@ final class Utilities {
         openOrder.removeFirst(openOrder.count - Self.keptOpen)
     }
 
+    private func forget(_ key: String) {
+        openPanels[key] = nil
+        openOrder.removeAll { $0 == key }
+    }
+
     /// Another conversation in view: its panel as you left it there, or, never in view before,
     /// as it was in the one you were in. The same conversation under another name (found to be a
     /// bot's) stays as it is on screen.
     private func openChanged(from old: InView) {
         let from = openKey(of: old), to = openKey(of: inView)
-        guard from != to else { return }
-        let renamed = old.group == nil && inView.group == nil && old.session != nil && old.session == inView.session && panelOf(from) == to
-        if renamed { openPanels[from] = nil }
-        if renamed || openPanels[to] == nil { openPanels[to] = lastOpen }
-        lastOpen = openPanels[to] ?? lastOpen
-        touch(to)
+        guard from != to, !to.isEmpty else { return }
+        let renamed = isRenamed(from: old, to: inView)
+        if renamed { forget(from) }
+        let open = renamed ? lastOpen : openPanels[to] ?? lastOpen
+        record(open, for: to)
+        lastOpen = open
     }
 
     /// A conversation's open or closed under another name, unless it has its own there.
     private func moveOpen(from: String, to: String) {
-        guard let open = openPanels.removeValue(forKey: from) else { return }
-        openOrder.removeAll { $0 == from }
-        if openPanels[to] == nil {
-            openPanels[to] = open
-            touch(to)
-        }
+        guard let open = openPanels[from] else { return }
+        forget(from)
+        if openPanels[to] == nil { record(open, for: to) }
     }
 
     /// Puts back what the window kept (the latest last) and whether the panel of the conversation
     /// in view then was open, which one not kept (a version before kept only that) starts as.
-    /// Opened already this launch, it stays open.
-    func restoreOpen(_ kept: [(key: String, open: Bool)], last: Bool) {
+    /// Opened already this launch, it stays open. `view` is the window's, restored.
+    func restoreOpen(_ kept: [(key: String, open: Bool)], last: Bool, in view: InView) {
         let opened = openOrder.filter { openPanels[$0] == true }
         openPanels = [:]
         openOrder = []
-        for panel in kept {
-            openPanels[panel.key] = panel.open
-            touch(panel.key)
-        }
-        for key in opened {
-            openPanels[key] = true
-            touch(key)
-        }
-        let key = openKey(of: inView)
+        for panel in kept { record(panel.open, for: panel.key) }
+        for key in opened { record(true, for: key) }
         if last { lastOpen = true }
-        if openPanels[key] == nil { openPanels[key] = lastOpen }
-        lastOpen = openPanels[key] ?? lastOpen
-        touch(key)
+        let key = openKey(of: view)
+        guard !key.isEmpty else { return }
+        let open = openPanels[key] ?? lastOpen
+        record(open, for: key)
+        lastOpen = open
     }
 
     /// What `restoreOpen` takes back, the latest last.
@@ -953,10 +969,7 @@ final class Utilities {
         chosen = chosen.filter { !$0.key.hasPrefix(owner + "|") }
         runs = runs.filter { !$0.key.hasPrefix(owner + "|") }
         kept[owner] = nil
-        if !refills {
-            openPanels[owner] = nil
-            openOrder.removeAll { $0 == owner }
-        }
+        if !refills { forget(owner) }
         if refills, visibleTabs.isEmpty { startOver() }
     }
 
