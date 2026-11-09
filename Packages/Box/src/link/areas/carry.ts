@@ -2,7 +2,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { parsed } from "../../shared/json";
+import { isObject, parsed } from "../../shared/json";
 import type { Body, Fields } from "../../shared/json";
 import { botHere, isModel, isMoving, MOVING } from "../bots/here";
 import { readKit, runsWithAgents } from "../bots/kit";
@@ -126,8 +126,12 @@ export async function carryToAgents(id: string, model: unknown, readEngine: () =
     // `letAttachmentsGo`); a bot's as its too; in the mode it was in, its rules made for it. As
     // it's made, so nothing takes it for a new conversation of yours.
     const kuvo = bot ? session.metadata?.kuvo ?? { bot: bot.described.id } : {};
-    const { approval, applied, autopilot } = session.metadata?.kuvo ?? {};
-    const marks = { kuvo: { ...(approval ? { approval } : {}), ...(applied ? { applied } : {}), ...(autopilot === true ? { autopilot } : {}), ...kuvo, carriedFrom: id } };
+    const { approval, applied, autopilot, held, lead, line, call: started } = session.metadata?.kuvo ?? {};
+    // (One a lead on another computer started keeps what came with it: that lead's Don't Allows,
+    // which its rules are made with each time; who and where it's from; its line, so its lead's
+    // Stop All and list still reach it; and its call, so it's never started again.)
+    const fromAfar = { ...(Array.isArray(held) && held.length ? { held } : {}), ...(isObject(lead) ? { lead } : {}), ...(Array.isArray(line) ? { line } : {}), ...(typeof started === "string" ? { call: started } : {}) };
+    const marks = { kuvo: { ...(approval ? { approval } : {}), ...(applied ? { applied } : {}), ...(autopilot === true ? { autopilot } : {}), ...fromAfar, ...kuvo, carriedFrom: id } };
     const moved = await call(agents, "POST", "/api/session/import", {
       title: session.title, agent: session.agent, model, location: { directory }, permissions: session.permissions, metadata: marks, messages,
       waiting: waiting.map(item => ({ id: renamed[item.id], text: item.text, files: promptFiles(item.payload) })),

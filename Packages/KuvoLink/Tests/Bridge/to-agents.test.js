@@ -170,6 +170,22 @@ test("a conversation on Autopilot stays on it with the coding agents, its agent 
   assert.equal(others.asked.some(each => each.url.endsWith("/instructions/entries/kuvo.autopilot")), false);
 });
 
+test("one a lead on another computer started keeps what came with it as it goes on with the coding agents: the lead's Don't Allows, who and where from, its line and its call", async () => {
+  const project = path.join(home, "remote");
+  const push = { action: "shell", resource: "git push*", effect: "deny" };
+  const lead = { box: "mini", key: "N".repeat(43), name: "Foreman" };
+  const engine = await engineFor({ id: "ses_remote", title: "Sign-in", agent: "build", location: { directory: project }, permissions: [push],
+    metadata: { kuvo: { approval: "auto", applied: "auto", startedBy: "ses_lead", held: [push], lead, line: ["ses_top", "ses_lead"], call: "cal_start000000000001" } } });
+  const agents = await agentsBridge({ id: "ses_carried" });
+  assert.equal((await link.carryToAgents("ses_remote", sonnet, () => engine.at, agents.at, undefined)).status, 200);
+  for (const sent of [agents.asked.find(each => each.url === "/api/session/import").body.metadata, agents.asked.find(each => each.method === "PATCH" && each.url === "/api/session/ses_carried").body.metadata]) {
+    assert.deepEqual(sent.kuvo.held, [push], "its lead's Don't Allows, which its rules are made with each time");
+    assert.deepEqual(sent.kuvo.lead, lead);
+    assert.deepEqual(sent.kuvo.line, ["ses_top", "ses_lead"]);
+    assert.equal(sent.kuvo.call, "cal_start000000000001");
+  }
+});
+
 test("what can't be is said, and nothing moves", async () => {
   const engine = await engineFor({ id: "ses_mine", title: "Mine", location: { directory: home } });
   const signedOut = await agentsBridge({ signedIn: false });
