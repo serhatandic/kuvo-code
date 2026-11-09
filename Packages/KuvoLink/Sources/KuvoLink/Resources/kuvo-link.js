@@ -8015,28 +8015,50 @@ import fs32 from "node:fs";
 import path33 from "node:path";
 
 // Packages/Box/src/link/relay/dropped.ts
+import { randomBytes } from "node:crypto";
 import fs31 from "node:fs";
+var FENCE = Buffer.from("kuvo-fence:");
+var self = null;
 var watched = new Map;
 var droppedMark = (file) => file.replace(/\.json$/, ".dropped");
+function connectionStarted(address) {
+  watched.clear();
+  self = address;
+}
+function connectionEnded() {
+  watched.clear();
+  self = null;
+}
 function sendingTo(to) {
   if (watched.size)
     watched.delete(to.toString("base64url"));
 }
-function watchCall(to, file) {
-  watched.set(to, file);
+function fenceBefore() {
+  if (!self)
+    return null;
+  const fence = randomBytes(8).toString("hex");
+  return { fence, to: self, payload: Buffer.concat([FENCE, Buffer.from(fence)]) };
 }
-function connectionEnded() {
-  watched.clear();
+function watchCall(to, file, fence) {
+  watched.set(to, { file, fence, back: false });
+}
+function fenceBack(payload) {
+  if (payload.length <= FENCE.length || !payload.subarray(0, FENCE.length).equals(FENCE))
+    return;
+  const fence = payload.subarray(FENCE.length).toString();
+  for (const each of watched.values())
+    if (each.fence === fence)
+      each.back = true;
 }
 function noteDropped(to) {
   const key = to.toString("base64url");
-  const file = watched.get(key);
-  if (!file)
+  const call = watched.get(key);
+  if (!call?.back)
     return;
   watched.delete(key);
-  if (fs31.existsSync(file))
+  if (fs31.existsSync(call.file))
     try {
-      writePrivate(droppedMark(file), "{}");
+      writePrivate(droppedMark(call.file), "{}");
     } catch {}
 }
 
@@ -11599,7 +11621,7 @@ import fs53 from "node:fs";
 import path54 from "node:path";
 
 // Packages/Box/src/link/work/reviewer.ts
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, randomBytes as randomBytes2 } from "node:crypto";
 import dns from "node:dns/promises";
 import fs50 from "node:fs";
 import path51 from "node:path";
@@ -12461,7 +12483,7 @@ function isSecret(where, policy) {
   const sshKey = where.startsWith(policy.home + "/.ssh/") && ssh && !/^(config|config\.d|known_hosts.*|authorized_keys.*|rc|environment|.*\.pub)$/.test(ssh[1]);
   return Boolean(sshKey) || where === policy.home + "/.ssh" || policy.secrets.some((wall) => inside2(where, wall));
 }
-function reviewPrompt(action, context, scripts, mark = randomBytes(4).toString("hex"), notes = null) {
+function reviewPrompt(action, context, scripts, mark = randomBytes2(4).toString("hex"), notes = null) {
   const tag = (name, text) => `<${name}_${mark}>
 ${text}
 </${name}_${mark}>`;
@@ -12552,7 +12574,7 @@ function changeLog(session, folder, change) {
     return value;
   });
 }
-var decisionID = () => `rd_${randomBytes(6).toString("hex")}`;
+var decisionID = () => `rd_${randomBytes2(6).toString("hex")}`;
 var OUTAGES = new Set(["noModel", "failed", "unreadable"]);
 function keepDecision(session, decision, folder = REVIEWS_FOLDER) {
   return changeLog(session, folder, (log) => {
@@ -12841,7 +12863,7 @@ async function fetchScripts(command, folder, urls, given) {
     if (text.length > MOST_FETCHED)
       return fail(`It runs a script from ${oneLine(url, 120)}, too long to be read whole first.`);
     fs50.mkdirSync(FETCHED_FOLDER, { recursive: true, mode: 448 });
-    const copy = path51.join(FETCHED_FOLDER, `${randomBytes(8).toString("hex")}.script`);
+    const copy = path51.join(FETCHED_FOLDER, `${randomBytes2(8).toString("hex")}.script`);
     writePrivate(copy, text);
     fetched.files.push(copy);
     if (!fetchingOf(url).test(fetched.command))
@@ -19029,16 +19051,38 @@ function sendCall(host, id, file, call, { link, now, offline, peers, away }) {
     return;
   }
   const first = call.sentTo !== peer.key;
-  if (first)
+  if (!stillThere(file, first ? JSON.stringify({ ...call, sentTo: peer.key }) : null))
+    return void letterTries.delete(id);
+  const fence = first && isOpenTool(call.call.tool) ? fenceBefore() : null;
+  let fenced = false;
+  if (fence)
     try {
-      writePrivate(file, JSON.stringify({ ...call, sentTo: peer.key }));
+      fenced = host.send(relaySend(fence.to, fence.payload));
     } catch {}
   let went = false;
   try {
     went = host.send(bytes);
   } catch {}
-  if (first && went !== false && isOpenTool(call.call.tool))
-    watchCall(peer.address, file);
+  if (fence && fenced !== false && went !== false)
+    watchCall(peer.address, file, fence.fence);
+}
+function stillThere(file, text) {
+  let fd;
+  try {
+    fd = fs67.openSync(file, "r+");
+  } catch {
+    return false;
+  }
+  try {
+    if (text !== null) {
+      const bytes = Buffer.from(text);
+      fs67.writeSync(fd, bytes, 0, bytes.length, 0);
+      fs67.ftruncateSync(fd, bytes.length);
+    }
+  } catch {} finally {
+    fs67.closeSync(fd);
+  }
+  return true;
 }
 function reply(id, failed) {
   if (IS_MAC)
@@ -26020,8 +26064,11 @@ function heardFromMac(mac, payload, now = Date.now()) {
 
 // Packages/Box/src/link/relay/connection.ts
 function fromRelay(host, message, self) {
-  if (message.address.equals(self))
+  if (message.address.equals(self)) {
+    if (message.kind === "deliver")
+      fenceBack(message.payload);
     return;
+  }
   if (message.kind === "deliver")
     host.receive(message.address, message.payload);
   if (message.kind === "unreachable" || message.kind === "gone")
@@ -26080,6 +26127,7 @@ function connectOnce(relay, secret, host, onWelcome = () => {}) {
         if (message.kind !== "welcome" || !message.address.equals(self))
           return socket.close();
         welcomed = true;
+        connectionStarted(self);
         host.send = (bytes) => {
           if (socket.readyState !== 1)
             return false;
@@ -32834,6 +32882,7 @@ export {
   seatPayloads,
   seatPeers,
   selftest,
+  sendCall,
   sendMovesWith,
   sendOutbox,
   sendWakes,

@@ -416,11 +416,14 @@ connection.
   - **Sender side**: a start, or a read of what's there, is never kept for a box that isn't
     answering: the tool says at once it may be asleep, off or offline and nothing was started (so
     too when the relay says it isn't there before the call ever went to it, or drops the call
-    itself). The relay says `unreachable` only of something sent, in order, so one for that box
-    while the call, the first time it went, was the last thing this connection sent there is the
-    call's own: it never got there (the link process, which hears the relay, leaves `<id>.dropped`
-    beside the call in the outbox for the tool). Once this box sends anything else there, or its
-    relay connection ends, or the call goes again, that can't be told. Any other start or read
+    itself). The relay says `unreachable` only of something sent, in order: so the first time the
+    call goes, a fence goes right before it to the box's own address (`kuvo-fence:<tag>`), and
+    once that's back, every `unreachable` for what went before has come. One for that box after
+    it, while the call is still the last thing this connection sent there, is the call's own: it
+    never got there (the link process, which hears the relay, leaves `<id>.dropped` beside the
+    call in the outbox for the tool). Once this box sends anything else there, or its relay
+    connection ends, or the call goes again, that can't be told. A call its tool took out of the
+    outbox meanwhile doesn't go. Any other start or read
     that went and isn't answered, in time (45 seconds for a start, 20 for a read) or before the
     relay says that box isn't there, may have got there (a box keeps a start, then says `delivered
     {ok: true}`, before it makes anything, but that word can be lost), and so may one it said it

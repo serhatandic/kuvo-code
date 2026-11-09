@@ -22,7 +22,8 @@ import { frozen } from "../moves/records";
 import { peerOf, readPeerAgents } from "../peers/directory";
 import { mailFor, movedOf, ownKey, peersOf, removedBoxes } from "../peers/known";
 import { awaySince } from "../peers/reach";
-import { droppedMark, watchCall } from "../relay/dropped";
+import { droppedMark, fenceBefore, watchCall } from "../relay/dropped";
+import { relaySend } from "../relay/frames";
 import { macLink, readLink } from "../state";
 import { homesOf, noteHomes } from "../work/homes";
 import { rowsBox, rowsOf, startedOn } from "../work/elsewhere";
@@ -178,13 +179,33 @@ export function sendCall(host: Pick<LinkHost, "send">, id: string, file: string,
     return;
   }
   const first = call.sentTo !== peer.key;
-  if (first) try { writePrivate(file, JSON.stringify({ ...call, sentTo: peer.key })); } catch {}
+  // Kept as gone to that box in its own file, which is never made again: where its tool took it out
+  // meanwhile (it stopped waiting, and says so), it doesn't go at all.
+  if (!stillThere(file, first ? JSON.stringify({ ...call, sentTo: peer.key }) : null)) return void letterTries.delete(id);
+  // A start or a read the first time it goes: whether the relay drops it, fenced off from what went
+  // before (`relay/dropped.ts`). One sent again (this box's link started again as its tool waited)
+  // may have got there before: a drop of this copy says nothing of that one.
+  const fence = first && isOpenTool(call.call.tool) ? fenceBefore() : null;
+  let fenced: boolean | void = false;
+  if (fence) try { fenced = host.send(relaySend(fence.to, fence.payload)); } catch {}
   let went: boolean | void = false;
   try { went = host.send(bytes); } catch {}
-  // A start or a read the first time it goes: whether the relay drops it (`relay/dropped.ts`). One
-  // sent again (this box's link started again as its tool waited) may have got there before: a
-  // drop of this copy says nothing of that one.
-  if (first && went !== false && isOpenTool(call.call.tool)) watchCall(peer.address, file);
+  if (fence && fenced !== false && went !== false) watchCall(peer.address, file, fence.fence);
+}
+
+// Whether the outbox file `file` is still there, written over with `text` where given: opened as it
+// is, never made again (a rename over it would bring back one taken out meanwhile).
+function stillThere(file: string, text: string | null): boolean {
+  let fd: number;
+  try { fd = fs.openSync(file, "r+"); } catch { return false; }
+  try {
+    if (text !== null) {
+      const bytes = Buffer.from(text);
+      fs.writeSync(fd, bytes, 0, bytes.length, 0);
+      fs.ftruncateSync(fd, bytes.length);
+    }
+  } catch {} finally { fs.closeSync(fd); }
+  return true;
 }
 
 // A tool waiting for call `id` hears it failed (on a machine through `run/replies`, on this Mac in memory).

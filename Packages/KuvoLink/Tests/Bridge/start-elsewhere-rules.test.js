@@ -695,6 +695,34 @@ test("a start that got to its computer, sent again as it went quiet (as a link s
   assert.equal(startsCounted(), before + 1);
 });
 
+test("a start whose computer came on just as it went isn't taken as dropped by what the relay says of something sent before it", async t => {
+  const { host, going, before, mini: at } = await startOnRelay(t);
+  // Something went to mini a moment before (its rows, say) and found nothing there; mini came on,
+  // and the call got there. As the relay answers in that order: what went out is held here, and
+  // the `unreachable` for the rows comes, before anything of the call.
+  const out = [];
+  host.send = bytes => { out.push(bytes); return true; };
+  await link.sendOutbox(host);
+  assert.ok(out.some(bytes => bytes.subarray(1, 17).equals(at)), "the call went");
+  link.fromRelay(host, link.readRelay(Buffer.concat([Buffer.from([3]), at])), link.addressOf(Buffer.from(link.readLink().secret, "base64url")));
+  const said = await going;
+  assert.match(said.text, /It may still have started/);
+  assert.equal(startsCounted(), before + 1);
+});
+
+test("a start its tool stopped waiting for, as the outbox picked it up, doesn't go, and isn't brought back to go later", async () => {
+  leadHere();
+  const id = "cal_gone00000000001";
+  const file = path.join(run, "outbox", "sending", `${id}.json`);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const call = { peer: mini.pub, from: "ses_lead", wait: true, at: Date.now(), call: { tool: "start_session", args: { computer: "mini", project: "api", task: "Fix the sign-in." }, as: {} } };
+  // The outbox read it; meanwhile its tool took it out of the outbox.
+  const sent = [];
+  link.sendCall({ send: bytes => { sent.push(bytes); return true; } }, id, file, call, { link: link.readLink(), now: Date.now(), offline: false, peers: [mini.peer], away: new Set() });
+  assert.equal(sent.length, 0, "not sent");
+  assert.equal(fs.existsSync(file), false, "not back in the outbox");
+});
+
 test("a start that got to its computer, then this box's own relay connection dropped while it waited, may have started", async t => {
   const { relay, host, connect, going, before, mini: at } = await startOnRelay(t);
   const there = relay.device(mini.secret);
