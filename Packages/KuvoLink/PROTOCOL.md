@@ -2747,14 +2747,16 @@ the last reading in its folder (`limits.json`), through a restart. A client reac
     window whose `resetsAt` has passed has started over since: show it as not read yet, not as
     used.
   - `balance` `{left, limit?, unit}`: credits left to spend, where the account has them.
-  - `checked`, when it was last read, whatever came of it; `next`, when it's read again.
+  - `checked`, when its maker last answered (with its limits or a problem; absent for an account
+    only its turns tell of); `next`, when it's read again (absent for one that's never read).
   - `problem` `{kind, message, until?}` when the last read didn't work, with `windows` as last
     read (each with its `read`): `rate-limited` (its maker turned the read away; `until`, when it's
     read again), `expired` (its sign-in lapsed or was turned away: its agent renews it the next
     time it runs), `unreadable` (the sign-in can run the agent but not read its plan's limits) or
     `failed`. Show `message` as it is.
 - `POST kuvo/agents/api/kuvo/limits/refresh` reads now each account read over a minute ago, as
-  often as its maker allows and never inside a hold, and answers as `GET` once it's read.
+  often as its maker allows and never inside a hold, and answers as `GET` with what's read within
+  a couple of seconds; what comes later comes as `kuvo.limits.updated`.
 - The bridge's events (`kuvo/agents/api/event`) carry `kuvo.limits.updated` `{accounts}` each time
   the list changes.
 - What's read: Claude Code's accounts, on Linux from Anthropic with Claude Code's own sign-in in
@@ -2769,8 +2771,11 @@ the last reading in its folder (`limits.json`), through a restart. A client reac
   only the Ollama app's own signing key.
 - How often: Claude's each 15 minutes, the rest each 10. Anthropic limits these reads for the whole
   computer, not a sign-in, and holds a reader off longer each time it asks too soon: Claude's
-  accounts are read one a minute, and a 429 holds every one of them on the box for as long as its
-  `Retry-After` says (an hour with no word, doubling up to six), through a restart. A read is kept
+  accounts are read one a minute (counted before the request goes, through a restart too), and a
+  429 holds every one of them on the box for as long as its `Retry-After` says (an hour with no
+  word, doubling with each 429 of any of them, up to six), through a restart. An API key a maker
+  turns away is tried again later, with longer waits; a sign-in that lapsed isn't asked again
+  until it changes. A read is kept
   as asked before it's answered, so a restart meanwhile never asks again; a sign-in that lapsed or
   can't read its limits isn't asked again until it changes.
 - Agents read them with the tool `plan_limits` (read only): each account's windows, how much is

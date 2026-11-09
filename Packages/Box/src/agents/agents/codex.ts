@@ -178,6 +178,8 @@ export class CodexAgent implements Agent {
     } catch (caught) {
       throw new LimitsProblem("failed", `Codex couldn't say: ${caught instanceof Error ? caught.message : String(caught)}`)
     }
+    // It answered: not started again for this, whatever it said.
+    this.limitsRead = true
     // Signed out, or an API key: no plan to read.
     if (account?.type !== "chatgpt") throw new LimitsProblem("none", account ? "An API key has no plan limits." : "Not signed in to Codex here.")
     let result: any
@@ -192,7 +194,6 @@ export class CodexAgent implements Agent {
     const snapshots: any[] = result?.rateLimitsByLimitId ? Object.values(result.rateLimitsByLimitId) : result?.rateLimits ? [result.rateLimits] : []
     const windows = snapshots.flatMap((snapshot) => codexWindows(snapshot))
     const type = account.planType ?? snapshots.find((snapshot) => snapshot?.planType)?.planType
-    this.limitsRead = true
     return { windows, ...(typeof type === "string" && type !== "unknown" ? { plan: codexPlan(type) } : {}) }
   }
 

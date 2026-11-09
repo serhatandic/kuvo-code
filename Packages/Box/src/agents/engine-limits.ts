@@ -116,7 +116,15 @@ export class EngineAccounts {
     if (!reader.lasting && credential.value.type === "oauth" && credential.value.expires && credential.value.expires <= now) {
       throw new LimitsProblem("expired", "Its sign-in has lapsed: the engine renews it the next time a model of it runs here.")
     }
-    return reader.read(secret.trim(), credential, now)
+    try {
+      return await reader.read(secret.trim(), credential, now)
+    } catch (caught) {
+      // An API key turned away isn't a sign-in its engine renews: tried again later, not held to it.
+      if (caught instanceof LimitsProblem && caught.kind === "expired" && credential.value.type !== "oauth") {
+        throw new LimitsProblem("failed", caught.message.replace(/the sign-in away: sign in again/, "the key away: check it"))
+      }
+      throw caught
+    }
   }
 }
 

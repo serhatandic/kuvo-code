@@ -146,6 +146,8 @@ interface Saved {
   holds: Record<string, number>
   /** When each bucket was last asked, in ms. */
   asked?: Record<string, number>
+  /** Reads each bucket turned away in a row. */
+  refusals?: Record<string, number>
 }
 
 const MINUTE = 60_000
@@ -165,6 +167,8 @@ export class Limits {
   private holds = new Map<string, number>()
   /** When each maker's bucket was last asked, in ms. */
   private asked = new Map<string, number>()
+  /** Reads each maker's bucket turned away in a row. */
+  private refusals = new Map<string, number>()
   private reading?: Promise<void>
   private timer?: ReturnType<typeof setInterval>
   private said = ""
@@ -213,7 +217,8 @@ export class Limits {
         windows: entry.windows,
         ...(entry.balance ? { balance: entry.balance } : {}),
         ...(entry.checked ? { checked: entry.checked } : {}),
-        next: entry.next,
+        // (One only its turns tell of is never read.)
+        ...(account.limits.read ? { next: entry.next } : {}),
         ...(problem ? { problem } : {}),
       })
     }
@@ -286,8 +291,15 @@ export class Limits {
         entry.next = at + Math.max(source.every, FIRST_RETRY)
         continue
       }
+      // Counted as asked before it's sent, and kept so (a restart meanwhile doesn't ask another
+      // account of its maker at once); taken back when nothing went.
+      const before = source.bucket ? this.asked.get(source.bucket) : undefined
+      if (source.bucket) this.asked.set(source.bucket, at)
       const sent = await this.readOne(source, entry)
-      if (source.bucket && sent) this.asked.set(source.bucket, at)
+      if (source.bucket && !sent) {
+        if (before === undefined) this.asked.delete(source.bucket)
+        else this.asked.set(source.bucket, before)
+      }
       // Kept at once: a restart meanwhile never asks again what was just asked.
       this.changed()
     }
@@ -318,6 +330,7 @@ export class Limits {
       entry.signIn = undefined
       entry.refusals = 0
       entry.failures = 0
+      if (source.bucket) this.refusals.delete(source.bucket)
       return true
     } catch (caught) {
       const at = this.now()
@@ -326,10 +339,14 @@ export class Limits {
       entry.problem = { kind: problem.kind, message: problem.message, ...(problem.until ? { until: problem.until } : {}) }
       switch (problem.kind) {
         case "rate-limited": {
-          entry.refusals = (entry.refusals ?? 0) + 1
+          // Counted per maker's bucket where there is one (its hold is the computer's): turned away
+          // on one account, then another, is twice.
+          const refusals = (source.bucket ? (this.refusals.get(source.bucket) ?? 0) : (entry.refusals ?? 0)) + 1
+          entry.refusals = refusals
+          if (source.bucket) this.refusals.set(source.bucket, refusals)
           // As long as its maker says, never less than the account's own spacing; with no word, an
           // hour, doubling each time it's turned away again.
-          const wait = problem.until ? Math.max(problem.until, at + source.every) : at + Math.min(FIRST_HOLD * 2 ** (entry.refusals - 1), LONGEST_HOLD)
+          const wait = problem.until ? Math.max(problem.until, at + source.every) : at + Math.min(FIRST_HOLD * 2 ** (refusals - 1), LONGEST_HOLD)
           entry.next = wait
           entry.problem.until = wait
           if (source.bucket) this.holds.set(source.bucket, Math.max(this.holds.get(source.bucket) ?? 0, wait))
@@ -382,7 +399,7 @@ export class Limits {
       if (heard.name === undefined) delete heard.name
       if (heard.resetsAt === undefined) delete heard.resetsAt
       entry.windows = before ? entry.windows.map((each) => (each.id === window.id ? heard : each)) : [...entry.windows, heard]
-      this.changed()
+      this.changed(true)
     }
   }
 
@@ -394,10 +411,16 @@ export class Limits {
   }
 
   /** Tells the clients, and keeps it, when what's listed changed. */
-  private changed() {
+  private lastHeardSave = 0
+
+  /** `heard`: from a turn's event, which comes with each response: kept on disk at most every half minute. */
+  private changed(heard = false) {
     const list = this.list()
     const now = JSON.stringify(list)
-    this.save()
+    if (!heard || this.now() - this.lastHeardSave >= 30_000) {
+      if (heard) this.lastHeardSave = this.now()
+      this.save()
+    }
     if (now === this.said) return
     this.said = now
     emit("kuvo.limits.updated", { accounts: list })
@@ -413,6 +436,7 @@ export class Limits {
       }
       for (const [bucket, until] of Object.entries(saved.holds ?? {})) if (typeof until === "number") this.holds.set(bucket, until)
       for (const [bucket, at] of Object.entries(saved.asked ?? {})) if (typeof at === "number") this.asked.set(bucket, at)
+      for (const [bucket, count] of Object.entries(saved.refusals ?? {})) if (typeof count === "number") this.refusals.set(bucket, count)
     } catch {}
   }
 
@@ -420,7 +444,7 @@ export class Limits {
 
   private save() {
     if (!this.file) return
-    const saved = JSON.stringify({ accounts: Object.fromEntries(this.entries), holds: Object.fromEntries(this.holds), asked: Object.fromEntries(this.asked) } satisfies Saved)
+    const saved = JSON.stringify({ accounts: Object.fromEntries(this.entries), holds: Object.fromEntries(this.holds), asked: Object.fromEntries(this.asked), refusals: Object.fromEntries(this.refusals) } satisfies Saved)
     if (saved === this.kept) return
     try {
       mkdirSync(dirname(this.file), { recursive: true })
@@ -455,7 +479,8 @@ export async function limitsRoutes(limits: Limits | undefined, method: string, r
   const answer = () => json({ data: { accounts: limits.list(), services: limits.services() } })
   if (!rest.length && method === "GET") return answer()
   if (rest.length === 1 && rest[0] === "refresh" && method === "POST") {
-    await limits.refresh()
+    // What's read within a couple of seconds is in the answer; the rest comes as kuvo.limits.updated.
+    await Promise.race([limits.refresh(), new Promise((resolve) => setTimeout(resolve, 2_000).unref?.())])
     return answer()
   }
   return json({ message: "Not available for this agent." }, 404)

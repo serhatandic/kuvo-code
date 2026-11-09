@@ -113,7 +113,7 @@ test("the Grok agent's own sign-in, in its folder, reads the same pool", async (
   try {
     writeFileSync(join(folder, "auth.json"), JSON.stringify({ "https://auth.x.ai": { key: "grok-token", expires_at: "2026-11-09T20:00:00Z" } }))
     answers["/grok"] = () => Response.json({ config: { currentPeriod: { type: "USAGE_PERIOD_TYPE_WEEKLY", start: "2026-11-05T00:00:00Z", end: "2026-11-12T00:00:00Z" }, creditUsagePercent: 12.5 } })
-    const grok = new GrokAgent({ home: folder, temporary: folder, deps: {} as any }, { id: "a1", label: "Side", home: folder })
+    const grok = new (class extends GrokAgent { override executable() { return "/bin/true" } })({ home: folder, temporary: folder, deps: {} as any }, { id: "a1", label: "Side", home: folder })
     const limits = new Limits(() => agentAccounts([grok]), undefined, () => NOW)
     const accounts = (((await (await limitsRoutes(limits, "POST", ["refresh"])).json()) as any).data.accounts) as AccountLimits[]
     expect(accounts.map((each) => [each.provider, each.service, each.agent, each.label, each.windows[0]?.used])).toEqual([["grok-cli@a1", "grok", "grok", "Side", 0.125]])
@@ -138,7 +138,7 @@ test("a Grok sign-in that lapsed waits for Grok to renew it, without asking xAI"
   const folder = mkdtempSync(join(process.env.KUVO_TEST_ROOT ?? tmpdir(), "kuvo-grok-limits-"))
   try {
     writeFileSync(join(folder, "auth.json"), JSON.stringify({ "https://auth.x.ai": { key: "grok-token", expires_at: "2026-11-08T19:00:00Z" } }))
-    const grok = new GrokAgent({ home: folder, temporary: folder, deps: {} as any }, { id: "a1", home: folder })
+    const grok = new (class extends GrokAgent { override executable() { return "/bin/true" } })({ home: folder, temporary: folder, deps: {} as any }, { id: "a1", home: folder })
     const limits = new Limits(() => agentAccounts([grok]), undefined, () => NOW)
     const accounts = (((await (await limitsRoutes(limits, "POST", ["refresh"])).json()) as any).data.accounts) as AccountLimits[]
     expect(accounts.map((each) => each.problem?.kind)).toEqual(["expired"])
@@ -178,4 +178,17 @@ test("a box starting before its engine answers keeps the engine's sign-ins' hold
   } finally {
     rmSync(folder, { recursive: true, force: true })
   }
+})
+
+test("an API key turned away is tried again later, not held to that key as a lapsed sign-in", async () => {
+  let at = NOW
+  answers["/openrouterKey"] = () => new Response("{}", { status: 401 })
+  const engine = new EngineAccounts(async () => ({ data: [credential("openrouter", { type: "api", key: "or-key" })] }))
+  const limits = new Limits(() => engine.accounts(), undefined, () => at, () => engine.refresh(), () => engine.answered)
+  await limits.tick()
+  const listed = ((await (await limitsRoutes(limits, "GET", [])).json()) as any).data.accounts
+  expect(listed[0].problem.kind).toBe("failed")
+  at += 11 * 60_000
+  await limits.tick()
+  expect(reads.filter((read) => read.path === "/openrouterKey")).toHaveLength(2)
 })

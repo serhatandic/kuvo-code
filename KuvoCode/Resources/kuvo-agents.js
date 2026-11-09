@@ -10097,6 +10097,7 @@ class Limits {
   entries = new Map;
   holds = new Map;
   asked = new Map;
+  refusals = new Map;
   reading;
   timer;
   said = "";
@@ -10137,7 +10138,7 @@ class Limits {
         windows: entry.windows,
         ...entry.balance ? { balance: entry.balance } : {},
         ...entry.checked ? { checked: entry.checked } : {},
-        next: entry.next,
+        ...account.limits.read ? { next: entry.next } : {},
         ...problem ? { problem } : {}
       });
     }
@@ -10197,9 +10198,16 @@ class Limits {
         entry.next = at + Math.max(source.every, FIRST_RETRY);
         continue;
       }
-      const sent = await this.readOne(source, entry);
-      if (source.bucket && sent)
+      const before = source.bucket ? this.asked.get(source.bucket) : undefined;
+      if (source.bucket)
         this.asked.set(source.bucket, at);
+      const sent = await this.readOne(source, entry);
+      if (source.bucket && !sent) {
+        if (before === undefined)
+          this.asked.delete(source.bucket);
+        else
+          this.asked.set(source.bucket, before);
+      }
       this.changed();
     }
     this.forgetGone();
@@ -10224,6 +10232,8 @@ class Limits {
       entry.signIn = undefined;
       entry.refusals = 0;
       entry.failures = 0;
+      if (source.bucket)
+        this.refusals.delete(source.bucket);
       return true;
     } catch (caught) {
       const at = this.now();
@@ -10232,8 +10242,11 @@ class Limits {
       entry.problem = { kind: problem.kind, message: problem.message, ...problem.until ? { until: problem.until } : {} };
       switch (problem.kind) {
         case "rate-limited": {
-          entry.refusals = (entry.refusals ?? 0) + 1;
-          const wait = problem.until ? Math.max(problem.until, at + source.every) : at + Math.min(FIRST_HOLD * 2 ** (entry.refusals - 1), LONGEST_HOLD);
+          const refusals = (source.bucket ? this.refusals.get(source.bucket) ?? 0 : entry.refusals ?? 0) + 1;
+          entry.refusals = refusals;
+          if (source.bucket)
+            this.refusals.set(source.bucket, refusals);
+          const wait = problem.until ? Math.max(problem.until, at + source.every) : at + Math.min(FIRST_HOLD * 2 ** (refusals - 1), LONGEST_HOLD);
           entry.next = wait;
           entry.problem.until = wait;
           if (source.bucket)
@@ -10288,7 +10301,7 @@ class Limits {
       if (heard.resetsAt === undefined)
         delete heard.resetsAt;
       entry.windows = before ? entry.windows.map((each) => each.id === window.id ? heard : each) : [...entry.windows, heard];
-      this.changed();
+      this.changed(true);
     };
   }
   forgetGone() {
@@ -10299,10 +10312,15 @@ class Limits {
       if (!here.has(provider))
         this.entries.delete(provider);
   }
-  changed() {
+  lastHeardSave = 0;
+  changed(heard = false) {
     const list = this.list();
     const now = JSON.stringify(list);
-    this.save();
+    if (!heard || this.now() - this.lastHeardSave >= 30000) {
+      if (heard)
+        this.lastHeardSave = this.now();
+      this.save();
+    }
     if (now === this.said)
       return;
     this.said = now;
@@ -10324,13 +10342,16 @@ class Limits {
       for (const [bucket, at] of Object.entries(saved.asked ?? {}))
         if (typeof at === "number")
           this.asked.set(bucket, at);
+      for (const [bucket, count] of Object.entries(saved.refusals ?? {}))
+        if (typeof count === "number")
+          this.refusals.set(bucket, count);
     } catch {}
   }
   kept = "";
   save() {
     if (!this.file)
       return;
-    const saved = JSON.stringify({ accounts: Object.fromEntries(this.entries), holds: Object.fromEntries(this.holds), asked: Object.fromEntries(this.asked) });
+    const saved = JSON.stringify({ accounts: Object.fromEntries(this.entries), holds: Object.fromEntries(this.holds), asked: Object.fromEntries(this.asked), refusals: Object.fromEntries(this.refusals) });
     if (saved === this.kept)
       return;
     try {
@@ -10361,7 +10382,7 @@ async function limitsRoutes(limits, method, rest) {
   if (!rest.length && method === "GET")
     return answer();
   if (rest.length === 1 && rest[0] === "refresh" && method === "POST") {
-    await limits.refresh();
+    await Promise.race([limits.refresh(), new Promise((resolve) => setTimeout(resolve, 2000).unref?.())]);
     return answer();
   }
   return json6({ message: "Not available for this agent." }, 404);
@@ -12961,6 +12982,7 @@ class CodexAgent {
     } catch (caught) {
       throw new LimitsProblem("failed", `Codex couldn't say: ${caught instanceof Error ? caught.message : String(caught)}`);
     }
+    this.limitsRead = true;
     if (account?.type !== "chatgpt")
       throw new LimitsProblem("none", account ? "An API key has no plan limits." : "Not signed in to Codex here.");
     let result;
@@ -12977,7 +12999,6 @@ class CodexAgent {
     const snapshots = result?.rateLimitsByLimitId ? Object.values(result.rateLimitsByLimitId) : result?.rateLimits ? [result.rateLimits] : [];
     const windows = snapshots.flatMap((snapshot) => codexWindows(snapshot));
     const type = account.planType ?? snapshots.find((snapshot) => snapshot?.planType)?.planType;
-    this.limitsRead = true;
     return { windows, ...typeof type === "string" && type !== "unknown" ? { plan: codexPlan(type) } : {} };
   }
   signOut;
@@ -16017,7 +16038,14 @@ class EngineAccounts {
     if (!reader.lasting && credential.value.type === "oauth" && credential.value.expires && credential.value.expires <= now) {
       throw new LimitsProblem("expired", "Its sign-in has lapsed: the engine renews it the next time a model of it runs here.");
     }
-    return reader.read(secret.trim(), credential, now);
+    try {
+      return await reader.read(secret.trim(), credential, now);
+    } catch (caught) {
+      if (caught instanceof LimitsProblem && caught.kind === "expired" && credential.value.type !== "oauth") {
+        throw new LimitsProblem("failed", caught.message.replace(/the sign-in away: sign in again/, "the key away: check it"));
+      }
+      throw caught;
+    }
   }
 }
 async function fetched(url, headers, now, maker, refused) {
@@ -16305,6 +16333,8 @@ class GrokAgent {
     every: 10 * 60000,
     signIn: () => fingerprint(this.grokSignIn()?.key),
     read: async (now) => {
+      if (!this.executable())
+        throw new LimitsProblem("none", "Grok isn't installed here.", undefined, false);
       const entry = this.grokSignIn();
       if (!entry)
         throw new LimitsProblem("none", "Not signed in to Grok here.");
@@ -26021,4 +26051,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents d0d82b2362c275c5bd82a09466e487587586c1014dade06176291cc303f04afd
+// Built from Packages/Box/src/agents 6b763d62688b67c17ffb2ce0b10c0a783fbd90a31b7d2dbb8703def1040e06a9

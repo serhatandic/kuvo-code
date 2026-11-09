@@ -158,6 +158,8 @@ export class GrokAgent implements Agent {
     every: 10 * 60_000,
     signIn: () => fingerprint(this.grokSignIn()?.key),
     read: async (now) => {
+      // (A sign-in left behind by a Grok that's gone isn't read.)
+      if (!this.executable()) throw new LimitsProblem("none", "Grok isn't installed here.", undefined, false)
       const entry = this.grokSignIn()
       if (!entry) throw new LimitsProblem("none", "Not signed in to Grok here.")
       // (The Grok CLI writes `expires_at`.)

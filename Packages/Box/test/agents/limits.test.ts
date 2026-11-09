@@ -278,6 +278,25 @@ describe("Claude on Linux", () => {
     expect(anthropic.reads.map((read) => read.token)).toEqual(["token-own", "token-work"])
   })
 
+  test("a restart while one Claude account is being read doesn't read another in the same minute", async () => {
+    const [own, work] = two()
+    let answer!: () => void
+    anthropic.answers.set("token-own", () => new Promise<Response>((resolve) => (answer = () => resolve(usage(42, 18)()))) as any)
+    anthropic.answers.set("token-work", usage(90, 61))
+    const file = join(home, "limits.json")
+    const first = new Limits(() => agentAccounts([own!, work!]), file, clock.now)
+    const asked = anthropic.nextRead()
+    const reading = first.tick()
+    await asked
+    // The box starts again, seconds later.
+    clock.pass(5_000)
+    const restarted = new Limits(() => agentAccounts([own!, work!]), file, clock.now)
+    await restarted.tick()
+    expect(anthropic.reads.map((read) => read.token)).toEqual(["token-own"])
+    answer()
+    await reading
+  })
+
   test("a 429 with no time waits an hour, then longer each time", async () => {
     const folder = join(home, "claude", "home")
     signedIn(folder, "token-own")
@@ -382,7 +401,7 @@ process.stdin.on("data", (chunk) => {
 `,
   )
   const launcher = join(folder, "codex")
-  writeFileSync(launcher, `#!/bin/sh\nexport BUN_BE_BUN=1\nexec "${process.execPath}" "${script}" "$@"\n`)
+  writeFileSync(launcher, `#!/bin/sh\necho started >> "${join(folder, "starts.txt")}"\nexport BUN_BE_BUN=1\nexec "${process.execPath}" "${script}" "$@"\n`)
   chmodSync(launcher, 0o755)
   return launcher
 }
@@ -437,6 +456,17 @@ describe("Codex", () => {
     await limits.tick()
     expect(reads()).toBe(1)
     expect((await route(limits)).accounts[0]!.windows.map((each) => each.used)).toEqual([0.12])
+  })
+
+  test("an API key's Codex is started once to ask, not again every time it's looked at", async () => {
+    codex = new TestCodex(fakeCodex(home, { type: "apiKey" }, {}), home)
+    const limits = new Limits(() => agentAccounts([codex!]), undefined, clock.now)
+    await limits.tick()
+    codex.shutdown?.()
+    clock.pass(31 * 60_000)
+    await limits.tick()
+    expect(readFileSync(join(home, "starts.txt"), "utf8").trim().split("\n")).toHaveLength(1)
+    expect((await route(limits)).accounts).toEqual([])
   })
 
   test("an API key has no plan limits: not listed", async () => {
