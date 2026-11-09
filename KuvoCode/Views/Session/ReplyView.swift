@@ -302,6 +302,18 @@ final class ReplyTextView: PointerAwareTextView, NSTextViewDelegate {
     func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {
         let url = (link as? URL) ?? (link as? String).flatMap(URL.init(string:))
         guard let url else { return false }
+        if let storage = textStorage, charIndex < storage.length,
+           storage.attribute(.replyPicture, at: charIndex, effectiveRange: nil) != nil {
+            var pictures: [URL] = []
+            var selected = 0
+            storage.enumerateAttribute(.replyPicture, in: NSRange(location: 0, length: storage.length)) { value, range, _ in
+                guard let picture = value as? URL else { return }
+                if NSLocationInRange(charIndex, range) { selected = pictures.count }
+                pictures.append(picture)
+            }
+            if !pictures.isEmpty { ImageViewer.shared.show(pictures.map(AttachmentItem.local), at: selected) }
+            return true
+        }
         if openURL(url) { return true }
         NSWorkspace.shared.open(url)
         return true
