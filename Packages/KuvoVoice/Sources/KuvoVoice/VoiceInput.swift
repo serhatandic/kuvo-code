@@ -88,6 +88,8 @@ public final class VoiceInput {
     @ObservationIgnored private var meter = VoiceLevel()
     #if os(iOS)
     @ObservationIgnored private var interruption: (any NSObjectProtocol)?
+    /// The phone's audio is set up (or being set up) for this, to let go of once it stops.
+    @ObservationIgnored private var holdsSession = false
     #endif
     /// Counts each start: what comes from an earlier one (a cancel, then a start) is dropped.
     @ObservationIgnored private(set) var run = 0
@@ -390,21 +392,25 @@ public final class VoiceInput {
 
     #if DEBUG
     /// For the apps' tests: the microphone refuses to come on, as an iPhone's audio did with
-    /// OSStatus -50 (#363), without the system being asked for it (a simulator would use the
-    /// Mac's microphone).
+    /// OSStatus -50 (#363), once the phone's audio is set up (and so let go of again), before the
+    /// microphone itself is asked for (a simulator would use the Mac's).
     public static var microphoneRefuses = false
     #endif
 
     /// The phone's audio, set for listening (for start `run`: canceled meanwhile, it throws).
     private func startSession(run: Int) async throws {
-        #if DEBUG
-        if Self.microphoneRefuses { throw NSError(domain: NSOSStatusErrorDomain, code: -50) }
-        #endif
         #if os(iOS)
+        // Held from here: a cancel while it's set up lets go of it after.
+        holdsSession = true
         try await Self.setUpSessionInTurn()
         // Canceled while it was set up: the cancel's let-go comes after it, and nothing listens.
         try Task.checkCancellation()
         guard self.run == run else { throw CancellationError() }
+        #endif
+        #if DEBUG
+        if Self.microphoneRefuses { throw NSError(domain: NSOSStatusErrorDomain, code: -50) }
+        #endif
+        #if os(iOS)
         // A call, Siri or an alarm takes the microphone: what was said so far is kept, rather
         // than listening on to nothing.
         interruption = NotificationCenter.default.addObserver(forName: AVAudioSession.interruptionNotification, object: nil, queue: .main) { [weak self] note in
@@ -452,7 +458,12 @@ public final class VoiceInput {
         #if os(iOS)
         if let interruption { NotificationCenter.default.removeObserver(interruption) }
         interruption = nil
-        Self.letGoOfSessionInTurn()
+        // Only audio it set up: a start that stopped before (the microphone not allowed, the
+        // model's download) leaves the app's audio as it was.
+        if holdsSession {
+            holdsSession = false
+            Self.letGoOfSessionInTurn()
+        }
         #endif
     }
 
@@ -509,8 +520,7 @@ public final class VoiceInput {
         log.error("Voice input stopped at \(String(describing: stage), privacy: .public): \(String(describing: error), privacy: .public)")
         if (error as? VoiceError) == .noMicrophone {
             #if os(iOS)
-            // An iPhone has its microphone: something else holds it (a call, another app).
-            return .other("Voice input can’t use the microphone while something else is using it. Try again once it’s free.")
+            return .other("Voice input couldn’t hear the microphone. Try again.")
             #else
             return .other("Voice input can’t hear a microphone. Check that one is connected, then try again.")
             #endif
@@ -518,12 +528,20 @@ public final class VoiceInput {
         let words = error.localizedDescription
         if words.localizedCaseInsensitiveContains("authoriz") { return .speechDenied }
         return switch stage {
-        case .gettingReady where (error as NSError).domain == NSURLErrorDomain:
+        case .gettingReady where isNetwork(error):
             .other("Voice input couldn’t download what it needs for your language. Check that you’re online, then try again.")
         case .gettingReady: .other("Voice input couldn’t get ready. Try again.")
         case .microphone: .other("Voice input couldn’t use the microphone. Try again.")
         case .listening(let wroteSome): stopped(wroteSome: wroteSome)
         }
+    }
+
+    /// The network failed it, said by the error or one it wraps (a download's own error, around
+    /// the connection's).
+    static func isNetwork(_ error: any Error) -> Bool {
+        let error = error as NSError
+        if error.domain == NSURLErrorDomain { return true }
+        return error.underlyingErrors.contains { isNetwork($0) }
     }
 
     /// Stopped while it listened: what was written, if anything, stays for Done to take.

@@ -119,6 +119,13 @@ import Testing
     #expect(VoiceInput.failure(of: refused, .microphone).message == "Voice input couldn’t use the microphone. Try again.")
     // Stopped after some words, they're kept for Done.
     #expect(VoiceInput.failure(of: refused, .listening(wroteSome: true)).message == "Voice input stopped. What was written so far is kept.")
+    // Getting ready offline says so, the network's error bare or inside the download's own.
+    let offline = NSError(domain: NSURLErrorDomain, code: NSURLErrorNotConnectedToInternet)
+    let wrapped = NSError(domain: "SFSpeechErrorDomain", code: 3, userInfo: [NSUnderlyingErrorKey: offline])
+    for error in [offline, wrapped] {
+        #expect(VoiceInput.failure(of: error, .gettingReady).message.contains("Check that you’re online"))
+    }
+    #expect(!VoiceInput.failure(of: refused, .gettingReady).message.contains("online"))
     // Speech recognition not allowed still says where to allow it.
     let notAllowed = NSError(domain: "SFSpeechErrorDomain", code: 1, userInfo: [NSLocalizedDescriptionKey: "Speech recognition is not authorized"])
     #expect(VoiceInput.failure(of: notAllowed, .listening(wroteSome: false)) == .speechDenied)
