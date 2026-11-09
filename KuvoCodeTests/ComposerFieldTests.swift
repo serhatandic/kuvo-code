@@ -376,12 +376,16 @@ extension ComposerFieldTests {
         }
     }
 
-    /// The window as SwiftUI and AppKit lay it out and draw it, after what was typed.
+    /// The window as SwiftUI and AppKit lay it out and draw it, after what was typed: each frame
+    /// as the screen's next one would, laid out and its layers drawn as Core Animation commits them
+    /// (on macOS 27, where a view's `viewWillDraw` comes; `displayIfNeeded` alone doesn't draw
+    /// them, so what's done before drawing waited on a real frame landing between keys).
     private func laidOut() async {
         for _ in 0..<3 {
             await Task.yield()
             window.contentView?.layoutSubtreeIfNeeded()
             window.contentView?.displayIfNeeded()
+            CATransaction.flush()
         }
     }
 
