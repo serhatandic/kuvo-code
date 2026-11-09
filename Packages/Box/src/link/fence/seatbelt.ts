@@ -167,13 +167,16 @@ export function seatbeltProfile(policy: FencePolicy, options: SeatbeltOptions): 
   // (`touch`, checked only as `file-write*`: what's named above stays refused), never made, moved or
   // removed (so never a link, or another name for another file).
   allow("file-read-data file-write-data file-write-times file-write*", `(literal (param "MEMORY"))`);
-  // Beside it, files by its name and more (MEMORY_RE, escaped; none for no memory): Claude Code saves
-  // a file whole in a new one first (`MEMORY.md.tmp.<pid>.<random>`), which it renames onto it; that
-  // rename is refused (EPERM), so it writes the memory in place then, and removes the new one. (Where
-  // it can't make the new one at all, it gives up on macOS: only EACCES, Linux's, sends it in place.)
-  // Only files, made, written and removed: never a link, never moved onto the memory.
+  // Beside it, the new files Claude Code saves it through (MEMORY_RE, escaped; none for no memory):
+  // it saves a file whole in `MEMORY.md.tmp.<pid>.<random hex>` first (as of 2.1.319), which it
+  // renames onto it; that rename is refused (EPERM), so it writes the memory in place then, and
+  // removes the new one. (Where it can't make the new one at all, it gives up on macOS: only EACCES,
+  // Linux's, sends it in place.) By that name alone, so never one the box writes through (its
+  // Shelf's `.kuvo-restore`); only files, made, written and removed, never a symlink or folder (a
+  // hard link only of a file it writes anyway), never moved onto the memory. When Claude Code
+  // changes how it saves, test/sandbox-bot-memory.test.ts says so where it's installed.
   allow(`file-write* file-write-create file-write-data file-write-mode file-write-times file-write-unlink`,
-    `(require-all ${under("MEMORY_RE", String.raw`\.[^/]+$`)} (vnode-type REGULAR-FILE))`);
+    `(require-all ${under("MEMORY_RE", String.raw`\.tmp\.[0-9]+\.[0-9a-f]+$`)} (vnode-type REGULAR-FILE))`);
 
   out.push(";; what runs outside the sandbox, or changes the engine");
   // The conversation's folder and its repository's, themselves: never removed or made again, so

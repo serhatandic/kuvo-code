@@ -3896,7 +3896,7 @@ function seatbeltProfile(policy, options) {
   allow(HIDDEN, `(subpath (string-append (param "WAKES") "/inbox"))`);
   allow(HIDDEN, `(subpath (string-append (param "WAKES") "/memory"))`);
   allow("file-read-data file-write-data file-write-times file-write*", `(literal (param "MEMORY"))`);
-  allow(`file-write* file-write-create file-write-data file-write-mode file-write-times file-write-unlink`, `(require-all ${under("MEMORY_RE", String.raw`\.[^/]+$`)} (vnode-type REGULAR-FILE))`);
+  allow(`file-write* file-write-create file-write-data file-write-mode file-write-times file-write-unlink`, `(require-all ${under("MEMORY_RE", String.raw`\.tmp\.[0-9]+\.[0-9a-f]+$`)} (vnode-type REGULAR-FILE))`);
   out.push(";; what runs outside the sandbox, or changes the engine");
   deny("file-write-unlink file-write-create", `(literal (param "WORK"))`, `(literal (param "GIT"))`, `(literal (param "TMP"))`);
   const holders = new Set;

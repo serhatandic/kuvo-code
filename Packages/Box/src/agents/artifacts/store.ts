@@ -435,7 +435,10 @@ export class ArtifactStore {
       try {
         mode = statSync(artifact.path).mode & 0o7777
       } catch {}
-      writeFileSync(artifact.path + ".kuvo-restore", bytes)
+      // A file of its own, made new (never one there already, nor through a link someone left
+      // by that name: written through, then put in place, it would give the file another name).
+      rmSync(artifact.path + ".kuvo-restore", { force: true })
+      writeFileSync(artifact.path + ".kuvo-restore", bytes, { flag: "wx" })
       if (mode !== undefined) chmodSync(artifact.path + ".kuvo-restore", mode)
       renameSync(artifact.path + ".kuvo-restore", artifact.path)
     } catch (error: any) {

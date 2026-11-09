@@ -214,7 +214,7 @@ export function launcherScript(places: FencePlaces): string {
     // conversation this is; for its seat in a group chat, the bot the agents bridge names
     // (`KUVO_FENCE_BOT`, as its box marked the seat), or, run by the engine, the bot whose own
     // folder (never a link) it works in. That file alone, read and written in place, as it is (no
-    // other name for another file), and on macOS new files beside it by its name and more, which
+    // other name for another file), and on macOS the new files beside it (`MEMORY.md.tmp.…`) that
     // Claude Code saves it through (seatbelt.ts): never another bot's, nor anything else of its folder.
     `memory= m_bot=\${KUVO_FENCE_BOT-}`,
     "unset KUVO_FENCE_BOT",

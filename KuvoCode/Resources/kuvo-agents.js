@@ -1443,7 +1443,8 @@ class ArtifactStore {
       try {
         mode = statSync3(artifact.path).mode & 4095;
       } catch {}
-      writeFileSync3(artifact.path + ".kuvo-restore", bytes);
+      rmSync3(artifact.path + ".kuvo-restore", { force: true });
+      writeFileSync3(artifact.path + ".kuvo-restore", bytes, { flag: "wx" });
       if (mode !== undefined)
         chmodSync(artifact.path + ".kuvo-restore", mode);
       renameSync2(artifact.path + ".kuvo-restore", artifact.path);
@@ -26107,4 +26108,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents ce9ad3c28d50ae18116d2645e82296363463e3dabe42f8388be2f3371bc2d657
+// Built from Packages/Box/src/agents c43acc65758a05e01434b25c8cb283f13258db6ff448a4b66303275f9509340c

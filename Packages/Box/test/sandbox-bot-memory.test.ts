@@ -77,11 +77,14 @@ test.skipIf(!canFence)("a bot's agent saves its memory as Claude Code saves a fi
     }
     // What it can't do with it, or the rest of its folder.
     const tries = [
-      ["move one onto it", `echo x > ../MEMORY.md.tmp.1 ; mv ../MEMORY.md.tmp.1 ../MEMORY.md`],
+      ["move one onto it", `echo x > ../MEMORY.md.tmp.1.ab ; mv ../MEMORY.md.tmp.1.ab ../MEMORY.md`],
       ["move it away", `mv ../MEMORY.md ../MEMORY.md.old`],
       ["remove it", `rm ../MEMORY.md`],
-      ["a link beside it", `ln -s ../bot.json ../MEMORY.md.tmp.2`],
-      ["its settings beside it", `ln ../bot.json ../MEMORY.md.tmp.3`],
+      ["a link beside it", `ln -s ../bot.json ../MEMORY.md.tmp.2.ab`],
+      ["its settings beside it", `ln ../bot.json ../MEMORY.md.tmp.3.ab`],
+      // By a name the box writes through and puts in place (its Shelf's restore): never made.
+      ["a file by another name beside it", `echo x > ../MEMORY.md.kuvo-restore`],
+      ["a file of its own linked by that name", `echo x > ./w && ln ./w ../MEMORY.md.kuvo-restore`],
       ["a file of another name", `echo x > ../job.json`],
       ["change its settings", `echo x > ../bot.json`],
     ]
@@ -92,7 +95,7 @@ test.skipIf(!canFence)("a bot's agent saves its memory as Claude Code saves a fi
     expect(readFileSync(box.memory, "utf8")).toBe("# Ship\n\n- saved from ses_seat\n")
     expect(readFileSync(join(box.bot, "bot.json"), "utf8")).toBe("{}")
     // (The new file it couldn't move onto it stays, where it could make it: on macOS.)
-    expect(readdirSync(box.bot).filter((name) => name !== "MEMORY.md" && name.startsWith("MEMORY.md"))).toEqual(process.platform === "darwin" ? ["MEMORY.md.tmp.1"] : [])
+    expect(readdirSync(box.bot).filter((name) => name !== "MEMORY.md" && name.startsWith("MEMORY.md"))).toEqual(process.platform === "darwin" ? ["MEMORY.md.tmp.1.ab"] : [])
   } finally {
     rmSync(box.root, { recursive: true, force: true })
   }
