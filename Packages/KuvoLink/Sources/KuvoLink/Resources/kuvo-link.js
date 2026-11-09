@@ -4371,9 +4371,9 @@ function agentsNote(platform, tmuxFits = true) {
     "- It never writes what runs later outside the sandbox: shell start-up files, the folders on PATH, git's, SSH's, editors' and the coding agents' settings" + (mac ? ", or `~/Library` apart from its caches, logs and `Developer`" : "") + ".",
     "- The user's personal folders (Documents, Desktop, Downloads and the like) " + (mac ? "only take new files: save a new copy beside one rather than changing it." : "are only read."),
     "- A conversation the user started in one of those folders (a project in Documents, `~/.config/nvim`) writes its own folder freely. A session you start can't be in what runs later" + (mac ? ", `~/Library`" : "") + " or a personal folder itself: ask the user to start it there.",
-    "- A tool that replaces a file by moving a new copy over it (`sed -i`, some installers) can't change one outside the folders it writes freely: make the new copy in the project or `$TMPDIR`, then copy it over with plain `cp`.",
+    "- A tool that moves a new copy over a file (`sed -i`, some installers) can't change one outside the folders it writes freely: make the copy in the project or `$TMPDIR`, then `cp` it over.",
     "- Docker's socket, SSH's shared connections and terminals' and editors' servers aren't reachable.",
-    ...mac ? ["- It can't change git's hooks or config, or the settings opencode and the coding agents start with (`.opencode/`, `opencode.json`, `.claude/settings.json`, `.mcp.json`, `.codex/config.toml`, `.cursor/hooks.json` and the like, and their hooks' scripts), in this project or any other, nor make, move or remove the folders that hold them (`.git`, `.claude`, `.codex`, `.cursor` and the like): writing in them is fine. If a task needs one changed, ask the user."] : [],
+    ...mac ? ["- It can't change git's hooks or config, or the settings opencode and the coding agents start with (`.opencode/`, `opencode.json`, `.claude/settings.json`, `.mcp.json`, `.codex/config.toml`, `.cursor/hooks.json` and the like, and their hooks' scripts), in any project, nor make, move or remove the folders that hold them (`.git`, `.claude`, `.codex`, `.cursor` and the like); writing other files in them is fine. If a task needs one changed, ask the user."] : [],
     ...mac ? [
       "",
       "On this Mac:",
@@ -4383,12 +4383,12 @@ function agentsNote(platform, tmuxFits = true) {
       "- Commands can't open apps (`open`) or start launchd jobs."
     ] : [],
     "",
-    "`npm`, `pnpm`, `uv` and corepack use caches of Kuvo Code's own here (`$npm_config_cache`, `$pnpm_config_cache_dir`, `$UV_CACHE_DIR`, `$COREPACK_HOME`): leave them as they are, and `npx -y <package>`, `pnpm dlx` and `uvx` fetch what they need (`uvx` with a Python that's installed).",
+    "`npm`, `pnpm`, `uv` and corepack use caches of Kuvo Code's own here (`$npm_config_cache`, `$pnpm_config_cache_dir`, `$UV_CACHE_DIR`, `$COREPACK_HOME`): leave them as they are. `npx -y <package>`, `pnpm dlx` and `uvx` fetch what they need (`uvx` with a Python that's installed).",
     "",
-    ...tmuxFits ? [] : ["This computer's home folder's path is too long for tmux in the sandbox: its socket in a command's temporary folder (`$TMPDIR`) would pass the system's limit, so tmux fails with \"File name too long\", as can other programs that make a socket there. Don't start tmux with sandbox_ask instead: outside the sandbox it would be the user's own. For another program that needs a socket, ask with sandbox_ask, or tell the user why it can't run in the sandbox here.", ""],
+    ...tmuxFits ? [] : ["This computer's home folder's path is too long for tmux in the sandbox: its socket in `$TMPDIR` would pass the system's limit, so tmux fails with \"File name too long\", as can other programs that make a socket there. Don't start tmux with sandbox_ask instead: outside the sandbox it would be the user's own. For another program that needs a socket, ask with sandbox_ask, or tell the user why it can't run in the sandbox here.", ""],
     "`ssh` and git over SSH use only the keys the user lets this conversation use from Kuvo Code's vault, through `$SSH_AUTH_SOCK`. With none, use HTTPS or ask the user.",
     "",
-    `When the sandbox refuses something a task needs ("Operation not permitted" or "Permission denied"), don't work around it: ask the user with sandbox_ask, giving the command as you ran it and why the task needs it. They can let it run outside the sandbox once (and let your commands write in the folder it was stopped writing in from now on), or say no; allowed, it runs for you and you get its output.`,
+    `When the sandbox refuses something a task needs ("Operation not permitted" or "Permission denied"), don't work around it: ask the user with sandbox_ask.`,
     ""
   ].join(`
 `);
@@ -5244,9 +5244,6 @@ function readKit(system = process.platform) {
   const timeZone = zoneOf(mac);
   const machine = typeof mac?.machine === "string" && mac.machine || readLink()?.id || os5.hostname();
   const here = IS_MAC ? words.here.mac : words.here.machine;
-  const systems = here.systems ?? {};
-  const named = String(systems[system] ?? systems.other ?? "machine");
-  const fill = (text) => text.replace(/⟦(place|clock|browser)⟧/g, (_, key) => String(here[key] ?? "")).replaceAll("⟦system⟧", () => named).replaceAll("⟦machine⟧", () => machine).replaceAll("⟦timeZone⟧", () => timeZone || "UTC");
   const told = (each) => words.personalityWords.replaceAll("⟦name⟧", () => each.name).replaceAll("⟦description⟧", () => each.description);
   return {
     kuvo: 1,
@@ -5257,9 +5254,7 @@ function readKit(system = process.platform) {
     ],
     personalityWords: words.personalityWords,
     looks: words.looks,
-    instructions: fill(words.instructions.join(`
-
-`)),
+    instructions: wordsHere(words, here, system, machine, timeZone),
     job: { none: String(words.job.none ?? ""), line: String(words.job.line ?? ""), details: String(words.job.details ?? "") },
     projectNote: words.projectNote,
     identityNote: words.identityNote,
@@ -5271,6 +5266,13 @@ function readKit(system = process.platform) {
     timeZone: timeZone || "UTC",
     ...typeof mac?.zoneinfo === "string" ? { zoneinfo: mac.zoneinfo } : {}
   };
+}
+function wordsHere(words, here, system, machine, timeZone) {
+  const systems = here.systems ?? {};
+  const named = String(systems[system] ?? systems.other ?? "machine");
+  return words.instructions.join(`
+
+`).replace(/⟦(place|clock|browser)⟧/g, (_, key) => String(here[key] ?? "")).replaceAll("⟦system⟧", () => named).replaceAll("⟦machine⟧", () => machine).replaceAll("⟦timeZone⟧", () => timeZone || "UTC");
 }
 function readMacKit() {
   try {
@@ -28269,14 +28271,14 @@ var answerSandboxAsk = book.answer;
 var SANDBOX_TOOLS = [
   {
     name: "sandbox_ask",
-    description: `Ask the user to run a command outside the sandbox, when the sandbox stopped one the task needs ("Operation not permitted" or "Permission denied" outside the folders you may write, or a refused connection or app). They see the command, why, and what was refused, and allow it once or say no; where it was stopped writing in one folder, they can also let your commands write there from now on. Allowed, Kuvo Code runs it for you outside the sandbox, in your project's folder, and you get its output. Waits for their answer. Don't use it to get around a rule you were told, and never for a command you haven't tried in the sandbox.`,
+    description: `Ask the user to run a command outside the sandbox, when the sandbox stopped one the task needs ("Operation not permitted" or "Permission denied" outside the folders you may write, or a refused connection or app). They allow it once or say no, and where it was stopped writing in one folder, can let your commands write there from now on. Allowed, it runs outside the sandbox in your project's folder, and you get its output. Waits for their answer. Never use it to get around a rule you were told, nor for a command you haven't tried in the sandbox.`,
     inputSchema: {
       type: "object",
       properties: {
-        command: { type: "string", description: "The command, exactly as you ran it." },
+        command: { type: "string", description: "Exactly as you ran it." },
         why: { type: "string", description: "Why the task needs it, in one sentence the user reads." },
-        error: { type: "string", description: "What the command printed when the sandbox stopped it." },
-        timeout: { type: "number", description: "How long it may run once allowed, in seconds (300 unless you say; at most 600)." }
+        error: { type: "string", description: "What it printed when the sandbox stopped it." },
+        timeout: { type: "number", description: "How long it may run once allowed, in seconds: 300 by default, 600 at most." }
       },
       required: ["command", "why"],
       additionalProperties: false
@@ -30385,16 +30387,16 @@ var failed2 = (text) => ({ text, isError: true });
 var VAULT_TOOLS = [
   {
     name: "vault_items",
-    description: "List the items in the user's vault that you may use: sign-ins, keys, files and notes, by name, with where each may be used and whether you use it on your own or the user is asked each time. You never see a value: you name an item, and Kuvo Code fills it in (browser_sign_in, browser_fill) or hands it to a command (vault_run).",
+    description: "List the vault items you may use (sign-ins, keys, files and notes) by name, with where each may be used and whether the user is asked each time. You never see a value: you name an item, and Kuvo Code fills it in (browser_sign_in, browser_fill) or hands it to a command (vault_run).",
     inputSchema: { type: "object", properties: {}, additionalProperties: false }
   },
   {
     name: "vault_ask",
-    description: "Ask the user for something you need from their vault that vault_items doesn't list, such as a sign-in for a site or an API key. They pick an item (or say no); you get its name, never its value. Waits for their answer.",
+    description: "Ask the user for something you need from their vault that vault_items doesn't list, like a site's sign-in or an API key. They pick an item or say no; you get its name, never its value. Waits for their answer.",
     inputSchema: {
       type: "object",
       properties: {
-        need: { type: "string", description: "What you need, in a few words: “a sign-in for play.google.com”, “an App Store Connect API key”." },
+        need: { type: "string", description: "What you need, in a few words, like “a sign-in for play.google.com”." },
         why: { type: "string", description: "Why you need it, in one sentence the user reads." },
         site: { type: "string", description: "The site or host it's for, if any." }
       },
@@ -30404,14 +30406,14 @@ var VAULT_TOOLS = [
   },
   {
     name: "vault_run",
-    description: 'Run a shell command in your project\'s folder with values from the vault in its environment, never on its command line: each variable you name gets an item\'s value (`"GITHUB_TOKEN": "GitHub token"`, or `"Item.field"` for one field), and a file item\'s variable gets the path of a temporary copy of the file (removed when the command ends). Its output comes back with every vault value hidden. Use the variables in the command (`curl -H "Authorization: Bearer $GITHUB_TOKEN" …`); never print them.',
+    description: 'Run a shell command in your project\'s folder with values from the vault in its environment, never on its command line: each variable gets an item\'s value (`"GITHUB_TOKEN": "GitHub token"`, or `"Item.field"` for one field), and a file item\'s variable gets the path of a temporary copy, removed when the command ends. Vault values are hidden in its output. Use the variables in the command (`curl -H "Authorization: Bearer $GITHUB_TOKEN" …`); never print them.',
     inputSchema: {
       type: "object",
       properties: {
-        command: { type: "string", description: "The command, run with the user's shell." },
-        variables: { type: "object", additionalProperties: { type: "string" }, description: "Each environment variable, and the item (or `Item.field`) whose value it gets." },
+        command: { type: "string", description: "Run with the user's shell." },
+        variables: { type: "object", additionalProperties: { type: "string" }, description: "Each variable, and the item (or `Item.field`) whose value it gets." },
         why: { type: "string", description: "Why you need these, in one sentence the user reads." },
-        timeout: { type: "number", description: "How long it may run, in seconds (300 unless you say; at most 600)." }
+        timeout: { type: "number", description: "In seconds: 300 by default, 600 at most." }
       },
       required: ["command", "variables", "why"],
       additionalProperties: false

@@ -548,6 +548,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - A long message of yours comes into view with room for its Show More already made, so what's under it no longer slides down as the button appears, and a click on the next message's first line reaches that message.
 - The side panel of a bot's conversation no longer opens with only its + and expand arrows floating in the middle: it has its tab, and its bar stays at the top. That could happen when the conversation was open as the app started, or when a bot moved to another computer.
 - A machine you remove while its engine is restarting gets nothing more from this Mac: the remaining steps of the restart don't go to it.
+- Agents spend fewer tokens on Kuvo Code's own tools and instructions, which say the same in fewer words: about 1,300 fewer on every call a session on Kuvo Code's engine makes, and about 2,100 fewer for a bot there. A bot on Claude Code, Codex or another coding agent is told its shorter words once, and saves from its next new conversation.
 - On the card over the composer, every line and row ends on one right edge: the arrow that shows or hides a bar sits where "Stop" ends, instead of a gap left for a ✕ the line doesn't have. Folding a bar folds only that bar, even the last one open; the others and the card stay as they were, where the card used to tuck into one line.
 
 ## 0.7.2
