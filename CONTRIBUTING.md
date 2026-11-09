@@ -658,9 +658,6 @@ Every change starts from an issue and lands on `main` through a pull request.
      it.
    - **If people using Kuvo Code would notice the change, add a line to
      `CHANGELOG.md`** under Unreleased, saying what they'll see. It becomes
-     (`.gitattributes` merges `CHANGELOG.md` line by line, so branches that
-     each add a line there merge without a conflict; if two edit the same line,
-     both versions stay, so tidy that one by hand.)
      part of the next release's notes, on GitHub and in the app's update
      window. Something new people use (a keyword, a Settings page) can carry a
      "New" mark until it's used: add `<!-- new: keyword/goal -->` (or
@@ -670,6 +667,9 @@ Every change starts from an issue and lands on `main` through a pull request.
      which What's New shows once after an update; then run
      `python3 scripts/whats-new.py` and commit `KuvoCode/Resources/whats-new.json`
      (CI checks it, and the release workflow writes it again).
+     (`.gitattributes` merges `CHANGELOG.md` line by line, so branches that
+     each add a line there merge without a conflict; if two edit the same line,
+     both versions stay, so tidy that one by hand.)
 4. **CI must pass**, and a maintainer reviews and approves the pull request.
    It's then squash-merged and the branch is deleted.
 
