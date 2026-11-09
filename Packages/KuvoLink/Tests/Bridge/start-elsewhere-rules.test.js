@@ -749,8 +749,28 @@ test("the worktree made for a start that's then not to be made, as you switched 
     tree: { folder: tree.folder, root: tree.root, branch: tree.branch } });
   link.allowOtherComputers(false);
   const answered = [];
+  // Its engine not running yet, as the box starts again: the lead hears at once, and the worktree,
+  // which can't be taken away yet, stays with its call for later.
+  await link.resumeStarts((each, done) => answered.push([each.id, done]), Date.now(), { readEngine: () => ({ port: 1, password: "pw" }), bridge: () => null });
+  assert.match(answered[0][1].text, /^The session wasn't started: this computer stopped taking work from your other computers before it was made\./);
+  assert.ok(fs.existsSync(tree.root));
+  assert.equal(read(path.join(run, "calls", "cal_tree00000000001.json")).tree.root, tree.root);
+  // Once it runs: gone, and the lead isn't told twice.
   await link.resumeStarts((each, done) => answered.push([each.id, done]), Date.now(), { readEngine: () => eng.target, bridge: () => null });
   link.allowOtherComputers(true);
-  assert.match(answered[0][1].text, /^The session wasn't started: this computer stopped taking work from your other computers before it was made\./);
+  assert.equal(answered.length, 1);
   assert.equal(fs.existsSync(tree.root), false, "its worktree is gone");
+  assert.equal(read(path.join(run, "calls", "cal_tree00000000001.json")).tree, undefined);
+});
+
+test("a bot's session carried on with the coding agents is one of its starts for the day, not two", async () => {
+  // Started today and carried on: the engine's copy, archived, and the coding agents' one.
+  const now = Date.now();
+  eng.all.set("ses_left", { id: "ses_left", time: { created: now, updated: now }, directory: "/work", metadata: { "kuvo.archived": true, "kuvo.carriedTo": "ses_carried", kuvo: { startedBy: "ses_lead", by, depth: 1 } } });
+  eng.all.set("ses_carried", { id: "ses_carried", time: { created: now, updated: now }, directory: "/work", metadata: { kuvo: { startedBy: "ses_lead", by, depth: 1, carriedFrom: "ses_left" } } });
+  // Two a day, as you set for Foreman: one so far, so this one starts.
+  const call = startCall({}, { limits: { perDay: 2 } });
+  await take(call);
+  assert.equal(answerOf(call).refused, undefined, answerOf(call).note.words);
+  assert.equal(eng.seen.made.length, 1);
 });

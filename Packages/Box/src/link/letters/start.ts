@@ -558,6 +558,8 @@ export async function heldByLimits(bot: WorksFor, limits: WorkLimits, depth: num
   const today = work.filter(each => (each.data.time?.created ?? 0) >= midnight);
   const workIDs = new Set(work.map(each => each.data.id));
   const todayIDs = new Set(today.map(each => each.data.id));
+  // (One carried on with the coding agents is one start: its copy there counts, not the one left.)
+  const startedToday = today.filter(each => typeof each.data.metadata?.["kuvo.carriedTo"] !== "string").length;
   // Its sessions on your other computers too, as those last told this one.
   const far = elsewhereOf(bot.bot, workIDs).filter(row => !workIDs.has(row.session));
   const farToday = far.filter(row => row.started >= midnight);
@@ -569,7 +571,7 @@ export async function heldByLimits(bot: WorksFor, limits: WorkLimits, depth: num
     depth,
     // (One put away doesn't take a place for what it left running.)
     working: work.filter(each => working.has(each.data.id) && !isArchived(each.data)).length + far.filter(row => row.state === "working" || row.state === "asking").length + earlier.filter(each => !each.session || !each.prompted || !known(each.session, workIDs, far)).length,
-    started: todayIDs.size + farToday.length + earlier.filter(each => !each.session || !known(each.session, todayIDs, farToday)).length,
+    started: startedToday + farToday.length + earlier.filter(each => !each.session || !known(each.session, todayIDs, farToday)).length,
     tokens,
   });
   if (!past) return { went };

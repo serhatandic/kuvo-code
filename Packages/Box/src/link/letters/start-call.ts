@@ -427,13 +427,15 @@ const bridgeAnswers = async (places: Places): Promise<boolean> => {
 };
 const hasBridge = (): boolean => { try { return Boolean(readBridgeFile()); } catch { return false; } };
 
-// The worktree made for a start that was never made, taken away again.
+// The worktree made for a start that was never made, taken away again; kept with its journal
+// while it can't be (its engine not running yet), for a later round to try again.
 async function dropTree(journal: StartJournal, places: Places): Promise<void> {
   if (!journal.tree || journal.session) return;
   let engine: Target | null = null;
   try { engine = places.readEngine(); } catch {}
-  if (journal.tree.root) await answerWorktrees("POST", "kuvo/worktrees/remove", { path: journal.tree.root, discard: true }, engine, undefined).catch(() => {});
-  delete journal.tree;
+  const removed = !journal.tree.root ? 200 : (await answerWorktrees("POST", "kuvo/worktrees/remove", { path: journal.tree.root, discard: true }, engine, undefined).catch(() => null))?.status;
+  // (Gone already, as far as this box knows: nothing more to do.)
+  if (removed === 200 || removed === 404) delete journal.tree;
 }
 
 // Whether the session was given its task already (its message with the task's id is there).
@@ -453,6 +455,16 @@ export async function resumeStarts(answer: (journal: StartJournal, done: { text:
     const journal = readJournal(name.slice(0, -5));
     if (!journal) continue;
     if (journal.done) {
+      // (A worktree made for one that wasn't made, whose removal couldn't be done yet: again.)
+      if (journal.tree && !journal.session && !startsRunning.has(journal.id)) {
+        startsRunning.add(journal.id);
+        try {
+          await dropTree(journal, places);
+          if (!journal.tree) keepJournal(journal);
+        } catch {} finally {
+          startsRunning.delete(journal.id);
+        }
+      }
       if (now - journal.at > NOTE_MEMORY) fs.rmSync(journalFile(journal.id), { force: true });
       continue;
     }

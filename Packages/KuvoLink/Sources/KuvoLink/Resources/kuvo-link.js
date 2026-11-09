@@ -18310,6 +18310,7 @@ async function heldByLimits(bot, limits, depth, goal, targets, signal) {
   const today = work.filter((each) => (each.data.time?.created ?? 0) >= midnight);
   const workIDs = new Set(work.map((each) => each.data.id));
   const todayIDs = new Set(today.map((each) => each.data.id));
+  const startedToday = today.filter((each) => typeof each.data.metadata?.["kuvo.carriedTo"] !== "string").length;
   const far = elsewhereOf(bot.bot, workIDs).filter((row) => !workIDs.has(row.session));
   const farToday = far.filter((row) => row.started >= midnight);
   const tokens = today.reduce((sum, each) => sum + (each.data.tokens?.input ?? 0) + (each.data.tokens?.output ?? 0) + (each.data.tokens?.reasoning ?? 0), 0) + farToday.reduce((sum, row) => sum + row.tokens, 0);
@@ -18318,7 +18319,7 @@ async function heldByLimits(bot, limits, depth, goal, targets, signal) {
   const past = pastLimit(limits, {
     depth,
     working: work.filter((each) => working.has(each.data.id) && !isArchived(each.data)).length + far.filter((row) => row.state === "working" || row.state === "asking").length + earlier.filter((each) => !each.session || !each.prompted || !known(each.session, workIDs, far)).length,
-    started: todayIDs.size + farToday.length + earlier.filter((each) => !each.session || !known(each.session, todayIDs, farToday)).length,
+    started: startedToday + farToday.length + earlier.filter((each) => !each.session || !known(each.session, todayIDs, farToday)).length,
     tokens
   });
   if (!past)
@@ -18751,9 +18752,9 @@ async function dropTree(journal, places) {
   try {
     engine = places.readEngine();
   } catch {}
-  if (journal.tree.root)
-    await answerWorktrees("POST", "kuvo/worktrees/remove", { path: journal.tree.root, discard: true }, engine, undefined).catch(() => {});
-  delete journal.tree;
+  const removed = !journal.tree.root ? 200 : (await answerWorktrees("POST", "kuvo/worktrees/remove", { path: journal.tree.root, discard: true }, engine, undefined).catch(() => null))?.status;
+  if (removed === 200 || removed === 404)
+    delete journal.tree;
 }
 async function toldAlready(target, making, session) {
   const page = await call(target, "GET", `/api/session/${encodeURIComponent(session)}/message?limit=20&order=desc`);
@@ -18768,6 +18769,16 @@ async function resumeStarts(answer, now = Date.now(), places = { readEngine: rea
     if (!journal)
       continue;
     if (journal.done) {
+      if (journal.tree && !journal.session && !startsRunning.has(journal.id)) {
+        startsRunning.add(journal.id);
+        try {
+          await dropTree(journal, places);
+          if (!journal.tree)
+            keepJournal(journal);
+        } catch {} finally {
+          startsRunning.delete(journal.id);
+        }
+      }
       if (now - journal.at > NOTE_MEMORY)
         fs64.rmSync(journalFile(journal.id), { force: true });
       continue;
