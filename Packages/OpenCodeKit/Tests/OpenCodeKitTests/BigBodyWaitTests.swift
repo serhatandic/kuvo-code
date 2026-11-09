@@ -6,17 +6,19 @@ import Testing
 /// its body takes to go on a slow connection: nothing comes back until it's all there (#358).
 @Suite struct BigBodyWaitTests {
     @Test func aBigBodyWaitsLongerForItsAnswer() async throws {
-        // A request waits a second with nothing coming; the answer takes two.
+        // A request waits a second with nothing coming; the answer takes two. Its body takes three
+        // more on a slow connection.
         let client = SlowAnswer.client(idle: 1)
-        let big = Data(count: 3 * HTTPClient.slowUpload)
         var request = try client.request("POST", "api/session/ses_1/prompt", body: Empty?.none)
-        request.httpBody = big
+        request.timeoutInterval = 1
+        request.httpBody = Data(count: 3 * HTTPClient.slowUpload)
         _ = try await client.send(request, as: Empty.self)
     }
 
     @Test func aSmallBodyWaitsAsLongAsEver() async throws {
         let client = SlowAnswer.client(idle: 1)
         var request = try client.request("POST", "api/session/ses_1/prompt", body: Empty?.none)
+        request.timeoutInterval = 1
         request.httpBody = Data(count: 1_000)
         await #expect(throws: URLError.self) { try await client.send(request, as: Empty.self) }
     }

@@ -25252,7 +25252,7 @@ async function* forward(target, path, request, signal, allows, naming = null, do
         wasArchived = (await before.json())?.data?.metadata?.["kuvo.archived"] === true;
     } catch {}
   }
-  const delivering = sending ? undefined : signal;
+  const delivering = sending && sending[2] === "prompt" ? undefined : signal;
   const outgoing = async () => {
     if (!sending)
       return request.body;

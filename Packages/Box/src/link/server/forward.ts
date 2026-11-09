@@ -96,9 +96,10 @@ export async function* forward(target: Target, path: string, request: LinkReques
   }
   // A message that's here whole goes on to its conversation even if whoever sent it goes
   // meanwhile (a phone that gave up waiting while a big file was still on its way, #358): its
-  // files are kept here by then, and it isn't lost without a word. Sent again, under the same id,
-  // the conversation takes it once.
-  const delivering = sending ? undefined : signal;
+  // files are kept here by then, and it isn't lost without a word. Sent again under the same id
+  // (as the share sheet does), the conversation takes it once. A command still stops with its
+  // sender: it has no id, and sent again it would run twice.
+  const delivering = sending && sending[2] === "prompt" ? undefined : signal;
   // What goes to the engine: a message as above, anything else as it came.
   const outgoing = async (): Promise<Buffer | undefined> => {
     if (!sending) return request.body;

@@ -834,6 +834,23 @@ private func collect(_ stream: LinkResponse) async throws -> (status: Int, heade
         await #expect(throws: LinkError.timedOut) { try await uploading.value }
     }
 
+    /// A big body the host answered has arrived: a check after it has only its own time, and a host
+    /// whose connection died since is found out as quickly as ever.
+    @Test(.timeLimit(.minutes(1))) func aBodyTheHostAnsweredHoldsUpNoCheckAfterIt() async throws {
+        let relay = MemoryRelay()
+        let clock = ManualClock()
+        let host = TestHost(relay: relay, handle: echo)
+        let client = await phone(on: relay, clock: clock)
+        let paired = try await client.pair(host.link)
+        let big = randomBytes(1_300_000)
+        #expect(try await collect(client.send(LinkRequest(method: "POST", path: "api/upload", body: big), to: paired)).body == big)
+        relay.deafen(host.secret.address)
+        let sending = Task { try await collect(client.send(LinkRequest(path: "api/info"), to: paired)) }
+        await clock.advance(by: Link.answerWithin)
+        await clock.advance(by: Link.checkTimeout, waking: 2)
+        await #expect(throws: LinkError.timedOut) { try await sending.value }
+    }
+
     /// A check's ping held up behind the phone's own frames going out: its time counts from when it
     /// leaves, so a host that's there and answers it then keeps the session.
     @Test(.timeLimit(.minutes(1))) func aCheckHeldUpGoingOutCountsFromWhenItLeaves() async throws {

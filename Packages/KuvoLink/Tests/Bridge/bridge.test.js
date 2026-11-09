@@ -152,7 +152,7 @@ function phoneFor(host, hostKey) {
     },
     // The phone ends its session (it gave up waiting, say).
     close() {
-      host.receive(address, link.frame(link.Frame.close, session));
+      return host.receive(address, link.frame(link.Frame.close, session));
     },
     // A whole response: its head, and its body up to the message marked end.
     async response() {
@@ -375,18 +375,24 @@ test("files a phone sends with a message are kept on the box, where the agent op
   assert.deepEqual(fs.readFileSync(both[0]), pdf);
 });
 
-test("a message that arrived whole reaches its conversation though the phone that sent it gave up waiting (#358)", async t => {
-  // The coding agents' bridge, a moment slow to say which model a conversation is on (as it is
-  // while it asks every agent), keeping what each message brought.
-  const prompted = {};
+test("a message that arrived whole reaches its conversation though the phone that sent it gave up waiting (#358)", { timeout: 30_000 }, async t => {
+  // The coding agents' bridge, saying which model a conversation is on only once the phone's gone
+  // (it's slow to while it asks every agent), keeping what each message brought.
+  let phoneGone;
+  const gone = new Promise(resolve => { phoneGone = resolve; });
+  let promptedWith;
+  const prompted = new Promise(resolve => { promptedWith = resolve; });
   const server = http.createServer((request, response) => {
     let body = "";
     request.on("data", chunk => { body += chunk; });
-    request.on("end", () => {
+    request.on("end", async () => {
       response.writeHead(200, { "content-type": "application/json" });
       const session = /^\/api\/session\/([^/?]+)$/.exec(request.url)?.[1];
-      if (session) return setTimeout(() => response.end(JSON.stringify({ data: { id: session, model: { id: "opus", providerID: "claude-code", capabilities: { input: ["text", "image"] } } } })), 300);
-      prompted[/^\/api\/session\/([^/]+)\/prompt/.exec(request.url)?.[1]] = JSON.parse(body);
+      if (session) {
+        await gone;
+        return response.end(JSON.stringify({ data: { id: session, model: { id: "opus", providerID: "claude-code", capabilities: { input: ["text", "image"] } } } }));
+      }
+      promptedWith({ session: /^\/api\/session\/([^/]+)\/prompt/.exec(request.url)?.[1], prompt: JSON.parse(body) });
       response.end("{}");
     });
   });
@@ -403,13 +409,14 @@ test("a message that arrived whole reaches its conversation though the phone tha
   // to get here, ends its session.
   const video = Buffer.alloc(7_727_609, 42);
   phone.send({ t: "req", id: 1, m: "POST", p: "kuvo/agents/api/session/ses_shared/prompt", h: { "Content-Type": "application/json" } }, Buffer.from(JSON.stringify({ id: "msg_shared", text: "when I scroll the models it keeps resetting", files: [{ name: "video.mp4", uri: `data:video/mp4;base64,${video.toString("base64")}` }] })));
-  phone.close();
+  await phone.close();
+  phoneGone();
   // The message reaches the conversation, the video where the agent opens it.
-  for (let waited = 0; !prompted.ses_shared && waited < 5000; waited += 50) await new Promise(resolve => setTimeout(resolve, 50));
-  assert.ok(prompted.ses_shared, "the message reached its conversation");
-  assert.equal(prompted.ses_shared.id, "msg_shared");
-  assert.ok(prompted.ses_shared.text.startsWith("when I scroll the models it keeps resetting\n\n<attached-files>"));
-  const videoPath = prompted.ses_shared.text.split("\n").find(line => line.endsWith("/video.mp4"));
+  const { session, prompt } = await prompted;
+  assert.equal(session, "ses_shared");
+  assert.equal(prompt.id, "msg_shared");
+  assert.ok(prompt.text.startsWith("when I scroll the models it keeps resetting\n\n<attached-files>"));
+  const videoPath = prompt.text.split("\n").find(line => line.endsWith("/video.mp4"));
   assert.deepEqual(fs.readFileSync(videoPath), video);
 });
 

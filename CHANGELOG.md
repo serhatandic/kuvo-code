@@ -16,6 +16,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ### All Changes
 
+- A video or another big file you send from your iPhone, or share to a conversation from another app, gets there on a slow connection too. Before, the iPhone could give up while it was still on its way and say the computer "didn't answer": the file reached the computer, but the message with it never reached the conversation. A message that reached your computer whole now always goes on to its conversation.
 - A picture an agent changes and shows you again shows the change, not the picture it showed the first time. A file an agent on a machine shows is no longer drawn from a file at the same path on this Mac.
 - A bot on Claude Code saves its memory again on a Mac. Since the sandbox came in, every change it made to its `MEMORY.md` there was refused with "Operation not permitted", so it kept notes elsewhere or not at all. Bots on Codex, Grok, Cursor and Kuvo Code's own engine weren't affected.
 - Your computers' names over the sidebar take less room, as on your iPhone: the one in view first, larger and bold, then your other computers faded beside it, and "+3" for those that don't fit. Picking one slides it to the front. A long name is cut at its end rather than in the middle. Settings' sidebar shows them the same way.

@@ -154,7 +154,8 @@ public actor LinkClient {
     private var clock = LinkClock.real
     /// How much this phone has sent on its relay connection, in bytes, and how much of it a host
     /// has said it had (answering a request or a check sent after it). What's between may still be
-    /// on its way, however long ago the relay connection said it sent it.
+    /// on its way, however long ago the relay connection said it sent it. One mark for every host:
+    /// what holds a body up is this phone's own connection, which they share.
     private var sent = 0
     private var arrived = 0
 
