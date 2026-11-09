@@ -57,8 +57,9 @@ final class ScrolledConversation {
     }
 
     /// Every text in view has the tracking area it claims the pointer through. AppKit adds a new
-    /// view's on its run loop's next turn, not as it's laid out, and always before it hands over a
-    /// move of the real pointer; a move told to a text without one would reach nothing.
+    /// view's on its run loop's next turn (`WindowServer.appKitsTurn`), not as it's laid out, and
+    /// always before it hands over a move of the real pointer; a move told to a text without one
+    /// would reach nothing.
     private var textsTrackThePointer: Bool {
         texts.filter { $0.window != nil }.allSatisfy { text in text.trackingAreas.contains { $0.options.contains(.mouseMoved) } }
     }
@@ -112,6 +113,7 @@ final class ScrolledConversation {
         while !ready(), turns < 400 {
             window.contentView?.layoutSubtreeIfNeeded()
             window.displayIfNeeded()
+            WindowServer.appKitsTurn(over: window)
             await Task.yield()
             turns += 1
         }
@@ -586,6 +588,23 @@ final class ScrolledConversation {
     /// The pointer gone from `window`: the real answer again, unless another scene's window has it.
     static func pointerLeft(_ window: NSWindow) {
         if over == window.windowNumber { over = nil }
+    }
+
+    /// AppKit's turn over `window` before it hands on the pointer's next event there, as the run
+    /// loop turns: each view gives its cursor rectangles again and updates its tracking areas.
+    /// AppKit (on macOS 27.2) takes it only for a window the window server has sent an event of
+    /// the pointer's, once the pointer has come into it; a test's window, never under the real
+    /// pointer, would get no tracking areas and no cursor rectangles at all. So a scene takes it
+    /// each time its window settles, as AppKit does for the window you point at.
+    static func appKitsTurn(over window: NSWindow) {
+        window.resetCursorRects()
+        func update(_ view: NSView) {
+            view.updateTrackingAreas()
+            view.subviews.forEach(update)
+        }
+        var root = window.contentView
+        while let parent = root?.superview { root = parent }
+        root.map(update)
     }
 
     static func pointerIsOver(_ window: NSWindow?) {

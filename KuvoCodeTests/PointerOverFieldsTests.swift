@@ -45,6 +45,7 @@ import Testing
         while !isReady, turns < 400 {
             window.contentView?.layoutSubtreeIfNeeded()
             window.displayIfNeeded()
+            WindowServer.appKitsTurn(over: window)
             await Task.yield()
             turns += 1
         }
@@ -167,6 +168,7 @@ import Testing
         while !editor.trackingAreas.contains(where: { $0.options.contains(.cursorUpdate) }), turns < 400 {
             window.contentView?.layoutSubtreeIfNeeded()
             window.displayIfNeeded()
+            WindowServer.appKitsTurn(over: window)
             await Task.yield()
             turns += 1
         }
@@ -226,6 +228,7 @@ import Testing
             while !ready(), turns < 400 {
                 window.contentView?.layoutSubtreeIfNeeded()
                 window.displayIfNeeded()
+                WindowServer.appKitsTurn(over: window)
                 await Task.yield()
                 turns += 1
             }
