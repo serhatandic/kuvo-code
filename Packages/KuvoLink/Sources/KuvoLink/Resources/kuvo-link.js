@@ -7473,7 +7473,7 @@ async function describeWork(listed, working, { replies = false, signal } = {}) {
   const asking = await askingNow(listed, signal);
   const outcome = replies && !working.has(data.id) ? outcomeOf(listed, await call(listed.target, "GET", `/api/session/${encodeURIComponent(data.id)}/message?limit=6&order=desc`, undefined, signal).catch(() => null)) : data.outcome;
   const state = asking ? "asking" : working.has(data.id) ? "working" : outcome === "succeeded" ? "finished" : outcome === "failed" ? "failed" : outcome === "interrupted" ? "stopped" : data.time?.idle ? "finished" : "idle";
-  const reply = replies && state !== "working" ? await lastReplyOf(listed, signal) : null;
+  const reply = replies && state !== "working" && state !== "stopped" ? await lastReplyOf(listed, signal) : null;
   const project = folder === CHATS ? undefined : projectNameOf(folder);
   return {
     session: data.id,

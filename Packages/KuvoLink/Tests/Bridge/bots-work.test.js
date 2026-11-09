@@ -380,6 +380,17 @@ test("a summary doesn't change how a lead reads a session: failed stays failed, 
   assert.doesNotMatch((await tool("list_sessions", {}, "ses_pixel")).text, /finished/);
 });
 
+test("a stopped turn does not report an earlier turn's reply as its last reply", async () => {
+  const session = startedAddress(await tool("start_session", { task: "One.", title: "Sign-in", project: "Tidepool" }, "ses_pixel"));
+  busy.delete(session);
+  sessions.get(session).outcome = "interrupted";
+  sessions.get(session).time.idle = Date.now();
+  kept.set(session, [{ id: "msg_i2", type: "idle", outcome: "interrupted" }, { id: "msg_s", type: "assistant", content: [{ type: "text", text: "Previous turn finished." }] }]);
+  const listed = (await tool("list_sessions", {}, "ses_pixel")).text;
+  assert.match(listed, /stopped/);
+  assert.doesNotMatch(listed, /Previous turn finished/);
+});
+
 test("how a lead reads a session past several summaries: what they did isn't how its work went", async () => {
   const session = startedAddress(await tool("start_session", { task: "One.", title: "Sign-in", project: "Tidepool" }, "ses_pixel"));
   busy.delete(session);
