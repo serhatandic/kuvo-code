@@ -406,3 +406,84 @@ import Testing
         #expect(stack?.scrollAnchor?.isFollowingEnd == true, "still following")
     }
 }
+
+/// A row above what you read growing by itself (a picture or a diagram drawn at last), after a
+/// mouse wheel's notch took you off the end: it grows up out of view, and what you read stays.
+/// The real conversation's scroll, with plain rows.
+@MainActor
+@Suite(.serialized, .timeLimit(.minutes(1))) struct RowAboveGrowingAfterAWheelTests {
+    @Observable final class Heights { var grown: Int? }
+    /// Something of the window's own that animates, to tell when frames have been drawn.
+    @Observable final class Probe { var isOn = false }
+    struct ProbeView: View {
+        let probe: Probe
+        var body: some View { Color.black.opacity(probe.isOn ? 0.02 : 0.01).frame(width: 1, height: 1) }
+    }
+    struct Item: Hashable { let id: Int }
+    struct Grows: View {
+        let id: Int
+        let heights: Heights
+        var body: some View { Color.clear.frame(height: heights.grown == id ? 300 : 200) }
+    }
+
+    @Test func whatYouReadStays() async throws {
+        TestEnvironment.prepare()
+        let items = (0..<30).map(Item.init)
+        let heights = Heights()
+        let probe = Probe()
+        let scroller = ConversationScroller()
+        let window = NSWindow(contentRect: NSRect(x: -20_000, y: -20_000, width: 640, height: 500), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = NSHostingView(rootView: ConversationScroll(scroller: scroller, change: 0, quote: { _ in }) {
+            RowStack(items: items, id: { "\($0.id)" }, same: ==, estimate: { _ in 200 }) { item, _ in Grows(id: item.id, heights: heights) }
+        }
+        .frame(width: 640, height: 500)
+        .background(ProbeView(probe: probe)))
+        window.orderBack(nil)
+        defer { window.orderOut(nil); window.close() }
+
+        func stack() -> RowStackView? {
+            func find(_ view: NSView?) -> RowStackView? {
+                guard let view else { return nil }
+                return (view as? RowStackView) ?? view.subviews.lazy.compactMap(find).first
+            }
+            return find(window.contentView)
+        }
+        /// The main queue's next turns, as many as it takes the conversation to lay out.
+        func turns(_ count: Int) async {
+            for _ in 0..<count {
+                window.contentView?.layoutSubtreeIfNeeded()
+                await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in DispatchQueue.main.async { done.resume() } }
+            }
+        }
+        /// An animation started now has quite ended: frames have been drawn, and told of.
+        func settled() async {
+            await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
+                withAnimation(.ui, completionCriteria: .removed) { probe.isOn.toggle() } completion: { done.resume() }
+            }
+            window.contentView?.layoutSubtreeIfNeeded()
+        }
+        var waited = 0
+        while (stack()?.frame.height ?? 0) < 5000 || stack()?.shownFrames().window.isEmpty != false, waited < 400 {
+            await turns(1)
+            waited += 1
+        }
+        let scroll = try #require(stack()?.enclosingScrollView)
+        await settled()
+        // A notch of the wheel, up a screen and a half: lines, no phases, as a wheel sends them.
+        let event = try #require(CGEvent(scrollWheelEvent2Source: nil, units: .line, wheelCount: 1, wheel1: Int32(700 / max(1, scroll.verticalLineScroll)), wheel2: 0, wheel3: 0))
+        scroll.scrollWheel(with: try #require(NSEvent(cgEvent: event)))
+        await settled()
+        try #require(!scroller.followsEnd, "the notch took it off the end")
+        let rows = try #require(stack()?.shownFrames().window)
+        let read = try #require(rows.filter { $0.value.minY >= 0 }.min { $0.value.minY < $1.value.minY }, "a row in view among \(rows)")
+        // The row just above it, wholly out of view, drawn taller.
+        let above = try #require(Int(read.key)).advanced(by: -2)
+        try #require(rows["\(above)"].map { $0.maxY < 0 } == true, "row \(above) is above the view: \(rows)")
+        heights.grown = above
+        await settled()
+        await settled()
+        let now = stack()?.shownFrames().window[read.key]?.minY
+        #expect(now.map { abs($0 - read.value.minY) < 1 } == true, "the row you read moved from \(read.value.minY) to \(now.map { "\($0)" } ?? "out of view")")
+    }
+}
