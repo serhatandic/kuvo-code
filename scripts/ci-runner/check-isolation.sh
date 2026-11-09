@@ -31,6 +31,46 @@ if [[ "$(id -un)" == "$CI_USER" ]]; then
     prepare_keychain --force || echo "Couldn't prepare ci's keychain for the VM; it may not start." >&2
 fi
 
+# Print at most two online peers as IPv4<TAB>name; never print status metadata.
+tailnet_peers() {
+    local cli status peers
+    cli="$(command -v tailscale 2>/dev/null)"
+    [[ -n "$cli" ]] || cli=/Applications/Tailscale.app/Contents/MacOS/Tailscale
+    [[ -x "$cli" ]] || return 1
+    if status="$("$cli" status --json 2>/dev/null)" && peers="$(printf '%s' "$status" | /usr/bin/python3 -c '
+import ipaddress, json, sys
+try:
+    data = json.load(sys.stdin)
+    if data.get("BackendState") != "Running": sys.exit(1)
+    for peer in data.get("Peer", {}).values():
+        if not peer.get("Online"): continue
+        for address in peer.get("TailscaleIPs", []):
+            ip = ipaddress.ip_address(address)
+            if ip.version == 4 and ip in ipaddress.ip_network("100.64.0.0/10"):
+                name = str(peer.get("HostName") or "peer").split("\n")[0].split("\t")[0]
+                print(str(ip) + "\t" + name)
+                break
+except (ValueError, TypeError, AttributeError):
+    sys.exit(1)
+')"; then
+        printf '%s\n' "$peers" | awk 'NF && NR <= 2'
+        return 0
+    fi
+    status="$("$cli" status 2>/dev/null)" || return 1
+    # The first address line is this Mac; subsequent address lines are peers.
+    printf '%s\n' "$status" | awk '
+        /^#/ { next }
+        $1 ~ /^100\.[0-9]+\.[0-9]+\.[0-9]+$/ && $2 != "" {
+            if (!self_seen++) next
+            if ($0 ~ /(^|[[:space:]])offline([[:space:]]|$)/) next
+            split($1, octet, ".")
+            if (octet[2] >= 64 && octet[2] <= 127 && octet[3] <= 255 && octet[4] <= 255) {
+                print $1 "\t" $2
+                if (++count == 2) exit
+            }
+        }'
+}
+
 # A softnet that isn't setuid root makes Tart ask for your password to make it so, which would
 # give Homebrew's (runnable by anyone) the bit back: refuse instead.
 softnet="$(command -v softnet)" && softnet="$(readlink -f "$softnet")"
@@ -131,6 +171,15 @@ done
 if [[ -n "$tailscale_ip" ]]; then
     blocked_row "this Mac on Tailscale, $tailscale_ip:5000" "$(tcp_here "$tailscale_ip" 5000)" "$(tcp_vm "$tailscale_ip" 5000)"
     blocked_row "Tailscale's resolver, 100.100.100.100:53" "$(tcp_here 100.100.100.100 53)" "$(tcp_vm 100.100.100.100 53)"
+    peers="$(tailnet_peers)" || peers=""
+    if [[ -n "$peers" ]]; then
+        while IFS=$'\t' read -r peer_ip peer_name; do
+            blocked_row "tailnet peer $peer_name, $peer_ip:22" "$(tcp_here "$peer_ip" 22)" "$(tcp_vm "$peer_ip" 22)"
+        done <<< "$peers"
+    else
+        echo "Tailnet peers: inconclusive (no online peers discovered)"
+        inconclusive=$((inconclusive + 1))
+    fi
 fi
 echo
 echo "From this Mac into the VM, must be closed:"
@@ -156,7 +205,7 @@ echo
 echo "The VM's DNS servers: $(in_vm /bin/sh -c 'scutil --dns | awk "/nameserver\\[/ { print \$3 }" | sort -u | tr "\n" " "')"
 echo
 if [[ $failures -eq 0 ]]; then
-    echo "Isolation holds ($inconclusive inconclusive: closed from this Mac as well)."
+    echo "Isolation holds ($inconclusive inconclusive checks)."
 else
     echo "$failures check(s) failed."
 fi
