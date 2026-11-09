@@ -895,8 +895,21 @@ struct SidebarView: View {
 
     /// Where a branch came from, for VoiceOver: "Branched from Timer cycle".
     static func origin(of session: Session, in workspace: Workspace, nested: Bool = true) -> String {
-        let title = Branches.origin(of: session).flatMap { workspace.session($0.id)?.title }
-        return Branches.rowHint(of: session, nested: nested, from: title)
+        Branches.rowHint(of: session, nested: nested, from: originTitle(of: session, in: workspace))
+    }
+
+    /// What a row shows at its end for one a lead on another computer started: "from Mini".
+    static func tail(of session: Session, in workspace: Workspace, nested: Bool) -> String? {
+        Branches.tail(of: session, nested: nested, from: originTitle(of: session, in: workspace))
+    }
+
+    /// The title of the conversation `session` came from, where that one is on the same computer:
+    /// the sidebar holds every computer's sessions, and a lead on Mini isn't one a row on this
+    /// Mac's page sits under, so its row says where it came from.
+    private static func originTitle(of session: Session, in workspace: Workspace) -> String? {
+        guard let origin = Branches.origin(of: session), let from = workspace.session(origin.id),
+              SidebarBox(directory: from.location.directory) == SidebarBox(directory: session.location.directory) else { return nil }
+        return from.title
     }
 
     /// Highlighted where it was picked; picked elsewhere (a tab, a new session), in its project.
@@ -960,7 +973,7 @@ struct SidebarView: View {
                                   branches: branches, folded: folded, branchInset: branchInset, isUnfolded: isUnfolded(session.id), isSearching: !search.isEmpty,
                                   isUnread: session.isUnread || workspace.hasNewSubSessions(session.id),
                                   origin: Self.origin(of: session, in: workspace, nested: branchInset != nil),
-                                  elsewhere: Branches.tail(of: session, nested: branchInset != nil, from: Branches.origin(of: session).flatMap { workspace.session($0.id)?.title }))
+                                  elsewhere: Self.tail(of: session, in: workspace, nested: branchInset != nil))
         return StillRow(look: look) { sessionRowContent(look) }.equatable()
     }
 

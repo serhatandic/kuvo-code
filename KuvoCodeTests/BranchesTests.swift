@@ -121,4 +121,29 @@ import Testing
         #expect(!tree.under.values.joined().contains { $0.id == "ses_find" }, "a subagent isn't a branch")
         #expect(workspace.subSessions["ses_timer"]?.map(\.id) == ["ses_find"], "it's the conversation's, shown there")
     }
+
+    /// One a lead on another computer started says where at its row's end, "from Mini", and the
+    /// whole when pointed at and to VoiceOver, also with that computer's sessions in the sidebar
+    /// (they are, connected or last seen): its lead isn't on this Mac's page, so nothing above the
+    /// row says it. One started here sits under its lead with nothing at its end.
+    @Test func oneALeadOnAnotherComputerStartedSaysWhereWithThatComputersSessionsListedToo() async throws {
+        defer { clean() }
+        let lead: [String: Any] = ["box": "Mini", "name": "Foreman", "key": String(repeating: "N", count: 43)]
+        engine.list([
+            session("ses_review", "Review the timer tests", created: 25, extra: ["metadata": ["kuvo": ["startedBy": "ses_foreman", "lead": lead]]]),
+            // The lead, among Mini's sessions, which the sidebar holds as well.
+            StubEngine.session("ses_foreman", title: "Foreman", directory: RemoteFolder.folder("/home/me/kuvo", on: "mini.invalid"), created: 20),
+            session("ses_timer", "Timer cycle", created: 1),
+            session("ses_tried", "Try a state machine", created: 30, extra: ["metadata": ["kuvo": ["startedBy": "ses_timer"]]]),
+        ])
+        await workspace.refresh()
+
+        #expect(workspace.session("ses_foreman") != nil, "Mini's lead is in the sidebar's lists")
+        let review = try #require(workspace.session("ses_review"))
+        #expect(SidebarView.tail(of: review, in: workspace, nested: false) == "from Mini")
+        #expect(SidebarView.origin(of: review, in: workspace, nested: false) == "Started from Foreman on Mini")
+        let tried = try #require(workspace.session("ses_tried"))
+        #expect(SidebarView.tail(of: tried, in: workspace, nested: true) == nil)
+        #expect(SidebarView.origin(of: tried, in: workspace, nested: true) == "Started from Timer cycle")
+    }
 }
