@@ -16,9 +16,23 @@ concurrency:
 jobs:
   build:
     name: build and test
+    # Pushes to main, and release tags and dry runs from main (release.yml calls this; `github`
+    # is the caller's there), run on the Mac mini, each job in a fresh macOS VM
+    # (scripts/ci-runner/). Everything else, every pull request above all, runs on GitHub's: a
+    # pull request's workflow comes from its branch, so code from a fork must never be offered
+    # the Mini (which refuses one anyway, on the host and in the VM). The repository variable
+    # KUVO_MINI set to `off` sends everything to GitHub's runners, for when the Mini is away.
     # Xcode's runner images are named for the Xcode version they ship, which
     # has the Swift toolchain and the macOS SDK Kuvo Code builds against.
-    runs-on: xcode-27
+    runs-on: >-
+      ${{ github.repository == 'serhatandic/kuvo-code'
+          && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+          && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+          && vars.KUVO_MINI != 'off'
+          && fromJSON('["self-hosted", "macOS", "ARM64", "kuvo-mini"]')
+          || 'xcode-27' }}
+    # The Mini runs one job at a time: a hung step mustn't hold the rest for GitHub's six hours.
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -38,6 +52,12 @@ jobs:
           git diff --exit-code KuvoCode.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
           git diff --exit-code THIRD_PARTY_LICENSES.txt \
             || { echo "Run scripts/third-party-licenses.sh and commit the result." >&2; exit 1; }
+
+      # OpenCodeKit's launcher tests and the machines' bridge's tests run Node: the same pinned
+      # one on GitHub's runners and in the Mac mini's VMs.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
 
       - name: Test OpenCodeKit
         working-directory: Packages/OpenCodeKit

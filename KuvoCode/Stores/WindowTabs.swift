@@ -247,6 +247,24 @@ final class WindowTabs {
         worksBeside ? splitModel?.session.location.directory ?? activeDirectory : activeDirectory
     }
 
+    /// The computer a tab is on (a session's, a bot's, a group chat's, a draft's, a terminal's);
+    /// nil for one that's on none known. The sidebar's page slides to it as the tab comes into view.
+    func box(of key: TabKey) -> SidebarBox? {
+        switch key {
+        case .draft(let folder):
+            return SidebarBox(directory: folder)
+        case .session(let id):
+            if let session = workspace.session(workspace.root(of: id)) { return SidebarBox(directory: session.location.directory) }
+            if let bot = app.bots.list.first(where: { $0.sessionID == id }) { return SidebarBox(machine: bot.machine) }
+            return nil
+        case .group(let id):
+            guard app.chats.group(id) != nil else { return nil }
+            return SidebarBox(machine: app.chats.machine(of: id))
+        case .terminal:
+            return terminals.entry(key.text).map { SidebarBox(directory: $0.directory) }
+        }
+    }
+
     /// A folder when it's a project's: not the chats' folder or a bot's own.
     static func project(_ directory: String?) -> String? {
         directory.flatMap { Workspace.isChat($0) || Workspace.isBotFolder($0) ? nil : $0 }
@@ -369,6 +387,15 @@ final class WindowTabs {
         }
     }
 
+    /// ⌘W outside Settings: closes the tab in view. False when no tab is open, for the window to
+    /// close, as a browser's does; with tabs open but none in view (the last one on the computer the
+    /// sidebar shows was deleted), nothing goes.
+    func closeInView() -> Bool {
+        guard let selection else { return !keys.isEmpty }
+        close(selection)
+        return true
+    }
+
     /// Closes every tab but `key`, or all of them when it's nil.
     func closeAll(except key: TabKey?) {
         // Reopened last first, so the leftmost comes back last.
@@ -445,7 +472,11 @@ final class WindowTabs {
     /// Settings' tabs aside: the next or previous tab, around the ends.
     func cycle(by offset: Int) {
         guard !keys.isEmpty else { return }
-        let index = selection.flatMap { keys.firstIndex(of: $0) } ?? 0
+        // None in view: the first, going on, or the last, going back.
+        guard let index = selection.flatMap({ keys.firstIndex(of: $0) }) else {
+            withAnimation(.ui) { selection = offset > 0 ? keys.first : keys.last }
+            return
+        }
         withAnimation(.ui) { selection = keys[(index + offset + keys.count) % keys.count] }
     }
 
@@ -500,6 +531,13 @@ final class WindowTabs {
                     continue
                 }
             }
+            // The tab in view gone: the nearest on the computer whose page the sidebar shows takes
+            // its place, or none. A deletion never takes the sidebar, which follows the tab in
+            // view, to another computer's page.
+            if selection == key {
+                let next = nearest(to: key, on: app.boxInView)
+                withAnimation(.ui) { selection = next }
+            }
             close(key, remember: false)
         }
         let open = Set(keys)
@@ -508,6 +546,12 @@ final class WindowTabs {
         // A selection that isn't one of the tabs (its session went while the app was closed)
         // shows nothing; show the last tab instead.
         if let selection, !keys.contains(selection) { self.selection = keys.last }
+    }
+
+    /// The open tab nearest `key` that's on `box`: the first after it, else the last before it.
+    private func nearest(to key: TabKey, on box: SidebarBox) -> TabKey? {
+        guard let index = keys.firstIndex(of: key) else { return nil }
+        return (keys[(index + 1)...] + keys[..<index].reversed()).first { self.box(of: $0) == box }
     }
 
     // MARK: Sessions that carry on, start or begin

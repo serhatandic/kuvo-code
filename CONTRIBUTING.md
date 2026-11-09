@@ -66,6 +66,12 @@ your keychain, serves it from `127.0.0.1`, and points the Kuvo Code in /Applicat
 **Check for Updates…** there to go through the update window, the install, the restart and
 What's New. Ctrl-C stops the server and puts the real feed back.
 
+Pushes to `main`, release tags and release dry runs from `main` run on the maintainer's Mac
+(labels `self-hosted, macOS, ARM64, kuvo-mini`), each job in a fresh macOS VM that's deleted
+after it, with no folders shared and no network to that Mac or its LAN. Pull requests always run
+on GitHub's own runners, so a pull request's code never reaches that Mac, which refuses any other
+job anyway. `scripts/ci-runner/` has the orchestrator, the VM image's build and the setup.
+
 A release also carries what remote machines run, for them to update themselves
 with, once the `KUVO_BOX_SIGNING_KEY` secret (an Ed25519 key) is set
 (`scripts/set-box-key.sh` makes it once, keeps it in your login keychain, uploads
@@ -525,6 +531,7 @@ env -i HOME="$HOME" USER="$USER" LOGNAME="$USER" PATH=/usr/bin:/bin:/usr/sbin:/s
 | `KUVO_DEMO_COMMENT` | Add a review comment to the session in view, as `<path in the project>:<line>:<text>` |
 | `KUVO_DEMO_VOICE` | With `KUVO_DEMO_SESSION`: voice input listening for it with sample words, `composer` (in the composer) or `field` (the voice field), without the microphone; `tip`, the one-time tip about more accurate voice input, from the mic |
 | `KUVO_DEMO_WHISPER` | Whisper's download as if it were `downloading`, `paused`, `waiting`, `failed`, `space`, `preparing` or `ready`, without the network (the ring on the mic, Settings › General › Voice Input); `download` starts the real download, into the copy's own folder |
+| `KUVO_DEMO_QUOTE_AFTER` | With `KUVO_DEMO_QUOTE`: the quotes added this many seconds after the session shows, as Add to Chat adds them, and removed as long after that, to watch the conversation move with the composer |
 | `KUVO_DEMO_QUOTES` | With `KUVO_DEMO_SESSION`: that many quotes to answer in its composer (a session's or a group chat's, as `group:<id>`) |
 | `KUVO_DEMO_FIND` | With `KUVO_DEMO_SESSION`: Find in it, looking for these words |
 | `KUVO_DEMO_CONNECTED` | With `KUVO_DEMO_SETTINGS=integrations`: that integration's sign-in sheet, on its last step |
