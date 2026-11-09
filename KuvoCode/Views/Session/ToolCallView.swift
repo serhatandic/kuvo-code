@@ -387,7 +387,7 @@ struct ToolCallView: View {
         case "vault_items": return isActive ? "Looking up its vault items" : "Looked up its vault items"
         case "vault_ask": return isActive ? "Asking you for something from the vault" : "Asked you for something from the vault"
         case "vault_run": return isActive ? "Running a command with the vault’s values" : "Ran a command with the vault’s values"
-        case let name where name.hasPrefix("queue_"): return queueSummary(name)
+        case let name where name.hasPrefix("queue_"): return queueSummary(String(name))
         case let name where name.hasPrefix("browser_"): return "Used the browser"
         // One this list doesn't know yet: by its own name, never as the browser.
         case let name: return "Used " + name.replacingOccurrences(of: "_", with: " ")

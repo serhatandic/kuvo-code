@@ -60,7 +60,7 @@ struct WorkQueuePanel: View {
             .onChange(of: openedMissing) { _, missing in
                 if missing { store.scopes[panel] = .all }
             }
-            .alert(naming??.name.map { "Rename “\($0)”" } ?? "New Category", isPresented: Binding { naming != nil } set: { if !$0 { naming = nil } }) {
+            .alert((naming ?? nil).map { "Rename “\($0.name)”" } ?? "New Category", isPresented: Binding { naming != nil } set: { if !$0 { naming = nil } }) {
                 TextField("Name", text: $name)
                 Button(naming??.id == nil ? "Add" : "Rename") {
                     let given = name.trimmingCharacters(in: .whitespacesAndNewlines)
