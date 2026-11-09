@@ -276,10 +276,12 @@ class HeavyTests(unittest.TestCase):
         suite = Held([HEAVY, "mac"], self.env)
         try:
             self.assertEqual(self.run_heavy("mac-build", "true")[0], 0)
-            both = [Held([HEAVY, "mac-build"], self.env) for _ in range(2)]
-            for job in both:
-                job.let_go()
-            self.assertEqual(self.run_heavy("mac", "true")[0], WAITS)  # mac still one at a time
+            one, two = Held([HEAVY, "mac-build"], self.env), Held([HEAVY, "mac-build"], self.env)
+            try:
+                self.assertEqual((one.seen, two.seen), ("|1|-1", "|2|-2"))
+            finally:
+                two.let_go()
+                one.let_go()
         finally:
             suite.let_go()
         build = Held([HEAVY, "mac-build"], self.env)
@@ -301,14 +303,6 @@ class HeavyTests(unittest.TestCase):
             self.assertEqual(self.run_heavy("mac", "true")[0], WAITS)
         finally:
             old.let_go()
-
-    def test_a_mac_build_job_does_not_hold_the_old_mac_lock(self):
-        job = Held([HEAVY, "mac-build"], self.env)
-        try:
-            taken = subprocess.run(["lockf", "-ks", "-t", "0", self.lock("mac"), "true"], timeout=30)
-            self.assertEqual(taken.returncode, 0, "an old-style mac job would wait for a build")
-        finally:
-            job.let_go()
 
     def test_the_previous_heavy_sh_runs_mac_beside_mac_build_jobs(self):
         old = self.previous_heavy()

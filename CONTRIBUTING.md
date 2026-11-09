@@ -159,8 +159,10 @@ scripts/heavy.sh box sh -c 'cd Packages/Box && bun test'
   beside the app suite, since it doesn't take `mac`'s lock. A job takes whichever slot is free first
   and finds it in `KUVO_HEAVY_SLOT` and `KUVO_HEAVY_BUILD_SUFFIX` (`-1` or `-2`): build in
   `KuvoShared-MacBuild$KUVO_HEAVY_BUILD_SUFFIX`, never in `KuvoShared-MacBuild` itself (older
-  scripts' `mac` builds there) or `KuvoCodeTests-build` (the app suite's). A package's `.build` and
-  a checkout's `build/` are its own to each checkout;
+  scripts' `mac` builds there) or `KuvoCodeTests-build` (the app suite's). Give `xcodebuild` a
+  `-clonedSourcePackagesDirPath` in that folder too (`…/KuvoShared-MacBuild$KUVO_HEAVY_BUILD_SUFFIX/SourcePackages`),
+  not the checkout's `build/SourcePackages` (the app suite's) or `build/DerivedData`, which two
+  jobs in one checkout would share. A package's `.build` is its own to each checkout;
 - `phone`: the iPhone app's (`KuvoShared-PhoneBuild`, `KuvoCodeMobileTests-build`). It has two
   slots, so two phone test runs go at once, each on a simulator of its own: "Kuvo Code Tests" in
   slot 1 and "Kuvo Code Tests 2" in slot 2, both fixed (the phone's `scripts/test-app.sh` makes each

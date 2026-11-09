@@ -129,7 +129,8 @@ just_taken() {
 # What a phone or mac-build job knows of its slot, from the slot's lock: a job inside another takes
 # it from the lock it runs under, not from the environment it inherited (a shell started in a slot-2
 # job keeps slot 2's values). A phone job has a simulator, a mac-build job a build folder of its own
-# in each slot (and never slot 1's suffix empty: that folder is the older scripts' mac).
+# in each slot (slot 1's suffix isn't empty: that folder is the older scripts' mac). A job that
+# only runs under the old single lock holds no slot, and gets none of these.
 slot_env() {
     if [ "$kind" = mac-build ]; then
         unset KUVO_TEST_SIMULATOR
