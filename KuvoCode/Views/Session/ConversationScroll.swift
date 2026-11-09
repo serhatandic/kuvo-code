@@ -17,7 +17,7 @@ final class ConversationScroller {
 
     /// Whether to keep the newest in view: true until you scroll up, true again once you scroll
     /// back to the end. Set only when it changes (`follow`): each setting draws the conversation again.
-    var followsEnd = true
+    private(set) var followsEnd = true
     /// The end is in view, over the composer: no way back to it is needed, whether it's
     /// followed or not (Find stops following it). Set only when it changes, as `followsEnd`.
     fileprivate(set) var seesEnd = true
@@ -185,14 +185,11 @@ struct ConversationScroll<Rows: View>: View {
             }
             .environment(\.scrollAnchor, anchor)
             .onAppear {
-                anchor.stopFollowing = { [scroller] in scroller.follow(false) }
-                anchor.reading = { [scroller] id, isOpen in scroller.reading(id, isOpen: isOpen) }
-                // At once, whatever started or stopped it: the next row to come mustn't count as
-                // followed, nor what changes above what you read.
-                anchor.isFollowingEnd = scroller.followsEnd
-                scroller.followChanged = { [weak anchor] in anchor?.isFollowingEnd = $0 }
+                wire()
                 anchor.quote = quote
             }
+            // Another scroller for the same view: it's the one told and asked.
+            .onChange(of: ObjectIdentifier(scroller)) { wire() }
             .padding(.horizontal, Metrics.gutter)
             // Room under the card's header, which the conversation scrolls beneath (and under
             // Find's bar while it's open).
@@ -528,6 +525,16 @@ extension ConversationScroll {
         #else
         VStack(alignment: .leading, spacing: spacing, content: content)
         #endif
+    }
+
+    /// The rows and the scroller, each told what the other does. The rows hear whether the end is
+    /// followed at once, whatever started or stopped it: the next row to come mustn't count as
+    /// followed, nor what changes above what you read.
+    fileprivate func wire() {
+        anchor.stopFollowing = { [scroller] in scroller.follow(false) }
+        anchor.reading = { [scroller] id, isOpen in scroller.reading(id, isOpen: isOpen) }
+        anchor.isFollowingEnd = scroller.followsEnd
+        scroller.followChanged = { [weak anchor] in anchor?.isFollowingEnd = $0 }
     }
 
     fileprivate func toEnd(_ proxy: ScrollViewProxy) {

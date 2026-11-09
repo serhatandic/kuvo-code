@@ -121,6 +121,26 @@ import Testing
         scroll.scrollWheel(with: try #require(NSEvent(cgEvent: event)))
     }
 
+    /// One move up, as a single event: a trackpad's that's over in one frame, or a mouse wheel's
+    /// notch (lines, with no phases, as a wheel sends them).
+    enum SingleMove: String, CaseIterable, CustomTestStringConvertible {
+        case aFlick, aWheelsNotch
+        var testDescription: String { rawValue }
+    }
+
+    private func move(_ move: SingleMove, up distance: CGFloat) async throws {
+        switch move {
+        case .aFlick:
+            try await yourScroll(by: distance, frames: 1)
+        case .aWheelsNotch:
+            let scroll = try #require(scroll)
+            let lines = Int32((distance / max(1, scroll.verticalLineScroll)).rounded())
+            let event = try #require(CGEvent(scrollWheelEvent2Source: nil, units: .line, wheelCount: 1, wheel1: lines, wheel2: 0, wheel3: 0))
+            scroll.scrollWheel(with: try #require(NSEvent(cgEvent: event)))
+            await settled()
+        }
+    }
+
     /// Where the row you read was down the window as each pass of the main run loop left it
     /// (what's drawn), from now until `stop`; nil, out of view.
     private final class Watch {
@@ -312,10 +332,10 @@ import Testing
     }
 
     /// Scrolled up in a single move (a mouse's wheel, a quick flick): just as still.
-    @Test func aSingleMoveUpIsAsStill() async throws {
+    @Test(arguments: SingleMove.allCases) func aSingleMoveUpIsAsStill(_ single: SingleMove) async throws {
         defer { done() }
         try await conversation(run: [step(1), step(2), said(3), step(4)])
-        try await yourScroll(by: 500, frames: 1)
+        try await move(single, up: 500)
         try await until { isOffTheEnd }
         await settled()
         let rows = try #require(stack?.shownFrames().window)
@@ -348,20 +368,24 @@ import Testing
         #expect(isOffTheEnd, "still reading")
     }
 
-    /// Up in a single move (a wheel's notch, a flick), then the rows above what you read get
-    /// taller (read again, with more of what they said): it stays where it is. (The rows went on
+    /// Up in a single move (a wheel's notch, a flick), then the answers above the view get taller
+    /// (read again, with more of what they said): what you read stays where it is. (The rows went on
     /// taking it as following the end, as nothing told them since: what was above moved it.)
-    @Test func rowsAboveGrowingAfterASingleMoveUpLeaveWhatYouRead() async throws {
+    @Test(arguments: SingleMove.allCases) func rowsAboveGrowingAfterASingleMoveUpLeaveWhatYouRead(_ single: SingleMove) async throws {
         defer { done() }
         try await conversation()
-        try await yourScroll(by: 300, frames: 1)
+        try await move(single, up: 300)
         try await until { isOffTheEnd }
         await settled()
         let rows = try #require(stack?.shownFrames().window)
         let read = try #require(rows.first { $0.value.minY <= Self.size.height / 2 && $0.value.maxY > Self.size.height / 2 })
         let watch = try watch(read.key)
         defer { watch.stop() }
-        var longer = (0..<14).flatMap { answer($0, words: 70) }
+        // The answers wholly above the view, longer (made, not yet scrolled to: within a screen).
+        let above = Set(rows.filter { $0.value.maxY < 0 }.map { String($0.key.prefix { $0 != "#" }) })
+        let grown = Set((0..<14).filter { above.contains(run + "0\(101 + $0 * 2)") })
+        try #require(!grown.isEmpty, "answers above the view among \(rows)")
+        var longer = (0..<14).flatMap { turn in answer(turn, words: grown.contains(turn) ? 70 : 40) }
         longer.append(["id": run + "0900", "type": "user", "time": ["created": 1], "text": "Look around."])
         longer += [step(1), step(2)]
         engine.conversation(id, longer)
@@ -371,12 +395,14 @@ import Testing
         stayed(watch, at: read.value.minY)
     }
 
-    /// At the end, the same run is followed: the end stays in view all the way.
+    /// At the end, the same run is followed: once it's over, the view is at its end and still
+    /// following it.
     @Test func atTheEndTheRunIsFollowed() async throws {
         defer { done() }
         try await conversation()
         try await runs(from: 3)
         try await until { laidOut && atTheEnd }
         #expect(!isOffTheEnd)
+        #expect(stack?.scrollAnchor?.isFollowingEnd == true, "still following")
     }
 }
