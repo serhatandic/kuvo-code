@@ -1088,12 +1088,16 @@ client shows it from the same routes.
     (it isn't closed 15 minutes after its last turn), since that work goes with it. For the agents
     that are woken as such work ends (Claude Code, Grok), when it ends unfinished with their process
     instead, the bridge wakes the session itself, with a `synthetic` note saying what stopped (and
-    the end of what it printed, when known): `metadata` `{source: "shell", state: "error", signal:
-    "SIGTERM"}` (`source: "agent"` when none of it was a command), `description` the command. That's
-    when the process ends by itself between turns (killed from outside, or crashed), and as the
-    bridge stops, when the note waits in the session's queue (`metadata.kuvo.lostWork`, when) and
-    wakes it once the bridge is back, if that's within a day. When the agent starts again for your
-    next message (an update, its settings changed), that message says so instead.
+    the end of what it printed, or the file it went to, when known): `metadata` `{source: "shell",
+    state: "error", signal: "SIGTERM", kuvo: {lostWork: <when>, work}}` (`source: "agent"` when none
+    of it was a command), `description` the command. That's when the process ends by itself between
+    turns (killed from outside, or crashed); as the bridge stops, when the note waits in the
+    session's queue and wakes it once the bridge is back, if that's within 10 minutes (a restart or
+    an update; after a quit for longer it's let go of); and as the session moves to another
+    computer, where it wakes it as it arrives. While an undo is staged it waits: Redo sends it, and
+    your next message (which makes the undo final, starting the agent over) is followed by one note
+    for all of it. When the agent starts again for your next message (an update, its settings
+    changed), the next message of words says so instead.
   - **The bridge's side**: `GET api/session/background` → `{data: {<session>: {commands: [{id,
     command, started}], subagents: [{id, since}], tasks: [{id, since}]}}}`, `DELETE
     api/session/<id>/background` ends them all, and the event `session.background.updated` says to
