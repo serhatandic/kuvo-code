@@ -28804,14 +28804,14 @@ function serveAgent(socket, source) {
     } catch {}
     return close(done);
   };
-  if (Buffer.byteLength(socket) > LONGEST_PATH) {
+  const bound = path100.join(path100.dirname(socket), `.${crypto36.randomBytes(6).toString("base64url")}`);
+  if (Math.max(Buffer.byteLength(socket), Buffer.byteLength(bound)) > LONGEST_PATH) {
     queueMicrotask(() => server.emit("error", new Error(`An SSH agent's socket can't be this long: ${socket}`)));
     return server;
   }
   try {
     fs95.rmSync(socket, { force: true });
   } catch {}
-  const bound = path100.join(path100.dirname(socket), `.${crypto36.randomBytes(6).toString("base64url")}`);
   const old = process.umask(127);
   try {
     server.listen(bound);
@@ -28820,7 +28820,15 @@ function serveAgent(socket, source) {
   }
   try {
     fs95.renameSync(bound, socket);
-  } catch {}
+  } catch (error) {
+    if (fs95.existsSync(bound)) {
+      server.close();
+      try {
+        fs95.rmSync(bound, { force: true });
+      } catch {}
+      queueMicrotask(() => server.emit("error", error instanceof Error ? error : new Error(String(error))));
+    }
+  }
   server.unref();
   return server;
 }

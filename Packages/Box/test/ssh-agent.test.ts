@@ -197,4 +197,13 @@ test("a socket the agent can't open is an error on it, never a crash of the box"
   expect(error.message).toMatch(/can't be this long/);
   const missing = serveAgent(path.join(root, "no-such-folder", "a.sock"), { keys: async () => [], allow: async () => false });
   expect((await new Promise<Error & { code?: string }>(resolve => missing.once("error", resolve))).code).toBe("ENOENT");
+  // Bound, but its name taken by something it can't replace (a folder with files in it): an error
+  // too, and nothing left listening under the name it was bound as.
+  const folder = fs.mkdtempSync(path.join(root, "taken-"));
+  fs.mkdirSync(path.join(folder, "agent.sock"));
+  fs.writeFileSync(path.join(folder, "agent.sock", "file"), "");
+  const taken = serveAgent(path.join(folder, "agent.sock"), { keys: async () => [], allow: async () => false });
+  expect(await new Promise<Error>(resolve => taken.once("error", resolve))).toBeInstanceOf(Error);
+  expect(taken.listening).toBe(false);
+  expect(fs.readdirSync(folder)).toEqual(["agent.sock"]);
 });
