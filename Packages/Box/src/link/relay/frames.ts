@@ -3,13 +3,17 @@
 
 import { sortedJSON } from "../../shared/json";
 import { EMPTY } from "../crypto/keys";
+import { sendingTo } from "./dropped";
 
 export const Frame = { handshake1: 1, handshake2: 2, transport: 3, close: 4, mail: 5 } as const;
 export type FrameKind = (typeof Frame)[keyof typeof Frame];
 const MAX_MESSAGE = 65535 - 16;
 
 export const relayHello = (secret: Buffer) => Buffer.concat([Buffer.from([1]), secret]);
-export const relaySend = (to: Buffer, payload: Buffer) => Buffer.concat([Buffer.from([2]), to, payload]);
+export const relaySend = (to: Buffer, payload: Buffer) => {
+  sendingTo(to);
+  return Buffer.concat([Buffer.from([2]), to, payload]);
+};
 export const relayPush = (to: Buffer, payload: Buffer) => Buffer.concat([Buffer.from([5]), to, payload]);
 
 /** What the relay sends a device. */

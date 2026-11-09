@@ -462,6 +462,8 @@ export function sendOutbox(host: Pick<LinkHost, "send">, link: LinkState | null 
   // Oldest first, as they were left.
   const waiting: { name: string; letter: InSending | null }[] = [];
   for (const name of listOf(SENDING)) {
+    // (A call's mark that the relay dropped it, left by a tool that's gone: `relay/dropped.ts`.)
+    if (name.endsWith(".dropped") && !fs.existsSync(path.join(SENDING, `${name.slice(0, -8)}.json`))) fs.rmSync(path.join(SENDING, name), { force: true });
     if (!name.endsWith(".json")) continue;
     try { waiting.push({ name, letter: JSON.parse(fs.readFileSync(path.join(SENDING, name), "utf8")) }); } catch {}
   }

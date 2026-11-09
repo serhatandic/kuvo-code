@@ -21,7 +21,8 @@ import { macSendOutbox } from "../mac/peers";
 import { frozen } from "../moves/records";
 import { peerOf, readPeerAgents } from "../peers/directory";
 import { mailFor, movedOf, ownKey, peersOf, removedBoxes } from "../peers/known";
-import { awaySince, goneAt } from "../peers/reach";
+import { awaySince } from "../peers/reach";
+import { droppedMark, watchCall } from "../relay/dropped";
 import { macLink, readLink } from "../state";
 import { homesOf, noteHomes } from "../work/homes";
 import { rowsBox, rowsOf, startedOn } from "../work/elsewhere";
@@ -177,7 +178,10 @@ export function sendCall(host: Pick<LinkHost, "send">, id: string, file: string,
     return;
   }
   if (call.sentTo !== peer.key) try { writePrivate(file, JSON.stringify({ ...call, sentTo: peer.key })); } catch {}
-  try { host.send(bytes); } catch {}
+  let went: boolean | void = false;
+  try { went = host.send(bytes); } catch {}
+  // A start or a read, never sent again: whether the relay drops it (`relay/dropped.ts`).
+  if (went !== false && isOpenTool(call.call.tool)) watchCall(peer.address, file);
 }
 
 // A tool waiting for call `id` hears it failed (on a machine through `run/replies`, on this Mac in memory).
@@ -237,27 +241,26 @@ export async function callPeer(peer: Peer, tool: CallTool, args: Record<string, 
   const id = leaveCall(peer.key, lead.session, call, { wait: true, quiet });
   const { answer, unreachable } = await awaitAnswer(id, peer.key, sent, place, { most, cut: READ_BY_MAIL });
   // Whether that box said it has it (its receipt takes the call out of the outbox), or it went to
-  // that box (`sentTo`, kept as it went) and may have got there: the relay said that box's
-  // connection went since (`gone`, said only to what got there). One that went and came back
-  // `unreachable` with no `gone` was dropped by the relay: it never got there.
+  // that box (`sentTo`, kept as it went) and may have got there: unless the relay said it dropped
+  // that very call (`relay/dropped.ts`), whatever the relay says of that box after.
   const left = path.join(SENDING, `${id}.json`);
   const had = !fs.existsSync(left);
   let went = false;
   try { went = JSON.parse(fs.readFileSync(left, "utf8")).sentTo === peer.key; } catch {}
-  // (A `gone` from before it went is of a connection it never went to.)
-  const reached = went && (goneAt(peer.key) ?? 0) >= sent;
+  const dropped = fs.existsSync(droppedMark(left));
   // A start, or a read of what's there, not answered: never sent again, so it's never done late
   // (or twice). One that got there is told as a message.
   if (!answer && isOpenTool(tool)) {
-    fs.rmSync(path.join(SENDING, `${id}.json`), { force: true });
+    fs.rmSync(left, { force: true });
     letterTries.delete(id);
   }
+  fs.rmSync(droppedMark(left), { force: true });
   if (answer && "failed" in answer) return { failed: answer.failed };
   if (answer && "note" in answer) return { answer: { text: answer.note, isError: false } };
   if (answer && "text" in answer && typeof answer.text === "string") return { answer: { text: answer.text, isError: answer.isError === true } };
   // (`sent`: it may have got there. One the relay said it dropped, to a box that isn't there,
   // didn't: nothing was started.)
-  return { away: unreachable ? AWAY : "it didn't answer in time", kept: keep && !place.signal?.aborted, sent: had || reached || !unreachable };
+  return { away: unreachable ? AWAY : "it didn't answer in time", kept: keep && !place.signal?.aborted, sent: had || (went && !dropped) || !unreachable };
 }
 
 /** The answer to letter or call `id`, sent to box `peer` at `sent`: waited for until it comes, the

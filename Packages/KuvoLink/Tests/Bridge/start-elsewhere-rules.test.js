@@ -24,6 +24,7 @@ import path from "node:path";
 import { beforeEach, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { atEnd, removeAtEnd } from "./at-end.js";
+import { relayStandIn } from "./relay-stand-in.js";
 
 const script = fileURLToPath(new URL("../../Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url));
 const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-start-rules-")));
@@ -37,8 +38,10 @@ const run = path.join(home, "run");
 const k = key => key.toString("base64url");
 const box = (kind, id) => {
   const key = link.newKey();
-  const address = k(link.addressOf(crypto.randomBytes(32)));
-  return { key, pub: k(link.publicOf(key)), address, peer: { key: k(link.publicOf(key)), address, name: id ?? kind, kind, ...(id ? { id } : {}) } };
+  // (Its secret on the relay, for a test that puts it there.)
+  const secret = crypto.randomBytes(32);
+  const address = k(link.addressOf(secret));
+  return { key, secret, pub: k(link.publicOf(key)), address, peer: { key: k(link.publicOf(key)), address, name: id ?? kind, kind, ...(id ? { id } : {}) } };
 };
 const here = box("machine", "devbox"), mac = box("mac"), mini = box("machine", "mini"), third = box("machine", "third");
 const write = (file, value) => {
@@ -634,38 +637,66 @@ test("a start under way when you switch your other computers off here isn't made
   link.allowOtherComputers(true);
 });
 
-// A start to mini on its way: once it's in the outbox, marked as gone to mini, `relay` says what the
-// relay sends back (frames, as the link reads them). What the tool says, and the bot's count before
-// and after.
-async function startThenRelay(relay) {
+// This box on a relay (a stand-in that answers as the real one does), connected as its link
+// connects; a start for mini from the bot here, on its way: the tool's answer to come, and the bot's
+// count of starts.
+const startsCounted = () => (read(path.join(run, "tool-limits.json"))?.botSessions?.["bot:bot_foreman0001"] ?? []).length;
+async function startOnRelay(t) {
+  const relay = await relayStandIn(link);
+  const host = new link.LinkHost({ key: here.key, hello: { v: 1, kind: "machine", name: "devbox", app: "0" }, authorize: () => false, handle: async function* () {} });
+  const connect = async () => {
+    void link.connectOnce(relay.url, Buffer.from(link.readLink().secret, "base64url"), host);
+    while (!host.welcomed) await new Promise(resolve => setTimeout(resolve, 5));
+  };
+  await connect();
+  t.after(async () => { host.disconnect?.(); await relay.close(); });
   leadHere();
-  const counts = () => (read(path.join(run, "tool-limits.json"))?.botSessions?.["bot:bot_foreman0001"] ?? []).length;
-  const before = counts();
+  const before = startsCounted();
   const going = tool("start_session", { computer: "mini", project: "api", task: "Fix the sign-in." });
-  let name;
-  while (!(name = sending().find(each => read(path.join(run, "outbox", "sending", each))?.call?.tool === "start_session"))) await new Promise(resolve => setTimeout(resolve, 5));
-  const file = path.join(run, "outbox", "sending", name);
-  write(file, { ...read(file), sentTo: mini.pub });
-  const host = { receive() {}, forget() {} };
-  const at = Buffer.from(mini.address, "base64url");
-  for (const kind of relay) link.fromRelay(host, link.readRelay(kind === "gone" ? Buffer.concat([Buffer.from([7]), at, Buffer.from([1])]) : Buffer.concat([Buffer.from([3]), at])), crypto.randomBytes(16));
-  return { said: await going, before, after: counts() };
+  while (!sending().some(each => read(path.join(run, "outbox", "sending", each))?.call?.tool === "start_session")) await new Promise(resolve => setTimeout(resolve, 5));
+  return { relay, host, connect, going, before, mini: Buffer.from(mini.address, "base64url") };
 }
 
-test("a start that got to its computer, then no word back before it stopped answering, may have started: said so, and its count is kept", async () => {
-  // It got there (the relay says mini's connection went, as it does to what got to it), then
-  // something more for mini comes back unreachable.
-  const { said, before, after } = await startThenRelay(["gone", "unreachable"]);
-  assert.match(said.text, /^Couldn't confirm the session started on mini: it stopped answering .* It may still have started/);
-  assert.doesNotMatch(said.text, /nothing was started/);
-  assert.equal(after, before + 1, "it may have started: still counted");
-});
-
-test("a start the relay dropped, its computer not there as it went, wasn't started: said so, and its count given back", async () => {
-  const { said, before, after } = await startThenRelay(["unreachable"]);
+test("a start the relay drops, its computer not there as it goes, wasn't started: said so, and its count given back", async t => {
+  const { host, going, before } = await startOnRelay(t);
+  // It goes (the outbox's round), and the relay says nothing's connected at mini.
+  await link.sendOutbox(host);
+  const said = await going;
   assert.equal(said.isError, true);
   assert.match(said.text, /^mini isn't answering: it may be asleep, off or offline, so nothing was started\./);
-  assert.equal(after, before, "nothing started: not counted");
+  assert.equal(startsCounted(), before, "nothing started: not counted");
+  assert.deepEqual(sending(), [], "nothing left to go later");
+});
+
+test("a start that got to its computer, which then stopped answering before it said a word, may have started: said so, and its count is kept", async t => {
+  const { relay, host, going, before, mini: at } = await startOnRelay(t);
+  const there = relay.device(mini.secret);
+  await link.sendOutbox(host);
+  await there.next();
+  // Mini goes; then something else this box sends it (its rows, say) comes back unreachable.
+  there.leave();
+  host.send(link.relaySend(at, Buffer.from("rows")));
+  const said = await going;
+  assert.match(said.text, /^Couldn't confirm the session started on mini: it stopped answering .* It may still have started/);
+  assert.doesNotMatch(said.text, /nothing was started/);
+  assert.equal(startsCounted(), before + 1, "it may have started: still counted");
+});
+
+test("a start that got to its computer, then this box's own relay connection dropped while it waited, may have started", async t => {
+  const { relay, host, connect, going, before, mini: at } = await startOnRelay(t);
+  const there = relay.device(mini.secret);
+  await link.sendOutbox(host);
+  await there.next();
+  // The relay restarts: every connection drops (mini's word that it has it with them); this box
+  // connects again and greets mini, which isn't back.
+  there.leave();
+  relay.drop();
+  while (host.welcomed) await new Promise(resolve => setTimeout(resolve, 5));
+  await connect();
+  host.send(link.relaySend(at, Buffer.from("hello")));
+  const said = await going;
+  assert.match(said.text, /It may still have started/);
+  assert.equal(startsCounted(), before + 1);
 });
 
 test("a start cut short after its worktree was made goes on in that worktree, not a second", async () => {
