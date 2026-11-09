@@ -1051,11 +1051,11 @@ struct SidebarView: View {
                             .sidebarFont(11)
                             .foregroundStyle(.tertiary)
                             .lineLimit(1)
-                            // (Its width before the title's, up to a cap: a long name loses its
-                            // end, never "from", and the title gives way, not it.)
+                            // (As wide as it reads, up to a cap, and never squeezed: a long name
+                            // loses its end, never "from", and the title gives way, not it.)
                             .truncationMode(.tail)
                             .frame(maxWidth: 80, alignment: .trailing)
-                            .layoutPriority(1)
+                            .fixedSize(horizontal: true, vertical: false)
                             .help(look.origin)
                             // (The row's hint says it whole.)
                             .accessibilityHidden(true)
@@ -1079,8 +1079,6 @@ struct SidebarView: View {
                     // in its conversation.
                     SessionStatus(session: session, isUnread: look.isUnread, folded: folded)
                 }
-                // (Before the title, so "from Mini" is never squeezed: the title gives way.)
-                .layoutPriority(look.elsewhere == nil ? 0 : 1)
             }
         }
         .contextMenu { menu(for: session, in: place) }
