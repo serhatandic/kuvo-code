@@ -11,7 +11,8 @@ import { freshenBot, freshenBots } from "../bots/tell";
 import { ANSWERED, GROUP_NEWS, NEWS, RUN_ENDS, groupNotice, noticeFor, settleHeld } from "../notices/news";
 import { keepReadThroughSummary } from "../work/tree";
 import { bridgeTarget, engineGet, peerTargets, readBridgeFile, readEngineFile } from "./client";
-import { learnCompatibility } from "./compatibility";
+import { applyCompatibility, learnCompatibility } from "./compatibility";
+import { modelsDue, settleDueModels, WORK_ENDS } from "./models";
 import { goalHolds, settleGoalHolds } from "../work/goals";
 import { workWatcher } from "../work/wakes";
 import { reviewPermission } from "../work/reviewing";
@@ -146,6 +147,10 @@ async function* serverEvents(body: AsyncIterable<Uint8Array>): AsyncGenerator<Bo
 export const STEER_AFTER = 3000;
 // How often a box reads its engine's models again, at most, while the engine's at work.
 const LEARN_EVERY = 600_000;
+// The engine's events after which it reads them again at once: an account added, removed, signed in
+// to again or switched to, and the engine's list of models changed (an account's models come a
+// moment after its sign-in).
+const LEARN_NOW = new Set(["credential.updated", "credential.switched", "model.updated"]);
 export function steering(background: (session: string) => unknown, { after = STEER_AFTER, now = Date.now, schedule = setTimeout, cancel = clearTimeout, signal }: SteeringOptions = {}): (event: SteeringEvent) => void {
   const sessions = new Map<string, SteeredSession>(); // session → { names: call → tool, blocking: call → when it started, steers: messages waiting for its next step }
   const users = new Set<string>(); // messages sent as a message (steered or queued) that wait
@@ -265,9 +270,11 @@ function letSessionFilesGo(looked: (session: string | null) => void, session?: s
 // where those notices wait, settled each time the events are heard again (`settleHeld`).
 // `signedIn`: told once each event's been looked at for sign-ins (a test waits on it).
 // `steers`: your messages to an agent waiting on a command read at once (`steering`), the engine's.
-// `learns`: what its providers' models need from it learned for its next start (`learnCompatibility`),
-// the engine's: as it's found, then every ten minutes at most while it's at work (a sign-in to
-// GitHub Copilot brings new models); `learned` told each time.
+// `learns`: what its providers' models need from it learned and applied to it at once
+// (`learnCompatibility`), the engine's: as it's found, at once as an account is added, removed or
+// signed in to again and as its models change, and every ten minutes at most while it's at work
+// besides; `learned` told each time. And the folders a refresh of its models left at work closed
+// once their work is done (`settleDueModels`).
 // `queues`: its sessions' queues carried on (engine/queue.ts). `work`: whoever started a session
 // told as it finishes or asks (work/wakes.ts), as the place it is ("engine" or "bridge").
 // Either way, a deleted session's files go with it (`letAttachmentsGo`), and any a session deleted
@@ -276,16 +283,33 @@ export async function watchEvents(read: () => Target, tell: (notice: Notice) => 
   let attempt = 0;
   let lastLearned = 0;
   let learning = false;
+  let learnAgain = false;
   // Counted once it's learned: one the engine couldn't answer yet (just started) goes again with
-  // its next event.
-  const learn = (source: Target) => {
-    if (!learns || learning || Date.now() - lastLearned < LEARN_EVERY) return;
+  // its next event. `now`: at once, whenever it last did (an account added, removed or signed in
+  // to again, or its models changed), and once more after one under way, which may have read
+  // the engine before the change.
+  const learn = (source: Target, now = false) => {
+    if (!learns) return;
+    if (learning) {
+      if (now) learnAgain = true;
+      return;
+    }
+    if (!now && Date.now() - lastLearned < LEARN_EVERY) return;
     learning = true;
     learnCompatibility(source).then(() => { lastLearned = Date.now(); }, () => {}).finally(() => {
       learning = false;
       learned();
+      if (learnAgain) {
+        learnAgain = false;
+        learn(source, true);
+      }
     });
   };
+  // What its engine applies at once (`applyCompatibility`), as this box last learned it: a box
+  // that learned it before it kept it there.
+  if (learns) {
+    try { applyCompatibility(); } catch {}
+  }
   while (!signal?.aborted) {
     // What this connection set going ends with it: what it heard of can't be settled once it's gone.
     const connection = new AbortController();
@@ -318,6 +342,7 @@ export async function watchEvents(read: () => Target, tell: (notice: Notice) => 
       letSessionFilesGo(attachmentsLooked);
       lastLearned = 0;
       learn(source);
+      if (learns && modelsDue()) settleDueModels(source).catch(() => {});
       if (queues) scanQueues(source, found).catch(() => {});
       // Its worktrees' sessions titled while it wasn't listening: their branches named; and those
       // whose last session went meanwhile tidied.
@@ -347,7 +372,9 @@ export async function watchEvents(read: () => Target, tell: (notice: Notice) => 
           forgetReviews(event.data.sessionID);
           forgetDecided(event.data.sessionID);
         }
-        learn(source);
+        learn(source, LEARN_NOW.has(event.type));
+        // Folders a refresh of the models left at work, closed once their work is done.
+        if (learns && WORK_ENDS.has(event.type) && modelsDue()) settleDueModels(source).catch(() => {});
         steer?.(event);
         queue?.(event as QueueEvent);
         const followed = followWork?.(event);

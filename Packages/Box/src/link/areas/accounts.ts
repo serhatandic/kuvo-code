@@ -10,6 +10,7 @@ import path from "node:path";
 import { isObject } from "../../shared/json";
 import type { EngineRecord, Target } from "../../shared/records";
 import { engineGet } from "../engine/client";
+import { refreshModels } from "../engine/models";
 import type { EngineAnswer, UncheckedAnswer } from "../engine/client";
 import type { EngineSession } from "../engine/sessions";
 import { writePrivate } from "../files";
@@ -133,8 +134,9 @@ export async function forgetPlan(engine: Target, id: string): Promise<{ status: 
   return { status: 200 };
 }
 
-// The plans whose sign-in ran out and couldn't be renewed (a run on one was refused), and
-// signing out of one, as Settings › Accounts' Disconnect does (PROTOCOL.md, "kuvo/accounts").
+// The plans whose sign-in ran out and couldn't be renewed (a run on one was refused), signing out
+// of one, as Settings › Accounts' Disconnect does (PROTOCOL.md, "kuvo/accounts"), and a provider's
+// models asked of again (Refresh Models, `engine/models.ts`).
 export async function* accountsRoute(context: RouteContext): AsyncGenerator<AnswerPiece> {
   const { request, route, readEngine, json } = context;
   let engine: EngineRecord | null = null;
@@ -147,9 +149,14 @@ export async function* accountsRoute(context: RouteContext): AsyncGenerator<Answ
     return yield* json(200, { providers });
   }
   if (request.method.toUpperCase() !== "POST") return yield* json(405, {});
+  const action = route.endsWith("/refresh") ? "refresh" : "forget";
   let id: string | null = null;
-  try { id = decodeURIComponent(route.slice("kuvo/accounts/".length, -"/forget".length)); } catch {}
+  try { id = decodeURIComponent(route.slice("kuvo/accounts/".length, -`/${action}`.length)); } catch {}
   if (!id || id.includes("/")) return yield* json(404, {});
+  if (action === "refresh") {
+    const refreshed = await refreshModels(engine, id).catch(() => ({ status: 503 as const, message: "The engine isn't answering. Try again in a moment." }));
+    return yield* json(refreshed.status, refreshed.status === 200 ? { waiting: refreshed.waiting } : "message" in refreshed ? { message: refreshed.message } : {});
+  }
   const forgot = await forgetPlan(engine, id).catch(() => ({ status: 503 as const, message: "The engine isn't answering. Try again in a moment." }));
   return yield* json(forgot.status, "message" in forgot ? { message: forgot.message } : {});
 }
