@@ -1069,10 +1069,9 @@ class ClaudeThread implements Thread {
     const skills = skillsFolder(await skillsFor(this.session.location.directory, this.agent.ownSkillFolders(this.session.location.directory), turnedOff(hooks)))
     // So does it when the box's sandbox was turned on or off, or its rules changed.
     const fence = fenceKey() + fullAccessMark(this.session.id)
-    // (What it left going in the background ends with it: this message says so.)
-    let cut: LostWork[] = []
+    // (What it left going in the background ends with it: the next message of words says so.)
     if (this.query && (this.opened?.append !== append || this.opened?.program !== this.agent.program || this.opened?.tools !== tools?.key || this.opened?.skills !== skills || this.opened?.fence !== fence)) {
-      cut = this.wakingWork
+      this.cut.push(...this.wakingWork)
       this.close()
     }
     // The computer's MCP servers (yours, the integrations', a bot's with its own keys), through the
@@ -1114,7 +1113,7 @@ class ClaudeThread implements Thread {
       // a command (its /compact, a skill's), which goes as typed: the next message says it.
       const command = input.compact || input.text.trimStart().startsWith("/")
       const note = command ? undefined : instructionsNote(toldOf(this.state, "claudeTold"), append)
-      const lostNote = cut.length && !command ? lostWorkNote("Claude Code started again for this message (what Kuvo Code gives it changed).", cut) : undefined
+      const lostNote = this.cut.length && !command ? lostWorkNote("Claude Code started again before this message.", this.cut.splice(0)) : undefined
       const ahead = [lostNote, note].filter(Boolean).join("\n\n")
       const message = userMessage(ahead ? { ...input, text: `${ahead}\n\n${input.text}` } : input, this.copies())
       let active: Active | undefined
@@ -1322,6 +1321,8 @@ class ClaudeThread implements Thread {
   }
 
   onWorkLost?: (lost: LostWork[]) => void
+  /** What it had going when it was started again for a message, for the next message of words to say. */
+  private cut: LostWork[] = []
 
   /** What it left going, each of which tells it as it ends (Claude Code carries on then). */
   get wakingWork(): LostWork[] {

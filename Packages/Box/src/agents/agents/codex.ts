@@ -895,10 +895,10 @@ type AskedQuestion = { title: string; options?: string[] | null }
 type AskedCard = { abort: AbortController; typed?: MessageInput | null }
 /** An answer in the turn under way that Codex may yet sleep past: one it's `heard` and worked on from isn't what it's sleeping on. */
 type Answered = { text: string; heard?: boolean }
-/** What it does that's more than asking and thinking. */
 /** How often the commands it left running in background terminals are listed again while any runs. */
 export const codexTiming = { terminals: 30_000 }
 
+/** What it does that's more than asking and thinking. */
 const WORK_ITEMS = new Set(["commandExecution", "fileChange", "mcpToolCall", "dynamicToolCall", "webSearch", "imageGeneration", "imageView", "collabAgentToolCall"])
 /** Trying again to reach a sleep that turned it down: after this long, then twice that, up to the last. */
 const STEER_AGAIN = 1_000
@@ -1170,15 +1170,27 @@ class CodexThread implements Thread {
     clearTimeout(this.terminalsRead)
     const server = this.server
     const threadID = this.nativeID
-    let listed: { id: string; command: string }[] = []
+    // (Those it listed before, while it can't say now: a list that failed isn't an empty one.)
+    let listed: { id: string; command: string }[] | undefined = []
     if (server && !server.isClosed && threadID) {
       try {
-        const answer: any = await server.request("thread/backgroundTerminals/list", { threadId: threadID }, 30_000)
-        listed = (Array.isArray(answer?.data) ? answer.data : []).filter((terminal: any) => typeof terminal?.processId === "string").map((terminal: any) => ({ id: terminal.processId, command: String(terminal.command ?? "") }))
-      } catch {}
+        listed = []
+        let cursor: string | undefined
+        do {
+          const answer: any = await server.request("thread/backgroundTerminals/list", { threadId: threadID, ...(cursor ? { cursor } : {}) }, 30_000)
+          for (const terminal of Array.isArray(answer?.data) ? answer.data : []) if (typeof terminal?.processId === "string") listed.push({ id: terminal.processId, command: String(terminal.command ?? "") })
+          cursor = typeof answer?.nextCursor === "string" && answer.nextCursor ? answer.nextCursor : undefined
+        } while (cursor)
+      } catch {
+        listed = server.isClosed ? [] : undefined
+      }
     }
     // (Its app-server since replaced, or a turn under way, which reads them again as it ends.)
     if (server !== this.server || this.inTurn) return
+    if (!listed) {
+      if (this.terminals.length) this.terminalsRead = setTimeout(() => void this.readTerminals(), codexTiming.terminals)
+      return
+    }
     const before = this.terminals
     this.terminals = listed.map((terminal) => ({ ...terminal, since: before.find((known) => known.id === terminal.id)?.since ?? Date.now() }))
     if (before.length !== this.terminals.length || this.terminals.some((terminal) => !before.some((known) => known.id === terminal.id))) emit("session.background.updated", { sessionID: this.session.id }, this.session.location.directory)

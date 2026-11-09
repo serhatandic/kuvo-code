@@ -3,7 +3,7 @@
 // per turn, and what it does told in `session/update`s. Each agent says how it starts, signs in,
 // picks a model, and anything of its own.
 
-import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { dirname, resolve } from "node:path"
 import type { LostWork, OwnTurn, RunInput, RunResult, Thread, TurnHooks, SubagentRun, SubagentTask } from "./agent"
 import { failure, lostWorkNote } from "./agent"
@@ -120,7 +120,7 @@ export interface AcpContext {
    * What it has going in the background now, each of which wakes it as it ends (Grok's commands
    * and subagents), as it lists them: those not running any more are left out.
    */
-  background(tasks: BackgroundTask[], sessionID?: string): void
+  background(tasks: BackgroundTask[], sessionID?: string, replayed?: boolean): void
 }
 
 /** Something an ACP agent keeps going in the background. */
@@ -510,7 +510,7 @@ export class AcpThread implements Thread {
       instructed = { value: instructions }
     }
     if (others.length) text += `\n\nAttached files:\n${others.map((path) => `- ${path}`).join("\n")}`
-    if (this.cut.length) text = `${lostWorkNote(`${this.name} started again for this message (what Kuvo Code gives it changed).`, this.cut)}\n\n${text}`
+    if (this.cut.length) text = `${lostWorkNote(`${this.name} started again before this message.`, this.cut)}\n\n${text}`
     this.cut = []
     prompt.unshift({ type: "text", text })
     return new Promise<RunResult>((resolve) => {
@@ -613,9 +613,10 @@ export class AcpThread implements Thread {
         else if (this.own && !this.own.turnedAway) this.own.ended = true
         else if (this.own) this.own = undefined
       },
-      background: (tasks, sessionID) => {
-        // (Its own, not a subagent's on the same connection.)
-        if (sessionID && this.sessionID && sessionID !== this.sessionID) return
+      background: (tasks, sessionID, replayed) => {
+        // (Its own, not a subagent's on the same connection; nor what a load replays, from a
+        // process before: a new one starts with nothing going.)
+        if (this.loading || replayed || (sessionID && this.sessionID && sessionID !== this.sessionID)) return
         const before = this.tasks
         this.tasks = new Map(tasks.map((task) => [task.id, { ...task, started: before.get(task.id)?.started ?? task.started ?? Date.now() }]))
         if (before.size !== this.tasks.size || [...this.tasks.keys()].some((id) => !before.has(id))) emit("session.background.updated", { sessionID: this.session.id }, this.session.location.directory)
@@ -1098,11 +1099,12 @@ export class AcpThread implements Thread {
     this.close()
   }
 
+  /** (Where its output went is named, not read here: the agent can read it itself, and the bridge mustn't read for it what its sandbox hides.) */
   private taskWork(): LostWork[] {
     return [...this.tasks.values()].map((task) => {
-      const output = tailOf(task.outputFile)
-      if (task.command && task.kind !== "subagent") return { kind: "command", what: task.command, output }
-      return { kind: "task", what: task.description || task.command || "A task in the background", output }
+      const outputFile = task.outputFile
+      if (task.command && task.kind !== "subagent") return { kind: "command", what: task.command, outputFile }
+      return { kind: "task", what: task.description || task.command || "A task in the background", outputFile }
     })
   }
 
@@ -1303,19 +1305,3 @@ export function questionFields(questions: { id?: string; question: string; heade
   }))
 }
 
-/** The end of a file (what a background command printed so far), when it's there to read. */
-function tailOf(path: string | undefined, bytes = 2_000): string | undefined {
-  if (!path) return undefined
-  let fd: number | undefined
-  try {
-    fd = openSync(path, "r")
-    const size = fstatSync(fd).size
-    const buffer = Buffer.alloc(Math.min(bytes, size))
-    readSync(fd, buffer, 0, buffer.length, size - buffer.length)
-    return buffer.toString("utf8").trim() || undefined
-  } catch {
-    return undefined
-  } finally {
-    if (fd !== undefined) closeSync(fd)
-  }
-}

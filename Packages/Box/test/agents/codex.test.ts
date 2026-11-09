@@ -229,6 +229,11 @@ process.stdin.on("data", (chunk) => {
       send({ method: "turn/completed", params: { threadId: "t1", turn: { id: summarizing ? "c1" : "u1", status: "interrupted" } } })
       stopped?.()
     } else if (message.method === "thread/backgroundTerminals/list") {
+      // (It can't say, while a file "lists-fail" is there.)
+      if (require("node:fs").existsSync(require("node:path").join(process.cwd(), "lists-fail"))) {
+        send({ id: message.id, error: { code: -32603, message: "busy" } })
+        continue
+      }
       if (require("node:fs").existsSync(require("node:path").join(process.cwd(), "terminal-done"))) terminals = []
       send({ id: message.id, result: { data: terminals } })
     } else if (message.method === "thread/backgroundTerminals/clean") {
@@ -373,6 +378,20 @@ describe("Commands Codex leaves running in a background terminal (#262)", () => 
       await until(() => sent().some((message) => message.method === "thread/unsubscribe"))
       expect(sessions.background()[id]).toBeUndefined()
       expect(sent().filter((message) => message.method === "turn/start")).toHaveLength(1)
+    }))
+
+  test("a list that fails isn't taken for none: they're still kept, and listed again", () =>
+    quickly(async () => {
+      const id = await run([leavesTerminal("npm run dev")])
+      await until(() => (sessions.background()[id]?.tasks.length ?? 0) === 1)
+      writeFileSync(join(root, "lists-fail"), "")
+      const now = lists()
+      await until(() => lists() >= now + 6)
+      expect(sessions.background()[id]?.tasks.length).toBe(1)
+      expect(sent().some((message) => message.method === "thread/unsubscribe")).toBe(false)
+      rmSync(join(root, "lists-fail"))
+      writeFileSync(join(root, "terminal-done"), "")
+      await until(() => sent().some((message) => message.method === "thread/unsubscribe"))
     }))
 
   test("Stop on what it left running ends them", () =>

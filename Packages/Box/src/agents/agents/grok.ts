@@ -322,6 +322,7 @@ export class GrokAgent implements Agent {
             context.background(
               running.map((task: any) => ({ id: task.task_id, command: typeof task.command === "string" ? task.command : undefined, description: typeof task.description === "string" ? task.description : undefined, kind: typeof task.kind === "string" ? task.kind : undefined, started: Date.parse(task.started_at) || undefined, outputFile: typeof task.output_file === "string" ? task.output_file : undefined })),
               typeof params.sessionId === "string" ? params.sessionId : undefined,
+              Boolean(params?._meta?.isReplay),
             )
           }
           // One it ran on its own after a task of its own completed: that turn's end.

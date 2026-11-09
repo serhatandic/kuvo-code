@@ -65,6 +65,8 @@ interface Script {
    */
   readsItsFolder?: boolean
   fails?: string
+  /** What it says again as a session is loaded, before it answers (Grok's replay of what it said before). */
+  replays?: [string, any][]
 }
 
 /**
@@ -98,6 +100,7 @@ const prompts = ${JSON.stringify(prompts)}
 const setup = ${JSON.stringify({ sessionId: "s1", ...script.setup })}
 const refuses = ${JSON.stringify(script.refuses ?? [])}
 const later = ${JSON.stringify(later)}
+const replays = ${JSON.stringify(script.replays ?? [])}
 const tries = ${JSON.stringify(script.tries ?? null)}
 const fails = ${JSON.stringify(script.fails ?? "Traceback (most recent call last):\nPermissionError: [Errno 1] Operation not permitted")}
 if (${JSON.stringify(Boolean(script.readsItsFolder || script.fails))}) {
@@ -175,6 +178,7 @@ process.stdin.on("data", (chunk) => {
     else if (message.method === "initialize") send({ id: message.id, result: { protocolVersion: 1, authMethods: [], agentCapabilities: { loadSession: true, mcpCapabilities: { http: true } } } })
     else if (message.method === "session/new" || message.method === "session/load") {
       servers = message.params?.mcpServers ?? []
+      if (message.method === "session/load") for (const [sessionId, value] of replays) update(sessionId, value)
       send({ id: message.id, result: setup })
     } else if (message.method === "session/prompt" && tries) {
       // (What it tries is all that prompt does.)
@@ -734,10 +738,11 @@ describe("Grok's background work after its turn (#262)", () => {
     }
   })
 
-  test("Grok killed from outside meanwhile: the session is woken, told the command stopped unfinished and what it printed", async () => {
+  test("Grok killed from outside meanwhile: the session is woken, told the command stopped unfinished and where its output is", async () => {
     const output = join(root, "b1.log")
     writeFileSync(output, "PASS one.test\n")
-    const grok = new TestGrok(program(fakeAcp([backgroundTasks([["b1", "npm test", "running"]], output), said("Waiting for the tests.")], [], undefined, { next: [said("Running them again.")] }), join(root, "grok")), root)
+    // (Loaded again, it says again what it said before, its list of what ran then too.)
+    const grok = new TestGrok(program(fakeAcp([backgroundTasks([["b1", "npm test", "running"]], output), said("Waiting for the tests.")], [], undefined, { next: [said("Running them again.")], replays: [backgroundTasks([["b1", "npm test", "running"]], output)] }), join(root, "grok")), root)
     const id = await run(grok)
     // (Killed by its PID, as the stray pkill of 2026-11-07 did to Claude Code.)
     process.kill(received().find((message) => message.pid).pid, "SIGTERM")
@@ -745,10 +750,15 @@ describe("Grok's background work after its turn (#262)", () => {
     const told = prompts()[1].params.prompt[0].text as string
     expect(told).toContain("Grok stopped between turns")
     expect(told).toContain("`npm test`")
-    expect(told).toContain("PASS one.test")
+    // (Where its output went, for it to read: not read for it by the bridge, outside its sandbox.)
+    expect(told).toContain(output)
+    expect(told).not.toContain("PASS one.test")
     const notice = sessions.messages(id).find((message) => message.type === "synthetic") as any
     expect(notice).toMatchObject({ description: "npm test", metadata: { source: "shell", state: "error", signal: "SIGTERM" } })
     expect(words(id)).toContain("Running them again.")
+    // What the load said again of before isn't taken for work going now.
+    expect(received().some((message) => message.method === "session/load")).toBe(true)
+    expect(sessions.background()[id]).toBeUndefined()
   })
 })
 

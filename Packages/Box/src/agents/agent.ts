@@ -297,8 +297,9 @@ export interface LostWork {
   kind: "command" | "task"
   /** The command it runs, or what the task is for. */
   what: string
-  /** The end of what it printed, when that's known. */
+  /** The end of what it printed, when that's known; or the file it went to, for the agent to read. */
   output?: string
+  outputFile?: string
 }
 
 /**
@@ -308,7 +309,8 @@ export interface LostWork {
 export function lostWorkNote(why: string, lost: LostWork[]): string {
   const lines = lost.flatMap((work) => {
     const head = work.kind === "command" ? `- The command \`${work.what.split("\n")[0]}\`` : `- ${work.what.split("\n")[0]}`
-    return work.output ? [head, "  It had printed, at the end:", ...work.output.split("\n").map((line) => `  ${line}`)] : [head]
+    if (work.output) return [head, "  It had printed, at the end:", ...work.output.split("\n").map((line) => `  ${line}`)]
+    return work.outputFile ? [head, `  What it printed is in ${work.outputFile}`] : [head]
   })
   return [`${why} What you left running in the background stopped with it, unfinished, and won't report back:`, ...lines, "Run again what you still need."].join("\n")
 }

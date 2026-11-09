@@ -120,21 +120,27 @@ interface Live {
   models: Map<string, ModelRef>
 }
 
-/** At work: a turn, or the files being kept or put back (the app shows it working, and Undo waits). */
 /**
  * The box's note to a session that what its agent left running in the background ended unfinished
- * (`why`): it wakes the session as that work's end would have, and shows as it stopping. `restarted`:
- * kept through the box starting again, which wakes it then.
+ * (`why`): it wakes the session as that work's end would have, and shows as it stopping. It keeps
+ * the work it's about and when (`metadata.kuvo`), to wake it after the bridge starts again, or to
+ * be said again with more.
  */
-function lostWorkInput(why: string, lost: LostWork[], restarted = false): Input {
+function lostWorkInput(why: string, lost: LostWork[], delivery: Delivery = "steer"): Input {
   const command = lost.find((work) => work.kind === "command")
   const first = (command ?? lost[0]).what.split("\n")[0]
   const more = lost.length > 1 ? ` (and ${lost.length - 1} more)` : ""
-  const metadata: Record<string, unknown> = { source: command ? "shell" : "agent", state: "error", signal: "SIGTERM" }
-  if (restarted) metadata.kuvo = { lostWork: Date.now() }
-  return { id: newID("msg"), text: lostWorkNote(why, lost), files: [], delivery: "steer", synthetic: { description: command ? `${first}${more}` : `Background work stopped: ${first}${more}`, metadata } }
+  const metadata = { source: command ? "shell" : "agent", state: "error", signal: "SIGTERM", kuvo: { lostWork: Date.now(), work: lost } }
+  return { id: newID("msg"), text: lostWorkNote(why, lost), files: [], delivery, synthetic: { description: command ? `${first}${more}` : `Background work stopped: ${first}${more}`, metadata } }
 }
 
+/** A note of the box's in a session's queue that its background work ended unfinished (`lostWorkInput`). */
+function lostWorkOf(input: Input): { at: number; work: LostWork[] } | undefined {
+  const kept = input.synthetic?.metadata?.kuvo as { lostWork?: unknown; work?: unknown } | undefined
+  return typeof kept?.lostWork === "number" ? { at: kept.lostWork, work: Array.isArray(kept.work) ? (kept.work as LostWork[]) : [] } : undefined
+}
+
+/** At work: a turn, or the files being kept or put back (the app shows it working, and Undo waits). */
 function isBusy(doing: Doing): boolean {
   return doing.kind !== "idle" && doing.kind !== "deleting"
 }
@@ -168,8 +174,8 @@ const legacyKeys = ["claudeSession", "claudeStarted", "codexThread", "acpSession
 /** What an agent that has your message already is told when it's to go on with it on another of its models. */
 const carryOn = "Carry on with my last message from where you left off: you're on another model now."
 
-/** How long an agent gets to stop when you press Stop, before its conversation is closed; how long a session's agents keep running with nothing to do (the next message starts them again, in the same conversation); how lately a turn the bridge quit in must have last written for what changed since to count as its own; how long your `!` commands get to stop once their session goes, before they're made to; how long after background work ended with the bridge it may still wake its session. */
-export const timing = { stopGrace: 8_000, idleClose: 15 * 60_000, cutShort: 2 * 60_000, shellGrace: 5_000, lostWorkWake: 24 * 60 * 60_000 }
+/** How long an agent gets to stop when you press Stop, before its conversation is closed; how long a session's agents keep running with nothing to do (the next message starts them again, in the same conversation); how lately a turn the bridge quit in must have last written for what changed since to count as its own; how long your `!` commands get to stop once their session goes, before they're made to; how soon the bridge must be back for background work that ended as it stopped to wake its session (a restart or an update, not a quit for the night). */
+export const timing = { stopGrace: 8_000, idleClose: 15 * 60_000, cutShort: 2 * 60_000, shellGrace: 5_000, lostWorkWake: 10 * 60_000 }
 
 /** In plan mode, what changes files: refused, whatever your rules say. */
 const changes = new Set(["edit", "write", "patch"])
@@ -1198,8 +1204,12 @@ export class Sessions {
     const live = this.live.get(id)
     if (!live || isBusy(live.doing) || !live.threads.size) return false
     clearTimeout(live.idle)
+    // What they left running in the background stops here: the session hears so where it goes.
+    const lost = [...live.threads].flatMap(([provider, thread]) => (thread.wakingWork ?? []).map((work) => ({ provider, work })))
     for (const thread of live.threads.values()) thread.close()
     live.threads.clear()
+    const record = this.store.get(id)
+    if (lost.length && record && !record.session.parentID) this.queueLost(id, record, lostWorkInput(`This conversation moved to another computer, and ${this.agentName(lost[0].provider)} stopped on the one it was on.`, lost.map(({ work }) => work)))
     return true
   }
 
@@ -1209,6 +1219,8 @@ export class Sessions {
     // Its last turn is over (one left open there isn't one here).
     this.repair(record.session.id)
     this.store.save(record.session.id, true)
+    // What it left running there stopped as it came: it hears so now.
+    if (!record.session.revert && this.queue(record).some((input) => lostWorkOf(input) && input.delivery === "steer")) this.wake(record.session.id)
     emit("session.updated", { sessionID: record.session.id, session: record.session }, record.session.location.directory)
   }
 
@@ -1467,9 +1479,13 @@ export class Sessions {
     delete record.agent.revertNow
     delete record.agent.revertAt
     delete record.agent.revertFiles
+    // What was lost while the undo waited goes now, as it would have.
+    const lost = this.queue(record).filter((input) => lostWorkOf(input) && input.delivery === "queue")
+    for (const input of lost) input.delivery = "steer"
     this.store.save(id, true)
     emit("session.revert.cleared", { sessionID: id }, directory)
     if (live.doing === reverting) this.free(id, live)
+    if (lost.length) this.wake(id)
   }
 
   /** Undo and Redo go only while nothing runs. */
@@ -1493,11 +1509,19 @@ export class Sessions {
     delete record.agent.revertAt
     delete record.agent.revertFiles
     // Their own conversations still hold what was undone: let go of (an engine model's hidden
-    // session too), and started over.
+    // session too), and started over. What they left running in the background goes with them,
+    // and with what was lost while the undo waited, it's said once, after this message.
+    const lost = [...live.threads].flatMap(([provider, thread]) => (thread.wakingWork ?? []).map((work) => ({ provider, work })))
     for (const thread of live.threads.values()) thread.close()
+    const name = lost.length ? this.agentName(lost[0].provider) : undefined
     live.threads.clear()
     for (const [provider, slot] of Object.entries(this.slots(record))) void this.agent(provider)?.forgetConversation?.(slot.state).catch(() => {})
     record.agent.threads = {}
+    const queue = this.queue(record)
+    const waiting = queue.filter((input) => lostWorkOf(input))
+    const work = [...waiting.flatMap((input) => lostWorkOf(input)!.work), ...lost.map(({ work }) => work)]
+    for (const input of waiting) this.cancelInput(id, input.id)
+    if (work.length) this.queueLost(id, record, lostWorkInput(`${name ?? "Its agent"} started over with this conversation as it is now (an undo was made final).`, work, "queue"))
     this.store.save(id, true)
     emit("session.revert.committed", { sessionID: id, to: revert.messageID }, record.session.location.directory)
   }
@@ -2178,19 +2202,25 @@ export class Sessions {
 
   /**
    * What an agent left running in the background ended unfinished with its process (`why`), so it
-   * will never wake it: the session is woken with that instead, as the work's end would have
-   * (a note from the box, which a stopped session doesn't take).
+   * will never wake it: the session is woken with that instead, as the work's end would have (a
+   * note like that end's, `source` shell, which a session stopped with Stop on its lead's side
+   * doesn't take up). A subagent's session has no process of its own here: its work is its
+   * parent's agent's, whose session hears.
    */
   private workLost(id: string, provider: string, lost: LostWork[], why: string) {
     const record = this.store.get(id)
     const live = this.live.get(id)
     if (!record || !live || live.doing.kind === "deleting" || record.session.parentID) return
-    const input = lostWorkInput(why, lost)
-    if (!record.session.revert) return this.enqueue(id, record, live, input)
-    // An undo waits (a turn now would make it final): it goes after your next message.
-    this.queue(record).push({ ...input, delivery: "queue" })
+    // An undo waits (a turn now would make it final): it waits for your next message, or Redo.
+    if (!record.session.revert) return this.enqueue(id, record, live, lostWorkInput(why, lost))
+    this.queueLost(id, record, lostWorkInput(why, lost, "queue"))
+  }
+
+  /** A note that background work was lost, put in line after what's there, without waking the session. */
+  private queueLost(id: string, record: Record_, input: Input) {
+    this.queue(record).push(input)
     this.store.save(id, true)
-    emit("session.inbox.enqueued", { sessionID: id, inboxID: input.id, item: { type: "synthetic", payload: { text: input.text, description: input.synthetic!.description, metadata: input.synthetic!.metadata }, delivery: "queue" } }, record.session.location.directory)
+    emit("session.inbox.enqueued", { sessionID: id, inboxID: input.id, item: { type: "synthetic", payload: { text: input.text, description: input.synthetic!.description, metadata: input.synthetic!.metadata }, delivery: input.delivery } }, record.session.location.directory)
   }
 
   /**
@@ -2971,7 +3001,7 @@ export class Sessions {
       for (const thread of live.threads.values()) thread.close()
       const record = this.store.get(id)
       if (!lost.length || !record || record.session.parentID) continue
-      const input = lostWorkInput(`Kuvo Code stopped (it quit or restarted), and ${this.agentName(lost[0].provider)} with it.`, lost.map(({ work }) => work), true)
+      const input = lostWorkInput(`Kuvo Code stopped (it quit or restarted), and ${this.agentName(lost[0].provider)} with it.`, lost.map(({ work }) => work))
       this.queue(record).push(input)
       this.store.save(id, true)
     }
@@ -2979,16 +3009,17 @@ export class Sessions {
 
   /**
    * As the bridge starts again: each session whose background work ended as it stopped is woken
-   * with that (`closeAll`), if it's back within a day; after longer, the note is let go of.
+   * with that (`closeAll`), if it's back soon (a restart, an update); after longer (a quit for the
+   * night), the note is let go of, rather than a turn for each such session at once.
    */
   wakeLost(now = Date.now()) {
     for (const session of this.store.all()) {
       const record = this.store.get(session.id)
       if (!record) continue
       const queue = this.queue(record)
-      const waiting = queue.filter((input) => typeof (input.synthetic?.metadata?.kuvo as any)?.lostWork === "number")
+      const waiting = queue.filter((input) => lostWorkOf(input))
       if (!waiting.length) continue
-      const fresh = waiting.filter((input) => now - (input.synthetic!.metadata!.kuvo as any).lostWork < timing.lostWorkWake)
+      const fresh = waiting.filter((input) => now - lostWorkOf(input)!.at < timing.lostWorkWake)
       for (const input of waiting) if (!fresh.includes(input)) this.cancelInput(session.id, input.id)
       // (Not while an undo waits: it goes after your next message.)
       if (record.session.revert) {
