@@ -91,7 +91,11 @@ it, set `KUVO_OPENCODE_BINARY` to its path in the scheme's environment.
 
 ### Tests
 
-The account running `scripts/test-app.sh` must own the Mac's screen.
+The account running `scripts/test-app.sh` must own the Mac's screen. The screen can be
+locked: a test's window never gets the real pointer or waits on a real frame. Where AppKit would
+act on those (a window's tracking areas and cursor rectangles once the pointer comes in, a view's
+drawing as Core Animation commits), the test does it itself: `WindowServer.appKitsTurn` and
+`CATransaction.flush()` after `displayIfNeeded()`.
 
 The app, the engine client and the usage tracker have tests:
 
