@@ -896,6 +896,9 @@ type AskedCard = { abort: AbortController; typed?: MessageInput | null }
 /** An answer in the turn under way that Codex may yet sleep past: one it's `heard` and worked on from isn't what it's sleeping on. */
 type Answered = { text: string; heard?: boolean }
 /** What it does that's more than asking and thinking. */
+/** How often the commands it left running in background terminals are listed again while any runs. */
+export const codexTiming = { terminals: 30_000 }
+
 const WORK_ITEMS = new Set(["commandExecution", "fileChange", "mcpToolCall", "dynamicToolCall", "webSearch", "imageGeneration", "imageView", "collabAgentToolCall"])
 /** Trying again to reach a sleep that turned it down: after this long, then twice that, up to the last. */
 const STEER_AGAIN = 1_000
@@ -1131,11 +1134,55 @@ class CodexThread implements Thread {
     return this.inTurn
   }
 
-  /** Agents it spawned are still at work after the turn: it's kept open for them. */
+  /** Agents it spawned are still at work after the turn, or commands it left running: it's kept open for them. */
   get keepsWorking(): boolean {
     // (One the session ended, with the turn that started it, isn't.)
     for (const [threadID, lane] of this.backgroundLanes) if (lane.ended || lane.run.turn.isEnded) this.backgroundLanes.delete(threadID)
-    return this.backgroundLanes.size > 0
+    return this.backgroundLanes.size > 0 || this.liveTerminals.length > 0
+  }
+
+  /**
+   * Commands it left running in background terminals, as its app-server last listed them, with
+   * when each was first seen. They go with that app-server, which closing it would stop: Codex
+   * doesn't say when one ends (nor is it told: it looks at them itself), so they're listed again
+   * every while, until none is left.
+   */
+  private terminals: { id: string; command: string; since: number }[] = []
+  private terminalsRead?: ReturnType<typeof setTimeout>
+
+  private get liveTerminals() {
+    return this.server && !this.server.isClosed ? this.terminals : []
+  }
+
+  get backgroundTasks() {
+    return this.liveTerminals.map((terminal) => ({ id: terminal.id, since: terminal.since }))
+  }
+
+  async stopBackgroundTasks() {
+    const server = this.server
+    if (!this.liveTerminals.length || !server || !this.nativeID) return
+    await server.request("thread/backgroundTerminals/clean", { threadId: this.nativeID }, 30_000).catch(() => {})
+    await this.readTerminals()
+  }
+
+  /** Lists its background terminals again; while any runs, again in a while. */
+  private async readTerminals() {
+    clearTimeout(this.terminalsRead)
+    const server = this.server
+    const threadID = this.nativeID
+    let listed: { id: string; command: string }[] = []
+    if (server && !server.isClosed && threadID) {
+      try {
+        const answer: any = await server.request("thread/backgroundTerminals/list", { threadId: threadID }, 30_000)
+        listed = (Array.isArray(answer?.data) ? answer.data : []).filter((terminal: any) => typeof terminal?.processId === "string").map((terminal: any) => ({ id: terminal.processId, command: String(terminal.command ?? "") }))
+      } catch {}
+    }
+    // (Its app-server since replaced, or a turn under way, which reads them again as it ends.)
+    if (server !== this.server || this.inTurn) return
+    const before = this.terminals
+    this.terminals = listed.map((terminal) => ({ ...terminal, since: before.find((known) => known.id === terminal.id)?.since ?? Date.now() }))
+    if (before.length !== this.terminals.length || this.terminals.some((terminal) => !before.some((known) => known.id === terminal.id))) emit("session.background.updated", { sessionID: this.session.id }, this.session.location.directory)
+    if (this.terminals.length) this.terminalsRead = setTimeout(() => void this.readTerminals(), codexTiming.terminals)
   }
 
   /** Your message, into the turn under way (Codex's turn/steer). */
@@ -1235,6 +1282,8 @@ class CodexThread implements Thread {
       while (this.asking.size) await Promise.all(this.asking)
       this.answers = []
       this.inTurn = false
+      // What it left running, now the turn's over.
+      void this.readTerminals()
     }
   }
 
@@ -2244,6 +2293,9 @@ class CodexThread implements Thread {
   close() {
     for (const lane of this.backgroundLanes.values()) this.endSubagent(lane, "interrupted")
     this.backgroundLanes.clear()
+    clearTimeout(this.terminalsRead)
+    if (this.terminals.length) emit("session.background.updated", { sessionID: this.session.id }, this.session.location.directory)
+    this.terminals = []
     // Let go of in the app-server it's in (one of its own stops with it).
     const server = this.server
     if (this.nativeID && this.loaded && server && !server.isClosed && !this.agent.isFenced(server)) void server.request("thread/unsubscribe", { threadId: this.nativeID }).catch(() => {})

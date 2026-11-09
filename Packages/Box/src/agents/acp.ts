@@ -3,12 +3,13 @@
 // per turn, and what it does told in `session/update`s. Each agent says how it starts, signs in,
 // picks a model, and anything of its own.
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
+import { closeSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, writeFileSync } from "node:fs"
 import { dirname, resolve } from "node:path"
-import type { OwnTurn, RunInput, RunResult, Thread, TurnHooks, SubagentRun, SubagentTask } from "./agent"
-import { failure } from "./agent"
+import type { LostWork, OwnTurn, RunInput, RunResult, Thread, TurnHooks, SubagentRun, SubagentTask } from "./agent"
+import { failure, lostWorkNote } from "./agent"
 import { resetsIn, type Limit } from "./auto"
 import { fileDiff } from "./diff"
+import { emit } from "./events"
 import { newID } from "./ids"
 import { RPC, RPCError } from "./rpc"
 import { allowedFolders, fenceAgent, fenceAttachments, fenceCopy, fenceKey, fenceRules, seatBot, fullAccessMark } from "./fence"
@@ -115,6 +116,23 @@ export interface AcpContext {
   endPrompt(stopReason: string, error?: string, promptID?: string): void
   /** Ends a turn the agent began on its own (Grok's prompt after a task of its own completed). */
   endOwn(): void
+  /**
+   * What it has going in the background now, each of which wakes it as it ends (Grok's commands
+   * and subagents), as it lists them: those not running any more are left out.
+   */
+  background(tasks: BackgroundTask[], sessionID?: string): void
+}
+
+/** Something an ACP agent keeps going in the background. */
+export interface BackgroundTask {
+  id: string
+  /** A command it runs, or what the task is for. */
+  command?: string
+  description?: string
+  kind?: string
+  /** When it started (ms), and the file its output goes to. */
+  started?: number
+  outputFile?: string
 }
 
 interface Active {
@@ -226,6 +244,8 @@ export class AcpThread implements Thread {
     if (this.rpc && !this.rpc.isClosed) relayedServers(this.session.id, this, this.session.location.directory, computer)
     if (this.rpc && !this.rpc.isClosed && this.spawnedWith === key && this.rpc !== this.stale) return this.rpc
     // Started again for another approval mode (the agent takes it as it starts), or an updated program.
+    // (What it left going in the background ends with it: the next message says so.)
+    if (this.rpc && !this.rpc.isClosed && this.tasks.size) this.cut = this.taskWork()
     this.close()
     const launch = await this.flavor.command(mode)
     const whole = this.wholeLaunch(launch.argv, launch.env, launch.cleanEnv, skills)
@@ -267,7 +287,14 @@ export class AcpThread implements Thread {
     rpc.onExit = () => {
       launch.onExit?.()
       ended?.()
-      if (this.rpc === rpc) this.rpc = undefined
+      // Ended by itself between turns (killed, or crashed; not closed here) with work going that
+      // would have woken it as it ended: that went with it, and nothing will.
+      const lost = this.rpc === rpc && !this.active ? this.taskWork() : []
+      if (this.rpc === rpc) {
+        this.rpc = undefined
+        this.leftRunning()
+      }
+      if (lost.length) this.onWorkLost?.(lost)
       // Asked for a new sign-in as it started: the one it keeps is gone.
       const young = Date.now() - startedAt < acpTiming.signInGrace
       if (asksSignIn && young) flavor.signInEnded?.()
@@ -483,6 +510,8 @@ export class AcpThread implements Thread {
       instructed = { value: instructions }
     }
     if (others.length) text += `\n\nAttached files:\n${others.map((path) => `- ${path}`).join("\n")}`
+    if (this.cut.length) text = `${lostWorkNote(`${this.name} started again for this message (what Kuvo Code gives it changed).`, this.cut)}\n\n${text}`
+    this.cut = []
     prompt.unshift({ type: "text", text })
     return new Promise<RunResult>((resolve) => {
       const active: Active = { turn, hooks, resolve, rpc, tools: new Map(), toolsSinceText: false, ended: false, instructed, children: new Map(), served: new Map(), started: Date.now(), prompt: 0, input }
@@ -583,6 +612,13 @@ export class AcpThread implements Thread {
         // Over before it was taken: the turn that takes it ends with what it said.
         else if (this.own && !this.own.turnedAway) this.own.ended = true
         else if (this.own) this.own = undefined
+      },
+      background: (tasks, sessionID) => {
+        // (Its own, not a subagent's on the same connection.)
+        if (sessionID && this.sessionID && sessionID !== this.sessionID) return
+        const before = this.tasks
+        this.tasks = new Map(tasks.map((task) => [task.id, { ...task, started: before.get(task.id)?.started ?? task.started ?? Date.now() }]))
+        if (before.size !== this.tasks.size || [...this.tasks.keys()].some((id) => !before.has(id))) emit("session.background.updated", { sessionID: this.session.id }, this.session.location.directory)
       },
     }
   }
@@ -1035,9 +1071,51 @@ export class AcpThread implements Thread {
     if (this.rpc === rpc && (!this.active || this.active.rpc !== rpc)) this.close()
   }
 
+  /** What it keeps going in the background, by its id: it goes with its process. */
+  private tasks = new Map<string, BackgroundTask>()
+  /** What it had going when it was started again for the next message, for that message to say. */
+  private cut: LostWork[] = []
+  onWorkLost?: (lost: LostWork[]) => void
+
+  /** Work it left going: closing it would end it. */
+  get keepsWorking(): boolean {
+    return Boolean(this.rpc && !this.rpc.isClosed) && this.tasks.size > 0
+  }
+
+  get wakingWork(): LostWork[] {
+    return this.rpc && !this.rpc.isClosed ? this.taskWork() : []
+  }
+
+  /** Not commands in the bar: it can't stop one alone, nor say what one printed until it ends. */
+  get backgroundTasks() {
+    if (!this.rpc || this.rpc.isClosed) return []
+    return [...this.tasks.values()].map((task) => ({ id: task.id, since: task.started ?? Date.now() }))
+  }
+
+  /** It can't be asked to stop them one by one: it stops, and with it what it left going (the next message starts it again, going on with its conversation). */
+  async stopBackgroundTasks() {
+    if (!this.tasks.size || this.active) return
+    this.close()
+  }
+
+  private taskWork(): LostWork[] {
+    return [...this.tasks.values()].map((task) => {
+      const output = tailOf(task.outputFile)
+      if (task.command && task.kind !== "subagent") return { kind: "command", what: task.command, output }
+      return { kind: "task", what: task.description || task.command || "A task in the background", output }
+    })
+  }
+
+  private leftRunning() {
+    const had = this.tasks.size
+    this.tasks = new Map()
+    if (had) emit("session.background.updated", { sessionID: this.session.id }, this.session.location.directory)
+  }
+
   close() {
     this.rpc?.kill()
     this.rpc = undefined
+    this.leftRunning()
     // Its key to Kuvo Code's tools and the computer's servers goes with it (a new one for the next).
     dropRelayed(this.session.id, this)
     this.fenced = false
@@ -1223,4 +1301,21 @@ export function questionFields(questions: { id?: string; question: string; heade
     options: (question.options ?? []).map((option) => ({ value: option.label, label: option.label, description: option.description })),
     custom: true,
   }))
+}
+
+/** The end of a file (what a background command printed so far), when it's there to read. */
+function tailOf(path: string | undefined, bytes = 2_000): string | undefined {
+  if (!path) return undefined
+  let fd: number | undefined
+  try {
+    fd = openSync(path, "r")
+    const size = fstatSync(fd).size
+    const buffer = Buffer.alloc(Math.min(bytes, size))
+    readSync(fd, buffer, 0, buffer.length, size - buffer.length)
+    return buffer.toString("utf8").trim() || undefined
+  } catch {
+    return undefined
+  } finally {
+    if (fd !== undefined) closeSync(fd)
+  }
 }

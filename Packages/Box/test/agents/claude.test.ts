@@ -411,6 +411,121 @@ describe("Claude Code, on its own", () => {
   })
 })
 
+describe("Claude Code ended between turns, with work in the background (#262)", () => {
+  /** A session whose turn started `scripts/test.sh` in the background and ended, waiting for it. */
+  async function waiting(id: string) {
+    sessions.prompt(id, { id: "msg_claude_lost_001", text: "run the tests in the background", files: [], delivery: "steer" })
+    await until(() => fake.sent.length === 1)
+    const [first] = fake.sent.map((message) => message.uuid)
+    fake.out.push({ type: "assistant", message: { id: "m1", content: [{ type: "tool_use", id: "tool1", name: "Bash", input: { command: "scripts/test.sh", run_in_background: true } }] }, parent_tool_use_id: null, user_message_uuids: [first] })
+    fake.out.push({ type: "system", subtype: "task_started", task_id: "t1", task_type: "local_bash", description: "Run the tests", tool_use_id: "tool1", is_backgrounded: true })
+    fake.out.push({ type: "system", subtype: "background_tasks_changed", tasks: [{ task_id: "t1", task_type: "local_bash", description: "Run the tests" }] })
+    fake.say("Waiting for the tests to report back.", [first])
+    fake.result([first])
+    await until(() => idles(id).length === 1)
+    await until(() => (sessions.background()[id]?.commands.length ?? 0) === 1)
+  }
+
+  test("killed from outside: the session is woken, told the command stopped unfinished, rather than waiting for ever", async () => {
+    const id = sessions.create({ model: { providerID: provider, id: "default" }, location: { directory: root } }).id
+    await waiting(id)
+    // What it printed so far, as the bar read it.
+    fake.outputs.set("t1", "PASS a.test\n")
+    const [job] = shells(root).filter((job) => job.metadata.sessionID === id && job.status === "running")
+    await shellOutput(job.id, 0, 24_000)
+    const before = fake.sent.length
+    // (The Claude Code that starts again for the note has a stream of its own.)
+    const killed = fake.out
+    fake.out = new Queue<any>()
+    ;(fake as any).crashed = new Error("Claude Code process exited with code 143")
+    killed.close()
+    await until(() => fake.sent.length === before + 1)
+    const told = fake.sent.at(-1).message.content.find((part: any) => part.type === "text")?.text ?? fake.sent.at(-1).message.content
+    expect(String(told)).toContain("scripts/test.sh")
+    expect(String(told)).toContain("stopped")
+    expect(String(told)).toContain("PASS a.test")
+    // It shows as the command stopping, and nothing runs for it any more.
+    const notice = sessions.messages(id).find((message) => message.type === "synthetic") as any
+    expect(notice.description).toBe("scripts/test.sh")
+    expect(notice.metadata).toMatchObject({ source: "shell", state: "error", signal: "SIGTERM" })
+    expect(shells(root).find((one) => one.id === job.id)?.status).toBe("exited")
+    fake.say("The tests stopped; running them again.", [fake.sent.at(-1).uuid])
+    fake.result([fake.sent.at(-1).uuid])
+    await until(() => idles(id).length === 2)
+  })
+
+  test("killed while an undo is staged: the note waits for your next message, and the undo stays", async () => {
+    const id = sessions.create({ model: { providerID: provider, id: "default" }, location: { directory: root } }).id
+    await waiting(id)
+    await sessions.stageRevert(id, "msg_claude_lost_001")
+    const killed = fake.out
+    fake.out = new Queue<any>()
+    ;(fake as any).crashed = new Error("Claude Code process exited with code 143")
+    killed.close()
+    await until(() => sessions.inbox(id).length === 1)
+    await Bun.sleep(50)
+    expect(sessions.inbox(id)[0]).toMatchObject({ type: "synthetic", delivery: "queue" })
+    expect(fake.sent).toHaveLength(1)
+    expect(sessions.get(id).revert?.messageID).toBe("msg_claude_lost_001")
+  })
+
+  test("closed by the box itself (its account removed): no note, nothing more starts", async () => {
+    const id = sessions.create({ model: { providerID: provider, id: "default" }, location: { directory: root } }).id
+    await waiting(id)
+    sessions.forgetProvider(provider)
+    await until(() => fake.closed)
+    await Bun.sleep(50)
+    expect(sessions.messages(id).some((message) => message.type === "synthetic")).toBe(false)
+    expect(fake.sent).toHaveLength(1)
+  })
+
+  test("started again for your next message (Claude Code was updated): that message says what stopped with it", async () => {
+    const id = sessions.create({ model: { providerID: provider, id: "default" }, location: { directory: root } }).id
+    await waiting(id)
+    claude.programUpdated()
+    fake.out = new Queue<any>()
+    sessions.prompt(id, { id: "msg_claude_lost_002", text: "how are the tests doing?", files: [], delivery: "steer" })
+    await until(() => fake.sent.length === 2)
+    const told = String(fake.sent[1].message.content.find?.((part: any) => part.type === "text")?.text ?? fake.sent[1].message.content)
+    expect(told).toContain("Claude Code started again for this message")
+    expect(told).toContain("scripts/test.sh")
+    expect(told).toContain("how are the tests doing?")
+    // Not a turn of its own besides.
+    expect(sessions.messages(id).some((message) => message.type === "synthetic")).toBe(false)
+  })
+
+  test("the bridge stops meanwhile: once it's back, the session is woken with what stopped", async () => {
+    const store = join(root, "sessions")
+    const id = sessions.create({ model: { providerID: provider, id: "default" }, location: { directory: root } }).id
+    await waiting(id)
+    sessions.closeAll()
+    // A bridge started again, on the same sessions.
+    fake = new FakeClaude()
+    claude = new TestClaude(fake, root)
+    sessions = new Sessions(new Store(store), { find: (provider: string | undefined) => (provider === claude.providerID ? claude : undefined) } as unknown as Roster, new Auto(root), undefined, async () => [])
+    expect(fake.sent).toHaveLength(0)
+    sessions.wakeLost()
+    await until(() => fake.sent.length === 1)
+    const told = String(fake.sent[0].message.content.find?.((part: any) => part.type === "text")?.text ?? fake.sent[0].message.content)
+    expect(told).toContain("Kuvo Code stopped")
+    expect(told).toContain("scripts/test.sh")
+  })
+
+  test("the bridge back after more than a day: the note is let go of, and nothing starts", async () => {
+    const store = join(root, "sessions")
+    const id = sessions.create({ model: { providerID: provider, id: "default" }, location: { directory: root } }).id
+    await waiting(id)
+    sessions.closeAll()
+    fake = new FakeClaude()
+    claude = new TestClaude(fake, root)
+    sessions = new Sessions(new Store(store), { find: (provider: string | undefined) => (provider === claude.providerID ? claude : undefined) } as unknown as Roster, new Auto(root), undefined, async () => [])
+    sessions.wakeLost(Date.now() + 25 * 60 * 60_000)
+    await Bun.sleep(50)
+    expect(fake.sent).toHaveLength(0)
+    expect(sessions.inbox(id)).toHaveLength(0)
+  })
+})
+
 describe("Claude Code, on its own, twice", () => {
   test("two turns of its own one after the other are two turns here", async () => {
     const id = sessions.create({ model: { providerID: provider, id: "default" }, location: { directory: root } }).id
