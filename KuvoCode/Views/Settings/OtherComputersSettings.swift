@@ -38,8 +38,8 @@ struct OtherComputersSettings: View {
                     Text("Your Other Computers")
                 } footer: {
                     VStack(alignment: .leading, spacing: 4) {
+                        // (A footer's own color, as Also Allowed's above it.)
                         Text("At your own risk: a lost computer or a leaked key could start work here too. Full Access still has to be allowed on \(name) once.")
-                            .foregroundStyle(.secondary)
                         if let failure {
                             Text(failure).foregroundStyle(.red)
                         }
