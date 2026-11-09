@@ -1069,7 +1069,7 @@ class ClaudeThread implements Thread {
     const skills = skillsFolder(await skillsFor(this.session.location.directory, this.agent.ownSkillFolders(this.session.location.directory), turnedOff(hooks)))
     // So does it when the box's sandbox was turned on or off, or its rules changed.
     const fence = fenceKey() + fullAccessMark(this.session.id)
-    // (What it left going in the background ends with it: the next message of words says so.)
+    // (What it left going in the background ends with it: this message says so.)
     if (this.query && (this.opened?.append !== append || this.opened?.program !== this.agent.program || this.opened?.tools !== tools?.key || this.opened?.skills !== skills || this.opened?.fence !== fence)) {
       this.cut.push(...this.wakingWork)
       this.close()
@@ -1114,6 +1114,8 @@ class ClaudeThread implements Thread {
       const command = input.compact || input.text.trimStart().startsWith("/")
       const note = command ? undefined : instructionsNote(toldOf(this.state, "claudeTold"), append)
       const lostNote = this.cut.length && !command ? lostWorkNote("Claude Code started again before this message.", this.cut.splice(0)) : undefined
+      // (A command, as typed, has no room for it: the session hears it as a note instead.)
+      if (this.cut.length && command) this.onWorkLost?.(this.cut.splice(0))
       const ahead = [lostNote, note].filter(Boolean).join("\n\n")
       const message = userMessage(ahead ? { ...input, text: `${ahead}\n\n${input.text}` } : input, this.copies())
       let active: Active | undefined
@@ -1321,7 +1323,7 @@ class ClaudeThread implements Thread {
   }
 
   onWorkLost?: (lost: LostWork[]) => void
-  /** What it had going when it was started again for a message, for the next message of words to say. */
+  /** What it had going when it was started again for a message, for that message to say. */
   private cut: LostWork[] = []
 
   /** What it left going, each of which tells it as it ends (Claude Code carries on then). */

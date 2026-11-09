@@ -245,7 +245,7 @@ export class AcpThread implements Thread {
     if (this.rpc && !this.rpc.isClosed && this.spawnedWith === key && this.rpc !== this.stale) return this.rpc
     // Started again for another approval mode (the agent takes it as it starts), or an updated program.
     // (What it left going in the background ends with it: the next message says so.)
-    if (this.rpc && !this.rpc.isClosed && this.tasks.size) this.cut = this.taskWork()
+    if (this.rpc && !this.rpc.isClosed && this.tasks.size) this.cut.push(...this.taskWork())
     this.close()
     const launch = await this.flavor.command(mode)
     const whole = this.wholeLaunch(launch.argv, launch.env, launch.cleanEnv, skills)

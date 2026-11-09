@@ -473,15 +473,11 @@ describe("Claude Code ended between turns, with work in the background (#262)", 
     expect(String(fake.sent[1].message.content.find?.((part: any) => part.type === "text")?.text ?? fake.sent[1].message.content)).toContain("scripts/test.sh")
   })
 
-  test("killed while an undo is staged, then your message makes the undo final: told once, after your message", async () => {
+  test("an undo made final while a command still runs: its Claude Code starts over, and the session is told once, after your message", async () => {
     const id = sessions.create({ model: { providerID: provider, id: "default" }, location: { directory: root } }).id
     await waiting(id)
     await sessions.stageRevert(id, "msg_claude_lost_001")
-    const killed = fake.out
     fake.out = new Queue<any>()
-    ;(fake as any).crashed = new Error("Claude Code process exited with code 143")
-    killed.close()
-    await until(() => sessions.inbox(id).length === 1)
     sessions.prompt(id, { id: "msg_claude_lost_003", text: "start over", files: [], delivery: "steer" })
     await until(() => fake.sent.length === 2)
     const text = (message: any) => String(message.message.content.find?.((part: any) => part.type === "text")?.text ?? message.message.content)
@@ -490,28 +486,25 @@ describe("Claude Code ended between turns, with work in the background (#262)", 
     fake.result([fake.sent[1].uuid])
     await until(() => fake.sent.length === 3)
     expect(text(fake.sent[2])).toContain("scripts/test.sh")
+    fake.say("noted", [fake.sent[2].uuid])
+    fake.result([fake.sent[2].uuid])
+    // (The undo took the first turn away: these are the two since.)
+    await until(() => idles(id).length === 2)
+    expect(fake.sent).toHaveLength(3)
     expect(sessions.inbox(id)).toHaveLength(0)
   })
 
-  test("moved to another computer: its Claude Code stops here, and the session hears so where it goes", async () => {
+  test("started again for a command (/review): the session hears it as a note", async () => {
     const id = sessions.create({ model: { providerID: provider, id: "default" }, location: { directory: root } }).id
     await waiting(id)
-    expect(sessions.closeAgents(id)).toBe(true)
-    const record = JSON.parse(JSON.stringify((sessions as any).store.get(id)))
-    // The computer it goes to.
-    const there = mkdtempSync(join(base, "there-"))
-    const fakeThere = new FakeClaude()
-    const claudeThere = new TestClaude(fakeThere, there)
-    const elsewhere = new Sessions(new Store(join(there, "sessions")), { find: (provider: string | undefined) => (provider === claudeThere.providerID ? claudeThere : undefined) } as unknown as Roster, new Auto(there), undefined, async () => [])
-    try {
-      elsewhere.addCarried(record)
-      await until(() => fakeThere.sent.length === 1)
-      const told = String(fakeThere.sent[0].message.content.find?.((part: any) => part.type === "text")?.text ?? fakeThere.sent[0].message.content)
-      expect(told).toContain("moved to another computer")
-      expect(told).toContain("scripts/test.sh")
-    } finally {
-      elsewhere.closeAll()
-    }
+    claude.programUpdated()
+    fake.out = new Queue<any>()
+    sessions.prompt(id, { id: "msg_claude_lost_004", text: "/review", files: [], delivery: "steer" })
+    await until(() => fake.sent.length === 2)
+    expect(String(fake.sent[1].message.content.find?.((part: any) => part.type === "text")?.text ?? fake.sent[1].message.content)).toBe("/review")
+    await until(() => sessions.inbox(id).length + sessions.messages(id).filter((message) => message.type === "synthetic").length === 1)
+    const note = [...sessions.inbox(id).map((item: any) => item.payload.text), ...sessions.messages(id).flatMap((message: any) => (message.type === "synthetic" ? [message.text] : []))][0]
+    expect(note).toContain("scripts/test.sh")
   })
 
   test("closed by the box itself (its account removed): no note, nothing more starts", async () => {
@@ -556,7 +549,7 @@ describe("Claude Code ended between turns, with work in the background (#262)", 
     expect(told).toContain("scripts/test.sh")
   })
 
-  test("the bridge back only after a while (Kuvo Code quit for the night): the note is let go of, and nothing starts", async () => {
+  test("the bridge back only after a while (Kuvo Code quit for the night): nothing starts, and the note waits for your next message", async () => {
     const store = join(root, "sessions")
     const id = sessions.create({ model: { providerID: provider, id: "default" }, location: { directory: root } }).id
     await waiting(id)
@@ -567,7 +560,8 @@ describe("Claude Code ended between turns, with work in the background (#262)", 
     sessions.wakeLost(Date.now() + 11 * 60_000)
     await Bun.sleep(50)
     expect(fake.sent).toHaveLength(0)
-    expect(sessions.inbox(id)).toHaveLength(0)
+    // It goes with your next message instead.
+    expect(sessions.inbox(id)).toMatchObject([{ type: "synthetic", delivery: "queue" }])
   })
 })
 

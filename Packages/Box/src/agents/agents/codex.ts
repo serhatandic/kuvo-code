@@ -1149,6 +1149,8 @@ class CodexThread implements Thread {
    */
   private terminals: { id: string; command: string; since: number }[] = []
   private terminalsRead?: ReturnType<typeof setTimeout>
+  /** Lists that failed in a row. */
+  private listFailures = 0
 
   private get liveTerminals() {
     return this.server && !this.server.isClosed ? this.terminals : []
@@ -1175,14 +1177,18 @@ class CodexThread implements Thread {
     if (server && !server.isClosed && threadID) {
       try {
         listed = []
+        const seen = new Set<string>()
         let cursor: string | undefined
         do {
           const answer: any = await server.request("thread/backgroundTerminals/list", { threadId: threadID, ...(cursor ? { cursor } : {}) }, 30_000)
           for (const terminal of Array.isArray(answer?.data) ? answer.data : []) if (typeof terminal?.processId === "string") listed.push({ id: terminal.processId, command: String(terminal.command ?? "") })
-          cursor = typeof answer?.nextCursor === "string" && answer.nextCursor ? answer.nextCursor : undefined
-        } while (cursor)
+          cursor = typeof answer?.nextCursor === "string" && answer.nextCursor && !seen.has(answer.nextCursor) ? answer.nextCursor : undefined
+          if (cursor) seen.add(cursor)
+        } while (cursor && seen.size < 20)
+        this.listFailures = 0
       } catch {
-        listed = server.isClosed ? [] : undefined
+        // (Given up on after a few in a row: one that never answers can't keep it open for ever.)
+        listed = server.isClosed || ++this.listFailures >= 5 ? [] : undefined
       }
     }
     // (Its app-server since replaced, or a turn under way, which reads them again as it ends.)
