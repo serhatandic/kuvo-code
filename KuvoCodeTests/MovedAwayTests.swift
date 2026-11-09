@@ -62,7 +62,21 @@ import Testing
         MachineEngine.standIn = nil
         Drafts.shared.remove(id)
         try? FileManager.default.removeItem(at: Bots.file)
+        // (This Mac's list as kept for the next launch: nothing of this test's for the next suite.)
+        SessionCopies.saveLocalSessions([])
         mac.stop()
+    }
+
+    /// As the window follows the list (`MainView`'s `onChange`): each time it changes, closed tabs
+    /// go, and a moment its conversation has no row at all is counted.
+    private func watchList(_ gaps: Gaps) {
+        withObservationTracking { _ = app.workspace.sessions } onChange: { [app, id] in
+            Task { @MainActor in
+                if !app.workspace.sessions.contains(where: { $0.id == id }) { gaps.count += 1 }
+                app.tabs.dropClosed()
+                watchList(gaps)
+            }
+        }
     }
 
     /// A Claude Code model as its agents bridge lists it.
@@ -221,19 +235,27 @@ import Testing
         defer { done() }
         let engine = try await start()
         #expect(shown == "Opus 5.5", "before it moves, as this Mac's Claude Code names its default")
+        let open = app.workspace.model(for: id)
+        let gaps = Gaps()
+        watchList(gaps)
 
         said.machineMoves = move("to", stage: "copying")
-        said.macMoves = move("from", stage: "switching")
+        said.macMoves = move("from", stage: "copying")
         await app.moves.reload(machine)
         await app.moves.reload(BoxClient.mac)
+        // This Mac's bridge lets its copy go, heard before its box's word that it switched.
+        macBridge.list([])
+        app.workspace.handleAgents(try macBridge.event("session.deleted", session: id), machine: nil)
+        #expect(tabIsOpen && rows.count == 1, "its only row stays while it moves")
+        said.macMoves = move("from", stage: "switching")
+        await app.moves.reload(BoxClient.mac)
         #expect(app.workspace.isAway(id, from: nil) && app.workspace.isAway(id, from: machine), "away from both, as each box says")
+        // This Mac's agents bridge read again meanwhile (it reconnected, say).
+        await app.workspace.refreshAgents()
+        await app.workspace.refresh()
         #expect(tabIsOpen && rows.count == 1, "listed nowhere else yet: its row and tab stay")
         said.macMoves = move("from", stage: "finishing")
         await app.moves.reload(BoxClient.mac)
-        // This Mac's bridge lets its copy go.
-        macBridge.list([])
-        app.workspace.handleAgents(try macBridge.event("session.deleted", session: id), machine: nil)
-        #expect(tabIsOpen && rows.count == 1)
 
         // There: the machine has it, on the model it ran on here.
         lives(on: machine, model: "opus")
@@ -245,6 +267,8 @@ import Testing
         try await expectItLives(on: machine)
         #expect(app.bots.bot(bot)?.machine == machine)
         #expect(shown == "Opus 5.5", "the model it ran on, as the machine names it (not its default there, Sonnet)")
+        #expect(app.workspace.model(for: id) === open, "the conversation open all along, not opened again")
+        #expect(gaps.count == 0, "never without a row (its tab would close)")
         _ = engine
     }
 
@@ -336,12 +360,20 @@ import Testing
     @Test func movedBackToThisMacItLivesHere() async throws {
         defer { done() }
         _ = try await start(on: machine)
+        let open = app.workspace.model(for: id)
+        let gaps = Gaps()
+        watchList(gaps)
         said.macMoves = move("to", stage: "copying", toMac: true)
-        said.machineMoves = move("from", stage: "finishing", toMac: true)
+        said.machineMoves = move("from", stage: "copying", toMac: true)
         await app.moves.reload(BoxClient.mac)
         await app.moves.reload(machine)
-        #expect(tabIsOpen && rows.count == 1)
+        // The machine lets its copy go, heard before its box's word that it switched (its moves
+        // are read every few seconds).
+        miniBridge.list([])
         app.workspace.handleAgents(try miniBridge.event("session.deleted", session: id), machine: machine)
+        #expect(tabIsOpen && rows.count == 1, "its only row stays while it moves")
+        said.machineMoves = move("from", stage: "finishing", toMac: true)
+        await app.moves.reload(machine)
         #expect(tabIsOpen && rows.count == 1)
 
         lives(on: nil, model: "opus")
@@ -354,7 +386,14 @@ import Testing
         await app.bots.refresh(BoxClient.mac)
         try await expectItLives(on: nil)
         #expect(app.bots.bot(bot)?.machine == nil)
+        #expect(app.workspace.model(for: id) === open, "the conversation open all along")
+        #expect(gaps.count == 0, "never without a row (its tab would close)")
     }
+}
+
+/// Moments the list had no row of the conversation.
+@MainActor final class Gaps {
+    var count = 0
 }
 
 /// What the stand-in boxes say, from any thread.

@@ -555,10 +555,14 @@ A client asks the box it lives on once, and watches; the move goes on with no cl
   `moved: [{session, key, at}]` (bridge 0.9.208), left out when there are none: the conversations
   that moved away from this box in the last two days (`run/moves/moved.json`), each with the box it
   went to from here (`key`) and when (`at`, ms); one moved back here since isn't in it. A client
-  leaves them out of this box's conversations too, rows it still has from before the move included
-  (a coding agent's as well as the engine's), takes no event from this box about them, and reads them
-  where they're listed now, an open conversation reconnected there: it's the box's word, not the
-  client's guess from lists read at different times. `key` is only where it went from this box: one
+  takes no event from this box about them, and leaves them out of this box's conversations, rows it
+  still has from before the move included (a coding agent's as well as the engine's), once it has
+  them where they're listed now, an open conversation going on there: it's the box's word, not the
+  client's guess from lists read at different times. Until it lists one elsewhere, the row it has
+  stays its only one, as it was (a conversation in view isn't closed partway through its move), and so
+  does `away`'s: a list read then keeps it, and so does the box it leaves letting it go
+  (`session.deleted`) while it moves; once it's listed elsewhere too, that box's row alone goes,
+  never the other's. `key` is only where it went from this box: one
   that moved on since is in that box's own `moved`, and listed where it lives. A box from before
   0.9.208 doesn't say it.
   `elsewhere: [{box, moves: [Move]}]` (bridge 0.9.169), left out when there are none: the moves your other

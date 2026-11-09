@@ -1882,17 +1882,19 @@ final class Workspace {
             let all = everything.filter { $0.parentID == nil }
             Self.dropLeftScratch(all, api: api)
             keepSubSessions(everything.filter { !isAway($0.id, from: nil) }, box: "mac")
-            let local = all.filter { !isHidden($0) && !isAway($0.id, from: nil) }
+            let local = all.filter { !isHidden($0) && !leavesOut($0.id, from: nil) }
             // Moved here from a machine (asked here or from a phone): an open conversation follows it.
             let arrived = everything.filter { session in !isAway(session.id, from: nil) && models[session.id].map { RemoteFolder.isRemote($0.session.location.directory) } == true }
             if !arrived.isEmpty { moved(arrived, api: api) }
             // (This Mac's: a machine's agents' are its own, with its engine's. Not one that moved
             // away from here: its row is the box's it went to, and it isn't kept for the next launch.)
-            let theAgents = sessions.filter { OutsideAgents.isAgentSession($0) && !RemoteFolder.isRemote($0.location.directory) && !isAway($0.id, from: nil) }
+            let theAgents = sessions.filter { OutsideAgents.isAgentSession($0) && !RemoteFolder.isRemote($0.location.directory) && !leavesOut($0.id, from: nil) }
+            // An engine's conversation moving away that it no longer lists, and listed nowhere else yet.
+            let moving = keptWhileMoving(on: nil, listed: Set(local.map(\.id))) { !OutsideAgents.isAgentSession($0) }
             let before = sessions
-            sessions = keepingReads(local + theAgents) + sessions.filter { RemoteFolder.isRemote($0.location.directory) }
+            sessions = keepingReads(local + theAgents) + moving + sessions.filter { RemoteFolder.isRemote($0.location.directory) }
             noteArchiving(since: before)
-            SessionCopies.saveLocalSessions(local + theAgents)
+            SessionCopies.saveLocalSessions((local + theAgents).filter { !isAway($0.id, from: nil) })
             // Read before the engine was up: so here, and told it now.
             let localIDs = Set(local.map(\.id))
             for (id, idle) in unsentViews where localIDs.contains(id) {
@@ -1939,12 +1941,13 @@ final class Workspace {
             let all = everything.filter { $0.parentID == nil }
             Self.dropLeftScratch(all, api: api)
             keepSubSessions(everything.filter { !isAway($0.id, from: nil) }, box: "mac-agents")
-            let listed = all.filter { !isHidden($0) && !isAway($0.id, from: nil) }
+            let listed = all.filter { !isHidden($0) && !leavesOut($0.id, from: nil) }
+            let moving = keptWhileMoving(on: nil, listed: Set(listed.map(\.id)), isMacs)
             // Moved here from a machine: an open conversation follows it.
             let arrived = listed.filter { session in models[session.id].map { RemoteFolder.isRemote($0.session.location.directory) } == true }
             if !arrived.isEmpty { moved(arrived, api: api) }
             let before = sessions
-            sessions = sessions.filter { !isMacs($0) } + keepingReads(listed)
+            sessions = sessions.filter { !isMacs($0) } + keepingReads(listed) + moving
             noteArchiving(since: before)
             // Read while the bridge was away: so here, and told it now.
             let listedIDs = Set(listed.map(\.id))
@@ -1956,7 +1959,8 @@ final class Workspace {
             for (id, model) in models where isMacs(model.session) {
                 // A subagent's isn't one of the conversations listed: among all of the bridge's.
                 guard let session = (model.isSubagent ? everything : listed).first(where: { $0.id == id }) else {
-                    models[id] = nil
+                    // Moving away, and listed nowhere else yet: open as it is, until it's there.
+                    if !moving.contains(where: { $0.id == id }) { models[id] = nil }
                     continue
                 }
                 model.reconnect(api)
@@ -2168,13 +2172,15 @@ final class Workspace {
         do {
             // (Not one that moved away from it: it lives elsewhere now.)
             // Sub-sessions too, for under their sessions' rows.
-            let everything = try await api.allSessions(roots: false).filter { !isAway($0.id, from: machine) }
-            let listed = everything.filter { $0.parentID == nil }
+            let read = try await api.allSessions(roots: false)
+            let everything = read.filter { !isAway($0.id, from: machine) }
+            let listed = read.filter { $0.parentID == nil && !leavesOut($0.id, from: machine) }
             // Its coding agents' too, from the agents bridge beside its engine; not read (it's
             // starting), those known stay as they were.
             let bridge = engine.agents.api
-            let bridgeEverything: [Session]? = if let bridge { try? await bridge.allSessions(roots: false).filter { !isAway($0.id, from: machine) } } else { [] }
-            let bridgeListed = bridgeEverything?.filter { $0.parentID == nil }
+            let bridgeRead: [Session]? = if let bridge { try? await bridge.allSessions(roots: false) } else { [] }
+            let bridgeEverything = bridgeRead?.filter { !isAway($0.id, from: machine) }
+            let bridgeListed = bridgeRead?.filter { $0.parentID == nil && !leavesOut($0.id, from: machine) }
             guard isCurrent() else { return true }
             keepSubSessions(everything, box: machine, machine: machine)
             // Its agents' as they were, when they couldn't be read.
@@ -2192,12 +2198,13 @@ final class Workspace {
             }
             let fromBridge = (bridgeListed ?? []).filter { !isHidden($0) }
             bridgeSessions.formUnion(fromBridge.map(\.id))
-            let keptBridge = bridgeListed != nil ? [] : sessions.filter { RemoteFolder.machine(of: $0.location.directory) == machine && OutsideAgents.isAgentSession($0) && !isAway($0.id, from: machine) }
+            let keptBridge = bridgeListed != nil ? [] : sessions.filter { RemoteFolder.machine(of: $0.location.directory) == machine && OutsideAgents.isAgentSession($0) && !leavesOut($0.id, from: machine) }
             let theirs = listed.filter { !isHidden($0) } + fromBridge + keptBridge
             let reconnected = connectedOnce.contains(machine)
             tellMissedNews(in: theirs, machine: machine)
+            let moving = keptWhileMoving(on: machine, listed: Set(theirs.map(\.id))) { _ in true }
             let before = sessions
-            sessions = sessions.filter { RemoteFolder.machine(of: $0.location.directory) != machine } + keepingReads(theirs)
+            sessions = sessions.filter { RemoteFolder.machine(of: $0.location.directory) != machine } + keepingReads(theirs) + moving
             noteArchiving(since: before)
             for session in theirs { sessionMachines[session.id] = machine }
             remoteSessions = remoteSessions.filter { $0.value.machine != machine }
@@ -2624,11 +2631,12 @@ final class Workspace {
                 reloading[id] = nil
             }
         case "session.deleted":
-            // Its original, let go of by the box it moved away from (`Moves`), or one moving: the
-            // conversation lives on where it went. Only this box's row of it goes (one listed before
+            // One moving (`Moves`), let go of by the box it's leaving before that box's word that
+            // it's away came: the conversation lives on where it went. Only this box's row of it goes (one listed before
             // it moved), whichever is first, never the row of the box it went to; and while it's
             // moving, not its only row (it stays until it's listed where it went, its tab with it).
-            let leaving = isAway(id, from: machine) || Moves.isFrozen(id)
+            // (One from a box that says it doesn't live there never comes this far.)
+            let leaving = Moves.isFrozen(id)
             let elsewhere = sessions.contains { $0.id == id && RemoteFolder.machine(of: $0.location.directory) != machine }
             if leaving, !elsewhere, session(id) != nil { break }
             if leaving, elsewhere {
@@ -3483,6 +3491,26 @@ final class Workspace {
     /// Whether `id` doesn't live on `machine`'s box (nil: this Mac's), as the boxes say.
     func isAway(_ id: String, from machine: String?) -> Bool {
         movedAway[id]?.contains(machine ?? BoxClient.mac) == true
+    }
+
+    /// Whether `box`'s list (nil: this Mac's) leaves `id` out as it's read: it doesn't live there,
+    /// and a row of it from where it lives is here. Until then that box's row is its only one, and
+    /// stays (its tab with it).
+    private func leavesOut(_ id: String, from box: String?) -> Bool {
+        isAway(id, from: box) && sessions.contains { row in
+            let place = RemoteFolder.machine(of: row.location.directory)
+            return row.id == id && place != box && !isAway(id, from: place)
+        }
+    }
+
+    /// `box`'s rows (nil: this Mac's) that its list, read now, doesn't have (`listed`), of
+    /// conversations moving or moved away from it and listed nowhere else yet: kept as they are,
+    /// with an open one's model, until they're listed where they went (`leaveOutMovedAway` then).
+    private func keptWhileMoving(on box: String?, listed: Set<String>, _ include: (Session) -> Bool) -> [Session] {
+        sessions.filter { row in
+            RemoteFolder.machine(of: row.location.directory) == box && include(row) && !listed.contains(row.id)
+                && (isAway(row.id, from: box) || Moves.isFrozen(row.id)) && !leavesOut(row.id, from: box)
+        }
     }
 
     /// Rows of conversations from a box they don't live on (the one they left, listed before they
