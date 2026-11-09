@@ -2201,7 +2201,10 @@ async function setJob(args, from) {
     }
   });
   if (!id) return text("Only a bot keeps a job, and this conversation isn't one.", true);
-  const job = { line: typeof args.summary === "string" ? args.summary : "", details: typeof args.details === "string" ? args.details : "" };
+  const line = args.summary ?? args.job;
+  if (args.clear !== true && (typeof line !== "string" || !line.trim() || typeof args.details !== "string"))
+    return text("Provide a non-empty summary and details, or clear: true to clear your job.", true);
+  const job = args.clear === true ? { line: "", details: "" } : { line, details: args.details };
   const answer = await boxRoute({ method: "PATCH", path: `kuvo/bots/${id}`, body: { job } });
   if (!answer) return text("Couldn't keep it: Kuvo Code on this machine didn't answer. Try again in a moment.", true);
   let said = null;
@@ -2209,8 +2212,9 @@ async function setJob(args, from) {
     said = JSON.parse(answer.body || "{}");
   } catch {}
   if (answer.status !== 200) return text(said?.message || `Couldn't keep it (${answer.status}).`, true);
-  const line = said?.bot?.job ?? "";
-  return text(line ? `Kept. Kuvo Code shows "${line}" under your name.` : "Kept: you have no job now.");
+  if (typeof said?.bot?.job !== "string") return text("The box returned an unreadable job response. Check the job before trying again.", true);
+  const keptLine = said.bot.job;
+  return text(keptLine ? `Kept. Kuvo Code shows "${keptLine}" under your name.` : "Kept: you have no job now.");
 }
 
 /// A route of this machine's box, answered once: `{status, body}`, or null when its script didn't

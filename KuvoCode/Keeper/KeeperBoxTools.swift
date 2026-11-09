@@ -108,13 +108,19 @@ final class KeeperBoxTools {
         guard let caller else { return ("This needs a conversation of its own.", true) }
         let root = await rootOf(caller)
         guard let bot = Self.bot(owning: root.session) else { return ("Only a bot keeps a job, and this conversation isn't one.", true) }
-        let job: [String: Any] = ["line": arguments["summary"] as? String ?? "", "details": arguments["details"] as? String ?? ""]
+        let clear = arguments["clear"] as? Bool == true
+        let inputLine = (arguments["summary"] ?? arguments["job"]) as? String
+        let details = arguments["details"] as? String
+        guard clear || (inputLine?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false && details != nil) else {
+            return ("Provide a non-empty summary and details, or clear: true to clear your job.", true)
+        }
+        let job: [String: Any] = ["line": clear ? "" : inputLine!, "details": clear ? "" : details!]
         guard let answer = try? await box("PATCH", "kuvo/bots/" + Self.escaped(bot.lastPathComponent), body: ["job": job], timeout: 30) else {
             return ("Couldn't keep it: Kuvo Code’s background service on this Mac didn’t answer. Try again in a moment.", true)
         }
         let said = (try? JSONSerialization.jsonObject(with: answer.data)) as? [String: Any]
         guard answer.status == 200 else { return (said?["message"] as? String ?? "Couldn't keep it (\(answer.status)).", true) }
-        let line = (said?["bot"] as? [String: Any])?["job"] as? String ?? ""
+        guard let line = (said?["bot"] as? [String: Any])?["job"] as? String else { return ("The box returned an unreadable job response. Check the job before trying again.", true) }
         return line.isEmpty ? ("Kept: you have no job now.", false) : ("Kept. Kuvo Code shows \"\(line)\" under your name.", false)
     }
 

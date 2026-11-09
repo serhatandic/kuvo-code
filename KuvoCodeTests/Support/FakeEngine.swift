@@ -83,6 +83,15 @@ nonisolated final class FakeEngine: @unchecked Sendable {
                 return StubWeb.json([:])
             case ("GET", "/api/integration"):
                 return StubWeb.json(["location": location, "data": integrations])
+            case ("GET", let path) where path.hasPrefix("/api/integration/"):
+                let id = String(path.dropFirst("/api/integration/".count)).removingPercentEncoding ?? ""
+                guard let found = integrations.first(where: { $0["id"] as? String == id }) else { return StubWeb.json(["message": "Integration not found"], status: 404) }
+                return StubWeb.json(["location": location, "data": found])
+            // No folder open, nothing running: a refresh of its models has nothing to wait for.
+            case ("GET", "/api/debug/location"):
+                return StubWeb.json([] as [Any])
+            case ("GET", "/api/session/active"):
+                return StubWeb.json(["data": [:] as [String: Any]])
             case ("GET", "/api/mcp"):
                 return StubWeb.json(["location": location, "data": servers])
             default:

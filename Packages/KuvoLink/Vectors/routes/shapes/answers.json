@@ -3003,6 +3003,9 @@
             "literal": "accounts.found"
            },
            {
+            "literal": "accounts.refresh"
+           },
+           {
             "literal": "agents"
            },
            {
@@ -3336,6 +3339,9 @@
            },
            {
             "literal": "accounts.found"
+           },
+           {
+            "literal": "accounts.refresh"
            },
            {
             "literal": "agents"
@@ -4005,6 +4011,30 @@
    "answers": {
     "200": {
      "object": {}
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/accounts/refreshable",
+   "answers": {
+    "200": {
+     "object": {
+      "providers": {
+       "list": "string"
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/accounts/:provider/refresh",
+   "answers": {
+    "200": {
+     "object": {
+      "waiting": {
+       "list": "string"
+      }
+     }
     }
    }
   },

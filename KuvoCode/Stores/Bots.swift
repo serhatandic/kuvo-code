@@ -511,7 +511,7 @@ final class Bots {
 
     /// `fields` changed on `bot`'s box (`PATCH kuvo/bots/<id>`), and what it answered taken in.
     private func send(_ fields: [String: JSONValue], to bot: Bot) async throws {
-        guard let client = client(bot.box) else { return }
+        guard let client = client(bot.box) else { throw BoxRefusal(status: 503, data: Data()) }
         struct Answer: Decodable { var bot: ListedBot }
         let path = "kuvo/bots/" + (bot.id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? bot.id)
         let answer = try await client.value(Answer.self, "PATCH", path, body: JSONValue.object(fields))
@@ -613,7 +613,13 @@ final class Bots {
         guard let shown = bot(forSession: caller), let bot = known.first(where: { $0.id == shown.id }) else {
             return ("Only a bot keeps a job, and this conversation isn't one.", true)
         }
-        let job: JSONValue = .object(["line": .string(arguments["summary"] as? String ?? ""), "details": .string(arguments["details"] as? String ?? "")])
+        let clear = arguments["clear"] as? Bool == true
+        let inputLine = (arguments["summary"] ?? arguments["job"]) as? String
+        let details = arguments["details"] as? String
+        guard clear || (inputLine?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false && details != nil) else {
+            return ("Provide a non-empty summary and details, or clear: true to clear your job.", true)
+        }
+        let job: JSONValue = .object(["line": .string(clear ? "" : inputLine!), "details": .string(clear ? "" : details!)])
         do {
             try await send(["job": job], to: bot)
         } catch {

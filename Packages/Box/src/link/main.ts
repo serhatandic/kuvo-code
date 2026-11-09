@@ -47,7 +47,7 @@ import { docsChanged, macDocsChanged } from "./documents/exchange";
 import { newSigningSeed, ownSign, SIGN } from "./documents/format";
 import { docsWork, ownDocs, pruneDocs } from "./documents/work";
 import { bridgeTarget, peerPlaces, peerTargets, readBridgeFile, readEngineFile } from "./engine/client";
-import { engineConfigContent } from "./engine/compatibility";
+import { applyCompatibility, engineConfigContent, knowsEngineSettings } from "./engine/compatibility";
 import { keepEngineDefaults } from "./engine/defaults";
 import { watchBox } from "./engine/watch";
 import { watchMoves } from "./moves/move";
@@ -108,7 +108,8 @@ export { FEATURES } from "../shared/features";
 export { messageID } from "./engine/sessions";
 export { forgetMovesInMemory, keepMoving, sendMovesWith, takeMoveMail, watchMoves } from "./moves/move";
 export { movesElsewhere } from "./moves/elsewhere";
-export { COMPATIBILITY_FILE, engineConfigContent, learnCompatibility, readCompatibility } from "./engine/compatibility";
+export { applyCompatibility, COMPATIBILITY_FILE, ENGINE_LAYER_FILE, engineConfigContent, learnCompatibility, readCompatibility } from "./engine/compatibility";
+export { MODELS_DUE_FILE, refreshModels, settleDueModels } from "./engine/models";
 export { queueOf, queueWatcher, readQueues, scanQueues, stopSession } from "./engine/queue";
 export { keepReadThroughSummary, under } from "./work/tree";
 export { letAttachmentsGo } from "./server/attached";
@@ -872,12 +873,17 @@ if (main) {
   else if (mode === "serve") await serve();
   else if (mode === "leave") leave(argument);
   // A machine's start scripts' (`kuvo-launch`): what its engine starts with, its OPENCODE_CONFIG_CONTENT
-  // with what some providers need on top, as this box last learned it (PROTOCOL.md, "Settings per box").
+  // with the sandbox's note, and what some providers need beside its settings, as this box last
+  // learned it (PROTOCOL.md, "Settings per box").
   else if (mode === "engine-config") {
     // A machine's start runs this before each start of its engine, with or without a bridge or a Mac:
     // its settings as its catalogs have them, before the engine reads them. (This Mac's app runs it
     // too, for what it prints, not as its box: `serve` did this, and there's no settings file here.)
     await upgradeIntegrations().catch(() => {});
+    // What it learned before it kept it there (an older box's), or a copy taken away meanwhile.
+    if (knowsEngineSettings()) {
+      try { applyCompatibility(); } catch {}
+    }
     process.stdout.write(engineConfigContent(process.env.OPENCODE_CONFIG_CONTENT));
   }
   // A machine's start scripts' too: the PATH your login shell sets up there (`~/.local/bin`, nvm's
