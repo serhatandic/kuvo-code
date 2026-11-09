@@ -95,11 +95,12 @@ struct BoxNameStrip: View {
                         ForEach(Array(zip(places, names).enumerated()), id: \.element.0) { step, item in
                             let name = item.1
                             label(name, most: step == 0 ? fit.most : nil)
-                                // Out of sight: no clicks there (past the line's end, they'd be over the
-                                // window's other cards); the count's menu has them, as VoiceOver does.
-                                .allowsHitTesting(fit.isInSight(step))
-                                // Nor for VoiceOver, nor before it's known what fits (they'd all be read
-                                // as if they showed).
+                                // Only those that show whole are buttons: the rest, fading out or out of
+                                // sight, take no clicks (a clipped view still would, past the line's end
+                                // over the window's other cards), nor the keyboard, nor VoiceOver; the
+                                // count's menu has them. Nor any before it's known what fits.
+                                .allowsHitTesting(!hidden.contains(step))
+                                .disabled(hidden.contains(step))
                                 .accessibilityHidden(!measured || hidden.contains(step))
                                 .transition(.opacity)
                         }
@@ -109,16 +110,22 @@ struct BoxNameStrip: View {
                 }
                 .clipped()
                 .mask {
-                    // Once names trail off, the first that doesn't fit whole fades out where it begins;
-                    // those before it show clear.
-                    let from = fit.line > 0 && !hidden.isEmpty ? min(fit.fadesFrom / fit.line, 1) : 1
-                    let to = fit.line > 0 && !hidden.isEmpty ? min(max(fit.fadesTo / fit.line, from), 1) : 1
-                    LinearGradient(stops: [.init(color: .black, location: 0), .init(color: .black, location: from),
-                                           .init(color: hidden.isEmpty ? .black : .clear, location: to)],
-                                   startPoint: .leading, endPoint: .trailing)
+                    // Once names trail off, the first that doesn't fit whole fades out where it begins,
+                    // to the count; those before it show clear. Along the line as it is (the count is
+                    // often narrower than at its widest, which the layout allows for).
+                    GeometryReader { geometry in
+                        let width = max(geometry.size.width, 1)
+                        let from = hidden.isEmpty ? 1 : min(fit.fadesFrom / width, 1)
+                        let to = hidden.isEmpty || fit.fadesTo > fit.fadesFrom ? 1 : from
+                        LinearGradient(stops: [.init(color: .black, location: 0), .init(color: .black, location: from),
+                                               .init(color: hidden.isEmpty ? .black : .clear, location: to)],
+                                       startPoint: .leading, endPoint: .trailing)
+                    }
                 }
             if !hidden.isEmpty {
                 more(fit.hidden.map { names[$0] })
+                    // Its words end where the sections' controls below do.
+                    .padding(.trailing, Self.inset - Self.pad)
                     .accessibilityHidden(!measured)
                     .transition(.opacity)
             }
@@ -135,6 +142,7 @@ struct BoxNameStrip: View {
                         .onGeometryChange(for: CGFloat.self, of: \.size.width) { widths[box] = $0 }
                 }
                 moreLabel(count: boxes.count, mark: .new)
+                    .padding(.trailing, Self.inset - Self.pad)
                     .onGeometryChange(for: CGFloat.self, of: \.size.width) { moreWidth = $0 }
             }
             .fixedSize()
@@ -171,20 +179,14 @@ struct BoxNameStrip: View {
         var starts: [CGFloat] = []
         /// The line's length, short of the count when there is one.
         var line: CGFloat = 0
-        /// How wide the name in view may be, cut at its end past that.
+        /// How wide the name in view may be (its words, mark and padding), its words cut at their
+        /// end past that.
         var most: CGFloat?
         /// Where the line starts to fade out, while names trail off: where the words of the first
         /// that doesn't fit whole begin. It's gone by the line's end, or at once where too little of
         /// it would show to read.
         var fadesFrom: CGFloat = 0
         var fadesTo: CGFloat = 0
-
-        /// Whether the name at `step` shows, whole or fading out.
-        func isInSight(_ step: Int) -> Bool {
-            guard starts.indices.contains(step) else { return false }
-            guard let first = hidden.first else { return true }
-            return step < first || (step == first && fadesTo > fadesFrom)
-        }
     }
 
     /// Lays out names `widths` wide (each with its padding; nil until measured), the one in view
@@ -208,7 +210,7 @@ struct BoxNameStrip: View {
             return Fit(starts: starts, line: room, most: max(room - lead, 40))
         }
         let line = room - more
-        let most = max(line - lead - pad, 40)
+        let most = max(line - lead, 40)
         // Where the names after the one in view begin, once it's cut.
         let cut = known[0] - min(known[0], most)
         starts = starts.enumerated().map { $0 == 0 ? $1 : $1 - cut }
@@ -260,7 +262,8 @@ struct BoxNameStrip: View {
         Button { pick(name.box) } label: {
             StripName(name: name, most: most)
         }
-        .buttonStyle(.plain)
+        // The one in view is where you are already: nothing to show under the pointer.
+        .buttonStyle(StripNameStyle(isOn: !name.isOn))
         .help(name.title)
         .accessibilityLabel(name.title)
         .accessibilityValue(name.said ?? "")
@@ -347,25 +350,38 @@ private struct StripName: View {
                 .foregroundStyle(name.isOn || hovered ? AnyShapeStyle(.primary) : name.isAway ? AnyShapeStyle(.quaternary) : AnyShapeStyle(.tertiary))
                 .lineLimit(1)
                 .truncationMode(.tail)
-                // As wide as it is, never the room it's offered, up to where it's cut.
-                .frame(maxWidth: most ?? .infinity, alignment: .leading)
-                .fixedSize(horizontal: true, vertical: false)
-            if let connection = name.connection {
-                MachineIndicator(connection: connection, size: 6, quiet: true, progress: name.progress)
-            } else if let news = name.news {
-                NewsDot(news: news)
+            // Its mark keeps its room: a name cut short is cut in its words.
+            Group {
+                if let connection = name.connection {
+                    MachineIndicator(connection: connection, size: 6, quiet: true, progress: name.progress)
+                } else if let news = name.news {
+                    NewsDot(news: news)
+                }
             }
+            .fixedSize()
         }
         .padding(.horizontal, BoxNameStrip.pad)
+        // As wide as it is, never the room it's offered, up to where it's cut.
+        .frame(maxWidth: most ?? .infinity, alignment: .leading)
+        .fixedSize(horizontal: true, vertical: false)
         .frame(height: 26)
-        // The one in view is where you are already: nothing to show under the pointer.
-        .modifier(StripHover(isOn: !name.isOn))
     }
 }
 
-/// Under the pointer: a soft fill behind it, its words in full ink, and the pointing hand.
+/// A name in the strip as a button: the strip's hover, and a deeper fill while pressed.
+private struct StripNameStyle: ButtonStyle {
+    let isOn: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label.modifier(StripHover(isOn: isOn, isPressed: configuration.isPressed))
+    }
+}
+
+/// Under the pointer: a soft fill behind it (deeper while pressed), its words in full ink, and the
+/// pointing hand, as `Pressable` has the app's chrome-less controls.
 private struct StripHover: ViewModifier {
     var isOn = true
+    var isPressed = false
     @State private var isHovering = false
 
     func body(content: Content) -> some View {
@@ -373,7 +389,7 @@ private struct StripHover: ViewModifier {
         content
             .foregroundStyle(hovering ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
             .environment(\.stripHovered, hovering)
-            .background(hovering ? Pressable.hoverFill : .clear, in: .rect(cornerRadius: 6))
+            .background(isOn && isPressed ? Pressable.pressedFill : hovering ? Pressable.hoverFill : .clear, in: .rect(cornerRadius: 6))
             .contentShape(.rect(cornerRadius: 6))
             .onHover { isHovering = $0 }
             .pointerStyle(isOn ? .link : nil)

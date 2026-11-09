@@ -37,15 +37,18 @@ import Testing
         let picked: Picked
         let names: [String]
 
-        init(app: AppModel, names: [String], width: CGFloat, inView: Int = 0) {
+        /// `beside`: room past the strip's end, as the window's other cards have beside the sidebar.
+        init(app: AppModel, names: [String], width: CGFloat, inView: Int = 0, beside: CGFloat = 0) {
             AXElement.reading(true)
             self.names = names
             let boxes = names.map { SidebarBox.machine($0) }
             picked = Picked(boxes[inView])
-            window = NSWindow(contentRect: NSRect(x: -20_000, y: -20_000, width: width, height: 60), styleMask: [.titled], backing: .buffered, defer: false)
+            window = NSWindow(contentRect: NSRect(x: -20_000, y: -20_000, width: width + beside, height: 60), styleMask: [.titled], backing: .buffered,
+                              defer: false)
             window.isReleasedWhenClosed = false
             window.contentView = NSHostingView(rootView: Host(boxes: boxes, picked: picked).environment(app)
-                .frame(width: width, height: 60, alignment: .topLeading))
+                .frame(width: width, height: 60, alignment: .topLeading)
+                .frame(width: width + beside, alignment: .leading))
             window.orderBack(nil)
             window.contentView?.layoutSubtreeIfNeeded()
         }
@@ -81,7 +84,11 @@ import Testing
         /// A click on what VoiceOver calls `label`, sent through the window.
         func click(_ label: String) throws {
             let element = try #require(elements.first { $0.label == label }, "“\(label)” among \(shownNames)")
-            let point = window.convertPoint(fromScreen: NSPoint(x: element.frame.midX, y: element.frame.midY))
+            try click(at: window.convertPoint(fromScreen: NSPoint(x: element.frame.midX, y: element.frame.midY)))
+        }
+
+        /// A click at `point`, in the window, sent through it.
+        func click(at point: NSPoint) throws {
             for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
                 let event = try #require(NSEvent.mouseEvent(with: type, location: point, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
                                                             windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: type == .leftMouseDown ? 1 : 0))
@@ -184,6 +191,7 @@ import Testing
         let start = try #require(drawn.first), wholeStart = try #require(whole.first)
         let countStart = Int(strip.window.convertFromScreen(count.frame).minX * scale)
         let shownWidth = (drawn.filter { $0 < countStart }.max() ?? start) - start
+        #expect(start + shownWidth <= Int(frame.maxX * scale), "no ink past the name's end")
         let compared = Int(Double(shownWidth) * 0.8)
         let shifted = Set(drawn.filter { $0 - start < compared }.map { $0 - start })
         let reference = Set(whole.filter { $0 - wholeStart < compared }.map { $0 - wholeStart })
@@ -216,6 +224,79 @@ import Testing
         #expect(count.value?.contains("\(failedName), \(failed.statusText)") == true, "\(count.value ?? "")")
     }
 
+    /// A name fading out at the line's end isn't a button: a click past the strip's end, over
+    /// the card beside the sidebar, where it would run on, leaves the computer in view as it is.
+    @Test func aClickPastTheStripsEndPicksNothing() async throws {
+        // The third shows its start, fading out, and runs on far past the strip's end.
+        let strip = Strip(app: app, names: ["devbox", "gpu", "build-server-in-the-basement"], width: 220, beside: 200)
+        defer { strip.close() }
+        try await until { strip.count != nil }
+        #expect(strip.shownNames == ["devbox", "gpu"], "\(strip.shownNames)")
+        let name = try #require(strip.shown.first)
+        let row = strip.window.convertFromScreen(name.frame).midY
+        for x in [230.0, 260, 300, 380] { try strip.click(at: NSPoint(x: x, y: row)) }
+        #expect(strip.picked.box == .machine("devbox"))
+        // While the names that show whole are buttons.
+        try strip.click("gpu")
+        #expect(strip.picked.box == .machine("gpu"))
+    }
+
+    /// A long name in view that couldn't connect is cut in its words: its orange mark still shows,
+    /// before the count (marked too, for another that couldn't).
+    @Test func aCutNameKeepsItsMark() async throws {
+        SSHConnection.standIn = { _, _ in nil }
+        let failed = app.machines.add("build-server-in-the-basement-\(UUID().uuidString.prefix(6).lowercased()).invalid")
+        let other = app.machines.add("lab-\(UUID().uuidString.prefix(6).lowercased()).invalid")
+        defer {
+            app.removeMachine(failed.machine.id)
+            app.removeMachine(other.machine.id)
+            SSHConnection.standIn = nil
+        }
+        failed.showStandIn("failed")
+        other.showStandIn("failed")
+        let strip = Strip(app: app, names: [failed.machine.id, other.machine.id], width: 220)
+        defer { strip.close() }
+        try await until { strip.count != nil }
+        let name = try #require(strip.shown.first)
+        #expect(name.label == failed.machine.id)
+        let count = try #require(strip.count)
+        let (image, scale) = try strip.picture()
+        let host = try #require(strip.window.contentView)
+        let frame = strip.window.convertFromScreen(name.frame)
+        let orange = Self.orangeColumns(image, rows: Self.rows(of: frame, in: host, scale: scale))
+        let countStart = strip.window.convertFromScreen(count.frame).minX * scale
+        #expect(orange.contains { CGFloat($0) < countStart }, "its mark, before the count")
+    }
+
+    // MARK: How the line is laid out
+
+    /// Names `widths` wide (with their padding), the one in view first, in 220 pt with a 40-pt count.
+    private func fit(_ widths: [CGFloat], room: CGFloat = 220) -> BoxNameStrip.Fit {
+        BoxNameStrip.fit(widths: widths, room: room, more: 40)
+    }
+
+    @Test func thoseThatFitWholeShowAndTheRestAreCounted() {
+        #expect(fit([100, 60]).hidden.isEmpty, "all fit: no count")
+        // 4 + 100, 2 + 60 (words to 160), 2 + 60 (words to 222, past the line's 180).
+        let three = fit([100, 60, 60, 60])
+        #expect(three.hidden == [2, 3])
+        #expect(three.line == 180)
+        #expect(three.fadesFrom == 174 && three.fadesTo == three.fadesFrom, "6 pt of it would show: none")
+        // A short one in view leaves room for the next to show as it fades out.
+        let fading = fit([120, 120])
+        #expect(fading.hidden == [1])
+        #expect(fading.fadesFrom == 132 && fading.fadesTo == 180)
+    }
+
+    @Test func aLongNameInViewIsCutToTheLine() {
+        let long = fit([300, 60])
+        #expect(long.hidden == [1])
+        #expect(long.most == 176, "the line, past its inset: words, mark and padding all")
+        #expect(long.starts[1] == 182, "the next begins past the cut, out of sight")
+        #expect(long.fadesTo == long.fadesFrom)
+        #expect(fit([300]).hidden.isEmpty, "alone, there's nothing to count")
+    }
+
     // MARK: Pictures
 
     /// The pixel rows `frame` (in the window, from its bottom) covers in the host's picture.
@@ -233,6 +314,23 @@ import Testing
         context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
         let rows = rows.clamped(to: 0..<height)
         return (0..<width).filter { x in rows.contains { y in pixels[(y * width + x) * 4 + 3] > 40 } }
+    }
+
+    /// The columns with something orange (a mark) among `rows`.
+    private static func orangeColumns(_ image: CGImage, rows: Range<Int>) -> [Int] {
+        let width = image.width, height = image.height
+        var pixels = [UInt8](repeating: 0, count: width * height * 4)
+        guard let context = CGContext(data: &pixels, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
+                                      space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return [] }
+        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+        let rows = rows.clamped(to: 0..<height)
+        return (0..<width).filter { x in
+            rows.contains { y in
+                let at = (y * width + x) * 4
+                let (r, g, b, a) = (Int(pixels[at]), Int(pixels[at + 1]), Int(pixels[at + 2]), Int(pixels[at + 3]))
+                return a > 200 && r > 200 && (90...190).contains(g) && b < 90
+            }
+        }
     }
 
     /// The name drawn whole, as the strip draws the one in view: its inked columns.
