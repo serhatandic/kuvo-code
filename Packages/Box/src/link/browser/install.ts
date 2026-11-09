@@ -51,6 +51,7 @@ export const PINNED: { linux: Runtime; darwin: Runtime } = { linux, darwin: mac 
 const BROWSER = () => path.join(K, "browser");
 const CURRENT = () => path.join(BROWSER(), "current");
 const STATE = () => path.join(RUN, "browser-install.json");
+const NEXT = () => path.join(RUN, "browser.next");
 const LOCK = () => path.join(RUN, ".browser-installing");
 const STAGING = ".box-staging-";
 
@@ -188,6 +189,10 @@ function note(change: Record_): void {
   const record = { ...readRecord(), ...change, at: Date.now() };
   for (const [key, value] of Object.entries(change)) if (value === undefined) delete record[key as keyof Record_];
   try { writePrivate(STATE(), JSON.stringify(record)); } catch {}
+  // When the keeper may try again by itself (seconds since 1970; never, for what only an update
+  // fixes), which it reads without starting the box.
+  const next = record.state === "failed" ? (record.retryAt === null || record.retryAt === undefined ? 9_999_999_999 : Math.ceil(record.retryAt / 1000)) : 0;
+  try { writePrivate(NEXT(), `${next}\n`); } catch {}
 }
 
 /** Whether a setup is under way (its process holds `run/.browser-installing`). */
@@ -248,6 +253,7 @@ const hostOf = (url: string): string => new URL(url).host;
  * hasn't it (404), else it's there whole and checked, or it throws (and nothing's left). */
 async function download(url: string, expected: { sha256: string; size: number }, to: string, received: (bytes: number) => void, signal: AbortSignal): Promise<"ok" | "missing"> {
   const address = fetchedFrom(url);
+  if (signal.aborted) throw new SetupError("Stopped.");
   const controller = new AbortController();
   const stop = () => controller.abort();
   signal.addEventListener("abort", stop);
@@ -393,9 +399,17 @@ function takeLock(): boolean {
     fs.mkdirSync(LOCK(), { mode: 0o700 });
   } catch {
     if (installing()) return false;
-    // One left by a setup that went: taken aside in one step, so of two that find it so, one does.
+    // One left by a setup that went: taken aside in one step, and only that one (another may have
+    // taken it over meanwhile, and its lock is its own), so of two that find it so, one goes on.
+    const holder = (() => { try { return fs.readFileSync(path.join(LOCK(), "pid"), "utf8"); } catch { return null; } })();
     const aside = `${LOCK()}.gone-${process.pid}-${crypto.randomBytes(4).toString("hex")}`;
     try { fs.renameSync(LOCK(), aside); } catch { return false; }
+    let moved: string | null = null;
+    try { moved = fs.readFileSync(path.join(aside, "pid"), "utf8"); } catch {}
+    if (moved !== holder) {
+      try { fs.renameSync(aside, LOCK()); } catch { fs.rmSync(aside, { recursive: true, force: true }); }
+      return false;
+    }
     fs.rmSync(aside, { recursive: true, force: true });
     try { fs.mkdirSync(LOCK(), { mode: 0o700 }); } catch { return false; }
   }
@@ -460,13 +474,15 @@ function decide({ now, repair }: { now: boolean; repair: boolean }): { outcome: 
   const here = runtimeHere();
   if ("unsupported" in here) return { outcome: "failed", repair: false };
   const before = readRecord();
-  // (Once in a while for the same build.)
-  if (repair && before.repairedId === here.id && Date.now() - (before.repairedAt ?? 0) < REPAIR_EVERY) repair = false;
+  // After a failure, it waits as it said, unless asked now: a repair too.
+  const waits = !now && (before.failures ?? 0) > 0 && before.id === here.id && (before.retryAt == null || Date.now() < before.retryAt);
+  // (A repair that went well, once in a while for the same build, unless asked now.)
+  if (repair && !now && before.repairedId === here.id && Date.now() - (before.repairedAt ?? 0) < REPAIR_EVERY) repair = false;
+  if (repair && waits) repair = false;
   const current = inUse();
   if (repair && !current) repair = false;
   if (!repair && current && compareVersions(current.chromium, here.runtime.chromium.version) >= 0) return { outcome: "ready", repair };
-  const failedBefore = before.state === "failed" && before.id === here.id;
-  if (!now && !repair && failedBefore && (before.retryAt == null || Date.now() < before.retryAt)) return { outcome: "waiting", repair };
+  if (waits) return { outcome: "waiting", repair };
   if (installing()) return { outcome: "busy", repair };
   return { outcome: null, repair };
 }
@@ -483,7 +499,8 @@ export async function installBrowser(asked: { now?: boolean; repair?: boolean } 
     return "failed";
   }
   if (outcome === "ready") {
-    if (before.state !== "ready" && !installing()) note({ state: "ready", failures: 0, retryAt: null, message: undefined, progress: undefined });
+    // (Failures stay counted: a repair after one waits as it said.)
+    if (before.state !== "ready" && !installing()) note({ state: "ready", message: undefined, progress: undefined });
     return "ready";
   }
   if (outcome) return outcome;
@@ -497,7 +514,7 @@ export async function installBrowser(asked: { now?: boolean; repair?: boolean } 
   // The first failure stops every download still going, before anything's said or cleared.
   const stop = new AbortController();
   try {
-    note({ state: "checking", progress: undefined, message: undefined, ...(repair ? { repairedAt: Date.now(), repairedId: here.id } : {}) });
+    note({ state: "checking", progress: undefined, message: undefined });
     fs.mkdirSync(folder, { recursive: true, mode: 0o700 });
     clearOld(current?.id ?? here.id);
     const { runtime, id, kind, mac } = here;
@@ -583,7 +600,7 @@ export async function installBrowser(asked: { now?: boolean; repair?: boolean } 
     fs.chmodSync(bundle, 0o755);
     place(id, bundle);
     clearOld(id);
-    note({ state: "ready", failures: 0, retryAt: null, message: undefined, progress: undefined });
+    note({ state: "ready", failures: 0, retryAt: null, message: undefined, progress: undefined, ...(repair ? { repairedAt: Date.now(), repairedId: id } : {}) });
     return "installed";
   } catch (error) {
     stop.abort();
@@ -606,8 +623,17 @@ function linksInside(folder: string): void {
     for (const entry of fs.readdirSync(at, { withFileTypes: true })) {
       const each = path.join(at, entry.name);
       if (entry.isSymbolicLink()) {
-        let leads = "";
-        try { leads = fs.realpathSync(each); } catch {}
+        let leads: string;
+        try {
+          leads = fs.realpathSync(each);
+        } catch {
+          // To nothing: where it would lead, from its folder as it really is. One inside goes.
+          leads = path.resolve(fs.realpathSync(at), fs.readlinkSync(each));
+          if (leads.startsWith(real + path.sep)) {
+            fs.rmSync(each, { force: true });
+            continue;
+          }
+        }
         if (!leads.startsWith(real + path.sep)) throw new SetupError(`The browser's download has a link that leads outside it (${path.relative(folder, each)}).`, false);
       } else if (entry.isDirectory()) walk(each);
     }
@@ -618,12 +644,18 @@ function linksInside(folder: string): void {
 /** Sets it up in a process of its own (`kuvo-link.js browser install`), outliving whoever asked,
  * unless there's nothing to do (or it waits after a failure, unless asked `now`): how it stands then. */
 export function startBrowserInstall({ now = false, repair = false }: { now?: boolean; repair?: boolean } = {}): BrowserStatus {
+  // (One asked for a moment ago is starting.)
+  const record = readRecord();
+  if (record.state === "checking" && Date.now() - (record.at ?? 0) < 30_000) return browserStatus();
   const decided = decide({ now, repair });
   if (decided.outcome === null && SCRIPT) {
     // Said at once, so whoever asked sees it under way before its process takes the lock.
     note({ state: "checking", progress: undefined, message: undefined });
     const flags = [...(now ? ["--now"] : []), ...(decided.repair ? ["--repair"] : [])];
-    spawn(process.execPath, [...OWN_RUNTIME, SCRIPT, "browser", "install", ...flags], { detached: true, stdio: "ignore", cwd: K, env: process.env }).unref();
+    const child = spawn(process.execPath, [...OWN_RUNTIME, SCRIPT, "browser", "install", ...flags], { detached: true, stdio: "ignore", cwd: K, env: process.env });
+    const here = runtimeHere();
+    child.on("error", error => note({ state: "failed", id: "id" in here ? here.id : undefined, retryAt: Date.now() + 60_000, failures: (readRecord().failures ?? 0) + 1, message: `The browser's setup couldn't start (${error.message}). It tries again in a minute.` }));
+    child.unref();
   }
   return browserStatus();
 }

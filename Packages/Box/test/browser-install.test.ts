@@ -10,8 +10,9 @@ import crypto from "node:crypto"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
-import { makeRpm, makeXz, makeZip, served, startSource } from "../../KuvoLink/Tests/Bridge/browser-source-stand-in.js"
+import { crc32, makeRpm, makeXz, makeZip, served, startSource } from "../../KuvoLink/Tests/Bridge/browser-source-stand-in.js"
 import { allowedSource, browserStatus, compareVersions, installBrowser, runtimeHere, startBrowserInstall } from "../src/link/browser/install"
+import { scriptIs } from "../src/link/home"
 import { cpioEntries, payload } from "../src/link/browser/rpm"
 import { unxz } from "../src/link/browser/xz"
 import { unzip } from "../src/link/browser/zip"
@@ -45,6 +46,13 @@ describe("xz", () => {
     }
     expect(() => unxz(whole.subarray(0, whole.length / 2))).toThrow()
     expect(() => unxz(Buffer.from("not xz at all, not even close"))).toThrow()
+    // An LZMA chunk that would go on with the properties it had, after a dictionary reset.
+    const header = Buffer.from([0xfd, 0x37, 0x7a, 0x58, 0x5a, 0x00, 0x00, 0x00, 0, 0, 0, 0])
+    header.writeUInt32LE(crc32(header.subarray(6, 8)), 8)
+    const block = Buffer.from([0x02, 0x00, 0x21, 0x01, 0x16, 0, 0, 0, 0, 0, 0, 0])
+    block.writeUInt32LE(crc32(block.subarray(0, 8)), 8)
+    const chunks = Buffer.from([0x01, 0x00, 0x00, 0x41, 0xa0, 0x00, 0x00, 0x00, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
+    expect(() => unxz(Buffer.concat([header, block, chunks, Buffer.alloc(16)]))).toThrow(/properties/)
     // Nor more than it may hold.
     expect(() => unxz(fs.readFileSync(path.join(fixtures, "large.xz")), 1_000_000)).toThrow()
   })
@@ -366,17 +374,106 @@ describe("setting it up", () => {
     const asked = source!.asked.length
     // Again at once: the same reason, which setting it up again didn't fix (a library the machine
     // itself lacks), never has it download the browser over and over.
-    expect(await installBrowser({ repair: true, now: true })).toBe("ready")
+    expect(await installBrowser({ repair: true })).toBe("ready")
     expect(source!.asked.length).toBe(asked)
+    // Unless you ask for it now.
+    expect(await installBrowser({ repair: true, now: true })).toBe("installed")
+  })
+
+  test("a repair that fails waits as any failure does, and doesn't count as done", async () => {
+    await serve(systems())
+    expect(await installBrowser()).toBe("installed")
+    const working = current()
+    await source!.close()
+    source = null
+    expect(await installBrowser({ repair: true })).toBe("failed")
+    // The build there stays in use meanwhile, and the next repair waits out the failure.
+    expect(current()).toBe(working)
+    expect(browserStatus().state).toBe("ready")
+    expect(await installBrowser({ repair: true })).toBe("ready")
+    // Once it may try again (or now), it does: it isn't held back six hours for a repair that never happened.
+    await serve(systems())
+    const record = JSON.parse(fs.readFileSync(path.join(RUN, "browser-install.json"), "utf8"))
+    fs.writeFileSync(path.join(RUN, "browser-install.json"), JSON.stringify({ ...record, retryAt: Date.now() - 1 }))
+    expect(await installBrowser({ repair: true })).toBe("installed")
+    expect(fs.readFileSync(path.join(RUN, "browser.next"), "utf8").trim()).toBe("0")
+  })
+
+  test("the keeper is told when it may try again by itself, and never for what only an update fixes", async () => {
+    await serve(systems())
+    await source!.close()
+    source = null
+    expect(await installBrowser()).toBe("failed")
+    const next = Number(fs.readFileSync(path.join(RUN, "browser.next"), "utf8"))
+    expect(next * 1000 - Date.now()).toBeGreaterThan(30_000)
+    await serve(systems(), address => (address.includes("libfoo") ? { status: 404 } : null))
+    expect(await installBrowser({ now: true })).toBe("failed")
+    expect(Number(fs.readFileSync(path.join(RUN, "browser.next"), "utf8"))).toBeGreaterThan(9_000_000_000)
+  })
+
+  test("a setup asked for says so at once, before its process has started", async () => {
+    await serve(systems())
+    const stub = path.join(K, "stub-link.js")
+    fs.writeFileSync(stub, "")
+    scriptIs(stub)
+    try {
+      const before = Date.now()
+      expect(startBrowserInstall().state).toBe("checking")
+      expect(browserStatus().state).toBe("checking")
+      // Never twice: the one asked for already is starting.
+      const record = () => JSON.parse(fs.readFileSync(path.join(RUN, "browser-install.json"), "utf8"))
+      const at = record().at
+      expect(at).toBeGreaterThanOrEqual(before)
+      expect(startBrowserInstall().state).toBe("checking")
+      expect(record().at).toBe(at)
+    } finally {
+      scriptIs("")
+    }
+  })
+
+  test("status says ready while the pinned build is in use, whatever failed before it", async () => {
+    await serve(systems())
+    expect(await installBrowser()).toBe("installed")
+    fs.writeFileSync(path.join(RUN, "browser-install.json"), JSON.stringify({ state: "failed", message: "old", retryAt: Date.now() + 60_000, failures: 1 }))
+    expect(browserStatus().state).toBe("ready")
+  })
+
+  test("a lock left by a setup that went is taken over, and one at work is left alone", async () => {
+    await serve(systems())
+    // Left by a process that's gone.
+    fs.mkdirSync(path.join(RUN, ".browser-installing"), { recursive: true })
+    fs.writeFileSync(path.join(RUN, ".browser-installing", "pid"), "999999")
+    expect(await installBrowser()).toBe("installed")
+    expect(fs.existsSync(path.join(RUN, ".browser-installing"))).toBe(false)
+    expect(fs.readdirSync(RUN).filter(name => name.startsWith(".browser-installing"))).toEqual([])
+    // A setup at work (by its process): another is busy, and its staging stays.
+    fs.mkdirSync(path.join(RUN, ".browser-installing"))
+    const worker = spawn(process.execPath, ["-e", "setTimeout(() => {}, 30_000)", "kuvo-link"], { stdio: "ignore" })
+    try {
+      await new Promise(resolve => setTimeout(resolve, 200))
+      fs.writeFileSync(path.join(RUN, ".browser-installing", "pid"), String(worker.pid))
+      const staging = path.join(BROWSER, `.box-staging-${worker.pid}-test`)
+      fs.mkdirSync(staging)
+      await serve(systems("156.0.0.1"))
+      expect(await installBrowser({ now: true })).toBe("busy")
+      expect(fs.existsSync(staging)).toBe(true)
+    } finally {
+      worker.kill("SIGKILL")
+      await new Promise(resolve => worker.once("exit", resolve))
+      fs.rmSync(path.join(RUN, ".browser-installing"), { recursive: true, force: true })
+    }
   })
 
   test("a failure stops every download still going, and what it says stays said", async () => {
     const made = systems()
     const fonts = (made as { linux: { packages: Record<string, { name: string; rpm: Buffer }[]> } }).linux.packages[kind][1].rpm
     // One package Rocky Linux doesn't have anywhere; another still coming as that's found.
-    await serve(made, address => (address.includes("libfoo") ? { status: 404 } : address.includes("foo-fonts") ? { status: 200, body: fonts, slow: 1_500 } : null))
+    await serve(made, address => (address.includes("libfoo") ? { status: 404 } : address.includes("foo-fonts") ? { status: 200, body: fonts, slow: 3_000 } : null))
+    const began = Date.now()
     expect(await installBrowser()).toBe("failed")
-    await new Promise(resolve => setTimeout(resolve, 2_500))
+    // (The slow one was cut off, not waited for.)
+    expect(Date.now() - began).toBeLessThan(2_500)
+    await new Promise(resolve => setTimeout(resolve, 3_500))
     const status = browserStatus()
     expect(status.state).toBe("failed")
     expect(status.message).toContain("no longer has libfoo")
@@ -388,10 +485,12 @@ describe("setting it up", () => {
   })
 
   test("a link that leads out of the build once it's put together is refused", async () => {
+    // (`../chromium` is inside the zip as it's unpacked, and the folder it was unpacked in, outside
+    // the build, once its files are moved up into it.)
     const zip = makeZip([
       { name: "chrome-linux64/chrome", data: "#!/bin/sh\n", mode: 0o755 },
-      { name: "profile/" },
-      { name: "chrome-linux64/data", link: "../profile" },
+      { name: "chromium/" },
+      { name: "chrome-linux64/data", link: "../chromium" },
     ])
     await serve({ linux: { version: "155.0.0.1", x86_64: zip, aarch64: zip, packages: { [kind]: packages() } } })
     expect(await installBrowser()).toBe("failed")

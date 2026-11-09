@@ -26760,6 +26760,7 @@ var PINNED = { linux: linux_default, darwin: mac_default };
 var BROWSER = () => path88.join(K, "browser");
 var CURRENT = () => path88.join(BROWSER(), "current");
 var STATE = () => path88.join(RUN, "browser-install.json");
+var NEXT = () => path88.join(RUN, "browser.next");
 var LOCK12 = () => path88.join(RUN, ".browser-installing");
 var STAGING = ".box-staging-";
 var SOURCES = [
@@ -26882,6 +26883,11 @@ function note2(change) {
   try {
     writePrivate(STATE(), JSON.stringify(record));
   } catch {}
+  const next = record.state === "failed" ? record.retryAt === null || record.retryAt === undefined ? 9999999999 : Math.ceil(record.retryAt / 1000) : 0;
+  try {
+    writePrivate(NEXT(), `${next}
+`);
+  } catch {}
 }
 function installing() {
   let pid = 0;
@@ -26941,6 +26947,8 @@ function fetchedFrom(url) {
 var hostOf2 = (url) => new URL(url).host;
 async function download(url, expected, to, received, signal) {
   const address = fetchedFrom(url);
+  if (signal.aborted)
+    throw new SetupError("Stopped.");
   const controller = new AbortController;
   const stop = () => controller.abort();
   signal.addEventListener("abort", stop);
@@ -27091,10 +27099,29 @@ function takeLock() {
   } catch {
     if (installing())
       return false;
+    const holder = (() => {
+      try {
+        return fs83.readFileSync(path88.join(LOCK12(), "pid"), "utf8");
+      } catch {
+        return null;
+      }
+    })();
     const aside = `${LOCK12()}.gone-${process.pid}-${crypto36.randomBytes(4).toString("hex")}`;
     try {
       fs83.renameSync(LOCK12(), aside);
     } catch {
+      return false;
+    }
+    let moved = null;
+    try {
+      moved = fs83.readFileSync(path88.join(aside, "pid"), "utf8");
+    } catch {}
+    if (moved !== holder) {
+      try {
+        fs83.renameSync(aside, LOCK12());
+      } catch {
+        fs83.rmSync(aside, { recursive: true, force: true });
+      }
       return false;
     }
     fs83.rmSync(aside, { recursive: true, force: true });
@@ -27159,15 +27186,17 @@ function decide({ now, repair }) {
   if ("unsupported" in here)
     return { outcome: "failed", repair: false };
   const before = readRecord();
-  if (repair && before.repairedId === here.id && Date.now() - (before.repairedAt ?? 0) < REPAIR_EVERY)
+  const waits = !now && (before.failures ?? 0) > 0 && before.id === here.id && (before.retryAt == null || Date.now() < before.retryAt);
+  if (repair && !now && before.repairedId === here.id && Date.now() - (before.repairedAt ?? 0) < REPAIR_EVERY)
+    repair = false;
+  if (repair && waits)
     repair = false;
   const current = inUse();
   if (repair && !current)
     repair = false;
   if (!repair && current && compareVersions(current.chromium, here.runtime.chromium.version) >= 0)
     return { outcome: "ready", repair };
-  const failedBefore = before.state === "failed" && before.id === here.id;
-  if (!now && !repair && failedBefore && (before.retryAt == null || Date.now() < before.retryAt))
+  if (waits)
     return { outcome: "waiting", repair };
   if (installing())
     return { outcome: "busy", repair };
@@ -27183,7 +27212,7 @@ async function installBrowser(asked = {}) {
   }
   if (outcome === "ready") {
     if (before.state !== "ready" && !installing())
-      note2({ state: "ready", failures: 0, retryAt: null, message: undefined, progress: undefined });
+      note2({ state: "ready", message: undefined, progress: undefined });
     return "ready";
   }
   if (outcome)
@@ -27198,7 +27227,7 @@ async function installBrowser(asked = {}) {
   let staging = null;
   const stop = new AbortController;
   try {
-    note2({ state: "checking", progress: undefined, message: undefined, ...repair ? { repairedAt: Date.now(), repairedId: here.id } : {} });
+    note2({ state: "checking", progress: undefined, message: undefined });
     fs83.mkdirSync(folder, { recursive: true, mode: 448 });
     clearOld(current?.id ?? here.id);
     const { runtime, id, kind, mac } = here;
@@ -27286,7 +27315,7 @@ async function installBrowser(asked = {}) {
     fs83.chmodSync(bundle, 493);
     place(id, bundle);
     clearOld(id);
-    note2({ state: "ready", failures: 0, retryAt: null, message: undefined, progress: undefined });
+    note2({ state: "ready", failures: 0, retryAt: null, message: undefined, progress: undefined, ...repair ? { repairedAt: Date.now(), repairedId: id } : {} });
     return "installed";
   } catch (error) {
     stop.abort();
@@ -27308,10 +27337,16 @@ function linksInside(folder) {
     for (const entry of fs83.readdirSync(at, { withFileTypes: true })) {
       const each = path88.join(at, entry.name);
       if (entry.isSymbolicLink()) {
-        let leads = "";
+        let leads;
         try {
           leads = fs83.realpathSync(each);
-        } catch {}
+        } catch {
+          leads = path88.resolve(fs83.realpathSync(at), fs83.readlinkSync(each));
+          if (leads.startsWith(real + path88.sep)) {
+            fs83.rmSync(each, { force: true });
+            continue;
+          }
+        }
         if (!leads.startsWith(real + path88.sep))
           throw new SetupError(`The browser's download has a link that leads outside it (${path88.relative(folder, each)}).`, false);
       } else if (entry.isDirectory())
@@ -27321,11 +27356,17 @@ function linksInside(folder) {
   walk(folder);
 }
 function startBrowserInstall({ now = false, repair = false } = {}) {
+  const record = readRecord();
+  if (record.state === "checking" && Date.now() - (record.at ?? 0) < 30000)
+    return browserStatus();
   const decided = decide({ now, repair });
   if (decided.outcome === null && SCRIPT) {
     note2({ state: "checking", progress: undefined, message: undefined });
     const flags = [...now ? ["--now"] : [], ...decided.repair ? ["--repair"] : []];
-    spawn8(process.execPath, [...OWN_RUNTIME, SCRIPT, "browser", "install", ...flags], { detached: true, stdio: "ignore", cwd: K, env: process.env }).unref();
+    const child = spawn8(process.execPath, [...OWN_RUNTIME, SCRIPT, "browser", "install", ...flags], { detached: true, stdio: "ignore", cwd: K, env: process.env });
+    const here = runtimeHere();
+    child.on("error", (error) => note2({ state: "failed", id: "id" in here ? here.id : undefined, retryAt: Date.now() + 60000, failures: (readRecord().failures ?? 0) + 1, message: `The browser's setup couldn't start (${error.message}). It tries again in a minute.` }));
+    child.unref();
   }
   return browserStatus();
 }

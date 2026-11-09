@@ -1474,10 +1474,12 @@ without a Mac: no Mac sends it. On Linux and macOS, x86-64 and ARM64; a Mac's ow
   A build a browser still runs from stays until nothing does; `browser/profile` (sign-ins) always
   stays. It needs about 1 GB free to set up.
 - **When**: as the box's keeper starts (a newer pin is set up then), and each minute while there's
-  no browser or the last setup didn't go well; when the browser's needed (`kuvo-browser.js`: the
+  no browser or the last setup didn't go well, once `run/browser.next` (seconds since 1970, which
+  the box writes) says it may; when the browser's needed (`kuvo-browser.js`: the
   live view and the tools wait for it, a tool up to four minutes); when a client asks (`POST
   kuvo/browser`); and again when the browser doesn't start because its build isn't whole
-  (`--repair`, at most once in six hours for the same build). One setup at a time
+  (`--repair`: after one that went well, not again for six hours for the same build, unless asked
+  `now`; one that failed waits as any failure does). One setup at a time
   (`run/.browser-installing`, taken over in one step when its process is gone). An older build
   keeps working while a newer one is set up.
 - **Failures**: no network, a source that answers otherwise or too slowly, a checksum, no room. The

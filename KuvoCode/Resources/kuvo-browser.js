@@ -628,8 +628,9 @@ async function launchChrome(sandbox) {
   try {
     output = fs.readFileSync(LOGFILE, "utf8");
   } catch {}
-  // (The program itself couldn't be run: gone, or not a program.)
-  const unrunnable = ["ENOENT", "EACCES", "ENOEXEC"].includes(exited?.error?.code);
+  // (The program itself couldn't be run: gone, or not a program; on a Mac, its launcher couldn't
+  // run the app, 126 or 127.)
+  const unrunnable = ["ENOENT", "EACCES", "ENOEXEC"].includes(exited?.error?.code) || exited?.code === 126 || exited?.code === 127;
   return { output: output || (exited?.error ? String(exited.error.message) : ""), timedOut: !exited, unrunnable };
 }
 

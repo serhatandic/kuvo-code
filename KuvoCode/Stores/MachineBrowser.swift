@@ -258,7 +258,8 @@ final class MachineBrowser {
     }
 
     /// What this Mac put together for machines before their boxes set the browser up themselves
-    /// (hundreds of MB, `browser-linux`): gone, once, in the background.
+    /// (hundreds of MB, `browser-linux`): gone, once, in the background. (This and
+    /// `StorageReport.oldBrowserFolder` can go a few releases after #333 ships.)
     private static let oldCacheGone: Void = {
         let old = StorageReport.oldBrowserFolder
         Task.detached(priority: .background) { try? FileManager.default.removeItem(at: old) }
@@ -281,7 +282,12 @@ final class MachineBrowser {
     /// Makes sure the machine has the browser, its box setting it up if not. Once at a time.
     func prepare(now: Bool = false) async {
         if setup == .ready { return }
-        if let preparing { return await preparing.value }
+        if let preparing {
+            await preparing.value
+            // You asked to try again meanwhile: once more, now, if that one didn't set it up.
+            guard now, setup != .ready, self.preparing == nil else { return }
+            return await prepare(now: true)
+        }
         let task = Task { await install(now: now) }
         preparing = task
         await task.value
