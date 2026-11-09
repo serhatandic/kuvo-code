@@ -9,9 +9,9 @@ import { homedir } from "node:os"
 import { basename, dirname, join, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
 import { providerID, type AgentAccount } from "../accounts"
-import type { Agent, AgentContext, Account, ConversationFiles, ConversationPlace, MessageInput, OwnTurn, RunInput, RunResult, SignInAttempt, SignInOptions, SubagentMessages, SubagentRun, Thread, TurnHooks, PromptFile } from "../agent"
+import type { Agent, AgentContext, Account, ConversationFiles, ConversationPlace, LostWork, MessageInput, OwnTurn, RunInput, RunResult, SignInAttempt, SignInOptions, SubagentMessages, SubagentRun, Thread, TurnHooks, PromptFile } from "../agent"
 import type { Limit } from "../auto"
-import { accountName, ContextWindows, failure, KnownAccount, model, signOutWith, TookTooLong } from "../agent"
+import { accountName, ContextWindows, failure, KnownAccount, lostWorkNote, model, signOutWith, TookTooLong } from "../agent"
 import { fileDiff, fromPatch } from "../diff"
 import { install, installedVersion, maintenance, update, type MaintenanceDefinition } from "../maintenance"
 import { fingerprint, type LimitsSource } from "../limits"
@@ -1069,7 +1069,11 @@ class ClaudeThread implements Thread {
     const skills = skillsFolder(await skillsFor(this.session.location.directory, this.agent.ownSkillFolders(this.session.location.directory), turnedOff(hooks)))
     // So does it when the box's sandbox was turned on or off, or its rules changed.
     const fence = fenceKey() + fullAccessMark(this.session.id)
-    if (this.query && (this.opened?.append !== append || this.opened?.program !== this.agent.program || this.opened?.tools !== tools?.key || this.opened?.skills !== skills || this.opened?.fence !== fence)) this.close()
+    // (What it left going in the background ends with it: this message says so.)
+    if (this.query && (this.opened?.append !== append || this.opened?.program !== this.agent.program || this.opened?.tools !== tools?.key || this.opened?.skills !== skills || this.opened?.fence !== fence)) {
+      this.cut.push(...this.wakingWork)
+      this.close()
+    }
     // The computer's MCP servers (yours, the integrations', a bot's with its own keys), through the
     // relay, which keeps their keys: another set of them is told to the same Claude Code.
     const computer = await computerServers(this.session.location.directory)
@@ -1107,8 +1111,13 @@ class ClaudeThread implements Thread {
       // A conversation it goes on with keeps the instructions it started with (until it's
       // summarized): what changed in them since is said ahead of the message, once. Not ahead of
       // a command (its /compact, a skill's), which goes as typed: the next message says it.
-      const note = input.compact || input.text.trimStart().startsWith("/") ? undefined : instructionsNote(toldOf(this.state, "claudeTold"), append)
-      const message = userMessage(note ? { ...input, text: `${note}\n\n${input.text}` } : input, this.copies())
+      const command = input.compact || input.text.trimStart().startsWith("/")
+      const note = command ? undefined : instructionsNote(toldOf(this.state, "claudeTold"), append)
+      const lostNote = this.cut.length && !command ? lostWorkNote("Claude Code started again before this message.", this.cut.splice(0)) : undefined
+      // (A command, as typed, has no room for it: the session hears it as a note instead.)
+      if (this.cut.length && command) this.onWorkLost?.(this.cut.splice(0))
+      const ahead = [lostNote, note].filter(Boolean).join("\n\n")
+      const message = userMessage(ahead ? { ...input, text: `${ahead}\n\n${input.text}` } : input, this.copies())
       let active: Active | undefined
       const answered = (result: RunResult) => {
         // (Said once it took the message, not one it never got to.)
@@ -1313,6 +1322,21 @@ class ClaudeThread implements Thread {
     return Boolean(this.query) && this.liveTasks.size > 0
   }
 
+  onWorkLost?: (lost: LostWork[]) => void
+  /** What it had going when it was started again for a message, for that message to say. */
+  private cut: LostWork[] = []
+
+  /** What it left going, each of which tells it as it ends (Claude Code carries on then). */
+  get wakingWork(): LostWork[] {
+    if (!this.query) return []
+    return [...this.liveTasks].map((id) => {
+      const task = this.tasks.get(id)
+      const output = task?.last?.output.trim().slice(-2_000) || undefined
+      if (task?.type === "local_bash") return { kind: "command", what: (task.toolUseID ? this.commands.get(task.toolUseID) : undefined) ?? task.description, output }
+      return { kind: "task", what: task?.description || "A task in the background", output }
+    })
+  }
+
   /** What it keeps going that's neither a command (in the bar) nor a subagent (a session of its own). */
   get backgroundTasks() {
     if (!this.query) return []
@@ -1498,12 +1522,16 @@ class ClaudeThread implements Thread {
       ended = error
     }
     if (this.query === query) {
+      // Ended by itself between turns (killed, or crashed) with work going that would have woken
+      // it as it ended: that went with it, and nothing will (no turn here to fail and say so).
+      const lost = this.active ? [] : this.wakingWork
       this.query = undefined
       this.input = undefined
       this.lastEnd = ended
       // Claude Code stopped (or crashed): what it left running went with it.
       this.leftRunning()
       emit("session.background.updated", { sessionID: this.session.id }, this.session.location.directory)
+      if (lost.length) this.onWorkLost?.(lost)
     }
     // Ended under a turn of this Claude Code (not one started since on a new one).
     const active = this.active

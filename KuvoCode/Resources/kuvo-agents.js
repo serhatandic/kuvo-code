@@ -2948,6 +2948,19 @@ class KnownAccount {
     this.failure = undefined;
   }
 }
+function lostWorkNote(why, lost) {
+  const lines = lost.flatMap((work) => {
+    const head = work.kind === "command" ? `- The command \`${work.what.split(`
+`)[0]}\`` : `- ${work.what.split(`
+`)[0]}`;
+    if (work.output)
+      return [head, "  It had printed, at the end:", ...work.output.split(`
+`).map((line) => `  ${line}`)];
+    return work.outputFile ? [head, `  What it printed is in ${work.outputFile}`] : [head];
+  });
+  return [`${why} What you left running in the background stopped with it, unfinished, and won't report back:`, ...lines, "Run again what you still need."].join(`
+`);
+}
 
 class ContextWindows {
   sizes = new Map;
@@ -7469,6 +7482,8 @@ class AcpThread {
       relayedServers(this.session.id, this, this.session.location.directory, computer);
     if (this.rpc && !this.rpc.isClosed && this.spawnedWith === key && this.rpc !== this.stale)
       return this.rpc;
+    if (this.rpc && !this.rpc.isClosed && this.tasks.size)
+      this.cut.push(...this.taskWork());
     this.close();
     const launch = await this.flavor.command(mode);
     const whole = this.wholeLaunch(launch.argv, launch.env, launch.cleanEnv, skills);
@@ -7508,8 +7523,13 @@ class AcpThread {
     rpc.onExit = () => {
       launch.onExit?.();
       ended?.();
-      if (this.rpc === rpc)
+      const lost = this.rpc === rpc && !this.active ? this.taskWork() : [];
+      if (this.rpc === rpc) {
         this.rpc = undefined;
+        this.leftRunning();
+      }
+      if (lost.length)
+        this.onWorkLost?.(lost);
       const young = Date.now() - startedAt < acpTiming.signInGrace;
       if (asksSignIn && young)
         flavor.signInEnded?.();
@@ -7723,6 +7743,11 @@ ${text}`;
 Attached files:
 ${others.map((path) => `- ${path}`).join(`
 `)}`;
+    if (this.cut.length)
+      text = `${lostWorkNote(`${this.name} started again before this message.`, this.cut)}
+
+${text}`;
+    this.cut = [];
     prompt.unshift({ type: "text", text });
     return new Promise((resolve) => {
       const active = { turn, hooks, resolve, rpc, tools: new Map, toolsSinceText: false, ended: false, instructed, children: new Map, served: new Map, started: Date.now(), prompt: 0, input };
@@ -7821,6 +7846,14 @@ ${others.map((path) => `- ${path}`).join(`
           this.own.ended = true;
         else if (this.own)
           this.own = undefined;
+      },
+      background: (tasks, sessionID, replayed) => {
+        if (this.loading || replayed || sessionID && this.sessionID && sessionID !== this.sessionID)
+          return;
+        const before = this.tasks;
+        this.tasks = new Map(tasks.map((task) => [task.id, { ...task, started: before.get(task.id)?.started ?? task.started ?? Date.now() }]));
+        if (before.size !== this.tasks.size || [...this.tasks.keys()].some((id) => !before.has(id)))
+          emit("session.background.updated", { sessionID: this.session.id }, this.session.location.directory);
       }
     };
   }
@@ -8278,9 +8311,43 @@ ${others.map((path) => `- ${path}`).join(`
     if (this.rpc === rpc && (!this.active || this.active.rpc !== rpc))
       this.close();
   }
+  tasks = new Map;
+  cut = [];
+  onWorkLost;
+  get keepsWorking() {
+    return Boolean(this.rpc && !this.rpc.isClosed) && this.tasks.size > 0;
+  }
+  get wakingWork() {
+    return this.rpc && !this.rpc.isClosed ? this.taskWork() : [];
+  }
+  get backgroundTasks() {
+    if (!this.rpc || this.rpc.isClosed)
+      return [];
+    return [...this.tasks.values()].map((task) => ({ id: task.id, since: task.started ?? Date.now() }));
+  }
+  async stopBackgroundTasks() {
+    if (!this.tasks.size || this.active)
+      return;
+    this.close();
+  }
+  taskWork() {
+    return [...this.tasks.values()].map((task) => {
+      const outputFile = task.outputFile;
+      if (task.command && task.kind !== "subagent")
+        return { kind: "command", what: task.command, outputFile };
+      return { kind: "task", what: task.description || task.command || "A task in the background", outputFile };
+    });
+  }
+  leftRunning() {
+    const had = this.tasks.size;
+    this.tasks = new Map;
+    if (had)
+      emit("session.background.updated", { sessionID: this.session.id }, this.session.location.directory);
+  }
   close() {
     this.rpc?.kill();
     this.rpc = undefined;
+    this.leftRunning();
     dropRelayed(this.session.id, this);
     this.fenced = false;
   }
@@ -11520,8 +11587,10 @@ class ClaudeThread {
     const tools = fenceOn() ? relayedTools(this.session.id, this) : kuvoTools(this.session.id);
     const skills = skillsFolder(await skillsFor(this.session.location.directory, this.agent.ownSkillFolders(this.session.location.directory), turnedOff(hooks)));
     const fence = fenceKey() + fullAccessMark(this.session.id);
-    if (this.query && (this.opened?.append !== append || this.opened?.program !== this.agent.program || this.opened?.tools !== tools?.key || this.opened?.skills !== skills || this.opened?.fence !== fence))
+    if (this.query && (this.opened?.append !== append || this.opened?.program !== this.agent.program || this.opened?.tools !== tools?.key || this.opened?.skills !== skills || this.opened?.fence !== fence)) {
+      this.cut.push(...this.wakingWork);
       this.close();
+    }
     const computer = await computerServers(this.session.location.directory);
     const servers = relayedServers(this.session.id, this, this.session.location.directory, computer);
     const opening = !this.query;
@@ -11556,8 +11625,15 @@ class ClaudeThread {
     }
     return new Promise((resolve) => {
       this.lastHooks = hooks;
-      const note = input.compact || input.text.trimStart().startsWith("/") ? undefined : instructionsNote(toldOf(this.state, "claudeTold"), append);
-      const message = userMessage(note ? { ...input, text: `${note}
+      const command = input.compact || input.text.trimStart().startsWith("/");
+      const note = command ? undefined : instructionsNote(toldOf(this.state, "claudeTold"), append);
+      const lostNote = this.cut.length && !command ? lostWorkNote("Claude Code started again before this message.", this.cut.splice(0)) : undefined;
+      if (this.cut.length && command)
+        this.onWorkLost?.(this.cut.splice(0));
+      const ahead = [lostNote, note].filter(Boolean).join(`
+
+`);
+      const message = userMessage(ahead ? { ...input, text: `${ahead}
 
 ${input.text}` } : input, this.copies());
       let active;
@@ -11748,6 +11824,19 @@ ${input.text}` } : input, this.copies());
   get keepsWorking() {
     return Boolean(this.query) && this.liveTasks.size > 0;
   }
+  onWorkLost;
+  cut = [];
+  get wakingWork() {
+    if (!this.query)
+      return [];
+    return [...this.liveTasks].map((id) => {
+      const task = this.tasks.get(id);
+      const output = task?.last?.output.trim().slice(-2000) || undefined;
+      if (task?.type === "local_bash")
+        return { kind: "command", what: (task.toolUseID ? this.commands.get(task.toolUseID) : undefined) ?? task.description, output };
+      return { kind: "task", what: task?.description || "A task in the background", output };
+    });
+  }
   get backgroundTasks() {
     if (!this.query)
       return [];
@@ -11895,11 +11984,14 @@ ${input.text}` } : input, this.copies());
       ended = error;
     }
     if (this.query === query) {
+      const lost = this.active ? [] : this.wakingWork;
       this.query = undefined;
       this.input = undefined;
       this.lastEnd = ended;
       this.leftRunning();
       emit("session.background.updated", { sessionID: this.session.id }, this.session.location.directory);
+      if (lost.length)
+        this.onWorkLost?.(lost);
     }
     const active = this.active;
     if (!active || this.query)
@@ -13675,6 +13767,7 @@ function citationsOf(lane, item) {
   return citations;
 }
 var ASKING_WORDS = "Outside Plan mode, ask the user with request_user_input_async: request_user_input refuses there, which doesn't mean you can't ask. It returns at once, and the answer comes as a new user message, which also ends a sleep you're in.";
+var codexTiming = { terminals: 30000 };
 var WORK_ITEMS = new Set(["commandExecution", "fileChange", "mcpToolCall", "dynamicToolCall", "webSearch", "imageGeneration", "imageView", "collabAgentToolCall"]);
 var STEER_AGAIN = 1000;
 var STEER_AGAIN_LAST = 64000;
@@ -13841,7 +13934,61 @@ class CodexThread {
     for (const [threadID, lane] of this.backgroundLanes)
       if (lane.ended || lane.run.turn.isEnded)
         this.backgroundLanes.delete(threadID);
-    return this.backgroundLanes.size > 0;
+    return this.backgroundLanes.size > 0 || this.liveTerminals.length > 0;
+  }
+  terminals = [];
+  terminalsRead;
+  listFailures = 0;
+  get liveTerminals() {
+    return this.server && !this.server.isClosed ? this.terminals : [];
+  }
+  get backgroundTasks() {
+    return this.liveTerminals.map((terminal) => ({ id: terminal.id, since: terminal.since }));
+  }
+  async stopBackgroundTasks() {
+    const server = this.server;
+    if (!this.liveTerminals.length || !server || !this.nativeID)
+      return;
+    await server.request("thread/backgroundTerminals/clean", { threadId: this.nativeID }, 30000).catch(() => {});
+    await this.readTerminals();
+  }
+  async readTerminals() {
+    clearTimeout(this.terminalsRead);
+    const server = this.server;
+    const threadID = this.nativeID;
+    let listed = [];
+    if (server && !server.isClosed && threadID) {
+      try {
+        listed = [];
+        const seen = new Set;
+        let cursor;
+        do {
+          const answer = await server.request("thread/backgroundTerminals/list", { threadId: threadID, ...cursor ? { cursor } : {} }, 30000);
+          for (const terminal of Array.isArray(answer?.data) ? answer.data : [])
+            if (typeof terminal?.processId === "string")
+              listed.push({ id: terminal.processId, command: String(terminal.command ?? "") });
+          cursor = typeof answer?.nextCursor === "string" && answer.nextCursor && !seen.has(answer.nextCursor) ? answer.nextCursor : undefined;
+          if (cursor)
+            seen.add(cursor);
+        } while (cursor && seen.size < 20);
+        this.listFailures = 0;
+      } catch {
+        listed = server.isClosed || ++this.listFailures >= 5 ? [] : undefined;
+      }
+    }
+    if (server !== this.server || this.inTurn)
+      return;
+    if (!listed) {
+      if (this.terminals.length)
+        this.terminalsRead = setTimeout(() => void this.readTerminals(), codexTiming.terminals);
+      return;
+    }
+    const before = this.terminals;
+    this.terminals = listed.map((terminal) => ({ ...terminal, since: before.find((known) => known.id === terminal.id)?.since ?? Date.now() }));
+    if (before.length !== this.terminals.length || this.terminals.some((terminal) => !before.some((known) => known.id === terminal.id)))
+      emit("session.background.updated", { sessionID: this.session.id }, this.session.location.directory);
+    if (this.terminals.length)
+      this.terminalsRead = setTimeout(() => void this.readTerminals(), codexTiming.terminals);
   }
   async steer(input) {
     const [first] = this.waiting;
@@ -13932,6 +14079,7 @@ class CodexThread {
         await Promise.all(this.asking);
       this.answers = [];
       this.inTurn = false;
+      this.readTerminals();
     }
   }
   ask(questions, hooks) {
@@ -14951,6 +15099,10 @@ From memory: ${cited.join("; ")}`);
     for (const lane of this.backgroundLanes.values())
       this.endSubagent(lane, "interrupted");
     this.backgroundLanes.clear();
+    clearTimeout(this.terminalsRead);
+    if (this.terminals.length)
+      emit("session.background.updated", { sessionID: this.session.id }, this.session.location.directory);
+    this.terminals = [];
     const server = this.server;
     if (this.nativeID && this.loaded && server && !server.isClosed && !this.agent.isFenced(server))
       server.request("thread/unsubscribe", { threadId: this.nativeID }).catch(() => {});
@@ -16604,6 +16756,10 @@ class GrokAgent {
       },
       notification(method, params, context) {
         const name = method.replace(/^_/, "");
+        if (name === "x.ai/session/update" && params?.update?.sessionUpdate === "background_tasks" && Array.isArray(params.update.tasks)) {
+          const running = params.update.tasks.filter((task) => typeof task?.task_id === "string" && task.status === "running");
+          context.background(running.map((task) => ({ id: task.task_id, command: typeof task.command === "string" ? task.command : undefined, description: typeof task.description === "string" ? task.description : undefined, kind: typeof task.kind === "string" ? task.kind : undefined, started: Date.parse(task.started_at) || undefined, outputFile: typeof task.output_file === "string" ? task.output_file : undefined })), typeof params.sessionId === "string" ? params.sessionId : undefined, Boolean(params?._meta?.isReplay));
+        }
         if (name === "x.ai/session/prompt_complete" && String(params?.promptId ?? "").startsWith("task-completed-"))
           context.endOwn();
         if (name === "x.ai/session/prompt_complete" && !String(params?.promptId ?? "").startsWith("task-completed-")) {
@@ -17279,6 +17435,18 @@ function safeJSON(text) {
 var AGENTS_TEXT_BYTES = 200000;
 
 // Packages/Box/src/agents/sessions.ts
+function lostWorkInput(why, lost, delivery = "steer", restarted = false) {
+  const command = lost.find((work) => work.kind === "command");
+  const first = (command ?? lost[0]).what.split(`
+`)[0];
+  const more = lost.length > 1 ? ` (and ${lost.length - 1} more)` : "";
+  const metadata = { source: command ? "shell" : "agent", state: "error", signal: "SIGTERM", kuvo: { lostWork: Date.now(), work: lost, ...restarted ? { restarted: true } : {} } };
+  return { id: newID("msg"), text: lostWorkNote(why, lost), files: [], delivery, synthetic: { description: command ? `${first}${more}` : `Background work stopped: ${first}${more}`, metadata } };
+}
+function lostWorkOf(input) {
+  const kept = input.synthetic?.metadata?.kuvo;
+  return typeof kept?.lostWork === "number" ? { at: kept.lostWork, work: Array.isArray(kept.work) ? kept.work : [], restarted: kept.restarted === true } : undefined;
+}
 function isBusy(doing) {
   return doing.kind !== "idle" && doing.kind !== "deleting";
 }
@@ -17293,7 +17461,7 @@ function runOf(doing) {
 }
 var legacyKeys = ["claudeSession", "claudeStarted", "codexThread", "acpSession", "acpInstructed", "cursorAgent", "cursorInstructed"];
 var carryOn = "Carry on with my last message from where you left off: you're on another model now.";
-var timing = { stopGrace: 8000, idleClose: 15 * 60000, cutShort: 2 * 60000, shellGrace: 5000 };
+var timing = { stopGrace: 8000, idleClose: 15 * 60000, cutShort: 2 * 60000, shellGrace: 5000, lostWorkWake: 10 * 60000 };
 var changes2 = new Set(["edit", "write", "patch"]);
 var shellProcesses = { spawn: spawnProcess, kill: (pid, signal) => void process.kill(pid, signal) };
 function groupRuns(group) {
@@ -18430,10 +18598,19 @@ class Sessions {
     delete record.agent.revertNow;
     delete record.agent.revertAt;
     delete record.agent.revertFiles;
+    const lost = this.queue(record).filter((input) => lostWorkOf(input) && input.delivery === "queue");
+    for (const input of lost) {
+      input.delivery = "steer";
+      emit("session.inbox.delivery.changed", { sessionID: id, inboxID: input.id, delivery: "steer" }, directory);
+    }
     this.store.save(id, true);
     emit("session.revert.cleared", { sessionID: id }, directory);
+    if (lost.length)
+      live.go = true;
     if (live.doing === reverting)
       this.free(id, live);
+    else if (lost.length)
+      this.wake(id);
   }
   mustBeIdle(id, live) {
     if (live.doing.kind === "deleting")
@@ -18456,12 +18633,21 @@ class Sessions {
     delete record.agent.revertNow;
     delete record.agent.revertAt;
     delete record.agent.revertFiles;
+    const lost = [...live.threads].flatMap(([provider, thread]) => (thread.wakingWork ?? []).map((work) => ({ provider, work })));
     for (const thread of live.threads.values())
       thread.close();
+    const name = lost.length ? this.agentName(lost[0].provider) : undefined;
     live.threads.clear();
     for (const [provider, slot] of Object.entries(this.slots(record)))
       this.agent(provider)?.forgetConversation?.(slot.state).catch(() => {});
     record.agent.threads = {};
+    const queue = this.queue(record);
+    const waiting = queue.filter((input) => lostWorkOf(input));
+    const work = [...waiting.flatMap((input) => lostWorkOf(input).work), ...lost.map(({ work }) => work)];
+    for (const input of waiting)
+      this.cancelInput(id, input.id);
+    if (work.length)
+      this.queueLost(id, record, lostWorkInput(`${name ?? this.agentName(record.session.model?.providerID ?? "")} stopped while it had work going in the background (an undo made final starts it over).`, work, "queue"));
     this.store.save(id, true);
     emit("session.revert.committed", { sessionID: id, to: revert.messageID }, record.session.location.directory);
   }
@@ -18699,6 +18885,7 @@ ${others.join(`
     const slot = this.slots(record)[provider] ??= { state: {} };
     const thread = agent.thread(record.session, slot.state);
     thread.onOwnTurn = (note) => this.ownTurn(id, provider, note);
+    thread.onWorkLost = (lost) => this.workLost(id, provider, lost, `${this.agentName(provider)} stopped between turns: its process was ended from outside Kuvo Code, or crashed.`);
     live.threads.set(provider, thread);
     if (live.doing.kind === "idle")
       this.closeWhenIdle(id, live);
@@ -19102,6 +19289,20 @@ ${text.slice(0, 4000)}
         thread.close();
       live.threads.clear();
     }, timing.idleClose);
+  }
+  workLost(id, provider, lost, why) {
+    const record = this.store.get(id);
+    const live = this.live.get(id);
+    if (!record || !live || live.doing.kind === "deleting" || record.session.parentID)
+      return;
+    if (!record.session.revert)
+      return this.enqueue(id, record, live, lostWorkInput(why, lost));
+    this.queueLost(id, record, lostWorkInput(why, lost, "queue"));
+  }
+  queueLost(id, record, input) {
+    this.queue(record).push(input);
+    this.store.save(id, true);
+    emit("session.inbox.enqueued", { sessionID: id, inboxID: input.id, item: { type: "synthetic", payload: { text: input.text, description: input.synthetic.description, metadata: input.synthetic.metadata }, delivery: input.delivery } }, record.session.location.directory);
   }
   ownTurn(id, provider, note) {
     const record = this.store.get(id);
@@ -19806,6 +20007,7 @@ ${live.agentPrompt}` : ""
     clearInterval(this.pruning);
     this.pruning = undefined;
     for (const [id, live] of this.live) {
+      const lost = live.doing.kind === "idle" || onFiles(live.doing) ? [...live.threads].flatMap(([provider, thread]) => (thread.wakingWork ?? []).map((work) => ({ provider, work }))) : [];
       live.go = false;
       live.own = undefined;
       const run = runOf(live.doing);
@@ -19817,6 +20019,35 @@ ${live.agentPrompt}` : ""
       live.subagents.clear();
       for (const thread of live.threads.values())
         thread.close();
+      const record = this.store.get(id);
+      if (!lost.length || !record || record.session.parentID)
+        continue;
+      const input = lostWorkInput(`Kuvo Code stopped (it quit or restarted), and ${this.agentName(lost[0].provider)} with it.`, lost.map(({ work }) => work), "steer", true);
+      this.queue(record).push(input);
+      this.store.save(id, true);
+    }
+  }
+  wakeLost(now = Date.now()) {
+    for (const session of this.store.all()) {
+      const record = this.store.get(session.id);
+      if (!record)
+        continue;
+      const waiting = this.queue(record).filter((input) => lostWorkOf(input)?.restarted);
+      if (!waiting.length)
+        continue;
+      let wakes = false;
+      for (const input of waiting) {
+        const kuvo = input.synthetic.metadata.kuvo;
+        const soon = now - lostWorkOf(input).at < timing.lostWorkWake && !record.session.revert;
+        delete kuvo.restarted;
+        this.store.save(session.id, true);
+        if (soon)
+          wakes = true;
+        else
+          this.setDelivery(session.id, input.id, "queue");
+      }
+      if (wakes)
+        this.wake(session.id);
     }
   }
   forgetProvider(providerID) {
@@ -26166,6 +26397,7 @@ try {
 console.log(JSON.stringify({ url: `http://127.0.0.1:${server4.port}` }));
 self = server3(`http://127.0.0.1:${server4.port}`, password);
 link3.whenReady().then(() => {
+  sessions.wakeLost();
   goals.start();
   sideQuestions.start();
   reviews.resume();
@@ -26221,4 +26453,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 473e2a0b0a5226c8e0a8474793fc64bf94c1d7256fbc8ac25cf77a79b548879e
+// Built from Packages/Box/src/agents f72cc9b43524cdfc08c97d95d223baf73e2368c16cb978fc9d9fb2c06f058c95
