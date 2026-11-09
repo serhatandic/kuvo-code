@@ -1021,22 +1021,27 @@ struct SidebarView: View {
                 } cancel: {
                     if renaming == target { renaming = nil }
                 }
-            } else {
-                HStack(spacing: 6) {
-                    // A bot's work: its face, still, before the title; in a project, its lane shows
-                    // it instead, the session staying yours.
-                    if place != .project, let by = WorksFor(session), let bot = bots.bot(by.bot) {
-                        BotAvatar(look: bot.look, size: 15, animates: false)
-                            .help("Started by \(bot.name)")
-                            .accessibilityLabel("\(bot.name)’s work")
-                    }
-                    Text(session.title ?? "New Session")
-                        .fontWeight(session.isUnread ? .semibold : .regular)
-                        .foregroundStyle(Workspace.isArchived(session) ? .secondary : .primary)
+            } else if let elsewhere = look.elsewhere, !Workspace.isArchived(session) {
+                // Started from another computer: which, in a word, at the title's end; pointed at,
+                // who and where. The title always wins: in a row too narrow for both, it goes.
+                TitleWithTail(session.title ?? "New Session") {
+                    sessionTitle(session, in: place)
+                } tail: {
+                    Text(elsewhere)
+                        .sidebarFont(11)
+                        // (Readable on the open row's fill, as its other secondary words are.)
+                        .foregroundStyle(look.isHighlighted ? HierarchicalShapeStyle.secondary : .tertiary)
                         .lineLimit(1)
+                        // (As wide as it reads, up to a cap: a long name loses its end, never "from".)
                         .truncationMode(.tail)
-                        .accessibilityValue(place == .project ? WorksFor(session).flatMap { bots.bot($0.bot) }.map { Oversight.overseenBy($0.name) } ?? "" : "")
+                        .frame(maxWidth: 80, alignment: .trailing)
+                        .fixedSize(horizontal: true, vertical: false)
+                        .help(look.origin)
+                        // (The row's hint says it whole.)
+                        .accessibilityHidden(true)
                 }
+            } else {
+                sessionTitle(session, in: place)
             }
         } accessory: {
             if Workspace.isArchived(session) {
@@ -1045,21 +1050,6 @@ struct SidebarView: View {
                     .foregroundStyle(.tertiary)
             } else {
                 HStack(spacing: 6) {
-                    // Started from another computer: which, in a word; pointed at, who and where.
-                    if let elsewhere = look.elsewhere {
-                        Text(elsewhere)
-                            .sidebarFont(11)
-                            .foregroundStyle(.tertiary)
-                            .lineLimit(1)
-                            // (As wide as it reads, up to a cap, and never squeezed: a long name
-                            // loses its end, never "from", and the title gives way, not it.)
-                            .truncationMode(.tail)
-                            .frame(maxWidth: 80, alignment: .trailing)
-                            .fixedSize(horizontal: true, vertical: false)
-                            .help(look.origin)
-                            // (The row's hint says it whole.)
-                            .accessibilityHidden(true)
-                    }
                     if look.isSearching, Workspace.isChat(session.location.directory), let machine = RemoteFolder.machine(of: session.location.directory) {
                         Image(systemName: "server.rack")
                             .sidebarFont(10)
@@ -1084,6 +1074,25 @@ struct SidebarView: View {
         .contextMenu { menu(for: session, in: place) }
         .modifier(BranchesAction(count: branches, isUnfolded: look.isUnfolded) { toggleBranches(of: session.id) })
         .accessibilityHint(look.origin)
+    }
+
+    /// A session's title in its row: a bot's face before it where its lane doesn't show it.
+    private func sessionTitle(_ session: Session, in place: Place) -> some View {
+        HStack(spacing: 6) {
+            // A bot's work: its face, still, before the title; in a project, its lane shows
+            // it instead, the session staying yours.
+            if place != .project, let by = WorksFor(session), let bot = bots.bot(by.bot) {
+                BotAvatar(look: bot.look, size: 15, animates: false)
+                    .help("Started by \(bot.name)")
+                    .accessibilityLabel("\(bot.name)’s work")
+            }
+            Text(session.title ?? "New Session")
+                .fontWeight(session.isUnread ? .semibold : .regular)
+                .foregroundStyle(Workspace.isArchived(session) ? .secondary : .primary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .accessibilityValue(place == .project ? WorksFor(session).flatMap { bots.bot($0.bot) }.map { Oversight.overseenBy($0.name) } ?? "" : "")
+        }
     }
 
     /// A conversation's side threads ("/btw"), each opening it with the thread over the composer.
