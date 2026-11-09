@@ -163,9 +163,17 @@ export function seatbeltProfile(policy: FencePolicy, options: SeatbeltOptions): 
   allow(HIDDEN, `(subpath (string-append (param "WAKES") "/inbox"))`);
   // Its agent's own memory, in the bot's folder: only there does it write in that folder.
   allow(HIDDEN, `(subpath (string-append (param "WAKES") "/memory"))`);
-  // Its bot's memory, which the launcher names (MEMORY): read and written in place, never made,
-  // moved or removed (so never a link, or another name for another file).
-  allow("file-read-data file-write-data", `(literal (param "MEMORY"))`);
+  // Its bot's memory, which the launcher names (MEMORY): read and written in place, its times set
+  // (`touch`, checked only as `file-write*`: what's named above stays refused), never made, moved or
+  // removed (so never a link, or another name for another file).
+  allow("file-read-data file-write-data file-write-times file-write*", `(literal (param "MEMORY"))`);
+  // Beside it, files by its name and more (MEMORY_RE, escaped; none for no memory): Claude Code saves
+  // a file whole in a new one first (`MEMORY.md.tmp.<pid>.<random>`), which it renames onto it; that
+  // rename is refused (EPERM), so it writes the memory in place then, and removes the new one. (Where
+  // it can't make the new one at all, it gives up on macOS: only EACCES, Linux's, sends it in place.)
+  // Only files, made, written and removed: never a link, never moved onto the memory.
+  allow(`file-write* file-write-create file-write-data file-write-mode file-write-times file-write-unlink`,
+    `(require-all ${under("MEMORY_RE", String.raw`\.[^/]+$`)} (vnode-type REGULAR-FILE))`);
 
   out.push(";; what runs outside the sandbox, or changes the engine");
   // The conversation's folder and its repository's, themselves: never removed or made again, so

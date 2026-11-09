@@ -75,7 +75,7 @@ export function launcherScript(places: FencePlaces): string {
         `c_sum=$( (printf '%s' "\${c_last-}" | shasum -a 256) 2>/dev/null | cut -c 1-16)`,
         `case \${OPENCODE_SESSION_ID-} in ses_*[!A-Za-z0-9_]*|ses_|'') tag="kuvo-sandbox" ;; *) tag="kuvo-sandbox $OPENCODE_SESSION_ID $c_sum" ;; esac`,
         `[ "$as_bun" != 1 ] || export BUN_BE_BUN=1 BUN_RUNTIME_TRANSPILER_CACHE_PATH=0`,
-        `PATH=$user_path exec /usr/bin/sandbox-exec -D TAG="$tag" -D WORK="$work" -D GIT="$git" -D TMP="$tmp" -D WAKES="$own" -D MEMORY="$memory" -D SSH="$ssh" -D WORK_RE="$(escaped "$work")" -D GIT_RE="$(escaped "$git")" ${Array.from({ length: MOST_FOLDERS }, (_, at) => `-D ALLOW${at}="$a${at}" -D ALLOW${at}_RE="$r${at}"`).join(" ")} ${Array.from({ length: AGENT_FOLDERS }, (_, at) => `-D OWN${at}="$o${at}" -D OWN${at}_RE="$q${at}" -D READ${at}="$k${at}"`).join(" ")} -D STATE="$(names "$state_list")" -D KEPT="$(names "$kept_list")" -D PORT="$port" -f "$F/$profile$agent.sb" "$shell" "$@"`,
+        `PATH=$user_path exec /usr/bin/sandbox-exec -D TAG="$tag" -D WORK="$work" -D GIT="$git" -D TMP="$tmp" -D WAKES="$own" -D MEMORY="$memory" -D MEMORY_RE="$memory_re" -D SSH="$ssh" -D WORK_RE="$(escaped "$work")" -D GIT_RE="$(escaped "$git")" ${Array.from({ length: MOST_FOLDERS }, (_, at) => `-D ALLOW${at}="$a${at}" -D ALLOW${at}_RE="$r${at}"`).join(" ")} ${Array.from({ length: AGENT_FOLDERS }, (_, at) => `-D OWN${at}="$o${at}" -D OWN${at}_RE="$q${at}" -D READ${at}="$k${at}"`).join(" ")} -D STATE="$(names "$state_list")" -D KEPT="$(names "$kept_list")" -D PORT="$port" -f "$F/$profile$agent.sb" "$shell" "$@"`,
       ]
     : [
         // Kuvo Code's own commands (kuvo-wake's watches) run it with no engine: the box names the
@@ -214,7 +214,8 @@ export function launcherScript(places: FencePlaces): string {
     // conversation this is; for its seat in a group chat, the bot the agents bridge names
     // (`KUVO_FENCE_BOT`, as its box marked the seat), or, run by the engine, the bot whose own
     // folder (never a link) it works in. That file alone, read and written in place, as it is (no
-    // other name for another file): never another bot's, nor anything else of its folder.
+    // other name for another file), and on macOS new files beside it by its name and more, which
+    // Claude Code saves it through (seatbelt.ts): never another bot's, nor anything else of its folder.
     `memory= m_bot=\${KUVO_FENCE_BOT-}`,
     "unset KUVO_FENCE_BOT",
     `if [ -n "$w_bot" ] && [ "$own" != "$F/none" ]; then memory=$own/MEMORY.md`,
@@ -223,6 +224,8 @@ export function launcherScript(places: FencePlaces): string {
     `  [ -n "$memory" ] || for b in ${sh(places.bots)}/*/; do [ ! -L "\${b}workspace" ] && [ "$(cd "\${b}workspace" 2>/dev/null && pwd -P)" = "$work" ] && memory=$(cd "$b" && pwd -P)/MEMORY.md && break; done`,
     `fi`,
     `[ -n "$memory" ] && [ -f "$memory" ] && [ ! -L "$memory" ] && [ "$(${places.platform === "darwin" ? "stat -f %l" : "stat -c %h"} "$memory" 2>/dev/null)" = 1 ] || memory=$F/none`,
+    // (On macOS, the new files beside it, by its name escaped; with no memory, a name no file has.)
+    ...(places.platform === "darwin" ? [`memory_re=-; [ "$memory" = "$F/none" ] || memory_re=$(escaped "$memory")`] : []),
     // Kuvo Code's SSH agent for the conversation (the vault's SSH keys), while agents may use it:
     // noted where commands can't write, then handed the command once the box has opened it. Its
     // name starts with its note's sum; the rest, no command can list or guess.

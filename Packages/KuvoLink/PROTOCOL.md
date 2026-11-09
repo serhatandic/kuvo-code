@@ -4125,7 +4125,11 @@ folder (`TMPDIR`), its conversation's wake-ups' inbox (below), its bot's memory 
 whose conversation it is; for its seat in a group chat, the bot the agents bridge names
 (`KUVO_FENCE_BOT`, from the seat's `kuvo.seat.bot`), or, run by the engine, the bot whose own folder
 (not a link) it works in: that file alone, and only while it has no other name (a hard link), read
-and written in place, never made, moved or removed; a coding agent's conversation named to the
+and written in place (its times set too), never made, moved or removed; on macOS, beside it, new files
+named after it (`MEMORY.md.` and more: Claude Code saves a file whole in `MEMORY.md.tmp.<pid>.<random>`
+first, and writes it in place when the rename onto it is refused), made, written and removed, never a
+link or folder, never moved onto it (Linux refuses making them with EACCES, which sends Claude Code
+straight to writing in place); a coding agent's conversation named to the
 launcher as the engine names its own, `OPENCODE_SESSION_ID`), the system's temporary folders, devices and tools'
 caches, but not what in them runs later outside the sandbox (installed programs like
 `~/.cargo/bin` and `~/.bun/bin`, tools' settings and start-up scripts, what your shell profile
