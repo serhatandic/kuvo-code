@@ -92,11 +92,12 @@ export type GivenJob = { job: Job; error?: undefined } | { error: string; job?: 
 // A job as a bot or Edit Bot gives it: its line on one line, as it shows under the bot's name
 // (Bots' `jobLine`), and its details as they are. An error's words for one that can't be.
 export function givenJob(given: unknown): GivenJob {
-  if (!isObject(given) || (given.line !== undefined && typeof given.line !== "string") || (given.details !== undefined && typeof given.details !== "string")) {
+  if (!isObject(given) || typeof given.line !== "string" || (given.details !== undefined && typeof given.details !== "string")) {
     return { error: "A job is {line, details}: what it does in a few words, and the details." };
   }
   const line = jobLine(plainName(given.line ?? ""));
   const details = trimmed(given.details ?? "");
+  if (!line && (given.line !== "" || details)) return { error: "Provide a non-empty job line, or explicitly clear the job." };
   if ([...line].length > MOST_JOB_LINE) return { error: "Say what it does in a few words: that line is too long." };
   if ([...details].length > MOST_JOB_DETAILS) return { error: "That job is too long to keep: shorten its details." };
   return { job: { line, details } };
