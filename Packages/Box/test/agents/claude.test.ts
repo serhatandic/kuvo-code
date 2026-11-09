@@ -912,7 +912,7 @@ describe("a conversation on Claude Code's default, moved to a computer where tha
     }
   })
 
-  test("one on a model of its own goes on it; and where Claude Code hasn't said what its default is, it stays on the default, never a guess", async () => {
+  test("one on a model of its own goes on it; where Claude Code hasn't said what its default is, or the account there doesn't have it, it stays on the default", async () => {
     const macBook = computer("macbook", listing("opus")), mini = computer("mini", listing("sonnet"))
     const quiet = computer("quiet", [])
     try {
@@ -922,6 +922,16 @@ describe("a conversation on Claude Code's default, moved to a computer where tha
       const unsaid = quiet.sessions.create({ model: { providerID: provider, id: "default" }, location: { directory: quiet.home } }).id
       await move(quiet, mini, unsaid)
       expect(mini.sessions.get(unsaid).model).toEqual({ providerID: provider, id: "default" })
+      // To an account there that doesn't have that model: on its default there, which it can run.
+      const noOpus = computer("no-opus", listing("sonnet").filter((each) => each.value !== "opus"))
+      try {
+        const other = macBook.sessions.create({ model: { providerID: provider, id: "default" }, location: { directory: macBook.home } }).id
+        await noOpus.claude.concreteModel("default")
+        await move(macBook, noOpus, other)
+        expect(noOpus.sessions.get(other).model).toEqual({ providerID: provider, id: "default" })
+      } finally {
+        noOpus.sessions.closeAll()
+      }
     } finally {
       for (const each of [macBook, mini, quiet]) each.sessions.closeAll()
     }

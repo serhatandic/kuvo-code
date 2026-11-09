@@ -217,6 +217,8 @@ const work = seedClaude({ claude: path.join(mac.agents, "claude", "accounts", "w
 // it is, and one with a link out of its folder, which no computer takes.
 const linkClaude = conversation();
 const linkWork = seedBot(mac, "bot_link", "ses_link");
+// Its own model isn't its conversation's (you changed one of them): it keeps its own as it moves.
+write(path.join(mac.bots, "bot_link", "bot.json"), { kuvo: 1, id: "bot_link", name: "bot_link", model: { id: "sonnet", providerID: "claude-code" } });
 seedSession(mac, "ses_link", linkWork, linkClaude, { metadata: { kuvo: { bot: "bot_link" } } });
 seedClaude(mac, linkWork, linkClaude);
 fs.mkdirSync(path.join(linkWork, "tools", "bin"), { recursive: true });
@@ -466,6 +468,9 @@ test("a link within a bot's folder goes with it, still a link to the same file",
   assert.equal(fs.readlinkSync(cli), "../cli.js");
   assert.equal(fs.readFileSync(cli, "utf8"), "console.log(1)\n");
   assert.equal(await sessionThere(mac, "ses_link"), false);
+  // Its conversation on the model Claude Code's default stood for here, the bot on its own.
+  assert.deepEqual((await asks(lab, "GET", "/api/session/ses_link")).json.data.model, { id: "opus", providerID: "claude-code" });
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(lab.bots, "bot_link", "bot.json"), "utf8")).model, { id: "sonnet", providerID: "claude-code" });
 });
 
 test("a bot of more than 100 MB goes whole over the relay", { timeout: 600_000 }, async t => {

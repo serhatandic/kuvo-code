@@ -264,8 +264,14 @@ export class Carrying {
     await rm(into, { recursive: true, force: true })
     await mkdir(into, { recursive: true, mode: 0o700 })
     const { manifest, left } = await this.read(root, conversation, into)
+    // (Each model asked once: an agent that can't say now isn't asked again for each session.)
+    const asked = new Map<string, Promise<{ providerID: string; id: string } | undefined>>()
     for (const each of manifest.sessions) {
-      const concrete = await this.concreteOf(this.store.get(each.id)?.session.model)
+      const model = this.store.get(each.id)?.session.model
+      if (!model?.providerID || !model.id) continue
+      const key = `${model.providerID}/${model.id}`
+      if (!asked.has(key)) asked.set(key, this.concreteOf(model))
+      const concrete = await asked.get(key)
       if (concrete) each.model = concrete
     }
     await writeFile(join(into, "carry.json"), JSON.stringify(manifest), { mode: 0o600 })
@@ -415,9 +421,14 @@ export class Carrying {
         }
         agent.threads = kept
         if (id === manifest.root && session.model) rootCame = { ...session.model }
-        // On the model its alias stood for where it came from (it ran on that one there).
+        // On the model its alias stood for where it came from (it ran on that one there), if the
+        // agent that takes it here has that one too (another account's may not).
         const concrete = manifest.sessions.find((each) => each.id === id)?.model
-        if (concrete && session.model && concrete.providerID === session.model.providerID && typeof concrete.id === "string" && concrete.id && concrete.id.length <= 200) session.model = { ...session.model, id: concrete.id }
+        if (concrete && session.model && concrete.providerID === session.model.providerID && typeof concrete.id === "string" && concrete.id && concrete.id.length <= 200) {
+          const host = hosts.get(session.model.providerID) ?? this.agentOf(session.model.providerID)
+          const there = (await host?.models().catch(() => [])) ?? []
+          if (there.some((model) => model.id === concrete.id || model.aliases?.includes(concrete.id))) session.model = { ...session.model, id: concrete.id }
+        }
         if (session.model?.providerID && hosts.get(session.model.providerID)) session.model = { ...session.model, providerID: hosts.get(session.model.providerID)!.providerID }
         stillOn()
         await undo.noteSession(id)

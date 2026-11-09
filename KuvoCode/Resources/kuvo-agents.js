@@ -11145,15 +11145,21 @@ class ClaudeAgent {
     return this.modelList?.models ?? fallbackModels(this.providerID);
   }
   async concreteModel(id) {
+    if (id !== "default")
+      return;
     if (!this.modelList) {
       this.models();
       const loading = this.loadingModels;
       await new Promise((resolve) => {
-        this.listed.push(resolve);
-        if (loading)
-          loading.then(() => resolve(), () => resolve());
-        else
+        const told = () => {
+          this.listed = this.listed.filter((each) => each !== told);
           resolve();
+        };
+        this.listed.push(told);
+        if (loading)
+          loading.then(told, told);
+        else
+          told();
       });
     }
     const models = this.modelList?.models ?? [];
@@ -11220,7 +11226,7 @@ class ClaudeAgent {
         ];
       })
     };
-    for (const told of this.listed.splice(0))
+    for (const told of [...this.listed])
       told();
     emit("model.updated", {});
   }
@@ -20256,8 +20262,15 @@ class Carrying {
     await rm(into, { recursive: true, force: true });
     await mkdir(into, { recursive: true, mode: 448 });
     const { manifest, left } = await this.read(root, conversation, into);
+    const asked = new Map;
     for (const each of manifest.sessions) {
-      const concrete = await this.concreteOf(this.store.get(each.id)?.session.model);
+      const model = this.store.get(each.id)?.session.model;
+      if (!model?.providerID || !model.id)
+        continue;
+      const key = `${model.providerID}/${model.id}`;
+      if (!asked.has(key))
+        asked.set(key, this.concreteOf(model));
+      const concrete = await asked.get(key);
       if (concrete)
         each.model = concrete;
     }
@@ -20399,8 +20412,12 @@ class Carrying {
         if (id === manifest.root && session.model)
           rootCame = { ...session.model };
         const concrete = manifest.sessions.find((each) => each.id === id)?.model;
-        if (concrete && session.model && concrete.providerID === session.model.providerID && typeof concrete.id === "string" && concrete.id && concrete.id.length <= 200)
-          session.model = { ...session.model, id: concrete.id };
+        if (concrete && session.model && concrete.providerID === session.model.providerID && typeof concrete.id === "string" && concrete.id && concrete.id.length <= 200) {
+          const host = hosts.get(session.model.providerID) ?? this.agentOf(session.model.providerID);
+          const there = await host?.models().catch(() => []) ?? [];
+          if (there.some((model) => model.id === concrete.id || model.aliases?.includes(concrete.id)))
+            session.model = { ...session.model, id: concrete.id };
+        }
         if (session.model?.providerID && hosts.get(session.model.providerID))
           session.model = { ...session.model, providerID: hosts.get(session.model.providerID).providerID };
         stillOn();
@@ -26090,4 +26107,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents daa2a20f0d217350ef3a3e55d1710bb1d13c3eff4ed654c29aac7d17f8ab06eb
+// Built from Packages/Box/src/agents ce9ad3c28d50ae18116d2645e82296363463e3dabe42f8388be2f3371bc2d657

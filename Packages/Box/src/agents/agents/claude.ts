@@ -666,15 +666,21 @@ export class ClaudeAgent implements Agent {
   }
 
   async concreteModel(id: string): Promise<string | undefined> {
+    // Its only alias of its own: a model's own id (`opus`, `claude-opus-5-5`) stands for itself.
+    if (id !== "default") return undefined
     // Only as Claude Code listed them here (its usual ones meanwhile are a guess): asked first, if it
-    // hasn't said yet, until it lists them (not how much each holds, asked after).
+    // hasn't said yet, until it lists them (not how much each holds, asked after), or gives up.
     if (!this.modelList) {
       void this.models()
       const loading = this.loadingModels
       await new Promise<void>((resolve) => {
-        this.listed.push(resolve)
-        if (loading) loading.then(() => resolve(), () => resolve())
-        else resolve()
+        const told = () => {
+          this.listed = this.listed.filter((each) => each !== told)
+          resolve()
+        }
+        this.listed.push(told)
+        if (loading) loading.then(told, told)
+        else told()
       })
     }
     const models = this.modelList?.models ?? []
@@ -747,7 +753,7 @@ export class ClaudeAgent implements Agent {
         ]
       }),
     }
-    for (const told of this.listed.splice(0)) told()
+    for (const told of [...this.listed]) told()
     emit("model.updated", {})
   }
 
