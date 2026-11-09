@@ -302,7 +302,7 @@ enum BrowserTools {
                   "progress": ["type": "number", "description": "From 0 to 1, only where you can count it, with what you counted in note (3 of 8 pages is 0.375)."],
                   "note": ["type": "string", "description": "A few words the user sees: what you counted (\"3 of 8 pages\"), or like \"looks again at 2:40\"."],
                   "until": ["type": "string", "description": "For a step that can only start at a time (a weekly run on Monday): that time, like 2026-11-02T09:00. Set a wake-up for it too; you aren't told to carry on before then. null takes it away."],
-                  "app": ["type": ["string", "null"], "description": "The app it's done in, where that changed; null takes it away."]], "required": ["step"]]],
+                  "app": ["type": ["string", "null"], "description": "The app on the computer it's done in, by its own name, where that changed; null takes it away."]], "required": ["step"]]],
               "add": ["type": "array", "items": ["anyOf": [["type": "string"], ["type": "object", "properties": [
                   "text": ["type": "string"], "detail": ["type": "string"], "site": ["type": "string"], "app": ["type": "string"],
                   "after": ["type": "array", "items": ["type": "integer"]]], "required": ["text"]]]],
@@ -319,7 +319,7 @@ enum BrowserTools {
                   "text": ["type": "string", "description": "The call, as a question, like \"Which hosting?\"."],
                   "choice": ["type": "string", "description": "What you chose, in a few words."],
                   "why": ["type": "string", "description": "Why, in a few words, like \"free tier covers it\"."],
-                  "options": ["type": "array", "items": ["type": "string"], "description": "The choices there were, yours among them: the user may pick another."]], "required": ["text", "choice"],
+                  "options": ["type": "array", "items": ["type": "string"], "description": "The choices there were, yours among them: the user may pick another of these."]], "required": ["text", "choice"],
                  "description": "A call you made yourself, kept for the user to see; they may change it later."],
               "spent": ["type": "array", "items": ["type": "object", "properties": ["what": ["type": "string"], "amount": ["type": "number"]], "required": ["what", "amount"]], "description": "What you spent, by the plan's spend line."],
               "watching": ["type": "array", "items": ["type": "string"], "description": "All you're still watching, as it is now, like \"DNS for driftwood.coffee\"."]]),
@@ -328,7 +328,7 @@ enum BrowserTools {
         tool("finish_goal", "End your goal with the report: what needs the user first, then what got done and where, what it spent, and what you're still watching.",
              ["report": ["type": "string", "description": "A few lines."],
               "watching": ["type": "array", "items": ["type": "string"]]], required: ["report"]),
-        tool("notify_user", "Send the user a notification, on their phone and their Mac, when you need them and they may not be looking: a decision only they can make, something blocked until they act, or news they asked you for. A reply notifies them only when it answers something they asked; when you work on your own (a wake-up, a watch, another agent's message, a goal), nothing reaches them unless you use this. Not for progress or routine results: those go in your reply. A few an hour at most; the same text isn't sent twice.",
+        tool("notify_user", "Send the user a notification, on their phone and their Mac, when you need them and they may not be looking: a decision only they can make, something blocked until they act, or news they asked to be told. A reply notifies them only when it answers something they asked; when you work on your own (a wake-up, a watch, another agent's message, a goal), nothing reaches them unless you use this. Not for progress or routine results: those go in your reply. A few an hour at most; the same text isn't sent twice.",
              ["text": ["type": "string", "description": "One sentence, leading with what you need from the user or the news, like \"I need your Stripe key to finish the payments step.\""]], required: ["text"]),
     ]
 
