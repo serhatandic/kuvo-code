@@ -631,6 +631,7 @@ final class Moves {
         var moving = asked
         var frozen = Set(settling.values.flatMap(\.things))
         var away: [String: Set<String>] = [:]
+        var copies: [String: Set<String>] = [:]
         // What this Mac's own box has coming here: it says itself whether it hears from where it comes.
         let incoming = Dictionary((told[BoxClient.mac]?.moves ?? []).filter { $0.role == "to" }.map { ($0.id, $0) }) { $1 }
         // What a box read now says of a thing wins over what one out of reach said last (it's taken last).
@@ -660,6 +661,9 @@ final class Moves {
             }
             // Each box's own word: one away from two boxes at once is away from both.
             for session in said.away + (said.moved ?? []).map(\.session) { away[session, default: []].insert(box) }
+            for move in said.moves where move.role == "to" {
+                for session in move.sessions where said.away.contains(session) { copies[session, default: []].insert(box) }
+            }
         }
         // Coming here from a machine that's away and hasn't said what it moves (not since this app
         // started, say): as this Mac's box has it.
@@ -673,6 +677,7 @@ final class Moves {
         if arriving != Self.arriving { Self.arriving = arriving }
         if frozen != Self.frozen { Self.frozen = frozen }
         if frozen != held { held = frozen }
+        if let app, app.workspace.comingCopies != copies { app.workspace.comingCopies = copies }
         if let app, app.workspace.movedAway != away {
             // A box that no longer says one doesn't live there (it came back, or its copy there was
             // let go of): its list read again, which left it out till now.

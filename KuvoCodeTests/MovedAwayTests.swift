@@ -32,6 +32,8 @@ import Testing
     let kept = "/home/me/\(RemoteEngineInstaller.root)"
     /// What each box says, as the test moves it along.
     let said = Said()
+    /// Moments the list had no row of the conversation, as the window followed it.
+    let gaps = Gaps()
 
     init() {
         app.standIn(engine: mac.api)
@@ -56,25 +58,39 @@ import Testing
     }
 
     private func done() {
+        gaps.stopped = true
         app.agents.disconnect()
         for machine in app.machines.list { app.removeMachine(machine.id) }
         SSHConnection.standIn = nil
         MachineEngine.standIn = nil
         Drafts.shared.remove(id)
         try? FileManager.default.removeItem(at: Bots.file)
-        // (This Mac's list as kept for the next launch: nothing of this test's for the next suite.)
+        // (This Mac's list as kept for the next launch: nothing of this test's for the next suite,
+        // nor written by a save still waiting.)
+        // A list read still on its way finds nothing of it either.
+        macBridge.list([])
+        miniBridge.list([])
+        app.workspace.drop(id)
+        // Nor does a read this app still has queued (a move's) reach the next test's stand-ins,
+        // which answer at the same addresses, and keep what they say.
+        app.workspace.api = nil
+        app.moves.boxes = { _ in BoxClient(box: "gone", transport: LocalBox { _ in AsyncThrowingStream { $0.finish(throwing: CancellationError()) } }) }
         SessionCopies.saveLocalSessions([])
         mac.stop()
     }
 
     /// As the window follows the list (`MainView`'s `onChange`): each time it changes, closed tabs
     /// go, and a moment its conversation has no row at all is counted.
-    private func watchList(_ gaps: Gaps) {
-        withObservationTracking { _ = app.workspace.sessions } onChange: { [app, id] in
+    private func watchList() { Self.watch(app, gaps, id) }
+
+    private static func watch(_ app: AppModel, _ gaps: Gaps, _ id: String) {
+        guard !gaps.stopped else { return }
+        withObservationTracking { _ = app.workspace.sessions } onChange: { [weak app] in
             Task { @MainActor in
+                guard let app, !gaps.stopped else { return }
                 if !app.workspace.sessions.contains(where: { $0.id == id }) { gaps.count += 1 }
                 app.tabs.dropClosed()
-                watchList(gaps)
+                watch(app, gaps, id)
             }
         }
     }
@@ -236,8 +252,7 @@ import Testing
         let engine = try await start()
         #expect(shown == "Opus 5.5", "before it moves, as this Mac's Claude Code names its default")
         let open = app.workspace.model(for: id)
-        let gaps = Gaps()
-        watchList(gaps)
+        watchList()
 
         said.machineMoves = move("to", stage: "copying")
         said.macMoves = move("from", stage: "copying")
@@ -256,6 +271,11 @@ import Testing
         #expect(tabIsOpen && rows.count == 1, "listed nowhere else yet: its row and tab stay")
         said.macMoves = move("from", stage: "finishing")
         await app.moves.reload(BoxClient.mac)
+        // The machine's copy read while its last word still says it isn't its own yet: left out,
+        // one row, this Mac's.
+        lives(on: machine, model: "opus")
+        _ = await app.workspace.refresh(engine)
+        #expect(rows.map { RemoteFolder.machine(of: $0.location.directory) } == [nil], "one row, never two")
 
         // There: the machine has it, on the model it ran on here.
         lives(on: machine, model: "opus")
@@ -359,10 +379,9 @@ import Testing
     /// says it moved away, it lives here.
     @Test func movedBackToThisMacItLivesHere() async throws {
         defer { done() }
-        _ = try await start(on: machine)
+        let engine = try await start(on: machine)
         let open = app.workspace.model(for: id)
-        let gaps = Gaps()
-        watchList(gaps)
+        watchList()
         said.macMoves = move("to", stage: "copying", toMac: true)
         said.machineMoves = move("from", stage: "copying", toMac: true)
         await app.moves.reload(BoxClient.mac)
@@ -374,6 +393,8 @@ import Testing
         #expect(tabIsOpen && rows.count == 1, "its only row stays while it moves")
         said.machineMoves = move("from", stage: "finishing", toMac: true)
         await app.moves.reload(machine)
+        // The machine read again meanwhile (it reconnected, say).
+        _ = await app.workspace.refresh(engine)
         #expect(tabIsOpen && rows.count == 1)
 
         lives(on: nil, model: "opus")
@@ -394,6 +415,8 @@ import Testing
 /// Moments the list had no row of the conversation.
 @MainActor final class Gaps {
     var count = 0
+    /// The test is over: nothing more is followed.
+    var stopped = false
 }
 
 /// What the stand-in boxes say, from any thread.
