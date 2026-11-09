@@ -191,8 +191,9 @@ struct BoxNameStrip: View {
 
     /// Lays out names `widths` wide (each with its padding; nil until measured), the one in view
     /// first, in `room` with a count `more` wide: every name, and no count, when all fit; else the
-    /// one in view (cut at its end if it has to be), those after it that fit whole before the count,
-    /// and the rest counted, the first of them fading out where it begins.
+    /// one in view (its words cut at their end if they have to be), those after it that fit whole
+    /// before the count, fill and all, and the rest counted, the first of them fading out where it
+    /// begins.
     static func fit(widths: [CGFloat?], room: CGFloat, more: CGFloat) -> Fit {
         let gap = spacing - 2 * pad
         let lead = inset - pad
@@ -210,12 +211,13 @@ struct BoxNameStrip: View {
             return Fit(starts: starts, line: room, most: max(room - lead, 40))
         }
         let line = room - more
-        let most = max(line - lead, 40)
+        // (Its trailing padding may run on under the count: the one in view shows no fill.)
+        let most = max(line - lead + pad, 40)
         // Where the names after the one in view begin, once it's cut.
         let cut = known[0] - min(known[0], most)
         starts = starts.enumerated().map { $0 == 0 ? $1 : $1 - cut }
-        // The first whose words run past the line's end, and those after it.
-        let first = known.indices.dropFirst().first { starts[$0] + known[$0] - pad > line } ?? known.count
+        // The first that runs past the line's end, its fill under the pointer too, and those after it.
+        let first = known.indices.dropFirst().first { starts[$0] + known[$0] > line } ?? known.count
         let hidden = Array(first..<known.count)
         // Its words fade out from where they begin to the count; a sliver of them (a letter's
         // stroke) not at all.

@@ -277,7 +277,7 @@ import Testing
 
     @Test func thoseThatFitWholeShowAndTheRestAreCounted() {
         #expect(fit([100, 60]).hidden.isEmpty, "all fit: no count")
-        // 4 + 100, 2 + 60 (words to 160), 2 + 60 (words to 222, past the line's 180).
+        // 4 + 100, 2 + 60 (to 166), 2 + 60 (to 228, past the line's 180).
         let three = fit([100, 60, 60, 60])
         #expect(three.hidden == [2, 3])
         #expect(three.line == 180)
@@ -291,8 +291,8 @@ import Testing
     @Test func aLongNameInViewIsCutToTheLine() {
         let long = fit([300, 60])
         #expect(long.hidden == [1])
-        #expect(long.most == 176, "the line, past its inset: words, mark and padding all")
-        #expect(long.starts[1] == 182, "the next begins past the cut, out of sight")
+        #expect(long.most == 182, "its words and mark to the line's end")
+        #expect(long.starts[1] == 188, "the next begins past the cut, out of sight")
         #expect(long.fadesTo == long.fadesFrom)
         #expect(fit([300]).hidden.isEmpty, "alone, there's nothing to count")
     }
