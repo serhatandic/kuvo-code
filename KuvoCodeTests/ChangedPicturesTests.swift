@@ -2,9 +2,9 @@ import AppKit
 import Testing
 @testable import KuvoCode
 
-/// A picture on this Mac that changed where it is shows as it is now (#132's review): an agent
-/// that redraws a chart and shows it again (show_file) showed the first chart, kept by its path;
-/// a file attached again after you changed it, likewise.
+/// A file an agent shows you (show_file) is that step's (#132's review): one it changed and shows
+/// again shows the change, not the picture an earlier step drew at that path; and a machine's file
+/// is never this Mac's, though this Mac has a file at that path too.
 @MainActor
 @Suite(.serialized) struct ChangedPicturesTests {
     private enum Color { case red, blue }
@@ -34,30 +34,37 @@ import Testing
         return nil
     }
 
-    @Test(arguments: ["path", "local"])
-    func aPictureChangedWhereItIsShowsAsItIsNow(kind: String) async throws {
+    /// A folder of the test's own, gone after it.
+    private static func folder() throws -> URL {
         let folder = URL.temporaryDirectory.appending(path: "KuvoCodeTests-\(UUID().uuidString)", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        return folder
+    }
+
+    @Test func aPictureShownAgainAfterItChangedShowsTheChange() async throws {
+        let folder = try Self.folder()
         defer { try? FileManager.default.removeItem(at: folder) }
         let chart = folder.appending(path: "chart.png")
-        func item() -> AttachmentItem { kind == "path" ? .path(chart.path) : .local(chart) }
-        // Its times set, not the clock's: the second is later however fast the test runs.
-        func write(_ color: Color, at seconds: TimeInterval) throws {
-            try Self.png(color).write(to: chart)
-            try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSinceReferenceDate: seconds)], ofItemAtPath: chart.path)
-        }
 
-        try write(.blue, at: 800_000_000)
-        let first = try #require(await item().loadImage())
+        try Self.png(.blue).write(to: chart)
+        let first = try #require(await MadePictureRow.shown(chart.path, at: RemoteFolder.fileURL(chart.path, in: folder.path), step: "call_1").loadImage())
         #expect(try Self.color(of: first) == .blue)
 
-        // Redrawn in the same place (the same size of file), and shown again.
-        try write(.red, at: 800_000_060)
-        let shown = item()
-        let second = try #require(await shown.loadImage())
+        // "Make it red": the same file, redrawn, shown again by the next step.
+        try Self.png(.red).write(to: chart)
+        let second = try #require(await MadePictureRow.shown(chart.path, at: RemoteFolder.fileURL(chart.path, in: folder.path), step: "call_2").loadImage())
         #expect(try Self.color(of: second) == .red)
-        // What the picture's view starts from, before it loads, is the new one too.
-        let kept = try #require(AttachmentImages.cache.object(forKey: shown.contentID as NSString))
-        #expect(try Self.color(of: kept) == .red)
+    }
+
+    @Test func aMachinesShownFileIsNeverThisMacs() async throws {
+        let folder = try Self.folder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        // This Mac has a chart at the path the machine's agent shows.
+        let chart = folder.appending(path: "chart.png")
+        try Self.png(.blue).write(to: chart)
+        let shown = MadePictureRow.shown(chart.path, at: RemoteFolder.fileURL(chart.path, in: RemoteFolder.folder(folder.path, on: "lab")), step: "call_1")
+        #expect(shown.fileURL == nil)
+        #expect(shown.name == "chart.png")
+        #expect(await shown.loadImage() == nil)
     }
 }

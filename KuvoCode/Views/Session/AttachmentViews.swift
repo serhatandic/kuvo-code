@@ -58,7 +58,7 @@ nonisolated enum AttachmentItem: Identifiable, Sendable {
     }
 
     private var isFolder: Bool {
-        if case .stored(let file, _) = self { return file.mime == "application/x-directory" }
+        if case .stored(let file, _) = self, file.mime == "application/x-directory" { return true }
         return (try? fileURL?.resourceValues(forKeys: [.isDirectoryKey]))??.isDirectory == true
     }
 
@@ -68,20 +68,9 @@ nonisolated enum AttachmentItem: Identifiable, Sendable {
     }
 
     /// Changes with what it shows: a message's copy from the engine takes the place of the one
-    /// it was sent with, under the same id, and a file on this Mac changed where it is (a chart an
-    /// agent redrew and shows again) is not its earlier self. Cheap, as views compare it each time
-    /// they update.
+    /// it was sent with, under the same id. Cheap, as views compare it each time they update.
     var contentID: String {
-        guard case .stored(let file, let id) = self else {
-            let url: URL? = switch self {
-            // A URL of its own, read now: one that's kept keeps what it read before.
-            case .local(let url): url.isFileURL ? URL(filePath: url.path(percentEncoded: false)) : nil
-            case .path(let path): URL(filePath: path)
-            case .stored: nil
-            }
-            guard let values = try? url?.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey]) else { return id }
-            return [id, values.contentModificationDate.map { String($0.timeIntervalSinceReferenceDate) } ?? "", values.fileSize.map(String.init) ?? ""].joined(separator: "|")
-        }
+        guard case .stored(let file, let id) = self else { return id }
         let source = switch file.source {
         case .uri(let uri)? where uri.hasPrefix("data:"): Self.sample(uri)
         case .uri(let uri)?: uri
@@ -322,6 +311,15 @@ struct MadePictureRow: View {
         call.name == "kuvo-browser_" + BrowserTools.showFile
     }
 
+    /// The file a show_file step shows, at `url` (a machine's, or this Mac's): that step's, as an
+    /// image a step made is, so a picture the agent changed and shows again isn't drawn as an
+    /// earlier step had it (#132), and as the phone keeps it. A machine's is never read from this
+    /// Mac's disk, though this Mac has a file at that path too.
+    static func shown(_ path: String, at url: URL, step: String) -> AttachmentItem {
+        let mime = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType ?? "application/octet-stream"
+        return .stored(Message.User.Attachment(mime: mime, name: (path as NSString).lastPathComponent, source: .uri(url.absoluteString)), id: "\(step)-shown")
+    }
+
     var body: some View {
         if Self.isShownFile(call) { shownFile } else { made }
     }
@@ -334,9 +332,9 @@ struct MadePictureRow: View {
             let url = RemoteFolder.fileURL(path, in: directory ?? "/")
             VStack(alignment: .leading, spacing: 6) {
                 if url.isFileURL, UTType(filenameExtension: url.pathExtension)?.conforms(to: .image) == true {
-                    StepPictures(items: [.path(path)], height: 420, maxWidth: 560)
+                    StepPictures(items: [Self.shown(path, at: url, step: call.id)], height: 420, maxWidth: 560)
                 } else {
-                    AttachmentRow(item: .path(path)) { app.utilities.show(url) }
+                    AttachmentRow(item: Self.shown(path, at: url, step: call.id)) { app.utilities.show(url) }
                 }
                 if let caption = call.state.input?["caption"]?.string, !caption.isEmpty {
                     Text(caption)
@@ -521,16 +519,18 @@ private struct AttachmentRow: View {
         .clickablePointer()
         .onHover { isHovering = $0 }
         .animation(.easeOut(duration: 0.12), value: isHovering)
-        .contextMenu { AttachmentMenu(item: item) }
+        .contextMenu { AttachmentMenu(item: item, open: open) }
         .help(item.fileURL?.path ?? item.name)
     }
 }
 
 private struct AttachmentMenu: View {
     let item: AttachmentItem
+    /// What Open does for one that isn't on this Mac (a machine's file, in the panel).
+    var open: (() -> Void)?
 
     var body: some View {
-        Button("Open") { item.open() }
+        Button("Open") { if item.fileURL == nil, let open { open() } else { item.open() } }
         Button("Show in Finder") { item.revealInFinder() }
             .disabled(item.fileURL == nil)
     }

@@ -16,7 +16,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ### All Changes
 
-- A picture an agent changes and shows you again shows as it is now, not as it was the first time; a file you change and attach again also shows its new preview.
+- A picture an agent changes and shows you again shows the change, not the picture it showed the first time. A file an agent on a machine shows is no longer drawn from a file at the same path on this Mac.
 - A bot on Claude Code saves its memory again on a Mac. Since the sandbox came in, every change it made to its `MEMORY.md` there was refused with "Operation not permitted", so it kept notes elsewhere or not at all. Bots on Codex, Grok, Cursor and Kuvo Code's own engine weren't affected.
 - Your computers' names over the sidebar take less room, as on your iPhone: the one in view first, larger and bold, then your other computers faded beside it, and "+3" for those that don't fit. Picking one slides it to the front. A long name is cut at its end rather than in the middle. Settings' sidebar shows them the same way.
 - A bot or chat you move to another computer while Kuvo Code is open works there at once: what you send it goes to that computer, and it opens on that computer's page in the sidebar. Before, a bot on a coding agent (Claude Code, Codex and others) moved away from this Mac could keep answering "No session" and open on this Mac's page until you quit and opened Kuvo Code again.
