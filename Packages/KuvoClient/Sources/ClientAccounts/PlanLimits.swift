@@ -52,6 +52,11 @@ public struct LimitsAccount: Decodable, Hashable, Sendable, Identifiable {
     public var account: String?
     /// What you called one you added ("Work").
     public var label: String?
+    /// The account at its maker, the same from every box signed in to it (an opaque hash): rows with
+    /// one are one account (`UsageListing.accounts`). None from a box that can't tell, or an older one.
+    public var identity: String?
+    /// Its row's name where a listing gave it one (two rows of one name: the box it's from added).
+    public var name: String?
     public var plan: String?
     public var windows: [LimitsWindow]
     public var balance: Balance?
@@ -64,6 +69,12 @@ public struct LimitsAccount: Decodable, Hashable, Sendable, Identifiable {
         public var limit: Double?
         /// `usd` or `credits`.
         public var unit: String
+
+        public init(left: Double, limit: Double? = nil, unit: String) {
+            self.left = left
+            self.limit = limit
+            self.unit = unit
+        }
     }
 
     public struct Problem: Decodable, Hashable, Sendable {
@@ -71,6 +82,12 @@ public struct LimitsAccount: Decodable, Hashable, Sendable, Identifiable {
         public var kind: String
         public var message: String
         public var until: Date?
+
+        public init(kind: String, message: String, until: Date? = nil) {
+            self.kind = kind
+            self.message = message
+            self.until = until
+        }
 
         private enum CodingKeys: String, CodingKey { case kind, message, until }
 
@@ -82,20 +99,22 @@ public struct LimitsAccount: Decodable, Hashable, Sendable, Identifiable {
         }
     }
 
-    public init(provider: String, service: String, agent: String? = nil, account: String? = nil, label: String? = nil, plan: String? = nil,
-                windows: [LimitsWindow] = [], balance: Balance? = nil, problem: Problem? = nil) {
+    public init(provider: String, service: String, agent: String? = nil, account: String? = nil, label: String? = nil, identity: String? = nil, plan: String? = nil,
+                windows: [LimitsWindow] = [], balance: Balance? = nil, checked: Date? = nil, problem: Problem? = nil) {
         self.provider = provider
         self.service = service
         self.agent = agent
         self.account = account
         self.label = label
+        self.identity = identity
+        self.checked = checked
         self.plan = plan
         self.windows = windows
         self.balance = balance
         self.problem = problem
     }
 
-    private enum CodingKeys: String, CodingKey { case provider, service, agent, account, label, plan, windows, balance, checked, next, problem }
+    private enum CodingKeys: String, CodingKey { case provider, service, agent, account, label, identity, plan, windows, balance, checked, next, problem }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -105,6 +124,7 @@ public struct LimitsAccount: Decodable, Hashable, Sendable, Identifiable {
         service = try container.decodeIfPresent(String.self, forKey: .service) ?? agent ?? provider
         account = try container.decodeIfPresent(String.self, forKey: .account)
         label = try container.decodeIfPresent(String.self, forKey: .label)
+        identity = (try? container.decodeIfPresent(String.self, forKey: .identity))?.flatMap { $0.isEmpty ? nil : $0 }
         plan = try container.decodeIfPresent(String.self, forKey: .plan)
         windows = try container.decodeIfPresent(Readable<LimitsWindow>.self, forKey: .windows)?.items ?? []
         balance = try? container.decodeIfPresent(Balance.self, forKey: .balance)
@@ -115,6 +135,7 @@ public struct LimitsAccount: Decodable, Hashable, Sendable, Identifiable {
 
     /// Its row's name: "Claude", "Claude · Work" for one you added, "Copilot" for the engine's.
     public var title: String {
+        if let name { return name }
         let base = agent.map { Self.agentNames[$0] ?? $0.capitalized } ?? Self.serviceNames[service] ?? service.capitalized
         guard let label = label?.trimmingCharacters(in: .whitespacesAndNewlines), !label.isEmpty else { return base }
         return "\(base) · \(label)"
@@ -254,7 +275,7 @@ extension Date {
 /// What a client lists of a computer's usage, in one order on every client: the Mac panel's own
 /// providers (`kuvo/usage`) in its order, where one says it `covers` a service, that box's rows of
 /// it there (the first with what that provider had besides: spend, its trend); then the box's
-/// other rows (a machine has no panel: all of them).
+/// other rows (a machine has no panel: all of them). One row per account (`accounts`).
 public enum UsageListing {
     public enum Item<Panel> {
         case panel(Panel)
@@ -262,7 +283,10 @@ public enum UsageListing {
         case account(LimitsAccount, below: Panel?)
     }
 
+    /// `accounts`: one box's, as it states them (an account it has twice, a coding agent's and the
+    /// engine's sign-in to it, is one row).
     public static func items<Panel>(panel: [Panel], covers: (Panel) -> String?, accounts: [LimitsAccount]) -> [Item<Panel>] {
+        let accounts = Self.accounts([Box(key: "", name: nil, accounts: accounts)]).map(\.account)
         var items: [Item<Panel>] = []
         var placed = Set<String>()
         for entry in panel {
@@ -283,5 +307,128 @@ public enum UsageListing {
         }
         for row in accounts where !placed.contains(row.provider) { items.append(.account(row, below: nil)) }
         return items
+    }
+}
+
+extension UsageListing {
+    /// One computer's accounts, as a client lists them with its other computers' (PROTOCOL.md, "Plan
+    /// limits").
+    public struct Box: Sendable {
+        /// Which box it is, unique among those listed.
+        public var key: String
+        /// Its name, added to a row's where two rows would have one name; nil for the client's own
+        /// computer, whose rows keep theirs.
+        public var name: String?
+        public var accounts: [LimitsAccount]
+
+        public init(key: String, name: String?, accounts: [LimitsAccount]) {
+            self.key = key
+            self.name = name
+            self.accounts = accounts
+        }
+    }
+
+    /// One account's row, from every box that has it.
+    public struct Account: Sendable, Hashable, Identifiable {
+        /// The same for the account whichever boxes have it, as long as they say who it is.
+        public var id: String
+        /// Its limits, each window as read last by any of its boxes, and its row's name (`title`).
+        public var account: LimitsAccount
+        /// The boxes it's from, in their order, each with what it's called there (`provider`).
+        public var sources: [Source]
+
+        public struct Source: Sendable, Hashable {
+            public var box: String
+            public var provider: String
+        }
+    }
+
+    /// One row per account across the boxes, in their order (the client's own computer first): rows
+    /// of one service that say they're one account (`identity`) are one, from any box, whatever each
+    /// calls it; a row that doesn't say is its box's own, as before.
+    public static func accounts(_ boxes: [Box]) -> [Account] {
+        var groups: [(id: String, members: [(box: Box, account: LimitsAccount)])] = []
+        var found: [String: Int] = [:]
+        for box in boxes {
+            for account in box.accounts {
+                let id = account.identity.map { "\(account.service)#\($0)" } ?? "\(box.key)/\(account.provider)"
+                if let index = found[id] {
+                    groups[index].members.append((box, account))
+                } else {
+                    found[id] = groups.count
+                    groups.append((id, [(box, account)]))
+                }
+            }
+        }
+        var listed = groups.map { group in
+            Account(id: group.id, account: merged(group.members.map(\.account)),
+                    sources: group.members.map { Account.Source(box: $0.box.key, provider: $0.account.provider) })
+        }
+        // Two rows of one name (two accounts, or one whose boxes can't say it's the same) are told
+        // apart: a row whose sign-in on this computer is the engine's by the service's name
+        // ("ChatGPT"); a row not on this computer by its boxes' names; rows still alike (each on
+        // this computer) by their other boxes'.
+        var names = listed.map(\.account.title)
+        let mine = { (index: Int) in groups[index].members.filter { $0.box.name == nil }.map(\.account) }
+        let elsewhere = { (index: Int) -> String? in
+            var seen = Set<String>()
+            let boxes = groups[index].members.compactMap(\.box.name).filter { seen.insert($0).inserted }
+            return boxes.isEmpty ? nil : boxes.joined(separator: ", ")
+        }
+        func alike() -> Set<String> { Set(Dictionary(grouping: names, by: { $0 }).filter { $0.value.count > 1 }.keys) }
+        var clash = alike()
+        for index in listed.indices where clash.contains(names[index]) {
+            let here = mine(index)
+            guard let engine = here.first, !here.contains(where: { $0.agent != nil }) else { continue }
+            names[index] = engine.title
+        }
+        clash = alike()
+        for index in listed.indices where clash.contains(names[index]) && mine(index).isEmpty {
+            if let boxes = elsewhere(index) { names[index] += " · \(boxes)" }
+        }
+        clash = alike()
+        for index in listed.indices where clash.contains(names[index]) {
+            if let boxes = elsewhere(index) { names[index] += " · \(boxes)" }
+        }
+        for index in listed.indices where names[index] != listed[index].account.title { listed[index].account.name = names[index] }
+        return listed
+    }
+
+    /// One account as its boxes state it, together: named as a coding agent's where one is among
+    /// them (else the engine's sign-in's), with the first name you gave it; each window as read last;
+    /// the plan, credits and when it was checked as the newest says; a problem only when none of
+    /// them could read it.
+    static func merged(_ members: [LimitsAccount]) -> LimitsAccount {
+        var account = members.first { $0.agent != nil } ?? members[0]
+        guard members.count > 1 else { return account }
+        account.label = members.lazy.compactMap { $0.label?.trimmingCharacters(in: .whitespacesAndNewlines) }.first { !$0.isEmpty }
+        var windows: [LimitsWindow] = []
+        for member in members {
+            for window in member.windows {
+                if let index = windows.firstIndex(where: { $0.limit == window.limit }) {
+                    if window.read > windows[index].read { windows[index] = window }
+                } else {
+                    windows.append(window)
+                }
+            }
+        }
+        account.windows = windows
+        // Newest first: when its maker last answered, or a turn last told of it.
+        let newest = members.sorted { ($0.checked ?? $0.windows.map(\.read).max() ?? .distantPast) > ($1.checked ?? $1.windows.map(\.read).max() ?? .distantPast) }
+        account.plan = newest.lazy.compactMap(\.plan).first
+        account.balance = newest.lazy.compactMap(\.balance).first
+        account.checked = members.compactMap(\.checked).max()
+        account.next = members.compactMap(\.next).min()
+        account.problem = members.allSatisfy { $0.problem != nil } ? newest.first?.problem : nil
+        return account
+    }
+}
+
+extension LimitsWindow {
+    /// Which limit it is, the same from any box and either sign-in to an account (a coding agent's,
+    /// the engine's), which may name it differently: what it counts, and how long it is.
+    var limit: String {
+        if model == nil, name == nil, minutes == nil { return "id:" + id }
+        return "\(model?.lowercased() ?? "")|\(name ?? "")|\(minutes.map(String.init) ?? "")"
     }
 }

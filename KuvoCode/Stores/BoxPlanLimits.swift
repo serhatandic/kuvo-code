@@ -122,16 +122,20 @@ final class BoxPlanLimits {
             }
         }
         let now = Date.now
-        // This Mac's first, then each machine's by name.
+        // This Mac's first, then each machine's by name: one row per account across them (KuvoClient's
+        // `UsageListing`), its numbers the newest any of them read.
         let keys = boxes.keys.sorted { a, b in a.isEmpty != b.isEmpty ? a.isEmpty : a.localizedStandardCompare(b) == .orderedAscending }
-        let rows = keys.flatMap { key in
-            let accounts = boxes[key]?.accounts ?? []
-            return accounts.map { Self.row($0, machine: key.isEmpty ? nil : key, own: key.isEmpty && Self.isOwnLogin($0, among: accounts), now: now) }
+        let listed = UsageListing.accounts(keys.map { key in
+            UsageListing.Box(key: key, name: key.isEmpty ? nil : key, accounts: boxes[key]?.accounts ?? [])
+        })
+        let mine = boxes[""]?.accounts ?? []
+        let own = Set(mine.filter { Self.isOwnLogin($0, among: mine) }.map(\.provider))
+        let rows = listed.map { listed in
+            Self.row(listed, own: listed.sources.contains { $0.box.isEmpty && own.contains($0.provider) }, now: now)
         }
         HostLimits.shared.update(rows: rows, covered: services)
     }
 
-    /// One account as the panel draws it: "Claude · Work", and on a machine its name after.
     /// The login whose numbers the panel's own card of its service takes, as the panel reads that
     /// service: the engine's sign-in where there's one (ChatGPT's for Codex, SuperGrok's for Grok,
     /// and all of Copilot's and the rest), else the agent's own sign-in (Claude's).
@@ -141,12 +145,13 @@ final class BoxPlanLimits {
         return own?.provider == account.provider
     }
 
-    static func row(_ account: LimitsAccount, machine: String?, own: Bool = false, now: Date) -> HostLimitRow {
-        HostLimitRow(
-            // (No machine's address has a space.)
-            id: "\(machine ?? "this Mac")/\(account.provider)",
+    /// One account's row as the panel draws it: on this Mac where any of its boxes is this Mac's.
+    static func row(_ listed: UsageListing.Account, own: Bool = false, now: Date) -> HostLimitRow {
+        let account = listed.account
+        return HostLimitRow(
+            id: listed.id,
             providerID: account.service,
-            name: machine.map { "\(account.title) · \($0)" } ?? account.title,
+            name: account.title,
             plan: account.plan,
             meters: account.windows(at: now).map { window in
                 HostLimitRow.Meter(
@@ -157,8 +162,16 @@ final class BoxPlanLimits {
             balance: account.balance.map { HostLimitRow.Balance(left: $0.left, unit: $0.unit) },
             notice: account.problem?.message,
             readAt: account.readAt(now: now),
-            isLocal: machine == nil,
-            isOwnLogin: own
+            isLocal: listed.sources.contains { $0.box.isEmpty },
+            isOwnLogin: own,
+            // (The panel adds it beside a bar of its own of that name.)
+            place: listed.sources.contains { $0.box.isEmpty } ? nil : Self.places(listed.sources)
         )
+    }
+
+    /// The machines a row is from, by name ("hetzner, lokum").
+    static func places(_ sources: [UsageListing.Account.Source]) -> String {
+        var seen = Set<String>()
+        return sources.map(\.box).filter { seen.insert($0).inserted }.joined(separator: ", ")
     }
 }

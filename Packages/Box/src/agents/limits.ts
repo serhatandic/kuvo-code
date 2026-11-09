@@ -48,6 +48,8 @@ export interface LimitReading {
   plan?: string
   /** Credits left to spend, where the account has them (OpenRouter's), and the most it can, when there's a cap. */
   balance?: { left: number; limit?: number; unit: "usd" | "credits" }
+  /** Who the account is, where only its maker's answer says (GitHub's login): as `LimitsSource.identity`. */
+  identity?: string
 }
 
 /**
@@ -92,6 +94,13 @@ export interface LimitsSource {
   bucket?: string
   /** Set by the box: a window a turn heard of (a rate-limit event), told as it comes. */
   heard?: (window: Omit<LimitWindow, "read" | "source">) => void
+  /**
+   * Who the account is at its maker, as its sign-in says, the same on every computer signed in to
+   * it: its maker's own account ID (`anthropic:<account>|<organization>`, `chatgpt:<account>/<user>`,
+   * `xai:<user>`), or `key:<the key>` for an API key. Never an email. Only ever hashed before it
+   * leaves (`identityOf`); undefined where the sign-in doesn't say (a Mac's Claude token).
+   */
+  identity?(): string | undefined
 }
 
 /** An account whose limits are read: a coding agent's, or a sign-in of the engine's. */
@@ -114,6 +123,11 @@ export interface AccountLimits {
   agent?: AgentKind
   account?: string
   label?: string
+  /**
+   * The account at its maker, the same from every computer signed in to it, so a client lists it
+   * once: 16 hex characters of a hash, never the ID itself (`identityOf`). Absent where it isn't known.
+   */
+  identity?: string
   plan?: string
   windows: LimitWindow[]
   balance?: LimitReading["balance"]
@@ -138,6 +152,8 @@ interface Entry {
   refusals?: number
   /** Reads that failed in a row. */
   failures?: number
+  /** Who it is (`identityOf`), as last known. */
+  identity?: string
 }
 
 interface Saved {
@@ -205,14 +221,16 @@ export class Limits {
     for (const account of this.accounts()) {
       const entry = this.entries.get(account.provider)
       if (!entry || entry.problem?.kind === "none") continue
-      // Nothing read yet, and nothing heard: not one to show until it's tried.
-      if (!entry.checked && !entry.windows.length) continue
+      // Nothing read yet, and nothing heard: not one to show until it's tried (one signed in to
+      // another account since says so).
+      if (!entry.checked && !entry.windows.length && !entry.problem) continue
       const problem = entry.problem ? { kind: entry.problem.kind, message: entry.problem.message, ...(entry.problem.until ? { until: entry.problem.until } : {}) } : undefined
       listed.push({
         provider: account.provider,
         service: account.service,
         ...(account.agent ? { agent: account.agent.kind, account: account.agent.account } : {}),
         ...(account.label ? { label: account.label } : {}),
+        ...(entry.identity ? { identity: entry.identity } : {}),
         ...(entry.plan ? { plan: entry.plan } : {}),
         windows: entry.windows,
         ...(entry.balance ? { balance: entry.balance } : {}),
@@ -270,6 +288,7 @@ export class Limits {
         entry = { windows: [], next: 0 }
         this.entries.set(account.provider, entry)
       }
+      this.identify(entry, source.identity?.())
       if (!source.read) continue
       const at = this.now()
       if (at < entry.next) continue
@@ -316,6 +335,8 @@ export class Limits {
     try {
       const reading = await source.read!(started)
       const at = this.now()
+      // (Another account's since: what was kept goes, before this one's is kept.)
+      if (reading) this.identify(entry, reading.identity)
       entry.next = at + source.every
       // Nothing to read now: as it was.
       if (!reading) return false
@@ -371,6 +392,29 @@ export class Limits {
       }
       return problem.sent
     }
+  }
+
+  /**
+   * Who the account is now, as its sign-in says (none: as last known). Signed in to another account
+   * since, what was kept of the one before isn't this one's: it goes, and this one is read soon.
+   */
+  private identify(entry: Entry, raw: string | undefined) {
+    if (!raw) return
+    const identity = identityOf(raw)
+    if (entry.identity === identity) return
+    if (entry.identity) {
+      entry.windows = []
+      entry.plan = undefined
+      entry.balance = undefined
+      entry.checked = undefined
+      // Listed meanwhile, saying why it has no numbers (a maker's hold can keep it unread for hours).
+      entry.problem = { kind: "failed", message: "Signed in to another account here: its limits show once they're read." }
+      entry.signIn = undefined
+      entry.refusals = 0
+      entry.failures = 0
+      entry.next = 0
+    }
+    entry.identity = identity
   }
 
   /** What a turn of this account hears (its rate-limit events), kept as the window's latest. */
@@ -501,3 +545,46 @@ export function agentAccounts(agents: Agent[]): LimitedAccount[] {
 export function fingerprint(secret: string | undefined): string | undefined {
   return secret ? createHash("sha256").update(secret).digest("hex").slice(0, 16) : undefined
 }
+
+/**
+ * An account's identity as the clients get it (`AccountLimits.identity`): the same on every box, so
+ * a client lists the account once, and nothing of what it's made of. Its makers' IDs are random
+ * (UUIDs, keys) or public (a GitHub login); a hash of its own kind, not the bare SHA-256 of an ID,
+ * so it matches nothing outside Kuvo Code.
+ */
+export function identityOf(raw: string): string {
+  return createHash("sha256").update("kuvo-code plan limits account v1\n").update(raw).digest("hex").slice(0, 16)
+}
+
+/** What a JSON Web Token says of itself (its middle part), never checked: only to tell who it's for. */
+export function tokenClaims(token: string | undefined): Record<string, any> | undefined {
+  const part = token?.trim().split(".")[1]
+  if (!part) return undefined
+  try {
+    const claims = JSON.parse(Buffer.from(part, "base64url").toString("utf8"))
+    return claims && typeof claims === "object" ? claims : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** A ChatGPT sign-in's account, as its token says (Codex's, and the engine's `openai`, alike). */
+export function chatGPTIdentity(access: string | undefined, accountID?: unknown): string | undefined {
+  const auth = tokenClaims(access)?.["https://api.openai.com/auth"]
+  const account = text(auth?.chatgpt_account_id) ?? text(accountID)
+  if (!account) return undefined
+  // (A workspace's members share its account: each one's own limits.)
+  const user = text(auth?.chatgpt_user_id) ?? text(auth?.user_id)
+  return `chatgpt:${account}${user ? `/${user}` : ""}`
+}
+
+/** An xAI sign-in's user, as its token says (the Grok agent's, and the engine's `xai`, alike). */
+export function xaiIdentity(...tokens: (string | undefined)[]): string | undefined {
+  for (const token of tokens) {
+    const user = text(tokenClaims(token)?.sub)
+    if (user) return `xai:${user}`
+  }
+  return undefined
+}
+
+const text = (value: unknown) => (typeof value === "string" && value.trim() ? value.trim().toLowerCase() : undefined)

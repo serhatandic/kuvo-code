@@ -476,6 +476,149 @@ describe("Codex", () => {
   })
 })
 
+/** A sign-in's token as its maker signs it: only what it says of itself matters here. */
+const token = (claims: Record<string, unknown>) => `eyJhbGciOiJSUzI1NiJ9.${Buffer.from(JSON.stringify(claims)).toString("base64url")}.signature`
+
+describe("who each account is, the same from every computer", () => {
+  /** Claude Code's own record of who it's signed in as, beside its sign-in (Linux). */
+  function signedInAs(folder: string, token: string, account: string, organization: string) {
+    mkdirSync(folder, { recursive: true })
+    writeFileSync(join(folder, ".credentials.json"), JSON.stringify({ claudeAiOauth: { accessToken: token, expiresAt: clock.at + 86_400_000, scopes: ["user:inference", "user:profile"] } }))
+    writeFileSync(join(folder, ".claude.json"), JSON.stringify({ oauthAccount: { accountUuid: account, emailAddress: "ada@example.com", organizationUuid: organization } }))
+  }
+
+  test("one Claude login on two computers is one identity, another login another, and neither says who", async () => {
+    ClaudeAgent.keychain = false
+    // Two computers' boxes, each with Kuvo Code's own sign-ins in its folders.
+    const first = join(home, "first")
+    const second = join(home, "second")
+    signedInAs(join(first, "claude", "home"), "token-1", "6F1E0C4A-0000-4000-8000-000000000001", "org-1")
+    signedInAs(join(second, "claude", "home"), "token-2", "6f1e0c4a-0000-4000-8000-000000000001", "ORG-1")
+    signedInAs(join(second, "claude", "accounts", "a1"), "token-3", "6f1e0c4a-0000-4000-8000-000000000002", "org-2")
+    for (const each of ["token-1", "token-2", "token-3"]) anthropic.answers.set(each, usage(10, 20))
+    const one = new Limits(() => agentAccounts([new TestClaude(first, { id: "default", home: join(first, "claude", "home") })]), undefined, clock.now)
+    const two = new Limits(() => agentAccounts([new TestClaude(second, { id: "default", home: join(second, "claude", "home") }), new TestClaude(second, { id: "a1", label: "Athas", home: join(second, "claude", "accounts", "a1") })]), undefined, clock.now)
+    await one.tick()
+    clock.pass(60_000)
+    await two.tick()
+    clock.pass(60_000)
+    await two.tick()
+    const [mine] = (await route(one)).accounts
+    const [same, other] = (await route(two)).accounts
+    expect(mine!.identity).toMatch(/^[0-9a-f]{16}$/)
+    expect(same!.identity).toBe(mine!.identity!)
+    expect(other!.identity).toMatch(/^[0-9a-f]{16}$/)
+    expect(other!.identity).not.toBe(mine!.identity!)
+    // Nothing of the account itself leaves the box.
+    const said = JSON.stringify([await route(one), await route(two)])
+    for (const secret of ["6f1e0c4a", "6F1E0C4A", "org-1", "org-2", "ada@example.com", "token-1"]) expect(said).not.toContain(secret)
+  })
+
+  test("a Mac's Claude token says nothing of who it's for: no identity, and the row is as before", async () => {
+    ClaudeAgent.keychain = true
+    const { heardWindows } = await import("../../src/agents/agents/claude-limits")
+    signIn(home, "default", "token-own")
+    const own = new TestClaude(home)
+    const limits = new Limits(() => agentAccounts([own]), undefined, clock.now)
+    await limits.tick()
+    for (const window of heardWindows({ rateLimitType: "five_hour", utilization: 0.3, status: "allowed" })) own.limits.heard!(window)
+    const [account] = (await route(limits)).accounts
+    expect(account!.windows.map((each) => each.used)).toEqual([0.3])
+    expect(account!.identity).toBeUndefined()
+  })
+
+  test("signed in to another account since, what was kept of the one before isn't shown as this one's", async () => {
+    ClaudeAgent.keychain = false
+    const folder = join(home, "claude", "home")
+    signedInAs(folder, "token-old", "00000000-0000-4000-8000-00000000000a", "org-a")
+    anthropic.answers.set("token-old", usage(80, 70))
+    const file = join(home, "limits.json")
+    const own = new TestClaude(home, { id: "default", home: folder })
+    const limits = new Limits(() => agentAccounts([own]), file, clock.now)
+    await limits.tick()
+    const before = (await route(limits)).accounts[0]!
+    expect(before.windows.map((each) => each.used)).toEqual([0.8, 0.7])
+
+    // Signed in as someone else, and Anthropic holding reads off for now: nothing of the old one stays.
+    signedInAs(folder, "token-new", "00000000-0000-4000-8000-00000000000b", "org-b")
+    anthropic.answers.set("token-new", () => new Response("{}", { status: 429, headers: { "retry-after": "600" } }))
+    clock.pass(60_000)
+    await limits.tick()
+    const after = (await route(limits)).accounts[0]!
+    expect(after.identity).not.toBe(before.identity!)
+    expect(after.windows).toEqual([])
+    expect(after.problem?.kind).toBe("rate-limited")
+    // Through a restart too.
+    const restarted = new Limits(() => agentAccounts([own]), file, clock.now)
+    expect((await route(restarted)).accounts[0]!.windows).toEqual([])
+  })
+
+  test("Codex's ChatGPT sign-in is its account and workspace member, the same as the engine's sign-in to it", async () => {
+    const { EngineAccounts } = await import("../../src/agents/engine-limits")
+    const access = (user: string) => token({ "https://api.openai.com/auth": { chatgpt_account_id: "acct-77", chatgpt_user_id: user }, "https://api.openai.com/profile": { email: "ada@example.com" } })
+    const codexHome = join(home, "codex-accounts", "a1")
+    mkdirSync(codexHome, { recursive: true })
+    writeFileSync(join(codexHome, "auth.json"), JSON.stringify({ OPENAI_API_KEY: null, tokens: { id_token: "x", access_token: access("user-ada"), refresh_token: "r", account_id: "acct-77" } }))
+    const window = { usedPercent: 12, windowDurationMins: 300, resetsAt: 1_794_200_000 }
+    const launcher = fakeCodex(home, { type: "chatgpt", email: "ada@example.com", planType: "team" }, { rateLimits: { limitId: "codex", primary: window } })
+    const codex = new (class extends CodexAgent {
+      override executable() {
+        return launcher
+      }
+    })({ home, temporary: home, deps: {} as any }, { id: "a1", label: "Work", home: codexHome })
+    try {
+      const agent = (await route(new Limits(() => agentAccounts([codex]), undefined, clock.now), "POST", ["refresh"])).accounts[0]!
+      const engine = (signedIn: string) => {
+        const accounts = new EngineAccounts(async () => [{ integrationID: "openai", active: true, value: { type: "oauth", access: access(signedIn), expires: clock.at + 3_600_000, metadata: { accountID: "acct-77" } } }])
+        return accounts.refresh().then(() => accounts.accounts()[0]!.limits.identity!())
+      }
+      const { identityOf } = await import("../../src/agents/limits")
+      expect(agent.identity).toBe(identityOf((await engine("user-ada"))!))
+      // Another member of the same workspace has limits of their own.
+      expect(identityOf((await engine("user-bob"))!)).not.toBe(agent.identity!)
+      expect(JSON.stringify(agent)).not.toContain("acct-77")
+    } finally {
+      codex.shutdown?.()
+    }
+  })
+
+  test("Codex signed in to another account while one still runs: not read through it, said so, then read once it starts again", async () => {
+    const access = (user: string) => token({ "https://api.openai.com/auth": { chatgpt_account_id: `acct-${user}`, chatgpt_user_id: user } })
+    const codexHome = join(home, "codex-accounts", "a1")
+    mkdirSync(codexHome, { recursive: true })
+    const signIn = (user: string) => writeFileSync(join(codexHome, "auth.json"), JSON.stringify({ tokens: { access_token: access(user), account_id: `acct-${user}` } }))
+    signIn("ada")
+    // (The stand-in answers the same numbers whoever it is: what matters is whose they're said to be.)
+    const launcher = fakeCodex(home, { type: "chatgpt", planType: "plus" }, { rateLimits: { limitId: "codex", primary: { usedPercent: 70, windowDurationMins: 300, resetsAt: 1_794_200_000 } } })
+    const codex = new (class extends CodexAgent {
+      override executable() {
+        return launcher
+      }
+    })({ home, temporary: home, deps: {} as any }, { id: "a1", home: codexHome })
+    try {
+      const limits = new Limits(() => agentAccounts([codex]), undefined, clock.now)
+      const first = (await route(limits, "POST", ["refresh"])).accounts[0]!
+      expect(first.windows.map((each) => each.used)).toEqual([0.7])
+      // Signed in as Bob in Terminal; the Codex running reads Ada's sign-in still.
+      signIn("bob")
+      clock.pass(60_000)
+      await limits.tick()
+      const switched = (await route(limits)).accounts[0]!
+      expect(switched.identity).not.toBe(first.identity!)
+      expect(switched.windows).toEqual([])
+      expect(switched.problem?.message).toBe("Signed in to another account here: its limits show once they're read.")
+      // It stops (nothing used it); the next read starts one with Bob's sign-in.
+      codex.shutdown?.()
+      clock.pass(10 * 60_000)
+      await limits.tick()
+      const read = (await route(limits)).accounts[0]!
+      expect([read.identity, read.windows.map((each) => each.used), read.problem]).toEqual([switched.identity, [0.7], undefined])
+    } finally {
+      codex.shutdown?.()
+    }
+  })
+})
+
 describe("plan_limits, an agent's read of them", () => {
   test("says each account's windows, how much is used, when each resets and as of when", async () => {
     ClaudeAgent.keychain = false

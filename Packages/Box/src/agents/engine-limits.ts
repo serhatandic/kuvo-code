@@ -11,7 +11,7 @@
 // Ollama's isn't read: ollama.com tells its usage only to the Ollama app's own signing key, not to the
 // API key you sign in to Kuvo Code with.
 
-import { fingerprint, LimitsProblem, retryAt, type LimitedAccount, type LimitReading, type LimitsService, type LimitWindow } from "./limits"
+import { chatGPTIdentity, fingerprint, LimitsProblem, retryAt, xaiIdentity, type LimitedAccount, type LimitReading, type LimitsService, type LimitWindow } from "./limits"
 
 type Window = Omit<LimitWindow, "read" | "source">
 
@@ -44,16 +44,21 @@ interface Reader {
    * `access` is Copilot's own, short-lived), so its expiry isn't the sign-in's. */
   lasting?: boolean
   read(secret: string, credential: Credential, now: number): Promise<LimitReading>
+  /** Who the sign-in is, as it says itself (`LimitsSource.identity`); else as its maker's answer says. */
+  identity?(value: Credential["value"]): string | undefined
 }
 
+/** An API key is its own account here: the same key on two computers is one row. */
+const byKey = (value: Credential["value"]) => (value.key?.trim() ? `key:${value.key.trim()}` : undefined)
+
 const READERS: Record<string, Reader> = {
-  openai: { service: "codex", signIn: true, read: readChatGPT },
-  xai: { service: "grok", signIn: true, read: readGrok },
+  openai: { service: "codex", signIn: true, read: readChatGPT, identity: (value) => chatGPTIdentity(value.access, value.metadata?.accountID) },
+  xai: { service: "grok", signIn: true, read: readGrok, identity: (value) => xaiIdentity(value.access) },
   "github-copilot": { service: "copilot", lasting: true, read: readCopilot },
-  openrouter: { service: "openrouter", read: readOpenRouter },
-  zai: { service: "zai", read: readZai },
-  "zai-coding-plan": { service: "zai", read: readZai },
-  "opencode-go": { service: "opencode", read: readOpenCodeGo },
+  openrouter: { service: "openrouter", read: readOpenRouter, identity: byKey },
+  zai: { service: "zai", read: readZai, identity: byKey },
+  "zai-coding-plan": { service: "zai", read: readZai, identity: byKey },
+  "opencode-go": { service: "opencode", read: readOpenCodeGo, identity: byKey },
 }
 
 /** The services whose limits the engine's sign-ins are read for. */
@@ -98,6 +103,10 @@ export class EngineAccounts {
             signIn: () => {
               const value = this.credentials.find((each) => each.integrationID === integration)?.value
               return fingerprint(`${value?.access ?? value?.key ?? ""}:${value?.refresh ?? ""}:${value?.expires ?? ""}`)
+            },
+            identity: () => {
+              const value = this.credentials.find((each) => each.integrationID === integration)?.value
+              return value ? READERS[integration]?.identity?.(value) : undefined
             },
           },
         }
@@ -235,7 +244,8 @@ async function readCopilot(secret: string, _credential: Credential, now: number)
     }
   }
   const plan = title(body?.copilot_plan)
-  return { windows, ...(plan ? { plan } : {}) }
+  const login = typeof body?.login === "string" && body.login.trim() ? body.login.trim().toLowerCase() : undefined
+  return { windows, ...(plan ? { plan } : {}), ...(login ? { identity: `github:${login}` } : {}) }
 }
 
 /** OpenRouter: the key's own cap, if it has one, and the account's credits left. */

@@ -192,3 +192,67 @@ test("an API key turned away is tried again later, not held to that key as a lap
   await limits.tick()
   expect(reads.filter((read) => read.path === "/openrouterKey")).toHaveLength(2)
 })
+
+test("each sign-in says who it is, the same on every computer: a key by the key, Copilot by GitHub's login, SuperGrok by its user", async () => {
+  const { GrokAgent } = await import("../../src/agents/agents/grok")
+  const { agentAccounts } = await import("../../src/agents/limits")
+  const { mkdtempSync, writeFileSync, rmSync } = await import("node:fs")
+  const { tmpdir } = await import("node:os")
+  const { join } = await import("node:path")
+  const jwt = (claims: Record<string, unknown>) => `eyJhbGciOiJSUzI1NiJ9.${Buffer.from(JSON.stringify(claims)).toString("base64url")}.signature`
+  answers["/openrouterKey"] = () => Response.json({ data: { limit: null, usage: 3, is_free_tier: false } })
+  answers["/openrouterCredits"] = () => Response.json({ data: { total_credits: 20, total_usage: 7.5 } })
+  answers["/copilot"] = () => Response.json({ login: "Ada-L", copilot_plan: "individual_pro", quota_reset_date: "2026-12-01", quota_snapshots: { premium_interactions: { entitlement: 300, remaining: 120, percent_remaining: 40 } } })
+  answers["/grok"] = () => Response.json({ config: { currentPeriod: { start: "2026-11-05T00:00:00Z", end: "2026-11-12T00:00:00Z" }, creditUsagePercent: 10 } })
+  const engine = (key: string, github: string) => stated([
+    credential("openrouter", { type: "api", key }),
+    credential("github-copilot", { type: "oauth", access: "copilot-short", refresh: github, expires: NOW - 1 }),
+    credential("xai", { type: "oauth", access: jwt({ sub: "xai-user-1" }), expires: NOW + 3_600_000 }),
+  ])
+  // Two computers: the same key and GitHub account, signed in on each with sign-ins of their own.
+  const here = await engine("or-key", "gho_here")
+  const there = await engine("or-key", "gho_there")
+  const other = await engine("or-other-key", "gho_there")
+  const identities = (accounts: AccountLimits[]) => accounts.map((each) => [each.provider, each.identity])
+  expect(identities(here.accounts)).toEqual(identities(there.accounts))
+  expect(here.accounts.every((each) => /^[0-9a-f]{16}$/.test(each.identity ?? ""))).toBe(true)
+  expect(other.accounts[0]!.identity).not.toBe(here.accounts[0]!.identity!)
+  const said = JSON.stringify([here, there])
+  for (const secret of ["or-key", "Ada-L", "ada-l", "xai-user-1", "gho_here"]) expect(said).not.toContain(secret)
+
+  // The Grok agent signed in to the same xAI account: the same identity as the engine's SuperGrok.
+  const folder = mkdtempSync(join(process.env.KUVO_TEST_ROOT ?? tmpdir(), "kuvo-grok-identity-"))
+  try {
+    writeFileSync(join(folder, "auth.json"), JSON.stringify({ "https://auth.x.ai": { key: jwt({ sub: "xai-user-1" }), expires_at: "2026-11-09T20:00:00Z" } }))
+    const grok = new (class extends GrokAgent { override executable() { return "/bin/true" } })({ home: folder, temporary: folder, deps: {} as any }, { id: "a1", home: folder })
+    const limits = new Limits(() => agentAccounts([grok]), undefined, () => NOW)
+    const accounts = (((await (await limitsRoutes(limits, "POST", ["refresh"])).json()) as any).data.accounts) as AccountLimits[]
+    expect(accounts[0]!.identity).toBe(here.accounts.find((each) => each.provider === "xai")!.identity!)
+  } finally {
+    rmSync(folder, { recursive: true, force: true })
+  }
+})
+
+test("signed in to Copilot as another GitHub account, what was kept of the one before isn't shown as this one's", async () => {
+  let login = "ada"
+  let remaining = 120
+  answers["/copilot"] = () => Response.json({ login, copilot_plan: "individual", quota_reset_date: "2026-12-01", quota_snapshots: { premium_interactions: { entitlement: 300, remaining, percent_remaining: (remaining / 300) * 100 } } })
+  let now = NOW
+  let value = { type: "oauth", access: "copilot-short", refresh: "gho_ada", expires: NOW - 1 }
+  const engine = new EngineAccounts(async () => ({ data: [credential("github-copilot", value)] }))
+  const limits = new Limits(() => engine.accounts(), undefined, () => now, () => engine.refresh())
+  const listed = async () => (((await (await limitsRoutes(limits, "GET", [])).json()) as any).data.accounts as AccountLimits[])[0]!
+  await limits.tick()
+  const ada = await listed()
+  expect(ada.windows[0]!.amount?.used).toBe(180)
+  // Signed in again as Bob, who has used less.
+  login = "bob"
+  remaining = 290
+  value = { ...value, refresh: "gho_bob" }
+  now += 11 * 60_000
+  await limits.tick()
+  const bob = await listed()
+  expect(bob.identity).not.toBe(ada.identity!)
+  expect(bob.windows.map((each) => each.amount?.used)).toEqual([10])
+  expect(bob.problem).toBeUndefined()
+})

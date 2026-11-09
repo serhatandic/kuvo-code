@@ -15,7 +15,7 @@ import { accountName, ContextWindows, failure, KnownAccount, model, signOutWith,
 import { fileDiff, fromPatch } from "../diff"
 import { install, installedVersion, maintenance, update, type MaintenanceDefinition } from "../maintenance"
 import { fingerprint, type LimitsSource } from "../limits"
-import { CLAUDE_LIMITS_EVERY, credentialsIn, heardWindows, readClaudeLimits, type ClaudeSignIn } from "./claude-limits"
+import { CLAUDE_LIMITS_EVERY, claudeIdentity, credentialsIn, heardWindows, readClaudeLimits, type ClaudeSignIn } from "./claude-limits"
 import { emit } from "../events"
 import { run, which } from "../proc"
 import { Queue } from "../queue"
@@ -424,6 +424,7 @@ export class ClaudeAgent implements Agent {
           return readClaudeLimits(signIn, signIn ? await this.programVersion() : undefined, now)
         },
         signIn: () => fingerprint(this.limitsSignIn()?.token),
+        identity: () => (this.instance.home ? claudeIdentity(this.instance.home) : undefined),
       }
 
   /**

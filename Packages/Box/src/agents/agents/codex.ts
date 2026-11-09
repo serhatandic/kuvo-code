@@ -22,7 +22,7 @@ import { newID } from "../ids"
 import { onMachine, ownFoldersConfig } from "../machine"
 import { install, maintenance, update, type MaintenanceDefinition } from "../maintenance"
 import { which } from "../proc"
-import { LimitsProblem, type LimitReading, type LimitsSource, type LimitWindow } from "../limits"
+import { chatGPTIdentity, LimitsProblem, type LimitReading, type LimitsSource, type LimitWindow } from "../limits"
 import { RPC, RPCError } from "../rpc"
 import { CodexCitations, plainCitations, type Said } from "./codex-citations"
 import { engineSkills, skillsFolder, skillsFor, skillsRoot, turnedOff, upward, within } from "../skills"
@@ -156,10 +156,23 @@ export class CodexAgent implements Agent {
   readonly limits: LimitsSource = {
     every: 10 * 60_000,
     read: () => this.readLimits(),
+    identity: () => this.chatGPTAccount(),
   }
 
-  /** Its limits were read once since the box started. */
-  private limitsRead = false
+  /** Who its ChatGPT sign-in is, as its token in its home says (never sent anywhere); none in the Keychain. */
+  private chatGPTAccount(): string | undefined {
+    try {
+      const tokens = JSON.parse(readFileSync(join(this.home, "auth.json"), "utf8"))?.tokens
+      return chatGPTIdentity(tokens?.access_token, tokens?.account_id)
+    } catch {
+      return undefined
+    }
+  }
+
+  /** Its limits were read since the box started, and with which sign-in (`chatGPTAccount`). */
+  private limitsRead?: { as: string | undefined }
+  /** Who each app-server is signed in as: it reads its sign-in as it starts, and keeps it. */
+  private signedInAs = new WeakMap<RPC, string | undefined>()
 
   /**
    * Read once as the box starts (its app-server then stops when it's idle, as any), then only through
@@ -168,18 +181,24 @@ export class CodexAgent implements Agent {
    */
   private async readLimits(): Promise<LimitReading | null> {
     if (!this.executable()) throw new LimitsProblem("none", "Codex isn't installed here.")
-    const running = [...this.slots.values()].map((slot) => slot.server).find((server) => server && !server.isClosed)
-    if (this.limitsRead && !running) return null
+    // Only through a Codex signed in as its home is now: one started before you signed in to
+    // another account still reads the one before, whose limits aren't this one's.
+    const now = this.chatGPTAccount()
+    const current = (server: RPC | undefined): server is RPC => !!server && !server.isClosed && this.signedInAs.get(server) === now
+    const running = [...this.slots.values()].map((slot) => slot.server).find(current)
+    // (Signed in to another account since it was read: read once more, as at the box's start.)
+    if (this.limitsRead && this.limitsRead.as === now && !running) return null
     let rpc: RPC
     let account: any
     try {
       rpc = running ?? (await this.rpc())
+      if (!current(rpc)) return null
       account = (await rpc.request("account/read", {}, 20_000))?.account
     } catch (caught) {
       throw new LimitsProblem("failed", `Codex couldn't say: ${caught instanceof Error ? caught.message : String(caught)}`)
     }
     // It answered: not started again for this, whatever it said.
-    this.limitsRead = true
+    this.limitsRead = { as: now }
     // Signed out, or an API key: no plan to read.
     if (account?.type !== "chatgpt") throw new LimitsProblem("none", account ? "An API key has no plan limits." : "Not signed in to Codex here.")
     let result: any
@@ -399,6 +418,7 @@ export class CodexAgent implements Agent {
     const args = ["app-server", ...noComputerUse.flatMap((plugin) => ["-c", `plugins.${plugin}.enabled=false`])]
     const env = { ...(this.instance.home ? { CODEX_HOME: this.instance.home } : {}), ...(thread ? { OPENCODE_SESSION_ID: thread.session.id } : {}), ...fence?.env }
     const rpc = new RPC(fence ? [fence.command, ...args] : [executable, ...args], { cwd: fence ? directory : this.context.temporary, env })
+    this.signedInAs.set(rpc, this.chatGPTAccount())
     slot.fence = fenceNow
     if (fence) this.fencedServers.add(rpc)
     else this.unfencedServers.add(rpc)
@@ -466,8 +486,8 @@ export class CodexAgent implements Agent {
     if (method === "account/rateLimits/updated") {
       const snapshot = params?.rateLimits
       if (snapshot) this.rateLimits.set(snapshot.limitId ?? "codex", snapshot)
-      // Where the plan stands, for its limits (limits.ts).
-      if (snapshot) for (const window of codexWindows(snapshot)) this.limits.heard?.(window)
+      // Where the plan stands, for its limits (limits.ts): its sign-in's, as it is now.
+      if (snapshot && from && this.signedInAs.get(from) === this.chatGPTAccount()) for (const window of codexWindows(snapshot)) this.limits.heard?.(window)
       return
     }
     // An agent a session's Codex spawned: its thread says which it came from as it starts.

@@ -8,7 +8,7 @@
 // 429 for as long as it says. What a turn hears (Claude Code's rate-limit events, each window as
 // every response's headers give it) keeps them current between reads, and is all a Mac has.
 
-import { readFileSync } from "node:fs"
+import { readFileSync, statSync } from "node:fs"
 import { join } from "node:path"
 import { LimitsProblem, retryAt, type LimitReading, type LimitWindow } from "../limits"
 
@@ -43,6 +43,41 @@ export function credentialsIn(configHome: string): ClaudeSignIn | undefined {
       ...(typeof oauth.expiresAt === "number" ? { expiresAt: oauth.expiresAt } : {}),
       ...(Array.isArray(oauth.scopes) ? { scopes: oauth.scopes.filter((scope: unknown) => typeof scope === "string") } : {}),
     }
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Who Claude Code is signed in as in a settings folder (Linux), as it keeps it beside the sign-in
+ * (`.claude.json`'s `oauthAccount`): the account and the organization whose plan it uses (one
+ * account can have a personal plan and a team's, each with its own limits). None on a Mac: Kuvo
+ * Code's token there says nothing of who it's for, and Claude Code doesn't know either.
+ */
+export function claudeIdentity(configHome: string): string | undefined {
+  const file = join(configHome, ".claude.json")
+  try {
+    // (It keeps each project's state too, and can be large: read again only when it changed.)
+    const { mtimeMs, size } = statSync(file)
+    const known = identities.get(file)
+    if (known && known.mtimeMs === mtimeMs && known.size === size) return known.identity
+    const identity = identityIn(readFileSync(file, "utf8"))
+    identities.set(file, { mtimeMs, size, identity })
+    return identity
+  } catch {
+    return undefined
+  }
+}
+
+const identities = new Map<string, { mtimeMs: number; size: number; identity: string | undefined }>()
+
+function identityIn(text: string): string | undefined {
+  try {
+    const account = JSON.parse(text)?.oauthAccount
+    const uuid = typeof account?.accountUuid === "string" ? account.accountUuid.trim().toLowerCase() : ""
+    if (!uuid) return undefined
+    const organization = typeof account.organizationUuid === "string" ? account.organizationUuid.trim().toLowerCase() : ""
+    return `anthropic:${uuid}|${organization}`
   } catch {
     return undefined
   }

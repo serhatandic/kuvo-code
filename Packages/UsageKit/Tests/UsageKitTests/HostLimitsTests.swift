@@ -1,7 +1,7 @@
 import XCTest
 @testable import UsageKit
 
-/// The host's plan limits, one row per login (fork addition): in the Bars view each takes the place
+/// The host's plan limits, one row per account (fork addition): in the Bars view each takes the place
 /// of the panel's own row for its provider, and the panel stops reading that provider's limits.
 @MainActor
 final class HostLimitsTests: XCTestCase {
@@ -50,6 +50,12 @@ final class HostLimitsTests: XCTestCase {
         limits.update(rows: [row("mini/claude-code", "claude", "Claude · mini")], covered: ["claude"])
         let entries = limits.entries(groups: [group("claude"), group("cursor")]) { _ in false }
         XCTAssertEqual(names(entries), ["panel:claude", "Claude · mini", "panel:cursor"])
+        // The host names it as the account ("Claude"): beside the panel's own Claude bar, it says
+        // which computers it's from.
+        limits.update(rows: [HostLimitRow(id: "claude#a1", providerID: "claude", name: "Claude", meters: [], isLocal: false, place: "hetzner, lokum")], covered: ["claude"])
+        XCTAssertEqual(names(limits.entries(groups: [group("claude"), group("cursor")]) { _ in false }), ["panel:claude", "Claude · hetzner, lokum", "panel:cursor"])
+        // With no bar of that name, just its name.
+        XCTAssertEqual(names(limits.entries(groups: [group("cursor")]) { _ in false }), ["panel:cursor", "Claude"])
         // A phone gets the panel's own Claude: this Mac's box has no row for it.
         XCTAssertEqual(limits.phoneGroups([group("claude"), group("cursor")]).map { $0.group.provider.id + ($0.covers.map { ">" + $0 } ?? "") }, ["claude", "cursor"])
     }
