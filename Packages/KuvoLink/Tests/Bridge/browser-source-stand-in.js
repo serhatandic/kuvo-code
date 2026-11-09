@@ -182,13 +182,23 @@ export function served(systems) {
 }
 
 /** Serves `files` (a Map of real addresses to bytes) at `<host>/<path>`, as `KUVO_BROWSER_SOURCE`
- * names it. `asked` lists what was asked for; `answer(address)` may answer otherwise first. */
+ * names it. `asked` lists what was asked for; `answer(address)` may answer otherwise first
+ * (`{status, body, slow}`: half the body, the rest `slow` ms later). */
 export async function startSource(files, answer = () => null) {
   const asked = [];
   const server = http.createServer((request, response) => {
     const address = `https://${request.url.slice(1)}`;
     asked.push(address);
     const instead = answer(address);
+    if (instead?.slow) {
+      // Half now, the rest `slow` ms later.
+      const body = Buffer.from(instead.body ?? "");
+      response.writeHead(instead.status, { "content-length": body.length });
+      response.write(body.subarray(0, body.length >> 1));
+      const timer = setTimeout(() => response.end(body.subarray(body.length >> 1)), instead.slow);
+      response.on("close", () => clearTimeout(timer));
+      return;
+    }
     if (instead) {
       response.writeHead(instead.status, instead.headers ?? {});
       return response.end(instead.body ?? "");

@@ -1464,7 +1464,8 @@ without a Mac: no Mac sends it. On Linux and macOS, x86-64 and ARM64; a Mac's ow
 - **Checked**: each download's size (it stops past it) and SHA-256 before anything of it is
   unpacked; one that doesn't match is deleted and the setup fails, saying so. Nothing downloaded is
   run while setting up. The box unpacks the zip and packages itself (no `unzip`, `xz` or `rpm`
-  needed): nothing outside the build's folder, no link that leads out of it, no set-user-ID. Of
+  needed): nothing outside the build's folder, no link that leads out of it (checked again once
+  the build is put together), no set-user-ID. Of
   the packages it takes only `usr/lib64/*.so*` (links only to a name beside them), fonts and
   licenses, by their own names.
 - **Where**: `browser/.box-staging-<pid>-<random>` while it works (downloads and all, removed
@@ -1472,25 +1473,30 @@ without a Mac: no Mac sends it. On Linux and macOS, x86-64 and ARM64; a Mac's ow
   `chromium-version` and `kuvo-version` (the box's version), and `current` moved to it in one step.
   A build a browser still runs from stays until nothing does; `browser/profile` (sign-ins) always
   stays. It needs about 1 GB free to set up.
-- **When**: as the box's keeper starts (a newer pin is set up then), and while there's no browser,
-  each minute; when the browser's needed (`kuvo-browser.js`: the live view and the tools wait for
-  it, a tool up to four minutes); when a client asks (`POST kuvo/browser`); and once again when the
-  browser doesn't start because its build isn't whole (`--repair`). One setup at a time
-  (`run/.browser-installing/pid`). An older build keeps working while a newer one is set up.
-- **Failures**: no network, a source that answers otherwise, a checksum, no room. It notes why and
-  tries again by itself after 1, 5, 15, then 60 minutes; what only an update fixes (a build Google
-  or Rocky no longer has, a system or processor it has none for) it doesn't try again by itself.
-  Asked now, it tries at once.
-- **State**: `run/browser-install.json`, `{state, progress?, message?, at, failures?, retryAt?, id?}`.
+- **When**: as the box's keeper starts (a newer pin is set up then), and each minute while there's
+  no browser or the last setup didn't go well; when the browser's needed (`kuvo-browser.js`: the
+  live view and the tools wait for it, a tool up to four minutes); when a client asks (`POST
+  kuvo/browser`); and again when the browser doesn't start because its build isn't whole
+  (`--repair`, at most once in six hours for the same build). One setup at a time
+  (`run/.browser-installing`, taken over in one step when its process is gone). An older build
+  keeps working while a newer one is set up.
+- **Failures**: no network, a source that answers otherwise or too slowly, a checksum, no room. The
+  first failure stops every download still going; then it notes why and tries again by itself
+  after 1, 5, 15, then 60 minutes. What only an update fixes (a build Google or Rocky no longer
+  has, a system or processor it has none for) it doesn't try again by itself. Only a client asking
+  `now` (you, with Try Again) has it try at once; the tools and the live view wait as it says.
+- **State**: `run/browser-install.json`, `{state, progress?, message?, at, failures?, retryAt?, id?,
+  repairedAt?, repairedId?}`. A setup asked for says `checking` at once, before its process starts.
 - `kuvo/browser` (a machine's; feature `browser`):
   - `GET` answers `{state, chromium, installed, progress, message, retryAt}`: `state` is `missing`
     (none, and none being set up), `checking`, `downloading` (`progress`, 0 to 1), `installing`,
     `ready` or `failed` (`message`; `retryAt` when it tries again, ms, or null). `chromium` is the
     pinned version, `installed` the one in use.
-  - `POST {repair?}` sets it up now unless the pinned build's in use (or `repair`): 202 with the
-    status.
-  - A Mac asks over SSH with `box route`; `kuvo-link.js browser install [--now] [--repair]` and
-    `browser status` do the same from a shell.
+  - `POST {now?, repair?}` sets it up unless the pinned build's in use (or `repair`), or it waits
+    after a failure (unless `now`): 202 with the status.
+  - A Mac asks over SSH with `box route`. From a shell: `kuvo-link.js browser install [--now]
+    [--repair]` (the setup itself, as the keeper runs it), `browser start [--now] [--repair]` (in
+    a process of its own, as `POST`; `kuvo-browser.js` uses it) and `browser status`.
 - **The live view** (`kuvo-browser.js connect`) says `Kuvo.installing {state, progress}` while it
   waits for the setup, then `Kuvo.hello`; a setup that failed is `Kuvo.error` with `kind: "missing"`
   and why (an older Mac then puts the browser there itself, as it did). A tool that waited says

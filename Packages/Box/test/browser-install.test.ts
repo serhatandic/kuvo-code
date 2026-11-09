@@ -11,7 +11,7 @@ import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { makeRpm, makeXz, makeZip, served, startSource } from "../../KuvoLink/Tests/Bridge/browser-source-stand-in.js"
-import { allowedSource, browserStatus, compareVersions, installBrowser, runtimeHere } from "../src/link/browser/install"
+import { allowedSource, browserStatus, compareVersions, installBrowser, runtimeHere, startBrowserInstall } from "../src/link/browser/install"
 import { cpioEntries, payload } from "../src/link/browser/rpm"
 import { unxz } from "../src/link/browser/xz"
 import { unzip } from "../src/link/browser/zip"
@@ -199,7 +199,7 @@ const systems = (version = "155.0.0.1", given: { mac?: boolean } = {}) => {
 }
 
 let source: Awaited<ReturnType<typeof startSource>> | null = null
-async function serve(made: ReturnType<typeof systems>, answer?: (address: string) => { status: number; body?: string | Buffer } | null) {
+async function serve(made: ReturnType<typeof systems>, answer?: (address: string) => { status: number; body?: string | Buffer; slow?: number } | null) {
   await source?.close()
   const { pins, files } = served(made)
   source = await startSource(files, answer)
@@ -357,6 +357,46 @@ describe("setting it up", () => {
     expect(await installBrowser()).toBe("ready")
     expect(await installBrowser({ repair: true })).toBe("installed")
     expect(fs.existsSync(path.join(current(), "lib", "libfoo.so.1.0"))).toBe(true)
+  })
+
+  test("a build that doesn't start is set up again at most once in a while", async () => {
+    await serve(systems())
+    expect(await installBrowser()).toBe("installed")
+    expect(await installBrowser({ repair: true })).toBe("installed")
+    const asked = source!.asked.length
+    // Again at once: the same reason, which setting it up again didn't fix (a library the machine
+    // itself lacks), never has it download the browser over and over.
+    expect(await installBrowser({ repair: true, now: true })).toBe("ready")
+    expect(source!.asked.length).toBe(asked)
+  })
+
+  test("a failure stops every download still going, and what it says stays said", async () => {
+    const made = systems()
+    const fonts = (made as { linux: { packages: Record<string, { name: string; rpm: Buffer }[]> } }).linux.packages[kind][1].rpm
+    // One package Rocky Linux doesn't have anywhere; another still coming as that's found.
+    await serve(made, address => (address.includes("libfoo") ? { status: 404 } : address.includes("foo-fonts") ? { status: 200, body: fonts, slow: 1_500 } : null))
+    expect(await installBrowser()).toBe("failed")
+    await new Promise(resolve => setTimeout(resolve, 2_500))
+    const status = browserStatus()
+    expect(status.state).toBe("failed")
+    expect(status.message).toContain("no longer has libfoo")
+    // Only an update fixes it: it doesn't try again by itself, nor when a tool asks.
+    expect(status.retryAt).toBeNull()
+    expect(await installBrowser()).toBe("waiting")
+    expect(startBrowserInstall().state).toBe("failed")
+    expect(fs.readdirSync(BROWSER)).toEqual([])
+  })
+
+  test("a link that leads out of the build once it's put together is refused", async () => {
+    const zip = makeZip([
+      { name: "chrome-linux64/chrome", data: "#!/bin/sh\n", mode: 0o755 },
+      { name: "profile/" },
+      { name: "chrome-linux64/data", link: "../profile" },
+    ])
+    await serve({ linux: { version: "155.0.0.1", x86_64: zip, aarch64: zip, packages: { [kind]: packages() } } })
+    expect(await installBrowser()).toBe("failed")
+    expect(browserStatus().message).toContain("leads outside")
+    expect(fs.existsSync(path.join(BROWSER, "current"))).toBe(false)
   })
 
   test("the browser's data stays whatever is set up", async () => {

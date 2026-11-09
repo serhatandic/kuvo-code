@@ -171,7 +171,7 @@ private struct SetupCard: View {
             VStack(spacing: 6) {
                 Text("Setting Up the Browser on \(machine)")
                     .font(.system(size: 15, weight: .semibold))
-                Text("\(machine) downloads a browser and everything it needs from Google into ~/.kuvo-code. Nothing is installed on the system.")
+                Text("\(machine) downloads a browser from Google (on Linux, with the libraries it needs from Rocky Linux) into ~/.kuvo-code. Nothing is installed on the system.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)

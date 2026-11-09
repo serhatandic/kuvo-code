@@ -33,11 +33,12 @@ nonisolated enum MachineBrowserInstaller {
         var isUnderWay: Bool { ["checking", "downloading", "installing"].contains(state) }
     }
 
-    /// Asks the machine's box how its browser stands, after having it set the browser up now
-    /// (`start`) when it isn't ready. Nil when the box doesn't know `kuvo/browser` (an older one,
-    /// which the browser's own helper sets it up for when it's first used).
-    static func status(start: Bool, on connection: SSHConnection) async throws -> Status? {
-        let (code, data) = try await MachineBox.route(start ? "POST" : "GET", "kuvo/browser", body: start ? [:] : nil, on: connection)
+    /// Asks the machine's box how its browser stands, after having it set the browser up (`start`)
+    /// when it isn't ready: after a failure, it waits as long as the box says, unless asked `now`
+    /// (you asked to try again). Nil when the box doesn't know `kuvo/browser` (an older one, which
+    /// the browser's own helper sets it up for when it's first used).
+    static func status(start: Bool, now: Bool = false, on connection: SSHConnection) async throws -> Status? {
+        let (code, data) = try await MachineBox.route(start ? "POST" : "GET", "kuvo/browser", body: start ? ["now": now] : nil, on: connection)
         guard (200..<300).contains(code) else { return nil }
         return try? JSONDecoder().decode(Status.self, from: data)
     }

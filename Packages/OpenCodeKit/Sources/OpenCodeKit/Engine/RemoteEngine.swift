@@ -970,9 +970,10 @@ public final class RemoteServer: @unchecked Sendable {
               fi
             fi
             # The browser agents use here: the box sets it up itself (PROTOCOL.md, "The browser on a
-            # machine"), as the keeper starts (a newer Kuvo Code may pin a newer one) and, while it's
-            # missing, each minute (after a failure, the box waits longer between tries itself).
-            if [ -f "$K/bin/kuvo-link.js" ] && [ -n "$V" ] && { [ "$round" -eq 0 ] || { [ $((round % 4)) -eq 0 ] && [ ! -x "$K/browser/current/chrome" ] && [ ! -x "$K/browser/current/chrome-headless-shell" ]; }; } && ! is "$(cat "$R/.browser-installing/pid" 2>/dev/null)" kuvo-link; then
+            # machine"), as the keeper starts (a newer Kuvo Code may pin a newer one) and, each
+            # minute, while it's missing or its last setup didn't go well (the box itself waits
+            # longer between tries after a failure).
+            if [ -f "$K/bin/kuvo-link.js" ] && [ -n "$V" ] && { [ "$round" -eq 0 ] || { [ $((round % 4)) -eq 0 ] && { { [ ! -x "$K/browser/current/chrome" ] && [ ! -x "$K/browser/current/chrome-headless-shell" ]; } || ! grep -q '"state":"ready"' "$R/browser-install.json" 2>/dev/null; }; }; } && ! is "$(cat "$R/.browser-installing/pid" 2>/dev/null)" kuvo-link; then
               (environment; cd "$K"; KUVO_HOME="$K" BUN_BE_BUN=1 BUN_RUNTIME_TRANSPILER_CACHE_PATH=0 "$S" "$K/engine/$V/opencode" --config=/dev/null --no-env-file "$K/bin/kuvo-link.js" browser install >/dev/null 2>&1 </dev/null &)
             fi
             # The phone link, while a phone is paired with it or a pairing's open.

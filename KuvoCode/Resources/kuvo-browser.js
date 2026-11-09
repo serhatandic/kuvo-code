@@ -234,24 +234,21 @@ function askBox(args, timeout = 30_000) {
 }
 
 /// Has the box set the browser up (PROTOCOL.md, "The browser on a machine"), in a process of its
-/// own that outlives this one, and that waits a while after a failure unless asked `now`.
+/// own that outlives this one; after a failure it waits as the box says, unless asked `now`.
+/// How it stands then, or null when the box can't say.
 function startSetUp({ now = false, repair = false } = {}) {
-  const link = path.join(K, "bin", "kuvo-link.js");
-  if (!fs.existsSync(link)) return;
   const flags = [...(now ? ["--now"] : []), ...(repair ? ["--repair"] : [])];
-  spawn(process.execPath, [...OWN_RUNTIME, link, "browser", "install", ...flags], { detached: true, stdio: "ignore", env: { ...process.env, BUN_BE_BUN: "1" }, cwd: K }).unref();
+  return askBox(["browser", "start", ...flags]);
 }
 
-/// The browser, set up by the box now, and followed until it's there: null once it is, else what's
+/// The browser, set up by the box, and followed until it's there: null once it is, else what's
 /// wrong. `told` hears how it goes (each `kuvo/browser` status as it changes); `wait` is how long to
 /// follow it before saying it's still under way.
 async function setUp(told, { repair = false, wait = 15 * 60_000 } = {}) {
-  startSetUp({ now: true, repair });
   const began = Date.now();
+  let status = await startSetUp({ repair });
   let said = "";
   while (true) {
-    await sleep(1_500);
-    const status = await askBox(["browser", "status"]);
     if (!status) return { kind: "missing", message: "This machine's box can't set up the browser. Connect to the machine from Kuvo Code on your Mac." };
     const underWay = ["checking", "downloading", "installing"].includes(status.state);
     const now = JSON.stringify([status.state, status.progress]);
@@ -259,16 +256,18 @@ async function setUp(told, { repair = false, wait = 15 * 60_000 } = {}) {
       said = now;
       told?.(status);
     }
-    if (!underWay && status.state === "ready" && browserBinary(CURRENT)) return null;
-    // (A moment for the setup to start and say so.)
-    if (!underWay && Date.now() - began > 6_000) {
-      // Failed: kind "missing", so an older Kuvo Code on a Mac puts the browser there itself.
+    if (!underWay) {
+      if (status.state === "ready" && browserBinary(CURRENT)) return null;
+      // Failed, or waits to try again: kind "missing", so an older Kuvo Code on a Mac puts the
+      // browser there itself.
       return { kind: "missing", message: status.message || "The browser isn't on this machine, and its box couldn't set it up." };
     }
     if (Date.now() - began > wait) {
       const done = status.state === "downloading" && typeof status.progress === "number" ? ` (${Math.round(status.progress * 100)}% downloaded)` : "";
       return { kind: "installing", message: `This machine is still setting up its browser${done}. Try again in a minute.` };
     }
+    await sleep(1_500);
+    status = await askBox(["browser", "status"]);
   }
 }
 
@@ -629,7 +628,9 @@ async function launchChrome(sandbox) {
   try {
     output = fs.readFileSync(LOGFILE, "utf8");
   } catch {}
-  return { output: output || (exited?.error ? String(exited.error.message) : ""), timedOut: !exited };
+  // (The program itself couldn't be run: gone, or not a program.)
+  const unrunnable = ["ENOENT", "EACCES", "ENOEXEC"].includes(exited?.error?.code);
+  return { output: output || (exited?.error ? String(exited.error.message) : ""), timedOut: !exited, unrunnable };
 }
 
 async function host() {
@@ -667,7 +668,7 @@ async function host() {
       fail("unsupported", "This machine's C library (glibc) is too old for the browser.\n\n" + lines);
     }
     // Its build isn't whole (a library or the browser itself gone, or damaged): the box sets it up again.
-    if (/error while loading shared libraries|cannot open shared object file|Exec format error|ENOENT|EACCES/.test(started.output)) {
+    if (started.unrunnable || /error while loading shared libraries|cannot open shared object file|Exec format error/.test(started.output)) {
       fail("broken", "The browser on this machine isn't whole." + (lines ? "\n\n" + lines : ""));
     }
     fail("failed", (started.timedOut ? "The browser didn't start in time." : "The browser stopped as it started.") + (lines ? "\n\n" + lines : ""));
@@ -3013,7 +3014,7 @@ async function mcp() {
   if (await reachable()) browser().catch(() => {});
   // No browser here: the box sets it up now, ready for the first tool (it waits a while after a
   // failure, as its keeper does).
-  else if (!browserBinary(CURRENT)) startSetUp();
+  else if (!browserBinary(CURRENT)) startSetUp().catch(() => {});
 }
 
 const mode = process.argv[2];

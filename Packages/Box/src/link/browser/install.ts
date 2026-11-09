@@ -176,6 +176,9 @@ interface Record_ {
   retryAt?: number | null;
   /** The build it was setting up: a failure of another (before an update) doesn't hold this one back. */
   id?: string;
+  /** The last time a build was set up again because it didn't start (`repair`), and which. */
+  repairedAt?: number;
+  repairedId?: string;
 }
 
 const readRecord = (): Record_ => {
@@ -207,10 +210,13 @@ export function browserStatus(): BrowserStatus {
   if ("unsupported" in here) return { state: "failed", chromium, installed, progress: null, message: here.unsupported, retryAt: null };
   const record = readRecord();
   const underWay = record.state === "checking" || record.state === "downloading" || record.state === "installing";
-  if (underWay && installing()) {
+  // (Just asked for: its process may not have taken the lock yet.)
+  if (underWay && (installing() || (record.state === "checking" && Date.now() - (record.at ?? 0) < 30_000))) {
     return { state: record.state as Step, chromium, installed, progress: record.state === "downloading" ? record.progress ?? 0 : null, message: null, retryAt: null };
   }
   if (underWay) return { state: "failed", chromium, installed, progress: null, message: "Setting up the browser stopped before it finished. It starts again in a minute.", retryAt: null };
+  // The pinned build's in use (another setup put it there since one failed).
+  if (now && chromium && compareVersions(now.chromium, chromium) >= 0) return { state: "ready", chromium, installed, progress: null, message: null, retryAt: null };
   if (record.state === "failed" && (!record.id || record.id === here.id)) return { state: "failed", chromium, installed, progress: null, message: record.message ?? "The browser couldn't be set up.", retryAt: record.retryAt ?? null };
   if (now) return { state: "ready", chromium, installed, progress: null, message: null, retryAt: null };
   if (!downloads()) return { state: "missing", chromium, installed, progress: null, message: "Only a machine's own Kuvo Code folder downloads the browser.", retryAt: null };
@@ -240,29 +246,41 @@ const hostOf = (url: string): string => new URL(url).host;
 
 /** Downloads `url` into `to`, checking its size and SHA-256 as it comes: "missing" when the source
  * hasn't it (404), else it's there whole and checked, or it throws (and nothing's left). */
-async function download(url: string, expected: { sha256: string; size: number }, to: string, received: (bytes: number) => void): Promise<"ok" | "missing"> {
+async function download(url: string, expected: { sha256: string; size: number }, to: string, received: (bytes: number) => void, signal: AbortSignal): Promise<"ok" | "missing"> {
   const address = fetchedFrom(url);
   const controller = new AbortController();
-  // Nothing for a minute: the connection's gone.
-  let idle = setTimeout(() => controller.abort(), 60_000);
+  const stop = () => controller.abort();
+  signal.addEventListener("abort", stop);
+  // Nothing for a minute: the connection's gone. And never longer than a slow connection takes
+  // (50 KB a second), or ten minutes, whichever is longer.
+  let idle = setTimeout(stop, 60_000);
+  const deadline = setTimeout(stop, Math.max(600_000, (expected.size / 50_000) * 1000));
   const awake = () => {
     clearTimeout(idle);
-    idle = setTimeout(() => controller.abort(), 60_000);
+    idle = setTimeout(stop, 60_000);
+  };
+  const settle = () => {
+    clearTimeout(idle);
+    clearTimeout(deadline);
+    signal.removeEventListener("abort", stop);
   };
   let response: Response;
   try {
     response = await fetch(address, { redirect: "error", signal: controller.signal });
   } catch (error) {
-    clearTimeout(idle);
+    settle();
     const cause = (error as { cause?: { code?: string; message?: string } })?.cause;
-    throw new SetupError(`Couldn't reach ${hostOf(url)} to download the browser (${cause?.code ?? cause?.message ?? (error as Error)?.message ?? "no connection"}).`);
+    if (signal.aborted) throw new SetupError("Stopped.");
+    throw new SetupError(`Couldn't reach ${hostOf(url)} to download the browser (${cause?.code ?? cause?.message ?? (error as Error)?.message ?? "no connection"}): the machine needs to reach storage.googleapis.com${testSystem() === "darwin" || (!testSystem() && process.platform === "darwin") ? "" : " and dl.rockylinux.org"} over HTTPS.`);
   }
   if (response.status === 404) {
-    clearTimeout(idle);
+    settle();
+    await response.body?.cancel().catch(() => {});
     return "missing";
   }
   if (!response.ok || !response.body) {
-    clearTimeout(idle);
+    settle();
+    await response.body?.cancel().catch(() => {});
     throw new SetupError(`${hostOf(url)} answered ${response.status} for the browser's download.`);
   }
   const fd = fs.openSync(to, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL, 0o600);
@@ -284,9 +302,11 @@ async function download(url: string, expected: { sha256: string; size: number },
     return "ok";
   } catch (error) {
     if (error instanceof SetupError) throw error;
-    throw new SetupError(`The browser's download from ${hostOf(url)} stopped partway (${controller.signal.aborted ? "nothing came for a minute" : (error as Error)?.message ?? "the connection closed"}).`);
+    if (signal.aborted) throw new SetupError("Stopped.");
+    throw new SetupError(`The browser's download from ${hostOf(url)} stopped partway (${controller.signal.aborted ? "it came too slowly" : (error as Error)?.message ?? "the connection closed"}).`);
   } finally {
-    clearTimeout(idle);
+    settle();
+    await response.body?.cancel().catch(() => {});
     fs.closeSync(fd);
     if (!done) fs.rmSync(to, { force: true });
   }
@@ -360,7 +380,7 @@ function freeRoom(folder: string): number | null {
     return Number(stats.bavail) * Number(stats.bsize);
   } catch {}
   try {
-    const free = execFileSync("df", ["-Pk", folder], { encoding: "utf8", timeout: 5_000 }).trim().split("\n").pop()?.trim().split(/\s+/)[3];
+    const free = execFileSync(fs.existsSync("/bin/df") ? "/bin/df" : "/usr/bin/df", ["-Pk", folder], { encoding: "utf8", timeout: 5_000 }).trim().split("\n").pop()?.trim().split(/\s+/)[3];
     return free ? Number(free) * 1024 : null;
   } catch {
     return null;
@@ -373,7 +393,10 @@ function takeLock(): boolean {
     fs.mkdirSync(LOCK(), { mode: 0o700 });
   } catch {
     if (installing()) return false;
-    fs.rmSync(LOCK(), { recursive: true, force: true });
+    // One left by a setup that went: taken aside in one step, so of two that find it so, one does.
+    const aside = `${LOCK()}.gone-${process.pid}-${crypto.randomBytes(4).toString("hex")}`;
+    try { fs.renameSync(LOCK(), aside); } catch { return false; }
+    fs.rmSync(aside, { recursive: true, force: true });
     try { fs.mkdirSync(LOCK(), { mode: 0o700 }); } catch { return false; }
   }
   fs.writeFileSync(path.join(LOCK(), "pid"), String(process.pid), { mode: 0o600 });
@@ -407,6 +430,9 @@ function clearOld(keep: string): void {
   for (const name of fs.readdirSync(folder)) {
     const entry = path.join(folder, name);
     if (name.startsWith(STAGING) || name.startsWith(".current-")) {
+      // (Never another setup's at work: its process is in its name.)
+      const pid = Number(name.slice(name.startsWith(STAGING) ? STAGING.length : ".current-".length).split("-")[0]);
+      if (pid !== process.pid && processRuns(pid, "kuvo-link")) continue;
       fs.rmSync(entry, { recursive: true, force: true });
       continue;
     }
@@ -423,30 +449,55 @@ function clearOld(keep: string): void {
 /** How a setup went. */
 export type InstallOutcome = "ready" | "installed" | "busy" | "waiting" | "off" | "failed";
 
+/** A build that doesn't start is set up again at most this often: a reason the box can't fix (a
+ * library the machine itself lacks) never has it download the browser over and over. */
+const REPAIR_EVERY = 6 * 3_600_000;
+
+/** Whether a setup asked for now would do anything: what it comes to without one (null: it would
+ * set up the pinned build), and whether a repair asked for still counts. */
+function decide({ now, repair }: { now: boolean; repair: boolean }): { outcome: InstallOutcome | null; repair: boolean } {
+  if (!downloads()) return { outcome: "off", repair: false };
+  const here = runtimeHere();
+  if ("unsupported" in here) return { outcome: "failed", repair: false };
+  const before = readRecord();
+  // (Once in a while for the same build.)
+  if (repair && before.repairedId === here.id && Date.now() - (before.repairedAt ?? 0) < REPAIR_EVERY) repair = false;
+  const current = inUse();
+  if (repair && !current) repair = false;
+  if (!repair && current && compareVersions(current.chromium, here.runtime.chromium.version) >= 0) return { outcome: "ready", repair };
+  const failedBefore = before.state === "failed" && before.id === here.id;
+  if (!now && !repair && failedBefore && (before.retryAt == null || Date.now() < before.retryAt)) return { outcome: "waiting", repair };
+  if (installing()) return { outcome: "busy", repair };
+  return { outcome: null, repair };
+}
+
 /** Checks the browser here, and puts the pinned build in place if it's missing, older, or (`repair`)
  * doesn't start: one setup at a time. After a failure it waits a while before trying again by
  * itself, unless asked `now`. */
-export async function installBrowser({ now = false, repair = false }: { now?: boolean; repair?: boolean } = {}): Promise<InstallOutcome> {
-  if (!downloads()) return "off";
+export async function installBrowser(asked: { now?: boolean; repair?: boolean } = {}): Promise<InstallOutcome> {
   const here = runtimeHere();
-  if ("unsupported" in here) {
+  const { outcome, repair } = decide({ now: asked.now ?? false, repair: asked.repair ?? false });
+  const before = readRecord();
+  if (outcome === "failed" && "unsupported" in here) {
     note({ state: "failed", message: here.unsupported, retryAt: null, progress: undefined });
     return "failed";
   }
-  const before = readRecord();
-  const current = inUse();
-  const upToDate = current !== null && compareVersions(current.chromium, here.runtime.chromium.version) >= 0;
-  if (upToDate && !repair) {
+  if (outcome === "ready") {
     if (before.state !== "ready" && !installing()) note({ state: "ready", failures: 0, retryAt: null, message: undefined, progress: undefined });
     return "ready";
   }
-  const failedBefore = before.state === "failed" && before.id === here.id;
-  if (!now && !repair && failedBefore && (before.retryAt === null || (before.retryAt && Date.now() < before.retryAt))) return "waiting";
+  if (outcome) return outcome;
+  if ("unsupported" in here) return "failed";
   if (!takeLock()) return "busy";
+  // (Counted until one goes well, whoever asked in between.)
+  const failedBefore = (before.failures ?? 0) > 0 && before.id === here.id;
+  const current = inUse();
   const folder = BROWSER();
   let staging: string | null = null;
+  // The first failure stops every download still going, before anything's said or cleared.
+  const stop = new AbortController();
   try {
-    note({ state: "checking", progress: undefined, message: undefined });
+    note({ state: "checking", progress: undefined, message: undefined, ...(repair ? { repairedAt: Date.now(), repairedId: here.id } : {}) });
     fs.mkdirSync(folder, { recursive: true, mode: 0o700 });
     clearOld(current?.id ?? here.id);
     const { runtime, id, kind, mac } = here;
@@ -468,6 +519,7 @@ export async function installBrowser({ now = false, repair = false }: { now?: bo
     const got = new Map<string, number>();
     let said = -1, saidAt = 0;
     const received = (name: string, bytes: number) => {
+      if (stop.signal.aborted) return;
       got.set(name, bytes);
       const progress = Math.min(1, [...got.values()].reduce((sum, each) => sum + each, 0) / total);
       if (progress - said >= 0.01 || Date.now() - saidAt > 2_000 || progress === 1) {
@@ -478,27 +530,34 @@ export async function installBrowser({ now = false, repair = false }: { now?: bo
     };
     note({ state: "downloading", progress: 0 });
     const zip = path.join(staging, "chromium.zip");
-    if ((await download(chromium.url, chromium, zip, bytes => received("chromium", bytes))) === "missing") {
-      throw new SetupError(`${hostOf(chromium.url)} doesn't have the browser this Kuvo Code pins (Chrome for Testing ${runtime.chromium.version}).`, false);
+    if ((await download(chromium.url, chromium, zip, bytes => received("chromium", bytes), stop.signal)) === "missing") {
+      throw new SetupError(`${hostOf(chromium.url)} doesn't have the browser this Kuvo Code pins (Chrome for Testing ${runtime.chromium.version}): update Kuvo Code.`, false);
     }
 
     // The packages, a few at a time, each checked, then what the browser needs of it taken.
     const queue = [...packages];
     const worker = async () => {
-      for (let each = queue.shift(); each; each = queue.shift()) {
+      for (let each = queue.shift(); each && !stop.signal.aborted; each = queue.shift()) {
         const file = path.join(staging!, `${each.name.replace(/[^A-Za-z0-9._+-]/g, "_")}.rpm`);
         let outcome: "ok" | "missing" = "missing";
         for (const url of packageURLs(each, kind)) {
-          outcome = await download(url, each, file, bytes => received(each.name, bytes));
+          outcome = await download(url, each, file, bytes => received(each.name, bytes), stop.signal);
           if (outcome === "ok") break;
         }
         if (outcome === "missing") throw new SetupError(`Rocky Linux no longer has ${each.name} ${each.version}, which the browser needs: update Kuvo Code.`, false);
+        if (stop.signal.aborted) return;
         const archive = payload(fs.readFileSync(file));
         fs.rmSync(file, { force: true });
         takeFrom(archive, bundle);
       }
     };
-    await Promise.all(Array.from({ length: Math.min(4, packages.length) }, worker));
+    const settled = await Promise.allSettled(Array.from({ length: Math.min(4, packages.length) }, () => worker().catch(error => {
+      stop.abort();
+      throw error;
+    })));
+    const failed = settled.find((each): each is PromiseRejectedResult => each.status === "rejected");
+    // (The first one's reason: the others only stopped for it.)
+    if (failed) throw settled.map(each => (each.status === "rejected" ? each.reason : null)).find(reason => reason && !(reason instanceof SetupError && reason.message === "Stopped.")) ?? failed.reason;
 
     // Chrome: its folder's files at the top of the build.
     note({ state: "installing", progress: undefined });
@@ -519,12 +578,15 @@ export async function installBrowser({ now = false, repair = false }: { now?: bo
     if (!hasBrowser(bundle) || (mac && !fs.existsSync(path.join(bundle, "Google Chrome for Testing.app", "Contents", "MacOS", "Google Chrome for Testing")))) {
       throw new SetupError("The browser's download has no browser in it.", false);
     }
+    // Every link in the build, now that it's all in its place, leads inside it.
+    linksInside(bundle);
     fs.chmodSync(bundle, 0o755);
     place(id, bundle);
     clearOld(id);
     note({ state: "ready", failures: 0, retryAt: null, message: undefined, progress: undefined });
     return "installed";
   } catch (error) {
+    stop.abort();
     const failures = (failedBefore ? before.failures ?? 0 : 0) + 1;
     const retry = !(error instanceof SetupError) || error.retry;
     const wait = retryAfter(failures);
@@ -537,27 +599,44 @@ export async function installBrowser({ now = false, repair = false }: { now?: bo
   }
 }
 
-/** Sets it up in a process of its own (`kuvo-link.js browser install`), outliving whoever asked:
- * false when one is under way already, or this box doesn't. */
-export function startBrowserInstall({ now = false, repair = false }: { now?: boolean; repair?: boolean } = {}): boolean {
-  if (!downloads() || installing() || !SCRIPT) return false;
-  const flags = [...(now ? ["--now"] : []), ...(repair ? ["--repair"] : [])];
-  spawn(process.execPath, [...OWN_RUNTIME, SCRIPT, "browser", "install", ...flags], { detached: true, stdio: "ignore", cwd: K, env: process.env }).unref();
-  return true;
+/** Throws unless every link in `folder` leads somewhere inside it. */
+function linksInside(folder: string): void {
+  const real = fs.realpathSync(folder);
+  const walk = (at: string) => {
+    for (const entry of fs.readdirSync(at, { withFileTypes: true })) {
+      const each = path.join(at, entry.name);
+      if (entry.isSymbolicLink()) {
+        let leads = "";
+        try { leads = fs.realpathSync(each); } catch {}
+        if (!leads.startsWith(real + path.sep)) throw new SetupError(`The browser's download has a link that leads outside it (${path.relative(folder, each)}).`, false);
+      } else if (entry.isDirectory()) walk(each);
+    }
+  };
+  walk(folder);
 }
 
-/** `kuvo/browser` (PROTOCOL.md, "The browser on a machine"): how it stands, and setting it up now. */
+/** Sets it up in a process of its own (`kuvo-link.js browser install`), outliving whoever asked,
+ * unless there's nothing to do (or it waits after a failure, unless asked `now`): how it stands then. */
+export function startBrowserInstall({ now = false, repair = false }: { now?: boolean; repair?: boolean } = {}): BrowserStatus {
+  const decided = decide({ now, repair });
+  if (decided.outcome === null && SCRIPT) {
+    // Said at once, so whoever asked sees it under way before its process takes the lock.
+    note({ state: "checking", progress: undefined, message: undefined });
+    const flags = [...(now ? ["--now"] : []), ...(decided.repair ? ["--repair"] : [])];
+    spawn(process.execPath, [...OWN_RUNTIME, SCRIPT, "browser", "install", ...flags], { detached: true, stdio: "ignore", cwd: K, env: process.env }).unref();
+  }
+  return browserStatus();
+}
+
+/** `kuvo/browser` (PROTOCOL.md, "The browser on a machine"): how it stands, and setting it up (now,
+ * after a failure, with `now`). */
 export async function* browserRoute(context: RouteContext): AsyncGenerator<AnswerPiece> {
   const { request, json } = context;
   const method = request.method.toUpperCase();
   if (method === "GET") return yield* json(200, browserStatus());
   if (method === "POST") {
-    const repair = (parsed(request.body) as { repair?: unknown } | null)?.repair === true;
-    const status = browserStatus();
-    // Nothing to do: the pinned build's in use (unless it's to be set up again).
-    if (status.state === "ready" && !repair && status.installed && status.chromium && compareVersions(status.installed, status.chromium) >= 0) return yield* json(202, status);
-    const started = startBrowserInstall({ now: true, repair });
-    return yield* json(202, started ? { ...status, state: "checking", message: null, retryAt: null, progress: null } : status);
+    const body = parsed(request.body) as { now?: unknown; repair?: unknown } | null;
+    return yield* json(202, startBrowserInstall({ now: body?.now === true, repair: body?.repair === true }));
   }
   return yield* json(405, {});
 }

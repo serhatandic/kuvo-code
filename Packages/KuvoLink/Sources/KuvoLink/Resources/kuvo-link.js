@@ -26252,6 +26252,8 @@ class Lzma {
           corrupt("a distance");
         if (rc.bit(this.isRepG0, state) === 0) {
           if (rc.bit(this.isRep0Long, (state << 4) + posState) === 0) {
+            if (rep0 >= pos)
+              corrupt("a distance");
             state = state < 7 ? 9 : 11;
             buffer[at] = buffer[at - rep0 - 1];
             at++;
@@ -26377,6 +26379,8 @@ function unxz(input, most = 512 * 1024 * 1024) {
         if (control === 1) {
           start = out.length;
           haveDictionary = true;
+          haveProperties = false;
+          needState = true;
         } else if (!haveDictionary)
           corrupt("a chunk before its dictionary");
         const size = (input[at] << 8 | input[at + 1]) + 1;
@@ -26903,11 +26907,13 @@ function browserStatus() {
     return { state: "failed", chromium, installed, progress: null, message: here.unsupported, retryAt: null };
   const record = readRecord();
   const underWay = record.state === "checking" || record.state === "downloading" || record.state === "installing";
-  if (underWay && installing()) {
+  if (underWay && (installing() || record.state === "checking" && Date.now() - (record.at ?? 0) < 30000)) {
     return { state: record.state, chromium, installed, progress: record.state === "downloading" ? record.progress ?? 0 : null, message: null, retryAt: null };
   }
   if (underWay)
     return { state: "failed", chromium, installed, progress: null, message: "Setting up the browser stopped before it finished. It starts again in a minute.", retryAt: null };
+  if (now && chromium && compareVersions(now.chromium, chromium) >= 0)
+    return { state: "ready", chromium, installed, progress: null, message: null, retryAt: null };
   if (record.state === "failed" && (!record.id || record.id === here.id))
     return { state: "failed", chromium, installed, progress: null, message: record.message ?? "The browser couldn't be set up.", retryAt: record.retryAt ?? null };
   if (now)
@@ -26933,28 +26939,40 @@ function fetchedFrom(url) {
   return source ? `${source}/${url.slice("https://".length)}` : url;
 }
 var hostOf2 = (url) => new URL(url).host;
-async function download(url, expected, to, received) {
+async function download(url, expected, to, received, signal) {
   const address = fetchedFrom(url);
   const controller = new AbortController;
-  let idle = setTimeout(() => controller.abort(), 60000);
+  const stop = () => controller.abort();
+  signal.addEventListener("abort", stop);
+  let idle = setTimeout(stop, 60000);
+  const deadline = setTimeout(stop, Math.max(600000, expected.size / 50000 * 1000));
   const awake = () => {
     clearTimeout(idle);
-    idle = setTimeout(() => controller.abort(), 60000);
+    idle = setTimeout(stop, 60000);
+  };
+  const settle = () => {
+    clearTimeout(idle);
+    clearTimeout(deadline);
+    signal.removeEventListener("abort", stop);
   };
   let response;
   try {
     response = await fetch(address, { redirect: "error", signal: controller.signal });
   } catch (error) {
-    clearTimeout(idle);
+    settle();
     const cause = error?.cause;
-    throw new SetupError(`Couldn't reach ${hostOf2(url)} to download the browser (${cause?.code ?? cause?.message ?? error?.message ?? "no connection"}).`);
+    if (signal.aborted)
+      throw new SetupError("Stopped.");
+    throw new SetupError(`Couldn't reach ${hostOf2(url)} to download the browser (${cause?.code ?? cause?.message ?? error?.message ?? "no connection"}): the machine needs to reach storage.googleapis.com${testSystem() === "darwin" || !testSystem() && process.platform === "darwin" ? "" : " and dl.rockylinux.org"} over HTTPS.`);
   }
   if (response.status === 404) {
-    clearTimeout(idle);
+    settle();
+    await response.body?.cancel().catch(() => {});
     return "missing";
   }
   if (!response.ok || !response.body) {
-    clearTimeout(idle);
+    settle();
+    await response.body?.cancel().catch(() => {});
     throw new SetupError(`${hostOf2(url)} answered ${response.status} for the browser's download.`);
   }
   const fd = fs83.openSync(to, fs83.constants.O_WRONLY | fs83.constants.O_CREAT | fs83.constants.O_EXCL, 384);
@@ -26981,9 +26999,12 @@ async function download(url, expected, to, received) {
   } catch (error) {
     if (error instanceof SetupError)
       throw error;
-    throw new SetupError(`The browser's download from ${hostOf2(url)} stopped partway (${controller.signal.aborted ? "nothing came for a minute" : error?.message ?? "the connection closed"}).`);
+    if (signal.aborted)
+      throw new SetupError("Stopped.");
+    throw new SetupError(`The browser's download from ${hostOf2(url)} stopped partway (${controller.signal.aborted ? "it came too slowly" : error?.message ?? "the connection closed"}).`);
   } finally {
-    clearTimeout(idle);
+    settle();
+    await response.body?.cancel().catch(() => {});
     fs83.closeSync(fd);
     if (!done)
       fs83.rmSync(to, { force: true });
@@ -27056,7 +27077,7 @@ function freeRoom(folder) {
     return Number(stats.bavail) * Number(stats.bsize);
   } catch {}
   try {
-    const free = execFileSync3("df", ["-Pk", folder], { encoding: "utf8", timeout: 5000 }).trim().split(`
+    const free = execFileSync3(fs83.existsSync("/bin/df") ? "/bin/df" : "/usr/bin/df", ["-Pk", folder], { encoding: "utf8", timeout: 5000 }).trim().split(`
 `).pop()?.trim().split(/\s+/)[3];
     return free ? Number(free) * 1024 : null;
   } catch {
@@ -27070,7 +27091,13 @@ function takeLock() {
   } catch {
     if (installing())
       return false;
-    fs83.rmSync(LOCK12(), { recursive: true, force: true });
+    const aside = `${LOCK12()}.gone-${process.pid}-${crypto36.randomBytes(4).toString("hex")}`;
+    try {
+      fs83.renameSync(LOCK12(), aside);
+    } catch {
+      return false;
+    }
+    fs83.rmSync(aside, { recursive: true, force: true });
     try {
       fs83.mkdirSync(LOCK12(), { mode: 448 });
     } catch {
@@ -27101,6 +27128,9 @@ function clearOld(keep) {
   for (const name of fs83.readdirSync(folder)) {
     const entry = path88.join(folder, name);
     if (name.startsWith(STAGING) || name.startsWith(".current-")) {
+      const pid = Number(name.slice(name.startsWith(STAGING) ? STAGING.length : ".current-".length).split("-")[0]);
+      if (pid !== process.pid && processRuns(pid, "kuvo-link"))
+        continue;
       fs83.rmSync(entry, { recursive: true, force: true });
       continue;
     }
@@ -27121,31 +27151,54 @@ function clearOld(keep) {
     fs83.rmSync(entry, { recursive: true, force: true });
   }
 }
-async function installBrowser({ now = false, repair = false } = {}) {
+var REPAIR_EVERY = 6 * 3600000;
+function decide({ now, repair }) {
   if (!downloads())
-    return "off";
+    return { outcome: "off", repair: false };
   const here = runtimeHere();
-  if ("unsupported" in here) {
+  if ("unsupported" in here)
+    return { outcome: "failed", repair: false };
+  const before = readRecord();
+  if (repair && before.repairedId === here.id && Date.now() - (before.repairedAt ?? 0) < REPAIR_EVERY)
+    repair = false;
+  const current = inUse();
+  if (repair && !current)
+    repair = false;
+  if (!repair && current && compareVersions(current.chromium, here.runtime.chromium.version) >= 0)
+    return { outcome: "ready", repair };
+  const failedBefore = before.state === "failed" && before.id === here.id;
+  if (!now && !repair && failedBefore && (before.retryAt == null || Date.now() < before.retryAt))
+    return { outcome: "waiting", repair };
+  if (installing())
+    return { outcome: "busy", repair };
+  return { outcome: null, repair };
+}
+async function installBrowser(asked = {}) {
+  const here = runtimeHere();
+  const { outcome, repair } = decide({ now: asked.now ?? false, repair: asked.repair ?? false });
+  const before = readRecord();
+  if (outcome === "failed" && "unsupported" in here) {
     note2({ state: "failed", message: here.unsupported, retryAt: null, progress: undefined });
     return "failed";
   }
-  const before = readRecord();
-  const current = inUse();
-  const upToDate = current !== null && compareVersions(current.chromium, here.runtime.chromium.version) >= 0;
-  if (upToDate && !repair) {
+  if (outcome === "ready") {
     if (before.state !== "ready" && !installing())
       note2({ state: "ready", failures: 0, retryAt: null, message: undefined, progress: undefined });
     return "ready";
   }
-  const failedBefore = before.state === "failed" && before.id === here.id;
-  if (!now && !repair && failedBefore && (before.retryAt === null || before.retryAt && Date.now() < before.retryAt))
-    return "waiting";
+  if (outcome)
+    return outcome;
+  if ("unsupported" in here)
+    return "failed";
   if (!takeLock())
     return "busy";
+  const failedBefore = (before.failures ?? 0) > 0 && before.id === here.id;
+  const current = inUse();
   const folder = BROWSER();
   let staging = null;
+  const stop = new AbortController;
   try {
-    note2({ state: "checking", progress: undefined, message: undefined });
+    note2({ state: "checking", progress: undefined, message: undefined, ...repair ? { repairedAt: Date.now(), repairedId: here.id } : {} });
     fs83.mkdirSync(folder, { recursive: true, mode: 448 });
     clearOld(current?.id ?? here.id);
     const { runtime, id, kind, mac } = here;
@@ -27166,6 +27219,8 @@ async function installBrowser({ now = false, repair = false } = {}) {
     const got = new Map;
     let said = -1, saidAt = 0;
     const received = (name, bytes) => {
+      if (stop.signal.aborted)
+        return;
       got.set(name, bytes);
       const progress = Math.min(1, [...got.values()].reduce((sum, each) => sum + each, 0) / total);
       if (progress - said >= 0.01 || Date.now() - saidAt > 2000 || progress === 1) {
@@ -27176,27 +27231,35 @@ async function installBrowser({ now = false, repair = false } = {}) {
     };
     note2({ state: "downloading", progress: 0 });
     const zip = path88.join(staging, "chromium.zip");
-    if (await download(chromium.url, chromium, zip, (bytes) => received("chromium", bytes)) === "missing") {
-      throw new SetupError(`${hostOf2(chromium.url)} doesn't have the browser this Kuvo Code pins (Chrome for Testing ${runtime.chromium.version}).`, false);
+    if (await download(chromium.url, chromium, zip, (bytes) => received("chromium", bytes), stop.signal) === "missing") {
+      throw new SetupError(`${hostOf2(chromium.url)} doesn't have the browser this Kuvo Code pins (Chrome for Testing ${runtime.chromium.version}): update Kuvo Code.`, false);
     }
     const queue = [...packages];
     const worker = async () => {
-      for (let each = queue.shift();each; each = queue.shift()) {
+      for (let each = queue.shift();each && !stop.signal.aborted; each = queue.shift()) {
         const file = path88.join(staging, `${each.name.replace(/[^A-Za-z0-9._+-]/g, "_")}.rpm`);
         let outcome = "missing";
         for (const url of packageURLs(each, kind)) {
-          outcome = await download(url, each, file, (bytes) => received(each.name, bytes));
+          outcome = await download(url, each, file, (bytes) => received(each.name, bytes), stop.signal);
           if (outcome === "ok")
             break;
         }
         if (outcome === "missing")
           throw new SetupError(`Rocky Linux no longer has ${each.name} ${each.version}, which the browser needs: update Kuvo Code.`, false);
+        if (stop.signal.aborted)
+          return;
         const archive = payload(fs83.readFileSync(file));
         fs83.rmSync(file, { force: true });
         takeFrom(archive, bundle);
       }
     };
-    await Promise.all(Array.from({ length: Math.min(4, packages.length) }, worker));
+    const settled = await Promise.allSettled(Array.from({ length: Math.min(4, packages.length) }, () => worker().catch((error) => {
+      stop.abort();
+      throw error;
+    })));
+    const failed = settled.find((each) => each.status === "rejected");
+    if (failed)
+      throw settled.map((each) => each.status === "rejected" ? each.reason : null).find((reason) => reason && !(reason instanceof SetupError && reason.message === "Stopped.")) ?? failed.reason;
     note2({ state: "installing", progress: undefined });
     const unpacked = path88.join(staging, "chromium");
     fs83.mkdirSync(unpacked, { mode: 448 });
@@ -27219,12 +27282,14 @@ async function installBrowser({ now = false, repair = false } = {}) {
     if (!hasBrowser(bundle) || mac && !fs83.existsSync(path88.join(bundle, "Google Chrome for Testing.app", "Contents", "MacOS", "Google Chrome for Testing"))) {
       throw new SetupError("The browser's download has no browser in it.", false);
     }
+    linksInside(bundle);
     fs83.chmodSync(bundle, 493);
     place(id, bundle);
     clearOld(id);
     note2({ state: "ready", failures: 0, retryAt: null, message: undefined, progress: undefined });
     return "installed";
   } catch (error) {
+    stop.abort();
     const failures = (failedBefore ? before.failures ?? 0 : 0) + 1;
     const retry = !(error instanceof SetupError) || error.retry;
     const wait = retryAfter(failures);
@@ -27237,12 +27302,32 @@ async function installBrowser({ now = false, repair = false } = {}) {
     fs83.rmSync(LOCK12(), { recursive: true, force: true });
   }
 }
+function linksInside(folder) {
+  const real = fs83.realpathSync(folder);
+  const walk = (at) => {
+    for (const entry of fs83.readdirSync(at, { withFileTypes: true })) {
+      const each = path88.join(at, entry.name);
+      if (entry.isSymbolicLink()) {
+        let leads = "";
+        try {
+          leads = fs83.realpathSync(each);
+        } catch {}
+        if (!leads.startsWith(real + path88.sep))
+          throw new SetupError(`The browser's download has a link that leads outside it (${path88.relative(folder, each)}).`, false);
+      } else if (entry.isDirectory())
+        walk(each);
+    }
+  };
+  walk(folder);
+}
 function startBrowserInstall({ now = false, repair = false } = {}) {
-  if (!downloads() || installing() || !SCRIPT)
-    return false;
-  const flags = [...now ? ["--now"] : [], ...repair ? ["--repair"] : []];
-  spawn8(process.execPath, [...OWN_RUNTIME, SCRIPT, "browser", "install", ...flags], { detached: true, stdio: "ignore", cwd: K, env: process.env }).unref();
-  return true;
+  const decided = decide({ now, repair });
+  if (decided.outcome === null && SCRIPT) {
+    note2({ state: "checking", progress: undefined, message: undefined });
+    const flags = [...now ? ["--now"] : [], ...decided.repair ? ["--repair"] : []];
+    spawn8(process.execPath, [...OWN_RUNTIME, SCRIPT, "browser", "install", ...flags], { detached: true, stdio: "ignore", cwd: K, env: process.env }).unref();
+  }
+  return browserStatus();
 }
 async function* browserRoute(context) {
   const { request, json } = context;
@@ -27250,12 +27335,8 @@ async function* browserRoute(context) {
   if (method === "GET")
     return yield* json(200, browserStatus());
   if (method === "POST") {
-    const repair = parsed(request.body)?.repair === true;
-    const status = browserStatus();
-    if (status.state === "ready" && !repair && status.installed && status.chromium && compareVersions(status.installed, status.chromium) >= 0)
-      return yield* json(202, status);
-    const started = startBrowserInstall({ now: true, repair });
-    return yield* json(202, started ? { ...status, state: "checking", message: null, retryAt: null, progress: null } : status);
+    const body = parsed(request.body);
+    return yield* json(202, startBrowserInstall({ now: body?.now === true, repair: body?.repair === true }));
   }
   return yield* json(405, {});
 }
@@ -34448,10 +34529,12 @@ if (main) {
     if (argument === "install") {
       const outcome = await installBrowser({ now: args.includes("--now"), repair: args.includes("--repair") });
       console.log(JSON.stringify({ outcome, ...browserStatus() }));
+    } else if (argument === "start") {
+      console.log(JSON.stringify(startBrowserInstall({ now: args.includes("--now"), repair: args.includes("--repair") })));
     } else if (argument === "status") {
       console.log(JSON.stringify(browserStatus()));
     } else {
-      console.error("Usage: kuvo-link.js browser install [--now] [--repair] | status");
+      console.error("Usage: kuvo-link.js browser install|start [--now] [--repair] | status");
       process.exit(2);
     }
   } else if (mode === "selftest") {
@@ -34459,7 +34542,7 @@ if (main) {
     console.log(ok ? "ok" : "failed");
     process.exit(ok ? 0 : 1);
   } else {
-    console.error("Usage: kuvo-link.js run | serve | setup | pair [relay] | box <command> | leave <mac> | engine-config | login-path | update [--now] | browser install|status | selftest");
+    console.error("Usage: kuvo-link.js run | serve | setup | pair [relay] | box <command> | leave <mac> | engine-config | login-path | update [--now] | browser install|start|status | selftest");
     process.exit(2);
   }
 }

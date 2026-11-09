@@ -230,6 +230,7 @@ class Lzma {
         if (pos === 0) corrupt("a distance");
         if (rc.bit(this.isRepG0, state) === 0) {
           if (rc.bit(this.isRep0Long, (state << 4) + posState) === 0) {
+            if (rep0 >= pos) corrupt("a distance");
             state = state < 7 ? 9 : 11;
             buffer[at] = buffer[at - rep0 - 1];
             at++;
@@ -337,6 +338,9 @@ export function unxz(input: Uint8Array, most = 512 * 1024 * 1024): Buffer {
         if (control === 1) {
           start = out.length;
           haveDictionary = true;
+          // (The next LZMA chunk starts over: new properties, and its state.)
+          haveProperties = false;
+          needState = true;
         } else if (!haveDictionary) corrupt("a chunk before its dictionary");
         const size = ((input[at] << 8) | input[at + 1]) + 1;
         at += 2;

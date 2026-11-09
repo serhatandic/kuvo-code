@@ -236,6 +236,7 @@ final class MachineBrowser {
 
     init(machine: Machine) {
         self.machine = machine
+        _ = Self.oldCacheGone
         // After the Mac sleeps, the connection is gone, though SSH takes a while to notice: start
         // a fresh one right away.
         NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main, using: { [weak self] _ in
@@ -256,6 +257,13 @@ final class MachineBrowser {
         resume()
     }
 
+    /// What this Mac put together for machines before their boxes set the browser up themselves
+    /// (hundreds of MB, `browser-linux`): gone, once, in the background.
+    private static let oldCacheGone: Void = {
+        let old = StorageReport.oldBrowserFolder
+        Task.detached(priority: .background) { try? FileManager.default.removeItem(at: old) }
+    }()
+
     private var isWanted: Bool { keepers > 0 || viewers > 0 }
 
     func page(_ id: String?) -> Page? {
@@ -271,17 +279,17 @@ final class MachineBrowser {
     // MARK: Setting it up
 
     /// Makes sure the machine has the browser, its box setting it up if not. Once at a time.
-    func prepare() async {
+    func prepare(now: Bool = false) async {
         if setup == .ready { return }
         if let preparing { return await preparing.value }
-        let task = Task { await install() }
+        let task = Task { await install(now: now) }
         preparing = task
         await task.value
         preparing = nil
         if setup == .ready, isWanted, link == nil { connect() }
     }
 
-    private func install() async {
+    private func install(now: Bool) async {
         // A stand-in (a demo copy's, under `.invalid`) is never contacted: nothing's installed there.
         guard !machine.connection.isNeverContacted else {
             #if DEBUG
@@ -306,7 +314,7 @@ final class MachineBrowser {
         var drops = 0
         while true {
             do {
-                guard let status = try await MachineBrowserInstaller.status(start: !asked, on: connection) else {
+                guard let status = try await MachineBrowserInstaller.status(start: !asked, now: now, on: connection) else {
                     // An older box: its helper sets the browser up when it's first used.
                     setup = .ready
                     return
@@ -427,7 +435,8 @@ final class MachineBrowser {
         reconnects = 0
         if setup != .ready {
             setup = .unknown
-            Task { await prepare() }
+            // You asked: the box tries at once, rather than waiting after a failure.
+            Task { await prepare(now: true) }
         } else {
             disconnect()
             connect()

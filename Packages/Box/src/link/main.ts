@@ -52,7 +52,7 @@ import { keepEngineDefaults } from "./engine/defaults";
 import { watchBox } from "./engine/watch";
 import { watchMoves } from "./moves/move";
 import { writePrivate } from "./files";
-import { browserStatus, installBrowser } from "./browser/install";
+import { browserStatus, installBrowser, startBrowserInstall } from "./browser/install";
 import { BRIDGE_FILE, IS_MAC, K, NEEDED_FILE, OWN_RUNTIME, PID_FILE, REAL_BOX, RUN, scriptIs, socketKey, takeVaultSecrets, VERSION_FILE } from "./home";
 import { isBridge, keepKeeper, needed, noLongerNeeded, runningBridge, startBridge } from "./keeper";
 import { noteRelay } from "./letters/leave";
@@ -906,17 +906,20 @@ if (main) {
     console.log(JSON.stringify(outcome));
   }
   // The browser agents use here (PROTOCOL.md, "The browser on a machine"): `browser install [--now]
-  // [--repair]` sets it up, as the keeper, a browser tool or a client starts it (one at a time);
-  // `browser status` says how it stands.
+  // [--repair]` sets it up, as the keeper starts it (one at a time); `browser start [--now]
+  // [--repair]` has it set up in a process of its own, as a browser tool does, and says how it
+  // stands then; `browser status` says how it stands.
   else if (mode === "browser") {
     const args = process.argv.slice(3);
     if (argument === "install") {
       const outcome = await installBrowser({ now: args.includes("--now"), repair: args.includes("--repair") });
       console.log(JSON.stringify({ outcome, ...browserStatus() }));
+    } else if (argument === "start") {
+      console.log(JSON.stringify(startBrowserInstall({ now: args.includes("--now"), repair: args.includes("--repair") })));
     } else if (argument === "status") {
       console.log(JSON.stringify(browserStatus()));
     } else {
-      console.error("Usage: kuvo-link.js browser install [--now] [--repair] | status");
+      console.error("Usage: kuvo-link.js browser install|start [--now] [--repair] | status");
       process.exit(2);
     }
   }
@@ -925,7 +928,7 @@ if (main) {
     console.log(ok ? "ok" : "failed");
     process.exit(ok ? 0 : 1);
   } else {
-    console.error("Usage: kuvo-link.js run | serve | setup | pair [relay] | box <command> | leave <mac> | engine-config | login-path | update [--now] | browser install|status | selftest");
+    console.error("Usage: kuvo-link.js run | serve | setup | pair [relay] | box <command> | leave <mac> | engine-config | login-path | update [--now] | browser install|start|status | selftest");
     process.exit(2);
   }
 }

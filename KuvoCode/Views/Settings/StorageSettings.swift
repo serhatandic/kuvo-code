@@ -391,7 +391,8 @@ nonisolated struct StorageReport: Sendable {
     static var engineData: URL { support.appending(path: "opencode/data/opencode") }
     static var linuxEngineFolder: URL { support.appending(path: "engine-linux") }
     /// Where this Mac put the browser together for machines before their boxes set it up
-    /// themselves: shown and deleted with the downloads for machines, as an older copy left it.
+    /// themselves: removed once (`MachineBrowser`), and meanwhile shown and deleted with the
+    /// downloads for machines.
     static var oldBrowserFolder: URL { support.appending(path: "browser-linux") }
     static var appLogs: URL { URL.libraryDirectory.appending(path: "Logs/\(AppInfo.name)") }
 
