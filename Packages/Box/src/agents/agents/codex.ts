@@ -22,7 +22,7 @@ import { newID } from "../ids"
 import { onMachine, ownFoldersConfig } from "../machine"
 import { install, maintenance, update, type MaintenanceDefinition } from "../maintenance"
 import { which } from "../proc"
-import { LimitsProblem, type LimitReading, type LimitsSource, type LimitWindow } from "../limits"
+import { chatGPTIdentity, LimitsProblem, type LimitReading, type LimitsSource, type LimitWindow } from "../limits"
 import { RPC, RPCError } from "../rpc"
 import { CodexCitations, plainCitations, type Said } from "./codex-citations"
 import { engineSkills, skillsFolder, skillsFor, skillsRoot, turnedOff, upward, within } from "../skills"
@@ -156,6 +156,17 @@ export class CodexAgent implements Agent {
   readonly limits: LimitsSource = {
     every: 10 * 60_000,
     read: () => this.readLimits(),
+    identity: () => this.chatGPTAccount(),
+  }
+
+  /** Who its ChatGPT sign-in is, as its token in its home says (never sent anywhere); none in the Keychain. */
+  private chatGPTAccount(): string | undefined {
+    try {
+      const tokens = JSON.parse(readFileSync(join(this.home, "auth.json"), "utf8"))?.tokens
+      return chatGPTIdentity(tokens?.access_token, tokens?.account_id)
+    } catch {
+      return undefined
+    }
   }
 
   /** Its limits were read once since the box started. */

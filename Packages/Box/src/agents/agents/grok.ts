@@ -9,7 +9,7 @@ import type { Agent, AgentContext, Account, SignInAttempt, SignInOptions, Thread
 import { accountName, ContextWindows, KnownAccount, model, signOutWith, TookTooLong } from "../agent"
 import { emit } from "../events"
 import { readGrok } from "../engine-limits"
-import { fingerprint, LimitsProblem, type LimitsSource } from "../limits"
+import { fingerprint, LimitsProblem, xaiIdentity, type LimitsSource } from "../limits"
 import { AcpThread, questionFields } from "../acp"
 import { withOwnFolders } from "../machine"
 import { install, maintenance, update, type MaintenanceDefinition } from "../maintenance"
@@ -167,10 +167,14 @@ export class GrokAgent implements Agent {
       if (Number.isFinite(expires) && expires <= now) throw new LimitsProblem("expired", "Its sign-in has lapsed: Grok renews it the next time it runs here.")
       return readGrok(entry.key.trim(), undefined, now)
     },
+    identity: () => {
+      const entry = this.grokSignIn()
+      return xaiIdentity(entry?.key, entry?.id_token)
+    },
   }
 
   /** The sign-in Grok keeps in its home, as it is now. */
-  private grokSignIn(): { key: string; expires_at?: string; expiresAt?: string; expires?: string } | undefined {
+  private grokSignIn(): { key: string; id_token?: string; expires_at?: string; expiresAt?: string; expires?: string } | undefined {
     const home = this.instance.home ?? process.env.GROK_HOME ?? join(homedir(), ".grok")
     try {
       const entries = JSON.parse(readFileSync(join(home, "auth.json"), "utf8")) ?? {}

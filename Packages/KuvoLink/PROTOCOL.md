@@ -2756,6 +2756,14 @@ the last reading in its folder (`limits.json`), through a restart. A client reac
     `agent` (`claude`…) and `account` (`default` for its own sign-in, else the ID of one you
     added); `label`, what you called one you added ("Work"); `plan`, in its maker's words ("Max
     20x", "Pro"), when known.
+  - `identity`: the account at its maker, 16 hex characters, the same from every box signed in to
+    it (and from a coding agent's sign-in and the engine's to the same account), so a client
+    lists it once. A hash of its maker's own ID for it, never the ID, an email or a secret:
+    Claude's account and organization (Linux only: a Mac's Claude token doesn't say who it's
+    for), ChatGPT's account and workspace member, xAI's user, GitHub's login (from Copilot's
+    answer), and an API key for OpenRouter, Z.ai and OpenCode Go. Absent where it isn't known, and
+    from a box from before it: list that row as its box's own. Signed in as
+    another account since, the box drops what it kept of the one before.
   - `windows`: each `{id, used, resetsAt?, minutes?, model?, name?, amount?, read, source}`. `id` is its
     maker's name for it (`five_hour`, `seven_day`, `seven_day_sonnet`, Codex's `primary`); `used`,
     how much of it is gone, 0 to 1; `minutes`, how long it is (300, 10080) when said; `model`, the
@@ -2779,6 +2787,14 @@ the last reading in its folder (`limits.json`), through a restart. A client reac
   a couple of seconds; what comes later comes as `kuvo.limits.updated`.
 - The bridge's events (`kuvo/agents/api/event`) carry `kuvo.limits.updated` `{accounts}` each time
   the list changes.
+- Listing them (KuvoClient's `UsageListing`, as the Mac and the phone do): one row per account
+  across the boxes a client lists, in their order (its own computer's first): rows of one
+  `service` with one `identity` are one row, from any box, and a row without one is its box's
+  own. Each window is the one read last (`read`) among them; the plan, the credits and `checked`
+  are those of the newest; a `problem` shows only when every box has one. Its name is the coding
+  agent's ("Claude", "Codex") where one is among them, else the service's ("ChatGPT"), with the
+  first `label` among them ("Claude · Work"); where two rows would have the same name, those not
+  on the client's own computer add the name of the box they're from ("Claude · hetzner").
 - What's read: Claude Code's accounts, on Linux from Anthropic with Claude Code's own sign-in in
   Kuvo Code's folder; on a Mac only from what its turns hear (Claude Code's rate-limit events, every
   window from each response's headers), as the token Kuvo Code signs in with there can only run

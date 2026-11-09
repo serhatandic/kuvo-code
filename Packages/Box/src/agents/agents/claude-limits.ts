@@ -48,6 +48,24 @@ export function credentialsIn(configHome: string): ClaudeSignIn | undefined {
   }
 }
 
+/**
+ * Who Claude Code is signed in as in a settings folder (Linux), as it keeps it beside the sign-in
+ * (`.claude.json`'s `oauthAccount`): the account and the organization whose plan it uses (one
+ * account can have a personal plan and a team's, each with its own limits). None on a Mac: Kuvo
+ * Code's token there says nothing of who it's for, and Claude Code doesn't know either.
+ */
+export function claudeIdentity(configHome: string): string | undefined {
+  try {
+    const account = JSON.parse(readFileSync(join(configHome, ".claude.json"), "utf8"))?.oauthAccount
+    const uuid = typeof account?.accountUuid === "string" ? account.accountUuid.trim().toLowerCase() : ""
+    if (!uuid) return undefined
+    const organization = typeof account.organizationUuid === "string" ? account.organizationUuid.trim().toLowerCase() : ""
+    return `anthropic:${uuid}|${organization}`
+  } catch {
+    return undefined
+  }
+}
+
 /** "Max 20x", "Pro": the plan, from what Claude Code kept of the sign-in. */
 export function planName(subscription?: string, tier?: string): string | undefined {
   const base = subscription?.trim()

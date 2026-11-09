@@ -10140,6 +10140,7 @@ class Limits {
         service: account.service,
         ...account.agent ? { agent: account.agent.kind, account: account.agent.account } : {},
         ...account.label ? { label: account.label } : {},
+        ...entry.identity ? { identity: entry.identity } : {},
         ...entry.plan ? { plan: entry.plan } : {},
         windows: entry.windows,
         ...entry.balance ? { balance: entry.balance } : {},
@@ -10185,6 +10186,7 @@ class Limits {
         entry = { windows: [], next: 0 };
         this.entries.set(account.provider, entry);
       }
+      this.identify(entry, source.identity?.());
       if (!source.read)
         continue;
       const at = this.now();
@@ -10226,6 +10228,8 @@ class Limits {
     try {
       const reading = await source.read(started);
       const at = this.now();
+      if (reading)
+        this.identify(entry, reading.identity);
       entry.next = at + source.every;
       if (!reading)
         return false;
@@ -10276,6 +10280,23 @@ class Limits {
       }
       return problem.sent;
     }
+  }
+  identify(entry, raw) {
+    if (!raw)
+      return;
+    const identity = identityOf(raw);
+    if (entry.identity === identity)
+      return;
+    if (entry.identity) {
+      entry.windows = [];
+      entry.plan = undefined;
+      entry.balance = undefined;
+      entry.checked = undefined;
+      entry.problem = undefined;
+      entry.signIn = undefined;
+      entry.next = 0;
+    }
+    entry.identity = identity;
   }
   listen(provider, source) {
     if (source.heard)
@@ -10405,6 +10426,38 @@ function agentAccounts(agents) {
 function fingerprint(secret) {
   return secret ? createHash6("sha256").update(secret).digest("hex").slice(0, 16) : undefined;
 }
+function identityOf(raw) {
+  return createHash6("sha256").update(`kuvo-code plan limits account v1
+`).update(raw).digest("hex").slice(0, 16);
+}
+function tokenClaims(token) {
+  const part = token?.trim().split(".")[1];
+  if (!part)
+    return;
+  try {
+    const claims = JSON.parse(Buffer.from(part, "base64url").toString("utf8"));
+    return claims && typeof claims === "object" ? claims : undefined;
+  } catch {
+    return;
+  }
+}
+function chatGPTIdentity(access, accountID) {
+  const auth = tokenClaims(access)?.["https://api.openai.com/auth"];
+  const account = text2(auth?.chatgpt_account_id) ?? text2(accountID);
+  if (!account)
+    return;
+  const user = text2(auth?.chatgpt_user_id) ?? text2(auth?.user_id);
+  return `chatgpt:${account}${user ? `/${user}` : ""}`;
+}
+function xaiIdentity(...tokens) {
+  for (const token of tokens) {
+    const user = text2(tokenClaims(token)?.sub);
+    if (user)
+      return `xai:${user}`;
+  }
+  return;
+}
+var text2 = (value) => typeof value === "string" && value.trim() ? value.trim().toLowerCase() : undefined;
 
 // Packages/Box/src/agents/agents/claude-limits.ts
 import { readFileSync as readFileSync19 } from "fs";
@@ -10423,6 +10476,18 @@ function credentialsIn(configHome) {
       ...typeof oauth.expiresAt === "number" ? { expiresAt: oauth.expiresAt } : {},
       ...Array.isArray(oauth.scopes) ? { scopes: oauth.scopes.filter((scope) => typeof scope === "string") } : {}
     };
+  } catch {
+    return;
+  }
+}
+function claudeIdentity(configHome) {
+  try {
+    const account = JSON.parse(readFileSync19(join21(configHome, ".claude.json"), "utf8"))?.oauthAccount;
+    const uuid = typeof account?.accountUuid === "string" ? account.accountUuid.trim().toLowerCase() : "";
+    if (!uuid)
+      return;
+    const organization = typeof account.organizationUuid === "string" ? account.organizationUuid.trim().toLowerCase() : "";
+    return `anthropic:${uuid}|${organization}`;
   } catch {
     return;
   }
@@ -10952,7 +11017,8 @@ class ClaudeAgent {
       const signIn = this.limitsSignIn();
       return readClaudeLimits(signIn, signIn ? await this.programVersion() : undefined, now);
     },
-    signIn: () => fingerprint(this.limitsSignIn()?.token)
+    signIn: () => fingerprint(this.limitsSignIn()?.token),
+    identity: () => this.instance.home ? claudeIdentity(this.instance.home) : undefined
   };
   limitsSignIn() {
     if (ClaudeAgent.keychain) {
@@ -12997,8 +13063,17 @@ class CodexAgent {
   rateLimits = new Map;
   limits = {
     every: 10 * 60000,
-    read: () => this.readLimits()
+    read: () => this.readLimits(),
+    identity: () => this.chatGPTAccount()
   };
+  chatGPTAccount() {
+    try {
+      const tokens = JSON.parse(readFileSync21(join23(this.home, "auth.json"), "utf8"))?.tokens;
+      return chatGPTIdentity(tokens?.access_token, tokens?.account_id);
+    } catch {
+      return;
+    }
+  }
   limitsRead = false;
   async readLimits() {
     if (!this.executable())
@@ -16003,14 +16078,15 @@ var engineEndpoints = {
 };
 var EVERY2 = 10 * 60000;
 var MONTH = 43200;
+var byKey = (value) => value.key?.trim() ? `key:${value.key.trim()}` : undefined;
 var READERS = {
-  openai: { service: "codex", signIn: true, read: readChatGPT },
-  xai: { service: "grok", signIn: true, read: readGrok },
+  openai: { service: "codex", signIn: true, read: readChatGPT, identity: (value) => chatGPTIdentity(value.access, value.metadata?.accountID) },
+  xai: { service: "grok", signIn: true, read: readGrok, identity: (value) => xaiIdentity(value.access) },
   "github-copilot": { service: "copilot", lasting: true, read: readCopilot },
-  openrouter: { service: "openrouter", read: readOpenRouter },
-  zai: { service: "zai", read: readZai },
-  "zai-coding-plan": { service: "zai", read: readZai },
-  "opencode-go": { service: "opencode", read: readOpenCodeGo }
+  openrouter: { service: "openrouter", read: readOpenRouter, identity: byKey },
+  zai: { service: "zai", read: readZai, identity: byKey },
+  "zai-coding-plan": { service: "zai", read: readZai, identity: byKey },
+  "opencode-go": { service: "opencode", read: readOpenCodeGo, identity: byKey }
 };
 var ENGINE_SERVICES = [...new Set(Object.values(READERS).map((reader) => reader.service))];
 
@@ -16052,6 +16128,10 @@ class EngineAccounts {
             signIn: () => {
               const value = this.credentials.find((each) => each.integrationID === integration)?.value;
               return fingerprint(`${value?.access ?? value?.key ?? ""}:${value?.refresh ?? ""}:${value?.expires ?? ""}`);
+            },
+            identity: () => {
+              const value = this.credentials.find((each) => each.integrationID === integration)?.value;
+              return value ? READERS[integration]?.identity?.(value) : undefined;
             }
           }
         };
@@ -16178,7 +16258,8 @@ async function readCopilot(secret, _credential, now) {
     }
   }
   const plan = title(body?.copilot_plan);
-  return { windows, ...plan ? { plan } : {} };
+  const login = typeof body?.login === "string" && body.login.trim() ? body.login.trim().toLowerCase() : undefined;
+  return { windows, ...plan ? { plan } : {}, ...login ? { identity: `github:${login}` } : {} };
 }
 async function readOpenRouter(secret, _credential, now) {
   const headers = { Authorization: `Bearer ${secret}` };
@@ -16374,6 +16455,10 @@ class GrokAgent {
       if (Number.isFinite(expires) && expires <= now)
         throw new LimitsProblem("expired", "Its sign-in has lapsed: Grok renews it the next time it runs here.");
       return readGrok(entry.key.trim(), undefined, now);
+    },
+    identity: () => {
+      const entry = this.grokSignIn();
+      return xaiIdentity(entry?.key, entry?.id_token);
     }
   };
   grokSignIn() {
@@ -21236,7 +21321,7 @@ var read2 = (file) => {
     return;
   }
 };
-var text2 = (file) => {
+var text3 = (file) => {
   try {
     return readFileSync26(file, "utf8");
   } catch {
@@ -21336,11 +21421,11 @@ class GroupStore {
       return;
     const folder = join29(this.bots, id);
     const described = read2(join29(folder, "bot.json"));
-    const sessionID = text2(join29(folder, "session"))?.trim();
+    const sessionID = text3(join29(folder, "session"))?.trim();
     if (!described?.name || !sessionID)
       return;
     const job = read2(join29(folder, "job.json"));
-    const directory = text2(join29(folder, "directory"))?.trim() || join29(folder, "workspace");
+    const directory = text3(join29(folder, "directory"))?.trim() || join29(folder, "workspace");
     return {
       id,
       name: String(described.name),
@@ -21352,10 +21437,10 @@ class GroupStore {
       directory,
       model: described.model?.id && described.model?.providerID ? described.model : undefined,
       personality: typeof described.personality === "string" ? described.personality : undefined,
-      agents: text2(join29(folder, "via"))?.trim() === "bridge",
+      agents: text3(join29(folder, "via"))?.trim() === "bridge",
       ...described.look !== undefined ? { look: described.look } : {},
       ...typeof described.created === "string" ? { created: described.created } : {},
-      ...text2(join29(folder, "paused"))?.trim() === "moving" ? { moving: true } : {}
+      ...text3(join29(folder, "paused"))?.trim() === "moving" ? { moving: true } : {}
     };
   }
   peerMemory(bot) {
@@ -26113,4 +26198,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 9e44b22d4bbd68fbd95f1473e767417906e16445efd312432549f6e99de67c85
+// Built from Packages/Box/src/agents 6334bede152435bf6c248db8bd1b1d892c05504edbfa1657ba443e8bd347c5e8
