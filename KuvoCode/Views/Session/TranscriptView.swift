@@ -455,6 +455,7 @@ struct TranscriptView: View {
                     break
                 }
                 // Its words as they are, its thinking and tool calls in the line before them.
+                let assistantRowsStart = rows.count
                 for (part, block) in assistant.content.enumerated() {
                     switch block {
                     case .text(let text):
@@ -479,7 +480,14 @@ struct TranscriptView: View {
                     case .tool(let call) where MadePictureRow.isMade(call):
                         // So does an image it made.
                         flushSteps(live: false)
-                        rows.append(.picture(call))
+                        if MadePictureRow.isGroupable(call), rows.count > assistantRowsStart, case .pictures(let previous)? = rows.last {
+                            rows.removeLast()
+                            rows.append(.pictures(previous + [call]))
+                        } else if MadePictureRow.isGroupable(call) {
+                            rows.append(.pictures([call]))
+                        } else {
+                            rows.append(.picture(call))
+                        }
                     case .tool(let call) where call.name == "kuvo-browser_send_message":
                         // So does what it wrote to another agent.
                         flushSteps(live: false)
@@ -703,6 +711,7 @@ enum Row: Identifiable, Hashable {
     case widget(Message.ToolCall)
     /// An image it made.
     case picture(Message.ToolCall)
+    case pictures([Message.ToolCall])
     /// What it wrote to another agent (send_message).
     case sent(Message.ToolCall)
     /// A subagent it handed part of the work to.
@@ -829,6 +838,7 @@ enum Row: Identifiable, Hashable {
         case .steps(let id, _, _, _): id
         case .widget(let call): call.id
         case .picture(let call): call.id
+        case .pictures(let calls): calls.first?.id ?? "pictures"
         case .sent(let call): call.id
         case .subagent(let call): call.id
         case .turnEnd(let m, _, _, _): m.id
@@ -923,6 +933,8 @@ private struct RowView: View, Equatable {
             WidgetCard(call: call, send: answerAgent)
         case .picture(let call):
             MadePictureRow(call: call, directory: directory)
+        case .pictures(let calls):
+            ShownPictures(calls: calls, directory: directory)
         case .sent(let call):
             AgentSentRow(call: call)
         case .subagent(let call):
@@ -1229,9 +1241,16 @@ private struct AssistantStepView: View {
 
     var body: some View {
         let marks = marks
+        let groups = MadePictureRow.groups(in: message.content)
+        let groupedIndices = Set(groups.flatMap { start, calls in (start..<(start + calls.count)) })
         VStack(alignment: .leading, spacing: 10) {
             ForEach(Array(message.content.enumerated()), id: \.offset) { index, block in
                 Group {
+                    if let calls = groups[index] {
+                        ShownPictures(calls: calls, directory: directory)
+                    } else if groupedIndices.contains(index) {
+                        EmptyView()
+                    } else {
                     switch block {
                     case .text(let text):
                         // The last of a step under way: its words as they stream in. The same view
@@ -1245,6 +1264,7 @@ private struct AssistantStepView: View {
                         ToolCallView(call: call, directory: directory, foldKey: message.id + "#" + call.id)
                     case .other:
                         EmptyView()
+                    }
                     }
                 }
                 // Only its words: Find doesn't look in its thinking and steps.

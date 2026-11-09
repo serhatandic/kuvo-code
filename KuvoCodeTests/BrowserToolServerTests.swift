@@ -45,6 +45,25 @@ import Testing
         #expect(!MadePictureRow.isMade(try call([:])))
     }
 
+    @Test func shownPicturesGroupWithCaptionsAndKeepBoundaries() throws {
+        func call(_ id: String, path: String, caption: String? = nil, status: String = "completed") throws -> Message.ToolCall {
+            var input: [String: Any] = ["path": path]
+            if let caption { input["caption"] = caption }
+            let json: [String: Any] = ["type": "tool", "id": id, "name": "kuvo-browser_show_file",
+                                       "state": ["status": status, "input": input, "content": []]]
+            return try JSONDecoder().decode(Message.ToolCall.self, from: JSONSerialization.data(withJSONObject: json))
+        }
+        let first = try call("a", path: "/tmp/a.png", caption: "First")
+        let second = try call("b", path: "/tmp/b.png", caption: "Second")
+        let document = try call("c", path: "/tmp/c.txt")
+        let third = try call("d", path: "/tmp/d.png")
+        let groups = MadePictureRow.groups(in: [.tool(first), .tool(second), .tool(document), .tool(third)])
+        #expect(groups[0]?.map(\.id) == ["a", "b"])
+        #expect(groups[3]?.map(\.id) == ["d"])
+        #expect(groups[0]?.first?.state.input?["caption"]?.string == "First")
+        #expect(groups[2] == nil)
+    }
+
     @Test func onlyOnThisMac() async throws {
         let url = try await server.start()
         #expect(url.host() == "127.0.0.1")

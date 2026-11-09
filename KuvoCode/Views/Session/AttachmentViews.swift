@@ -10,12 +10,14 @@ nonisolated enum AttachmentItem: Identifiable, Sendable {
     case stored(Message.User.Attachment, id: String)
     case local(URL)
     case path(String)
+    case remote(String, machine: String)
 
     var id: String {
         switch self {
         case .stored(_, let id): id
         case .local(let url): url.absoluteString
         case .path(let path): "path:" + path
+        case .remote(let path, let machine): "remote:" + machine + ":" + path
         }
     }
 
@@ -24,6 +26,7 @@ nonisolated enum AttachmentItem: Identifiable, Sendable {
         case .stored(let file, _): file.name ?? file.fileURL?.lastPathComponent ?? "Attachment"
         case .local(let url): url.lastPathComponent
         case .path(let path): (path as NSString).lastPathComponent
+        case .remote(let path, _): (path as NSString).lastPathComponent
         }
     }
 
@@ -33,6 +36,7 @@ nonisolated enum AttachmentItem: Identifiable, Sendable {
         case .stored(let file, _): file.fileURL
         case .local(let url): url
         case .path(let path): URL(filePath: path)
+        case .remote: nil
         }
         return url.flatMap { FileManager.default.fileExists(atPath: $0.path) ? $0 : nil }
     }
@@ -91,6 +95,11 @@ nonisolated enum AttachmentItem: Identifiable, Sendable {
     func loadImage() async -> NSImage? {
         let key = contentID as NSString
         if let cached = AttachmentImages.cache.object(forKey: key) { return cached }
+        if case .remote(let path, let machine) = self {
+            guard let data = try? await BoxClient.machine(machine).file(path), let image = NSImage(data: data) else { return nil }
+            AttachmentImages.cache.setObject(image, forKey: key)
+            return image
+        }
         let item = self
         let image = await Task.detached(priority: .userInitiated) { () -> NSImage? in
             if let url = item.fileURL, let image = NSImage(contentsOf: url) { return image }
@@ -116,11 +125,19 @@ nonisolated enum AttachmentItem: Identifiable, Sendable {
     /// is written out first, once, as a download of its type.
     func localURL() -> URL? {
         if let url = fileURL { return url }
+        if let written = AttachmentImages.written(id), FileManager.default.fileExists(atPath: written.path) { return written }
         guard case .stored(let file, let id) = self else { return nil }
         if let written = AttachmentImages.written(id), FileManager.default.fileExists(atPath: written.path) { return written }
         guard let bytes = file.bytes, let url = Attachments.writeReceived(bytes, named: name, type: type) else { return nil }
         AttachmentImages.wrote(url, for: id)
         return url
+    }
+
+    func readBytes() async -> Data? {
+        if case .remote(let path, let machine) = self { return try? await BoxClient.machine(machine).file(path) }
+        if let url = fileURL { return try? Data(contentsOf: url) }
+        if case .stored(let file, _) = self { return file.bytes }
+        return nil
     }
 
     func revealInFinder() {
@@ -311,6 +328,28 @@ struct MadePictureRow: View {
         call.name == "kuvo-browser_" + BrowserTools.showFile
     }
 
+    static func isGroupable(_ call: Message.ToolCall) -> Bool {
+        guard isShownFile(call), case .completed = call.state,
+              let path = call.state.input?["path"]?.string,
+              UTType(filenameExtension: (path as NSString).pathExtension)?.conforms(to: .image) == true else { return false }
+        return true
+    }
+
+    /// Consecutive pictures form one gallery; intervening content starts another.
+    static func groups(in content: [Message.Content]) -> [Int: [Message.ToolCall]] {
+        var groups: [Int: [Message.ToolCall]] = [:]
+        var start: Int?
+        for (index, block) in content.enumerated() {
+            if case .tool(let call) = block, isGroupable(call) {
+                if start == nil { start = index }
+                groups[start!, default: []].append(call)
+            } else {
+                start = nil
+            }
+        }
+        return groups
+    }
+
     var body: some View {
         if Self.isShownFile(call) { shownFile } else { made }
     }
@@ -322,8 +361,8 @@ struct MadePictureRow: View {
         case .completed:
             let url = RemoteFolder.fileURL(path, in: directory ?? "/")
             VStack(alignment: .leading, spacing: 6) {
-                if url.isFileURL, UTType(filenameExtension: url.pathExtension)?.conforms(to: .image) == true {
-                    StepPictures(items: [.path(path)], height: 420, maxWidth: 560)
+                if UTType(filenameExtension: url.pathExtension)?.conforms(to: .image) == true {
+                    StepPictures(items: [ShownPictures.item(url)], height: 420, maxWidth: 560)
                 } else {
                     AttachmentRow(item: .path(path)) { app.utilities.show(url) }
                 }
@@ -371,18 +410,50 @@ struct MadePictureRow: View {
     }
 }
 
+struct ShownPictures: View {
+    let calls: [Message.ToolCall]
+    let directory: String
+
+    static func item(_ url: URL) -> AttachmentItem {
+        if let remote = RemoteFolder.parse(url) { return .remote(remote.path, machine: remote.machine) }
+        return .path(url.path)
+    }
+
+    var body: some View {
+        let items = calls.compactMap { call -> AttachmentItem? in
+            guard let path = call.state.input?["path"]?.string else { return nil }
+            return Self.item(RemoteFolder.fileURL(path, in: directory))
+        }
+        StepPictures(items: items, height: items.count == 1 ? 420 : 140, maxWidth: items.count == 1 ? 560 : 220,
+                     captions: calls.compactMap { call in
+                         guard call.state.input?["path"]?.string != nil else { return nil }
+                         return call.state.input?["caption"]?.string ?? ""
+                     })
+    }
+}
+
 /// Pictures a step brought back (a screenshot of the page the agent browses), under the step.
 struct StepPictures: View {
     let items: [AttachmentItem]
     /// How tall and wide one may be: a step's are small, an image the agent made is shown large.
     var height: CGFloat?
     var maxWidth: CGFloat = 360
+    var captions: [String] = []
 
     var body: some View {
-        HStack(alignment: .top, spacing: 6) {
-            ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
-                AttachmentPicture(item: item, height: height ?? (items.count == 1 ? 220 : 140), maxWidth: maxWidth) {
-                    ImageViewer.shared.show(items, at: index)
+        Flow(spacing: 6) {
+            ForEach(Array(items.enumerated()), id: \.offset) { index, item in
+                VStack(alignment: .leading, spacing: 6) {
+                    AttachmentPicture(item: item, height: height ?? (items.count == 1 ? 220 : 140), maxWidth: maxWidth) {
+                        ImageViewer.shared.show(items, at: index)
+                    }
+                    if captions.indices.contains(index), !captions[index].isEmpty {
+                        Text(captions[index])
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                            .frame(maxWidth: maxWidth, alignment: .leading)
+                    }
                 }
             }
         }
