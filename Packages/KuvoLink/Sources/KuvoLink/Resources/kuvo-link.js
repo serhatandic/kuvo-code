@@ -19028,7 +19028,8 @@ function sendCall(host, id, file, call, { link, now, offline, peers, away }) {
       reply(id, "It's too long to send.");
     return;
   }
-  if (call.sentTo !== peer.key)
+  const first = call.sentTo !== peer.key;
+  if (first)
     try {
       writePrivate(file, JSON.stringify({ ...call, sentTo: peer.key }));
     } catch {}
@@ -19036,7 +19037,7 @@ function sendCall(host, id, file, call, { link, now, offline, peers, away }) {
   try {
     went = host.send(bytes);
   } catch {}
-  if (went !== false && isOpenTool(call.call.tool))
+  if (first && went !== false && isOpenTool(call.call.tool))
     watchCall(peer.address, file);
 }
 function reply(id, failed) {

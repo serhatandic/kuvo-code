@@ -177,11 +177,14 @@ export function sendCall(host: Pick<LinkHost, "send">, id: string, file: string,
     if (call.wait) reply(id, "It's too long to send.");
     return;
   }
-  if (call.sentTo !== peer.key) try { writePrivate(file, JSON.stringify({ ...call, sentTo: peer.key })); } catch {}
+  const first = call.sentTo !== peer.key;
+  if (first) try { writePrivate(file, JSON.stringify({ ...call, sentTo: peer.key })); } catch {}
   let went: boolean | void = false;
   try { went = host.send(bytes); } catch {}
-  // A start or a read, never sent again: whether the relay drops it (`relay/dropped.ts`).
-  if (went !== false && isOpenTool(call.call.tool)) watchCall(peer.address, file);
+  // A start or a read the first time it goes: whether the relay drops it (`relay/dropped.ts`). One
+  // sent again (this box's link started again as its tool waited) may have got there before: a
+  // drop of this copy says nothing of that one.
+  if (first && went !== false && isOpenTool(call.call.tool)) watchCall(peer.address, file);
 }
 
 // A tool waiting for call `id` hears it failed (on a machine through `run/replies`, on this Mac in memory).

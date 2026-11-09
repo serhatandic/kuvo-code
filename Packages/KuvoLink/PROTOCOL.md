@@ -45,7 +45,9 @@ One WebSocket per device, binary messages, first byte the kind:
 | `0x07` gone | relay | `address(16) reason(1)` | The device at `address`, which you sent something to on its current connection, has a new connection (0, replaced) or none (1, left; any other reason reads as left). Whatever sessions you had with it are over. |
 
 Known kinds keep their lengths, and a device skips a kind it doesn't know once it's welcomed, so a
-new kind goes only after welcome. A device never sends `0x07`.
+new kind goes only after welcome. A device never sends `0x07`. The relay handles a connection's
+sends in the order they come, so its `unreachable`s come back in that order too (a box tells a
+start the relay dropped by it: "Starts", Sender side).
 
 **Gone.** The relay keeps, for each connection, the devices that sent it something on that connection
 (at most 1,024) and the connections it sent to (at most 256); past either, nothing more is recorded.
@@ -414,14 +416,15 @@ connection.
   - **Sender side**: a start, or a read of what's there, is never kept for a box that isn't
     answering: the tool says at once it may be asleep, off or offline and nothing was started (so
     too when the relay says it isn't there before the call ever went to it, or drops the call
-    itself). The relay answers what a connection sends in order, and says `unreachable` only of
-    something sent, so an `unreachable` for that box while the last thing this connection sent
-    there was the call is the call's own: it never got there (the link process, which hears the
-    relay, leaves `<id>.dropped` beside the call in the outbox for the tool). Once anything else
-    went there, or this box's relay connection ended, it can't be told. One not answered in
-    time (45 seconds for a start, 20 for a read), or that went to that box and then the relay says
-    it isn't there, short of that (whether or not it said it had it: a box keeps a start, then says `delivered
-    {ok: true}`, before it makes anything, but that word can be lost), is taken out of the outbox, so it's never started late or twice: the
+    itself). The relay says `unreachable` only of something sent, in order, so one for that box
+    while the call, the first time it went, was the last thing this connection sent there is the
+    call's own: it never got there (the link process, which hears the relay, leaves `<id>.dropped`
+    beside the call in the outbox for the tool). Once this box sends anything else there, or its
+    relay connection ends, or the call goes again, that can't be told. Any other start or read
+    that went and isn't answered, in time (45 seconds for a start, 20 for a read) or before the
+    relay says that box isn't there, may have got there (a box keeps a start, then says `delivered
+    {ok: true}`, before it makes anything, but that word can be lost), and so may one it said it
+    had: it's taken out of the outbox, so it's never started late or twice, and the
     tool says it couldn't confirm, to check `list_sessions` before trying again. The lead's box notes where the session lives ("Homes") and that the lead
     started work there (`run/work/started-elsewhere.json`, `{<lead>: {<key>: at}}`, 30 days), so
     its `list_sessions` asks there before that computer's first rows come.

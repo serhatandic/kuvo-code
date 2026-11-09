@@ -682,6 +682,19 @@ test("a start that got to its computer, which then stopped answering before it s
   assert.equal(startsCounted(), before + 1, "it may have started: still counted");
 });
 
+test("a start that got to its computer, sent again as it went quiet (as a link started again sends what's waiting), may have started: the copy dropped says nothing of the first", async t => {
+  const { relay, host, going, before } = await startOnRelay(t);
+  const there = relay.device(mini.secret);
+  await link.sendOutbox(host);
+  await there.next();
+  there.leave();
+  // The outbox's next try at it, past the minute between tries, finds nothing connected at mini.
+  await link.sendOutbox(host, link.readLink(), Date.now() + 61_000);
+  const said = await going;
+  assert.match(said.text, /It may still have started/);
+  assert.equal(startsCounted(), before + 1);
+});
+
 test("a start that got to its computer, then this box's own relay connection dropped while it waited, may have started", async t => {
   const { relay, host, connect, going, before, mini: at } = await startOnRelay(t);
   const there = relay.device(mini.secret);
