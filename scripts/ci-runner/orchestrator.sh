@@ -89,7 +89,8 @@ status() { # state message
 # put there would hold the read, and the loop's checks with it.
 read_version() { # path
     [[ -f "$1" && ! -L "$1" ]] || return 1
-    head -c 512 "$1" 2>/dev/null
+    # It may turn into a pipe between the check and the read: the read is limited too.
+    run_limited 5 head -c 512 "$1" 2>/dev/null
 }
 
 # Waits up to $2 seconds for a child to end, then reaps it.
@@ -266,7 +267,7 @@ take_golden() {
     fi
     # Its disk, its NVRAM and its config are files: a symlink would point ci's VMs at whatever it
     # names.
-    if [[ -n "$(find -P "$TART_DIR/vms/$GOLDEN-incoming" ! -type f ! -type d -print 2>/dev/null | head -1)" ]]; then
+    if ! vm_bundle_ok "$TART_DIR/vms/$GOLDEN-incoming"; then
         rm -rf "$TART_DIR/vms/$GOLDEN-incoming"
         log "!!! The golden image holds something that isn't a file or a folder (a symlink?): not taking it."
         return 1
@@ -546,16 +547,20 @@ one_job() {
         # The network's public address, blocked as the VM started, mustn't have moved.
         if [[ -z "$stop" ]] && ((now - last_ip >= IP_EVERY)); then
             last_ip=$now
-            local new_ip
-            if new_ip="$(public_ipv4)"; then
+            # Either service naming another address stops the VM; one confirming it is enough
+            # (the other may be down); neither, three times in a row, stops it too.
+            local seen_a seen_b
+            read -r seen_a seen_b <<< "$(ip_lookups)"
+            if [[ ("$seen_a" != - && "$seen_a" != "$ip") || ("$seen_b" != - && "$seen_b" != "$ip") ]]; then
+                stop="this network's public address moved from $ip (now $seen_a, $seen_b), which the VM may reach"
+            elif [[ "$seen_a" == "$ip" || "$seen_b" == "$ip" ]]; then
                 ip_failures=0
-                [[ "$new_ip" == "$ip" ]] || stop="this network's public address moved from $ip to $new_ip, which the VM may reach"
             else
                 ip_failures=$((ip_failures + 1))
                 if ((ip_failures >= IP_FAILURES_MAX)); then
                     stop="this network's public address couldn't be checked $ip_failures times in a row (it may have moved)"
                 else
-                    log "[$vm] couldn't look up this network's public address (the two lookups failed or disagreed); trying again in $((IP_EVERY / 60)) minutes"
+                    log "[$vm] couldn't look up this network's public address; trying again in $((IP_EVERY / 60)) minutes"
                 fi
             fi
         fi
@@ -568,7 +573,8 @@ one_job() {
     exec 3<&-
     [[ -z "$retired" ]] || return 2
     if [[ -z "$job_started" && -z "$hinted" ]]; then
-        log "[$vm] the runner stopped without taking a job (see $LOG_DIR/$vm.log)"
+        # Stopped above, the reason's logged; otherwise the runner ended by itself.
+        [[ -n "$stop" ]] || log "[$vm] the runner stopped without taking a job (see $LOG_DIR/$vm.log)"
         return 1
     fi
     return 0
@@ -579,7 +585,7 @@ main() {
     mkdir -p "$LOG_DIR" "$TART_DIR" "$STATE_DIR"
     # Its own log, opened as ci (launchd's StandardOutPath is /dev/null: launchd would open a
     # path in ci's folder as root).
-    exec >> "$LOG_FILE" 2>&1
+    exec >> "$LOG_FILE" 2>&1 || { status error "can't write $LOG_FILE"; exit 1; }
     # The VMs' disks (a release's signing keychain among them) are ci's alone.
     chmod 700 "$TART_DIR"
     rotate_log

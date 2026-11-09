@@ -97,12 +97,20 @@ run_limited() { # seconds command...
 # starts (and again while it runs: the orchestrator stops a VM when it changes). It's asked of two
 # services over HTTPS, which must agree; no VM starts when they don't.
 VM_BLOCKED="10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,100.64.0.0/10,169.254.0.0/16"
-public_ipv4() {
-    local a b
+# What each service says this network's public address is: two words, "-" for no answer.
+ip_lookups() {
+    local a b ip='^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$'
     a="$(/usr/bin/curl -4 -fsS --proto '=https' --max-time 10 https://api.ipify.org 2>/dev/null)"
     b="$(/usr/bin/curl -4 -fsS --proto '=https' --max-time 10 https://checkip.amazonaws.com 2>/dev/null)"
     a="${a//[[:space:]]/}" b="${b//[[:space:]]/}"
-    [[ "$a" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ && "$a" == "$b" ]] || return 1
+    [[ "$a" =~ $ip ]] || a=-
+    [[ "$b" =~ $ip ]] || b=-
+    echo "$a $b"
+}
+public_ipv4() {
+    local a b
+    read -r a b <<< "$(ip_lookups)"
+    [[ "$a" != - && "$a" == "$b" ]] || return 1
     echo "$a"
 }
 vm_run_flags() { # [the public address to block; looked up when not given]
@@ -137,8 +145,7 @@ verify_tree() {
         echo "$CI_BIN/softnet isn't root:$SOFTNET_GROUP, mode 4750." >&2
         return 1
     fi
-    # ACLs: stat and find -perm don't see them, ls -le does (a line like " 0: user:… allow write").
-    if /bin/ls -leR "$CI_ROOT" 2>/dev/null | /usr/bin/grep -qE '^ [0-9]+: '; then
+    if has_acl "$CI_ROOT"; then
         echo "In $CI_ROOT, something has an ACL." >&2
         return 1
     fi
@@ -146,6 +153,19 @@ verify_tree() {
     for dir in "$CI_BIN/tart" "$CI_ROOT/Tart.app/Contents/MacOS/tart" "$CI_SCRIPTS/orchestrator.sh" "$CI_SCRIPTS/common.sh"; do
         [[ -f "$dir" ]] || { echo "$dir is missing." >&2; return 1; }
     done
+}
+
+# Whether a folder, or anything in it, has an ACL: stat and find -perm don't see them, ls -le does
+# (a line like " 0: user:… allow write"). grep reads to the end, so ls never dies of SIGPIPE
+# (which pipefail would read as "none").
+has_acl() { # folder
+    { /bin/ls -led "$1"; /bin/ls -leR "$1"; } 2>/dev/null | /usr/bin/grep -E '^ [0-9]+: ' >/dev/null
+}
+
+# Whether a VM's folder (a copy of the golden image) holds only files and folders: its disk, NVRAM
+# and config are files, and a symlink would point Tart, as ci, at whatever it names.
+vm_bundle_ok() { # folder
+    [[ -d "$1" && ! -L "$1" && -z "$(/usr/bin/find -P "$1" ! -type f ! -type d -print 2>/dev/null | /usr/bin/head -1)" ]]
 }
 
 # Whether $SOFTNET_GROUP has $CI_USER as its only member: no other member, no nested group, no

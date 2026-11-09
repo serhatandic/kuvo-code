@@ -186,11 +186,11 @@ install_tree() { # Tart.app softnet
     sudo /usr/bin/install -o root -g wheel -m 644 "$here/common.sh" "$CI_ROOT.new/scripts/"
     sudo /usr/bin/install -o root -g wheel -m 755 "$here/vm/job-started.sh" "$CI_ROOT.new/scripts/vm/"
     rm -rf "$staging"
+    tart_signed_by_cirrus "$CI_ROOT.new/Tart.app" || fail "The copy of Tart.app isn't signed by Cirrus Labs (codesign --verify): $CI_ROOT is as it was."
     sudo /bin/rm -rf "$CI_ROOT.old"
     if [[ -e "$CI_ROOT" ]]; then sudo /bin/mv "$CI_ROOT" "$CI_ROOT.old"; fi
     sudo /bin/mv "$CI_ROOT.new" "$CI_ROOT"
     sudo /bin/rm -rf "$CI_ROOT.old"
-    tart_signed_by_cirrus "$CI_ROOT/Tart.app" || fail "The copy of Tart.app in $CI_ROOT isn't signed by Cirrus Labs (codesign --verify)."
     verify_tree || fail "$CI_ROOT isn't as it should be (above)."
     echo "Installed $CI_ROOT: Tart $("$CI_BIN/tart" --version), softnet root:$SOFTNET_GROUP 4750."
 }
@@ -244,8 +244,10 @@ as_admin() { # agent|daemon
         sudo /bin/chmod u-s "$softnet"
         echo "Took the setuid bit off Homebrew's softnet ($softnet)."
     fi
-    # The scripts ci ran before, from your folder: gone, so nothing runs them by mistake.
+    # The scripts ci ran before, from your folder: gone, so nothing runs them by mistake. And the
+    # status folder an earlier setup made there (ci's, so sudo; rm follows no symlinks).
     rm -rf "$SHARED/scripts"
+    sudo /bin/rm -rf "$SHARED/run"
     # ci's, for its status file: anyone can read it. In root's /usr/local, where nothing can be
     # planted for this sudo to follow.
     if [[ -L "$SHARED_RUN" ]]; then sudo /bin/rm -f "$SHARED_RUN"; fi

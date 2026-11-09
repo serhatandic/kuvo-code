@@ -17,9 +17,9 @@
 #   sudo -u ci -i /usr/local/kuvo-ci/scripts/check-isolation.sh
 #   rm /Users/Shared/kuvo-ci/paused
 #
-# As someone else, it uses their Tart and softnet (TART_HOME=/Users/Shared/kuvo-ci/tart: the
-# golden image's own home) and pauses CI itself, only when that softnet is setuid root already
-# (it refuses rather than let Tart make Homebrew's setuid again).
+# Only as ci once setup.sh has run. Before it (Homebrew's softnet still setuid), it can run as you
+# with TART_HOME=/Users/Shared/kuvo-ci/tart, the golden image's own home; after, it refuses rather
+# than let Tart ask to make Homebrew's softnet setuid again.
 #   IMAGE   what to boot, from /Users/Shared/kuvo-ci/tart (default: kuvo-ci-golden)
 set -uo pipefail
 
@@ -71,6 +71,7 @@ if [[ ! "$TART_DIR" -ef "$SHARED_TART" ]]; then
     source_vm="kuvo-ci-isolation-source-$$"
     mkdir -p "$TART_DIR/vms"
     run_limited 900 cp -cR "$SHARED_TART/vms/$IMAGE" "$TART_DIR/vms/$source_vm" || { echo "Couldn't copy $IMAGE." >&2; exit 1; }
+    vm_bundle_ok "$TART_DIR/vms/$source_vm" || { echo "$IMAGE holds something that isn't a file or a folder (a symlink?)." >&2; exit 1; }
 fi
 run_limited 300 tart clone "$source_vm" "$vm" || exit 1
 echo "Booting $IMAGE ($(cat "$SHARED/golden-version" 2>/dev/null)) with $(command -v tart) and $(command -v softnet), as $(id -un)…"

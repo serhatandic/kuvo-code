@@ -83,7 +83,7 @@ run_job_here() {
         LOCAL_VERSION="$t/shared/golden-version"
         CONFIRM_SECONDS=6 MARKER_SECONDS=3 BUSY_EVERY=1 READ_SECONDS=1 IP_EVERY=100000 BOOT_SECONDS=5
         verify_tree() { :; }
-        public_ipv4() { echo 203.0.113.7; }
+        ip_lookups() { echo "203.0.113.7 203.0.113.7"; }
         free_gb() { echo 500; }
         eval "${1:-}"
         started=$SECONDS
@@ -293,8 +293,9 @@ t_refused_runner_config_logs_no_body() {
 t_public_address_moving_stops_the_vm() {
     new_test address_moves "$RUNNER_LONG"
     scenario '{"token": "github_pat_TEST", "busy": false}'
-    run_job 'IP_EVERY=1; public_ipv4() { if [[ -e "$t/looked" ]]; then echo 198.51.100.9; else touch "$t/looked"; echo 203.0.113.7; fi; }'
-    expect_log "public address moved from 203.0.113.7 to 198.51.100.9, which the VM may reach: stopping the VM"
+    # One service says the new address, the other doesn't answer: that's enough.
+    run_job 'IP_EVERY=1; ip_lookups() { if [[ -e "$t/looked" ]]; then echo "198.51.100.9 -"; else touch "$t/looked"; echo "203.0.113.7 203.0.113.7"; fi; }'
+    expect_log "public address moved from 203.0.113.7 (now 198.51.100.9, -), which the VM may reach: stopping the VM"
     done_test
 }
 
@@ -386,9 +387,51 @@ t_github_silent_about_the_runner_stops_the_vm() {
 t_address_that_cant_be_checked_stops_the_vm() {
     new_test address_unknown "vm_sleep 60"
     scenario '{"token": "github_pat_TEST", "busy": false}'
-    run_job 'IP_EVERY=1; public_ipv4() { if [[ -e "$t/looked" ]]; then return 1; else touch "$t/looked"; echo 203.0.113.7; fi; }'
+    run_job 'IP_EVERY=1; ip_lookups() { if [[ -e "$t/looked" ]]; then echo "- -"; else touch "$t/looked"; echo "203.0.113.7 203.0.113.7"; fi; }'
     expect_log "couldn't look up this network's public address"
     expect_log "public address couldn't be checked 3 times in a row (it may have moved): stopping the VM"
+    refute_log "the runner stopped without taking a job"
+}
+
+t_one_lookup_service_down_doesnt_stop_a_job() {
+    new_test one_lookup_down "vm_sleep 6"
+    scenario '{"token": "github_pat_TEST", "busy": false}'
+    run_job 'IP_EVERY=1; ip_lookups() { if [[ -e "$t/looked" ]]; then echo "- 203.0.113.7"; else touch "$t/looked"; echo "203.0.113.7 203.0.113.7"; fi; }'
+    refute_log "stopping the VM"
+    refute_log "couldn't look up"
+    expect_log "the runner stopped without taking a job"
+}
+
+# An ACL anywhere in a big tree (big enough that ls is still writing when grep has its answer).
+t_acl_check() {
+    new_test acl_check ""
+    mkdir -p "$t/tree/a"
+    for i in $(seq 1 3000); do : > "$t/tree/a/file-with-a-long-name-$i"; done
+    (
+        . "$ci/common.sh"
+        set -o pipefail
+        has_acl "$t/tree" && echo "clean tree: ACL"
+        chmod +a "everyone allow read" "$t/tree/a/file-with-a-long-name-1"
+        has_acl "$t/tree" && echo "deep ACL seen"
+        chmod -N "$t/tree/a/file-with-a-long-name-1"
+        chmod +a "everyone allow list" "$t/tree"
+        has_acl "$t/tree" && echo "top ACL seen"
+        chmod -N "$t/tree"
+    ) > "$t/log" 2>&1
+    refute_log "clean tree: ACL"
+    expect_log "deep ACL seen"
+    expect_log "top ACL seen"
+}
+
+t_check_isolation_refuses_a_softnet_that_isnt_setuid() {
+    new_test isolation_softnet ""
+    printf '#!/bin/sh\nexit 0\n' > "$t/bin/softnet"
+    chmod 755 "$t/bin/softnet"
+    KUVO_TEST_TART="$t/tart" PATH="$t/bin:/usr/bin:/bin:/usr/sbin:/sbin" "$ci/check-isolation.sh" > "$t/log" 2>&1
+    echo "rc=$?" >> "$t/log"
+    expect_log "isn't setuid root, and Tart would ask to make it so."
+    expect_log "rc=1"
+    [[ ! -s "$t/tart/calls.log" ]] || fail "it ran Tart: $(cat "$t/tart/calls.log")"
 }
 
 t_failed_retire_is_logged() {
@@ -486,7 +529,8 @@ tests=(t_allowed_job_runs t_fork_job_stopped t_host_takes_only_main_and_release_
     t_bad_token_never_reaches_curl t_status_never_follows_a_symlink t_watchdog
     t_tree_check_refuses_a_tree_that_isnt_roots t_hook t_github_silent_about_the_runner_stops_the_vm
     t_address_that_cant_be_checked_stops_the_vm t_failed_retire_is_logged
-    t_golden_image_with_a_symlink_or_pipe_is_refused t_softnet_group_check)
+    t_golden_image_with_a_symlink_or_pipe_is_refused t_softnet_group_check
+    t_one_lookup_service_down_doesnt_stop_a_job t_acl_check t_check_isolation_refuses_a_softnet_that_isnt_setuid)
 if [[ $# -gt 0 ]]; then tests=("$@"); fi
 for name in "${tests[@]}"; do
     "$name"
