@@ -400,7 +400,7 @@ private struct SettingsSidebar: View {
                 .environment(\.messageFont, MessageFont())
             if boxes.count > 1, search.isEmpty {
                 BoxNameStrip(boxes: boxes, selected: shownBinding, marksNews: false)
-                    .padding(.top, 8)
+                    .padding(.top, 6)
             }
             if !search.isEmpty {
                 ScrollView {

@@ -41,11 +41,14 @@ extension EnvironmentValues {
     @Entry var marksMachines = true
 }
 
-/// Above the sidebar's pages, staying put while they slide: your computers by name, in order, as
-/// many as fit, and "+3" for the rest, which opens a menu of them with how each is and Add
-/// Machine…. The one in view is lit, and always among the names. A computer that needs you or has
-/// something new is marked, one that isn't connected says so, and so does the count when one of
-/// those it stands for does.
+/// Above the sidebar's pages, staying put while they slide: your computers by name on one line, as
+/// the phone's strip has them. The one in view comes first, large and bold; the others follow it
+/// (past the last, the first again) in the same size, faded, trailing off at the end of the line,
+/// and "+3" stands for those that don't show whole, opening a menu of them with how each is and
+/// Add Machine…. Picking another slides the line a step, so it comes first. A name too long for the
+/// line is cut at its end, never in the middle. A computer that needs you or has something new is
+/// marked, one that isn't connected says so, and so does the count when one of those it stands for
+/// does.
 struct BoxNameStrip: View {
     let boxes: [SidebarBox]
     @Binding var selected: SidebarBox
@@ -55,75 +58,171 @@ struct BoxNameStrip: View {
     @Environment(AppModel.self) private var app
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.messageFont) private var messageFont
-    /// Each name's width at rest, measured off screen, so what fits is known before it's shown.
+    /// Each name's width as it shows whole, measured off screen, so what fits is known before it's shown.
     @State private var widths: [SidebarBox: CGFloat] = [:]
     @State private var moreWidth: CGFloat = 0
     @State private var room: CGFloat = 0
+    /// Where the line stands: the place of the one in view, counted on past the last (a computer's
+    /// place is this modulo how many there are). Each name keeps its place as the line slides, so
+    /// picking the next one moves every name a step, and the one that was first goes as the one
+    /// after the last comes in.
+    @State private var position = 0
 
-    private static let spacing: CGFloat = 2
+    /// The names' size: a step up from the rows' 12.5 ("a bit bigger, not more").
+    static let size: CGFloat = 14
+    /// Between one name's words and the next one's.
+    static let spacing: CGFloat = 14
+    /// Around a name's words, for the fill under the pointer to clear them.
+    static let pad: CGFloat = 6
+    /// Where the first name's words begin: in line with the sections' headings below.
+    static let inset: CGFloat = 10
 
     var body: some View {
-        let names = boxes.map(name)
-        let shown = Self.shown(widths: boxes.map { widths[$0] ?? 0 }, room: room, more: moreWidth, spacing: Self.spacing,
-                               selected: boxes.firstIndex(of: selected) ?? 0)
-        let rest = boxes.indices.filter { !shown.contains($0) }.map { names[$0] }
+        let count = boxes.count
+        let places = Array(position..<(position + count))
+        let order = places.map { boxes[Self.wrapped($0, count)] }
+        let names = order.map(name)
+        let fit = Self.fit(widths: order.map { widths[$0] }, room: room, more: moreWidth)
+        let hidden = Set(fit.hidden)
         // Until every name is measured, what fits isn't known: nothing rather than a jump.
         let measured = room > 0 && boxes.allSatisfy { widths[$0] != nil }
-        HStack(spacing: Self.spacing) {
-            ForEach(shown.map { names[$0] }, id: \.box) { name in
-                label(name)
-            }
-            if !rest.isEmpty {
-                more(rest)
+        HStack(spacing: 0) {
+            // Over a line of the room it's offered, so however long the names run they never widen it.
+            Color.clear
+                .frame(maxWidth: .infinity)
+                .overlay(alignment: .leading) {
+                    HStack(spacing: Self.spacing - 2 * Self.pad) {
+                        ForEach(Array(zip(places, names).enumerated()), id: \.element.0) { step, item in
+                            let name = item.1
+                            label(name, most: step == 0 ? fit.most : nil)
+                                // Only those that show whole are buttons: the rest, fading out or out of
+                                // sight, take no clicks (a clipped view still would, past the line's end
+                                // over the window's other cards), nor the keyboard, nor VoiceOver; the
+                                // count's menu has them. Nor any before it's known what fits.
+                                .allowsHitTesting(!hidden.contains(step))
+                                .disabled(hidden.contains(step))
+                                .accessibilityHidden(!measured || hidden.contains(step))
+                                .transition(.opacity)
+                        }
+                    }
+                    .fixedSize()
+                    .padding(.leading, Self.inset - Self.pad)
+                }
+                .clipped()
+                .mask {
+                    // Once names trail off, the first that doesn't fit whole fades out where it begins,
+                    // to the count; those before it show clear. Along the line as it is (the count is
+                    // often narrower than at its widest, which the layout allows for).
+                    GeometryReader { geometry in
+                        let width = max(geometry.size.width, 1)
+                        let from = hidden.isEmpty ? 1 : min(fit.fadesFrom / width, 1)
+                        let to = hidden.isEmpty || fit.fadesTo > fit.fadesFrom ? 1 : from
+                        LinearGradient(stops: [.init(color: .black, location: 0), .init(color: .black, location: from),
+                                               .init(color: hidden.isEmpty ? .black : .clear, location: to)],
+                                       startPoint: .leading, endPoint: .trailing)
+                    }
+                }
+            if !hidden.isEmpty {
+                more(fit.hidden.map { names[$0] })
+                    // Its words end where the sections' controls below do.
+                    .padding(.trailing, Self.inset - Self.pad)
+                    .accessibilityHidden(!measured)
+                    .transition(.opacity)
             }
         }
         .opacity(measured ? 1 : 0)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .frame(height: (24 * messageFont.sidebarScale).rounded())
-        .clipped()
+        .frame(height: (28 * messageFont.sidebarScale).rounded())
         .onGeometryChange(for: CGFloat.self, of: \.size.width) { room = $0 }
         .background(alignment: .topLeading) {
-            // Every name as it would show lit (its widest), and the count at its widest, to
-            // measure: never seen.
+            // Every name as it shows whole, and the count at its widest, to measure: never seen.
             HStack(spacing: Self.spacing) {
-                ForEach(names, id: \.box) { name in
-                    label(name, lit: true)
-                        .onGeometryChange(for: CGFloat.self, of: \.size.width) { widths[name.box] = $0 }
+                ForEach(boxes, id: \.self) { box in
+                    label(name(box), most: nil)
+                        .onGeometryChange(for: CGFloat.self, of: \.size.width) { widths[box] = $0 }
                 }
                 moreLabel(count: boxes.count, mark: .new)
+                    .padding(.trailing, Self.inset - Self.pad)
                     .onGeometryChange(for: CGFloat.self, of: \.size.width) { moreWidth = $0 }
             }
             .fixedSize()
             .hidden()
             .accessibilityHidden(true)
         }
-        .padding(.horizontal, 10)
+        .onAppear { position = boxes.firstIndex(of: selected) ?? 0 }
+        .onChange(of: boxes) { position = boxes.firstIndex(of: selected) ?? 0 }
+        .onChange(of: selected) { slide(to: selected) }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Computers")
     }
 
-    /// Which of the names show, by their place: from the first, as many as fit in `room` with
-    /// the count after them, and the one in view always, in place of the last that would have
-    /// fit. All of them when they fit without the count, or before the room is known.
-    static func shown(widths: [CGFloat], room: CGFloat, more: CGFloat, spacing: CGFloat, selected: Int) -> [Int] {
-        let all = Array(widths.indices)
-        guard room > 0, widths.reduce(0, +) + spacing * CGFloat(max(widths.count - 1, 0)) > room else { return all }
-        // The first `count` that fit beside `extra` (and the count, after a gap).
-        func fitting(besides extra: CGFloat) -> Int {
-            var used = extra + more
-            var count = 0
-            for width in widths {
-                guard used + width + spacing <= room else { break }
-                used += width + spacing
-                count += 1
-            }
-            return count
+    /// `place` among `count`, however far the line has gone round (either way).
+    static func wrapped(_ place: Int, _ count: Int) -> Int {
+        count > 0 ? ((place % count) + count) % count : 0
+    }
+
+    /// The line moved on to `box`, the shorter way round, a step at a time.
+    private func slide(to box: SidebarBox) {
+        let count = boxes.count
+        guard count > 0, let target = boxes.firstIndex(of: box) else { return }
+        var steps = Self.wrapped(target - position, count)
+        if steps > count / 2 { steps -= count }
+        guard steps != 0 else { return }
+        withAnimation(reduceMotion ? nil : .spring(response: 0.38, dampingFraction: 0.9)) { position += steps }
+    }
+
+    /// How the line lays out its names, in its order (the one in view first).
+    struct Fit: Equatable {
+        /// Those that don't show whole, by their place in the line: what "+3" stands for.
+        var hidden: [Int] = []
+        /// Where each name's fill begins along the line.
+        var starts: [CGFloat] = []
+        /// The line's length, short of the count when there is one.
+        var line: CGFloat = 0
+        /// How wide the name in view may be (its words, mark and padding), its words cut at their
+        /// end past that.
+        var most: CGFloat?
+        /// Where the line starts to fade out, while names trail off: where the words of the first
+        /// that doesn't fit whole begin. It's gone by the line's end, or at once where too little of
+        /// it would show to read.
+        var fadesFrom: CGFloat = 0
+        var fadesTo: CGFloat = 0
+    }
+
+    /// Lays out names `widths` wide (each with its padding; nil until measured), the one in view
+    /// first, in `room` with a count `more` wide: every name, and no count, when all fit; else the
+    /// one in view (its words cut at their end if they have to be), those after it that fit whole
+    /// before the count, fill and all, and the rest counted, the first of them fading out where it
+    /// begins.
+    static func fit(widths: [CGFloat?], room: CGFloat, more: CGFloat) -> Fit {
+        let gap = spacing - 2 * pad
+        let lead = inset - pad
+        guard room > 0, !widths.isEmpty, widths.allSatisfy({ $0 != nil }) else { return Fit(line: room) }
+        let known = widths.map { $0! }
+        var starts: [CGFloat] = []
+        var end = lead
+        for width in known {
+            starts.append(end)
+            end += width + gap
         }
-        let first = fitting(besides: 0)
-        if selected < first { return Array(0..<first) }
-        // In view but past them: it takes the place of the last, or more if it's wider.
-        let before = min(fitting(besides: widths[selected] + spacing), selected)
-        return Array(0..<before) + [selected]
+        let whole = end - gap
+        guard known.count > 1, whole > room else {
+            // All of them fit, or it's alone: the one in view cut only if it can't fit at all.
+            return Fit(starts: starts, line: room, most: max(room - lead, 40))
+        }
+        let line = room - more
+        // (Its trailing padding may run on under the count: the one in view shows no fill.)
+        let most = max(line - lead + pad, 40)
+        // Where the names after the one in view begin, once it's cut.
+        let cut = known[0] - min(known[0], most)
+        starts = starts.enumerated().map { $0 == 0 ? $1 : $1 - cut }
+        // The first that runs past the line's end, its fill under the pointer too, and those after it.
+        let first = known.indices.dropFirst().first { starts[$0] + known[$0] > line } ?? known.count
+        let hidden = Array(first..<known.count)
+        // Its words fade out from where they begin to the count; a sliver of them (a letter's
+        // stroke) not at all.
+        let fadesFrom = first < known.count ? starts[first] + pad : line
+        return Fit(hidden: hidden, starts: starts, line: line, most: most, fadesFrom: fadesFrom, fadesTo: line - fadesFrom < 28 ? fadesFrom : line)
     }
 
     private func pick(_ box: SidebarBox) {
@@ -160,41 +259,17 @@ struct BoxNameStrip: View {
         }
     }
 
-    /// `lit`: drawn in the lit one's weight, whichever it is, to measure.
-    private func label(_ name: Name, lit: Bool = false) -> some View {
+    /// A name, with its mark; `most`: as wide as the one in view may be, cut at its end past that.
+    private func label(_ name: Name, most: CGFloat?) -> some View {
         Button { pick(name.box) } label: {
-            HStack(spacing: 5) {
-                Text(name.title)
-                    .sidebarFont(12.5, weight: name.isOn || lit ? .semibold : .medium)
-                    .foregroundStyle(name.isOn ? AnyShapeStyle(.primary) : name.isAway ? AnyShapeStyle(.tertiary) : AnyShapeStyle(.secondary))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .modifier(NameWidth())
-                if let connection = name.connection {
-                    MachineIndicator(connection: connection, size: 5, quiet: true, progress: name.progress)
-                } else if let news = name.news {
-                    NewsDot(news: news)
-                }
-            }
-            .padding(.horizontal, 8)
-            .frame(height: 22)
-            .pickHighlight(RoundedRectangle(cornerRadius: 6), isOn: name.isOn)
+            StripName(name: name, most: most)
         }
-        .buttonStyle(.plain)
-        .clickablePointer()
+        // The one in view is where you are already: nothing to show under the pointer.
+        .buttonStyle(StripNameStyle(isOn: !name.isOn))
         .help(name.title)
         .accessibilityLabel(name.title)
         .accessibilityValue(name.said ?? "")
         .accessibilityAddTraits(name.isOn ? .isSelected : [])
-    }
-
-    /// A name as wide as it is, never the room it's offered, up to a width it's cut at.
-    struct NameWidth: ViewModifier {
-        func body(content: Content) -> some View {
-            content
-                .frame(maxWidth: 150, alignment: .leading)
-                .fixedSize(horizontal: true, vertical: false)
-        }
     }
 
     /// "+3", and the menu of the computers it stands for.
@@ -212,6 +287,7 @@ struct BoxNameStrip: View {
             return menu
         } label: {
             moreLabel(count: rest.count, mark: Self.mark(of: rest))
+                .modifier(StripHover())
         }
         .help(rest.map(\.title).formatted(.list(type: .and)))
         .accessibilityLabel("\(rest.count) more")
@@ -230,19 +306,17 @@ struct BoxNameStrip: View {
     private func moreLabel(count: Int, mark: Mark?) -> some View {
         HStack(spacing: 5) {
             Text("+\(count)")
-                .sidebarFont(12.5, weight: .semibold)
+                .sidebarFont(13, weight: .semibold)
                 .monospacedDigit()
-                .foregroundStyle(.secondary)
             switch mark {
-            case .failed: MachineIndicator(connection: .failed, size: 5, quiet: true)
+            case .failed: MachineIndicator(connection: .failed, size: 6, quiet: true)
             case .needsYou: NewsDot(news: .needsYou)
             case .new: NewsDot(news: .new)
             case nil: EmptyView()
             }
         }
-        .padding(.horizontal, 8)
-        .frame(height: 22)
-        .pickHighlight(RoundedRectangle(cornerRadius: 6), isOn: false)
+        .padding(.horizontal, Self.pad)
+        .frame(height: 24)
     }
 
     /// A computer's dot in the menu, as its name's in the strip, and green while all is well.
@@ -260,6 +334,74 @@ struct BoxNameStrip: View {
         }
         return image
     }
+}
+
+/// A computer's name in the strip: the one in view in full ink, the others faded (a machine that
+/// isn't connected more so), each brought up to full ink with a soft fill under the pointer, as the
+/// app's chrome-less controls are. Its mark after it: how it's connected while it isn't, else its
+/// news.
+private struct StripName: View {
+    let name: BoxNameStrip.Name
+    let most: CGFloat?
+    @Environment(\.stripHovered) private var hovered
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Text(name.title)
+                .sidebarFont(BoxNameStrip.size, weight: .bold)
+                .foregroundStyle(name.isOn || hovered ? AnyShapeStyle(.primary) : name.isAway ? AnyShapeStyle(.quaternary) : AnyShapeStyle(.tertiary))
+                .lineLimit(1)
+                .truncationMode(.tail)
+            // Its mark keeps its room: a name cut short is cut in its words.
+            Group {
+                if let connection = name.connection {
+                    MachineIndicator(connection: connection, size: 6, quiet: true, progress: name.progress)
+                } else if let news = name.news {
+                    NewsDot(news: news)
+                }
+            }
+            .fixedSize()
+        }
+        .padding(.horizontal, BoxNameStrip.pad)
+        // As wide as it is, never the room it's offered, up to where it's cut.
+        .frame(maxWidth: most ?? .infinity, alignment: .leading)
+        .fixedSize(horizontal: true, vertical: false)
+        .frame(height: 26)
+    }
+}
+
+/// A name in the strip as a button: the strip's hover, and a deeper fill while pressed.
+private struct StripNameStyle: ButtonStyle {
+    let isOn: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label.modifier(StripHover(isOn: isOn, isPressed: configuration.isPressed))
+    }
+}
+
+/// Under the pointer: a soft fill behind it (deeper while pressed), its words in full ink, and the
+/// pointing hand, as `Pressable` has the app's chrome-less controls.
+private struct StripHover: ViewModifier {
+    var isOn = true
+    var isPressed = false
+    @State private var isHovering = false
+
+    func body(content: Content) -> some View {
+        let hovering = isOn && isHovering
+        content
+            .foregroundStyle(hovering ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
+            .environment(\.stripHovered, hovering)
+            .background(isOn && isPressed ? Pressable.pressedFill : hovering ? Pressable.hoverFill : .clear, in: .rect(cornerRadius: 6))
+            .contentShape(.rect(cornerRadius: 6))
+            .onHover { isHovering = $0 }
+            .pointerStyle(isOn ? .link : nil)
+            .animation(.easeOut(duration: 0.12), value: hovering)
+    }
+}
+
+private extension EnvironmentValues {
+    /// The strip's name under the pointer, for its words to come up to full ink.
+    @Entry var stripHovered = false
 }
 
 /// Something waiting on a computer: orange when it needs you, the accent when it's only new.
