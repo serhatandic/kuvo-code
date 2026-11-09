@@ -17,6 +17,12 @@ HEAVY = str(Path(__file__).with_name("heavy.sh"))
 WAITS = 75
 
 
+def clean_environment():
+    """The environment of the run without what a job of heavy.sh leaves in it (a test run from inside
+    one would otherwise see that job's turn and slot)."""
+    return {k: v for k, v in os.environ.items() if k not in ("KUVO_HEAVY_SLOTS", "KUVO_HEAVY_HELD", "KUVO_HEAVY_HOLDING", "KUVO_HEAVY_SLOT", "KUVO_HEAVY_BUILD_SUFFIX", "KUVO_TEST_SIMULATOR", "KUVO_HEAVY_WAIT")}
+
+
 class Held:
     """A job that holds a lock until it's let go: started, it says it's running through a pipe,
     then waits on another."""
@@ -42,7 +48,7 @@ class HeavyTests(unittest.TestCase):
     def setUp(self):
         self.locks = tempfile.mkdtemp()
         # As from the 29th, when the old single lock is over (the day before, test_the_day_before).
-        self.env = dict(os.environ, KUVO_HEAVY_DIR=self.locks, KUVO_HEAVY_LOAD="1000", KUVO_HEAVY_OLD_UNTIL="20000101")
+        self.env = dict(clean_environment(), KUVO_HEAVY_DIR=self.locks, KUVO_HEAVY_LOAD="1000", KUVO_HEAVY_OLD_UNTIL="20000101")
 
     def run_heavy(self, kind, *command, **env):
         result = subprocess.run([HEAVY, kind, *command], env=dict(self.env, KUVO_HEAVY_WAIT="0", **env), capture_output=True, text=True, timeout=30)
@@ -185,10 +191,48 @@ class HeavyTests(unittest.TestCase):
         finally:
             slot_one.let_go()
 
-    def test_a_phone_job_under_a_slot_one_lock_of_an_older_script_runs_at_once(self):
-        old = self.old_lock()
-        result = subprocess.run(["lockf", "-k", old, HEAVY, "phone", "true"], env=dict(self.phone_slots(), KUVO_HEAVY_WAIT="0"), timeout=30)
-        self.assertEqual(result.returncode, 0)
+    def test_a_phone_job_under_a_slot_one_lock_of_an_older_script_runs_at_once_on_slot_ones_simulator(self):
+        """Whatever slot's values it inherited (a shell started in a slot 2 job keeps them): it runs
+        under slot 1's lock, so it is slot 1's."""
+        stale = dict(self.phone_slots(), KUVO_HEAVY_WAIT="0", KUVO_TEST_SIMULATOR="Kuvo Code Tests 2", KUVO_HEAVY_SLOT="2", KUVO_HEAVY_BUILD_SUFFIX="-2")
+        result = subprocess.run(["lockf", "-k", self.old_lock(), HEAVY, "phone", "/bin/sh", "-c", 'echo "$KUVO_TEST_SIMULATOR|$KUVO_HEAVY_SLOT|$KUVO_HEAVY_BUILD_SUFFIX"'], env=stale, capture_output=True, text=True, timeout=30)
+        self.assertEqual((result.returncode, result.stdout.strip()), (0, "Kuvo Code Tests|1|"))
+
+    def previous_heavy(self):
+        """heavy.sh as it was before slots (the script an older checkout runs), to run beside this one."""
+        source = subprocess.run(["git", "show", "de71a5b7b:scripts/heavy.sh"], cwd=os.path.dirname(HEAVY), capture_output=True, text=True)
+        if source.returncode != 0:
+            self.skipTest("the previous heavy.sh isn't in this checkout's history")
+        folder = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, folder, ignore_errors=True)
+        path = os.path.join(folder, "heavy.sh")
+        with open(path, "w") as f:
+            f.write(source.stdout)
+        os.chmod(path, 0o755)
+        return path
+
+    def test_the_previous_heavy_sh_and_this_one_share_slot_one_and_this_one_has_slot_two_besides(self):
+        old = self.previous_heavy()
+        env = self.phone_slots()
+        before = Held([old, "phone"], env)
+        try:
+            self.assertEqual(self.run_heavy("phone", "true")[0], WAITS)  # slot 1 only: it waits for the older one
+            new = Held([HEAVY, "phone"], env)  # slot 2 beside it
+            try:
+                self.assertEqual(new.seen, "Kuvo Code Tests 2|2|-2")
+                self.assertEqual(subprocess.run([old, "phone", "true"], env=dict(env, KUVO_HEAVY_WAIT="0"), timeout=30).returncode, WAITS)
+            finally:
+                new.let_go()
+        finally:
+            before.let_go()
+        new = Held([HEAVY, "phone"], env)  # slot 1 now: the older one waits for it
+        try:
+            self.assertEqual(new.seen, "Kuvo Code Tests|1|")
+            result = subprocess.run([old, "phone", "true"], env=dict(env, KUVO_HEAVY_WAIT="0"), capture_output=True, text=True, timeout=30)
+            self.assertEqual(result.returncode, WAITS)
+            self.assertIn("Another phone job is running", result.stderr)
+        finally:
+            new.let_go()
 
     def test_a_script_can_ask_whether_its_kinds_turn_is_held(self):
         holds = lambda *command: subprocess.run(command, env=self.env, timeout=30).returncode
@@ -285,7 +329,7 @@ class StoppingTests(unittest.TestCase):
     def setUp(self):
         self.locks = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.locks, ignore_errors=True)
-        self.env = dict(os.environ, KUVO_HEAVY_DIR=self.locks, KUVO_HEAVY_LOAD="1000", KUVO_HEAVY_OLD_UNTIL="20000101", KUVO_HEAVY_WAIT="0")
+        self.env = dict(clean_environment(), KUVO_HEAVY_DIR=self.locks, KUVO_HEAVY_LOAD="1000", KUVO_HEAVY_OLD_UNTIL="20000101", KUVO_HEAVY_WAIT="0")
         self.pids = []
 
     def tearDown(self):
@@ -344,7 +388,7 @@ class StoppingTests(unittest.TestCase):
         sleeps) and said so. Returns the process and the child's pid."""
         self.fresh()  # folders of their own for each job: one job's leftovers aren't the next one's
         ready, pidfile = (os.path.join(self.folder, name) for name in ("ready", "pid"))
-        script = f'{child} & echo $! > "{pidfile}"; echo yes > "{ready}"; {job}'
+        script = f'{child} & echo $! > "{pidfile}"; echo "${{KUVO_HEAVY_SLOT-}}" > "{self.folder}/slot"; echo yes > "{ready}"; {job}'
         process = self.run_job(["/bin/sh", "-c", script], kind, env)
         self.ready()
         return process, self.child("pid")
@@ -402,6 +446,28 @@ class StoppingTests(unittest.TestCase):
         process.wait(timeout=30)
         self.over(process)
         self.gone(inner_child, "the inner job's child is still running")
+
+    def test_a_job_on_the_second_phone_slot_ends_with_its_command_too(self):
+        """Slot 1 is taken, so the job is on slot 2: stopped, any way, its command's child ends."""
+        env = dict(self.env, KUVO_HEAVY_SLOTS="2")
+        first, _ = self.start("wait", kind="phone", env=env)
+        try:
+            for how, sig in (("pid", signal.SIGTERM), ("group", signal.SIGINT), ("group", signal.SIGKILL)):
+                with self.subTest(f"{sig.name} to its {how}"):
+                    process, child = self.start("wait", kind="phone", env=env)
+                    with open(os.path.join(self.folder, "slot")) as f:
+                        self.assertEqual(f.read().strip(), "2")
+                    if how == "pid":
+                        process.send_signal(sig)
+                    else:
+                        os.killpg(process.pid, sig)
+                    process.wait(timeout=30)
+                    self.over(process)
+                    self.gone(child, "its command's child is still running")
+        finally:
+            first.send_signal(signal.SIGTERM)
+            first.wait(timeout=30)
+            self.over(first)
 
     def test_the_old_way_lock_changes_nothing(self):
         env = dict(self.env, KUVO_HEAVY_OLD_UNTIL="20991231")

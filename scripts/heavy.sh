@@ -105,6 +105,17 @@ just_taken() {
     fi
 }
 
+# What a phone job knows of its slot, from the slot's lock: a job inside another takes it from the
+# lock it runs under, not from the environment it inherited (a shell started in a slot-2 job keeps
+# slot 2's values).
+slot_env() {
+    if [ "$1" = "$LOCK2" ]; then
+        export KUVO_TEST_SIMULATOR="Kuvo Code Tests 2" KUVO_HEAVY_SLOT=2 KUVO_HEAVY_BUILD_SUFFIX=-2
+    else
+        export KUVO_TEST_SIMULATOR="Kuvo Code Tests" KUVO_HEAVY_SLOT=1 KUVO_HEAVY_BUILD_SUFFIX=
+    fi
+}
+
 # Whether this runs inside a job of this kind (in either slot) or of the old single lock.
 holds_any() {
     held "$LOCK" || { [ -n "$LOCK2" ] && held "$LOCK2"; } || held "$OLD"
@@ -137,13 +148,7 @@ if [ -n "$TAKEN" ]; then
     unset KUVO_HEAVY_HOLDING
     # What runs under this turn knows it holds the lock, for when `ps` can't say.
     KUVO_HEAVY_HELD="${KUVO_HEAVY_HELD:-} $TAKEN:$PPID"
-    if [ "$kind" = phone ]; then
-        if [ "$TAKEN" = "$LOCK2" ]; then
-            export KUVO_TEST_SIMULATOR="Kuvo Code Tests 2" KUVO_HEAVY_SLOT=2 KUVO_HEAVY_BUILD_SUFFIX=-2
-        else
-            export KUVO_TEST_SIMULATOR="Kuvo Code Tests" KUVO_HEAVY_SLOT=1 KUVO_HEAVY_BUILD_SUFFIX=
-        fi
-    fi
+    [ "$kind" != phone ] || slot_env "$TAKEN"
     # While jobs were still started the old way, under one lock for every kind (older checkouts'
     # test-app.sh), one of these waited for them, and held that lock too as it ran.
     if [ "$(date +%Y%m%d)" -le "${KUVO_HEAVY_OLD_UNTIL:-20261026}" ]; then
@@ -158,13 +163,17 @@ if [ -n "$TAKEN" ]; then
 else
     # Inside a job that holds the lock already: on at once.
     if holds_any; then
+        if [ "$kind" = phone ]; then
+            if [ -n "$LOCK2" ] && held "$LOCK2"; then slot_env "$LOCK2"; elif held "$LOCK"; then slot_env "$LOCK"; fi
+        fi
         exec "$@"
     fi
     # Its kind's turn.
     if [ "$SLOTS" = 2 ]; then
         # The first free slot, slot 1 first. Taking one is `lockf` on it, the job's own parent as
-        # before; between the look and the `lockf` another job can take that slot, and this one then
-        # waits for it, which is all the harm of it.
+        # before. Between the look and the `lockf` (a few milliseconds) another job can take that
+        # slot: this one then waits for it, even if the other slot frees first, and with
+        # KUVO_HEAVY_WAIT=0 it waits too. That needs two jobs starting within those milliseconds.
         said=
         while :; do
             for slot in "$LOCK" "$LOCK2"; do
