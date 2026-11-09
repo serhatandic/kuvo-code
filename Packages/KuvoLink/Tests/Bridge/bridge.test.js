@@ -294,7 +294,9 @@ test("files a phone sends with a message are kept on the box, where the agent op
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
   t.after(() => { server.closeAllConnections(); server.close(); });
   const hostKey = link.newKey();
-  const handle = link.engineHandler(() => ({ pid: process.pid, port: server.address().port, password: "s3cret", version: "2.0.32" }));
+  const target = () => ({ pid: process.pid, port: server.address().port, password: "s3cret", version: "2.0.32" });
+  const agents = await runningAs("kuvo-agents", t);
+  const handle = link.engineHandler(target, {}, () => ({ ...target(), pid: agents }));
   const host = new link.LinkHost({ key: hostKey, hello: { v: 1, kind: "machine", name: "m", app: "0" }, authorize: () => true, handle });
   const phone = phoneFor(host, hostKey);
   await phone.open({});
@@ -310,6 +312,15 @@ test("files a phone sends with a message are kept on the box, where the agent op
     assert.equal((await phone.response()).head.s, 200);
     return prompted[session];
   };
+  const video = Buffer.alloc(7_727_609, 42);
+  phone.send({ t: "req", id: id++, m: "POST", p: `kuvo/agents/api/session/ses_video/prompt`, h: { "Content-Type": "application/json" } }, Buffer.from(JSON.stringify({ id: "msg_video", text: "See this", files: [{ name: "video.mp4", uri: `data:video/mp4;base64,${video.toString("base64")}` }] })));
+  assert.equal((await phone.response()).head.s, 200);
+  assert.ok(prompted.ses_video.text.startsWith("See this\n\n<attached-files>"));
+  assert.equal(prompted.ses_video.id, "msg_video");
+  assert.equal(prompted.ses_video.files, undefined);
+  const videoPath = prompted.ses_video.text.split("\n").find(line => line.endsWith("/video.mp4"));
+  assert.ok(videoPath.startsWith(path.join(home, "attachments", "ses_video") + path.sep));
+  assert.deepEqual(fs.readFileSync(videoPath), video);
   // Where the note at the message's end says each file is, under its heading.
   const listed = (text, heading) => {
     const lines = text.split("\n");
