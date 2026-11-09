@@ -123,15 +123,10 @@ final class ClaudeProvider: ProviderRuntime {
         // limits, as of when, for the menu bar, the cards, notices and the host's readers; another
         // account card, none. Spend comes from the logs, as ever.
         if HostLimits.shared.covers(provider.id) {
-            var mapped = ClaudeMappedUsage(plan: nil, lines: [])
-            var warning: String?
-            if provider.id == "claude", let host = HostLimits.shared.lines(for: provider.id, now: now()) {
-                mapped.lines = host.lines
-                mapped.plan = host.plan
-                mapped.readAt = host.readAt
-                warning = host.notice
-            }
-            return await snapshotWithLocalUsage(mapped: mapped, warning: warning)
+            // (Its limits come in as it's drawn, `HostLimits.applied`; with none from this Mac's
+            // own Claude login yet, its bar says when they will.)
+            let waiting = provider.id == "claude" && HostLimits.shared.ownRow(for: provider.id) == nil
+            return await snapshotWithLocalUsage(mapped: ClaudeMappedUsage(plan: nil, lines: []), warning: waiting ? HostLimits.waitingForClaude : nil)
         }
         return await refresh(
             credentialReloadsRemaining: 1,

@@ -11,12 +11,13 @@ extension UsageMenuBar {
         guard let container else { return nil }
         let store = container.dataStore
         let encoder = Self.phoneEncoder
-        // As the Bars view lists them, less those this Mac's box states rows for (the phone reads
-        // those from the box itself, `kuvo/agents/api/kuvo/limits`).
-        let groups = HostLimits.shared.phoneGroups(container.layout.displayGroups)
-        let providers = groups.compactMap { group -> PhoneUsage.Provider? in
+        // As the Bars view lists them; where this Mac's box states rows for a provider, its place,
+        // with only what the box doesn't state (the phone reads the rows from the box itself,
+        // `kuvo/agents/api/kuvo/limits`, and draws them there).
+        let providers = HostLimits.shared.phoneGroups(container.layout.displayGroups).compactMap { group, covers -> PhoneUsage.Provider? in
             let provider = group.provider
             guard let snapshot = store.snapshots[provider.id] else { return nil }
+            let lines = covers == nil ? snapshot.lines : snapshot.lines.filter { if case .progress = $0 { false } else { true } }
             return PhoneUsage.Provider(
                 id: provider.id,
                 name: snapshot.displayName,
@@ -27,7 +28,8 @@ extension UsageMenuBar {
                 refreshed: snapshot.refreshedAt,
                 notice: store.headerNotice(for: provider.id),
                 stale: store.stalenessHint(for: provider.id) == nil ? nil : true,
-                lines: Self.phoneLines(snapshot.lines, encoder: encoder)
+                lines: Self.phoneLines(lines, encoder: encoder),
+                covers: covers
             )
         }
         let usage = PhoneUsage(providers: providers, refreshing: !store.refreshingProviderIDs.isEmpty, refreshed: store.lastRefreshAt)
@@ -108,6 +110,8 @@ private struct PhoneUsage: Encodable {
         var notice: String?
         var stale: Bool?
         var lines: [MetricLine]
+        /// The service whose rows the phone puts here, from this Mac's box, with these lines under the first.
+        var covers: String?
     }
 
     var providers: [Provider]

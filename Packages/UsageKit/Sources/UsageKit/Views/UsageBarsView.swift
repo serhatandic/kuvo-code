@@ -371,6 +371,9 @@ struct ProviderBar: View {
             Text(provider.displayName)
                 .fontWeight(.medium)
                 .lineLimit(1)
+                // A login's own name, and its computer's, are at either end ("Claude · Work · Mac mini").
+                .truncationMode(.middle)
+                .accessibilityLabel(provider.displayName.replacingOccurrences(of: " · ", with: ", "))
             Spacer(minLength: 6)
             if notice != nil {
                 Image(systemName: "exclamationmark.triangle")

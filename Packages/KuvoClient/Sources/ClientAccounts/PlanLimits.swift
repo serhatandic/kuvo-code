@@ -147,9 +147,9 @@ public struct LimitsAccount: Decodable, Hashable, Sendable, Identifiable {
         windows(at: now).max { $0.used < $1.used }
     }
 
-    /// When the oldest of what it shows was read: its "as of".
+    /// When it was last heard of or read: its "as of" (a turn tells one window, the rest stay as read).
     public func readAt(now: Date) -> Date? {
-        windows(at: now).map(\.read).min()
+        windows(at: now).map(\.read).max()
     }
 
     /// How old a reading is when it's shown as out of date ("As of …" on the Mac): longer than a
@@ -248,5 +248,40 @@ extension Date {
     /// A box's time: ms since 1970.
     init(milliseconds: Double) {
         self.init(timeIntervalSince1970: milliseconds / 1000)
+    }
+}
+
+/// What a client lists of a computer's usage, in one order on every client: the Mac panel's own
+/// providers (`kuvo/usage`) in its order, where one says it `covers` a service, that box's rows of
+/// it there (the first with what that provider had besides: spend, its trend); then the box's
+/// other rows (a machine has no panel: all of them).
+public enum UsageListing {
+    public enum Item<Panel> {
+        case panel(Panel)
+        /// A box's row, with the panel's entry whose other lines go under it.
+        case account(LimitsAccount, below: Panel?)
+    }
+
+    public static func items<Panel>(panel: [Panel], covers: (Panel) -> String?, accounts: [LimitsAccount]) -> [Item<Panel>] {
+        var items: [Item<Panel>] = []
+        var placed = Set<String>()
+        for entry in panel {
+            guard let service = covers(entry) else {
+                items.append(.panel(entry))
+                continue
+            }
+            let rows = accounts.filter { $0.service == service && !placed.contains($0.provider) }
+            // (Not read from the box yet: what the panel has, as it is.)
+            guard !rows.isEmpty else {
+                items.append(.panel(entry))
+                continue
+            }
+            for (index, row) in rows.enumerated() {
+                items.append(.account(row, below: index == 0 ? entry : nil))
+                placed.insert(row.provider)
+            }
+        }
+        for row in accounts where !placed.contains(row.provider) { items.append(.account(row, below: nil)) }
+        return items
     }
 }

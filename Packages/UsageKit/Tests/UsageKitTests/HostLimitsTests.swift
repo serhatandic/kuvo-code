@@ -51,13 +51,16 @@ final class HostLimitsTests: XCTestCase {
         let entries = limits.entries(groups: [group("claude"), group("cursor")]) { _ in false }
         XCTAssertEqual(names(entries), ["panel:claude", "Claude · mini", "panel:cursor"])
         // A phone gets the panel's own Claude: this Mac's box has no row for it.
-        XCTAssertEqual(limits.phoneGroups([group("claude"), group("cursor")]).map(\.provider.id), ["claude", "cursor"])
+        XCTAssertEqual(limits.phoneGroups([group("claude"), group("cursor")]).map { $0.group.provider.id + ($0.covers.map { ">" + $0 } ?? "") }, ["claude", "cursor"])
     }
 
-    func testAPhoneGetsThePanelLessWhatThisMacsBoxStates() {
+    func testAPhoneGetsThePanelInOrderWithWhereThisMacsBoxRowsGo() {
         let limits = HostLimits()
         limits.update(rows: [row("this Mac/claude-code", "claude", "Claude"), row("this Mac/openrouter", "openrouter", "OpenRouter")], covered: ["claude", "openrouter", "copilot"])
-        XCTAssertEqual(limits.phoneGroups([group("claude"), group("claude@ab12cd34"), group("copilot"), group("openrouter"), group("cursor")]).map(\.provider.id), ["copilot", "cursor"])
+        // Claude's place (once for its account cards) and OpenRouter's, marked; Copilot, covered with
+        // no row here, as the panel's own.
+        XCTAssertEqual(limits.phoneGroups([group("cursor"), group("claude"), group("claude@ab12cd34"), group("copilot"), group("openrouter")]).map { $0.group.provider.id + ($0.covers.map { ">" + $0 } ?? "") },
+                       ["cursor", "claude>claude", "copilot", "openrouter>openrouter"])
     }
 
     func testACoveredProviderTheHostHasNoRowForYetKeepsItsOwnBar() {
@@ -125,12 +128,12 @@ final class HostLimitsTests: XCTestCase {
         ], covered: ["claude"])
         defer { HostLimits.shared.update(rows: [], covered: []) }
 
-        let snapshot = await provider.refresh()
+        let read = await provider.refresh()
+        let snapshot = try XCTUnwrap(HostLimits.shared.applied(to: ["claude": read], now: now)["claude"])
 
         // Anthropic isn't asked with your own login: the menu bar, the cards and the notices read the box's.
         XCTAssertEqual(httpClient.requests.count, 0)
         XCTAssertEqual(snapshot.plan, "Max 20x")
-        XCTAssertEqual(snapshot.refreshedAt, now.addingTimeInterval(-120))
         guard case .progress(_, let used, _, _, let resetsAt, _, _)? = snapshot.lines.first(where: { $0.label == "Session" }) else { return XCTFail("no Session") }
         XCTAssertEqual(used, 42)
         XCTAssertEqual(resetsAt, now.addingTimeInterval(3_600))
@@ -155,11 +158,48 @@ final class HostLimitsTests: XCTestCase {
         ], covered: ["claude"])
         defer { HostLimits.shared.update(rows: [], covered: []) }
 
-        let snapshot = await provider.refresh()
+        let read = await provider.refresh()
+        let snapshot = try XCTUnwrap(HostLimits.shared.applied(to: ["claude": read], now: now)["claude"])
 
         XCTAssertNil(snapshot.errorCategory)
         XCTAssertNotNil(snapshot.lines.first(where: { $0.label == "Session" }))
         XCTAssertEqual(snapshot.warning, "Anthropic is turning away reads of the plan's limits for now.")
         XCTAssertEqual(httpClient.requests.count, 0)
+    }
+
+    func testAnyCoveredProvidersReadingTakesThisMacsOwnLoginsNumbersWhileTheyreCurrent() {
+        let now = Date(timeIntervalSince1970: 2_000_000_000)
+        let limits = HostLimits()
+        limits.update(rows: [
+            HostLimitRow(id: "this Mac/github-copilot", providerID: "copilot", name: "Copilot", meters: [
+                HostLimitRow.Meter(title: "Premium requests", fraction: 0.6, resetsAt: now.addingTimeInterval(86_400), count: (used: 180, limit: 300, unit: "requests")),
+            ], readAt: now.addingTimeInterval(-60), isOwnLogin: true),
+            HostLimitRow(id: "this Mac/openrouter", providerID: "openrouter", name: "OpenRouter", meters: [HostLimitRow.Meter(title: "Key limit", fraction: 0.1)], readAt: now.addingTimeInterval(-3_600), isOwnLogin: true),
+        ], covered: ["copilot", "openrouter"])
+        let panel = ProviderSnapshot.make(provider: Provider(id: "copilot", displayName: "Copilot", icon: .providerMark("copilot")), plan: "Pro",
+                                          lines: [.progress(label: "Credits", used: 10, limit: 300, format: .count(suffix: "requests"), resetsAt: nil, periodDurationMs: nil)], refreshedAt: now)
+        let stale = ProviderSnapshot.make(provider: Provider(id: "openrouter", displayName: "OpenRouter", icon: .providerMark("openrouter")), plan: nil,
+                                          lines: [.progress(label: "Mine", used: 50, limit: 100, format: .percent, resetsAt: nil, periodDurationMs: nil)], refreshedAt: now)
+        let applied = limits.applied(to: ["copilot": panel, "openrouter": stale], now: now)
+        guard case .progress(let label, let used, let limit, _, _, _, _)? = applied["copilot"]?.lines.first else { return XCTFail("no meter") }
+        XCTAssertEqual([label, "\(used)", "\(limit)"], ["Premium requests", "180.0", "300.0"])
+        XCTAssertEqual(applied["copilot"]?.lines.count, 1)
+        // Read over half an hour ago: the panel's own, as it was.
+        XCTAssertEqual(applied["openrouter"]?.lines.first?.label, "Mine")
+    }
+
+    func testClaudesBarSaysWhenItsLimitsWillShowWhileThisMacHasNone() async throws {
+        let now = OpenUsageISO8601.date(from: "2026-02-20T16:00:00.000Z")!
+        let provider = ClaudeProvider(
+            authStore: ClaudeAuthStore(environment: FakeEnvironment(), files: FakeFiles(), keychain: FakeKeychain(), now: { now }),
+            usageClient: ClaudeUsageClient(httpClient: FakeHTTPClient(response: HTTPResponse(statusCode: 200, headers: [:], body: Data()))),
+            logUsageScanner: ClaudeLogFixture.scanner(home: try ClaudeLogFixture.makeHome(files: [:])),
+            now: { now },
+            pricing: { TestPricing.bundled }
+        )
+        HostLimits.shared.update(rows: [], covered: ["claude"])
+        defer { HostLimits.shared.update(rows: [], covered: []) }
+        let snapshot = await provider.refresh()
+        XCTAssertEqual(snapshot.warning, HostLimits.waitingForClaude)
     }
 }

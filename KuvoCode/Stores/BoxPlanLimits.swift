@@ -17,6 +17,8 @@ final class BoxPlanLimits {
     /// Where each box's bridge is, to ask it again.
     private var apis: [String: OpenCodeAPI] = [:]
     private var reads: [String: Task<Void, Never>] = [:]
+    /// Each box's answers, counted: one asked before another came back isn't kept over it.
+    private var asked: [String: Int] = [:]
     /// The services this Mac's box reads, as it last said: kept between launches, so the panel's own
     /// rows (yours, outside Kuvo Code) don't show while the box starts.
     private var services = Set(UserDefaults.standard.stringArray(forKey: BoxPlanLimits.servicesKey) ?? [])
@@ -51,15 +53,15 @@ final class BoxPlanLimits {
         publish()
     }
 
-    private func read(_ key: String) {
+    private func read(_ key: String, tries: Int = 3) {
         guard let api = apis[key] else { return }
         reads[key]?.cancel()
+        let number = next(key)
         reads[key] = Task { [weak self] in
             do {
                 let limits = try await api.client.send(try api.client.request("GET", BoxLimits.bridgePath), as: DataEnvelope<BoxLimits>.self).data
                 guard !Task.isCancelled, let self else { return }
-                self.boxes[key] = limits
-                self.publish()
+                self.keep(limits, from: key, number: number)
             } catch let error as ServerError where error.status == 404 {
                 // A box from before it read them: none from it, and this Mac's covers nothing.
                 guard !Task.isCancelled, let self else { return }
@@ -67,7 +69,13 @@ final class BoxPlanLimits {
                 if key.isEmpty { self.forgetServices() }
                 self.publish()
             } catch {
-                // One that's starting: none from it yet.
+                // One that's starting: asked again in a while, a few times.
+                if tries > 1, !Task.isCancelled {
+                    try? await Task.sleep(for: .seconds(30))
+                    guard !Task.isCancelled, let self, self.apis[key] != nil else { return }
+                    self.read(key, tries: tries - 1)
+                    return
+                }
                 if !Task.isCancelled { log.info("plan limits of \(key.isEmpty ? "this Mac" : key, privacy: .public): \(String(describing: error), privacy: .public)") }
             }
         }
@@ -76,13 +84,28 @@ final class BoxPlanLimits {
     /// Asks every box to read them again now (a bar's Refresh): each reads what its makers allow.
     func refreshAll() {
         for (key, api) in apis {
+            let number = next(key)
             Task { [weak self] in
                 let limits = try? await api.client.send(try api.client.request("POST", BoxLimits.bridgeRefreshPath), as: DataEnvelope<BoxLimits>.self, patience: .seconds(60)).data
                 guard let self, let limits, self.apis[key] != nil else { return }
-                self.boxes[key] = limits
-                self.publish()
+                self.keep(limits, from: key, number: number)
             }
         }
+    }
+
+    private var answered: [String: Int] = [:]
+
+    private func next(_ key: String) -> Int {
+        asked[key, default: 0] += 1
+        return asked[key]!
+    }
+
+    /// An answer, kept unless one asked after it came back first.
+    private func keep(_ limits: BoxLimits, from key: String, number: Int) {
+        guard number > answered[key, default: 0] else { return }
+        answered[key] = number
+        boxes[key] = limits
+        publish()
     }
 
     private func forgetServices() {
@@ -102,13 +125,23 @@ final class BoxPlanLimits {
         // This Mac's first, then each machine's by name.
         let keys = boxes.keys.sorted { a, b in a.isEmpty != b.isEmpty ? a.isEmpty : a.localizedStandardCompare(b) == .orderedAscending }
         let rows = keys.flatMap { key in
-            (boxes[key]?.accounts ?? []).map { Self.row($0, machine: key.isEmpty ? nil : key, now: now) }
+            let accounts = boxes[key]?.accounts ?? []
+            return accounts.map { Self.row($0, machine: key.isEmpty ? nil : key, own: key.isEmpty && Self.isOwnLogin($0, among: accounts), now: now) }
         }
         HostLimits.shared.update(rows: rows, covered: services)
     }
 
     /// One account as the panel draws it: "Claude · Work", and on a machine its name after.
-    static func row(_ account: LimitsAccount, machine: String?, now: Date) -> HostLimitRow {
+    /// The login whose numbers the panel's own card of its service takes, as the panel reads that
+    /// service: the engine's sign-in where there's one (ChatGPT's for Codex, SuperGrok's for Grok,
+    /// and all of Copilot's and the rest), else the agent's own sign-in (Claude's).
+    static func isOwnLogin(_ account: LimitsAccount, among accounts: [LimitsAccount]) -> Bool {
+        let same = accounts.filter { $0.service == account.service }
+        let own = same.first { $0.agent == nil } ?? same.first { $0.account == "default" }
+        return own?.provider == account.provider
+    }
+
+    static func row(_ account: LimitsAccount, machine: String?, own: Bool = false, now: Date) -> HostLimitRow {
         HostLimitRow(
             // (No machine's address has a space.)
             id: "\(machine ?? "this Mac")/\(account.provider)",
@@ -125,7 +158,7 @@ final class BoxPlanLimits {
             notice: account.problem?.message,
             readAt: account.readAt(now: now),
             isLocal: machine == nil,
-            isOwnLogin: machine == nil && account.account == "default"
+            isOwnLogin: own
         )
     }
 }

@@ -96,33 +96,68 @@ public final class HostLimits {
     @ObservationIgnored public var refresh: (() -> Void)?
 
     public func update(rows: [HostLimitRow], covered: Set<String>) {
-        let before = ownReading(in: self.rows, covered: self.covered)
+        let changed = self.rows != rows || self.covered != covered
         if self.rows != rows { self.rows = rows }
         if self.covered != covered { self.covered = covered }
-        // The panel's own Claude reading takes this Mac's own login's numbers: read again when they
-        // change (not their read times), which asks no maker anything. (Only Claude's does.)
-        if ownReading(in: rows, covered: covered) != before { onLocalChange?(["claude"]) }
+        // The panel's readings of covered providers take the host's numbers as they're shown: drawn
+        // again (nothing is asked of any maker).
+        if changed { onChange?() }
     }
 
-    private func ownReading(in rows: [HostLimitRow], covered: Set<String>) -> [String]? {
-        guard covered.contains("claude"), let row = rows.first(where: { $0.isOwnLogin && ProviderAccountID.family(of: $0.providerID) == "claude" }) else { return nil }
-        return [row.plan ?? "", row.notice ?? ""] + row.meters.map { "\($0.title) \(Int(($0.fraction * 100).rounded())) \($0.resetsAt?.timeIntervalSince1970 ?? 0)" }
-    }
+    /// Claude's bar while this Mac's box has none of its own login's limits yet: a Mac's box hears
+    /// them only as Claude runs in Kuvo Code (no read of Anthropic, nor of your own sign-in).
+    public static let waitingForClaude = "Its limits show once Claude has had a turn in Kuvo Code."
 
-    /// Told which covered providers' local rows changed (the panel reads those again).
-    @ObservationIgnored var onLocalChange: ((Set<String>) -> Void)?
+    /// Told when the rows change: the panel draws its readings again with them.
+    @ObservationIgnored var onChange: (() -> Void)?
 
-    /// A covered provider's limits as the panel's own lines, from this Mac's own login's row (its
-    /// agent's own sign-in, listed first): nil when the host has none for it.
-    func lines(for providerID: String, now: Date = .now) -> (lines: [MetricLine], plan: String?, readAt: Date?, notice: String?)? {
+    /// How old the host's numbers may be before a reading leaves them out and its bar says "As of":
+    /// longer than a box leaves between reads (10 to 15 minutes), as the phone says it too
+    /// (KuvoClient's `LimitsAccount.outdatedAfter`).
+    static let outdated: TimeInterval = 30 * 60
+
+    /// This Mac's own login's row for a covered provider (Claude's agent's own sign-in, the engine's
+    /// sign-in for its others): the panel's own card of it takes its numbers.
+    func ownRow(for providerID: String) -> HostLimitRow? {
         let family = ProviderAccountID.family(of: providerID)
-        guard covers(family), let row = rows.first(where: { $0.isOwnLogin && ProviderAccountID.family(of: $0.providerID) == family }) else { return nil }
+        guard providerID == family, covers(family) else { return nil }
+        return rows.first { $0.isOwnLogin && ProviderAccountID.family(of: $0.providerID) == family }
+    }
+
+    /// A covered provider's limits as the panel's own lines, from this Mac's own login's row; nil
+    /// with none, or none read in the last half hour.
+    func lines(for providerID: String, now: Date = .now) -> (lines: [MetricLine], plan: String?, readAt: Date?, notice: String?)? {
+        guard let row = ownRow(for: providerID) else { return nil }
+        if let readAt = row.readAt, now.timeIntervalSince(readAt) > Self.outdated { return nil }
         let lines: [MetricLine] = row.meters.compactMap { meter in
             if let resetsAt = meter.resetsAt, resetsAt <= now { return nil }
+            if let count = meter.count, count.limit > 0 {
+                return .progress(label: meter.title, used: count.used, limit: count.limit,
+                                 format: count.unit == "usd" ? .dollars : .count(suffix: count.unit), resetsAt: meter.resetsAt, periodDurationMs: meter.periodMinutes.map { $0 * 60_000 })
+            }
             return .progress(label: meter.title, used: ProviderParse.clampPercent(meter.fraction * 100), limit: 100, format: .percent,
                              resetsAt: meter.resetsAt, periodDurationMs: meter.periodMinutes.map { $0 * 60_000 })
         }
         return (lines, row.plan, row.readAt, row.notice)
+    }
+
+    /// The panel's readings with the host's numbers for each covered provider (fork addition): its
+    /// own limit lines give way to this Mac's own login's, read by its box, so the menu bar, the
+    /// cards, notices and the host's own readers show what the bars do. What else it has (spend,
+    /// its trend) stays.
+    func applied(to snapshots: [String: ProviderSnapshot], now: Date = .now) -> [String: ProviderSnapshot] {
+        guard !covered.isEmpty else { return snapshots }
+        var result = snapshots
+        for (id, snapshot) in snapshots {
+            guard let host = lines(for: id, now: now) else { continue }
+            var applied = snapshot
+            applied.lines = host.lines + snapshot.lines.filter { if case .progress = $0 { false } else { true } }
+            applied.plan = host.plan ?? snapshot.plan
+            applied.warning = host.notice
+            applied.errorCategory = nil
+            result[id] = applied
+        }
+        return result
     }
 
     public func covers(_ providerID: String) -> Bool {
@@ -160,11 +195,17 @@ public final class HostLimits {
         return entries
     }
 
-    /// The panel's own bars a phone gets (`kuvo/usage`): all but those this Mac's box states rows for.
-    func phoneGroups(_ groups: [ProviderGroup]) -> [ProviderGroup] {
-        groups.filter { group in
+    /// The panel's own bars a phone gets (`kuvo/usage`), in the Bars view's order: those this
+    /// Mac's box states rows for say so (`covers`, their service), keeping only what the box doesn't
+    /// state (spend, its trend), which the phone shows under the first of those rows, where they go.
+    func phoneGroups(_ groups: [ProviderGroup]) -> [(group: ProviderGroup, covers: String?)] {
+        var placed = Set<String>()
+        return groups.compactMap { group in
             let family = ProviderAccountID.family(of: group.provider.id)
-            return !(covers(family) && rows.contains { $0.isLocal && ProviderAccountID.family(of: $0.providerID) == family })
+            guard covers(family), rows.contains(where: { $0.isLocal && ProviderAccountID.family(of: $0.providerID) == family }) else { return (group, nil) }
+            // (One place per service: its other account cards go with it.)
+            guard placed.insert(family).inserted else { return nil }
+            return (group, family)
         }
     }
 
@@ -221,15 +262,11 @@ enum HostLimitData {
         return rows
     }
 
-    /// How old a box's reading is when it says "As of": longer than the box's own spacing (10 to
-    /// 15 minutes), as the phone says it (KuvoClient's `LimitsAccount.outdatedAfter`).
-    static let outdated: TimeInterval = 30 * 60
-
     /// "As of …" once what it shows was read longer ago than that.
     static func staleness(_ row: HostLimitRow, now: Date = .now) -> StalenessHint? {
         guard let readAt = row.readAt else { return nil }
         let age = now.timeIntervalSince(readAt)
-        guard age >= outdated, let duration = Formatters.compactDuration(age) else { return nil }
+        guard age >= HostLimits.outdated, let duration = Formatters.compactDuration(age) else { return nil }
         let when = readAt.formatted(date: Calendar.current.isDate(readAt, inSameDayAs: now) ? .omitted : .abbreviated, time: .shortened)
         return StalenessHint(label: "As of \(when)", tooltip: "Last read \(duration) ago")
     }

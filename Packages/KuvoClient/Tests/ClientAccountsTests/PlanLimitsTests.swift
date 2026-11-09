@@ -48,10 +48,10 @@ struct PlanLimitsTests {
         #expect(limits.accounts[1].tightest(at: now) == nil)
         #expect(limits.accounts[1].problem?.kind == "rate-limited")
         #expect(limits.accounts[0].tightest(at: now)?.id == "five_hour")
-        // As of its oldest window shown; out of date once that's over half an hour.
-        #expect(limits.accounts[0].readAt(now: now) == Date(timeIntervalSince1970: 1_794_150_000))
-        #expect(limits.accounts[0].isOutdated(now: now))
-        #expect(!limits.accounts[0].isOutdated(now: Date(timeIntervalSince1970: 1_794_151_000)))
+        // As of when it was last heard of; out of date once that's over half an hour.
+        #expect(limits.accounts[0].readAt(now: now) == Date(timeIntervalSince1970: 1_794_160_000))
+        #expect(!limits.accounts[0].isOutdated(now: Date(timeIntervalSince1970: 1_794_161_000)))
+        #expect(limits.accounts[0].isOutdated(now: Date(timeIntervalSince1970: 1_794_162_000)))
     }
 
     @Test func theEventCarriesTheAccountsAlone() throws {
@@ -61,5 +61,24 @@ struct PlanLimitsTests {
         // (A box from before it said what service an account is: its agent.)
         #expect(limits.accounts[0].service == "codex")
         #expect(limits.services.isEmpty)
+    }
+
+    /// The Mac panel's providers as `kuvo/usage` lists them: Cursor, Claude's place (covered, its
+    /// spend only), Copilot, OpenRouter's place.
+    struct Entry: Equatable { var id: String; var covers: String? }
+
+    @Test func everyClientListsABoxsRowsWhereTheMacPanelSaysTheyGo() throws {
+        let limits = try BoxLimits.decode(Data(answer.utf8))
+        let panel = [Entry(id: "cursor"), Entry(id: "claude", covers: "claude"), Entry(id: "copilot"), Entry(id: "openrouter", covers: "openrouter")]
+        let listed = UsageListing.items(panel: panel, covers: \.covers, accounts: limits.accounts).map { item -> String in
+            switch item {
+            case .panel(let entry): "panel:\(entry.id)"
+            case .account(let account, let below): account.title + (below.map { " +\($0.id)" } ?? "")
+            }
+        }
+        // The box's Copilot comes after: the panel's own Copilot isn't one it covers here.
+        #expect(listed == ["panel:cursor", "Claude +claude", "Claude · Work", "panel:copilot", "OpenRouter +openrouter", "Copilot"])
+        // A machine's: no panel, every row.
+        #expect(UsageListing.items(panel: [Entry](), covers: \.covers, accounts: limits.accounts).count == 4)
     }
 }
