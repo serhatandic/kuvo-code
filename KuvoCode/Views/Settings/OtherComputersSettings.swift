@@ -69,7 +69,7 @@ struct OtherComputersSettings: View {
                 } footer: {
                     VStack(alignment: .leading, spacing: 4) {
                         // (A footer's own color, as Also Allowed's above it.)
-                        Text("At your own risk: a lost computer or a leaked key could start work here too. Full Access still has to be allowed on \(name) once.")
+                        Text("At your own risk: a lost computer or a leaked key could start work here too. Full Access still has to be allowed on \(name) once. Even off, your other computers can still move bots and chats here, and seat bots here in their group chats.")
                         if let failure {
                             Text(failure).foregroundStyle(.red)
                         }
