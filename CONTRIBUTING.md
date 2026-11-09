@@ -658,6 +658,9 @@ Every change starts from an issue and lands on `main` through a pull request.
      it.
    - **If people using Kuvo Code would notice the change, add a line to
      `CHANGELOG.md`** under Unreleased, saying what they'll see. It becomes
+     (`.gitattributes` merges `CHANGELOG.md` line by line, so branches that
+     each add a line there merge without a conflict; if two edit the same line,
+     both versions stay, so tidy that one by hand.)
      part of the next release's notes, on GitHub and in the app's update
      window. Something new people use (a keyword, a Settings page) can carry a
      "New" mark until it's used: add `<!-- new: keyword/goal -->` (or
