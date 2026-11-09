@@ -895,9 +895,8 @@ struct SidebarView: View {
 
     /// Where a branch came from, for VoiceOver: "Branched from Timer cycle".
     static func origin(of session: Session, in workspace: Workspace) -> String {
-        guard let origin = Branches.origin(of: session) else { return "" }
-        let title = workspace.session(origin.id)?.title ?? "another conversation"
-        return Branches.hint(origin.kind, from: title)
+        let title = Branches.origin(of: session).flatMap { workspace.session($0.id)?.title }
+        return Branches.hint(of: session, from: title) ?? ""
     }
 
     /// Highlighted where it was picked; picked elsewhere (a tab, a new session), in its project.

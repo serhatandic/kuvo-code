@@ -48,6 +48,8 @@ struct PermissionsSettings: View {
         ScrollingSettingsForm {
             SandboxSettings()
 
+            OtherComputersSettings()
+
             Section {
                 ActionChoices(path: Self.path)
             } header: {
@@ -124,6 +126,8 @@ struct PermissionsSettings: View {
         }
         // Again once its engine answers (a machine's, connecting as the page opened).
         .task(id: app.isReady(box)) { if app.isReady(box) { await loadSaved() } }
+        // Whether your other computers may start work here, as its box says now.
+        .task(id: app.isReady(box)) { try? await workspace.readApprovalHere(onBox: box.machine ?? BoxClient.mac) }
         // Its sandbox, as it changes while the page is open.
         .task(id: box) { await Sandboxes.shared.watchState(box.machine ?? BoxClient.mac) }
         // A machine's folder for a rule, from its own folders.

@@ -124,6 +124,19 @@ struct SessionRulesTests {
     /// Sessions an agent started from a conversation (its start_session tool, on a Mac or a
     /// machine, for any kind of agent) show under that conversation too; one started from outside
     /// any conversation stays at the top.
+    @Test func aSessionALeadOnAnotherComputerStartedSaysWhoAndWhere() throws {
+        let far = try session("ses_far", metadata: #"{"kuvo": {"startedBy": "ses_lead", "lead": {"box": "Mini", "key": "k", "name": "Foreman"}}}"#)
+        // Its lead isn't listed here: who started it, and on which computer.
+        #expect(Branches.hint(of: far, from: nil) == "Started from Foreman on Mini")
+        // Listed here (the lead moved here since): by its title, as any other.
+        #expect(Branches.hint(of: far, from: "Foreman") == "Started from Foreman")
+        // Started here by one that isn't listed: as before.
+        let here = try session("ses_here", metadata: #"{"kuvo": {"startedBy": "ses_gone"}}"#)
+        #expect(Branches.hint(of: here, from: nil) == "Started from another conversation")
+        #expect(Branches.lead(of: here) == nil)
+        #expect(Branches.hint(of: try session("ses_mine"), from: nil) == nil)
+    }
+
     @Test func sessionsAnAgentStartedShowUnderIt() throws {
         let demo = try session("ses_demo")
         let docs = try session("ses_docs", created: 5, metadata: #"{"kuvo": {"startedBy": "ses_demo", "beside": true}, "kuvoAgent": "codex"}"#)

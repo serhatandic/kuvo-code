@@ -50,6 +50,24 @@ public enum Branches {
             .min { $0.time.created < $1.time.created }?.id
     }
 
+    /// The lead on another of your computers that started `session`, as its box marks it
+    /// (`kuvo.lead`: the lead's name and its computer, as that box names it); nil for one started
+    /// on the computer it's on.
+    public static func lead(of session: Session) -> (name: String, computer: String)? {
+        guard let lead = session.metadata?["kuvo"]?["lead"], let name = lead["name"]?.string, !name.isEmpty,
+              let computer = lead["box"]?.string, !computer.isEmpty else { return nil }
+        return (name, computer)
+    }
+
+    /// The hint for a conversation that came from `title`'s; started by a lead on another
+    /// computer that isn't listed here, from that lead there: "Started from Foreman on Mini".
+    public static func hint(of session: Session, from title: String?) -> String? {
+        guard let origin = origin(of: session) else { return nil }
+        if let title { return hint(origin.kind, from: title) }
+        if origin.kind == .started, let lead = lead(of: session) { return hint(.started, from: "\(lead.name) on \(lead.computer)") }
+        return hint(origin.kind, from: "another conversation")
+    }
+
     /// The sidebar's hint for a conversation that came from `title`'s.
     public static func hint(_ kind: Kind, from title: String) -> String {
         switch kind {
