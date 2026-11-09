@@ -43,8 +43,9 @@ case "${GITHUB_EVENT_NAME:-}" in
     push | workflow_dispatch) ;;
     *) refuse "A ${GITHUB_EVENT_NAME:-unknown} event's job." ;;
 esac
+# The same rule as the workflows' `runs-on` and the orchestrator's (scripts/ci-runner/common.sh).
 case "${GITHUB_REF:-}" in
-    refs/heads/main | refs/tags/v*) ;;
+    refs/heads/main | refs/tags/v[0-9]*) ;;
     *) refuse "A job for ${GITHUB_REF:-an unknown ref}." ;;
 esac
 # The event itself, as GitHub sent it: none for a pull request reaches here.
@@ -55,5 +56,9 @@ fi
 [[ "$(/usr/bin/plutil -extract repository.full_name raw -o - "$GITHUB_EVENT_PATH" 2>/dev/null)" == "$REPOSITORY" ]] \
     || refuse "The event isn't from $REPOSITORY."
 
+# The orchestrator reads this back (common.sh, HOOK_MARKER) and stops the VM if it's not there:
+# proof that this hook ran for the job, and not only that the runner was told to run it.
+[[ "${GITHUB_RUN_ID:-}" =~ ^[0-9]+$ ]] || refuse "The job has no run ID."
+printf '%s\n' "$GITHUB_RUN_ID" > /private/var/tmp/kuvo-ci-job-started || refuse "Couldn't leave the marker for the host."
 echo "Taking $GITHUB_EVENT_NAME on $GITHUB_REF (${GITHUB_WORKFLOW_REF:-}) by ${GITHUB_ACTOR:-unknown}, in a fresh VM."
 exit 0

@@ -107,7 +107,12 @@ jobs:
     runs-on: >-
       ${{ github.repository == 'serhatandic/kuvo-code'
           && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
-          && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+          && (github.ref == 'refs/heads/main'
+              || startsWith(github.ref, 'refs/tags/v0') || startsWith(github.ref, 'refs/tags/v1')
+              || startsWith(github.ref, 'refs/tags/v2') || startsWith(github.ref, 'refs/tags/v3')
+              || startsWith(github.ref, 'refs/tags/v4') || startsWith(github.ref, 'refs/tags/v5')
+              || startsWith(github.ref, 'refs/tags/v6') || startsWith(github.ref, 'refs/tags/v7')
+              || startsWith(github.ref, 'refs/tags/v8') || startsWith(github.ref, 'refs/tags/v9'))
           && vars.KUVO_MINI != 'off'
           && fromJSON('["self-hosted", "macOS", "ARM64", "kuvo-mini"]')
           || 'xcode-27' }}

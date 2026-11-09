@@ -6,7 +6,7 @@
 #
 #   scripts/ci-runner/build-image.sh
 #
-# It builds into /Users/Shared/kuvo-ci/tart (Tart's home for it), keeps the image before as
+# It builds into /Users/Shared/kuvo-ci/tart (Tart's home for it, with Homebrew's Tart), keeps the image before as
 # kuvo-ci-golden.previous, and stamps /Users/Shared/kuvo-ci/golden-version; the orchestrator
 # takes the new image between jobs. Nothing secret goes in: jobs bring their own secrets, and
 # the image is readable by ci.
@@ -28,6 +28,8 @@ command -v tart >/dev/null || fail "Tart isn't installed (brew install openai/to
     || fail "$SHARED isn't your folder: run scripts/ci-runner/setup.sh first."
 mkdir -p "$SHARED_TART"
 chmod 755 "$SHARED_TART"
+# Big, and rebuilt whenever it's needed.
+tmutil addexclusion "$SHARED_TART" 2>/dev/null || true
 export TART_HOME="$SHARED_TART"
 
 XCODE="${XCODE:-$(xcode-select -p)}"
@@ -66,9 +68,11 @@ pause_ci
 tart clone "$BASE_IMAGE" "$build"
 tart set "$build" --cpu "$VM_CPUS" --memory "$VM_MEMORY_MB" --disk-size "$VM_DISK_GB"
 
-# Built on the jobs' own network and flags (common.sh): nothing on this Mac, the LAN or Tailscale,
-# and nothing shared with it.
-flags="$(vm_run_flags)" || fail "No VM without its network's rules."
+# Nothing shared with it. Its network is Tart's own (NAT), not the jobs' softnet: that softnet
+# runs only for ci (setup.sh), and Homebrew's isn't setuid any more. What runs in it is only
+# what's named here: the base image pinned by digest, this Mac's Xcode, the runner checked
+# against its SHA-256, and the hook. The jobs' network is checked with check-isolation.sh.
+flags="--no-graphics --no-clipboard --no-audio --no-usb-accessories"
 log="$(mktemp -t kuvo-ci-build)"
 # shellcheck disable=SC2086 # the flags are words of their own
 tart run $flags "$build" > "$log" 2>&1 &
@@ -85,7 +89,7 @@ for _ in $(seq 1 120); do
 done
 guest true || fail "The VM's guest agent never answered."
 
-# Public DNS first, since the gateway's is blocked; Tart's agent needs no network to set it.
+# Public DNS, since the jobs' gateway is blocked (softnet); Tart's agent needs no network to set it.
 echo "Public DNS…"
 guest 'networksetup -listallnetworkservices | tail -n +2 | sed "s/^\*//" | while IFS= read -r service; do sudo networksetup -setdnsservers "$service" 1.1.1.1 8.8.8.8; done; scutil --dns | awk "/nameserver/ && n++ < 2"'
 
