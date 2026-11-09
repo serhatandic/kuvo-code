@@ -17,7 +17,7 @@ final class ConversationScroller {
 
     /// Whether to keep the newest in view: true until you scroll up, true again once you scroll
     /// back to the end. Set only when it changes (`follow`): each setting draws the conversation again.
-    var followsEnd = true
+    private(set) var followsEnd = true
     /// The end is in view, over the composer: no way back to it is needed, whether it's
     /// followed or not (Find stops following it). Set only when it changes, as `followsEnd`.
     fileprivate(set) var seesEnd = true
@@ -57,9 +57,15 @@ final class ConversationScroller {
         heldFor = []
         if followsEnd != follows {
             followsEnd = follows
+            followChanged?(follows)
             sees(atEnd: atEnd)
         }
     }
+
+    /// Told as soon as following the end starts or stops: the rows keep what you read in place
+    /// by it. (Told only as the view moved, they went on following once a scroll up had stopped,
+    /// as where it stopped decides: what changed above what you read then moved it.)
+    @ObservationIgnored fileprivate var followChanged: ((Bool) -> Void)?
 
     /// The steps you opened while following the end, which you left it to read. Going anywhere
     /// yourself since (each way goes through `follow`) means you left it for good.
@@ -179,14 +185,11 @@ struct ConversationScroll<Rows: View>: View {
             }
             .environment(\.scrollAnchor, anchor)
             .onAppear {
-                anchor.stopFollowing = { [scroller] in scroller.follow(false) }
-                anchor.reading = { [scroller, weak anchor] id, isOpen in
-                    scroller.reading(id, isOpen: isOpen)
-                    // At once: the next row to come mustn't count as followed.
-                    anchor?.isFollowingEnd = scroller.followsEnd
-                }
+                wire()
                 anchor.quote = quote
             }
+            // Another scroller for the same view: it's the one told and asked.
+            .onChange(of: ObjectIdentifier(scroller)) { wire() }
             .padding(.horizontal, Metrics.gutter)
             // Room under the card's header, which the conversation scrolls beneath (and under
             // Find's bar while it's open).
@@ -343,7 +346,6 @@ struct ConversationScroll<Rows: View>: View {
         // Where it's scrolled to, for going to a place (a plain value, read only then).
         .onScrollGeometryChange(for: ScrollSpot.Geometry.self) { ScrollSpot.Geometry(offset: $0.contentOffset.y, height: $0.containerSize.height) } action: { _, new in
             spot.geometry = new
-            anchor.isFollowingEnd = scroller.followsEnd
             anchor.viewMoved(offset: new.offset, height: new.height)
             if let nearTop, !scroller.followsEnd, new.offset < new.height * 2 { nearTop() }
         }
@@ -523,6 +525,16 @@ extension ConversationScroll {
         #else
         VStack(alignment: .leading, spacing: spacing, content: content)
         #endif
+    }
+
+    /// The rows and the scroller, each told what the other does. The rows hear whether the end is
+    /// followed at once, whatever started or stopped it: the next row to come mustn't count as
+    /// followed, nor what changes above what you read.
+    fileprivate func wire() {
+        anchor.stopFollowing = { [scroller] in scroller.follow(false) }
+        anchor.reading = { [scroller] id, isOpen in scroller.reading(id, isOpen: isOpen) }
+        anchor.isFollowingEnd = scroller.followsEnd
+        scroller.followChanged = { [weak anchor] in anchor?.isFollowingEnd = $0 }
     }
 
     fileprivate func toEnd(_ proxy: ScrollViewProxy) {
