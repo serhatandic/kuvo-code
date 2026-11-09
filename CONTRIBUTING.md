@@ -145,12 +145,22 @@ waits for jobs of the same kind (they share build folders) and runs the other
 kinds alongside:
 
 ```sh
-scripts/heavy.sh mac xcodebuild … -derivedDataPath "$(getconf DARWIN_USER_CACHE_DIR)KuvoShared-MacBuild" …
+scripts/heavy.sh mac scripts/test-app.sh
+scripts/heavy.sh mac-build sh -c 'xcodebuild … -derivedDataPath "$(getconf DARWIN_USER_CACHE_DIR)KuvoShared-MacBuild$KUVO_HEAVY_BUILD_SUFFIX" …'
+scripts/heavy.sh mac-build sh -c 'cd Packages/KuvoClient && swift test'
 scripts/heavy.sh box sh -c 'cd Packages/Box && bun test'
 ```
 
-- `mac`: the Mac app's builds and tests (`KuvoShared-MacBuild`, `KuvoCodeTests-build`), and the
-  packages' `swift build` and `swift test`;
+- `mac`: the Mac app's UI test suite, `scripts/test-app.sh` (`KuvoCodeTests-build`), which drives the
+  real window and pointer, so one runs at a time and nothing else of this kind beside it. Older
+  scripts also say `mac` for a plain build, which still works, under the same lock;
+- `mac-build`: what doesn't drive the UI: the Mac's `xcodebuild` (builds, demo builds) and the
+  packages' `swift build` and `swift test`. It has two slots, so two of these run at once, and
+  beside the app suite, since it doesn't take `mac`'s lock. A job takes whichever slot is free first
+  and finds it in `KUVO_HEAVY_SLOT` and `KUVO_HEAVY_BUILD_SUFFIX` (`-1` or `-2`): build in
+  `KuvoShared-MacBuild$KUVO_HEAVY_BUILD_SUFFIX`, never in `KuvoShared-MacBuild` itself (older
+  scripts' `mac` builds there) or `KuvoCodeTests-build` (the app suite's). A package's `.build` and
+  a checkout's `build/` are its own to each checkout;
 - `phone`: the iPhone app's (`KuvoShared-PhoneBuild`, `KuvoCodeMobileTests-build`). It has two
   slots, so two phone test runs go at once, each on a simulator of its own: "Kuvo Code Tests" in
   slot 1 and "Kuvo Code Tests 2" in slot 2, both fixed (the phone's `scripts/test-app.sh` makes each

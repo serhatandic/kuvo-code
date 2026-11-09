@@ -1,5 +1,6 @@
 """scripts/heavy.sh: jobs of different kinds run together, two of one kind queue (two phone jobs that
-handle slots run at once, each with a simulator of its own), a job started the
+handle slots run at once, each with a simulator of its own, and two mac-build jobs, each with a build
+folder of its own, beside the app suite's mac), a job started the
 old way (under the one lock for every kind) holds up every kind, and a busy Mac holds a job back.
 Each test has locks of its own (KUVO_HEAVY_DIR), and asks with KUVO_HEAVY_WAIT=0, which says what a
 job would wait for instead of waiting."""
@@ -233,6 +234,129 @@ class HeavyTests(unittest.TestCase):
             self.assertIn("Another phone job is running", result.stderr)
         finally:
             new.let_go()
+
+    def lock(self, name):
+        return os.path.join(self.locks, f"kuvo-code-heavy-{name}-{os.getuid()}.lock")
+
+    def test_two_mac_build_jobs_run_at_once_each_in_a_build_folder_of_its_own_and_a_third_waits(self):
+        # Any caller: nothing to opt into.
+        first = Held([HEAVY, "mac-build"], self.env)
+        try:
+            second = Held([HEAVY, "mac-build"], self.env)
+            try:
+                self.assertEqual(first.seen, "|1|-1")
+                self.assertEqual(second.seen, "|2|-2")
+                code, said = self.run_heavy("mac-build", "true")
+                self.assertEqual(code, WAITS)
+                self.assertIn("Another mac-build job is running", said)
+                self.assertEqual(self.run_heavy("box", "true")[0], 0)
+            finally:
+                second.let_go()
+        finally:
+            first.let_go()
+        self.assertEqual(self.run_heavy("mac-build", "true")[0], 0)
+
+    def test_a_third_mac_build_job_takes_whichever_slot_frees_first(self):
+        first, second = Held([HEAVY, "mac-build"], self.env), Held([HEAVY, "mac-build"], self.env)
+        third = None
+        try:
+            third = subprocess.Popen([HEAVY, "mac-build", "/bin/sh", "-c", 'echo "$KUVO_HEAVY_SLOT$KUVO_HEAVY_BUILD_SUFFIX"'], env=self.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            self.assertIn("Waiting for another mac-build job", third.stderr.readline())
+            self.assertIsNone(third.poll(), "it ran with both slots taken")
+            second.let_go()
+            out, _ = third.communicate(timeout=30)
+            self.assertEqual((third.returncode, out), (0, "2-2\n"))
+        finally:
+            first.let_go()
+            if third is not None and third.poll() is None:
+                third.kill()
+                third.wait()
+
+    def test_a_mac_build_job_runs_while_the_app_suite_holds_the_mac_lock_and_the_other_way_round(self):
+        suite = Held([HEAVY, "mac"], self.env)
+        try:
+            self.assertEqual(self.run_heavy("mac-build", "true")[0], 0)
+            both = [Held([HEAVY, "mac-build"], self.env) for _ in range(2)]
+            for job in both:
+                job.let_go()
+            self.assertEqual(self.run_heavy("mac", "true")[0], WAITS)  # mac still one at a time
+        finally:
+            suite.let_go()
+        build = Held([HEAVY, "mac-build"], self.env)
+        try:
+            self.assertEqual(self.run_heavy("mac", "true")[0], 0)
+        finally:
+            build.let_go()
+
+    def test_a_job_that_still_says_mac_for_a_build_does_not_block_mac_build_and_still_excludes_mac(self):
+        """What an older script does, under the one mac lock as before: no mac-build slot is theirs."""
+        old = Held(["lockf", "-k", self.lock("mac")], self.env)
+        try:
+            one, two = Held([HEAVY, "mac-build"], self.env), Held([HEAVY, "mac-build"], self.env)
+            try:
+                self.assertEqual((one.seen, two.seen), ("|1|-1", "|2|-2"))
+            finally:
+                two.let_go()
+                one.let_go()
+            self.assertEqual(self.run_heavy("mac", "true")[0], WAITS)
+        finally:
+            old.let_go()
+
+    def test_a_mac_build_job_does_not_hold_the_old_mac_lock(self):
+        job = Held([HEAVY, "mac-build"], self.env)
+        try:
+            taken = subprocess.run(["lockf", "-ks", "-t", "0", self.lock("mac"), "true"], timeout=30)
+            self.assertEqual(taken.returncode, 0, "an old-style mac job would wait for a build")
+        finally:
+            job.let_go()
+
+    def test_the_previous_heavy_sh_runs_mac_beside_mac_build_jobs(self):
+        old = self.previous_heavy()
+        before = Held([old, "mac"], self.env)
+        try:
+            one, two = Held([HEAVY, "mac-build"], self.env), Held([HEAVY, "mac-build"], self.env)
+            try:
+                self.assertEqual((one.seen, two.seen), ("|1|-1", "|2|-2"))
+                result = subprocess.run([old, "mac", "true"], env=dict(self.env, KUVO_HEAVY_WAIT="0"), capture_output=True, text=True, timeout=30)
+                self.assertEqual(result.returncode, WAITS)
+                self.assertIn("Another mac job is running", result.stderr)
+            finally:
+                two.let_go()
+                one.let_go()
+        finally:
+            before.let_go()
+
+    def test_a_job_inside_a_mac_build_job_runs_at_once_in_the_same_slot(self):
+        env = self.env
+        holds = lambda *command: subprocess.run(command, env=env, timeout=30).returncode
+        slot = lambda *command: subprocess.run(command, env=dict(env, KUVO_HEAVY_WAIT="0"), capture_output=True, text=True, timeout=30).stdout.strip()
+        self.assertEqual(holds(HEAVY, "--holds", "mac-build"), 1)
+        self.assertEqual(holds(HEAVY, "mac-build", HEAVY, "--holds", "mac-build"), 0)
+        self.assertEqual(holds(HEAVY, "mac-build", HEAVY, "--holds", "mac"), 1)  # not mac's turn
+        inner = ["/bin/sh", "-c", f'"{HEAVY}" mac-build /bin/sh -c \'echo "$KUVO_HEAVY_SLOT$KUVO_HEAVY_BUILD_SUFFIX"\'']
+        self.assertEqual(slot(HEAVY, "mac-build", *inner), "1-1")
+        first = Held([HEAVY, "mac-build"], env)  # slot 1 taken: the next job and its nested one are on slot 2
+        try:
+            self.assertEqual(slot(HEAVY, "mac-build", *inner), "2-2")
+        finally:
+            first.let_go()
+        # Stale values from a slot 2 shell, under slot 1's lock: slot 1's.
+        stale = dict(env, KUVO_HEAVY_WAIT="0", KUVO_HEAVY_SLOT="2", KUVO_HEAVY_BUILD_SUFFIX="-2")
+        result = subprocess.run(["lockf", "-k", self.lock("mac-build"), HEAVY, "mac-build", "/bin/sh", "-c", 'echo "$KUVO_HEAVY_SLOT$KUVO_HEAVY_BUILD_SUFFIX"'], env=stale, capture_output=True, text=True, timeout=30)
+        self.assertEqual((result.returncode, result.stdout.strip()), (0, "1-1"))
+
+    def test_a_mac_build_job_started_without_ps_takes_a_slot_too(self):
+        env = self.refused_ps()
+        first = Held([HEAVY, "mac-build"], env)
+        try:
+            second = Held([HEAVY, "mac-build"], env)
+            try:
+                self.assertEqual((first.seen, second.seen), ("|1|-1", "|2|-2"))
+                self.assertEqual(subprocess.run([HEAVY, "mac-build", "true"], env=dict(env, KUVO_HEAVY_WAIT="0"), timeout=30).returncode, WAITS)
+            finally:
+                second.let_go()
+        finally:
+            first.let_go()
 
     def test_a_script_can_ask_whether_its_kinds_turn_is_held(self):
         holds = lambda *command: subprocess.run(command, env=self.env, timeout=30).returncode

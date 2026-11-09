@@ -21,8 +21,9 @@ check_console() {
 }
 check_console "$(stat -f %Su /dev/console 2>/dev/null || true)"
 
-# A heavy job of the Mac's (scripts/heavy.sh): it builds in KuvoCodeTests-build, so it waits for
-# the Mac's other builds, and for a busy Mac, unless whoever started it took that turn already.
+# A heavy job of the Mac's (scripts/heavy.sh, kind mac: the one app suite that drives the UI, which
+# runs alone; builds and package tests are mac-build and run beside it). It waits for a busy Mac,
+# unless whoever started it took that turn already.
 if ! scripts/heavy.sh --holds mac; then
     exec scripts/heavy.sh mac /bin/sh "$PWD/scripts/test-app.sh"
 fi
