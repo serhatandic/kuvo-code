@@ -47,12 +47,12 @@ import Testing
         let chart = folder.appending(path: "chart.png")
 
         try Self.png(.blue).write(to: chart)
-        let first = try #require(await MadePictureRow.shown(chart.path, at: RemoteFolder.fileURL(chart.path, in: folder.path), step: "call_1").loadImage())
+        let first = try #require(await MadePictureRow.shown(chart.path, in: folder.path, step: "call_1").loadImage())
         #expect(try Self.color(of: first) == .blue)
 
         // "Make it red": the same file, redrawn, shown again by the next step.
         try Self.png(.red).write(to: chart)
-        let second = try #require(await MadePictureRow.shown(chart.path, at: RemoteFolder.fileURL(chart.path, in: folder.path), step: "call_2").loadImage())
+        let second = try #require(await MadePictureRow.shown(chart.path, in: folder.path, step: "call_2").loadImage())
         #expect(try Self.color(of: second) == .red)
     }
 
@@ -62,7 +62,7 @@ import Testing
         // This Mac has a chart at the path the machine's agent shows.
         let chart = folder.appending(path: "chart.png")
         try Self.png(.blue).write(to: chart)
-        let shown = MadePictureRow.shown(chart.path, at: RemoteFolder.fileURL(chart.path, in: RemoteFolder.folder(folder.path, on: "lab")), step: "call_1")
+        let shown = MadePictureRow.shown(chart.path, in: RemoteFolder.folder(folder.path, on: "lab"), step: "call_1")
         #expect(shown.fileURL == nil)
         #expect(shown.name == "chart.png")
         #expect(await shown.loadImage() == nil)
