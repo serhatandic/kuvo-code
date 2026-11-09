@@ -339,8 +339,10 @@ struct Composer: View {
                         } else {
                             Group {
                                 Button(action: chooseFiles) {
+                                    // The row's one size and weight (as the mic, and the mode's icon
+                                    // alone), a point under it: its long diagonal reads bigger.
                                     Image(systemName: "paperclip")
-                                        .font(.system(size: 14, weight: .medium))
+                                        .font(.system(size: 13, weight: .medium))
                                         .frame(width: 30, height: 28)
                                         .hoverHighlight(in: Capsule(), mutesInk: true)
                                 }
