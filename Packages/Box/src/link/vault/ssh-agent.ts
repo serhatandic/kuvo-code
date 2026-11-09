@@ -8,6 +8,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import net from "node:net";
+import path from "node:path";
 
 const FAILURE = 5;
 const REQUEST_IDENTITIES = 11;
@@ -243,6 +244,8 @@ export function serveAgent(socket: string, source: AgentSource): net.Server {
   const close = server.close.bind(server);
   server.close = (done?: (error?: Error) => void) => {
     for (const connection of open) connection.destroy();
+    // (Closing removes the file it was bound as, which is now at its own name.)
+    try { fs.rmSync(socket, { force: true }); } catch {}
     return close(done);
   };
   if (Buffer.byteLength(socket) > LONGEST_PATH) {
@@ -250,13 +253,18 @@ export function serveAgent(socket: string, source: AgentSource): net.Server {
     return server;
   }
   try { fs.rmSync(socket, { force: true }); } catch {}
+  // Bound under a hidden name beside it, then moved to its own: macOS never tells a folder's watch
+  // of a socket bound in it, only of a rename, so what waits for this agent hears of it.
+  const bound = path.join(path.dirname(socket), `.${crypto.randomBytes(6).toString("base64url")}`);
   // Yours alone from the moment its file is there (it's bound as listen is called).
   const old = process.umask(0o177);
   try {
-    server.listen(socket);
+    server.listen(bound);
   } finally {
     process.umask(old);
   }
+  // (Not bound, the server says why in `error`.)
+  try { fs.renameSync(bound, socket); } catch {}
   server.unref();
   return server;
 }

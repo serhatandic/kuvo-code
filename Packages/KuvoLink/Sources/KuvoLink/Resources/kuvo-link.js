@@ -5,7 +5,7 @@ import { spawn as spawn12 } from "node:child_process";
 import crypto42 from "node:crypto";
 import fs104 from "node:fs";
 import os14 from "node:os";
-import path106 from "node:path";
+import path107 from "node:path";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
 
 // Packages/Box/src/shared/text.ts
@@ -28544,17 +28544,18 @@ async function callSandboxTool(name, args, caller, signal) {
 import crypto38 from "node:crypto";
 import fs98 from "node:fs";
 import net4 from "node:net";
-import path102 from "node:path";
+import path103 from "node:path";
 
 // Packages/Box/src/link/vault/ssh.ts
 import crypto37 from "node:crypto";
 import fs97 from "node:fs";
-import path101 from "node:path";
+import path102 from "node:path";
 
 // Packages/Box/src/link/vault/ssh-agent.ts
 import crypto36 from "node:crypto";
 import fs95 from "node:fs";
 import net3 from "node:net";
+import path100 from "node:path";
 var FAILURE = 5;
 var REQUEST_IDENTITIES = 11;
 var IDENTITIES_ANSWER = 12;
@@ -28798,6 +28799,9 @@ function serveAgent(socket, source) {
   server.close = (done) => {
     for (const connection of open)
       connection.destroy();
+    try {
+      fs95.rmSync(socket, { force: true });
+    } catch {}
     return close(done);
   };
   if (Buffer.byteLength(socket) > LONGEST_PATH) {
@@ -28807,12 +28811,16 @@ function serveAgent(socket, source) {
   try {
     fs95.rmSync(socket, { force: true });
   } catch {}
+  const bound = path100.join(path100.dirname(socket), `.${crypto36.randomBytes(6).toString("base64url")}`);
   const old = process.umask(127);
   try {
-    server.listen(socket);
+    server.listen(bound);
   } finally {
     process.umask(old);
   }
+  try {
+    fs95.renameSync(bound, socket);
+  } catch {}
   server.unref();
   return server;
 }
@@ -28822,8 +28830,8 @@ import os10 from "node:os";
 
 // Packages/Box/src/link/vault/activity.ts
 import fs96 from "node:fs";
-import path100 from "node:path";
-var ACTIVITY = path100.join(VAULT_FOLDER, "activity.jsonl");
+import path101 from "node:path";
+var ACTIVITY = path101.join(VAULT_FOLDER, "activity.jsonl");
 var DAY5 = 86400000;
 var prunedAt = 0;
 function note2(what, now = Date.now()) {
@@ -29004,7 +29012,7 @@ var IDLE = 60 * 60000;
 function safeFolder() {
   if (process.platform !== "darwin")
     return true;
-  const parent = path101.dirname(SSH_AGENTS);
+  const parent = path102.dirname(SSH_AGENTS);
   try {
     const seen = fs97.lstatSync(parent);
     return seen.isDirectory() && seen.uid === process.getuid?.() && (seen.mode & 63) === 0;
@@ -29018,7 +29026,7 @@ var real = (where) => {
   try {
     return fs97.realpathSync(where);
   } catch {
-    return path101.resolve(where);
+    return path102.resolve(where);
   }
 };
 function callerFor(note, folder) {
@@ -29028,7 +29036,7 @@ function callerFor(note, folder) {
       return who.folder && real(who.folder) === real(folder) ? who : null;
     };
   return async () => {
-    const bot = listBots().find((each) => each.folder && (folder === each.folder || folder.startsWith(each.folder + path101.sep)));
+    const bot = listBots().find((each) => each.folder && (folder === each.folder || folder.startsWith(each.folder + path102.sep)));
     return { folder, yours: true, ...bot ? { bot: bot.id, botName: bot.name, ...bot.session ? { session: bot.session, root: bot.session } : {} } : {} };
   };
 }
@@ -29130,7 +29138,7 @@ function keepSshAgents() {
       if (Date.now() - agent.used < IDLE)
         continue;
       close(note);
-      fs97.rmSync(path101.join(SSH_FOR, note), { force: true });
+      fs97.rmSync(path102.join(SSH_FOR, note), { force: true });
     }
     let notes = [];
     try {
@@ -29139,11 +29147,11 @@ function keepSshAgents() {
     for (const note of notes) {
       let folder = "";
       try {
-        folder = fs97.readFileSync(path101.join(SSH_FOR, note), "utf8");
+        folder = fs97.readFileSync(path102.join(SSH_FOR, note), "utf8");
       } catch {
         continue;
       }
-      if (!path101.isAbsolute(folder) || note.startsWith("dir-") && note !== `dir-${sumOf2(folder)}`)
+      if (!path102.isAbsolute(folder) || note.startsWith("dir-") && note !== `dir-${sumOf2(folder)}`)
         continue;
       if (agents.get(note)?.folder === folder)
         continue;
@@ -29151,8 +29159,8 @@ function keepSshAgents() {
       const prefix = sumOf2(note).slice(0, 16);
       for (const old of fs97.readdirSync(SSH_AGENTS))
         if (old.startsWith(prefix))
-          fs97.rmSync(path101.join(SSH_AGENTS, old), { force: true });
-      const socket = path101.join(SSH_AGENTS, `${prefix}${crypto37.randomBytes(9).toString("base64url")}.sock`);
+          fs97.rmSync(path102.join(SSH_AGENTS, old), { force: true });
+      const socket = path102.join(SSH_AGENTS, `${prefix}${crypto37.randomBytes(9).toString("base64url")}.sock`);
       const agent = { folder, server: serveAgent(socket, sourceFor(callerFor(note, folder))), used: Date.now() };
       agent.server.on("connection", () => {
         agent.used = Date.now();
@@ -29169,8 +29177,8 @@ function keepSshAgents() {
       fs97.rmSync(SSH_AGENTS, { recursive: true, force: true });
     for (const note of fs97.readdirSync(SSH_FOR)) {
       try {
-        if (Date.now() - fs97.statSync(path101.join(SSH_FOR, note)).mtimeMs > NOTE_KEPT)
-          fs97.rmSync(path101.join(SSH_FOR, note), { force: true });
+        if (Date.now() - fs97.statSync(path102.join(SSH_FOR, note)).mtimeMs > NOTE_KEPT)
+          fs97.rmSync(path102.join(SSH_FOR, note), { force: true });
       } catch {}
     }
   } catch {}
@@ -29197,7 +29205,7 @@ function keepSshAgents() {
 }
 
 // Packages/Box/src/link/vault/holder.ts
-var VAULT_SOCKET = path102.join(RUN, "vault.sock");
+var VAULT_SOCKET = path103.join(RUN, "vault.sock");
 var holding = false;
 var holdsVault = () => holding;
 var heldHere = (route) => /^kuvo\/(vault|sandbox\/(asks|tools|allowed|stopped))(\/|\?|$)/.test(route);
@@ -29210,7 +29218,7 @@ function holdVault(handle) {
   holding = true;
   fs98.mkdirSync(RUN, { recursive: true, mode: 448 });
   try {
-    fs98.rmSync(path102.join(RUN, "vault-run"), { recursive: true, force: true });
+    fs98.rmSync(path103.join(RUN, "vault-run"), { recursive: true, force: true });
   } catch {}
   try {
     fs98.rmSync(VAULT_SOCKET, { force: true });
@@ -30046,7 +30054,7 @@ async function* appIconRoute(context) {
 
 // Packages/Box/src/link/mac/routes.ts
 import fs101 from "node:fs";
-import path103 from "node:path";
+import path104 from "node:path";
 var macPhones = () => {
   const link = readLink();
   return {
@@ -30207,7 +30215,7 @@ async function* macLinkRoute(route, request, signal) {
             peer: letter.peer,
             ...typeof letter.answers === "string" ? { answers: letter.answers } : {}
           };
-          writePrivate(path103.join(SENDING, `${letter.id}.json`), JSON.stringify(kept));
+          writePrivate(path104.join(SENDING, `${letter.id}.json`), JSON.stringify(kept));
         }
         if (isObject(given.seen)) {
           locked(PEER_LOCK, () => {
@@ -30322,7 +30330,7 @@ async function fill(given, caller, signal) {
 import crypto39 from "node:crypto";
 import fs102 from "node:fs";
 import os11 from "node:os";
-import path104 from "node:path";
+import path105 from "node:path";
 
 // Packages/Box/src/link/vault/mask.ts
 var SHORTEST = 4;
@@ -30490,7 +30498,7 @@ async function askForItem(caller, args, signal) {
 var MOST_OUTPUT3 = 64 * 1024;
 var CALL_BUDGET2 = 15.5 * 60000;
 var VARIABLE = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
-var RUN_FOLDER = path104.join(RUN, "vault-run");
+var RUN_FOLDER = path105.join(RUN, "vault-run");
 function namedValue(named) {
   const whole = itemNamed(named);
   if (whole)
@@ -30519,7 +30527,7 @@ async function runWith(caller, args, signal) {
   if (!isObject(args.variables) || !Object.keys(args.variables).length)
     return failed2("Name at least one variable and the item it gets.");
   const started = Date.now();
-  const program = path104.basename(command.split(/\s+/)[0] ?? "");
+  const program = path105.basename(command.split(/\s+/)[0] ?? "");
   const folder = caller.folder && fs102.existsSync(caller.folder) ? caller.folder : homeFolder();
   const wanted = [];
   for (const [variable, named] of Object.entries(args.variables)) {
@@ -30546,7 +30554,7 @@ async function runWith(caller, args, signal) {
       return may.leftUndone ? { text: may.message, isError: false } : failed2(may.message);
     allowed.set(item.id, may.how);
   }
-  const scratch = path104.join(RUN_FOLDER, crypto39.randomBytes(8).toString("hex"));
+  const scratch = path105.join(RUN_FOLDER, crypto39.randomBytes(8).toString("hex"));
   const env = commandEnv();
   const hidden = [];
   try {
@@ -30556,9 +30564,9 @@ async function runWith(caller, args, signal) {
       if (value === undefined)
         return failed2(`“${item.name}” has no ${field} kept.`);
       if (item.kind === "file" && field === "file") {
-        const name = path104.basename(item.fileName ?? "");
-        const file = path104.join(scratch, variable, name && name !== "." && name !== ".." ? name : variable.toLowerCase());
-        fs102.mkdirSync(path104.dirname(file), { recursive: true, mode: 448 });
+        const name = path105.basename(item.fileName ?? "");
+        const file = path105.join(scratch, variable, name && name !== "." && name !== ".." ? name : variable.toLowerCase());
+        fs102.mkdirSync(path105.dirname(file), { recursive: true, mode: 448 });
         const bytes = Buffer.from(value, "base64");
         fs102.writeFileSync(file, bytes, { mode: 384 });
         env[variable] = file;
@@ -31045,9 +31053,9 @@ async function* passedOn(response, signal) {
 
 // Packages/Box/src/link/mac/machines.ts
 import fs103 from "node:fs";
-import path105 from "node:path";
-var LIST_FILE = path105.join(K, "machines.json");
-var PHONE_LINK_FILE = path105.join(path105.dirname(K), "phone-link.json");
+import path106 from "node:path";
+var LIST_FILE = path106.join(K, "machines.json");
+var PHONE_LINK_FILE = path106.join(path106.dirname(K), "phone-link.json");
 var HEARD_LATELY = 30 * 60000;
 var TIMING = { wait: 5000, look: 1e4 };
 var macName = () => macLink.config?.name || "this Mac";
@@ -31404,9 +31412,9 @@ async function run3() {
   fs104.writeFileSync(VERSION_FILE, BRIDGE_VERSION, { mode: 384 });
   const saved = savedLoginPath(K);
   if (saved)
-    process.env.PATH = joinPath(path106.join(K, "bin"), saved);
+    process.env.PATH = joinPath(path107.join(K, "bin"), saved);
   for (const folder of ["present", "connected"])
-    fs104.rmSync(path106.join(RUN, folder), { recursive: true, force: true });
+    fs104.rmSync(path107.join(RUN, folder), { recursive: true, force: true });
   try {
     keepJobs();
   } catch {}
