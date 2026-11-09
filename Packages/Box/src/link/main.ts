@@ -59,6 +59,7 @@ import { deliverLeftAnswers, outboxSoon, sendOutbox } from "./letters/outbox";
 import { SENDING } from "./letters/letter";
 import { watchFolders } from "./follow";
 import { pushRows } from "./work/elsewhere";
+import { pushNumbers } from "./work-queue/numbers";
 import { macLinkCheck } from "./mac/link";
 import { macNoticeHold, macTell } from "./mac/notices";
 import { runMacPeers } from "./mac/peers";
@@ -171,6 +172,9 @@ export { answered, deliverLeftAnswers, letterMail, letterWent, sendOutbox } from
 export { takeLetter } from "./letters/take";
 export { callAs, callsBack, takeCall } from "./letters/calls";
 export { pushRows, takeRows } from "./work/elsewhere";
+export { askToSend, blockArrived, BLOCK as QUEUE_BLOCK, claimNumbers, giveBlock, LOW as QUEUE_LOW, primaryOf, readNumbers, takeBlock, takeNumber } from "./work-queue/numbers";
+export { parseBacklog } from "./work-queue/import";
+export { carryWorkQueue, forgetWorkQueues, packWorkQueues, placeWorkQueues } from "./work-queue/moves";
 export { readReach } from "./peers/reach";
 export { peerPlaces } from "./engine/client";
 export { answerPersonalities, retellBots, takePersonalities, takePersonalitiesDocument } from "./personalities/take";
@@ -405,6 +409,8 @@ async function run(): Promise<void> {
     deliverLeftAnswers().catch(() => {});
     // The rows of sessions here whose lead lives on another computer, told to it as they change.
     if (current?.welcomed) pushRows(current, readLink(), peerTargets()).catch(() => {});
+    // The Work Queue's ask for more numbers, to the primary, while one is under way.
+    try { pushNumbers(current); } catch {}
   }, 3_000);
 
   let attempt = 0;

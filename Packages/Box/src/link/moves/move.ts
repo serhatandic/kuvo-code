@@ -38,6 +38,7 @@ import { decidedOf, forgetDecided, isAutopilot, keepDecided, tellAutopilot } fro
 import type { EngineSession } from "../engine/sessions";
 import { CHATS, engineWait, MOST_BUNDLE, NotTaken, TooBig, deleteSession, directoryOf, exportAll, folderOf, groupAction, conversationHash, hashOf, idsOf, importAll, keysOf, notPlainIn, ownTree, pack, toTrash, unpack } from "./bundle";
 import type { Contents } from "./bundle";
+import { forgetWorkQueues, packWorkQueues, placeWorkQueues } from "../work-queue/moves";
 import { AGENT_NAMES, CARRIED_AGENTS } from "../../shared/carry";
 import { forgetQuiet, tellMoving } from "./elsewhere";
 import { ASK_LEFT, KEEP_LEFT, forgetLeft, keysGone, noteLeft, noteRan, readLeft, removeTrashed } from "./left";
@@ -581,6 +582,9 @@ async function carryOn(id: string): Promise<void> {
     if (Object.keys(queues).length) contents.queues = queues;
     const decided = decidedOf(record.sessions);
     if (Object.keys(decided).length) contents.decided = decided;
+    // Its conversations' Work Queues.
+    const workQueue = packWorkQueues(record.sessions);
+    if (workQueue) contents.workQueue = workQueue;
     if (record.folder) contents.folder = path.basename(record.folder);
     if (record.kind === "bot") {
       // A goal started as it was asked to move (goals stay where they started): it stays.
@@ -777,8 +781,9 @@ async function finish(id: string): Promise<void> {
       await deleteSession(engine, session);
       forgetDecided(session);
     }
-    // What waited for them here went with them.
+    // What waited for them here went with them, and so did their Work Queues.
     for (const session of record.sessions) forgetQueue(session);
+    forgetWorkQueues(record.sessions);
     // (Kept here they're no one's, but never left for good: tried again till they're gone.)
     const keysLeft = record.kind === "bot" && !(await answerBotKeys("DELETE", `kuvo/bots/${record.thing}/keys`, null, null).then(answer => answer.status === 200, () => false));
     const trash = await toTrash(place);
@@ -990,7 +995,7 @@ async function setUp(sender: MailSender, id: string, file: string): Promise<void
 
 /** The bundle put in place here, held: its folder, its conversations, a bot's keys, a group chat. */
 async function bringIn(record: MoveRecord, signal: AbortSignal): Promise<string[]> {
-  const { contents, folder, carry: carried } = await unpack(record.id);
+  const { contents, folder, carry: carried, opened } = await unpack(record.id);
   if (record.kind === "group") {
     const held = contents.group;
     if (!held || !isObject(held.group)) throw new NotTaken("The group chat didn’t come with it.");
@@ -1054,6 +1059,8 @@ async function bringIn(record: MoveRecord, signal: AbortSignal): Promise<string[
   if (goOn.length) changeMove(record.id, each => { each.queuesGoOn = goOn; });
   // The calls it made on Autopilot; on it (its flag came with it), its agent is told so here.
   keepDecided(contents.decided, sessions);
+  // Its conversations' Work Queues, with their files.
+  placeWorkQueues(contents.workQueue, sessions, opened);
   for (const info of infos) {
     if (isAutopilot(info)) await tellAutopilot(engine, info.id, true, signal).catch(error => console.error(`kuvo-link: ${record.name} couldn't be told it's on Autopilot here: ${error}`));
   }
@@ -1247,6 +1254,7 @@ async function clearCopy(record: MoveRecord): Promise<void> {
     }
     }
     for (const session of record.sessions) forgetQueue(session);
+    forgetWorkQueues(record.sessions);
     const place = folderOf(record.kind, record.thing);
     // Only a copy this move placed, never one that lives here.
     if (place && record.placed) {

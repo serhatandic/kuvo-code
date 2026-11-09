@@ -16,6 +16,7 @@ import { BOTS, HERE, SESSION_WAKES } from "../home";
 import { settleAgain } from "./approval";
 import { holdArchived } from "./wakes";
 import { carryDecided, tellAutopilot } from "../work/autopilot";
+import { carryWorkQueue } from "../work-queue/moves";
 import { tellWorktree } from "./worktrees";
 import type { Target } from "../../shared/records";
 import type { EngineAnswer, UncheckedAnswer } from "../engine/client";
@@ -145,6 +146,7 @@ export async function carryToAgents(id: string, model: unknown, readEngine: () =
     // On Autopilot, its new agent is told so too; the calls it made come along (`carryDecided`).
     if (autopilot === true) await tellAutopilot(agents, moved.id, true, signal).catch(() => {});
     carryDecided(id, moved.id);
+    carryWorkQueue(id, moved.id);
     if (bot) {
       // The bot's conversation is the new one, told what it is.
       const kit = readKit();

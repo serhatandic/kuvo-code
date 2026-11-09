@@ -6,6 +6,7 @@ import { isObject, parsed } from "../../shared/json";
 import { engineGet, peerTargets } from "../engine/client";
 import { CHOICE_MOST } from "../work/answers";
 import { carryDecided, decidedByYou, decidedIn, goAheadOnWaiting, isAutopilot, setAutopilot, waitsOnYou } from "../work/autopilot";
+import { carryWorkQueue } from "../work-queue/moves";
 import { answerGoal, runningGoalOf } from "../work/goals";
 import type { EngineAnswer } from "../engine/client";
 import type { EngineSession } from "../engine/sessions";
@@ -50,7 +51,10 @@ export async function* autopilotRoute(context: RouteContext): AsyncGenerator<Ans
   if (!at) return yield* json(404, { message: "That conversation isn't here." });
   // Carried on from another of this box's (a Mac carries it itself): its calls come along.
   const carried = at.data.metadata?.kuvo?.carriedFrom;
-  if (typeof carried === "string") carryDecided(carried, id);
+  if (typeof carried === "string") {
+    carryDecided(carried, id);
+    carryWorkQueue(carried, id);
+  }
   if (asked) return yield* json(200, { waiting: await waitsOnYou(at.target, at.data, given.form as string, undefined, signal).catch(() => true) });
   if (method === "PUT") {
     const on = given.autopilot as boolean;
