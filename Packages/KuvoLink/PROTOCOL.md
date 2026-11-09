@@ -2914,8 +2914,9 @@ note. An item made with no number left waits too, and takes one, oldest first, w
 **Moves**: a move carries its conversations' queues (a group chat's, its own) and their files
 (`move.json`'s `workQueue`, the files in the bundle's `work-queue/<item>/`), put in place under the
 same owners and numbers, each item checked as this box's own are (a category it can't keep is
-Next); once it's over, the box it left forgets the items it packed, as they were then (one handed
-in or changed since stays). A conversation carried on as another takes its queue.
+Next); once it's over, the box it left forgets them. While it's under way nothing changes those
+queues (a tool's change, a hand-off into one, or yours: refused, with words to try again once
+it's there), so nothing is left behind. A conversation carried on as another takes its queue.
 
 ### Side questions, handoffs and reviews
 

@@ -38,7 +38,7 @@ import { decidedOf, forgetDecided, isAutopilot, keepDecided, tellAutopilot } fro
 import type { EngineSession } from "../engine/sessions";
 import { CHATS, engineWait, MOST_BUNDLE, NotTaken, TooBig, deleteSession, directoryOf, exportAll, folderOf, groupAction, conversationHash, hashOf, idsOf, importAll, keysOf, notPlainIn, ownTree, pack, toTrash, unpack } from "./bundle";
 import type { Contents } from "./bundle";
-import { forgetWorkQueues, packedOf, packWorkQueues, placeWorkQueues } from "../work-queue/moves";
+import { forgetWorkQueues, packWorkQueues, placeWorkQueues } from "../work-queue/moves";
 import { AGENT_NAMES, CARRIED_AGENTS } from "../../shared/carry";
 import { forgetQuiet, tellMoving } from "./elsewhere";
 import { ASK_LEFT, KEEP_LEFT, forgetLeft, keysGone, noteLeft, noteRan, readLeft, removeTrashed } from "./left";
@@ -541,7 +541,6 @@ async function carryOn(id: string): Promise<void> {
     // Its Work Queue, which its seats keep.
     const workQueue = packWorkQueues([record.thing]);
     if (workQueue) contents.workQueue = workQueue;
-    record.workQueue = packedOf(workQueue);
     const members = isObject(contents.group?.group) && Array.isArray(contents.group.group.members) ? contents.group.group.members : [];
     record.members = members.filter((member): member is string => typeof member === "string");
   } else {
@@ -589,7 +588,6 @@ async function carryOn(id: string): Promise<void> {
     // Its conversations' Work Queues.
     const workQueue = packWorkQueues(record.sessions);
     if (workQueue) contents.workQueue = workQueue;
-    record.workQueue = packedOf(workQueue);
     if (record.folder) contents.folder = path.basename(record.folder);
     if (record.kind === "bot") {
       // A goal started as it was asked to move (goals stay where they started): it stays.
@@ -607,7 +605,7 @@ async function carryOn(id: string): Promise<void> {
   if (takenBack()) return;
   outgoing.set(id, { got: new Set(), flying: new Map(), exports: fingerprint(digest, queues), digest });
   const now = changeMove(id, each => {
-    Object.assign(each, { leftOf: record.leftOf, sessions: record.sessions, wasPaused: record.wasPaused, pausedAs: record.pausedAs, members: record.members, workQueue: record.workQueue, hash: bundle.hash, size: bundle.size, sent: 0, stage: "copying", step: "offer", offered: true, sentAt: Date.now(), holdSince: undefined });
+    Object.assign(each, { leftOf: record.leftOf, sessions: record.sessions, wasPaused: record.wasPaused, pausedAs: record.pausedAs, members: record.members, hash: bundle.hash, size: bundle.size, sent: 0, stage: "copying", step: "offer", offered: true, sentAt: Date.now(), holdSince: undefined });
   });
   if (now) offer(now);
 }
@@ -753,7 +751,7 @@ async function finish(id: string): Promise<void> {
   if (!record) return;
   if (record.kind === "group") {
     await groupAction(readBridgeFile(), record.thing, "release");
-    forgetWorkQueues([record.thing], record.workQueue ?? {});
+    forgetWorkQueues([record.thing]);
   } else {
     const engine = record.lane ? readBridgeFile() : readEngineFile();
     const place = record.folder ?? path.join(K, `moved-${record.thing}`);
@@ -789,7 +787,7 @@ async function finish(id: string): Promise<void> {
     }
     // What waited for them here went with them, and so did their Work Queues.
     for (const session of record.sessions) forgetQueue(session);
-    forgetWorkQueues(record.sessions, record.workQueue ?? {});
+    forgetWorkQueues(record.sessions);
     // (Kept here they're no one's, but never left for good: tried again till they're gone.)
     const keysLeft = record.kind === "bot" && !(await answerBotKeys("DELETE", `kuvo/bots/${record.thing}/keys`, null, null).then(answer => answer.status === 200, () => false));
     const trash = await toTrash(place);

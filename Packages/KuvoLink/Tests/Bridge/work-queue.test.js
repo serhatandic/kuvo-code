@@ -411,6 +411,8 @@ test("an agent imports its old backlog with its numbers; new items number after 
   const clash = await tool("queue_import", { items: [{ number: 244, title: "Something else" }] }, "ses_lead");
   assert.match(clash.text, /Imported 1 item with their numbers: 1 in Next\. Imported with a new number, theirs being another item's here already: #244 is #245\./);
   assert.match((await route("GET", "kuvo/work-queue/items/245")).body.item.notes[0].text, /^Imported as #244/);
+  // The same backlog imported again doesn't make it twice.
+  assert.match((await tool("queue_import", { items: [{ number: 244, title: "Something else" }] }, "ses_lead")).text, /^Nothing was imported\./);
 });
 
 test("a client imports BACKLOG.md files from the box: list lines starting with #n, categories from headings and sorted lines, the details file's text as bodies", async () => {
@@ -525,11 +527,17 @@ test("a move carries its conversations' queues and their files, and the box it l
   const staging = path.join(home, "staging");
   fs.mkdirSync(path.join(staging, "work-queue"), { recursive: true });
   fs.cpSync(path.join(queues, "files", carried.withFiles[0]), path.join(staging, "work-queue", carried.withFiles[0]), { recursive: true });
-  // One handed into it after it was packed stays here, rather than be lost.
+  // While it moves, nothing changes its queue (what did would be left behind): not a hand-off into
+  // it, not its own change, not yours.
+  const record = path.join(home, "run", "moves", "mov_test1.json");
+  write(record, JSON.stringify({ id: "mov_test1", thing: "bot_scout00001", kind: "bot", peer: "k", role: "from", sessions: ["ses_scout"], step: "parts", started: 1 }));
   await tool("queue_add", { title: "Handed in late" }, "ses_lead");
-  await tool("queue_hand", { item: 3, to: "Scout" }, "ses_lead");
-  link.forgetWorkQueues(["ses_scout"], Object.fromEntries(carried.items.map(item => [item.id, item.updated.at])));
-  assert.deepEqual((await view("ses_scout")).items.map(item => item.title), ["Handed in late"]);
+  const late = await tool("queue_hand", { item: 3, to: "Scout" }, "ses_lead");
+  assert.deepEqual(late, { text: "That conversation is moving to another computer, with its Work Queue: try again once it's there.", isError: true });
+  assert.equal((await tool("queue_update", { item: 1, note: "Meanwhile" }, "ses_scout")).isError, true);
+  assert.equal((await route("POST", "kuvo/work-queue/items/1/move", { category: "later" })).status, 400);
+  link.forgetWorkQueues(["ses_scout"]);
+  fs.rmSync(record);
   await tool("queue_remove", { item: 3 }, "ses_lead");
   assert.equal(fs.existsSync(path.join(queues, "files", carried.withFiles[0])), false);
   // As it arrives on the other box: under the same owner and number, an owner it didn't carry left out.

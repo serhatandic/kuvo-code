@@ -12,7 +12,7 @@ import { atWorkNow } from "../work/background";
 import { addCategory, categories, removeCategory, renameCategory } from "../work-queue/categories";
 import { importItems, importWords, parseBacklog, readBacklogFiles } from "../work-queue/import";
 import { numberWaiting, primaryOf } from "../work-queue/numbers";
-import { changeItem, Refusal, removeItem, restoreItem } from "../work-queue/ops";
+import { changeItem, Refusal, refuseMoving, removeItem, restoreItem } from "../work-queue/ops";
 import { changeQueues, FILE_NAME, filesOf, matching, OWNER, queueFollowers, readAll, WORK_QUEUE, type Item } from "../work-queue/store";
 import { callQueueTool, QUEUE_INSTRUCTIONS, QUEUE_TOOLS } from "../work-queue/tools";
 import { factsOf, inProgress, inView, overseenBy, ownersOf, refOf, summaryOf, wholeOf, type Facts } from "../work-queue/view";
@@ -108,6 +108,11 @@ export async function* workQueueRoute(context: RouteContext, match: RegExpMatchA
     if (!fromClient(context)) return yield* json(403, { message: ONLY_CLIENTS });
     const owner = typeof given.owner === "string" && OWNER.test(given.owner) ? given.owner : null;
     if (!owner) return yield* json(400, { message: "Say whose queue it goes in (owner): a conversation's address." });
+    try {
+      refuseMoving([owner]);
+    } catch (error) {
+      return yield* json(409, { message: (error as Error).message });
+    }
     const read = readBacklogFiles(given.files);
     if ("refused" in read) return yield* json(400, { message: read.refused });
     const { items, skipped } = parseBacklog(read.texts);
@@ -154,10 +159,11 @@ export async function* workQueueRoute(context: RouteContext, match: RegExpMatchA
   const now = Date.now();
   const primary = primaryOf();
   const inBook = (work: (item: Item, book: Parameters<Parameters<typeof changeQueues>[0]>[0]) => void) => () => changeQueues(book => {
-    numberWaiting(book, primary, null);
     const item = find(book.items());
     if (!item) throw new Missing("There's no item like that.");
+    refuseMoving([item.owner]);
     work(item, book);
+    numberWaiting(book, primary, null);
     return item;
   });
   if (action === undefined && method === "DELETE") {
@@ -195,8 +201,10 @@ async function* followView(owner: string, targets: Target[], signal?: AbortSigna
     wake?.();
   };
   queueFollowers.add(told);
-  // (The queues, and the categories beside them.)
-  const watching = watchFolders([path.join(WORK_QUEUE, "queues"), WORK_QUEUE], told, { recursive: false });
+  // (The queues, and the categories beside them: not the locks and the numbers there.)
+  const queuesWatch = watchFolders([path.join(WORK_QUEUE, "queues")], told, { recursive: false });
+  const categoriesWatch = watchFolders([WORK_QUEUE], ((_: unknown, name: unknown) => { if (String(name ?? "") === "categories.json") told(); }) as () => void, { recursive: false });
+  const watching = { close: () => { queuesWatch.close(); categoriesWatch.close(); } };
   signal?.addEventListener("abort", () => wake?.(), { once: true });
   let last = "";
   let facts: Facts | null = null;

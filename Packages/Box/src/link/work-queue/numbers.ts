@@ -55,7 +55,9 @@ export interface Numbers {
 /** Who hands out this box's numbers: itself, the Mac it names, or a Mac it can't write to yet. */
 export type Primary = { self: true } | { peer: Peer } | { away: true };
 
-const isRange = (each: unknown): each is [number, number] => Array.isArray(each) && each.length === 2 && each.every(n => Number.isInteger(n) && n > 0) && each[0] <= each[1];
+// (A number is below ten million: what an import takes, and far past what's ever handed out.)
+const MOST_NUMBER = 10_000_000;
+const isRange = (each: unknown): each is [number, number] => Array.isArray(each) && each.length === 2 && each.every(n => Number.isInteger(n) && n > 0 && n < MOST_NUMBER) && each[0] <= each[1];
 
 /** Runs sorted, and those that touch or overlap joined. */
 const joined = (...all: Ranges[]): Ranges => {
@@ -148,7 +150,7 @@ export function takeNumber(primary: Primary, { file = NUMBERS_FILE, now = Date.n
 function grantOn(kept: Numbers, by: string, claims: Ranges): Ranges {
   const before = kept.granted?.[by] ?? [];
   const next = kept.next ?? 1;
-  const ranges = joined(overlap(claims, [[next, Number.MAX_SAFE_INTEGER]]), overlap(claims, before));
+  const ranges = joined(overlap(claims, [[next, MOST_NUMBER - 1]]), overlap(claims, before));
   if (ranges.length) {
     kept.next = Math.max(next, ranges[ranges.length - 1][1] + 1);
     kept.granted = { ...(kept.granted ?? {}), [by]: joined(before, ranges).slice(-MOST_RANGES) };
@@ -230,7 +232,10 @@ export function numberWaiting(book: Book, primary: Primary, granted: Ranges | nu
     for (const item of book.items()) {
       if (item.wanted === undefined || item.number !== undefined) continue;
       if (inRanges(granted, item.wanted)) item.number = item.wanted;
-      else item.notes.push({ at: now, by: { user: true }, text: `Imported as #${item.wanted}, a number another of your computers was given already, so it has a new one.` });
+      else {
+        item.notes.push({ at: now, by: { user: true }, text: `Imported as #${item.wanted}, a number another of your computers was given already, so it has a new one.` });
+        item.importedAs = item.wanted;
+      }
       delete item.wanted;
     }
   }

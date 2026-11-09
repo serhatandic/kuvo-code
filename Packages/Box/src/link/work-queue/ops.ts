@@ -12,10 +12,11 @@ import { BOTS, K } from "../home";
 import { categoryNamed } from "./categories";
 import { takeNumber, type Primary } from "./numbers";
 import {
-  FILES, filesOf, MOST_BODY, MOST_FILE, MOST_FILES, MOST_ITEMS, MOST_LINKS, MOST_NOTE, MOST_NOTES, MOST_TITLE, newItemID, noteHanded, placeBeside, placeIn,
+  FILES, filesOf, matching, MOST_BODY, MOST_FILE, MOST_FILES, MOST_ITEMS, MOST_LINKS, MOST_NOTE, MOST_NOTES, MOST_TITLE, newItemID, noteHanded, placeBeside, placeIn,
   type Book, type Item, type KeptFile, type Who,
 } from "./store";
-import { nameOf } from "./view";
+import { nameOf, refOf } from "./view";
+import { frozen } from "../moves/records";
 
 /** A session is linked to this many items at most: linking one more drops its oldest link. */
 export const LINKS_EACH = 3;
@@ -26,6 +27,30 @@ const refuse = (words: string): never => { throw new Refusal(words); };
 
 // Where files an agent named wait, read, until the change that keeps them.
 const STAGING = path.join(path.dirname(FILES), "staging");
+
+/** What's left in the staging folder by a box that stopped midway: gone, once it's an hour old. */
+export function clearStaging(now = Date.now()): void {
+  for (const name of (() => { try { return fs.readdirSync(STAGING); } catch { return []; } })()) {
+    try {
+      if (now - fs.statSync(path.join(STAGING, name)).mtimeMs > 3_600_000) fs.rmSync(path.join(STAGING, name), { recursive: true, force: true });
+    } catch {}
+  }
+}
+
+// A file's name, short enough to keep with " 2" added and stay within a name's 255 bytes: its stem
+// cut, its extension kept.
+const shortName = (name: string): string => {
+  const ext = path.extname(name).slice(0, 20);
+  let stem = name.slice(0, name.length - path.extname(name).length);
+  while (stem && Buffer.byteLength(stem + ext) > 180) stem = Array.from(stem).slice(0, -1).join("");
+  return stem + ext;
+};
+
+/** Changes to the queues of owners that are moving to another computer wait until they're there:
+ * what's changed meanwhile would be left behind. */
+export function refuseMoving(owners: (string | undefined)[], moving: Set<string> = frozen()): void {
+  for (const owner of owners) if (owner && moving.has(owner)) refuse(owner.startsWith("grp_") ? "This group chat is moving to another computer, with its Work Queue: try again once it's there." : "That conversation is moving to another computer, with its Work Queue: try again once it's there.");
+}
 
 /** Where an agent's files may come from: its conversation's folder, its project's other folders,
  * and the temporary folders; never Kuvo Code's own (but for its own folder there, a bot's). */
@@ -61,7 +86,8 @@ export function stageFile(given: string, places: FilePlaces, staging: string): S
   }
   try {
     const opened = fs.fstatSync(handle);
-    if (!opened.isFile() || opened.dev !== checked.dev || opened.ino !== checked.ino) refuse(`${given} changed as it was read: try again.`);
+    // (And still where it was found: a folder on the way swapped for a link meanwhile is said.)
+    if (!opened.isFile() || opened.dev !== checked.dev || opened.ino !== checked.ino || real(given) !== file) refuse(`${given} changed as it was read: try again.`);
     if (opened.nlink !== 1) refuse(`${given} has other names (a hard link): it isn't kept with an item.`);
     const size = Math.min(opened.size, MOST_FILE);
     const bytes = Buffer.alloc(size);
@@ -221,8 +247,11 @@ export function changeItem(book: Book, item: Item, fields: Fields, acting: Actin
     }
   }
   const beside = (given: unknown) => {
-    const found = book.items().find(each => !each.removed && (each.id === given || (typeof given === "string" || typeof given === "number") && String(each.number) === String(given).replace(/^#/, "")));
-    if (!found || found.id === item.id) refuse(`There's no other item ${String(given)} to put it beside.`);
+    const ref = refOf(given);
+    const all = ref ? matching(book.items(), ref).filter(each => !each.removed && each.id !== item.id) : [];
+    // (Where two computers gave one number twice, the one in this item's category.)
+    const found = all.find(each => each.category === item.category) ?? all[0];
+    if (!found) refuse(`There's no other item ${String(given)} to put it beside.`);
     if (found!.category !== item.category) refuse(`${nameOf(found!)} is in another category: move it there first (category).`);
     return found!;
   };
@@ -266,7 +295,7 @@ export function changeItem(book: Book, item: Item, fields: Fields, acting: Actin
   for (const file of item.files) if (gone.has(file.name)) acting.fileOps.push(() => fs.rmSync(path.join(filesOf(item.id), file.name), { force: true }));
   item.files = left;
   for (const each of staged) {
-    const base = each.name.replace(/[\\\0]/g, "_").slice(-200).replace(/^\.+/, "") || "file";
+    const base = shortName(each.name.replace(/[\\\0]/g, "_").replace(/^\.+/, "")) || "file";
     const ext = path.extname(base);
     let name = base;
     for (let n = 2; item.files.some(file => file.name === name); n++) name = `${base.slice(0, base.length - ext.length)} ${n}${ext}`;

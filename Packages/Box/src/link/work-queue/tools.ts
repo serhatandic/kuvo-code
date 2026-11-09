@@ -13,7 +13,7 @@ import { callerOf, isCalling } from "../vault/who";
 import { addCategory, categories, categoryNamed } from "./categories";
 import { importItems, importWords, givenItems } from "./import";
 import { numberWaiting, primaryOf } from "./numbers";
-import { addItem, applyFileOps, changeItem, handItem, linkSession, Refusal, removeItem, restoreItem, stageFiles, type Acting, type Fields, type FilePlaces } from "./ops";
+import { addItem, applyFileOps, changeItem, handItem, linkSession, Refusal, refuseMoving, removeItem, restoreItem, stageFiles, type Acting, type Fields, type FilePlaces } from "./ops";
 import { changeQueues, matching, readAll, type Book, type Item, type Who } from "./store";
 import { askGroups } from "../areas/groups";
 import { agoWords, factsOf, inProgress, inView, nameOf, overseenBy, ownersOf, refOf, sessionsNamed, type Facts } from "./view";
@@ -200,12 +200,14 @@ export async function callQueueTool(name: unknown, args: Record<string, unknown>
   }
 }
 
-// A change to the queues, numbered what waits for one first.
+// A change to the queues, then what waits for a number numbered (once nothing can refuse it, so
+// a refused change takes none).
 const change = <T>(work: (book: Book) => T): T => {
   const primary = primaryOf();
   return changeQueues(book => {
+    const done = work(book);
     numberWaiting(book, primary, null);
-    return work(book);
+    return done;
   });
 };
 
@@ -222,6 +224,7 @@ async function run(name: string, args: Record<string, unknown>, caller: QueueCal
       return said(await showWords(item, facts, targets, caller));
     }
     case "queue_add": {
+      refuseMoving([caller.owner]);
       const item = withFiles(args, caller, acting, () => change(book => {
         const made = addItem(book, caller.owner, args as Fields, acting, primaryOf());
         if (args.working === true && !caller.seat) linkSession(book, made, caller.session, now);
@@ -237,6 +240,7 @@ async function run(name: string, args: Record<string, unknown>, caller: QueueCal
       const item = withFiles(args, caller, acting, () => change(book => {
         const item = itemFor(book.items(), args.item, caller, overseen);
         if (item.removed) throw new Refusal(deletedWords(item));
+        refuseMoving([item.owner]);
         changeItem(book, item, args as Fields, acting);
         const named = (value: unknown) => (Array.isArray(value) ? value : value === undefined ? [] : [value]).map(String).filter(each => /^ses_[A-Za-z0-9]{1,60}$/.test(each));
         if (item.category !== "done") {
@@ -258,6 +262,7 @@ async function run(name: string, args: Record<string, unknown>, caller: QueueCal
       const item = change(book => {
         const item = itemFor(book.items(), args.item, caller, overseen);
         if (item.removed) throw new Refusal(deletedWords(item));
+        refuseMoving([item.owner, to.owner]);
         handItem(book, item, to.owner, caller.who, now);
         return item;
       });
@@ -266,6 +271,7 @@ async function run(name: string, args: Record<string, unknown>, caller: QueueCal
     case "queue_remove": {
       const item = change(book => {
         const item = itemFor(book.items(), args.item, caller, overseen);
+        refuseMoving([item.owner]);
         if (args.undo === true) {
           if (!item.removed) throw new Refusal(`${nameOf(item)} isn't deleted.`);
           if ("user" in item.removed.by) throw new Refusal(deletedWords(item));
@@ -289,6 +295,7 @@ async function run(name: string, args: Record<string, unknown>, caller: QueueCal
     case "queue_import": {
       const given = givenItems(args.items);
       if ("refused" in given) return refused(given.refused);
+      refuseMoving([caller.owner]);
       const outcome = change(book => importItems(book, caller.owner, given.items, caller.who, primaryOf(), now));
       return said(importWords(outcome, given.skipped, id => categoryNamed(id)?.name ?? id));
     }

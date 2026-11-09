@@ -11,8 +11,7 @@ import { categoryNamed } from "./categories";
 import { changeQueues, FILE_NAME, filesOf, itemOf, OWNER, readQueue, type Item } from "./store";
 
 /** What a move carries: each owner's items, the custom categories they're in, and which items
- * have files (packed beside `move.json`, in `work-queue/<item>/`). The box it leaves keeps which
- * items went, as they were (`packed`), to forget only those once it's over. */
+ * have files (packed beside `move.json`, in `work-queue/<item>/`). */
 export interface CarriedQueues {
   items: Item[];
   categories: { id: string; name: string }[];
@@ -47,9 +46,6 @@ export const filesSize = (carried: CarriedQueues | undefined): number => (carrie
   }
 }, 0);
 
-/** Which items a move packed, by id, as they were then (`updated.at`). */
-export const packedOf = (carried: CarriedQueues | null): Record<string, number> => Object.fromEntries((carried?.items ?? []).map(item => [item.id, item.updated.at]));
-
 /** What came with a move put in place: the items of `owners` it brought (any other owner's left
  * out, and each checked as one read from this box's own files), their files from
  * `opened/work-queue`, and the custom categories they're in (Next for one this box can't keep). */
@@ -71,25 +67,29 @@ export function placeWorkQueues(carried: unknown, owners: readonly string[], ope
         if (!from || !FILE_NAME.test(file.name)) continue;
         try {
           fs.mkdirSync(filesOf(item.id), { recursive: true, mode: 0o700 });
-          fs.copyFileSync(path.join(from, file.name), path.join(filesOf(item.id), file.name));
+          // (Never through a link: `unpack` took only plain files, and this is opened as one.)
+          const handle = fs.openSync(path.join(from, file.name), fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0));
+          try {
+            if (fs.fstatSync(handle).isFile()) fs.writeFileSync(path.join(filesOf(item.id), file.name), fs.readFileSync(handle), { mode: 0o600 });
+          } finally {
+            fs.closeSync(handle);
+          }
         } catch {}
       }
     }
   });
 }
 
-/** The queues of `owners` gone from here (their files too): a copy that came is taken back; or,
- * with `packed`, the move took them: only the items it packed, as they were then (one handed in
- * or changed since stays, rather than be lost). */
-export function forgetWorkQueues(owners: readonly string[], packed?: Record<string, number>): void {
+/** The queues of `owners` gone from here (their files too): the move took them (nothing changes
+ * them while it's under way, `refuseMoving`), or a copy that came is taken back. */
+export function forgetWorkQueues(owners: readonly string[]): void {
   const gone = new Set(owners);
   changeQueues(book => {
     for (const owner of gone) {
       if (!OWNER.test(owner)) continue;
       const queue = book.queue(owner);
-      const going = queue.items.filter(item => !packed || packed[item.id] === item.updated.at);
-      for (const item of going) fs.rmSync(filesOf(item.id), { recursive: true, force: true });
-      queue.items = queue.items.filter(item => !going.includes(item));
+      for (const item of queue.items) fs.rmSync(filesOf(item.id), { recursive: true, force: true });
+      queue.items = [];
     }
   });
 }

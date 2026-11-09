@@ -60,6 +60,7 @@ import { SENDING } from "./letters/letter";
 import { watchFolders } from "./follow";
 import { pushRows } from "./work/elsewhere";
 import { pushNumbers } from "./work-queue/numbers";
+import { clearStaging } from "./work-queue/ops";
 import { macLinkCheck } from "./mac/link";
 import { macNoticeHold, macTell } from "./mac/notices";
 import { runMacPeers } from "./mac/peers";
@@ -377,6 +378,8 @@ async function run(): Promise<void> {
   setInterval(nightly, 600_000);
   // Recently Deleted's skills past their 30 days, gone with no client there too.
   keepSkillTrashClear();
+  // What a Work Queue change left half read as the box stopped.
+  clearStaging();
   setInterval(() => {
     if (current?.welcomed) announce(current, readEngineFile).catch(() => {});
     else refreshOwn(readEngineFile).catch(() => {});
@@ -663,6 +666,8 @@ async function serve(): Promise<void> {
   if (IS_MAC && !testsAlone) runMacPeers();
   // Recently Deleted's skills past their 30 days, gone with no client there too.
   keepSkillTrashClear();
+  // What a Work Queue change left half read as the box stopped.
+  clearStaging();
   // Its bots' jobs kept in their folders, taken once from where they were before, once its app
   // makes them this box's (it gives the box its kit then).
   if (readKit()) try { keepJobs(); } catch {}

@@ -64,6 +64,8 @@ export interface Item {
   handedBy?: string;
   /** A number it was imported with, until the primary grants it. */
   wanted?: number;
+  /** The number it was imported with, where that was another item's, and it has a new one. */
+  importedAs?: number;
   source?: { kind: string; ref: string; url?: string };
   created: { at: number; by: Who };
   updated: { at: number; by: Who };
@@ -115,6 +117,7 @@ export function itemOf(given: unknown, owner: string): Item | null {
     ...(Array.isArray(given.handed) ? { handed: list<Handed>(given.handed, each => typeof each.from === "string" && typeof each.to === "string") } : {}),
     ...(typeof given.handedBy === "string" && OWNER.test(given.handedBy) ? { handedBy: given.handedBy } : {}),
     ...(typeof given.wanted === "number" && Number.isInteger(given.wanted) && given.wanted > 0 ? { wanted: given.wanted } : {}),
+    ...(typeof given.importedAs === "number" && Number.isInteger(given.importedAs) && given.importedAs > 0 ? { importedAs: given.importedAs } : {}),
     ...(isObject(given.source) && typeof given.source.kind === "string" && typeof given.source.ref === "string" ? { source: given.source as Item["source"] } : {}),
     created,
     updated,

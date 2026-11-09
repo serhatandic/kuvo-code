@@ -156,12 +156,14 @@ export function givenItems(given: unknown): { items: Imported[]; skipped: string
  * one (with a note); on the primary, so does one it can't grant. */
 export function importItems(book: Book, owner: string, items: Imported[], who: Who, primary: Primary, now = Date.now()): ImportOutcome {
   const have = new Map(book.items().flatMap(item => [item.number, item.wanted].filter((n): n is number => n !== undefined).map(n => [n, item.title] as const)));
+  // Imported before under a number that was another item's: the same again is skipped.
+  const before = new Set(book.items().flatMap(item => (item.importedAs !== undefined ? [`${item.importedAs}\0${item.title.toLowerCase()}`] : [])));
   const outcome: ImportOutcome = { added: 0, byCategory: {}, skipped: [], waiting: 0, renumbered: [] };
   const made: Item[] = [];
   const fresh: { from: number; item: Item }[] = [];
   for (const each of items) {
     const taken = have.get(each.number);
-    if (taken !== undefined && taken.toLowerCase() === each.title.toLowerCase()) {
+    if ((taken !== undefined && taken.toLowerCase() === each.title.toLowerCase()) || before.has(`${each.number}\0${each.title.toLowerCase()}`)) {
       outcome.skipped.push(`#${each.number} (already in the Work Queue here)`);
       continue;
     }
@@ -169,7 +171,7 @@ export function importItems(book: Book, owner: string, items: Imported[], who: W
     const item: Item = {
       id: newItemID(),
       owner,
-      ...(taken === undefined ? { wanted: each.number } : {}),
+      ...(taken === undefined ? { wanted: each.number } : { importedAs: each.number }),
       title: each.title,
       body: each.body,
       category: each.category,
