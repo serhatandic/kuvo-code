@@ -141,7 +141,7 @@ verify_tree() {
         echo "In $CI_ROOT, a symlink or something others than root can change: ${bad//$'\n'/, }" >&2
         return 1
     fi
-    if [[ "$(/usr/bin/stat -f '%Su:%Sg %Lp' "$CI_BIN/softnet" 2>/dev/null)" != "root:$SOFTNET_GROUP 4750" ]]; then
+    if [[ "$(/usr/bin/stat -f '%Su:%Sg %Mp%Lp' "$CI_BIN/softnet" 2>/dev/null)" != "root:$SOFTNET_GROUP 4750" ]]; then
         echo "$CI_BIN/softnet isn't root:$SOFTNET_GROUP, mode 4750." >&2
         return 1
     fi

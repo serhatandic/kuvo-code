@@ -105,7 +105,7 @@ df -h / | tail -1'
 
 # Streamed in through Tart's agent as a tar, which keeps the frameworks' symlinks (a --dir share
 # doesn't: copying from one fails on each with "Too many levels of symbolic links").
-echo "Copying in $XCODE…"
+echo "Copying in ${XCODE}…"
 guest 'sudo rm -rf /Applications/Xcode.app /tmp/kuvo-xcode && sudo mkdir /tmp/kuvo-xcode'
 tar -C "$(dirname "$XCODE")" -cf - "$(basename "$XCODE")" \
     | tart exec -i "$build" sudo tar -C /tmp/kuvo-xcode -xpf - \
@@ -125,7 +125,7 @@ swift --version 2>&1 | sed -n 1p'
 echo "Node where the app's tests look for it…"
 guest 'set -e; [[ -x /opt/homebrew/bin/node ]] || brew link --force --overwrite node@24 >/dev/null; /opt/homebrew/bin/node --version'
 
-echo "Installing GitHub's runner $runner_version…"
+echo "Installing GitHub's runner ${runner_version}…"
 guest "set -euo pipefail
 rm -rf ~/actions-runner && mkdir -p ~/actions-runner && cd ~/actions-runner
 curl -fsSL --proto '=https' -o /tmp/runner.tar.gz https://github.com/actions/runner/releases/download/v$runner_version/actions-runner-osx-arm64-$runner_version.tar.gz
