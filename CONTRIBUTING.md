@@ -151,7 +151,16 @@ scripts/heavy.sh box sh -c 'cd Packages/Box && bun test'
 
 - `mac`: the Mac app's builds and tests (`KuvoShared-MacBuild`, `KuvoCodeTests-build`), and the
   packages' `swift build` and `swift test`;
-- `phone`: the iPhone app's (`KuvoShared-PhoneBuild`, `KuvoCodeMobileTests-build`);
+- `phone`: the iPhone app's (`KuvoShared-PhoneBuild`, `KuvoCodeMobileTests-build`). It has two
+  slots, so two phone test runs go at once, each on a simulator of its own: "Kuvo Code Tests" in
+  slot 1 and "Kuvo Code Tests 2" in slot 2, both fixed (the phone's `scripts/test-app.sh` makes each
+  once, on the same runtime and device, and keeps it; nothing makes or deletes one per run). A
+  caller that handles slots sets `KUVO_HEAVY_SLOTS=2` and takes whichever slot is free first (slot 1
+  before slot 2; with both busy it waits for the first to free). Its job finds its slot in
+  `KUVO_TEST_SIMULATOR` (the simulator's name), `KUVO_HEAVY_SLOT` and `KUVO_HEAVY_BUILD_SUFFIX`
+  (`""` or `-2`: put it on a build folder, since two builds in one folder break). Without
+  `KUVO_HEAVY_SLOTS=2` a job only ever takes slot 1, whose lock and simulator are what they always
+  were, so an older script and a new one on slot 1 still exclude each other;
 - `box`: the box's whole suites (`bun test`, `node --test`) and runs on a test machine.
 
 A job also waits while the Mac is busy (its load over the last minute above 40;
