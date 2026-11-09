@@ -25252,11 +25252,12 @@ async function* forward(target, path, request, signal, allows, naming = null, do
         wasArchived = (await before.json())?.data?.metadata?.["kuvo.archived"] === true;
     } catch {}
   }
+  const delivering = sending ? undefined : signal;
   const outgoing = async () => {
     if (!sending)
       return request.body;
     const session = decodeURIComponent(sending[1]);
-    const body = await attachedIn(request.body, session, modelInput(url, headers, signal), request.fromMac === true, toAgents);
+    const body = await attachedIn(request.body, session, modelInput(url, headers, delivering), request.fromMac === true, toAgents);
     return prompt ? fromPhone(await namedIn(body, session, naming)) : body;
   };
   let response;
@@ -25265,7 +25266,7 @@ async function* forward(target, path, request, signal, allows, naming = null, do
       method,
       headers,
       body: method === "GET" || method === "HEAD" ? undefined : await outgoing(),
-      signal
+      signal: delivering
     });
   } catch (error) {
     if (signal?.aborted)

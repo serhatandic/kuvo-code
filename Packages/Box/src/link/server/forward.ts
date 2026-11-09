@@ -94,11 +94,16 @@ export async function* forward(target: Target, path: string, request: LinkReques
       if (before.ok) wasArchived = (await before.json() as { data?: EngineSession } | null)?.data?.metadata?.["kuvo.archived"] === true;
     } catch {}
   }
+  // A message that's here whole goes on to its conversation even if whoever sent it goes
+  // meanwhile (a phone that gave up waiting while a big file was still on its way, #358): its
+  // files are kept here by then, and it isn't lost without a word. Sent again, under the same id,
+  // the conversation takes it once.
+  const delivering = sending ? undefined : signal;
   // What goes to the engine: a message as above, anything else as it came.
   const outgoing = async (): Promise<Buffer | undefined> => {
     if (!sending) return request.body;
     const session = decodeURIComponent(sending[1]!);
-    const body = await attachedIn(request.body, session, modelInput(url, headers, signal), request.fromMac === true, toAgents);
+    const body = await attachedIn(request.body, session, modelInput(url, headers, delivering), request.fromMac === true, toAgents);
     return prompt ? fromPhone(await namedIn(body, session, naming)) : body;
   };
   let response: Response;
@@ -107,7 +112,7 @@ export async function* forward(target: Target, path: string, request: LinkReques
       method,
       headers,
       body: method === "GET" || method === "HEAD" ? undefined : await outgoing(),
-      signal,
+      signal: delivering,
     });
   } catch (error) {
     // Not answering (starting again, say): said so, unless the asker went.

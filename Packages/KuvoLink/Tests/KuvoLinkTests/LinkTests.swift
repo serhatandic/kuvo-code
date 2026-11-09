@@ -191,9 +191,11 @@ final class ManualClock: @unchecked Sendable {
 }
 
 /// A phone's relay connection whose frames wait to go out while it's held (a big body on a slow
-/// connection), in order.
+/// connection), in order. `onTheWay`: they wait past it, on the network, where it can't see them:
+/// it says they've all gone (as a WebSocket says once the system has them in its buffers).
 private final class GatedConnection: RelayTransport, @unchecked Sendable {
     let base: MemoryRelay.Connection
+    private let onTheWay: Bool
     private let lock = NSLock()
     private var held = false
     /// Held frames are going out: what's sent meanwhile goes behind them.
@@ -203,7 +205,10 @@ private final class GatedConnection: RelayTransport, @unchecked Sendable {
     /// Each link frame the phone sent (held or not), by kind and where to.
     private var sent: [(kind: LinkFrame.Kind, to: LinkAddress)] = []
 
-    init(_ base: MemoryRelay.Connection) { self.base = base }
+    init(_ base: MemoryRelay.Connection, onTheWay: Bool = false) {
+        self.base = base
+        self.onTheWay = onTheWay
+    }
 
     /// How many frames of `kind` the phone has sent to `address`.
     func sent(_ kind: LinkFrame.Kind, to address: LinkAddress) -> Int {
@@ -212,7 +217,7 @@ private final class GatedConnection: RelayTransport, @unchecked Sendable {
 
     var address: LinkAddress { base.address }
     var messages: AsyncStream<RelayMessage> { base.messages }
-    var isSending: Bool { lock.withLock { !queue.isEmpty || draining } }
+    var isSending: Bool { !onTheWay && lock.withLock { !queue.isEmpty || draining } }
 
     func hold() { lock.withLock { held = true } }
 
@@ -247,7 +252,7 @@ private final class GatedConnection: RelayTransport, @unchecked Sendable {
     func allSent() async {
         await withCheckedContinuation { continuation in
             let now = lock.withLock {
-                if queue.isEmpty, !draining { return true }
+                if onTheWay || (queue.isEmpty && !draining) { return true }
                 waiting.append(continuation)
                 return false
             }
@@ -784,6 +789,49 @@ private func collect(_ stream: LinkResponse) async throws -> (status: Int, heade
         #expect(gate.value?.sent(.transport, to: host.secret.address) == pieces)
         gate.value?.release()
         #expect(try await uploading.value.body == big)
+    }
+
+    /// A big body its relay connection says has gone, still on its way (in the system's buffers, on
+    /// a slow network, at the relay): the check that goes behind it has the time that takes, and a
+    /// host that's there answers it, and the request, once it's arrived (#358).
+    @Test(.timeLimit(.minutes(1))) func aCheckBehindABodyStillOnItsWayWaitsForIt() async throws {
+        let relay = MemoryRelay()
+        let clock = ManualClock()
+        let host = TestHost(relay: relay, handle: echo)
+        let network = Locked<GatedConnection?>(nil)
+        let client = LinkClient(relay: URL(string: "wss://relay.test")!, key: LinkKey(), secret: RelaySecret(), name: "Test iPhone", app: "0.0.1") { _, secret in
+            let connection = GatedConnection(relay.connect(secret), onTheWay: true)
+            network.value = connection
+            return connection
+        }
+        await client.setClockForTesting(clock.link)
+        let paired = try await client.pair(host.link)
+        network.value?.hold()
+        let big = randomBytes(1_300_000)
+        let uploading = Task { try await collect(client.send(LinkRequest(method: "POST", path: "api/upload", body: big), to: paired)) }
+        // It waits its time, and a check goes, behind the body; well past a check's own time, the
+        // body is still on its way.
+        await clock.advance(by: Link.answerWithin)
+        for _ in 0..<3 { await clock.advance(by: Link.answerWithin) }
+        network.value?.release()
+        #expect(try await uploading.value.body == big)
+    }
+
+    /// The same, to a host whose connection died without closing: once a slow connection would
+    /// have sent it all, the check gives up.
+    @Test(.timeLimit(.minutes(1))) func aCheckBehindABodyStillOnItsWayGivesUpOnAHostThatsGone() async throws {
+        let relay = MemoryRelay()
+        let clock = ManualClock()
+        let host = TestHost(relay: relay, handle: echo)
+        let client = await phone(on: relay, clock: clock)
+        let paired = try await client.pair(host.link)
+        relay.deafen(host.secret.address)
+        let big = randomBytes(1_300_000)
+        let uploading = Task { try await collect(client.send(LinkRequest(method: "POST", path: "api/upload", body: big), to: paired)) }
+        await clock.advance(by: Link.answerWithin)
+        let behind = LinkMessage.pieces(.init(t: .req, id: 1, m: "POST", p: "api/upload", h: [:]), body: big, end: true).reduce(0) { $0 + $1.data.count }
+        await clock.advance(by: Link.checkTimeout + .seconds(behind / Link.slowUpload + 1), waking: 2)
+        await #expect(throws: LinkError.timedOut) { try await uploading.value }
     }
 
     /// A check's ping held up behind the phone's own frames going out: its time counts from when it

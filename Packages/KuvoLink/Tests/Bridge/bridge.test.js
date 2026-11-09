@@ -150,6 +150,10 @@ function phoneFor(host, hostKey) {
       if (frame.kind !== link.Frame.transport) return { closed: true };
       return link.decodeMessage(transport.open(frame.body));
     },
+    // The phone ends its session (it gave up waiting, say).
+    close() {
+      host.receive(address, link.frame(link.Frame.close, session));
+    },
     // A whole response: its head, and its body up to the message marked end.
     async response() {
       const first = await this.receive();
@@ -369,6 +373,44 @@ test("files a phone sends with a message are kept on the box, where the agent op
   const both = listed(eyes.text, "The attached files are on disk here (what's in them is in this message already):");
   assert.deepEqual(both.map(file => path.basename(file)), ["note.pdf", "dot.png"]);
   assert.deepEqual(fs.readFileSync(both[0]), pdf);
+});
+
+test("a message that arrived whole reaches its conversation though the phone that sent it gave up waiting (#358)", async t => {
+  // The coding agents' bridge, a moment slow to say which model a conversation is on (as it is
+  // while it asks every agent), keeping what each message brought.
+  const prompted = {};
+  const server = http.createServer((request, response) => {
+    let body = "";
+    request.on("data", chunk => { body += chunk; });
+    request.on("end", () => {
+      response.writeHead(200, { "content-type": "application/json" });
+      const session = /^\/api\/session\/([^/?]+)$/.exec(request.url)?.[1];
+      if (session) return setTimeout(() => response.end(JSON.stringify({ data: { id: session, model: { id: "opus", providerID: "claude-code", capabilities: { input: ["text", "image"] } } } })), 300);
+      prompted[/^\/api\/session\/([^/]+)\/prompt/.exec(request.url)?.[1]] = JSON.parse(body);
+      response.end("{}");
+    });
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  const hostKey = link.newKey();
+  const target = () => ({ pid: process.pid, port: server.address().port, password: "s3cret", version: "2.0.32" });
+  const agents = await runningAs("kuvo-agents", t);
+  const handle = link.engineHandler(target, {}, () => ({ ...target(), pid: agents }));
+  const host = new link.LinkHost({ key: hostKey, hello: { v: 1, kind: "machine", name: "m", app: "0" }, authorize: () => true, handle });
+  const phone = phoneFor(host, hostKey);
+  await phone.open({});
+  // A video and a few words, the whole of it here; then the phone, which waited too long for it
+  // to get here, ends its session.
+  const video = Buffer.alloc(7_727_609, 42);
+  phone.send({ t: "req", id: 1, m: "POST", p: "kuvo/agents/api/session/ses_shared/prompt", h: { "Content-Type": "application/json" } }, Buffer.from(JSON.stringify({ id: "msg_shared", text: "when I scroll the models it keeps resetting", files: [{ name: "video.mp4", uri: `data:video/mp4;base64,${video.toString("base64")}` }] })));
+  phone.close();
+  // The message reaches the conversation, the video where the agent opens it.
+  for (let waited = 0; !prompted.ses_shared && waited < 5000; waited += 50) await new Promise(resolve => setTimeout(resolve, 50));
+  assert.ok(prompted.ses_shared, "the message reached its conversation");
+  assert.equal(prompted.ses_shared.id, "msg_shared");
+  assert.ok(prompted.ses_shared.text.startsWith("when I scroll the models it keeps resetting\n\n<attached-files>"));
+  const videoPath = prompted.ses_shared.text.split("\n").find(line => line.endsWith("/video.mp4"));
+  assert.deepEqual(fs.readFileSync(videoPath), video);
 });
 
 test("a Mac's files for a machine take the phone's path: kept on the machine's box, and only what the model reads goes as a file, with no word of a phone", async t => {

@@ -1618,7 +1618,7 @@ like HTTP:
 | `{"t": "res", "id": 7, "s": 200, "h": {"content-type": "…"}, "end": false}` | The response's status and headers, with the first piece of its body. |
 | `{"t": "data", "id": 7, "end": false}` | More body. Event streams (`api/event`) go on until cancelled. |
 | `{"t": "cancel", "id": 7}` | Either side stops request 7. |
-| `{"t": "ping"}`, `{"t": "pong"}` | Is the other end still there? The relay's own pings only reach the relay. The phone pings while a request waits with nothing from the host, once its own frames have gone out: a host whose connection died without closing takes frames until the relay notices, and never answers. No answer ends the session. A host that started again or left is told by the relay (`gone`), so a quiet session isn't checked. Answer at once. |
+| `{"t": "ping"}`, `{"t": "pong"}` | Is the other end still there? The relay's own pings only reach the relay. The phone pings while a request waits with nothing from the host, once its own frames have gone out: a host whose connection died without closing takes frames until the relay notices, and never answers. No answer ends the session, after 5 s and a second more for each 64 KB the phone sent that the host hasn't answered yet (a request it answered, a ping it answered): frames the phone's connection says it sent may still be in the system's buffers, on a slow network or at the relay, ahead of the ping. A host that started again or left is told by the relay (`gone`), so a quiet session isn't checked. Answer at once. |
 
 `h` holds `x-opencode-directory` and `content-type`; the host adds the engine's password
 itself. Which route answers is told by its path before any `?`: a query string never changes it,
@@ -2542,6 +2542,10 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   message without it (everything from a line `<from-phone>` to the line `</from-phone>`), as
   sent from the phone. It tells the agent to keep replies short and to show files with
   `show_file`.
+- A message or command whose request arrived whole (`POST api/session/<id>/prompt` or
+  `…/command`, and `kuvo/agents/api/…` alike) goes on to its conversation even if the phone that
+  sent it ends its session or cancels meanwhile: its files are kept on the box by then. A client
+  that sends it again after a failure sends it under the same `id`, so it isn't taken twice.
 - An agent shows a file in the conversation with `show_file`, one of Kuvo Code's tools (on the
   Mac and machines, for the engine and the coding agents): a tool call named
   `kuvo-browser_show_file` with input `{"path": "<full path on the computer it runs on>",
