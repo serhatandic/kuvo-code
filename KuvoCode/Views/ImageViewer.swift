@@ -62,6 +62,8 @@ private struct ImageLightbox: View {
     let request: ImageViewer.Request
     @State private var index: Int
     @State private var image: NSImage?
+    @State private var loadFailed = false
+    @State private var retry = 0
     /// Pinched or double-clicked in; 1 is fitted to the window.
     @State private var scale: CGFloat = 1
     @State private var fitScale: CGFloat = 1
@@ -90,6 +92,11 @@ private struct ImageLightbox: View {
                         .padding(.horizontal, 48)
                         .padding(.vertical, 75)
                         .transition(.replacingPlaceholder)
+                } else if loadFailed {
+                    VStack(spacing: 12) {
+                        Text("This picture couldn’t be loaded.")
+                        Button("Try Again") { loadFailed = false; retry += 1 }
+                    }
                 } else {
                     let room = fit(CGSize(width: 480, height: 360), in: CGSize(width: proxy.size.width - 96, height: proxy.size.height - 150))
                     Placeholder(.image, label: "Loading picture")
@@ -143,7 +150,13 @@ private struct ImageLightbox: View {
             isFocused = true
             withAnimation(.snappy(duration: 0.22)) { appeared = true }
         }
-        .task(id: index) { image = await item.loadImage() }
+        .task(id: "\(index)-\(retry)") {
+            loadFailed = false
+            let loaded = await item.loadImage()
+            guard !Task.isCancelled else { return }
+            image = loaded
+            loadFailed = loaded == nil
+        }
     }
 
     /// Its name and size, and what else you can do with it.
@@ -163,8 +176,8 @@ private struct ImageLightbox: View {
             HStack(spacing: 2) {
                 Menu("\(Int(scale * fitScale * 100))%") {
                     Button("Fit") { scale = 1 }
-                    Button("Actual Size") { scale = 1 / max(fitScale, 0.001) }
-                    Button("Zoom In") { scale = min(scale * 1.25, 8) }
+                    Button("Actual Size") { scale = 1 / max(fitScale, 0.000000001) }
+                    Button("Zoom In") { scale = min(scale * 1.25, max(100, 1 / max(fitScale, 0.000000001))) }
                     Button("Zoom Out") { scale = max(scale / 1.25, 1) }
                 }
                 Button("Download", systemImage: "arrow.down.to.line") {
@@ -237,6 +250,7 @@ private struct ImageLightbox: View {
         guard request.items.indices.contains(index + direction) else { return false }
         index += direction
         image = nil
+        loadFailed = false
         scale = 1
         return true
     }
@@ -260,45 +274,48 @@ struct PictureCanvas: View {
     @State private var pinch: CGFloat = 1
     @FocusState private var focused: Bool
 
-    static func actualScale(_ image: NSImage?, room: CGSize) -> CGFloat {
-        guard let image, image.size.width > 0, image.size.height > 0, room.width > 0, room.height > 0 else { return 1 }
-        return max(1, 1 / min(room.width / image.size.width, room.height / image.size.height, 1))
+    /// Bitmap representations carry pixel dimensions even when their logical size is in points.
+    private var pixelSize: CGSize {
+        guard let rep = image.representations.max(by: { $0.pixelsWide * $0.pixelsHigh < $1.pixelsWide * $1.pixelsHigh }),
+              rep.pixelsWide > 0, rep.pixelsHigh > 0 else { return image.size }
+        return CGSize(width: rep.pixelsWide, height: rep.pixelsHigh)
     }
 
     var body: some View {
         GeometryReader { proxy in
             let room = proxy.size
-            let fit = min(room.width / max(image.size.width, 1), room.height / max(image.size.height, 1), 1)
-            let current = max(1, min(100, scale * pinch))
+            let size = pixelSize
+            let fit = max(0.000000001, min(room.width / max(size.width, 1), room.height / max(size.height, 1), 1))
+            let maximum = max(100, 1 / fit)
+            let current = max(1, min(maximum, scale * pinch))
             ScrollView([.horizontal, .vertical]) {
                 Image(nsImage: image)
                     .resizable()
                     .interpolation(.high)
-                    .frame(width: max(1, image.size.width * fit * current), height: max(1, image.size.height * fit * current))
+                    .frame(width: max(1, size.width * fit * current), height: max(1, size.height * fit * current))
                     .frame(minWidth: room.width, minHeight: room.height)
             }
-            .onAppear { fitScale = fit }
+            .onAppear { fitScale = fit; focused = true }
             .onChange(of: fit) { _, value in fitScale = value }
             .gesture(MagnifyGesture().onChanged { pinch = $0.magnification }.onEnded { _ in
                 scale = current
                 pinch = 1
             })
             .onTapGesture(count: 2) {
-                scale = scale > 1 ? 1 : Self.actualScale(image, room: room)
+                scale = scale > 1 ? 1 : 1 / fit
             }
             .focusable()
             .focused($focused)
             .onKeyPress(characters: ["+", "=", "-", "0"], phases: .down) { press in
                 guard press.modifiers.contains(.command) else { return .ignored }
                 switch press.characters {
-                case "+", "=": scale = min(100, scale * 1.25)
+                case "+", "=": scale = min(maximum, scale * 1.25)
                 case "-": scale = max(1, scale / 1.25)
                 case "0": scale = 1
                 default: return .ignored
                 }
                 return .handled
             }
-            .onTapGesture { focused = true }
             .help("Pinch or double-click to zoom")
         }
     }
