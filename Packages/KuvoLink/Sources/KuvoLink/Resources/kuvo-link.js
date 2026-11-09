@@ -18755,7 +18755,13 @@ async function dropTree(journal, places) {
   try {
     engine = places.readEngine();
   } catch {}
-  const removed = !journal.tree.root ? 200 : (await answerWorktrees("POST", "kuvo/worktrees/remove", { path: journal.tree.root, discard: true, forget: true }, engine, undefined).catch(() => null))?.status;
+  let bridge = null;
+  try {
+    bridge = places.bridge();
+  } catch {}
+  if (journal.making?.agents && !(bridge && await answers(bridge)))
+    return;
+  const removed = !journal.tree.root ? 200 : (await answerWorktrees("POST", "kuvo/worktrees/remove", { path: journal.tree.root, discard: true, forget: true }, engine, undefined, bridge).catch(() => null))?.status;
   if (removed === 200 || removed === 404 || removed === 409)
     delete journal.tree;
 }

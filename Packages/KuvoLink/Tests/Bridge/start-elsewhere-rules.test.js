@@ -120,7 +120,7 @@ async function engine(sessions) {
 const by = { bot: "bot_foreman0001", name: "Foreman" };
 let eng;
 beforeEach(async () => {
-  for (const folder of [run, path.join(home, "box"), path.join(home, "bots"), path.join(home, "projects")]) fs.rmSync(folder, { recursive: true, force: true });
+  for (const folder of [run, path.join(home, "box"), path.join(home, "bots"), path.join(home, "projects"), path.join(home, "worktrees")]) fs.rmSync(folder, { recursive: true, force: true });
   fs.mkdirSync(run, { recursive: true });
   fs.mkdirSync(path.join(home, "projects", "api"), { recursive: true });
   link.writeLink({ secret: crypto.randomBytes(32).toString("base64url"), key: k(here.key), relay: "wss://relay.test", name: "devbox", id: "devbox", mac: mac.pub, macs: [mac.pub], phones: [],
@@ -810,4 +810,20 @@ test("a bot's own session here carried on with the coding agents is still one of
   assert.equal(answerOf(call).refused, true);
   assert.match(answerOf(call).note.words, /new session a day at most/);
   assert.equal(eng.seen.made.length, 0);
+});
+
+test("a worktree made for a start going to the coding agents stays while their bridge is down, as it can't say whether its session is in it", async () => {
+  const tree = await apiWorktree();
+  await cutShort("cal_agent0000000001", each => {
+    each.making = { ...structuredClone(read(path.join(run, "calls", `${eng.seen.made.at(-1).metadata.kuvo.call}.json`)).making), folder: tree.folder, agents: true };
+    each.tree = { folder: tree.folder, root: tree.root, branch: tree.branch };
+    each.made = Date.now() - DAY - 60_000;
+  });
+  const answered = [];
+  // The engine answers; the coding agents' bridge doesn't run yet.
+  await link.resumeStarts((each, done) => answered.push([each.id, done]), Date.now(), { readEngine: () => eng.target, bridge: () => null });
+  await link.resumeStarts((each, done) => answered.push([each.id, done]), Date.now(), { readEngine: () => eng.target, bridge: () => null });
+  assert.equal(answered.length, 1, "the lead hears once");
+  assert.ok(fs.existsSync(tree.root), "its worktree stays");
+  assert.equal(read(path.join(run, "calls", "cal_agent0000000001.json")).tree.root, tree.root, "to be tried again once the bridge runs");
 });

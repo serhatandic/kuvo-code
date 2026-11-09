@@ -434,7 +434,12 @@ async function dropTree(journal: StartJournal, places: Places): Promise<void> {
   if (!journal.tree || journal.session) return;
   let engine: Target | null = null;
   try { engine = places.readEngine(); } catch {}
-  const removed = !journal.tree.root ? 200 : (await answerWorktrees("POST", "kuvo/worktrees/remove", { path: journal.tree.root, discard: true, forget: true }, engine, undefined).catch(() => null))?.status;
+  let bridge: Target | null = null;
+  try { bridge = places.bridge(); } catch {}
+  // (One that was going to the coding agents: its session would be theirs, so not while they can't
+  // say whether one's in it.)
+  if (journal.making?.agents && !(bridge && await answers(bridge))) return;
+  const removed = !journal.tree.root ? 200 : (await answerWorktrees("POST", "kuvo/worktrees/remove", { path: journal.tree.root, discard: true, forget: true }, engine, undefined, bridge).catch(() => null))?.status;
   // (Gone, gone already as far as this box knows, or a session's: nothing more to do.)
   if (removed === 200 || removed === 404 || removed === 409) delete journal.tree;
 }
