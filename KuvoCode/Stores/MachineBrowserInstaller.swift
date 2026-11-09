@@ -201,8 +201,13 @@ nonisolated enum MachineBrowserInstaller {
     /// Sends a bundle to the machine and makes it the one in use. Older builds go, unless a browser
     /// still runs from one (it moves to the new one when it next starts).
     static func send(_ bundle: URL, _ runtime: BrowserRuntime, to connection: SSHConnection) async throws {
+        try await connection.run(sending(runtime.id), input: bundle)
+    }
+
+    /// The machine's side of `send`: the bundle comes in on its input.
+    static func sending(_ id: String) -> String {
         let version = madeBy.filter { $0.isASCII && ($0.isNumber || $0 == "." || $0 == "b") }
-        try await connection.run("""
+        return """
             set -e
             B="\(folder)"
             mkdir -p "$B"
@@ -212,21 +217,25 @@ nonisolated enum MachineBrowserInstaller {
             tar xzf - -C "$B/.staging"
             # Which Kuvo Code put it there, so an older one leaves it in place.
             echo "\(version)" >"$B/.staging/kuvo-version"
+            has() { [ -x "$B/$1/chrome" ] || [ -x "$B/$1/chrome-headless-shell" ]; }
             # The same build, already running (another Mac put it there meanwhile), stays as it is.
-            if running "\(runtime.id)"; then rm -rf "$B/.staging"; else rm -rf "$B/\(runtime.id)"; mv "$B/.staging" "$B/\(runtime.id)"; fi
-            ln -sfn "\(runtime.id)" "$B/current"
-            \(clearOldBuilds(keeping: runtime.id))
-            """, input: bundle)
+            if running "\(id)" && has "\(id)"; then rm -rf "$B/.staging"; else rm -rf "$B/\(id)"; mv "$B/.staging" "$B/\(id)"; fi
+            # Never said to be done while the browser isn't there, nor put in use: the one in use stays.
+            has "\(id)" || { echo "The browser didn't arrive whole on the machine." >&2; exit 1; }
+            ln -sfn "\(id)" "$B/current"
+            \(clearOldBuilds(keeping: id))
+            """
     }
 
     /// Shell for the builds in `$B`: `running <build>` says whether a browser runs from it, by its
     /// real path, which is how the browser starts, and which differs from `$B`'s where a folder on
-    /// the way is a link (a home moved to another disk, say).
+    /// the way is a link (a home moved to another disk, say). On a Mac, from the processes listed
+    /// first: `grep` started beside `ps` is listed with the path it looks for, and finds itself.
     private static let builds = """
         R=$(cd "$B" && pwd -P)
         running() {
           if [ -d /proc/self ]; then grep -qsF -e "$B/$1/" -e "$R/$1/" /proc/[0-9]*/cmdline 2>/dev/null
-          else ps -axww -o command= 2>/dev/null | grep -qF -e "$B/$1/" -e "$R/$1/"; fi
+          else listed=$(ps -axww -o command= 2>/dev/null); printf '%s\\n' "$listed" | grep -qF -e "$B/$1/" -e "$R/$1/"; fi
         }
         """
 

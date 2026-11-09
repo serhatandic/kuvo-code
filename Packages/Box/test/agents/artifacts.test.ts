@@ -1,7 +1,7 @@
 import "../safety"
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { spawnSync } from "node:child_process"
-import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from "node:fs"
+import { chmodSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { pathToFileURL } from "node:url"
@@ -907,6 +907,24 @@ describe("restoring a version", () => {
     // Undone: what it replaced, back.
     await route("POST", `kuvo/artifacts/${id}/restore`, { version: 3 })
     expect(readFileSync(notes, "utf8")).toBe("mine\n")
+  })
+
+  test("never through a file someone left by the name it's put back through, which would give it another name", async () => {
+    session("ses_code", project)
+    const notes = join(project, "notes.md")
+    for (const [n, text] of ["first\n", "second\n"].entries()) {
+      writeFileSync(notes, text)
+      await hear(turn("ses_code", `m${n}`, tool("ses_code", `c${n}`, "write", { filePath: notes })))
+    }
+    // A command's own file, linked by that name.
+    const planted = join(project, "planted.txt")
+    writeFileSync(planted, "planted\n")
+    linkSync(planted, notes + ".kuvo-restore")
+    const { status } = await route("POST", `kuvo/artifacts/${ArtifactStore.idOf(notes)}/restore`, { version: 1 })
+    expect(status).toBe(200)
+    expect(readFileSync(notes, "utf8")).toBe("first\n")
+    expect(readFileSync(planted, "utf8")).toBe("planted\n")
+    expect(statSync(notes).nlink).toBe(1)
   })
 })
 
