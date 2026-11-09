@@ -146,21 +146,6 @@ rotate_log() {
     log "Rotated the log (the one before is $LOG_FILE.1)."
 }
 
-# Apple's Virtualization framework wants an unlocked login keychain (macOS 15 and later). In a
-# login session there's one; as a daemon, ci gets one of its own with an empty password, holding
-# nothing but what the framework keeps there (Tart's FAQ, "headless machines").
-prepare_keychain() {
-    [[ "$(launchctl managername 2>/dev/null)" != Aqua ]] || return 0
-    local keychain="$HOME/Library/Keychains/kuvo-ci-vms.keychain-db"
-    mkdir -p "$HOME/Library/Keychains"
-    { [[ -f "$keychain" ]] || security create-keychain -p '' "$keychain"; } \
-        && security set-keychain-settings "$keychain" \
-        && security unlock-keychain -p '' "$keychain" \
-        && security list-keychains -d user -s "$keychain" \
-        && security default-keychain -d user -s "$keychain" \
-        && security login-keychain -d user -s "$keychain"
-}
-
 vm="" vm_pid="" exec_pid="" runner_id="" check_pid="" work=""
 
 # Stops the VM: Tart first, and if that fails or hangs, its process.

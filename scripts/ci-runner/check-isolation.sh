@@ -25,7 +25,10 @@ set -uo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=scripts/ci-runner/common.sh
 . "$here/common.sh"
-if [[ "$(id -un)" == "$CI_USER" ]]; then export PATH="$CI_PATH"; fi
+if [[ "$(id -un)" == "$CI_USER" ]]; then
+    export PATH="$CI_PATH"
+    prepare_keychain --force || echo "Couldn't prepare ci's keychain for the VM; it may not start." >&2
+fi
 
 IMAGE="${IMAGE:-$GOLDEN}"
 TART_DIR="${TART_HOME:-$HOME/.tart}"

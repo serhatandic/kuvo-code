@@ -147,6 +147,22 @@ verify_tree() {
     done
 }
 
+# Apple's Virtualization framework wants an unlocked login keychain (macOS 15 and later). In a
+# login session there's one; as a daemon, ci gets one of its own with an empty password, holding
+# nothing but what the framework keeps there (Tart's FAQ, "headless machines").
+# check-isolation.sh, as ci under sudo, asks for it whatever the session (--force).
+prepare_keychain() { # [--force]
+    [[ "${1:-}" == --force || "$(launchctl managername 2>/dev/null)" != Aqua ]] || return 0
+    local keychain="$HOME/Library/Keychains/kuvo-ci-vms.keychain-db"
+    mkdir -p "$HOME/Library/Keychains"
+    { [[ -f "$keychain" ]] || security create-keychain -p '' "$keychain"; } \
+        && security set-keychain-settings "$keychain" \
+        && security unlock-keychain -p '' "$keychain" \
+        && security list-keychains -d user -s "$keychain" \
+        && security default-keychain -d user -s "$keychain" \
+        && security login-keychain -d user -s "$keychain"
+}
+
 # Apple allows two macOS VMs at once, and this Mac has 16 GB: a VM of your own (an image build,
 # an isolation check) runs while CI is paused. pause_ci stops CI's idle VM and waits for a job in
 # progress to end; resume_ci lets it go on, if pause_ci paused it.
