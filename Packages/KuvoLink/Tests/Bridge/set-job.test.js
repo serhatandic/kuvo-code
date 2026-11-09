@@ -92,6 +92,19 @@ test("a bot keeps its job with set_job: its box keeps it, says it under its name
   assert.equal(told.at(-1).value, "You are Scout: Keeps CI green.\n\nYour job:\nWatch main.\nFix flaky tests.\n\nWho sets what.");
   assert.equal(fs.readFileSync(path.join(folder, "MEMORY.md"), "utf8"), "# Scout's memory\n", "its memory is its own");
 
+  const details = ("Leads development of Kuvo Code.\n\nCoordinates work across the project.\n\n" ).repeat(30);
+  const reported = await call("set_job", { job: "Leads development of Kuvo Code", details }, "ses_scout");
+  assert.equal(reported.isError, false, reported.content[0].text);
+  assert.deepEqual(Object.values(JSON.parse(fs.readFileSync(path.join(folder, "job.json"), "utf8"))).slice(0, 2), ["Leads development of Kuvo Code", details.trim()]);
+  assert.equal(reported.content[0].text, 'Kept. Kuvo Code shows "Leads development of Kuvo Code" under your name.');
+  assert.equal(told.at(-1).value, `You are Scout: Leads development of Kuvo Code.\n\nYour job:\n${details.trim()}\n\nWho sets what.`);
+  for (const args of [{ summary: "   ", details: "" }, { summary: "**", details: "" }, { summary: "Job:", details: "" }, {}, { summary: "", details: "" }, { summary: 42, details: "" }, { summary: "Something" }]) {
+    assert.equal((await call("set_job", args, "ses_scout")).isError, true);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(folder, "bot.json"), "utf8")).job, "Leads development of Kuvo Code");
+  }
+  assert.equal((await call("set_job", { clear: true }, "ses_scout")).isError, false);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(folder, "bot.json"), "utf8")).job, "");
+
   // From a subagent it started: the bot's.
   const fromHelper = await call("set_job", { summary: "Keeps CI and docs green", details: "Watch main and the docs." }, "ses_helper");
   assert.equal(fromHelper.isError, false);
