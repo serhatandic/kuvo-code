@@ -18,7 +18,7 @@
 import path from "node:path";
 import { isObject } from "../../shared/json";
 import { textOf, writePrivate } from "../files";
-import { BOX } from "../home";
+import { BOX, IS_MAC } from "../home";
 import { holdsBack, isParticular, permissionsHere, refreshedRules } from "../bots/tell";
 import { hasFormerAsks } from "./former-asks";
 import { sandboxGap } from "./sandbox";
@@ -59,6 +59,21 @@ const keepHere = (change: Record<string, unknown>, file: string) =>
  * back only when you pick it again. */
 export function allowFullAccess(on: boolean, file = APPROVAL_FILE): void {
   keepHere({ fullAccess: on, ...(!on && keptHere(file).last === "fullAccess" ? { last: "auto" } : {}) }, file);
+}
+
+/** Whether your other computers may start work on this one (start_session, list_models and
+ * list_projects from a lead on another of your computers: PROTOCOL.md, "Peers", `call`). Yours to
+ * allow, at your own risk: a machine's key, taken, could then start sessions here. Until you say,
+ * it follows the role: off on the Mac with the app, on for a machine (so machines from before have
+ * it on). */
+export function otherComputersAllowed(file = APPROVAL_FILE): boolean {
+  const kept = keptHere(file).otherComputers;
+  return typeof kept === "boolean" ? kept : !IS_MAC;
+}
+
+/** Your other computers allowed to start work here, or not. */
+export function allowOtherComputers(on: boolean, file = APPROVAL_FILE): void {
+  keepHere({ otherComputers: on }, file);
 }
 
 /** The approval a new conversation here gets where its client didn't say: Auto the first time on
@@ -145,7 +160,22 @@ export const asksBeforeCommands = (approval: Approval) => approval === "askFirst
  * (only those of its own rules: never the asks a box before put in a bot's). Accept Edits allows edits in
  * place of Ask First's asks for them, so an Ask in Settings doesn't hold them back, and a Don't
  * Allow there, after, still does. */
-export function approvalRules(approval: Approval, current: readonly KitRule[]): KitRule[] {
+export function approvalRules(approval: Approval, current: readonly KitRule[], held: readonly KitRule[] = []): KitRule[] {
+  const made = rulesMade(approval, current);
+  // (Don't Allows it brought from the computer its lead lives on, `kuvo.held`: last, so nothing here
+  // lets it past them, as they're made again whenever Settings › Permissions here change.)
+  const more = held.filter(rule => holdsBack(rule) && !made.some(each => each.action === rule.action && each.resource === rule.resource && each.effect === rule.effect));
+  return [...made, ...more];
+}
+
+/** The Don't Allows a conversation brought from its lead's computer (`kuvo.held`), kept with it so
+ * they hold here however often its rules are made again. */
+export function heldOf(session: WithApproval | null | undefined): KitRule[] {
+  const held = session?.metadata?.kuvo?.held;
+  return Array.isArray(held) ? held.filter((rule): rule is KitRule => isObject(rule) && typeof rule.action === "string" && typeof rule.resource === "string" && typeof rule.effect === "string" && holdsBack(rule as unknown as KitRule)) : [];
+}
+
+function rulesMade(approval: Approval, current: readonly KitRule[]): KitRule[] {
   const settings = permissionsHere() ?? current.filter(holdsBack);
   let made = refreshedRules([...(asksBeforeCommands(approval) ? [SHELL_ASK] : []), ...current.filter(isParticular)], settings);
   if (approval === "acceptEdits") made = made.map(rule => (EDITS.has(rule.action) && rule.resource === "*" && rule.effect === "ask" ? { ...rule, effect: "allow" } : rule));

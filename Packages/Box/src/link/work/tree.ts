@@ -41,6 +41,16 @@ export const startedByOf = (data: Partial<EngineSession> | null | undefined): st
   return typeof by === "string" && by ? by : null;
 };
 
+/** The conversations above a session, its starter's starter first and its starter last
+ * (`kuvo.line`, copied from its starter's as it starts, so it's known under a lead on another
+ * computer though the one between isn't here); one from before lines, its starter. */
+export const lineOf = (data: Partial<EngineSession> | null | undefined): string[] => {
+  const line = data?.metadata?.kuvo?.line;
+  if (Array.isArray(line)) return line.filter((each): each is string => typeof each === "string" && /^ses_[A-Za-z0-9]{1,60}$/.test(each)).slice(-20);
+  const by = startedByOf(data);
+  return by ? [by] : [];
+};
+
 /** How deep a session is under the one that started its line (1 for one a bot started itself). */
 export const depthOf = (data: Partial<EngineSession> | null | undefined): number => {
   const depth = data?.metadata?.kuvo?.depth;
@@ -87,11 +97,14 @@ export async function workSessions(targets: Target[], signal?: AbortSignal, { ar
 /** The sessions under the conversation `root` (those it started, theirs, and so on), from `all`. */
 export function under(root: string, all: Listed[]): Listed[] {
   const byID = new Map(all.map(each => [each.data.id, each]));
+  // (Up its starters here, and its line, for one whose line crosses computers.)
   const isUnder = (each: Listed): boolean => {
-    let above = startedByOf(each.data);
-    for (let step = 0; above && step < 20; step++) {
-      if (above === root) return true;
-      above = startedByOf(byID.get(above)?.data);
+    let at: Listed | undefined = each;
+    for (let step = 0; at && step < 20; step++) {
+      if (lineOf(at.data).includes(root)) return true;
+      const above = startedByOf(at.data);
+      if (!above) return false;
+      at = byID.get(above);
     }
     return false;
   };

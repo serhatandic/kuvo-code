@@ -1,6 +1,6 @@
 // A bot's work stopped (Stop All, and Stop the Night): every session of its work that's working or
 // waiting on an answer, and the bot's own turn with what it was still to hear of them, since it
-// would only start them again.
+// would only start them again; and its work on your other computers, told to each (`stop_work`).
 
 import { stopSession } from "../engine/queue";
 import { botHere } from "../bots/here";
@@ -8,6 +8,8 @@ import { noteWorkChanged } from "./changes";
 import { atWorkNow, hasWakeUps, stopWork } from "./background";
 import { askingNow, ofBot, workSessions, workingNow } from "./tree";
 import { forgetWakes } from "./wakes";
+import { leaveCall } from "../letters/calls";
+import { stopBotWorkElsewhere } from "../letters/start-call";
 import type { Target } from "../../shared/records";
 
 /** How many of `bot`'s sessions were stopped. */
@@ -31,6 +33,8 @@ export async function stopBotWork(bot: string, targets: Target[], signal?: Abort
       for (const target of targets) if (await stopSession(target, own).then(() => true, () => false)) break;
     }
   }
+  // Its work on your other computers too: each is told, now or once it's back.
+  stopBotWorkElsewhere(bot, (peer, from, call) => leaveCall(peer, from, call, { wait: false, quiet: true }));
   noteWorkChanged(bot);
   return stopped;
 }

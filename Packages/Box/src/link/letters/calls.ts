@@ -13,7 +13,7 @@ import path from "node:path";
 import { isObject } from "../../shared/json";
 import { plainName } from "../../shared/text";
 import { pause } from "../../shared/wait";
-import { peerTargets } from "../engine/client";
+import { bridgeTarget, peerTargets, readEngineFile } from "../engine/client";
 import { messageID } from "../engine/sessions";
 import { listOf, writePrivate } from "../files";
 import { HERE, IS_MAC } from "../home";
@@ -24,8 +24,11 @@ import { mailFor, movedOf, ownKey, peersOf, removedBoxes } from "../peers/known"
 import { awaySince } from "../peers/reach";
 import { macLink, readLink } from "../state";
 import { homesOf, noteHomes } from "../work/homes";
-import { rowsBox, rowsOf } from "../work/elsewhere";
+import { rowsBox, rowsOf, startedOn } from "../work/elsewhere";
 import { ALLOW_LIFE, answerAskTool, compactSessionTool, liveRows, stopSessionTool } from "../work/tools";
+import { otherComputersAllowed } from "../work/approval";
+import { AWAY_WORDS, noteLineHomes, OPEN_TOOLS, readHere, readJournal, START_FEATURE, startAsOfMail, startsRunning, stopLineWork, takeStart } from "./start-call";
+import type { StartAs, StartJournal } from "./start-call";
 import { deliverNote } from "./note";
 import { cutText, LETTER_LIFE, letterTries, NOTE_MEMORY, placeOfSession, SENDING } from "./letter";
 import { READ_BY_MAIL } from "./conversation";
@@ -44,7 +47,7 @@ import type { Delivered, LetterReply } from "./outbox";
 import type { LetterSender } from "./take";
 
 /** The tools a call runs on another box: what a lead does to the sessions it started. */
-export const CALL_TOOLS = ["list_sessions", "stop_session", "compact_session", "answer_ask"] as const;
+export const CALL_TOOLS = ["list_sessions", "stop_session", "compact_session", "answer_ask", "start_session", "list_models", "list_projects", "stop_work"] as const;
 export type CallTool = (typeof CALL_TOOLS)[number];
 export const isCallTool = (name: unknown): name is CallTool => CALL_TOOLS.includes(name as CallTool);
 
@@ -61,6 +64,8 @@ export interface CallAs {
   bot?: WorksFor;
   rules: KitRule[];
   free: boolean;
+  /** For a start: more of who's calling (`start-call.ts`). */
+  start?: StartAs;
 }
 
 /** A call as it goes by mail (`{"call": …}`): its id, the conversation calling, the tool and its
@@ -98,6 +103,8 @@ export const CALL_WAIT = 20_000;
  * a stop, a compact or a refusal as long as news is. */
 export function callLife(call: Pick<OutboxCall["call"], "tool" | "args">): number {
   if (call.tool === "list_sessions") return 15 * 60_000;
+  // (A start, or a read of what's there, only while its tool waits: never started late.)
+  if (isOpenTool(call.tool)) return 2 * 60_000;
   if (call.tool === "answer_ask" && call.args.decision === "allow") return ALLOW_LIFE;
   return NOTE_MEMORY;
 }
@@ -109,7 +116,10 @@ export const boxName = (peer: Pick<Peer, "kind" | "name" | "id">): string => (pe
 const ownName = (): string => plainName(IS_MAC ? macLink.config?.name : readLink()?.name) || (IS_MAC ? "the Mac" : "a machine");
 
 // What a call's words say a tool did: "stop", "summarize", "answer", "list".
-const verbOf = (tool: CallTool) => (tool === "stop_session" ? "stop" : tool === "compact_session" ? "summary" : tool === "answer_ask" ? "answer" : "list");
+const verbOf = (tool: CallTool) => (tool === "stop_session" || tool === "stop_work" ? "stop" : tool === "compact_session" ? "summary" : tool === "answer_ask" ? "answer" : tool === "start_session" ? "start" : "list");
+const isOpenTool = (tool: unknown): tool is (typeof OPEN_TOOLS)[number] => OPEN_TOOLS.includes(tool as (typeof OPEN_TOOLS)[number]);
+// The calls only for a tool that waits: a list, a start, a read of what's there.
+const waitedFor = (tool: CallTool) => tool === "list_sessions" || isOpenTool(tool);
 
 /** `call` left in the outbox for box `peer`: sent at once on this Mac, the next moment on a machine
  * (its link watches its outbox). Its id. */
@@ -131,7 +141,7 @@ export function sendCall(host: Pick<LinkHost, "send">, id: string, file: string,
   if (now - made > callLife(call.call)) {
     fs.rmSync(file, { force: true });
     letterTries.delete(id);
-    if (call.quiet || call.call.tool === "list_sessions") return;
+    if (call.quiet || waitedFor(call.call.tool)) return;
     const peer = peers.find(each => each.key === call.peer);
     return tellLead(call.from, `[Not done] Your ${call.call.tool} for ${String(call.call.args.session ?? "")} on ${peer ? boxName(peer) : "another computer"} wasn't done: that computer wasn't back in time.${call.call.tool === "answer_ask" && call.call.args.decision === "allow" ? " An allow waits a day at most, as what it was for may have changed. Look at what it asks with list_sessions once it's back." : ""}`).catch(() => {});
   }
@@ -142,7 +152,7 @@ export function sendCall(host: Pick<LinkHost, "send">, id: string, file: string,
   if (lives && lives !== own && !call.quiet) {
     fs.rmSync(file, { force: true });
     letterTries.delete(id);
-    if (call.call.tool === "list_sessions") return;
+    if (waitedFor(call.call.tool)) return;
     return tellLead(call.from, `[Not done] Your ${call.call.tool} for ${String(call.call.args.session ?? "")} wasn't done: you moved to another computer before it could go. Ask again from there.`).catch(() => {});
   }
   if (lives && lives !== own) return void fs.rmSync(file, { force: true });
@@ -190,7 +200,7 @@ export async function tellLead(session: string, text: string, targets: Target[] 
 /** A kept call (no tool waits for it) the box it went to refused for good: the lead hears why,
  * unless it went to every box in case one had it (`quiet`). */
 export function callRefused(call: OutboxCall, why: string, sender: Pick<Peer, "key">): void {
-  if (call.quiet || call.wait === true || !isObject(call.call) || call.call.tool === "list_sessions") return;
+  if (call.quiet || call.wait === true || !isObject(call.call) || waitedFor(call.call.tool)) return;
   const peer = peersOf(readLink()).find(each => each.key === sender.key);
   tellLead(call.from, `[Not done] Your ${call.call.tool} for ${String(call.call.args.session ?? "")} on ${peer ? boxName(peer) : "another computer"}: ${why}`).catch(() => {});
 }
@@ -207,14 +217,14 @@ export type CallOutcome =
   | { older: true }
   | { offline: true; kept: boolean };
 
-const AWAY = "it may be asleep, off or offline";
+const AWAY = AWAY_WORDS;
 
 /** `tool` for `lead` on the box `peer`, waiting `most` ms at most for its answer, less once the
  * relay says that box isn't there. With `keep`, one that can't be answered now is kept for when
  * it's back. */
-export async function callPeer(peer: Peer, tool: CallTool, args: Record<string, unknown>, lead: Lead, place: Pick<ToolPlace, "signal" | "step">, { keep, quiet = false, most = CALL_WAIT }: { keep: boolean; quiet?: boolean; most?: number }): Promise<CallOutcome> {
-  if (!(readPeerAgents()[peer.key]?.features ?? []).includes(CALLS_FEATURE)) return { older: true };
-  const call: OutboxCall["call"] = { tool, args, as: callAs(lead) };
+export async function callPeer(peer: Peer, tool: CallTool, args: Record<string, unknown>, lead: Lead, place: Pick<ToolPlace, "signal" | "step">, { keep, quiet = false, most = CALL_WAIT, start }: { keep: boolean; quiet?: boolean; most?: number; start?: StartAs }): Promise<CallOutcome> {
+  if (!(readPeerAgents()[peer.key]?.features ?? []).includes(isOpenTool(tool) || tool === "stop_work" ? START_FEATURE : CALLS_FEATURE)) return { older: true };
+  const call: OutboxCall["call"] = { tool, args, as: { ...callAs(lead), ...(start ? { start } : {}) } };
   if (offRelay()) {
     if (keep) leaveCall(peer.key, lead.session, call, { wait: false, quiet });
     return { offline: true, kept: keep };
@@ -226,6 +236,12 @@ export async function callPeer(peer: Peer, tool: CallTool, args: Record<string, 
   const sent = Date.now();
   const id = leaveCall(peer.key, lead.session, call, { wait: true, quiet });
   const { answer, unreachable } = await awaitAnswer(id, peer.key, sent, place, { most, cut: READ_BY_MAIL });
+  // A start, or a read of what's there, not answered: never sent again, so it's never done late
+  // (or twice). One that got there is told as a message.
+  if (!answer && isOpenTool(tool)) {
+    fs.rmSync(path.join(SENDING, `${id}.json`), { force: true });
+    letterTries.delete(id);
+  }
   if (answer && "failed" in answer) return { failed: answer.failed };
   if (answer && "note" in answer) return { answer: { text: answer.note, isError: false } };
   if (answer && "text" in answer && typeof answer.text === "string") return { answer: { text: answer.text, isError: answer.isError === true } };
@@ -310,12 +326,14 @@ export async function elsewhereTool(tool: Exclude<CallTool, "list_sessions">, le
 }
 
 /** What each other computer has of the caller's sessions (list_sessions): asked live of each that
- * told this one it has some (they tell as they change, so it knows before it's asleep); one that
- * doesn't answer gives what it last told, as of then. */
+ * told this one it has some (they tell as they change, so it knows before it's asleep), or that the
+ * caller started one on; one that doesn't answer gives what it last told, as of then. */
 export async function rowsEverywhere(lead: Lead, place: Pick<ToolPlace, "signal" | "step">, most = CALL_WAIT): Promise<RowsThere[]> {
   const told = readPeerAgents();
   const kept = new Map(rowsOf(lead.session).map(each => [each.key, each]));
-  const asked = peersOf(readLink()).filter(peer => kept.has(peer.key) && (told[peer.key]?.features ?? []).includes(CALLS_FEATURE));
+  // (And those it started sessions on, whose first rows may not have come yet.)
+  const started = new Set(startedOn(lead.session));
+  const asked = peersOf(readLink()).filter(peer => (kept.has(peer.key) || started.has(peer.key)) && (told[peer.key]?.features ?? []).includes(CALLS_FEATURE));
   return (await Promise.all(asked.map(async (peer): Promise<RowsThere | null> => {
     const name = boxName(peer);
     const before = kept.get(peer.key);
@@ -349,6 +367,8 @@ export interface TakeCallOptions {
   now?: number;
   bridge?: boolean;
   moved?: Map<string, string>;
+  /** Where a session it starts runs: the engine here and the coding agents' bridge. */
+  places?: { readEngine: () => Target; bridge: () => Target | null };
 }
 
 // `as` as it came, cleaned; null for one that isn't.
@@ -358,7 +378,9 @@ function asOfMail(given: unknown): CallAs | null {
     .slice(0, MOST_RULES).map(rule => ({ action: rule.action.slice(0, 200), resource: rule.resource.slice(0, 2000), effect: rule.effect }));
   if (rules.length !== given.rules.length) return null;
   const bot = isObject(given.bot) && typeof given.bot.bot === "string" && /^bot_[A-Za-z0-9]{1,60}$/.test(given.bot.bot) && typeof given.bot.name === "string" ? { bot: given.bot.bot, name: plainName(given.bot.name).slice(0, 100) } : undefined;
-  return { name: plainName(given.name).slice(0, 100) || "another agent", ...(bot ? { bot } : {}), rules, free: given.free };
+  const start = given.start === undefined ? undefined : startAsOfMail(given.start);
+  if (start === null) return null;
+  return { name: plainName(given.name).slice(0, 100) || "another agent", ...(bot ? { bot } : {}), rules, free: given.free, ...(start ? { start } : {}) };
 }
 
 /** A call from a peer (PROTOCOL.md, "Peers", `call`): checked, run once, and answered by a letter
@@ -368,7 +390,7 @@ function asOfMail(given: unknown): CallAs | null {
  * allow goes only within what the lead could do itself, where it lives, and within what this box's
  * own rules (its Settings › Permissions) allow too, each judged on its own; and never for a session
  * in Ask First. Anything else a call can't reach. */
-export async function takeCall(sender: LetterSender & { name?: string }, given: unknown, { send, targets, answer = leaveCallAnswer, now = Date.now(), bridge = true, moved = movedOf(readLink()) }: TakeCallOptions): Promise<void> {
+export async function takeCall(sender: LetterSender & { name?: string }, given: unknown, { send, targets, answer = leaveCallAnswer, now = Date.now(), bridge = true, moved = movedOf(readLink()), places = { readEngine: readEngineFile, bridge: bridgeTarget } }: TakeCallOptions): Promise<void> {
   if (!isObject(given) || typeof given.id !== "string" || !CALL_ID.test(given.id)) return;
   const id = given.id;
   const no = (why: string, again = false) => send(sender, { delivered: { id, ok: false, why, ...(again ? { retry: true } : {}) } });
@@ -380,8 +402,13 @@ export async function takeCall(sender: LetterSender & { name?: string }, given: 
   if (!as) return no("That isn't a call.");
   const { from, tool, made } = given as { from: string; tool: CallTool; made: number };
   const args = given.args as Record<string, unknown>;
-  if (running.has(id)) return;
+  if (running.has(id) || startsRunning.has(id)) return;
   if (id in lettersSeen(now) || `note:${id}` in lettersSeen(now)) return send(sender, { delivered: { id, ok: true } });
+  // Work started here from your other computers only while you let them (this box's switch).
+  if (isOpenTool(tool) && !otherComputersAllowed()) return no(`${ownName()} doesn't take work from your other computers. Ask the user to allow it in Settings › Permissions on ${ownName()}.`);
+  if (tool === "start_session" && !as.start) return no("That isn't a call.");
+  // (A start that's a day old, from a box whose clock is off or a relay that held it: what it was for may have changed.)
+  if (tool === "start_session" && Math.abs(now - made) > LETTER_LIFE) return no("It's too old to start now.");
   // Kept for a box that was away, as long as news is (an allow's day is the tool's to judge).
   if (tool !== "list_sessions" && now - made > NOTE_MEMORY + LETTER_LIFE) return no("It's too old to deliver.");
   running.add(id);
@@ -394,6 +421,30 @@ export async function takeCall(sender: LetterSender & { name?: string }, given: 
     if (lives && lives !== sender.key && lives !== own) return no("That conversation lives on another computer, as this one knows it: it comes again.", true);
     if (await placeOfSession(from, targets).catch(() => undefined)) return no("That conversation is on this computer: another can't speak for it.");
     const session = typeof args.session === "string" ? args.session.trim() : "";
+    if (tool === "start_session" || tool === "list_models" || tool === "list_projects" || tool === "stop_work") {
+      if (!lives) noteHomes([from], sender.key, now);
+      if (tool === "stop_work") {
+        // A bot's Stop All: what's under it here stops, and nothing's said back (it would wake the bot).
+        const before = typeof args.before === "number" ? args.before : made;
+        await stopLineWork(from, before, targets);
+        noteSeen(`note:${id}`, now);
+        return send(sender, { delivered: { id, ok: true } });
+      }
+      if (tool !== "start_session") {
+        const said = await readHere(tool, places, ownName());
+        answer(answerIdOf(id), { to: from, text: said.text, peer: sender.key, answers: id, words: said.text, refused: said.isError, list: true });
+        noteSeen(id, now);
+        return send(sender, { delivered: { id, ok: true } });
+      }
+      // The conversations above the lead live where its box says, where this one knows no better.
+      noteLineHomes(as.start!.homes, now);
+      const peer = peersOf(readLink()).find(each => each.key === sender.key);
+      const journal = readJournal(id) ?? { id, from, sender: sender.key, computer: peer ? boxName(peer) : plainName(sender.name) || "another computer", name: as.name, given: startGiven(args), start: as.start!, made, at: now };
+      const done = await takeStart(journal, places);
+      answer(answerIdOf(id), { to: from, text: done.text, peer: sender.key, answers: id, words: done.text, refused: done.refused, list: false });
+      noteSeen(`note:${id}`, now);
+      return send(sender, { delivered: { id, ok: true } });
+    }
     if (tool !== "list_sessions") {
       if (!SESSION.test(session)) return no("Say which session.");
       if (frozen().has(session)) return no("It's moving between computers: it comes again once it's there.", true);
@@ -427,6 +478,19 @@ export async function takeCall(sender: LetterSender & { name?: string }, given: 
   // (A list may be asked again harmlessly: remembered as a letter is, not as long as news.)
   noteSeen(tool === "list_sessions" ? id : `note:${id}`, now);
   send(sender, { delivered: { id, ok: true } });
+}
+
+// What a start's call asks for, as start_session takes it here: never where the lead's own
+// conversation is (it's on another computer), nor a step of a goal (goals stay on their bot's).
+function startGiven(args: Record<string, unknown>): Record<string, unknown> {
+  const given: Record<string, unknown> = {};
+  for (const field of ["task", "title", "project", "folder", "chat", "worktree", "model", "effort", "mode", "approval", "wake", "wait"]) if (args[field] !== undefined) given[field] = args[field];
+  return given;
+}
+
+/** A start finished from where it got to (`resumeStarts`), told to its lead as its call's answer. */
+export function answerResumed(journal: StartJournal, done: { text: string; refused: boolean }): void {
+  leaveCallAnswer(answerIdOf(journal.id), { to: journal.from, text: done.text, peer: journal.sender, answers: journal.id, words: done.text, refused: done.refused, list: false });
 }
 
 // A call's answer, left in the outbox for the box that called: a list's only for the tool that

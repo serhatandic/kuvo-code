@@ -169,7 +169,12 @@ export { bridgeAsk, bridgeClock, carrySeat, seatPayloads, seatPeers, takeSeat, t
 export { announce, ownAgents, refreshOwn, writeAgents } from "./peers/agents";
 export { answered, deliverLeftAnswers, letterMail, letterWent, sendOutbox } from "./letters/outbox";
 export { takeLetter } from "./letters/take";
-export { callAs, callsBack, takeCall } from "./letters/calls";
+export { answerResumed, callAs, callsBack, takeCall } from "./letters/calls";
+export { computerOf, resumeStarts, stopBotWorkElsewhere } from "./letters/start-call";
+export { agentTool } from "./letters/tools";
+export { stopBotWork } from "./work/stop";
+export { allowOtherComputers, otherComputersAllowed } from "./work/approval";
+export { reapplyApprovals } from "./areas/approval";
 export { pushRows, takeRows } from "./work/elsewhere";
 export { readReach } from "./peers/reach";
 export { peerPlaces } from "./engine/client";

@@ -33,7 +33,8 @@ import { answerAskTool, describeList, finishGoalTool, goalProgressTool, leadOf, 
 import { under, workSessions } from "../work/tree";
 import { rowsBox } from "../work/elsewhere";
 import { awaySince } from "../peers/reach";
-import { awaitAnswer, boxName, boxOf, elsewhereTool, rowsEverywhere } from "./calls";
+import { awaitAnswer, boxName, boxOf, callPeer, elsewhereTool, rowsEverywhere } from "./calls";
+import { computerOf, readElsewhere, startElsewhere } from "./start-call";
 import type { ListedAgent, Target } from "../../shared/records";
 import type { SessionPlace } from "./letter";
 
@@ -292,19 +293,34 @@ export async function agentTool(name: AgentToolName, args: Record<string, unknow
     case "read_conversation":
       return readOne(args, caller, all, targets, place);
     case "start_session": {
+      // On another of your computers (`computer`): checked here, started there.
+      const where = computerOf(args.computer);
+      if ("refused" in where) return refused(where.refused);
+      if ("peer" in where) {
+        if (!root) return refused("Only a conversation on this computer can start work on another.");
+        const caller = { ...root, name: nameOf(root.session, all) };
+        return startElsewhere(where.peer, args, caller, leadOf(caller), place, callPeer);
+      }
       // From a conversation this box doesn't have: an agent all the same, counted and approved as
       // one (`outside`).
       const by = root ? { ...root, name: nameOf(root.session, all) } : OUTSIDE;
-      const outcome = await startSession(args, by, { readEngine: place.readEngine, bridge: place.bridge, step: place.step, signal: place.signal });
+      const { computer: _here, ...given } = args;
+      const outcome = await startSession(given, by, { readEngine: place.readEngine, bridge: place.bridge, step: place.step, signal: place.signal });
       return startedWords(outcome, args.wait === true);
     }
-    case "list_models": {
+    case "list_models":
+    case "list_projects": {
+      const where = computerOf(args.computer);
+      if ("refused" in where) return refused(where.refused);
+      if ("peer" in where) {
+        if (!root) return refused("Only a conversation on this computer can look at another.");
+        return readElsewhere(name, where.peer, leadOf({ ...root, name: nameOf(root.session, all) }), place, callPeer);
+      }
+      if (name === "list_projects") return listProjectsTool();
       let engine: Target | null = null;
       try { engine = place.readEngine(); } catch {}
       return listModelsTool(engine, place.bridge(), place.signal);
     }
-    case "list_projects":
-      return listProjectsTool();
     case "plan_limits":
       return planLimitsTool(place.bridge(), place.signal);
     case "make_project": {

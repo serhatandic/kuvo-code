@@ -17,7 +17,7 @@ import { awaySince } from "../peers/reach";
 import { readPeerAgents } from "../peers/directory";
 import { WORK_CHANGES, WORK_FOLDER } from "./changes";
 import { homesOf, noteHomes } from "./homes";
-import { describeWork, startedByOf, workingNow, workSessions } from "./tree";
+import { describeWork, lineOf, startedByOf, workingNow, workSessions } from "./tree";
 import type { Target } from "../../shared/records";
 import type { WorkSession } from "../../shared/routes/work";
 import type { LinkHost } from "../relay/host";
@@ -96,6 +96,54 @@ export function rowsOf(lead: string): { key: string; at: number; rows: Row[] }[]
   return found;
 }
 
+/** The rows every computer last told of any of `leads`' sessions, each session once. */
+export function rowsOfLeads(leads: ReadonlySet<string>): Row[] {
+  const found = new Map<string, Row>();
+  for (const name of listOf(ELSEWHERE)) {
+    if (!name.endsWith(".json")) continue;
+    for (const [lead, rows] of Object.entries(readRows(name.slice(0, -5))?.leads ?? {})) {
+      if (!leads.has(lead) || !Array.isArray(rows)) continue;
+      for (const row of rows) if (row?.session && !found.has(row.session)) found.set(row.session, row);
+    }
+  }
+  return [...found.values()];
+}
+
+// Where each lead here started sessions on other computers (`run/work/started-elsewhere.json`,
+// `{lead: {key: at}}`): its list_sessions asks there at once, before that computer's first rows come.
+const STARTED = path.join(WORK_FOLDER, "started-elsewhere.json");
+const STARTED_FOR = 30 * 86_400_000;
+
+/** That `lead` started a session on the computer `key` just now. */
+export function noteStartedOn(lead: string, key: string, now = Date.now()): void {
+  try {
+    fs.mkdirSync(WORK_FOLDER, { recursive: true, mode: 0o700 });
+    locked(LOCK, () => {
+      const kept = readStarted();
+      for (const [each, keys] of Object.entries(kept)) {
+        for (const [at, when] of Object.entries(keys)) if (now - when > STARTED_FOR) delete keys[at];
+        if (!Object.keys(keys).length) delete kept[each];
+      }
+      kept[lead] = { ...(kept[lead] ?? {}), [key]: now };
+      writePrivate(STARTED, JSON.stringify(kept));
+    });
+  } catch {}
+}
+
+/** The computers `lead` started sessions on, in the last 30 days. */
+export function startedOn(lead: string, now = Date.now()): string[] {
+  return Object.entries(readStarted()[lead] ?? {}).filter(([, at]) => now - at <= STARTED_FOR).map(([key]) => key);
+}
+
+const readStarted = (): Record<string, Record<string, number>> => {
+  try {
+    const kept = JSON.parse(fs.readFileSync(STARTED, "utf8"));
+    return isObject(kept) ? kept as Record<string, Record<string, number>> : {};
+  } catch {
+    return {};
+  }
+};
+
 /** The computer whose rows name `session` (under any lead), or null. */
 export function rowsBox(session: string): { key: string; row: Row } | null {
   for (const name of listOf(ELSEWHERE)) {
@@ -171,8 +219,8 @@ export function rowsWent(sender: { key: string }, id: string): void {
 }
 
 /** The rows of this box's sessions whose lead lives on another computer, by that computer and lead:
- * each session's lead is the first conversation above it, up its line, that isn't here and lives
- * elsewhere, as this box knows it (`homesOf`). */
+ * each session's leads are the first conversation above it, up its starters, that isn't here, and
+ * those in its line that aren't, each that lives elsewhere, as this box knows it (`homesOf`). */
 export async function rowsElsewhere(targets: Target[], link: LinkState | null, signal?: AbortSignal): Promise<Map<string, Record<string, Row[]>>> {
   const out = new Map<string, Record<string, Row[]>>();
   const own = ownKey(link ?? {});
@@ -182,16 +230,29 @@ export async function rowsElsewhere(targets: Target[], link: LinkState | null, s
   const byID = new Map(all.map(each => [each.data.id, each]));
   const working = await workingNow(targets, signal);
   for (const each of all) {
-    let above = startedByOf(each.data);
-    for (let step = 0; above && byID.has(above) && step < 20; step++) above = startedByOf(byID.get(above)!.data);
-    const key = above ? homes.get(above) : undefined;
-    if (!above || !key || key === own) continue;
-    const leads = out.get(key) ?? {};
-    const rows = (leads[above] ??= []);
-    if (rows.length >= ROWS_EACH) continue;
-    const work = await describeWork(each, working, { signal });
-    rows.push(rowOf(work)!);
-    out.set(key, leads);
+    // Its leads elsewhere: the first conversation up its starters that isn't here, and any in its
+    // line (or its starters' lines) that lives elsewhere, so a lead whose line crosses computers
+    // (A to B to C) hears of it from C too.
+    const above = new Set<string>();
+    let at: (typeof all)[number] | undefined = each;
+    for (let step = 0; at && step < 20; step++) {
+      for (const session of lineOf(at.data)) if (!byID.has(session)) above.add(session);
+      const starter = startedByOf(at.data);
+      if (!starter) break;
+      if (!byID.has(starter)) above.add(starter);
+      at = byID.get(starter);
+    }
+    let row: Row | null = null;
+    for (const lead of above) {
+      const key = homes.get(lead);
+      if (!key || key === own) continue;
+      const leads = out.get(key) ?? {};
+      const rows = (leads[lead] ??= []);
+      if (rows.length >= ROWS_EACH) continue;
+      row ??= rowOf(await describeWork(each, working, { signal }))!;
+      rows.push(row);
+      out.set(key, leads);
+    }
   }
   return out;
 }

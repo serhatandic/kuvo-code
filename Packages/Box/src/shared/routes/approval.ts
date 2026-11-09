@@ -24,10 +24,13 @@ export const SESSION_APPROVAL = object({
 /** This computer's: whether you confirmed Full Access here (`fullAccess`: a client asks you the
  * first time you pick it, then sets it), the one a new conversation starts with (`default`: Auto
  * the first time, then the last one picked here), and whether Auto runs for the engine's
- * conversations and the coding agents' (why it asks first for now, where it doesn't: `held`). */
+ * conversations and the coding agents' (why it asks first for now, where it doesn't: `held`).
+ * `otherComputers`: whether your other computers may start work here (`PATCH {otherComputers}`;
+ * off on the Mac with the app until you say, on for a machine; none from a box before it). */
 export const APPROVAL_HERE = object({
   fullAccess: bool, default: APPROVAL,
   auto: object({ engine: object({ "held?": UNAVAILABLE }), agents: object({ "held?": UNAVAILABLE }) }),
+  "otherComputers?": bool,
 });
 
 /** One of Auto's reviewer's decisions in a conversation: its `id`, when, the action in words and
