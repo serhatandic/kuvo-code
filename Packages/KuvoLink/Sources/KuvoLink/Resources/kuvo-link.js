@@ -18128,6 +18128,8 @@ async function startSession(given, by, place) {
   }
   let modelNote;
   if (remote && !picked.length) {
+    if (!engine && !bridge)
+      return no(503, `The engine on ${HERE} isn't running.`);
     const models = (await usableModels(engine, bridge, place.signal)).filter((each) => !each.retiring);
     if (!models.length)
       return no(400, describeModels([]));
@@ -18264,7 +18266,7 @@ ${goalNote}` : ""}` : "") : task;
     await promptMade(making, session);
   } catch (error) {
     went(session, true);
-    return no(502, `Started a session (${session}), but the task didn't reach it: ${String(error?.message ?? error)}`, session);
+    return no(502, `Started a session (address ${session}), but the task didn't reach it: ${String(error?.message ?? error)}`, session);
   }
   place.steps?.prompted?.();
   went(session, true);
@@ -18364,6 +18366,7 @@ ${answer}` : "It hasn't answered yet; it may still write back with send_message.
 }
 
 // Packages/Box/src/link/letters/start-call.ts
+var START_FIELDS = ["task", "title", "project", "folder", "chat", "worktree", "model", "effort", "mode", "approval", "wake", "wait"];
 var START_FEATURE = "work.elsewhere.start";
 var OPEN_TOOLS = ["start_session", "list_models", "list_projects"];
 var SESSION2 = /^ses_[A-Za-z0-9]{1,60}$/;
@@ -18522,7 +18525,7 @@ async function startElsewhere(peer, args, caller, lead, place, callPeer) {
     }))
   };
   const sent = {};
-  for (const field of ["task", "title", "project", "folder", "chat", "worktree", "model", "effort", "mode", "approval", "wake", "wait"])
+  for (const field of START_FIELDS)
     if (args[field] !== undefined && args[field] !== null)
       sent[field] = args[field];
   sent.task = task;
@@ -18531,15 +18534,11 @@ async function startElsewhere(peer, args, caller, lead, place, callPeer) {
     const text = outcome.answer.text.startsWith("[On ") ? outcome.answer.text : `[On ${name}] ${outcome.answer.text}`;
     outcome = { answer: { text, isError: outcome.answer.isError } };
     const session = /\(address (ses_[A-Za-z0-9]+)\)/.exec(outcome.answer.text)?.[1] ?? null;
-    if (outcome.answer.isError || !session) {
-      if (outcome.answer.isError && !session)
-        return failed(outcome.answer.text);
-      went(null);
-      return outcome.answer;
-    }
+    if (!session)
+      return outcome.answer.isError ? failed(outcome.answer.text) : (went(null), outcome.answer);
     noteHomes([session], peer.key);
     noteStartedOn(caller.session, peer.key);
-    went(session, true);
+    went(session, !outcome.answer.isError);
     return outcome.answer;
   }
   if ("failed" in outcome)
@@ -18548,10 +18547,11 @@ async function startElsewhere(peer, args, caller, lead, place, callPeer) {
     return failed(olderWords(name));
   if ("offline" in outcome)
     return failed(offlineWords(name));
-  if (outcome.away === AWAY_WORDS)
+  if (outcome.away === AWAY_WORDS && !outcome.sent)
     return failed(asleep(name, "nothing was started"));
   went(null);
-  return no(`Couldn't confirm the session started on ${name}: it didn't answer in time. It may still have started, and if it did you'll hear as a message. Check with list_sessions before you start it again.`);
+  const why = outcome.away === AWAY_WORDS ? `it stopped answering (${AWAY_WORDS}) after the start went` : "it didn't answer in time";
+  return no(`Couldn't confirm the session started on ${name}: ${why}. It may still have started, and if it did you'll hear as a message${outcome.away === AWAY_WORDS ? ` once ${name} is back` : ""}. Check with list_sessions before you start it again.`);
 }
 var AWAY_WORDS = "it may be asleep, off or offline";
 var CALLS = path66.join(RUN, "calls");
@@ -18674,6 +18674,13 @@ async function resumeStarts(answer, now = Date.now(), places = { readEngine: rea
     }
     if (startsRunning.has(journal.id))
       continue;
+    if (!otherComputersAllowed() || !peersOf(readLink()).some((peer) => peer.key === journal.sender)) {
+      const why = !otherComputersAllowed() ? "this computer stopped taking work from your other computers" : "your computer was removed from this one";
+      journal.done = journal.session ? { text: `Started a session (address ${journal.session}), but it wasn't given its task: ${why} first.`, refused: true } : { text: `The session wasn't started: ${why} before it was made.`, refused: true };
+      keepJournal(journal);
+      answer(journal, journal.done);
+      continue;
+    }
     if (now - journal.made > LETTER_LIFE && !journal.session) {
       journal.done = { text: `The session wasn't started: this computer went down while starting it, and it's been over a day since you asked. Start it again if it's still needed.`, refused: true };
       keepJournal(journal);
@@ -18725,11 +18732,11 @@ async function readHere(tool, places, where) {
   } catch {}
   return listModelsTool(engine, places.bridge(), undefined, where);
 }
-function noteLineHomes(homes, at = Date.now()) {
+function noteLineHomes(homes, line, at = Date.now()) {
   const keys = new Set(peersOf(readLink()).map((peer) => peer.key));
   const known = homesOf(readLink());
   for (const [session, key] of Object.entries(homes))
-    if (keys.has(key) && !known.has(session))
+    if (line.includes(session) && keys.has(key) && !known.has(session))
       noteHomes([session], key, at);
 }
 
@@ -18794,6 +18801,7 @@ var CALLS_FEATURE = "work.elsewhere";
 var CALL_ID = /^cal_[A-Za-z0-9_-]{16,40}$/;
 var answerIdOf = (call) => `${call}-a`;
 var LIST_BYTES = 22000;
+var BOUNCE = 3000;
 var CALL_WAIT = 20000;
 function callLife(call) {
   if (call.tool === "list_sessions")
@@ -18804,7 +18812,7 @@ function callLife(call) {
     return ALLOW_LIFE;
   return NOTE_MEMORY;
 }
-var boxName = (peer) => peer.kind === "mac" ? plainName(peer.name) || "the Mac" : peer.id || plainName(peer.name) || "another computer";
+var boxName = computerName;
 var ownName = () => plainName(IS_MAC ? macLink.config?.name : readLink()?.name) || (IS_MAC ? "the Mac" : "a machine");
 var verbOf = (tool) => tool === "stop_session" || tool === "stop_work" ? "stop" : tool === "compact_session" ? "summary" : tool === "answer_ask" ? "answer" : tool === "start_session" ? "start" : "list";
 var isOpenTool = (tool) => OPEN_TOOLS.includes(tool);
@@ -18922,7 +18930,9 @@ async function callPeer(peer, tool, args, lead, place, { keep, quiet = false, mo
     return { answer: { text: answer.note, isError: false } };
   if (answer && "text" in answer && typeof answer.text === "string")
     return { answer: { text: answer.text, isError: answer.isError === true } };
-  return { away: unreachable ? AWAY : "it didn't answer in time", kept: keep && !place.signal?.aborted };
+  const since = awaySince(peer.key);
+  const bounced = unreachable && since !== null && since - sent <= BOUNCE;
+  return { away: unreachable ? AWAY : "it didn't answer in time", kept: keep && !place.signal?.aborted, sent: !bounced };
 }
 async function awaitAnswer(id, peer, sent, place, { most, cut, every = 250 }) {
   const stop = new AbortController;
@@ -19057,7 +19067,7 @@ async function takeCall(sender, given, { send, targets, answer = leaveCallAnswer
     return send(sender, { delivered: { id, ok: true } });
   if (isOpenTool(tool) && !otherComputersAllowed())
     return no(`${ownName()} doesn't take work from your other computers. Ask the user to allow it in Settings › Permissions on ${ownName()}.`);
-  if (tool === "start_session" && !as.start)
+  if (tool === "start_session" && (!as.start || as.start.line.at(-1) !== from))
     return no("That isn't a call.");
   if (tool === "start_session" && Math.abs(now - made) > LETTER_LIFE)
     return no("It's too old to start now.");
@@ -19080,7 +19090,7 @@ async function takeCall(sender, given, { send, targets, answer = leaveCallAnswer
       if (!lives)
         noteHomes([from], sender.key, now);
       if (tool === "stop_work") {
-        const before = typeof args.before === "number" ? args.before : made;
+        const before = (typeof args.before === "number" ? args.before : made) + (now - given.at);
         await stopLineWork(from, before, targets);
         noteSeen(`note:${id}`, now);
         return send(sender, { delivered: { id, ok: true } });
@@ -19091,10 +19101,11 @@ async function takeCall(sender, given, { send, targets, answer = leaveCallAnswer
         noteSeen(id, now);
         return send(sender, { delivered: { id, ok: true } });
       }
-      noteLineHomes(as.start.homes, now);
       const peer = peersOf(readLink()).find((each) => each.key === sender.key);
       const journal = readJournal(id) ?? { id, from, sender: sender.key, computer: peer ? boxName(peer) : plainName(sender.name) || "another computer", name: as.name, given: startGiven(args), start: as.start, made, at: now };
       const done = await takeStart(journal, places);
+      if (!done.refused)
+        noteLineHomes(as.start.homes, as.start.line, now);
       answer(answerIdOf(id), { to: from, text: done.text, peer: sender.key, answers: id, words: done.text, refused: done.refused, list: false });
       noteSeen(`note:${id}`, now);
       return send(sender, { delivered: { id, ok: true } });
@@ -19138,7 +19149,7 @@ async function takeCall(sender, given, { send, targets, answer = leaveCallAnswer
 }
 function startGiven(args) {
   const given = {};
-  for (const field of ["task", "title", "project", "folder", "chat", "worktree", "model", "effort", "mode", "approval", "wake", "wait"])
+  for (const field of START_FIELDS)
     if (args[field] !== undefined)
       given[field] = args[field];
   return given;

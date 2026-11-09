@@ -378,7 +378,8 @@ connection.
     plans, its model, whether it's on Autopilot, the bot its work is for (`own`: the lead is that
     bot), the new session's depth and line (the lead's own line, then the lead), the limits you set
     for that bot, and where each in the line lives as the lead's box knows it (kept only for those
-    the receiver knows nothing of, on boxes it knows).
+    the receiver knows nothing of, on boxes it knows, and only once the start is made). A line that
+    doesn't end with `from` isn't a call.
   - **What the receiver does**: its own `start_session`, as for a conversation of its own, from
     the lead: in the folder named (a project there, a folder there, or a chat: a folder of the
     lead's means nothing there), on the lead's model where there's an account for it there, else
@@ -397,20 +398,22 @@ connection.
     answered as it was, and one cut short by the box going down is finished from the step it got
     to at the next round (a session marked with its `kuvo.call` is found rather than made again; a
     task already there isn't sent again), its lead told by the call's answer. One a day old that
-    wasn't made yet isn't started, and the lead hears why. Kept 30 days.
+    wasn't made yet isn't started, nor one whose box has stopped taking starts or was removed since,
+    and the lead hears why. Kept 30 days.
   - **The answer** is a note, as for a stop, so a start whose tool stopped waiting reaches its lead
     as a message; `list_models` and `list_projects` answer as a list does (`read: {}`), in the
     receiving box's name.
   - **Sender side**: a start, or a read of what's there, is never kept for a box that isn't
-    answering: the tool says at once it may be asleep, off or offline and nothing was started, and
-    one not answered in time (45 seconds for a start, 20 for a read) is taken out of the outbox, so
-    it's never started late or twice: the tool says it couldn't confirm, to check `list_sessions`
-    before trying again. The lead's box notes where the session lives ("Homes") and that the lead
+    answering: the tool says at once it may be asleep, off or offline and nothing was started (so
+    too when the relay says so within 3 seconds of the call going: it keeps nothing, so that box
+    never had it). One not answered in time (45 seconds for a start, 20 for a read), or whose box
+    stopped answering later, is taken out of the outbox, so it's never started late or twice: the
+    tool says it couldn't confirm, to check `list_sessions` before trying again. The lead's box notes where the session lives ("Homes") and that the lead
     started work there (`run/work/started-elsewhere.json`, `{<lead>: {<key>: at}}`, 30 days), so
     its `list_sessions` asks there before that computer's first rows come.
   - **`stop_work`** (`{before}`): a bot's Stop All, on each computer that takes starts: every session
     under the bot's conversation there that's working, waiting on an answer or on a timer, made
-    before `before`, stops. Kept for a box that's away until it's back (30 days, `quiet`), and
+    before `before` (moved onto the receiver's clock by how far the call's `at` is from its own), stops. Kept for a box that's away until it's back (30 days, `quiet`), and
     answered with no note (it would wake the bot it stopped).
 - **Rows** (bridge 0.9.204): `{"rows": {id, at, leads: {<lead>: [WorkSession & {askID?}]}}}` tells a
   peer (one whose `features` say `work.elsewhere`) the sessions on the sending box whose lead lives

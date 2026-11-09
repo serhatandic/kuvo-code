@@ -21,7 +21,7 @@ import { botHere } from "../bots/here";
 import { readPeerAgents } from "../peers/directory";
 import { ownKey, peersOf } from "../peers/known";
 import { macLink, readLink } from "../state";
-import { approvalOf, isApproval } from "../work/approval";
+import { approvalOf, isApproval, otherComputersAllowed } from "../work/approval";
 import { isAutopilot } from "../work/autopilot";
 import { runningGoal } from "../work/goals";
 import { homesOf, noteHomes } from "../work/homes";
@@ -41,6 +41,9 @@ import type { Approval } from "../work/approval";
 import type { Caller, Lead } from "../work/tools";
 import type { Making, RemoteLead, StartGiven } from "./start";
 import type { ToolAnswer, ToolPlace } from "./tools";
+
+/** What a start's call asks for, as start_session takes it: never a step of a goal, nor where. */
+export const START_FIELDS = ["task", "title", "project", "folder", "chat", "worktree", "model", "effort", "mode", "approval", "wake", "wait"] as const;
 
 /** What a box's agents' mail says when it takes starts, and reads of its models and projects, from
  * your other computers (`kuvo/info`'s `features` too). */
@@ -133,7 +136,7 @@ export function computerOf(given: unknown, peers: Peer[] = peersOf(readLink())):
 // ---- The caller's side ----
 
 /** How a call went, as the caller's side sees it (`callPeer`'s, `calls.ts`). */
-type Outcome = { answer: ToolAnswer } | { away: string; kept: boolean } | { failed: string } | { older: true } | { offline: true; kept: boolean };
+type Outcome = { answer: ToolAnswer } | { away: string; kept: boolean; sent?: boolean } | { failed: string } | { older: true } | { offline: true; kept: boolean };
 type CallPeer = (peer: Peer, tool: "start_session" | "list_models" | "list_projects", args: Record<string, unknown>, lead: Lead, place: Pick<ToolPlace, "signal" | "step">, options: { keep: boolean; most?: number; start?: StartAs }) => Promise<Outcome>;
 
 const asleep = (name: string, doing: string) => `${name} isn't answering: it may be asleep, off or offline, so ${doing}. Nothing can wake it from here: try again once it's back (a wake-up can remind you), or do it on another computer.`;
@@ -211,7 +214,7 @@ export async function startElsewhere(peer: Peer, args: Record<string, unknown>, 
     homes: Object.fromEntries(line.flatMap(session => { const at = homes.get(session) ?? own; return at ? [[session, at]] : []; })),
   };
   const sent: Record<string, unknown> = {};
-  for (const field of ["task", "title", "project", "folder", "chat", "worktree", "model", "effort", "mode", "approval", "wake", "wait"] as const) if (args[field] !== undefined && args[field] !== null) sent[field] = args[field];
+  for (const field of START_FIELDS) if (args[field] !== undefined && args[field] !== null) sent[field] = args[field];
   sent.task = task;
   let outcome = await callPeer(peer, "start_session", sent, lead, place, { keep: false, most: START_WAIT, start });
   if ("answer" in outcome) {
@@ -219,25 +222,25 @@ export async function startElsewhere(peer: Peer, args: Record<string, unknown>, 
     const text = outcome.answer.text.startsWith("[On ") ? outcome.answer.text : `[On ${name}] ${outcome.answer.text}`;
     outcome = { answer: { text, isError: outcome.answer.isError } };
     const session = /\(address (ses_[A-Za-z0-9]+)\)/.exec(outcome.answer.text)?.[1] ?? null;
-    if (outcome.answer.isError || !session) {
-      // (Refused there: it didn't start.)
-      if (outcome.answer.isError && !session) return failed(outcome.answer.text);
-      went(null);
-      return outcome.answer;
-    }
-    // It lives there: a stop or an answer for it goes there at once, before its first rows come.
+    // Refused there, with nothing made: it didn't start.
+    if (!session) return outcome.answer.isError ? failed(outcome.answer.text) : (went(null), outcome.answer);
+    // Made there (its task may not have reached it): it lives there, so a stop or an answer for it
+    // goes there at once, before its first rows come.
     noteHomes([session], peer.key);
     noteStartedOn(caller.session, peer.key);
-    went(session, true);
+    went(session, !outcome.answer.isError);
     return outcome.answer;
   }
   if ("failed" in outcome) return failed(`On ${name}: ${outcome.failed}`);
   if ("older" in outcome) return failed(olderWords(name));
   if ("offline" in outcome) return failed(offlineWords(name));
-  if (outcome.away === AWAY_WORDS) return failed(asleep(name, "nothing was started"));
-  // It may have started: no answer came in time. Not tried again, so it's never started twice.
+  // Not answering before it went: nothing was started.
+  if (outcome.away === AWAY_WORDS && !outcome.sent) return failed(asleep(name, "nothing was started"));
+  // It went, and no answer came (that computer stopped answering, or took too long): it may have
+  // started. Not tried again, so it's never started twice.
   went(null);
-  return no(`Couldn't confirm the session started on ${name}: it didn't answer in time. It may still have started, and if it did you'll hear as a message. Check with list_sessions before you start it again.`);
+  const why = outcome.away === AWAY_WORDS ? `it stopped answering (${AWAY_WORDS}) after the start went` : "it didn't answer in time";
+  return no(`Couldn't confirm the session started on ${name}: ${why}. It may still have started, and if it did you'll hear as a message${outcome.away === AWAY_WORDS ? ` once ${name} is back` : ""}. Check with list_sessions before you start it again.`);
 }
 
 /** Why a box isn't answering, in `callPeer`'s words, when the relay says it isn't there. */
@@ -376,6 +379,16 @@ export async function resumeStarts(answer: (journal: StartJournal, done: { text:
       continue;
     }
     if (startsRunning.has(journal.id)) continue;
+    // (Switched off since, or the computer it's from removed: not finished here.)
+    if (!otherComputersAllowed() || !peersOf(readLink()).some(peer => peer.key === journal.sender)) {
+      const why = !otherComputersAllowed() ? "this computer stopped taking work from your other computers" : "your computer was removed from this one";
+      journal.done = journal.session
+        ? { text: `Started a session (address ${journal.session}), but it wasn't given its task: ${why} first.`, refused: true }
+        : { text: `The session wasn't started: ${why} before it was made.`, refused: true };
+      keepJournal(journal);
+      answer(journal, journal.done);
+      continue;
+    }
     if (now - journal.made > LETTER_LIFE && !journal.session) {
       journal.done = { text: `The session wasn't started: this computer went down while starting it, and it's been over a day since you asked. Start it again if it's still needed.`, refused: true };
       keepJournal(journal);
@@ -430,8 +443,8 @@ export async function readHere(tool: "list_models" | "list_projects", places: { 
 
 /** Word from the box that called that the conversations above its lead live where it says, kept
  * only for those this box has no word on yet, and only on boxes it knows. */
-export function noteLineHomes(homes: Record<string, string>, at = Date.now()): void {
+export function noteLineHomes(homes: Record<string, string>, line: readonly string[], at = Date.now()): void {
   const keys = new Set(peersOf(readLink()).map(peer => peer.key));
   const known = homesOf(readLink());
-  for (const [session, key] of Object.entries(homes)) if (keys.has(key) && !known.has(session)) noteHomes([session], key, at);
+  for (const [session, key] of Object.entries(homes)) if (line.includes(session) && keys.has(key) && !known.has(session)) noteHomes([session], key, at);
 }

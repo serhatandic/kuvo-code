@@ -362,6 +362,7 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
   if (remote && !picked.length) {
     // A lead on another computer: on its own model where there's an account for it here, else on
     // this computer's default; none at all, it can't start here.
+    if (!engine && !bridge) return no(503, `The engine on ${HERE} isn't running.`);
     const models = (await usableModels(engine, bridge, place.signal)).filter(each => !each.retiring);
     if (!models.length) return no(400, describeModels([]));
     const own = model ? models.find(each => each.providerID === model?.providerID && each.id === model?.id) : undefined;
@@ -488,7 +489,7 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
     await promptMade(making, session);
   } catch (error) {
     went(session, true);
-    return no(502, `Started a session (${session}), but the task didn't reach it: ${String((error as Error | null)?.message ?? error)}`, session);
+    return no(502, `Started a session (address ${session}), but the task didn't reach it: ${String((error as Error | null)?.message ?? error)}`, session);
   }
   place.steps?.prompted?.();
   went(session, true);

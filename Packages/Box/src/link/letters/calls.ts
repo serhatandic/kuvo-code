@@ -27,7 +27,7 @@ import { homesOf, noteHomes } from "../work/homes";
 import { rowsBox, rowsOf, startedOn } from "../work/elsewhere";
 import { ALLOW_LIFE, answerAskTool, compactSessionTool, liveRows, stopSessionTool } from "../work/tools";
 import { otherComputersAllowed } from "../work/approval";
-import { AWAY_WORDS, noteLineHomes, OPEN_TOOLS, readHere, readJournal, START_FEATURE, startAsOfMail, startsRunning, stopLineWork, takeStart } from "./start-call";
+import { AWAY_WORDS, computerName, noteLineHomes, START_FIELDS, OPEN_TOOLS, readHere, readJournal, START_FEATURE, startAsOfMail, startsRunning, stopLineWork, takeStart } from "./start-call";
 import type { StartAs, StartJournal } from "./start-call";
 import { deliverNote } from "./note";
 import { cutText, LETTER_LIFE, letterTries, NOTE_MEMORY, placeOfSession, SENDING } from "./letter";
@@ -96,6 +96,8 @@ export interface OutboxCall {
 
 // How many bytes of rows a list's answer carries at most: within what a letter's words are cut to.
 const LIST_BYTES = 22_000;
+// How soon after a call goes the relay's word that its box isn't there means it never got there.
+const BOUNCE = 3000;
 // How long a box that doesn't answer may take before a tool stops waiting for it.
 export const CALL_WAIT = 20_000;
 
@@ -110,7 +112,7 @@ export function callLife(call: Pick<OutboxCall["call"], "tool" | "args">): numbe
 }
 
 /** What a box is called here: a machine by its name, a Mac by its own or "the Mac". */
-export const boxName = (peer: Pick<Peer, "kind" | "name" | "id">): string => (peer.kind === "mac" ? plainName(peer.name) || "the Mac" : peer.id || plainName(peer.name) || "another computer");
+export const boxName = computerName;
 
 /** This box's own name, as it calls itself to others. */
 const ownName = (): string => plainName(IS_MAC ? macLink.config?.name : readLink()?.name) || (IS_MAC ? "the Mac" : "a machine");
@@ -212,7 +214,7 @@ export function callRefused(call: OutboxCall, why: string, sender: Pick<Peer, "k
  * is off the relay. */
 export type CallOutcome =
   | { answer: ToolAnswer }
-  | { away: string; kept: boolean }
+  | { away: string; kept: boolean; sent?: boolean }
   | { failed: string }
   | { older: true }
   | { offline: true; kept: boolean };
@@ -245,7 +247,11 @@ export async function callPeer(peer: Peer, tool: CallTool, args: Record<string, 
   if (answer && "failed" in answer) return { failed: answer.failed };
   if (answer && "note" in answer) return { answer: { text: answer.note, isError: false } };
   if (answer && "text" in answer && typeof answer.text === "string") return { answer: { text: answer.text, isError: answer.isError === true } };
-  return { away: unreachable ? AWAY : "it didn't answer in time", kept: keep && !place.signal?.aborted };
+  // (`sent`: it may have got there. The relay keeps nothing and says at once when nothing's
+  // connected where a frame goes, so a box said away within moments of the call going never had it.)
+  const since = awaySince(peer.key);
+  const bounced = unreachable && since !== null && since - sent <= BOUNCE;
+  return { away: unreachable ? AWAY : "it didn't answer in time", kept: keep && !place.signal?.aborted, sent: !bounced };
 }
 
 /** The answer to letter or call `id`, sent to box `peer` at `sent`: waited for until it comes, the
@@ -406,7 +412,7 @@ export async function takeCall(sender: LetterSender & { name?: string }, given: 
   if (id in lettersSeen(now) || `note:${id}` in lettersSeen(now)) return send(sender, { delivered: { id, ok: true } });
   // Work started here from your other computers only while you let them (this box's switch).
   if (isOpenTool(tool) && !otherComputersAllowed()) return no(`${ownName()} doesn't take work from your other computers. Ask the user to allow it in Settings › Permissions on ${ownName()}.`);
-  if (tool === "start_session" && !as.start) return no("That isn't a call.");
+  if (tool === "start_session" && (!as.start || as.start.line.at(-1) !== from)) return no("That isn't a call.");
   // (A start that's a day old, from a box whose clock is off or a relay that held it: what it was for may have changed.)
   if (tool === "start_session" && Math.abs(now - made) > LETTER_LIFE) return no("It's too old to start now.");
   // Kept for a box that was away, as long as news is (an allow's day is the tool's to judge).
@@ -425,7 +431,8 @@ export async function takeCall(sender: LetterSender & { name?: string }, given: 
       if (!lives) noteHomes([from], sender.key, now);
       if (tool === "stop_work") {
         // A bot's Stop All: what's under it here stops, and nothing's said back (it would wake the bot).
-        const before = typeof args.before === "number" ? args.before : made;
+        // (On this box's clock: the call was sealed as it went, `at`, on the other's.)
+        const before = (typeof args.before === "number" ? args.before : made) + (now - (given.at as number));
         await stopLineWork(from, before, targets);
         noteSeen(`note:${id}`, now);
         return send(sender, { delivered: { id, ok: true } });
@@ -436,11 +443,12 @@ export async function takeCall(sender: LetterSender & { name?: string }, given: 
         noteSeen(id, now);
         return send(sender, { delivered: { id, ok: true } });
       }
-      // The conversations above the lead live where its box says, where this one knows no better.
-      noteLineHomes(as.start!.homes, now);
       const peer = peersOf(readLink()).find(each => each.key === sender.key);
       const journal = readJournal(id) ?? { id, from, sender: sender.key, computer: peer ? boxName(peer) : plainName(sender.name) || "another computer", name: as.name, given: startGiven(args), start: as.start!, made, at: now };
       const done = await takeStart(journal, places);
+      // The conversations above the lead live where its box says, where this one knows no better
+      // (once it's started: a refused start leaves no word behind).
+      if (!done.refused) noteLineHomes(as.start!.homes, as.start!.line, now);
       answer(answerIdOf(id), { to: from, text: done.text, peer: sender.key, answers: id, words: done.text, refused: done.refused, list: false });
       noteSeen(`note:${id}`, now);
       return send(sender, { delivered: { id, ok: true } });
@@ -484,7 +492,7 @@ export async function takeCall(sender: LetterSender & { name?: string }, given: 
 // conversation is (it's on another computer), nor a step of a goal (goals stay on their bot's).
 function startGiven(args: Record<string, unknown>): Record<string, unknown> {
   const given: Record<string, unknown> = {};
-  for (const field of ["task", "title", "project", "folder", "chat", "worktree", "model", "effort", "mode", "approval", "wake", "wait"]) if (args[field] !== undefined) given[field] = args[field];
+  for (const field of START_FIELDS) if (args[field] !== undefined) given[field] = args[field];
   return given;
 }
 

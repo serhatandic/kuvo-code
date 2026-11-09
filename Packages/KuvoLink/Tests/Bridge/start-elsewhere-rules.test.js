@@ -433,3 +433,73 @@ test("what the caller's computer refuses before anything goes", async () => {
   assert.equal(local.isError, false, local.text);
   assert.equal(eng.seen.made.length, 1);
 });
+
+// ---- Found in review ----
+
+test("a start that went before its computer stopped answering isn't said to have not started: it may have", async () => {
+  leadHere();
+  const going = tool("start_session", { computer: "mini", project: "api", task: "Fix the sign-in." });
+  while (!sending().some(name => read(path.join(run, "outbox", "sending", name))?.call?.tool === "start_session")) await new Promise(resolve => setTimeout(resolve, 5));
+  // Mini stops answering a while after the call went (its lid closed as it started the session):
+  // the relay's word comes on a later frame, seconds on.
+  write(path.join(run, "peer-reach.json"), { [mini.pub]: Date.now() + 5000 });
+  const said = await going;
+  assert.equal(said.isError, true);
+  assert.match(said.text, /^Couldn't confirm the session started on mini: it stopped answering \(it may be asleep, off or offline\) after the start went\. It may still have started, and if it did you'll hear as a message once mini is back\. Check with list_sessions before you start it again\.$/);
+  assert.deepEqual(sending(), [], "and it isn't sent again");
+
+  // The relay says so the moment the call goes (nothing connected there): it never got there.
+  fs.rmSync(path.join(run, "peer-reach.json"));
+  const bounced = tool("start_session", { computer: "mini", project: "api", task: "Fix the sign-in." });
+  while (!sending().some(name => read(path.join(run, "outbox", "sending", name))?.call?.tool === "start_session")) await new Promise(resolve => setTimeout(resolve, 5));
+  write(path.join(run, "peer-reach.json"), { [mini.pub]: Date.now() });
+  assert.match((await bounced).text, /^mini isn't answering: it may be asleep, off or offline, so nothing was started\./);
+});
+
+test("a start cut short isn't finished once this computer stopped taking work from yours, or yours was removed", async () => {
+  const whole = startCall();
+  await take(whole);
+  const kept = read(path.join(run, "calls", `${whole.id}.json`));
+  const pending = (id, sender = mini.pub) => {
+    const each = { ...structuredClone(kept), id, sender, made: Date.now(), at: Date.now() };
+    for (const key of ["done", "making", "session", "marked", "prompted"]) delete each[key];
+    write(path.join(run, "calls", `${id}.json`), each);
+  };
+  const answered = [];
+  const resume = () => link.resumeStarts((each, done) => answered.push([each.id, done]), Date.now(), { readEngine: () => eng.target, bridge: () => null });
+  const made = eng.seen.made.length;
+  link.allowOtherComputers(false);
+  pending("cal_off0000000000001");
+  await resume();
+  link.allowOtherComputers(true);
+  // From a computer that isn't one of yours any more.
+  pending("cal_gone000000000001", crypto.randomBytes(32).toString("base64url"));
+  await resume();
+  assert.equal(eng.seen.made.length, made, "nothing made");
+  assert.deepEqual(answered.map(([id, done]) => [id, done.refused]), [["cal_off0000000000001", true], ["cal_gone000000000001", true]]);
+  assert.match(answered[0][1].text, /^The session wasn't started: this computer stopped taking work from your other computers before it was made\.$/);
+});
+
+test("a start's line must end with the lead that sends it, and a refused one leaves no word on where anyone lives", async () => {
+  const forged = { ...startCall({}, { line: ["ses_someone", "ses_other"], homes: { ses_someone: third.pub } }) };
+  assert.deepEqual((await take(forged)).map(each => [each.ok, each.why]), [[false, "That isn't a call."]]);
+  // Refused there (no such project): the line's homes aren't kept.
+  const refused = startCall({ project: "nowhere" }, { line: ["ses_top", "ses_lead"], homes: { ses_top: third.pub, ses_lead: mini.pub } });
+  await take(refused);
+  assert.equal(answerOf(refused).refused, true);
+  assert.equal(read(path.join(run, "work", "homes.json"))?.ses_top, undefined);
+  assert.equal(eng.seen.made.length, 0);
+});
+
+test("Stop All goes by when it was given, on the other computer's clock: a session started after it, by this one's, stays", async () => {
+  const T = Date.now();
+  // The bot's computer runs five minutes ahead of this one.
+  const ahead = 5 * 60_000;
+  eng.all.set("ses_old", { id: "ses_old", title: "Old", time: { created: T - 1000, updated: T }, directory: "/work", metadata: { kuvo: { startedBy: "ses_lead", depth: 1, by } } });
+  eng.all.set("ses_new", { id: "ses_new", title: "New", time: { created: T + 60_000, updated: T }, directory: "/work", metadata: { kuvo: { startedBy: "ses_lead", depth: 1, by } } });
+  eng.active.add("ses_old");
+  eng.active.add("ses_new");
+  const call = { id: callID(), from: "ses_lead", tool: "stop_work", args: { before: T + ahead }, as: { name: "Foreman", rules: [], free: false }, made: T + ahead, at: T + ahead };
+  await take(call);
+  assert.deepEqual(eng.seen.interrupted, ["ses_old"]);
+});
