@@ -387,7 +387,6 @@ final class AppModel {
         // This Mac's link is its box's: the app tells it what's wanted, and answers what it asks.
         phoneLink.box = { [weak self] in self?.box(BoxClient.mac) }
         host.phoneLink = phoneLink
-        phoneLink.isMoving = { [weak self] id in self?.moves.underWay[id] != nil || Moves.isFrozen(id) }
         phoneLink.engineStarted = { [weak self] in self?.engineStarted }
         phoneLink.restartEngine = { [weak self] in Task { await self?.restart() } }
     }
@@ -648,6 +647,8 @@ final class AppModel {
             follower.onGone = { [weak self] in self?.keeperGone() }
             follower.onMakingWay = { [weak self] makingWay in self?.keeperMakesWay = makingWay }
             host.tellsBox = false
+            // Answering again at a new address (its listener failed by itself): the keeper is told.
+            host.restarted = { [weak self] in Task { await self?.tellKeeper() } }
             // The keeper keeps this Mac awake while agents work, so the app holds nothing besides.
             Awake.shared.keeper = { (try? await KeeperControl.send(.status))?["awake"] as? Bool ?? false }
             keeperBox = follower

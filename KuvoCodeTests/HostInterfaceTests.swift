@@ -134,6 +134,44 @@ import Testing
         #expect(!host.isAnswering)
     }
 
+    /// While the keeper runs this Mac's box, the box reaches the open app through the keeper's host
+    /// interface (its record in the box's folder). The app's own failing by itself (its listener
+    /// gone, as after the Mac sleeps) leaves the keeper's record alone, and once the app answers
+    /// again, at a new address, the keeper is told: what only the app answers (a phone's requests to
+    /// the Mac's own routes) reaches it again, rather than "Kuvo Code on this Mac isn't answering"
+    /// until the app quits (#190).
+    @Test func theAppFailingByItselfLeavesTheKeepersRecordAndTheKeeperFindsItAgain() async throws {
+        let keeper = HostInterface()
+        keeper.appAnswers = false
+        let app = HostInterface()
+        app.tellsBox = false
+        defer {
+            app.restarted = nil
+            app.stop()
+            keeper.stop()
+        }
+        let environment = try await keeper.start()
+        let password = try #require(environment["KUVO_HOST_PASSWORD"])
+        let record = try Data(contentsOf: HostInterface.file)
+        try await app.start()
+        keeper.useApp(try #require(app.address))
+        let told = AsyncStream<Void> { continuation in
+            app.restarted = { [keeper, app] in
+                keeper.useApp(app.address ?? [:])
+                continuation.yield()
+            }
+        }
+        #expect(try await ask("/sites/signed-in", [:], password: password, at: environment).status == 200, "the app, through the keeper")
+
+        // Gone by itself, as its listener's failing has it: stopped, then said.
+        app.stop()
+        app.failedByItself()
+        #expect((try? Data(contentsOf: HostInterface.file)) == record, "the keeper's record stays")
+
+        for await _ in told { break }
+        #expect(try await ask("/sites/signed-in", [:], password: password, at: environment).status == 200, "the app again, at its new address")
+    }
+
     /// Try Again while it's starting (its retry, say) waits for that start: one listener, not a
     /// second that would go on answering with the password after it stops.
     @Test func twoStartsAtOnceAreOneListener() async throws {

@@ -12087,6 +12087,11 @@ function readProjects(file = PROJECTS_FILE) {
     return [];
   }
 }
+var PROJECT_FOLDERS_ENTRY = "kuvo.project-folders";
+var projectFoldersNote = (primary, folders) => `This project spans several folders. You work in its primary folder, ${path44.basename(primary)} (${primary}). These folders belong to the project too, and you can read, search and change files in them the same way:
+${folders.map((folder) => `- ${path44.basename(folder)}: ${folder}`).join(`
+`)}
+When the user mentions one of these folders by name, they mean that folder.`;
 function boxProjects(kit, file = PROJECTS_FILE) {
   if (!fs40.existsSync(file))
     return kit?.projects ?? [];
@@ -22767,7 +22772,17 @@ var promptFiles = (payload) => (Array.isArray(payload?.files) ? payload.files : 
     return { uri, ...name };
   return typeof file?.data === "string" ? { uri: `data:${file.mime ?? "application/octet-stream"};base64,${file.data}`, ...name } : null;
 }).filter(Boolean);
-async function carryToAgents(id, model, readEngine, agents, signal) {
+var CARRY_ROUTE = /^kuvo\/sessions\/([^/]+)\/agents$/;
+var IMPORT_TIMEOUT = 120000;
+async function dropCopies(agents, id, directory, since) {
+  const listed = (await engineGet(agents, `api/session?limit=20${directory ? `&directory=${encodeURIComponent(directory)}` : ""}`).catch(() => null))?.data;
+  for (const each of Array.isArray(listed) ? listed : []) {
+    const from = each?.metadata?.kuvo?.carriedFrom;
+    if (from === id && (each.time?.created ?? since) >= since)
+      await call(agents, "DELETE", `/api/session/${encodeURIComponent(each.id)}`).catch(() => {});
+  }
+}
+async function carryToAgents(id, model, readEngine, agents) {
   const no = (status, message) => ({ status, value: { message } });
   if (!isModel(model) || !runsWithAgents(model))
     return no(400, "That isn’t a coding agent’s model.");
@@ -22804,8 +22819,11 @@ async function carryToAgents(id, model, readEngine, agents, signal) {
   if (carrying.has(id))
     return no(409, "It’s being carried on with the coding agents already.");
   carrying.add(id);
+  const directory = session.location?.directory ?? session.directory;
+  const started = Date.now();
+  let made = null;
+  let kept = false;
   try {
-    const directory = session.location?.directory ?? session.directory;
     let messages = [], waiting = [];
     for (let round = 0;round < 3; round++) {
       const active = (await engineGet(engine, "api/session/active").catch(() => null))?.data ?? {};
@@ -22826,59 +22844,100 @@ async function carryToAgents(id, model, readEngine, agents, signal) {
     const kuvo = bot ? session.metadata?.kuvo ?? { bot: bot.described.id } : {};
     const { approval, applied, autopilot } = session.metadata?.kuvo ?? {};
     const marks = { kuvo: { ...approval ? { approval } : {}, ...applied ? { applied } : {}, ...autopilot === true ? { autopilot } : {}, ...kuvo, carriedFrom: id } };
-    const moved = await call(agents, "POST", "/api/session/import", {
-      title: session.title,
-      agent: session.agent,
-      model,
-      location: { directory },
-      permissions: session.permissions,
-      metadata: marks,
-      messages,
-      waiting: waiting.map((item) => ({ id: renamed[item.id], text: item.text, files: promptFiles(item.payload) }))
-    });
-    if (typeof moved?.id !== "string")
+    let imported = null;
+    try {
+      imported = await call(agents, "POST", "/api/session/import", {
+        title: session.title,
+        agent: session.agent,
+        model,
+        location: { directory },
+        permissions: session.permissions,
+        metadata: marks,
+        messages,
+        waiting: waiting.map((item) => ({ id: renamed[item.id], text: item.text, files: promptFiles(item.payload) }))
+      }, AbortSignal.timeout(IMPORT_TIMEOUT));
+    } catch (error) {
+      await dropCopies(agents, id, directory, started);
+      throw error;
+    }
+    if (typeof imported?.id !== "string") {
+      await dropCopies(agents, id, directory, started);
       return no(502, "The coding agents didn’t take it.");
-    carryQueue(id, moved.id, renamed);
-    for (const item of waiting)
-      await call(engine, "DELETE", `/${route}/inbox/${encodeURIComponent(item.id)}`).catch(() => {});
-    const entries = `/api/experimental/session/${encodeURIComponent(moved.id)}/instructions/entries`;
-    await tellWorktree(agents, moved.id).catch(() => {});
-    await call(agents, "PATCH", `/api/session/${encodeURIComponent(moved.id)}`, { metadata: marks }).catch(() => {});
-    await settleAgain(agents, moved.id, true, signal).catch(() => {});
+    }
+    made = imported.id;
+    const moved = made;
+    await tellWorktree(agents, moved).catch(() => {});
+    await call(agents, "PATCH", `/api/session/${encodeURIComponent(moved)}`, { metadata: marks }).catch(() => {});
+    const folders = directory ? readProjects().find((each) => each.directory === projectOf(directory))?.folders ?? [] : [];
+    if (directory && folders.length) {
+      await call(agents, "PUT", `/api/experimental/session/${encodeURIComponent(moved)}/instructions/entries/${PROJECT_FOLDERS_ENTRY}`, { value: projectFoldersNote(directory, folders) }).catch(() => {});
+    }
+    await settleAgain(agents, moved, true).catch(() => {});
     if (autopilot === true)
-      await tellAutopilot(agents, moved.id, true, signal).catch(() => {});
-    carryDecided(id, moved.id);
+      await tellAutopilot(agents, moved, true).catch(() => {});
     if (bot) {
       const kit = readKit();
       if (kit)
-        await tellBot(agents, bot, moved.id, toldNow(kit, bot));
-      fs75.writeFileSync(path79.join(bot.folder, "session"), moved.id);
-      fs75.writeFileSync(path79.join(bot.folder, "via"), "bridge");
+        await tellBot(agents, bot, moved, toldNow(kit, bot));
+      const via = path79.join(bot.folder, "via");
+      let wasVia = null;
+      try {
+        wasVia = fs75.readFileSync(via, "utf8");
+      } catch {}
+      try {
+        fs75.writeFileSync(via, "bridge");
+        fs75.writeFileSync(path79.join(bot.folder, "session"), moved);
+      } catch (error) {
+        try {
+          if (wasVia === null)
+            fs75.rmSync(via, { force: true });
+          else
+            fs75.writeFileSync(via, wasVia);
+        } catch {}
+        throw error;
+      }
+      kept = true;
+    } else {
+      try {
+        await call(engine, "PATCH", `/${route}`, { metadata: { ...session.metadata ?? {}, "kuvo.archived": true, "kuvo.carriedTo": moved } });
+      } catch (error) {
+        const now = (await engineGet(engine, route).catch(() => null))?.data;
+        if (now?.metadata?.["kuvo.carriedTo"] !== moved)
+          throw error;
+      }
+      kept = true;
+    }
+    carryQueue(id, moved, renamed);
+    for (const item of waiting)
+      await call(engine, "DELETE", `/${route}/inbox/${encodeURIComponent(item.id)}`).catch(() => {});
+    carryDecided(id, moved);
+    if (bot) {
       await call(engine, "DELETE", `/${route}`).catch(() => {});
     } else {
-      const from = path79.join(SESSION_WAKES, id), to = path79.join(SESSION_WAKES, moved.id);
+      const from = path79.join(SESSION_WAKES, id), to = path79.join(SESSION_WAKES, moved);
       if (fs75.existsSync(path79.join(from, "session")) && !fs75.existsSync(to)) {
         try {
           fs75.renameSync(from, to);
-          fs75.writeFileSync(path79.join(to, "session"), moved.id);
+          fs75.writeFileSync(path79.join(to, "session"), moved);
           fs75.writeFileSync(path79.join(to, "directory"), directory ?? "");
           fs75.writeFileSync(path79.join(to, "via"), "bridge");
         } catch {}
       }
-      await call(engine, "PATCH", `/${route}`, { metadata: { ...session.metadata ?? {}, "kuvo.archived": true, "kuvo.carriedTo": moved.id } }).catch(() => {});
       try {
         holdArchived(id, true);
       } catch {}
     }
-    return { status: 200, value: { session: moved.id } };
+    return { status: 200, value: { session: moved } };
   } catch (error) {
+    if (made && !kept)
+      await call(agents, "DELETE", `/api/session/${encodeURIComponent(made)}`).catch(() => {});
     return no(502, error?.message ?? String(error));
   } finally {
     carrying.delete(id);
   }
 }
 async function* carryRoute(context, toAgents) {
-  const { request, signal, readEngine, bridge, json } = context;
+  const { request, readEngine, bridge, json } = context;
   if (request.method.toUpperCase() !== "POST")
     return yield* json(405, {});
   let id;
@@ -22887,7 +22946,7 @@ async function* carryRoute(context, toAgents) {
   } catch {
     return yield* json(404, { message: "That conversation isn’t there any more." });
   }
-  const { status, value } = await carryToAgents(id, parsed(request.body)?.model, readEngine, bridge(), signal);
+  const { status, value } = await carryToAgents(id, parsed(request.body)?.model, readEngine, bridge());
   return yield* json(status, value);
 }
 
@@ -22974,7 +23033,7 @@ async function changeBot(id, given, readEngine, readBridge, machine, signal) {
           try {
             agents = readBridge();
           } catch {}
-          const carried = await carryToAgents(here.session, model, readEngine, agents, signal);
+          const carried = await carryToAgents(here.session, model, readEngine, agents);
           if (carried.status !== 200)
             return carried;
           Object.assign(here, botHere(id) ?? {});
@@ -25648,10 +25707,6 @@ function rulesFor(approval, parent, folders) {
   const own = Array.isArray(parent?.permissions) ? parent.permissions.filter((rule) => !isFolderRule(rule) || rule.resource.includes("/bots/bot_")) : [];
   return approvalRules(approval, [...own, ...folderRules(folders)]);
 }
-var projectsNote = (primary, folders) => `This project spans several folders. You work in its primary folder, ${path89.basename(primary)} (${primary}). These folders belong to the project too, and you can read, search and change files in them the same way:
-${folders.map((folder) => `- ${path89.basename(folder)}: ${folder}`).join(`
-`)}
-When the user mentions one of these folders by name, they mean that folder.`;
 function projectOf3(folder) {
   if (folder === CHATS)
     return null;
@@ -25869,7 +25924,7 @@ async function startSession(given, by, place) {
   }
   const address = encodeURIComponent(session);
   if (project?.folders.length) {
-    await call(target, "PUT", `/api/experimental/session/${address}/instructions/entries/kuvo.project-folders`, { value: projectsNote(folder, project.folders) }).catch(() => {});
+    await call(target, "PUT", `/api/experimental/session/${address}/instructions/entries/${PROJECT_FOLDERS_ENTRY}`, { value: projectFoldersNote(folder, project.folders) }).catch(() => {});
   }
   if (autopilot)
     await tellAutopilot(target, session, true).catch(() => {});
@@ -27651,7 +27706,7 @@ import fs90 from "node:fs";
 import path95 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "0.9.208";
+var BRIDGE_VERSION = "0.9.209";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
@@ -30960,7 +31015,7 @@ var ROUTES = [
   { when: (route) => route === APP_ICON_ROUTE, answer: appIconRoute },
   { when: (route) => route === "kuvo/bots/keys/refresh", answer: botKeysRefreshRoute },
   { when: (route) => /^kuvo\/bots\/[^/]+\/keys(\/[^/]+)?$/.test(route), answer: botKeysRoute },
-  { when: (route) => route.match(/^kuvo\/sessions\/([^/]+)\/agents$/), answer: carryRoute },
+  { when: (route) => route.match(CARRY_ROUTE), answer: carryRoute },
   { when: (route, request) => ["PATCH", "DELETE"].includes(request.method.toUpperCase()) && route.match(/^kuvo\/bots\/([^/]+)$/), answer: botRoute },
   { when: (route) => GROUP_ROUTE.test(route), answer: groupsRoute },
   { when: (route) => ARTIFACT_ROUTE.test(route), answer: artifactsRoute },
@@ -31221,7 +31276,7 @@ var MAC_BOX_ROUTES = [
   "kuvo/search",
   "kuvo/git"
 ];
-var macAnswersAlso = (route) => /^kuvo\/accounts\/[^/]+\/(forget|refresh)$/.test(route) || /^kuvo\/shell\/[^/]+\/stop$/.test(route) || route === "kuvo/sessions" || QUEUE_ROUTE.test(route) || SESSION_APPROVAL_ROUTE.test(route) || SESSION_DECISIONS_ROUTE.test(route);
+var macAnswersAlso = (route) => /^kuvo\/accounts\/[^/]+\/(forget|refresh)$/.test(route) || /^kuvo\/shell\/[^/]+\/stop$/.test(route) || route === "kuvo/sessions" || QUEUE_ROUTE.test(route) || SESSION_APPROVAL_ROUTE.test(route) || SESSION_DECISIONS_ROUTE.test(route) || SESSION_AUTOPILOT_ROUTE.test(route) || CARRY_ROUTE.test(route);
 var macAnswers = (route) => MAC_BOX_ROUTES.some((area) => route === area || route.startsWith(`${area}/`)) || macAnswersAlso(route);
 var APP_NOT_ANSWERING = "Kuvo Code on this Mac isn't answering. Try again in a moment.";
 async function* toApp(request, phone, signal) {

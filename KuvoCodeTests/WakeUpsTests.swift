@@ -66,11 +66,13 @@ import Testing
     /// A session with a wake-up for tomorrow moves to Claude Code: the wake-up is the new
     /// session's, waiting, not left behind with the old one in Archived.
     @Test func wakeUpsMoveWithTheConversation() async throws {
-        let box = try await start()
+        let box = try #require(try await start())
         defer { done(box) }
         let moved = "ses_onagents"
         let imported = StubWeb.json(["data": Self.session(moved, agent: true)])
         StubWeb.route(Self.bridge + "/api/session/import") { _ in imported }
+        // (The box carries it, to the bridge it's told of.)
+        try await box.agents(at: Self.bridge)
         let agents = OutsideAgents()
         agents.connect(ServerEndpoint(url: URL(string: Self.bridge)!, password: "test"), folderPrefix: "")
         app.workspace.agents = agents

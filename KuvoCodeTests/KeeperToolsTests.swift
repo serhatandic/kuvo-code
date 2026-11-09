@@ -5,7 +5,8 @@ import Testing
 
 /// With Kuvo Code closed, this Mac's box goes on, and so do the agents on it: the keeper's tools
 /// (`KeeperTools`) answer what a machine's box answers without any app (agents writing to each
-/// other, wake-ups, a bot's job, the vault), and only the browser says it needs Kuvo Code open.
+/// other, wake-ups, a bot's job, the vault, the sandbox's way out), and only the browser says it
+/// needs Kuvo Code open.
 /// Over real HTTP, to a stand-in for this Mac's box on a loopback port of the test's own.
 @MainActor
 @Suite(.serialized, .timeLimit(.minutes(1))) struct KeeperToolsTests {
@@ -135,5 +136,51 @@ import Testing
         #expect(text(result).contains("Kuvo Code open"))
         #expect(result["isError"] as? Bool == true)
         #expect(asked.requests("/kuvo/agent-tools").isEmpty)
+    }
+
+    /// An agent whose command the sandbox stopped asks to run it outside, with Kuvo Code closed (#206):
+    /// sandbox_ask is listed as this Mac's box lists it now, before the app has ever listed the tools
+    /// and whatever it last listed, and the call goes to the box, which asks you, rather than saying
+    /// the browser needs Kuvo Code open.
+    @Test func anAgentAsksToGoOutsideTheSandboxWithTheAppClosed() async throws {
+        let asked = Asked()
+        let ask: [String: Any] = ["name": "sandbox_ask", "description": "Ask the user to run a command outside the sandbox.", "inputSchema": ["type": "object"]]
+        let box = try await StubListener { request, body in
+            asked.note(request, body)
+            guard request.url?.path() == "/kuvo/sandbox/tools" else { return StubWeb.Answer(status: 404) }
+            if request.httpMethod == "GET" { return StubWeb.json(["tools": [ask]]) }
+            return StubWeb.json(["text": "Allowed once. It printed: done", "isError": false])
+        }
+        let endpoint = box.endpoint
+        let tools = KeeperTools(record: { $0 == "serve.json" ? endpoint : nil })
+        try? FileManager.default.removeItem(at: KeeperTools.listFile)
+        defer {
+            tools.stop()
+            box.stop()
+            try? FileManager.default.removeItem(at: KeeperTools.listFile)
+        }
+        let server = try await tools.start().agents
+        let names = { (result: [String: Any]) in ((result["tools"] as? [[String: Any]]) ?? []).compactMap { $0["name"] as? String } }
+
+        // Before the app has ever listed them.
+        var listed = names(try await call(server, ["method": "tools/list"]))
+        #expect(listed.contains("sandbox_ask"))
+        #expect(listed.contains("send_message"))
+        // As the app last listed them, from before the sandbox was on.
+        let kept = try JSONSerialization.data(withJSONObject: BrowserTools.definitions(vault: []))
+        FileManager.default.createFile(atPath: KeeperTools.listFile.path, contents: kept)
+        listed = names(try await call(server, ["method": "tools/list"]))
+        #expect(listed.filter { $0 == "sandbox_ask" }.count == 1)
+
+        let result = try await call(server, ["method": "tools/call", "params": [
+            "name": "sandbox_ask", "arguments": ["command": "swift build", "why": "To build the app."],
+            "_meta": ["ai.opencode/sessionID": "ses_bot"],
+        ]])
+        #expect(text(result) == "Allowed once. It printed: done")
+        #expect(result["isError"] as? Bool == false)
+        let sent = try #require(asked.requests("/kuvo/sandbox/tools").last)
+        #expect(sent.body["name"] as? String == "sandbox_ask")
+        #expect(sent.body["session"] as? String == "ses_bot")
+        #expect((sent.body["arguments"] as? [String: Any])?["command"] as? String == "swift build")
     }
 }

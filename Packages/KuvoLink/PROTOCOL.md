@@ -1864,25 +1864,31 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   answers `503` as Machines' changes do. A phone takes this list for all your machines and forgets
   the rest, so where those can't be told, the box answers `503 {"message"}` rather than a short list.
 - `POST kuvo/sessions/<id>/agents` with `{"model": {providerID, id, variant?}}`: a
-  conversation the engine runs (on the Mac or a machine it reaches) carried on with the coding
-  agents on that model (one of theirs, or Custom Auto's `auto`), as picking it in the
-  conversation does: a session of theirs with the whole conversation, what was waiting and its
-  draft; the engine's goes to Archived, and a bot's conversation becomes the new one. `200
-  {"session"}`, the new one, to open (read through `kuvo/agents/api/…`). Errors are
+  conversation this box's engine runs carried on with its coding agents on that model (one of
+  theirs, or Custom Auto's `auto`), as picking it in the conversation does: a session of theirs
+  with the whole conversation (without what an undo not yet kept took back) and what was waiting;
+  the engine's goes to Archived, and a bot's conversation becomes the new one. Every box answers it
+  for its own conversations, a Mac's with its app closed too, and every client asks the box the
+  conversation lives on (the Mac's model picker as a phone's; a client carries the draft itself).
+  `200 {"session"}`, the new one, to open (read through `kuvo/agents/api/…`). Errors are
   `{"message"}`: 400 for a model that isn't theirs; 404 for no such conversation; 409 for one
-  with them already, or while it moves; 422 for a model it can't use where it is (signed out);
-  503 while the coding agents aren't running there; 502 when the move failed. Nothing opens on
-  the Mac. A machine's bridge does the same for its own, with the Mac closed: a phone asks the
-  computer the conversation lives on. There the session's wake-ups and watches go
-  with it, the engine's is marked `kuvo.carriedTo` (the new one's id) as it's archived, the new
-  one `kuvo.carriedFrom` (the old one's id, under `kuvo` in its metadata), and once
-  started it goes to its end, whatever becomes of the request. A client that carries one itself
-  marks both too, as it archives it: a session archived so takes its queue on the
-  box with it, once (paused, stopped by you, it stays so in the new one, with what waited on the
-  box). One brought back keeps the mark and its own queue, archived again too (the box keeps the
-  carries it made in `run/queues-carried.json`). Changing a machine's bot's model there to
-  one of the agents' (`PATCH kuvo/bots/<id>`) carries its conversation on with them too; the Mac
-  takes in its new conversation as it next connects.
+  with them already, or while it moves; 422 for a model it can't use where it is (not installed, or
+  signed out: the box checks its bridge's integration, `metadata.installed` and `connections`);
+  503 while the engine or the coding agents aren't running there; 502 when the move failed. Nothing
+  opens on the Mac. The session's wake-ups and watches go with it, the engine's is marked
+  `kuvo.carriedTo` (the new one's id) as it's archived, the new one `kuvo.carriedFrom` (the old
+  one's id, under `kuvo` in its metadata) and its approval and Autopilot, and it's told its
+  worktree (`kuvo.worktree`) and its project's other folders (`kuvo.project-folders`), as a session
+  started there is. It's all or nothing (bridge 0.9.209): once started it goes to its end,
+  whatever becomes of the request, and until the engine's is marked (a bot's, its record names the new one) anything that
+  fails deletes the new one again (and any the bridge made from it without saying so: its sessions
+  marked `carriedFrom` this one, made since), so the conversation stays as it was, with what
+  waited, and can be tried again; a failed move never leaves a copy. A session archived so takes
+  its queue on the box with it, once (paused, stopped by you, it stays so in the new one, with what
+  waited on the box). One brought back keeps the mark and its own queue, archived again too (the
+  box keeps the carries it made in `run/queues-carried.json`). Changing a bot's model to one of the
+  agents' (`PATCH kuvo/bots/<id>`) carries its conversation on with them the same way; a Mac takes
+  in a machine's bot's new conversation as it next connects.
 - `POST kuvo/sign-in/return` with `{"url"}`: where a sign-in's page sent the browser back to the
   computer (`http://127.0.0.1:<port>/…?code=…`: a plan's that finishes there, an MCP server's at
   `127.0.0.1:19876`, a coding agent's), which a phone can't load. The computer loads it, as the
@@ -3324,8 +3330,10 @@ What a phone asks, it answers itself for the areas that have moved onto it and i
 (`kuvo/phones…`), and, as every box answers them, `kuvo/file`, `kuvo/sign-in/return`,
 `kuvo/accounts/credentials`, `kuvo/shell/<id>/stop`, the engine's API and the coding agents'
 (`api/…`, `kuvo/agents/…`, telling who a message names with `&`; bridge 0.9.64), and `kuvo/named`
-and `kuvo/groups…` (bridge 0.9.65); the app did each before. While its engine starts, or starts
-again, the engine's routes answer `503 {"message": "This Mac's engine is starting. Try again in a
+and `kuvo/groups…` (bridge 0.9.65), and a session's own routes: its queue, `stop`, approval,
+decisions, Autopilot (`kuvo/sessions/<id>/autopilot…`) and its move to the coding agents
+(`kuvo/sessions/<id>/agents`, both from bridge 0.9.209); the app did each before. While its
+engine starts, or starts again, the engine's routes answer `503 {"message": "This Mac's engine is starting. Try again in a
 moment."}` (a machine's say "This machine's"). From 0.9.66, once the app has given up on it (no try
 can help; the app's `run/engine-stopped`, why, until it starts or stops it again),
 they say "This Mac's engine isn't running." with why, and that Try Again on the Mac starts it (or
@@ -3343,7 +3351,9 @@ What it asks the app goes through the app's `hello` proof first (the host interf
 the link's keys (`link/identity`) are never asked of a host that hasn't given it. When the app's
 host interface starts again (it failed, or Try Again), what the link has open through it ends: a
 phone's followed `link/route` streams end (the phone follows again), and a request in the gap is a
-`503`.
+`503`. While the keeper runs the box, the record in `run/host.json` is the keeper's alone: the app's
+own host interface failing or starting again leaves it, and the app tells the keeper where it
+answers now.
 
 For the app only (anyone else gets `403`):
 
@@ -4523,8 +4533,9 @@ On macOS `top` runs outside the sandbox as it is (it's setuid, which the sandbox
 shows no program's environment); `ps` stays refused in it, as it would show every program's
 environment: in Auto it goes to the reviewer as any stopped command.
 
-The tool is the box's, so an agent has it on every box (`sandbox.asks`): this Mac's tool server and a
-machine's (`kuvo-browser.js mcp`, through `box route`) list what `GET kuvo/sandbox/tools` gives (only
+The tool is the box's, so an agent has it on every box (`sandbox.asks`): this Mac's tool server
+(the app's, and the keeper's with the app closed) and a machine's (`kuvo-browser.js mcp`, through
+`box route`) list what `GET kuvo/sandbox/tools` gives (only
 while the sandbox is `on`) and pass a call to `POST kuvo/sandbox/tools` `{session, name, arguments}`
 → `{text, isError}`, which, as the vault's, the box carries out only while that conversation is
 making that call. The asks, the tool and the answers live in the box's long-running process, as the

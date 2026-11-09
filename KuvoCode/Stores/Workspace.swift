@@ -1663,10 +1663,11 @@ final class Workspace {
         return session
     }
 
-    /// An engine session you picked a coding agent's model (or Auto) in: it carries on with the
-    /// agents, in a session of theirs with its conversation (their first agent is handed all of
-    /// it), opened in its place; the engine's goes to Archived, its draft comes along. `opens`:
-    /// with no tab of it, the new one opens (not when a phone moved it). Nil: it isn't there.
+    /// An engine session you picked a coding agent's model (or Auto) in: its box carries it on with
+    /// the agents, in a session of theirs with its conversation (their first agent is handed all of
+    /// it), as a phone's pick does (`carryToAgents`); the new one opens in its place, the engine's
+    /// goes to Archived, its draft comes along. `opens`: with no tab of it, the new one opens. Nil:
+    /// it isn't there.
     @discardableResult
     func moveToAgents(_ id: String, model: ModelRef, opens: Bool = true) async throws -> Session? {
         // Moving to another computer: it goes to the coding agents once it's there.
@@ -1690,7 +1691,8 @@ final class Workspace {
         let kept = await onMovedToAgents?(id, moved) == true
         // With no tab of it, it opens as any session does; a bot's that wasn't open stays so.
         if !swapped, !kept, opens { tabs?.open(.session(moved.id)) }
-        if !kept { await setArchived(id, true, carriedTo: moved.id) }
+        // Archived by its box, as it's shown here from now on.
+        if !kept, let api = api(forSession: id), let archived = try? await api.session(id) { upsert(archived) }
         return moved
     }
 
@@ -1711,75 +1713,25 @@ final class Workspace {
         bridgeSessions.formUnion(ids)
     }
 
-    /// An engine session's conversation carried on with the agents (see `moveToAgents`), in a
-    /// new session of theirs, with what was waiting; nothing archived or opened (`moveToAgents`
-    /// brings its draft).
+    /// An engine session's conversation carried on with the coding agents by its box
+    /// (`POST kuvo/sessions/<id>/agents`, PROTOCOL.md), here or on a machine, as a phone's pick has it
+    /// carried: the whole conversation and what was waiting, its wake-ups and Autopilot, and the
+    /// engine's archived, or nothing at all when it can't (its box says why). The new session, as its
+    /// bridge has it; nil: it isn't there.
     func carryToAgents(_ id: String, model: ModelRef) async throws -> Session? {
-        guard let session = session(id), let engine = api(forSession: id) else { return nil }
+        guard let session = session(id) else { return nil }
+        let directory = session.location.directory
+        let escaped = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed.subtracting(CharacterSet(charactersIn: "/"))) ?? id
+        let given = try JSONSerialization.jsonObject(with: JSONEncoder().encode(model))
+        struct Carried: Decodable { var session: String }
+        let carried: Carried = try await onBox(Self.box(of: directory), "POST", "kuvo/sessions/\(escaped)/agents", ["model": given])
         // (On a machine, its own bridge, beside its engine.)
-        let place = agents(forFolder: session.location.directory)
-        guard let bridge = place?.api else { throw OutsideAgents.Failure.notRunning(place?.failure) }
-        // What waits stays waiting (it comes along), rather than starting as the run ends; if the
-        // session can't move after all, it goes on as before.
-        let wasPaused = models[id]?.isQueuePaused ?? true
-        var moving = true
-        defer { if moving, !wasPaused { models[id]?.resumeQueue() } }
-        await models[id]?.holdQueue()
-        // Not partway through a turn.
-        if running.contains(id) {
-            _ = try? await engine.interrupt(session: id)
-            try? await engine.wait(session: id)
+        if let bridge = agents(forFolder: directory)?.api, let moved = try? await bridge.session(carried.session) {
+            upsert(moved)
+            return moved
         }
-        // Its whole conversation, page by page (a great many messages at most).
-        var page = try await engine.messages(session: id, limit: 200)
-        var messages = page.data
-        while page.data.count >= 200, messages.count < 20_000, let cursor = page.cursor?.next ?? page.cursor?.previous {
-            page = try await engine.messages(session: id, limit: 200, before: cursor)
-            if page.data.isEmpty { break }
-            messages = page.data + messages
-        }
-        // An undo waiting to be kept: the conversation as it is now, without what it took back
-        // (its files are back already, and its message is in your composer).
-        let current = (try? await engine.session(id)) ?? session
-        if let revert = current.revert, let cut = messages.firstIndex(where: { $0.id == revert.messageID }) {
-            messages = Array(messages[..<cut])
-        }
-        // What you'd sent that was waiting comes along, still waiting (nothing starts there).
-        let waiting = ((try? await engine.inbox(session: id)) ?? []).filter { $0.type == "user" && $0.text != nil }
-        let carried = waiting.map { OpenCodeAPI.WaitingPrompt(id: Identifier.message(), text: $0.text ?? "", files: Self.promptFiles(in: $0.payload)) }
-        let moved = try await bridge.importSession(directory: session.location.directory, title: session.title, agent: session.agent, model: model,
-                                                   permissions: current.permissions, messages: messages, waiting: carried)
-        moving = false
-        // Marked as carried on from this one, whose files its words show: they stay while it does.
-        var metadata = moved.metadata?.object ?? [:]
-        var kuvo = metadata["kuvo"]?.object ?? [:]
-        kuvo["carriedFrom"] = .string(id)
-        metadata["kuvo"] = .object(kuvo)
-        try? await bridge.setMetadata(session: moved.id, .object(metadata))
-        for item in waiting { try? await engine.cancelInbox(session: id, item: item.id) }
-        // As its bridge knows them: a machine's folders are plain paths there.
-        let extra = extraFolders(session.location.directory).map(bridge.enginePath)
-        if !extra.isEmpty {
-            try? await bridge.setInstruction(session: moved.id, key: ProjectFolders.instructionKey, text: ProjectFolders.instructions(primary: bridge.enginePath(session.location.directory), folders: extra))
-        }
-        if let tree = worktrees[session.location.directory] {
-            try? await bridge.setInstruction(session: moved.id, key: Self.worktreeInstructionKey, text: Self.instructions(for: tree))
-        }
-        upsert(moved)
-        await WakeUps.carry(from: session, to: moved)
-        // On Autopilot, it stays so there, its agent told by its box (which brings its calls along).
-        if AutopilotShown.isOn(current) { await self.model(for: moved.id)?.switchAutopilot(true) }
-        return moved
-    }
-
-    /// A waiting message's files as they were sent: on this Mac, or with it (`data:`).
-    private static func promptFiles(in payload: JSONValue) -> [OpenCodeAPI.PromptFile] {
-        (payload["files"]?.array ?? []).compactMap { file in
-            let name = file["name"]?.string
-            if let uri = file["source"]?["uri"]?.string ?? file["uri"]?.string { return .init(uri: uri, name: name) }
-            guard let data = file["data"]?.string else { return nil }
-            return .init(uri: "data:\(file["mime"]?.string ?? "application/octet-stream");base64,\(data)", name: name)
-        }
+        await refreshAgents()
+        return self.session(carried.session)
     }
 
     /// A session was deleted: its panel goes with it. The app sets it.

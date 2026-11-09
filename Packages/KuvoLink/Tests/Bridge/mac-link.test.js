@@ -304,9 +304,33 @@ test("every area the app sends to this Mac's box, the box answers a phone itself
   assert.deepEqual(listed.filter(route => route !== "kuvo/link" && !link.macAnswers(`${route}/x`)), []);
   assert.equal(link.macAnswers("kuvo/link/config"), false);
   // A session's own routes the app moved there too, not its others.
-  assert.ok(link.macAnswers("kuvo/sessions/ses_1/approval"));
-  assert.ok(link.macAnswers("kuvo/sessions/ses_1/queue"));
-  assert.equal(link.macAnswers("kuvo/sessions/ses_1/agents"), false);
+  // A session's own routes the app hands its box (PhoneLink's `movedToBox`), the box answers a phone too.
+  const appHands = new RegExp(`^${swift.match(/route\.wholeMatch\(of: \/(kuvo\\\/sessions\\\/.*?)\/\) != nil/)[1]}$`);
+  for (const route of ["queues/events", "ses_1/stop", "ses_1/approval", "ses_1/decisions", "ses_1/autopilot", "ses_1/autopilot/asked", "ses_1/queue", "ses_1/queue/hold", "ses_1/agents"]) {
+    assert.ok(link.macAnswers(`kuvo/sessions/${route}`), route);
+    assert.ok(appHands.test(`kuvo/sessions/${route}`), `${route} is in the app's list`);
+  }
+  assert.equal(link.macAnswers("kuvo/sessions/ses_1/branch"), false);
+  assert.equal(appHands.test("kuvo/sessions/ses_1/branch"), false);
+});
+
+test("a phone moving a conversation to the coding agents, or reading its Autopilot, is answered by this Mac's box, whether the app answers or not", async () => {
+  const { it } = await paired();
+  const asked = app.asked.length;
+  const codex = { model: { id: "gpt-5.5", providerID: "codex" } };
+  for (const away of [false, true]) {
+    app.away = away;
+    try {
+      // (No engine runs in this test: the box says so, as a machine's does.)
+      const moved = await it.request("POST", "kuvo/sessions/ses_older/agents", codex);
+      assert.deepEqual([moved.status, JSON.parse(moved.body).message], [503, "The engine isn’t running."], away ? "the app away" : "the app there");
+      const autopilot = await it.request("GET", "kuvo/sessions/ses_older/autopilot");
+      assert.deepEqual([autopilot.status, JSON.parse(autopilot.body).message], [503, "The engine isn't running."]);
+    } finally {
+      app.away = false;
+    }
+  }
+  assert.equal(app.asked.length, asked, "none went to the app");
 });
 
 test("a phone asking for a pairing link leaves Settings › Phone's as it is: each lets in once", async () => {

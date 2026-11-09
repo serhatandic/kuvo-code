@@ -46,6 +46,23 @@ import Testing
 
     private var keys: [String] { tabs.keys.map(\.text) }
 
+    /// `ses_engine` carried on with the coding agents as `ses_agent` by its box (its part:
+    /// MoveToAgentsTests), which the bridge then has.
+    private func carriedByItsBox() {
+        bridge.on("GET", "/api/session/ses_agent", json: ["data": StubEngine.session("ses_agent", title: "Settings", directory: folder)])
+        let carried = try! JSONSerialization.data(withJSONObject: ["session": "ses_agent"])
+        app.workspace.boxes = { box in
+            BoxClient(box: box, transport: LocalBox { request in
+                AsyncThrowingStream { continuation in
+                    let carries = request.method == "POST" && request.path == "kuvo/sessions/ses_engine/agents"
+                    continuation.yield(.head(status: carries ? 200 : 404, headers: ["content-type": "application/json"]))
+                    continuation.yield(.body(carries ? carried : Data("{}".utf8)))
+                    continuation.finish()
+                }
+            })
+        }
+    }
+
     // MARK: Opening, closing, reopening
 
     /// A subagent opens in place of the conversation it works for, in its tab; the way back (or
@@ -415,9 +432,7 @@ import Testing
         await sessions(["ses_a", "ses_engine", "ses_c"])
         engine.conversation("ses_engine", [["id": "msg_01", "type": "user", "time": ["created": 1], "text": "Add a settings page"]])
         engine.on("GET", "/api/session/ses_engine", json: ["data": StubEngine.session("ses_engine", directory: folder)])
-        engine.on("GET", "/api/session/ses_engine/inbox", json: ["data": []])
-        engine.on("PATCH", "/api/session/ses_engine", json: [:])
-        bridge.on("POST", "/api/session/import", json: ["data": StubEngine.session("ses_agent", title: "Settings", directory: folder)])
+        carriedByItsBox()
         tabs.open(.session("ses_a"))
         tabs.open(.session("ses_engine"))
         tabs.open(.session("ses_c"))
@@ -436,9 +451,7 @@ import Testing
         await sessions(["ses_a", "ses_engine"])
         engine.conversation("ses_engine", [])
         engine.on("GET", "/api/session/ses_engine", json: ["data": StubEngine.session("ses_engine", directory: folder)])
-        engine.on("GET", "/api/session/ses_engine/inbox", json: ["data": []])
-        engine.on("PATCH", "/api/session/ses_engine", json: [:])
-        bridge.on("POST", "/api/session/import", json: ["data": StubEngine.session("ses_agent", directory: folder)])
+        carriedByItsBox()
         tabs.open(.session("ses_a"))
         tabs.openBeside("ses_engine")
 
@@ -455,9 +468,7 @@ import Testing
         await sessions(["ses_engine"])
         engine.conversation("ses_engine", [])
         engine.on("GET", "/api/session/ses_engine", json: ["data": StubEngine.session("ses_engine", directory: folder)])
-        engine.on("GET", "/api/session/ses_engine/inbox", json: ["data": []])
-        engine.on("PATCH", "/api/session/ses_engine", json: [:])
-        bridge.on("POST", "/api/session/import", json: ["data": StubEngine.session("ses_agent", directory: folder)])
+        carriedByItsBox()
 
         try await app.workspace.moveToAgents("ses_engine", model: ModelRef(id: "sonnet", providerID: "claude-code"))
 
