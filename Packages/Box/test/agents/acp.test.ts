@@ -32,6 +32,9 @@ let sessions: Sessions
 
 beforeEach(() => {
   root = mkdtempSync(join(base, "case-"))
+  // Run from inside Kuvo Code (an agent's shell), the box's own sandbox is in the environment: an agent
+  // would start run whole in it. Each test that wants the sandbox sets up its own.
+  delete process.env.KUVO_FENCE
 })
 afterEach(() => sessions?.closeAll())
 
