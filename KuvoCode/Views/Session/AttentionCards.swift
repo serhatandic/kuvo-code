@@ -184,7 +184,8 @@ struct PermissionCard: View {
         switch choice {
         case .once: reply(.once, nil)
         case .always: reply(.always, nil)
-        case .reject: reply(.reject, nil)
+        // With what you wrote in 4's line, if you did.
+        case .reject: refuse()
         case .instead: writeInstead()
         }
     }
@@ -863,8 +864,12 @@ struct AllowedWell<Content: View>: View {
         event.modifierFlags.intersection([.command, .control, .option]).isEmpty && (event.characters?.first?.wholeNumberValue).map { (1...9).contains($0) } == true
     }
 
-    /// Quiet again a moment from now.
+    /// Quiet again a moment from now (a test's, at once).
     func restart() {
+        guard Self.quietAfter > .zero else {
+            wait?.cancel()
+            return isQuiet = true
+        }
         if isQuiet { isQuiet = false }
         wait?.cancel()
         wait = Task { [weak self] in

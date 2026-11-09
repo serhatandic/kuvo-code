@@ -22,6 +22,7 @@ import Testing
 
     init() throws {
         TestEnvironment.prepare()
+        // The keyboard still from the start: its keys answer at once.
         KeysTyped.quietAfter = .zero
         let ask: [String: Any] = ["id": "per_keys", "sessionID": "ses_keys", "action": "shell", "resources": ["npm test"], "save": ["npm test *"]]
         let request = try JSONDecoder().decode(PermissionRequest.self, from: JSONSerialization.data(withJSONObject: ask))
@@ -40,9 +41,15 @@ import Testing
         window.contentView = nil
     }
 
-    /// `key`, pressed: queued, as a hand's would be, where the app's monitors see it first.
-    private func press(_ key: String, code: UInt16) async throws {
-        let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+    /// `key`, pressed (with `modifiers`): queued, as a hand's would be, where the app's monitors see
+    /// it first; then the card laid out again.
+    private func press(_ key: String, code: UInt16, modifiers: NSEvent.ModifierFlags = []) async throws {
+        try await until {
+            window.contentView?.layoutSubtreeIfNeeded()
+            TestPulse.beat()
+            return window.contentView?.subviews.isEmpty == false
+        }
+        let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: modifiers, timestamp: ProcessInfo.processInfo.systemUptime,
                                      windowNumber: window.windowNumber, context: nil, characters: key, charactersIgnoringModifiers: key,
                                      isARepeat: false, keyCode: code)!
         NSApp.postEvent(event, atStart: false)
@@ -51,32 +58,40 @@ import Testing
         try await until { handled.isHandled }
     }
 
-    /// Pressed until it answers: the card's keys wait for the keyboard to be still a moment after
-    /// it shows (none, here), and a number pressed before then does nothing.
-    private func pressUntilAnswered(_ key: String, code: UInt16) async throws {
-        for _ in 0..<50 where replies.sent.isEmpty {
-            try await press(key, code: code)
-            await Task.yield()
-        }
-        #expect(replies.sent.count == 1, "answered by its key, once")
-    }
-
     @Test func twoIsAlwaysAllow() async throws {
         defer { done() }
-        try await pressUntilAnswered("2", code: 19)
+        try await press("2", code: 19)
         #expect(replies.sent.first?.0 == .always)
         #expect(replies.sent.first?.1 == nil)
     }
 
     @Test func threeIsDontAllow() async throws {
         defer { done() }
-        try await pressUntilAnswered("3", code: 20)
+        try await press("3", code: 20)
         #expect(replies.sent.first?.0 == .reject)
     }
 
     @Test func oneIsAllowOnce() async throws {
         defer { done() }
-        try await pressUntilAnswered("1", code: 18)
+        try await press("1", code: 18)
         #expect(replies.sent.first?.0 == .once)
+    }
+
+    /// ⌘2 is the app's, not the card's.
+    @Test func aNumberWithCommandIsntAnAnswer() async throws {
+        defer { done() }
+        try await press("2", code: 19, modifiers: .command)
+        #expect(replies.sent.isEmpty)
+    }
+
+    /// While the keyboard hasn't been still a moment (you were typing as it came), a number does
+    /// nothing: it was meant for what you were typing.
+    @Test func aNumberWhileTypingIsntAnAnswer() async throws {
+        defer { done() }
+        KeysTyped.quietAfter = .seconds(3600)
+        // A letter, then a number, as in a word being typed.
+        try await press("a", code: 0)
+        try await press("2", code: 19)
+        #expect(replies.sent.isEmpty)
     }
 }
