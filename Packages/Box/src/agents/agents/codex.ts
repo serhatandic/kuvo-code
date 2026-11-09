@@ -886,7 +886,7 @@ interface SubagentLane extends Lane {
  * What Codex's models are told of asking you. They list request_user_input outside Plan too, where it
  * refuses them ("unavailable in Default mode"), and a model that reached for it said it couldn't ask.
  */
-const ASKING_WORDS = "Outside Plan mode, ask the user with request_user_input_async: request_user_input refuses there, which doesn't mean you can't ask. It returns at once, and the answer comes as a new user message, which also ends a sleep you're in."
+export const ASKING_WORDS = "Outside Plan mode, ask the user with request_user_input_async: request_user_input refuses there, which doesn't mean you can't ask. It returns at once, and the answer comes as a new user message, which also ends a sleep you're in."
 
 /** What Codex asks you with its request_user_input_async. */
 type AskedQuestion = { title: string; options?: string[] | null }

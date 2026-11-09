@@ -43,14 +43,14 @@ export const answerSandboxAsk = book.answer;
 export const SANDBOX_TOOLS = [
   {
     name: "sandbox_ask",
-    description: "Ask the user to run a command outside the sandbox, when the sandbox stopped one the task needs (\"Operation not permitted\" or \"Permission denied\" outside the folders you may write, or a refused connection or app). They see the command, why, and what was refused, and allow it once or say no; where it was stopped writing in one folder, they can also let your commands write there from now on. Allowed, Kuvo Code runs it for you outside the sandbox, in your project's folder, and you get its output. Waits for their answer. Don't use it to get around a rule you were told, and never for a command you haven't tried in the sandbox.",
+    description: "Ask the user to run a command outside the sandbox, when the sandbox stopped one the task needs (\"Operation not permitted\" or \"Permission denied\" outside the folders you may write, or a refused connection or app). They allow it once or say no, and where it was stopped writing in one folder, can let your commands write there from now on. Allowed, it runs outside the sandbox in your project's folder, and you get its output. Waits for their answer. Never use it to get around a rule you were told, nor for a command you haven't tried in the sandbox.",
     inputSchema: {
       type: "object",
       properties: {
-        command: { type: "string", description: "The command, exactly as you ran it." },
+        command: { type: "string", description: "Exactly as you ran it." },
         why: { type: "string", description: "Why the task needs it, in one sentence the user reads." },
-        error: { type: "string", description: "What the command printed when the sandbox stopped it." },
-        timeout: { type: "number", description: "How long it may run once allowed, in seconds (300 unless you say; at most 600)." },
+        error: { type: "string", description: "What it printed when the sandbox stopped it." },
+        timeout: { type: "number", description: "How long it may run once allowed, in seconds: 300 by default, 600 at most." },
       },
       required: ["command", "why"],
       additionalProperties: false,
