@@ -64,9 +64,7 @@ private struct ImageLightbox: View {
     @State private var image: NSImage?
     /// Pinched or double-clicked in; 1 is fitted to the window.
     @State private var scale: CGFloat = 1
-    @State private var pinch: CGFloat = 1
-    @State private var offset: CGSize = .zero
-    @State private var drag: CGSize = .zero
+    @State private var fitScale: CGFloat = 1
     @State private var appeared = false
     /// Just copied: the button shows a check for a moment.
     @State private var copied = false
@@ -78,7 +76,6 @@ private struct ImageLightbox: View {
     }
 
     private var item: AttachmentItem { request.items[index] }
-    private var zoom: CGFloat { max(1, min(8, scale * pinch)) }
 
     var body: some View {
         GeometryReader { proxy in
@@ -89,43 +86,9 @@ private struct ImageLightbox: View {
                     .contentShape(.rect)
                     .onTapGesture { ImageViewer.shared.close() }
                 if let image {
-                    let fitted = fit(image.size, in: CGSize(width: proxy.size.width - 96, height: proxy.size.height - 150))
-                    Image(nsImage: image)
-                        .resizable()
-                        .interpolation(.high)
-                        .frame(width: fitted.width, height: fitted.height)
-                        .clipShape(.rect(cornerRadius: zoom > 1 ? 0 : 10))
-                        .shadow(color: .black.opacity(0.35), radius: 24, y: 8)
-                        .scaleEffect(zoom)
-                        .offset(x: offset.width + drag.width, y: offset.height + drag.height)
-                        .scaleEffect(appeared ? 1 : 0.94)
-                        .gesture(
-                            MagnifyGesture()
-                                .onChanged { pinch = $0.magnification }
-                                .onEnded { _ in
-                                    scale = zoom
-                                    pinch = 1
-                                    if scale <= 1 { withAnimation(.ui) { offset = .zero } }
-                                }
-                        )
-                        .simultaneousGesture(
-                            DragGesture()
-                                .onChanged { if zoom > 1 { drag = $0.translation } }
-                                .onEnded { value in
-                                    guard zoom > 1 else { return }
-                                    offset.width += value.translation.width
-                                    offset.height += value.translation.height
-                                    drag = .zero
-                                }
-                        )
-                        // Double-click: in to twice the size, or back to fitted.
-                        .onTapGesture(count: 2) {
-                            withAnimation(.ui) {
-                                scale = zoom > 1 ? 1 : 2
-                                offset = .zero
-                            }
-                        }
-                        .help("Pinch or double-click to zoom")
+                    PictureCanvas(image: image, scale: $scale, fitScale: $fitScale)
+                        .padding(.horizontal, 48)
+                        .padding(.vertical, 75)
                         .transition(.replacingPlaceholder)
                 } else {
                     let room = fit(CGSize(width: 480, height: 360), in: CGSize(width: proxy.size.width - 96, height: proxy.size.height - 150))
@@ -144,6 +107,14 @@ private struct ImageLightbox: View {
                 VStack {
                     header
                     Spacer()
+                    if request.items.count > 1 {
+                        Text("\(index + 1) of \(request.items.count)")
+                            .font(.system(size: 12, weight: .medium))
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .glassEffect(.regular, in: .capsule)
+                            .padding(.bottom, 20)
+                    }
                 }
                 .padding(.top, 14)
                 .padding(.horizontal, 20)
@@ -183,13 +154,26 @@ private struct ImageLightbox: View {
                     .font(.system(size: 13, weight: .semibold))
                     .lineLimit(1)
                     .truncationMode(.middle)
-                Text(request.items.count > 1 ? "\(index + 1) of \(request.items.count) · \(item.detail)" : item.detail)
+                Text(item.detail)
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             }
             .frame(maxWidth: 320, alignment: .leading)
             Spacer(minLength: 12)
             HStack(spacing: 2) {
+                Menu("\(Int(scale * fitScale * 100))%") {
+                    Button("Fit") { scale = 1 }
+                    Button("Actual Size") { scale = 1 / max(fitScale, 0.001) }
+                    Button("Zoom In") { scale = min(scale * 1.25, 8) }
+                    Button("Zoom Out") { scale = max(scale / 1.25, 1) }
+                }
+                Button("Download", systemImage: "arrow.down.to.line") {
+                    guard let source = item.localURL(), let data = try? Data(contentsOf: source) else { return }
+                    let panel = NSSavePanel()
+                    panel.nameFieldStringValue = item.name
+                    if panel.runModal() == .OK, let url = panel.url { try? data.write(to: url) }
+                }
+                .disabled(image == nil)
                 Button(copied ? "Copied" : "Copy", systemImage: copied ? "checkmark" : "doc.on.doc", action: copy)
                     .contentTransition(.symbolEffect(.replace))
                     .disabled(image == nil)
@@ -254,7 +238,6 @@ private struct ImageLightbox: View {
         index += direction
         image = nil
         scale = 1
-        offset = .zero
         return true
     }
 
@@ -265,5 +248,58 @@ private struct ImageLightbox: View {
         guard size.width > 0, size.height > 0 else { return CGSize(width: min(200, room.width), height: min(200, room.height)) }
         let scale = min(room.width / size.width, room.height / size.height, 1)
         return CGSize(width: (size.width * scale).rounded(), height: (size.height * scale).rounded())
+    }
+}
+
+
+/// A single zoomable picture surface for the file panel and the conversation viewer.
+struct PictureCanvas: View {
+    let image: NSImage
+    @Binding var scale: CGFloat
+    @Binding var fitScale: CGFloat
+    @State private var pinch: CGFloat = 1
+    @FocusState private var focused: Bool
+
+    static func actualScale(_ image: NSImage?, room: CGSize) -> CGFloat {
+        guard let image, image.size.width > 0, image.size.height > 0, room.width > 0, room.height > 0 else { return 1 }
+        return max(1, 1 / min(room.width / image.size.width, room.height / image.size.height, 1))
+    }
+
+    var body: some View {
+        GeometryReader { proxy in
+            let room = proxy.size
+            let fit = min(room.width / max(image.size.width, 1), room.height / max(image.size.height, 1), 1)
+            let current = max(1, min(100, scale * pinch))
+            ScrollView([.horizontal, .vertical]) {
+                Image(nsImage: image)
+                    .resizable()
+                    .interpolation(.high)
+                    .frame(width: max(1, image.size.width * fit * current), height: max(1, image.size.height * fit * current))
+                    .frame(minWidth: room.width, minHeight: room.height)
+            }
+            .onAppear { fitScale = fit }
+            .onChange(of: fit) { _, value in fitScale = value }
+            .gesture(MagnifyGesture().onChanged { pinch = $0.magnification }.onEnded { _ in
+                scale = current
+                pinch = 1
+            })
+            .onTapGesture(count: 2) {
+                scale = scale > 1 ? 1 : Self.actualScale(image, room: room)
+            }
+            .focusable()
+            .focused($focused)
+            .onKeyPress(characters: ["+", "=", "-", "0"], phases: .down) { press in
+                guard press.modifiers.contains(.command) else { return .ignored }
+                switch press.characters {
+                case "+", "=": scale = min(100, scale * 1.25)
+                case "-": scale = max(1, scale / 1.25)
+                case "0": scale = 1
+                default: return .ignored
+                }
+                return .handled
+            }
+            .onTapGesture { focused = true }
+            .help("Pinch or double-click to zoom")
+        }
     }
 }
