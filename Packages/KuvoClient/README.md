@@ -18,6 +18,8 @@ The rules for what a message says, the same in both apps. Foundation only: no vi
   it ("~/notes", not the engine's "/Users/me/notes/*"), and as VoiceOver reads it ("Home, notes").
 - `SearchMatches`: where a search's words are in the snippet a result shows, as the box matched
   them, and the snippet with them in bold.
+- `PermissionAnswer`: a permission's answers, numbered as both apps list them (1 Allow Once,
+  2 Always Allow…, 3 Don't Allow, 4 Tell It What to Do Instead…), with `AlwaysWords` for 2.
 
 ## ClientAccounts
 
@@ -41,6 +43,8 @@ What a client shows of a computer's sessions, the same in both apps. Rules only,
   it, Look for), their rows and sizes from what the box measured, and loading those.
 - `ShellRead`: the end of what a background command printed, as Output shows it, and whether it
   has ended (its engine let go of it) or just can't be read now.
+- `AskPlace`: which of the asks waiting takes the composer's place, and "2 of 3" over it: the one
+  in view stays while others come, and once it's answered the next after it shows.
 
 ## ClientVault
 
@@ -84,6 +88,8 @@ phone's copies of the Mac's design files, a piece at a time.
   folds open and close, and the readable column; `formattedCost` and `compactTokens` for a run's
   cost and tokens.
 - `Spinner`: the app's loader, played by Core Animation on each platform's own view.
+- `ChoiceRowLabel`: a numbered choice (a question's, a permission's answer): its number in a small
+  square, its words and what it means; each app puts it in its own button.
 - `FirstLineListItemStyle` (`.firstLine`): a list item's marker on its first line's middle.
 - `ShimmerText`: words that shimmer while something's under way, played by Core Animation.
 - `BotAvatar`, `BotLook`, `BotMood`, `GroupAvatar`, `MachineBadge`: the bots' looks, still and
