@@ -126,11 +126,15 @@ export async function carryToAgents(id: string, model: unknown, readEngine: () =
     // `letAttachmentsGo`); a bot's as its too; in the mode it was in, its rules made for it. As
     // it's made, so nothing takes it for a new conversation of yours.
     const kuvo = bot ? session.metadata?.kuvo ?? { bot: bot.described.id } : {};
-    const { approval, applied, autopilot, held, lead, line, call: started } = session.metadata?.kuvo ?? {};
+    const { approval, applied, autopilot, held, lead, line, call: started, startedBy, wake, by, depth, limits } = session.metadata?.kuvo ?? {};
     // (One a lead on another computer started keeps what came with it: that lead's Don't Allows,
-    // which its rules are made with each time; who and where it's from; its line, so its lead's
-    // Stop All and list still reach it; and its call, so it's never started again.)
-    const fromAfar = { ...(Array.isArray(held) && held.length ? { held } : {}), ...(isObject(lead) ? { lead } : {}), ...(Array.isArray(line) ? { line } : {}), ...(typeof started === "string" ? { call: started } : {}) };
+    // which its rules are made with each time; who started it and where from, its line and its
+    // bot's, so its lead's list, Stop All and news still reach it, and its bot's limits count it;
+    // and its call, so it's never started again.)
+    const fromAfar = isObject(lead) ? {
+      lead, ...(Array.isArray(held) && held.length ? { held } : {}), ...(Array.isArray(line) ? { line } : {}), ...(typeof started === "string" ? { call: started } : {}),
+      ...(typeof startedBy === "string" ? { startedBy } : {}), ...(Array.isArray(wake) ? { wake } : {}), ...(isObject(by) ? { by } : {}), ...(typeof depth === "number" ? { depth } : {}), ...(isObject(limits) ? { limits } : {}),
+    } : {};
     const marks = { kuvo: { ...(approval ? { approval } : {}), ...(applied ? { applied } : {}), ...(autopilot === true ? { autopilot } : {}), ...fromAfar, ...kuvo, carriedFrom: id } };
     const moved = await call(agents, "POST", "/api/session/import", {
       title: session.title, agent: session.agent, model, location: { directory }, permissions: session.permissions, metadata: marks, messages,
