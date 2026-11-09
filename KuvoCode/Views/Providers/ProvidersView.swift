@@ -70,6 +70,9 @@ struct ProvidersView: View {
             } message: {
                 Text(removalFailure ?? "")
             }
+            // Which providers its box can Refresh Models for (a machine's from the box that brings
+            // it), read as the page opens and once the engine's accounts are in.
+            .task(id: "\(box.machine ?? "")/\(catalog.integrationsRead != nil)") { await catalog.readRefreshable() }
         #if DEBUG
         // Once it's listed (a coding agent's comes after the engine's).
         .task(id: catalog.providers.contains { $0.id == ProcessInfo.processInfo.environment["KUVO_DEMO_PROVIDERS"] }) {
@@ -385,6 +388,8 @@ private struct ConnectedRow: View {
     @Environment(\.settingsBox) private var box
     @Environment(Catalog.self) private var catalog
     @State private var failure: String?
+    @State private var refreshFailure: String?
+    @State private var refreshWaits = false
 
     var body: some View {
         HStack(spacing: 12) {
@@ -404,14 +409,41 @@ private struct ConnectedRow: View {
                 Button("Disconnect", role: .destructive, action: disconnect)
                     .buttonStyle(.glass)
             }
+            // Its menu at the right edge, as an account's has it on this page.
+            if catalog.refreshesModels(provider.id) {
+                if catalog.refreshingModels[provider.id] != nil {
+                    Spinner(size: 13)
+                        .frame(width: 26, height: 22)
+                        .accessibilityLabel("Refreshing models")
+                } else {
+                    Menu(content: menu) {
+                        Image(systemName: "ellipsis")
+                            .frame(width: 22, height: 22)
+                            .contentShape(.rect)
+                    }
+                    .menuStyle(.button)
+                    .buttonStyle(IconButtonStyle(width: 26, height: 22))
+                    .menuIndicator(.hidden)
+                    .fixedSize()
+                    .accessibilityLabel("More")
+                    .help("More")
+                }
+            }
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
+        .contentShape(.rect)
+        .contextMenu(menuItems: { if catalog.refreshesModels(provider.id) { menu() } })
         .alert("Couldn't Disconnect \(provider.name)", isPresented: Binding(get: { failure != nil }, set: { if !$0 { failure = nil } })) {
             Button("OK", role: .cancel) {}
         } message: {
             Text(failure ?? "")
         }
+        .refreshModelsFailure($refreshFailure)
+    }
+
+    @ViewBuilder private func menu() -> some View {
+        RefreshModelsButton(provider: provider.id, failure: $refreshFailure, waits: $refreshWaits)
     }
 
     private var active: Integration.Connection? { provider.connections.first }
@@ -423,6 +455,7 @@ private struct ConnectedRow: View {
     private var detail: String {
         guard let active else { return "" }
         if signInEnded { return "Sign-in ended" }
+        if refreshWaits { return refreshWaitsNote }
         if let status = active.status { return status.message }
         switch active.type {
         case "env": return "From \(active.name ?? "the environment")"

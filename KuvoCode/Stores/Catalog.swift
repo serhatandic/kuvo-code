@@ -646,6 +646,45 @@ final class Catalog {
         if read.held != unanswering { unanswering = read.held }
     }
 
+    /// The providers its box brings new models to with Refresh Models, as it lists them
+    /// (`kuvo/accounts/refreshable`): those whose models come from your account. Empty from a box
+    /// from before it; nil until read.
+    private(set) var refreshableProviders: Set<String>?
+    /// The providers whose models are being asked of again now, by how many asks.
+    private(set) var refreshingModels: [String: Int] = [:]
+
+    /// Reads which providers its box refreshes; as Accounts opens, so an updated box is seen.
+    func readRefreshable() async {
+        guard let box else { return }
+        struct Listed: Decodable { var providers: [String] }
+        do {
+            refreshableProviders = Set(try await box.value(Listed.self, "GET", "kuvo/accounts/refreshable").providers)
+        } catch let refusal as BoxRefusal where refusal.status == 404 {
+            // A box from before Refresh Models.
+            refreshableProviders = []
+        } catch {}
+    }
+
+    /// Whether Refresh Models is offered for `provider` here.
+    func refreshesModels(_ provider: String) -> Bool { refreshableProviders?.contains(provider) == true }
+
+    /// Refresh Models: `provider`'s models asked of again by its computer's box, which makes the
+    /// engine's lists afresh without restarting it (`kuvo/accounts/<provider>/refresh`). The pickers
+    /// follow as the engine says its models changed. Says whether some folders get them only once
+    /// their work is done; throws what the box said when it couldn't.
+    @discardableResult
+    func refreshModels(_ provider: String) async throws -> Bool {
+        guard let box else { throw BoxRefusal(status: 503, message: "This computer's box isn't running.") }
+        refreshingModels[provider, default: 0] += 1
+        defer {
+            let left = (refreshingModels[provider] ?? 1) - 1
+            refreshingModels[provider] = left > 0 ? left : nil
+        }
+        struct Refreshed: Decodable { var waiting: [String] }
+        let refreshed = try await box.value(Refreshed.self, "POST", "kuvo/accounts/\(provider.pathComponentEscaped)/refresh")
+        return !refreshed.waiting.isEmpty
+    }
+
     /// Why `model` can't answer now, if it can't: what happened and until when, for its row; the
     /// engine's words; and whether the line says it's free already (its free usage spent).
     func unanswering(_ model: Model, now: Date = .now) -> (line: String, why: String, saysFree: Bool)? {

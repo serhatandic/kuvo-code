@@ -23,14 +23,14 @@
           "expect": {
             "mac": { "status": 200, "json": { "features": {
               "<includes>": ["accounts.credentials", "agents", "artifacts", "asks", "attention", "bots", "bots.edit", "bots.events", "bots.job", "bots.keys", "bots.make", "config", "config.apply", "engine.restart", "file", "goals", "groups", "btw", "btw.threads", "handoff", "branch", "reviews", "reviews.parts", "reviews.scopes", "moves", "moves.agents", "moves.check", "groups.delete", "groups.edit", "groups.joinable", "groups.make", "groups.seats", "integrations", "keys", "mcp.catalog", "named", "personalities", "phones", "phones.pair", "projects", "search", "sessions.agents", "shell.stop", "sign-in.return", "skills", "skills.trash", "wakes", "wakes.edit", "worktrees", "worktrees.events", "folders", "folders.files", "git", "git.merge", "git.pull-request", "git.pull-request.draft", "git.push", "plugins.search", "programs", "providers.models", "worktrees.where",
-                "accounts.ended", "accounts.found", "claude-code", "hosts", "mac", "machines", "wakes.events", "personalities.events", "agent-tools", "sessions.start", "letters-read", "work.elsewhere", "queue", "queue.waits", "work", "work.projects", "work.goals", "autopilot", "work.goals.apps", "work.goals.projects", "work.unanswering", "vault", "sandbox", "sandbox.check", "sandbox.asks", "approval", "approval.reviewer", "git.backups", "approval.fullAccess", "approval.held", "approval.default", "approval.seen", "approval.stopped", "limits"],
+                "accounts.ended", "accounts.found", "accounts.refresh", "claude-code", "hosts", "mac", "machines", "wakes.events", "personalities.events", "agent-tools", "sessions.start", "letters-read", "work.elsewhere", "queue", "queue.waits", "work", "work.projects", "work.goals", "autopilot", "work.goals.apps", "work.goals.projects", "work.unanswering", "vault", "sandbox", "sandbox.check", "sandbox.asks", "approval", "approval.reviewer", "git.backups", "approval.fullAccess", "approval.held", "approval.default", "approval.seen", "approval.stopped", "limits"],
               "<excludes>": ["engine.start", "update"]
             } } },
             "machine": { "status": 200, "json": { "features": {
               "<includes>": ["accounts.credentials", "agents", "artifacts", "asks", "attention", "bots", "bots.edit", "bots.events", "bots.job", "bots.keys", "bots.make", "config", "config.apply", "engine.restart", "file", "goals", "groups", "btw", "btw.threads", "handoff", "branch", "reviews", "reviews.parts", "reviews.scopes", "moves", "moves.agents", "moves.check", "groups.delete", "groups.edit", "groups.joinable", "groups.make", "groups.seats", "integrations", "keys", "mcp.catalog", "named", "personalities", "phones", "phones.pair", "projects", "search", "sessions.agents", "shell.stop", "sign-in.return", "skills", "skills.trash", "wakes", "wakes.edit", "worktrees", "worktrees.events", "folders", "folders.files", "git", "git.merge", "git.pull-request", "git.pull-request.draft", "git.push", "plugins.search", "programs", "providers.models", "worktrees.where",
-                "engine.start", "update", "wakes.events", "personalities.events", "accounts.ended", "accounts.found", "agent-tools", "sessions.start", "letters-read", "work.elsewhere", "queue", "queue.waits", "work", "work.projects", "work.goals", "autopilot", "work.goals.apps", "work.goals.projects", "work.unanswering", "vault", "sandbox", "sandbox.check", "sandbox.asks", "approval", "approval.reviewer", "git.backups", "approval.fullAccess", "approval.held", "approval.default", "approval.seen", "approval.stopped", "limits"],
+                "engine.start", "update", "wakes.events", "personalities.events", "accounts.ended", "accounts.found", "accounts.refresh", "agent-tools", "sessions.start", "letters-read", "work.elsewhere", "queue", "queue.waits", "work", "work.projects", "work.goals", "autopilot", "work.goals.apps", "work.goals.projects", "work.unanswering", "vault", "sandbox", "sandbox.check", "sandbox.asks", "approval", "approval.reviewer", "git.backups", "approval.fullAccess", "approval.held", "approval.default", "approval.seen", "approval.stopped", "limits"],
               "<excludes>": ["claude-code", "hosts", "mac", "machines", "usage"],
-              "<length>": 93
+              "<length>": 94
             } } }
           }
         }
@@ -123,6 +123,15 @@
         { "send": "POST kuvo/accounts/found/use", "body": { "id": "opencode:anthropic" }, "expect": { "status": 404, "json": { "message": "<string>" } } },
         { "send": "POST kuvo/accounts/found/use", "body": {}, "expect": { "status": 400, "json": { "message": "<string>" } } },
         { "send": "GET kuvo/accounts/found/use", "expect": { "status": 405, "whole": true, "json": {} } }
+      ]
+    },
+    {
+      "name": "a provider's models asked of again",
+      "steps": [
+        { "send": "GET kuvo/accounts/refreshable", "why": "The providers whose models come from your account, which Refresh Models brings anew: a client offers it for those alone.", "expect": { "status": 200, "json": { "providers": "<array>" } } },
+        { "send": "POST kuvo/accounts/github-copilot/refresh", "why": "A provider the engine doesn't have: nothing of the engine's is closed.", "expect": { "status": 404, "json": { "message": "<string>" } } },
+        { "send": "POST kuvo/accounts/anthropic/refresh", "why": "One whose models come from the catalog, which the engine reads again by itself.", "expect": { "status": 409, "json": { "message": "<string>" } } },
+        { "send": "GET kuvo/accounts/github-copilot/refresh", "expect": { "status": 405, "whole": true, "json": {} } }
       ]
     },
     {
