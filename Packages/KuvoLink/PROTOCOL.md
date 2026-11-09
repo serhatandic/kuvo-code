@@ -552,6 +552,19 @@ A client asks the box it lives on once, and watches; the move goes on with no cl
   carries on where it was once that computer is back, and clients say it waits for it (still taken
   back after 10 minutes before the switch, as above). `away`: conversations this box's engine lists that don't live here (a copy not
   switched to yet or being let go of, an original still going): clients leave them out.
+  `moved: [{session, key, at}]` (bridge 0.9.208), left out when there are none: the conversations
+  that moved away from this box in the last two days (`run/moves/moved.json`), each with the box it
+  went to from here (`key`) and when (`at`, ms); one moved back here since isn't in it. A client
+  takes no event from this box about them, and leaves them out of this box's conversations, rows it
+  still has from before the move included (a coding agent's as well as the engine's), once it has
+  them where they're listed now, an open conversation going on there: it's the box's word, not the
+  client's guess from lists read at different times. Until it lists one elsewhere, the row it has
+  stays its only one, as it was (a conversation in view isn't closed partway through its move), and so
+  does `away`'s: a list read then keeps it, and so does the box it leaves letting it go
+  (`session.deleted`) while it moves; once it's listed elsewhere too, that box's row alone goes,
+  never the other's. `key` is only where it went from this box: one
+  that moved on since is in that box's own `moved`, and listed where it lives. A box from before
+  0.9.208 doesn't say it.
   `elsewhere: [{box, moves: [Move]}]` (bridge 0.9.169), left out when there are none: the moves your other
   computers said they have under way between them (`box`, its key; "Peers", `moving`), so a client
   that follows one box sees a move between two others too. One to or from this box isn't in it
@@ -576,6 +589,13 @@ hash again. A bot's memory goes in its own folder (`<bot>/memory`, Claude Code's
 `autoMemoryDirectory`) from there on. An agent that keeps nothing to carry, or one whose files
 can't be found, goes with the bridge's record, and its next turn starts from what that holds.
 `conversation: false` leaves the agent's own conversation out, for a box that doesn't carry it.
+A conversation on one of its agent's aliases (Claude Code's `default`, which stands for whichever
+model it recommends on that computer's account, Opus on one and Sonnet on another) goes on the
+model the alias stands for where it leaves, as that agent lists it there (`carry.json`'s
+`sessions[].model`; bridge 0.9.208), when the agent that takes it on the box it goes to lists that
+model too; and a bot whose own model named the same as its conversation takes it too: it runs, and
+shows, the same model there. One whose agent hasn't said what the alias stands for, or that the
+other box's agent doesn't have, keeps the alias (never a guess).
 
 Between the boxes, each `{"move": {op, id, …}}` (`id`: `mov_…`), each step sent again each minute
 until it's answered:

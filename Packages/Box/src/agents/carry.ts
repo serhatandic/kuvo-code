@@ -59,7 +59,9 @@ export interface CarriedLane {
 /** The manifest (`carry.json`). */
 export interface Manifest {
   root: string
-  sessions: { id: string; parentID?: string; metadata?: Record<string, unknown> }[]
+  /** Each session, and (`model`) the model its own is an alias for where it was packed: it runs
+   * on that one where it goes, as it did, whatever the alias stands for there. */
+  sessions: { id: string; parentID?: string; metadata?: Record<string, unknown>; model?: { providerID: string; id: string } }[]
   lanes: (CarriedLane & { list: CarriedFile[] })[]
   /** The sessions' own files, by hash. */
   records: CarriedFile[]
@@ -262,8 +264,26 @@ export class Carrying {
     await rm(into, { recursive: true, force: true })
     await mkdir(into, { recursive: true, mode: 0o700 })
     const { manifest, left } = await this.read(root, conversation, into)
+    // (Each model asked once: an agent that can't say now isn't asked again for each session.)
+    const asked = new Map<string, Promise<{ providerID: string; id: string } | undefined>>()
+    for (const each of manifest.sessions) {
+      const model = this.store.get(each.id)?.session.model
+      if (!model?.providerID || !model.id) continue
+      const key = `${model.providerID}/${model.id}`
+      if (!asked.has(key)) asked.set(key, this.concreteOf(model))
+      const concrete = await asked.get(key)
+      if (concrete) each.model = concrete
+    }
     await writeFile(join(into, "carry.json"), JSON.stringify(manifest), { mode: 0o600 })
     return { sessions: manifest.sessions, lanes: manifest.lanes.map(({ list: _, ...lane }) => lane), digest: manifest.digest, left }
+  }
+
+  /** The model `model` is an alias for here (Claude Code's `default`, Opus on one account and Sonnet
+   * on another), as its agent listed it: none for one that isn't an alias, or an agent that hasn't said. */
+  private async concreteOf(model: Session["model"] | undefined): Promise<{ providerID: string; id: string } | undefined> {
+    if (!model?.providerID || !model.id) return undefined
+    const id = await this.agentOf(model.providerID)?.concreteModel?.(model.id).catch(() => undefined)
+    return id && id !== model.id ? { providerID: model.providerID, id } : undefined
   }
 
   /** What it would carry now, to see whether anything changed since it was packed. */
@@ -348,6 +368,8 @@ export class Carrying {
       const hosts = new Map<string, Agent | undefined>()
       for (const lane of manifest.lanes) if (!hosts.has(lane.provider)) hosts.set(lane.provider, await this.hostOf(lane.provider))
       const placed: Manifest["lanes"] = []
+      // The root's model as it came (`model`, as it's here now, may say another).
+      let rootCame: Session["model"] | undefined
       // Sessions first, into a folder of their own: so whatever goes wrong below, `undo` has them too.
       for (const { id } of manifest.sessions) {
         stillOn()
@@ -398,12 +420,21 @@ export class Carrying {
           }
         }
         agent.threads = kept
+        if (id === manifest.root && session.model) rootCame = { ...session.model }
+        // On the model its alias stood for where it came from (it ran on that one there), if the
+        // agent that takes it here has that one too (another account's may not).
+        const concrete = manifest.sessions.find((each) => each.id === id)?.model
+        if (concrete && session.model && concrete.providerID === session.model.providerID && typeof concrete.id === "string" && concrete.id && concrete.id.length <= 200) {
+          const host = hosts.get(session.model.providerID) ?? this.agentOf(session.model.providerID)
+          const there = (await host?.models().catch(() => [])) ?? []
+          if (there.some((model) => model.id === concrete.id || model.aliases?.includes(concrete.id))) session.model = { ...session.model, id: concrete.id }
+        }
         if (session.model?.providerID && hosts.get(session.model.providerID)) session.model = { ...session.model, providerID: hosts.get(session.model.providerID)!.providerID }
         stillOn()
         await undo.noteSession(id)
         this.sessions.addCarried({ session, messages, agent })
       }
-      return { sessions, infos: manifest.sessions.map(({ id, metadata }) => ({ id, metadata })), digest: manifest.digest, lanes: manifest.lanes.map(({ list: _, ...lane }) => ({ ...lane, how: placed.includes(manifest.lanes.find((each) => each.session === lane.session && each.provider === lane.provider)!) ? ("files" as const) : ("handover" as const) })), model: this.store.get(manifest.root)?.session.model }
+      return { sessions, infos: manifest.sessions.map(({ id, metadata }) => ({ id, metadata })), digest: manifest.digest, ...(rootCame ? { came: rootCame } : {}), lanes: manifest.lanes.map(({ list: _, ...lane }) => ({ ...lane, how: placed.includes(manifest.lanes.find((each) => each.session === lane.session && each.provider === lane.provider)!) ? ("files" as const) : ("handover" as const) })), model: this.store.get(manifest.root)?.session.model }
     } catch (error) {
       await this.undoNow(keep).catch(() => {})
       throw error

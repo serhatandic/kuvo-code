@@ -59,7 +59,7 @@ import Testing
         try await until { app.moves.held.isSuperset(of: ["ses_trip", "ses_copy"]) }
         #expect(!Moves.isFrozen("ses_other"))
         #expect(app.moves.isPending("ses_trip"))
-        #expect(app.workspace.movedAway["ses_copy"] == .some(nil), "the copy coming here isn't this Mac's yet")
+        #expect(app.workspace.movedAway["ses_copy"] == [BoxClient.mac], "the copy coming here isn't this Mac's yet")
         await app.workspace.refresh()
         #expect(app.workspace.session("ses_copy") == nil, "nor listed")
         #expect(app.workspace.movedAway["ses_trip"] == nil, "the one leaving lives here until it's switched")

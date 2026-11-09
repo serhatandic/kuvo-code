@@ -17,6 +17,7 @@ import { test as nodeTest } from "node:test";
 import { fileURLToPath } from "node:url";
 import { atEnd, removeAtEnd } from "./at-end.js";
 import { NO_BUN, testBun } from "./bun-for-tests.js";
+import { standInClaude } from "./claude-stand-in.js";
 
 let running;
 const test = (name, run) => nodeTest(name, { timeout: 60_000 }, t => {
@@ -103,9 +104,11 @@ write(rollout, '{"type":"session_meta"}\n{"type":"response_item"}\n');
 const grokBot = seedOtherBot("bot_grok", "grok-cli", { acpSession: "01a158d3-0ce8-70b0-9071-6d8d831287c0" });
 
 write(path.join(agents, "claude", "tokens", "default.json"), { token: "stand-in" });
+// Claude Code as far as the bridge asks it (its models, as a move asks what `default` is here).
+const claudeBin = standInClaude({ root: support, agents });
 const bridge = spawn(bun, [bridgeScript], {
   env: {
-    PATH: process.env.PATH, HOME: support, TMPDIR: process.env.TMPDIR ?? os.tmpdir(), BUN_BE_BUN: "1", BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0",
+    PATH: `${claudeBin}:${process.env.PATH}`, HOME: support, TMPDIR: process.env.TMPDIR ?? os.tmpdir(), BUN_BE_BUN: "1", BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0",
     KUVO_AGENTS_HOME: agents, OPENCODE_PASSWORD: "pw", CLAUDE_CONFIG_DIR: claude,
     KUVO_GROUPS: path.join(support, "groups"), KUVO_BOTS: bots, KUVO_TRASH: path.join(home, "trash"), KUVO_ARTIFACTS: path.join(support, "artifacts"),
   },

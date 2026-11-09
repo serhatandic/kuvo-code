@@ -10767,6 +10767,7 @@ class ClaudeAgent {
   turnedAway;
   modelList;
   loadingModels;
+  listed = [];
   program = 0;
   signOut;
   constructor(context, instance = { id: "default" }) {
@@ -11143,6 +11144,29 @@ class ClaudeAgent {
     this.loadingModels ??= this.loadModels().finally(() => this.loadingModels = undefined);
     return this.modelList?.models ?? fallbackModels(this.providerID);
   }
+  async concreteModel(id) {
+    if (id !== "default")
+      return;
+    if (!this.modelList) {
+      this.models();
+      const loading = this.loadingModels;
+      await new Promise((resolve) => {
+        const told = () => {
+          this.listed = this.listed.filter((each) => each !== told);
+          resolve();
+        };
+        this.listed.push(told);
+        if (loading)
+          loading.then(told, told);
+        else
+          told();
+      });
+    }
+    const models = this.modelList?.models ?? [];
+    if (models.some((model) => model.id === id))
+      return;
+    return models.find((model) => model.aliases?.includes(id))?.id;
+  }
   async loadModels() {
     const sdk = await this.sdk();
     const abort = new AbortController;
@@ -11202,6 +11226,8 @@ class ClaudeAgent {
         ];
       })
     };
+    for (const told of [...this.listed])
+      told();
     emit("model.updated", {});
   }
   async askWindows(q, list) {
@@ -20236,8 +20262,28 @@ class Carrying {
     await rm(into, { recursive: true, force: true });
     await mkdir(into, { recursive: true, mode: 448 });
     const { manifest, left } = await this.read(root, conversation, into);
+    const asked = new Map;
+    for (const each of manifest.sessions) {
+      const model = this.store.get(each.id)?.session.model;
+      if (!model?.providerID || !model.id)
+        continue;
+      const key = `${model.providerID}/${model.id}`;
+      if (!asked.has(key))
+        asked.set(key, this.concreteOf(model));
+      const concrete = await asked.get(key);
+      if (concrete)
+        each.model = concrete;
+    }
     await writeFile(join28(into, "carry.json"), JSON.stringify(manifest), { mode: 384 });
     return { sessions: manifest.sessions, lanes: manifest.lanes.map(({ list: _, ...lane }) => lane), digest: manifest.digest, left };
+  }
+  async concreteOf(model) {
+    if (!model?.providerID || !model.id)
+      return;
+    const id = await this.agentOf(model.providerID)?.concreteModel?.(model.id).catch(() => {
+      return;
+    });
+    return id && id !== model.id ? { providerID: model.providerID, id } : undefined;
   }
   async digest(root, conversation = true) {
     await this.settle(root);
@@ -20313,6 +20359,7 @@ class Carrying {
         if (!hosts.has(lane.provider))
           hosts.set(lane.provider, await this.hostOf(lane.provider));
       const placed = [];
+      let rootCame;
       for (const { id } of manifest.sessions) {
         stillOn();
         const read = async (name, or) => {
@@ -20362,13 +20409,22 @@ class Carrying {
           }
         }
         agent.threads = kept;
+        if (id === manifest.root && session.model)
+          rootCame = { ...session.model };
+        const concrete = manifest.sessions.find((each) => each.id === id)?.model;
+        if (concrete && session.model && concrete.providerID === session.model.providerID && typeof concrete.id === "string" && concrete.id && concrete.id.length <= 200) {
+          const host = hosts.get(session.model.providerID) ?? this.agentOf(session.model.providerID);
+          const there = await host?.models().catch(() => []) ?? [];
+          if (there.some((model) => model.id === concrete.id || model.aliases?.includes(concrete.id)))
+            session.model = { ...session.model, id: concrete.id };
+        }
         if (session.model?.providerID && hosts.get(session.model.providerID))
           session.model = { ...session.model, providerID: hosts.get(session.model.providerID).providerID };
         stillOn();
         await undo.noteSession(id);
         this.sessions.addCarried({ session, messages, agent });
       }
-      return { sessions, infos: manifest.sessions.map(({ id, metadata }) => ({ id, metadata })), digest: manifest.digest, lanes: manifest.lanes.map(({ list: _, ...lane }) => ({ ...lane, how: placed.includes(manifest.lanes.find((each) => each.session === lane.session && each.provider === lane.provider)) ? "files" : "handover" })), model: this.store.get(manifest.root)?.session.model };
+      return { sessions, infos: manifest.sessions.map(({ id, metadata }) => ({ id, metadata })), digest: manifest.digest, ...rootCame ? { came: rootCame } : {}, lanes: manifest.lanes.map(({ list: _, ...lane }) => ({ ...lane, how: placed.includes(manifest.lanes.find((each) => each.session === lane.session && each.provider === lane.provider)) ? "files" : "handover" })), model: this.store.get(manifest.root)?.session.model };
     } catch (error) {
       await this.undoNow(keep).catch(() => {});
       throw error;
@@ -26051,4 +26107,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 6b763d62688b67c17ffb2ce0b10c0a783fbd90a31b7d2dbb8703def1040e06a9
+// Built from Packages/Box/src/agents ce9ad3c28d50ae18116d2645e82296363463e3dabe42f8388be2f3371bc2d657

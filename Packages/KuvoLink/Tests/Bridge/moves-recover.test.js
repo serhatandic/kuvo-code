@@ -17,6 +17,9 @@ import path from "node:path";
 import { test as nodeTest } from "node:test";
 import { atEnd, removeAtEnd } from "./at-end.js";
 
+// What's under way, as `kuvo/moves` says it (not what moved away lately, `moved`, which stays two days).
+const underWay = ({ moved: _moved, ...rest } = {}) => rest;
+
 // Each fails, rather than hangs, when what it waits for never comes.
 let running = null;
 const test = (name, run) => nodeTest(name, { timeout: 30_000 }, t => { running = t.signal; return run(t); });
@@ -381,7 +384,7 @@ test("a copy let go of while this box's engine is down: the other computer hears
   // Lab asks again: gone.
   await say({ op: "drop", id });
   assert.equal(told.findLast(move => move.id === id).op, "dropped");
-  assert.deepEqual((await ask("GET", "kuvo/moves")).json, { moves: [], away: [] });
+  assert.deepEqual(underWay((await ask("GET", "kuvo/moves")).json), { moves: [], away: [] });
 });
 
 test("a group chat let go of while group chats here aren't answering: the other computer hears at once, and here it's held until it goes once they are", async () => {
@@ -504,7 +507,7 @@ test("getting it ready to move stuck (this box's engine not answering): it's tak
     assert.equal(moved.status, 409, JSON.stringify(moved.json));
     assert.match(moved.json.message, /took too long/);
     assert.ok(!fs.existsSync(path.join(wakes, "ses_hang1", "paused")), "its wake-ups go on");
-    assert.deepEqual((await ask("GET", "kuvo/moves")).json, { moves: [], away: [] });
+    assert.deepEqual(underWay((await ask("GET", "kuvo/moves")).json), { moves: [], away: [] });
   } finally {
     engine.exportHold = null;
     release();
@@ -666,7 +669,7 @@ test("a copy that never got set up here is let go of at once, even while this bo
   try {
     await say({ op: "drop", id });
     assert.equal(told.findLast(move => move.id === id)?.op, "dropped");
-    assert.deepEqual((await ask("GET", "kuvo/moves")).json, { moves: [], away: [] }, "nothing of it is left");
+    assert.deepEqual(underWay((await ask("GET", "kuvo/moves")).json), { moves: [], away: [] }, "nothing of it is left");
   } finally {
     fs.renameSync(`${engineFile}.away`, engineFile);
   }

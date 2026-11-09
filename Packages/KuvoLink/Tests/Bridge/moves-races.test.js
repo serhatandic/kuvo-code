@@ -18,6 +18,9 @@ import path from "node:path";
 import { test as nodeTest } from "node:test";
 import { atEnd, removeAtEnd } from "./at-end.js";
 
+// What's under way, as `kuvo/moves` says it (not what moved away lately, `moved`, which stays two days).
+const underWay = ({ moved: _moved, ...rest } = {}) => rest;
+
 // Each fails, rather than hangs, when what it waits for never comes: once it's failed or out of
 // time, what it still waits for stops waiting too (its signal, `running`), so the file can end.
 let running;
@@ -158,7 +161,7 @@ async function asItWas(id) {
   assert.ok(engine.sessions.has(id), "its conversation is still here");
   assert.ok(fs.existsSync(path.join(wakes, id, "wakes.json")), "its wake-ups are still here");
   assert.ok(!fs.existsSync(path.join(wakes, id, "paused")), "and going");
-  assert.deepEqual((await ask("GET", "kuvo/moves")).json, { moves: [], away: [] });
+  assert.deepEqual(underWay((await ask("GET", "kuvo/moves")).json), { moves: [], away: [] });
 }
 
 test("a copy that couldn't be set up as it arrived leaves the original here as it was", async () => {
@@ -224,11 +227,11 @@ test("parts that come twice set a copy up once; a part after the switch changes 
   assert.ok(told.some(move => move.id === id && move.op === "switched"));
   // What it came with, noted: only what's after it is its running here.
   assert.equal(JSON.parse(fs.readFileSync(path.join(movesFolder, "ended.json"), "utf8"))[id]?.last, "msg_in1last");
-  assert.deepEqual((await ask("GET", "kuvo/moves")).json, { moves: [], away: [] });
+  assert.deepEqual(underWay((await ask("GET", "kuvo/moves")).json), { moves: [], away: [] });
   // A late repeat of the part: nothing set up again, nothing held.
   await say(part);
   assert.equal(engine.imports, 1);
-  assert.deepEqual((await ask("GET", "kuvo/moves")).json, { moves: [], away: [] });
+  assert.deepEqual(underWay((await ask("GET", "kuvo/moves")).json), { moves: [], away: [] });
   // And a switch again (its answer was lost): switched still.
   await say({ op: "switch", id });
   assert.equal(told.filter(move => move.id === id && move.op === "switched").length, 2);
@@ -343,7 +346,7 @@ test("a copy whose setting up fails partway leaves nothing here: none of its con
   engine.refuse = null;
   assert.ok(!engine.sessions.has(thing), "the conversation that did come in is gone");
   assert.ok(!fs.existsSync(path.join(wakes, thing)), "and its folder");
-  assert.deepEqual((await ask("GET", "kuvo/moves")).json, { moves: [], away: [] });
+  assert.deepEqual(underWay((await ask("GET", "kuvo/moves")).json), { moves: [], away: [] });
 });
 
 test("the other computer going quiet partway: it's taken back after a while, and the original goes on here", async () => {
@@ -577,7 +580,7 @@ test("a drop that comes while a copy's being set up waits for it, then lets all 
   await until(() => told.some(move => move.id === id && move.op === "dropped"));
   assert.ok(!engine.sessions.has(thing), "its conversation isn't left here, live, beside the original");
   assert.ok(!fs.existsSync(path.join(wakes, thing)), "nor its folder");
-  assert.deepEqual((await ask("GET", "kuvo/moves")).json, { moves: [], away: [] });
+  assert.deepEqual(underWay((await ask("GET", "kuvo/moves")).json), { moves: [], away: [] });
   // And lab heard, as it was set up, that it was still at it.
   assert.ok(told.some(move => move.id === id && move.op === "working"));
 });
@@ -667,7 +670,7 @@ test("a copy whose conversations aren't its own is refused, and what lives here 
     assert.match(told.find(move => move.id === id && move.op === "failed").message, /aren’t its own/);
     assert.ok(exports.every(each => !engine.sessions.has(each.info.id)));
   }
-  assert.deepEqual((await ask("GET", "kuvo/moves")).json, { moves: [], away: [] });
+  assert.deepEqual(underWay((await ask("GET", "kuvo/moves")).json), { moves: [], away: [] });
 });
 
 test("a copy whose move.json is a link to a file here isn't set up, and nothing of that file is said back", async () => {
@@ -775,7 +778,7 @@ test("a copy whose folder is a link (to a folder here) isn't set up, and that fo
   assert.match(told.find(move => move.id === id && move.op === "failed").message, /a link/);
   assert.deepEqual(fs.readdirSync(mine), ["notes.txt"], "nothing written into the folder it pointed at");
   assert.ok(!fs.existsSync(path.join(wakes, thing)) && !engine.sessions.has(thing));
-  assert.deepEqual((await ask("GET", "kuvo/moves")).json, { moves: [], away: [] });
+  assert.deepEqual(underWay((await ask("GET", "kuvo/moves")).json), { moves: [], away: [] });
 });
 
 test("letting the original go, its engine refusing again and again to give its conversation to keep: it goes on here too, and says so", async () => {
@@ -824,7 +827,7 @@ test("a copy whose setting up gets stuck (its engine not answering) is given up 
     assert.match(told.find(move => move.id === id && move.op === "failed").message, /too long/);
     await settingUp;
     assert.ok(!engine.sessions.has(thing) && !fs.existsSync(path.join(wakes, thing)), "nothing of it is left here");
-    assert.deepEqual((await ask("GET", "kuvo/moves")).json, { moves: [], away: [] });
+    assert.deepEqual(underWay((await ask("GET", "kuvo/moves")).json), { moves: [], away: [] });
   } finally {
     engine.hold = null;
     engine.holding = false;
@@ -838,7 +841,7 @@ test("one over 1 GB is refused, saying so plainly, and nothing of it comes", asy
   const answer = told.find(move => move.id === id);
   assert.equal(answer.op, "refused");
   assert.equal(answer.message, "“Videos” is more than 1 GB, too big to move to another computer, so it stays where it is.");
-  assert.deepEqual((await ask("GET", "kuvo/moves")).json, { moves: [], away: [] });
+  assert.deepEqual(underWay((await ask("GET", "kuvo/moves")).json), { moves: [], away: [] });
 });
 
 test("what's moving says which computer it's going to by name, as your computers call it", async () => {
@@ -1213,7 +1216,7 @@ test("asked whether it can run what's coming: not with its coding agents down, n
   const fine = await answerTo("mov_chk5", { model: { providerID: "opencode", id: "big-pickle" } });
   assert.equal(fine.ok, true);
   // It keeps nothing of them: they're only questions.
-  assert.deepEqual((await ask("GET", "kuvo/moves")).json, { moves: [], away: [] });
+  assert.deepEqual(underWay((await ask("GET", "kuvo/moves")).json), { moves: [], away: [] });
 });
 
 test("asked with its coding agents here on a model none of them has: the engine's sign-ins answer, not 'isn't installed'", async () => {

@@ -387,6 +387,12 @@ export interface Agent {
   restartOutside?(): boolean
   models(): Promise<Model[]>
   /**
+   * The model an alias of its own (Claude Code's `default`) stands for on this computer and
+   * account, as the agent itself listed it: undefined when `id` isn't an alias, or the agent hasn't
+   * said (never a guess). A move carries that, since the alias may stand for another model there.
+   */
+  concreteModel?(id: string): Promise<string | undefined>
+  /**
    * Known to be signed out of, for an agent whose models run somewhere that drops a request it
    * can't send without a word (the engine): said first, rather than sent. Unknown is not.
    */

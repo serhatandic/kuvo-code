@@ -190,6 +190,8 @@ export function movedAway(now = Date.now()): MovedAway[] {
 export function noteMovedAway(sessions: readonly string[], key: string, now = Date.now()): void {
   const kept = movedAway(now).filter(each => !sessions.includes(each.session));
   writePrivate(MOVED_FILE, JSON.stringify([...kept, ...sessions.map(session => ({ session, key, at: now }))]));
+  // (Clients leave them out from here on: `kuvo/moves`' `moved`.)
+  movesChanged();
 }
 
 /** Moved here again (back from where it went): no longer away. */
@@ -197,6 +199,7 @@ export function forgetMovedAway(sessions: readonly string[], now = Date.now()): 
   const kept = movedAway(now);
   if (!kept.some(each => sessions.includes(each.session))) return;
   writePrivate(MOVED_FILE, JSON.stringify(kept.filter(each => !sessions.includes(each.session))));
+  movesChanged();
 }
 
 export type { Move, MoveKind, MoveStage };

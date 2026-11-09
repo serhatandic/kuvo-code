@@ -190,6 +190,8 @@ export class ClaudeAgent implements Agent {
   turnedAway?: { written?: number }
   private modelList?: { at: number; models: Model[] }
   private loadingModels?: Promise<void>
+  /** Told as Claude Code lists its models. */
+  private listed: (() => void)[] = []
   /** Counts updates of Claude Code: a session's Claude Code started before the last one starts again. */
   program = 0
 
@@ -663,6 +665,29 @@ export class ClaudeAgent implements Agent {
     return this.modelList?.models ?? fallbackModels(this.providerID)
   }
 
+  async concreteModel(id: string): Promise<string | undefined> {
+    // Its only alias of its own: a model's own id (`opus`, `claude-opus-5-5`) stands for itself.
+    if (id !== "default") return undefined
+    // Only as Claude Code listed them here (its usual ones meanwhile are a guess): asked first, if it
+    // hasn't said yet, until it lists them (not how much each holds, asked after), or gives up.
+    if (!this.modelList) {
+      void this.models()
+      const loading = this.loadingModels
+      await new Promise<void>((resolve) => {
+        const told = () => {
+          this.listed = this.listed.filter((each) => each !== told)
+          resolve()
+        }
+        this.listed.push(told)
+        if (loading) loading.then(told, told)
+        else told()
+      })
+    }
+    const models = this.modelList?.models ?? []
+    if (models.some((model) => model.id === id)) return undefined
+    return models.find((model) => model.aliases?.includes(id))?.id
+  }
+
   private async loadModels() {
     const sdk = await this.sdk()
     const abort = new AbortController()
@@ -728,6 +753,7 @@ export class ClaudeAgent implements Agent {
         ]
       }),
     }
+    for (const told of [...this.listed]) told()
     emit("model.updated", {})
   }
 

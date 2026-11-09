@@ -147,6 +147,16 @@ final class Moves {
         }
         var moves: [Move]
         var away: [String]
+        /// The conversations that moved away from that box lately (two days), and where each went:
+        /// rows of them from that box, listed before they moved, go (bridge 0.9.208).
+        var moved: [Moved]?
+
+        struct Moved: Decodable, Equatable {
+            var session: String
+            /// The box it went to.
+            var key: String
+            var at: Double
+        }
         /// Your other computers' moves, as each told this box: a machine's box answers this Mac
         /// over SSH only when asked, so one that's moving is read from here.
         var elsewhere: [Elsewhere]?
@@ -566,6 +576,8 @@ final class Moves {
         switch move.kind {
         case "bot":
             for end in ends { await app.bots.refresh(end ?? BoxClient.mac) }
+            // Its conversation too, on both: a coding agent's (on the agents bridges) as well.
+            await rereadSessions(on: ends)
             settled(move, on: box)
             // Its tabs here go with it, once it doesn't live here.
             let bot = app.bots.bot(move.thing)
@@ -573,14 +585,25 @@ final class Moves {
             app.wakeUps.forget(key: move.thing)
             if let bot = app.bots.bot(move.thing) { await app.wakeUps.read(bot.wakeOwner) }
         case "chat":
-            for end in ends {
-                if let end { if let engine = app.machines.engine(end) { _ = await app.workspace.refresh(engine) } } else { await app.workspace.refresh() }
-            }
+            await rereadSessions(on: ends)
             settled(move, on: box)
             app.wakeUps.forget(key: move.thing)
             if let chat = app.workspace.session(move.thing) { await app.wakeUps.read(WakeUps.owner(of: chat)) }
         default:
             for end in ends { await app.boxGroups.reload(move.thing, on: end) }
+        }
+    }
+
+    /// The conversations each end lists (nil: this Mac), its engine's and its coding agents'.
+    private func rereadSessions(on ends: [String?]) async {
+        guard let app else { return }
+        for end in ends {
+            if let end {
+                if let engine = app.machines.engine(end) { _ = await app.workspace.refresh(engine) }
+            } else {
+                await app.workspace.refresh()
+                await app.workspace.refreshAgents()
+            }
         }
     }
 
@@ -607,7 +630,8 @@ final class Moves {
     private func show() {
         var moving = asked
         var frozen = Set(settling.values.flatMap(\.things))
-        var away: [String: String?] = [:]
+        var away: [String: Set<String>] = [:]
+        var copies: [String: Set<String>] = [:]
         // What this Mac's own box has coming here: it says itself whether it hears from where it comes.
         let incoming = Dictionary((told[BoxClient.mac]?.moves ?? []).filter { $0.role == "to" }.map { ($0.id, $0) }) { $1 }
         // What a box read now says of a thing wins over what one out of reach said last (it's taken last).
@@ -635,7 +659,11 @@ final class Moves {
                 let sent = incoming[move.id]?.sent.map { max($0, move.sent ?? 0) } ?? move.sent
                 moving[move.thing] = Going(place: name, stage: move.stage, sent: sent, size: move.size, waitingFor: waiting)
             }
-            for session in said.away { away[session] = .some(machine) }
+            // Each box's own word: one away from two boxes at once is away from both.
+            for session in said.away + (said.moved ?? []).map(\.session) { away[session, default: []].insert(box) }
+            for move in said.moves where move.role == "to" {
+                for session in move.sessions where said.away.contains(session) { copies[session, default: []].insert(box) }
+            }
         }
         // Coming here from a machine that's away and hasn't said what it moves (not since this app
         // started, say): as this Mac's box has it.
@@ -649,7 +677,15 @@ final class Moves {
         if arriving != Self.arriving { Self.arriving = arriving }
         if frozen != Self.frozen { Self.frozen = frozen }
         if frozen != held { held = frozen }
-        if app?.workspace.movedAway != away { app?.workspace.movedAway = away }
+        if let app, app.workspace.comingCopies != copies { app.workspace.comingCopies = copies }
+        if let app, app.workspace.movedAway != away {
+            // A box that no longer says one doesn't live there (it came back, or its copy there was
+            // let go of): its list read again, which left it out till now.
+            let before = app.workspace.movedAway
+            let back = Set(before.flatMap { session, boxes in boxes.subtracting(away[session] ?? []) })
+            app.workspace.movedAway = away
+            if !back.isEmpty { Task { await rereadSessions(on: back.sorted().map { $0 == BoxClient.mac ? nil : $0 }) } }
+        }
     }
 
     /// A machine out of reach, its moves unread: not a read that failed a moment (its connection up).

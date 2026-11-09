@@ -8,7 +8,7 @@ import { plainName } from "../../shared/text";
 import { followed } from "../follow";
 import { placesFor, startMove } from "../moves/move";
 import { movesElsewhere } from "../moves/elsewhere";
-import { awaySessions, listedMoves, moveFollowers, shownMove } from "../moves/records";
+import { awaySessions, listedMoves, moveFollowers, movedAway, shownMove } from "../moves/records";
 import { peersOf } from "../peers/known";
 import type { AnswerPiece, RouteContext } from "../server/context";
 import { readLink } from "../state";
@@ -20,6 +20,7 @@ const KINDS: MoveKind[] = ["bot", "chat", "group"];
 const movesNow = (): Moves => {
   const peers = peersOf(readLink());
   const elsewhere = movesElsewhere(peers);
+  const moved = movedAway().map(({ session, key, at }) => ({ session, key, at }));
   return {
     moves: listedMoves().map(record => {
       const place = plainName(peers.find(peer => peer.key === record.peer)?.name ?? "");
@@ -27,6 +28,7 @@ const movesNow = (): Moves => {
     }),
     away: awaySessions(),
     ...(elsewhere.length ? { elsewhere } : {}),
+    ...(moved.length ? { moved } : {}),
   };
 };
 

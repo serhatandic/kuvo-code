@@ -20,6 +20,9 @@ import { fileURLToPath } from "node:url";
 import { relayStandIn } from "./relay-stand-in.js";
 import { atEnd, removeAtEnd } from "./at-end.js";
 
+// What's under way, as `kuvo/moves` says it (not what moved away lately, `moved`, which stays two days).
+const underWay = ({ moved: _moved, ...rest } = {}) => rest;
+
 const script = fileURLToPath(new URL("../../Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url));
 const support = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-moves-")));
 const macHome = path.join(support, "mac");
@@ -334,8 +337,8 @@ test("a chat moves from this Mac to the machine, with its wake-ups; here it's go
   const kept = trashed(macHome).find(each => path.basename(each) === "ses_chat1");
   assert.ok(kept && JSON.parse(fs.readFileSync(path.join(kept, "conversation.json"), "utf8"))[0].info.id === "ses_chat1");
   // Nothing under way on either box, and nothing listed where it doesn't live.
-  assert.deepEqual((await ask("GET", "kuvo/moves")).json, { moves: [], away: [] });
-  assert.deepEqual((await askMachine("GET", "kuvo/moves")).json, { moves: [], away: [] });
+  assert.deepEqual(underWay((await ask("GET", "kuvo/moves")).json), { moves: [], away: [] });
+  assert.deepEqual(underWay((await askMachine("GET", "kuvo/moves")).json), { moves: [], away: [] });
 });
 
 test("the chat that moved takes messages where it lives now", { timeout: 60_000 }, async t => {
@@ -378,7 +381,7 @@ test("a computer that can't take it now: it stays where it was, as it was", { ti
   assert.match(moved.json.message, /engine on lab isn’t running/);
   assert.ok(macEngine.sessions.has("ses_chat2"));
   assert.ok(!labEngine.sessions.has("ses_chat2"));
-  assert.deepEqual((await ask("GET", "kuvo/moves")).json, { moves: [], away: [] });
+  assert.deepEqual(underWay((await ask("GET", "kuvo/moves")).json), { moves: [], away: [] });
 });
 
 test("a group chat goes to the machine its bots live on, held there until the switch; one whose bots don't all live there stays", { timeout: 60_000 }, async t => {
