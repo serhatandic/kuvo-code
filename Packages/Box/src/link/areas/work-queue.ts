@@ -22,6 +22,8 @@ import type { Target } from "../../shared/records";
 export const WORK_QUEUE_ROUTE = /^kuvo\/work-queue(?:\/(tools|events|refs|categories|import|items\/([^/]+)(?:\/(move|restore|files\/([^/]+)))?))?$/;
 
 const YOU = { user: true } as const;
+// Every queue on the box at once, as the panel's All shows it.
+const ALL = "all";
 // An item a client named that isn't here.
 class Missing extends Refusal {}
 const ONLY_CLIENTS = "Only Kuvo Code on your Mac or iPhone can do this: agents change the Work Queue with their tools.";
@@ -31,11 +33,12 @@ const fromClient = ({ request, phone }: RouteContext) => Boolean(phone?.key || r
 const queryOf = (request: RouteContext["request"]) => new URLSearchParams(request.path.split("?")[1] ?? "");
 
 /** An owner's view, as `kuvo/work-queue` gives it: the categories, its items and those it oversees
- * or handed on (summaries), whose each is, and what's deleted among them. */
+ * or handed on (summaries), whose each is, and what's deleted among them. `all` is every item on
+ * the box, whoever's it is. */
 export async function viewOf(owner: string, targets: Target[], facts?: Facts, signal?: AbortSignal, cache?: Map<string, unknown>) {
   const known = facts ?? await factsOf(targets, signal);
-  const overseen = overseenBy(owner, known.all);
-  const all = readAll().flatMap(queue => queue.items).filter(item => inView(owner, item, overseen));
+  const overseen = owner === ALL ? new Set<string>() : overseenBy(owner, known.all);
+  const all = readAll().flatMap(queue => queue.items).filter(item => owner === ALL || inView(owner, item, overseen));
   const { owners, titles } = await ownersOf(owner, all, known, targets, cache);
   // (In the categories' order, then each one's own.)
   const place = new Map(categories().map((each, index) => [each.id, index]));
@@ -124,7 +127,7 @@ export async function* workQueueRoute(context: RouteContext, match: RegExpMatchA
   if (part === "events" || part === undefined) {
     if (method !== "GET") return yield* json(405, {});
     const owner = queryOf(request).get("owner") ?? "";
-    if (!OWNER.test(owner)) return yield* json(400, { message: "Say whose queue (owner): a conversation's address or a group chat's id." });
+    if (!OWNER.test(owner) && owner !== ALL) return yield* json(400, { message: "Say whose queue (owner): a conversation's address, a group chat's id, or all." });
     if (part === undefined) return yield* json(200, await viewOf(owner, targets, undefined, signal ?? undefined));
     yield { head: { status: 200, headers: { "content-type": "application/x-ndjson" } } };
     return yield* followView(owner, targets, signal ?? undefined);

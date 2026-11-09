@@ -146,7 +146,7 @@ export function wholeOf(item: Item, working: Set<string>, titles: Map<string, { 
 
 /** The owners of `items`, and `owner` itself, as a view names them. */
 export async function ownersOf(owner: string, items: Item[], facts: Facts, targets: Target[], cache?: Map<string, unknown>): Promise<{ owners: OwnerFacts[]; titles: Map<string, { title: string; startedBy?: string; bot?: { id: string; name: string } }> }> {
-  const keys = new Set([owner, ...items.map(item => item.owner), ...items.flatMap(item => item.handedBy ? [item.handedBy] : [])]);
+  const keys = new Set([...(owner === "all" ? [] : [owner]), ...items.map(item => item.owner), ...items.flatMap(item => item.handedBy ? [item.handedBy] : [])]);
   const named = await sessionsNamed([...keys, ...items.flatMap(item => item.sessions.map(each => each.session))], facts, targets, cache);
   const bots = listBots();
   const owners: OwnerFacts[] = [...keys].map(key => {

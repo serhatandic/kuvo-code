@@ -205,6 +205,12 @@ test("a lead sees the queues of the sessions it oversees; handing an item moves 
   const lead = await view("ses_lead");
   assert.deepEqual(lead.items.map(item => item.title).sort(), ["Build the sign-in", "Child's own", "Grandchild's own"]);
   assert.deepEqual(lead.owners.find(each => each.owner === "ses_child"), { owner: "ses_child", kind: "session", title: "Sign-in", startedBy: "ses_lead" });
+  // All: every queue on the box, each item naming whose it is.
+  const everything = await view("all");
+  assert.equal(everything.owner, "all");
+  assert.deepEqual(everything.items.map(item => item.title).sort(), ["Build the sign-in", "Child's own", "Grandchild's own", "Not the lead's"]);
+  assert.deepEqual(everything.owners.map(each => each.owner).sort(), ["ses_child", "ses_grandchild", "ses_lead", "ses_other"]);
+  assert.equal((await route("GET", "kuvo/work-queue?owner=everyone")).status, 400);
 
   const handed = await tool("queue_hand", { item: "#1", to: "ses_child" }, "ses_lead");
   assert.equal(handed.isError, false, handed.text);

@@ -2862,7 +2862,8 @@ it, or by those, put away ones too), and those it handed on, each living once in
 - `GET kuvo/work-queue?owner=<ses_…|grp_…>` → `{owner, categories, items, owners, removed}`:
   `items` in the categories' order, then each one's; `owners` (`[{owner, kind: bot|session|group,
   title, bot?: {id, name}, startedBy?}]`) names each owner in the view; `removed`, what's deleted
-  in it, newest first. `kuvo/work-queue/events?owner=` is the same as NDJSON: a line now and one
+  in it, newest first. `owner=all` is every queue on the box at once (the panel's All; piece 3 adds
+  every other computer's). `kuvo/work-queue/events?owner=` is the same as NDJSON: a line now and one
   each time it changes (a change here or by another process, or a linked session starting or
   stopping work).
 - `GET kuvo/work-queue/items/<id or number>` → `{item}`, whole. `…/files/<name>` → its bytes.

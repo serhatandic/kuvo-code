@@ -25353,7 +25353,7 @@ function wholeOf(item, working, titles) {
   return { ...summaryOf(item, working, titles), body: item.body, notes: item.notes, files: item.files, links: item.links, handed: item.handed ?? [] };
 }
 async function ownersOf(owner, items, facts, targets, cache) {
-  const keys = new Set([owner, ...items.map((item) => item.owner), ...items.flatMap((item) => item.handedBy ? [item.handedBy] : [])]);
+  const keys = new Set([...owner === "all" ? [] : [owner], ...items.map((item) => item.owner), ...items.flatMap((item) => item.handedBy ? [item.handedBy] : [])]);
   const named = await sessionsNamed([...keys, ...items.flatMap((item) => item.sessions.map((each) => each.session))], facts, targets, cache);
   const bots = listBots();
   const owners = [...keys].map((key) => {
@@ -29286,6 +29286,7 @@ Handed: ${item.handed.map((each) => `${title(each.from)} → ${title(each.to)} $
 // Packages/Box/src/link/areas/work-queue.ts
 var WORK_QUEUE_ROUTE = /^kuvo\/work-queue(?:\/(tools|events|refs|categories|import|items\/([^/]+)(?:\/(move|restore|files\/([^/]+)))?))?$/;
 var YOU = { user: true };
+var ALL = "all";
 
 class Missing extends Refusal {
 }
@@ -29294,8 +29295,8 @@ var fromClient = ({ request, phone }) => Boolean(phone?.key || request.fromApp |
 var queryOf = (request) => new URLSearchParams(request.path.split("?")[1] ?? "");
 async function viewOf(owner, targets, facts, signal, cache) {
   const known = facts ?? await factsOf(targets, signal);
-  const overseen = overseenBy(owner, known.all);
-  const all = readAll2().flatMap((queue) => queue.items).filter((item) => inView(owner, item, overseen));
+  const overseen = owner === ALL ? new Set : overseenBy(owner, known.all);
+  const all = readAll2().flatMap((queue) => queue.items).filter((item) => owner === ALL || inView(owner, item, overseen));
   const { owners, titles } = await ownersOf(owner, all, known, targets, cache);
   const place = new Map(categories().map((each, index) => [each.id, index]));
   const sorted = (items) => items.sort((a, b) => (place.get(a.category) ?? 99) - (place.get(b.category) ?? 99) || a.order - b.order).map((item) => summaryOf(item, known.working, titles));
@@ -29384,8 +29385,8 @@ async function* workQueueRoute(context, match) {
     if (method !== "GET")
       return yield* json(405, {});
     const owner = queryOf(request).get("owner") ?? "";
-    if (!OWNER.test(owner))
-      return yield* json(400, { message: "Say whose queue (owner): a conversation's address or a group chat's id." });
+    if (!OWNER.test(owner) && owner !== ALL)
+      return yield* json(400, { message: "Say whose queue (owner): a conversation's address, a group chat's id, or all." });
     if (part === undefined)
       return yield* json(200, await viewOf(owner, targets, undefined, signal ?? undefined));
     yield { head: { status: 200, headers: { "content-type": "application/x-ndjson" } } };
