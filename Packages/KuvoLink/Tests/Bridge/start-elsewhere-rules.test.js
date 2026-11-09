@@ -136,7 +136,10 @@ const confirmFullAccess = () => write(path.join(home, "box", "approval.json"), {
 
 test("a lead on another computer starts a session here as its own would: marked as its, told who it's from, and its news goes to the lead's computer", async () => {
   const call = startCall();
-  assert.deepEqual(await take(call), [{ id: call.id, ok: true }]);
+  // Said to be had before anything's made (so its lead's box knows it got there), and again once done.
+  const said = [];
+  await link.takeCall(mini.peer, call, { send: (_to, message) => said.push([message.delivered, eng.seen.made.length]), targets: [eng.target], bridge: true, places: { readEngine: () => eng.target, bridge: () => null } });
+  assert.deepEqual(said, [[{ id: call.id, ok: true }, 0], [{ id: call.id, ok: true }, 1]]);
   assert.equal(eng.seen.made.length, 1);
   const made = eng.all.get(eng.seen.made[0].id);
   assert.equal(made.directory, path.join(home, "projects", "api"));
@@ -436,25 +439,34 @@ test("what the caller's computer refuses before anything goes", async () => {
 
 // ---- Found in review ----
 
-test("a start that went before its computer stopped answering isn't said to have not started: it may have", async () => {
+test("a start that got there before its computer stopped answering isn't said to have not started: it may have", async () => {
   leadHere();
+  const callFile = async () => {
+    let name;
+    while (!(name = sending().find(each => read(path.join(run, "outbox", "sending", each))?.call?.tool === "start_session"))) await new Promise(resolve => setTimeout(resolve, 5));
+    return name;
+  };
   const going = tool("start_session", { computer: "mini", project: "api", task: "Fix the sign-in." });
-  while (!sending().some(name => read(path.join(run, "outbox", "sending", name))?.call?.tool === "start_session")) await new Promise(resolve => setTimeout(resolve, 5));
-  // Mini stops answering a while after the call went (its lid closed as it started the session):
-  // the relay's word comes on a later frame, seconds on.
-  write(path.join(run, "peer-reach.json"), { [mini.pub]: Date.now() + 5000 });
+  // Mini says it has it (as it takes a start, before it makes anything), then stops answering
+  // (its lid closed as it started the session).
+  const name = await callFile();
+  const file = path.join(run, "outbox", "sending", name);
+  write(file, { ...read(file), sentTo: mini.pub });
+  link.letterWent(mini.peer, { id: name.slice(0, -5), ok: true });
+  write(path.join(run, "peer-reach.json"), { [mini.pub]: Date.now() });
   const said = await going;
   assert.equal(said.isError, true);
   assert.match(said.text, /^Couldn't confirm the session started on mini: it stopped answering \(it may be asleep, off or offline\) after the start went\. It may still have started, and if it did you'll hear as a message once mini is back\. Check with list_sessions before you start it again\.$/);
   assert.deepEqual(sending(), [], "and it isn't sent again");
 
-  // The relay says so the moment the call goes (nothing connected there): it never got there.
+  // The relay says it isn't there and mini never said it had it: it never got there.
   fs.rmSync(path.join(run, "peer-reach.json"));
   const bounced = tool("start_session", { computer: "mini", project: "api", task: "Fix the sign-in." });
-  while (!sending().some(name => read(path.join(run, "outbox", "sending", name))?.call?.tool === "start_session")) await new Promise(resolve => setTimeout(resolve, 5));
+  await callFile();
   write(path.join(run, "peer-reach.json"), { [mini.pub]: Date.now() });
   assert.match((await bounced).text, /^mini isn't answering: it may be asleep, off or offline, so nothing was started\./);
 });
+
 
 test("a start cut short isn't finished once this computer stopped taking work from yours, or yours was removed", async () => {
   const whole = startCall();
@@ -478,6 +490,35 @@ test("a start cut short isn't finished once this computer stopped taking work fr
   assert.equal(eng.seen.made.length, made, "nothing made");
   assert.deepEqual(answered.map(([id, done]) => [id, done.refused]), [["cal_off0000000000001", true], ["cal_gone000000000001", true]]);
   assert.match(answered[0][1].text, /^The session wasn't started: this computer stopped taking work from your other computers before it was made\.$/);
+
+  // Made and told its task before this box went down, then switched off: it did start, and says so.
+  link.allowOtherComputers(false);
+  const told = { ...structuredClone(kept), id: "cal_told000000000001", made: Date.now(), at: Date.now() };
+  delete told.done;
+  write(path.join(run, "calls", `${told.id}.json`), told);
+  await resume();
+  assert.deepEqual([answered.at(-1)[0], answered.at(-1)[1].refused], ["cal_told000000000001", false]);
+  assert.match(answered.at(-1)[1].text, /^Started "Sign-in"/);
+  link.allowOtherComputers(true);
+});
+
+test("a start finished after this box went down keeps where its lead's line lives, as one finished at once does", async () => {
+  const whole = startCall({}, { line: ["ses_top", "ses_lead"], homes: { ses_top: mac.pub, ses_lead: mini.pub }, own: false, depth: 2 });
+  await take(whole);
+  const kept = read(path.join(run, "calls", `${whole.id}.json`));
+  fs.rmSync(path.join(run, "work", "homes.json"), { force: true });
+  const again = { ...structuredClone(kept), id: "cal_home000000000001", made: Date.now(), at: Date.now() };
+  for (const key of ["done", "making", "session", "marked", "prompted"]) delete again[key];
+  write(path.join(run, "calls", `${again.id}.json`), again);
+  await link.resumeStarts(link.answerResumed, Date.now(), { readEngine: () => eng.target, bridge: () => null });
+  assert.equal(read(path.join(run, "work", "homes.json"))?.ses_top?.key, mac.pub);
+});
+
+test("a start on a computer whose engine doesn't answer says so, not that it has no models", async () => {
+  const down = startCall();
+  const said = [];
+  await link.takeCall(mini.peer, down, { send: (_to, message) => said.push(message.delivered), targets: [eng.target], bridge: true, places: { readEngine: () => ({ port: 1, password: "pw" }), bridge: () => null } });
+  assert.match(answerOf(down).note.words, /^The engine on this machine isn't running\./);
 });
 
 test("a start's line must end with the lead that sends it, and a refused one leaves no word on where anyone lives", async () => {

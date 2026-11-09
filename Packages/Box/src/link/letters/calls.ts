@@ -27,7 +27,7 @@ import { homesOf, noteHomes } from "../work/homes";
 import { rowsBox, rowsOf, startedOn } from "../work/elsewhere";
 import { ALLOW_LIFE, answerAskTool, compactSessionTool, liveRows, stopSessionTool } from "../work/tools";
 import { otherComputersAllowed } from "../work/approval";
-import { AWAY_WORDS, computerName, noteLineHomes, START_FIELDS, OPEN_TOOLS, readHere, readJournal, START_FEATURE, startAsOfMail, startsRunning, stopLineWork, takeStart } from "./start-call";
+import { AWAY_WORDS, computerName, keepJournal, noteLineHomes, START_FIELDS, OPEN_TOOLS, readHere, readJournal, START_FEATURE, startAsOfMail, startsRunning, stopLineWork, takeStart } from "./start-call";
 import type { StartAs, StartJournal } from "./start-call";
 import { deliverNote } from "./note";
 import { cutText, LETTER_LIFE, letterTries, NOTE_MEMORY, placeOfSession, SENDING } from "./letter";
@@ -96,8 +96,6 @@ export interface OutboxCall {
 
 // How many bytes of rows a list's answer carries at most: within what a letter's words are cut to.
 const LIST_BYTES = 22_000;
-// How soon after a call goes the relay's word that its box isn't there means it never got there.
-const BOUNCE = 3000;
 // How long a box that doesn't answer may take before a tool stops waiting for it.
 export const CALL_WAIT = 20_000;
 
@@ -238,6 +236,8 @@ export async function callPeer(peer: Peer, tool: CallTool, args: Record<string, 
   const sent = Date.now();
   const id = leaveCall(peer.key, lead.session, call, { wait: true, quiet });
   const { answer, unreachable } = await awaitAnswer(id, peer.key, sent, place, { most, cut: READ_BY_MAIL });
+  // Whether that box said it has it (its receipt takes the call out of the outbox).
+  const had = !fs.existsSync(path.join(SENDING, `${id}.json`));
   // A start, or a read of what's there, not answered: never sent again, so it's never done late
   // (or twice). One that got there is told as a message.
   if (!answer && isOpenTool(tool)) {
@@ -247,11 +247,9 @@ export async function callPeer(peer: Peer, tool: CallTool, args: Record<string, 
   if (answer && "failed" in answer) return { failed: answer.failed };
   if (answer && "note" in answer) return { answer: { text: answer.note, isError: false } };
   if (answer && "text" in answer && typeof answer.text === "string") return { answer: { text: answer.text, isError: answer.isError === true } };
-  // (`sent`: it may have got there. The relay keeps nothing and says at once when nothing's
-  // connected where a frame goes, so a box said away within moments of the call going never had it.)
-  const since = awaySince(peer.key);
-  const bounced = unreachable && since !== null && since - sent <= BOUNCE;
-  return { away: unreachable ? AWAY : "it didn't answer in time", kept: keep && !place.signal?.aborted, sent: !bounced };
+  // (`sent`: it may have got there. A box that takes a start says so before it makes anything, so
+  // one that's not answering and never said it had it, didn't.)
+  return { away: unreachable ? AWAY : "it didn't answer in time", kept: keep && !place.signal?.aborted, sent: had || !unreachable };
 }
 
 /** The answer to letter or call `id`, sent to box `peer` at `sent`: waited for until it comes, the
@@ -444,7 +442,12 @@ export async function takeCall(sender: LetterSender & { name?: string }, given: 
         return send(sender, { delivered: { id, ok: true } });
       }
       const peer = peersOf(readLink()).find(each => each.key === sender.key);
-      const journal = readJournal(id) ?? { id, from, sender: sender.key, computer: peer ? boxName(peer) : plainName(sender.name) || "another computer", name: as.name, given: startGiven(args), start: as.start!, made, at: now };
+      const kept = readJournal(id);
+      const journal = kept ?? { id, from, sender: sender.key, computer: peer ? boxName(peer) : plainName(sender.name) || "another computer", name: as.name, given: startGiven(args), start: as.start!, made, at: now };
+      // Kept, then said to be had, before anything's made: the lead's box tells "it may have
+      // started" from "it never got there" by that.
+      if (!kept) keepJournal(journal);
+      send(sender, { delivered: { id, ok: true } });
       const done = await takeStart(journal, places);
       // The conversations above the lead live where its box says, where this one knows no better
       // (once it's started: a refused start leaves no word behind).
@@ -498,6 +501,7 @@ function startGiven(args: Record<string, unknown>): Record<string, unknown> {
 
 /** A start finished from where it got to (`resumeStarts`), told to its lead as its call's answer. */
 export function answerResumed(journal: StartJournal, done: { text: string; refused: boolean }): void {
+  if (!done.refused) noteLineHomes(journal.start.homes, journal.start.line);
   leaveCallAnswer(answerIdOf(journal.id), { to: journal.from, text: done.text, peer: journal.sender, answers: journal.id, words: done.text, refused: done.refused, list: false });
 }
 

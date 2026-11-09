@@ -281,7 +281,7 @@ export function readJournal(id: string): StartJournal | null {
     return null;
   }
 }
-const keepJournal = (journal: StartJournal) => {
+export const keepJournal = (journal: StartJournal) => {
   fs.mkdirSync(CALLS, { recursive: true, mode: 0o700 });
   writePrivate(journalFile(journal.id), JSON.stringify(journal));
 };
@@ -379,12 +379,16 @@ export async function resumeStarts(answer: (journal: StartJournal, done: { text:
       continue;
     }
     if (startsRunning.has(journal.id)) continue;
-    // (Switched off since, or the computer it's from removed: not finished here.)
+    // (Switched off since, or the computer it's from removed: not finished here; said as far as
+    // it got.)
     if (!otherComputersAllowed() || !peersOf(readLink()).some(peer => peer.key === journal.sender)) {
       const why = !otherComputersAllowed() ? "this computer stopped taking work from your other computers" : "your computer was removed from this one";
-      journal.done = journal.session
-        ? { text: `Started a session (address ${journal.session}), but it wasn't given its task: ${why} first.`, refused: true }
-        : { text: `The session wasn't started: ${why} before it was made.`, refused: true };
+      if (journal.making && !journal.session) journal.session = await madeFor(journal.making.target, journal.id).catch(() => null) ?? undefined;
+      journal.done = journal.making && journal.session && journal.prompted
+        ? { text: startedWords({ started: { session: journal.session, ...journal.making.started, ...(journal.marked ? {} : { wakes: undefined }) } }, false).text, refused: false }
+        : journal.session
+          ? { text: `Started a session (address ${journal.session}), but it wasn't given its task: ${why} first.`, refused: true }
+          : { text: `The session wasn't started: ${why} before it was made.`, refused: true };
       keepJournal(journal);
       answer(journal, journal.done);
       continue;

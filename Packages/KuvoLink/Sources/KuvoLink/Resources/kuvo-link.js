@@ -18128,7 +18128,8 @@ async function startSession(given, by, place) {
   }
   let modelNote;
   if (remote && !picked.length) {
-    if (!engine && !bridge)
+    const answering = engine ? await call(engine, "GET", "/api/provider", undefined, place.signal).then(() => true, () => false) : false;
+    if (!answering && !bridge)
       return no(503, `The engine on ${HERE} isn't running.`);
     const models = (await usableModels(engine, bridge, place.signal)).filter((each) => !each.retiring);
     if (!models.length)
@@ -18676,7 +18677,9 @@ async function resumeStarts(answer, now = Date.now(), places = { readEngine: rea
       continue;
     if (!otherComputersAllowed() || !peersOf(readLink()).some((peer) => peer.key === journal.sender)) {
       const why = !otherComputersAllowed() ? "this computer stopped taking work from your other computers" : "your computer was removed from this one";
-      journal.done = journal.session ? { text: `Started a session (address ${journal.session}), but it wasn't given its task: ${why} first.`, refused: true } : { text: `The session wasn't started: ${why} before it was made.`, refused: true };
+      if (journal.making && !journal.session)
+        journal.session = await madeFor3(journal.making.target, journal.id).catch(() => null) ?? undefined;
+      journal.done = journal.making && journal.session && journal.prompted ? { text: startedWords({ started: { session: journal.session, ...journal.making.started, ...journal.marked ? {} : { wakes: undefined } } }, false).text, refused: false } : journal.session ? { text: `Started a session (address ${journal.session}), but it wasn't given its task: ${why} first.`, refused: true } : { text: `The session wasn't started: ${why} before it was made.`, refused: true };
       keepJournal(journal);
       answer(journal, journal.done);
       continue;
@@ -18801,7 +18804,6 @@ var CALLS_FEATURE = "work.elsewhere";
 var CALL_ID = /^cal_[A-Za-z0-9_-]{16,40}$/;
 var answerIdOf = (call) => `${call}-a`;
 var LIST_BYTES = 22000;
-var BOUNCE = 3000;
 var CALL_WAIT = 20000;
 function callLife(call) {
   if (call.tool === "list_sessions")
@@ -18920,6 +18922,7 @@ async function callPeer(peer, tool, args, lead, place, { keep, quiet = false, mo
   const sent = Date.now();
   const id = leaveCall(peer.key, lead.session, call, { wait: true, quiet });
   const { answer, unreachable } = await awaitAnswer(id, peer.key, sent, place, { most, cut: READ_BY_MAIL });
+  const had = !fs66.existsSync(path68.join(SENDING, `${id}.json`));
   if (!answer && isOpenTool(tool)) {
     fs66.rmSync(path68.join(SENDING, `${id}.json`), { force: true });
     letterTries.delete(id);
@@ -18930,9 +18933,7 @@ async function callPeer(peer, tool, args, lead, place, { keep, quiet = false, mo
     return { answer: { text: answer.note, isError: false } };
   if (answer && "text" in answer && typeof answer.text === "string")
     return { answer: { text: answer.text, isError: answer.isError === true } };
-  const since = awaySince(peer.key);
-  const bounced = unreachable && since !== null && since - sent <= BOUNCE;
-  return { away: unreachable ? AWAY : "it didn't answer in time", kept: keep && !place.signal?.aborted, sent: !bounced };
+  return { away: unreachable ? AWAY : "it didn't answer in time", kept: keep && !place.signal?.aborted, sent: had || !unreachable };
 }
 async function awaitAnswer(id, peer, sent, place, { most, cut, every = 250 }) {
   const stop = new AbortController;
@@ -19102,7 +19103,11 @@ async function takeCall(sender, given, { send, targets, answer = leaveCallAnswer
         return send(sender, { delivered: { id, ok: true } });
       }
       const peer = peersOf(readLink()).find((each) => each.key === sender.key);
-      const journal = readJournal(id) ?? { id, from, sender: sender.key, computer: peer ? boxName(peer) : plainName(sender.name) || "another computer", name: as.name, given: startGiven(args), start: as.start, made, at: now };
+      const kept = readJournal(id);
+      const journal = kept ?? { id, from, sender: sender.key, computer: peer ? boxName(peer) : plainName(sender.name) || "another computer", name: as.name, given: startGiven(args), start: as.start, made, at: now };
+      if (!kept)
+        keepJournal(journal);
+      send(sender, { delivered: { id, ok: true } });
       const done = await takeStart(journal, places);
       if (!done.refused)
         noteLineHomes(as.start.homes, as.start.line, now);
@@ -19155,6 +19160,8 @@ function startGiven(args) {
   return given;
 }
 function answerResumed(journal, done) {
+  if (!done.refused)
+    noteLineHomes(journal.start.homes, journal.start.line);
   leaveCallAnswer(answerIdOf(journal.id), { to: journal.from, text: done.text, peer: journal.sender, answers: journal.id, words: done.text, refused: done.refused, list: false });
 }
 function leaveCallAnswer(id, letter) {

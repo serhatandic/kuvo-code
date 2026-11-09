@@ -405,9 +405,10 @@ connection.
     receiving box's name.
   - **Sender side**: a start, or a read of what's there, is never kept for a box that isn't
     answering: the tool says at once it may be asleep, off or offline and nothing was started (so
-    too when the relay says so within 3 seconds of the call going: it keeps nothing, so that box
-    never had it). One not answered in time (45 seconds for a start, 20 for a read), or whose box
-    stopped answering later, is taken out of the outbox, so it's never started late or twice: the
+    too when the relay says it isn't there before that box said it has the call: a box keeps a
+    start, then says `delivered {ok: true}`, before it makes anything, and again once it's done).
+    One not answered in time (45 seconds for a start, 20 for a read), or whose box said it had it
+    and then stopped answering, is taken out of the outbox, so it's never started late or twice: the
     tool says it couldn't confirm, to check `list_sessions` before trying again. The lead's box notes where the session lives ("Homes") and that the lead
     started work there (`run/work/started-elsewhere.json`, `{<lead>: {<key>: at}}`, 30 days), so
     its `list_sessions` asks there before that computer's first rows come.

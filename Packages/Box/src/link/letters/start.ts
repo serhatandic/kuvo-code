@@ -362,7 +362,9 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
   if (remote && !picked.length) {
     // A lead on another computer: on its own model where there's an account for it here, else on
     // this computer's default; none at all, it can't start here.
-    if (!engine && !bridge) return no(503, `The engine on ${HERE} isn't running.`);
+    // (An engine that doesn't answer isn't one with no accounts.)
+    const answering = engine ? await call(engine, "GET", "/api/provider", undefined, place.signal).then(() => true, () => false) : false;
+    if (!answering && !bridge) return no(503, `The engine on ${HERE} isn't running.`);
     const models = (await usableModels(engine, bridge, place.signal)).filter(each => !each.retiring);
     if (!models.length) return no(400, describeModels([]));
     const own = model ? models.find(each => each.providerID === model?.providerID && each.id === model?.id) : undefined;
