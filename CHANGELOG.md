@@ -16,6 +16,8 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ### All Changes
 
+- A permission's answers are numbered in the composer's place, as on your iPhone and in Claude Code and Codex: **1** Allow Once, **2** Always Allow…, **3** Don't Allow, **4** Tell It What to Do Instead…, which opens a line to say no with your words. Press the number to answer; **Return** still allows once, and **Esc** still goes to the line. Once the ask in view is answered, the next one after it shows, and what you wrote under an ask stays with it while you look at the others.
+- The composer's paperclip, the mode's icon when it shows alone, and the microphone are one size.
 - A GitHub Copilot account's Claude models work as soon as you sign in, sign in again or sign out, on this Mac and on your machines, with nothing restarted and no session cut short (from the engine's first start after this update). Before, Kuvo Code learned what they need only while its own agent was at work, and it took effect at the engine's next start, so they failed with "Extra inputs are not permitted" until then.
 - **Refresh Models**, in the **…** menu of the account in use in Settings › Accounts (on your iPhone too), brings models your plan gained (GitHub Copilot, GitLab Duo, OpenCode and others whose models come from your account) into the model picker without a restart. A project with work going on gets them once it's done.
 - A picture an agent changes and shows you again shows the change, not the picture it showed the first time. A file an agent on a machine shows is no longer drawn from a file at the same path on this Mac.
