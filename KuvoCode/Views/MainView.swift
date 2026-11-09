@@ -166,8 +166,9 @@ struct MainView: View {
             // Leaving Settings closes the sites you were signing in to.
             if !shows { app.settingsTabs.closeSites(machines: app.machines) }
         }
-        // The agent started browsing: show it.
-        .onChange(of: utilities.revealRequest) { withAnimation(.ui) { tabs.showPanel() } }
+        // The agent started browsing: show it. The panel's open already, in the conversation it
+        // was for (by now maybe another's in view): room is made for it.
+        .onChange(of: utilities.revealRequest) { withAnimation(.ui) { tabs.keep(.changes) } }
         // Hiding the tab bar takes the whole row away and the cards reach the top. The sidebar
         // button stays, so the window's buttons keep a toolbar's height, centered on the cards'
         // header row, and the sidebar is a click away. The panel is still ⌥⌘0, and sessions ⌘K.
@@ -1268,7 +1269,9 @@ private struct WindowCards<Sessions: View, Conversation: View, Split: View, Pane
                 }
             }
         }
-        .animation(.ui, value: tabs.showsPanel)
+        // Opened or closed, it slides; open or closed in the conversation you switch to, it's
+        // there at once, as the conversation is.
+        .animation(.ui, value: tabs.panelTurns)
         .animation(.ui, value: tabs.panelExpanded)
     }
 }

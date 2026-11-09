@@ -16,6 +16,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ### All Changes
 
+- The side panel stays open or closed in each conversation as you left it there: closing it in one no longer closes it in all the others, and opening it in one no longer opens it in a bot's or session's where you'd closed it. A conversation you haven't been in yet starts as the one you were in, and an agent showing you a file opens the panel only in its own conversation. The agent's browser keeps working with the panel hidden. The sessions list on the left is still one for the whole window.
 - A GitHub Copilot account's Claude models work as soon as you sign in, sign in again or sign out, on this Mac and on your machines, with nothing restarted and no session cut short (from the engine's first start after this update). Before, Kuvo Code learned what they need only while its own agent was at work, and it took effect at the engine's next start, so they failed with "Extra inputs are not permitted" until then.
 - **Refresh Models**, in the **…** menu of the account in use in Settings › Accounts (on your iPhone too), brings models your plan gained (GitHub Copilot, GitLab Duo, OpenCode and others whose models come from your account) into the model picker without a restart. A project with work going on gets them once it's done.
 - A picture an agent changes and shows you again shows the change, not the picture it showed the first time. A file an agent on a machine shows is no longer drawn from a file at the same path on this Mac.
@@ -548,6 +549,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 - A long message of yours comes into view with room for its Show More already made, so what's under it no longer slides down as the button appears, and a click on the next message's first line reaches that message.
 - The side panel of a bot's conversation no longer opens with only its + and expand arrows floating in the middle: it has its tab, and its bar stays at the top. That could happen when the conversation was open as the app started, or when a bot moved to another computer.
 - A machine you remove while its engine is restarting gets nothing more from this Mac: the remaining steps of the restart don't go to it.
+- Agents spend fewer tokens on Kuvo Code's own tools and instructions, which say the same in fewer words: about 1,300 fewer on every call a session on Kuvo Code's engine makes, and about 2,100 fewer for a bot there. A bot on Claude Code, Codex or another coding agent is told its shorter words once, and saves from its next new conversation.
 - On the card over the composer, every line and row ends on one right edge: the arrow that shows or hides a bar sits where "Stop" ends, instead of a gap left for a ✕ the line doesn't have. Folding a bar folds only that bar, even the last one open; the others and the card stay as they were, where the card used to tuck into one line.
 
 ## 0.7.2

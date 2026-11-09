@@ -1,13 +1,18 @@
 #!/bin/sh
 # Runs a heavy job (a build, a test run) once this Mac has room for it:
 #
-#   scripts/heavy.sh <mac|phone|box> <command> [arguments…]
+#   scripts/heavy.sh <mac|mac-build|phone|box> <command> [arguments…]
 #
-#   mac    anything that builds in KuvoShared-MacBuild or KuvoCodeTests-build: the Mac app's
-#          xcodebuild, its scripts/test-app.sh, swift build or test of its packages
-#   phone  anything that builds in KuvoShared-PhoneBuild or KuvoCodeMobileTests-build: the phone's
-#          xcodebuild, its scripts/test-app.sh
-#   box    the box's whole suites (bun test, node --test) and runs on a test machine
+#   mac        the Mac app's UI test suite, scripts/test-app.sh, which drives the real window and
+#              pointer and so runs alone (it builds in KuvoCodeTests-build). Older scripts also say
+#              mac for a plain build (xcodebuild in KuvoShared-MacBuild, swift build or test of a
+#              package), which still works: it takes this lock, as it always did.
+#   mac-build  what doesn't drive the UI: the Mac's xcodebuild (builds, demo builds), swift build
+#              or test of its packages. Two slots, and it doesn't take mac's lock, so these run
+#              beside the app suite and each other.
+#   phone      anything that builds in KuvoShared-PhoneBuild or KuvoCodeMobileTests-build: the
+#              phone's xcodebuild, its scripts/test-app.sh
+#   box        the box's whole suites (bun test, node --test) and runs on a test machine
 #
 # Jobs of one kind share their build folders, which two builds at once break, so they run one at a
 # time, each waiting on its kind's lock in this user's own temporary folder (getconf's, not
@@ -23,7 +28,16 @@
 # A script that started before slots existed holds slot 1 alone, as always, so it and a new job
 # on slot 1 still exclude each other, and a job on slot 2 runs beside it.
 #
-# Slot 2 is only for a caller that handles slots (KUVO_HEAVY_SLOTS=2): an older caller would take it
+# mac-build has two slots the same way, for every caller (no older script says mac-build, so there is
+# no one to keep apart): slot 1 is kuvo-code-heavy-mac-build-<uid>.lock, slot 2
+# kuvo-code-heavy-mac-build-2-<uid>.lock, and a job takes whichever is free first. It finds out which
+# in KUVO_HEAVY_SLOT (1 or 2) and KUVO_HEAVY_BUILD_SUFFIX ("-1" or "-2"): build in
+# KuvoShared-MacBuild$KUVO_HEAVY_BUILD_SUFFIX. Neither slot uses KuvoShared-MacBuild itself, which a
+# job that still says mac builds in, nor KuvoCodeTests-build, which the app suite builds in, so
+# nothing builds twice in one folder. (A package's .build and a checkout's build/ are its own to each
+# checkout.) Never start a build in a folder that isn't the slot's.
+#
+# For phone, slot 2 is only for a caller that handles slots (KUVO_HEAVY_SLOTS=2): an older caller would take it
 # and still build in slot 1's folder and drive slot 1's simulator, beside whoever holds slot 1.
 # With it, a job takes whichever slot is free first, slot 1 before slot 2, and when both are busy it
 # waits for whichever frees first (looking once a second).
@@ -43,7 +57,7 @@
 set -eu
 
 usage() {
-    echo "Usage: scripts/heavy.sh <mac|phone|box> <command> [arguments…], or --holds <kind>" >&2
+    echo "Usage: scripts/heavy.sh <mac|mac-build|phone|box> <command> [arguments…], or --holds <kind>" >&2
     exit 64
 }
 [ $# -ge 2 ] || usage
@@ -54,18 +68,25 @@ if [ "$1" = --holds ]; then
 fi
 kind=$1
 shift
-case "$kind" in mac | phone | box) ;; *) usage ;; esac
+case "$kind" in mac | mac-build | phone | box) ;; *) usage ;; esac
 
 DIR="${KUVO_HEAVY_DIR:-$(getconf DARWIN_USER_TEMP_DIR 2>/dev/null || echo /tmp/)}"
 DIR="${DIR%/}"
 LOCK="$DIR/kuvo-code-heavy-$kind-$(id -u).lock"
-# Phone's second slot; no other kind has one. SLOTS is how many this caller may take.
+# A second slot, for phone and mac-build; no other kind has one. SLOTS is how many this caller may
+# take: a phone caller says so (KUVO_HEAVY_SLOTS=2), a mac-build one always may.
 LOCK2=
 SLOTS=1
-if [ "$kind" = phone ]; then
-    LOCK2="$DIR/kuvo-code-heavy-$kind-2-$(id -u).lock"
-    [ "${KUVO_HEAVY_SLOTS:-1}" = 2 ] && SLOTS=2
-fi
+case "$kind" in
+    phone)
+        LOCK2="$DIR/kuvo-code-heavy-$kind-2-$(id -u).lock"
+        [ "${KUVO_HEAVY_SLOTS:-1}" = 2 ] && SLOTS=2
+        ;;
+    mac-build)
+        LOCK2="$DIR/kuvo-code-heavy-$kind-2-$(id -u).lock"
+        SLOTS=2
+        ;;
+esac
 OLD="$DIR/kuvo-code-heavy-$(id -u).lock"
 MAX_LOAD="${KUVO_HEAVY_LOAD:-40}"
 WAITS="${KUVO_HEAVY_WAIT:-1}"
@@ -105,11 +126,20 @@ just_taken() {
     fi
 }
 
-# What a phone job knows of its slot, from the slot's lock: a job inside another takes it from the
-# lock it runs under, not from the environment it inherited (a shell started in a slot-2 job keeps
-# slot 2's values).
+# What a phone or mac-build job knows of its slot, from the slot's lock: a job inside another takes
+# it from the lock it runs under, not from the environment it inherited (a shell started in a slot-2
+# job keeps slot 2's values). A phone job has a simulator, a mac-build job a build folder of its own
+# in each slot (slot 1's suffix isn't empty: that folder is the older scripts' mac). A job that
+# only runs under the old single lock holds no slot, and gets none of these.
 slot_env() {
-    if [ "$1" = "$LOCK2" ]; then
+    if [ "$kind" = mac-build ]; then
+        unset KUVO_TEST_SIMULATOR
+        if [ "$1" = "$LOCK2" ]; then
+            export KUVO_HEAVY_SLOT=2 KUVO_HEAVY_BUILD_SUFFIX=-2
+        else
+            export KUVO_HEAVY_SLOT=1 KUVO_HEAVY_BUILD_SUFFIX=-1
+        fi
+    elif [ "$1" = "$LOCK2" ]; then
         export KUVO_TEST_SIMULATOR="Kuvo Code Tests 2" KUVO_HEAVY_SLOT=2 KUVO_HEAVY_BUILD_SUFFIX=-2
     else
         export KUVO_TEST_SIMULATOR="Kuvo Code Tests" KUVO_HEAVY_SLOT=1 KUVO_HEAVY_BUILD_SUFFIX=
@@ -148,7 +178,7 @@ if [ -n "$TAKEN" ]; then
     unset KUVO_HEAVY_HOLDING
     # What runs under this turn knows it holds the lock, for when `ps` can't say.
     KUVO_HEAVY_HELD="${KUVO_HEAVY_HELD:-} $TAKEN:$PPID"
-    [ "$kind" != phone ] || slot_env "$TAKEN"
+    [ -z "$LOCK2" ] || slot_env "$TAKEN"
     # While jobs were still started the old way, under one lock for every kind (older checkouts'
     # test-app.sh), one of these waited for them, and held that lock too as it ran.
     if [ "$(date +%Y%m%d)" -le "${KUVO_HEAVY_OLD_UNTIL:-20261026}" ]; then
@@ -163,8 +193,8 @@ if [ -n "$TAKEN" ]; then
 else
     # Inside a job that holds the lock already: on at once.
     if holds_any; then
-        if [ "$kind" = phone ]; then
-            if [ -n "$LOCK2" ] && held "$LOCK2"; then slot_env "$LOCK2"; elif held "$LOCK"; then slot_env "$LOCK"; fi
+        if [ -n "$LOCK2" ]; then
+            if held "$LOCK2"; then slot_env "$LOCK2"; elif held "$LOCK"; then slot_env "$LOCK"; fi
         fi
         exec "$@"
     fi
