@@ -109,13 +109,13 @@ final class BrowserToolServer {
                 "protocolVersion": requested.flatMap { supported.contains($0) ? $0 : nil } ?? "2025-06-18",
                 "capabilities": ["tools": ["listChanged": false]],
                 "serverInfo": ["name": "kuvo-browser", "title": "Kuvo Code browser", "version": AppInfo.version],
-                "instructions": BrowserTools.instructions(machine: false, vault: !(await BrowserTools.vaultDefinitions()).isEmpty),
+                "instructions": BrowserTools.instructions(machine: false, vault: !(await BrowserTools.vaultDefinitions()).isEmpty) + (await BrowserTools.workQueueDefinitions()).instructions,
             ])
         case "ping":
             return reply([:])
         case "tools/list":
             // With the vault's and the sandbox's, in this Mac's box's own words.
-            return reply(["tools": BrowserTools.definitions(vault: await BrowserTools.vaultDefinitions()) + (await BrowserTools.sandboxDefinitions())])
+            return reply(["tools": BrowserTools.definitions(vault: await BrowserTools.vaultDefinitions()) + (await BrowserTools.sandboxDefinitions()) + (await BrowserTools.workQueueDefinitions()).tools])
         case "tools/call":
             let name = params["name"] as? String ?? ""
             let arguments = params["arguments"] as? [String: Any] ?? [:]
@@ -130,11 +130,12 @@ final class BrowserToolServer {
             if name == BrowserTools.showWidget { return reply(BrowserTools.showWidgetCall(arguments)) }
             let key = Self.key(id, client: client)
             let call: Task<CallResult, Never>
-            if BrowserTools.mailTools.contains(name) || BrowserTools.wakeTools.contains(name) || name == BrowserTools.setJob || BrowserTools.isVault(name) || BrowserTools.isSandbox(name) {
+            if BrowserTools.mailTools.contains(name) || BrowserTools.wakeTools.contains(name) || name == BrowserTools.setJob || BrowserTools.isVault(name) || BrowserTools.isSandbox(name) || BrowserTools.isWorkQueue(name) {
                 // Stopped as the others are: one waiting for an answer stops waiting.
                 call = Task {
                     let result = BrowserTools.isVault(name) ? await BrowserTools.vault(name, arguments, caller)
                         : BrowserTools.isSandbox(name) ? await BrowserTools.sandbox(name, arguments, caller)
+                        : BrowserTools.isWorkQueue(name) ? await BrowserTools.workQueue(name, arguments, caller)
                         : name == BrowserTools.setJob ? await BrowserTools.job(arguments, caller)
                         : BrowserTools.wakeTools.contains(name) ? await BrowserTools.wake(name, arguments, caller) : await BrowserTools.mail(name, arguments, caller)
                     return CallResult(value: ["content": [["type": "text", "text": result.text]], "isError": result.isError])
@@ -422,6 +423,11 @@ enum BrowserTools {
     nonisolated static func isSandbox(_ name: String) -> Bool { name.hasPrefix("sandbox_") }
     static var sandboxDefinitions: () async -> [[String: Any]] = { [] }
     static var sandbox: (_ name: String, _ arguments: [String: Any], _ caller: String?) async -> (text: String, isError: Bool) = { _, _, _ in ("Not available.", true) }
+    /// The Work Queue's tools (`queue_…`): this Mac's box lists them, says what agents are told of
+    /// them, and carries them out (KuvoLink's PROTOCOL.md, "The Work Queue").
+    nonisolated static func isWorkQueue(_ name: String) -> Bool { name.hasPrefix("queue_") }
+    static var workQueueDefinitions: () async -> (tools: [[String: Any]], instructions: String) = { ([], "") }
+    static var workQueue: (_ name: String, _ arguments: [String: Any], _ caller: String?) async -> (text: String, isError: Bool) = { _, _, _ in ("Not available.", true) }
     /// The tool a bot keeps its job with, in its box's record (`PATCH kuvo/bots/<id>` with `job`).
     nonisolated static let setJob = "set_job"
     /// Carries out its calls from this Mac's conversations.
