@@ -54,6 +54,18 @@
 #
 #   KUVO_HEAVY_WAIT=0   don't wait: say what it would wait for, and exit 75
 #   KUVO_HEAVY_DIR      where the locks are (for the helper's own tests)
+#
+# Every job has a time limit, so one that hangs can't hold its kind's turn for hours: past it, the
+# job is stopped (its process group, as below: TERM, then KILL), it says what was running, and
+# heavy.sh exits 124. The clock runs only while the job runs, not while it waits for its turn or for
+# a busy Mac. Generous, per kind: mac 45 minutes (the app's whole suite), phone 45, mac-build 30
+# (a build, a package's tests), box 20 (a box or bridge suite).
+#
+#   KUVO_HEAVY_LIMIT    this job's limit instead: 90m, 600s, 2h, or plain minutes; 0 for none
+#
+# A job inside one of its kind (above) runs within that one's limit; one of another kind has its
+# own as well. In a terminal a job has none: you're there to stop it. Older copies of this helper
+# start their jobs with no limit, and take turns with these as before.
 set -eu
 
 usage() {
@@ -90,6 +102,20 @@ esac
 OLD="$DIR/kuvo-code-heavy-$(id -u).lock"
 MAX_LOAD="${KUVO_HEAVY_LOAD:-40}"
 WAITS="${KUVO_HEAVY_WAIT:-1}"
+case "$kind" in mac | phone) DEFAULT_LIMIT=45m ;; mac-build) DEFAULT_LIMIT=30m ;; box) DEFAULT_LIMIT=20m ;; esac
+GIVEN_LIMIT="${KUVO_HEAVY_LIMIT:-$DEFAULT_LIMIT}"
+# In seconds (0: none).
+case "$GIVEN_LIMIT" in
+    *[!0-9smh]* | "" | [smh]* | *[smh]?*) LIMIT= ;;
+    *s) LIMIT=${GIVEN_LIMIT%s} ;;
+    *m) LIMIT=$((${GIVEN_LIMIT%m} * 60)) ;;
+    *h) LIMIT=$((${GIVEN_LIMIT%h} * 3600)) ;;
+    *) LIMIT=$((GIVEN_LIMIT * 60)) ;;
+esac
+if [ -z "$LIMIT" ]; then
+    echo "KUVO_HEAVY_LIMIT is a time like 90m, 600s or 2h, or 0 for none (it's $GIVEN_LIMIT)." >&2
+    exit 64
+fi
 
 # Whether `ps` answers. A sandbox can refuse it (Auto mode), and then no process can be asked what
 # it runs under.
@@ -256,6 +282,8 @@ end_group() {
 end_watch() {
     [ -n "$watch" ] || return 0
     { kill -s KILL -- "-$watch" && wait "$watch"; } 2>/dev/null || true
+    [ -n "$timer" ] || return 0
+    { kill -s KILL -- "-$timer" && wait "$timer"; } 2>/dev/null || true
 }
 stopped() {
     # Stopped before the job has started (between its start and its id being known): once it has.
@@ -263,10 +291,20 @@ stopped() {
         early="$1 $2"
         return 0
     fi
-    trap '' HUP INT TERM
+    trap '' HUP INT TERM USR1
     end_group "$1"
     end_watch
     exit "$2"
+}
+# Past its time limit (its timer, below, says so).
+timer=
+over_time() {
+    trap '' HUP INT TERM USR1
+    echo "heavy.sh: this $kind job ran past its time limit ($GIVEN_LIMIT) and was stopped: $*" >&2
+    echo "heavy.sh: if it wasn't stuck, give it longer with KUVO_HEAVY_LIMIT (like KUVO_HEAVY_LIMIT=90m)." >&2
+    end_group TERM
+    end_watch
+    exit 124
 }
 
 # In a terminal the job stays in the terminal's own group: one in a group of its own couldn't read
@@ -279,6 +317,9 @@ fi
 trap 'stopped HUP 129' HUP
 trap 'stopped INT 130' INT
 trap 'stopped TERM 143' TERM
+# (The command as it was given, for what over_time says.)
+command_line=$*
+trap 'over_time "$command_line"' USR1
 set -m
 if [ -n "${old_way:-}" ]; then
     lockf -k "$OLD" "$@" &
@@ -293,6 +334,15 @@ group=$!
 # killed, and a helper above it may have stopped it before it was done.
 parent=$PPID
 me=$$
+# Its time limit: a timer of its own, in a group of its own, that tells this shell once it's up (and
+# that the watcher below ends with the job, if this shell can't).
+if [ "$LIMIT" -gt 0 ]; then
+    (
+        sleep "$LIMIT"
+        kill -s USR1 "$me" 2>/dev/null || true
+    ) >/dev/null 2>&1 &
+    timer=$!
+fi
 (
     while kill -0 "$parent" 2>/dev/null; do sleep 0.2; done
     kill -s TERM "$me" 2>/dev/null || true
@@ -302,6 +352,7 @@ me=$$
         waits=$((waits + 1))
     done
     end_group TERM
+    [ -z "$timer" ] || kill -s KILL -- "-$timer" 2>/dev/null || true
 ) >/dev/null 2>&1 &
 watch=$!
 set +m
