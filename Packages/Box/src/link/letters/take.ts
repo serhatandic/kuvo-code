@@ -17,6 +17,7 @@ import { READ_BY_MAIL, excerpt, readConversation } from "./conversation";
 import { allowed, takeBack } from "./limits";
 import { deliverNote, noteOf } from "./note";
 import { ANSWER_TEXT, answered } from "./outbox";
+import { switchedMove } from "../moves/records";
 import { awaitingAnswer } from "../work/awaited";
 import { homesOf, noteHomes } from "../work/homes";
 import { under, workSessions } from "../work/tree";
@@ -241,9 +242,14 @@ export async function takeLetter(sender: LetterSender, letter: unknown, { send, 
     else if (!(await listedOrUnder(letter.from, letter.to, targets))) return notDelivered("That conversation isn't one this computer lists, nor one you started: write to one that list_agents names.");
     else {
       // Its sender: that box's own agent, as it named it; one of this box's own claimed from there isn't.
-      // (`from` isn't checked: one that's no session finds no agent.)
-      const listed = peerOf(letter.from as string, peers, told, moved)?.key === sender.key ? (told[sender.key]?.list ?? []).find(agent => agent.session === letter.from) : null;
-      if (listed && !(await placeOfSession(letter.from as string, targets).catch(() => ({})))) fromAgent = listed;
+      // (`from` isn't checked: one that's no session finds no agent.) One that moved from here to
+      // the box sending it, switched to there, lives there, though its original here is still
+      // going: by that box's name for it, or, before that box lists it, the name it moved with.
+      const switched = typeof letter.from === "string" ? switchedMove(letter.from) : null;
+      const arrived = switched?.peer === sender.key ? switched : null;
+      const listed = arrived || peerOf(letter.from as string, peers, told, moved)?.key === sender.key ? (told[sender.key]?.list ?? []).find(agent => agent.session === letter.from) : null;
+      if (listed && (arrived || !(await placeOfSession(letter.from as string, targets).catch(() => ({}))))) fromAgent = listed;
+      else if (arrived && arrived.kind !== "group" && arrived.sessions[0] === letter.from) fromAgent = { session: letter.from as string, name: arrived.name, ...(arrived.kind === "bot" ? { kind: "bot", id: arrived.thing } : { kind: "session" }) };
       const name = fromAgent?.name ?? `an agent on ${plainName(sender.name) || "another computer"}`;
       prompt = messageID();
       const waits = letter.wait === true && Boolean(fromAgent);

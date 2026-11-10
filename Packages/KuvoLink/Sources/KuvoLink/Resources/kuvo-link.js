@@ -1964,8 +1964,10 @@ function frozen(records = liveMoves()) {
   return new Set(records.filter((record) => record.step !== "check").flatMap((record) => [record.thing, ...record.sessions]));
 }
 function switchedTo(session, records = liveMoves()) {
-  const record = records.find((each) => each.role === "from" && (each.stage === "switching" || each.stage === "finishing") && each.sessions.includes(session));
-  return record?.peer ?? null;
+  return switchedMove(session, records)?.peer ?? null;
+}
+function switchedMove(session, records = liveMoves()) {
+  return records.find((each) => each.role === "from" && (each.stage === "switching" || each.stage === "finishing") && each.sessions.includes(session)) ?? null;
 }
 function movedAway(now = Date.now()) {
   try {
@@ -8355,6 +8357,7 @@ var ANSWER = object({
   by: object({ "bot?": string, name: string }),
   at: number
 });
+var WORK_ACCOUNT = object({ name: string, "label?": string });
 var WORK_SESSION = object({
   session: string,
   title: string,
@@ -8364,6 +8367,7 @@ var WORK_SESSION = object({
   depth: number,
   "model?": object({ id: string, providerID: string, "variant?": string }),
   "mode?": string,
+  "account?": WORK_ACCOUNT,
   state: words("working", "asking", "finished", "failed", "stopped", "idle"),
   "asks?": string,
   started: number,
@@ -13682,9 +13686,13 @@ async function takeLetter(sender, letter, { send, targets, answer = () => {}, to
     else if (!await listedOrUnder(letter.from, letter.to, targets))
       return notDelivered("That conversation isn't one this computer lists, nor one you started: write to one that list_agents names.");
     else {
-      const listed = peerOf(letter.from, peers, told, moved)?.key === sender.key ? (told[sender.key]?.list ?? []).find((agent) => agent.session === letter.from) : null;
-      if (listed && !await placeOfSession(letter.from, targets).catch(() => ({})))
+      const switched = typeof letter.from === "string" ? switchedMove(letter.from) : null;
+      const arrived = switched?.peer === sender.key ? switched : null;
+      const listed = arrived || peerOf(letter.from, peers, told, moved)?.key === sender.key ? (told[sender.key]?.list ?? []).find((agent) => agent.session === letter.from) : null;
+      if (listed && (arrived || !await placeOfSession(letter.from, targets).catch(() => ({}))))
         fromAgent = listed;
+      else if (arrived && arrived.kind !== "group" && arrived.sessions[0] === letter.from)
+        fromAgent = { session: letter.from, name: arrived.name, ...arrived.kind === "bot" ? { kind: "bot", id: arrived.thing } : { kind: "session" } };
       const name = fromAgent?.name ?? `an agent on ${plainName(sender.name) || "another computer"}`;
       prompt = messageID();
       const waits = letter.wait === true && Boolean(fromAgent);
@@ -30089,6 +30097,38 @@ async function* movePlacesRoute(context) {
 
 // Packages/Box/src/link/areas/work.ts
 import fs101 from "node:fs";
+
+// Packages/Box/src/link/work/accounts.ts
+var ASK_WAIT = 5000;
+async function accountsOn(target, signal) {
+  const wait = AbortSignal.timeout(ASK_WAIT);
+  const listed = await call(target, "GET", "/api/integration", undefined, signal ? AbortSignal.any([signal, wait]) : wait).catch(() => null);
+  const accounts = new Map;
+  for (const each of Array.isArray(listed) ? listed : []) {
+    if (!isObject(each) || typeof each.id !== "string" || typeof each.name !== "string" || !each.name.trim())
+      continue;
+    const name = each.name.trim();
+    const label = isObject(each.metadata) && each.metadata.source === "agent" && typeof each.metadata.accountLabel === "string" ? each.metadata.accountLabel.trim() : "";
+    accounts.set(each.id, label ? { name, label } : { name });
+  }
+  return accounts;
+}
+async function workAccounts(sessions, signal) {
+  const asked = new Map;
+  const accounts = new Map;
+  await Promise.all(sessions.map(async ({ id, target, provider }) => {
+    if (!provider || provider === "auto")
+      return;
+    if (!asked.has(target.port))
+      asked.set(target.port, accountsOn(target, signal));
+    const account = (await asked.get(target.port)).get(provider);
+    if (account)
+      accounts.set(id, account);
+  }));
+  return accounts;
+}
+
+// Packages/Box/src/link/areas/work.ts
 var WORK_ROUTE = /^kuvo\/(?:work(?:\/events|\/oversight(?:\/events)?|\/background(?:\/events)?)?|bots\/([^/]+)\/stop-all)$/;
 var WORK_ASKS_ROUTE = /^kuvo\/work\/(?:settings|unanswering|asks(?:\/([^/]+))?)$/;
 var GOALS_ROUTE = /^kuvo\/work\/goals(?:\/([^/]+))?$/;
@@ -30100,16 +30140,21 @@ async function botWork(bot, context) {
   const working = await atWorkNow(targets, signal ?? undefined);
   const sessions = [];
   const shown = work.slice(0, 60);
+  const asked = workAccounts(shown.map((each) => ({ id: each.data.id, target: each.target, provider: each.data.model?.providerID })), signal ?? undefined);
   for (let at = 0;at < shown.length; at += 8) {
     sessions.push(...await Promise.all(shown.slice(at, at + 8).map((each) => describeWork(each, working, { replies: true, signal: signal ?? undefined }))));
   }
   const answered = work.flatMap((each) => answersOn(each.data.metadata).map((answer) => ({ ...answer, session: each.data.id }))).sort((a, b) => b.at - a.at).slice(0, 100);
+  const accounts = await asked;
   const midnight = startOfDay(Date.now());
   const today = work.filter((each) => (each.data.time?.created ?? 0) >= midnight);
   const cost = today.reduce((sum, each) => sum + (typeof each.data.cost === "number" ? each.data.cost : 0), 0);
   return {
     bot,
-    sessions: sessions.map(({ askID: _, ...described }) => described),
+    sessions: sessions.map(({ askID: _, ...described }) => {
+      const account = accounts.get(described.session);
+      return account ? { ...described, account } : described;
+    }),
     answered,
     today: {
       started: today.length,

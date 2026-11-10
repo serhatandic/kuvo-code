@@ -8219,6 +8219,12 @@
           }
          },
          "mode?": "string",
+         "account?": {
+          "object": {
+           "name": "string",
+           "label?": "string"
+          }
+         },
          "state": {
           "oneOf": [
            {
