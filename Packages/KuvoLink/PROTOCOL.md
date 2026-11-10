@@ -215,7 +215,8 @@ connection.
   about?, machine?, look?}], "features"?}}`: a bot's `id` (`bot_…`, as group chats name their
   members) and `look` (`{color, shape, face}`, as `kuvo/bots` has it: a colour, shape or face the
   apps don't draw is kept as the plain look's, `graphite`, `round`, `calm`), and `features` as the box's
-  `kuvo/info` names them. A box sends its bots and its 40 latest
+  `kuvo/info` names them (the box that takes them keeps the first 300 names, 80 before bridge
+  0.9.210: a Mac's box puts those its peers check among the first 80). A box sends its bots and its 40 latest
   sessions (its engine's and its coding agents') when they change and every ten minutes. Each box
   keeps the newest list from each peer. The relay keeps nothing, so a box that has just connected adds `"ask": "agents"` to
   what it sends first (its agents; a Mac's digest), and whoever gets it tells that box its agents
@@ -1723,6 +1724,9 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   its `name` and `app` as the app last said them (kept, "The relay, on this Mac's box"), its
   `engine` the version running, or the one the app brings while none runs, its integrations from
   the catalog the app leaves it (`bin/integrations.json`), and its `features` the box's own list.
+  While an older keeper makes way for a newer app's (it goes once nothing is under way), its box,
+  from before 0.9.210, answers as a machine's does (its own `chats`, `running` false, a machine's
+  features): the app no longer answers it in its place.
 - `kuvo/agents/api/…`: the coding agents you already have (Claude Code, Codex, Cursor, Grok,
   Antigravity), through the agents bridge beside the host's engine, which answers the same paths
   as the engine for them: sessions, messages, prompts, permissions, questions, events

@@ -2160,7 +2160,7 @@ var BYTES = "bytes";
 // Packages/Box/src/shared/routes/mac.ts
 var MAC_FEATURES = ["accounts.ended", "claude-code", "hosts", "mac", "machines", "usage"];
 var MACHINE_FEATURES = ["engine.start", "update"];
-var macFeatures = () => [...new Set([...FEATURES.filter((feature) => !MACHINE_FEATURES.includes(feature)), ...MAC_FEATURES])].sort();
+var macFeatures = () => [...new Set([...FEATURES.filter((feature) => !MACHINE_FEATURES.includes(feature)), ...MAC_FEATURES])];
 var HOSTS = object({
   hosts: list(object({ kind: literal("machine"), name: string, address: string, key: string, relay: string, machine: string, anotherMac: bool, removed: bool }))
 });
@@ -32413,6 +32413,7 @@ export {
   keepReadThroughSummary,
   keepSkillTrashClear,
   keptAwake,
+  keptFeatures,
   keysNamedHere,
   learnCompatibility,
   leave,

@@ -163,7 +163,7 @@ export { noteDocsChanged } from "./documents/changed";
 export { authorizePhone, confirmPhone, foldPhones, newPairing, pairPhone, removeAsMac, removePhones } from "./phones";
 export { noLongerNeeded } from "./keeper";
 export { changedWork, digestOf, docMails, docsWork, greetWork, ownDoc, takeDoc } from "./documents/work";
-export { peerOf, readPeerAgents, takeAgents } from "./peers/directory";
+export { keptFeatures, peerOf, readPeerAgents, takeAgents } from "./peers/directory";
 export { composeLetter } from "./letters/letter";
 export { composeAgents } from "./peers/directory";
 export { nameAgents, namedAgents, namesIn } from "./peers/naming";

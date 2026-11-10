@@ -115,7 +115,7 @@ final class PhoneLink {
 
     /// This Mac's key and relay secret, from the Keychain, made the first time the link is on
     /// (with it off, Kuvo Code keeps nothing for it).
-    @ObservationIgnored private lazy var identity: (key: LinkKey, secret: RelaySecret) = Self.loadIdentity()
+    @ObservationIgnored private lazy var identity: (key: LinkKey, secret: RelaySecret) = loadIdentity()
     private var key: LinkKey { identity.key }
     private var secret: RelaySecret { identity.secret }
     /// This Mac's box, which holds the relay connection (`BoxProcess`); set by AppModel.
@@ -130,10 +130,14 @@ final class PhoneLink {
     /// Where the phones and machines are kept: phone-link.json (a test's own, for a test).
     private let savedFile: URL
 
-    /// `file`, `identity` and `signing`: a test's own, kept apart from the app's file and Keychain
-    /// (one giving an identity and no signing key gets a new one).
-    init(file: URL? = nil, identity: (key: LinkKey, secret: RelaySecret)? = nil, signing: Documents.SigningKey? = nil) {
+    /// Where its keys are in the Keychain (`keychainService`, a test's own).
+    private let service: String
+
+    /// `file`, `identity`, `signing` and `keychain`: a test's own, kept apart from the app's file
+    /// and Keychain (one giving an identity and no signing key gets a new one).
+    init(file: URL? = nil, identity: (key: LinkKey, secret: RelaySecret)? = nil, signing: Documents.SigningKey? = nil, keychain: String = PhoneLink.keychainService) {
         savedFile = file ?? AppInfo.supportDirectory.appending(path: "phone-link.json")
+        service = keychain
         let saved = (try? JSONDecoder().decode(Saved.self, from: Data(contentsOf: savedFile))) ?? Saved()
         // Only what names a phone (an earlier build kept anything a document named).
         toRemove = saved.toRemove.filter { PairedPhones.fits($0, macs: []) }
@@ -146,43 +150,50 @@ final class PhoneLink {
     }
 
     /// The Keychain wouldn't give out this Mac's key or secret this launch.
-    private static var unreadable = false
+    @ObservationIgnored private var unreadable = false
     /// Only because it was locked then (the keeper starting this Mac's box at login, before your
-    /// Keychain was unlocked): read again a minute later, rather than not until the next launch.
-    private static var wasLocked = false
+    /// Keychain was unlocked): read again `readAgainAfter` later (a minute), and every so often
+    /// after, rather than not until the next launch.
+    @ObservationIgnored private var wasLocked = false
     @ObservationIgnored private var readAgainAt: Date?
+    @ObservationIgnored var readAgainAfter: TimeInterval = 60
 
     /// This Mac's own key and secret, as your phones and machines know them (not a stand-in).
     private var hasIdentity: Bool {
         _ = identity
-        return !Self.unreadable
+        return !unreadable
     }
 
     /// The key this Mac signs its documents with (PROTOCOL.md, "Documents"), from the Keychain beside
     /// the others, made the first time.
-    @ObservationIgnored private lazy var signing: Documents.SigningKey = Self.kept("sign", read: { try? Documents.SigningKey(rawRepresentation: $0) },
-                                                                              make: Documents.SigningKey.init, bytes: \.rawRepresentation)
+    @ObservationIgnored private lazy var signing: Documents.SigningKey = loadSigning()
 
-    private static func loadIdentity() -> (key: LinkKey, secret: RelaySecret) {
+    private func loadIdentity() -> (key: LinkKey, secret: RelaySecret) {
         (kept("key", read: { try? LinkKey(rawRepresentation: $0) }, make: LinkKey.init, bytes: \.rawRepresentation),
          kept("secret", read: RelaySecret.init(bytes:), make: RelaySecret.init, bytes: \.bytes))
     }
 
+    private func loadSigning() -> Documents.SigningKey {
+        kept("sign", read: { try? Documents.SigningKey(rawRepresentation: $0) }, make: Documents.SigningKey.init, bytes: \.rawRepresentation)
+    }
+
     /// One of them from the Keychain, made the first time. One the Keychain won't give out (you
-    /// said no when it asked) isn't replaced, and the link stays off (`unreadable`): your phones
-    /// and other computers would take a stand-in for another Mac. It's tried again next launch.
-    private static func kept<T>(_ account: String, read: (Data) -> T?, make: () -> T, bytes: (T) -> Data) -> T {
+    /// said no when it asked, or it's locked) isn't replaced, and the link stays off
+    /// (`unreadable`): your phones and other computers would take a stand-in for another Mac. It's
+    /// tried again next launch, or once it may have been unlocked (`readAgainIfLocked`).
+    private func kept<T>(_ account: String, read: (Data) -> T?, make: () -> T, bytes: (T) -> Data) -> T {
         do {
-            if let data = try keychain(account), let value = read(data) { return value }
+            if let data = try Self.keychain(account, in: service), let value = read(data) { return value }
         } catch {
             Logger(subsystem: "run.kuvo.code", category: "phone").error("Couldn’t read the phone link’s \(account, privacy: .public) from the Keychain: \(error.localizedDescription, privacy: .public)")
-            if !unreadable { wasLocked = (error as NSError).code == Int(errSecInteractionNotAllowed) }
-            else if (error as NSError).code != Int(errSecInteractionNotAllowed) { wasLocked = false }
+            let locked = (error as NSError).code == Int(errSecInteractionNotAllowed)
+            wasLocked = locked && (wasLocked || !unreadable)
             unreadable = true
+            if locked, readAgainAt == nil { readAgainAt = .now }
             return make()
         }
         let value = make()
-        setKeychain(bytes(value), for: account)
+        Self.setKeychain(bytes(value), for: account, in: service)
         return value
     }
 
@@ -838,20 +849,20 @@ final class PhoneLink {
         guard hasIdentity else { return nil }
         // Read before the check: one the Keychain won't give out isn't stood in for.
         let sign = signing.rawRepresentation.base64URL
-        guard !Self.unreadable else { return nil }
+        guard !unreadable else { return nil }
         return ["key": key.rawRepresentation.base64URL, "secret": secret.bytes.base64URL, "sign": sign]
     }
 
     /// This Mac's keys read again, once a minute at most, while the Keychain was only locked when
     /// they were read: what it gives then is this Mac's own (one it never gave is never stood in for).
     private func readAgainIfLocked() {
-        guard Self.unreadable, Self.wasLocked, readAgainAt.map({ Date.now.timeIntervalSince($0) >= 60 }) ?? true else { return }
+        guard unreadable, wasLocked, readAgainAt.map({ Date.now.timeIntervalSince($0) >= readAgainAfter }) ?? true else { return }
         readAgainAt = .now
-        Self.unreadable = false
-        Self.wasLocked = false
-        let again = Self.loadIdentity()
-        let sign = Self.kept("sign", read: { try? Documents.SigningKey(rawRepresentation: $0) }, make: Documents.SigningKey.init, bytes: \.rawRepresentation)
-        guard !Self.unreadable else { return }
+        unreadable = false
+        wasLocked = false
+        let again = loadIdentity()
+        let sign = loadSigning()
+        guard !unreadable else { return }
         identity = again
         signing = sign
     }
@@ -880,8 +891,8 @@ final class PhoneLink {
         return json.base64URL
     }
 
-    /// What a phone asks of this Mac that its box hands the app (the Mac's own routes, and those
-    /// that haven't moved to the box yet), answered as it was: `phone`, the phone's key.
+    /// What a phone asks of this Mac that its box hands the app (the Mac's own routes, its
+    /// `MAC_APP_ROUTES`; an older box's anything else goes back to it), answered: `phone`, the phone's key.
     func answerForBox(_ request: LinkRequest, phone: Data?) -> AsyncThrowingStream<LinkResponsePart, Error> {
         // The engine not up yet (the app's starting): its routes say so, as a machine's do.
         guard let endpoint else {
@@ -1306,10 +1317,9 @@ final class PhoneLink {
     // MARK: Keychain
 
     static var keychainService: String { (Bundle.main.bundleIdentifier ?? "run.kuvo.code") + ".phone-link" }
-    private static var service: String { keychainService }
 
     /// The item, or nil when there's none; throws when the Keychain can't be read.
-    private static func keychain(_ account: String) throws -> Data? {
+    private static func keychain(_ account: String, in service: String) throws -> Data? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -1325,7 +1335,7 @@ final class PhoneLink {
         }
     }
 
-    private static func setKeychain(_ data: Data, for account: String) {
+    private static func setKeychain(_ data: Data, for account: String, in service: String) {
         let base: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,

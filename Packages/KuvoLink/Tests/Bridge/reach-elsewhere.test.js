@@ -225,7 +225,7 @@ function startLab() {
 
 let lab = null;
 before(async () => {
-  assert.notEqual((await ask("PUT", "kuvo/link/config", { phones: false, machines: true, relay: relay.url, name: "Studio Mac", app: "0.9.0", features: ["mac", "letters-read", "work.elsewhere"] })).json?.state, "failed");
+  assert.notEqual((await ask("PUT", "kuvo/link/config", { phones: false, machines: true, relay: relay.url, name: "Studio Mac", app: "0.9.0" })).json?.state, "failed");
   const setup = await ask("GET", "kuvo/link/setup");
   const result = spawnSync(process.execPath, [script, "setup"], {
     input: JSON.stringify({ relay: relay.url, name: "lab", mac, macSign: setup.json.macSign, docs: setup.json.docs, id: "lab" }),

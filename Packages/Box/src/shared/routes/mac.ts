@@ -13,8 +13,10 @@ export const MAC_FEATURES = ["accounts.ended", "claude-code", "hosts", "mac", "m
 export const MACHINE_FEATURES = ["engine.start", "update"] as const;
 
 /** What a Mac's box answers, as its `kuvo/info` and its agents' mail say: every box's but a
- * machine's own, and the Mac's own. The box's list alone: its app keeps none. */
-export const macFeatures = (): string[] => [...new Set([...FEATURES.filter(feature => !(MACHINE_FEATURES as readonly string[]).includes(feature)), ...MAC_FEATURES])].sort();
+ * machine's own, in their order, then the Mac's own. The box's list alone: its app keeps none.
+ * (In that order: a box before bridge 0.9.210 keeps only the first 80 names a peer's mail gives,
+ * and those its peers check, `work.elsewhere` the last of them, are among them.) */
+export const macFeatures = (): string[] => [...new Set([...FEATURES.filter(feature => !(MACHINE_FEATURES as readonly string[]).includes(feature)), ...MAC_FEATURES])];
 
 /** Your machines' bridges, which phones reach directly with the Mac closed: each by its id
  * (`machine`), where it is on the relay, whether another Mac gives it its settings (`anotherMac`),

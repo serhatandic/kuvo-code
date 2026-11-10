@@ -13,7 +13,13 @@ import Security
 nonisolated enum Keychain {
     static func copyMatching(_ query: [String: Any], _ result: UnsafeMutablePointer<CFTypeRef?>?,
                              file: StaticString = #fileID, line: UInt = #line) -> OSStatus {
-        if inMemory { return lock.withLock { standIn.copyMatching(query, result) } }
+        if inMemory {
+            return lock.withLock {
+                // (As a locked Keychain refuses a read without asking: a test's own service's items.)
+                if let service = query[kSecAttrService as String] as? String, lockedServices.contains(service) { return errSecInteractionNotAllowed }
+                return standIn.copyMatching(query, result)
+            }
+        }
         return said(SecItemCopyMatching(query as CFDictionary, result), "read", file, line)
     }
 
@@ -49,6 +55,13 @@ nonisolated enum Keychain {
         }
         return status
     }
+
+    /// Hosting tests: the items of these services read as a locked Keychain's do (a test's own
+    /// services, while it says so).
+    static func lockForTests(_ service: String, _ locked: Bool) {
+        lock.withLock { if locked { lockedServices.insert(service) } else { lockedServices.remove(service) } }
+    }
+    nonisolated(unsafe) private static var lockedServices: Set<String> = []
 
     /// Hosting tests, never the real Keychain: SecItem isn't called at all.
     private static let inMemory = AppInfo.isHostingTests
