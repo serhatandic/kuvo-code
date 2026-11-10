@@ -45,6 +45,8 @@ import { phoneHere } from "../compat/leave-running";
 import { readBridgeFile, readEngineFile } from "../engine/client";
 import { linkRoute } from "../mac/routes";
 import { updateRoute } from "../updates/update";
+import { browserRoute } from "../browser/install";
+import { IS_MAC } from "../home";
 import { vaultRoute } from "../areas/vault";
 import { AGENTS, agentsRoute, engineRoute } from "./forward";
 import type { BridgeRecord, EngineRecord } from "../../shared/records";
@@ -69,6 +71,8 @@ const ROUTES: (Route | Route<RegExpMatchArray>)[] = [
   { when: route => route === "kuvo/sandbox" || route.startsWith("kuvo/sandbox/"), answer: sandboxRoute },
   { when: route => route === "kuvo/file", answer: ({ request, json }: RouteContext) => fileAt(request.path, json) },
   { when: route => route === "kuvo/update", answer: updateRoute },
+  // (A machine's: this Mac's agents browse in its app's panel.)
+  { when: route => !IS_MAC && route === "kuvo/browser", answer: browserRoute },
   { when: (route, request) => /^kuvo\/integrations(\/|\?|$)/.test(request.path), answer: integrationsRoute },
   { when: route => route === "kuvo/folders", answer: foldersRoute },
   { when: route => route === "kuvo/plugins/search", answer: pluginSearchRoute },

@@ -9,7 +9,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { conversationOf, everySession } from "../engine/conversations";
 import { engineGet } from "../engine/client";
-import { K, MAC_ATTACHMENTS } from "../home";
+import { attachmentRoots, K } from "../home";
 import { droppedHere, frozen, movedAway } from "../moves/records";
 import { withAttachedNote } from "../peers/naming";
 import { AGENTS_TEXT_BYTES } from "../../shared/text";
@@ -146,7 +146,7 @@ const SESSION = /^ses_[A-Za-z0-9_-]{1,120}$/;
 export interface SessionPlaces { engine: Target; bridge: Target | null }
 
 // Where sessions' files are kept: this box's, and on this Mac's box, the Mac app's.
-const keptIn = () => [path.join(K, "attachments"), ...(MAC_ATTACHMENTS ? [MAC_ATTACHMENTS] : [])];
+const keptIn = attachmentRoots;
 
 // One look at a time: a session deleted while the box looks over the rest waits for it.
 let looking: Promise<void> = Promise.resolve();

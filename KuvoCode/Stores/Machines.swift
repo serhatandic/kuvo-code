@@ -655,8 +655,8 @@ final class MachineEngine {
             learnIdentity()
             Analytics.shared.trackOnce("machine_connected")
             listen(to: current)
-            // The browser, in the background: the first time, a download and an upload. A browser
-            // tab in view comes back live.
+            // The browser, in the background: the machine's box sets it up the first time (its
+            // download), and this follows how that goes. A browser tab in view comes back live.
             Task { await browser.prepare() }
             browser.resume()
             await catalog.refresh()

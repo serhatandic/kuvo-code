@@ -101,21 +101,6 @@ import Testing
         #expect(Set(asked) == [item(agents.appending(path: "home")), item(agents.appending(path: "accounts/work"))])
     }
 
-    /// The build of the browser a machine gets, by what it says it is, never a guess: a system it
-    /// couldn't say gets none, rather than Linux's on a Mac.
-    @Test func aMachineGetsItsOwnSystemsBrowser() throws {
-        let linux = try #require(BrowserRuntime.pinned(for: "Linux"))
-        let mac = try #require(BrowserRuntime.pinned(for: "Darwin"))
-        #expect(!linux.isMac && mac.isMac)
-        #expect(linux.id != mac.id)
-        #expect(mac.id.contains("-mac-"))
-        #expect(BrowserRuntime.pinned(for: "") == nil)
-        #expect(BrowserRuntime.pinned(for: "FreeBSD") == nil)
-        for runtime in [linux, mac] {
-            #expect(runtime.chromium.x86_64.url != runtime.chromium.aarch64.url)
-        }
-    }
-
     /// The removal scripts, connected or not, both sign the agents out.
     @Test func bothWaysOfRemovingSignThemOut() {
         #expect(Machines.removalScript.contains(Machines.agentsSignOut))
