@@ -40,6 +40,8 @@ final class Sandboxes {
     /// Boxes whose word on them is whole (`sandbox.reviews.whole`): one they haven't listed isn't
     /// yours yet. This Mac's box is this app's version; a machine's says so in its `kuvo/info`.
     private(set) var listAll: Set<String> = [BoxClient.mac]
+    /// Machines whose `kuvo/info` was read for it on this connection.
+    @ObservationIgnored private var featuresRead: Set<String> = []
     /// Told when its box lists an ask as yours (one held back meanwhile), for its notification;
     /// nil when every one held back is to be looked at again (a box whose word isn't whole).
     @ObservationIgnored var onYours: ((String?) -> Void)?
@@ -130,7 +132,8 @@ final class Sandboxes {
             if let client = client(box) {
                 do {
                     // Whether its word on the reviewer's asks is whole: read once a connection.
-                    if box != BoxClient.mac {
+                    if box != BoxClient.mac, !featuresRead.contains(box) {
+                        featuresRead.insert(box)
                         struct Info: Decodable { var features: [String]? }
                         let whole = (try? await client.value(Info.self, "GET", "kuvo/info"))?.features?.contains(AskReview.listsAllFeature) == true
                         takeListsAll(whole, from: box)
@@ -140,10 +143,16 @@ final class Sandboxes {
                         take(list.asks, from: box)
                         takeRestart(list.restart == true, from: box)
                         take(reviews: list.reviews, from: box)
+                        setLive(true, box)
                     }
+                    // This Mac's box tells each change as it comes: its stream over, it's not
+                    // telling now. A machine's answers once, and is read again.
+                    if box == BoxClient.mac { setLive(false, box) }
                 } catch let refusal as BoxRefusal where [404, 405].contains(refusal.status) {
                     return
-                } catch {}
+                } catch {
+                    setLive(false, box)
+                }
             }
             try? await Task.sleep(for: .seconds(box == BoxClient.mac ? 2 : 10))
         }
@@ -151,6 +160,8 @@ final class Sandboxes {
         // asks keeps its notification, and isn't told again when it's back.
         guard following[box] == me else { return }
         following[box] = nil
+        featuresRead.remove(box)
+        setLive(false, box)
         asks[box] = nil
         heard.remove(box)
         restarting.remove(box)
@@ -193,6 +204,7 @@ final class Sandboxes {
         for gone in asks[box] ?? [] { Notifier.shared.clear(request: gone.id) }
         asks[box] = nil
         heard.remove(box)
+        live.remove(box)
         restarting.remove(box)
         forgetReviews(of: box)
         changed()
@@ -203,7 +215,20 @@ final class Sandboxes {
     /// Whether a permission its agent asks is yours to answer, as its box says (`AskReview`): its
     /// box's word alone, waiting on nothing of this app's own.
     func isYours(_ request: PermissionRequest, on box: String) -> Bool {
-        AskReview.isYours(action: request.action, review: reviews[box]?[request.id], listsAll: listAll.contains(box))
+        // Whole only while its asks are heard: its link down, nothing reviews or lists them, and an
+        // ask not listed is yours, not hidden.
+        AskReview.isYours(action: request.action, review: reviews[box]?[request.id], listsAll: listAll.contains(box), heard: live.contains(box))
+    }
+
+    /// Boxes whose asks are being heard now: this Mac's while its stream runs, a machine's while
+    /// its last read went through.
+    private(set) var live: Set<String> = []
+
+    func setLive(_ isLive: Bool, _ box: String) {
+        guard isLive != live.contains(box) else { return }
+        if isLive { live.insert(box) } else { live.remove(box) }
+        // Not heard now: what was held for its word is looked at again (yours, if not listed).
+        if !isLive { onYours?(nil) }
     }
 
     /// Whether `box`'s word on its reviewer's asks is whole (`sandbox.reviews.whole`).

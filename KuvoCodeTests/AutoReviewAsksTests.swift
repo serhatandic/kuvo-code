@@ -46,7 +46,8 @@ import Testing
             engine.stop()
         }
         let model = try await open()
-        // The box says how its reviewer takes asks up.
+        // The box says how its reviewer takes asks up, its asks heard now.
+        Sandboxes.shared.setLive(true, box)
         Sandboxes.shared.take(reviews: [], from: box)
         workspace.handle(try engine.event("permission.asked", outside("per_r1")))
         #expect(model.permissions.map(\.id) == ["per_r1"])
@@ -85,6 +86,7 @@ import Testing
             engine.stop()
         }
         _ = try await open()
+        Sandboxes.shared.setLive(true, box)
         workspace.handle(try engine.event("permission.asked", outside("per_t1")))
         Sandboxes.shared.take(reviews: [review("per_t1", .checking)], from: box)
         #expect(!workspace.needsAttention(id))
@@ -92,6 +94,27 @@ import Testing
         Sandboxes.shared.take(reviews: [review("per_t1", .yours)], from: box)
         #expect(workspace.needsAttention(id))
         #expect(workspace.asking["per_t1"] == id, "told once it's yours")
+    }
+
+    /// Its box's link down (crashed, restarting), with its engine still asking: nothing reviews or
+    /// lists what it asks, so one not listed is yours, not hidden while the agent waits.
+    @Test func withItsBoxNotHeardAnAskNotListedIsYours() async throws {
+        let workspace = workspace
+        Sandboxes.shared.onYours = { workspace.reviewLeftForYou($0) }
+        defer {
+            Sandboxes.shared.forget(box)
+            Sandboxes.shared.onYours = nil
+            engine.stop()
+        }
+        _ = try await open()
+        Sandboxes.shared.setLive(true, box)
+        workspace.handle(try engine.event("permission.asked", outside("per_d1")))
+        #expect(!workspace.needsAttention(id), "heard, and not listed yet: its box's to say")
+        Sandboxes.shared.take(reviews: [review("per_d1", .checking)], from: box)
+        #expect(!workspace.needsAttention(id), "being checked")
+        Sandboxes.shared.setLive(false, box)
+        #expect(workspace.needsAttention(id), "its box not heard: nothing checks it now, so it's yours")
+        #expect(workspace.asking["per_d1"] == id, "and told")
     }
 
     /// A command isn't the reviewer's to take up, and a box whose word isn't whole (from before

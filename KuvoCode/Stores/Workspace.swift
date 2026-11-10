@@ -2445,7 +2445,8 @@ final class Workspace {
         for directory in Set(here.map(\.session.location.directory)) { await readShellJobs(in: directory) }
         for model in models.values {
             if !RemoteFolder.isRemote(model.session.location.directory) { await model.load() }
-            for request in model.permissions { asking[request.id] = request.sessionID }
+            // (Not what Auto's reviewer checks: told once its box leaves it for you.)
+            for request in model.permissions where tellsOnceYours(request) { asking[request.id] = request.sessionID }
             for form in model.forms { note(form, in: model) }
         }
         for (request, session) in before where asking[request] == nil {

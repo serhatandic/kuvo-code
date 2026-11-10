@@ -199,8 +199,8 @@ test.skipIf(!canFence)("asks waiting as the box starts again are taken up and li
       // Asked while the box was starting again: its event went by unheard.
       const file = path.join(${JSON.stringify(project)}, "notes.md");
       const call = { type: "tool", id: "call_w", name: "write", state: { input: { filePath: file } } };
-      const asked = { id: "per_w", action: "external_directory", resources: [${JSON.stringify(project)} + "/*"], source: { id: "call_w", messageID: "msg_1" } };
-      await fetch("http://127.0.0.1:" + engine.port + "/test/asking", { method: "POST", body: JSON.stringify({ session: "ses_wait", call, ask: asked }) });
+      const waiting = { id: "per_w", action: "external_directory", resources: [${JSON.stringify(project)} + "/*"], source: { id: "call_w", messageID: "msg_1" } };
+      await fetch("http://127.0.0.1:" + engine.port + "/test/asking", { method: "POST", body: JSON.stringify({ session: "ses_wait", call, ask: waiting }) });
       said.before = reviewing.listAskReviews().find(each => each.id === "per_w")?.state ?? null;
       await reviewing.takeUpWaitingAsks(engine, ["ses_wait"]);
       said.after = reviewing.listAskReviews().find(each => each.id === "per_w")?.state ?? null;

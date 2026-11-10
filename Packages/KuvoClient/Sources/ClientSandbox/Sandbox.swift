@@ -264,9 +264,13 @@ public struct AskReview: Codable, Equatable, Sendable {
     /// Whether an ask is yours to answer, as its box says: one it left for you, or one it doesn't
     /// take up (only asks to work outside the folder are). One it may take up and hasn't listed is
     /// yours only from a box that doesn't list them all (`listsAll`, from before
-    /// `sandbox.reviews.whole`); a client waits for nothing of its own.
-    public static func isYours(action: String, review: AskReview?, listsAll: Bool) -> Bool {
+    /// `sandbox.reviews.whole`). While its box isn't heard (`heard`: its link down, restarting),
+    /// nothing reviews what it asks, so every one is yours. A client waits for nothing of its own.
+    public static func isYours(action: String, review: AskReview?, listsAll: Bool, heard: Bool = true) -> Bool {
+        guard heard else { return true }
         if let review { return review.state == .yours }
+        // (`!listsAll`, a box from before `sandbox.reviews.whole`: goes once no box before it is
+        // supported.)
         return action != "external_directory" || !listsAll
     }
 
