@@ -287,12 +287,29 @@ import Testing
         start(link, on: box)
         link.machinesChanged()
         link.attend(["ses_a"])
-        #expect(link.boxIdentity() == nil)
+        #expect(await link.boxIdentity() == nil)
         await link.saidToBox()
         var found: CFTypeRef?
         let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: PhoneLink.keychainService,
                                     kSecMatchLimit as String: kSecMatchLimitAll, kSecReturnAttributes as String: true]
         #expect(Keychain.copyMatching(query, &found) == errSecItemNotFound)
+    }
+
+    /// The phone link turned off (or on) while the app is open: its box keeps it so (run/mac-link.json),
+    /// for after a restart with the app closed.
+    @Test func thePhoneLinkTurnedOffWhileTheAppIsOpenIsKeptOffForAfterARestart() async throws {
+        let box = try await SettingsBox(port: 47_951)
+        let link = try link(on: box)
+        defer { done(box, link) }
+        let kept = BoxProcess.run.appending(path: "mac-link.json")
+        func phones() -> Bool? {
+            ((try? JSONSerialization.jsonObject(with: Data(contentsOf: kept))) as? [String: Any])?["phones"] as? Bool
+        }
+        try await until { phones() == true }
+        UserDefaults.standard.set(false, forKey: "phoneLink")
+        try await until { phones() == false }
+        UserDefaults.standard.set(true, forKey: "phoneLink")
+        try await until { phones() == true }
     }
 
     /// Before this Mac's engine is up, a phone asking it hears it's starting, not a connection
