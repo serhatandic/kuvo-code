@@ -14506,7 +14506,7 @@ ${said(index)}`).join(`
     const text = answer?.text ?? "The user dismissed this question without answering it. Don't wait for an answer.";
     const files = answer?.files ?? [];
     if (active?.turnID && this.nativeID) {
-      const noted = this.sleep ? undefined : { text };
+      const noted = this.sleep ? undefined : { text, files };
       if (noted)
         this.answered.push(noted);
       if (await this.steerIn(active, { text, files }))
@@ -14514,8 +14514,11 @@ ${said(index)}`).join(`
       if (noted && !this.answered.includes(noted))
         return;
       this.answered = this.answered.filter((each) => each !== noted);
-      if (await this.steerIntoSleep(active, { text, files }))
-        return;
+      for (let tried;this.sleep && this.sleep !== tried && this.active === active; ) {
+        tried = this.sleep;
+        if (await this.steerIntoSleep(active, { text, files }))
+          return;
+      }
     }
     if (answer)
       this.answers.push(answer);
@@ -14648,8 +14651,15 @@ ${said.map((each) => each.text).join(`
 
 `)}`, files: [] };
         this.keep(this.steerIn(active, words).then(async (took) => {
-          if (!took && !await this.steerIntoSleep(active, words))
-            this.answered.push(...said);
+          if (took)
+            return;
+          for (let tried;this.sleep && this.sleep !== tried && this.active === active; ) {
+            tried = this.sleep;
+            if (await this.steerIntoSleep(active, words))
+              return;
+          }
+          this.answered.push(...said.filter((each) => each.heard));
+          this.answers.push(...said.filter((each) => !each.heard).map((each) => ({ text: each.text, files: each.files ?? [] })));
         }));
       }
     } else if (item?.type === "userMessage") {
@@ -26887,4 +26897,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 19d7c184d7876878f071710b02fd39c2f709dc7830ba3f6c8bb749061bb7b930
+// Built from Packages/Box/src/agents 0d20a07d6cb44fe34d5378f0ebc04a19f403acfe39e1b1f42217f4ce7e0aa05d

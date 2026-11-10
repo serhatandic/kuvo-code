@@ -1,6 +1,6 @@
 """scripts/heavy.sh: jobs of different kinds run together, two of one kind queue (two phone jobs that
 handle slots run at once, each with a simulator of its own, and two mac-build jobs, each with a build
-folder of its own, beside the app suite's mac), a job started the
+folder of its own, beside the app suite's mac; the phone's builds, phone-build, take mac-build's slots), a job started the
 old way (under the one lock for every kind) holds up every kind, and a busy Mac holds a job back.
 Each test has locks of its own (KUVO_HEAVY_DIR), and asks with KUVO_HEAVY_WAIT=0, which says what a
 job would wait for instead of waiting."""
@@ -290,6 +290,53 @@ class HeavyTests(unittest.TestCase):
             self.assertEqual(self.run_heavy("mac", "true")[0], 0)
         finally:
             build.let_go()
+
+    def test_a_phone_build_does_not_wait_on_held_phone_slots_and_takes_a_build_lane_slot(self):
+        env = self.phone_slots()
+        one, two = Held([HEAVY, "phone"], env), Held([HEAVY, "phone"], env)
+        try:
+            self.assertEqual((one.seen, two.seen), ("Kuvo Code Tests|1|", "Kuvo Code Tests 2|2|-2"))
+            # Both phone slots are held, and another phone test run would wait.
+            self.assertEqual(self.run_heavy("phone", "true", KUVO_HEAVY_SLOTS="2")[0], WAITS)
+            self.assertEqual(self.run_heavy("phone-build", "true")[0], 0)
+            # It's in the build lane's slot, with no simulator, and a suffix that isn't the phone's.
+            build = Held([HEAVY, "phone-build"], self.env)
+            try:
+                self.assertEqual(build.seen, "|1|-1")
+            finally:
+                build.let_go()
+        finally:
+            two.let_go()
+            one.let_go()
+
+    def test_a_phone_build_waits_on_a_full_build_lane_and_shares_it_with_mac_builds(self):
+        first, second = Held([HEAVY, "phone-build"], self.env), Held([HEAVY, "mac-build"], self.env)
+        try:
+            self.assertEqual((first.seen, second.seen), ("|1|-1", "|2|-2"))
+            for kind in ("phone-build", "mac-build"):
+                code, said = self.run_heavy(kind, "true")
+                self.assertEqual(code, WAITS)
+                self.assertIn("Another mac-build job is running", said)
+            # The phone's test runs and the app suite aren't held up by the full lane.
+            self.assertEqual(self.run_heavy("phone", "true")[0], 0)
+            self.assertEqual(self.run_heavy("mac", "true")[0], 0)
+        finally:
+            second.let_go()
+            first.let_go()
+        self.assertEqual(self.run_heavy("phone-build", "true")[0], 0)
+
+    def test_a_phone_build_runs_beside_the_app_suite_and_one_inside_a_build_job_runs_at_once(self):
+        suite = Held([HEAVY, "mac"], self.env)
+        try:
+            self.assertEqual(self.run_heavy("phone-build", "true")[0], 0)
+        finally:
+            suite.let_go()
+        nested = f'KUVO_HEAVY_WAIT=0 "{HEAVY}" phone-build /bin/sh -c \'echo "$KUVO_HEAVY_SLOT$KUVO_HEAVY_BUILD_SUFFIX"\''
+        result = subprocess.run([HEAVY, "phone-build", "/bin/sh", "-c", nested], env=self.env, capture_output=True, text=True, timeout=30)
+        self.assertEqual((result.returncode, result.stdout), (0, "1-1\n"))
+        self.assertEqual(subprocess.run([HEAVY, "--holds", "phone-build", "true"], env=self.env).returncode, 1)
+        held = f'"{HEAVY}" --holds phone-build'
+        self.assertEqual(subprocess.run([HEAVY, "mac-build", "/bin/sh", "-c", held], env=self.env).returncode, 0)
 
     def test_a_job_that_still_says_mac_for_a_build_does_not_block_mac_build_and_still_excludes_mac(self):
         """What an older script does, under the one mac lock as before: no mac-build slot is theirs."""

@@ -2159,6 +2159,7 @@
          },
          "host": "string",
          "machine?": "string",
+         "box?": "string",
          "session?": "string",
          "asker?": "string",
          "username?": "bool",
@@ -3283,6 +3284,9 @@
             "literal": "work-queue"
            },
            {
+            "literal": "work-queue.elsewhere"
+           },
+           {
             "literal": "browser"
            },
            {
@@ -3625,6 +3629,9 @@
            },
            {
             "literal": "work-queue"
+           },
+           {
+            "literal": "work-queue.elsewhere"
            },
            {
             "literal": "browser"
@@ -9986,6 +9993,9 @@
                "session": "string",
                "name": "string"
               }
+             },
+             {
+              "map": "any"
              }
             ]
            },
@@ -9999,7 +10009,32 @@
           "object": {
            "kind": "string",
            "ref": "string",
-           "url?": "string"
+           "url?": "string",
+           "host?": "string",
+           "id?": "string"
+          }
+         },
+         "handing?": {
+          "object": {
+           "to": "string",
+           "name": "string"
+          }
+         },
+         "computer?": {
+          "object": {
+           "key": "string",
+           "name": "string",
+           "kind": {
+            "oneOf": [
+             {
+              "literal": "mac"
+             },
+             {
+              "literal": "machine"
+             }
+            ]
+           },
+           "id?": "string"
           }
          },
          "created": {
@@ -10017,6 +10052,9 @@
                "session": "string",
                "name": "string"
               }
+             },
+             {
+              "map": "any"
              }
             ]
            }
@@ -10037,6 +10075,9 @@
                "session": "string",
                "name": "string"
               }
+             },
+             {
+              "map": "any"
              }
             ]
            }
@@ -10058,6 +10099,9 @@
                "session": "string",
                "name": "string"
               }
+             },
+             {
+              "map": "any"
              }
             ]
            }
@@ -10141,6 +10185,9 @@
                "session": "string",
                "name": "string"
               }
+             },
+             {
+              "map": "any"
              }
             ]
            },
@@ -10154,7 +10201,32 @@
           "object": {
            "kind": "string",
            "ref": "string",
-           "url?": "string"
+           "url?": "string",
+           "host?": "string",
+           "id?": "string"
+          }
+         },
+         "handing?": {
+          "object": {
+           "to": "string",
+           "name": "string"
+          }
+         },
+         "computer?": {
+          "object": {
+           "key": "string",
+           "name": "string",
+           "kind": {
+            "oneOf": [
+             {
+              "literal": "mac"
+             },
+             {
+              "literal": "machine"
+             }
+            ]
+           },
+           "id?": "string"
           }
          },
          "created": {
@@ -10172,6 +10244,9 @@
                "session": "string",
                "name": "string"
               }
+             },
+             {
+              "map": "any"
              }
             ]
            }
@@ -10192,6 +10267,9 @@
                "session": "string",
                "name": "string"
               }
+             },
+             {
+              "map": "any"
              }
             ]
            }
@@ -10213,11 +10291,34 @@
                "session": "string",
                "name": "string"
               }
+             },
+             {
+              "map": "any"
              }
             ]
            }
           }
          }
+        }
+       }
+      },
+      "computers": {
+       "list": {
+        "object": {
+         "key": "string",
+         "name": "string",
+         "kind": {
+          "oneOf": [
+           {
+            "literal": "mac"
+           },
+           {
+            "literal": "machine"
+           }
+          ]
+         },
+         "id?": "string",
+         "at": "number"
         }
        }
       }
@@ -10282,6 +10383,9 @@
                "session": "string",
                "name": "string"
               }
+             },
+             {
+              "map": "any"
              }
             ]
            },
@@ -10295,7 +10399,32 @@
           "object": {
            "kind": "string",
            "ref": "string",
-           "url?": "string"
+           "url?": "string",
+           "host?": "string",
+           "id?": "string"
+          }
+         },
+         "handing?": {
+          "object": {
+           "to": "string",
+           "name": "string"
+          }
+         },
+         "computer?": {
+          "object": {
+           "key": "string",
+           "name": "string",
+           "kind": {
+            "oneOf": [
+             {
+              "literal": "mac"
+             },
+             {
+              "literal": "machine"
+             }
+            ]
+           },
+           "id?": "string"
           }
          },
          "created": {
@@ -10313,6 +10442,9 @@
                "session": "string",
                "name": "string"
               }
+             },
+             {
+              "map": "any"
              }
             ]
            }
@@ -10333,6 +10465,9 @@
                "session": "string",
                "name": "string"
               }
+             },
+             {
+              "map": "any"
              }
             ]
            }
@@ -10354,6 +10489,9 @@
                "session": "string",
                "name": "string"
               }
+             },
+             {
+              "map": "any"
              }
             ]
            }
@@ -10437,6 +10575,9 @@
                "session": "string",
                "name": "string"
               }
+             },
+             {
+              "map": "any"
              }
             ]
            },
@@ -10450,7 +10591,32 @@
           "object": {
            "kind": "string",
            "ref": "string",
-           "url?": "string"
+           "url?": "string",
+           "host?": "string",
+           "id?": "string"
+          }
+         },
+         "handing?": {
+          "object": {
+           "to": "string",
+           "name": "string"
+          }
+         },
+         "computer?": {
+          "object": {
+           "key": "string",
+           "name": "string",
+           "kind": {
+            "oneOf": [
+             {
+              "literal": "mac"
+             },
+             {
+              "literal": "machine"
+             }
+            ]
+           },
+           "id?": "string"
           }
          },
          "created": {
@@ -10468,6 +10634,9 @@
                "session": "string",
                "name": "string"
               }
+             },
+             {
+              "map": "any"
              }
             ]
            }
@@ -10488,6 +10657,9 @@
                "session": "string",
                "name": "string"
               }
+             },
+             {
+              "map": "any"
              }
             ]
            }
@@ -10509,11 +10681,34 @@
                "session": "string",
                "name": "string"
               }
+             },
+             {
+              "map": "any"
              }
             ]
            }
           }
          }
+        }
+       }
+      },
+      "computers": {
+       "list": {
+        "object": {
+         "key": "string",
+         "name": "string",
+         "kind": {
+          "oneOf": [
+           {
+            "literal": "mac"
+           },
+           {
+            "literal": "machine"
+           }
+          ]
+         },
+         "id?": "string",
+         "at": "number"
         }
        }
       }
@@ -10557,11 +10752,90 @@
           "object": {
            "id": "string",
            "number?": "number",
+           "source?": {
+            "object": {
+             "kind": "string",
+             "ref": "string",
+             "url?": "string",
+             "host?": "string",
+             "id?": "string"
+            }
+           },
            "title": "string",
            "category": "string",
            "inProgress": "bool",
            "owner": "string",
-           "removed?": "bool"
+           "removed?": "bool",
+           "computer?": {
+            "object": {
+             "key": "string",
+             "name": "string",
+             "kind": {
+              "oneOf": [
+               {
+                "literal": "mac"
+               },
+               {
+                "literal": "machine"
+               }
+              ]
+             },
+             "id?": "string"
+            }
+           }
+          }
+         },
+         "null"
+        ]
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/work-queue/refs",
+   "answers": {
+    "200": {
+     "object": {
+      "refs": {
+       "map": {
+        "oneOf": [
+         {
+          "object": {
+           "id": "string",
+           "number?": "number",
+           "source?": {
+            "object": {
+             "kind": "string",
+             "ref": "string",
+             "url?": "string",
+             "host?": "string",
+             "id?": "string"
+            }
+           },
+           "title": "string",
+           "category": "string",
+           "inProgress": "bool",
+           "owner": "string",
+           "removed?": "bool",
+           "computer?": {
+            "object": {
+             "key": "string",
+             "name": "string",
+             "kind": {
+              "oneOf": [
+               {
+                "literal": "mac"
+               },
+               {
+                "literal": "machine"
+               }
+              ]
+             },
+             "id?": "string"
+            }
+           }
           }
          },
          "null"
@@ -10672,6 +10946,9 @@
               "session": "string",
               "name": "string"
              }
+            },
+            {
+             "map": "any"
             }
            ]
           },
@@ -10685,7 +10962,32 @@
          "object": {
           "kind": "string",
           "ref": "string",
-          "url?": "string"
+          "url?": "string",
+          "host?": "string",
+          "id?": "string"
+         }
+        },
+        "handing?": {
+         "object": {
+          "to": "string",
+          "name": "string"
+         }
+        },
+        "computer?": {
+         "object": {
+          "key": "string",
+          "name": "string",
+          "kind": {
+           "oneOf": [
+            {
+             "literal": "mac"
+            },
+            {
+             "literal": "machine"
+            }
+           ]
+          },
+          "id?": "string"
          }
         },
         "created": {
@@ -10703,6 +11005,9 @@
               "session": "string",
               "name": "string"
              }
+            },
+            {
+             "map": "any"
             }
            ]
           }
@@ -10723,6 +11028,9 @@
               "session": "string",
               "name": "string"
              }
+            },
+            {
+             "map": "any"
             }
            ]
           }
@@ -10744,6 +11052,9 @@
               "session": "string",
               "name": "string"
              }
+            },
+            {
+             "map": "any"
             }
            ]
           }
@@ -10766,6 +11077,9 @@
                "session": "string",
                "name": "string"
               }
+             },
+             {
+              "map": "any"
              }
             ]
            },
@@ -10787,7 +11101,9 @@
          "list": {
           "object": {
            "url": "string",
-           "title?": "string"
+           "title?": "string",
+           "kind?": "string",
+           "ref?": "string"
           }
          }
         },
@@ -10858,6 +11174,9 @@
               "session": "string",
               "name": "string"
              }
+            },
+            {
+             "map": "any"
             }
            ]
           },
@@ -10871,7 +11190,32 @@
          "object": {
           "kind": "string",
           "ref": "string",
-          "url?": "string"
+          "url?": "string",
+          "host?": "string",
+          "id?": "string"
+         }
+        },
+        "handing?": {
+         "object": {
+          "to": "string",
+          "name": "string"
+         }
+        },
+        "computer?": {
+         "object": {
+          "key": "string",
+          "name": "string",
+          "kind": {
+           "oneOf": [
+            {
+             "literal": "mac"
+            },
+            {
+             "literal": "machine"
+            }
+           ]
+          },
+          "id?": "string"
          }
         },
         "created": {
@@ -10889,6 +11233,9 @@
               "session": "string",
               "name": "string"
              }
+            },
+            {
+             "map": "any"
             }
            ]
           }
@@ -10909,6 +11256,9 @@
               "session": "string",
               "name": "string"
              }
+            },
+            {
+             "map": "any"
             }
            ]
           }
@@ -10930,11 +11280,36 @@
               "session": "string",
               "name": "string"
              }
+            },
+            {
+             "map": "any"
             }
            ]
           }
          }
         }
+       }
+      }
+     }
+    },
+    "409": {
+     "object": {
+      "message": "string",
+      "computer": {
+       "object": {
+        "key": "string",
+        "name": "string",
+        "kind": {
+         "oneOf": [
+          {
+           "literal": "mac"
+          },
+          {
+           "literal": "machine"
+          }
+         ]
+        },
+        "id?": "string"
        }
       }
      }
@@ -10987,6 +11362,9 @@
               "session": "string",
               "name": "string"
              }
+            },
+            {
+             "map": "any"
             }
            ]
           },
@@ -11000,7 +11378,32 @@
          "object": {
           "kind": "string",
           "ref": "string",
-          "url?": "string"
+          "url?": "string",
+          "host?": "string",
+          "id?": "string"
+         }
+        },
+        "handing?": {
+         "object": {
+          "to": "string",
+          "name": "string"
+         }
+        },
+        "computer?": {
+         "object": {
+          "key": "string",
+          "name": "string",
+          "kind": {
+           "oneOf": [
+            {
+             "literal": "mac"
+            },
+            {
+             "literal": "machine"
+            }
+           ]
+          },
+          "id?": "string"
          }
         },
         "created": {
@@ -11018,6 +11421,9 @@
               "session": "string",
               "name": "string"
              }
+            },
+            {
+             "map": "any"
             }
            ]
           }
@@ -11038,6 +11444,9 @@
               "session": "string",
               "name": "string"
              }
+            },
+            {
+             "map": "any"
             }
            ]
           }
@@ -11059,11 +11468,36 @@
               "session": "string",
               "name": "string"
              }
+            },
+            {
+             "map": "any"
             }
            ]
           }
          }
         }
+       }
+      }
+     }
+    },
+    "409": {
+     "object": {
+      "message": "string",
+      "computer": {
+       "object": {
+        "key": "string",
+        "name": "string",
+        "kind": {
+         "oneOf": [
+          {
+           "literal": "mac"
+          },
+          {
+           "literal": "machine"
+          }
+         ]
+        },
+        "id?": "string"
        }
       }
      }
@@ -11116,6 +11550,9 @@
               "session": "string",
               "name": "string"
              }
+            },
+            {
+             "map": "any"
             }
            ]
           },
@@ -11129,7 +11566,32 @@
          "object": {
           "kind": "string",
           "ref": "string",
-          "url?": "string"
+          "url?": "string",
+          "host?": "string",
+          "id?": "string"
+         }
+        },
+        "handing?": {
+         "object": {
+          "to": "string",
+          "name": "string"
+         }
+        },
+        "computer?": {
+         "object": {
+          "key": "string",
+          "name": "string",
+          "kind": {
+           "oneOf": [
+            {
+             "literal": "mac"
+            },
+            {
+             "literal": "machine"
+            }
+           ]
+          },
+          "id?": "string"
          }
         },
         "created": {
@@ -11147,6 +11609,9 @@
               "session": "string",
               "name": "string"
              }
+            },
+            {
+             "map": "any"
             }
            ]
           }
@@ -11167,6 +11632,9 @@
               "session": "string",
               "name": "string"
              }
+            },
+            {
+             "map": "any"
             }
            ]
           }
@@ -11188,11 +11656,36 @@
               "session": "string",
               "name": "string"
              }
+            },
+            {
+             "map": "any"
             }
            ]
           }
          }
         }
+       }
+      }
+     }
+    },
+    "409": {
+     "object": {
+      "message": "string",
+      "computer": {
+       "object": {
+        "key": "string",
+        "name": "string",
+        "kind": {
+         "oneOf": [
+          {
+           "literal": "mac"
+          },
+          {
+           "literal": "machine"
+          }
+         ]
+        },
+        "id?": "string"
        }
       }
      }
