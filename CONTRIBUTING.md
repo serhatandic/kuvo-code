@@ -176,7 +176,9 @@ scripts/heavy.sh box sh -c 'cd Packages/Box && bun test'
 - `box`: the box's whole suites (`bun test`, `node --test`) and runs on a test machine.
 
 A job also waits while the Mac is busy (its load over the last minute above 40;
-`KUVO_HEAVY_LOAD` sets another). Both apps' `scripts/test-app.sh` take their turn
+`KUVO_HEAVY_LOAD` sets another). While the Mac app's suite waits there, new jobs of the other
+kinds wait for it to start, 15 minutes at most (`KUVO_HEAVY_MAC_FIRST_FOR`), so the jobs that keep
+starting can't keep it out. Both apps' `scripts/test-app.sh` take their turn
 this way themselves. `python3 -m unittest discover -s scripts -p test_heavy.py`
 tries the helper.
 

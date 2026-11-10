@@ -18,7 +18,9 @@
 # time, each waiting on its kind's lock in this user's own temporary folder (getconf's, not
 # $TMPDIR, which a caller may point elsewhere). Jobs of different kinds run side by side. Once its
 # turn comes, a job also waits while the Mac is busy (its load over the last minute above
-# KUVO_HEAVY_LOAD, 40 unless set), so it stays usable.
+# KUVO_HEAVY_LOAD, 40 unless set), so it stays usable. While the Mac app's suite (mac) waits there,
+# new phone, mac-build and box jobs wait for it to start, for 15 minutes at most
+# (KUVO_HEAVY_MAC_FIRST_FOR): the jobs that kept starting kept the Mac busy, and it rarely got in.
 #
 # phone has two slots, so two phone jobs can run at once, each on a simulator of its own (the Mac
 # mini has room for it). Slot 1 is the lock above, unchanged, with the simulator "Kuvo Code Tests";
@@ -103,19 +105,25 @@ OLD="$DIR/kuvo-code-heavy-$(id -u).lock"
 MAX_LOAD="${KUVO_HEAVY_LOAD:-40}"
 WAITS="${KUVO_HEAVY_WAIT:-1}"
 case "$kind" in mac | phone) DEFAULT_LIMIT=45m ;; mac-build) DEFAULT_LIMIT=30m ;; box) DEFAULT_LIMIT=20m ;; esac
-GIVEN_LIMIT="${KUVO_HEAVY_LIMIT:-$DEFAULT_LIMIT}"
-# In seconds (0: none).
-case "$GIVEN_LIMIT" in
-    *[!0-9smh]* | "" | [smh]* | *[smh]?*) LIMIT= ;;
-    *s) LIMIT=${GIVEN_LIMIT%s} ;;
-    *m) LIMIT=$((${GIVEN_LIMIT%m} * 60)) ;;
-    *h) LIMIT=$((${GIVEN_LIMIT%h} * 3600)) ;;
-    *) LIMIT=$((GIVEN_LIMIT * 60)) ;;
-esac
-if [ -z "$LIMIT" ]; then
-    echo "KUVO_HEAVY_LIMIT is a time like 90m, 600s or 2h, or 0 for none (it's $GIVEN_LIMIT)." >&2
+# A time like 90m, 600s or 2h (plain: minutes), in seconds; $2 names the variable it came from.
+seconds_of() {
+    case "$1" in
+        *[!0-9smh]* | "" | [smh]* | *[smh]?*) ;;
+        *s) echo "${1%s}"; return ;;
+        *m) echo $((${1%m} * 60)); return ;;
+        *h) echo $((${1%h} * 3600)); return ;;
+        *) echo $(($1 * 60)); return ;;
+    esac
+    echo "$2 is a time like 90m, 600s or 2h, or 0 for none (it's $1)." >&2
     exit 64
-fi
+}
+GIVEN_LIMIT="${KUVO_HEAVY_LIMIT:-$DEFAULT_LIMIT}"
+LIMIT=$(seconds_of "$GIVEN_LIMIT" KUVO_HEAVY_LIMIT) || exit 64
+# How long the Mac app's suite, waiting on a busy Mac with its turn, holds back new jobs of the
+# other kinds (below).
+GIVEN_MAC_FIRST="${KUVO_HEAVY_MAC_FIRST_FOR:-15m}"
+MAC_FIRST_FOR=$(seconds_of "$GIVEN_MAC_FIRST" KUVO_HEAVY_MAC_FIRST_FOR) || exit 64
+MAC_FIRST="$DIR/kuvo-code-heavy-mac-first-$(id -u)"
 
 # Whether `ps` answers. A sandbox can refuse it (Auto mode), and then no process can be asked what
 # it runs under.
@@ -252,13 +260,42 @@ fi
 
 # The Mac busy: wait until it isn't.
 load() { sysctl -n vm.loadavg | awk '{ print $2 }'; }
+busy() { [ "$(load | awk -v max="$MAX_LOAD" '{ print ($1 > max) }')" = 1 ]; }
+
+# The Mac app's suite first: with its turn, it waits for the Mac to be less busy, and phone,
+# mac-build and box jobs that kept starting meanwhile kept it busy, so it rarely got in. While it
+# waits there (it says so in $MAC_FIRST: its pid and since when), a new job of another kind waits
+# for it to start, for $MAC_FIRST_FOR at most. Jobs already running go on. A suite that's gone, or
+# that started, says nothing; older copies of this helper neither say it nor wait for it.
+mac_waits() {
+    [ -f "$MAC_FIRST" ] || return 1
+    read -r pid since < "$MAC_FIRST" 2>/dev/null || return 1
+    [ -n "${pid:-}" ] && [ -n "${since:-}" ] && kill -0 "$pid" 2>/dev/null && [ $(($(date +%s) - since)) -lt "$MAC_FIRST_FOR" ]
+}
+if [ "$kind" != mac ]; then
+    said=
+    while mac_waits; do
+        [ "$WAITS" = 0 ] && cannot_wait "The Mac app's suite is waiting for the Mac to be less busy, and goes first."
+        [ -n "$said" ] || echo "Waiting for the Mac app's suite to start first: it's waiting for the Mac to be less busy (for $GIVEN_MAC_FIRST at most)…" >&2
+        said=1
+        sleep 5
+    done
+fi
+
 said=
-while [ "$(load | awk -v max="$MAX_LOAD" '{ print ($1 > max) }')" = 1 ]; do
+if [ "$kind" = mac ] && busy && [ "$WAITS" != 0 ]; then
+    printf '%s %s\n' "$$" "$(date +%s)" > "$MAC_FIRST.$$" && mv -f "$MAC_FIRST.$$" "$MAC_FIRST"
+fi
+while busy; do
     [ "$WAITS" = 0 ] && cannot_wait "The Mac is busy (load $(load), over $MAX_LOAD)."
     [ -n "$said" ] || echo "Waiting while the Mac is busy (load $(load), over $MAX_LOAD)…" >&2
     said=1
     sleep 15
 done
+# (Its own say, not another suite's since.)
+if [ "$kind" = mac ] && [ -f "$MAC_FIRST" ] && read -r pid since < "$MAC_FIRST" 2>/dev/null && [ "$pid" = "$$" ]; then
+    rm -f "$MAC_FIRST"
+fi
 
 # The job runs in a process group of its own, and the group ends with the job: once the command is
 # over, or this helper is stopped, everything the command started that stays in its group is
