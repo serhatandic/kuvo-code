@@ -751,6 +751,8 @@ final class PhoneLink {
             // The app's own requests (no phone asking) say so: they aren't a phone using the box.
             let forwarded = EngineRoutes.forward(request, to: base, password: box.password, session: Self.boxSession, adding: asking == nil ? ["x-kuvo-from": "app"] : [:],
                                                  allowing: { path, _ in path.hasPrefix("kuvo/") })
+            // COMPAT(0.8 keeper handover): what an older keeper's box says of this Mac; remove 3 months after 0.8.0.
+            if route == Self.handoverRoute, request.method.uppercased() == "GET" { return Self.handedOver(forwarded) }
             // A change to a conversation's wake-ups, or to your personalities: what the app shows
             // of them (and `kuvo/bots` and its templates list) has it before the answer goes back,
             // so what's read next agrees.

@@ -1748,9 +1748,11 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   its `name` and `app` as the app last said them (kept, "The relay, on this Mac's box"), its
   `engine` the version running, or the one the app brings while none runs, its integrations from
   the catalog the app leaves it (`bin/integrations.json`), and its `features` the box's own list.
-  While an older keeper makes way for a newer app's (it goes once nothing is under way), its box,
-  from before 0.9.210, answers as a machine's does (its own `chats`, `running` false, a machine's
-  features): the app no longer answers it in its place.
+  While an older keeper makes way for a newer app's (it goes once nothing is under way, which can
+  take hours), its box, from before 0.9.210, answers as a machine's does (its own `chats`, `running`
+  false, a machine's features): the app says it as this Mac in its place, from what that box said
+  (its engine's version, `agents`, `started`), with this Mac's chats folder and the Mac's features
+  for a machine's own (`COMPAT(0.8 keeper handover)`, going 3 months after 0.8.0).
 - `kuvo/agents/api/…`: the coding agents you already have (Claude Code, Codex, Cursor, Grok,
   Antigravity), through the agents bridge beside the host's engine, which answers the same paths
   as the engine for them: sessions, messages, prompts, permissions, questions, events
