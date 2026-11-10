@@ -16,6 +16,7 @@ import { asked, call } from "../engine/client";
 import { BOTS, IS_MAC, K, SESSION_WAKES } from "../home";
 import { hostTrash } from "../host-interface";
 import { bundleOf } from "./records";
+import { filesSize, stageFiles, type CarriedQueues } from "../work-queue/moves";
 
 /** The most a move carries (1 GB, as clients say sizes): past that it's refused before anything's
  * held for long. */
@@ -50,6 +51,8 @@ export interface Contents {
   /** It talks with a coding agent: its conversations are in the bundle's `carry` folder as the agents
    * bridge packed them (`exports` is empty), these. */
   lane?: { sessions: string[]; root: string };
+  /** Its conversations' Work Queues, their files beside `move.json` (`work-queue/<item>`). */
+  workQueue?: CarriedQueues;
   /** Where it was: the computer's name, and its folder (bots and chats). */
   was?: { place: string; folder?: string };
 }
@@ -178,12 +181,13 @@ export async function pack(id: string, contents: Contents): Promise<{ file: stri
   const moveJSON = JSON.stringify(contents);
   const original = contents.folder ? folderOf(contents.kind, contents.thing) : null;
   const carried = contents.lane ? path.join(folder, "carry") : null;
-  if (Buffer.byteLength(moveJSON) + (original ? bytesIn(original, MOST_BUNDLE) : 0) + (carried ? bytesIn(carried, MOST_BUNDLE) : 0) > MOST_BUNDLE) throw new TooBig();
+  if (Buffer.byteLength(moveJSON) + (original ? bytesIn(original, MOST_BUNDLE) : 0) + (carried ? bytesIn(carried, MOST_BUNDLE) : 0) + filesSize(contents.workQueue) > MOST_BUNDLE) throw new TooBig();
   fs.rmSync(staging, { recursive: true, force: true });
   fs.mkdirSync(staging, { recursive: true, mode: 0o700 });
   fs.writeFileSync(path.join(staging, "move.json"), moveJSON, { mode: 0o600 });
+  const queueFiles = stageFiles(contents.workQueue, staging);
   const file = path.join(folder, "bundle.tgz");
-  const args = [...(process.platform === "darwin" ? ["--no-mac-metadata", "--no-xattrs"] : []), "-czf", file, "-C", staging, "move.json"];
+  const args = [...(process.platform === "darwin" ? ["--no-mac-metadata", "--no-xattrs"] : []), "-czf", file, "-C", staging, "move.json", ...(queueFiles ? ["work-queue"] : [])];
   if (original) args.push("-C", path.dirname(original), path.basename(original));
   if (carried) args.push("-C", folder, "carry");
   await run("tar", args);
@@ -194,7 +198,7 @@ export async function pack(id: string, contents: Contents): Promise<{ file: stri
 
 /** The bundle that came for move `id`, opened: what it holds, and the folder it brought (in the
  * move's own folder, until it's put in place). */
-export async function unpack(id: string): Promise<{ contents: Contents; folder: string | null; carry: string | null }> {
+export async function unpack(id: string): Promise<{ contents: Contents; folder: string | null; carry: string | null; opened: string }> {
   const folder = bundleOf(id);
   const opened = path.join(folder, "opened");
   fs.rmSync(opened, { recursive: true, force: true });
@@ -229,7 +233,13 @@ export async function unpack(id: string): Promise<{ contents: Contents; folder: 
     // (A conversation never has a link: the agents bridge sends none.)
     plainOnly(carried, false);
   }
-  return { contents, folder: kind ? brought : null, carry };
+  // The Work Queue's files: plain files only.
+  const queueFiles = path.join(opened, "work-queue");
+  let queueKind: fs.Stats | null = null;
+  try { queueKind = fs.lstatSync(queueFiles); } catch {}
+  if (queueKind && !queueKind.isDirectory()) throw new NotTaken("It brought something that isn’t a folder for its Work Queue’s files, which isn’t taken.");
+  if (queueKind) plainOnly(queueFiles, false);
+  return { contents, folder: kind ? brought : null, carry, opened };
 }
 
 /** Whether `entry`, in the folder `root`, goes as it is: a file or folder, or a relative link to

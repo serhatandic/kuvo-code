@@ -60,6 +60,8 @@ import { deliverLeftAnswers, outboxSoon, sendOutbox } from "./letters/outbox";
 import { SENDING } from "./letters/letter";
 import { watchFolders } from "./follow";
 import { pushRows } from "./work/elsewhere";
+import { pushNumbers } from "./work-queue/numbers";
+import { clearStaging } from "./work-queue/ops";
 import { macLinkCheck } from "./mac/link";
 import { macNoticeHold, macTell } from "./mac/notices";
 import { runMacPeers } from "./mac/peers";
@@ -71,7 +73,7 @@ import { primeGenerations } from "./vault/store";
 import { setVaultTell } from "./vault/use";
 import { HELD_FILE, NoticeHold } from "./notices/hold";
 import { keepTold, markTeller, watchSentByAgents } from "./notices/told";
-import { noticeJSON, pushTo } from "./notices/notice";
+import { sendToPhones } from "./notices/push";
 import { announce, forgetMacsAgents, refreshOwn } from "./peers/agents";
 import { forgetOldMacs, KEY, leaveMac, macsOf, noteOnline, peersOf, takeLegacyPeers } from "./peers/known";
 import { peerMail, receiveMail } from "./peers/mail";
@@ -95,7 +97,7 @@ import type { KeptNotice } from "./notices/hold";
 import type { Notice } from "./notices/notice";
 import type { GivenLibrary } from "./personalities/library";
 import type { AnyPiece } from "./server/context";
-import type { LinkState, Phone } from "./state";
+import type { LinkState } from "./state";
 
 // What moved into modules, as this file exported it (the bridge's tests import it from here).
 export { addressOf, newKey, publicOf } from "./crypto/keys";
@@ -132,6 +134,7 @@ export { adoptBox } from "./compat/adopt-settings";
 export { setBoxKey } from "./areas/box-keys";
 export { applySettings, translateSettings } from "./areas/apply";
 export { NOTICE_LIMIT, noticeJSON, pushTo } from "./notices/notice";
+export { notePushed, PUSHED_FILE, readPushed, sendToPhones } from "./notices/push";
 export { LinkHost } from "./relay/host";
 export { followed } from "./follow";
 export { answerIntegrations, reconnectEverywhere, upgradeIntegrations } from "./areas/integrations";
@@ -173,6 +176,9 @@ export { answered, deliverLeftAnswers, letterMail, letterWent, sendOutbox } from
 export { takeLetter } from "./letters/take";
 export { callAs, callsBack, takeCall } from "./letters/calls";
 export { pushRows, takeRows } from "./work/elsewhere";
+export { askToSend, blockArrived, BLOCK as QUEUE_BLOCK, CLAIM_REACH as QUEUE_CLAIM_REACH, claimNumbers, giveBlock, LOW as QUEUE_LOW, primaryOf, readNumbers, reclaimWaiting, takeBlock, takeNumber } from "./work-queue/numbers";
+export { parseBacklog } from "./work-queue/import";
+export { carryWorkQueue, forgetWorkQueues, packWorkQueues, placeWorkQueues } from "./work-queue/moves";
 export { readReach } from "./peers/reach";
 export { peerPlaces } from "./engine/client";
 export { answerPersonalities, retellBots, takePersonalities, takePersonalitiesDocument } from "./personalities/take";
@@ -290,23 +296,8 @@ async function run(): Promise<void> {
 
   // Your phones' notifications, on whichever relay connection is up: the engine's news, and what
   // agents ask for as they browse.
-  // False when it can't go now (the relay isn't there), to be tried again.
-  const tellPhones = (notice: Notice): boolean => {
-    const link = readLink();
-    const phones = (link?.phones ?? []).filter(phone => phone.address);
-    if (!phones.length) return true;
-    if (!current?.welcomed || !link?.key) return false;
-    const json = noticeJSON(notice);
-    const key = Buffer.from(link.key, "base64url");
-    let sent = false;
-    for (const phone of phones) {
-      try {
-        current.send(pushTo(phone as Phone & { address: string }, json, key));
-        sent = true;
-      } catch {}
-    }
-    return sent;
-  };
+  // False when it can't go now (the relay isn't there, or its connection is closing), to be tried again.
+  const tellPhones = (notice: Notice): boolean => sendToPhones(current, readLink(), notice);
   // Each held a little while a client's in use here (PROTOCOL.md, "kuvo/attention"); what's held
   // is kept in run/held-notices.json, for the next bridge to send if this one stops first: read
   // once the one before has gone (a few seconds at most), so it neither sends nor holds one more.
@@ -375,6 +366,8 @@ async function run(): Promise<void> {
   setInterval(nightly, 600_000);
   // Recently Deleted's skills past their 30 days, gone with no client there too.
   keepSkillTrashClear();
+  // What a Work Queue change left half read as the box stopped.
+  clearStaging();
   setInterval(() => {
     if (current?.welcomed) announce(current, readEngineFile).catch(() => {});
     else refreshOwn(readEngineFile).catch(() => {});
@@ -407,6 +400,8 @@ async function run(): Promise<void> {
     deliverLeftAnswers().catch(() => {});
     // The rows of sessions here whose lead lives on another computer, told to it as they change.
     if (current?.welcomed) pushRows(current, readLink(), peerTargets()).catch(() => {});
+    // The Work Queue's ask for more numbers, to the primary, while one is under way.
+    try { pushNumbers(current); } catch {}
   }, 3_000);
 
   let attempt = 0;
@@ -659,6 +654,8 @@ async function serve(): Promise<void> {
   if (IS_MAC && !testsAlone) runMacPeers();
   // Recently Deleted's skills past their 30 days, gone with no client there too.
   keepSkillTrashClear();
+  // What a Work Queue change left half read as the box stopped.
+  clearStaging();
   // Its bots' jobs kept in their folders, taken once from where they were before, once its app
   // makes them this box's (it gives the box its kit then).
   if (readKit()) try { keepJobs(); } catch {}

@@ -6,6 +6,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { HangWatch, isBridge, isEngine, MOST_ENDED } from "../src/shared/hang"
+import { endsWithRun } from "./ends-with-run"
 import { processUse } from "../src/shared/platform"
 
 // A server of the box that hung while running is ended, and only one that did: killing a live one
@@ -25,6 +26,8 @@ let run = ""
 let record = ""
 let now = 1_800_000_000_000
 const started: ChildProcess[] = []
+/** What ends each one's watchdog (ends-with-run.ts), which ends it if the run is cut off. */
+const watchdogs: (() => void)[] = []
 
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), "kuvo-box-hang-"))
@@ -38,6 +41,7 @@ afterEach(() => {
   for (const child of started.splice(0)) {
     try { process.kill(-child.pid!, "SIGKILL") } catch {}
   }
+  for (const stop of watchdogs.splice(0)) stop()
   rmSync(root, { recursive: true, force: true })
 })
 
@@ -71,6 +75,7 @@ async function server(behavior: keyof typeof BEHAVIOR, argument = "serve"): Prom
   writeFileSync(script, `${OPEN}\nfunction afterListening() { ${BEHAVIOR[behavior]} }\n`)
   const child = spawn(process.execPath, [script, argument, join(root, "work-over")], { stdio: ["ignore", "pipe", "ignore"], detached: true })
   started.push(child)
+  watchdogs.push(endsWithRun(child))
   const gone = new Promise(resolve => child.once("exit", resolve))
   const line = await new Promise<string>(resolve => child.stdout!.once("data", chunk => resolve(String(chunk))))
   const { port } = JSON.parse(line)
@@ -369,6 +374,7 @@ function realServer(script: string, argument: string[], env: Record<string, stri
     env: { HOME: home, PATH: process.env.PATH!, TMPDIR: root, OPENCODE_PASSWORD: "x", ...(process.env.BUN_BE_BUN ? { BUN_BE_BUN: "1", BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0" } : {}), ...env },
   })
   started.push(child)
+  watchdogs.push(endsWithRun(child))
   return child
 }
 
@@ -407,4 +413,31 @@ test("the link ends this box's hung coding agents' bridge", async () => {
   realServer(join("link", "main.ts"), ["serve"], { KUVO_HOME: root, KUVO_TEST_NO_PEERS: "1" })
   await hung.gone
   expect(existsSync(join(run, "hung-bridge.json"))).toBe(true)
+})
+
+// A run cut off before its afterEach (killed, its time up) leaves none of its servers running: here
+// a run of its own, killed outright, with a server spinning at full CPU, as one left behind did for a
+// day. (Its watchdog looks once a second.)
+test("a run cut off leaves none of the servers it started running", async () => {
+  const spinner = join(root, "spinner.js")
+  writeFileSync(spinner, "while (true) {}\n")
+  const runner = join(root, "runner.ts")
+  writeFileSync(runner, `
+import { spawn } from "node:child_process"
+import { endsWithRun } from ${JSON.stringify(join(import.meta.dir, "ends-with-run.ts"))}
+const child = spawn(process.execPath, [${JSON.stringify(spinner)}], { stdio: "ignore", detached: true })
+endsWithRun(child)
+console.log(child.pid)
+setInterval(() => {}, 1000)
+`)
+  // (Its own, like the servers: whatever happens here, afterEach ends it, and with it its server.)
+  const run = spawn(process.execPath, [runner], { stdio: ["ignore", "pipe", "ignore"], detached: true, env: { PATH: process.env.PATH!, HOME: root, TMPDIR: root, ...(process.env.BUN_BE_BUN ? { BUN_BE_BUN: "1" } : {}) } })
+  started.push(run)
+  watchdogs.push(endsWithRun(run))
+  const pid = Number(await new Promise<string>(resolve => run.stdout!.once("data", chunk => resolve(String(chunk)))))
+  const isRunning = () => { try { process.kill(pid, 0); return true } catch { return false } }
+  expect(isRunning()).toBe(true)
+  run.kill("SIGKILL")
+  await until(async () => !isRunning())
+  expect(isRunning()).toBe(false)
 })

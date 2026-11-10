@@ -102,7 +102,7 @@ function provedMac(given: Record<string, unknown>, tag = "kuvo-vault-key", rest 
  * (`x-kuvo-vault-proof`, base64url JSON `{mac, at, nonce, proof}`): its signing key's signature of
  * `kuvo-vault-request\0<this machine's id>\0<at>\0<nonce>\0<METHOD>\0<path>\0<sha256 of the body, hex>`,
  * within five minutes, each nonce once. The Mac's unlock key never goes with such a request. */
-function provedRequest(request: RouteContext["request"]): string | null {
+export function provedRequest(request: RouteContext["request"]): string | null {
   const header = request.headers["x-kuvo-vault-proof"];
   if (typeof header !== "string") return null;
   let given: Record<string, unknown> = {};

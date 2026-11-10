@@ -86,6 +86,15 @@ function resetEngine() {
   held = [];
 }
 resetEngine();
+let integrationsAskedFresh = 0;
+const engineAccounts = {
+  anthropic: { id: "anthropic", name: "Anthropic", metadata: {}, connections: [{ type: "credential", id: "crd_work", label: "Work", method: "key" }, { type: "credential", id: "crd_home", label: "Personal", method: "key" }] },
+  deepseek: { id: "deepseek", name: "DeepSeek", metadata: {}, connections: [{ type: "credential", id: "crd_ds", label: "API key", method: "key" }] },
+};
+const bridgeAccounts = {
+  "claude-code": { id: "claude-code", name: "Claude Code", metadata: { source: "agent", accountID: "default" }, connections: [{ type: "agent", label: "ada@example.com · Max plan", method: "oauth" }] },
+  "claude-code@acc0001": { id: "claude-code@acc0001", name: "Claude Code", metadata: { source: "agent", accountID: "acc0001", accountLabel: "Athas" }, connections: [{ type: "agent", label: "athas@example.com", method: "oauth" }] },
+};
 // An ask names the tool call it's for, as the engine's do.
 const withSource = ask => ({ ...ask, source: ask.source ?? { type: "tool", messageID: `msg_${ask.id}`, id: `call_${ask.id}` } });
 // The coding agents' bridge answers as the engine does, for the sessions on it (`bridge`).
@@ -191,6 +200,13 @@ const standIn = onBridge => (request, response) => {
       return reply({});
     }
     if (request.url.includes("/instructions/entries/")) return reply({});
+    // An account as Settings › Accounts lists it: the engine's plans with their sign-ins (the one in
+    // use first), the coding agents' accounts with the names you gave them.
+    if (url.pathname.startsWith("/api/integration") && request.method === "GET") {
+      // (Asked of each agent's program again, the bridge's `fresh` and one account's: what a read of a bot's work never needs.)
+      if (url.pathname !== "/api/integration" || url.searchParams.has("fresh")) integrationsAskedFresh += 1;
+      else return reply({ location: { directory: home }, data: Object.values(onBridge ? bridgeAccounts : engineAccounts) });
+    }
     reply({ message: "Not here." }, 404);
   });
 };
@@ -579,6 +595,38 @@ test("a client sees a bot's work: its sessions, the answers it gave and today's 
   assert.deepEqual(work.body.answered.map(each => [each.session, each.ask, each.decision]), [[session, "per_1", "allow"]]);
   assert.equal(work.body.today.started, 1);
   assert.deepEqual(work.body.limits, { atOnce: 3 });
+});
+
+test("a client sees which account each of a bot's sessions runs on, as Settings › Accounts names it: its provider, and the name you gave a coding agent's account", async t => {
+  write(path.join(home, "run", "bridge.json"), JSON.stringify({ port: bridge.address().port, password: "b", pid: await runningAs("kuvo-agents", t) }));
+  t.after(() => fs.rmSync(path.join(home, "run", "bridge.json"), { force: true }));
+  const start = async (title, model, onBridge = false) => {
+    const session = startedAddress(await tool("start_session", { task: "Go.", title, project: "Tidepool" }, "ses_pixel"));
+    Object.assign(sessions.get(session), { model, ...(onBridge ? { bridge: true } : {}) });
+    return title;
+  };
+  // The engine's plan with two sign-ins: by its name alone (they have no names of yours).
+  await start("On the work key", { providerID: "anthropic", id: "claude-opus-5-5" });
+  // One sign-in: the plan says which.
+  await start("On DeepSeek", { providerID: "deepseek", id: "deepseek-v4" });
+  // A coding agent's own sign-in, and one you added and named.
+  await start("On Claude Code", { providerID: "claude-code", id: "opus" }, true);
+  await start("On Athas", { providerID: "claude-code@acc0001", id: "opus" }, true);
+  // Custom Auto picks an account each turn; a provider where it runs can't say: none.
+  await start("On Auto", { providerID: "auto", id: "auto" });
+  await start("On a gone plan", { providerID: "gone", id: "x" });
+  integrationsAskedFresh = 0;
+  const work = await route("GET", "kuvo/work?bot=bot_pixel00001");
+  assert.equal(work.status, 200);
+  assert.deepEqual(Object.fromEntries(work.body.sessions.map(each => [each.title, each.account ?? null])), {
+    "On the work key": { name: "Anthropic" },
+    "On DeepSeek": { name: "DeepSeek" },
+    "On Claude Code": { name: "Claude Code" },
+    "On Athas": { name: "Claude Code", label: "Athas" },
+    "On Auto": null,
+    "On a gone plan": null,
+  });
+  assert.equal(integrationsAskedFresh, 0, "each agent's sign-in isn't checked again for a read of the work");
 });
 
 test("a client stops all of a bot's work at once", async () => {
