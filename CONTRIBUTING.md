@@ -66,11 +66,13 @@ your keychain, serves it from `127.0.0.1`, and points the Kuvo Code in /Applicat
 **Check for Updates…** there to go through the update window, the install, the restart and
 What's New. Ctrl-C stops the server and puts the real feed back.
 
-Pushes to `main`, release tags and release dry runs from `main` run on the maintainer's Mac
-(labels `self-hosted, macOS, ARM64, kuvo-mini`), each job in a fresh macOS VM that's deleted
-after it, with no folders shared and no network to that Mac or its LAN. Pull requests always run
-on GitHub's own runners, so a pull request's code never reaches that Mac, which refuses any other
-job anyway. `scripts/ci-runner/` has the orchestrator, the VM image's build and the setup.
+CI (`.github/workflows/ci.yml`) runs on GitHub's hosted runners, its jobs side by side: the
+generated files and What's New on Linux, the box's and the bridge's tests on macOS and Linux, the
+Swift packages' tests, and the app's. It doesn't build the app itself: only the release workflow
+does, signed, for a tag or a dry run. So run a dry run from `main` (Actions › Release › Run
+workflow) before tagging a release whose build changed. The release's signing job runs in the
+`release` environment (Settings › Environments), which should allow only `main` and `v*` tags and
+hold the signing, notarization and update keys.
 
 A release also carries what remote machines run, for them to update themselves
 with, once the `KUVO_BOX_SIGNING_KEY` secret (an Ed25519 key) is set
@@ -97,16 +99,12 @@ act on those (a window's tracking areas and cursor rectangles once the pointer c
 drawing as Core Animation commits), the test does it itself: `WindowServer.appKitsTurn` and
 `CATransaction.flush()` after `displayIfNeeded()`.
 
-The app, the engine client and the usage tracker have tests:
-
-```sh
-./scripts/test-app.sh
-cd Packages/OpenCodeKit && swift test
-cd Packages/UsageKit && swift test
-cd Packages/KuvoClient && swift test
-cd Packages/KuvoLink && swift test && node --test Tests/Bridge/*.test.js
-cd Packages/Box && bun install && bun run check && bun test
-```
+Run quick, targeted tests locally while working. Commit the changes to a work branch, then run
+`scripts/ci-branch.sh --wait` to push it over SSH to `origin` as a `ci/` branch and run the full
+CI suites on GitHub. Pass a local branch name to test a different branch. The script prints the run
+URL, job conclusions and failed logs; it never pushes `main` or tags. Only committed changes run.
+CI covers the Mac app, Swift packages, box and bridge; the phone has no CI, so run its tests locally.
+Use `scripts/heavy.sh` for the phone and for local builds or tests that CI doesn't cover.
 
 The bridge's tests that run the box itself need a Bun: `bun` on your PATH, or
 `KUVO_TEST_BUN` naming one or an engine (a machine's `~/.kuvo-code/engine/<version>/opencode`,
@@ -140,7 +138,7 @@ its home as it ends, and the next run clears what a killed one left.
 `./scripts/test-app.sh` runs one at a time: a run started while another is going
 waits for it, since they share the test copy's settings and temporary folders.
 
-Builds and test runs are heavy, so start them with `scripts/heavy.sh <kind>`, which
+When running heavy builds or tests locally, start them with `scripts/heavy.sh <kind>`, which
 waits for jobs of the same kind (they share build folders) and runs the other
 kinds alongside:
 

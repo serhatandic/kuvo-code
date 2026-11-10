@@ -565,6 +565,8 @@ describe("a review with fresh eyes", () => {
     await expect(gitChanges(root)).rejects.toThrow("This folder isn't a git repository")
   })
 
+  // (About twenty git commands, each a process of its own: over Bun's 5 s on a busy machine, though
+  // it takes 2 s on a quiet one.)
   test("reads a branch against main, a range of commits, and a folder's or the project's files from its git", async () => {
     const folder = join(root, "work")
     const git = (...args: string[]) => run("git", ["-C", folder, "-c", "user.email=t@example.com", "-c", "user.name=T", ...args])
@@ -648,7 +650,7 @@ describe("a review with fresh eyes", () => {
     writeFileSync(join(folder, "docs", "a.md"), "doc\n")
     await git("branch", "docs", first)
     expect(JSON.stringify(await readScope(folder, { kind: "commits", from: "docs" }))).toContain("+log(password)")
-  })
+  }, 30_000)
 
   test("a branch is compared with main as origin has it, when that's newer than your own main", async () => {
     const folder = join(root, "fetched")
