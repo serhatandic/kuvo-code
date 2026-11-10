@@ -204,7 +204,7 @@ let lab = null;
 
 before(async () => {
   // This Mac's box on, meeting its machines: up first, as the machine starts after it's set up.
-  assert.notEqual((await ask("PUT", "kuvo/link/config", { phones: false, machines: true, relay: relay.url, name: "Studio Mac", app: "0.9.0", features: ["groups.seats", "mac"] })).json?.state, "failed");
+  assert.notEqual((await ask("PUT", "kuvo/link/config", { phones: false, machines: true, relay: relay.url, name: "Studio Mac", app: "0.9.0" })).json?.state, "failed");
   const setup = await ask("GET", "kuvo/link/setup");
   assert.equal(setup.status, 200);
   // Set up as the app sets it up over SSH.
@@ -242,7 +242,8 @@ test("each box tells the other who its agents are, with what this Mac answers", 
   await arrived(() => relay.has(macAddress));
   const told = await eventually(() => read(run("peer-agents.json"))?.[mac]);
   assert.deepEqual(told.list.map(agent => [agent.session, agent.name]), [["ses_mac1", "Release notes"]]);
-  assert.deepEqual(told.features, ["groups.seats", "mac"]);
+  // What this Mac answers, as its box says it (its app gives no list).
+  assert.deepEqual(told.features, link.macFeatures());
   // This Mac's box has the machine's, by its name here, for the app's list of everyone.
   const peers = await eventually(() => {
     const agents = read(path.join(macHome, "run", "peer-agents.json"));
@@ -420,9 +421,12 @@ test("a machine's conversation writes to a Mac's agent with its tool, and gets i
   assert.deepEqual(said, { text: "Release notes answered:\n\nNotes are done.", isError: false });
   const prompt = macEngine.seen.prompts.findLast(each => each.session === "ses_mac1");
   assert.match(prompt.text, /^\[Message from API work · ses_lab1\] \(They're waiting for your reply/);
-  // This Mac's app here doesn't say it shares them (an older one).
-  const read = await machineTool("read_conversation", { of: "Release notes" }, "ses_lab1");
-  assert.deepEqual(read, { text: "Release notes's computer doesn't share its conversations yet (it runs an older Kuvo Code). Ask it what you need with send_message.", isError: true });
+  // As if this Mac ran an older Kuvo Code, which didn't say it shares them.
+  const told = read(run("peer-agents.json"));
+  told[mac].features = told[mac].features.filter(feature => feature !== "letters-read");
+  fs.writeFileSync(run("peer-agents.json"), JSON.stringify(told));
+  const refused = await machineTool("read_conversation", { of: "Release notes" }, "ses_lab1");
+  assert.deepEqual(refused, { text: "Release notes's computer doesn't share its conversations yet (it runs an older Kuvo Code). Ask it what you need with send_message.", isError: true });
 });
 
 // The machine's link, stopped, as a machine is when it's asleep; started again, it's back on the relay.
