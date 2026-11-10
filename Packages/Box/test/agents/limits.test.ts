@@ -379,7 +379,7 @@ describe("Claude on Linux", () => {
     credentials(join(process.env.HOME!, ".claude"), { accessToken: "token-yours", scopes: ["user:profile"] })
     anthropic.answers.set("token-yours", usage(1, 1))
     const limits = new Limits(() => agentAccounts([new TestClaude(home)]), undefined, clock.now)
-    const { accounts, services } = await route(limits, "POST", ["refresh"])
+    const { accounts, services } = await refreshed(limits)
     expect(accounts).toEqual([])
     expect(services).toEqual(["claude"])
     expect(anthropic.reads).toHaveLength(0)
