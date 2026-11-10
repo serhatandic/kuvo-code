@@ -206,8 +206,16 @@ MAC_FIRST="$DIR/kuvo-code-heavy-mac-first-$(id -u)"
 # Memory a new job waits for (below): the share of it available, in percent (0: it doesn't wait).
 MIN_FREE="${KUVO_HEAVY_MEMORY:-20}"
 case "$MIN_FREE" in
-    "" | *[!0-9]* | ????*) echo "KUVO_HEAVY_MEMORY is a share of memory in percent, 0 to 100 (it's $MIN_FREE)." >&2; exit 64 ;;
+    "" | *[!0-9]* | ????*) MIN_FREE=bad ;;
 esac
+if [ "$MIN_FREE" = bad ] || [ "${KUVO_HEAVY_MEMORY:-20}" -gt 100 ]; then
+    echo "KUVO_HEAVY_MEMORY is a share of memory in percent, 0 to 100 (it's ${KUVO_HEAVY_MEMORY:-})." >&2
+    exit 64
+fi
+# Swapping, in MB a second, that counts as short of memory too.
+SWAP_MB="${KUVO_HEAVY_SWAP:-10}"
+case "$SWAP_MB" in "" | *[!0-9]* | ???????*) echo "KUVO_HEAVY_SWAP is MB a second (it's $SWAP_MB)." >&2; exit 64 ;; esac
+MEMORY_SHORT="$DIR/kuvo-code-heavy-memory-short-$(id -u)"
 GIVEN_MEMORY_WAIT="${KUVO_HEAVY_MEMORY_WAIT_FOR:-15m}"
 MEMORY_WAIT_FOR=$(seconds_of "$GIVEN_MEMORY_WAIT" KUVO_HEAVY_MEMORY_WAIT_FOR) || exit 64
 
@@ -305,33 +313,80 @@ fi
 # Short of memory: with two simulators, the app's suite, builds and the engine going, the Mac ran
 # out of memory long before CPU (15 of 16 GB used, 9 GB swapped, the CPU half idle), and the load
 # grew with the swapping. So a new job (not one started inside a job already running) also waits
-# while the system says memory is short: its pressure at warn or worse
-# (kern.memorystatus_vm_pressure_level, as Activity Monitor shows it), or less than MIN_FREE percent
-# of it available (kern.memorystatus_level, what `memory_pressure -Q` says is free). Swap used isn't
-# a measure: it stays long after the pressure is gone. For $MEMORY_WAIT_FOR at most: then the load
-# alone decides.
+# while memory is short, by what the system does and says: it's swapping (pages in and out, more
+# than $SWAP_MB MB a second since the last look, from vm_stat), its memory pressure is at warn or
+# worse (kern.memorystatus_vm_pressure_level), or less than $MIN_FREE% of it is available
+# (kern.memorystatus_level, what `memory_pressure -Q` calls free; it counts memory in use by apps
+# too, so it falls late). Not swap used: it stays long after the pressure is gone. Short, it waits
+# until two looks in a row find it isn't, so the jobs that waited don't all start at once, and for
+# $MEMORY_WAIT_FOR at most from when any job found it short ($MEMORY_SHORT): then the load alone
+# decides.
 memory_level() { sysctl -n kern.memorystatus_vm_pressure_level 2>/dev/null || echo 1; }
 memory_free() { sysctl -n kern.memorystatus_level 2>/dev/null || echo 100; }
+page_size=$(vm_stat 2>/dev/null | sed -n 's/.*page size of \([0-9]*\) bytes.*/\1/p')
+page_size=${page_size:-16384}
+# Pages swapped in and out so far.
+swapped() { vm_stat 2>/dev/null | awk '/^Swapins/ { gsub("\\.", "", $2); n += $2 } /^Swapouts/ { gsub("\\.", "", $2); n += $2 } END { print n + 0 }'; }
+swap_pages=
+swap_at=
+swap_rate=0
+# Looks again: how much it swapped a second since the last look (the first, over three seconds).
+look_at_memory() {
+    if [ -z "$swap_pages" ]; then
+        swap_pages=$(swapped)
+        swap_at=$(date +%s)
+        sleep 3
+    fi
+    pages=$(swapped)
+    at=$(date +%s)
+    seconds=$((at - swap_at))
+    [ "$seconds" -gt 0 ] || seconds=1
+    swap_rate=$(((pages - swap_pages) * page_size / 1000000 / seconds))
+    swap_pages=$pages
+    swap_at=$at
+}
 memory_short() {
-    [ "$MIN_FREE" -gt 0 ] || return 1
-    [ "$(memory_level)" -ge 2 ] || [ "$(memory_free)" -lt "$MIN_FREE" ]
+    [ "$swap_rate" -gt "$SWAP_MB" ] || [ "$(memory_level)" -ge 2 ] || [ "$(memory_free)" -lt "$MIN_FREE" ]
 }
 memory_said() {
     case "$(memory_level)" in 1) pressure=normal ;; 2) pressure=warn ;; 4) pressure=critical ;; *) pressure="level $(memory_level)" ;; esac
-    echo "pressure $pressure, $(memory_free)% available"
+    echo "swapping ${swap_rate} MB a second, pressure $pressure, $(memory_free)% available"
 }
-memory_since=$(date +%s)
-# Why it waits now, if it does: memory, or the load.
-waits_for() {
-    if [ -z "${NESTED:-}" ] && memory_short && [ $(($(date +%s) - memory_since)) -lt "$MEMORY_WAIT_FOR" ]; then
-        echo memory
-    elif busy; then
-        echo load
+# How long memory has been short, for any job: since the first that found it so.
+short_for() {
+    since=
+    [ -f "$MEMORY_SHORT" ] && read -r since < "$MEMORY_SHORT" 2>/dev/null
+    if [ -z "${since:-}" ]; then
+        since=$(date +%s)
+        printf '%s\n' "$since" > "$MEMORY_SHORT.$$" && mv -f "$MEMORY_SHORT.$$" "$MEMORY_SHORT"
     fi
+    echo $(($(date +%s) - since))
+}
+# Why it waits now, if it does (in `why`): memory, or the load.
+was_short=
+calm=0
+decide() {
+    why=
+    if [ "$MIN_FREE" -gt 0 ] && [ -z "${NESTED:-}" ]; then
+        look_at_memory
+        if memory_short; then
+            calm=0
+            was_short=1
+            [ "$(short_for)" -lt "$MEMORY_WAIT_FOR" ] && why=memory && return
+        elif [ -n "$was_short" ] && [ "$calm" -lt 1 ]; then
+            # (Once more, so it's not a moment's calm.)
+            calm=$((calm + 1))
+            why=memory
+            return
+        else
+            rm -f "$MEMORY_SHORT"
+        fi
+    fi
+    if busy; then why=load; fi
 }
 
 said=
-why=$(waits_for)
+decide
 if [ "$kind" = mac ] && [ -n "$why" ] && [ "$WAITS" != 0 ]; then
     printf '%s %s\n' "$$" "$(date +%s)" > "$MAC_FIRST.$$" && mv -f "$MAC_FIRST.$$" "$MAC_FIRST"
 fi
@@ -345,7 +400,7 @@ while [ -n "$why" ]; do
     fi
     said=$why
     sleep 15
-    why=$(waits_for)
+    decide
 done
 # (Its own say, not another suite's since.)
 if [ "$kind" = mac ] && [ -f "$MAC_FIRST" ] && read -r pid since < "$MAC_FIRST" 2>/dev/null && [ "$pid" = "$$" ]; then

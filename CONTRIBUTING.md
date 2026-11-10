@@ -178,10 +178,11 @@ scripts/heavy.sh box sh -c 'cd Packages/Box && bun test'
 A job also waits while the Mac is busy (its load over the last minute above 40;
 `KUVO_HEAVY_LOAD` sets another). While the Mac app's suite waits there, new jobs of the other
 kinds wait for it to start, 15 minutes at most (`KUVO_HEAVY_MAC_FIRST_FOR`), so the jobs that keep
-starting can't keep it out. A new job also waits while the Mac is short of memory (its memory
-pressure at warn or worse, or less than 20% of it available, as `memory_pressure -Q` says;
-`KUVO_HEAVY_MEMORY` sets another share, `0` none), 15 minutes at most (`KUVO_HEAVY_MEMORY_WAIT_FOR`):
-on this Mac memory runs out before CPU does. Both apps' `scripts/test-app.sh` take their turn
+starting can't keep it out. A new job also waits while the Mac is short of memory: swapping more than
+10 MB a second (`KUVO_HEAVY_SWAP`), its memory pressure at warn or worse, or less than 20% of it
+available as `memory_pressure -Q` says (`KUVO_HEAVY_MEMORY`; `0` turns the memory wait off). It
+waits until two looks in a row find it isn't, 15 minutes at most from when any job found it short
+(`KUVO_HEAVY_MEMORY_WAIT_FOR`): on this Mac memory runs out before CPU does. Both apps' `scripts/test-app.sh` take their turn
 this way themselves. `python3 -m unittest discover -s scripts -p test_heavy.py`
 tries the helper.
 

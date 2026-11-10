@@ -11,6 +11,7 @@ import shutil
 import signal
 import subprocess
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -504,15 +505,15 @@ class HeavyTests(unittest.TestCase):
         with open(inner) as f:
             self.assertEqual(f.read().strip(), "0", "it waited for the suite")
 
-    # Memory: KUVO_HEAVY_MEMORY=101 makes it short whatever this Mac has (more than all of it
-    # available is never there); 0, the tests' own, never.
+    # Memory: KUVO_HEAVY_MEMORY=100 makes it short whatever this Mac has (all of it is never
+    # available: some is always wired); 0, the tests' own, never.
     def test_a_new_job_waits_while_memory_is_short_and_says_why(self):
         for kind in ("mac", "mac-build", "phone", "box"):
             with self.subTest(kind):
-                code, said = self.run_heavy(kind, "true", KUVO_HEAVY_MEMORY="101")
+                code, said = self.run_heavy(kind, "true", KUVO_HEAVY_MEMORY="100")
                 self.assertEqual(code, WAITS)
-                self.assertRegex(said, r"The Mac is short of memory \(pressure \S+, \d+% available\)")
-        waiting = subprocess.Popen([HEAVY, "box", "true"], env=dict(self.env, KUVO_HEAVY_MEMORY="101"), stderr=subprocess.PIPE, text=True, start_new_session=True)
+                self.assertRegex(said, r"The Mac is short of memory \(swapping \d+ MB a second, pressure \S+, \d+% available\)")
+        waiting = subprocess.Popen([HEAVY, "box", "true"], env=dict(self.env, KUVO_HEAVY_MEMORY="100"), stderr=subprocess.PIPE, text=True, start_new_session=True)
         try:
             self.assertTrue(select.select([waiting.stderr], [], [], 30)[0], "it said nothing")
             self.assertIn("Waiting for memory: the Mac is short of it", waiting.stderr.readline())
@@ -523,14 +524,20 @@ class HeavyTests(unittest.TestCase):
             waiting.stderr.close()
 
     def test_past_its_time_to_wait_for_memory_a_job_goes(self):
-        self.assertEqual(self.run_heavy("box", "true", KUVO_HEAVY_MEMORY="101", KUVO_HEAVY_MEMORY_WAIT_FOR="0")[0], 0)
+        self.assertEqual(self.run_heavy("box", "true", KUVO_HEAVY_MEMORY="100", KUVO_HEAVY_MEMORY_WAIT_FOR="0")[0], 0)
+
+    def test_the_time_to_wait_for_memory_counts_from_when_any_job_found_it_short(self):
+        """A shortage another job found two hours ago is past the time any job waits for it."""
+        with open(os.path.join(self.locks, f"kuvo-code-heavy-memory-short-{os.getuid()}"), "w") as since:
+            since.write(f"{int(time.time()) - 7200}\n")
+        self.assertEqual(self.run_heavy("box", "true", KUVO_HEAVY_MEMORY="100")[0], 0)
 
     def test_a_job_started_inside_one_already_running_doesnt_wait_for_memory(self):
-        code, said = self.run_heavy("box", "/bin/sh", "-c", f'KUVO_HEAVY_MEMORY=101 "{HEAVY}" phone true')
+        code, said = self.run_heavy("box", "/bin/sh", "-c", f'KUVO_HEAVY_MEMORY=100 "{HEAVY}" phone true')
         self.assertEqual((code, said), (0, ""))
 
     def test_an_app_suite_waiting_for_memory_goes_first_too(self):
-        mac = subprocess.Popen([HEAVY, "mac", "true"], env=dict(self.env, KUVO_HEAVY_MEMORY="101"), stderr=subprocess.PIPE, text=True, start_new_session=True)
+        mac = subprocess.Popen([HEAVY, "mac", "true"], env=dict(self.env, KUVO_HEAVY_MEMORY="100"), stderr=subprocess.PIPE, text=True, start_new_session=True)
         try:
             self.assertTrue(select.select([mac.stderr], [], [], 30)[0], "the suite said nothing")
             self.assertIn("Waiting for memory", mac.stderr.readline())
@@ -543,7 +550,7 @@ class HeavyTests(unittest.TestCase):
             mac.stderr.close()
 
     def test_a_share_of_memory_that_isnt_one_is_refused(self):
-        for given in ("lots", "20%", "1000"):
+        for given in ("lots", "20%", "1000", "101"):
             with self.subTest(given):
                 result = subprocess.run([HEAVY, "box", "true"], env=dict(self.env, KUVO_HEAVY_MEMORY=given), capture_output=True, text=True, timeout=30)
                 self.assertEqual(result.returncode, 64)
