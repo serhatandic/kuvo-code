@@ -1779,14 +1779,16 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   it (a notification). A group chat is read with `POST kuvo/groups/<id>/viewed`, and its `unread`
   changes in `kuvo/groups/events` (below).
   **An agent's work is read for you** (READ_RULE, `work/tree.ts`): a session another conversation
-  started and leads (a bot's or a lead's, `metadata.kuvo.startedBy`, not a subagent's) is its
-  work, and it hears of it itself. So as each of its turns ends, its box reads it (`POST …/view`,
-  as above), unless the turn answers you as a notification would (NOTIFY_RULE: you wrote in it, or
-  answered what it asked you); and as the box finds its engine or coding agents' bridge, it does
-  the same for those left unread meanwhile. No client decides it: each follows `session.viewed`,
-  so such a session shows nothing new on any client (its row, its project, its computer) unless it
-  answered you, and its lead's row is where its work shows. What it asks you still waits on you as
-  any ask does.
+  started and leads (`metadata.kuvo.startedBy`, not a subagent's, and its starter hears when it
+  finishes: a bot's work, `kuvo.by`, or `kuvo.wake` naming `finished`) is that conversation's work.
+  So as each of its turns ends, its box reads it (`POST …/view`, as above), unless what ended since
+  it was last read holds news for you, as its notifications are: a turn that answers you
+  (NOTIFY_RULE: you wrote in it, or answered what it asked you), a turn that failed, or a
+  `notify_user` its agent sent; and never while it asks you something (a permission or a question,
+  its subagents' too), which still waits on you. As the box finds its engine or coding agents'
+  bridge, it does the same for those left unread meanwhile. No client decides it: each follows
+  `session.viewed`, so such a session shows nothing new on any client (its row, its project, its
+  computer) unless it has news for you, and its lead's row is where its work shows.
 - **A message while a command runs** is read at once. A message sent to steer
   (`delivery: "steer"`: yours, or another agent's letter) waits for the agent's next step, and an
   agent waiting on a command or a subagent it started in the foreground takes none until that

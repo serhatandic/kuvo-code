@@ -200,7 +200,7 @@ function turnIn(rows: EngineMessage[]): { from: number; end: number } {
 
 /** A session's latest messages, newest first, as far back as its latest turn begins (a long one is
  * many steps): `whole` once that's in them, or there's nothing older. */
-export async function latestTurn(session: string, get: EngineAsk): Promise<{ data: EngineMessage[]; whole: boolean }> {
+async function latestTurn(session: string, get: EngineAsk): Promise<{ data: EngineMessage[]; whole: boolean }> {
   const data: EngineMessage[] = [];
   let query = `limit=${TURN_PAGE}&order=desc`;
   for (let pages = 0; pages < TURN_PAGES; pages++) {
