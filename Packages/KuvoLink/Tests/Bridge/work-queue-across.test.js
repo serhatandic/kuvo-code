@@ -22,6 +22,11 @@ import { atEnd, removeAtEnd } from "./at-end.js";
 
 const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-work-queue-across-")));
 removeAtEnd(home);
+// GitHub's `gh`, standing in, signed out: an issue in a queue is never read from GitHub here
+// (work-queue-github.test.js reads them).
+fs.mkdirSync(path.join(home, "bin"), { recursive: true });
+fs.writeFileSync(path.join(home, "bin", "gh"), "#!/bin/sh\necho 'gh auth login' >&2\nexit 1\n", { mode: 0o755 });
+process.env.PATH = `${path.join(home, "bin")}${path.delimiter}${process.env.PATH}`;
 process.env.KUVO_HOME = home;
 const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
 const run = path.join(home, "run");

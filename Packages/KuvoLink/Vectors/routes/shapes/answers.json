@@ -10011,9 +10011,17 @@
            "ref": "string",
            "url?": "string",
            "host?": "string",
-           "id?": "string"
+           "id?": "string",
+           "name?": "string"
           }
          },
+         "seen?": {
+          "object": {
+           "state": "string",
+           "at": "number"
+          }
+         },
+         "keptIn?": "string",
          "handing?": {
           "object": {
            "to": "string",
@@ -10203,9 +10211,17 @@
            "ref": "string",
            "url?": "string",
            "host?": "string",
-           "id?": "string"
+           "id?": "string",
+           "name?": "string"
           }
          },
+         "seen?": {
+          "object": {
+           "state": "string",
+           "at": "number"
+          }
+         },
+         "keptIn?": "string",
          "handing?": {
           "object": {
            "to": "string",
@@ -10401,9 +10417,17 @@
            "ref": "string",
            "url?": "string",
            "host?": "string",
-           "id?": "string"
+           "id?": "string",
+           "name?": "string"
           }
          },
+         "seen?": {
+          "object": {
+           "state": "string",
+           "at": "number"
+          }
+         },
+         "keptIn?": "string",
          "handing?": {
           "object": {
            "to": "string",
@@ -10593,9 +10617,17 @@
            "ref": "string",
            "url?": "string",
            "host?": "string",
-           "id?": "string"
+           "id?": "string",
+           "name?": "string"
           }
          },
+         "seen?": {
+          "object": {
+           "state": "string",
+           "at": "number"
+          }
+         },
+         "keptIn?": "string",
          "handing?": {
           "object": {
            "to": "string",
@@ -10758,7 +10790,14 @@
              "ref": "string",
              "url?": "string",
              "host?": "string",
-             "id?": "string"
+             "id?": "string",
+             "name?": "string"
+            }
+           },
+           "seen?": {
+            "object": {
+             "state": "string",
+             "at": "number"
             }
            },
            "title": "string",
@@ -10811,7 +10850,14 @@
              "ref": "string",
              "url?": "string",
              "host?": "string",
-             "id?": "string"
+             "id?": "string",
+             "name?": "string"
+            }
+           },
+           "seen?": {
+            "object": {
+             "state": "string",
+             "at": "number"
             }
            },
            "title": "string",
@@ -10964,9 +11010,17 @@
           "ref": "string",
           "url?": "string",
           "host?": "string",
-          "id?": "string"
+          "id?": "string",
+          "name?": "string"
          }
         },
+        "seen?": {
+         "object": {
+          "state": "string",
+          "at": "number"
+         }
+        },
+        "keptIn?": "string",
         "handing?": {
          "object": {
           "to": "string",
@@ -11192,9 +11246,17 @@
           "ref": "string",
           "url?": "string",
           "host?": "string",
-          "id?": "string"
+          "id?": "string",
+          "name?": "string"
          }
         },
+        "seen?": {
+         "object": {
+          "state": "string",
+          "at": "number"
+         }
+        },
+        "keptIn?": "string",
         "handing?": {
          "object": {
           "to": "string",
@@ -11380,9 +11442,17 @@
           "ref": "string",
           "url?": "string",
           "host?": "string",
-          "id?": "string"
+          "id?": "string",
+          "name?": "string"
          }
         },
+        "seen?": {
+         "object": {
+          "state": "string",
+          "at": "number"
+         }
+        },
+        "keptIn?": "string",
         "handing?": {
          "object": {
           "to": "string",
@@ -11568,9 +11638,17 @@
           "ref": "string",
           "url?": "string",
           "host?": "string",
-          "id?": "string"
+          "id?": "string",
+          "name?": "string"
          }
         },
+        "seen?": {
+         "object": {
+          "state": "string",
+          "at": "number"
+         }
+        },
+        "keptIn?": "string",
         "handing?": {
          "object": {
           "to": "string",

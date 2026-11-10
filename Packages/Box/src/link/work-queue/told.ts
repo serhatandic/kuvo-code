@@ -44,6 +44,7 @@ export const MOST_TOLD_DONE = 100;
 
 const fileOf = (key: string) => path.join(TOLD, `${key}.json`);
 const SESSION = /^ses_[A-Za-z0-9]{1,60}$/;
+const CATEGORY = /^(?:next|later|parked|done|cat_[a-z0-9-]{1,40})$/;
 const KIND = (value: unknown): "mac" | "machine" | null => (value === "mac" || value === "machine" ? value : null);
 const count = (value: unknown) => (typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : 0);
 const time = (value: unknown) => (typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0);
@@ -58,7 +59,7 @@ const stamp = (value: unknown) => (isObject(value) ? { at: time(value.at), by: w
 export function toldItemOf(given: unknown): ToldItem | null {
   if (!isObject(given) || typeof given.id !== "string" || !ITEM_ID.test(given.id) || typeof given.owner !== "string" || !OWNER.test(given.owner)) return null;
   const title = words(given.title, 200);
-  const category = typeof given.category === "string" && /^(?:next|later|parked|done|cat_[a-z0-9-]{1,40})$/.test(given.category) ? given.category : "next";
+  const category = typeof given.category === "string" && CATEGORY.test(given.category) ? given.category : "next";
   const progress = isObject(given.progress)
     ? { ...(typeof given.progress.value === "number" && given.progress.value >= 0 && given.progress.value <= 1 ? { value: given.progress.value } : {}), ...(typeof given.progress.note === "string" ? { note: words(given.progress.note, 300) } : {}) }
     : undefined;
@@ -66,8 +67,11 @@ export function toldItemOf(given: unknown): ToldItem | null {
     .map(each => ({ session: each.session as string, title: words(each.title, 200) || "New Session", working: each.working === true }));
   const lastNote = isObject(given.lastNote) && typeof given.lastNote.text === "string" ? { at: time(given.lastNote.at), by: whoOf(given.lastNote.by), text: cut(given.lastNote.text, 500) } : undefined;
   const source = isObject(given.source) && typeof given.source.kind === "string" && typeof given.source.ref === "string"
-    ? Object.fromEntries(Object.entries(given.source).filter(([key, value]) => ["kind", "ref", "url", "host", "id"].includes(key) && typeof value === "string").map(([key, value]) => [key, (value as string).slice(0, 2000)])) as unknown as ItemSummary["source"]
+    ? Object.fromEntries(Object.entries(given.source).filter(([key, value]) => ["kind", "ref", "url", "host", "id", "name"].includes(key) && typeof value === "string").map(([key, value]) => [key, (value as string).slice(0, 2000)])) as unknown as ItemSummary["source"]
     : undefined;
+  // (What GitHub said of it there, and when; with the category it keeps while that makes it Done.)
+  const seen = source && isObject(given.seen) && typeof given.seen.state === "string" && /^[a-z_]{1,20}$/.test(given.seen.state) ? { state: given.seen.state, at: time(given.seen.at) } : undefined;
+  const keptIn = seen && typeof given.keptIn === "string" && CATEGORY.test(given.keptIn) ? given.keptIn : undefined;
   return {
     id: given.id,
     ...(whole(given.number) ? { number: whole(given.number) } : {}),
@@ -86,6 +90,8 @@ export function toldItemOf(given: unknown): ToldItem | null {
     ...(typeof given.handedBy === "string" && OWNER.test(given.handedBy) ? { handedBy: given.handedBy } : {}),
     ...(Array.isArray(given.handedFrom) ? { handedFrom: given.handedFrom.filter((each): each is string => typeof each === "string" && OWNER.test(each)).slice(0, 20) } : {}),
     ...(source ? { source } : {}),
+    ...(seen ? { seen } : {}),
+    ...(keptIn ? { keptIn } : {}),
     ...(isObject(given.handing) && typeof given.handing.to === "string" && OWNER.test(given.handing.to) ? { handing: { to: given.handing.to, name: words(given.handing.name, 100) } } : {}),
     created: stamp(given.created),
     updated: stamp(given.updated),

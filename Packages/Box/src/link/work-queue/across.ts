@@ -19,7 +19,8 @@ import { categories, takePrimaryCategories } from "./categories";
 import { handArrived, handedBack, sendHandings } from "./hand";
 import { mailsFor, takePart } from "./parts";
 import { movePast, ownSince, primaryOf, takeNumbersMail, topOf } from "./numbers";
-import { allItems, OWNER, queueFollowers, WORK_QUEUE, type Item } from "./store";
+import { allItems, OWNER, queueFollowers, refNames, WORK_QUEUE, type Item, type ItemRef } from "./store";
+import { SEEN_FILE, withSeen } from "./github";
 import { forgetTold, keepTold, MOST_TOLD, MOST_TOLD_DONE, readTold, TOLD, toldKeys, toldOf, type Numbering, type ToldItem } from "./told";
 import { factsOf, ownersOf, summaryOf, type Computer, type OwnerFacts } from "./view";
 import { rowsOf } from "../work/elsewhere";
@@ -93,7 +94,7 @@ let builtMarks = "";
 let building = false;
 /** The least time between two tellings to one computer, however busy. */
 export const TELL_SPACING = 15_000;
-const marks = () => [path.join(WORK_QUEUE, "queues"), path.join(WORK_QUEUE, "categories.json"), path.join(WORK_QUEUE, "numbers.json"), TOLD].map(file => {
+const marks = () => [path.join(WORK_QUEUE, "queues"), path.join(WORK_QUEUE, "categories.json"), path.join(WORK_QUEUE, "numbers.json"), TOLD, SEEN_FILE].map(file => {
   try { return String(fs.statSync(file).mtimeMs); } catch { return "-"; }
 }).join(" ");
 // Titles of sessions the list doesn't have, looked up once in ten minutes at most.
@@ -273,7 +274,7 @@ export function itemsElsewhere(owner: string, link: LinkState | null = readLink(
       // (Not one here; nor one deleted here that this one told of on its way here: it got here.)
       if (here.has(item.id) || (deleted.has(item.id) && item.handing)) continue;
       const other = best.get(item.id);
-      if (!other || newer(item, told.at, other.item, other.at)) best.set(item.id, { item: { ...item, computer }, at: told.at });
+      if (!other || newer(item, told.at, other.item, other.at)) best.set(item.id, { item: withSeen({ ...item, computer }), at: told.at });
     }
     for (const each of told.owners) if (!owners.has(each.owner)) owners.set(each.owner, each);
     for (const each of told.categories) if (!custom.has(each.id)) custom.set(each.id, each.name);
@@ -284,16 +285,16 @@ export function itemsElsewhere(owner: string, link: LinkState | null = readLink(
   return { items, owners: [...owners.values()].filter(each => named.has(each.owner)), categories: [...custom].map(([id, name]) => ({ id, name })), computers };
 }
 
-/** The item another computer told of that `ref` names (by id or number), or null: of two, the newer
- * word. */
-export function itemElsewhere(ref: { id: string } | { number: number }, link: LinkState | null = readLink()): ItemElsewhere | null {
+/** The item another computer told of that `ref` names (by id, number or source), or null: of two,
+ * the newer word. */
+export function itemElsewhere(ref: ItemRef, link: LinkState | null = readLink()): ItemElsewhere | null {
   let found: { item: ItemElsewhere; at: number } | null = null;
   for (const peer of peersOf(link)) {
     const told = readTold(peer.key);
-    const item = told?.items.find(each => ("id" in ref ? each.id === ref.id : each.number === ref.number));
+    const item = told?.items.find(each => refNames(ref, each));
     if (item && (!found || newer(item, told!.at, found.item, found.at))) found = { item: { ...item, computer: { key: peer.key, name: computerName(peer), kind: peer.kind, ...(peer.id ? { id: peer.id } : {}) } }, at: told!.at };
   }
-  return found?.item ?? null;
+  return found ? withSeen(found.item) : null;
 }
 
 // Whether `a` (told at `aAt`) is newer word of an item than `b`: changed later, or the same and
