@@ -13,8 +13,13 @@ import { callerOf, isCalling } from "../vault/who";
 import { addCategory, categories, categoryNamed } from "./categories";
 import { importItems, importWords, givenItems } from "./import";
 import { numberWaiting, primaryOf } from "./numbers";
-import { addItem, applyFileOps, changeItem, handItem, linkSession, Refusal, refuseMoving, removeItem, restoreItem, stageFiles, type Acting, type Fields, type FilePlaces } from "./ops";
-import { changeQueues, matching, readAll, type Book, type Item, type Who } from "./store";
+import { addItem, applyFileOps, changeItem, handItem, linkSession, Refusal, refuseHanding, refuseMoving, removeItem, restoreItem, stageFiles, type Acting, type Fields, type FilePlaces } from "./ops";
+import { byUser, changeQueues, matching, readAll, whoWords, type Book, type Item, type Who } from "./store";
+import { computerName, itemElsewhere, itemsElsewhere, takesQueues, type ItemElsewhere } from "./across";
+import { elsewhereOf, handElsewhere } from "./hand";
+import { readPeerAgents } from "../peers/directory";
+import { awaySince } from "../peers/reach";
+import type { Peer } from "../peers/known";
 import { askGroups } from "../areas/groups";
 import { agoWords, factsOf, inProgress, inView, nameOf, overseenBy, ownersOf, refOf, sessionsNamed, type Facts } from "./view";
 import type { BridgeRecord, EngineRecord, Target } from "../../shared/records";
@@ -91,7 +96,7 @@ export const QUEUE_TOOLS = [
   },
   {
     name: "queue_hand",
-    description: "Hand an item to a session on this computer (one you started for it): it moves to that session's queue, linked to it, and stays in your view.",
+    description: "Hand an item to a session or bot (here or on another of the user's computers): it moves to its queue, linked to it, and stays in your view.",
     inputSchema: { type: "object", properties: {
       item: ITEM,
       to: { type: "string", description: "Its address, or a bot's name." },
@@ -175,15 +180,20 @@ function itemFor(items: Item[], given: unknown, caller: QueueCaller, overseen: S
   if (!ref) throw new Refusal("Say which item (item), by its number, like #243 (or the id an item without one was given).");
   const found = matching(items, ref);
   const item = found.find(each => inView(caller.owner, each, overseen)) ?? found[0];
-  if (!item) throw new Refusal(`There's no item ${"number" in ref ? `#${ref.number}` : ref.id} in the Work Queue on ${HERE}. queue_list shows yours.`);
+  if (!item) {
+    // One on another of your computers is changed there, by the conversation it belongs to.
+    const far = itemElsewhere(ref);
+    if (far) throw new Refusal(`${nameOf(far)} is on ${far.computer.name}, in ${far.owner.startsWith("grp_") ? "a group chat's" : `the queue of ${far.owner}`}: it's changed there. Ask that conversation (send_message), or the user.`);
+    throw new Refusal(`There's no item ${"number" in ref ? `#${ref.number}` : ref.id} in the Work Queue on ${HERE} or your other computers. queue_list shows yours.`);
+  }
   if (!inView(caller.owner, item, overseen)) throw new Refusal(`${nameOf(item)} isn't in your Work Queue, nor in a session's you oversee: ask the conversation it belongs to, or the user.`);
   return item;
 }
 
 // One that's deleted, said: the user's to bring back, or an agent's.
-const deletedWords = (item: Item) => ("user" in item.removed!.by
+const deletedWords = (item: Item) => (byUser(item.removed!.by)
   ? `The user deleted ${nameOf(item)}: only they bring it back. Ask them if it's still needed.`
-  : `${nameOf(item)} was deleted by ${item.removed!.by.name}: queue_remove with undo brings it back.`);
+  : `${nameOf(item)} was deleted by ${whoWords(item.removed!.by)}: queue_remove with undo brings it back.`);
 
 /** A tool's call, from the conversation `session` names: what it says back. */
 export async function callQueueTool(name: unknown, args: Record<string, unknown>, session: unknown, readEngine: () => EngineRecord, readBridge: () => BridgeRecord, targets: Target[], signal?: AbortSignal): Promise<ToolAnswer> {
@@ -219,7 +229,11 @@ async function run(name: string, args: Record<string, unknown>, caller: QueueCal
     case "queue_list":
       return said(await listWords(caller, args, facts, overseen, targets));
     case "queue_show": {
-      const item = itemFor(readAll().flatMap(queue => queue.items), args.item, caller, overseen);
+      const ref = refOf(args.item);
+      const here = readAll().flatMap(queue => queue.items);
+      const far = ref && !matching(here, ref).length ? itemElsewhere(ref) : null;
+      if (far) return said(farWords(far, caller));
+      const item = itemFor(here, args.item, caller, overseen);
       return said(await showWords(item, facts, targets, caller));
     }
     case "queue_add": {
@@ -240,6 +254,7 @@ async function run(name: string, args: Record<string, unknown>, caller: QueueCal
         const item = itemFor(book.items(), args.item, caller, overseen);
         if (item.removed) throw new Refusal(deletedWords(item));
         refuseMoving([item.owner]);
+        refuseHanding(item);
         changeItem(book, item, args as Fields, acting);
         const named = (value: unknown) => (Array.isArray(value) ? value : value === undefined ? [] : [value]).map(String).filter(each => /^ses_[A-Za-z0-9]{1,60}$/.test(each));
         if (item.category !== "done") {
@@ -262,18 +277,22 @@ async function run(name: string, args: Record<string, unknown>, caller: QueueCal
         const item = itemFor(book.items(), args.item, caller, overseen);
         if (item.removed) throw new Refusal(deletedWords(item));
         refuseMoving([item.owner, to.owner]);
-        handItem(book, item, to.owner, caller.who, now);
+        refuseHanding(item);
+        if (to.peer) handElsewhere(item, { owner: to.owner, peer: to.peer, name: to.name }, caller.who, now);
+        else handItem(book, item, to.owner, caller.who, now);
         return item;
       });
+      if (to.peer) return said(`Handing ${nameOf(item)} to ${to.name} on ${computerName(to.peer)}: it goes into its queue there, linked to it, as soon as that computer has it${awaySince(to.peer.key) !== null ? " (it isn't answering now: it goes once it's back)" : ""}, and stays in your view. Until then it's unchanged here.`);
       return said(`Handed ${nameOf(item)} to ${to.name}: it's in its queue now${to.owner.startsWith("ses_") ? ", linked to it, so it shows In progress while it works" : ""}, and stays in your view.`);
     }
     case "queue_remove": {
       const item = change(book => {
         const item = itemFor(book.items(), args.item, caller, overseen);
         refuseMoving([item.owner]);
+        refuseHanding(item);
         if (args.undo === true) {
           if (!item.removed) throw new Refusal(`${nameOf(item)} isn't deleted.`);
-          if ("user" in item.removed.by) throw new Refusal(deletedWords(item));
+          if (byUser(item.removed.by)) throw new Refusal(deletedWords(item));
           restoreItem(book, item, caller.who, now);
         } else {
           if (item.removed) throw new Refusal(`${nameOf(item)} is deleted already.`);
@@ -315,14 +334,21 @@ function withFiles<T>(args: Record<string, unknown>, caller: QueueCaller, acting
   }
 }
 
-// Who `to` names for a hand-off: a conversation here (its root), or a bot by its name.
-async function handTarget(given: unknown, caller: QueueCaller, targets: Target[]): Promise<{ owner: string; name: string } | { refused: string }> {
+// Who `to` names for a hand-off: a conversation here (its root), or a bot by its name; or one on
+// another of your computers that takes the Work Queue's mail (`peer`).
+async function handTarget(given: unknown, caller: QueueCaller, targets: Target[]): Promise<{ owner: string; name: string; peer?: Peer } | { refused: string }> {
   const to = typeof given === "string" ? given.trim().replace(/^&/, "") : "";
   if (!to) return { refused: "Say who to hand it to (to), by a session's address or a bot's name." };
+  const elsewhere = (session: string, name: string | null): { owner: string; name: string; peer: Peer } | { refused: string } | null => {
+    const peer = elsewhereOf(session);
+    if (!peer) return null;
+    if (!takesQueues(peer.key)) return { refused: `${name ?? session} is on ${computerName(peer)}, which runs an older Kuvo Code: items can't be handed to it until it's updated. Ask that conversation to add it with queue_add.` };
+    return { owner: session, name: name ?? peerName(session) ?? session, peer };
+  };
   if (/^ses_[A-Za-z0-9]{1,60}$/.test(to)) {
     const place = await placeOfSession(to, targets).catch(() => undefined);
     if (place === undefined) return { refused: `${HERE[0].toUpperCase()}${HERE.slice(1)}'s engine can't say where ${to} is now. Try again in a moment.` };
-    if (place === null) return { refused: `There's no session ${to} on ${HERE}. Handing items to another computer's sessions comes later; for now, ask that session to add it with queue_add.` };
+    if (place === null) return elsewhere(to, null) ?? { refused: `There's no session ${to} on ${HERE} or your other computers that this one knows of. Give the address list_agents or list_sessions shows.` };
     const root = await rootOf(to, targets);
     const owner = root?.session ?? to;
     if (owner === caller.owner) return { refused: "That's your own queue." };
@@ -331,8 +357,18 @@ async function handTarget(given: unknown, caller: QueueCaller, targets: Target[]
   }
   const bots = listBots().filter(each => each.name.toLowerCase() === to.toLowerCase() && each.session);
   if (bots.length === 1) return bots[0].session === caller.owner ? { refused: "That's your own queue." } : { owner: bots[0].session!, name: bots[0].name };
-  return { refused: `There's no bot called ${to} on ${HERE}. Give a session's address (from start_session or list_sessions).` };
+  // A bot on another of your computers, by the name it's listed with there.
+  const far = Object.values(readPeerAgents()).flatMap(told => told.list ?? []).filter(agent => agent.kind === "bot" && agent.name.toLowerCase() === to.toLowerCase());
+  if (new Set(far.map(agent => agent.session)).size === 1) {
+    if (far[0].session === caller.owner) return { refused: "That's your own queue." };
+    const found = elsewhere(far[0].session, far[0].name);
+    if (found) return found;
+  }
+  return { refused: `There's no bot called ${to} on ${HERE} or your other computers. Give a session's address (from start_session or list_sessions).` };
 }
+
+// A conversation's name as another computer listed it.
+const peerName = (session: string): string | null => Object.values(readPeerAgents()).flatMap(told => told.list ?? []).find(agent => agent.session === session)?.name ?? null;
 
 // How an item reads in a list: its name, where it stands, and whose it is when it isn't yours.
 function line(item: Item, facts: Facts, caller: QueueCaller, owners: Map<string, { title: string }>, now: number): string {
@@ -366,10 +402,36 @@ async function listWords(caller: QueueCaller, args: Record<string, unknown>, fac
     if (each.id === "done") list = list.sort((a, b) => (b.doneAt ?? 0) - (a.doneAt ?? 0)).slice(0, 30);
     if (list.length) sections.push(`${each.name}:\n${(each.id === "done" ? list.map(item => line(item, facts, caller, titles, now)) : shown(list)).join("\n")}`);
   }
+  // On your other computers: the items of sessions you oversee there, and those you handed there.
+  let far = itemsElsewhere(caller.owner).items.filter(item => item.category !== "done" || args.done === true || category?.id === "done");
+  if (query) far = far.filter(item => item.title.toLowerCase().includes(query));
+  if (progressOnly) far = far.filter(item => item.inProgress);
+  else if (category) far = far.filter(item => item.category === category.id);
+  const farOwners = new Map(itemsElsewhere(caller.owner).owners.map(each => [each.owner, each]));
+  const farLines = far.sort((a, b) => a.order - b.order).map(item => {
+    const named = farOwners.get(item.owner);
+    const whose = item.owner === caller.owner ? "" : item.owner.startsWith("grp_") ? " · in a group's queue" : ` · in "${named?.bot?.name ?? named?.title ?? "another session"}" (${item.owner})`;
+    const state = item.inProgress ? ` · in progress${item.progress?.note ? `: ${item.progress.note}` : ""}` : item.category === "done" ? " · done" : ` · ${categoryNamed(item.category)?.name ?? item.category}`;
+    return `- ${nameOf(item)}${state}${whose} · on ${item.computer.name}, updated ${agoWords(item.updated.at, now)}`;
+  });
+  if (farLines.length) sections.push(`On your other computers (as each last told it; changed there):\n${farLines.join("\n")}`);
   const waiting = items.filter(item => item.number === undefined).length;
   const open = items.filter(item => item.category !== "done").length;
   if (!sections.length) return query || wanted ? "Nothing in your Work Queue matches." : "Your Work Queue is empty. Add items with queue_add.";
-  return `Your Work Queue (${open} open${waiting ? `, ${waiting} waiting for a number` : ""}):\n\n${sections.join("\n\n")}`;
+  return `Your Work Queue (${open} open${waiting ? `, ${waiting} waiting for a number` : ""}${farLines.length ? `, ${farLines.length} more on your other computers` : ""}):\n\n${sections.join("\n\n")}`;
+}
+
+// One on another of your computers, as it last told it.
+function farWords(item: ItemElsewhere, caller: QueueCaller): string {
+  const now = Date.now();
+  const category = categoryNamed(item.category)?.name ?? item.category;
+  return [
+    `${nameOf(item)} · ${item.inProgress ? `In progress (kept in ${category})` : category} · on ${item.computer.name}${item.owner === caller.owner ? "" : `, in the queue of ${item.owner}`}`,
+    `Added ${agoWords(item.created.at, now)} by ${whoWords(item.created.by)}; updated ${agoWords(item.updated.at, now)}.`,
+    item.progress ? `Progress: ${item.progress.value !== undefined ? `${Math.round(item.progress.value * 100)}%` : ""}${item.progress.value !== undefined && item.progress.note ? " · " : ""}${item.progress.note ?? ""}` : "",
+    item.sessions.length ? `Sessions on it: ${item.sessions.map(each => `"${each.title}" (${each.session}) ${each.working ? "at work" : "not at work"}`).join("; ")}` : "",
+    `It lives on ${item.computer.name}: its description, ${item.noteCount} note${item.noteCount === 1 ? "" : "s"}, files and links are kept there, and it's changed there. Ask the conversation it belongs to (send_message).`,
+  ].filter(Boolean).join("\n");
 }
 
 async function showWords(item: Item, facts: Facts, targets: Target[], caller: QueueCaller): Promise<string> {
@@ -379,13 +441,13 @@ async function showWords(item: Item, facts: Facts, targets: Target[], caller: Qu
   const category = categories().find(each => each.id === item.category)?.name ?? item.category;
   const parts = [
     `${nameOf(item)} · ${inProgress(item, facts.working) ? `In progress (kept in ${category})` : category}${item.removed ? " · DELETED" : ""}${item.owner === caller.owner ? "" : ` · in ${title(item.owner)}'s queue (${item.owner})`}`,
-    `Added ${agoWords(item.created.at, now)} by ${"user" in item.created.by ? "the user" : item.created.by.name}; updated ${agoWords(item.updated.at, now)}.`,
+    `Added ${agoWords(item.created.at, now)} by ${whoWords(item.created.by)}; updated ${agoWords(item.updated.at, now)}.`,
     item.progress ? `Progress: ${item.progress.value !== undefined ? `${Math.round(item.progress.value * 100)}%` : ""}${item.progress.value !== undefined && item.progress.note ? " · " : ""}${item.progress.note ?? ""}` : "",
     item.sessions.length ? `Sessions on it: ${item.sessions.map(each => `${title(each.session)} (${each.session}) ${facts.working.has(each.session) ? "at work" : "not at work"}`).join("; ")}` : "",
     item.body ? `\n${item.body}` : "",
     item.links.length ? `\nLinks:\n${item.links.map(each => `- ${each.title ? `${each.title}: ` : ""}${each.url}`).join("\n")}` : "",
     item.files.length ? `\nFiles: ${item.files.map(each => each.name).join(", ")}` : "",
-    item.notes.length ? `\nNotes:\n${item.notes.slice(-20).map(each => `- ${agoWords(each.at, now)}, ${"user" in each.by ? "the user" : each.by.name}: ${each.text}`).join("\n")}` : "",
+    item.notes.length ? `\nNotes:\n${item.notes.slice(-20).map(each => `- ${agoWords(each.at, now)}, ${whoWords(each.by)}: ${each.text}`).join("\n")}` : "",
     item.handed?.length ? `\nHanded: ${item.handed.map(each => `${title(each.from)} → ${title(each.to)} ${agoWords(each.at, now)}`).join("; ")}` : "",
   ];
   return parts.filter(Boolean).join("\n");

@@ -583,6 +583,50 @@ test("what a newer box keeps of an item is kept here when this box writes it", a
   assert.deepEqual(JSON.parse(fs.readFileSync(lead, "utf8")).items[0].estimate, { hours: 3 });
 });
 
+test("a change from someone this box doesn't know the shape of (an outside tracker's) keeps its author, never turned into you, and its notes", async () => {
+  await tool("queue_add", { title: "From upstream" }, "ses_lead");
+  const lead = path.join(queues, "queues", "ses_lead.json");
+  const kept = JSON.parse(fs.readFileSync(lead, "utf8"));
+  const octocat = { source: "github", name: "octocat" };
+  kept.items[0].created.by = octocat;
+  kept.items[0].notes = [{ at: 1, by: octocat, text: "Reopened upstream" }];
+  write(lead, JSON.stringify(kept));
+  await tool("queue_update", { item: 1, note: "Picked up" }, "ses_lead");
+  const now = JSON.parse(fs.readFileSync(lead, "utf8")).items[0];
+  assert.deepEqual(now.created.by, octocat);
+  assert.deepEqual(now.notes.map(note => [note.by, note.text]), [[octocat, "Reopened upstream"], [{ session: "ses_lead", name: "Lead" }, "Picked up"]]);
+  const shown = await tool("queue_show", { item: 1 }, "ses_lead");
+  assert.match(shown.text, /Added just now by octocat; /);
+  assert.match(shown.text, /- \d+d ago, octocat: Reopened upstream/);
+  assert.deepEqual((await view("ses_lead")).items[0].created.by, octocat, "clients get it as it is");
+});
+
+test("a queue of a kind this box doesn't know (a newer box's) is kept as it is: never shown, skipped or written over", async () => {
+  const theirs = path.join(queues, "queues", "prj_storefront.json");
+  const text = JSON.stringify({ owner: "prj_storefront", items: [{ id: "wqi_projectprojectproj01", owner: "prj_storefront", title: "A project's", category: "next", order: 0, notes: [], files: [], links: [], sessions: [], created: { at: 1, by: { user: true } }, updated: { at: 1, by: { user: true } } }] });
+  write(theirs, text);
+  await tool("queue_add", { title: "Ours" }, "ses_lead");
+  assert.equal(fs.readFileSync(theirs, "utf8"), text);
+  assert.deepEqual((await view("all")).items.map(item => item.title), ["Ours"]);
+  // A move of an owner by that name carries it along.
+  assert.deepEqual(link.packWorkQueues(["prj_storefront"]).items.map(item => item.title), ["A project's"]);
+});
+
+test("an outside source's item (an issue) is never numbered, and is named by its ref", async () => {
+  await tool("queue_add", { title: "Ours" }, "ses_lead");
+  const lead = path.join(queues, "queues", "ses_lead.json");
+  const kept = JSON.parse(fs.readFileSync(lead, "utf8"));
+  kept.items.push({ ...kept.items[0], id: "wqi_issueissueissue00001", number: undefined, title: "Login loops", source: { kind: "github", ref: "gh:owner/repo#12", url: "https://github.com/owner/repo/issues/12", host: "github.com", id: "I_kw123" } });
+  write(lead, JSON.stringify(kept));
+  link.reclaimWaiting({ self: true }, { file: path.join(queues, "numbers.json") });
+  await tool("queue_add", { title: "Next one" }, "ses_lead");
+  const items = (await view("ses_lead")).items;
+  assert.deepEqual(items.map(item => [item.title, item.number ?? null]), [["Ours", 1], ["Login loops", null], ["Next one", 2]]);
+  assert.deepEqual(items[1].source, { kind: "github", ref: "gh:owner/repo#12", url: "https://github.com/owner/repo/issues/12", host: "github.com", id: "I_kw123" });
+  const listed = await tool("queue_list", {}, "ses_lead");
+  assert.match(listed.text, /- gh:owner\/repo#12 "Login loops"/);
+});
+
 test("items left waiting for a number with nothing under way (a crash midway, a move) are numbered again", async () => {
   await tool("queue_add", { title: "First" }, "ses_lead");
   const lead = path.join(queues, "queues", "ses_lead.json");

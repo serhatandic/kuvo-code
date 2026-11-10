@@ -8,7 +8,7 @@ import path from "node:path";
 import { isObject } from "../../shared/json";
 import { categories, keepCategory } from "./categories";
 import { categoryNamed } from "./categories";
-import { changeQueues, FILE_NAME, filesOf, itemOf, OWNER, readQueueSettingAside, type Item } from "./store";
+import { changeQueues, FILE_NAME, filesOf, itemOf, KEPT_OWNER, OWNER, readQueueSettingAside, type Item } from "./store";
 
 /** What a move carries: each owner's items, the custom categories they're in, and which items
  * have files (packed beside `move.json`, in `work-queue/<item>/`). */
@@ -20,7 +20,7 @@ export interface CarriedQueues {
 
 /** The queues of `owners`, as a move carries them; null for none. */
 export function packWorkQueues(owners: readonly string[]): CarriedQueues | null {
-  const items = owners.filter(owner => OWNER.test(owner)).flatMap(owner => readQueueSettingAside(owner).items);
+  const items = owners.filter(owner => KEPT_OWNER.test(owner)).flatMap(owner => readQueueSettingAside(owner).items);
   if (!items.length) return null;
   const used = new Set(items.map(item => item.category));
   return {
@@ -86,7 +86,7 @@ export function forgetWorkQueues(owners: readonly string[]): void {
   const gone = new Set(owners);
   changeQueues(book => {
     for (const owner of gone) {
-      if (!OWNER.test(owner)) continue;
+      if (!KEPT_OWNER.test(owner)) continue;
       const queue = book.queue(owner);
       for (const item of queue.items) fs.rmSync(filesOf(item.id), { recursive: true, force: true });
       queue.items = [];
