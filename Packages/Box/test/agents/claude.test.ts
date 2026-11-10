@@ -635,6 +635,84 @@ describe("Claude Code's subagents in the background", () => {
     await until(() => !sessions.active().includes(child))
     expect(sessions.messages(child).at(-1)).toMatchObject({ type: "idle", outcome: "succeeded" })
   })
+
+  /** A turn that sends a subagent (call1, Claude Code's ag1) off as Claude Code does by default: `run_in_background` left out. */
+  async function sendOffByDefault(id: string, said: boolean) {
+    sessions.prompt(id, { id: "msg_claude_sub_0101", text: "have a reviewer look", files: [], delivery: "steer" })
+    await until(() => fake.sent.length === 1)
+    const [first] = fake.sent.map((message) => message.uuid)
+    fake.out.push({ type: "assistant", message: { id: "m1", content: [{ type: "tool_use", id: "call1", name: "Agent", input: { description: "Review it", prompt: "Review it", subagent_type: "reviewer" } }] }, parent_tool_use_id: null, user_message_uuids: [first] })
+    fake.out.push({ type: "system", subtype: "task_started", task_id: "ag1", task_type: "local_agent", description: "Review it", tool_use_id: "call1", is_backgrounded: true })
+    fake.out.push({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "call1", content: "Async agent launched successfully." }] }, parent_tool_use_id: null })
+    if (said) fake.out.push({ type: "assistant", message: { id: "m2", content: [{ type: "text", text: "Reading the diff." }] }, parent_tool_use_id: "call1" })
+    fake.say("A reviewer is on it.", [first])
+    fake.result([first])
+    await until(() => idles(id).length === 1)
+    const child = sessions.list(root, id)[0]?.id
+    expect(child).toBeTruthy()
+    return child
+  }
+
+  test("one sent off without saying (Claude Code's default is the background) works on after the turn, under your rules", async () => {
+    const id = sessions.create({ model: { providerID: provider, id: "default" }, location: { directory: root } }).id
+    const child = await sendOffByDefault(id, true)
+    expect(sessions.active()).toContain(child)
+    // Its tools after the turn: what you allow runs, what asks is asked in the conversation, and
+    // what you refused stays refused.
+    expect((await fake.canUse("Read", { file_path: join(root, "a.ts") }, "t1", { agentID: "ag1" })).behavior).toBe("allow")
+    sessions.update(id, { permissions: [{ action: "shell", resource: "*", effect: "ask" }, { action: "shell", resource: "rm *", effect: "deny" }] })
+    const asked = fake.canUse("Bash", { command: "git diff" }, "t2", { agentID: "ag1" })
+    await until(() => sessions.permissions(id).length === 1)
+    sessions.replyPermission(id, sessions.permissions(id)[0].id, "once")
+    expect((await asked).behavior).toBe("allow")
+    expect(await fake.hook("Bash", { command: "rm -rf build" }, "t3")).toMatchObject({ decision: "deny" })
+    expect((await fake.canUse("Bash", { command: "rm -rf build" }, "t3", { agentID: "ag1" })).behavior).toBe("deny")
+    fake.out.push({ type: "assistant", message: { id: "m3", content: [{ type: "text", text: "Looks right." }] }, parent_tool_use_id: "call1" })
+    await until(() => texts(child).includes("Looks right."))
+    fake.out.push({ type: "system", subtype: "task_notification", task_id: "ag1", status: "completed", tool_use_id: "call1", output_file: "", summary: "done" })
+    await until(() => !sessions.active().includes(child))
+    // Done: a call that still comes from it is a stray, and refused.
+    expect((await fake.canUse("Bash", { command: "git status" }, "t4", { agentID: "ag1" })).behavior).toBe("deny")
+  })
+
+  test("one whose first words come after the turn ended is still its own session's, and still asks", async () => {
+    const id = sessions.create({ model: { providerID: provider, id: "default" }, location: { directory: root } }).id
+    const child = await sendOffByDefault(id, false)
+    expect(sessions.active()).toContain(child)
+    expect((await fake.canUse("Read", { file_path: join(root, "a.ts") }, "t1", { agentID: "ag1" })).behavior).toBe("allow")
+    fake.out.push({ type: "assistant", message: { id: "m2", content: [{ type: "text", text: "Reading the diff." }] }, parent_tool_use_id: "call1" })
+    await until(() => texts(child).includes("Reading the diff."))
+  })
+
+  test("one sent to work in the foreground and moved to the background on the way goes on after the turn", async () => {
+    const id = sessions.create({ model: { providerID: provider, id: "default" }, location: { directory: root } }).id
+    sessions.prompt(id, { id: "msg_claude_sub_0102", text: "have a reviewer look", files: [], delivery: "steer" })
+    await until(() => fake.sent.length === 1)
+    const [first] = fake.sent.map((message) => message.uuid)
+    fake.out.push({ type: "assistant", message: { id: "m1", content: [{ type: "tool_use", id: "call1", name: "Agent", input: { description: "Review it", prompt: "Review it", subagent_type: "reviewer", run_in_background: false } }] }, parent_tool_use_id: null, user_message_uuids: [first] })
+    fake.out.push({ type: "system", subtype: "task_started", task_id: "ag1", task_type: "local_agent", description: "Review it", tool_use_id: "call1", is_backgrounded: false })
+    fake.out.push({ type: "assistant", message: { id: "m2", content: [{ type: "text", text: "Reading the diff." }] }, parent_tool_use_id: "call1" })
+    fake.out.push({ type: "system", subtype: "task_updated", task_id: "ag1", patch: { is_backgrounded: true } })
+    fake.out.push({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "call1", content: "The agent was moved to the background." }] }, parent_tool_use_id: null })
+    fake.say("It's in the background now.", [first])
+    fake.result([first])
+    await until(() => idles(id).length === 1)
+    const child = sessions.list(root, id)[0].id
+    expect(sessions.active()).toContain(child)
+    expect((await fake.canUse("Read", { file_path: join(root, "a.ts") }, "t1", { agentID: "ag1" })).behavior).toBe("allow")
+  })
+
+  test("a call from a subagent the box doesn't know, with no turn under way, is refused", async () => {
+    const id = sessions.create({ model: { providerID: provider, id: "default" }, location: { directory: root } }).id
+    sessions.prompt(id, { id: "msg_claude_sub_0103", text: "hello", files: [], delivery: "steer" })
+    await until(() => fake.sent.length === 1)
+    const [first] = fake.sent.map((message) => message.uuid)
+    fake.say("hi", [first])
+    fake.result([first])
+    await until(() => idles(id).length === 1)
+    expect((await fake.canUse("Bash", { command: "git status" }, "t1", { agentID: "nobody" })).behavior).toBe("deny")
+    expect((await fake.canUse("Bash", { command: "git status" }, "t2")).behavior).toBe("deny")
+  })
 })
 
 describe("what Claude Code left running, as the box reads it", () => {

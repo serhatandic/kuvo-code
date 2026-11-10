@@ -11734,19 +11734,32 @@ ${input.text}` } : input, this.copies());
         const known = this.tasks.get(message.task_id);
         const type = message.task_type ?? known?.type ?? "";
         const resumed = type === "local_agent" && known?.toolUseID && message.tool_use_id && message.tool_use_id !== known.toolUseID ? known.toolUseID : undefined;
-        this.tasks.set(message.task_id, { ...known, type, description: message.description ?? known?.description ?? "", toolUseID: resumed ?? message.tool_use_id ?? known?.toolUseID });
-        if (type === "local_agent" && typeof message.tool_use_id === "string" && !resumed)
+        const backgrounded = typeof message.is_backgrounded === "boolean" ? message.is_backgrounded : known?.backgrounded;
+        this.tasks.set(message.task_id, { ...known, type, description: message.description ?? known?.description ?? "", toolUseID: resumed ?? message.tool_use_id ?? known?.toolUseID, backgrounded });
+        if (type === "local_agent" && typeof message.tool_use_id === "string" && !resumed) {
           this.rememberSubagent(message.tool_use_id, { agentID: message.task_id });
+          if (this.active)
+            this.subagentLane(this.active, message.tool_use_id);
+          if (backgrounded)
+            this.toBackground(message.tool_use_id);
+        }
         if (resumed && this.active)
           this.resumedLane(this.active, resumed);
         if (message.is_backgrounded && !message.ambient)
           this.shellFor(message.task_id);
         return;
       }
-      case "task_updated":
-        if (message.patch?.is_backgrounded)
-          this.shellFor(message.task_id);
+      case "task_updated": {
+        if (!message.patch?.is_backgrounded)
+          return;
+        const task = this.tasks.get(message.task_id);
+        if (task)
+          task.backgrounded = true;
+        this.shellFor(message.task_id);
+        if (task?.type === "local_agent" && task.toolUseID)
+          this.toBackground(task.toolUseID);
         return;
+      }
       case "task_notification": {
         const task = this.tasks.get(message.task_id);
         if (task && typeof message.output_file === "string")
@@ -12336,10 +12349,10 @@ ${input.text}` } : input, this.copies());
       const input = call.input;
       if (kuvoTool2(call.name, input).name !== "subagent")
         return;
-      background = input.run_in_background === true;
+      const agentID = [...this.tasks].find(([, task]) => task.toolUseID === callID && task.type === "local_agent")?.[0];
+      background = (agentID ? this.tasks.get(agentID)?.backgrounded : undefined) ?? input.run_in_background === true;
       run = active.hooks.subagent(callID, { title: String(input.description ?? ""), prompt: typeof input.prompt === "string" ? input.prompt : undefined, agent: input.subagent_type, background, messages: subagentRoute(input.subagent_type) });
       run.stop = () => this.stopSubagent(callID);
-      const agentID = [...this.tasks].find(([, task]) => task.toolUseID === callID && task.type === "local_agent")?.[0];
       this.rememberSubagent(callID, { sessionID: run.sessionID, title: String(input.description ?? ""), ...typeof input.subagent_type === "string" ? { kind: input.subagent_type } : {}, ...agentID ? { agentID } : {} });
     } else if (before) {
       run = active.hooks.subagent(callID, { title: before.title, sessionID: before.sessionID, background: true, messages: subagentRoute(before.kind) });
@@ -12596,6 +12609,13 @@ ${input.text}` } : input, this.copies());
     for (const [taskID, task] of this.tasks)
       if (task.toolUseID === callID)
         await this.query?.stopTask?.(taskID).catch(() => {});
+  }
+  toBackground(callID) {
+    const lane = this.active?.subagents.get(callID) ?? this.keptLane(callID);
+    if (!lane || lane.background || lane.run.turn.isEnded)
+      return;
+    lane.background = true;
+    lane.run.inBackground();
   }
   keptLane(callID) {
     const lane = this.backgroundLanes.get(callID);
@@ -19714,6 +19734,10 @@ ${live.agentPrompt}` : ""
         }
       },
       permission: (ask) => this.askPermission(id, live, turn, ask, plan),
+      inBackground: () => {
+        if (live.subagents.get(session.id) === turn && !turn.isEnded)
+          live.background.add(session.id);
+      },
       messages: (route) => this.setMessages(session.id, route)
     };
     live.runs.set(session.id, run);
@@ -26453,4 +26477,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents f72cc9b43524cdfc08c97d95d223baf73e2368c16cb978fc9d9fb2c06f058c95
+// Built from Packages/Box/src/agents a57716bd5df0fadea0f0654ae0922feb2c2cdc38dc01a90cf090bd0aad7cdfae

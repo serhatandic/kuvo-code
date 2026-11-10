@@ -973,7 +973,7 @@ class ClaudeThread implements Thread {
   /** Subagents it sent off in the background, at work after the turn that started them: by their call. */
   private backgroundLanes = new Map<string, Lane & { run: SubagentRun; background: boolean }>()
   /** Its background tasks (commands, subagents), by its id: commands are in the bar. */
-  private tasks = new Map<string, { type: string; description: string; toolUseID?: string; shell?: string; outputFile?: string; last?: { output: string; total: number }; since?: number }>()
+  private tasks = new Map<string, { type: string; description: string; toolUseID?: string; shell?: string; outputFile?: string; last?: { output: string; total: number }; since?: number; backgrounded?: boolean }>()
   /** Its live background tasks, as it last listed them. */
   private liveTasks = new Set<string>()
   /** Commands it ran, by their call: what a background one runs. */
@@ -1231,15 +1231,28 @@ class ClaudeThread implements Thread {
         // A subagent picked up again (your message, passed on with SendMessage) keeps its id and
         // its call: what it says comes under the call that started it, in the same session.
         const resumed = type === "local_agent" && known?.toolUseID && message.tool_use_id && message.tool_use_id !== known.toolUseID ? known.toolUseID : undefined
-        this.tasks.set(message.task_id, { ...known, type, description: message.description ?? known?.description ?? "", toolUseID: resumed ?? message.tool_use_id ?? known?.toolUseID })
-        if (type === "local_agent" && typeof message.tool_use_id === "string" && !resumed) this.rememberSubagent(message.tool_use_id, { agentID: message.task_id })
+        // (Whether it runs in the background is Claude Code's to say: its Agent tool's default is.)
+        const backgrounded = typeof message.is_backgrounded === "boolean" ? message.is_backgrounded : known?.backgrounded
+        this.tasks.set(message.task_id, { ...known, type, description: message.description ?? known?.description ?? "", toolUseID: resumed ?? message.tool_use_id ?? known?.toolUseID, backgrounded })
+        if (type === "local_agent" && typeof message.tool_use_id === "string" && !resumed) {
+          this.rememberSubagent(message.tool_use_id, { agentID: message.task_id })
+          // Its session from the start: the turn may end before it says anything, and it works on.
+          if (this.active) this.subagentLane(this.active, message.tool_use_id)
+          if (backgrounded) this.toBackground(message.tool_use_id)
+        }
         if (resumed && this.active) this.resumedLane(this.active, resumed)
         if (message.is_backgrounded && !message.ambient) this.shellFor(message.task_id)
         return
       }
-      case "task_updated":
-        if (message.patch?.is_backgrounded) this.shellFor(message.task_id)
+      case "task_updated": {
+        if (!message.patch?.is_backgrounded) return
+        const task = this.tasks.get(message.task_id)
+        if (task) task.backgrounded = true
+        this.shellFor(message.task_id)
+        // A subagent moved to the background: it works on past the turn.
+        if (task?.type === "local_agent" && task.toolUseID) this.toBackground(task.toolUseID)
         return
+      }
       case "task_notification": {
         const task = this.tasks.get(message.task_id)
         if (task && typeof message.output_file === "string") task.outputFile = message.output_file
@@ -1869,10 +1882,12 @@ class ClaudeThread implements Thread {
     if (call) {
       const input = call.input
       if (kuvoTool(call.name, input).name !== "subagent") return undefined
-      background = input.run_in_background === true
+      // As Claude Code says it runs (its Agent tool runs one in the background unless told not
+      // to); before it says, as the call asked.
+      const agentID = [...this.tasks].find(([, task]) => task.toolUseID === callID && task.type === "local_agent")?.[0]
+      background = (agentID ? this.tasks.get(agentID)?.backgrounded : undefined) ?? input.run_in_background === true
       run = active.hooks.subagent(callID, { title: String(input.description ?? ""), prompt: typeof input.prompt === "string" ? input.prompt : undefined, agent: input.subagent_type, background, messages: subagentRoute(input.subagent_type) })
       run.stop = () => this.stopSubagent(callID)
-      const agentID = [...this.tasks].find(([, task]) => task.toolUseID === callID && task.type === "local_agent")?.[0]
       this.rememberSubagent(callID, { sessionID: run.sessionID, title: String(input.description ?? ""), ...(typeof input.subagent_type === "string" ? { kind: input.subagent_type } : {}), ...(agentID ? { agentID } : {}) })
     } else if (before) {
       // One sent off in the background in an earlier turn, still at work: its session goes on.
@@ -2145,6 +2160,14 @@ class ClaudeThread implements Thread {
   /** A subagent stopped from Kuvo Code: its task, as Claude Code's own Stop does (it then says it stopped). */
   private async stopSubagent(callID: string) {
     for (const [taskID, task] of this.tasks) if (task.toolUseID === callID) await this.query?.stopTask?.(taskID).catch(() => {})
+  }
+
+  /** A subagent Claude Code runs in the background, as it says: its session goes on past the turn. */
+  private toBackground(callID: string) {
+    const lane = this.active?.subagents.get(callID) ?? this.keptLane(callID)
+    if (!lane || lane.background || lane.run.turn.isEnded) return
+    lane.background = true
+    lane.run.inBackground()
   }
 
   /** A subagent kept at work in the background, unless the session ended it since (with a turn that failed). */
