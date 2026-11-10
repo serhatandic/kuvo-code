@@ -150,7 +150,8 @@ struct TranscriptReplayTests {
         #expect(instructions.description == "Instructions updated: kuvo/project-folders")
         #expect(instructions.instructionSources == ["kuvo/project-folders"])
         #expect(instructions.metadata?["by"]?.string == "kuvo")
-        #expect(ended.backgroundEnd == "Background command finished: npm test")
+        #expect(ended.description == "npm test")
+        #expect(ended.metadata?["source"]?.string == "shell")
     }
 
     /// Stopped while it asks you something: the engine lets the ask go without a word, and its card
