@@ -61,6 +61,8 @@ import { SENDING } from "./letters/letter";
 import { watchFolders } from "./follow";
 import { pushRows } from "./work/elsewhere";
 import { pushNumbers } from "./work-queue/numbers";
+import { pushQueues } from "./work-queue/across";
+import { handUpkeepSoon } from "./work-queue/hand";
 import { clearStaging } from "./work-queue/ops";
 import { macLinkCheck } from "./mac/link";
 import { macNoticeHold, macTell } from "./mac/notices";
@@ -176,7 +178,10 @@ export { answered, deliverLeftAnswers, letterMail, letterWent, sendOutbox } from
 export { takeLetter } from "./letters/take";
 export { callAs, callsBack, takeCall } from "./letters/calls";
 export { pushRows, takeRows } from "./work/elsewhere";
-export { askToSend, blockArrived, BLOCK as QUEUE_BLOCK, CLAIM_REACH as QUEUE_CLAIM_REACH, claimNumbers, giveBlock, LOW as QUEUE_LOW, primaryOf, readNumbers, reclaimWaiting, takeBlock, takeNumber } from "./work-queue/numbers";
+export { askToSend, blockArrived, BLOCK as QUEUE_BLOCK, CLAIM_REACH as QUEUE_CLAIM_REACH, claimNumbers, giveBlock, LOW as QUEUE_LOW, notePrimaryNow, primaryOf, pushNumbers, readNumbers, reclaimWaiting, takeBlock, takeNumber, takeNumbersMail } from "./work-queue/numbers";
+export { forgetPushed as forgetQueuesTold, itemsElsewhere, pushQueues, takeWorkQueueMail, tellingNow as queueTellingNow, tellQueuesAgain } from "./work-queue/across";
+export { handUpkeep } from "./work-queue/hand";
+export { mailsFor as queueMailsFor, takePart as takeQueuePart } from "./work-queue/parts";
 export { parseBacklog } from "./work-queue/import";
 export { carryWorkQueue, forgetWorkQueues, packWorkQueues, placeWorkQueues } from "./work-queue/moves";
 export { readReach } from "./peers/reach";
@@ -400,8 +405,11 @@ async function run(): Promise<void> {
     deliverLeftAnswers().catch(() => {});
     // The rows of sessions here whose lead lives on another computer, told to it as they change.
     if (current?.welcomed) pushRows(current, readLink(), peerTargets()).catch(() => {});
-    // The Work Queue's ask for more numbers, to the primary, while one is under way.
+    // The Work Queue's ask for more numbers, to the primary, while one is under way; and this box's
+    // queue told to your other computers as it changes, with what it's handing to theirs.
     try { pushNumbers(current); } catch {}
+    if (current?.welcomed) pushQueues(current, readLink(), peerTargets()).catch(() => {});
+    else try { handUpkeepSoon(readLink()); } catch {}
   }, 3_000);
 
   let attempt = 0;
