@@ -22,7 +22,7 @@ import { backUpSession } from "../work/backups";
 import { markConversation, noteFullAccess, noteFullAccessAtWork } from "../work/full";
 import { queueWatcher, scanQueues, type ScanFound } from "./queue";
 import { adoptConversation } from "../areas/approval";
-import { forgetAsksOn, noteAskEvent } from "../glance/asked";
+import { followAsks, forgetAsksOn, noteAskEvent } from "../glance/asked";
 import { pullCatcher } from "../glance/pulls";
 import type { Target } from "../../shared/records";
 import type { SignInEvent } from "../areas/accounts";
@@ -250,6 +250,10 @@ function backgroundTools(engine: Target, session: string): Promise<Response> {
 // and `attachmentsLooked`, each time it's looked at what deleted sessions left.
 export function watchBox({ tell = () => true, hold = null, bots = false, notices = !bots, signal, signedIn, learned, attachmentsLooked }: WatchBoxOptions = {}): void {
   const answered = (id: string | undefined) => hold?.resolve(id);
+  // What waits on you that the box asks itself, and what Auto's reviewer takes up, for the rows'
+  // "since" (glance/asked.ts).
+  const stopAsks = followAsks();
+  signal?.addEventListener("abort", stopAsks, { once: true });
   watchEvents(readEngineFile, tell, signal, answered, { bots, notices, signIns: true, hold, signedIn, steers: true, learns: true, learned, queues: true, work: "engine", attachmentsLooked });
   watchEvents(readBridgeFile, tell, signal, answered, { bots, notices, queues: true, work: "bridge", goals: true, attachmentsLooked });
 }
@@ -337,7 +341,7 @@ export async function watchEvents(read: () => Target, tell: (notice: Notice) => 
       if (!response.ok || !response.body) throw new Error(`${response.status}`);
       attempt = 0;
       // When what it asks came: what it asked meanwhile went by unheard (glance/asked.ts).
-      forgetAsksOn(source.port);
+      forgetAsksOn(work || String(source.port));
       // What was answered while its events couldn't be heard (it restarted, the stream dropped).
       if (notices && hold) settleHeld(source, hold).catch(() => {});
       // Found it (it started, or this did): its bots told what they are now, before their next turn,
@@ -383,7 +387,7 @@ export async function watchEvents(read: () => Target, tell: (notice: Notice) => 
           forgetDecided(event.data.sessionID);
         }
         learn(source, LEARN_NOW.has(event.type));
-        noteAskEvent(event, source.port);
+        noteAskEvent(event, work || String(source.port));
         catchPull(event);
         // Your settings changed by hand meanwhile: the model your subagents use follows them.
         if (learns && (event.type === "session.execution.started" || event.type === "config.updated")) followSettingsFile();

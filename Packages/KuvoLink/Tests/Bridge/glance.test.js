@@ -84,6 +84,12 @@ atEnd(() => { engine.closeAllConnections(); engine.close(); });
 const targets = [{ port: engine.address().port, password: "p" }];
 
 let clock = 1_000_000_000_000;
+// A pull request linked to `session`, once the catch has made the link (it reads the engine first).
+const linked = session => new Promise((resolve, reject) => {
+  const deadline = Date.now() + 10_000;
+  const look = () => link.readPullLinks()[session] ? resolve() : Date.now() > deadline ? reject(new Error(`No pull request linked to ${session}.`)) : setTimeout(look, 10);
+  look();
+});
 const now = () => clock;
 const glance = ids => link.glances(ids, targets, undefined, now);
 
@@ -121,8 +127,31 @@ test("checks as the card counts them: skipped and neutral passed, cancelled and 
   assert.equal(draft.state, "draft");
   assert.equal(draft.checks, undefined);
   github({ p0: { pullRequests: { nodes: [pr(41, { state: "MERGED" })] } } });
+  // (Open with nothing under way: read again every few minutes, not each one.)
   clock += 61_000;
+  assert.equal((await glance(["ses_tree"])).ses_tree.pull.state, "draft");
+  clock += 5 * 60_000;
   assert.equal((await glance(["ses_tree"])).ses_tree.pull.state, "merged");
+  // Merged: read again only every half hour.
+  const read = queries().length;
+  clock += 10 * 60_000;
+  await glance(["ses_tree"]);
+  assert.equal(queries().length, read);
+});
+
+test("a worktree's branch never shows a fork's pull request of the same name, or an earlier branch's", async () => {
+  const made = fs.statSync(tree).birthtimeMs;
+  const at = ms => new Date(ms).toISOString();
+  github({ p0: { pullRequests: { nodes: [
+    { ...pr(77), headRepositoryOwner: { login: "someone-else" }, createdAt: at(made + 3_600_000) },
+    { ...pr(12, { state: "MERGED" }), headRepositoryOwner: { login: "kuvo-test" }, createdAt: at(made - 30 * 86_400_000) },
+  ] } } });
+  const shown = await glance(["ses_tree"]);
+  assert.equal(shown.ses_tree.pull, undefined);
+  assert.deepEqual([shown.ses_tree.additions, shown.ses_tree.deletions], [1, 0]);
+  clock += 6 * 60_000;
+  github({ p0: { pullRequests: { nodes: [{ ...pr(78), headRepositoryOwner: { login: "Kuvo-Test" }, createdAt: at(made + 60_000) }] } } });
+  assert.equal((await glance(["ses_tree"])).ses_tree.pull.number, 78);
 });
 
 test("GitHub is read at most once a minute, in one query for every pull request asked for", async () => {
@@ -166,30 +195,62 @@ test("without gh, or signed out, a pull request a session made still shows its n
 test("a session's own gh pr create, or its subagent's, links the pull request it printed to its conversation", async () => {
   const caught = link.pullCatcher(() => targets[0]);
   caught({ type: "session.tool.called", data: { sessionID: "ses_helper", id: "call_1", input: { command: "git push -u origin HEAD && gh pr create --fill" } } });
-  caught({ type: "session.tool.success", data: { sessionID: "ses_helper", id: "call_1", content: [{ type: "text", text: "Creating pull request for fix into main\n\nhttps://github.com/kuvo-test/app/pull/9\n" }] } });
+  caught({ type: "session.tool.success", data: { sessionID: "ses_helper", id: "call_1", content: [{ type: "text", text: "Fixes https://github.com/kuvo-test/app/pull/3\n\nhttps://github.com/kuvo-test/app/pull/9\n" }] } });
+  // A command that only says it, and a pull request on a host its folder isn't on, aren't its own.
+  caught({ type: "session.tool.called", data: { sessionID: "ses_other", id: "call_3", input: { command: "echo next: gh pr create" } } });
+  caught({ type: "session.tool.success", data: { sessionID: "ses_other", id: "call_3", content: [{ type: "text", text: "https://github.com/kuvo-test/app/pull/5" }] } });
+  caught({ type: "session.tool.called", data: { sessionID: "ses_tree", id: "call_4", input: { command: "gh pr create --fill" } } });
+  caught({ type: "session.tool.success", data: { sessionID: "ses_tree", id: "call_4", content: [{ type: "text", text: "https://github.attacker.example/a/b/pull/1" }] } });
   // Another command's output naming a pull request isn't one it made.
   caught({ type: "session.tool.called", data: { sessionID: "ses_other", id: "call_2", input: { command: "gh pr view 9" } } });
   caught({ type: "session.tool.success", data: { sessionID: "ses_other", id: "call_2", content: [{ type: "text", text: "https://github.com/kuvo-test/app/pull/9" }] } });
-  await new Promise(resolve => { const wait = () => (link.readPullLinks().ses_mine ? resolve() : setTimeout(wait, 10)); wait(); });
+  await linked("ses_mine");
   assert.deepEqual(Object.keys(link.readPullLinks()), ["ses_mine"]);
   assert.equal(link.readPullLinks().ses_mine.url, "https://github.com/kuvo-test/app/pull/9");
 });
 
 test("waiting on you: since its first ask came, its subagent's too, until it's answered", async () => {
-  clock += 1;
-  link.forgetAsksOn(targets[0].port);
-  link.noteAskEvent({ type: "permission.asked", data: { id: "per_1", sessionID: "ses_helper" } }, targets[0].port, 5_000);
-  link.noteAskEvent({ type: "form.created", data: { form: { id: "frm_1", sessionID: "ses_mine" } } }, targets[0].port, 9_000);
+  link.forgetAsksOn("engine");
+  link.noteAskEvent({ type: "permission.asked", data: { id: "per_1", sessionID: "ses_helper" } }, "engine", 5_000);
+  link.noteAskEvent({ type: "form.created", data: { form: { id: "frm_1", sessionID: "ses_mine" } } }, "engine", 9_000);
   assert.equal((await glance(["ses_mine"])).ses_mine.asked, 5_000);
-  link.noteAskEvent({ type: "permission.replied", data: { requestID: "per_1" } }, targets[0].port);
+  link.noteAskEvent({ type: "permission.replied", data: { requestID: "per_1" } }, "engine");
   assert.equal((await glance(["ses_mine"])).ses_mine.asked, 9_000);
-  // Its run ending lets what it asked go with it.
-  link.noteAskEvent({ type: "session.execution.interrupted", data: { sessionID: "ses_mine" } }, targets[0].port);
+  // Its run ending lets what it asked go with it, and so does its deletion.
+  link.noteAskEvent({ type: "session.execution.interrupted", data: { sessionID: "ses_mine" } }, "engine");
   assert.equal((await glance(["ses_mine"])).ses_mine.asked, undefined);
-  // Heard again after it couldn't be: what was noted of it goes.
-  link.noteAskEvent({ type: "permission.asked", data: { id: "per_2", sessionID: "ses_other" } }, targets[0].port, 7_000);
-  link.forgetAsksOn(targets[0].port);
-  assert.equal((await glance(["ses_other"])).ses_other.asked, undefined);
+  link.noteAskEvent({ type: "permission.asked", data: { id: "per_3", sessionID: "ses_mine" } }, "engine", 6_000);
+  link.noteAskEvent({ type: "session.deleted", data: { sessionID: "ses_mine" } }, "engine");
+  assert.equal((await glance(["ses_mine"])).ses_mine.asked, undefined);
+  // Its place heard again after it couldn't be (an engine restarts on another port): what was noted
+  // of it goes, and the bridge's stays.
+  link.noteAskEvent({ type: "permission.asked", data: { id: "per_2", sessionID: "ses_other" } }, "engine", 7_000);
+  link.noteAskEvent({ type: "permission.asked", data: { id: "per_4", sessionID: "ses_tree" } }, "bridge", 8_000);
+  link.forgetAsksOn("engine");
+  const shown = await glance(["ses_other", "ses_tree"]);
+  assert.equal(shown.ses_other.asked, undefined);
+  assert.equal(shown.ses_tree.asked, 8_000);
+});
+
+test("followed: what it shows now, again only as it changes, and nothing more once it's let go", async () => {
+  const handle = link.engineHandler(() => targets[0], { name: "box" }, () => { throw new Error("No bridge."); });
+  const stop = new AbortController();
+  const answer = handle({ method: "GET", path: "kuvo/sessions/glance/events?sessions=ses_mine", headers: {} }, {}, stop.signal);
+  const next = async () => {
+    const piece = (await answer.next()).value;
+    return piece?.body ? JSON.parse(piece.body.toString()) : piece;
+  };
+  assert.equal((await next()).head.status, 200);
+  assert.deepEqual(await next(), { sessions: { ses_mine: { account: { name: "Anthropic" } } } });
+  // An ask comes: said at once, not a minute later.
+  link.noteAskEvent({ type: "permission.asked", data: { id: "per_9", sessionID: "ses_mine" } }, "engine", 4_000);
+  assert.deepEqual(await next(), { sessions: { ses_mine: { account: { name: "Anthropic" }, asked: 4_000 } } });
+  stop.abort();
+  assert.equal((await answer.next()).done, true);
+});
+
+test("an engine that isn't answering says nothing of its sessions, rather than say they're gone", async () => {
+  await assert.rejects(link.glances(["ses_mine"], [{ port: 9, password: "p" }], undefined, now), error => error instanceof link.Unreached);
 });
 
 test("a session this box doesn't have is left out", async () => {
