@@ -35,9 +35,14 @@ name: Release
 # notarization secrets come from scripts/set-signing-secrets.sh and
 # scripts/set-notary-secrets.sh.
 #
-# Running it by hand (Actions › Release › Run workflow) is a dry run: it signs,
-# notarizes and checks the app with Gatekeeper, then uploads it as a workflow
-# artifact instead of publishing a release. Use it to check the secrets.
+# Running it by hand (Actions › Release › Run workflow) on main is a dry run: it
+# signs, notarizes and checks the app with Gatekeeper, then uploads it as a
+# workflow artifact instead of publishing a release. Use it to check the secrets,
+# and the release build itself, which CI doesn't make on every push.
+#
+# The signing job runs in the `release` environment, which GitHub settings limit to
+# main and v* tags: create it (Settings › Environments) before the next release, or
+# the job waits for it.
 on:
   push:
     tags:
@@ -58,10 +63,11 @@ jobs:
   ci:
     uses: ./.github/workflows/ci.yml
 
+  # Beside CI's jobs, so a wrong tag fails in seconds.
   verify:
     name: verify release tag
-    needs: ci
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -69,6 +75,15 @@ jobs:
           # The checks below ask the remote about the tag and main, which a private
           # repository only answers with the job's read-only token.
           persist-credentials: true
+
+      - name: Check a dry run is from main
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" != refs/heads/main ]]; then
+            echo "A dry run signs with the release secrets, so it runs only from main." >&2
+            exit 1
+          fi
 
       - name: Check the tag
         if: github.event_name == 'push'
@@ -101,27 +116,20 @@ jobs:
 
   release:
     name: build and publish
-    needs: verify
-    # Tags and dry runs from main run on the Mac mini, in a fresh VM, like ci.yml's job (which
-    # says why).
-    runs-on: >-
-      ${{ github.repository == 'serhatandic/kuvo-code'
-          && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
-          && (github.ref == 'refs/heads/main'
-              || startsWith(github.ref, 'refs/tags/v0') || startsWith(github.ref, 'refs/tags/v1')
-              || startsWith(github.ref, 'refs/tags/v2') || startsWith(github.ref, 'refs/tags/v3')
-              || startsWith(github.ref, 'refs/tags/v4') || startsWith(github.ref, 'refs/tags/v5')
-              || startsWith(github.ref, 'refs/tags/v6') || startsWith(github.ref, 'refs/tags/v7')
-              || startsWith(github.ref, 'refs/tags/v8') || startsWith(github.ref, 'refs/tags/v9'))
-          && vars.KUVO_MINI != 'off'
-          && fromJSON('["self-hosted", "macOS", "ARM64", "kuvo-mini"]')
-          || 'xcode-27' }}
-    # Notarization usually takes minutes; a hung one mustn't hold the Mini for hours.
-    timeout-minutes: 180
+    needs: [ci, verify]
+    # Only a v* tag (which verify checked is on main) or a dry run from main gets the secrets.
+    if: >-
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v'))
+      || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
+    runs-on: xcode-27
+    # GitHub settings limit this environment to main and v* tags (create it before releasing).
+    environment: release
+    # Building takes about 20 minutes and each notarization a few; a hung one mustn't run for hours.
+    timeout-minutes: 120
     permissions:
       contents: write
     # Each secret goes only to the steps that use it, not to the actions (checkout, setup-node,
-    # upload-artifact) as well.
+    # upload-artifact) as well. No caches either: what's signed is built from the checkout alone.
     env:
       # The certificate's fingerprint, which names it; not a key.
       MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
@@ -205,6 +213,26 @@ jobs:
           python3 scripts/whats-new.py
           SIGN_IDENTITY="$MACOS_SIGNING_IDENTITY" ./scripts/build-app.sh
 
+      # (CI checked these on every push while it built the app; only releases build it now.)
+      - name: Check the app bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          app="build/Kuvo Code.app"
+          for file in Assets.car AppIcon.icns LICENSE NOTICE THIRD_PARTY_LICENSES.txt prism-bundle.js buildDomTree.js kuvo-agents.js kuvo-browser.js; do
+            test -f "$app/Contents/Resources/$file" || { echo "Missing $file in the app bundle" >&2; exit 1; }
+          done
+          test -d "$app/Contents/Frameworks/Sparkle.framework" || { echo "Sparkle isn't embedded" >&2; exit 1; }
+          for key in SUFeedURL SUPublicEDKey; do
+            /usr/libexec/PlistBuddy -c "Print :$key" "$app/Contents/Info.plist" >/dev/null \
+              || { echo "Info.plist is missing $key" >&2; exit 1; }
+          done
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Contents/Info.plist")" = run.kuvo.code \
+            || { echo "Unexpected bundle identifier" >&2; exit 1; }
+          codesign --verify --strict --deep --verbose=2 "$app"
+          codesign -d --verbose=2 "$app" 2>&1 | grep -q 'flags=.*runtime' \
+            || { echo "The hardened runtime is off" >&2; exit 1; }
+
       - name: Notarize
         shell: bash
         env:
@@ -231,6 +259,13 @@ jobs:
         run: |
           set -euo pipefail
           SIGN_IDENTITY="$MACOS_SIGNING_IDENTITY" ./scripts/build-dmg.sh
+          mount=$(mktemp -d)
+          hdiutil attach -nobrowse -readonly -mountpoint "$mount" build/KuvoCode.dmg >/dev/null
+          trap 'hdiutil detach "$mount" >/dev/null 2>&1 || true' EXIT
+          test -d "$mount/Kuvo Code.app" || { echo "Kuvo Code.app is missing from the disk image" >&2; exit 1; }
+          test "$(readlink "$mount/Applications")" = /Applications || { echo "The Applications link is missing" >&2; exit 1; }
+          hdiutil detach "$mount" >/dev/null
+          trap - EXIT
           xcrun notarytool submit build/KuvoCode.dmg \
             --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD" --wait
           xcrun stapler staple build/KuvoCode.dmg
