@@ -13,6 +13,8 @@ struct SandboxAskCard: View {
     var takesKeys = false
     /// Off in the composer's place, whose card it's in.
     var drawsSurface = true
+    /// Where its answer goes: its box (a test's own, to see it).
+    var onAnswer: ((SandboxAnswer) -> Void)?
 
     var body: some View {
         // A bot's run with you away: how long it's been waiting, over the card once it's a minute.
@@ -79,8 +81,8 @@ struct SandboxAskCard: View {
                     .foregroundStyle(.red)
             }
 
-            // Its answers numbered, as every ask's (the permission card's). No number key or
-            // Return runs it outside the sandbox: that's a click you mean. Esc says no.
+            // Its answers numbered, as every ask's (the permission card's): their number keys pick
+            // them, as there, and Esc says no.
             VStack(spacing: 2) {
                 ForEach(Array(answers.enumerated()), id: \.element.answer) { index, row in
                     ChoiceRow(number: index + 1, label: row.words) { answer(row.answer) }
@@ -93,6 +95,10 @@ struct SandboxAskCard: View {
             .disabled(Sandboxes.shared.answering.contains(asked.id))
         }
         .padding(16)
+        .modifier(AnswerKeys(count: answers.count, takesKeys: takesKeys && !Sandboxes.shared.answering.contains(asked.id)) { index in
+            let rows = answers
+            if rows.indices.contains(index) { answer(rows[index].answer) }
+        })
     }
 
     /// Allow Once, Always Allow <place> where its box names one, and Don't Allow.
@@ -116,6 +122,7 @@ struct SandboxAskCard: View {
     }
 
     private func answer(_ answer: SandboxAnswer) {
+        if let onAnswer { return onAnswer(answer) }
         Task { try? await Sandboxes.shared.answer(asked, answer, on: box) }
     }
 }

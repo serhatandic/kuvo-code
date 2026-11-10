@@ -798,6 +798,62 @@ extension EnvironmentValues {
 }
 
 
+/// A card's number keys: its `count` answers, 1 to n, picked as their keys are pressed while
+/// nothing you type in has the keyboard and it's been still a moment (`KeysTyped`), as a
+/// permission's are.
+struct AnswerKeys: ViewModifier {
+    let count: Int
+    var takesKeys = true
+    let pick: (Int) -> Void
+    @Environment(\.isEnabled) private var isEnabled
+    @State private var typing = KeysTyped()
+    @State private var monitor: Any?
+    @State private var windowBox = WindowBox()
+
+    #if DEBUG
+    /// How many cards watch their number keys this way, for a test to press once one does.
+    static var watched = 0
+    #endif
+
+    func body(content: Content) -> some View {
+        content
+            .background(WindowReader(box: windowBox))
+            .onChange(of: isEnabled, initial: true) { _, enabled in windowBox.isEnabled = enabled }
+            .onChange(of: takesKeys, initial: true) { _, takes in if takes { watch() } else { stopWatching() } }
+            .onAppear { typing.start() }
+            .onDisappear {
+                typing.stop()
+                stopWatching()
+            }
+    }
+
+    private func watch() {
+        guard monitor == nil else { return }
+        monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in key(event) ? nil : event }
+        #if DEBUG
+        Self.watched += 1
+        #endif
+    }
+
+    private func stopWatching() {
+        guard let monitor else { return }
+        NSEvent.removeMonitor(monitor)
+        self.monitor = nil
+        #if DEBUG
+        Self.watched -= 1
+        #endif
+    }
+
+    private func key(_ event: NSEvent) -> Bool {
+        guard let window = windowBox.window, event.window === window, windowBox.isEnabled, takesKeys, typing.isQuiet,
+              QuestionKeys.isFree(window.firstResponder, in: window),
+              event.modifierFlags.intersection([.command, .control, .option]).isEmpty,
+              let number = event.characters?.first?.wholeNumberValue, (1...max(count, 1)).contains(number), number <= count else { return false }
+        pick(number - 1)
+        return true
+    }
+}
+
 /// Where a card's keys (a number, typing) go to it.
 enum QuestionKeys {
     /// Nothing that takes typing has the keyboard: the window does, or SwiftUI's own host
