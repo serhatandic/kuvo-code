@@ -35,10 +35,44 @@ import type { LinkState } from "../state";
 // What this Mac's box answers a phone itself: the areas that have moved onto it (PhoneLink's
 // `boxRoutes`, all but the link's own, `kuvo/link`, which are the app's alone), and its phones.
 // The rest the app answers, through the host.
-export const MAC_BOX_ROUTES = ["kuvo/artifacts", "kuvo/projects", "kuvo/worktrees", "kuvo/plugins", "kuvo/folders", "kuvo/programs", "kuvo/providers", "kuvo/wakes", "kuvo/config", "kuvo/mcp/catalog", "kuvo/skills", "kuvo/skill-library",
-  "kuvo/skill-trash", "kuvo/integrations", "kuvo/keys", "kuvo/bots", "kuvo/personalities", "kuvo/phones", "kuvo/attention", "kuvo/accounts/ended",
-  "kuvo/accounts/refreshable", "kuvo/accounts/credentials", "kuvo/accounts/found", "kuvo/file", "kuvo/sign-in/return", "kuvo/named", "kuvo/groups", "kuvo/agent-tools", "kuvo/moves", "kuvo/work", "kuvo/work-queue", "kuvo/vault", "kuvo/sandbox",
-  "kuvo/approval", "kuvo/search", "kuvo/git"];
+export const MAC_BOX_ROUTES = [
+  "kuvo/accounts/credentials",
+  "kuvo/accounts/ended",
+  "kuvo/accounts/found",
+  "kuvo/accounts/refreshable",
+  "kuvo/agent-tools",
+  "kuvo/approval",
+  "kuvo/artifacts",
+  "kuvo/attention",
+  "kuvo/bots",
+  "kuvo/config",
+  "kuvo/file",
+  "kuvo/folders",
+  "kuvo/git",
+  "kuvo/groups",
+  "kuvo/integrations",
+  "kuvo/keys",
+  "kuvo/mcp/catalog",
+  "kuvo/moves",
+  "kuvo/named",
+  "kuvo/personalities",
+  "kuvo/phones",
+  "kuvo/plugins",
+  "kuvo/programs",
+  "kuvo/projects",
+  "kuvo/providers",
+  "kuvo/sandbox",
+  "kuvo/search",
+  "kuvo/sign-in/return",
+  "kuvo/skill-library",
+  "kuvo/skill-trash",
+  "kuvo/skills",
+  "kuvo/vault",
+  "kuvo/wakes",
+  "kuvo/work",
+  "kuvo/work-queue",
+  "kuvo/worktrees",
+];
 // (A plan signed out from a phone, `kuvo/accounts/<id>/forget`, its models asked of again (`…/refresh`), a command stopped,
 // `kuvo/shell/<id>/stop`, a session started with a task, a session's queue, its approval, its Autopilot, and carrying
 // it on with the coding agents: the box's too.)

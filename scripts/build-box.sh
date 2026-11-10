@@ -37,23 +37,26 @@ real_app_guard "scripts/build-box.sh" "$BUN"
 # SHA-256 of what's built with the version as its source has it, written in its place: it changes
 # with every change to the link, the same on every computer, and no branch bumps it by hand.
 SOURCE_VERSION=0.0.0-from-its-sources
+raw=$(mktemp "${TMPDIR:-/tmp}/kuvo-link-raw.XXXXXX")
+built=$(mktemp "${TMPDIR:-/tmp}/kuvo-link.XXXXXX")
+trap 'rm -f "$raw" "$built"' EXIT
+sha256() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1"; else shasum -a 256 "$1"; fi; }
 build() {
-  raw=$(mktemp "${TMPDIR:-/tmp}/kuvo-link-raw.XXXXXX")
   BUN_BE_BUN=1 "$BUN" build Packages/Box/src/link/main.ts --target=node --format=esm --outfile "$raw" \
     --banner "// Built from Packages/Box/src by scripts/build-box.sh: change those, then run it. Never edit this file." >/dev/null
   if ! grep -q "\"$SOURCE_VERSION\"" "$raw"; then
-    rm -f "$raw"
     echo "scripts/build-box.sh: the built link doesn't have \"$SOURCE_VERSION\" (Packages/Box/src/link/version.ts) to write its version in." >&2
     exit 1
   fi
-  hash=$(shasum -a 256 "$raw" | cut -c1-12)
+  hash=$(sha256 "$raw" | cut -c1-12)
+  if ! printf '%s' "$hash" | grep -Eq '^[0-9a-f]{12}$'; then
+    echo "scripts/build-box.sh: couldn't hash the built link (sha256sum or shasum)." >&2
+    exit 1
+  fi
   sed "s/\"$(printf '%s' "$SOURCE_VERSION" | sed 's/\./\\./g')\"/\"$hash\"/g" "$raw" >"$1"
-  rm -f "$raw"
 }
 
 if [ "${1:-}" = "--check" ]; then
-  built=$(mktemp "${TMPDIR:-/tmp}/kuvo-link.XXXXXX")
-  trap 'rm -f "$built"' EXIT
   build "$built"
   cmp -s "$built" "$OUT" && exit 0
   echo "$OUT isn't what Packages/Box/src builds: change the sources, not it, then run ./scripts/build-box.sh and commit it." >&2

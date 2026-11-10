@@ -720,7 +720,17 @@ and the lists they add to merge line by line:
   too, though maybe out of order: the box's tests (`test/features.test.ts`) fail on a list out
   of order or a name twice, so put them in order. Change nothing else in `features.ts` in a
   branch that adds a name, and don't remove a name next to one another branch adds (union keeps
-  it; the bridge's tests check every name has its route).
+  it; the bridge's tests check every name has its route). A name this Mac's box doesn't answer
+  (its route isn't in `MAC_BOX_ROUTES`, `link/mac/relay.ts`, nor the app's) goes in
+  `MACHINE_FEATURES` too: every other name, this Mac claims.
+- **Other lists a feature adds to** are one entry a line, in order, so they merge the same way
+  (without union): the bridge's test of each name's route (`routes` in
+  `Tests/Bridge/bridge.test.js`, whose order it checks), `MAC_BOX_ROUTES`, PhoneLink's
+  `boxRoutes`, and PROTOCOL.md's table of names ("Features").
+- **A branch from before these were one a line** (#396) merges main into itself first, where the
+  old lines conflict as they always did, and puts its names back one a line, in order. Merged the
+  other way, into main, `features.ts`'s union takes its old line whole beside the new ones: it
+  still builds, with names twice, and only the tests catch it.
 - **What's written from those**: `./scripts/route-shapes.sh` writes `routes/shapes/answers.json`,
   `routes/features.json` (each box's `kuvo/info` features, which both route runners check) and
   the Mac app's `KuvoCode/Stores/BoxFeatures.swift`; `./scripts/build-box.sh` and

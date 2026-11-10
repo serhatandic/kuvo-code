@@ -136,7 +136,8 @@ const ownFeatures = (): readonly string[] => (IS_MAC && Array.isArray(macLink.co
 // The names a box from before the lists were in order checks of its peers (moves, calls, letters
 // and group chats' seats). Such a box keeps only the first 80 names a peer's mail gives
 // (`keptFeatures`), and in order there are more before some of these: so they go first. Boxes now
-// keep many more, so a name added later needn't be here.
+// keep many more, so a name added later needn't be here. This goes once no box from bridge 0.9.211
+// or before is left: three months after the release that brings it.
 const CHECKED_BY_OLDER_PEERS = ["groups.seats", "letters-read", "moves", "moves.agents", "moves.check", "work.elsewhere"];
 
 /** `features` as this box's mail gives them: those older boxes check of a peer first. */

@@ -953,8 +953,44 @@ final class PhoneLink {
 
     /// The areas that have moved onto this Mac's box (`BoxProcess`), by their routes: a phone's
     /// requests and the app's own (`BoxClient`) go there.
-    nonisolated static let boxRoutes = ["kuvo/projects", "kuvo/worktrees", "kuvo/plugins", "kuvo/folders", "kuvo/programs", "kuvo/providers", "kuvo/wakes", "kuvo/config", "kuvo/mcp/catalog", "kuvo/skills", "kuvo/skill-library", "kuvo/skill-trash", "kuvo/integrations", "kuvo/keys", "kuvo/bots", "kuvo/personalities",
-                                                  "kuvo/phones", "kuvo/link", "kuvo/attention", "kuvo/accounts/ended", "kuvo/accounts/refreshable", "kuvo/accounts/credentials", "kuvo/accounts/found", "kuvo/file", "kuvo/sign-in/return", "kuvo/named", "kuvo/groups", "kuvo/artifacts", "kuvo/search", "kuvo/git", "kuvo/agent-tools", "kuvo/moves", "kuvo/work", "kuvo/work-queue", "kuvo/vault", "kuvo/approval"]
+    nonisolated static let boxRoutes = [
+        "kuvo/accounts/credentials",
+        "kuvo/accounts/ended",
+        "kuvo/accounts/found",
+        "kuvo/accounts/refreshable",
+        "kuvo/agent-tools",
+        "kuvo/approval",
+        "kuvo/artifacts",
+        "kuvo/attention",
+        "kuvo/bots",
+        "kuvo/config",
+        "kuvo/file",
+        "kuvo/folders",
+        "kuvo/git",
+        "kuvo/groups",
+        "kuvo/integrations",
+        "kuvo/keys",
+        "kuvo/link",
+        "kuvo/mcp/catalog",
+        "kuvo/moves",
+        "kuvo/named",
+        "kuvo/personalities",
+        "kuvo/phones",
+        "kuvo/plugins",
+        "kuvo/programs",
+        "kuvo/projects",
+        "kuvo/providers",
+        "kuvo/search",
+        "kuvo/sign-in/return",
+        "kuvo/skill-library",
+        "kuvo/skill-trash",
+        "kuvo/skills",
+        "kuvo/vault",
+        "kuvo/wakes",
+        "kuvo/work",
+        "kuvo/work-queue",
+        "kuvo/worktrees",
+    ]
     /// Where this Mac's box is reached while it runs.
     nonisolated static let box = OSAllocatedUnfairLock<ServerEndpoint?>(initialState: nil)
     /// Connections of its own to this Mac's box, plenty of them: the streams that follow it

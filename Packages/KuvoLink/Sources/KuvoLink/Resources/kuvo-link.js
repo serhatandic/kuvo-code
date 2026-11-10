@@ -2143,7 +2143,10 @@ var FEATURES = [
   "worktrees.events",
   "worktrees.where"
 ];
-var MACHINE_FEATURES = ["engine.start", "update"];
+var MACHINE_FEATURES = [
+  "engine.start",
+  "update"
+];
 var MAC_BOX_FEATURES = FEATURES.filter((name) => !MACHINE_FEATURES.includes(name));
 
 // Packages/Box/src/link/areas/projects.ts
@@ -29194,7 +29197,7 @@ import fs95 from "node:fs";
 import path102 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "3d88607df2c3";
+var BRIDGE_VERSION = "e7ab3b09b47f";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
@@ -33619,42 +33622,42 @@ async function* machinesRoute(request, phone, signal, route, timing = TIMING) {
 
 // Packages/Box/src/link/mac/relay.ts
 var MAC_BOX_ROUTES = [
+  "kuvo/accounts/credentials",
+  "kuvo/accounts/ended",
+  "kuvo/accounts/found",
+  "kuvo/accounts/refreshable",
+  "kuvo/agent-tools",
+  "kuvo/approval",
   "kuvo/artifacts",
-  "kuvo/projects",
-  "kuvo/worktrees",
-  "kuvo/plugins",
-  "kuvo/folders",
-  "kuvo/programs",
-  "kuvo/providers",
-  "kuvo/wakes",
+  "kuvo/attention",
+  "kuvo/bots",
   "kuvo/config",
-  "kuvo/mcp/catalog",
-  "kuvo/skills",
-  "kuvo/skill-library",
-  "kuvo/skill-trash",
+  "kuvo/file",
+  "kuvo/folders",
+  "kuvo/git",
+  "kuvo/groups",
   "kuvo/integrations",
   "kuvo/keys",
-  "kuvo/bots",
+  "kuvo/mcp/catalog",
+  "kuvo/moves",
+  "kuvo/named",
   "kuvo/personalities",
   "kuvo/phones",
-  "kuvo/attention",
-  "kuvo/accounts/ended",
-  "kuvo/accounts/refreshable",
-  "kuvo/accounts/credentials",
-  "kuvo/accounts/found",
-  "kuvo/file",
+  "kuvo/plugins",
+  "kuvo/programs",
+  "kuvo/projects",
+  "kuvo/providers",
+  "kuvo/sandbox",
+  "kuvo/search",
   "kuvo/sign-in/return",
-  "kuvo/named",
-  "kuvo/groups",
-  "kuvo/agent-tools",
-  "kuvo/moves",
+  "kuvo/skill-library",
+  "kuvo/skill-trash",
+  "kuvo/skills",
+  "kuvo/vault",
+  "kuvo/wakes",
   "kuvo/work",
   "kuvo/work-queue",
-  "kuvo/vault",
-  "kuvo/sandbox",
-  "kuvo/approval",
-  "kuvo/search",
-  "kuvo/git"
+  "kuvo/worktrees"
 ];
 var macAnswersAlso = (route) => /^kuvo\/accounts\/[^/]+\/(forget|refresh)$/.test(route) || /^kuvo\/shell\/[^/]+\/stop$/.test(route) || route === "kuvo/sessions" || QUEUE_ROUTE.test(route) || SESSION_APPROVAL_ROUTE.test(route) || SESSION_DECISIONS_ROUTE.test(route) || SESSION_AUTOPILOT_ROUTE.test(route) || CARRY_ROUTE.test(route);
 var macAnswers = (route) => MAC_BOX_ROUTES.some((area) => route === area || route.startsWith(`${area}/`)) || macAnswersAlso(route);

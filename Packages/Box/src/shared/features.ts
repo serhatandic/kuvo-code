@@ -112,8 +112,12 @@ export const FEATURES = [
 export type Feature = (typeof FEATURES)[number];
 
 /** Those only a machine's box answers: it updates itself, and starts an engine an older Mac's Stop
- * left down. */
-export const MACHINE_FEATURES = ["engine.start", "update"] as const satisfies readonly Feature[];
+ * left down. Every other name, this Mac claims too (`BoxFeatures.swift`): a name for a route this
+ * Mac's box doesn't answer (link/mac/relay.ts's `MAC_BOX_ROUTES`, or the app's) goes here. */
+export const MACHINE_FEATURES = [
+  "engine.start",
+  "update",
+] as const satisfies readonly Feature[];
 
 /** What this Mac's box answers of them: all but a machine's own. */
 export const MAC_BOX_FEATURES: readonly Feature[] = FEATURES.filter(name => !(MACHINE_FEATURES as readonly string[]).includes(name));

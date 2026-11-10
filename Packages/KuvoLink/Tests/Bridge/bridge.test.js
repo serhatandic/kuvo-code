@@ -1366,45 +1366,118 @@ test("each feature kuvo/info names is a route the machine answers, and one it do
   // Where each one is reached: a route a client would ask first, answered with whatever this box
   // has now, never as one it doesn't have (403).
   const routes = {
-    "accounts.credentials": ["GET", "kuvo/accounts/credentials"], "accounts.ended": ["GET", "kuvo/accounts/ended"], "accounts.found": ["GET", "kuvo/accounts/found"], "accounts.refresh": ["GET", "kuvo/accounts/refreshable"], agents: ["GET", "kuvo/agents/api/session"], artifacts: ["GET", "kuvo/artifacts?bot=bot_none"], asks: ["GET", "kuvo/asks"], attention: ["GET", "kuvo/attention"],
-    bots: ["GET", "kuvo/bots"], "bots.events": ["GET", "kuvo/bots/events"], "bots.job": ["GET", "kuvo/bots"], "bots.edit": ["DELETE", "kuvo/bots/bot_none"], "bots.keys": ["GET", "kuvo/bots/bot_none/keys"],
-    "bots.make": ["GET", "kuvo/bots/templates"], config: ["GET", "kuvo/config"], "config.apply": ["GET", "kuvo/config/apply"], "engine.restart": ["GET", "kuvo/engine/restart"],
-    "engine.start": ["GET", "kuvo/engine/start"], file: ["GET", "kuvo/file"], git: ["POST", "kuvo/git/changes"], "git.changes.count": ["POST", "kuvo/git/changes/count"], "git.merge": ["POST", "kuvo/git/merge"], "git.pull-request": ["POST", "kuvo/git/pull-request"], "git.pull-request.draft": ["POST", "kuvo/git/pull-request/draft"], "git.push": ["POST", "kuvo/git/push"], goals: ["GET", "kuvo/agents/api/kuvo/goals"], btw: ["GET", "kuvo/agents/api/kuvo/btw"], "btw.threads": ["GET", "kuvo/agents/api/kuvo/btw"], handoff: ["POST", "kuvo/agents/api/kuvo/handoff/ses_none"], branch: ["POST", "kuvo/agents/api/kuvo/branch/ses_none"], reviews: ["GET", "kuvo/agents/api/kuvo/reviews"], "reviews.scopes": ["GET", "kuvo/agents/api/kuvo/reviews"], "reviews.parts": ["GET", "kuvo/agents/api/kuvo/reviews"], groups: ["GET", "kuvo/groups"],
-    "groups.delete": ["DELETE", "kuvo/groups/grp_none"], "groups.edit": ["PATCH", "kuvo/groups/grp_none"], "groups.joinable": ["GET", "kuvo/groups/joinable"], "groups.make": ["POST", "kuvo/groups"],
-    // Its turns for chats on other computers, which kuvo/groups/joinable shows from theirs.
-    "groups.seats": ["GET", "kuvo/groups/joinable"],
-    integrations: ["GET", "kuvo/integrations"], keys: ["GET", "kuvo/keys"], "mcp.catalog": ["GET", "kuvo/mcp/catalog"], moves: ["GET", "kuvo/moves"], named: ["GET", "kuvo/named"], search: ["GET", "kuvo/search?q=none"],
-    personalities: ["GET", "kuvo/personalities"], "personalities.events": ["POST", "kuvo/personalities/events"], phones: ["GET", "kuvo/phones"], "phones.pair": ["DELETE", "kuvo/phones/pair"], projects: ["GET", "kuvo/projects"],
-    "sessions.agents": ["GET", "kuvo/sessions/ses_none/agents"], "shell.stop": ["POST", "kuvo/shell/sh_none/stop"],
-    "sign-in.return": ["GET", "kuvo/sign-in/return"], skills: ["GET", "kuvo/skills"], "skills.trash": ["GET", "kuvo/skill-trash"], update: ["GET", "kuvo/update"], wakes: ["GET", "kuvo/wakes"],
-    "wakes.edit": ["POST", "kuvo/wakes/ses_none/pause"], "wakes.events": ["POST", "kuvo/wakes/events"], worktrees: ["GET", "kuvo/worktrees"], "worktrees.events": ["POST", "kuvo/worktrees/events"], "worktrees.where": ["POST", "kuvo/worktrees/where"], folders: ["DELETE", "kuvo/folders"], "folders.files": ["GET", "kuvo/folders?files=1"], "plugins.search": ["POST", "kuvo/plugins/search"], programs: ["POST", "kuvo/programs"], "providers.models": ["GET", "kuvo/providers/models"],
-    // What a side question's and a review's routes take besides, on the coding agents' bridge.
-    "btw.threads": ["GET", "kuvo/agents/api/kuvo/btw"], "reviews.scopes": ["GET", "kuvo/agents/api/kuvo/reviews"],
-    "agent-tools": ["POST", "kuvo/agent-tools"], "sessions.start": ["POST", "kuvo/sessions"],
-    // What its agents' mail says it takes (a letter that reads a conversation), on the agents' tools.
-    "letters-read": ["POST", "kuvo/agent-tools"],
-    // (And a lead's call for the sessions it started here: list, stop, summarize, answer.)
-    "work.elsewhere": ["POST", "kuvo/agent-tools"], queue: ["GET", "kuvo/sessions/ses_none/queue"], "queue.waits": ["POST", "kuvo/sessions/ses_none/queue/add"], work: ["GET", "kuvo/work"], "work.projects": ["GET", "kuvo/work/settings"], "work.goals": ["GET", "kuvo/work/goals"], "work.goals.apps": ["GET", "kuvo/work/apps/icon?app=com.example.none"], "work.goals.projects": ["POST", "kuvo/work/goals/goal_none"], autopilot: ["GET", "kuvo/sessions/ses_none/autopilot"], "work.unanswering": ["GET", "kuvo/work/unanswering"],
-    vault: ["GET", "kuvo/vault/tools"], sandbox: ["GET", "kuvo/sandbox"], "sandbox.check": ["POST", "kuvo/sandbox/check"], "sandbox.asks": ["GET", "kuvo/sandbox/allowed"],
+    // One a line, in order (as `FEATURES` are), so branches that each add one merge cleanly.
+    "accounts.credentials": ["GET", "kuvo/accounts/credentials"],
+    "accounts.ended": ["GET", "kuvo/accounts/ended"],
+    "accounts.found": ["GET", "kuvo/accounts/found"],
+    "accounts.refresh": ["GET", "kuvo/accounts/refreshable"],
+    "agent-tools": ["POST", "kuvo/agent-tools"],
+    agents: ["GET", "kuvo/agents/api/session"],
     approval: ["GET", "kuvo/approval"],
-    "approval.reviewer": ["GET", "kuvo/sessions/ses_none/decisions"],
+    // (A new conversation's mode, the last picked: kuvo/approval's `default`.)
+    "approval.default": ["GET", "kuvo/approval"],
     // (Full Access outside the sandbox, confirmed per computer: what kuvo/approval says.)
     "approval.fullAccess": ["GET", "kuvo/approval"],
-    // (Held back, approved from a client; a new conversation's mode, the last picked: kuvo/approval's `default`.)
+    // (Held back, approved from a client: decisions.)
     "approval.held": ["POST", "kuvo/sessions/ses_none/decisions"],
-    "approval.default": ["GET", "kuvo/approval"],
+    "approval.reviewer": ["GET", "kuvo/sessions/ses_none/decisions"],
     "approval.seen": ["POST", "kuvo/sessions/ses_none/decisions"],
     // (A command the sandbox stopped, told by the engine's plugin: Auto's reviewer takes it.)
     "approval.stopped": ["POST", "kuvo/sandbox/stopped"],
+    artifacts: ["GET", "kuvo/artifacts?bot=bot_none"],
+    asks: ["GET", "kuvo/asks"],
+    attention: ["GET", "kuvo/attention"],
+    autopilot: ["GET", "kuvo/sessions/ses_none/autopilot"],
+    bots: ["GET", "kuvo/bots"],
+    "bots.edit": ["DELETE", "kuvo/bots/bot_none"],
+    "bots.events": ["GET", "kuvo/bots/events"],
+    "bots.job": ["GET", "kuvo/bots"],
+    "bots.keys": ["GET", "kuvo/bots/bot_none/keys"],
+    "bots.make": ["GET", "kuvo/bots/templates"],
+    branch: ["POST", "kuvo/agents/api/kuvo/branch/ses_none"],
+    btw: ["GET", "kuvo/agents/api/kuvo/btw"],
+    // (What a side question's routes take besides, on the coding agents' bridge.)
+    "btw.threads": ["GET", "kuvo/agents/api/kuvo/btw"],
+    config: ["GET", "kuvo/config"],
+    "config.apply": ["GET", "kuvo/config/apply"],
+    "engine.restart": ["GET", "kuvo/engine/restart"],
+    "engine.start": ["GET", "kuvo/engine/start"],
+    file: ["GET", "kuvo/file"],
+    folders: ["DELETE", "kuvo/folders"],
+    "folders.files": ["GET", "kuvo/folders?files=1"],
+    git: ["POST", "kuvo/git/changes"],
+    "git.backups": ["GET", "kuvo/git/backups?folder=/"],
+    "git.changes.count": ["POST", "kuvo/git/changes/count"],
+    "git.merge": ["POST", "kuvo/git/merge"],
+    "git.pull-request": ["POST", "kuvo/git/pull-request"],
+    "git.pull-request.draft": ["POST", "kuvo/git/pull-request/draft"],
+    "git.push": ["POST", "kuvo/git/push"],
+    goals: ["GET", "kuvo/agents/api/kuvo/goals"],
+    groups: ["GET", "kuvo/groups"],
+    "groups.delete": ["DELETE", "kuvo/groups/grp_none"],
+    "groups.edit": ["PATCH", "kuvo/groups/grp_none"],
+    "groups.joinable": ["GET", "kuvo/groups/joinable"],
+    "groups.make": ["POST", "kuvo/groups"],
+    // (Its turns for chats on other computers, which kuvo/groups/joinable shows from theirs.)
+    "groups.seats": ["GET", "kuvo/groups/joinable"],
+    handoff: ["POST", "kuvo/agents/api/kuvo/handoff/ses_none"],
+    integrations: ["GET", "kuvo/integrations"],
+    keys: ["GET", "kuvo/keys"],
+    // (What its agents' mail says it takes (a letter that reads a conversation), on the agents' tools.)
+    "letters-read": ["POST", "kuvo/agent-tools"],
     // (Each account's plan limits, on the coding agents' bridge.)
     limits: ["GET", "kuvo/agents/api/kuvo/limits"],
+    "mcp.catalog": ["GET", "kuvo/mcp/catalog"],
+    moves: ["GET", "kuvo/moves"],
+    // (Moves with a coding agent's own conversation: what kuvo/moves takes besides.)
+    "moves.agents": ["GET", "kuvo/moves"],
+    // (The check before a move holds anything, which a box asks of another in its mail.)
+    "moves.check": ["GET", "kuvo/moves/places?kind=bot&id=bot_none"],
+    named: ["GET", "kuvo/named"],
+    personalities: ["GET", "kuvo/personalities"],
+    "personalities.events": ["POST", "kuvo/personalities/events"],
+    phones: ["GET", "kuvo/phones"],
+    "phones.pair": ["DELETE", "kuvo/phones/pair"],
+    "plugins.search": ["POST", "kuvo/plugins/search"],
+    programs: ["POST", "kuvo/programs"],
+    projects: ["GET", "kuvo/projects"],
+    "providers.models": ["GET", "kuvo/providers/models"],
+    queue: ["GET", "kuvo/sessions/ses_none/queue"],
+    "queue.waits": ["POST", "kuvo/sessions/ses_none/queue/add"],
+    reviews: ["GET", "kuvo/agents/api/kuvo/reviews"],
+    "reviews.parts": ["GET", "kuvo/agents/api/kuvo/reviews"],
+    // (What a review's routes take besides, on the coding agents' bridge.)
+    "reviews.scopes": ["GET", "kuvo/agents/api/kuvo/reviews"],
+    sandbox: ["GET", "kuvo/sandbox"],
+    "sandbox.asks": ["GET", "kuvo/sandbox/allowed"],
+    "sandbox.check": ["POST", "kuvo/sandbox/check"],
+    search: ["GET", "kuvo/search?q=none"],
+    "sessions.agents": ["GET", "kuvo/sessions/ses_none/agents"],
+    "sessions.start": ["POST", "kuvo/sessions"],
+    "shell.stop": ["POST", "kuvo/shell/sh_none/stop"],
+    "sign-in.return": ["GET", "kuvo/sign-in/return"],
+    skills: ["GET", "kuvo/skills"],
+    "skills.trash": ["GET", "kuvo/skill-trash"],
+    update: ["GET", "kuvo/update"],
+    vault: ["GET", "kuvo/vault/tools"],
+    wakes: ["GET", "kuvo/wakes"],
+    "wakes.edit": ["POST", "kuvo/wakes/ses_none/pause"],
+    "wakes.events": ["POST", "kuvo/wakes/events"],
+    work: ["GET", "kuvo/work"],
     "work-queue": ["GET", "kuvo/work-queue/categories"],
-    "git.backups": ["GET", "kuvo/git/backups?folder=/"],
-    // (Moves with a coding agent's own conversation, and the check before one holds anything: what
-    // kuvo/moves takes besides, and a box asks of another in its mail.)
-    "moves.agents": ["GET", "kuvo/moves"], "moves.check": ["GET", "kuvo/moves/places?kind=bot&id=bot_none"],
+    // (A lead's call for the sessions it started here (list, stop, summarize, answer), on the agents' tools.)
+    "work.elsewhere": ["POST", "kuvo/agent-tools"],
+    "work.goals": ["GET", "kuvo/work/goals"],
+    "work.goals.apps": ["GET", "kuvo/work/apps/icon?app=com.example.none"],
+    "work.goals.projects": ["POST", "kuvo/work/goals/goal_none"],
+    "work.projects": ["GET", "kuvo/work/settings"],
+    "work.unanswering": ["GET", "kuvo/work/unanswering"],
+    worktrees: ["GET", "kuvo/worktrees"],
+    "worktrees.events": ["POST", "kuvo/worktrees/events"],
+    "worktrees.where": ["POST", "kuvo/worktrees/where"],
   };
   const named = (await answer(handle, "GET", "kuvo/info")).json.features;
+  assert.deepEqual(Object.keys(routes), Object.keys(routes).sort(), "the routes are one a line, in order");
   assert.deepEqual([...named].sort(), Object.keys(routes).sort(), "every name has a route here, and every route here its name");
   for (const [feature, [method, route]] of Object.entries(routes)) assert.ok(await isRoute(method, route), `${feature}: ${method} ${route}`);
   // The Mac's own aren't here: a route this box doesn't have.
