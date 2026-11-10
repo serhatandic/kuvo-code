@@ -71,6 +71,7 @@ final class AppModel {
     /// What each box told you lately, shown as this Mac's notifications.
     let boxNotices = BoxNotices()
     let botOversight = BotOversight()
+    let workQueues = WorkQueues()
     /// Voice input, for whichever composer listens.
     let dictation = Dictation()
     // COMPAT(0.7 mac-group-chats): `GroupMigration.run` before the box's group chats start. Goes 3 months after 0.8.0.
@@ -191,8 +192,8 @@ final class AppModel {
 
     /// A conversation carried on with the coding agents (`Workspace.moveToAgents`): its panel goes
     /// with it, its terminals, pages and files as they were. (A bot's is carried by its box.)
-    func movedToAgents(from old: String, to new: Session) async -> Bool {
-        utilities.handOver(from: old, to: new.id)
+    func movedToAgents(from old: String, to new: String) async -> Bool {
+        utilities.handOver(from: old, to: new)
         return false
     }
 
@@ -333,6 +334,7 @@ final class AppModel {
         Sandboxes.shared.onYours = { [weak self] id in self?.workspace.reviewLeftForYou(id) }
         goalPlans.app = self
         botOversight.app = self
+        workQueues.app = self
         boxNotices.app = self
         workspace.boxTellsNews = { [weak self] box in self?.boxNotices.tells(box) ?? false }
         boxGroups.boxTellsNews = { [weak self] box in self?.boxNotices.tells(box) ?? false }
@@ -387,7 +389,6 @@ final class AppModel {
         // This Mac's link is its box's: the app tells it what's wanted, and answers what it asks.
         phoneLink.box = { [weak self] in self?.box(BoxClient.mac) }
         host.phoneLink = phoneLink
-        phoneLink.isMoving = { [weak self] id in self?.moves.underWay[id] != nil || Moves.isFrozen(id) }
         phoneLink.engineStarted = { [weak self] in self?.engineStarted }
         phoneLink.restartEngine = { [weak self] in Task { await self?.restart() } }
     }
@@ -648,6 +649,8 @@ final class AppModel {
             follower.onGone = { [weak self] in self?.keeperGone() }
             follower.onMakingWay = { [weak self] makingWay in self?.keeperMakesWay = makingWay }
             host.tellsBox = false
+            // Answering again at a new address (its listener failed by itself): the keeper is told.
+            host.restarted = { [weak self] in Task { await self?.tellKeeper() } }
             // The keeper keeps this Mac awake while agents work, so the app holds nothing besides.
             Awake.shared.keeper = { (try? await KeeperControl.send(.status))?["awake"] as? Bool ?? false }
             keeperBox = follower
