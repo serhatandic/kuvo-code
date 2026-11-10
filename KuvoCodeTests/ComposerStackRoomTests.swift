@@ -279,6 +279,7 @@ import Testing
     }
     @Test func writingTucksTheCardAndSendingRestoresIt() async throws {
         defer { done() }
+        engine.on("POST", "/api/session/ses_pixel/prompt", json: [String: String]())
         app.workspace.handle(try engine.event("form.replied", session: "ses_pixel", ["id": "frm_concept", "sessionID": "ses_pixel"]))
         app.workspace.handle(try engine.event("shell.created", session: "ses_pixel", ["info": [
             "id": "sh_408", "metadata": ["sessionID": "ses_pixel"], "status": "running", "command": "swift build",
