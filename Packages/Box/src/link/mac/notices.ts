@@ -3,10 +3,9 @@
 import fs from "node:fs";
 import { writePrivate } from "../files";
 import { HELD_FILE, NoticeHold } from "../notices/hold";
-import { noticeJSON, pushTo } from "../notices/notice";
+import { sendToPhones } from "../notices/push";
 import type { Notice } from "../notices/notice";
 import { macLink, readLink } from "../state";
-import type { Phone } from "../state";
 
 // This Mac's notices for your phones (PROTOCOL.md, "kuvo/attention"): held a little while you're at
 // a computer (the app says when, as "mac"), then sealed here for each paired phone that's said where
@@ -18,21 +17,11 @@ export function macNoticeHold(clock = {}) {
   return new NoticeHold({
     ...clock,
     send: notice => {
-      const link = readLink();
-      const phones = (link?.phones ?? []).filter(phone => phone.address) as (Phone & { address: string })[];
       // Not told yet whether the phone link's on (the app hasn't said, as it starts): held.
       if (!macLink.config) return false;
-      if (!phones.length || !macLink.config.phones) return true;
-      const host = macLink.host;
-      if (!host?.welcomed || !link?.key) return false;
-      const json = noticeJSON(notice);
-      const key = Buffer.from(link.key, "base64url");
+      if (!macLink.config.phones) return true;
       // Gone out to one at least, or held to try again (a connection closing as it's sent).
-      let sent = 0;
-      for (const phone of phones) {
-        try { if (host.send(pushTo(phone, json, key))) sent += 1; } catch {}
-      }
-      return sent > 0;
+      return sendToPhones(macLink.host, readLink(), notice);
     },
     held,
     save: entries => {
