@@ -114,12 +114,14 @@ async function start() {
     exited.then(code => reject(new Error(`serve exited ${code}: ${err}`)));
   });
   const headers = { authorization: `Basic ${Buffer.from("opencode:box-pw").toString("base64")}`, "content-type": "application/json" };
+  // (A request that fails says which, and what the box said last: why is in there, if anywhere.)
+  const failed = (what, error) => new Error(`${what} failed (${error.cause?.code ?? error.message}). The box said last:\n${err.slice(-2000)}`, { cause: error });
   const ask = async (method, route, body) => {
-    const response = await fetch(`${url}/${route}`, { method, headers, body: body ? JSON.stringify(body) : undefined });
+    const response = await fetch(`${url}/${route}`, { method, headers, body: body ? JSON.stringify(body) : undefined }).catch(error => { throw failed(`${method} ${route}`, error); });
     return { status: response.status, value: await response.json().catch(() => ({})) };
   };
   const stop = async () => { child.stdin.end(); child.kill("SIGTERM"); await exited; };
-  return { ask, stop, url, headers };
+  return { ask, stop, url, headers, failed };
 }
 
 // The Mac over SSH: `box route`, a process of its own on the machine.
@@ -202,7 +204,7 @@ async function asked(box, call, stopped) {
   }
 }
 async function streamed(box, signal, ready = () => true) {
-  const response = await fetch(`${box.url}/kuvo/sandbox/asks/events`, { headers: box.headers, signal });
+  const response = await fetch(`${box.url}/kuvo/sandbox/asks/events`, { headers: box.headers, signal }).catch(error => { throw signal.aborted || !box.failed ? error : box.failed("Following the asks", error); });
   let buffered = "";
   try {
     for await (const chunk of response.body) {
@@ -215,7 +217,7 @@ async function streamed(box, signal, ready = () => true) {
       }
     }
   } catch (error) {
-    if (!signal.aborted) throw error;
+    if (!signal.aborted) throw box.failed ? box.failed("Following the asks", error) : error;
   }
   assert.fail("nothing was asked");
 }
@@ -549,7 +551,7 @@ test("the asks you follow carry the box's ask to restart the agents that started
 
 // Each line of the asks' stream, as it comes.
 async function* followed(box, signal) {
-  const response = await fetch(`${box.url}/kuvo/sandbox/asks/events`, { headers: box.headers, signal });
+  const response = await fetch(`${box.url}/kuvo/sandbox/asks/events`, { headers: box.headers, signal }).catch(error => { throw signal.aborted || !box.failed ? error : box.failed("Following the asks", error); });
   let buffered = "";
   try {
     for await (const chunk of response.body) {
@@ -557,7 +559,7 @@ async function* followed(box, signal) {
       for (let at; (at = buffered.indexOf("\n")) >= 0; buffered = buffered.slice(at + 1)) yield JSON.parse(buffered.slice(0, at));
     }
   } catch (error) {
-    if (!signal.aborted) throw error;
+    if (!signal.aborted) throw box.failed ? box.failed("Following the asks", error) : error;
   }
 }
 
