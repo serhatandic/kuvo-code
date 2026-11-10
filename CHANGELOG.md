@@ -16,7 +16,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ### All Changes
 
-- A notification for your iPhone is no longer lost when your computer's connection to the relay drops just as it's sent: it goes once the connection is back, from your machines as it already did from your Mac.
+- A notification for your iPhone from one of your machines is no longer lost when the machine's connection to the relay is closing just as it's sent: it goes once the connection is back, as it already did from your Mac.
 - The subagents you make in Settings › Agents work in Claude Code, Codex, Cursor, Grok and Antigravity sessions too, with their instructions, on every account. In Claude Code they win over one of the same name in `~/.claude/agents`, and keep to what Settings › Agents lets them do. Before, only Kuvo Code's own agent had them.
 - **Subagents use** in Settings › Agents picks one model for the parts of a task an agent hands off, from any of your accounts, on each computer; a subagent with a model of its own keeps it. Each coding agent takes it when it's one of its models.
 - A Claude Code subagent sent off to work in the background (as Claude Code does unless told otherwise, a reviewer say) keeps working after the turn that started it ends: its tools run, ask you or are refused by your rules as the conversation's own would be. Before, every tool it used once that turn ended was refused with "There's no turn under way for this", so its review or task quietly didn't happen.

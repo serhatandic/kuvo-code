@@ -37,8 +37,9 @@ export function sendToPhones(host: PushHost | null | undefined, link: LinkState 
 }
 
 /** How a push went, as the relay answers it (`0x06`): Apple took it, no phone is registered at that
- * address, this box isn't one the phone takes pushes from, or Apple refused it. */
-export type PushOutcome = "sent" | "noPhone" | "notAllowed" | "refused";
+ * address, this box isn't one the phone takes pushes from, Apple refused it, or an answer this box
+ * doesn't know yet (a newer relay's). */
+export type PushOutcome = "sent" | "noPhone" | "notAllowed" | "refused" | "unknown";
 const OUTCOMES: readonly PushOutcome[] = ["sent", "noPhone", "notAllowed", "refused"];
 
 /** What the relay last answered of a push to one phone: when, how it went, and when one last went
@@ -67,7 +68,7 @@ export function notePushed(address: Buffer, status: number, now = Date.now(), li
   const where = address.toString("base64url");
   const phone = (link?.phones ?? []).find(each => each.address === where);
   if (!phone) return;
-  const outcome = OUTCOMES[status] ?? "refused";
+  const outcome = OUTCOMES[status] ?? "unknown";
   const kept = readPushed();
   const sent = outcome === "sent" ? now : kept[phone.key]?.sent;
   // Only phones this box still has.

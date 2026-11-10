@@ -73,7 +73,9 @@ function agentSends(body) {
   try { kept = JSON.parse(fs.readFileSync(file, "utf8")); } catch {}
   kept.push({ id: `ntc_${told}`, at: Date.now(), by: "agent", notice: { title: "Ada", body, category: "report", thread: "ses_ada", data: { session: "ses_ada" } } });
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, JSON.stringify(kept));
+  // Whole, as the box writes it: the bridge never reads half of it.
+  fs.writeFileSync(`${file}.tmp`, JSON.stringify(kept));
+  fs.renameSync(`${file}.tmp`, file);
 }
 
 // What another process does, looked at again as the relay records something and every few
@@ -132,7 +134,27 @@ test("how the relay answered a machine's push to your phone is kept: one it may 
   assert.equal(after.sent, went.at);
 });
 
-test("a notice handed to a relay connection that's closing is held and tried again, not lost", () => {
+test("a machine's notice told as its relay connection is closing is held, and reaches the phone once it's connected again", { timeout: 60_000 }, async t => {
+  relay.answers.push = 0;
+  // The relay closes the connection, and the bridge's side is left closing.
+  await relay.closing();
+  agentSends("Closing time.");
+  // Held to try again, not counted as sent, while the connection is still there, closing.
+  const held = path.join(home, "run", "held-notices.json");
+  await eventually(() => {
+    try { return JSON.parse(fs.readFileSync(held, "utf8")).some(entry => entry.notice.body === "Closing time."); } catch { return false; }
+  }, t.signal);
+  assert.ok(relay.has(machineAddress), "still on its closing connection as it held it");
+  assert.equal(relay.pushed.length, 3, "nothing went out on the closing connection");
+  // The connection ends; the bridge connects again, and the notice goes, once.
+  relay.drop();
+  const notice = await pushedSaying("Closing time.", t.signal);
+  assert.equal(notice.title, "Ada");
+  await eventually(() => !fs.existsSync(held), t.signal);
+  assert.equal(relay.pushed.length, 4);
+});
+
+test("sendToPhones: a connection that's closing takes nothing, and the hold tries again", () => {
   const readLink = () => JSON.parse(fs.readFileSync(path.join(home, "run", "link.json"), "utf8"));
   const notice = { title: "Ada", body: "Done.", category: "report", thread: "ses_ada", data: { session: "ses_ada" } };
   const sent = [];

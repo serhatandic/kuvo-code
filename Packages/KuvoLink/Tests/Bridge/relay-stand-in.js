@@ -47,7 +47,13 @@ function readFrames(buffer) {
 }
 
 // `changed`: called each time what it keeps changes (a device on it or gone, a push), for a test waiting on it.
-export async function relayStandIn({ addressOf }, { changed = () => {} } = {}) {
+export async function relayStandIn({ addressOf }, { changed: told = () => {} } = {}) {
+  // What waits for devices to say their close back (`closing`).
+  const waitingForClose = [];
+  const changed = () => {
+    for (const wake of waitingForClose.splice(0)) wake();
+    told();
+  };
   // Who's on it, by address (hex): how to give each what comes for it.
   const devices = new Map();
   const pushed = [];
@@ -55,7 +61,8 @@ export async function relayStandIn({ addressOf }, { changed = () => {} } = {}) {
   // What it answers a push with (`answers.push`: 0 sent, 1 no phone, 2 not allowed, 3 refused);
   // nothing until a test sets it.
   const answers = { push: null };
-  const sockets = new Set();
+  // Each connection, and what it knows of its device.
+  const sockets = new Map();
   const deliver = (from, to, payload) => {
     const device = devices.get(to.toString("hex"));
     if (!device) return devices.get(from.toString("hex"))?.(Buffer.concat([Buffer.from([3]), to]));
@@ -86,15 +93,23 @@ export async function relayStandIn({ addressOf }, { changed = () => {} } = {}) {
   server.on("upgrade", (request, socket) => {
     const accept = crypto.createHash("sha1").update(request.headers["sec-websocket-key"] + GUID).digest("base64");
     socket.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`);
-    sockets.add(socket);
     const state = { address: null };
+    sockets.set(socket, state);
     const give = bytes => { if (!socket.destroyed) socket.write(wsFrame(bytes)); };
     let pending = Buffer.alloc(0);
     socket.on("data", chunk => {
       const { frames, rest } = readFrames(Buffer.concat([pending, chunk]));
       pending = Buffer.from(rest);
       for (const { opcode, payload } of frames) {
-        if (opcode === 0x8) return socket.end(wsFrame(Buffer.alloc(0), 0x8));
+        if (opcode === 0x8) {
+          // Closing half way (`closing`): the device's close is heard, and the connection kept.
+          if (state.closing) {
+            state.closeHeard = true;
+            changed();
+            return;
+          }
+          return socket.end(wsFrame(Buffer.alloc(0), 0x8));
+        }
         if (opcode === 0x9) { socket.write(wsFrame(payload, 0xa)); continue; }
         if (opcode === 0x2) take(payload, state, give);
       }
@@ -142,10 +157,21 @@ export async function relayStandIn({ addressOf }, { changed = () => {} } = {}) {
     },
     // Every connection dropped (the relay restarting).
     drop() {
-      for (const socket of sockets) socket.destroy();
+      for (const socket of sockets.keys()) socket.destroy();
+    },
+    // Every connection starts closing (the relay says so) and isn't let go: each device, once it
+    // hears it, is left with a connection that's closing, until `drop`. Resolves once each device
+    // said its close back.
+    async closing() {
+      const all = [...sockets.entries()];
+      for (const [socket, state] of all) {
+        state.closing = true;
+        socket.write(wsFrame(Buffer.alloc(0), 0x8));
+      }
+      while (!all.every(([, state]) => state.closeHeard)) await new Promise(resolve => waitingForClose.push(resolve));
     },
     close: () => new Promise(resolve => {
-      for (const socket of sockets) socket.destroy();
+      for (const socket of sockets.keys()) socket.destroy();
       server.close(() => resolve());
     }),
   };

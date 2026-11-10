@@ -25132,7 +25132,7 @@ function notePushed(address, status, now = Date.now(), link = readLink()) {
   const phone = (link?.phones ?? []).find((each) => each.address === where);
   if (!phone)
     return;
-  const outcome = OUTCOMES[status] ?? "refused";
+  const outcome = OUTCOMES[status] ?? "unknown";
   const kept = readPushed2();
   const sent = outcome === "sent" ? now : kept[phone.key]?.sent;
   const known = new Set((link?.phones ?? []).map((each) => each.key));
