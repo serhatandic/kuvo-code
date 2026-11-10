@@ -151,7 +151,7 @@ nonisolated enum MessageMentions {
     /// it, in `color` where it sets none: each marked "&" its face or mark, a keyword's "/" its mark, a picture's name its mark
     /// for the "[" and without the "]", each over the character it stands for, which stays (so
     /// it's copied and found as written). Bold, color, links and Find's marks as they're set.
-    @MainActor static func attributed(_ attributed: AttributedString, font: NSFont, color: NSColor = .labelColor) -> (text: NSAttributedString, faces: TextFaces) {
+    @MainActor static func attributed(_ attributed: AttributedString, font: NSFont, color: NSColor = .labelColor, dark: Bool = false) -> (text: NSAttributedString, faces: TextFaces) {
         let text = NSMutableAttributedString()
         var faces = TextFaces()
         faces.size = (font.pointSize * 1.1).rounded()
@@ -171,7 +171,9 @@ nonisolated enum MessageMentions {
             text.append(NSAttributedString(string: String(attributed[run.range].characters), attributes: attributes))
             let span = NSRange(location: start, length: text.length - start)
             let ink = attributes[.foregroundColor] as? NSColor ?? color
-            if let symbol = run[KeywordTokenMark.self] {
+            if let chip = run[WorkItemChipMark.self] {
+                faces.addChip(WorkItemChipAttachment.image(chip, size: font.pointSize, dark: dark), over: span, in: text, font: runFont)
+            } else if let symbol = run[KeywordTokenMark.self] {
                 faces.add(TextFaces.symbol(symbol, size: faces.size, ink: ink), at: span, in: text, font: runFont)
             } else if let mark = run[PictureMark.self] {
                 if mark == .open {
@@ -383,6 +385,13 @@ nonisolated enum PictureMark: AttributedStringKey {
 nonisolated enum KeywordTokenMark: AttributedStringKey {
     typealias Value = String
     static let name = "kuvo.keywordTokenMark"
+}
+
+/// A Work Queue item's "#243" in a bubble, which `MessageMentions.attributed(_:font:color:dark:)`
+/// draws as its chip.
+nonisolated enum WorkItemChipMark: AttributedStringKey {
+    typealias Value = WorkItemChipAttachment
+    static let name = "kuvo.workItemChip"
 }
 
 /// An agent's "&" in a bubble, which `MessageMentions.attributed(_:font:color:)` (and

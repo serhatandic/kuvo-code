@@ -25,6 +25,7 @@ import { WAKE_ROUTES } from "./wakes";
 import { VAULT_ROUTES } from "./vault";
 import { WORK_ROUTES } from "./work";
 import { WORKTREE_ROUTES } from "./worktrees";
+import { WORK_QUEUE_ROUTES } from "./work-queue";
 
 /** What a route that refuses says, as JSON: why, in words to show (`message`), and for a file that
  * can't be used, its problem alone (`problem`). One that says nothing is `{}`. A route that says
@@ -57,5 +58,6 @@ export const ROUTES: RouteShape[] = [
   ...WAKE_ROUTES,
   ...VAULT_ROUTES,
   ...WORK_ROUTES,
+  ...WORK_QUEUE_ROUTES,
   ...WORKTREE_ROUTES,
 ];
