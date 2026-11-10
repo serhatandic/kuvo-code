@@ -84,11 +84,33 @@ final class TestBox {
         if let port = process.endpoint?.url.port { StubWeb.letThrough(port: port) }
     }
 
+    /// Where the coding agents' bridge it's told of listens for it (`agents(at:)`).
+    private var agentsPort: UInt16?
+
+    /// The coding agents' bridge beside its engine, at `url`, as the app records it for the box
+    /// (`run/bridge.json`): a test's stand-in there (a `StubEngine`, or `StubWeb`'s routes), which
+    /// listens on its port for it, with `signedIn` installed and signed in.
+    func agents(at url: String, password: String = "test", signedIn: [String] = ["claude-code"]) async throws {
+        let address = try URL(string: url).orThrow("Not a bridge's address: \(url)")
+        let port = UInt16(address.port ?? 0)
+        agentsPort = port
+        try await StubWeb.listen(port: port)
+        for id in signedIn {
+            let answer = StubWeb.json(["data": ["id": id, "name": id, "metadata": ["installed": true], "connections": [["type": "agent"]]]])
+            StubWeb.route(url + "/api/integration/" + id) { _ in answer }
+        }
+        BoxProcess.agentsChanged(ServerEndpoint(url: address, password: password), pid: getpid())
+    }
+
     func stop() {
         host.stop()
         process.stop()
         BoxProcess.engineChanged(nil, version: nil, pid: nil)
         StubWeb.stopListening(port: enginePort)
+        if let agentsPort {
+            BoxProcess.agentsChanged(nil, pid: nil)
+            StubWeb.stopListening(port: agentsPort)
+        }
         try? FileManager.default.removeItem(at: BoxProcess.home)
     }
 }

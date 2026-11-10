@@ -13,7 +13,7 @@ import { askAnswerRoute, asksRoute } from "../areas/asks";
 import { appNoticeRoute, attentionRoute } from "../areas/attention";
 import { botKeysRefreshRoute, botKeysRoute } from "../areas/bot-keys";
 import { arrivedRoute, botEventsRoute, botRoute, botsRoute, botTemplatesRoute, newBotRoute, retellRoute } from "../areas/bots";
-import { carryRoute } from "../areas/carry";
+import { CARRY_ROUTE, carryRoute } from "../areas/carry";
 import { engineControlRoute, signInReturnRoute } from "../areas/engine";
 import { fileAt } from "../areas/file";
 import { foldersRoute } from "../areas/folders";
@@ -121,7 +121,7 @@ const ROUTES: (Route | Route<RegExpMatchArray>)[] = [
   // (Before the bot keys' route, which would take "keys" for a bot.)
   { when: route => route === "kuvo/bots/keys/refresh", answer: botKeysRefreshRoute },
   { when: route => /^kuvo\/bots\/[^/]+\/keys(\/[^/]+)?$/.test(route), answer: botKeysRoute },
-  { when: route => route.match(/^kuvo\/sessions\/([^/]+)\/agents$/), answer: carryRoute },
+  { when: route => route.match(CARRY_ROUTE), answer: carryRoute },
   { when: (route, request) => ["PATCH", "DELETE"].includes(request.method.toUpperCase()) && route.match(/^kuvo\/bots\/([^/]+)$/), answer: botRoute },
   { when: route => GROUP_ROUTE.test(route), answer: groupsRoute },
   { when: route => ARTIFACT_ROUTE.test(route), answer: artifactsRoute },

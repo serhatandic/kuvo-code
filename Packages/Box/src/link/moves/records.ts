@@ -174,8 +174,12 @@ export function frozen(records = liveMoves()): Set<string> {
  * still being let go; null for none. Its copy there is held until it's switched to, so whatever
  * comes from it there comes from it as it runs there now. */
 export function switchedTo(session: string, records = liveMoves()): string | null {
-  const record = records.find(each => each.role === "from" && (each.stage === "switching" || each.stage === "finishing") && each.sessions.includes(session));
-  return record?.peer ?? null;
+  return switchedMove(session, records)?.peer ?? null;
+}
+
+/** The move switching `session` from here to another box (`switchedTo`), or null. */
+export function switchedMove(session: string, records = liveMoves()): MoveRecord | null {
+  return records.find(each => each.role === "from" && (each.stage === "switching" || each.stage === "finishing") && each.sessions.includes(session)) ?? null;
 }
 
 /** A conversation moved away from here in the last two days, and where it lives now (a box's key). */
