@@ -491,7 +491,8 @@ struct BottomStack: View {
                                 .modifier(CardRow())
                                 .transition(.fold)
                             } else {
-                                if !liveBars.isEmpty { BarTuckButton { model.tuck.hide() } }
+                                // (One bar folds by its own chevron.)
+                                if liveBars.count > 1 { BarTuckButton { model.tuck.hide() } }
                                 if let goal = model.goal, let text = model.putAways.text(.goal(started: goal.started)) {
                                     let item = PutAway.goal(started: goal.started)
                                     UndoLine(text: text, undo: model.putAways.canUndo(item) ? { model.putAways.undo(item) } : nil)
@@ -871,7 +872,6 @@ struct BottomStack: View {
         let machine = RemoteFolder.machine(of: model.session.location.directory).map { id in app.machines.list.first { $0.id == id }?.name ?? id }
         let unavailable = model.session.model.flatMap { catalog.refusal($0, on: machine) }
         model.submitDraft(for: catalog.model(model.session.model), queue: queue, commands: catalog.commands(in: model.session.location.directory), unavailable: unavailable)
-        if model.draftText.isEmpty { model.tuck.sent() }
     }
 }
 
