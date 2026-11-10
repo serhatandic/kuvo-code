@@ -243,14 +243,14 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
     // meanwhile.)
     const oursGiven = [...readProjects().filter(each => !each.removed).flatMap(each => [each.directory, ...(each.folders ?? [])]),
       ...readWorktrees().map(each => each.folder ?? each.root), ...(parentFolder ? [parentFolder] : [])];
-    if (path.isAbsolute(full)) await askedAbout([full, ...oursGiven]);
+    if (path.isAbsolute(full)) await askedAbout([full, ...(by ? oursGiven : [])]);
     let isFolder = false;
     try { isFolder = fs.statSync(full).isDirectory(); } catch {}
     if (!path.isAbsolute(full) || !isFolder) return no(400, `${written} isn't a folder on ${HERE}. Give a full path to one.`);
     // (Its commands would write it whole, in the sandbox: an agent in Auto never starts one where
     // that's real damage, its own conversation's folder and your projects aside; one in Full
     // Access, anywhere, as its own commands go.)
-    const ours = oursGiven.map(realish);
+    const ours = by ? oursGiven.map(realish) : [];
     // (An agent's by where it really is as it's checked: a link swapped in after is never followed.)
     const at = by ? fs.realpathSync(full) : full;
     const bridgeNow = place.bridge?.() ?? null;

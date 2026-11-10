@@ -217,6 +217,8 @@ export async function tellApproved(session: string, decision: Decision, found?: 
 
 // The agent's own file tools, as their calls read (Claude Code's capitalised): which only read.
 const READING = new Set(["read", "glob", "grep", "list", "ls", "view", "notebookread"]);
+// Of those, the ones that read one file, as named.
+const OWN_READING = new Set(["read", "view", "notebookread"]);
 // Asks already taken up in this process (an event can come again as the stream reconnects).
 const reviewing = new Set<string>();
 
@@ -337,14 +339,23 @@ async function answerPermission(source: Target, id: string, sessionID: string, s
   const actions: ReviewedAction[] = seen && file ? [{ kind: "file", path: file, access: READING.has(seen.tool.toLowerCase()) ? "read" : "write", folder, tool: seen.tool, input: seen.input }]
     : named.length ? named.map(each => ({ kind: "file" as const, path: each, access: "write" as const, folder }))
     : [{ kind: "tool", tool: seen?.tool || "work outside its folder", args: seen?.input ?? { asked: permission.resources }, folder }];
-  // (Each path macOS may ask about, asked off the box's thread first: a project on your Desktop.)
-  await askedAbout([folder, ...actions.flatMap(action => action.kind === "file" ? [action.path] : [])]);
-  // What its own tools read of its commands' temporary files (a screenshot a command took) and of
-  // the files sent with its messages is its own to read in any mode, as what's in its folder is:
-  // never asked of you, nor reviewed.
+  // What its own tools read, one file at a time, of its commands' temporary files (a screenshot a
+  // command took) and of the files sent with its messages is its own to read in any mode, as what's
+  // in its folder is: never asked of you, nor reviewed. (By name first; then by where each really is,
+  // so never through a link out of them. Not a tool that walks a folder, which could follow one.)
   const readsOwn = [commandTemporary(folder), ...[at.data.id, at.data.parentID].filter((each): each is string => typeof each === "string").flatMap(attachedOf)]
     .filter((each): each is string => Boolean(each));
-  if (actions.every(action => action.kind === "file" && action.access === "read" && readsOwn.some(place => isWithin(action.path, place)))) {
+  const ownReads = (within: (file: string, place: string) => boolean) => actions.every(action => action.kind === "file" && action.access === "read"
+    && OWN_READING.has(String(action.tool).toLowerCase()) && readsOwn.some(place => within(action.path, place)));
+  const ownByName = ownReads((file, place) => { const inside = path.relative(place, path.resolve(file)); return inside === "" || (!inside.startsWith("..") && !path.isAbsolute(inside)); });
+  // (Else, outside Auto, it's yours as it is: nothing is opened for it, nor waits on macOS.)
+  if (!ownByName && !inAuto(at)) {
+    noteReview(id, sessionID, "yours", call);
+    return null;
+  }
+  // (Each path macOS may ask about, asked off the box's thread first: a project on your Desktop.)
+  await askedAbout([folder, ...actions.flatMap(action => action.kind === "file" ? [action.path] : [])]);
+  if (ownByName && ownReads(isWithin)) {
     await engineCall(source, "POST", `/api/session/${encodeURIComponent(permission.asker)}/permission/${encodeURIComponent(permission.id)}/reply`, { decision: "once" }, signal);
     noteReview(id, sessionID, "allowed", call);
     return { decision: "allow", reason: "Its own files.", by: "code" };

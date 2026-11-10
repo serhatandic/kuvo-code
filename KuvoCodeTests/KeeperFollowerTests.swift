@@ -51,4 +51,39 @@ import Testing
         #expect(KeeperRecord.read() == nil, "no keeper runs")
         #expect(follower.engine == .starting, "it waits for the keeper's engine rather than connect to the old one")
     }
+
+    /// The app quits while launchd is still being asked to start the keeper (as the app opens after
+    /// Stop Background Work): it's still the keeper's to follow, and the app doesn't take it for
+    /// one that isn't coming, which would start a box of its own as it quits.
+    @Test func quittingWhileLaunchdIsAskedIsNoKeeperGone() async throws {
+        try #require(KeeperRecord.read() == nil, "no keeper runs for the tests")
+        let folder = AppInfo.testRoot.appending(path: "Launchd-\(UUID().uuidString.prefix(6))")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let launchctl = folder.appending(path: "launchctl")
+        try "#!/bin/sh\nsleep 2\nexit 0\n".write(to: launchctl, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: launchctl.path(percentEncoded: false))
+        BackgroundWork.status = { .enabled }
+        BackgroundWork.asUsersCopy = true
+        BackgroundWork.launchctlForTests = launchctl.path(percentEncoded: false)
+        BackgroundWork.shared.refresh()
+        let didntStart = BackgroundWork.shared.didntStart
+        let follower = KeeperFollower(box: BoxProcess(), agents: OutsideAgents())
+        defer {
+            follower.stop()
+            BackgroundWork.status = nil
+            BackgroundWork.asUsersCopy = false
+            BackgroundWork.launchctlForTests = nil
+            BackgroundWork.shared.refresh()
+            BackgroundWork.shared.didntStart = didntStart
+            try? FileManager.default.removeItem(at: folder)
+        }
+        var gone = false
+        follower.onGone = { gone = true }
+        let starting = Task { await follower.start() }
+        try await Task.sleep(for: .milliseconds(200))
+        follower.stop()
+        #expect(await starting.value, "still the keeper's")
+        #expect(!gone)
+        #expect(BackgroundWork.shared.didntStart == didntStart, "Settings doesn't say background work didn't start")
+    }
 }

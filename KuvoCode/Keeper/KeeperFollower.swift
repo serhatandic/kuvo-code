@@ -86,8 +86,9 @@ final class KeeperFollower {
         if KeeperRecord.read() == nil {
             askedToStart = .now
             let started = await startKeeper()
-            // (Stopped while launchd was asked: nothing more.)
-            guard following else { return false }
+            // (Stopped while launchd was asked, as the app quits: nothing more, and the app doesn't
+            // take it for a keeper that isn't coming, which would start its own box.)
+            guard following else { return true }
             guard started else {
                 following = false
                 log.error("launchd has no keeper to start: this Mac's box runs in the app")

@@ -104,11 +104,28 @@ const homeWord = (text: string) => text.replace(/^(~|\$HOME|\$\{HOME\})(?=\/|$)/
 /** A word of a command as a path, if it names one: `~` and `$HOME` read as your home, a relative
  * one from `folder`. Null for one that isn't a path. */
 function pathOf(word: string, folder: string): string | null {
+  const named = namedPath(word, folder);
+  return named === null ? null : realish(named);
+}
+
+/** As `pathOf`, as it's named: its links not followed, so nothing is opened. */
+function namedPath(word: string, folder: string): string | null {
   let text = word.replace(/^['"]|['"]$/g, "").replace(/^[A-Za-z_][A-Za-z0-9_]*=/, "").replace(/^-[A-Za-z-]*=/, "");
   if (!text || /^[a-z][a-z0-9+.-]*:\/\//i.test(text)) return null;
   text = homeWord(text);
   if (!text.includes("/") && !text.startsWith(".")) return null;
-  return realish(path.resolve(folder, text));
+  return path.resolve(folder, text);
+}
+
+/** What an action names that judging it opens (`realish`, a script read): its folder, its file, a
+ * command's words that name paths, the scripts it runs and what the sandbox stopped it writing. */
+function namedBy(action: ReviewedAction): string[] {
+  if (action.kind === "file") return [action.folder, action.path];
+  if (action.kind === "tool") return [action.folder];
+  const line = readLine(action.command, true);
+  const words = "unreadable" in line ? [] : line.parts.flatMap(part => [...part.words, ...part.writes, ...part.reads]);
+  return [action.folder, ...words.map(word => namedPath(word, action.folder)).filter((each): each is string => each !== null),
+    ...scriptsOf(action.command, action.folder).files, ...stoppedWrites(action)];
 }
 
 // What runs as you log in, in your home: your shells' start-up files, launchd's agents and login
@@ -962,7 +979,7 @@ export async function review(action: ReviewedAction, context: ReviewContext, giv
   const now = given.now ?? Date.now;
   const folder = given.folder ?? REVIEWS_FOLDER;
   // (What it names that macOS may ask about, asked off the box's thread first: `askedAbout`.)
-  await askedAbout([action.folder, ...(action.kind === "file" ? [action.path] : []), ...(given.own ?? [])]);
+  await askedAbout([...namedBy(action), ...(given.own ?? [])]);
   // (One it fails to judge is held back like any it can't, on the log for you to approve.)
   const { verdict, key } = await judge(action, context, given, now(), folder)
     .catch(error => ({ verdict: heldBack(`Auto's reviewer couldn't review it (${oneLine(String((error as Error)?.message ?? error), 120)}).`, "failed"), key: actionKey(action) }));

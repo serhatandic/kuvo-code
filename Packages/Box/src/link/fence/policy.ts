@@ -311,8 +311,9 @@ function keychainDaemons(home: string): string[] {
 export function sshKeys(home: string): string[] {
   const folder = path.join(home, ".ssh");
   const { known, value: names } = namesIn(folder);
-  // (One that leads into a folder macOS asks about, not listed yet: hidden whole until it is.)
-  if (!known) return [folder];
+  // (One that leads into a folder macOS asks about, not listed yet, or not listed at all: hidden
+  // whole. If the box can't list it, commands can't read it either.)
+  if (!known || (!names && macMayAsk(folder))) return [folder];
   if (!names) return [];
   return names.filter(name => !(name === "config" || name === "config.d" || name.startsWith("known_hosts") || name.endsWith(".pub") || name === "authorized_keys"))
     .map(name => path.join(folder, name));
@@ -323,8 +324,8 @@ export function sshKeys(home: string): string[] {
 function ghHosts(home: string): string[] {
   const file = path.join(home, ".config", "gh", "hosts.yml");
   const { known, value: text } = textFor(file);
-  // (Hidden until it's read, where that waits on macOS.)
-  return !known || (text !== null && /oauth_token\s*:/.test(text)) ? [file] : [];
+  // (Hidden until it's read, where that waits on macOS, and where macOS said no.)
+  return !known || (text === null ? macMayAsk(file) : /oauth_token\s*:/.test(text)) ? [file] : [];
 }
 
 /** This Mac's app's temporary folder (`…/T/<bundle>`), where its box's own is (`…/T/<bundle>/box`),
@@ -534,8 +535,37 @@ export function macMayAsk(where: string): boolean {
  * waits for it, and after it they open at once. Anything else is never waited on.
  */
 export async function askedAbout(paths: readonly unknown[]): Promise<void> {
-  const asking = paths.filter((each): each is string => typeof each === "string" && path.isAbsolute(each) && macMayAsk(each));
-  await Promise.all(asking.map(each => fs.promises.realpath(each).catch(() => {})));
+  const named = paths.filter((each): each is string => typeof each === "string" && path.isAbsolute(each) && macMayAsk(each));
+  await Promise.all([...new Set(named.map(each => path.resolve(each)))].map(askOne));
+}
+
+// The ask under way in each folder macOS asks about (`askingIn`): one at a time there, so prompts
+// nobody answers hold one of Bun's threads for files each, never all of them (the rest of the box
+// reads files on them too).
+const asking = new Map<string, Promise<void>>();
+
+async function askOne(where: string): Promise<void> {
+  const place = askingIn(macAsksAbout(where) ? where : leadsTo(where));
+  for (let pending = asking.get(place); pending; pending = asking.get(place)) await pending;
+  const asked: Promise<void> = fs.promises.realpath(where).then(() => {}, () => {}).finally(() => {
+    if (asking.get(place) === asked) asking.delete(place);
+  });
+  asking.set(place, asked);
+  await asked;
+}
+
+/** The folder macOS answers for as a whole that `at` is in: a personal folder of yours, iCloud
+ * Drive, another drive; in ~/Library, where it asks of each app's data, the path itself. */
+function askingIn(at: string): string {
+  macAsksAbout(at);
+  const found = macAsks!.exec(at.toLowerCase());
+  if (!found) return at;
+  if (found[2] === "/volumes/") {
+    const name = at.slice(found[0].length).split("/")[0];
+    return name ? at.slice(0, found[0].length) + name : at;
+  }
+  const folder = at.slice(0, found[0].length).replace(/\/$/, "");
+  return /\/library$/i.test(folder) ? at : folder;
 }
 
 // Files of yours the walls are read from (SSH's settings and the files they include, gh's sign-in)
@@ -572,13 +602,13 @@ function readLate<T>(key: string, read: () => Promise<T>): { known: boolean; val
 
 /** A file's text, null where it can't be read; `known`, false while it waits on macOS. */
 function textFor(file: string): { known: boolean; value: string | null } {
-  if (macMayAsk(file)) return readLate(`text ${path.resolve(file)}`, () => fs.promises.readFile(file, "utf8"));
+  if (macMayAsk(file)) return readLate(`text ${path.resolve(file)}`, async () => { await askedAbout([file]); return fs.promises.readFile(file, "utf8"); });
   try { return { known: true, value: fs.readFileSync(file, "utf8") }; } catch { return { known: true, value: null }; }
 }
 
 /** A folder's names, null where it can't be listed; `known`, false while it waits on macOS. */
 function namesIn(folder: string): { known: boolean; value: string[] | null } {
-  if (macMayAsk(folder)) return readLate(`names ${path.resolve(folder)}`, () => fs.promises.readdir(folder));
+  if (macMayAsk(folder)) return readLate(`names ${path.resolve(folder)}`, async () => { await askedAbout([folder]); return fs.promises.readdir(folder); });
   try { return { known: true, value: fs.readdirSync(folder) }; } catch { return { known: true, value: null }; }
 }
 

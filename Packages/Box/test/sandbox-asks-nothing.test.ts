@@ -257,17 +257,21 @@ test.skipIf(process.platform !== "darwin")("a project in a folder macOS asks abo
   const held = `/Volumes/kuvo-asks-held-${id}`
   const behind = join(root, "behind")
   for (const folder of ["shop", "shop-data", "blog"]) mkdirSync(join(behind, folder), { recursive: true })
-  const { preload, noted } = asking(root, { [place]: behind }, held)
+  // (And another such folder, with a script in it.)
+  const tools = `/Volumes/kuvo-asks-tools-${id}`
+  mkdirSync(join(root, "tools"))
+  writeFileSync(join(root, "tools", "build.sh"), "echo built\n")
+  const { preload, noted } = asking(root, { [place]: behind, [tools]: join(root, "tools") }, held)
   const script = join(root, "rules.ts")
   writeFileSync(script, `
 import { addRule, allowedFor, listed } from ${JSON.stringify(join(import.meta.dir, "..", "src", "link", "fence", "allowed.ts"))}
-import { keptFromSessions } from ${JSON.stringify(join(import.meta.dir, "..", "src", "link", "work", "reviewer.ts"))}
+import { keptFromSessions, review } from ${JSON.stringify(join(import.meta.dir, "..", "src", "link", "work", "reviewer.ts"))}
 const said: Record<string, unknown> = {}
 // One nobody answers about: it waits, and the box goes on meanwhile.
 let ticks = 0
 const ticking = setInterval(() => ticks++, 20)
 let settled = false
-addRule({ project: ${JSON.stringify(held + "/blog")}, kind: "write", path: ${JSON.stringify(held + "/blog-data")} }).finally(() => { settled = true })
+Promise.resolve(addRule({ project: ${JSON.stringify(held + "/blog")}, kind: "write", path: ${JSON.stringify(held + "/blog-data")} })).finally(() => { settled = true })
 await new Promise(resolve => setTimeout(resolve, 400))
 said.heldSettled = settled
 said.ticked = ticks >= 10
@@ -276,6 +280,10 @@ const rule = await addRule({ project: ${JSON.stringify(place + "/shop")}, kind: 
 said.rule = { project: rule.project, path: rule.path }
 said.listed = (await listed(await allowedFor(${JSON.stringify(place + "/shop")}))).map(each => each.owner)
 said.kept = await keptFromSessions(${JSON.stringify(place + "/blog")})
+// Auto's reviewer, on a command that runs a script there, from a project elsewhere.
+const judged = await review({ kind: "command", command: "bash " + ${JSON.stringify(tools + "/build.sh")}, folder: ${JSON.stringify(root)} },
+  { session: "ses_auto", said: [] }, { model: async () => { throw new Error("no model here") } })
+said.judged = judged.decision
 console.log(JSON.stringify(said))
 process.exit(0)
 `)
@@ -285,7 +293,7 @@ process.exit(0)
     heldSettled: false, ticked: true,
     rule: { project: `${place}/shop`, path: `${place}/shop-data` },
     listed: [{ kind: "project", name: "shop" }],
-    kept: null,
+    kept: null, judged: "refuse",
   })
   expect(await Bun.file(noted).text()).toBe("")
 }, 30_000)
