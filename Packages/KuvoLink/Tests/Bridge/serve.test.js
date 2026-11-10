@@ -96,6 +96,77 @@ test("a stream goes as it comes, and stops when the client goes", async t => {
   while (!stopped) await new Promise(resolve => setImmediate(resolve));
 });
 
+// A route that holds a request before its answer's head (an ask waiting for you, a sandbox tool, a
+// vault wait) says it's still working, every 20 seconds: a client's wait for the head (URLSession's
+// request timeout, a minute unless it says) never runs out while it works.
+test("an answer slow to come says it's alive while the box works, so a client waiting for its head doesn't give up", async t => {
+  // (Its heartbeat on a clock this test moves: no waiting on one.)
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  t.after(() => t.mock.timers.reset());
+  let started;
+  const began = new Promise(resolve => { started = resolve; });
+  let release;
+  const held = new Promise(resolve => { release = resolve; });
+  const server = link.serveBox("pw", async function* () {
+    started();
+    await held;
+    yield { head: { status: 200, headers: { "content-type": "application/json" } } };
+    yield { body: Buffer.from(JSON.stringify({ ok: true })) };
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  const interim = [];
+  const answer = new Promise((resolve, reject) => {
+    const request = http.request({ hostname: "127.0.0.1", port: server.address().port, path: "/kuvo/sandbox/tools", method: "POST", headers: { authorization: auth("pw"), "content-type": "application/json" } }, response => {
+      let body = "";
+      response.setEncoding("utf8");
+      response.on("data", chunk => { body += chunk; });
+      response.on("end", () => resolve({ status: response.statusCode, body }));
+    });
+    request.on("information", info => interim.push(info.statusCode));
+    request.on("error", reject);
+    request.end("{}");
+  });
+  await began;
+  // Its 20 seconds with nothing to read: the box says it's still working.
+  t.mock.timers.tick(20_000);
+  release();
+  const got = await answer;
+  assert.ok(interim.length >= 1 && interim.every(code => code === 102), `it says it's alive while it works (${interim.join(",")})`);
+  assert.equal(got.status, 200);
+  assert.deepEqual(JSON.parse(got.body), { ok: true }, "and then the answer itself, whole");
+});
+
+test("a client of HTTP/1.0, which mustn't get an interim answer, gets only its answer however long it's held", async t => {
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  t.after(() => t.mock.timers.reset());
+  let started;
+  const began = new Promise(resolve => { started = resolve; });
+  let release;
+  const held = new Promise(resolve => { release = resolve; });
+  const server = link.serveBox("pw", async function* () {
+    started();
+    await held;
+    yield { head: { status: 200, headers: { "content-type": "application/json" } } };
+    yield { body: Buffer.from("{}") };
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  const socket = net.connect(server.address().port, "127.0.0.1");
+  t.after(() => socket.destroy());
+  let heard = "";
+  socket.setEncoding("utf8");
+  socket.on("data", chunk => { heard += chunk; });
+  const closed = once(socket, "close");
+  socket.write(`POST /kuvo/sandbox/tools HTTP/1.0\r\nAuthorization: ${auth("pw")}\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}`);
+  await began;
+  t.mock.timers.tick(60_000);
+  release();
+  await closed;
+  assert.match(heard, /^HTTP\/1\.[01] 200/, heard);
+  assert.doesNotMatch(heard, / 102 /);
+});
+
 test("an answer cut off as it comes (the engine gone halfway) reaches the app cut off, not as a whole one", async t => {
   const handle = async function* () {
     yield { head: { status: 200, headers: { "content-type": "application/json" } } };
