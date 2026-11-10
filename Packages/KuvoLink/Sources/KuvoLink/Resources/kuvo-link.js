@@ -2133,6 +2133,7 @@ var FEATURES = [
   "sandbox",
   "sandbox.check",
   "sandbox.asks",
+  "sandbox.reviews.whole",
   "approval",
   "approval.reviewer",
   "git.backups",
@@ -17572,6 +17573,23 @@ var reviewing = new Set;
 var askReviews = new Map;
 var reviewFollowers = new Set;
 var listAskReviews = () => [...askReviews.values()];
+function settleAskReview(id) {
+  const review = askReviews.get(id);
+  if (!review || review.state !== "yours" && review.state !== "checking")
+    return;
+  askReviews.delete(id);
+  for (const changed of reviewFollowers)
+    changed();
+}
+function settleRunReviews(session) {
+  const gone = [...askReviews.values()].filter((each) => each.session === session && (each.state === "yours" || each.state === "checking"));
+  if (!gone.length)
+    return;
+  for (const each of gone)
+    askReviews.delete(each.id);
+  for (const changed of reviewFollowers)
+    changed();
+}
 function onAskReviewsChanged(changed) {
   reviewFollowers.add(changed);
   return () => {
@@ -17606,6 +17624,23 @@ async function reviewPermission(source, event, signal, found) {
     throw error;
   }
 }
+async function takeUpWaitingAsks(source, sessions, signal) {
+  const waiting = [];
+  for (const session of sessions) {
+    if (signal?.aborted)
+      return;
+    const { permissions } = await asksIn(source, session, signal).catch(() => ({ permissions: [] }));
+    for (const each of permissions) {
+      if (each.action !== "external_directory" || reviewing.has(each.id) || askReviews.has(each.id))
+        continue;
+      noteReview(each.id, each.asker, "checking");
+      waiting.push(each);
+    }
+  }
+  for (const each of waiting) {
+    await reviewPermission(source, { type: "permission.asked", data: { id: each.id, sessionID: each.asker, action: each.action } }, signal).catch(() => null);
+  }
+}
 var attachedOf = (session) => attachmentRoots().map((root) => path64.join(root, session));
 function ownFolders(at) {
   const folder = at.data.location?.directory;
@@ -17637,9 +17672,19 @@ function realPath(file) {
   }
 }
 async function answerPermission(source, id, sessionID, signal, found) {
-  const { permissions } = await asksIn(source, sessionID, signal);
-  const permission = permissions.find((each) => each.id === id && each.asker === sessionID);
-  if (permission?.action !== "external_directory")
+  let { permissions } = await asksIn(source, sessionID, signal);
+  let permission = permissions.find((each) => each.id === id && each.asker === sessionID);
+  if (!permission) {
+    await new Promise((done) => setTimeout(done, 1000));
+    ({ permissions } = await asksIn(source, sessionID, signal));
+    permission = permissions.find((each) => each.id === id && each.asker === sessionID);
+  }
+  if (!permission) {
+    if (askReviews.get(id)?.state === "checking")
+      noteReview(id, sessionID, "yours", askReviews.get(id)?.call);
+    return null;
+  }
+  if (permission.action !== "external_directory")
     return null;
   const seen = await callOf(source, permission, signal);
   const at = found === undefined ? await conversationOf2(sessionID) : found;
@@ -25908,6 +25953,8 @@ async function watchEvents(read, tell, signal, answered = () => {}, { bots = fal
         settleGoalHolds(source, goalHeld).catch(() => {});
       if (work)
         noteFullAccessAtWork(source, atWork3).catch(() => {});
+      if (work)
+        atWork3(source).then((sessions) => takeUpWaitingAsks(source, sessions, connection.signal)).catch(() => {});
       for await (const event of serverEvents(response.body)) {
         if (event.type === "session.execution.started")
           freshenBot(source, event.data?.sessionID).catch(() => {});
@@ -25946,6 +25993,11 @@ async function watchEvents(read, tell, signal, answered = () => {}, { bots = fal
           if (event.type === "session.created" || event.type === "session.deleted" || RUN_ENDS.has(event.type) || event.type === "session.metadata.updated" && isArchiving(event))
             tidyWorktrees(connection.signal).catch(() => {});
         }
+        const settled = ANSWERED2.has(event.type) ? event.data?.requestID ?? event.data?.id : undefined;
+        if (typeof settled === "string")
+          settleAskReview(settled);
+        if (RUN_ENDS.has(event.type) && typeof event.data?.sessionID === "string")
+          settleRunReviews(event.data.sessionID);
         if (!notices)
           continue;
         if (ANSWERED2.has(event.type))

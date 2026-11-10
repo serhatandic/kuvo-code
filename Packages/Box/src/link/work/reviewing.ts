@@ -241,6 +241,25 @@ const reviewFollowers = new Set<() => void>();
 
 export const listAskReviews = (): AskReview[] => [...askReviews.values()];
 
+/** An ask answered (here, on a client, by the reviewer) or gone: one left for you, or still checked,
+ * is off the list, so what's listed as waiting is what waits; what the reviewer decided stays, for
+ * the mark on its step. */
+export function settleAskReview(id: string): void {
+  const review = askReviews.get(id);
+  if (!review || (review.state !== "yours" && review.state !== "checking")) return;
+  askReviews.delete(id);
+  for (const changed of reviewFollowers) changed();
+}
+
+/** A run's end, which takes what it asked with it, without a word of each: its asks left for you
+ * or still checked are off the list, as `settleAskReview` takes one. */
+export function settleRunReviews(session: string): void {
+  const gone = [...askReviews.values()].filter(each => each.session === session && (each.state === "yours" || each.state === "checking"));
+  if (!gone.length) return;
+  for (const each of gone) askReviews.delete(each.id);
+  for (const changed of reviewFollowers) changed();
+}
+
 /** Tells `changed` each time an ask's review changes, until the function it returns is called. */
 export function onAskReviewsChanged(changed: () => void): () => void {
   reviewFollowers.add(changed);
@@ -276,6 +295,27 @@ export async function reviewPermission(source: Target, event: { type?: string; d
     reviewing.delete(id);
     if (askReviews.has(id)) noteReview(id, sessionID, "yours", askReviews.get(id)?.call);
     throw error;
+  }
+}
+
+/** The asks to work outside a folder already waiting as the box (re)connects to an engine or the
+ * bridge, in the sessions at work there (an ask holds its session's run): taken up as they would
+ * have been as they came, so the box lists each one, as `sandbox.reviews.whole` says (one asked
+ * while it was starting again, or whose event went by unheard). */
+export async function takeUpWaitingAsks(source: Target, sessions: string[], signal?: AbortSignal): Promise<void> {
+  const waiting: { id: string; asker: string; action: string }[] = [];
+  for (const session of sessions) {
+    if (signal?.aborted) return;
+    const { permissions } = await asksIn(source, session, signal).catch(() => ({ permissions: [] as { id: string; asker: string; action: string }[] }));
+    for (const each of permissions) {
+      if (each.action !== "external_directory" || reviewing.has(each.id) || askReviews.has(each.id)) continue;
+      // Listed as checked at once, all of them, before any is read.
+      noteReview(each.id, each.asker, "checking");
+      waiting.push(each);
+    }
+  }
+  for (const each of waiting) {
+    await reviewPermission(source, { type: "permission.asked", data: { id: each.id, sessionID: each.asker, action: each.action } }, signal).catch(() => null);
   }
 }
 
@@ -318,10 +358,23 @@ function realPath(file: string): string {
 }
 
 async function answerPermission(source: Target, id: string, sessionID: string, signal?: AbortSignal, found?: Conversation | null): Promise<Verdict | null> {
-  const { permissions } = await asksIn(source, sessionID, signal);
-  const permission = permissions.find(each => each.id === id && each.asker === sessionID);
+  let { permissions } = await asksIn(source, sessionID, signal);
+  let permission = permissions.find(each => each.id === id && each.asker === sessionID);
+  // Not listed: read once more a moment later (its engine slow to answer), before it's taken as
+  // answered meanwhile or unreadable.
+  if (!permission) {
+    await new Promise(done => setTimeout(done, 1_000));
+    ({ permissions } = await asksIn(source, sessionID, signal));
+    permission = permissions.find(each => each.id === id && each.asker === sessionID);
+  }
+  // Still not listed: never left checked, which no client would show; yours, as an ask it doesn't
+  // take up is.
+  if (!permission) {
+    if (askReviews.get(id)?.state === "checking") noteReview(id, sessionID, "yours", askReviews.get(id)?.call);
+    return null;
+  }
   // (Anything else asked is your own rules'.)
-  if (permission?.action !== "external_directory") return null;
+  if (permission.action !== "external_directory") return null;
   const seen = await callOf(source, permission, signal);
   const at = found === undefined ? await conversationOf(sessionID) : found;
   const folder = at?.data.location?.directory;

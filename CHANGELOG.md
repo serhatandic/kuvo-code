@@ -16,6 +16,10 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ### All Changes
 
+- A permission's answers are numbered in the composer's place, as on your iPhone and in Claude Code and Codex: **1** Allow Once, **2** Always Allow…, **3** Don't Allow, **4** Tell It What to Do Instead…, which opens a line to say no with your words. Press the number to answer; **Return** still allows once, and **Esc** still goes to the line. Once the ask in view is answered, the next one after it shows, and what you wrote under an ask stays with it while you look at the others.
+- The composer's paperclip, the mode's icon when it shows alone, and the microphone are one size.
+- A command the sandbox stopped, which the agent asks to run outside it, has its answers numbered too (Allow Once, Always Allow…, Don't Allow), and their number keys pick them, as every other ask's.
+- What Auto's reviewer is still checking never takes the composer's place or tells you, on this Mac or your machines, however long the check takes; one it leaves for you comes as soon as its computer says so.
 - In Ask First and Accept Edits, an agent's own tools read what its commands saved in their temporary folder (a screenshot, a log) and the files you sent in the conversation without asking you, as they read its project. In Auto, a command run outside the sandbox may name the files you sent in that conversation (Auto's reviewer judges it as any other); another conversation's stay refused.
 - `rm -rf $TMPDIR` in a command no longer fails with "Operation not permitted": the command's temporary folder can be removed and made again, only never as a link.
 - Kuvo Code's background work no longer waits on macOS while it asks you about a folder: a project on your Desktop or in Documents, or your SSH or GitHub settings linked into one (from a dotfiles folder, say), is looked at off the box's thread, so only what needs your answer waits for it, and the rest of Kuvo Code keeps answering. Until macOS has your answer, commands in the sandbox can't read `~/.ssh` or gh's sign-in where those lead into such a folder.
