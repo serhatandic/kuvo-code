@@ -52,6 +52,12 @@ export function refuseMoving(owners: (string | undefined)[], moving: Set<string>
   for (const owner of owners) if (owner && moving.has(owner)) refuse(owner.startsWith("grp_") ? "This group chat is moving to another computer, with its Work Queue: try again once it's there." : "That conversation is moving to another computer, with its Work Queue: try again once it's there.");
 }
 
+/** Changes to an item on its way to another computer wait until it's there: it's that
+ * conversation's then, and what's changed here meanwhile would be left behind. */
+export function refuseHanding(item: Item): void {
+  if (item.handing) refuse(`${nameOf(item)} is being handed to ${item.handing.name || item.handing.to} on another computer: change it there once it's arrived.`);
+}
+
 /** Where an agent's files may come from: its conversation's folder, its project's other folders,
  * and the temporary folders; never Kuvo Code's own (but for its own folder there, a bot's). */
 export interface FilePlaces { own: string | null; others: readonly string[] }
@@ -222,6 +228,8 @@ export function addItem(book: Book, owner: string, fields: Fields, acting: Actin
   book.queue(owner).items.push(item);
   // (Its details as a change makes them, so the same checks hold.)
   changeItem(book, item, { ...fields, title: undefined, category: undefined, top: undefined }, acting);
+  // (An outside source's item is named by its ref, never numbered.)
+  if (item.source) return item;
   const number = takeNumber(primary);
   if (number !== null) item.number = number;
   return item;

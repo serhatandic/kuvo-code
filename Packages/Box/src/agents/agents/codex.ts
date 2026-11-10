@@ -898,7 +898,7 @@ type AskedQuestion = { title: string; options?: string[] | null }
 /** `typed`: what you sent meanwhile, which answers this card (null: it answered another of those open, and covers this one). */
 type AskedCard = { abort: AbortController; typed?: MessageInput | null }
 /** An answer in the turn under way that Codex may yet sleep past: one it's `heard` and worked on from isn't what it's sleeping on. */
-type Answered = { text: string; heard?: boolean }
+type Answered = { text: string; files?: PromptFile[]; heard?: boolean }
 /** How often the commands it left running in background terminals are listed again while any runs. */
 export const codexTiming = { terminals: 30_000 }
 
@@ -1401,13 +1401,18 @@ class CodexThread implements Thread {
     const files = answer?.files ?? []
     if (active?.turnID && this.nativeID) {
       // (Noted first: a sleep can start before Codex says it took this. One under way, this ends.)
-      const noted: Answered | undefined = this.sleep ? undefined : { text }
+      const noted: Answered | undefined = this.sleep ? undefined : { text, files }
       if (noted) this.answered.push(noted)
       if (await this.steerIn(active, { text, files })) return
       // (Turned down with a sleep starting: telling it again as that started is seeing to it.)
       if (noted && !this.answered.includes(noted)) return
       this.answered = this.answered.filter((each) => each !== noted)
-      if (await this.steerIntoSleep(active, { text, files })) return
+      // Into the sleep it's in, and then into one that started while that was tried: as a sleep
+      // starts it's told only what's kept by then, so kept below at once once there's no sleep left.
+      for (let tried: AbortController | undefined; this.sleep && this.sleep !== tried && this.active === active; ) {
+        tried = this.sleep
+        if (await this.steerIntoSleep(active, { text, files })) return
+      }
     }
     if (answer) this.answers.push(answer)
   }
@@ -1541,7 +1546,17 @@ class CodexThread implements Thread {
       if (said.length && !stopped) {
         const words = { text: `Your question has its answer, so there's nothing to wait for on it:\n\n${said.map((each) => each.text).join("\n\n")}`, files: [] }
         this.keep(this.steerIn(active, words).then(async (took) => {
-          if (!took && !await this.steerIntoSleep(active, words)) this.answered.push(...said)
+          if (took) return
+          // Into this sleep, and then into one that started while that was tried (as in steerAnswer).
+          for (let tried: AbortController | undefined; this.sleep && this.sleep !== tried && this.active === active; ) {
+            tried = this.sleep
+            if (await this.steerIntoSleep(active, words)) return
+          }
+          // None left to tell, in the same breath: what it heard waits for the next sleep, and what
+          // it never took (turned down as this sleep started) goes in as it goes on, or starts its
+          // next turn, rather than wait on a sleep that may never come.
+          this.answered.push(...said.filter((each) => each.heard))
+          this.answers.push(...said.filter((each) => !each.heard).map((each) => ({ text: each.text, files: each.files ?? [] })))
         }))
       }
     } else if (item?.type === "userMessage") {

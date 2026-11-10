@@ -24,20 +24,31 @@ export function readReach(file = PEER_REACH): Record<string, number> {
   }
 }
 
-const change = (edit: (reach: Record<string, number>) => boolean): void => {
+const change = (edit: (reach: Record<string, number>) => boolean, file = PEER_REACH): void => {
   try {
     fs.mkdirSync(RUN, { recursive: true, mode: 0o700 });
     locked(LOCK, () => {
-      const reach = readReach();
-      if (edit(reach)) writePrivate(PEER_REACH, JSON.stringify(reach));
+      const reach = readReach(file);
+      if (edit(reach)) writePrivate(file, JSON.stringify(reach));
     });
   } catch {}
 };
 
+/** When the relay last found each box that doesn't answer not there (ms), by its key: as recent as
+ * a few minutes, so a box that was itself off the relay a while doesn't take one that was away
+ * when it left to be away all that time (the Work Queue's numbers, `work-queue/numbers.ts`). */
+export const PEER_CHECKED = path.join(RUN, "peer-reach-checked.json");
+const CHECKED_EVERY = 300_000;
+
 /** The relay found nothing connected at `address`: the peer there (if it's one) isn't answering, from now. */
 export function noteUnreachable(address: Buffer, now = Date.now()): void {
   const peer = peersOf(readLink()).find(each => each.address === address.toString("base64url"));
-  if (!peer || readReach()[peer.key] !== undefined) return;
+  if (!peer) return;
+  if (now - (readReach(PEER_CHECKED)[peer.key] ?? 0) > CHECKED_EVERY) change(checked => {
+    checked[peer.key] = now;
+    return true;
+  }, PEER_CHECKED);
+  if (readReach()[peer.key] !== undefined) return;
   change(reach => {
     if (reach[peer.key] !== undefined) return false;
     reach[peer.key] = now;
@@ -48,6 +59,7 @@ export function noteUnreachable(address: Buffer, now = Date.now()): void {
 /** Mail from the box `key`: it answers. True when it didn't before. (Read first, so mail that comes
  * again and again writes nothing.) */
 export function noteHeard(key: string): boolean {
+  if (readReach(PEER_CHECKED)[key] !== undefined) change(checked => delete checked[key], PEER_CHECKED);
   if (readReach()[key] === undefined) return false;
   let back = false;
   change(reach => {
@@ -61,3 +73,6 @@ export function noteHeard(key: string): boolean {
 
 /** Since when the box `key` hasn't answered, or null when nothing says it doesn't. */
 export const awaySince = (key: string, reach = readReach()): number | null => reach[key] ?? null;
+
+/** When the relay last found the box `key` not there, or null. */
+export const lastFoundAway = (key: string, checked = readReach(PEER_CHECKED)): number | null => checked[key] ?? null;

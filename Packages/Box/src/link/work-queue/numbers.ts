@@ -15,11 +15,13 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { isObject } from "../../shared/json";
-import { IS_MAC } from "../home";
+import { IS_MAC, RUN } from "../home";
 import { locked, textOf, writePrivate } from "../files";
-import { macsOf, mailFor, peersOf } from "../peers/known";
+import { KEY, macsOf, mailFor, ownKey, peersOf, removedBoxes } from "../peers/known";
+import { readTold, toldKeys } from "./told";
+import { awaySince, lastFoundAway, PEER_CHECKED, readReach } from "../peers/reach";
 import { readLink } from "../state";
-import { allItems, changeQueues, WORK_QUEUE } from "./store";
+import { allItems, changeQueues, OWNER, WORK_QUEUE } from "./store";
 import type { Book } from "./store";
 import type { LinkHost } from "../relay/host";
 import type { LinkState } from "../state";
@@ -45,6 +47,12 @@ export type Ranges = [number, number][];
  * waits on, with the numbers it claims. */
 export interface Numbers {
   primary?: string;
+  /** When this box was set up, as it ranks for numbering (`ownSince`). */
+  since?: number;
+  /** Since when the primary it keeps hasn't been heard of (`notePrimaryNow`). */
+  lost?: number;
+  /** The peer it reaches its primary through, when that isn't one of its own. */
+  through?: string;
   next?: number;
   given?: Record<string, { from: number; to: number; granted: Ranges; at: number }>;
   granted?: Record<string, Ranges>;
@@ -52,8 +60,9 @@ export interface Numbers {
   asking?: { id: string; count: number; claims?: Ranges; since: number; sent?: number };
 }
 
-/** Who hands out this box's numbers: itself, the Mac it names, or a Mac it can't write to yet. */
-export type Primary = { self: true } | { peer: Peer } | { away: true };
+/** Who hands out this box's numbers: itself, another computer (reached through a peer, `via`, when
+ * it isn't one of this box's own), or one it can't write to yet. */
+export type Primary = { self: true } | { peer: Peer; via?: Peer } | { away: true };
 
 // (A number has six digits at most: what a chip reads (`#243`), and far past what's ever handed out.)
 export const MOST_NUMBER = 1_000_000;
@@ -89,6 +98,9 @@ export function readNumbers(file = NUMBERS_FILE): Numbers {
       : undefined;
     return {
       ...(typeof kept.primary === "string" ? { primary: kept.primary } : {}),
+      ...(typeof kept.since === "number" && Number.isFinite(kept.since) && kept.since > 0 ? { since: kept.since } : {}),
+      ...(typeof kept.lost === "number" && Number.isFinite(kept.lost) ? { lost: kept.lost } : {}),
+      ...(typeof kept.through === "string" ? { through: kept.through } : {}),
       ...(typeof kept.next === "number" && Number.isInteger(kept.next) && kept.next > 0 ? { next: kept.next } : {}),
       ...(isObject(kept.given) ? { given: kept.given as Numbers["given"] } : {}),
       ...(isObject(kept.granted) ? { granted: Object.fromEntries(Object.entries(kept.granted).map(([box, ranges]) => [box, cleanRanges(ranges)])) } : {}),
@@ -100,14 +112,137 @@ export function readNumbers(file = NUMBERS_FILE): Numbers {
   }
 }
 
-/** This box's primary: the one it kept, else as its link says now. */
-export function primaryOf(link: LinkState | null | undefined = readLink(), file = NUMBERS_FILE): Primary {
-  if (IS_MAC) return { self: true };
-  const kept = readNumbers(file).primary;
-  const mac = kept ?? (link ? (typeof link.mac === "string" ? link.mac : macsOf(link)[0]) : undefined);
-  if (!mac || mac === "self") return { self: true };
-  const peer = peersOf(link).find(each => each.key === mac && each.address);
-  return peer ? { peer } : { away: true };
+/** This box's primary, the first computer you set up, as far as this box can tell (PROTOCOL.md,
+ * "The Work Queue", "Numbers"): of this box, its peers and the primaries they say they number from,
+ * a Mac before a machine (a machine is always set up from a Mac), then the one set up first, then by
+ * key. The one it numbers from now is kept while it's still one of your computers and none set up
+ * earlier is known; a box that hears of an earlier one moves to it (never back), and one whose
+ * primary was removed or forgotten finds the next. A machine with a Mac is never its own. */
+export function primaryOf(link: LinkState | null | undefined = readLink(), file = NUMBERS_FILE, now = Date.now()): Primary {
+  const kept = readNumbers(file);
+  const own = link ? ownKey(link) : null;
+  const gone = goneOf(link, now);
+  const all = candidatesOf(link, kept, own, file, gone);
+  const macs = IS_MAC ? [] : macsOf(link);
+  // (A machine set up from a Mac never numbers on its own.)
+  const choices = macs.length ? all.filter(each => !each.self) : all;
+  const best = choices.sort(rank)[0];
+  const keptKey = kept.primary === "self" || (own && kept.primary === own) ? "self" : kept.primary;
+  let current: Candidate | null | "away" = null;
+  if (keptKey === "self") current = all.find(each => each.self) ?? null;
+  else if (keptKey && !gone.has(keptKey)) {
+    current = all.find(each => each.key === keptKey) ?? null;
+    // Not heard of now (one of its Macs whose peers document isn't here yet, one a peer stopped
+    // naming for a while, no link yet): it waits, so a box never goes back and forth between two;
+    // only one you removed, or one not heard of for days (gone), makes way for the next; and one
+    // the peer it was reached through now says it numbers from another instead of (it found it
+    // gone, or one set up earlier).
+    const removed = removedBoxes(link);
+    const through = kept.through ? readTold(kept.through)?.primary : undefined;
+    const movedOn = Boolean(kept.through && through && through.key !== keptKey && peersOf(link).some(peer => peer.key === kept.through) && !gone.has(kept.through));
+    if (!current && !movedOn && !removed.has(keptKey) && !(kept.through && removed.has(kept.through)) && !(kept.lost !== undefined && now - kept.lost > LOST_FOR)) current = "away";
+  }
+  if (current === "away") return { away: true };
+  // A machine kept itself (before it was set up from a Mac): its Mac now.
+  if (current?.self && macs.length) current = null;
+  const chosen = current && (!best || !earlier(best, current)) ? current : best;
+  if (!chosen) return (keptKey && keptKey !== "self") || macs.length ? { away: true } : { self: true };
+  if (chosen.self) return { self: true };
+  if (chosen.peer?.address) return { peer: chosen.peer };
+  if (chosen.via?.address) return { peer: { key: chosen.key, address: "", kind: chosen.kind, name: chosen.name ?? "" }, via: chosen.via };
+  return { away: true };
+}
+
+/** How long a box's primary may go unheard of (no peer names it), or not answer the box that reaches
+ * it, before it's taken to be gone. */
+export const LOST_FOR = 3 * 86_400_000;
+
+/** The computers taken to be gone, for numbering: a peer that hasn't answered this box for days,
+ * and still didn't lately (a Mac put away, or set up again with new keys, that its machines still
+ * list a while; not one that was away when this box itself went off the relay). A box that reaches
+ * that one through this one hears of it no more once this box numbers from another. Heard from
+ * again, it's back, and the earliest again: a box moves back to it, and it moves past what was
+ * numbered meanwhile (`top`). */
+function goneOf(link: LinkState | null | undefined, now: number): Set<string> {
+  const gone = new Set<string>();
+  const reach = readReach();
+  const checked = readReach(PEER_CHECKED);
+  for (const peer of peersOf(link)) {
+    const away = awaySince(peer.key, reach);
+    const last = lastFoundAway(peer.key, checked);
+    if (away !== null && now - away > LOST_FOR && last !== null && now - last < FOUND_AWAY_WITHIN) gone.add(peer.key);
+  }
+  return gone;
+}
+
+/** How lately a peer has to have been found away for it to count as gone. */
+const FOUND_AWAY_WITHIN = 3_600_000;
+
+/** Whether the primary this box keeps is one it hears of now: for `notePrimaryNow`, which notes
+ * since when it hasn't been. */
+function keptHeardOf(link: LinkState | null | undefined, kept: Numbers, file: string, now: number): boolean {
+  if (!kept.primary || kept.primary === "self") return true;
+  const own = link ? ownKey(link) : null;
+  return kept.primary === own || candidatesOf(link, kept, own, file, goneOf(link, now)).some(each => each.key === kept.primary);
+}
+
+/** A computer that may be the primary: this box, a peer, or a primary a peer named (reached
+ * through that peer, `via`). */
+interface Candidate {
+  key: string;
+  kind: "mac" | "machine";
+  since: number;
+  self?: true;
+  peer?: Peer;
+  via?: Peer;
+  name?: string;
+}
+
+// Whether `a` was set up before `b`, as far as either has said: a Mac before a machine, then the one
+// that says it was set up first (one that hasn't said is never earlier).
+// (Never over one that hasn't said yet, an older box in the middle of an update: it may well be
+// the first.)
+const earlier = (a: Candidate, b: Candidate): boolean => (a.kind !== b.kind ? a.kind === "mac" : b.since !== Number.MAX_SAFE_INTEGER && a.since < b.since);
+// A Mac first, then the one set up first (one that hasn't said is last), then by key.
+const rank = (a: Candidate, b: Candidate): number => (a.kind === b.kind ? 0 : a.kind === "mac" ? -1 : 1) || a.since - b.since || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0);
+
+function candidatesOf(link: LinkState | null | undefined, kept: Numbers, own: string | null, file: string, gone: Set<string> = goneOf(link, Date.now())): Candidate[] {
+  const all: Candidate[] = [{ key: own ?? "self", kind: IS_MAC ? "mac" : "machine", since: kept.since ?? ownSince(Date.now(), file), self: true }];
+  const peers = peersOf(link).filter(peer => !gone.has(peer.key));
+  for (const peer of peers) all.push({ key: peer.key, kind: peer.kind, since: readTold(peer.key)?.since ?? Number.MAX_SAFE_INTEGER, peer, name: peer.name });
+  for (const peer of peers) {
+    const named = readTold(peer.key)?.primary;
+    if (!named || named.key === own || gone.has(named.key)) continue;
+    const known = all.find(each => each.key === named.key);
+    if (known) {
+      if (known.since === Number.MAX_SAFE_INTEGER && named.since) known.since = named.since;
+      continue;
+    }
+    all.push({ key: named.key, kind: named.kind, since: named.since ?? Number.MAX_SAFE_INTEGER, via: peer });
+  }
+  return all;
+}
+
+/** When this box was set up, as it ranks among your computers for numbering: kept once worked out
+ * (the earliest of its folder's making, where the system keeps that, and its oldest item). */
+export function ownSince(now = Date.now(), file = NUMBERS_FILE): number {
+  const kept = readNumbers(file).since;
+  if (kept) return kept;
+  let since = now;
+  try {
+    const made = fs.statSync(RUN).birthtimeMs;
+    if (made > 0 && made < since) since = made;
+  } catch {}
+  for (const item of allItems()) if (item.created.at > 0 && item.created.at < since) since = item.created.at;
+  since = Math.floor(since);
+  changeNumbers(numbers => { numbers.since ??= since; }, file);
+  return readNumbers(file).since ?? since;
+}
+
+/** The highest number this box used, holds or handed out: a primary moves its counter past it. */
+export function topOf(kept: Numbers = readNumbers()): number {
+  // (Not a number an import was refused, `importedAs`: that one was never used.)
+  return Math.max(0, (kept.next ?? 1) - 1, ...kept.leases.map(([, to]) => to), ...allItems().map(item => item.number ?? 0));
 }
 
 const keyOf = (primary: Primary, link: LinkState | null | undefined) => ("self" in primary ? "self" : "peer" in primary ? primary.peer.key : (readNumbers().primary ?? (link?.mac || undefined)));
@@ -128,14 +263,57 @@ export function changeNumbers<T>(work: (kept: Numbers) => T, file = NUMBERS_FILE
 
 /** The primary's counter: as kept, or, lost with its file, past every number here (never #1 again). */
 function counterOf(kept: Numbers): number {
-  return kept.next ?? Math.max(0, ...allItems().map(item => Math.max(item.number ?? 0, item.importedAs ?? 0))) + 1;
+  return kept.next ?? Math.max(0, ...allItems().map(item => item.number ?? 0)) + 1;
+}
+
+/** The primary `primary` noted as the one this box numbers from now. One that leaves numbering on its
+ * own asks its new primary at once, so that one moves past what it handed out (`top`); one that
+ * becomes the primary starts past every number it knows of. */
+function notePrimary(kept: Numbers, primary: Primary, link: LinkState | null | undefined, now: number): void {
+  if ("away" in primary) {
+    kept.primary ??= keyOf(primary, link);
+    return;
+  }
+  const key = keyOf(primary, link)!;
+  const through = "peer" in primary ? primary.via?.key : undefined;
+  if (through) kept.through = through;
+  else delete kept.through;
+  if (kept.primary === key) return;
+  const was = kept.primary;
+  kept.primary = key;
+  if (was === "self") kept.asking ??= { id: askID(), count: BLOCK, since: now };
+  else if (key === "self" && was !== undefined) kept.next = Math.max(counterOf(kept), cappedTop(Math.max(topOf(kept), toldTop())) + 1);
+}
+
+/** The highest number your other computers told this one of. */
+export function toldTop(): number {
+  return Math.max(0, ...toldKeys().map(key => {
+    const told = readTold(key);
+    return Math.max(told?.top ?? 0, ...(told?.items ?? []).map(item => item.number ?? 0));
+  }));
+}
+
+/** Where a `top` another box tells can move the counter at most: room left for blocks below six
+ * digits, so one far number never takes every box past what a chip reads. */
+const TOP_MOST = MOST_NUMBER - 1 - 4 * BLOCK;
+const cappedTop = (top: number) => Math.min(top, TOP_MOST);
+
+/** The primary moved past `top`, a number another of your computers used (on the primary only). */
+export function movePast(top: number, { file = NUMBERS_FILE }: { file?: string } = {}): void {
+  if (!Number.isInteger(top) || top <= 0 || top >= MOST_NUMBER) return;
+  top = cappedTop(top);
+  if ((readNumbers(file).next ?? 0) > top) return;
+  changeNumbers(kept => {
+    if (kept.primary !== "self" && kept.primary !== undefined) return;
+    kept.next = Math.max(counterOf(kept), top + 1);
+  }, file);
 }
 
 /** The next number for a new item here, or null when it has to wait for one (`primary`: who hands
  * them out, as `primaryOf` says). The first number taken keeps that primary for good. */
 export function takeNumber(primary: Primary, { file = NUMBERS_FILE, now = Date.now(), link = readLink() }: { file?: string; now?: number; link?: LinkState | null } = {}): number | null {
   return changeNumbers(kept => {
-    kept.primary ??= keyOf(primary, link);
+    notePrimary(kept, primary, link, now);
     if ("self" in primary) {
       const number = counterOf(kept);
       kept.next = number + 1;
@@ -173,7 +351,7 @@ export function claimNumbers(primary: Primary, numbers: number[], { file = NUMBE
   const claims = rangesOf(numbers);
   if (!claims.length) return { granted: [] };
   return changeNumbers(kept => {
-    kept.primary ??= keyOf(primary, link);
+    notePrimary(kept, primary, link, now);
     if ("self" in primary) return { granted: grantOn(kept, "self", claims) };
     const highest = claims[claims.length - 1][1];
     kept.leases = kept.leases.map(([from, to]): [number, number] => [Math.max(from, highest + 1), to]).filter(([from, to]) => from <= to);
@@ -184,14 +362,33 @@ export function claimNumbers(primary: Primary, numbers: number[], { file = NUMBE
 }
 
 /** What goes to the primary now: the ask under way, if it wasn't sent in the last half minute
- * (kept as sent before it goes). */
-export function askToSend({ file = NUMBERS_FILE, now = Date.now() }: { file?: string; now?: number } = {}): { id: string; count: number; claims?: Ranges } | null {
-  return changeNumbers(kept => {
+ * (kept as sent before it goes), with the highest number this box used or holds (`top`). */
+export function askToSend({ file = NUMBERS_FILE, now = Date.now() }: { file?: string; now?: number } = {}): { id: string; count: number; claims?: Ranges; top?: number } | null {
+  const asked = changeNumbers(kept => {
     const asking = kept.asking;
     if (!asking || (asking.sent !== undefined && now - asking.sent < ASK_AGAIN)) return null;
     asking.sent = now;
     return { id: asking.id, count: asking.count, ...(asking.claims?.length ? { claims: asking.claims } : {}) };
   }, file);
+  if (!asked) return null;
+  const top = topOf(readNumbers(file));
+  return { ...asked, ...(top ? { top } : {}) };
+}
+
+/** Whether this box's primary changed (one set up earlier heard of, or the one it had gone): noted
+ * now, so a box that numbered on its own asks its new primary at once. */
+export function notePrimaryNow(link: LinkState | null | undefined = readLink(), { file = NUMBERS_FILE, now = Date.now() }: { file?: string; now?: number } = {}): void {
+  // Since when the one it keeps hasn't been heard of.
+  const before = readNumbers(file);
+  const heard = keptHeardOf(link, before, file, now);
+  if (heard === (before.lost !== undefined)) changeNumbers(numbers => {
+    if (heard) delete numbers.lost;
+    else numbers.lost ??= now;
+  }, file);
+  const primary = primaryOf(link, file, now);
+  const kept = readNumbers(file);
+  if (kept.primary === undefined || "away" in primary || (kept.primary === keyOf(primary, link) && kept.through === ("peer" in primary ? primary.via?.key : undefined))) return;
+  changeNumbers(numbers => notePrimary(numbers, primary, link, now), file);
 }
 
 /** The primary's answer to the box `by`'s ask: the numbers of its claims it may keep, and a block
@@ -200,9 +397,13 @@ export function giveBlock(by: string, ask: unknown, { file = NUMBERS_FILE, now =
   if (!isObject(ask) || typeof ask.id !== "string" || !ASK_ID.test(ask.id)) return null;
   const count = typeof ask.count === "number" && Number.isInteger(ask.count) ? Math.min(Math.max(ask.count, 1), 200) : BLOCK;
   const claims = cleanRanges(ask.claims);
+  const top = typeof ask.top === "number" && Number.isInteger(ask.top) && ask.top > 0 && ask.top < MOST_NUMBER ? ask.top : 0;
   const id = ask.id;
   return changeNumbers(kept => {
     kept.primary ??= "self";
+    // (Past what the asking box used or holds: one that numbered on its own before, or numbers this
+    // box lost with its file.)
+    if (top && !kept.given?.[id]) kept.next = Math.max(counterOf(kept), cappedTop(top) + 1);
     const given = kept.given?.[id];
     if (given) return { id, from: given.from, to: given.to, granted: given.granted ?? [] };
     const granted = grantOn(kept, by, claims);
@@ -238,7 +439,7 @@ export function numberWaiting(book: Book, primary: Primary, granted: Ranges | nu
   const now = options.now ?? Date.now();
   if (granted) {
     for (const item of book.items()) {
-      if (item.wanted === undefined || item.number !== undefined) continue;
+      if (item.wanted === undefined || item.number !== undefined || item.source || !OWNER.test(item.owner)) continue;
       if (inRanges(granted, item.wanted)) item.number = item.wanted;
       else {
         item.notes.push({ at: now, by: { user: true }, text: `Imported as #${item.wanted}, a number that couldn't be kept (another of your computers was given it already, or it's far past the numbers in use), so it has a new one.` });
@@ -247,7 +448,9 @@ export function numberWaiting(book: Book, primary: Primary, granted: Ranges | nu
       delete item.wanted;
     }
   }
-  const waiting = book.items().filter(item => item.number === undefined && item.wanted === undefined && !item.source).sort((a, b) => a.created.at - b.created.at);
+  // (Not an outside source's item, named by its ref; nor one in a queue of a kind a newer box keeps,
+  // left as it is.)
+  const waiting = book.items().filter(item => item.number === undefined && item.wanted === undefined && !item.source && OWNER.test(item.owner)).sort((a, b) => a.created.at - b.created.at);
   for (const item of waiting) {
     const number = takeNumber(primary, options);
     if (number === null) return;
@@ -259,7 +462,7 @@ export function numberWaiting(book: Book, primary: Primary, granted: Ranges | nu
  * a block's coming and its use, or items a move brought): their claims asked again (on the primary,
  * granted at once), and a block asked for those with none. What it did: whether anything waited. */
 export function reclaimWaiting(primary: Primary = primaryOf(), options: { file?: string; now?: number } = {}): boolean {
-  const waiting = allItems().filter(item => item.number === undefined && !item.source && !item.removed);
+  const waiting = allItems().filter(item => item.number === undefined && !item.source && !item.removed && OWNER.test(item.owner));
   if (!waiting.length) return false;
   const kept = readNumbers(options.file);
   const asked = kept.asking?.claims ?? [];
@@ -279,10 +482,12 @@ export function reclaimWaiting(primary: Primary = primaryOf(), options: { file?:
 // When this box last looked for items waiting with nothing under way: once a minute.
 let lookedForWaiting = 0;
 
-/** The ask under way sent to the primary, on this box's rounds (every few seconds), when it's due. */
+/** The ask under way sent to the primary, on this box's rounds (every few seconds), when it's due:
+ * to the primary itself, or, one this box can't write to, through the peer that named it. */
 export function pushNumbers(host: Pick<LinkHost, "send" | "welcomed"> | null | undefined, link: LinkState | null = readLink()): void {
   if (Date.now() - lookedForWaiting > 60_000) {
     lookedForWaiting = Date.now();
+    try { notePrimaryNow(link); } catch {}
     try { reclaimWaiting(primaryOf(link)); } catch {}
   }
   if (!host?.welcomed || !link || !readNumbers().asking) return;
@@ -290,23 +495,44 @@ export function pushNumbers(host: Pick<LinkHost, "send" | "welcomed"> | null | u
   if (!("peer" in primary)) return;
   const ask = askToSend();
   if (!ask) return;
-  const bytes = mailFor(primary.peer, { workQueue: { ask }, at: Date.now() }, link);
+  const bytes = mailFor(primary.via ?? primary.peer, { workQueue: { ask, ...(primary.via ? { to: primary.peer.key } : {}) }, at: Date.now() }, link);
   if (bytes) try { host.send(bytes); } catch {}
 }
 
 /** Numbers' mail from another box (`{workQueue: …}`): an ask, answered by the primary with its
- * block; a block given (only from this box's own primary), kept, and what waits here numbered. */
+ * block; a block given (only from this box's own primary, or the peer it asks through), kept, and
+ * what waits here numbered. A box asked on behalf of its primary (`to`, by a peer that can't write
+ * to it) passes the ask on (`for`), and the block back; one hop only. */
 export function takeNumbersMail(sender: MailSender, given: unknown, host: Pick<LinkHost, "send"> | null | undefined): void {
   if (!isObject(given)) return;
   const link = readLink();
   const primary = primaryOf(link);
-  if (isObject(given.ask) && "self" in primary) {
-    const block = giveBlock(sender.key, given.ask);
-    const bytes = block && link && "address" in sender ? mailFor(sender, { workQueue: { give: block }, at: Date.now() }, link) : null;
+  const send = (to: MailSender | Peer, payload: unknown) => {
+    const bytes = link && "address" in to && to.address ? mailFor(to, { workQueue: payload, at: Date.now() }, link) : null;
     if (bytes) try { host?.send(bytes); } catch {}
+  };
+  const peers = peersOf(link);
+  if (isObject(given.ask)) {
+    // (`for`: the box a peer passed this on for, which it heard from itself.)
+    const asker = typeof given.for === "string" && KEY.test(given.for) ? given.for : sender.key;
+    if ("self" in primary && (given.to === undefined || given.to === ownKey(link ?? {}))) {
+      const block = giveBlock(asker, given.ask);
+      if (block) send(sender, { give: block, ...(asker !== sender.key ? { for: asker } : {}) });
+      return;
+    }
+    // On behalf of this box's primary, for a peer that can't write to it.
+    if (given.for === undefined && typeof given.to === "string" && "peer" in primary && !primary.via && primary.peer.key === given.to) send(primary.peer, { ask: given.ask, for: sender.key });
     return;
   }
-  if (isObject(given.give) && "peer" in primary && primary.peer.key === sender.key) blockArrived(given.give, primary);
+  if (!isObject(given.give) || !("peer" in primary)) return;
+  const route = primary.via ?? primary.peer;
+  // A block for the peer this box passed an ask on for: to it, from this box's own primary only.
+  if (typeof given.for === "string" && given.for !== ownKey(link ?? {})) {
+    const to = peers.find(each => each.key === given.for);
+    if (to && !primary.via && sender.key === primary.peer.key) send(to, { give: given.give });
+    return;
+  }
+  if (route.key === sender.key) blockArrived(given.give, primary);
 }
 
 /** A block from the primary, kept, and what waits here numbered with it (imports' wanted numbers
