@@ -25,11 +25,12 @@ import type { AnyPiece, LinkHandler } from "./context";
 const IDLE_TOLD = 5_000;
 const IDLE_KEPT = 60_000;
 /** How often a request whose answer's head hasn't come says it's still being worked on, with an
- * interim `102 Processing` (ms): well under what a client waits for a head (a URLSession request's
- * own timeout, a minute unless it says; Node's fetch, five minutes), so a route that holds a request
- * (an ask waiting for you, a sandbox tool, a vault wait, a move) never looks gone while it works.
- * Clients ignore it (Node's and Bun's fetch, curl, URLSession, which takes it as the request's
- * activity); an HTTP/1.0 client, which mustn't get one, never does. */
+ * interim `102 Processing` (ms): a route that holds a request (an ask waiting for you, a sandbox
+ * tool, a vault wait, a move) never looks gone to a client's wait between bytes (a URLSession
+ * request's timeout, which counts it as activity; Node's fetch's for a head, five minutes) while it
+ * works. Clients ignore it otherwise (Node's and Bun's fetch, curl, URLSession), and a client that
+ * wants a limit on the whole request keeps its own (the keeper's, KeeperBoxTools). An HTTP/1.0
+ * client, which mustn't get one, never does. */
 export const HEARTBEAT = 20_000;
 export function serveBox(password: string, handle: LinkHandler = engineHandler(readEngineFile, { name: os.hostname() })): http.Server {
   const expected = Buffer.from("Basic " + Buffer.from(`opencode:${password}`).toString("base64"));

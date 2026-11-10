@@ -796,7 +796,7 @@ test("a Mac whose home is short keeps its SSH agents in the home, where the test
   // the 68 from which the box keeps them in /private/tmp instead. This file looked in /private/tmp on
   // every Mac, so there it waited 60 s for an agent the box had opened in the home, #410.)
   if (process.platform !== "darwin") return t.skip("only a Mac moves an agent's folder out of a long home");
-  const short = fs.mkdtempSync("/tmp/kv-ssh-");
+  const short = fs.mkdtempSync(`/tmp/kv-ssh-${process.pid}-`);
   removeAtEnd(short);
   const agents = path.join(short, "run", "ssh-agents");
   assert.equal(sshAgentsOf(short), agents, "the box's own folder, for a home this short");

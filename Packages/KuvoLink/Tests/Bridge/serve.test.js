@@ -105,12 +105,15 @@ test("an answer slow to come says it's alive while the box works, so a client wa
   t.after(() => t.mock.timers.reset());
   let started;
   const began = new Promise(resolve => { started = resolve; });
-  let release;
+  let release, finish, headed;
   const held = new Promise(resolve => { release = resolve; });
+  const rest = new Promise(resolve => { finish = resolve; });
+  const head = new Promise(resolve => { headed = resolve; });
   const server = link.serveBox("pw", async function* () {
     started();
     await held;
     yield { head: { status: 200, headers: { "content-type": "application/json" } } };
+    await rest;
     yield { body: Buffer.from(JSON.stringify({ ok: true })) };
   });
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
@@ -118,6 +121,7 @@ test("an answer slow to come says it's alive while the box works, so a client wa
   const interim = [];
   const answer = new Promise((resolve, reject) => {
     const request = http.request({ hostname: "127.0.0.1", port: server.address().port, path: "/kuvo/sandbox/tools", method: "POST", headers: { authorization: auth("pw"), "content-type": "application/json" } }, response => {
+      headed();
       let body = "";
       response.setEncoding("utf8");
       response.on("data", chunk => { body += chunk; });
@@ -131,8 +135,14 @@ test("an answer slow to come says it's alive while the box works, so a client wa
   // Its 20 seconds with nothing to read: the box says it's still working.
   t.mock.timers.tick(20_000);
   release();
+  await head;
+  const told = interim.length;
+  assert.ok(told >= 1 && interim.every(code => code === 102), `it says it's alive while it works (${interim.join(",")})`);
+  // Once its head has gone, it says nothing more: its body is the answer's alone.
+  t.mock.timers.tick(60_000);
+  finish();
   const got = await answer;
-  assert.ok(interim.length >= 1 && interim.every(code => code === 102), `it says it's alive while it works (${interim.join(",")})`);
+  assert.equal(interim.length, told, "none after its head");
   assert.equal(got.status, 200);
   assert.deepEqual(JSON.parse(got.body), { ok: true }, "and then the answer itself, whole");
 });
