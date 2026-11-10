@@ -866,6 +866,10 @@ export interface Decision {
   approved?: number;
   used?: number;
   key?: string;
+  /** For the folder the model allowed changes in, for the rest of the conversation: that folder
+   * (`places`), and `revoked`, when you took that back. */
+  place?: string;
+  revoked?: number;
 }
 
 /** A conversation's log: its decisions (the latest last), refusals in a row and in all, since
@@ -915,6 +919,8 @@ function changeLog<T>(session: string, folder: string, change: (log: ReviewLog) 
 }
 
 const decisionID = () => `rd_${randomBytes(6).toString("hex")}`;
+// The latest decisions kept, and every place not taken back, whenever it was, so it can be.
+const latest = (decisions: Decision[]): Decision[] => decisions.filter((each, at) => at >= decisions.length - KEPT || (each.place && !each.revoked));
 const OUTAGES = new Set(["noModel", "failed", "unreadable"]);
 
 /** How many places a conversation keeps (the latest), where its agent changes files again
@@ -926,11 +932,19 @@ const PLACES = 50;
  * kept for the rest of the conversation (`placeAllowed`). */
 export function keepDecision(session: string, decision: Decision, folder = REVIEWS_FOLDER, place?: string): boolean {
   return changeLog(session, folder, log => {
-    log.decisions = [...log.decisions, { id: decisionID(), ...decision }].slice(-KEPT);
+    log.decisions = latest([...log.decisions, { id: decisionID(), ...decision }]);
     // (Not one it couldn't judge for want of a model: an outage at night isn't the agent's doing.)
     if (decision.decision === "refused" && !OUTAGES.has(decision.why ?? "")) { log.refusedInRow++; log.refused++; }
     else if (decision.decision === "allowed") log.refusedInRow = 0;
-    if (place && decision.decision === "allowed") log.places = [...(log.places ?? []).filter(each => each !== place), place].slice(-PLACES);
+    // A place new to it is a decision of its own, which you can see and take back (`revokePlace`).
+    if (place && decision.decision === "allowed" && !(log.places ?? []).includes(place)) {
+      const places = [...(log.places ?? []), place];
+      // (One past the most kept goes, as if taken back.)
+      for (const gone of places.slice(0, -PLACES)) for (const each of log.decisions) if (each.place === gone && !each.revoked) each.revoked = decision.at;
+      log.places = places.slice(-PLACES);
+      log.decisions = latest([...log.decisions, { id: decisionID(), at: decision.at, action: `Change ${place}`, kind: "file", decision: "allowed",
+        reason: `Auto allowed edits in ${place} for this session.`, by: "model", place }]);
+    }
     const pausing = !log.paused && (log.refusedInRow >= BREAKER.inRow || log.refused >= BREAKER.inAll);
     if (pausing) log.paused = decision.at;
     return pausing;
@@ -975,6 +989,19 @@ export function approveHeld(session: string, id: string, now = Date.now(), folde
     log.refused = 0;
     delete log.paused;
     return { ...held };
+  });
+}
+
+/** A place you took back (by its decision's id): changes there are judged again, each, from now on;
+ * the decision now, or null where there's none by that id (or it's taken back already). */
+export function revokePlace(session: string, id: string, now = Date.now(), folder = REVIEWS_FOLDER): Decision | null {
+  if (!reviewLog(session, folder).decisions.some(each => each.id === id && each.place && !each.revoked)) return null;
+  return changeLog(session, folder, log => {
+    const given = log.decisions.find(each => each.id === id && each.place && !each.revoked);
+    if (!given) return null;
+    given.revoked = now;
+    log.places = (log.places ?? []).filter(each => each !== given.place);
+    return { ...given };
   });
 }
 

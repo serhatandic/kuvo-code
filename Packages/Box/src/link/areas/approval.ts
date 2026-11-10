@@ -13,7 +13,7 @@ import { bridgeTarget, call, engineGet, readEngineFile } from "../engine/client"
 import { allowFullAccess, APPROVALS, approvalOf, approvalRules, approvalsSince, defaultApproval, effectiveApproval, fullAccessAllowed, isApproval, madeBefore, rememberApproval, unavailable } from "../work/approval";
 import { resumeReviewedSession } from "../work/goals";
 import { sandboxOn } from "../work/sandbox";
-import { approveHeld, clearFetched, resumeReviews, reviewLog, seeHeld, shownReviews } from "../work/reviewer";
+import { approveHeld, clearFetched, resumeReviews, reviewLog, revokePlace, seeHeld, shownReviews } from "../work/reviewer";
 import { tellApproved } from "../work/reviewing";
 import { markConversation } from "../work/full";
 import { botOfConversation, worksFor } from "../work/tree";
@@ -351,7 +351,15 @@ export async function* approvalRoute(context: RouteContext): AsyncGenerator<Answ
       await tellApproved(decisions, approved).catch(() => false);
       return yield* json(200, shownReviews(reviewLog(decisions)));
     }
-    if (given.resume !== true) return yield* json(400, { message: "Say approve: <id> to approve one held back, resume: true to let Auto go on here, or seen: true once you've looked." });
+    if (typeof given.revoke === "string" && given.revoke) {
+      // A folder Auto allowed edits in for the session, taken back: each change there is judged again.
+      let revoked: ReturnType<typeof revokePlace>;
+      try { revoked = revokePlace(decisions, given.revoke); }
+      catch (error) { return yield* json(500, { message: `It couldn't be kept: ${String((error as Error)?.message ?? error).slice(0, 120)}` }); }
+      if (!revoked) return yield* json(404, { message: "That isn't a folder Auto allows edits in here: it was taken back already, or it's gone." });
+      return yield* json(200, shownReviews(reviewLog(decisions)));
+    }
+    if (given.resume !== true) return yield* json(400, { message: "Say approve: <id> to approve one held back, revoke: <id> to take back a folder Auto allowed edits in, resume: true to let Auto go on here, or seen: true once you've looked." });
     try { resumeReviews(decisions); }
     catch (error) { return yield* json(500, { message: `It couldn't be kept: ${String((error as Error)?.message ?? error).slice(0, 120)}` }); }
     resumeReviewedSession(decisions);

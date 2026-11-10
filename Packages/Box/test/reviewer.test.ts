@@ -1,6 +1,6 @@
 import "./safety"
 import { afterAll, beforeAll, expect, test } from "bun:test"
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { spawnSync } from "node:child_process"
 import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
@@ -522,6 +522,15 @@ test("once the model allows a change its file tool makes in a folder, the same t
   expect(await reviewer.review(change(join(copy, "Tests", "vault.test.js")), context, given(ask))).toMatchObject({ decision: "allow", by: "code" })
   expect(await reviewer.review(change(join(copy, "Tests", "Bridge", "new.test.js")), context, given(ask))).toMatchObject({ decision: "allow", by: "code" })
   expect(ask.shown).toHaveLength(0)
+  // It's a decision of its own, once, for every client to see, and to take back.
+  const places = () => reviewer.reviewLog(context.session, join(box, "reviews")).decisions.filter(each => each.place)
+  expect(places()).toEqual([expect.objectContaining({ action: `Change ${realpathSync(join(copy, "Tests"))}`, decision: "allowed", by: "model",
+    reason: `Auto allowed edits in ${realpathSync(join(copy, "Tests"))} for this session.`, place: realpathSync(join(copy, "Tests")) })])
+  expect(reviewer.revokePlace(context.session, places()[0].id!, Date.now(), join(box, "reviews"))).toMatchObject({ revoked: expect.any(Number) })
+  expect(await reviewer.review(change(join(copy, "Tests", "vault.test.js")), context, given(ask))).toMatchObject({ decision: "refuse", by: "model" })
+  // Allowed there again, it's kept again, as a new decision.
+  expect(await reviewer.review(change(join(copy, "Tests", "vault.test.js")), context, given(model(allows)))).toMatchObject({ decision: "allow", by: "model" })
+  expect(places().map(each => Boolean(each.revoked))).toEqual([true, false])
   // git's hooks and the agents' settings there (by any case, on a Mac) are judged on their own,
   // and so is the same change in another conversation.
   expect(await reviewer.review(change(join(copy, "Tests", ".git", "hooks", "pre-commit")), context, given(ask))).toMatchObject({ decision: "refuse", by: "model" })

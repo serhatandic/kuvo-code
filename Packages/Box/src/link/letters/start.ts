@@ -28,7 +28,7 @@ import { approvalOf, approvalRules, defaultApproval, effectiveApproval, isApprov
 import { settleAgain } from "../areas/approval";
 import { noteFullAccess } from "../work/full";
 import { keptFromSessions } from "../work/reviewer";
-import { inProjectWorktree } from "../work/project-trees";
+import { findLinkedTrees, inProjectWorktree } from "../work/project-trees";
 import type { Approval } from "../work/approval";
 import { linkSession, pauseGoal, runningGoal } from "../work/goals";
 import { nextMidnight, startOfDay } from "../work/clock";
@@ -401,6 +401,8 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
   const asBefore = Boolean(from && !from.stored && wanted === starters && !bot);
   const applied = asBefore ? wanted : effectiveApproval(wanted, { agents }).approval;
   const got = applied !== (requested ?? wanted) && lowerOf(applied, requested ?? wanted) === applied ? applied : undefined;
+  // (A worktree made elsewhere is its project's, as the projects' worktrees are found now.)
+  if (folder !== CHATS) await findLinkedTrees();
   const project = named && realish(folder) !== realish(named.directory) ? { name: named.name, folders: [] as readonly string[] } : projectOf(named?.directory ?? folder);
   const title = typeof given.title === "string" && given.title.trim() ? given.title.trim() : null;
   const rules = rulesFor(applied, parent, project?.folders ?? []);

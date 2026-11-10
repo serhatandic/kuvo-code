@@ -529,7 +529,9 @@
          },
          "held?": "bool",
          "approved?": "number",
-         "used?": "number"
+         "used?": "number",
+         "place?": "string",
+         "revoked?": "number"
         }
        }
       },
@@ -651,7 +653,9 @@
          },
          "held?": "bool",
          "approved?": "number",
-         "used?": "number"
+         "used?": "number",
+         "place?": "string",
+         "revoked?": "number"
         }
        }
       },

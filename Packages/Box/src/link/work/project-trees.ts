@@ -7,7 +7,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { realish } from "../fence/policy";
+import { askedAbout, realish } from "../fence/policy";
 
 const real = (where: string): string | null => {
   try { return fs.realpathSync(where); } catch { return null; }
@@ -95,4 +95,46 @@ export function inProjectWorktree(folder: string, project: string): boolean {
   const mapped = path.join(repository.main, path.relative(repository.top, realish(folder)));
   const home = realish(project);
   return mapped === home || mapped.startsWith(home + "/");
+}
+
+// Each project's linked worktrees, by the folder its sessions run in there (`worktreeProjects`
+// files a session in one under its project, as every client shows it): worked out off the box's
+// thread (macOS may ask about a project's folder), again each little while it's asked for, and
+// told to those following as it changes. Not one that's a project of its own.
+let linked: Record<string, string> = {};
+let linkedAt = 0;
+let linking: Promise<void> | null = null;
+let projectsOf: () => string[] = () => [];
+const LINKED_FOR = 15_000;
+/** Told each time the projects' linked worktrees change. */
+export const linkedFollowers = new Set<() => void>();
+
+/** Where the projects whose worktrees are looked for are read from (`areas/projects`). */
+export function linkedTreesOf(projects: () => string[]): void {
+  projectsOf = projects;
+}
+
+/** The projects' linked worktrees as last found: each folder sessions run in there, and its
+ * project. Looked for again, off the box's thread, where that was a while ago. */
+export function linkedTrees(): Record<string, string> {
+  if (Date.now() - linkedAt > LINKED_FOR) void findLinkedTrees();
+  return linked;
+}
+
+/** The projects' linked worktrees, found again now (once at a time). */
+export function findLinkedTrees(): Promise<void> {
+  linking ??= (async () => {
+    const projects = projectsOf();
+    await askedAbout(projects);
+    const own = new Set(projects.map(realish));
+    const found: Record<string, string> = {};
+    for (const project of projects) {
+      for (const tree of projectWorktrees(project)) if (!own.has(tree)) found[tree] ??= project;
+    }
+    linkedAt = Date.now();
+    if (JSON.stringify(found) === JSON.stringify(linked)) return;
+    linked = found;
+    for (const tell of linkedFollowers) tell();
+  })().catch(() => {}).finally(() => { linking = null; });
+  return linking;
 }
