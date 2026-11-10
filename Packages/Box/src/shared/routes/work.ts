@@ -27,9 +27,16 @@ export const ANSWER = object({
   at: number,
 });
 
+/** The account a session runs on, as Settings › Accounts lists it where it runs: its provider's
+ * name ("Claude Code", "GitHub Copilot"), and the account's own name where that tells it apart
+ * (`label`): one you named, of a coding agent's ("Work"), or the engine's sign-in in use where it has
+ * more than one. */
+export const WORK_ACCOUNT = object({ name: string, "label?": string });
+
 /** One of a bot's sessions: its address, title, folder and project (left out for a chat), the
  * session that started it, how deep it is (1 for the bot's own), its model and mode (left out when
- * the engine has none), where it stands (and, while it asks, what), when it started (ms), tokens
+ * the engine has none), the account it runs on (left out on Custom Auto, which picks one each turn,
+ * or when where it runs can't say), where it stands (and, while it asks, what), when it started (ms), tokens
  * and cost so far (cost where the engine prices it), and the first lines of its last reply. */
 export const WORK_SESSION = object({
   session: string,
@@ -40,6 +47,7 @@ export const WORK_SESSION = object({
   depth: number,
   "model?": object({ id: string, providerID: string, "variant?": string }),
   "mode?": string,
+  "account?": WORK_ACCOUNT,
   state: words("working", "asking", "finished", "failed", "stopped", "idle"),
   "asks?": string,
   started: number,
@@ -252,6 +260,7 @@ export type WorkLimits = Infer<typeof LIMITS>;
 export type WorksFor = Infer<typeof WORKS_FOR>;
 export type WorkAnswer = Infer<typeof ANSWER>;
 export type WorkSession = Infer<typeof WORK_SESSION>;
+export type WorkAccount = Infer<typeof WORK_ACCOUNT>;
 export type BotWork = Infer<typeof WORK>;
 export type UnansweringList = Infer<typeof UNANSWERING_LIST>;
 export type WorkAskShape = Infer<typeof WORK_ASK>;

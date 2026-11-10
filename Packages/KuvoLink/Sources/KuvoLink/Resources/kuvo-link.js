@@ -8308,6 +8308,7 @@ var ANSWER = object({
   by: object({ "bot?": string, name: string }),
   at: number
 });
+var WORK_ACCOUNT = object({ name: string, "label?": string });
 var WORK_SESSION = object({
   session: string,
   title: string,
@@ -8317,6 +8318,7 @@ var WORK_SESSION = object({
   depth: number,
   "model?": object({ id: string, providerID: string, "variant?": string }),
   "mode?": string,
+  "account?": WORK_ACCOUNT,
   state: words("working", "asking", "finished", "failed", "stopped", "idle"),
   "asks?": string,
   started: number,
@@ -27675,7 +27677,7 @@ import fs90 from "node:fs";
 import path95 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "0.9.208";
+var BRIDGE_VERSION = "0.9.209";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
@@ -29883,6 +29885,38 @@ async function* movePlacesRoute(context) {
 
 // Packages/Box/src/link/areas/work.ts
 import fs100 from "node:fs";
+
+// Packages/Box/src/link/work/accounts.ts
+var ASK_WAIT = 5000;
+async function accountOf(target, provider, signal) {
+  const wait = AbortSignal.timeout(ASK_WAIT);
+  const listed = await call(target, "GET", `/api/integration/${encodeURIComponent(provider)}`, undefined, signal ? AbortSignal.any([signal, wait]) : wait).catch(() => null);
+  if (!isObject(listed) || typeof listed.name !== "string" || !listed.name.trim())
+    return null;
+  const name = listed.name.trim();
+  const named = (label) => typeof label === "string" && label.trim() ? { name, label: label.trim() } : { name };
+  if (isObject(listed.metadata) && listed.metadata.source === "agent")
+    return named(listed.metadata.accountLabel);
+  const signIns = Array.isArray(listed.connections) ? listed.connections.filter((each) => isObject(each) && each.type === "credential") : [];
+  return signIns.length > 1 ? named(signIns[0].label) : { name };
+}
+async function workAccounts(sessions, signal) {
+  const asked = new Map;
+  const accounts = new Map;
+  await Promise.all(sessions.map(async ({ id, target, provider }) => {
+    if (!provider || provider === "auto")
+      return;
+    const key = `${target.port}|${provider}`;
+    if (!asked.has(key))
+      asked.set(key, accountOf(target, provider, signal));
+    const account = await asked.get(key);
+    if (account)
+      accounts.set(id, account);
+  }));
+  return accounts;
+}
+
+// Packages/Box/src/link/areas/work.ts
 var WORK_ROUTE = /^kuvo\/(?:work(?:\/events|\/oversight(?:\/events)?|\/background(?:\/events)?)?|bots\/([^/]+)\/stop-all)$/;
 var WORK_ASKS_ROUTE = /^kuvo\/work\/(?:settings|unanswering|asks(?:\/([^/]+))?)$/;
 var GOALS_ROUTE = /^kuvo\/work\/goals(?:\/([^/]+))?$/;
@@ -29894,16 +29928,21 @@ async function botWork(bot, context) {
   const working = await atWorkNow(targets, signal ?? undefined);
   const sessions = [];
   const shown = work.slice(0, 60);
+  const asked = workAccounts(shown.map((each) => ({ id: each.data.id, target: each.target, provider: each.data.model?.providerID })), signal ?? undefined);
   for (let at = 0;at < shown.length; at += 8) {
     sessions.push(...await Promise.all(shown.slice(at, at + 8).map((each) => describeWork(each, working, { replies: true, signal: signal ?? undefined }))));
   }
   const answered = work.flatMap((each) => answersOn(each.data.metadata).map((answer) => ({ ...answer, session: each.data.id }))).sort((a, b) => b.at - a.at).slice(0, 100);
+  const accounts = await asked;
   const midnight = startOfDay(Date.now());
   const today = work.filter((each) => (each.data.time?.created ?? 0) >= midnight);
   const cost = today.reduce((sum, each) => sum + (typeof each.data.cost === "number" ? each.data.cost : 0), 0);
   return {
     bot,
-    sessions: sessions.map(({ askID: _, ...described }) => described),
+    sessions: sessions.map(({ askID: _, ...described }) => {
+      const account = accounts.get(described.session);
+      return account ? { ...described, account } : described;
+    }),
     answered,
     today: {
       started: today.length,
