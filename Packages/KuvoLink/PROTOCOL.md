@@ -1498,6 +1498,16 @@ with a mail frame, sealed with the sender's static key for the phone's. Its payl
 | `blocked` | A bot's goal needs you (`quiet`, or `wake` where you asked to be woken). |
 | `message` | Something in a group chat. |
 
+**Handed over, and how it went.** A push counts as handed over only once the box's relay
+connection takes it: one closing as it's handed over is held and tried again, as when the relay
+isn't there (`kuvo/attention`, below). The relay answers each push with `pushed` (above). Each box
+keeps the last answer for each of its phones in `run/notices/pushed.json`, by the phone's key:
+`{"<key>": {"at", "outcome": "sent"|"noPhone"|"notAllowed"|"refused", "sent"?}}`, `at` and `sent`
+(when one last went through) in ms since 1970. So a phone that hears nothing can be told from one
+that was sent nothing: `noPhone` is no registration at its address (it registers again as it
+connects), `notAllowed` a registration that doesn't name this box among its senders, `refused`
+Apple's no. No route reads it yet (bridge 0.9.209).
+
 A phone should ignore a category it doesn't know, and show the notification plainly.
 
 What's news, each box decides alike (`notices/news.ts`), for your phones and its clients

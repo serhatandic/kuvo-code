@@ -1,7 +1,8 @@
 // A relay for the bridge's tests, on 127.0.0.1: the relay's messages (PROTOCOL.md, "The relay") over
 // a WebSocket, as the real one speaks them, for a bridge connecting with `connectOnce`; and devices
 // in this process (a phone, a machine) on it too, without a socket. It delivers, says who's
-// unreachable, and keeps what was pushed. Nothing else of the real relay (Apple, limits) is here.
+// unreachable, keeps what was pushed and, when a test says so, answers each push as the relay does.
+// Nothing else of the real relay (Apple, limits) is here.
 import crypto from "node:crypto";
 import http from "node:http";
 
@@ -51,6 +52,9 @@ export async function relayStandIn({ addressOf }, { changed = () => {} } = {}) {
   const devices = new Map();
   const pushed = [];
   const delivered = [];
+  // What it answers a push with (`answers.push`: 0 sent, 1 no phone, 2 not allowed, 3 refused);
+  // nothing until a test sets it.
+  const answers = { push: null };
   const sockets = new Set();
   const deliver = (from, to, payload) => {
     const device = devices.get(to.toString("hex"));
@@ -73,6 +77,8 @@ export async function relayStandIn({ addressOf }, { changed = () => {} } = {}) {
     if (kind === 2 && message.length >= 17) return deliver(state.address, message.subarray(1, 17), message.subarray(17));
     if (kind === 5 && message.length >= 17) {
       pushed.push({ from: state.address, to: Buffer.from(message.subarray(1, 17)), payload: Buffer.from(message.subarray(17)) });
+      // How it went, as the real relay answers (`0x06`), once a test says what to answer.
+      if (typeof answers.push === "number") give(Buffer.concat([Buffer.from([6]), message.subarray(1, 17), Buffer.from([answers.push])]));
       changed();
     }
   };
@@ -107,6 +113,7 @@ export async function relayStandIn({ addressOf }, { changed = () => {} } = {}) {
   return {
     url: `ws://127.0.0.1:${server.address().port}`,
     pushed,
+    answers,
     // What it gave a device on it, from another (in order).
     delivered,
     // Whether a device is on it at `address`.
