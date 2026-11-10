@@ -436,8 +436,6 @@ final class MacBoxRunner {
         var environment = shell
         environment["KUVO_WAKE_COMMAND"] = WakeUps.command.path
         environment["KUVO_KEYS_ON_HOST"] = "1"
-        // This Mac's chats, where a session a bot starts from its own folder goes.
-        environment["KUVO_CHATS"] = Workspace.chatsFolder
         // Where this app keeps the files its sessions sent, a folder for each: they go as the
         // box hears their session's deleted.
         environment["KUVO_MAC_ATTACHMENTS"] = Attachments.directory.path
