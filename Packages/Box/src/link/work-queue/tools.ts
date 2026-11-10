@@ -26,99 +26,98 @@ export interface ToolAnswer { text: string; isError: boolean }
 const said = (text: string): ToolAnswer => ({ text, isError: false });
 const refused = (text: string): ToolAnswer => ({ text, isError: true });
 
-const ITEM = { type: ["string", "integer"], description: "The item: its number, like #243 (or 243)." };
-const TOP = { type: "boolean", description: "Put it at the top of its category." };
-const LINKS = { type: "array", items: { anyOf: [{ type: "string" }, { type: "object", properties: { url: { type: "string" }, title: { type: "string" } }, required: ["url"] }] }, description: "Web links that belong with it: a pull request, a doc, a page (https://…)." };
-const FILES = { type: "array", items: { type: "string" }, description: "Pictures or files to keep with it, as full paths: from this conversation's folder, its project or a temporary folder. Show a picture in the body with ![what it shows](file name)." };
-const PROGRESS = { type: ["number", "null"], description: "How far along, from 0 to 1, only where you can count it (3 of 8 is 0.375); null takes it away." };
-const PROGRESS_NOTE = { type: ["string", "null"], description: "What's being done now, in a few words, like \"Writing the tests (3 of 8)\": the user sees it under In progress." };
+const ITEM = { type: ["string", "integer"], description: "Its number, like #243." };
+const TOP = { type: "boolean", description: "At the top of its category." };
+const CATEGORY = { type: "string", description: "Next, Later, Parked, Done or a custom one." };
+const LINKS = { type: "array", items: { type: "string" }, description: "Web links (a PR, a doc)." };
+const FILES = { type: "array", items: { type: "string" }, description: "Full paths of files to keep with it (in the body: ![](name))." };
+const PROGRESS = { type: ["number", "null"], description: "0 to 1, where it can be counted." };
+const PROGRESS_NOTE = { type: ["string", "null"], description: "What's being done now, in a few words." };
+const WORKING = { type: "boolean", description: "You're on it now (false: you stopped)." };
+const NAMES = { type: "array", items: { type: "string" } };
 
 /** The tools, as a tool server lists them. */
 export const QUEUE_TOOLS = [
   {
     name: "queue_list",
-    description: "List your Work Queue: your work items, and those of the sessions you oversee, by category (In progress first, then Next, Later, any custom ones, Parked; Done only when asked), each with its number, what it's at and when it last changed. Use it before adding an item, to find one you mean, and to see what's next.",
+    description: "List your Work Queue (and that of sessions you oversee) by category, In progress first.",
     inputSchema: { type: "object", properties: {
-      category: { type: "string", description: "Only this category: Next, Later, Parked, Done, a custom one, or In progress." },
-      query: { type: "string", description: "Only items whose title or description has these words." },
-      done: { type: "boolean", description: "Include Done items (the latest 30)." },
+      category: { type: "string", description: "Only this one (or In progress)." },
+      query: { type: "string", description: "Words in the title or description." },
+      done: { type: "boolean", description: "Include Done ones." },
     }, additionalProperties: false },
   },
   {
     name: "queue_show",
-    description: "Read one Work Queue item whole: its description, progress, notes, files, links, the sessions working on it and where each stands, and who handed it to whom.",
+    description: "Read one item whole: description, progress, notes, files, links, sessions.",
     inputSchema: { type: "object", properties: { item: ITEM }, required: ["item"], additionalProperties: false },
   },
   {
     name: "queue_add",
-    description: "Add a work item to your Work Queue: anything the user asks you to do later, track or remember as work, and what you find needs doing. It goes in Next, at the bottom, unless you say. You get its number; refer to it as #n in what you write (the user sees a chip, never an id).",
+    description: "Add an item to your Work Queue (Next, at the bottom, by default). You get its number.",
     inputSchema: { type: "object", properties: {
-      title: { type: "string", description: "What it is, in one short line." },
-      body: { type: "string", description: "The description, in Markdown: what, why, what's decided, what's left." },
-      category: { type: "string", description: "Next (default), Later, Parked, Done, or a custom one." },
+      title: { type: "string", description: "One short line." },
+      body: { type: "string", description: "Markdown: what, why, what's decided." },
+      category: CATEGORY,
       top: TOP,
       progress: PROGRESS,
       progress_note: PROGRESS_NOTE,
       links: LINKS,
       files: FILES,
-      working: { type: "boolean", description: "You're starting on it now: links this conversation to it, so it shows In progress while you work." },
+      working: WORKING,
     }, required: ["title"], additionalProperties: false },
   },
   {
     name: "queue_update",
-    description: "Change a Work Queue item of yours (or of a session you oversee): its title, description, category (category: done marks it done), place, progress and what's being done, a note (added, never replacing), links and files; and which sessions work on it. Link yourself with working: true when you start on it, and mark it done when it is.",
+    description: "Change an item of yours (or of a session you oversee). category: done marks it done; note adds a note.",
     inputSchema: { type: "object", properties: {
       item: ITEM,
       title: { type: "string" },
-      body: { type: "string", description: "The whole description, in Markdown: it replaces the one there." },
-      category: { type: "string", description: "Next, Later, Parked, Done, or a custom one." },
+      body: { type: "string", description: "Replaces the description." },
+      category: CATEGORY,
       top: TOP,
-      before: { type: ["string", "integer"], description: "Put it just before this item (in the same category)." },
-      after: { type: ["string", "integer"], description: "Put it just after this item (in the same category)." },
+      before: { type: ["string", "integer"], description: "Just before this item." },
+      after: { type: ["string", "integer"], description: "Just after this item." },
       progress: PROGRESS,
       progress_note: PROGRESS_NOTE,
-      note: { type: "string", description: "A note to add, in Markdown: what happened, what you found, what's decided." },
+      note: { type: "string" },
       links: LINKS,
-      remove_links: { type: "array", items: { type: "string" }, description: "Links to take away, by address." },
       files: FILES,
-      remove_files: { type: "array", items: { type: "string" }, description: "Files to take away, by name." },
-      working: { type: "boolean", description: "true: you're working on it now (it shows In progress while you're at work); false: you've stopped." },
-      sessions: { type: "array", items: { type: "string" }, description: "Sessions working on it, by address, to link." },
-      unlink: { type: "array", items: { type: "string" }, description: "Sessions to unlink, by address." },
+      remove: { ...NAMES, description: "Links or files to take away." },
+      working: WORKING,
+      sessions: { ...NAMES, description: "Sessions to link, by address." },
+      unlink: NAMES,
     }, required: ["item"], additionalProperties: false },
   },
   {
     name: "queue_hand",
-    description: "Hand a Work Queue item to a session on this computer (one you started, usually, right after start_session): it moves into that session's queue, linked to it, so it shows In progress while that session works. It lives once, in its queue, and stays in your view.",
+    description: "Hand an item to a session on this computer (one you started for it): it moves to that session's queue, linked to it, and stays in your view.",
     inputSchema: { type: "object", properties: {
       item: ITEM,
-      to: { type: "string", description: "The session or bot, by its address (from start_session or list_sessions) or a bot's name." },
+      to: { type: "string", description: "Its address, or a bot's name." },
     }, required: ["item", "to"], additionalProperties: false },
   },
   {
     name: "queue_remove",
-    description: "Delete a Work Queue item (the user can bring it back for 30 days), or with undo bring back one an agent deleted. Only the user brings back what the user deleted.",
-    inputSchema: { type: "object", properties: { item: ITEM, undo: { type: "boolean", description: "Bring it back instead." } }, required: ["item"], additionalProperties: false },
+    description: "Delete an item (the user can bring it back for 30 days); undo brings back one an agent deleted.",
+    inputSchema: { type: "object", properties: { item: ITEM, undo: { type: "boolean" } }, required: ["item"], additionalProperties: false },
   },
   {
     name: "queue_categories",
-    description: "List the Work Queue's categories (one set for every queue), or add a custom one when the user asks for it. Renaming or removing one is the user's.",
-    inputSchema: { type: "object", properties: {
-      add: { type: "string", description: "A new category's name, like Bugs." },
-      after: { type: "string", description: "Put it after this one (Later, or a custom one); after the other custom ones by default." },
-    }, additionalProperties: false },
+    description: "List the categories, or add a custom one the user asked for.",
+    inputSchema: { type: "object", properties: { add: { type: "string" }, after: { type: "string" } }, additionalProperties: false },
   },
   {
     name: "queue_import",
-    description: "Import items from an old backlog (a BACKLOG.md, say) into your Work Queue, keeping their numbers: read the files yourself and give each item. Up to 200 a call. Numbers already in the queue are left out.",
+    description: "Import an old backlog's items with their numbers (read the files yourself); up to 200 a call.",
     inputSchema: { type: "object", properties: {
       items: { type: "array", items: { type: "object", properties: {
-        number: { type: "integer", description: "Its number, as the backlog has it (#243 is 243)." },
-        title: { type: "string", description: "What it is, in one short line." },
-        body: { type: "string", description: "Its whole text from the backlog, in Markdown." },
-        category: { type: "string", description: "Next (default), Later, Parked, Done, or a custom one, as the backlog sorts it." },
-        done: { type: "boolean", description: "It's done." },
-      }, required: ["number", "title"] }, description: "The items." },
+        number: { type: "integer" },
+        title: { type: "string" },
+        body: { type: "string" },
+        category: { type: "string" },
+        done: { type: "boolean" },
+      }, required: ["number", "title"] } },
     }, required: ["items"], additionalProperties: false },
   },
 ];
@@ -126,7 +125,7 @@ export const QUEUE_TOOLS = [
 export const QUEUE_TOOL_NAMES: readonly string[] = QUEUE_TOOLS.map(tool => tool.name);
 
 /** What the tool servers add to what they tell agents, with the tools. */
-export const QUEUE_INSTRUCTIONS = " Your Work Queue keeps your work items (queue_list, queue_add, queue_update, queue_hand): it's how you and the user track work in Kuvo Code, in place of a backlog file. When the user asks for a new item, or work comes up to do later, add it there. Refer to items as #243 (the user sees a chip); outside ones with their source, like gh:owner/repo#12. When you start on one, link yourself (working: true), keep progress_note to what's being done, and mark it done when it is; hand an item to a session you start for it with queue_hand.";
+export const QUEUE_INSTRUCTIONS = " Keep work items in your Work Queue (queue_*), not a file: add what the user asks for or what's left to do. Refer to them as #243 (outside ones with their source, like gh:owner/repo#12). On one: working: true, progress_note, then category: done.";
 
 /** Who calls, as the queue knows them: the owner of the queue they write to, the session that
  * works when they say working, their name, and where their files may come from. */

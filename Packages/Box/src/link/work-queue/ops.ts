@@ -8,11 +8,11 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { isObject } from "../../shared/json";
 import { plainName } from "../../shared/text";
-import { BOTS, K } from "../home";
+import { BOTS, IS_MAC, K } from "../home";
 import { categoryNamed } from "./categories";
 import { takeNumber, type Primary } from "./numbers";
 import {
-  FILES, filesOf, matching, MOST_BODY, MOST_FILE, MOST_FILES, MOST_ITEMS, MOST_LINKS, MOST_NOTE, MOST_NOTES, MOST_TITLE, newItemID, noteHanded, placeBeside, placeIn,
+  FILES, filesOf, matching, MOST_BODY, MOST_FILE, MOST_FILES, MOST_ITEMS, MOST_LINKS, MOST_NOTE, MOST_NOTES, MOST_TITLE, newItemID, noteHanded, placeBeside, placeIn, Refusal,
   type Book, type Item, type KeptFile, type Who,
 } from "./store";
 import { nameOf, refOf } from "./view";
@@ -22,7 +22,7 @@ import { frozen } from "../moves/records";
 export const LINKS_EACH = 3;
 const MOST_PROGRESS_NOTE = 300;
 
-export class Refusal extends Error {}
+export { Refusal };
 const refuse = (words: string): never => { throw new Refusal(words); };
 
 // Where files an agent named wait, read, until the change that keeps them.
@@ -71,8 +71,11 @@ export function stageFile(given: string, places: FilePlaces, staging: string): S
   const own = places.own ? real(places.own) : null;
   const roots = [own, ...places.others.map(real), real(os.tmpdir()), real("/tmp")].filter((each): each is string => Boolean(each));
   const root = roots.find(each => within(file, each));
-  const boxes = [real(K), real(BOTS)].filter((each): each is string => Boolean(each));
-  const ownOK = own !== null && root === own;
+  // Kuvo Code's own folders (on a Mac, the app's around its box's): never, unless the conversation's
+  // own folder is itself in them (a bot's, a chat's), and then only what's in that folder. A project
+  // that holds them (one at the home folder) doesn't make them its own.
+  const boxes = [real(K), real(BOTS), IS_MAC ? real(path.dirname(path.resolve(K))) : null].filter((each): each is string => Boolean(each));
+  const ownOK = own !== null && root === own && boxes.some(box => within(own, box));
   if (!root || (!ownOK && boxes.some(box => within(file, box)))) refuse(`${given} isn't in this conversation's folder, its project or a temporary folder: only files from there are kept with an item.`);
   if (path.relative(root!, file).split(path.sep).some(part => part.startsWith("."))) refuse(`${given} is hidden (a name starting with a dot): it isn't kept with an item.`);
   const checked = fs.lstatSync(file);
@@ -181,6 +184,8 @@ export interface Fields {
   remove_links?: unknown;
   files?: unknown;
   remove_files?: unknown;
+  /** Links (by address) and files (by name) to take away: one list for both. */
+  remove?: unknown;
 }
 
 /** Who acts, when, the files it read for the change (`stageFiles`), and what's to be done on disk
@@ -278,8 +283,10 @@ export function changeItem(book: Book, item: Item, fields: Fields, acting: Actin
     const note = text(fields.note, MOST_NOTE, "The note").trim();
     if (note) item.notes = [...item.notes, { at: now, by: who, text: note }].slice(-MOST_NOTES);
   }
-  if (fields.remove_links !== undefined) {
-    const gone = new Set((Array.isArray(fields.remove_links) ? fields.remove_links : [fields.remove_links]).map(String));
+  const listed = (value: unknown): string[] => (value === undefined ? [] : (Array.isArray(value) ? value : [value]).map(String));
+  const removing = listed(fields.remove);
+  if (fields.remove_links !== undefined || removing.length) {
+    const gone = new Set([...listed(fields.remove_links), ...removing]);
     item.links = item.links.filter(link => !gone.has(link.url));
   }
   if (fields.links !== undefined) {
@@ -288,10 +295,10 @@ export function changeItem(book: Book, item: Item, fields: Fields, acting: Actin
   }
   // Files: everything checked first; what's on disk changes only as the change is kept
   // (`applyFileOps`), those taken away before those added.
-  const gone = new Set(fields.remove_files === undefined ? [] : (Array.isArray(fields.remove_files) ? fields.remove_files : [fields.remove_files]).map(String));
+  const gone = new Set([...listed(fields.remove_files), ...removing]);
   const staged = fields.files === undefined ? [] : acting.staged ?? refuse("Only an agent's own files are kept with an item.");
   const left = item.files.filter(file => !gone.has(file.name));
-  if (left.length + staged.length > MOST_FILES) refuse(`An item keeps ${MOST_FILES} files at most: take some away first (remove_files).`);
+  if (left.length + staged.length > MOST_FILES) refuse(`An item keeps ${MOST_FILES} files at most: take some away first (remove).`);
   for (const file of item.files) if (gone.has(file.name)) acting.fileOps.push(() => fs.rmSync(path.join(filesOf(item.id), file.name), { force: true }));
   item.files = left;
   for (const each of staged) {
