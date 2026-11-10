@@ -30,17 +30,17 @@ import Testing
     }
 
     /// This Mac's keys, as the app made them before.
-    private func made() async throws -> [String: String] {
+    private func made() async throws -> (identity: [String: String], macKey: String?) {
         let app = PhoneLink(file: file, keychain: service)
         app.hasMachines = { true }
         let mine = try #require(await app.boxIdentity())
         #expect(items() == 3)
-        return mine
+        return (mine, app.macKey)
     }
 
     @Test func keysTheLockedKeychainWouldntGiveAreReadAgainLaterAndNeverStoodInFor() async throws {
         defer { cleanUp() }
-        let mine = try await made()
+        let mine = try await made().identity
 
         // The keeper, started at login before the Keychain was unlocked: none, and none made.
         Keychain.lockForTests(service, true)
@@ -62,17 +62,17 @@ import Testing
     /// read fails at once as a locked one does, and is tried again once you've unlocked it.
     @Test func theKeeperNeverAsksSoACancelledPromptDoesntKeepTheLinkOffUntilARestart() async throws {
         defer { cleanUp() }
-        let mine = try await made()
+        let mine = try await made().identity
 
         Keychain.lockForTests(service, true, answer: errSecUserCanceled)
         let keeper = PhoneLink(file: file, keychain: service)
         keeper.hasMachines = { true }
         keeper.readAgainAfter = 0
         #expect(await keeper.boxIdentity() == nil)
-        #expect(await keeper.boxIdentity() == nil, "still refused, and nothing made")
-        #expect(items() == 3)
+        #expect(await keeper.boxIdentity() == nil, "still refused")
         #expect(Keychain.promptsForTests(service) == 0, "never asked")
         Keychain.lockForTests(service, false)
+        #expect(items() == 3, "nothing made")
         #expect(await keeper.boxIdentity() == mine)
     }
 
@@ -80,7 +80,7 @@ import Testing
     /// link off, nothing made; its box's asking reads them again later, without asking.
     @Test func aPromptCancelledInTheAppIsntShownAgainAndTheBoxsAskingReadsThemLater() async throws {
         defer { cleanUp() }
-        let mine = try await made()
+        let (mine, macKey) = try await made()
 
         Keychain.lockForTests(service, true, answer: errSecUserCanceled)
         let app = PhoneLink(file: file, keychain: service)
@@ -89,9 +89,9 @@ import Testing
         #expect(app.macKey == nil, "you said no: not this Mac's, and no stand-in")
         #expect(app.macKey == nil)
         #expect(Keychain.promptsForTests(service) == 1, "asked once, not again")
-        #expect(items() == 3)
         Keychain.lockForTests(service, false)
+        #expect(items() == 3, "nothing made")
         #expect(await app.boxIdentity() == mine)
-        #expect(app.macKey == mine["key"].flatMap { Data(base64URL: $0) }.flatMap { try? LinkKey(rawRepresentation: $0) }?.publicBytes.base64URL)
+        #expect(app.macKey != nil && app.macKey == macKey)
     }
 }
