@@ -158,6 +158,7 @@ function fittedMails(peer: Peer, telling: Telling, link: LinkState, now: number)
       return mails;
     }
   }
+  console.error(`Work Queue: what this box tells ${computerName(peer)} is too big to send, even cut to its 50 latest items.`);
   return null;
 }
 

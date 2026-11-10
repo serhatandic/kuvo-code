@@ -20289,7 +20289,8 @@ async function handArrived(sender, given, reply, places, now = Date.now()) {
   for (const each of Array.isArray(given.categories) ? given.categories : [])
     if (isObject(each) && typeof each.id === "string" && typeof each.name === "string")
       keepCategory(each.id, each.name);
-  const by = whoOf(given.by) ?? { name: "someone else" };
+  const kept = whoOf(given.by) ?? { name: "someone else" };
+  const by = typeof kept.name === "string" ? { ...kept, name: plainName(kept.name).slice(0, 100) } : kept;
   let refused = null;
   let again = false;
   changeQueues((book) => {
@@ -20439,6 +20440,7 @@ function fittedMails(peer, telling, link, now) {
       return mails;
     }
   }
+  console.error(`Work Queue: what this box tells ${computerName(peer)} is too big to send, even cut to its 50 latest items.`);
   return null;
 }
 function queuesBack(key) {
@@ -32165,6 +32167,8 @@ function itemFor(items, given, caller, overseen) {
   const item = found.find((each) => inView(caller.owner, each, overseen)) ?? found[0];
   if (!item) {
     const far = itemElsewhere(ref);
+    if (far && !itemsElsewhere(caller.owner).items.some((each) => each.id === far.id))
+      throw new Refusal(`${nameOf3(far)} is on ${far.computer.name}, and isn't in your Work Queue, nor in a session's you oversee: ask the conversation it belongs to, or the user.`);
     if (far)
       throw new Refusal(`${nameOf3(far)} is on ${far.computer.name}, in ${far.owner.startsWith("grp_") ? "a group chat's" : `the queue of ${far.owner}`}: it's changed there. Ask that conversation (send_message), or the user.`);
     throw new Refusal(`There's no item ${"number" in ref ? `#${ref.number}` : ref.id} in the Work Queue on ${HERE} or your other computers. queue_list shows yours.`);

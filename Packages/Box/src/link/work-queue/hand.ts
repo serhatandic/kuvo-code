@@ -190,7 +190,8 @@ export async function handArrived(sender: MailSender, given: unknown, reply: (pa
   });
   item.files = item.files.filter(file => files.some(each => each.name === file.name));
   for (const each of Array.isArray(given.categories) ? given.categories : []) if (isObject(each) && typeof each.id === "string" && typeof each.name === "string") keepCategory(each.id, each.name);
-  const by: Who = whoOf(given.by) ?? { name: "someone else" };
+  const kept = whoOf(given.by) ?? { name: "someone else" };
+  const by: Who = typeof (kept as { name?: unknown }).name === "string" ? { ...kept, name: plainName((kept as { name: string }).name).slice(0, 100) } as Who : kept;
   let refused: string | null = null;
   let again = false;
   changeQueues((book: Book) => {

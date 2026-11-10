@@ -183,6 +183,7 @@ function itemFor(items: Item[], given: unknown, caller: QueueCaller, overseen: S
   if (!item) {
     // One on another of your computers is changed there, by the conversation it belongs to.
     const far = itemElsewhere(ref);
+    if (far && !itemsElsewhere(caller.owner).items.some(each => each.id === far.id)) throw new Refusal(`${nameOf(far)} is on ${far.computer.name}, and isn't in your Work Queue, nor in a session's you oversee: ask the conversation it belongs to, or the user.`);
     if (far) throw new Refusal(`${nameOf(far)} is on ${far.computer.name}, in ${far.owner.startsWith("grp_") ? "a group chat's" : `the queue of ${far.owner}`}: it's changed there. Ask that conversation (send_message), or the user.`);
     throw new Refusal(`There's no item ${"number" in ref ? `#${ref.number}` : ref.id} in the Work Queue on ${HERE} or your other computers. queue_list shows yours.`);
   }

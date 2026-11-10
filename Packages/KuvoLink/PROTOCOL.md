@@ -3055,7 +3055,10 @@ was set up, the earliest it can tell: its folder's making where the system keeps
 item; one that hasn't said is never earlier), then by key. A box keeps the primary it numbers from
 (`numbers.json`, `primary`) while that one is still one of your computers and none set up earlier is
 known: it moves only to an earlier one, never back, and one whose primary was removed or forgotten
-finds the next. A machine set up from a Mac never numbers on its own; while it knows of no Mac that
+finds the next. A primary no peer names any more (the one this box reaches it through stopped
+saying it) is waited for: once three days go by unheard (`numbers.json`, `lost`), or at once once the
+peer it was reached through (`through`) is removed, the box finds the next. A machine set up from a
+Mac never numbers on its own; while it knows of no Mac that
 can be reached yet, items wait. (#183 will let you choose the primary.) The primary numbers its own
 items from its counter; another box numbers from blocks of 50 the primary gave it, and asks for the
 next when 15 or fewer are left, by mail, on its rounds: `{workQueue: {ask: {id, count, claims?,
@@ -3100,7 +3103,8 @@ item on its way to another computer (`handing`) goes with the move and is sent f
   `{workQueue: {had: id}}`, nothing while it's the same and had, and nothing while that computer
   isn't answering (`run/peer-reach.json`; it goes once its mail comes again, and again in full to
   one that asks for agents as it connects). The receiver keeps the newest from each peer
-  (`run/work-queue/peers/<key>.json`; one older than what it has is had, not kept), cleaned as it
+  (`run/work-queue/peers/<key>.json`; one older than what it has by less than ten minutes, mail
+  come late, is had, not kept; one older by more is its clock set back, and kept), cleaned as it
   takes it, and only from a box that's one of its peers; what's kept of a computer you removed goes.
 - **Parts**: Work Queue mail too big for one goes as `{workQueue: {part: {whole, i, of, d}}}`: `d`
   pieces of 40,000 characters of the base64url of the whole's JSON (`{told: …}`, `{hand: …}`),
@@ -3119,7 +3123,8 @@ item on its way to another computer (`handing`) goes with the move and is sent f
   root conversation (a subagent's, its conversation's; a group chat's seat refused), linked to it,
   noted as handed from `from`, in a category it can keep (else Next), with its number as it was; it
   answers `retry` while `to` moves between computers or it can't look it up (its engine starting, or
-  the coding agents' bridge not running), and refuses one for a conversation it doesn't have, or a
+  the coding agents' bridge not running), and while the item is still on its way from it to
+  another computer itself (handed back before its receipt came), and refuses one for a conversation it doesn't have, or a
   queue that's full. So the item lives once, and stays in the hander's view on every computer
   (`handedBy`, `handedFrom`).
 
