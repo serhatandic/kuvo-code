@@ -16,6 +16,9 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ### All Changes
 
+- The subagents you make in Settings › Agents work in Claude Code, Codex, Cursor, Grok and Antigravity sessions too, with their instructions, on every account. In Claude Code they win over one of the same name in `~/.claude/agents`, and keep to what Settings › Agents lets them do. Before, only Kuvo Code's own agent had them.
+- **Subagents use** in Settings › Agents picks one model for the parts of a task an agent hands off, from any of your accounts, on each computer; a subagent with a model of its own keeps it. Each coding agent takes it when it's one of its models.
+
 - A Claude Code subagent sent off to work in the background (as Claude Code does unless told otherwise, a reviewer say) keeps working after the turn that started it ends: its tools run, ask you or are refused by your rules as the conversation's own would be. Before, every tool it used once that turn ended was refused with "There's no turn under way for this", so its review or task quietly didn't happen.
 - A bot's list of its sessions, and the bot's work bar in the app, no longer give a session you or it stopped (or one that failed) the reply it wrote in an earlier turn as its last reply, so the bot doesn't take that earlier answer for how the stopped turn ended. What the session said in the turn that was stopped still shows.
 - A bot that just moved to another computer reaches the sessions it left behind at once. Before, for up to a minute after the move, its list of sessions said the computer it left "isn't answering", and a stop or an answer it gave was only kept for later, though that computer was awake.
