@@ -28,8 +28,7 @@ final class UsageHistoryRefreshTriggerTests: XCTestCase {
 
     private func makeDefaults() -> UserDefaults {
         let suite = "OpenUsageTests.HistoryTriggers.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
-        defaults.removePersistentDomain(forName: suite)
+        let defaults = testDefaults(suiteName: suite)!
         return defaults
     }
 }

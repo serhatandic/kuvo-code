@@ -152,11 +152,6 @@ export function readKit(system: string = process.platform): BotKit | null {
   const timeZone = zoneOf(mac);
   const machine = (typeof mac?.machine === "string" && mac.machine) || readLink()?.id || os.hostname();
   const here = IS_MAC ? words.here.mac : words.here.machine;
-  // A machine says which system it is, from the box's own: "the Mac", "the Linux machine".
-  const systems = here.systems ?? {};
-  const named = String(systems[system] ?? systems.other ?? "machine");
-  const fill = (text: string) => text.replace(/⟦(place|clock|browser)⟧/g, (_, key: "place" | "clock" | "browser") => String(here[key] ?? ""))
-    .replaceAll("⟦system⟧", () => named).replaceAll("⟦machine⟧", () => machine).replaceAll("⟦timeZone⟧", () => timeZone || "UTC");
   const told = (each: PresetPersonality) => words.personalityWords.replaceAll("⟦name⟧", () => each.name).replaceAll("⟦description⟧", () => each.description);
   return {
     kuvo: 1,
@@ -168,13 +163,23 @@ export function readKit(system: string = process.platform): BotKit | null {
     ],
     personalityWords: words.personalityWords,
     looks: words.looks,
-    instructions: fill(words.instructions.join("\n\n")),
+    instructions: wordsHere(words, here, system, machine, timeZone),
     job: { none: String(words.job.none ?? ""), line: String(words.job.line ?? ""), details: String(words.job.details ?? "") },
     projectNote: words.projectNote, identityNote: words.identityNote, memory: words.memory, greeting: words.greeting,
     startingModel: mac?.startingModel ?? null, projects: Array.isArray(mac?.projects) ? mac.projects : [], rules: Array.isArray(mac?.rules) ? mac.rules : [],
     timeZone: timeZone || "UTC",
     ...(typeof mac?.zoneinfo === "string" ? { zoneinfo: mac.zoneinfo } : {}),
   };
+}
+
+// What a bot is told, filled in for where it runs: `here` (this Mac, or a machine by its name,
+// system and your time zone).
+export function wordsHere(words: Pick<BotWords, "instructions">, here: BotPlace, system: string, machine: string, timeZone: string | null | undefined): string {
+  // A machine says which system it is, from the box's own: "the Mac", "the Linux machine".
+  const systems = here.systems ?? {};
+  const named = String(systems[system] ?? systems.other ?? "machine");
+  return words.instructions.join("\n\n").replace(/⟦(place|clock|browser)⟧/g, (_, key: "place" | "clock" | "browser") => String(here[key] ?? ""))
+    .replaceAll("⟦system⟧", () => named).replaceAll("⟦machine⟧", () => machine).replaceAll("⟦timeZone⟧", () => timeZone || "UTC");
 }
 
 // What a Mac gave this box of what's its own (`bots/kit.json`), or null.
