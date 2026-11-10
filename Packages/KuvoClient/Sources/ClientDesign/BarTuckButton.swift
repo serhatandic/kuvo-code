@@ -6,10 +6,13 @@ public struct BarTuckButton: View {
     private let hide: () -> Void
     public init(hide: @escaping () -> Void) { self.hide = hide }
 
+    // Centered over the bars' chevrons: a finger's width on the phone.
     #if os(iOS)
     private let size = CGSize(width: 44, height: 28)
+    private let trailing: CGFloat = 4
     #else
     private let size = CGSize(width: 36, height: 20)
+    private let trailing: CGFloat = 2
     #endif
 
     public var body: some View {
@@ -27,7 +30,7 @@ public struct BarTuckButton: View {
             .accessibilityLabel("Fold all bars")
             .help("Fold all bars into one line")
         }
-        .padding(.horizontal, 8)
+        .padding(.trailing, trailing)
         .padding(.top, 4)
     }
 }
