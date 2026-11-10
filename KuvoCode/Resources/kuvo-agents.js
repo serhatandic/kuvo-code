@@ -9317,6 +9317,7 @@ function setSubagentSource(engine, folder, settings = settingsFile()) {
   link3 = engine;
   home2 = folder;
   file = settings;
+  lastListed.clear();
 }
 function settingsFile(env = process.env) {
   if (env.KUVO_ENGINE_CONFIG)
@@ -9334,11 +9335,14 @@ function settingModel() {
     return;
   }
 }
+var lastListed = new Map;
 async function subagentsFor(directory) {
   const model = settingModel();
-  const listed = link3?.ready ? await link3.agents(directory).catch(() => {
+  const listed = (link3?.ready ? await link3.agents(directory).catch(() => {
     return;
-  }) : undefined;
+  }) : undefined) ?? lastListed.get(directory);
+  if (listed)
+    lastListed.set(directory, listed);
   const agents = [];
   for (const entry of listed ?? []) {
     const name = typeof entry?.id === "string" ? entry.id : undefined;
@@ -26849,4 +26853,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 8513c7512151d60a58cc065ab288fab53adde84f805a705c9137e7c883b9eb76
+// Built from Packages/Box/src/agents 7af109e2ff3fd4ad68e23147578b5493e753e6ec81a80cdfc4d38d833f9dbc2d

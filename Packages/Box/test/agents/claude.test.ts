@@ -2380,6 +2380,20 @@ describe("Your subagents (Settings › Agents), in Claude Code", () => {
     }
   })
 
+  test("the engine starting again meanwhile doesn't start Claude Code again: it keeps the subagents it has", async () => {
+    const { engine, id } = await started("claude-code/haiku")
+    try {
+      fake.result([fake.sent[0].uuid])
+      await until(() => idles(id).length === 1)
+      engine.down()
+      sessions.prompt(id, { id: "msg_claude_subs_003", text: "again", files: [], delivery: "steer" })
+      await until(() => fake.sent.length === 2)
+      expect(fake.closed).toBe(false)
+    } finally {
+      engine.stop()
+    }
+  })
+
   test("a subagent's tools go by what it may do, with the session's rules over them", async () => {
     const { engine, id } = await started(undefined)
     try {

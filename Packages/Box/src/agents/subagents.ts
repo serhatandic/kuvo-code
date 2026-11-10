@@ -54,6 +54,7 @@ export function setSubagentSource(engine: EngineLink, folder: string, settings =
   link = engine
   home = folder
   file = settings
+  lastListed.clear()
 }
 
 /** This box's settings file, as it keeps it. */
@@ -73,10 +74,14 @@ function settingModel(): ModelRef | undefined {
   }
 }
 
-/** Your subagents for a conversation's folder, and the model they use: none while the engine can't say. */
+/** What the engine last listed for each folder: kept while it can't say (it's starting again), so an agent isn't started again without them, and again with them. */
+const lastListed = new Map<string, any[]>()
+
+/** Your subagents for a conversation's folder, and the model they use: as last known while the engine can't say, none before it has. */
 export async function subagentsFor(directory: string): Promise<Subagents> {
   const model = settingModel()
-  const listed = link?.ready ? await link.agents(directory).catch(() => undefined) : undefined
+  const listed = (link?.ready ? await link.agents(directory).catch(() => undefined) : undefined) ?? lastListed.get(directory)
+  if (listed) lastListed.set(directory, listed)
   const agents: Subagent[] = []
   for (const entry of listed ?? []) {
     const name = typeof entry?.id === "string" ? entry.id : undefined

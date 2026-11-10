@@ -54,6 +54,10 @@ export function subagentEngine(folder: string) {
       link.configure(`http://127.0.0.1:${engine.port}`, "engine-password")
       setSubagentSource(link, folder, settings)
     },
+    /** The engine gone for a moment (starting again): the bridge can't ask it. */
+    down() {
+      link.configure(undefined, undefined)
+    },
     stop() {
       link.configure(undefined, undefined)
       engine?.stop(true)
