@@ -73,6 +73,7 @@ import Testing
         StubWeb.route(Self.bridge + "/api/session/import") { _ in imported }
         // (The box carries it, to the bridge it's told of.)
         try await box.agents(at: Self.bridge)
+        app.workspace.boxes = { _ in box.client(engine: Self.engine) }
         let agents = OutsideAgents()
         agents.connect(ServerEndpoint(url: URL(string: Self.bridge)!, password: "test"), folderPrefix: "")
         app.workspace.agents = agents
