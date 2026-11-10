@@ -521,6 +521,7 @@ extension NSAttributedString.Key {
     nonisolated static let replyRule = NSAttributedString.Key("kuvo.reply.rule")
     /// What it is as plain text, copied (a list's marker, a picture in the text).
     nonisolated static let replyPlainText = NSAttributedString.Key("kuvo.reply.plainText")
+    nonisolated static let replyPicture = NSAttributedString.Key("kuvo.reply.picture")
 }
 
 /// Textual's attachments (a file's icon, a formula, a bot's face) as pictures in the text.
@@ -545,6 +546,8 @@ enum ReplyAttachments {
         item.bounds = CGRect(x: 0, y: 0, width: width, height: image.size.height * width / image.size.width)
         let text = NSMutableAttributedString(attachment: item)
         text.addAttributes(attributes.filter { $0.key == .paragraphStyle || $0.key == .link }, range: NSRange(location: 0, length: text.length))
+        // A click opens it in the viewer, with the file's other pictures; one in a link goes there.
+        if attributes[.link] == nil { text.addAttributes([.link: url, .replyPicture: url], range: NSRange(location: 0, length: text.length)) }
         return text
     }
 
