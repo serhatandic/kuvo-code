@@ -1471,7 +1471,7 @@ struct ReasoningView: View {
         .foldOpen(isExpanded)
         // Stays where it is from when it ends, as what's next comes in under it.
         .onChange(of: block.isComplete) { _, ended in
-            if ended, CardFolds.shared.isOpen(foldKey, otherwise: false) { scrollAnchor?.reading?(foldKey) }
+            if ended, CardFolds.shared.isOpen(foldKey, otherwise: false) { scrollAnchor?.reading?(foldKey, true) }
         }
         #if DEBUG
         // KUVO_DEMO_OPEN_STEPS: the thinking shows, opened.
@@ -2046,16 +2046,21 @@ final class CardFolds {
     /// What was opened or closed among those kept under this, closed with what they're in.
     func kept(under prefix: String) -> [String] { choices.keys.filter { $0.hasPrefix(prefix) } }
 
-    /// Steps you opened or closed, in their conversation: only they change, and what's above them
-    /// stays where it is (see `ConversationScroller.folding`). Opened, the end is no longer
-    /// followed, so what comes in next doesn't move what you read (`holds` false: a step under
-    /// way, kept in view until it ends); closing what you opened follows it again. `closes`: what
-    /// goes with it.
+    /// Steps you opened or closed, in their conversation: opened, the end is no longer followed
+    /// from before it grows, so it opens down past the composer, moving nothing above it (#416),
+    /// and what comes in next doesn't move what you read (`holds` false: a step under way, kept in
+    /// view until it ends); closing what you opened goes back to the end once it has (see
+    /// `ConversationScroller.reading`). `closes`: what goes with it.
     func toggle(_ id: String, open: Bool, in anchor: ScrollAnchor?, holds: Bool = true, closes: [String] = []) {
-        anchor?.folding?(id, open, holds, closes)
+        if open, holds { anchor?.opening?(id) }
         withAnimation(.ui) {
             set(id, open: open)
             closes.forEach(forget)
+        } completion: { [weak anchor] in
+            // Not if you've changed your mind since. (What's closed with others is forgotten.)
+            guard self.isOpen(id, otherwise: closes.contains(id) ? false : !open) == open else { return }
+            for closed in closes { anchor?.reading?(closed, false) }
+            if !open { anchor?.reading?(id, false) }
         }
     }
 }

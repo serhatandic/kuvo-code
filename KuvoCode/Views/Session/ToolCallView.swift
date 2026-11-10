@@ -133,7 +133,7 @@ struct ToolCallView: View {
         .foldOpen(isExpanded)
         // Opened under way and kept in view as it grew, it stays where it is from when it ends.
         .onChange(of: call.state.isFinished) { _, finished in
-            if finished, CardFolds.shared.isOpen(key, otherwise: false) { scrollAnchor?.reading?(key) }
+            if finished, CardFolds.shared.isOpen(key, otherwise: false) { scrollAnchor?.reading?(key, true) }
         }
         // A subagent at work shows what it's doing; opened later, its steps stay folded.
         .onAppear {
