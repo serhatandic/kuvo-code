@@ -36,7 +36,7 @@ struct WorkItemPage: View {
 
     /// The box the item is kept on: the panel's, or the computer it says it's on.
     private var keptOn: String {
-        (view.items.first(where: opened.matches) ?? detail?.item).map { store.box(of: $0, in: opened.box) } ?? opened.box
+        (view.items.first(where: opened.matches) ?? detail?.item).flatMap { store.box(of: $0, in: opened.box) } ?? opened.box
     }
 
     var body: some View {

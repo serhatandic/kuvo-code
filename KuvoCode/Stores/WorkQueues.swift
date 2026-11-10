@@ -147,8 +147,8 @@ final class WorkQueues {
         guard let client = client(box) else { return details[box + "|" + item] ?? details[box + "|#" + item] }
         do {
             var detail = try await client.value(DetailAnswer.self, "GET", "kuvo/work-queue/items/\(path(item))").item
-            if let computer = detail.item.computer, self.box(of: detail.item, in: box) != box,
-               let whole = try? await self.client(self.box(of: detail.item, in: box))?.value(DetailAnswer.self, "GET", "kuvo/work-queue/items/\(path(detail.item.id))").item {
+            if let computer = detail.item.computer, let there = self.box(of: detail.item, in: box), there != box,
+               let whole = try? await self.client(there)?.value(DetailAnswer.self, "GET", "kuvo/work-queue/items/\(path(detail.item.id))").item {
                 detail = whole
                 detail.item.computer = computer
             }
@@ -185,11 +185,47 @@ final class WorkQueues {
 
     // MARK: Where an item is
 
-    /// The box an item is kept on: the one the view is from, or the computer it says it's on (a
-    /// machine by its id; a Mac, this Mac's box). What you do to it, and it whole, go there.
-    func box(of item: WorkItem, in box: String) -> String {
+    /// Who this Mac and its machines are to your other computers: this Mac's key, and each
+    /// machine's, by its id here. A test's own; this Mac's link's otherwise.
+    @ObservationIgnored var computers: (() -> (mac: String?, machines: [String: String]))?
+
+    private var known: (mac: String?, machines: [String: String]) {
+        if let computers { return computers() }
+        guard let link = app?.phoneLink else { return (nil, [:]) }
+        return (link.macKey, link.machineHosts.mapValues(\.key))
+    }
+
+    /// The box an item is kept on: the one the view is from, or the computer it says it's on, by
+    /// its key: this Mac's own box, or one of your machines by its id on this Mac. Nil for one on
+    /// another Mac (or a machine only another Mac set up): it's changed from there.
+    func box(of item: WorkItem, in box: String) -> String? {
         guard let computer = item.computer else { return box }
-        return computer.kind == "mac" ? BoxClient.mac : computer.id ?? box
+        let known = known
+        if computer.kind == "mac" { return computer.key == known.mac ? BoxClient.mac : nil }
+        if let id = known.machines.first(where: { $0.value == computer.key })?.key { return id }
+        // (A machine this Mac has, whose key it doesn't know yet: by the id the box gave, unless
+        // that's another of this Mac's machines.)
+        guard let id = computer.id, known.machines[id] == nil else { return nil }
+        return id
+    }
+
+    /// What's said of an item on a computer this Mac doesn't reach.
+    private func elsewhere(_ item: WorkItem) -> String {
+        guard let computer = item.computer else { return "" }
+        return computer.kind == "mac"
+            ? "That item is on \(computer.name), another Mac: change it there."
+            : "That item is on \(computer.name), a computer this Mac doesn’t reach. Change it from a Mac or iPhone that reaches it."
+    }
+
+    /// What you do to an item, sent to the box it's kept on; refused, saying where it is, when this
+    /// Mac doesn't reach that one.
+    @discardableResult
+    private func act<T: Decodable>(_ type: T.Type, _ method: String, _ path: String, body: (any Encodable)? = nil, on item: WorkItem, shownOn box: String) async -> T? {
+        guard let there = self.box(of: item, in: box) else {
+            refusal = (box, elsewhere(item))
+            return nil
+        }
+        return await act(type, method, path, body: body, on: there, shownOn: box)
     }
 
     // MARK: What you do
@@ -217,13 +253,13 @@ final class WorkQueues {
         case .category(let category): Move(category: category)
         }
         undoable = nil
-        await act(ItemAnswer.self, "POST", "kuvo/work-queue/items/\(path(item.id))/move", body: body, on: self.box(of: item, in: box), shownOn: box)
+        await act(ItemAnswer.self, "POST", "kuvo/work-queue/items/\(path(item.id))/move", body: body, on: item, shownOn: box)
         if item.computer != nil { await readAll(box) }
     }
 
     /// Deletes an item: Undo brings it back, as does Recently Deleted for 30 days.
     func delete(_ item: WorkItem, on box: String) async {
-        if let answer = await act(ItemAnswer.self, "DELETE", "kuvo/work-queue/items/\(path(item.id))", on: self.box(of: item, in: box), shownOn: box) {
+        if let answer = await act(ItemAnswer.self, "DELETE", "kuvo/work-queue/items/\(path(item.id))", on: item, shownOn: box) {
             // (Undo goes where it was deleted.)
             var deleted = answer.item
             deleted.computer = item.computer
@@ -241,7 +277,7 @@ final class WorkQueues {
     /// Brings back a deleted item, into the category it was in.
     func restore(_ item: WorkItem, on box: String) async {
         if undoable?.item.id == item.id { undoable = nil }
-        await act(ItemAnswer.self, "POST", "kuvo/work-queue/items/\(path(item.id))/restore", on: self.box(of: item, in: box), shownOn: box)
+        await act(ItemAnswer.self, "POST", "kuvo/work-queue/items/\(path(item.id))/restore", on: item, shownOn: box)
         if item.computer != nil { await readAll(box) }
     }
 

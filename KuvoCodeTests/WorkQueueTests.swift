@@ -210,10 +210,13 @@ import Textual
         try keep([Self.item(500, "On the lab", order: 1)], for: "ses_far", on: lab)
         // The studio's box knows lab as one of your computers (its Mac's word), and lab told it of
         // its queue.
-        let mac = Self.randomKey(32), labKey = Self.randomKey(32)
+        // (lab as another Mac names it, by an id of its own: this Mac finds it by its key.) And a
+        // Mac this one isn't.
+        let mac = Self.randomKey(32), labKey = Self.randomKey(32), otherMac = Self.randomKey(32)
         let run = studio.folder.appending(path: "run")
         try FileManager.default.createDirectory(at: run.appending(path: "work-queue/peers"), withIntermediateDirectories: true)
-        let peers: [[String: Any]] = [["key": mac, "address": Self.randomKey(16), "kind": "mac", "name": "Studio Mac"], ["key": labKey, "address": Self.randomKey(16), "kind": "machine", "name": "lab", "id": "lab"]]
+        let peers: [[String: Any]] = [["key": mac, "address": Self.randomKey(16), "kind": "mac", "name": "Studio Mac"], ["key": labKey, "address": Self.randomKey(16), "kind": "machine", "name": "lab", "id": "lab-elsewhere"],
+                                      ["key": otherMac, "address": Self.randomKey(16), "kind": "mac", "name": "Laptop"]]
         try JSONSerialization.data(withJSONObject: ["mac": mac, "macs": [mac], "legacy": [mac: ["at": 1, "peers": peers]]]).write(to: run.appending(path: "link.json"))
         var told = Self.item(500, "On the lab", order: 1)
         told["owner"] = "ses_far"
@@ -223,17 +226,30 @@ import Textual
         told["linkCount"] = 0
         try JSONSerialization.data(withJSONObject: ["id": "wqt_told0000001", "at": Date.now.timeIntervalSince1970 * 1000, "heard": 1, "kind": "machine", "items": [told], "owners": [], "categories": []])
             .write(to: run.appending(path: "work-queue/peers/\(labKey).json"))
+        var onLaptop = told
+        onLaptop["id"] = "wqi_" + String(repeating: "b", count: 17) + "501"
+        onLaptop["number"] = 501
+        onLaptop["title"] = "On the laptop"
+        try JSONSerialization.data(withJSONObject: ["id": "wqt_told0000002", "at": Date.now.timeIntervalSince1970 * 1000, "heard": 1, "kind": "mac", "items": [onLaptop], "owners": [], "categories": []])
+            .write(to: run.appending(path: "work-queue/peers/\(otherMac).json"))
 
         let store = app.workQueues
         let studioClient = Self.appClient(studio, box: BoxClient.mac), labClient = Self.appClient(lab, box: "lab")
         store.boxes = { $0 == "lab" ? labClient : studioClient }
         store.proof = { _, _, _, _ in "cHJvb2Y" }
+        store.computers = { (mac: mac, machines: ["lab": labKey]) }
         let all = WorkQueues.Key(box: BoxClient.mac, owner: WorkQueueView.all)
         await store.read(all)
         let item = try #require(store.views[all]?.items.first { $0.number == 500 })
         #expect(item.computer?.name == "lab")
-        #expect(store.views[all]?.computers.map(\.name) == ["lab"])
-        #expect(store.box(of: item, in: BoxClient.mac) == "lab")
+        #expect(store.views[all]?.computers.map(\.name).sorted() == ["Laptop", "lab"])
+        #expect(store.box(of: item, in: BoxClient.mac) == "lab", "by its key, as this Mac names it")
+
+        // One on another Mac: said plainly, never sent to this Mac's box.
+        let laptops = try #require(store.views[all]?.items.first { $0.number == 501 })
+        #expect(store.box(of: laptops, in: BoxClient.mac) == nil)
+        await store.delete(laptops, on: BoxClient.mac)
+        #expect(store.refusal?.text == "That item is on Laptop, another Mac: change it there.")
 
         // Its page: whole, as lab keeps it.
         #expect(await store.load(box: BoxClient.mac, item: "500")?.body == "About On the lab.")
