@@ -20,27 +20,33 @@ public struct WorkCategory: Codable, Hashable, Sendable, Identifiable {
     public static let done = "done"
 }
 
-/// Who wrote something: you, or a session (by its name then).
+/// Who wrote something: you, a session (by its name then), or someone else the box kept as it
+/// came (an outside tracker's change, `{source, name?}`), by its name, never taken for you.
 public enum WorkWho: Hashable, Sendable, Decodable {
     case user
     case session(String, name: String)
+    case other(String)
 
-    private enum Keys: String, CodingKey { case user, session, name }
+    private enum Keys: String, CodingKey { case user, session, name, source }
 
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: Keys.self)
-        if let session = try container.decodeIfPresent(String.self, forKey: .session) {
-            self = .session(session, name: try container.decodeIfPresent(String.self, forKey: .name) ?? "")
-        } else {
+        if (try? container.decodeIfPresent(Bool.self, forKey: .user)) == true {
             self = .user
+        } else if let session = try? container.decodeIfPresent(String.self, forKey: .session) {
+            self = .session(session, name: (try? container.decodeIfPresent(String.self, forKey: .name)) ?? "")
+        } else {
+            let name = (try? container.decodeIfPresent(String.self, forKey: .name)) ?? (try? container.decodeIfPresent(String.self, forKey: .source)) ?? nil
+            self = .other(name ?? "")
         }
     }
 
-    /// "you", or the session's name.
+    /// "you", the session's name, or another's.
     public var words: String {
         switch self {
         case .user: "you"
         case .session(_, let name): name.isEmpty ? "an agent" : name
+        case .other(let name): name.isEmpty ? "someone else" : name
         }
     }
 }
@@ -81,6 +87,41 @@ public struct WorkItemSession: Hashable, Sendable, Decodable {
     public var working: Bool
 }
 
+/// An outside source's item (an issue or a pull request): named by its ref, never numbered.
+public struct WorkSource: Hashable, Sendable, Decodable {
+    public var kind: String
+    public var ref: String
+    public var url: String?
+
+    public init(kind: String, ref: String, url: String? = nil) {
+        self.kind = kind
+        self.ref = ref
+        self.url = url
+    }
+}
+
+/// Another of your computers: the one an item is on, when it isn't the box asked. A client reads
+/// and changes the item there: a machine by its `id`, a Mac by its own box.
+public struct WorkComputer: Hashable, Sendable, Decodable {
+    public var key: String
+    public var name: String
+    public var kind: String
+    public var id: String?
+
+    public init(key: String, name: String, kind: String, id: String? = nil) {
+        self.key = key
+        self.name = name
+        self.kind = kind
+        self.id = id
+    }
+}
+
+/// An item on its way to a conversation on another computer: unchanged until it's there.
+public struct WorkHanding: Hashable, Sendable, Decodable {
+    public var to: String
+    public var name: String
+}
+
 /// An item as a list shows it: everything but its body and notes.
 public struct WorkItem: Hashable, Sendable, Decodable, Identifiable {
     public var id: String
@@ -98,14 +139,17 @@ public struct WorkItem: Hashable, Sendable, Decodable, Identifiable {
     public var fileCount: Int
     public var linkCount: Int
     public var handedBy: String?
+    public var source: WorkSource?
+    public var computer: WorkComputer?
+    public var handing: WorkHanding?
     public var created: WorkStamp
     public var updated: WorkStamp
     public var doneAt: Double?
     public var removed: WorkStamp?
 
     public var isDone: Bool { category == WorkCategory.done }
-    /// "#243", or "New" while it waits for its number.
-    public var name: String { number.map { "#\($0)" } ?? "New" }
+    /// An outside source's ref, "#243", or "New" while it waits for its number.
+    public var name: String { source?.ref ?? number.map { "#\($0)" } ?? "New" }
 }
 
 /// An item whole: its description (Markdown), notes, files, links and who handed it on.
@@ -121,6 +165,9 @@ public struct WorkItemDetail: Hashable, Sendable, Decodable {
     public struct Link: Hashable, Sendable, Decodable {
         public var url: String
         public var title: String?
+        /// What it links: `pr`, `mr`, `issue`, `doc` (outside sources, later), and its ref.
+        public var kind: String?
+        public var ref: String?
     }
 
     public struct Handed: Hashable, Sendable, Decodable {
@@ -170,53 +217,99 @@ public struct WorkOwner: Hashable, Sendable, Decodable {
     }
 }
 
-/// An owner's view, or every queue on the box (`owner` "all").
+/// An owner's view, or every queue on the box and on your other computers (`owner` "all"). Items
+/// another computer told of say which (`computer`); `computers` says when each told them.
 public struct WorkQueueView: Hashable, Sendable, Decodable {
+    public struct Told: Hashable, Sendable, Decodable {
+        public var key: String
+        public var name: String
+        public var kind: String
+        public var id: String?
+        public var at: Double
+        public var date: Date { Date(timeIntervalSince1970: at / 1000) }
+    }
+
     public var owner: String
     public var categories: [WorkCategory]
     public var items: [WorkItem]
     public var owners: [WorkOwner]
     public var removed: [WorkItem]
+    public var computers: [Told]
 
-    public init(owner: String, categories: [WorkCategory] = [], items: [WorkItem] = [], owners: [WorkOwner] = [], removed: [WorkItem] = []) {
+    public init(owner: String, categories: [WorkCategory] = [], items: [WorkItem] = [], owners: [WorkOwner] = [], removed: [WorkItem] = [], computers: [Told] = []) {
         self.owner = owner
         self.categories = categories
         self.items = items
         self.owners = owners
         self.removed = removed
+        self.computers = computers
+    }
+
+    private enum Keys: String, CodingKey { case owner, categories, items, owners, removed, computers }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: Keys.self)
+        owner = try container.decode(String.self, forKey: .owner)
+        categories = try container.decode([WorkCategory].self, forKey: .categories)
+        items = try container.decode([WorkItem].self, forKey: .items)
+        owners = try container.decode([WorkOwner].self, forKey: .owners)
+        removed = try container.decodeIfPresent([WorkItem].self, forKey: .removed) ?? []
+        // (A box from before piece 3 has none.)
+        computers = (try? container.decodeIfPresent([Told].self, forKey: .computers)) ?? []
     }
 
     public static let all = "all"
 }
 
-/// What a `#n` names, for a chip.
+/// What a ref names, for a chip: a `#n`, or (later) an outside source's. `owner` and `computer`
+/// only when the box says (an outside ref may have no owner).
 public struct WorkRef: Hashable, Sendable, Decodable {
     public var id: String
     public var number: Int?
+    public var source: WorkSource?
     public var title: String
     public var category: String
     public var inProgress: Bool
-    public var owner: String
+    public var owner: String?
     public var removed: Bool?
+    public var computer: WorkComputer?
 
-    public init(id: String, number: Int?, title: String, category: String, inProgress: Bool, owner: String, removed: Bool? = nil) {
+    public init(id: String, number: Int?, source: WorkSource? = nil, title: String, category: String, inProgress: Bool, owner: String?, removed: Bool? = nil, computer: WorkComputer? = nil) {
         self.id = id
         self.number = number
+        self.source = source
         self.title = title
         self.category = category
         self.inProgress = inProgress
         self.owner = owner
         self.removed = removed
+        self.computer = computer
     }
 
     public init(_ item: WorkItem) {
-        self.init(id: item.id, number: item.number, title: item.title, category: item.category, inProgress: item.inProgress, owner: item.owner, removed: item.removed == nil ? nil : true)
+        self.init(id: item.id, number: item.number, source: item.source, title: item.title, category: item.category, inProgress: item.inProgress, owner: item.owner, removed: item.removed == nil ? nil : true, computer: item.computer)
     }
 }
 
-/// The `refs` route's answer: null for a number the box doesn't know.
+/// The `refs` route's answer, by the ref as it was asked: null for one the box doesn't know. Each is
+/// read on its own, so one this client can't read (a newer box's) stays plain text and the rest
+/// still show.
 public struct WorkRefs: Decodable, Sendable {
     public var refs: [String: WorkRef?]
+
+    private struct Each: Decodable {
+        var ref: WorkRef?
+        init(from decoder: any Decoder) throws { ref = try? decoder.singleValueContainer().decode(WorkRef.self) }
+    }
+
+    private enum Keys: String, CodingKey { case refs }
+
+    public init(refs: [String: WorkRef?]) { self.refs = refs }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: Keys.self)
+        refs = try container.decode([String: Each].self, forKey: .refs).mapValues(\.ref)
+    }
 }
 
 /// What the panel shows of a view, the same in both apps.
@@ -289,6 +382,9 @@ public enum WorkQueue {
         if seconds < 7 * 86_400 { return "\(Int(seconds / 86_400))d ago" }
         return date.formatted(Date.FormatStyle(locale: locale, calendar: calendar, timeZone: calendar.timeZone).month(.abbreviated).day())
     }
+
+    /// The computer an item is on, by name, when it isn't the box the view is from: "lab".
+    public static func computerName(of item: WorkItem) -> String? { item.computer?.name }
 
     /// Whose an item is, by name, when it isn't the view's own owner's (a session a lead oversees,
     /// or the All view's): nil for the view's own.

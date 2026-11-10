@@ -15,7 +15,7 @@ export const MACHINE_FEATURES = ["engine.start", "update", "browser"] as const;
 
 /** What a Mac's box answers, as its `kuvo/info` and its agents' mail say: every box's but a
  * machine's own, in their order, then the Mac's own. The box's list alone: its app keeps none.
- * (In that order: a box from before #191 step 2 keeps only the first 80 names a peer's mail gives,
+ * (In that order: an older box keeps only the first 80 names a peer's mail gives,
  * and those its peers check, `work.elsewhere` the last of them, are among them.) */
 export const macFeatures = (): string[] => [...new Set([...FEATURES.filter(feature => !(MACHINE_FEATURES as readonly string[]).includes(feature)), ...MAC_FEATURES])];
 

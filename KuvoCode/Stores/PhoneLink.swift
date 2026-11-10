@@ -704,8 +704,8 @@ final class PhoneLink {
     #if DEBUG
     /// A test's machine, as if it was set up for your computers: its box's key, and its bridge
     /// talking to them itself.
-    func standIn(machine: String, key: String) {
-        machineHosts[machine] = MachineHost(name: machine, address: "", key: key, peers: true)
+    func standIn(machine: String, key: String, address: String = "") {
+        machineHosts[machine] = MachineHost(name: machine, address: address, key: key, peers: true)
     }
     #endif
 
@@ -1158,6 +1158,9 @@ final class PhoneLink {
                 var host: String
                 /// The machine whose browser it is, by name; none for this Mac's.
                 var machine: String?
+                /// That machine's box, by its link address (as `kuvo/hosts` gives it), when your
+                /// phones can reach it: the ask is its own, and its answer goes there too.
+                var box: String?
                 var session: String?
                 var asker: String?
                 var username: Bool?
@@ -1173,7 +1176,8 @@ final class PhoneLink {
             var asks: [Ask]
         }
         let asks = (browserAsks?.asks ?? []).map { ask in
-            var listed = Listed.Ask(id: ask.id, kind: "", host: ask.host, machine: ask.machine.map { machineName($0) ?? $0 }, session: ask.session, asker: ask.asker)
+            let box = ask.machine.flatMap { machineHosts[$0]?.address }.flatMap { $0.isEmpty ? nil : $0 }
+            var listed = Listed.Ask(id: ask.id, kind: "", host: ask.host, machine: ask.machine.map { machineName($0) ?? $0 }, box: box, session: ask.session, asker: ask.asker)
             if ask.passkey { listed.passkey = true }
             switch ask.kind {
             case .signIn(let username, let password):
