@@ -109,6 +109,22 @@ import Testing
         #expect(PictureZoom.key("k", scale: 3, fit: fit) == nil)
         #expect(PictureZoom.clamped(1000, fit: fit) == 32)
         #expect(PictureZoom.clamped(0.2, fit: fit) == 1)
+        // Never past what a view can draw: a 1000-point fitted picture at most 16 times.
+        #expect(PictureZoom.clamped(1000, fit: fit, side: 1000) == 16)
+        #expect(PictureZoom.toggled(1, fit: 1, side: 12_000) == 16_000.0 / 12_000)
+    }
+
+    /// The fix for #373: a picture an agent on a machine shows is a picture, read from that
+    /// machine through its box, never a file card nor this Mac's file at that path.
+    @Test func aPictureShownOnAMachineIsAPictureReadFromIt() {
+        let item = MadePictureRow.shown("/home/alex/shots/a.png", in: "ssh://devbox/home/alex", step: "call_1")
+        #expect(item.isImage)
+        #expect(item.fileURL == nil)
+        #expect(item.remoteLocation?.machine == "devbox")
+        #expect(item.remoteLocation?.path == "/home/alex/shots/a.png")
+        let relative = MadePictureRow.shown("shots/b.png", in: "ssh://devbox/home/alex", step: "call_2")
+        #expect(relative.remoteLocation?.path == "/home/alex/shots/b.png")
+        #expect(MadePictureRow.shown("/tmp/a.png", in: "/tmp", step: "call_3").remoteLocation == nil)
     }
 
     @Test func onlyOnThisMac() async throws {

@@ -89,7 +89,7 @@ private struct ImageLightbox: View {
                     .contentShape(.rect)
                     .onTapGesture { ImageViewer.shared.close() }
                 if let image {
-                    PictureCanvas(image: image, scale: $scale, fitScale: $fitScale, ownsKeys: true)
+                    PictureCanvas(image: image, scale: $scale, fitScale: $fitScale, name: item.name, ownsKeys: true) { ImageViewer.shared.close() }
                         .padding(.horizontal, 48)
                         .padding(.vertical, 75)
                         .transition(.replacingPlaceholder)
@@ -196,6 +196,8 @@ private struct ImageLightbox: View {
                 .fixedSize()
                 .disabled(image == nil)
                 .help("Zoom (⌘+, ⌘−, ⌘0)")
+                .accessibilityLabel("Zoom")
+                .accessibilityValue("\(PictureZoom.percent(scale, fit: fitScale))%")
                 Button("Download", systemImage: "arrow.down.to.line") {
                     let panel = NSSavePanel()
                     panel.nameFieldStringValue = item.name
@@ -221,9 +223,12 @@ private struct ImageLightbox: View {
                     let selected = item
                     Task {
                         let url: URL
-                        if let local = selected.fileURL {
+                        if let local = selected.localURL() {
                             url = local
+                        } else if let written = AttachmentImages.written(selected.id), FileManager.default.fileExists(atPath: written.path) {
+                            url = written
                         } else {
+                            // One only its machine has: its bytes through its box, written out once.
                             guard let data = await selected.readBytes() else {
                                 actionError = "The picture couldn’t be read. Please try again."
                                 return
@@ -232,6 +237,7 @@ private struct ImageLightbox: View {
                                 actionError = "The picture couldn’t be saved for opening."
                                 return
                             }
+                            AttachmentImages.wrote(written, for: selected.id)
                             url = written
                         }
                         if Attachments.canRun(url) {
@@ -316,39 +322,46 @@ private struct ImageLightbox: View {
 
 
 /// How a picture zooms, the same in the viewer over the window and in the side panel. A scale of 1
-/// is the picture fitted to its room (never enlarged past its pixels); its pixels at their own size
-/// are 1 / fit; it goes no further than eight times that.
+/// is the picture fitted to its room (never enlarged past its own size); its own size is 1 / fit;
+/// it goes no further than eight times that, nor past what a view can draw.
 nonisolated enum PictureZoom {
-    /// The scale that fits `pixels` in `room`, at most 1.
-    static func fit(_ pixels: CGSize, in room: CGSize) -> CGFloat {
-        guard pixels.width > 0, pixels.height > 0, room.width > 0, room.height > 0 else { return 1 }
-        return max(0.0001, min(room.width / pixels.width, room.height / pixels.height, 1))
+    /// The longest side a zoomed picture is drawn at: past it, a layer can't hold it.
+    static let largest: CGFloat = 16_000
+
+    /// The scale that fits `size` in `room`, at most 1.
+    static func fit(_ size: CGSize, in room: CGSize) -> CGFloat {
+        guard size.width > 0, size.height > 0, room.width > 0, room.height > 0 else { return 1 }
+        return max(0.0001, min(room.width / size.width, room.height / size.height, 1))
     }
 
     static func actual(fit: CGFloat) -> CGFloat { 1 / max(fit, 0.0001) }
 
-    static func most(fit: CGFloat) -> CGFloat { max(2, 8 * actual(fit: fit)) }
-
-    static func clamped(_ scale: CGFloat, fit: CGFloat) -> CGFloat { max(1, min(most(fit: fit), scale)) }
-
-    static func zoomedIn(_ scale: CGFloat, fit: CGFloat) -> CGFloat { clamped(scale * 1.25, fit: fit) }
-
-    static func zoomedOut(_ scale: CGFloat, fit: CGFloat) -> CGFloat { clamped(scale / 1.25, fit: fit) }
-
-    /// A double-click: back to fitted when zoomed, otherwise its pixels at their own size (twice
-    /// the fit for one that fits already).
-    static func toggled(_ scale: CGFloat, fit: CGFloat) -> CGFloat {
-        scale > 1 ? 1 : clamped(max(actual(fit: fit), 2), fit: fit)
+    /// `side`: the fitted picture's longest side, when known.
+    static func most(fit: CGFloat, side: CGFloat = 0) -> CGFloat {
+        let most = max(2, 8 * actual(fit: fit))
+        return side > 0 ? max(1, min(most, largest / side)) : most
     }
 
-    /// "100%": of its own pixels.
+    static func clamped(_ scale: CGFloat, fit: CGFloat, side: CGFloat = 0) -> CGFloat { max(1, min(most(fit: fit, side: side), scale)) }
+
+    static func zoomedIn(_ scale: CGFloat, fit: CGFloat, side: CGFloat = 0) -> CGFloat { clamped(scale * 1.25, fit: fit, side: side) }
+
+    static func zoomedOut(_ scale: CGFloat, fit: CGFloat, side: CGFloat = 0) -> CGFloat { clamped(scale / 1.25, fit: fit, side: side) }
+
+    /// A double-click: back to fitted when zoomed, otherwise its own size (twice the fit for one
+    /// that fits already).
+    static func toggled(_ scale: CGFloat, fit: CGFloat, side: CGFloat = 0) -> CGFloat {
+        scale > 1 ? 1 : clamped(max(actual(fit: fit), 2), fit: fit, side: side)
+    }
+
+    /// "100%": of its own size.
     static func percent(_ scale: CGFloat, fit: CGFloat) -> Int { Int((scale * fit * 100).rounded()) }
 
     /// ⌘+ (⌘= too), ⌘− and ⌘0: its new scale, or nil for another key.
-    static func key(_ characters: String, scale: CGFloat, fit: CGFloat) -> CGFloat? {
+    static func key(_ characters: String, scale: CGFloat, fit: CGFloat, side: CGFloat = 0) -> CGFloat? {
         switch characters {
-        case "+", "=": zoomedIn(scale, fit: fit)
-        case "-": zoomedOut(scale, fit: fit)
+        case "+", "=": zoomedIn(scale, fit: fit, side: side)
+        case "-": zoomedOut(scale, fit: fit, side: side)
         case "0": 1
         default: nil
         }
@@ -356,64 +369,74 @@ nonisolated enum PictureZoom {
 }
 
 /// A picture to look at closely, the one surface for every picture opened in the app: the viewer
-/// over the window and a picture in the side panel. Fitted at first; a pinch, a double-click and
-/// ⌘+ ⌘− ⌘0 zoom it, and zoomed in it scrolls.
+/// over the window and a picture in the side panel. Fitted at first, rounded; a pinch, a
+/// double-click and ⌘+ ⌘− ⌘0 zoom it, and zoomed in it scrolls.
 struct PictureCanvas: View {
     let image: NSImage
     /// 1 is fitted; see `PictureZoom`.
     @Binding var scale: CGFloat
     /// The fit, for what says its size in percent.
     @Binding var fitScale: CGFloat
+    /// Its name, for VoiceOver.
+    var name = "Picture"
     /// The viewer over the window: its zoom keys are the picture's while it's open, and the
     /// keyboard stays with the viewer for its arrows. The side panel's picture takes them once
     /// it has the keyboard, or while the pointer is over it.
     var ownsKeys = false
+    /// A click beside the picture (the viewer closes).
+    var tapOutside: (() -> Void)?
     @State private var pinch: CGFloat = 1
     @State private var isHovering = false
     @FocusState private var focused: Bool
 
-    /// Bitmap representations carry pixel dimensions even when their logical size is in points.
-    private var pixelSize: CGSize {
-        guard let rep = image.representations.max(by: { $0.pixelsWide * $0.pixelsHigh < $1.pixelsWide * $1.pixelsHigh }),
-              rep.pixelsWide > 0, rep.pixelsHigh > 0 else { return image.size }
-        return CGSize(width: rep.pixelsWide, height: rep.pixelsHigh)
-    }
-
     var body: some View {
         GeometryReader { proxy in
             let room = proxy.size
-            let size = pixelSize
+            // In points, as Preview's Actual Size: a Retina screenshot at the size it was on screen.
+            let size = image.size
             let fit = PictureZoom.fit(size, in: room)
-            let current = PictureZoom.clamped(scale * pinch, fit: fit)
+            let side = max(size.width, size.height) * fit
+            let current = PictureZoom.clamped(scale * pinch, fit: fit, side: side)
             ScrollView([.horizontal, .vertical]) {
-                Image(nsImage: image)
-                    .resizable()
-                    .interpolation(current * fit > 2 ? .none : .high)
-                    .frame(width: max(1, size.width * fit * current), height: max(1, size.height * fit * current))
-                    // Rounded while it's whole, as in the conversation.
-                    .clipShape(.rect(cornerRadius: current > 1.001 ? 0 : 10))
-                    .frame(minWidth: room.width, minHeight: room.height)
+                ZStack {
+                    Color.clear
+                        .contentShape(.rect)
+                        .onTapGesture { tapOutside?() }
+                    Image(nsImage: image)
+                        .resizable()
+                        .interpolation(current * fit > 2 ? .none : .high)
+                        .frame(width: max(1, size.width * fit * current), height: max(1, size.height * fit * current))
+                        // Rounded while it's whole, as in the conversation.
+                        .clipShape(.rect(cornerRadius: current > 1.001 ? 0 : 10))
+                        .onTapGesture(count: 2) {
+                            withAnimation(.ui) { scale = PictureZoom.toggled(scale, fit: fit, side: side) }
+                        }
+                }
+                .frame(minWidth: room.width, minHeight: room.height)
             }
             .scrollIndicators(current > 1 ? .automatic : .never)
+            .scrollBounceBehavior(.basedOnSize, axes: [.horizontal, .vertical])
             .defaultScrollAnchor(.center, for: .initialOffset)
             .defaultScrollAnchor(.center, for: .sizeChanges)
             .onAppear {
                 fitScale = fit
-                if let demo = Self.demoScale { scale = PictureZoom.clamped(demo, fit: fit) }
+                if let demo = Self.demoScale { scale = PictureZoom.clamped(demo, fit: fit, side: side) }
                 // A file can finish loading while someone is typing in the composer.
                 if !ownsKeys, !(NSApp.keyWindow?.firstResponder is NSTextView) { focused = true }
             }
             .onChange(of: fit) { _, value in fitScale = value }
+            // Never past what it can draw, whatever set it (the viewer's zoom menu).
+            .onChange(of: scale) { _, value in
+                let most = PictureZoom.clamped(value, fit: fit, side: side)
+                if most != value { scale = most }
+            }
             .gesture(MagnifyGesture().onChanged { pinch = $0.magnification }.onEnded { _ in
                 scale = current
                 pinch = 1
             })
-            .onTapGesture(count: 2) {
-                withAnimation(.ui) { scale = PictureZoom.toggled(scale, fit: fit) }
-            }
             .onHover { isHovering = $0 }
             .background(PictureKeys(isActive: ownsKeys || focused || isHovering) { characters in
-                guard let zoomed = PictureZoom.key(characters, scale: scale, fit: fit) else { return false }
+                guard let zoomed = PictureZoom.key(characters, scale: scale, fit: fit, side: side) else { return false }
                 withAnimation(.ui) { scale = zoomed }
                 return true
             })
@@ -421,12 +444,14 @@ struct PictureCanvas: View {
             .focusEffectDisabled()
             .focused($focused)
             .help("Pinch or double-click to zoom")
-            .accessibilityLabel("Picture")
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(name)
             .accessibilityValue("\(PictureZoom.percent(current, fit: fit))%")
+            .accessibilityAddTraits(.isImage)
             .accessibilityAdjustableAction { direction in
                 switch direction {
-                case .increment: scale = PictureZoom.zoomedIn(scale, fit: fit)
-                case .decrement: scale = PictureZoom.zoomedOut(scale, fit: fit)
+                case .increment: scale = PictureZoom.zoomedIn(scale, fit: fit, side: side)
+                case .decrement: scale = PictureZoom.zoomedOut(scale, fit: fit, side: side)
                 @unknown default: break
                 }
             }

@@ -672,7 +672,7 @@ struct FileViewer: View {
                                 app.utilities.addToMessage?("@\(mention):\(range)")
                             }
                         case .image(let image):
-                            PictureCanvas(image: image, scale: $pictureScale, fitScale: $pictureFitScale)
+                            PictureCanvas(image: image, scale: $pictureScale, fitScale: $pictureFitScale, name: url.lastPathComponent)
                                 .padding(20)
                                 .id(url)
                         case .unavailable(let why):

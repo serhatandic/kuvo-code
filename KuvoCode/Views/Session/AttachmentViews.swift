@@ -135,7 +135,9 @@ nonisolated enum AttachmentItem: Identifiable, Sendable {
         return nil
     }
 
-    private var remoteLocation: (machine: String, path: String)? {
+    /// Where it is on a machine, for one only that machine has (a file an agent there showed):
+    /// read through its box (`kuvo/file`), never from this Mac's disk.
+    var remoteLocation: (machine: String, path: String)? {
         if case .stored(let file, _) = self, case .uri(let uri) = file.source,
            let url = URL(string: uri) { return RemoteFolder.parse(url) }
         return nil
@@ -502,6 +504,8 @@ private struct AttachmentPicture: View {
     @State private var image: NSImage?
     /// Loaded without a picture (data that isn't one, a file that's gone): no spinner then.
     @State private var isMissing = false
+    /// Clicked again after it couldn't be read.
+    @State private var tries = 0
     @State private var isHovering = false
     @Environment(\.colorScheme) private var scheme
 
@@ -552,10 +556,16 @@ private struct AttachmentPicture: View {
         .contentShape(.rect(cornerRadius: 12))
         .onHover { isHovering = $0 }
         .animation(.easeOut(duration: 0.12), value: isHovering)
-        .onTapGesture(perform: view)
-        .contextMenu { AttachmentMenu(item: item) }
-        .help("\(item.name) — click to look closer")
-        .task(id: item.contentID) {
+        .onTapGesture {
+            // One that couldn't be read (its computer away) is asked for again, and opens.
+            if isMissing { tries += 1 }
+            view()
+        }
+        // Open: in the viewer, where one only its computer has opens in its app too.
+        .contextMenu { AttachmentMenu(item: item, open: view) }
+        .help(isMissing ? "\(item.name) couldn’t be read — click to try again" : "\(item.name) — click to look closer")
+        .task(id: "\(item.contentID)\n\(tries)") {
+            if tries > 0 { isMissing = false }
             image = await item.loadImage()
             isMissing = image == nil
         }
