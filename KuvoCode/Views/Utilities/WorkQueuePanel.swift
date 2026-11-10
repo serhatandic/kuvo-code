@@ -657,7 +657,7 @@ struct WorkItemRow: View {
             }
             .buttonStyle(ListRowButtonStyle(isSelected: isSelected))
             .accessibilityElement(children: .combine)
-            .accessibilityLabel([ordinal.map { "\($0)." } ?? "", item.number.map { "Work item \($0)" } ?? "New work item", item.title, working ? "in progress" : "", WorkQueue.currentWork(item) ?? "", working ? WorkQueue.updated(item.updated.date) : "", ownerName.map { "in \($0)" } ?? "", WorkQueue.computerName(of: item).map { "on \($0)" } ?? ""].filter { !$0.isEmpty }.joined(separator: ", "))
+            .accessibilityLabel(spoken(working: working))
             if working, let openSession {
                 Button(action: openSession) {
                     Label("Open Agent Session", systemImage: "arrow.up.right")
@@ -668,6 +668,20 @@ struct WorkItemRow: View {
                 .help("Open the session at work on it")
             }
         }
+    }
+
+    /// What VoiceOver reads for the row.
+    private func spoken(working: Bool) -> String {
+        var parts: [String] = []
+        if let ordinal { parts.append("\(ordinal).") }
+        parts.append(item.number.map { "Work item \($0)" } ?? "New work item")
+        parts.append(item.title)
+        if working { parts.append("in progress") }
+        if let now = WorkQueue.currentWork(item) { parts.append(now) }
+        if working { parts.append(WorkQueue.updated(item.updated.date)) }
+        if let ownerName { parts.append("in \(ownerName)") }
+        if let computer = WorkQueue.computerName(of: item) { parts.append("on \(computer)") }
+        return parts.filter { !$0.isEmpty }.joined(separator: ", ")
     }
 
     /// "#181 · Updated 8m ago · in Sign-in · on lab": the number, when it's in progress how fresh
