@@ -17,6 +17,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { isObject } from "../../shared/json";
+import { subagentLayer } from "../../shared/subagents";
+import { deepMerged, readSettings } from "../areas/config";
 import { writePrivate } from "../files";
 import { ENGINE_CONFIG, K, RUN, SANDBOX_NOTE } from "../home";
 import { engineGet } from "./client";
@@ -32,7 +34,7 @@ export const ENGINE_LAYER_FILE = path.join(ENGINE_CONFIG || path.join(K, "config
 // What the file starts with: whose it is (`LAYER_MARK`, which never changes, so a box knows its own
 // file whatever an older one wrote under it), so the box only ever changes its own.
 const LAYER_MARK = "// Kept by Kuvo Code";
-const LAYER_HEADER = `${LAYER_MARK}: what some providers need from this engine, as this computer learned it from\n// it. Not your settings, which Kuvo Code keeps apart; changes here are replaced.\n`;
+const LAYER_HEADER = `${LAYER_MARK}: what some providers need from this engine, as this computer learned it from\n// it, and the model your subagents use (Settings › Agents). Not your settings, which Kuvo Code keeps\n// apart; changes here are replaced.\n`;
 
 /** Whether this process knows where its engine's settings are, to write the layer there: this
  * Mac's box (KUVO_ENGINE_CONFIG), a machine's box as it runs, or `engine-config` from a machine's
@@ -49,10 +51,15 @@ export function knowsEngineSettings(environment: NodeJS.ProcessEnv = process.env
 // Said once: a file of yours where the box keeps its own.
 let saidNotOurs = false;
 
-/** The engine's copy of the layer brought to `layer` (what this box learned, by default): written
- * when there's one, gone when there's none, so the engine reads it again at once. A file there
- * that isn't the box's (one you wrote) is left as it is. True when it changed. */
-export function applyCompatibility(layer: Record<string, unknown> = readCompatibility(), file = ENGINE_LAYER_FILE): boolean {
+/** The engine's copy of the layer brought to `layer` (what this box learned, by default), with the
+ * model your subagents use as `settings` say (this box's settings file, by default; see
+ * shared/subagents.ts): written when there's one, gone when there's none, so the engine reads it
+ * again at once. A file there that isn't the box's (one you wrote) is left as it is. True when it
+ * changed. */
+export function applyCompatibility(layer: Record<string, unknown> = readCompatibility(), file = ENGINE_LAYER_FILE, settings: unknown = readSettings().settings): boolean {
+  // (Settings that can't be read keep what the layer had for them: what was read last.)
+  const subagents = settings === undefined ? lastSubagents(file) : subagentLayer(settings);
+  layer = deepMerged(layer, subagents) as Record<string, unknown>;
   let there: string | null = null;
   try { there = fs.readFileSync(file, "utf8"); } catch {}
   if (there !== null && !there.startsWith(LAYER_MARK)) {
@@ -69,6 +76,18 @@ export function applyCompatibility(layer: Record<string, unknown> = readCompatib
   if (there === wanted) return false;
   writePrivate(file, wanted);
   return true;
+}
+
+/** What the layer at `file` has for the subagents now. */
+function lastSubagents(file: string): Record<string, unknown> {
+  try {
+    const text = fs.readFileSync(file, "utf8");
+    if (!text.startsWith(LAYER_MARK)) return {};
+    const kept = JSON.parse(text.split("\n").filter(line => !line.startsWith("//")).join("\n"));
+    return isObject(kept) && isObject(kept.agents) ? { agents: kept.agents } : {};
+  } catch {
+    return {};
+  }
 }
 
 /** The settings that leave `models` of Copilot's without the field they reject. */

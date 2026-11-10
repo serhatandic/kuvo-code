@@ -23,6 +23,7 @@ import { run, which } from "../proc"
 import { RPC, RPCError } from "../rpc"
 import { catcher } from "../signin"
 import { copySkillsInto, skillsFor, turnedOff } from "../skills"
+import { antigravityCustomAgents, subagentsFor } from "../subagents"
 import type { Turn } from "../turn"
 import type { Model, OAuthStatus, Session } from "../wire"
 
@@ -721,6 +722,11 @@ export class AntigravityAgent implements Agent {
         // them from there as it starts. Its home is the account's, for all its sessions.
         async skills(directory, hooks) {
           return copySkillsInto(join(agent.profile, "config", "skills"), await skillsFor(directory, agent.ownSkillFolders(directory), turnedOff(hooks)))
+        },
+        // Your subagents (Settings › Agents), as its custom agents in its home's folder for them,
+        // on Flash or Pro when their model is one (it takes no other, nor a model for its own).
+        async subagents(directory) {
+          return antigravityCustomAgents(join(agent.profile, "config", "agents"), await subagentsFor(directory))
         },
         // Its access lasts an hour, renewed from the sign-in it keeps: one that asks for a new
         // sign-in partway is started again, which renews it.

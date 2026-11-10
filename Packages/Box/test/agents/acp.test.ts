@@ -20,6 +20,7 @@ import { Store } from "../../src/agents/store"
 import { setToolServer } from "../../src/agents/kuvotools"
 import { canFence, realFence } from "./support/fence"
 import { computerServers, KEYS, SERVER_COMMAND } from "./support/servers"
+import { subagentEngine } from "./support/subagents"
 import { forgetServers } from "../../src/agents/servers"
 import { noteAgentsInside } from "../../src/agents/fence"
 import type { PermissionRule } from "../../src/agents/wire"
@@ -675,6 +676,62 @@ describe("What ACP agents ask", () => {
     const id = await run(new TestAntigravity(stuck, root), 1, { permissions: askFirst })
     expect(prompts()).toHaveLength(0)
     expect(ended(id)).toMatchObject({ type: "idle", outcome: "failed", error: { message: expect.stringContaining("Antigravity couldn't be set to ask before it acts") } })
+  })
+})
+
+// MARK: Your subagents
+
+describe("Your subagents (Settings › Agents), in Grok and Antigravity", () => {
+  test("Grok is given them as a plugin of its own, each on a model Grok runs, and started again when they change", async () => {
+    const engine = subagentEngine(root)
+    engine.agents.push({ id: "scout", name: "scout", mode: "subagent", description: "Looks: around.", system: "You scout.", model: { providerID: "xai", id: "grok-4.6" }, permissions: [] })
+    engine.model = "anthropic/claude-haiku-4-5"
+    await engine.serve()
+    try {
+      const grok = new TestGrok(program(fakeAcp([said("Done.")]), join(root, "grok")), root)
+      const id = await run(grok)
+      const given = launches()[0]
+      const folder = given[given.lastIndexOf("--plugin-dir") + 1]
+      expect(given.filter((arg) => arg === "--plugin-dir")).toHaveLength(1)
+      expect(JSON.parse(readFileSync(join(folder, ".claude-plugin", "plugin.json"), "utf8")).name).toBe("kuvo")
+      expect(readdirSync(join(folder, "agents")).sort()).toEqual(["keyword-research.md", "reviewer.md", "scout.md"])
+      expect(readFileSync(join(folder, "agents", "scout.md"), "utf8")).toBe('---\nname: "scout"\ndescription: "Looks: around."\nmodel: "grok-4.6"\n---\n\nYou scout.\n')
+      // Another maker's model (its own, or the one subagents use): the conversation's.
+      expect(readFileSync(join(folder, "agents", "reviewer.md"), "utf8")).toBe('---\nname: "reviewer"\ndescription: "Reviews a finished change."\n---\n\nYou review. You never edit.\n')
+      expect(folder.startsWith(root)).toBe(true)
+      // The model subagents use changed to one of Grok's: the next message starts it again, with it.
+      engine.model = "grok-cli/grok-4.6-fast"
+      send(id)
+      await settled(id, 2)
+      const again = launches()[1]
+      expect(again).toBeDefined()
+      expect(readFileSync(join(again[again.lastIndexOf("--plugin-dir") + 1], "agents", "reviewer.md"), "utf8")).toContain('model: "grok-4.6-fast"')
+    } finally {
+      engine.stop()
+    }
+  })
+
+  test("Antigravity is given them as custom agents in its home's folder for them, on Flash or Pro as their model says; one taken away goes, and nothing else there is touched", async () => {
+    const engine = subagentEngine(root)
+    engine.model = "antigravity/gemini-3-flash"
+    await engine.serve()
+    const agent = new TestAntigravity(fakeAcp([said("Done.")]), root)
+    const folder = join((agent as any).profile, "config", "agents")
+    mkdirSync(folder, { recursive: true })
+    writeFileSync(join(folder, "mine.md"), "yours")
+    try {
+      await run(agent)
+      expect(readdirSync(folder).sort()).toEqual([".kuvo-code", "keyword-research.md", "mine.md", "reviewer.md"])
+      expect(readFileSync(join(folder, "reviewer.md"), "utf8")).toBe('---\nname: "reviewer"\ndescription: "Reviews a finished change."\nsubagent: true\nmainAgent: false\nmodel: "flash"\n---\n\nYou review. You never edit.\n')
+      expect(readFileSync(join(folder, "keyword-research.md"), "utf8")).not.toContain("model:")
+      engine.agents.splice(engine.agents.findIndex((each) => each.id === "Keyword Research"), 1)
+      root = mkdtempSync(join(base, "case-"))
+      await run(new TestAntigravity(fakeAcp([said("Done.")]), dirname(dirname(dirname(dirname(folder))))))
+    } finally {
+      engine.stop()
+    }
+    expect(readdirSync(folder).sort()).toEqual([".kuvo-code", "mine.md", "reviewer.md"])
+    expect(readFileSync(join(folder, "mine.md"), "utf8")).toBe("yours")
   })
 })
 

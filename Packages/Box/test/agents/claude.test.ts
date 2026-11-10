@@ -13,6 +13,7 @@ import { subscribe } from "../../src/agents/events"
 import { repositoryOf } from "../../src/agents/fence"
 import { setToolServer } from "../../src/agents/kuvotools"
 import { callServer, computerServers, KEYS } from "./support/servers"
+import { subagentEngine } from "./support/subagents"
 import { Auto } from "../../src/agents/auto"
 import { agentAccounts, Limits } from "../../src/agents/limits"
 import { Queue } from "../../src/agents/queue"
@@ -2327,5 +2328,83 @@ describe("the plan's limits a turn hears", () => {
     ])
     fake.result([first])
     await until(() => idles(id).length > 0)
+  })
+})
+
+describe("Your subagents (Settings › Agents), in Claude Code", () => {
+  /** A turn that has started, with the engine listing your subagents and the model they use. */
+  async function started(model: string | undefined) {
+    const engine = subagentEngine(root)
+    engine.model = model
+    await engine.serve()
+    const id = sessions.create({ model: { providerID: provider, id: "default" }, location: { directory: root } }).id
+    sessions.prompt(id, { id: "msg_claude_subs_001", text: "review it", files: [], delivery: "steer" })
+    await until(() => fake.sent.length === 1)
+    return { engine, id }
+  }
+
+  test("it's given them as its own, over one of the same name in ~/.claude/agents: their words, a model it runs, the tools they may not use, and the model for the rest", async () => {
+    const { engine } = await started("claude-code/haiku")
+    try {
+      expect(Object.keys(fake.options.agents).sort()).toEqual(["Keyword Research", "reviewer"])
+      expect(fake.options.agents.reviewer).toEqual({
+        description: "Reviews a finished change.",
+        prompt: "You review. You never edit.",
+        model: "haiku",
+        disallowedTools: ["Edit", "MultiEdit", "Write", "NotebookEdit"],
+      })
+      // Its own model is one Claude Code doesn't run: it goes by the model Claude Code's subagents use.
+      expect(fake.options.agents["Keyword Research"]).toEqual({ description: "Finds keywords.", prompt: "You research keywords." })
+      expect(fake.options.env.CLAUDE_CODE_SUBAGENT_MODEL).toBe("haiku")
+    } finally {
+      engine.stop()
+    }
+  })
+
+  test("the model changed in Settings: the next message starts it again with that one; one it doesn't run leaves its subagents on the conversation's", async () => {
+    const { engine, id } = await started("anthropic/claude-sonnet-4-5")
+    try {
+      expect(fake.options.env.CLAUDE_CODE_SUBAGENT_MODEL).toBe("claude-sonnet-4-5")
+      const first = fake.sent[0].uuid
+      fake.result([first])
+      await until(() => idles(id).length === 1)
+      engine.model = "openai/gpt-5"
+      fake.out = new Queue<any>()
+      sessions.prompt(id, { id: "msg_claude_subs_002", text: "again", files: [], delivery: "steer" })
+      await until(() => fake.sent.length === 2)
+      expect(fake.closed).toBe(true)
+      expect(fake.options.env.CLAUDE_CODE_SUBAGENT_MODEL).toBeUndefined()
+      expect(Object.keys(fake.options.agents)).toContain("reviewer")
+    } finally {
+      engine.stop()
+    }
+  })
+
+  test("a subagent's tools go by what it may do, with the session's rules over them", async () => {
+    const { engine, id } = await started(undefined)
+    try {
+      const hook = async (name: string, input: Record<string, unknown>, toolUseID: string, agent?: string) => {
+        const said = await fake.options.hooks.PreToolUse[0].hooks[0]({ hook_event_name: "PreToolUse", tool_name: name, tool_input: input, tool_use_id: toolUseID, ...(agent ? { agent_id: "ag1", agent_type: agent } : {}) })
+        return said?.hookSpecificOutput?.permissionDecision
+      }
+      // The reviewer edits nothing, and asks before a command but `git diff`.
+      expect(await hook("Edit", { file_path: join(root, "a.ts"), old_string: "a", new_string: "b" }, "t1", "reviewer")).toBe("deny")
+      expect(await hook("Bash", { command: "git diff HEAD" }, "t2", "reviewer")).toBeUndefined()
+      expect(await hook("Bash", { command: "rm -rf build" }, "t3", "reviewer")).toBe("ask")
+      const asked = fake.canUse("Bash", { command: "rm -rf build" }, "t3", { agentID: "ag1" })
+      await until(() => sessions.permissions(id).length === 1)
+      sessions.replyPermission(id, sessions.permissions(id)[0].id, "reject")
+      expect((await asked).behavior).toBe("deny")
+      // The conversation's own agent, and Claude Code's own subagents, go by the session's.
+      expect(await hook("Edit", { file_path: join(root, "a.ts"), old_string: "a", new_string: "b" }, "t4")).toBeUndefined()
+      expect(await hook("Bash", { command: "rm -rf build" }, "t5", "general-purpose")).toBeUndefined()
+      expect((await fake.canUse("Bash", { command: "rm -rf build" }, "t5", { agentID: "ag2" })).behavior).toBe("allow")
+      // Approve All for the session goes over what the subagent asks first about, as the engine has it.
+      sessions.update(id, { permissions: [{ action: "*", resource: "*", effect: "allow" }] })
+      expect(await hook("Bash", { command: "rm -rf build" }, "t6", "reviewer")).toBeUndefined()
+      expect(await hook("Edit", { file_path: join(root, "a.ts"), old_string: "a", new_string: "b" }, "t7", "reviewer")).toBeUndefined()
+    } finally {
+      engine.stop()
+    }
   })
 })

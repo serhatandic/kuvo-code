@@ -1945,9 +1945,18 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   `{action, resource, effect}`, effect `allow`, `ask` or `deny`) and its blocks under `policies`.
   Settings › Agents keeps its agents under `agents.<id>` (the engine's own, `build`, `plan`,
   `general`, `explore`, `title`, `summary` and `compaction`, whether named there or not), with
-  `default_agent` the one new sessions start in; Settings › Commands, `commands.<name>`;
-  Settings › MCP Servers, `mcp.servers.<name>`. A machine's box answers `409 {"message"}` until a
-  Mac has made its settings its own ("Settings per box").
+  `default_agent` the one new sessions start in, and the model subagents use under
+  `subagent_model` (`provider/model`, a coding agent's account's too; none: the conversation's),
+  which the engine doesn't read: the box puts it on the engine's subagents and yours without a
+  model of their own, in its own settings file beside yours (see "Settings per box"), as each
+  change is made and whenever the settings are read, and the coding agents' bridge gives your
+  subagents and that model to each agent with subagents of its own, one it runs (Claude Code's
+  `agents` and `CLAUDE_CODE_SUBAGENT_MODEL`, Codex's roles and `agents.default_subagent_model`,
+  Cursor's `agents`, a plugin of Grok's with an agent each, Antigravity's custom agents), on a
+  Mac from where its box's `KUVO_ENGINE_CONFIG` says, on a machine from `box/opencode.json`;
+  Settings › Commands, `commands.<name>`; Settings › MCP Servers, `mcp.servers.<name>`. A
+  machine's box answers `409 {"message"}` until a Mac has made its settings its own ("Settings
+  per box").
 - `POST kuvo/config/apply` (`config.apply` in `features`): "Also Apply to…", changes made to
   another computer's settings made to this one's too, as its own settings have room for them.
   `{"changes": [{"path": [keys…], "before": …, "after": …}], "dry"?: true}`: each as it was made
@@ -3602,7 +3611,11 @@ GitHub Copilot's Claude models named with
 `{"compatibility": {"supportsThinkingBlockBinding": false}}` (anomalyco/opencode#55160), only
 while the box has a Copilot account: named in an engine's settings with none, Copilot counts as set
 up there and its newest model becomes the engine's default, which fails every message left to it.
-With nothing to name, there's no file.
+The model your subagents use (`subagent_model`, `kuvo/config`) is in it too, as `agents.<id>.model`
+for the engine's subagents (`general`, `explore`) and your subagents (`mode` `subagent` or `all`,
+not turned off) that have no model of their own: read after your settings, it would go over one
+that has. None for a coding agent's model, which the engine can't run. With nothing to name,
+there's no file.
 The box learns them from its own engine: `GET /api/integration/github-copilot` (an account when its
 `connections` aren't empty; an answer it can't read leaves what it learned, and it asks again with
 the engine's next event: one just started answers 404 for a moment), then `GET /api/model`
