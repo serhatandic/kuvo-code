@@ -1,6 +1,7 @@
 // What the vault's tests wait on, as it happens: a file the box makes, what the vault asks you.
 // Never a count of tries or a pause: a busy machine is slow, never wrong, and a wait whose thing
-// never comes fails at the test's own time limit.
+// never comes fails at the test's own time limit. Filesystem watches are a hint,
+// with a periodic look too: macOS may lose or coalesce a notification.
 
 import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
@@ -34,6 +35,7 @@ export function appears(folder, found) {
     const signal = ending.getStore();
     const watchers = [];
     let done = false;
+    let fallback;
     const ended = () => finish(() => reject(new Error(`The test ended before this came, in ${folder}.`)));
     if (signal?.aborted) return ended();
     signal?.addEventListener("abort", ended, { once: true });
@@ -41,6 +43,7 @@ export function appears(folder, found) {
     function finish(then) {
       if (done) return;
       done = true;
+      clearInterval(fallback);
       open.delete(ended);
       signal?.removeEventListener("abort", ended);
       for (const watcher of watchers.splice(0)) watcher.close();
@@ -75,6 +78,7 @@ export function appears(folder, found) {
     }
     // (Once it watches, so nothing made in between is missed.)
     changed();
+    if (!done) fallback = setInterval(look, 100);
   });
 }
 
