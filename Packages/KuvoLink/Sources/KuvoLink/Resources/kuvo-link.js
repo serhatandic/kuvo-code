@@ -15216,13 +15216,22 @@ function writeCard() {
 // Packages/Box/src/link/setup/lead.ts
 function leadsNow(link) {
   if (!IS_MAC)
-    return !macsOf(link).length;
+    return !macsOf(link).length && "self" in rankedPrimary(link);
   if (!("self" in rankedPrimary(link)))
     return false;
   const said = peersOf(link).map((peer) => readTold2(peer.key)?.shared);
   return followedSetup(link)?.role === "primary" ? !said.includes(true) : said.every((shared) => shared === false);
 }
+function noteKeyNow(link) {
+  const own = IS_MAC ? ownKey(link) : null;
+  if (!own)
+    return;
+  if (link.keyNow && link.keyNow !== own)
+    link.keysBefore = [...(link.keysBefore ?? []).filter((key) => key !== own && key !== link.keyNow), link.keyNow].slice(-8);
+  link.keyNow = own;
+}
 function settleOwnSetup(link) {
+  noteKeyNow(link);
   settleSetup(link);
   const own = ownKey(link);
   const sign = ownSign(link);
@@ -21027,7 +21036,7 @@ function takeTold(sender, given, reply) {
   if (!keepTold(sender.key, told))
     return;
   reply({ had: told.id });
-  if (before?.shared !== told.shared || before?.primary?.key !== told.primary?.key)
+  if (before?.shared !== told.shared || before?.primary?.key !== told.primary?.key || before?.primary?.since !== told.primary?.since)
     noteSetupNow(Date.now(), { soon: 0 });
   const primary = primaryOf(link);
   if ("self" in primary)
@@ -37556,13 +37565,14 @@ async function* macLinkRoute(route, request, signal) {
           return null;
         if (again && Array.isArray(link.left))
           link.left = link.left.filter((key) => key !== again);
+        noteKeyNow(link);
         const own = ownDocs({ link, library });
         docs = [...Object.values(own).map((made) => made.envelope), ...Object.values(link.docs ?? {}).sort((a, b) => a.d < b.d ? -1 : 1)];
         return link;
       });
       if (!link)
         return yield* json(503, { message: "This Mac's link has no keys yet." });
-      return yield* json(200, { mac: ownKey(link), macSign: ownSign(link), docs });
+      return yield* json(200, { mac: ownKey(link), macSign: ownSign(link), docs, replaces: link.keysBefore ?? [] });
     }
     case "kuvo/link/docs": {
       if (method !== "POST")
@@ -38591,6 +38601,8 @@ async function setup() {
   const old = readLink();
   const before = readPersonalities();
   let link = null, work = null, library = before;
+  const replaced = mac && Array.isArray(input.replaces) ? input.replaces.filter((key) => typeof key === "string" && KEY.test(key) && key !== mac).slice(0, 8) : [];
+  let formerMacs = [];
   updateLink((current) => {
     const next = current ?? { secret: crypto51.randomBytes(32).toString("base64url"), key: newKey().toString("base64url"), phones: [] };
     next.sign ??= newSigningSeed();
@@ -38607,6 +38619,9 @@ async function setup() {
       } else if (Array.isArray(input.peers)) {
         takeLegacyPeers(next, mac, input.peers, typeof input.peersAt === "number" ? input.peersAt : typeof input.at === "number" ? input.at : 0, input.moved);
       }
+      formerMacs = replaced.filter((key) => macsOf(next).includes(key));
+      for (const key of formerMacs)
+        leaveMac(next, key);
     }
     if (typeof input.id === "string")
       next.id = input.id.slice(0, 200);
@@ -38624,6 +38639,10 @@ async function setup() {
   });
   if (work && library !== before)
     await takePersonalities(library).catch(() => {});
+  const after = link ?? readLink();
+  if (after)
+    for (const key of formerMacs)
+      forgetMacsAgents(key, after);
   noteDocsChanged();
   try {
     writeCard();

@@ -201,7 +201,7 @@ function takeTold(sender: MailSender, given: unknown, reply: (payload: Record<st
   if (!keepTold(sender.key, told)) return;
   reply({ had: told.id });
   // How it numbers changed (it's shared now, or numbers from another): this box's setup looked at now.
-  if (before?.shared !== told.shared || before?.primary?.key !== told.primary?.key) noteSetupNow(Date.now(), { soon: 0 });
+  if (before?.shared !== told.shared || before?.primary?.key !== told.primary?.key || before?.primary?.since !== told.primary?.since) noteSetupNow(Date.now(), { soon: 0 });
   const primary = primaryOf(link);
   if ("self" in primary) movePast(Math.max(told.top ?? 0, ...told.items.map(item => item.number ?? 0)));
   else if ("peer" in primary && (primary.via ? primary.via.key === sender.key && told.primary?.key === primary.peer.key : primary.peer.key === sender.key)) {

@@ -716,6 +716,8 @@ interface SetupInput {
   peersAt?: number;
   at?: number;
   moved?: unknown[];
+  /** The Mac's keys before (made anew since), which it no longer is: let go here. */
+  replaces?: unknown;
 }
 
 // What the Mac sends: the relay, this machine's name, and the phones you've paired with the Mac,
@@ -738,6 +740,9 @@ async function setup(): Promise<void> {
   const old = readLink();
   const before = readPersonalities();
   let link = null as LinkState | null, work = null as ReturnType<typeof docsWork> | null, library = before;
+  // The Mac's keys before, made anew since (over SSH, so this box knows they were that Mac's).
+  const replaced = mac && Array.isArray(input.replaces) ? input.replaces.filter((key): key is string => typeof key === "string" && KEY.test(key) && key !== mac).slice(0, 8) : [];
+  let formerMacs: string[] = [];
   updateLink(current => {
     const next = current ?? { secret: crypto.randomBytes(32).toString("base64url"), key: newKey().toString("base64url"), phones: [] };
     next.sign ??= newSigningSeed();
@@ -756,6 +761,9 @@ async function setup(): Promise<void> {
         // A Mac that signs none yet (0.8.0-beta.1): its peers as it lists them.
         takeLegacyPeers(next, mac, input.peers, typeof input.peersAt === "number" ? input.peersAt : (typeof input.at === "number" ? input.at : 0), input.moved);
       }
+      // That Mac under its keys before: no Mac of this box's any more (never two of one Mac).
+      formerMacs = replaced.filter(key => macsOf(next).includes(key));
+      for (const key of formerMacs) leaveMac(next, key);
     }
     if (typeof input.id === "string") next.id = input.id.slice(0, 200);
     // COMPAT(0.7 visits): a Mac that doesn't say it `tolerates` newer boxes holds updates back. Goes 3 months after 0.8.0.
@@ -775,6 +783,9 @@ async function setup(): Promise<void> {
     return next;
   });
   if (work && library !== before) await takePersonalities(library).catch(() => {});
+  // (What those keys' agents were, told here, goes with them.)
+  const after = link ?? readLink();
+  if (after) for (const key of formerMacs) forgetMacsAgents(key, after);
   // The running bridge tells your other computers what changed; its setup card says what it's in now.
   noteDocsChanged();
   try { writeCard(); } catch {}

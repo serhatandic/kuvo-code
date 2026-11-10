@@ -10,12 +10,14 @@
 // Run with `node --test Packages/KuvoLink/Tests/Bridge/setup-mac.test.js`.
 import "./test-safety.js";
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, test } from "node:test";
+import { fileURLToPath } from "node:url";
 import { atEnd, removeAtEnd } from "./at-end.js";
 
 const support = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-setup-mac-")));
@@ -258,5 +260,63 @@ test("kuvo/setup/events says it now, and again as link.json changes, written her
   } finally {
     stop.abort();
     await lines.return?.();
+  }
+});
+
+test("this Mac's setup outlives a restart: kept in its link.json, it's named again, the same, once its keys are back", () => {
+  write(numbers, { primary: "self", next: 12, leases: [], since: 1_000 });
+  labTold({ primary: { key: self.pub, kind: "mac", since: 1_000 } });
+  link.noteSetupNow(Date.now(), { soon: 0 });
+  const led = ownPeers().setup;
+  assert.equal(read(path.join(run, "link.json")).setup.id, led.id, "kept on disk");
+  const before = link.macLink.overlay;
+  try {
+    // Started again: no keys from its app yet, so no setup it can say it leads.
+    link.macLink.overlay = null;
+    assert.equal(link.setupView(link.readLink()).setup, null);
+    link.macLink.overlay = before;
+    link.noteSetupNow(Date.now(), { soon: 0 });
+    assert.deepEqual(ownPeers().setup, led);
+  } finally {
+    link.macLink.overlay = before;
+  }
+});
+
+test("this Mac's static key made anew: setting a machine up again lets the old key go, so the machine isn't shared with itself and follows the new setup at once", async () => {
+  write(numbers, { primary: "self", next: 12, leases: [], since: 1_000 });
+  labTold({ primary: { key: self.pub, kind: "mac", since: 1_000 } });
+  link.noteSetupNow(Date.now(), { soon: 0 });
+  const script = fileURLToPath(new URL("../../Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url));
+  const machine = path.join(support, "machine");
+  fs.mkdirSync(path.join(machine, "run"), { recursive: true });
+  const env = { PATH: process.env.PATH, HOME: support, KUVO_HOME: machine, TMPDIR: support };
+  atEnd(() => {
+    try { process.kill(Number(fs.readFileSync(path.join(machine, "run", "link.pid"), "utf8")), "SIGTERM"); } catch {}
+  });
+  // Set up as the app sets it up: what this Mac's box gives (kuvo/link/setup), over SSH.
+  const setUp = async () => {
+    const given = (await route("GET", "kuvo/link/setup")).json;
+    const result = spawnSync(process.execPath, [script, "setup"], { input: JSON.stringify({ relay: "wss://relay.invalid", name: "lab", id: "lab", ...given }), env, encoding: "utf8" });
+    assert.equal(result.status, 0, result.stderr);
+    return { given, link: read(path.join(machine, "run", "link.json")) };
+  };
+  const first = await setUp();
+  assert.deepEqual(first.link.macs, [self.pub]);
+  assert.equal(first.link.setup?.primary, self.pub);
+
+  const before = link.macLink.overlay;
+  const fresh = link.newKey();
+  try {
+    link.macLink.overlay = { ...before, key: k(fresh), sign: link.newSigningSeed() };
+    link.noteSetupNow(Date.now(), { soon: 0 });
+    const now = k(link.publicOf(fresh));
+    const again = await setUp();
+    assert.deepEqual(again.link.macs, [now], "never two of one Mac");
+    assert.equal(again.link.setup?.primary, now);
+    assert.equal(again.link.setup?.aside, undefined, "not shared with itself");
+    assert.equal(again.link.setup?.id, ownPeers().setup.id);
+    assert.deepEqual([first.given.replaces, again.given.replaces], [[], [self.pub]], "what this Mac's box gives: the key it had before");
+  } finally {
+    link.macLink.overlay = before;
   }
 });

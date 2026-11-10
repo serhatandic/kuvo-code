@@ -21,6 +21,7 @@ import { cleanMoved, cleanPeer, fitsPeer, KEY, MOST_PEERS, ownKey, peersOf } fro
 import { readPersonalities } from "../personalities/library";
 import { macLink, readLink, updateLink } from "../state";
 import { macKeys, macLinkCheck, tellGone } from "./link";
+import { noteKeyNow } from "../setup/lead";
 import { macSendOutbox } from "./peers";
 import type { SignedDoc } from "../../shared/documents";
 import type { Peer } from "../peers/known";
@@ -147,12 +148,14 @@ export async function* macLinkRoute(route: string, request: LinkRequest, signal:
       const link = updateLink(link => {
         if (!link?.sign) return null;
         if (again && Array.isArray(link.left)) link.left = link.left.filter(key => key !== again);
+        noteKeyNow(link);
         const own = ownDocs({ link, library });
         docs = [...Object.values(own).map(made => made.envelope), ...Object.values(link.docs ?? {}).sort((a, b) => (a.d < b.d ? -1 : 1))];
         return link;
       });
       if (!link) return yield* json(503, { message: "This Mac's link has no keys yet." });
-      return yield* json(200, { mac: ownKey(link), macSign: ownSign(link), docs });
+      // (And the keys this Mac had before, made anew since, for the machine to let go.)
+      return yield* json(200, { mac: ownKey(link), macSign: ownSign(link), docs, replaces: link.keysBefore ?? [] });
     }
     case "kuvo/link/docs": {
       // Documents a machine gave as it was set up (over SSH): taken as if they'd come by mail.

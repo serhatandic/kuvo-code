@@ -368,6 +368,31 @@ test("a machine in a setup numbers from its main computer, whatever a peer says 
   sent.length = 0;
 });
 
+test("a machine its main computer lets go (removed, or not heard from in 30 days) doesn't number on its own at once: it waits for that Mac, as numbering always has, days, before it does", () => {
+  const file = path.join(queues, "numbers.json");
+  const seed = link.newSigningSeed();
+  const sign = link.signingKeyOf(seed);
+  const leads = { setup: { id: "set_BBBBBBBBBBBBBBBBBBBBBB", epoch: 1, primary: mac.pub } };
+  const library = { personalities: [], removed: [] };
+  link.updateLink(() => ({ secret: crypto.randomBytes(32).toString("base64url"), key: k(here.key), sign: link.newSigningSeed(), relay: "wss://relay.test", name: "devbox", id: "devbox", mac: mac.pub, macs: [mac.pub], macSigns: { [mac.pub]: sign }, phones: [] }));
+  link.updateLink(current => { link.docsWork({ link: current, library }, { key: mac.pub, sign }, { give: [link.signDoc(seed, "peers", 1, { boxes: [{ ...mac.peer, sign }, lab.peer, here.peer], moved: [], left: [], ...leads })] }); return current; });
+  write(file, { primary: mac.pub, leases: [], since: 9_000 });
+  assert.equal(link.readLink().setup?.role, "member");
+  // Its Mac removes it.
+  link.updateLink(current => { link.docsWork({ link: current, library }, { key: mac.pub, sign }, { give: [link.signDoc(seed, "peers", 2, { boxes: [{ ...mac.peer, sign }, lab.peer], moved: [], left: [here.pub], ...leads })] }); return current; });
+  link.noteSetupNow(Date.now(), { soon: 0 });
+  assert.equal(link.readLink().setup, undefined, "it leads none yet");
+  assert.deepEqual(link.primaryOf(link.readLink(), file), { away: true }, "its items wait, as before");
+  // Days on, unheard: it numbers on its own, and leads a setup of its own.
+  link.notePrimaryNow(link.readLink(), { file });
+  const lost = link.readNumbers(file).lost;
+  assert.ok(lost);
+  write(file, { ...link.readNumbers(file), lost: lost - 4 * 86_400_000 });
+  link.noteSetupNow(Date.now(), { soon: 0 });
+  assert.equal(link.readLink().setup?.role, "primary");
+  assert.deepEqual(link.primaryOf(link.readLink(), file), { self: true });
+});
+
 test("a box asked for numbers on behalf of its primary passes the ask on and the block back, one hop", () => {
   const file = path.join(queues, "numbers.json");
   write(file, { primary: mac.pub, leases: [[100, 149]] });

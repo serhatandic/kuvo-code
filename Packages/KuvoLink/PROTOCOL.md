@@ -223,12 +223,15 @@ setups, and pairing and adding only from the main computer come later: #183.)
   "Numbers") and each of its machines has said no other Mac shares it (`shared: false` in what it
   tells of its Work Queue; one that hasn't said, an older box, holds it back, and nothing changes
   meanwhile; once it leads, a machine just added that hasn't said yet doesn't stop it, only one
-  saying `shared: true` does); and a box no Mac set up (one paired with a phone by itself, on Linux say). It's made
-  once, at epoch 1, and looked at once a minute and as a machine's word on how it numbers changes:
-  a Mac that stops leading (a machine of it is shared now, or it numbers through another Mac) sets
-  it aside and its document names it no more; leading again, it names the same one. A Mac whose
-  keys were made anew is a new computer to the others: the setup it led with its old keys is no
-  longer its own. (Leading follows its machines' word, as the Work Queue's numbers already do
+  saying `shared: true` does); and a box no Mac set up, once it numbers on its own (one paired with
+  a phone by itself, on Linux say; one its Mac let go waits for that Mac first, as "Numbers" says,
+  days). It's made once, at epoch 1, and looked at once a minute and as a machine's word on how it
+  numbers changes: a Mac that stops leading (a machine of it is shared now, or it numbers through
+  another Mac) sets it aside and its document names it no more; leading again, it names the same
+  one. A Mac whose keys were made anew (its static key, or its signing key alone) makes a new setup:
+  the one it led with its old keys is no longer its own, and its machines take the new one from it.
+  Setting a machine up again, it names its static keys before (`replaces` in `kuvo/link/setup` and
+  setup's input), which the machine lets go as `leave` does, so it's never two Macs to it. (Leading follows its machines' word, as the Work Queue's numbers already do
   without a setup; a later part of #183 makes it hold against a member's word alone.)
 - **What a box takes it from**: a machine follows the setup its Mac leads, from that Mac's
   document. Then it takes `peers` only from the main computer's signing key (as that Mac's setup
@@ -238,8 +241,9 @@ setups, and pairing and adding only from the main computer come later: #183.)
   {primary, epoch}` (gone with that epoch). A machine with no Mac leads its own; set up by a Mac, it
   gives that up (a setup of no other computer joins its Mac's). A box drops its setup when that Mac
   stops counting there (it removed the box, or wasn't heard from in 30 days), as it drops that
-  Mac's documents. A box that follows no setup (kept until every box knows setups) takes `peers` from its own
-  Macs, as before.
+  Mac's documents. A box that follows no setup (kept until every box knows setups) takes `peers`
+  from its own Macs, as before. The card (below) is a hint for what looks from outside, never
+  trusted for any of this.
 - **Shared machines**: a machine more than one Mac set up, unless the setup's document names each
   of them as one of its Macs, follows no setup, and tells its peers it's shared (the Work Queue's
   `told`, `shared: true`), so none of those Macs leads one. Macs that share a machine, and the

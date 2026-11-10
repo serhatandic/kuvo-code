@@ -22,17 +22,29 @@ import type { LinkState } from "../state";
  * to start leading (or lead again), each machine must have said so (one that hasn't, an older box,
  * holds it back: nothing changes meanwhile), while one that leads goes on through a machine that
  * hasn't said yet (one just added, its first word still on its way). A machine leads while no Mac
- * set it up. */
+ * set it up and it numbers on its own. */
 export function leadsNow(link: LinkState): boolean {
-  if (!IS_MAC) return !macsOf(link).length;
+  // (A machine its Mac let go waits for that Mac as numbering always has, days, before it numbers
+  // on its own: never at once.)
+  if (!IS_MAC) return !macsOf(link).length && "self" in rankedPrimary(link);
   if (!("self" in rankedPrimary(link))) return false;
   const said = peersOf(link).map(peer => readTold(peer.key)?.shared);
   return followedSetup(link)?.role === "primary" ? !said.includes(true) : said.every(shared => shared === false);
 }
 
+/** This Mac's static key noted (in place, under link.json's lock): one made anew since the last is
+ * kept among the keys before, for its machines to let the old one go as it sets them up again. */
+export function noteKeyNow(link: LinkState): void {
+  const own = IS_MAC ? ownKey(link) : null;
+  if (!own) return;
+  if (link.keyNow && link.keyNow !== own) link.keysBefore = [...(link.keysBefore ?? []).filter(key => key !== own && key !== link.keyNow), link.keyNow].slice(-8);
+  link.keyNow = own;
+}
+
 /** This box's setup as it stands now (in place, under link.json's lock): one it leads made, or set
  * aside while it doesn't lead it; a machine's taken as its documents say. */
 export function settleOwnSetup(link: LinkState): void {
+  noteKeyNow(link);
   settleSetup(link);
   const own = ownKey(link);
   const sign = ownSign(link);

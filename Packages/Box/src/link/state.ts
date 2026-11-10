@@ -73,6 +73,10 @@ export interface LinkState {
   untold?: Peer[];
   /** The setup it's in, and its role there (PROTOCOL.md, "Your setup"). */
   setup?: SetupRecord;
+  /** This Mac's static key as its box last had it, and the ones before (made anew since): a machine
+   * this Mac sets up again lets those go (`replaces` in setup). */
+  keyNow?: string;
+  keysBefore?: string[];
   /** The #181 switch, as you set it (none: it follows the role, `startsFromOthers`). */
   startsFromOthers?: "on" | "off";
 }
