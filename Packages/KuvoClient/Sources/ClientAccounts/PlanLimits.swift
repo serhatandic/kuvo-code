@@ -279,9 +279,9 @@ extension Date {
 public enum UsageListing {
     public enum Item<Panel> {
         case panel(Panel)
-        /// An account's row, with the panel's entry whose other lines go under it, and the boxes it's
-        /// from (`Box.key`, in their order).
-        case account(LimitsAccount, below: Panel?, from: [String])
+        /// An account's row (its id, its boxes and its limits as one), with the panel's entry whose
+        /// other lines go under it.
+        case account(Account, below: Panel?)
     }
 
     /// `accounts`: one box's, as it states them (an account it has twice, a coding agent's and the
@@ -309,11 +309,11 @@ public enum UsageListing {
                 continue
             }
             for (index, row) in rows.enumerated() {
-                items.append(.account(row.account, below: index == 0 ? entry : nil, from: row.sources.map(\.box)))
+                items.append(.account(row, below: index == 0 ? entry : nil))
                 placed.insert(row.id)
             }
         }
-        for row in listed where !placed.contains(row.id) { items.append(.account(row.account, below: nil, from: row.sources.map(\.box))) }
+        for row in listed where !placed.contains(row.id) { items.append(.account(row, below: nil)) }
         return items
     }
 }
@@ -395,7 +395,7 @@ extension UsageListing {
             if let boxes = elsewhere(index) { names[index] += " · \(boxes)" }
         }
         clash = alike()
-        for index in listed.indices where clash.contains(names[index]) {
+        for index in listed.indices where clash.contains(names[index]) && !mine(index).isEmpty {
             if let boxes = elsewhere(index) { names[index] += " · \(boxes)" }
         }
         for index in listed.indices where names[index] != listed[index].account.title { listed[index].account.name = names[index] }
