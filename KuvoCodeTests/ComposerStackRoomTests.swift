@@ -285,6 +285,7 @@ import Testing
             "time": ["started": 1700000000000]
         ]] as [String: Any]))
         show(NSSize(width: 820, height: 1000))
+        try await until { app.workspace.lastingShellJobs.contains("sh_408") }
         func fields(_ view: NSView?) -> [MessageTextView] {
             guard let view else { return [] }
             return (view as? MessageTextView).map { [$0] } ?? view.subviews.flatMap { fields($0) }
@@ -301,6 +302,7 @@ import Testing
             let field = try #require(fields(window.contentView).first)
             window.makeFirstResponder(nil)
             model.draftText = ""
+            try await until { !model.tuck.isWriting }
             model.tuck.show()
             try await until { elements.contains { $0.label == "Fold all bars" } && elements.contains { $0.label?.hasPrefix("Running in the background") == true } }
             func keep(_ state: String) async throws {
