@@ -275,6 +275,8 @@ export interface SubagentRun {
   end(outcome: Outcome, error?: StructuredError): void
   /** What it asks you, as its own (one in the background asks after its turn too). */
   permission(ask: PermissionAsk): Promise<Decision>
+  /** Its agent moved it to the background after it started: it goes on past the turn that started it. */
+  inBackground(): void
   /** Set by its agent: stops it (Stop in its session, or in the conversation that started it once that turn is over). */
   stop?: () => Promise<void>
   /** How you can write to it, as its agent learns it (a Codex agent's thread says as it starts). */

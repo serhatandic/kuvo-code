@@ -2748,6 +2748,9 @@ export class Sessions {
       },
       // Asked in the conversation that started it, while it works.
       permission: (ask) => this.askPermission(id, live, turn, ask, plan),
+      inBackground: () => {
+        if (live.subagents.get(session.id) === turn && !turn.isEnded) live.background.add(session.id)
+      },
       messages: (route) => this.setMessages(session.id, route),
     }
     live.runs.set(session.id, run)
