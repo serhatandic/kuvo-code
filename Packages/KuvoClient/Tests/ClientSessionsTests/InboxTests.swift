@@ -39,4 +39,18 @@ import ClientSessions
         #expect(found("4") == [4])
         #expect(found("  ").isEmpty)
     }
+
+    @Test func anItemTwoComputersListIsFoundOnceWhereItsKept() {
+        let told = { (number: Int, title: String) in
+            #"{"id":"wqi_\#(number)","number":\#(number),"owner":"ses_far","title":"\#(title)","category":"next","order":1,"inProgress":false,"sessions":[],"noteCount":0,"fileCount":0,"linkCount":0,"computer":{"key":"k","name":"lab","kind":"machine"},"created":{"at":1,"by":{"user":true}},"updated":{"at":1,"by":{"user":true}}}"#
+        }
+        let decode = { (json: String) in try! JSONDecoder().decode(WorkItem.self, from: Data(json.utf8)) }
+        let mac = [decode(WorkQueueTests.item(1, "Sign-in", "next")), decode(told(500, "Lab's"))]
+        let lab = [decode(WorkQueueTests.item(500, "Lab's", "next")), decode(told(1, "Sign-in"))]
+        let other = [decode(told(600, "Elsewhere")), decode(told(500, "Lab's"))]
+        let once = WorkQueue.once([("mac", mac), ("lab", lab), ("other", other)]).map { ($0.0, $0.1.compactMap(\.number)) }
+        #expect(once.map(\.0) == ["mac", "lab", "other"])
+        #expect(once.map(\.1) == [[1], [500], [600]])
+    }
 }
+

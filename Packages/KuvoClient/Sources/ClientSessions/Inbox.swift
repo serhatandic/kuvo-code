@@ -44,4 +44,14 @@ extension WorkQueue {
         if let number = Int(words.trimmingCharacters(in: CharacterSet(charactersIn: "#"))), item.number == number { return true }
         return item.title.localizedStandardContains(words)
     }
+
+    /// What several computers' All views list, each item once: under the computer it's kept on, and
+    /// one only another of your computers tells of (`computer`) under the first that does.
+    public static func once<Place>(_ lists: [(Place, [WorkItem])]) -> [(Place, [WorkItem])] {
+        let key = { (item: WorkItem) in item.number.map { "#\($0)" } ?? item.id }
+        var seen = Set(lists.flatMap { $0.1.filter { $0.computer == nil }.map(key) })
+        return lists.map { place, items in
+            (place, items.filter { item in item.computer == nil || seen.insert(key(item)).inserted })
+        }
+    }
 }
