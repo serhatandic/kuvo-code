@@ -215,7 +215,7 @@ connection.
   about?, machine?, look?}], "features"?}}`: a bot's `id` (`bot_…`, as group chats name their
   members) and `look` (`{color, shape, face}`, as `kuvo/bots` has it: a colour, shape or face the
   apps don't draw is kept as the plain look's, `graphite`, `round`, `calm`), and `features` as the box's
-  `kuvo/info` names them. A box sends its bots and its 40 latest
+  `kuvo/info` names them (the box that takes them keeps the first 300 names). A box sends its bots and its 40 latest
   sessions (its engine's and its coding agents') when they change and every ten minutes. Each box
   keeps the newest list from each peer. The relay keeps nothing, so a box that has just connected adds `"ask": "agents"` to
   what it sends first (its agents; a Mac's digest), and whoever gets it tells that box its agents
@@ -1862,6 +1862,10 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   machine was off since), and `phones`, how many phones
   reach it. A Mac also names `integrations`, each integration's name by its MCP
   server's (`{"microsoft-365": "Outlook and Microsoft 365", …}`), for a card when one asks something.
+  A Mac's is its box's (from #191 step 2; its app answered it before), the same with the app closed:
+  its `name` and `app` as the app last said them (kept, "The relay, on this Mac's box"), its
+  `engine` the version running, or the one the app brings while none runs, its integrations from
+  the catalog the app leaves it (`bin/integrations.json`), and its `features` the box's own list.
 - `kuvo/agents/api/…`: the coding agents you already have (Claude Code, Codex, Cursor, Grok,
   Antigravity), through the agents bridge beside the host's engine, which answers the same paths
   as the engine for them: sessions, messages, prompts, permissions, questions, events
@@ -3449,7 +3453,9 @@ Mac, its app for its keys), and on a
 machine `409` for `config`, `config.apply`, `keys`, `mcp.catalog` and `integrations` until a Mac has made its
 settings its own. A name comes with what it names and never changes meaning; one the client
 doesn't know, it ignores. Both boxes are held to their lists by
-the route scenarios (`Vectors/routes/routing.json`).
+the route scenarios (`Vectors/routes/routing.json`). A Mac's list is its box's (`macFeatures`, from #191
+step 2; the app gave it before): every box's but a machine's own, and the Mac's own, the same
+with its app closed, when what needs the app answers `503 {"message"}`.
 
 | Name | What it answers |
 | --- | --- |
@@ -3550,7 +3556,7 @@ the route scenarios (`Vectors/routes/routing.json`).
 | `hosts` | a Mac only: `kuvo/hosts…` (with its app closed its box still lists them, and `DELETE` says the app must be open) |
 | `mac` | a Mac only: `kuvo/mac` |
 | `machines` | a Mac only: `kuvo/machines…` (with its app closed its box still lists them, and the rest says the app must be open) |
-| `usage` | the Mac with the app only for now, while it has the usage panel: `kuvo/usage…`, spend and what the box doesn't state of a plan yet (a machine's box can't do this yet, on Linux or a Mac) |
+| `usage` | a Mac only for now: `kuvo/usage…`, from its app while it's open (`404` without the usage panel, `503` with the app closed), spend and what the box doesn't state of a plan yet (a machine's box can't do this yet, on Linux or a Mac). Before #191 step 2 a Mac named it only while its usage panel was there |
 | `limits` | `kuvo/agents/api/kuvo/limits…` and `plan_limits`: each account's plan limits ("Plan limits") |
 
 Here "a Mac" is the box the app runs (`KUVO_BOX=mac`), and "a machine" any box in `~/.kuvo-code`,
@@ -3745,8 +3751,9 @@ application/json`:
   Finder's Trash (bridge 0.9.52); one anywhere else stays where it is;
 - for its link (bridge 0.9.61, "The relay, on this Mac's box"):
   - `link/identity {}` → `{"key", "secret", "sign"}` (each 32 bytes, base64url): this Mac's link
-    key, relay secret and signing key, from the Keychain; `503` while the link isn't wanted or the
-    Keychain won't give them;
+    key, relay secret and signing key, from the Keychain, never asking you to unlock it; `503` while
+    the link isn't wanted or the Keychain won't give them (read again a minute later while it was
+    locked);
   - `link/route {"method", "path", "headers", "body", "phone"}` (`body` base64, `phone` the asking
     phone's key, base64url) → that request's answer as the app gives it: its status, its
     `content-type` and `cache-control`, `x-kuvo-answer: 1` (the app's own answer, whatever its
@@ -3769,13 +3776,14 @@ without them its link stays off and says why. What it keeps of its phones is in 
 as on a machine, without the keys, the relay or its name. Nothing its link meets (the relay gone, a
 frame that isn't one, the app away) stops the box's own routes.
 
-What a phone asks, it answers itself for the areas that have moved onto it and its phones
-(`kuvo/phones…`), and, as every box answers them, `kuvo/file`, `kuvo/sign-in/return`,
+What a phone asks, it answers itself, as a machine's bridge does, with the app open or closed:
+everything but the Mac's own routes, below (from #191 step 2, `kuvo/info` among them). Before, it
+answered only the areas that had moved onto it (a list of them, which the app kept a copy of), and
+handed the app the rest: its phones (`kuvo/phones…`), `kuvo/file`, `kuvo/sign-in/return`,
 `kuvo/accounts/credentials`, `kuvo/shell/<id>/stop`, the engine's API and the coding agents'
-(`api/…`, `kuvo/agents/…`, telling who a message names with `&`; bridge 0.9.64), and `kuvo/named`
-and `kuvo/groups…` (bridge 0.9.65), and a session's own routes: its queue, `stop`, approval,
-decisions, Autopilot (`kuvo/sessions/<id>/autopilot…`) and its move to the coding agents
-(`kuvo/sessions/<id>/agents`, both from bridge 0.9.209); the app did each before. While its
+(`api/…`, `kuvo/agents/…`, telling who a message names with `&`; bridge 0.9.64), `kuvo/named`
+and `kuvo/groups…` (bridge 0.9.65), and a session's Autopilot (`kuvo/sessions/<id>/autopilot…`)
+and move to the coding agents (`kuvo/sessions/<id>/agents`, bridge 0.9.209) were among them. While its
 engine starts, or starts again, the engine's routes answer `503 {"message": "This Mac's engine is starting. Try again in a
 moment."}` (a machine's say "This machine's"). From 0.9.66, once the app has given up on it (no try
 can help; the app's `run/engine-stopped`, why, until it starts or stops it again),
@@ -3783,11 +3791,13 @@ they say "This Mac's engine isn't running." with why, and that Try Again on the 
 from 0.9.201, while it waits for its next try, `run/engine.retry`, that it's trying again); and a
 machine's, while its keeper's next start is more than half a minute away (`run/engine.retry`, when,
 in seconds since 1970), "This machine's engine keeps stopping. It's started again in about N
-minutes." The rest, the Mac's own routes (`kuvo/info`,
-usage, machines, hosts, `kuvo/mac`, `kuvo/claude-code`, asks, the engine starting over), it hands
-the app (`link/route`), as it comes, whether its app or its keeper runs the box (the keeper's host
-passes on the app's answer as it came, `x-kuvo-answer` with it), `503 {"message"}` at once when the
-app isn't answering. Mail your
+minutes." The Mac's own routes (`MAC_APP_ROUTES`, the one list of them: `kuvo/machines…`,
+`kuvo/hosts…`, `kuvo/usage…`, `kuvo/asks…`, `kuvo/mac`, `kuvo/claude-code`, `kuvo/engine/…`), it
+hands the app (`link/route`), as it comes, whether its app or its keeper runs the box (the keeper's
+host passes on the app's answer as it came, `x-kuvo-answer` with it), `503 {"message"}` at once when
+the app isn't answering (of its machines and hosts it says what it can itself then: "Machines").
+The app answers those alone, and hands its box everything else it's asked, its own requests
+too (`BoxClient`), so a route a box gains needs no list. Mail your
 machines send it, it takes itself, as a machine's bridge does ("Peers"): their documents (from
 0.9.62), and their agents, letters and group chats' mail (from 0.9.63).
 What it asks the app goes through the app's `hello` proof first (the host interface, above), and
@@ -3800,13 +3810,23 @@ answers now.
 
 For the app only (anyone else gets `403`):
 
-- `PUT kuvo/link/config {"phones", "machines", "relay", "name", "app", "features"?}`: whether the
-  phone link is on, whether there are machines to meet, the relay (`ws:` or `wss:`), the Mac's
-  name and version as phones are told them, and what it answers (`kuvo/info`'s features, which its
-  agents' mail carries). The link is up while the phone link's on with a phone paired or a
-  pairing waiting, or there are machines. Its keys are asked for before this answers, so a pairing
-  link can be made right after. The box keeps none of it: the app says it again each time the box
-  starts. Answers the link's state.
+- `PUT kuvo/link/config {"phones", "machines", "relay", "name", "app"}`: whether the
+  phone link is on, whether there are machines to meet, the relay (`ws:` or `wss:`), and the Mac's
+  name and version as phones are told them. The link is up while the phone link's on with a phone
+  paired or a pairing waiting, or there are machines. Its keys are asked for before this answers,
+  so a pairing link can be made right after. Answers the link's state. The app says it again each
+  time the box starts, and the box keeps what it last said (from #191 step 2; it kept none before) in
+  `box/run/mac-link.json` (`0600`): the phone link on or off, the relay, the name and version,
+  never its keys nor whether there are machines. A box that starts before the app says it (the
+  keeper's, at login with Background Work on, the app closed) takes it from there, with whether
+  there are machines from the app's list of them (`box/machines.json`, one that won't read
+  counting), so this Mac is back on the relay for your phones and machines before the app opens:
+  the phone link turned off stays off, and machines you've removed don't bring it back. Its keys
+  come through the keeper's host interface then, which never asks you to unlock your Keychain
+  for them (while it's locked, they're refused at once, never with a prompt that would hold up
+  the keeper) and reads them again a minute later while it was locked. The app also says it again when the phone link is turned on or
+  off while it's open. An older app also sent `features`, what it answered: the box says that
+  itself now (`kuvo/info`, its agents' mail), and leaves it.
 - `GET kuvo/link/status` → `{"state": "off" | "connecting" | "connected" | "failed", "reason"?}`;
   `GET kuvo/link/status/events` follows it (ndjson).
 - `GET kuvo/link/phones` → `{"phones", "removed", "pairing"}`: its phones whole (with where each is),
@@ -3839,11 +3859,10 @@ phone asks for, so neither ends the other; with the phone link off it's `409 {"m
 link is off on this Mac."}`. The app's `kuvo/phones/remove` removes as the Mac does (any phone,
 and the removals a machine's phones document brings).
 
-Areas move onto it one at a time. A moved area's routes are answered there for every client: a
-phone's through the Mac's link, which hands them on (`PhoneLink.boxRoutes`), and the Mac app's
-own, which reach every box's routes the same way (`BoxClient`: this Mac's through the link's
-answer, a machine's through `kuvo-link.js box route` over SSH). Until an area moves, the Mac
-answers it itself, as below.
+Its routes are answered there for every client: a phone's through this Mac's link, and the Mac
+app's own, which reach every box's routes the same way (`BoxClient`: this Mac's through the app's
+`PhoneLink`, which hands all but its own routes on, a machine's through `kuvo-link.js box route`
+over SSH). What only the app answers is described below.
 
 ### Projects
 

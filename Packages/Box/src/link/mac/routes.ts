@@ -16,11 +16,11 @@ import { IS_MAC } from "../home";
 import { cutText, LETTER_ID, LETTER_MEMORY, LETTERS_SEEN, SENDING } from "../letters/letter";
 import { lettersSeen } from "../letters/take";
 import { refreshOwn } from "../peers/agents";
-import { keptFeatures, PEER_LOCK, readPeerAgents } from "../peers/directory";
+import { PEER_LOCK, readPeerAgents } from "../peers/directory";
 import { cleanMoved, cleanPeer, fitsPeer, KEY, MOST_PEERS, ownKey, peersOf } from "../peers/known";
 import { readPersonalities } from "../personalities/library";
 import { macLink, readLink, updateLink } from "../state";
-import { macKeys, macLinkCheck, tellGone } from "./link";
+import { macKeys, macLinkCheck, saveMacConfig, tellGone } from "./link";
 import { macSendOutbox } from "./peers";
 import type { SignedDoc } from "../../shared/documents";
 import type { Peer } from "../peers/known";
@@ -85,16 +85,18 @@ export async function* macLinkRoute(route: string, request: LinkRequest, signal:
   switch (route) {
     case "kuvo/link/config": {
       if (method !== "PUT") return yield* json(405, {});
-      const given = parsed(request.body) as Body<"relay" | "phones" | "machines" | "name" | "app" | "features">;
+      // (An older app also says what it answers, `features`: the box says that itself now.)
+      const given = parsed(request.body) as Body<"relay" | "phones" | "machines" | "name" | "app">;
       let relay = null;
       try { relay = given?.relay ? new URL(String(given.relay)) : null; } catch {}
       if (!isObject(given) || typeof given.phones !== "boolean" || typeof given.machines !== "boolean" || !relay || !["ws:", "wss:"].includes(relay.protocol)) {
         return yield* json(400, { message: "Say whether the phone link is on (phones) and there are machines (machines), and the relay." });
       }
-      const config = { phones: given.phones, machines: given.machines, relay: relay.toString().replace(/\/$/, ""), name: String(given.name ?? "Mac").slice(0, 100), app: String(given.app ?? ""),
-        ...(Array.isArray(given.features) ? { features: keptFeatures(given.features) } : {}) };
+      const config = { phones: given.phones, machines: given.machines, relay: relay.toString().replace(/\/$/, ""), name: String(given.name ?? "Mac").slice(0, 100), app: String(given.app ?? "") };
       const before = macLink.config;
       macLink.config = config;
+      // Kept, so the link comes back as it was when the box starts again before the app opens.
+      saveMacConfig(config);
       if (macLink.overlay) macLink.overlay = { ...macLink.overlay, relay: config.relay, name: config.name };
       // Phones not let in any more (the phone link off) lose what they have open; another relay
       // means another connection.

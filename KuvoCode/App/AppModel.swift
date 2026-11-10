@@ -393,7 +393,6 @@ final class AppModel {
         // This Mac's link is its box's: the app tells it what's wanted, and answers what it asks.
         phoneLink.box = { [weak self] in self?.box(BoxClient.mac) }
         host.phoneLink = phoneLink
-        phoneLink.engineStarted = { [weak self] in self?.engineStarted }
         phoneLink.restartEngine = { [weak self] in Task { await self?.restart() } }
     }
 
@@ -424,8 +423,6 @@ final class AppModel {
 
     /// The engine this Mac runs (KUVO_OPENCODE_BINARY's, or the one installed), once it has started.
     private(set) var engineBinary: URL?
-    /// When the engine running now came up, for a phone to tell it from the one before a restart.
-    @ObservationIgnored private(set) var engineStarted: Date?
 
     /// A macOS prompt is on screen, like "would like to access files in your Desktop folder":
     /// those come from UserNotificationCenter, whose windows show only while it asks.
@@ -535,7 +532,6 @@ final class AppModel {
             // What this Mac's box and your machines say is moving, from now on.
             Task { await moves.reloadAll() }
             usage.api = api
-            engineStarted = .now
             engine = .ready
             #if DEBUG
             E2E.note(endpoint)

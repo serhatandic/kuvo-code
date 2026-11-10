@@ -25,5 +25,5 @@ Object.assign(process.env, {
 removeAtEnd(root);
 const { contract } = await import("./contract-runner.js");
 
-// The areas this Mac's box answers (PhoneLink.boxRoutes) that are written as scenarios here.
+// Scenarios of what this Mac's box answers (all but the app's own routes, PhoneLink.appRoutes).
 contract({ box: "mac", root, files: ["bots.json"] });
