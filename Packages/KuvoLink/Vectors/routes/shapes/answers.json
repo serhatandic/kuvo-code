@@ -3004,7 +3004,31 @@
             "literal": "accounts.refresh"
            },
            {
+            "literal": "agent-tools"
+           },
+           {
             "literal": "agents"
+           },
+           {
+            "literal": "approval"
+           },
+           {
+            "literal": "approval.default"
+           },
+           {
+            "literal": "approval.fullAccess"
+           },
+           {
+            "literal": "approval.held"
+           },
+           {
+            "literal": "approval.reviewer"
+           },
+           {
+            "literal": "approval.seen"
+           },
+           {
+            "literal": "approval.stopped"
            },
            {
             "literal": "artifacts"
@@ -3016,10 +3040,19 @@
             "literal": "attention"
            },
            {
+            "literal": "autopilot"
+           },
+           {
             "literal": "bots"
            },
            {
             "literal": "bots.edit"
+           },
+           {
+            "literal": "bots.events"
+           },
+           {
+            "literal": "bots.job"
            },
            {
             "literal": "bots.keys"
@@ -3059,6 +3092,9 @@
            },
            {
             "literal": "git"
+           },
+           {
+            "literal": "git.backups"
            },
            {
             "literal": "git.changes.count"
@@ -3106,6 +3142,12 @@
             "literal": "keys"
            },
            {
+            "literal": "letters-read"
+           },
+           {
+            "literal": "limits"
+           },
+           {
             "literal": "mcp.catalog"
            },
            {
@@ -3124,15 +3166,6 @@
             "literal": "personalities"
            },
            {
-            "literal": "plugins.search"
-           },
-           {
-            "literal": "programs"
-           },
-           {
-            "literal": "providers.models"
-           },
-           {
             "literal": "personalities.events"
            },
            {
@@ -3142,7 +3175,22 @@
             "literal": "phones.pair"
            },
            {
+            "literal": "plugins.search"
+           },
+           {
+            "literal": "programs"
+           },
+           {
             "literal": "projects"
+           },
+           {
+            "literal": "providers.models"
+           },
+           {
+            "literal": "queue"
+           },
+           {
+            "literal": "queue.waits"
            },
            {
             "literal": "reviews"
@@ -3154,10 +3202,22 @@
             "literal": "reviews.scopes"
            },
            {
+            "literal": "sandbox"
+           },
+           {
+            "literal": "sandbox.asks"
+           },
+           {
+            "literal": "sandbox.check"
+           },
+           {
             "literal": "search"
            },
            {
             "literal": "sessions.agents"
+           },
+           {
+            "literal": "sessions.start"
            },
            {
             "literal": "shell.stop"
@@ -3175,6 +3235,9 @@
             "literal": "update"
            },
            {
+            "literal": "vault"
+           },
+           {
             "literal": "wakes"
            },
            {
@@ -3184,43 +3247,13 @@
             "literal": "wakes.events"
            },
            {
-            "literal": "worktrees"
-           },
-           {
-            "literal": "worktrees.events"
-           },
-           {
-            "literal": "worktrees.where"
-           },
-           {
-            "literal": "bots.events"
-           },
-           {
-            "literal": "bots.job"
-           },
-           {
-            "literal": "agent-tools"
-           },
-           {
-            "literal": "sessions.start"
-           },
-           {
-            "literal": "letters-read"
-           },
-           {
-            "literal": "work.elsewhere"
-           },
-           {
-            "literal": "queue"
-           },
-           {
-            "literal": "queue.waits"
-           },
-           {
             "literal": "work"
            },
            {
-            "literal": "work.projects"
+            "literal": "work-queue"
+           },
+           {
+            "literal": "work.elsewhere"
            },
            {
             "literal": "work.goals"
@@ -3232,52 +3265,19 @@
             "literal": "work.goals.projects"
            },
            {
+            "literal": "work.projects"
+           },
+           {
             "literal": "work.unanswering"
            },
            {
-            "literal": "autopilot"
+            "literal": "worktrees"
            },
            {
-            "literal": "vault"
+            "literal": "worktrees.events"
            },
            {
-            "literal": "sandbox"
-           },
-           {
-            "literal": "sandbox.check"
-           },
-           {
-            "literal": "sandbox.asks"
-           },
-           {
-            "literal": "approval"
-           },
-           {
-            "literal": "approval.reviewer"
-           },
-           {
-            "literal": "git.backups"
-           },
-           {
-            "literal": "approval.fullAccess"
-           },
-           {
-            "literal": "approval.held"
-           },
-           {
-            "literal": "approval.default"
-           },
-           {
-            "literal": "approval.seen"
-           },
-           {
-            "literal": "approval.stopped"
-           },
-           {
-            "literal": "limits"
-           },
-           {
-            "literal": "work-queue"
+            "literal": "worktrees.where"
            },
            {
             "literal": "accounts.ended"
@@ -3342,7 +3342,31 @@
             "literal": "accounts.refresh"
            },
            {
+            "literal": "agent-tools"
+           },
+           {
             "literal": "agents"
+           },
+           {
+            "literal": "approval"
+           },
+           {
+            "literal": "approval.default"
+           },
+           {
+            "literal": "approval.fullAccess"
+           },
+           {
+            "literal": "approval.held"
+           },
+           {
+            "literal": "approval.reviewer"
+           },
+           {
+            "literal": "approval.seen"
+           },
+           {
+            "literal": "approval.stopped"
            },
            {
             "literal": "artifacts"
@@ -3354,10 +3378,19 @@
             "literal": "attention"
            },
            {
+            "literal": "autopilot"
+           },
+           {
             "literal": "bots"
            },
            {
             "literal": "bots.edit"
+           },
+           {
+            "literal": "bots.events"
+           },
+           {
+            "literal": "bots.job"
            },
            {
             "literal": "bots.keys"
@@ -3397,6 +3430,9 @@
            },
            {
             "literal": "git"
+           },
+           {
+            "literal": "git.backups"
            },
            {
             "literal": "git.changes.count"
@@ -3444,6 +3480,12 @@
             "literal": "keys"
            },
            {
+            "literal": "letters-read"
+           },
+           {
+            "literal": "limits"
+           },
+           {
             "literal": "mcp.catalog"
            },
            {
@@ -3462,15 +3504,6 @@
             "literal": "personalities"
            },
            {
-            "literal": "plugins.search"
-           },
-           {
-            "literal": "programs"
-           },
-           {
-            "literal": "providers.models"
-           },
-           {
             "literal": "personalities.events"
            },
            {
@@ -3480,7 +3513,22 @@
             "literal": "phones.pair"
            },
            {
+            "literal": "plugins.search"
+           },
+           {
+            "literal": "programs"
+           },
+           {
             "literal": "projects"
+           },
+           {
+            "literal": "providers.models"
+           },
+           {
+            "literal": "queue"
+           },
+           {
+            "literal": "queue.waits"
            },
            {
             "literal": "reviews"
@@ -3492,10 +3540,22 @@
             "literal": "reviews.scopes"
            },
            {
+            "literal": "sandbox"
+           },
+           {
+            "literal": "sandbox.asks"
+           },
+           {
+            "literal": "sandbox.check"
+           },
+           {
             "literal": "search"
            },
            {
             "literal": "sessions.agents"
+           },
+           {
+            "literal": "sessions.start"
            },
            {
             "literal": "shell.stop"
@@ -3513,6 +3573,9 @@
             "literal": "update"
            },
            {
+            "literal": "vault"
+           },
+           {
             "literal": "wakes"
            },
            {
@@ -3522,43 +3585,13 @@
             "literal": "wakes.events"
            },
            {
-            "literal": "worktrees"
-           },
-           {
-            "literal": "worktrees.events"
-           },
-           {
-            "literal": "worktrees.where"
-           },
-           {
-            "literal": "bots.events"
-           },
-           {
-            "literal": "bots.job"
-           },
-           {
-            "literal": "agent-tools"
-           },
-           {
-            "literal": "sessions.start"
-           },
-           {
-            "literal": "letters-read"
-           },
-           {
-            "literal": "work.elsewhere"
-           },
-           {
-            "literal": "queue"
-           },
-           {
-            "literal": "queue.waits"
-           },
-           {
             "literal": "work"
            },
            {
-            "literal": "work.projects"
+            "literal": "work-queue"
+           },
+           {
+            "literal": "work.elsewhere"
            },
            {
             "literal": "work.goals"
@@ -3570,52 +3603,19 @@
             "literal": "work.goals.projects"
            },
            {
+            "literal": "work.projects"
+           },
+           {
             "literal": "work.unanswering"
            },
            {
-            "literal": "autopilot"
+            "literal": "worktrees"
            },
            {
-            "literal": "vault"
+            "literal": "worktrees.events"
            },
            {
-            "literal": "sandbox"
-           },
-           {
-            "literal": "sandbox.check"
-           },
-           {
-            "literal": "sandbox.asks"
-           },
-           {
-            "literal": "approval"
-           },
-           {
-            "literal": "approval.reviewer"
-           },
-           {
-            "literal": "git.backups"
-           },
-           {
-            "literal": "approval.fullAccess"
-           },
-           {
-            "literal": "approval.held"
-           },
-           {
-            "literal": "approval.default"
-           },
-           {
-            "literal": "approval.seen"
-           },
-           {
-            "literal": "approval.stopped"
-           },
-           {
-            "literal": "limits"
-           },
-           {
-            "literal": "work-queue"
+            "literal": "worktrees.where"
            }
           ]
          }

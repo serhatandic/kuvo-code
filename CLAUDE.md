@@ -13,6 +13,7 @@ Kuvo Code is a small distributed system. Build every feature for that system, ne
   - Never build a feature only into the Mac app, or only for this Mac's box, or so it works only through the Mac's SSH connection.
   - Where a box can't do something yet, say so plainly in the UI and in your report, rather than quietly making the Mac a hub.
   - **Box code runs on both macOS and Linux.** This Mac's box and each machine's, on Linux or a Mac, run the same code (`IS_MAC` is the box with the app next to it, not the system), so anything on the box side works on both. Prefer code that's the same on both (Node and Bun APIs that behave alike); where they differ (file watching, processes and `/proc`, paths, the keeper, the shell, the Keychain versus files), handle both explicitly, in one place, and test each. Check a box change on a Linux machine too (a test folder of your own on devbox) before calling it done.
+  - **Never bump or hand-edit what's worked out, so parallel branches merge cleanly** (CONTRIBUTING.md, "What branches don't edit by hand"): `BRIDGE_VERSION` is a hash `build-box.sh` writes; a new feature name is one line, in order, in `FEATURES` (`src/shared/features.ts`); `answers.json`, `routes/features.json`, `BoxFeatures.swift`, `kuvo-link.js` and `kuvo-agents.js` are written by `route-shapes.sh`, `build-box.sh` and `build-agents.sh`.
 
 ### Logic goes in the box, never in a client (strict)
 

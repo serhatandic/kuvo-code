@@ -1,13 +1,14 @@
 #!/bin/sh
-# Writes Packages/KuvoLink/Vectors/routes/shapes/answers.json from Packages/Box/src/shared/routes:
-# every route's answers, as the contract suite holds both boxes to them (contract-runner.js and
-# KuvoCodeTests/RouteContractTests.swift read it). Run it after changing a shape, and commit the
-# result. `--check` says whether the file is what the shapes write, as CI checks.
+# Writes what's kept from Packages/Box/src/shared, so it's held by hand in one place only
+# (scripts/route-shapes.ts says how): Packages/KuvoLink/Vectors/routes/shapes/answers.json, every
+# route's answers, as the contract suite holds both boxes to them (contract-runner.js and
+# KuvoCodeTests/RouteContractTests.swift read it); Packages/KuvoLink/Vectors/routes/features.json,
+# the scenario that holds each box's `kuvo/info` to its features; and KuvoCode/Stores/BoxFeatures.swift,
+# the Mac app's list of them. Run it after changing a shape or a feature, and commit the result.
+# `--check` says whether the files are what the sources write, as CI checks.
 #   BUN   the Bun to run with (as scripts/build-box.sh finds it)
 set -eu
 cd "$(dirname "$0")/.."
-
-OUT=Packages/KuvoLink/Vectors/routes/shapes/answers.json
 
 . scripts/real-app-guard.sh
 if [ -z "${BUN:-}" ]; then
@@ -22,20 +23,8 @@ fi
 [ -n "${BUN:-}" ] || { echo "scripts/route-shapes.sh needs Bun: install it, or name one with BUN=." >&2; exit 1; }
 real_app_guard "scripts/route-shapes.sh" "$BUN"
 
-write() {
-  BUN_BE_BUN=1 "$BUN" -e '
-    const { ERROR, PASSED_ON, ROUTES } = await import(process.argv[1] + "/Packages/Box/src/shared/routes/index.ts");
-    const about = "What each route of a box answers (scripts/route-shapes.sh writes it from Packages/Box/src/shared/routes; never edit it): its JSON by status, or \"bytes\". A shape is \"string\", \"number\", \"bool\", \"null\", \"any\", {list}, {map}, {object} (those fields and no others; a name ending in ? may be left out), {oneOf} or {literal}. A refusal (400 and over) in JSON is `error`, unless its route has a shape of its own for that status; what starts with a `passedOn` path is the engine'"'"'s or the agents bridge'"'"'s own.";
-    process.stdout.write(JSON.stringify({ about, error: ERROR, passedOn: PASSED_ON, routes: ROUTES }, null, 1) + "\n");
-  ' "$PWD"
-}
-
 if [ "${1:-}" = "--check" ]; then
-  write | cmp -s - "$OUT" && exit 0
-  echo "$OUT isn't what Packages/Box/src/shared/routes writes: run ./scripts/route-shapes.sh and commit it." >&2
-  exit 1
+  BUN_BE_BUN=1 "$BUN" scripts/route-shapes.ts "$PWD" --check
+else
+  BUN_BE_BUN=1 "$BUN" scripts/route-shapes.ts "$PWD"
 fi
-
-mkdir -p "$(dirname "$OUT")"
-write > "$OUT"
-echo "Wrote $OUT"

@@ -1732,7 +1732,8 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   with the Mac closed too.
 - `kuvo/info`: what the host is and runs: `kind` (`mac` or `machine`), `name`, `engine` (its
   version), a Mac's `app` and a machine's `bridge` version (to show, never to compare: check
-  `features`), `features` (below), whether its coding agents' bridge is up (`agents`), and
+  `features`; after bridge 0.9.211, `bridge` is a hash of the link as built, which changes with
+  every change, rather than a number), `features` (below), whether its coding agents' bridge is up (`agents`), and
   `started`, when the engine running now came up, in seconds since 1970 (null while none runs): a
   restart changes it, so a phone tells the new engine from the old. Both name the folder of chats
   (`chats`: conversations of no project, made if it isn't there yet, so a phone can start the first
@@ -3206,7 +3207,16 @@ Mac, its app for its keys), and on a
 machine `409` for `config`, `config.apply`, `keys`, `mcp.catalog` and `integrations` until a Mac has made its
 settings its own. A name comes with what it names and never changes meaning; one the client
 doesn't know, it ignores. Both boxes are held to their lists by
-the route scenarios (`Vectors/routes/routing.json`).
+the route scenario `Vectors/routes/features.json`, which `scripts/route-shapes.sh` writes from the
+box's lists (`FEATURES` and `MACHINE_FEATURES` in `Packages/Box/src/shared/features.ts`,
+`MAC_FEATURES` in `shared/routes/mac.ts`), as it writes the Mac app's (`BoxFeatures.swift`). A
+note of when a name came in names the bridge's version up to 0.9.211; after that, the bridge's
+version is a hash, and a name is its own mark.
+
+A box's agents' mail gives its names too (`features`, "Peers"), those a box from before they were
+in order checks of a peer first (`groups.seats`, `letters-read`, `moves`, `moves.agents`,
+`moves.check`, `work.elsewhere`): such a box kept only the first 80 a peer gave. A box now keeps
+400.
 
 | Name | What it answers |
 | --- | --- |

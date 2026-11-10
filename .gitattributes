@@ -1,1 +1,8 @@
 CHANGELOG.md merge=union
+# Lists that many branches add to, one entry a line, in order: union keeps the lines both sides
+# added instead of a conflict (CONTRIBUTING.md, "What branches don't edit by hand"). Only where
+# every line of a list is whole by itself (a trailing comma on each), and nothing else in the file
+# is edited much; never a JSON file, whose last entry has no comma. A union that leaves a list out
+# of order, or a name twice, fails the box's tests (test/features.test.ts) and `route-shapes --check`.
+Packages/Box/src/shared/features.ts merge=union
+KuvoCode/Stores/BoxFeatures.swift merge=union

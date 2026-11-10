@@ -5,8 +5,18 @@
 import { any, bool, type Infer, list, literal, NOTHING, object, type RouteShape, string } from "../shape";
 
 /** What only a Mac answers, besides what every box does (`FEATURES`): `usage` while it has the
- * usage panel (PROTOCOL.md, "Features"). */
-export const MAC_FEATURES = ["accounts.ended", "claude-code", "hosts", "mac", "machines", "usage"] as const;
+ * usage panel (PROTOCOL.md, "Features"). One a line, in order, as `FEATURES` are. */
+export const MAC_FEATURES = [
+  "accounts.ended",
+  "claude-code",
+  "hosts",
+  "mac",
+  "machines",
+  "usage",
+] as const;
+
+/** Of those, what a Mac answers only at times: `usage` while it has the usage panel. */
+export const MAC_FEATURES_AT_TIMES = ["usage"] as const satisfies readonly (typeof MAC_FEATURES)[number][];
 
 /** Your machines' bridges, which phones reach directly with the Mac closed: each by its id
  * (`machine`), where it is on the relay, whether another Mac gives it its settings (`anotherMac`),

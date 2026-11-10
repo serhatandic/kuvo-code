@@ -2050,12 +2050,23 @@ var FEATURES = [
   "accounts.ended",
   "accounts.found",
   "accounts.refresh",
+  "agent-tools",
   "agents",
+  "approval",
+  "approval.default",
+  "approval.fullAccess",
+  "approval.held",
+  "approval.reviewer",
+  "approval.seen",
+  "approval.stopped",
   "artifacts",
   "asks",
   "attention",
+  "autopilot",
   "bots",
   "bots.edit",
+  "bots.events",
+  "bots.job",
   "bots.keys",
   "bots.make",
   "branch",
@@ -2069,6 +2080,7 @@ var FEATURES = [
   "folders",
   "folders.files",
   "git",
+  "git.backups",
   "git.changes.count",
   "git.merge",
   "git.pull-request",
@@ -2084,65 +2096,55 @@ var FEATURES = [
   "handoff",
   "integrations",
   "keys",
+  "letters-read",
+  "limits",
   "mcp.catalog",
   "moves",
   "moves.agents",
   "moves.check",
   "named",
   "personalities",
-  "plugins.search",
-  "programs",
-  "providers.models",
   "personalities.events",
   "phones",
   "phones.pair",
+  "plugins.search",
+  "programs",
   "projects",
+  "providers.models",
+  "queue",
+  "queue.waits",
   "reviews",
   "reviews.parts",
   "reviews.scopes",
+  "sandbox",
+  "sandbox.asks",
+  "sandbox.check",
   "search",
   "sessions.agents",
+  "sessions.start",
   "shell.stop",
   "sign-in.return",
   "skills",
   "skills.trash",
   "update",
+  "vault",
   "wakes",
   "wakes.edit",
   "wakes.events",
-  "worktrees",
-  "worktrees.events",
-  "worktrees.where",
-  "bots.events",
-  "bots.job",
-  "agent-tools",
-  "sessions.start",
-  "letters-read",
-  "work.elsewhere",
-  "queue",
-  "queue.waits",
   "work",
-  "work.projects",
+  "work-queue",
+  "work.elsewhere",
   "work.goals",
   "work.goals.apps",
   "work.goals.projects",
+  "work.projects",
   "work.unanswering",
-  "autopilot",
-  "vault",
-  "sandbox",
-  "sandbox.check",
-  "sandbox.asks",
-  "approval",
-  "approval.reviewer",
-  "git.backups",
-  "approval.fullAccess",
-  "approval.held",
-  "approval.default",
-  "approval.seen",
-  "approval.stopped",
-  "limits",
-  "work-queue"
+  "worktrees",
+  "worktrees.events",
+  "worktrees.where"
 ];
+var MACHINE_FEATURES = ["engine.start", "update"];
+var MAC_BOX_FEATURES = FEATURES.filter((name) => !MACHINE_FEATURES.includes(name));
 
 // Packages/Box/src/link/areas/projects.ts
 import fs41 from "node:fs";
@@ -8587,7 +8589,7 @@ var keptAgent = ({ session, name, kind, project, about, machine, id, look }) => 
   ...typeof about === "string" && about ? { about: about.slice(0, 500) } : {},
   ...typeof machine === "string" && machine ? { machine: machine.slice(0, 200) } : {}
 });
-var keptFeatures = (features) => Array.isArray(features) ? features.filter((each) => typeof each === "string" && each.length <= 60).slice(0, 80) : [];
+var keptFeatures = (features) => Array.isArray(features) ? features.filter((each) => typeof each === "string" && each.length <= 60).slice(0, 400) : [];
 var keptMoved = (moved) => moved.filter((each) => isObject(each) && typeof each.session === "string" && /^ses_[A-Za-z0-9]{1,60}$/.test(each.session) && typeof each.key === "string" && KEY.test(each.key) && typeof each.at === "number").slice(0, 400).map(({ session, key, at }) => ({ session, key, at }));
 function takeAgents(sender, given, file = PEER_AGENTS_FILE, lock = PEER_LOCK) {
   if (!isObject(given) || typeof given.at !== "number" || !Array.isArray(given.list))
@@ -13137,6 +13139,8 @@ async function refreshOwn(readEngine, link = readLink()) {
   return ownList;
 }
 var ownFeatures = () => IS_MAC && Array.isArray(macLink.config?.features) ? macLink.config.features : FEATURES;
+var CHECKED_BY_OLDER_PEERS = ["groups.seats", "letters-read", "moves", "moves.agents", "moves.check", "work.elsewhere"];
+var mailedFeatures = (features) => [...CHECKED_BY_OLDER_PEERS.filter((name) => features.includes(name)), ...features.filter((name) => !CHECKED_BY_OLDER_PEERS.includes(name))];
 var toldPeers = new Map;
 async function announce(host, readEngine, link = readLink(), now = Date.now(), ask = false) {
   if (!link?.key)
@@ -13157,7 +13161,7 @@ async function announce(host, readEngine, link = readLink(), now = Date.now(), a
     let bytes = null, sent = [];
     for (const count of [ownList.length, Math.floor(ownList.length / 2), Math.floor(ownList.length / 4)]) {
       sent = ownList.slice(0, count);
-      bytes = mailFor(peer, { agents: { at: now, list: sent, features: ownFeatures(), moved }, ...docs, at: now, ...ask ? { ask: "agents" } : {} }, link);
+      bytes = mailFor(peer, { agents: { at: now, list: sent, features: mailedFeatures(ownFeatures()), moved }, ...docs, at: now, ...ask ? { ask: "agents" } : {} }, link);
       if (bytes)
         break;
     }
@@ -29190,7 +29194,7 @@ import fs95 from "node:fs";
 import path102 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "0.9.211";
+var BRIDGE_VERSION = "3d88607df2c3";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {

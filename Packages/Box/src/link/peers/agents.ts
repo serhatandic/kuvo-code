@@ -133,6 +133,16 @@ export async function refreshOwn(readEngine: () => Target, link: LinkState | nul
 // list, as the app gives it (`kuvo/link/config`).
 const ownFeatures = (): readonly string[] => (IS_MAC && Array.isArray(macLink.config?.features) ? macLink.config.features : FEATURES);
 
+// The names a box from before the lists were in order checks of its peers (moves, calls, letters
+// and group chats' seats). Such a box keeps only the first 80 names a peer's mail gives
+// (`keptFeatures`), and in order there are more before some of these: so they go first. Boxes now
+// keep many more, so a name added later needn't be here.
+const CHECKED_BY_OLDER_PEERS = ["groups.seats", "letters-read", "moves", "moves.agents", "moves.check", "work.elsewhere"];
+
+/** `features` as this box's mail gives them: those older boxes check of a peer first. */
+export const mailedFeatures = (features: readonly string[]): string[] =>
+  [...CHECKED_BY_OLDER_PEERS.filter(name => features.includes(name)), ...features.filter(name => !CHECKED_BY_OLDER_PEERS.includes(name))];
+
 // Tells each peer this box's agents: when they change, and every ten minutes, with a digest of
 // its documents to each that takes them, so one that missed what was given gets it then (PROTOCOL.md,
 // "Documents"). `told` remembers what went to whom, and when. `ask`: just connected, so each is
@@ -156,7 +166,7 @@ export async function announce(host: Pick<LinkHost, "send">, readEngine: () => T
     let bytes: Buffer | null = null, sent: ListedAgent[] = [];
     for (const count of [ownList.length, Math.floor(ownList.length / 2), Math.floor(ownList.length / 4)]) {
       sent = ownList.slice(0, count);
-      bytes = mailFor(peer, { agents: { at: now, list: sent, features: ownFeatures(), moved }, ...docs, at: now, ...(ask ? { ask: "agents" } : {}) }, link);
+      bytes = mailFor(peer, { agents: { at: now, list: sent, features: mailedFeatures(ownFeatures()), moved }, ...docs, at: now, ...(ask ? { ask: "agents" } : {}) }, link);
       if (bytes) break;
     }
     if (!bytes) continue;

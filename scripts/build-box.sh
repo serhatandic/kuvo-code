@@ -33,9 +33,22 @@ fi
 real_app_guard "scripts/build-box.sh" "$BUN"
 
 # For Node too, not only Bun: the bridge's tests import it with Node, and it uses Node's modules only.
+# Its version (BRIDGE_VERSION, Packages/Box/src/link/version.ts) is the first 12 hex digits of the
+# SHA-256 of what's built with the version as its source has it, written in its place: it changes
+# with every change to the link, the same on every computer, and no branch bumps it by hand.
+SOURCE_VERSION=0.0.0-from-its-sources
 build() {
-  BUN_BE_BUN=1 "$BUN" build Packages/Box/src/link/main.ts --target=node --format=esm --outfile "$1" \
+  raw=$(mktemp "${TMPDIR:-/tmp}/kuvo-link-raw.XXXXXX")
+  BUN_BE_BUN=1 "$BUN" build Packages/Box/src/link/main.ts --target=node --format=esm --outfile "$raw" \
     --banner "// Built from Packages/Box/src by scripts/build-box.sh: change those, then run it. Never edit this file." >/dev/null
+  if ! grep -q "\"$SOURCE_VERSION\"" "$raw"; then
+    rm -f "$raw"
+    echo "scripts/build-box.sh: the built link doesn't have \"$SOURCE_VERSION\" (Packages/Box/src/link/version.ts) to write its version in." >&2
+    exit 1
+  fi
+  hash=$(shasum -a 256 "$raw" | cut -c1-12)
+  sed "s/\"$(printf '%s' "$SOURCE_VERSION" | sed 's/\./\\./g')\"/\"$hash\"/g" "$raw" >"$1"
+  rm -f "$raw"
 }
 
 if [ "${1:-}" = "--check" ]; then
