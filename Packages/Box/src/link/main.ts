@@ -52,6 +52,7 @@ import { keepEngineDefaults } from "./engine/defaults";
 import { watchBox } from "./engine/watch";
 import { watchMoves } from "./moves/move";
 import { writePrivate } from "./files";
+import { browserStatus, installBrowser, startBrowserInstall } from "./browser/install";
 import { BRIDGE_FILE, IS_MAC, K, NEEDED_FILE, OWN_RUNTIME, PID_FILE, REAL_BOX, RUN, scriptIs, socketKey, takeVaultSecrets, VERSION_FILE } from "./home";
 import { isBridge, keepKeeper, needed, noLongerNeeded, runningBridge, startBridge } from "./keeper";
 import { noteRelay } from "./letters/leave";
@@ -60,6 +61,8 @@ import { SENDING } from "./letters/letter";
 import { watchFolders } from "./follow";
 import { pushRows } from "./work/elsewhere";
 import { pushNumbers } from "./work-queue/numbers";
+import { pushQueues } from "./work-queue/across";
+import { handUpkeepSoon } from "./work-queue/hand";
 import { clearStaging } from "./work-queue/ops";
 import { macLinkCheck } from "./mac/link";
 import { macNoticeHold, macTell } from "./mac/notices";
@@ -175,7 +178,10 @@ export { answered, deliverLeftAnswers, letterMail, letterWent, sendOutbox } from
 export { takeLetter } from "./letters/take";
 export { callAs, callsBack, takeCall } from "./letters/calls";
 export { pushRows, takeRows } from "./work/elsewhere";
-export { askToSend, blockArrived, BLOCK as QUEUE_BLOCK, CLAIM_REACH as QUEUE_CLAIM_REACH, claimNumbers, giveBlock, LOW as QUEUE_LOW, primaryOf, readNumbers, reclaimWaiting, takeBlock, takeNumber } from "./work-queue/numbers";
+export { askToSend, blockArrived, BLOCK as QUEUE_BLOCK, CLAIM_REACH as QUEUE_CLAIM_REACH, claimNumbers, giveBlock, LOW as QUEUE_LOW, notePrimaryNow, primaryOf, pushNumbers, readNumbers, reclaimWaiting, takeBlock, takeNumber, takeNumbersMail } from "./work-queue/numbers";
+export { forgetPushed as forgetQueuesTold, itemsElsewhere, pushQueues, takeWorkQueueMail, tellingNow as queueTellingNow, tellQueuesAgain } from "./work-queue/across";
+export { handUpkeep } from "./work-queue/hand";
+export { mailsFor as queueMailsFor, takePart as takeQueuePart } from "./work-queue/parts";
 export { parseBacklog } from "./work-queue/import";
 export { carryWorkQueue, forgetWorkQueues, packWorkQueues, placeWorkQueues } from "./work-queue/moves";
 export { readReach } from "./peers/reach";
@@ -399,8 +405,11 @@ async function run(): Promise<void> {
     deliverLeftAnswers().catch(() => {});
     // The rows of sessions here whose lead lives on another computer, told to it as they change.
     if (current?.welcomed) pushRows(current, readLink(), peerTargets()).catch(() => {});
-    // The Work Queue's ask for more numbers, to the primary, while one is under way.
+    // The Work Queue's ask for more numbers, to the primary, while one is under way; and this box's
+    // queue told to your other computers as it changes, with what it's handing to theirs.
     try { pushNumbers(current); } catch {}
+    if (current?.welcomed) pushQueues(current, readLink(), peerTargets()).catch(() => {});
+    else try { handUpkeepSoon(readLink()); } catch {}
   }, 3_000);
 
   let attempt = 0;
@@ -907,12 +916,30 @@ if (main) {
     }
     console.log(JSON.stringify(outcome));
   }
+  // The browser agents use here (PROTOCOL.md, "The browser on a machine"): `browser install [--now]
+  // [--repair]` sets it up, as the keeper starts it (one at a time); `browser start [--now]
+  // [--repair]` has it set up in a process of its own, as a browser tool does, and says how it
+  // stands then; `browser status` says how it stands.
+  else if (mode === "browser") {
+    const args = process.argv.slice(3);
+    if (argument === "install") {
+      const outcome = await installBrowser({ now: args.includes("--now"), repair: args.includes("--repair") });
+      console.log(JSON.stringify({ outcome, ...browserStatus() }));
+    } else if (argument === "start") {
+      console.log(JSON.stringify(startBrowserInstall({ now: args.includes("--now"), repair: args.includes("--repair") })));
+    } else if (argument === "status") {
+      console.log(JSON.stringify(browserStatus()));
+    } else {
+      console.error("Usage: kuvo-link.js browser install|start [--now] [--repair] | status");
+      process.exit(2);
+    }
+  }
   else if (mode === "selftest") {
     const ok = selftest();
     console.log(ok ? "ok" : "failed");
     process.exit(ok ? 0 : 1);
   } else {
-    console.error("Usage: kuvo-link.js run | serve | setup | pair [relay] | box <command> | leave <mac> | engine-config | login-path | update [--now] | selftest");
+    console.error("Usage: kuvo-link.js run | serve | setup | pair [relay] | box <command> | leave <mac> | engine-config | login-path | update [--now] | browser install|start|status | selftest");
     process.exit(2);
   }
 }

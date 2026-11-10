@@ -15,7 +15,7 @@ import path from "node:path";
 import { script, sshAgentsOf } from "./bot-keys-scenarios.js";
 import { atEnd, removeAtEnd } from "./at-end.js";
 // (Each test fails at its own time limit when what it waits for never comes, rather than holding up the run.)
-import { appears, asked, before, test } from "./vault-waits.js";
+import { appears, asked, before, test as vaultTest } from "./vault-waits.js";
 
 // (A short folder: the vault's socket lives in it, and a socket's path can't be long. Not in the
 // temporary folder: where the system's can't be used (an agent's shell may write only in Kuvo Code's
@@ -108,7 +108,14 @@ async function start(more = {}) {
     const response = await fetch(`${url}/${route}`, { method, headers: { authorization: `Basic ${Buffer.from("opencode:box-pw").toString("base64")}`, "content-type": "application/json" }, body: body && method !== "GET" ? JSON.stringify(body) : undefined });
     return { status: response.status, value: await response.json().catch(() => ({})) };
   };
-  const stop = async () => { child.stdin.end(); child.kill("SIGTERM"); await exited; return out + err; };
+  let stopping;
+  const stop = () => stopping ??= (async () => {
+    try { await cleanItems(); } finally {
+      child.stdin.end(); child.kill("SIGTERM"); await exited;
+    }
+    return out + err;
+  })();
+  atEnd(stop);
   // What the vault asks you, once it asks.
   const asks = () => asked(`${url}/kuvo/vault/asks/events`, "box-pw");
   return { local, stop, asks };
@@ -122,7 +129,9 @@ async function fromMac(method, route, body, key) {
   child.stdout.setEncoding("utf8");
   for await (const chunk of child.stdout) out += chunk;
   const answer = JSON.parse(out.trim().split("\n").at(-1));
-  return { status: answer.status, value: JSON.parse(answer.body || "{}") };
+  const value = JSON.parse(answer.body || "{}");
+  if (method === "POST" && route === "kuvo/vault/items" && value.item?.id) temporaryItems.add(value.item.id);
+  return { status: answer.status, value };
 }
 
 // The Mac over SSH as it reaches the vault now: each request with its proof for that request alone,
@@ -158,6 +167,28 @@ const onDisk = () => {
 let box;
 let key;
 const items = {};
+// The four setup items are shared fixtures. Every other item belongs to its test,
+// including one whose next assertion or wait fails.
+const temporaryItems = new Set();
+let cleaning;
+function cleanItems() {
+  return cleaning ??= deleteItems().finally(() => { cleaning = undefined; });
+}
+async function deleteItems() {
+  for (const id of temporaryItems) {
+    if (!Object.values(items).some(item => item.id === id)) {
+      const answer = await fromMac("DELETE", `kuvo/vault/items/${id}`, undefined, key);
+      assert.ok([200, 404].includes(answer.status), JSON.stringify(answer));
+    }
+    temporaryItems.delete(id);
+  }
+}
+let testSignal;
+const test = (name, run) => vaultTest(name, async t => {
+  testSignal = t.signal;
+  t.after(cleanItems);
+  return run(t);
+});
 const tool = (session, name, args) => {
   running(session, name, args ?? {});
   return box.local("POST", "kuvo/vault/tools", { session, name, arguments: args });
@@ -571,7 +602,7 @@ test("after the box starts again the vault is locked, until a client's key unloc
   const listed = await fromMac("GET", "kuvo/vault", undefined, key);
   assert.equal(listed.value.state.locked, false);
   assert.equal(listed.value.state.agents, true);
-  assert.equal(listed.value.items.length, 9);
+  assert.equal(listed.value.items.length, 4);
   assert.equal((await fillAs({ session: "ses_ship", origin: "https://github.com", purpose: "sign-in" })).value.values.password, SECRET);
   await box.stop();
 });
@@ -608,19 +639,32 @@ async function sshAgentFor(note, folder) {
 }
 const folderNote = folder => `dir-${crypto.createHash("sha256").update(folder).digest("hex").slice(0, 32)}`;
 // (Never blocking this process, whose stand-in engine the agent asks who a conversation is.)
-const sshTool = (tool, args, socket) => new Promise(resolve => {
-  const child = spawn(tool, args, { env: { PATH: process.env.PATH, HOME: root, ...(socket ? { SSH_AUTH_SOCK: socket } : {}) }, stdio: ["ignore", "pipe", "pipe"] });
-  let stdout = "", stderr = "";
-  child.stdout.on("data", chunk => { stdout += chunk; });
-  child.stderr.on("data", chunk => { stderr += chunk; });
-  child.on("close", status => resolve({ status, stdout, stderr }));
-});
+const sshTool = (tool, args, socket) => {
+  const pending = new Promise((resolve, reject) => {
+    const child = spawn(tool, args, { signal: testSignal, env: { PATH: process.env.PATH, HOME: root, ...(socket ? { SSH_AUTH_SOCK: socket } : {}) }, stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "", stderr = "";
+    child.stdout.on("data", chunk => { stdout += chunk; });
+    child.stderr.on("data", chunk => { stderr += chunk; });
+    child.on("error", reject);
+    child.on("close", status => resolve({ status, stdout, stderr }));
+  });
+  // Signing can run while the test waits for its ask. Observe cancellation now,
+  // even if that wait aborts before the test reaches its await of this command.
+  pending.catch(() => {});
+  return pending;
+};
 
 test("an SSH key you keep for a project signs through its conversations' own agent, as git over SSH uses it, and another project's agent doesn't offer it (on Linux, only a key you keep for everyone)", async t => {
   // (A socket's path is at most 107 bytes on Linux: a machine's agents are in its own folder, which
   // fits, but this test's may be too deep in its temporary folder.)
   if (Buffer.byteLength(path.join(sshAgents, "x".repeat(33))) > (process.platform === "darwin" ? 103 : 107)) return t.skip("this test's folder is too deep for a socket's path: run it with a shorter TMPDIR");
+  const awayMetadata = sessions.ses_away.metadata;
+  t.after(() => {
+    sessions.ses_away.metadata = awayMetadata;
+    delete sessions.ses_scout.metadata;
+  });
   box = await start();
+  t.after(box.stop);
   let left = [];
   try {
     assert.equal((await fromMac("POST", "kuvo/vault/unlock", { key }, key)).status, 200);
@@ -729,6 +773,7 @@ test("an SSH key you keep for a project signs through its conversations' own age
   const monthAgo = new Date(Date.now() - 31 * 24 * 60 * 60_000);
   fs.utimesSync(old, monthAgo, monthAgo);
   box = await start();
+  t.after(box.stop);
   try {
     // (Each made anew, none of the old ones left.)
     const now = await appears(sshAgents, () => {
@@ -791,7 +836,7 @@ test("on a box whose agents' commands aren't fenced, agents get none of the vaul
     assert.equal(field.value.values, undefined);
     const state = await fromMac("GET", "kuvo/vault", undefined, key);
     assert.equal(state.value.state.agents, false, "your Vault page can say so");
-    assert.equal(state.value.items.length, 9, "your items are all still there");
+    assert.equal(state.value.items.length, 4, "your items are all still there");
   } finally {
     await box.stop();
   }

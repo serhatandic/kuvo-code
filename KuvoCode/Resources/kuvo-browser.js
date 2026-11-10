@@ -60,7 +60,7 @@ const TAB_IDLE = Number(process.env.KUVO_BROWSER_TAB_IDLE || 3600) * 1000;
 
 // Goes up with every change to the keeper (host mode): a newer one replaces one that's running
 // (its pages close, its sign-ins stay), and an older one never replaces a newer.
-const KEEPER = 48;
+const KEEPER = 49;
 // Passkeys: none yet, as in the panel's browser on the Mac (Passkeys.swift, the same script).
 const NO_PASSKEYS = "(() => {\n  try {\n    // Says a passkey was asked for with an event only this launch's listener, in a world of its\n    // own, knows the name of: nothing of it is left in the page's world. (Taken before the page\n    // can change them.)\n    const dispatch = EventTarget.prototype.dispatchEvent, Made = Event;\n    const tell = () => {\n      try {\n        dispatch.call(window, new Made(\"KUVO_PASSKEY_EVENT\"));\n      } catch {}\n    };\n    const none = (options) => {\n      // Asked of you, not looked for quietly as the page loads.\n      if (options.mediation !== \"conditional\") tell();\n      return Promise.reject(new DOMException(\"Passkeys can't be used in this browser.\", \"NotAllowedError\"));\n    };\n    const Container = window.CredentialsContainer;\n    if (Container && Container.prototype) {\n      const prototype = Container.prototype, get = prototype.get, create = prototype.create;\n      if (get) prototype.get = function (options) { return options && options.publicKey ? none(options) : get.call(this, options); };\n      if (create) prototype.create = function (options) { return options && options.publicKey ? none(options) : create.call(this, options); };\n    }\n    const Credential = window.PublicKeyCredential;\n    if (Credential) {\n      Credential.isUserVerifyingPlatformAuthenticatorAvailable = () => Promise.resolve(false);\n      if (Credential.isConditionalMediationAvailable) Credential.isConditionalMediationAvailable = () => Promise.resolve(false);\n    }\n  } catch {}\n})();";
 // The event it fires when a passkey is asked for (a name of this keeper's, which only the
@@ -211,17 +211,88 @@ async function stopKeeper() {
   while (Date.now() < deadline && (await reachable())) await sleep(200);
 }
 
+/// What the box's own script (`kuvo-link.js`) answers `args` with, as JSON: null when it can't.
+function askBox(args, timeout = 30_000) {
+  return new Promise((resolve) => {
+    const link = path.join(K, "bin", "kuvo-link.js");
+    if (!fs.existsSync(link)) return resolve(null);
+    let out = "";
+    const child = spawn(process.execPath, [...OWN_RUNTIME, link, ...args], { stdio: ["ignore", "pipe", "ignore"], env: { ...process.env, BUN_BE_BUN: "1" }, cwd: K });
+    const timer = setTimeout(() => child.kill("SIGKILL"), timeout);
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => (out += chunk));
+    child.on("error", () => resolve(null));
+    child.on("close", () => {
+      clearTimeout(timer);
+      try {
+        resolve(JSON.parse(out.trim().split("\n").pop()));
+      } catch {
+        resolve(null);
+      }
+    });
+  });
+}
+
+/// Has the box set the browser up (PROTOCOL.md, "The browser on a machine"), in a process of its
+/// own that outlives this one; after a failure it waits as the box says, unless asked `now`.
+/// How it stands then, or null when the box can't say.
+function startSetUp({ now = false, repair = false } = {}) {
+  const flags = [...(now ? ["--now"] : []), ...(repair ? ["--repair"] : [])];
+  return askBox(["browser", "start", ...flags]);
+}
+
+/// The browser, set up by the box, and followed until it's there: null once it is, else what's
+/// wrong. `told` hears how it goes (each `kuvo/browser` status as it changes); `wait` is how long to
+/// follow it before saying it's still under way.
+async function setUp(told, { repair = false, wait = 15 * 60_000 } = {}) {
+  const began = Date.now();
+  let status = await startSetUp({ repair });
+  let said = "";
+  while (true) {
+    if (!status) return { kind: "missing", message: "This machine's box can't set up the browser. Connect to the machine from Kuvo Code on your Mac." };
+    const underWay = ["checking", "downloading", "installing"].includes(status.state);
+    const now = JSON.stringify([status.state, status.progress]);
+    if (now !== said) {
+      said = now;
+      told?.(status);
+    }
+    if (!underWay) {
+      if (status.state === "ready" && browserBinary(CURRENT)) return null;
+      // Failed, or waits to try again: kind "missing", so an older Kuvo Code on a Mac puts the
+      // browser there itself.
+      return { kind: "missing", message: status.message || "The browser isn't on this machine, and its box couldn't set it up." };
+    }
+    if (Date.now() - began > wait) {
+      const done = status.state === "downloading" && typeof status.progress === "number" ? ` (${Math.round(status.progress * 100)}% downloaded)` : "";
+      return { kind: "installing", message: `This machine is still setting up its browser${done}. Try again in a minute.` };
+    }
+    await sleep(1_500);
+    status = await askBox(["browser", "status"]);
+  }
+}
+
 /// Starts the keeper if it isn't running (or an older one is), and waits for it: nil once it
-/// answers, else what's wrong.
-async function ensure() {
+/// answers, else what's wrong. The browser isn't there: the box sets it up first (`told` hears how
+/// it goes, for `wait` at most); it doesn't start: the box sets it up again, once.
+async function ensure(told, wait) {
   if (await reachable()) {
     const running = await runningKeeper();
     if (running === null || running >= KEEPER) return null;
     await stopKeeper();
   }
-  if (!browserBinary(CURRENT)) {
-    return { kind: "missing", message: "The browser isn't on this machine yet. Kuvo Code puts it there when it connects to the machine; try again in a minute." };
+  for (let attempt = 0; ; attempt++) {
+    if (!browserBinary(CURRENT)) {
+      const problem = await setUp(told, { wait });
+      if (problem) return problem;
+    }
+    const problem = await startKeeper();
+    if (problem?.kind !== "broken" || attempt > 0) return problem;
+    const repaired = await setUp(told, { repair: true, wait });
+    if (repaired) return repaired;
   }
+}
+
+async function startKeeper() {
   fs.mkdirSync(RUN, { recursive: true, mode: 0o700 });
   fs.rmSync(ERRORFILE, { force: true });
   // In a session of its own, so it outlives whoever started it.
@@ -557,7 +628,10 @@ async function launchChrome(sandbox) {
   try {
     output = fs.readFileSync(LOGFILE, "utf8");
   } catch {}
-  return { output: output || (exited?.error ? String(exited.error.message) : ""), timedOut: !exited };
+  // (The program itself couldn't be run: gone, or not a program; on a Mac, its launcher couldn't
+  // run the app, 126 or 127.)
+  const unrunnable = ["ENOENT", "EACCES", "ENOEXEC"].includes(exited?.error?.code) || exited?.code === 126 || exited?.code === 127;
+  return { output: output || (exited?.error ? String(exited.error.message) : ""), timedOut: !exited, unrunnable };
 }
 
 async function host() {
@@ -593,6 +667,10 @@ async function host() {
     const lines = started.output.trim().split("\n").filter((line) => !/^\s*$/.test(line)).slice(-6).join("\n");
     if (/GLIBC_[0-9.]+' not found/.test(started.output)) {
       fail("unsupported", "This machine's C library (glibc) is too old for the browser.\n\n" + lines);
+    }
+    // Its build isn't whole (a library or the browser itself gone, or damaged): the box sets it up again.
+    if (started.unrunnable || /error while loading shared libraries|cannot open shared object file|Exec format error/.test(started.output)) {
+      fail("broken", "The browser on this machine isn't whole." + (lines ? "\n\n" + lines : ""));
     }
     fail("failed", (started.timedOut ? "The browser didn't start in time." : "The browser stopped as it started.") + (lines ? "\n\n" + lines : ""));
   }
@@ -1172,7 +1250,9 @@ class Connection {
 // MARK: - The live view
 
 async function connect() {
-  const problem = await ensure();
+  // How the box's setup of the browser goes, for the Mac to show meanwhile.
+  const told = (status) => process.stdout.write(JSON.stringify({ method: "Kuvo.installing", params: { state: status.state, progress: status.progress ?? null } }) + "\n");
+  const problem = await ensure(told);
   if (problem) {
     process.stdout.write(JSON.stringify({ method: "Kuvo.error", params: problem }) + "\n");
     return;
@@ -1356,7 +1436,8 @@ async function browser() {
 }
 
 async function openLink() {
-  const problem = await ensure();
+  // (A tool waits for the box's setup a few minutes; then it says to try again.)
+  const problem = await ensure(null, 4 * 60_000);
   if (problem) throw new ToolError(problem.message);
   link = await Connection.open();
   sessions.clear();
@@ -2944,6 +3025,9 @@ async function mcp() {
   process.stdin.on("end", () => process.exit(0));
   // A keeper that's already running stays up while the engine does, across its restarts.
   if (await reachable()) browser().catch(() => {});
+  // No browser here: the box sets it up now, ready for the first tool (it waits a while after a
+  // failure, as its keeper does).
+  else if (!browserBinary(CURRENT)) startSetUp().catch(() => {});
 }
 
 const mode = process.argv[2];

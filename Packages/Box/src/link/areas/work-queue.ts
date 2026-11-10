@@ -13,10 +13,14 @@ import { provedRequest } from "./vault";
 import { addCategory, categories, removeCategory, renameCategory } from "../work-queue/categories";
 import { importItems, importWords, parseBacklog, readBacklogFiles } from "../work-queue/import";
 import { numberWaiting, primaryOf } from "../work-queue/numbers";
-import { changeItem, Refusal, refuseMoving, removeItem, restoreItem } from "../work-queue/ops";
-import { changeQueues, FILE_NAME, filesOf, matching, OWNER, queueFollowers, readAll, WORK_QUEUE, type Item } from "../work-queue/store";
+import { itemElsewhere, itemsElsewhere, tellQueuesAgain } from "../work-queue/across";
+import { changeItem, Refusal, refuseHanding, refuseMoving, removeItem, restoreItem } from "../work-queue/ops";
+import { callOffHanding, refuseLiveElsewhere } from "../work-queue/hand";
+import { TOLD } from "../work-queue/told";
+import { readLink } from "../state";
+import { allItems, changeQueues, FILE_NAME, filesOf, matching, OWNER, queueFollowers, readAll, WORK_QUEUE, type Item } from "../work-queue/store";
 import { callQueueTool, QUEUE_INSTRUCTIONS, QUEUE_TOOLS } from "../work-queue/tools";
-import { factsOf, inProgress, inView, overseenBy, ownersOf, refOf, summaryOf, wholeOf, type Facts } from "../work-queue/view";
+import { factsOf, inProgress, inView, nameOf, overseenBy, ownersOf, refOf, summaryOf, wholeOf, type Facts } from "../work-queue/view";
 import type { AnswerPiece, RouteContext } from "../server/context";
 import type { Target } from "../../shared/records";
 
@@ -44,24 +48,53 @@ const queryOf = (request: RouteContext["request"]) => new URLSearchParams(reques
 export async function viewOf(owner: string, targets: Target[], facts?: Facts, signal?: AbortSignal, cache?: Map<string, unknown>) {
   const known = facts ?? await factsOf(targets, signal);
   const overseen = owner === ALL ? new Set<string>() : overseenBy(owner, known.all);
-  const all = readAll().flatMap(queue => queue.items).filter(item => owner === ALL || inView(owner, item, overseen));
+  const here = allItems();
+  // (A queue of a kind a newer box keeps isn't one to show.)
+  const all = here.filter(item => owner === ALL || inView(owner, item, overseen));
   const { owners, titles } = await ownersOf(owner, all, known, targets, cache);
+  // Your other computers' items in this view, as each last told them (one deleted here that's live
+  // there, a hand-off called off that had got there, is theirs).
+  const elsewhere = itemsElsewhere(owner, readLink(), new Set(here.filter(item => !item.removed).map(item => item.id)), new Set(here.filter(item => item.removed).map(item => item.id)));
+  const named = new Set(owners.map(each => each.owner));
+  // The categories: this box's, then custom ones only another computer has, before Parked.
+  const own = categories();
+  const others = elsewhere.categories.filter(each => !own.some(mine => mine.id === each.id)).map(each => ({ ...each, builtIn: false }));
+  const shown = [...own.slice(0, -2), ...others, ...own.slice(-2)];
+  const place = new Map(shown.map((each, index) => [each.id, index]));
   // (In the categories' order, then each one's own.)
-  const place = new Map(categories().map((each, index) => [each.id, index]));
-  const sorted = (items: Item[]) => items.sort((a, b) => (place.get(a.category) ?? 99) - (place.get(b.category) ?? 99) || a.order - b.order).map(item => summaryOf(item, known.working, titles));
+  // (Each computer keeps its own order: within a category, this box's first, then each other
+  // computer's, by name.)
+  const computerOf = (item: { computer?: { name: string; key: string } }) => (item.computer ? `1 ${item.computer.name} ${item.computer.key}` : "0");
+  const byPlace = <T extends { category: string; order: number; computer?: { name: string; key: string } }>(items: T[]) =>
+    items.sort((a, b) => (place.get(a.category) ?? 99) - (place.get(b.category) ?? 99) || computerOf(a).localeCompare(computerOf(b)) || a.order - b.order);
   return {
     owner,
-    categories: categories(),
-    items: sorted(all.filter(item => !item.removed)),
-    owners,
+    categories: shown,
+    items: byPlace([...all.filter(item => !item.removed).map(item => summaryOf(item, known.working, titles)), ...elsewhere.items.map(({ handedFrom: _, ...item }) => item)]),
+    owners: [...owners, ...elsewhere.owners.filter(each => !named.has(each.owner))],
     removed: all.filter(item => item.removed).sort((a, b) => b.removed!.at - a.removed!.at).map(item => summaryOf(item, known.working, titles)),
+    computers: elsewhere.computers,
   };
 }
+
+// What a chip shows of an item: its number (or its outside source), title, where it stands, whose.
+const refFacts = (item: Pick<Item, "id" | "number" | "title" | "category" | "owner"> & { source?: Item["source"]; removed?: unknown }, working: boolean) => ({
+  id: item.id,
+  ...(item.number !== undefined ? { number: item.number } : {}),
+  ...(item.source ? { source: item.source } : {}),
+  title: item.title,
+  category: item.category,
+  inProgress: working,
+  owner: item.owner,
+  ...(item.removed ? { removed: true } : {}),
+});
 
 // What a client's own change says: the item as it is now, or why not.
 function changed(work: () => Item, json: RouteContext["json"]): AnswerPiece[] {
   try {
     const item = work();
+    // Your other computers hear of it at their next round, not after the usual wait.
+    tellQueuesAgain();
     return json(200, { item: summaryOf(item, new Set(), new Map()) });
   } catch (error) {
     if (error instanceof Refusal) return json(error instanceof Missing ? 404 : 400, { message: error.message });
@@ -85,15 +118,20 @@ export async function* workQueueRoute(context: RouteContext, match: RegExpMatchA
   }
 
   if (part === "refs") {
-    if (method !== "GET") return yield* json(405, {});
-    const wanted = (queryOf(request).get("refs") ?? "").split(",").map(each => each.trim()).filter(Boolean).slice(0, 200);
-    const items = readAll().flatMap(queue => queue.items);
+    // (GET with `refs=243,12`; POST `{refs: [...], conversation?}`, a list, so a ref with a comma in
+    // it, an outside one later, goes whole.)
+    if (method !== "GET" && method !== "POST") return yield* json(405, {});
+    const listed = method === "POST" ? (Array.isArray(given.refs) ? given.refs : []) : (queryOf(request).get("refs") ?? "").split(",");
+    const wanted = listed.filter((each): each is string => typeof each === "string").map(each => each.trim()).filter(each => each && each.length <= 300).slice(0, 200);
+    const items = allItems();
     const facts = await factsOf(targets, signal ?? undefined);
     const refs: Record<string, unknown> = {};
     for (const ref of wanted) {
       const named = refOf(ref);
       const item = named ? items.find(each => ("id" in named ? each.id === named.id : each.number === named.number)) : undefined;
-      refs[ref] = item ? { id: item.id, ...(item.number !== undefined ? { number: item.number } : {}), title: item.title, category: item.category, inProgress: inProgress(item, facts.working), owner: item.owner, ...(item.removed ? { removed: true } : {}) } : null;
+      // One on another of your computers, as it last told it.
+      const far = !item && named ? itemElsewhere(named) : null;
+      refs[ref] = item ? refFacts(item, inProgress(item, facts.working)) : far ? { ...refFacts(far, far.inProgress), computer: far.computer } : null;
     }
     return yield* json(200, { refs });
   }
@@ -109,6 +147,7 @@ export async function* workQueueRoute(context: RouteContext, match: RegExpMatchA
       : given.remove !== undefined ? removeCategory(given.remove, used)
       : { refused: "Send {add, after}, {rename, to} or {remove}." };
     if ("refused" in outcome) return yield* json(400, { message: outcome.refused });
+    tellQueuesAgain();
     return yield* json(200, { categories: categories() });
   }
 
@@ -150,15 +189,24 @@ export async function* workQueueRoute(context: RouteContext, match: RegExpMatchA
   if (!ref) return yield* json(404, { message: "There's no such item." });
   const find = (items: Item[]) => matching(items, ref)[0] ?? null;
   if (action === undefined && method === "GET") {
-    const item = find(readAll().flatMap(queue => queue.items));
-    if (!item) return yield* json(404, { message: "There's no such item." });
+    const item = find(allItems());
+    if (!item) {
+      // One on another of your computers: as it last told it, without what only that computer
+      // keeps (its description, notes, files, links), which a client reads there.
+      const far = itemElsewhere(ref);
+      if (far) {
+        const { handedFrom: _, ...summary } = far;
+        return yield* json(200, { item: { ...summary, body: "", notes: [], files: [], links: [], handed: [] } });
+      }
+      return yield* json(404, { message: "There's no such item." });
+    }
     const facts = await factsOf(targets, signal ?? undefined);
     const { titles } = await ownersOf(item.owner, [item], facts, targets);
     return yield* json(200, { item: wholeOf(item, facts.working, titles) });
   }
   if (action?.startsWith("files/") && method === "GET") {
     const name = decodeURIComponent(rawFile ?? "");
-    const item = find(readAll().flatMap(queue => queue.items));
+    const item = find(allItems());
     const kept = item?.files.find(each => each.name === name);
     if (!item || !kept || !FILE_NAME.test(name)) return yield* json(404, { message: "There's no such file." });
     let bytes: Buffer;
@@ -173,23 +221,31 @@ export async function* workQueueRoute(context: RouteContext, match: RegExpMatchA
   if (!fromClient(context)) return yield* json(403, { message: notClient(context) });
   const now = Date.now();
   const primary = primaryOf();
-  const inBook = (work: (item: Item, book: Parameters<Parameters<typeof changeQueues>[0]>[0]) => void) => () => changeQueues(book => {
+  // One on another of your computers is changed there (a client asks that computer).
+  const far = !find(allItems()) ? itemElsewhere(ref) : null;
+  if (far) return yield* json(409, { message: `${nameOf(far)} is on ${far.computer.name}: change it there.`, computer: far.computer });
+  const inBook = (work: (item: Item, book: Parameters<Parameters<typeof changeQueues>[0]>[0]) => void, { handing = false } = {}) => () => changeQueues(book => {
     const item = find(book.items());
     if (!item) throw new Missing("There's no item like that.");
     refuseMoving([item.owner]);
+    if (!handing) refuseHanding(item);
     work(item, book);
     numberWaiting(book, primary, null);
     return item;
   });
+  // (Deleting one on its way to another computer calls its hand-off off: one stuck going to a
+  // computer that doesn't answer is yours to let go of.)
   if (action === undefined && method === "DELETE") {
     return yield* changed(inBook(item => {
       if (item.removed) throw new Refusal("It's deleted already.");
+      callOffHanding(item, YOU, now);
       removeItem(item, YOU, now);
-    }), json);
+    }, { handing: true }), json);
   }
   if (action === "restore" && method === "POST") {
     return yield* changed(inBook((item, book) => {
       if (!item.removed) throw new Refusal("It isn't deleted.");
+      refuseLiveElsewhere(item);
       restoreItem(book, item, YOU, now);
     }), json);
   }
@@ -216,8 +272,10 @@ async function* followView(owner: string, targets: Target[], signal?: AbortSigna
     wake?.();
   };
   queueFollowers.add(told);
-  // (The queues, and the categories beside them: not the locks and the numbers there.)
-  const queuesWatch = watchFolders([path.join(WORK_QUEUE, "queues")], told, { recursive: false });
+  // (The queues, what your other computers told of theirs, and the categories beside them: not the
+  // locks and the numbers there.)
+  try { fs.mkdirSync(TOLD, { recursive: true, mode: 0o700 }); } catch {}
+  const queuesWatch = watchFolders([path.join(WORK_QUEUE, "queues"), TOLD], told, { recursive: false });
   const categoriesWatch = watchFolders([WORK_QUEUE], ((_: unknown, name: unknown) => { if (String(name ?? "") === "categories.json") told(); }) as () => void, { recursive: false });
   const watching = { close: () => { queuesWatch.close(); categoriesWatch.close(); } };
   signal?.addEventListener("abort", () => wake?.(), { once: true });

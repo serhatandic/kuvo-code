@@ -8,12 +8,15 @@ import { bool, type Infer, list, NOTHING, object, type RouteShape, string, words
  * whether it wants a username and a password, the accounts saved for the site (a Mac's Passwords;
  * none on a machine, never their passwords), and whether what's typed is kept unless you say
  * otherwise; a code has its prompt, a step what to do. `passkey` when the site asked for a passkey,
- * which the browser can't use yet (so you sign in another way). */
+ * which the browser can't use yet (so you sign in another way). `box`, from a Mac listing one of its
+ * machines' asks: that machine's box by its link address (as `kuvo/hosts` gives it), whose ask it
+ * is and where its answer goes too. */
 export const ASK = object({
   id: string,
   kind: words("signIn", "code", "action"),
   host: string,
   "machine?": string,
+  "box?": string,
   "session?": string,
   "asker?": string,
   "username?": bool,
