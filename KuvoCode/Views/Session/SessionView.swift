@@ -156,8 +156,10 @@ struct BottomStack: View {
         var folds = BarFolds<ComposerBar>()
         var bars: [ComposerBar]?
         var news: [ComposerBar: Bool]?
-        /// The ask you went to, while it waits.
-        var pickedAsk: String?
+        /// Which ask shows, the one in view staying while others come (KuvoClient's, as the phone's).
+        var askPlace = AskPlace()
+        /// What you wrote to do instead, for each permission: there when you page back to it.
+        var insteadWords: [String: String] = [:]
     }
     @State private var cards: [String: Card] = [:]
     /// The conversation whose ask had the composer's place just before it: the composer back
@@ -268,7 +270,7 @@ struct BottomStack: View {
     private var waitingAsks: [WaitingAsk] {
         let box = Workspace.box(of: model.session.location.directory)
         // (Not what Auto's reviewer takes up: its step says how that goes.)
-        var asks: [WaitingAsk] = model.permissions.filter { Sandboxes.shared.isYours($0, on: box) }.map { .permission($0) } + forms.map { .form($0) }
+        var asks: [WaitingAsk] = permissions.filter { Sandboxes.shared.isYours($0, on: box) }.map { .permission($0) } + forms.map { .form($0) }
         asks += app.browserAsks.asks(for: model.session.id).map { .browser($0) }
         asks += Vaults.shared[box].asks.filter { $0.session == model.session.id && $0.group == nil }.map { .vault($0, box: box) }
         asks += Sandboxes.shared.asks(for: model.session.id, on: box).map { .sandbox($0, box: box) }
@@ -277,18 +279,24 @@ struct BottomStack: View {
         return asks
     }
 
-    /// Which of them shows: the one you went to while it waits, else the first; none, the composer.
-    private var askPosition: WaitingAskPosition? {
-        WaitingAskPosition(ids: waitingAsks.map(\.id), picked: cards[model.id]?.pickedAsk)
+    /// Which of them shows: the one in view while it waits, else the first; none, the composer.
+    private var askPlace: AskPlace {
+        var place = cards[model.id]?.askPlace ?? AskPlace()
+        // Not told of these yet (the first drawing with them): as they are now.
+        if place.waiting != waitingAsks.map(\.id) { place.update(waitingAsks.map(\.id)) }
+        return place
     }
 
     /// One ask in the composer's place, its keys its own.
     @ViewBuilder private func ask(_ ask: WaitingAsk) -> some View {
         switch ask {
         case .permission(let request):
+            let id = model.id
             PermissionCard(request: request, command: model.permissionCommands[request.id], directory: model.session.location.directory,
-                           forConversation: OutsideAgents.isAgentSession(model.session)) { decision, instead in
+                           forConversation: OutsideAgents.isAgentSession(model.session),
+                           instead: Binding { cards[id]?.insteadWords[request.id] ?? "" } set: { cards[id, default: Card()].insteadWords[request.id] = $0 }) { decision, instead in
                 model.reply(to: request, decision, message: instead)
+                cards[id]?.insteadWords[request.id] = nil
             }
             .disabled(offlineMachine != nil)
         case .form(let form):
@@ -557,12 +565,17 @@ struct BottomStack: View {
                     }
                     // (One over the other as they cross-fade, never one under the other.)
                     ZStack(alignment: .bottom) {
-                    if let position = askPosition, !app.dictation.isListening(for: model.id) {
+                    if let index = askPlace.index, !app.dictation.isListening(for: model.id) {
                         let asks = waitingAsks
-                        AskInComposer(position: position) { cards[model.id, default: Card()].pickedAsk = asks[$0].id } content: {
-                            ask(asks[position.index])
+                        let place = askPlace
+                        AskInComposer(place: place) { index in
+                            var paged = place
+                            paged.show(index)
+                            cards[model.id, default: Card()].askPlace = paged
+                        } content: {
+                            ask(asks[index])
                         }
-                        .id(asks[position.index].id)
+                        .id(asks[index].id)
                         .transition(.opacity)
                         .onAppear { askHadPlace = model.id }
                         // What the composer opens, opened while an ask has its place (the bar's
@@ -709,10 +722,8 @@ struct BottomStack: View {
             }
             .onChange(of: waitingAsks.map(\.id)) { before, now in
                 // The one in view stays while others come, rather than one swapping in under the
-                // pointer: they only add to the count.
-                if let shown = WaitingAskPosition(ids: before, picked: cards[model.id]?.pickedAsk).map({ before[$0.index] }), now.contains(shown) {
-                    cards[model.id, default: Card()].pickedAsk = shown
-                }
+                // pointer: they only add to the count; once it's answered, the next after it.
+                cards[model.id, default: Card()].askPlace.update(now)
                 // One came: VoiceOver says so (the first, as it takes the composer's place).
                 guard let came = now.first(where: { !before.contains($0) }), let ask = waitingAsks.first(where: { $0.id == came }) else { return }
                 AccessibilityNotification.Announcement(before.isEmpty ? Self.spoken(ask) : "\(Self.spoken(ask)), \(now.count) waiting").post()
@@ -806,6 +817,14 @@ struct BottomStack: View {
         return going?.waitingFor == nil ? nil : going
     }
 
+    private var permissions: [PermissionRequest] {
+        #if DEBUG
+        return model.permissions + Self.demoPermissions
+        #else
+        return model.permissions
+        #endif
+    }
+
     private var forms: [FormRequest] {
         #if DEBUG
         return model.forms + Self.demoForms
@@ -815,6 +834,17 @@ struct BottomStack: View {
     }
 
     #if DEBUG
+    /// KUVO_DEMO_PERMISSIONS: the agent asking to run a command (`long`: a long one), for a look at
+    /// its numbered answers in the composer's place.
+    private static let demoPermissions: [PermissionRequest] = {
+        guard let shown = ProcessInfo.processInfo.environment["KUVO_DEMO_PERMISSIONS"] else { return [] }
+        let command = shown == "long"
+            ? #"swift build -c release 2>&1 | tee build.log && swift test --parallel --filter \"SettingsTests|TimerTests\" --enable-code-coverage"#
+            : "swift test --filter SettingsTests"
+        let json = #"{"id":"per_demo","sessionID":"ses_demo","action":"shell","resources":["\#(command)"],"save":["swift test *"]}"#
+        return (try? JSONDecoder().decode(PermissionRequest.self, from: Data(json.utf8))).map { [$0] } ?? []
+    }()
+
     /// KUVO_DEMO_QUESTIONS: the agent asking three questions at once, over the composer.
     private static let demoForms: [FormRequest] = {
         guard ProcessInfo.processInfo.environment["KUVO_DEMO_QUESTIONS"] != nil else { return [] }
