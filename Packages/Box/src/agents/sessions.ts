@@ -17,7 +17,7 @@ import type { Account, Agent, LostWork, OwnTurn, PermissionAsk, PromptFile, Ques
 import { failure, lostWorkNote } from "./agent"
 import { parseProvider } from "./accounts"
 import { citedIn, plainCitations } from "./agents/codex-citations"
-import { Auto, autoProvider, resetTime, type AutoEntry } from "./auto"
+import { Auto, autoProvider, foldEntries, resetTime, type AutoEntry, type AutoList } from "./auto"
 import { emit } from "./events"
 import { handover, withHandover } from "./handover"
 import { onMachine, ownEnvironment } from "./machine"
@@ -28,7 +28,7 @@ import { runningShells, stopShell } from "./shells"
 import { skillFolders, within } from "./skills"
 import type { Record_, Store } from "./store"
 import { Turn, type Outcome } from "./turn"
-import type { AssistantMessage, Attachment, CompactionMessage, Decision, FormAnswer, FormRequest, Message, ModelRef, PermissionRequest, PermissionRule, Session, ShellMessage, FileDiff, StructuredError } from "./wire"
+import type { AssistantMessage, Attachment, CompactionMessage, Decision, FormAnswer, FormRequest, Message, Model, ModelRef, PermissionRequest, PermissionRule, Session, ShellMessage, FileDiff, StructuredError } from "./wire"
 import { plain } from "./proc"
 import type { Snapshots } from "./snapshots"
 import { AGENTS_TEXT_BYTES } from "../shared/text"
@@ -2316,7 +2316,7 @@ export class Sessions {
       const missed = Boolean(input.adopt && (before.length || late.size))
       if (!hasMessage && late.size && !input.adopt) delete record.agent.lateShells
       const partway = at < 0 ? [] : record.messages.slice(Math.max(at, seenAt) + 1)
-      const handed = handover(before, partway, (message) => this.stepName(message))
+      const handed = handover(before, partway, await this.stepNames([...before, ...partway]))
       const text = withHandover(hasMessage ? carryOn : input.text, handed)
       const files = hasMessage ? [] : input.files
       reached = true
@@ -2351,8 +2351,7 @@ export class Sessions {
     try {
       return await this.runAutoList(id, record, live, run, input, userMessage, heldBefore)
     } finally {
-      record.agent.autoHeld = this.auto
-        .list(input.model.id)
+      record.agent.autoHeld = (await this.autoEntries(input.model.id))
         .filter((entry) => this.auto.isHeld(entry))
         .map((entry) => Auto.modelKey(entry))
       this.store.save(id)
@@ -2380,7 +2379,7 @@ export class Sessions {
         if (last?.limit) return { outcome: "failed", error: { type: "limit", message: `Every model in your Custom Auto list is at a usage limit for now${this.nextReset()}.` } }
         return last ?? { outcome: "failed", error: { type: "limit", message: `Your Custom Auto list has no model to run. Edit it in Settings › Custom Auto.` } }
       }
-      if (!tried.size && heldBefore.has(Auto.modelKey(entry))) turn.notice(`Back on ${this.entryName(entry)}: its limit has reset.`)
+      if (!tried.size && heldBefore.has(Auto.modelKey(entry))) turn.notice(`Back on ${await this.entryName(entry)}: its limit has reset.`)
       tried.add(Auto.modelKey(entry))
       const model: ModelRef = { providerID: entry.providerID, id: entry.modelID, ...(entry.variant ? { variant: entry.variant } : {}) }
       if (note) {
@@ -2394,7 +2393,7 @@ export class Sessions {
           live.subagents.delete(child)
           live.background.delete(child)
         }
-        turn.notice(`${note} Going on with ${this.entryName(entry)}.`)
+        turn.notice(`${note} Going on with ${await this.entryName(entry)}.`)
       }
       earlier = new Set(live.subagents.keys())
       const from = record.messages.length
@@ -2415,19 +2414,19 @@ export class Sessions {
         const account = agent ? await Promise.race([agent.account(true).catch(() => undefined), Bun.sleep(10_000).then(() => undefined)]) : undefined
         if (account && !account.signedIn) emit("integration.updated", { integrationID: entry.providerID })
         const message = last.error?.message?.trim() || "it stopped with an error"
-        note = account && !account.signedIn ? `${this.entryName(entry, true)} needs you to sign in again.` : `${this.entryName(entry)} stopped: ${message.replace(/\.$/, "")}.`
+        note = account && !account.signedIn ? `${await this.entryName(entry, true)} needs you to sign in again.` : `${await this.entryName(entry)} stopped: ${message.replace(/\.$/, "")}.`
         continue
       }
       this.auto.hold(entry, last.limit)
       emit("kuvo.auto.updated", {})
       const whole = last.limit.scope === "provider"
-      note = `${this.entryName(entry, whole)} reached ${whole ? "its usage limit" : "this model's limit"}${last.limit.resetsAt ? ` (it resets at ${resetTime(last.limit.resetsAt)})` : ""}.`
+      note = `${await this.entryName(entry, whole)} reached ${whole ? "its usage limit" : "this model's limit"}${last.limit.resetsAt ? ` (it resets at ${resetTime(last.limit.resetsAt)})` : ""}.`
     }
   }
 
   /** The first entry of the Auto list `list` not at a limit, not tried for this message, and signed in. */
   private async nextEntry(tried: Set<string>, list: string): Promise<AutoEntry | undefined> {
-    for (const entry of this.auto.list(list)) {
+    for (const entry of await this.autoEntries(list)) {
       if (tried.has(Auto.modelKey(entry))) continue
       if (!(await this.whyNot(entry))) return entry
     }
@@ -2460,13 +2459,13 @@ export class Sessions {
     const signIn = new Set<string>()
     const held = new Map<string, number>()
     const gone: string[] = []
-    for (const entry of this.auto.list(list)) {
+    for (const entry of await this.autoEntries(list)) {
       if (tried.has(Auto.modelKey(entry))) continue
       const why = await this.whyNot(entry)
       if (!why) continue
-      if (why.kind === "signedOut") signIn.add(this.entryName(entry, true))
-      else if (why.kind === "held") held.set(this.entryName(entry, why.whole), why.until)
-      else gone.push(this.entryName(entry))
+      if (why.kind === "signedOut") signIn.add(await this.entryName(entry, true))
+      else if (why.kind === "held") held.set(await this.entryName(entry, why.whole), why.until)
+      else gone.push(await this.entryName(entry))
     }
     if (!signIn.size && !held.size && !gone.length) return undefined
     // On a machine, which (by the name you know it by), and that your Mac's sign-ins don't reach it.
@@ -2495,16 +2494,98 @@ export class Sessions {
     return known.length ? `; the first resets at ${resetTime(Math.min(...known))}` : ""
   }
 
-  /** "Claude Code (opus, high)", or the agent alone. */
-  private entryName(entry: AutoEntry, agentOnly = false): string {
+  /** "Claude Code (Opus 5.5, high)", or the agent alone. */
+  private async entryName(entry: AutoEntry, agentOnly = false): Promise<string> {
     const name = this.agent(entry.providerID)?.name ?? entry.providerID
-    return agentOnly ? name : `${name} (${entry.modelID}${entry.variant ? `, ${entry.variant}` : ""})`
+    return agentOnly ? name : `${name} (${await this.modelName(entry.providerID, entry.modelID)}${entry.variant ? `, ${entry.variant}` : ""})`
   }
 
-  /** Who wrote a step, for a handover: the agent and model. */
-  private stepName(message: AssistantMessage): string {
-    const agent = this.agent(message.model.providerID)
-    return `${agent?.name ?? message.model.providerID}, ${message.model.id}`
+  /** Who wrote each step of `messages`, for a handover: the agent and model ("Claude Code, Opus 5.5"). */
+  private async stepNames(messages: Message[]): Promise<(message: AssistantMessage) => string> {
+    const names = new Map<string, string>()
+    for (const message of messages) {
+      if (message.type !== "assistant") continue
+      const key = Auto.modelKey({ providerID: message.model.providerID, modelID: message.model.id })
+      if (names.has(key)) continue
+      const agent = this.agent(message.model.providerID)
+      names.set(key, `${agent?.name ?? message.model.providerID}, ${await this.modelName(message.model.providerID, message.model.id)}`)
+    }
+    return (message) => names.get(Auto.modelKey({ providerID: message.model.providerID, modelID: message.model.id })) ?? `${message.model.providerID}, ${message.model.id}`
+  }
+
+  /** What `providerID`'s agent lists now, as far as it says in a few seconds (none: nothing). */
+  private async listedModels(providerID: string): Promise<Model[]> {
+    const agent = this.agent(providerID)
+    if (!agent) return []
+    return await Promise.race([agent.models().catch(() => [] as Model[]), Bun.sleep(3_000).then(() => [] as Model[])])
+  }
+
+  /** The model `id` names among `models`: by its own id, or one it's known by (Claude Code's `default`). */
+  private static modelIn(models: Model[], id: string): Model | undefined {
+    return models.find((model) => model.id === id) ?? models.find((model) => model.aliases?.includes(id))
+  }
+
+  /** A model's name as its agent lists it ("Opus 5.5" for Claude Code's `default` now), or its id. */
+  private async modelName(providerID: string, id: string): Promise<string> {
+    return Sessions.modelIn(await this.listedModels(providerID), id)?.name ?? id
+  }
+
+  /** Your Auto list `list` (or the first) as the models it names (`foldEntries`): each by its own id, each once. */
+  async autoEntries(list?: string): Promise<AutoEntry[]> {
+    return await this.folded(this.auto.list(list))
+  }
+
+  /** Every Auto list, each as the models it names. */
+  async autoLists(): Promise<AutoList[]> {
+    return await Promise.all(this.auto.all().map(async (list) => ({ ...list, entries: await this.folded(list.entries) })))
+  }
+
+  private async folded(entries: AutoEntry[]): Promise<AutoEntry[]> {
+    const own = await this.ownIDs(entries)
+    return foldEntries(entries, (entry) => own.get(Auto.modelKey(entry)))
+  }
+
+  /**
+   * The model each of `entries` that names one by an alias stands for (by `provider/id`), as its
+   * agent itself listed it: never a guess (Claude Code's usual models, before it has said), and
+   * only of an agent that has aliases, as far as it says in a few seconds.
+   */
+  private async ownIDs(entries: AutoEntry[]): Promise<Map<string, string>> {
+    const keys = [...new Set(entries.map((entry) => Auto.modelKey(entry)))]
+    const own = new Map<string, string>()
+    await Promise.all(
+      keys.map(async (key) => {
+        const entry = entries.find((each) => Auto.modelKey(each) === key)!
+        const agent = this.agent(entry.providerID)
+        if (!agent?.concreteModel) return
+        const id = await Promise.race([agent.concreteModel(entry.modelID).catch(() => undefined), Bun.sleep(3_000).then(() => undefined)])
+        if (id) own.set(key, id)
+      }),
+    )
+    return own
+  }
+
+  /**
+   * Lists you saved as `kuvo/auto` gave them (each as the models it names), each entry kept under
+   * the id it was kept by: one kept as an alias of its model (Claude Code's `default`) goes on
+   * following whichever model that stands for.
+   */
+  async asKept(lists: unknown[]): Promise<unknown[]> {
+    const kept = new Map(this.auto.all().map((list) => [list.id, list.entries]))
+    return await Promise.all(
+      lists.map(async (list) => {
+        const before = list && typeof list === "object" && Array.isArray((list as AutoList).entries) ? kept.get((list as AutoList).id) : undefined
+        if (!before) return list
+        const own = await this.ownIDs(before)
+        const named = before.map((entry) => ({ entry, as: { ...entry, modelID: own.get(Auto.modelKey(entry)) ?? entry.modelID } }))
+        const same = (one: AutoEntry, other: Partial<AutoEntry> | null) => one.providerID === other?.providerID && one.modelID === other?.modelID && (one.variant ?? "") === (other?.variant ?? "")
+        const entries = (list as AutoList).entries.map((given) => {
+          const was = named.find((each) => same(each.as, given))
+          return was && given && typeof given === "object" ? { ...given, modelID: was.entry.modelID } : given
+        })
+        return { ...(list as AutoList), entries }
+      }),
+    )
   }
 
   /**

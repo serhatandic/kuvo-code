@@ -1093,6 +1093,17 @@ function workOutcome(messages, outcome) {
   const work = pastSummaries(rows);
   return work.length < rows.length ? work.find((row) => row?.type === "idle")?.outcome ?? outcome : outcome;
 }
+var ofTurn = (message) => message.type === "user" || message.type === "synthetic" || message.type === "assistant";
+function turnIn(messages) {
+  const lastEnd = messages.findIndex((message) => message.type === "idle");
+  const from = lastEnd >= 0 && !messages.slice(0, lastEnd).some(ofTurn) ? lastEnd + 1 : 0;
+  return { from, before: messages.findIndex((message, index) => index >= from && message.type === "idle") };
+}
+function lastTurn(messages) {
+  const work = pastSummaries(asRows(messages));
+  const { from, before } = turnIn(work);
+  return work.slice(from, before < 0 ? undefined : before);
+}
 var lastTurnEnd = (messages) => pastSummaries(asRows(messages)).find((row) => row?.type === "idle");
 
 // Packages/Box/src/link/engine/sessions.ts
@@ -1902,6 +1913,10 @@ function awaySessions(records = liveMoves()) {
 }
 function frozen(records = liveMoves()) {
   return new Set(records.filter((record) => record.step !== "check").flatMap((record) => [record.thing, ...record.sessions]));
+}
+function switchedTo(session, records = liveMoves()) {
+  const record = records.find((each) => each.role === "from" && (each.stage === "switching" || each.stage === "finishing") && each.sessions.includes(session));
+  return record?.peer ?? null;
 }
 function movedAway(now = Date.now()) {
   try {
@@ -7423,9 +7438,8 @@ async function askingNow(listed, signal) {
     return { id: questions[0].id, what: `Asks: ${questions[0].text}` };
   return null;
 }
-async function lastReplyOf(listed, signal) {
-  const page = await call(listed.target, "GET", `/api/session/${encodeURIComponent(listed.data.id)}/message?limit=6&order=desc`, undefined, signal).catch(() => null);
-  for (const message of Array.isArray(page) ? page : []) {
+function replyIn(messages) {
+  for (const message of Array.isArray(messages) ? messages : []) {
     if (!isObject(message) || message.type !== "assistant" || !Array.isArray(message.content))
       continue;
     const text = message.content.filter((part) => isObject(part) && part.type === "text").map((part) => String(part.text ?? "")).join(" ").replace(/\s+/g, " ").trim();
@@ -7433,6 +7447,9 @@ async function lastReplyOf(listed, signal) {
       return cut(text, 280);
   }
   return null;
+}
+async function lastReplyOf(listed, signal) {
+  return replyIn(await lastMessages(listed.target, listed.data.id, signal));
 }
 async function contextOf(listed, signal) {
   const page = await call(listed.target, "GET", `/api/session/${encodeURIComponent(listed.data.id)}/message?limit=20&order=desc`, undefined, signal).catch(() => null);
@@ -7471,9 +7488,11 @@ async function describeWork(listed, working, { replies = false, signal } = {}) {
   const { data } = listed;
   const folder = data.location?.directory ?? data.directory ?? "";
   const asking = await askingNow(listed, signal);
-  const outcome = replies && !working.has(data.id) ? outcomeOf(listed, await call(listed.target, "GET", `/api/session/${encodeURIComponent(data.id)}/message?limit=6&order=desc`, undefined, signal).catch(() => null)) : data.outcome;
+  const read = replies && !working.has(data.id);
+  const page = read ? await lastMessages(listed.target, data.id, signal) : null;
+  const outcome = read ? outcomeOf(listed, page) : data.outcome;
   const state = asking ? "asking" : working.has(data.id) ? "working" : outcome === "succeeded" ? "finished" : outcome === "failed" ? "failed" : outcome === "interrupted" ? "stopped" : data.time?.idle ? "finished" : "idle";
-  const reply = replies && state !== "working" ? await lastReplyOf(listed, signal) : null;
+  const reply = !replies || state === "working" ? null : state === "stopped" || state === "failed" ? replyIn(lastTurn(page)) : read ? replyIn(page) : await lastReplyOf(listed, signal);
   const project = folder === CHATS ? undefined : projectNameOf(folder);
   return {
     session: data.id,
@@ -8949,12 +8968,6 @@ function beganBy(turn) {
     return { kind: String(first.text ?? "").startsWith(WAKE_MARKER) ? "timer" : "word", at };
   const source = isObject(first.metadata) ? first.metadata.source : undefined;
   return { kind: source === "shell" || source === "subagent" || source === "agent" ? "left" : "other", at };
-}
-var ofTurn = (message) => message.type === "user" || message.type === "synthetic" || message.type === "assistant";
-function turnIn(messages) {
-  const lastEnd = messages.findIndex((message) => message.type === "idle");
-  const from = lastEnd >= 0 && !messages.slice(0, lastEnd).some(ofTurn) ? lastEnd + 1 : 0;
-  return { from, before: messages.findIndex((message, index) => index >= from && message.type === "idle") };
 }
 async function latestMessages(target, session) {
   const address = encodeURIComponent(session);
@@ -16648,6 +16661,10 @@ async function usableModels(engine, bridge, signal) {
     models.push(...modelsIn(await call(bridge, "GET", "/api/model", undefined, signal).catch(() => null), bridge, true, null));
   return models;
 }
+var modelNamed = (ref, models) => {
+  const ofProvider = ref ? models.filter((model) => model.providerID === ref.providerID) : [];
+  return ofProvider.find((model) => model.id === ref?.id) ?? ofProvider.find((model) => model.aliases.includes(ref?.id ?? ""));
+};
 function describeModels(all, held = unansweringNow()) {
   const models = all.filter((model) => !model.retiring);
   if (!models.length)
@@ -20969,12 +20986,13 @@ async function takeCall(sender, given, { send, targets, answer = leaveCallAnswer
   running.add(id);
   try {
     const own = ownKey(readLink() ?? {});
-    if (frozen().has(from))
+    const arrived = switchedTo(from) === sender.key;
+    if (!arrived && frozen().has(from))
       return no("That conversation is moving between computers: it comes again once it's there.", true);
-    const lives = moved.get(from) ?? homesOf(readLink()).get(from);
+    const lives = arrived ? sender.key : moved.get(from) ?? homesOf(readLink()).get(from);
     if (lives && lives !== sender.key && lives !== own)
       return no("That conversation lives on another computer, as this one knows it: it comes again.", true);
-    if (await placeOfSession(from, targets).catch(() => {
+    if (!arrived && await placeOfSession(from, targets).catch(() => {
       return;
     }))
       return no("That conversation is on this computer: another can't speak for it.");
@@ -25765,7 +25783,7 @@ async function startSession(given, by, place) {
     if ("refused" in choice)
       return no(400, choice.refused);
     const held = by ? holdOf(choice.model, unansweringNow()) : null;
-    const own = model && models.find((each) => each.providerID === model?.providerID && each.id === model?.id);
+    const own = modelNamed(model, models);
     if (held)
       warning = `${holdWords(held)}, so this may fail the same way. If it does, start it on a model that can, from list_models${own && !holdOf(own, unansweringNow()) ? `, like the one you run on (${own.providerID}/${own.id})` : ""}, or tell the user.`;
     free = choice.model.free;
