@@ -1407,7 +1407,12 @@ class CodexThread implements Thread {
       // (Turned down with a sleep starting: telling it again as that started is seeing to it.)
       if (noted && !this.answered.includes(noted)) return
       this.answered = this.answered.filter((each) => each !== noted)
-      if (await this.steerIntoSleep(active, { text, files })) return
+      // Into the sleep it's in, and then into one that started while that was tried: as a sleep
+      // starts it's told only what's kept by then, so kept below at once once there's no sleep left.
+      for (let tried: AbortController | undefined; this.sleep && this.sleep !== tried && this.active === active; ) {
+        tried = this.sleep
+        if (await this.steerIntoSleep(active, { text, files })) return
+      }
     }
     if (answer) this.answers.push(answer)
   }
