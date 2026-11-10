@@ -26,7 +26,7 @@ import { botHere } from "../bots/here";
 import { readProjects } from "../areas/projects";
 import { commandTemporary } from "../fence/state";
 import { askedAbout, fencePolicy } from "../fence/policy";
-import { projectWorktrees } from "./project-trees";
+import { inTime, projectWorktrees } from "./project-trees";
 import type { EngineAnswer } from "../engine/client";
 import type { EngineSession } from "../engine/sessions";
 import type { Target } from "../../shared/records";
@@ -360,7 +360,7 @@ const treesFound = new Map<string, { at: number; trees: Promise<string[]> }>();
 const TREES_FOR = 5_000;
 
 async function foundTrees(folder: string): Promise<string[]> {
-  const trees = projectWorktrees(folder);
+  const trees = await inTime(projectWorktrees(folder), []);
   if (!trees.length) return [];
   const policy = fencePolicy();
   const ours = (tree: string) => policy.kuvo.some(wall => tree === wall || tree.startsWith(wall + "/") || wall.startsWith(tree + "/")) || policy.kuvoPatterns.some(pattern => new RegExp(pattern).test(tree + "/"));

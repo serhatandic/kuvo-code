@@ -406,6 +406,31 @@ test.skipIf(!canFence || !mac)("on a Mac, a command never writes another project
   }
 })
 
+// Which worktrees a repository has, and its submodules, are named in `.git/worktrees` and
+// `.git/modules`: moved away or traded for a link, another repository's would pass for its own (Auto
+// counts a project's worktrees as its own, #422), and a worktree's `commondir` could name a copy
+// whose settings run a program as you run git there. On a Mac, neither folder is made, moved or
+// removed by a command; what's in them is git's to write as ever.
+test.skipIf(!canFence || !mac)("on a Mac, a command never moves or replaces its repository's worktrees and modules folders", () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "kuvo-sandbox-walls-trees-")))
+  try {
+    const { home, run } = walled(root)
+    const project = join(home, "app")
+    files(home, { "app/.git/HEAD": "ref: refs/heads/main\n", "app/.git/worktrees/try/HEAD": "x\n", "app/.git/modules/lib/HEAD": "x\n", "other/.git/worktrees/theirs/HEAD": "x\n" })
+    mkdirSync(join(project, ".git", "objects"), { recursive: true })
+    const out = run(project, [
+      tries("moves its worktrees folder", `mv ${project}/.git/worktrees ${project}/.git/wt`),
+      tries("links another's in its place", `rm -rf ${project}/.git/worktrees; ln -s ${home}/other/.git/worktrees ${project}/.git/worktrees`),
+      tries("moves its modules folder", `mv ${project}/.git/modules ${project}/.git/mods`),
+      tries("writes in a worktree's own folder", `echo x > ${project}/.git/worktrees/try/HEAD`),
+    ].join("\n"), { KUVO_FENCE_GIT: join(project, ".git") })
+    expect(outcomes(out)).toEqual({ "moves its worktrees folder": "refused", "links another's in its place": "refused", "moves its modules folder": "refused", "writes in a worktree's own folder": "allowed" })
+    expect(existsSync(join(project, ".git", "worktrees", "try", "HEAD"))).toBe(true)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
 // HOME names where tools look for what runs later, but never a folder that isn't a home.
 test("HOME set to / or a folder above yours adds no home to keep", () => {
   const account = realpathSync(userInfo().homedir)

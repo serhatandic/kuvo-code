@@ -48,8 +48,9 @@ const param = (name: string) => `(subpath (param ${quote(name)}))`;
 // scripts, but not the rest of their folders, like rules and commands, which run nothing) or change
 // what the engine does (its settings, its plugins). A folder moved or linked into place is checked
 // only by its own name, never by what's in it, so the folders that hold those (`.git`, a submodule's
-// or a worktree's repository, the agents' folders) can't be made, moved or removed, only written in.
-const GIT_GUARDED = String.raw`(((modules/.+|worktrees/[^/]+)/)?(hooks(/|$)|config(\.worktree)?$|commondir$|gitdir$)|(modules|worktrees)/[^/]+$)`;
+// or a worktree's repository, and the folders that hold those, `modules` and `worktrees`, and the
+// agents' folders) can't be made, moved or removed, only written in.
+const GIT_GUARDED = String.raw`(((modules/.+|worktrees/[^/]+)/)?(hooks(/|$)|config(\.worktree)?$|commondir$|gitdir$)|(modules|worktrees)(/[^/]+)?$)`;
 const AGENTS_GUARDED = String.raw`\.claude/settings(\.local)?\.json|\.mcp\.json|\.codex/(config\.toml|hooks\.json|\.env|rules(/.*)?)|\.cursor/(hooks|mcp)\.json|\.(gemini|grok)/settings\.json|\.grok/(config\.toml|sandbox\.toml|lsp\.json|(hooks|plugins|agents|workflows)(/.*)?)|\.(claude|cursor)/hooks(/.*)?|\.(claude|codex|cursor|gemini|grok)`;
 /** Every kind of write, by name, and `file-write*`. A rule on a kind by its name is checked before any
  * on `file-write*`, whatever their order, so the profile names them all wherever it carves one out of

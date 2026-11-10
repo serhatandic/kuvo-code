@@ -3999,7 +3999,7 @@ var quote2 = (text) => `"${text.replace(/\\/g, "\\\\").replace(/"/g, "\\\"")}"`;
 var subpath = (folder) => `(subpath ${quote2(folder)})`;
 var regex = (pattern) => `(regex ${quote2(pattern)})`;
 var param = (name) => `(subpath (param ${quote2(name)}))`;
-var GIT_GUARDED = String.raw`(((modules/.+|worktrees/[^/]+)/)?(hooks(/|$)|config(\.worktree)?$|commondir$|gitdir$)|(modules|worktrees)/[^/]+$)`;
+var GIT_GUARDED = String.raw`(((modules/.+|worktrees/[^/]+)/)?(hooks(/|$)|config(\.worktree)?$|commondir$|gitdir$)|(modules|worktrees)(/[^/]+)?$)`;
 var AGENTS_GUARDED = String.raw`\.claude/settings(\.local)?\.json|\.mcp\.json|\.codex/(config\.toml|hooks\.json|\.env|rules(/.*)?)|\.cursor/(hooks|mcp)\.json|\.(gemini|grok)/settings\.json|\.grok/(config\.toml|sandbox\.toml|lsp\.json|(hooks|plugins|agents|workflows)(/.*)?)|\.(claude|cursor)/hooks(/.*)?|\.(claude|codex|cursor|gemini|grok)`;
 var WRITE = "file-write* file-write-acl file-write-create file-write-data file-write-finderinfo file-write-flags file-write-mode file-write-owner file-write-setugid file-write-times file-write-unlink file-write-xattr";
 var HOME_WRITES = "file-write* file-write-create file-write-data file-write-flags file-write-mode file-write-times file-write-xattr";
@@ -5790,101 +5790,121 @@ import path25 from "node:path";
 // Packages/Box/src/link/work/project-trees.ts
 import fs23 from "node:fs";
 import path24 from "node:path";
-var real = (where) => {
+var fsp = fs23.promises;
+var MOST_READ = 4096;
+async function real(where) {
+  await askedAbout([where]);
   try {
-    return fs23.realpathSync(where);
+    return await fsp.realpath(where);
   } catch {
     return null;
   }
-};
-var isRepository = (git) => {
+}
+async function realishLater(where) {
+  const full = path24.resolve(where);
+  for (let at = full, rest = "";; rest = path24.join(path24.basename(at), rest), at = path24.dirname(at)) {
+    const found = await real(at);
+    if (found)
+      return path24.join(found, rest);
+    if (path24.dirname(at) === at)
+      return full;
+  }
+}
+async function smallFile(file) {
   try {
-    if (fs23.lstatSync(git).isSymbolicLink() || !fs23.statSync(path24.join(git, "HEAD")).isFile())
+    const kind = await fsp.lstat(file);
+    if (!kind.isFile() || kind.size > MOST_READ)
+      return null;
+    return await fsp.readFile(file, "utf8");
+  } catch {
+    return null;
+  }
+}
+async function isRepository(git) {
+  try {
+    if ((await fsp.lstat(git)).isSymbolicLink() || !(await fsp.lstat(path24.join(git, "HEAD"))).isFile())
       return false;
-    return fs23.statSync(path24.join(git, "objects")).isDirectory() && fs23.statSync(path24.join(git, "refs")).isDirectory();
+    return (await fsp.stat(path24.join(git, "objects"))).isDirectory() && (await fsp.stat(path24.join(git, "refs"))).isDirectory();
   } catch {
     return false;
   }
-};
-function namedBack(top) {
-  try {
-    if (!fs23.lstatSync(path24.join(top, ".git")).isFile())
-      return null;
-    const named = fs23.readFileSync(path24.join(top, ".git"), "utf8").match(/^gitdir:\s*(.+)$/m)?.[1]?.trim();
-    return named ? real(path24.resolve(top, named)) : null;
-  } catch {
-    return null;
-  }
 }
-function repositoryOf(folder) {
-  for (let at = realish(folder);; at = path24.dirname(at)) {
+async function namedBack(top) {
+  const named = (await smallFile(path24.join(top, ".git")))?.match(/^gitdir:\s*(.+)$/m)?.[1]?.trim();
+  return named ? real(path24.resolve(top, named)) : null;
+}
+async function repositoryOf(folder) {
+  for (let at = await realishLater(folder);; at = path24.dirname(at)) {
     const git = path24.join(at, ".git");
     let kind;
     try {
-      kind = fs23.lstatSync(git);
+      kind = await fsp.lstat(git);
     } catch {}
     if (kind?.isDirectory())
-      return isRepository(git) ? { top: at, main: at } : null;
+      return await isRepository(git) ? { top: at, main: at } : null;
     if (kind?.isFile()) {
-      const own = namedBack(at);
+      const own = await namedBack(at);
       if (!own || path24.basename(path24.dirname(own)) !== "worktrees")
         return null;
       const common = path24.dirname(path24.dirname(own));
-      if (path24.basename(common) !== ".git" || !isRepository(common))
+      if (path24.basename(common) !== ".git" || !await isRepository(common))
         return null;
-      return linkedWorktrees(path24.dirname(common)).includes(at) ? { top: at, main: path24.dirname(common) } : null;
+      return (await linkedWorktrees(path24.dirname(common))).includes(at) ? { top: at, main: path24.dirname(common) } : null;
     }
-    if (path24.dirname(at) === at)
+    if (kind || path24.dirname(at) === at)
       return null;
   }
 }
-function linkedWorktrees(main) {
-  const top = real(main);
+async function linkedWorktrees(main) {
+  const top = await real(main);
   if (!top)
     return [];
   const git = path24.join(top, ".git");
-  if (!isRepository(git))
+  const trees = path24.join(git, "worktrees");
+  if (!await isRepository(git) || await real(trees) !== trees)
     return [];
   let names = [];
   try {
-    names = fs23.readdirSync(path24.join(git, "worktrees"));
+    names = await fsp.readdir(trees);
   } catch {
     return [];
   }
   const found = [];
   for (const name of names) {
-    const own = path24.join(git, "worktrees", name);
+    const own = path24.join(trees, name);
     try {
-      if (fs23.lstatSync(own).isSymbolicLink())
+      if (!(await fsp.lstat(own)).isDirectory() || await real(own) !== own)
         continue;
-      const gitdir = fs23.readFileSync(path24.join(own, "gitdir"), "utf8").trim();
+      const gitdir = (await smallFile(path24.join(own, "gitdir")))?.trim();
       if (!gitdir)
         continue;
-      const tree = real(path24.dirname(path24.resolve(own, gitdir)));
-      if (tree && tree !== top && namedBack(tree) === real(own))
+      const tree = await real(path24.dirname(path24.resolve(own, gitdir)));
+      if (tree && tree !== top && await namedBack(tree) === own)
         found.push(tree);
     } catch {}
   }
   return found;
 }
-function projectWorktrees(folder) {
-  const repository = repositoryOf(folder);
+async function projectWorktrees(folder) {
+  const repository = await repositoryOf(folder);
   if (!repository || repository.top !== repository.main)
     return [];
-  const within = path24.relative(repository.top, realish(folder));
-  return linkedWorktrees(repository.main).map((tree) => path24.join(tree, within));
+  const within = path24.relative(repository.top, await realishLater(folder));
+  return (await linkedWorktrees(repository.main)).map((tree) => path24.join(tree, within));
 }
-function inProjectWorktree(folder, project) {
-  const repository = repositoryOf(folder);
+async function inProjectWorktree(folder, project) {
+  const repository = await repositoryOf(folder);
   if (!repository || repository.top === repository.main)
     return false;
-  const mapped = path24.join(repository.main, path24.relative(repository.top, realish(folder)));
-  const home = realish(project);
+  const mapped = path24.join(repository.main, path24.relative(repository.top, await realishLater(folder)));
+  const home = await realishLater(project);
   return mapped === home || mapped.startsWith(home + "/");
+}
+function inTime(work, instead, within = 5000) {
+  return Promise.race([work, new Promise((done) => setTimeout(() => done(instead), within).unref?.())]);
 }
 var linked = {};
 var linkedAt = 0;
-var linking = null;
 var projectsOf = () => [];
 var LINKED_FOR = 15000;
 var linkedFollowers = new Set;
@@ -5892,18 +5912,27 @@ function linkedTreesOf(projects) {
   projectsOf = projects;
 }
 function linkedTrees() {
-  if (Date.now() - linkedAt > LINKED_FOR)
-    findLinkedTrees();
+  if (Date.now() - linkedAt > LINKED_FOR && !looking) {
+    looking = true;
+    findLinkedTrees().finally(() => {
+      looking = false;
+    });
+  }
   return linked;
 }
+var looking = false;
+var looks = Promise.resolve();
 function findLinkedTrees() {
-  linking ??= (async () => {
+  looks = looks.then(lookForTrees, lookForTrees);
+  return looks;
+}
+async function lookForTrees() {
+  try {
     const projects = projectsOf();
-    await askedAbout(projects);
-    const own = new Set(projects.map(realish));
+    const own = new Set(await Promise.all(projects.map(realishLater)));
     const found = {};
     for (const project of projects) {
-      for (const tree of projectWorktrees(project))
+      for (const tree of await inTime(projectWorktrees(project), []))
         if (!own.has(tree))
           found[tree] ??= project;
     }
@@ -5913,10 +5942,7 @@ function findLinkedTrees() {
     linked = found;
     for (const tell of linkedFollowers)
       tell();
-  })().catch(() => {}).finally(() => {
-    linking = null;
-  });
-  return linking;
+  } catch {}
 }
 
 // Packages/Box/src/link/areas/worktree-records.ts
@@ -16220,8 +16246,10 @@ var VALUED2 = {
 var RUNS_ANOTHER = new Set([...WRAPPERS, "find", "watch", "parallel", "-exec", "-execdir", "-ok"]);
 var DELETERS = new Set(["rm", "rmdir", "unlink", "shred", "srm", "trash"]);
 var SHELLS = /^((ba|z|da|k|fi)?sh|eval)$/;
-var inside3 = (where, wall) => where === wall || where.startsWith(wall + "/");
-var holds = (folder, wall) => folder === "/" || wall.startsWith(folder + "/");
+var fold = (where) => process.platform === "darwin" ? where.toLowerCase() : where;
+var exactly = (where, wall) => where === wall || where.startsWith(wall + "/");
+var inside3 = (where, wall) => exactly(fold(where), fold(wall));
+var holds = (folder, wall) => folder === "/" || fold(wall).startsWith(fold(folder) + "/");
 var matching3 = (where, patterns = []) => patterns.some((each) => new RegExp(each).test(where));
 var nameOf = (word) => word.split("/").pop() ?? "";
 var homeWord = (text) => text.replace(/^(~|\$HOME|\$\{HOME\})(?=\/|$)/, homeFolder());
@@ -16322,16 +16350,17 @@ var SYSTEM_LOGIN = [
   "/private/etc/sudoers",
   "/private/etc/sudoers.d"
 ];
-function atLogin(where, home) {
-  if (SYSTEM_LOGIN.some((wall) => inside3(where, wall)))
+function atLogin(given, home) {
+  if (SYSTEM_LOGIN.some((wall) => inside3(given, wall)))
     return true;
-  if (!where.startsWith(home + "/"))
+  const where = fold(given);
+  if (!where.startsWith(fold(home) + "/"))
     return false;
   const rest = where.slice(home.length + 1);
   return LOGIN.some((wall) => inside3(rest, wall)) || !rest.includes("/") && LOGIN_PREFIXES.some((prefix) => rest.startsWith(prefix));
 }
 function inKuvo(where, policy, own = []) {
-  return (policy.kuvo.some((wall) => inside3(where, wall)) || matching3(where, policy.kuvoPatterns)) && !own.some((folder) => inside3(where, folder));
+  return (policy.kuvo.some((wall) => inside3(where, wall)) || matching3(where, policy.kuvoPatterns)) && !own.some((folder) => exactly(where, folder));
 }
 function ownInside(own, policy) {
   const temporaries = new Set(own.map(commandTemporary).filter((each) => Boolean(each)));
@@ -16352,7 +16381,7 @@ function conversationPlace(at) {
 }
 function deletesHome(where, home) {
   const target = where.endsWith("/*") ? where.slice(0, -2) || "/" : where;
-  return target === home || holds(target, home);
+  return fold(target) === fold(home) || holds(target, home);
 }
 async function keptFromSessions(folder, policy = fencePolicy()) {
   await askedAbout([folder]);
@@ -16361,7 +16390,7 @@ async function keptFromSessions(folder, policy = fencePolicy()) {
   const reach = (wall) => `its commands would reach ${wall}`;
   if (homes.some((home) => deletesHome(at, home)))
     return "its commands could delete your home folder";
-  if ((policy.personal ?? []).some((each) => at === each || holds(at, each)))
+  if ((policy.personal ?? []).some((each) => fold(at) === fold(each) || holds(at, each)))
     return "its commands could delete a whole personal folder of yours";
   if ([...policy.secrets, ...homes.map((home) => home + "/.ssh")].some((each) => inside3(at, each) || holds(at, each)))
     return reach("your secrets");
@@ -16608,12 +16637,13 @@ var CREDENTIALS = [
   ".gemini/oauth_creds.json"
 ];
 var GIT_GLOBAL = [".gitconfig", ".config/git/config"];
-function ownAt(where, home) {
+function ownAt(given, home) {
+  const where = fold(given);
   if (where === "/etc/gitconfig" || where === "/private/etc/gitconfig")
     return "git";
-  if (where === realish(opencodeAuthFile(home)))
+  if (where === fold(realish(opencodeAuthFile(home))))
     return "credentials";
-  if (!where.startsWith(home + "/"))
+  if (!where.startsWith(fold(home) + "/"))
     return null;
   const rest = where.slice(home.length + 1);
   if (GIT_GLOBAL.some((each) => inside3(rest, each)))
@@ -16911,33 +16941,48 @@ function scriptsOf(command, start) {
     unpinned ??= `It downloads something and runs ${path61.basename(missing[0])} from it, so what runs can't be read here first.`;
   return { files: [...new Set(files.filter(exists))], urls: [...new Set(urls)], ...unpinned ? { unpinned } : {} };
 }
-function isSecret(where, policy) {
-  const ssh = /\/\.ssh\/([^/]+)/.exec(where.slice(policy.home.length));
-  const sshKey = where.startsWith(policy.home + "/.ssh/") && ssh && !/^(config|config\.d|known_hosts.*|authorized_keys.*|rc|environment|.*\.pub)$/.test(ssh[1]);
-  return Boolean(sshKey) || where === policy.home + "/.ssh" || policy.secrets.some((wall) => inside3(where, wall));
+function isSecret(given, policy) {
+  const where = fold(given), home = fold(policy.home);
+  const ssh = /\/\.ssh\/([^/]+)/.exec(where.slice(home.length));
+  const sshKey = where.startsWith(home + "/.ssh/") && ssh && !/^(config|config\.d|known_hosts.*|authorized_keys.*|rc|environment|.*\.pub)$/.test(ssh[1]);
+  return Boolean(sshKey) || where === home + "/.ssh" || policy.secrets.some((wall) => inside3(where, wall));
 }
 var RUNS_OUTSIDE = new RegExp(`^/${GUARDED}`, process.platform === "darwin" ? "i" : "");
-async function gitIn2(folder, args) {
+async function gitIn2(folder, args, ok = [0]) {
   const run = await ownArgsLater(args, folder);
   if (!run)
     return null;
   const env = { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_OPTIONAL_LOCKS: "0", GIT_CONFIG_NOSYSTEM: "1", GIT_LITERAL_PATHSPECS: "1" };
-  return new Promise((resolve) => execFile7("git", run, { cwd: folder, env, encoding: "utf8", timeout: 20000, maxBuffer: 8 * 1024 * 1024 }, (error, out) => resolve(error ? null : String(out ?? ""))));
+  return new Promise((resolve) => execFile7("git", run, { cwd: folder, env, encoding: "utf8", timeout: 20000, maxBuffer: 8 * 1024 * 1024 }, (error, out) => resolve(!error || ok.includes(Number(error.code)) ? String(out ?? "") : null)));
 }
 async function projectScript(file, text, folders) {
   const at = realish(file);
   if (!folders.some((folder) => inside3(at, realish(folder))))
     return null;
   const where = path61.dirname(at);
-  if (await gitIn2(where, ["ls-files", "--error-unmatch", "--", path61.basename(at)]) === null)
+  const name = path61.basename(at);
+  if (await gitIn2(where, ["ls-files", "--error-unmatch", "--", name]) === null)
     return null;
-  const changed = await gitIn2(where, ["diff", "--no-color", "HEAD", "--", path61.basename(at)]);
-  if (changed === null)
+  const committed = await gitIn2(where, ["show", `HEAD:./${name}`]);
+  if (committed === null)
     return null;
+  let changed = "";
+  if (committed !== text) {
+    fs57.mkdirSync(FETCHED_FOLDER, { recursive: true, mode: 448 });
+    const copy = path61.join(FETCHED_FOLDER, `${randomBytes(8).toString("hex")}.committed`);
+    writePrivate(copy, committed);
+    try {
+      changed = await gitIn2(where, ["diff", "--no-index", "--text", "--no-color", "--", copy, at], [0, 1]) ?? "";
+    } finally {
+      fs57.rmSync(copy, { force: true });
+    }
+    if (!changed)
+      return null;
+  }
   if (changed.length > MOST_SCRIPT)
     return `It runs ${path61.basename(file)}, too long to be read whole first, and changed too much since its last commit to show what changed.`;
-  const name = `${file} (tracked in git, too long to show whole: only its start is shown${changed ? ", then its changes not yet committed" : ""}; what's past the start, as committed, isn't shown, and the agent may have committed it)`;
-  return { name, text: changed ? `${cut(text, MOST_SCRIPT)}
+  const label = `${file} (tracked in git, too long to show whole: only its start is shown${changed ? ", then how it differs from its last commit" : ""}; what's past the start, as committed, isn't shown, and the agent may have committed it)`;
+  return { name: label, text: changed ? `${cut(text, MOST_SCRIPT)}
 
 ${changed}` : cut(text, MOST_SCRIPT) };
 }
@@ -17078,10 +17123,6 @@ function keepDecision(session, decision, folder = REVIEWS_FOLDER, place) {
     return pausing;
   });
 }
-function placeAllowed(log, where) {
-  const at = realish(where);
-  return (log.places ?? []).some((place) => inside3(at, place));
-}
 function seeHeld(session, now = Date.now(), folder = REVIEWS_FOLDER) {
   return changeLog(session, folder, (log) => {
     log.seen = Math.max(log.seen ?? 0, now, ...log.decisions.map((each) => each.at));
@@ -17120,6 +17161,16 @@ function revokePlace(session, id, now = Date.now(), folder = REVIEWS_FOLDER) {
     given.revoked = now;
     log.places = (log.places ?? []).filter((each) => each !== given.place);
     return { ...given };
+  });
+}
+function clearPlaces(session, now = Date.now(), folder = REVIEWS_FOLDER) {
+  if (!reviewLog(session, folder).places?.length)
+    return;
+  changeLog(session, folder, (log) => {
+    for (const each of log.decisions)
+      if (each.place && !each.revoked)
+        each.revoked = now;
+    log.places = [];
   });
 }
 function takeApproval(session, key, now, folder) {
@@ -17194,7 +17245,7 @@ async function keptPlace(action, policy, own) {
   if (action.kind !== "file" || action.access !== "write" || !action.tool || !action.input)
     return;
   const file = realish(action.path);
-  const repository = repositoryOf(path61.dirname(file));
+  const repository = await inTime(repositoryOf(path61.dirname(file)), null);
   const place = repository?.top ?? path61.dirname(file);
   const home = own[0] ? realish(own[0]) : null;
   if (home && holds(place, home))
@@ -17297,7 +17348,7 @@ async function judge(action, context, given, now, folder) {
     return done(heldBack(`It changes ${OWN2[own].words}, for every project, which the user didn't ask for. ${OWN2[own].instead}`, "unasked"));
   }
   const persists = persistenceOf(action, policy);
-  if (action.kind === "file" && action.access === "write" && !own && !persists && !isSecret(realish(action.path), policy) && !runsLater(realish(action.path), policy) && placeAllowed(log, action.path)) {
+  if (action.kind === "file" && action.access === "write" && action.tool && action.input && log.places?.length && !own && !persists && !isSecret(realish(action.path), policy) && !runsLater(realish(action.path), policy) && log.places.includes(await keptPlace(action, policy, context.folders ?? given.own ?? []) ?? "")) {
     return done({ decision: "allow", reason: "Auto's reviewer allowed changing files there earlier in this conversation.", by: "code" });
   }
   const environments = environmentsOf(action);
@@ -17682,7 +17733,7 @@ async function projectTrees(folder) {
 var treesFound = new Map;
 var TREES_FOR = 5000;
 async function foundTrees(folder) {
-  const trees = projectWorktrees(folder);
+  const trees = await inTime(projectWorktrees(folder), []);
   if (!trees.length)
     return [];
   const policy = fencePolicy();
@@ -17960,7 +18011,12 @@ async function setApproval(id, wanted, engine, bridge, signal) {
   if (!at.data.parentID)
     rememberApproval(wanted);
   await settle(at, signal);
-  markConversation(at.data.id, approvalOf(at.data, { agents: at.agents, bot: at.bot }).effective === "fullAccess");
+  const effective = approvalOf(at.data, { agents: at.agents, bot: at.bot }).effective;
+  markConversation(at.data.id, effective === "fullAccess");
+  if (effective !== "auto")
+    try {
+      clearPlaces(at.data.id);
+    } catch {}
   return { status: 200, value: shown2(at) };
 }
 function approvalHere() {
@@ -18231,10 +18287,12 @@ function findProject(named) {
   return found ? { directory: found.directory, name: found.name ?? path65.basename(found.directory) } : null;
 }
 var projectNames = () => readProjects().filter((each) => !each.removed).map((each) => each.name ?? path65.basename(each.directory)).slice(0, 12);
-function inProject(folder, directory) {
+async function inProject(folder, directory) {
+  await askedAbout([folder, directory]);
   const at = realish(folder);
   const others = readProjects().find((each) => each.directory === directory)?.folders ?? [];
-  return [directory, ...others].map(realish).some((each) => at === each || at.startsWith(each + "/")) || inProjectWorktree(at, directory);
+  await askedAbout(others);
+  return [directory, ...others].map(realish).some((each) => at === each || at.startsWith(each + "/")) || inTime(inProjectWorktree(at, directory), false);
 }
 async function answersYou2(target, session) {
   const address = encodeURIComponent(session);
@@ -18300,7 +18358,7 @@ async function startSession(given, by, place) {
       const kept = by && !fullAccess && !ours.includes(at) ? await keptFromSessions(at) : null;
       if (kept)
         return no(403, `An agent in Auto can't start a session in ${written} on ${HERE}: ${kept}. Ask the user to start it there.`);
-      if (named && !inProject(at, named.directory))
+      if (named && !await inProject(at, named.directory))
         return no(400, `${written} isn't in ${named.name} on ${HERE}: give a folder in it or in one of its worktrees, or leave out project.`);
       folder = isBotFolder(at) ? CHATS : at;
     }
@@ -18425,7 +18483,7 @@ async function startSession(given, by, place) {
   const applied = asBefore ? wanted : effectiveApproval(wanted, { agents }).approval;
   const got = applied !== (requested ?? wanted) && lowerOf(applied, requested ?? wanted) === applied ? applied : undefined;
   if (folder !== CHATS)
-    await findLinkedTrees();
+    await inTime(findLinkedTrees(), undefined, 3000);
   const project = named && realish(folder) !== realish(named.directory) ? { name: named.name, folders: [] } : projectOf3(named?.directory ?? folder);
   const title = typeof given.title === "string" && given.title.trim() ? given.title.trim() : null;
   const rules = rulesFor(applied, parent, project?.folders ?? []);
@@ -27848,10 +27906,10 @@ function listOf3(folder) {
 }
 var SESSION5 = /^ses_[A-Za-z0-9_-]{1,120}$/;
 var keptIn = attachmentRoots;
-var looking = Promise.resolve();
+var looking2 = Promise.resolve();
 function letAttachmentsGo(places, session) {
-  looking = looking.then(() => letGo3(places, session)).catch(() => {});
-  return looking;
+  looking2 = looking2.then(() => letGo3(places, session)).catch(() => {});
+  return looking2;
 }
 async function letGo3({ engine, bridge }, session) {
   if (!bridge)
@@ -32410,7 +32468,7 @@ async function* searchRoute(context) {
   if (!lists[0].sessions)
     return yield* json(503, { message: "This computer's engine didn't answer. Search again in a moment." });
   const conversations = lists.flatMap(({ place, sessions }) => byConversation(sessions ?? []).map((conversation) => ({ ...conversation, place }))).sort((one, other) => other.top.time.updated - one.top.time.updated);
-  const wanted = fold(words);
+  const wanted = fold2(words);
   const results = [];
   const findIn = async ({ top, subagents, place }) => {
     const sessions = [top, ...subagents];
@@ -32479,7 +32537,7 @@ function textOf3(place, target, session) {
   const read = conversationOf3(target, session.id).then((messages) => {
     const cut = session.revert?.messageID ? messages.findIndex((message) => message.id === session.revert.messageID) : -1;
     const text = searchText(cut >= 0 ? messages.slice(0, cut) : messages, session.location?.directory ?? session.directory ?? "");
-    const kept = { version: TEXT_VERSION, updated, text, folded: fold(text) };
+    const kept = { version: TEXT_VERSION, updated, text, folded: fold2(text) };
     texts.set(name, { updated, folded: kept.folded });
     toDisk(name, kept);
     return kept;
@@ -32604,7 +32662,7 @@ function ownWords(written) {
 
 `);
 }
-function fold(text) {
+function fold2(text) {
   return Array.from(text, (letter) => {
     const plain = Array.from(letter.toLowerCase().normalize("NFD").replace(/\p{M}/gu, "").normalize("NFC"));
     const point = (plain.length === 1 ? plain[0] : letter).codePointAt(0) ?? 0;

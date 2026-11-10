@@ -13,7 +13,7 @@ import { bridgeTarget, call, engineGet, readEngineFile } from "../engine/client"
 import { allowFullAccess, APPROVALS, approvalOf, approvalRules, approvalsSince, defaultApproval, effectiveApproval, fullAccessAllowed, isApproval, madeBefore, rememberApproval, unavailable } from "../work/approval";
 import { resumeReviewedSession } from "../work/goals";
 import { sandboxOn } from "../work/sandbox";
-import { approveHeld, clearFetched, resumeReviews, reviewLog, revokePlace, seeHeld, shownReviews } from "../work/reviewer";
+import { approveHeld, clearFetched, clearPlaces, resumeReviews, reviewLog, revokePlace, seeHeld, shownReviews } from "../work/reviewer";
 import { tellApproved } from "../work/reviewing";
 import { markConversation } from "../work/full";
 import { botOfConversation, worksFor } from "../work/tree";
@@ -181,7 +181,10 @@ export async function setApproval(id: string, wanted: Approval, engine: Target |
   // (What it comes to may have changed while it was written.)
   await settle(at, signal);
   // Its commands from now on in the sandbox or outside it, at once (and its next run's subagents).
-  markConversation(at.data.id, approvalOf(at.data, { agents: at.agents, bot: at.bot }).effective === "fullAccess");
+  const effective = approvalOf(at.data, { agents: at.agents, bot: at.bot }).effective;
+  markConversation(at.data.id, effective === "fullAccess");
+  // Out of Auto, the folders it allowed edits in go with it.
+  if (effective !== "auto") try { clearPlaces(at.data.id); } catch {}
   return { status: 200, value: shown(at) };
 }
 

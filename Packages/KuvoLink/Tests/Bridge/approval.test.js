@@ -447,6 +447,12 @@ test("a folder Auto allowed edits in for the session shows as a decision, and an
   // Once; and only a place.
   assert.equal((await route("POST", "kuvo/sessions/ses_place/decisions", { revoke: "rd_place" })).status, 404);
   assert.equal((await route("POST", "kuvo/sessions/ses_place/decisions", { revoke: "rd_change" })).status, 404);
+  // Out of Auto, every folder it allowed goes: back in Auto, each change there is judged again.
+  write(file, JSON.stringify({ decisions: [...decisions, { ...decisions[1], id: "rd_again", place: "/tmp/eval/T3" }], refusedInRow: 0, refused: 0, places: ["/tmp/eval/T3"] }));
+  assert.equal((await route("PUT", "kuvo/sessions/ses_place/approval", { approval: "askFirst" })).status, 200);
+  const kept = JSON.parse(fs.readFileSync(file, "utf8"));
+  assert.deepEqual(kept.places, []);
+  assert.equal(typeof kept.decisions.find(each => each.id === "rd_again").revoked, "number");
 });
 
 test("what Auto held back, looked at on one client, isn't news on another, but what it holds back after is", async () => {

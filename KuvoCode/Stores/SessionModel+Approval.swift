@@ -16,14 +16,19 @@ struct ReviewDecisions: Decodable, Equatable {
         var held: Bool?
         var approved: Double?
         var used: Double?
+        /// A folder Auto allowed edits in for the rest of the conversation, and when you took it back.
+        var place: String?
+        var revoked: Double?
 
-        enum CodingKeys: String, CodingKey { case key = "id", at, action, kind, decision, reason, by, why, held, approved, used }
+        enum CodingKeys: String, CodingKey { case key = "id", at, action, kind, decision, reason, by, why, held, approved, used, place, revoked }
 
         var id: String { key ?? "\(at)·\(action)" }
         var date: Date { Date(timeIntervalSince1970: at / 1000) }
         var refused: Bool { decision != "allowed" }
         /// Held back, and yours to approve now.
         var waiting: Bool { held == true && approved == nil }
+        /// A folder Auto allows edits in now, which you can take back.
+        var revocable: Bool { place != nil && revoked == nil }
     }
     var decisions: [Decision]
     var paused: Double?
@@ -48,7 +53,8 @@ struct ReviewDecisions: Decodable, Equatable {
     }
 
     var counts: Counts {
-        latestFirst.reduce(into: Counts()) { counts, each in
+        // (A folder allowed is the edit that allowed it, counted once.)
+        latestFirst.filter { $0.place == nil }.reduce(into: Counts()) { counts, each in
             switch (each.refused, each.kind, each.action.hasPrefix("Read ")) {
             case (true, _, _) where each.approved == nil: counts.heldBack += 1
             case (_, "command", _): counts.commands += 1
@@ -172,6 +178,12 @@ extension SessionModel {
     func approveDecision(_ decision: ReviewDecisions.Decision) {
         guard let key = decision.key else { return }
         postDecisions(["approve": AnyEncodable(key)])
+    }
+
+    /// Takes back a folder Auto allowed edits in: each change there is judged again.
+    func revokePlace(_ decision: ReviewDecisions.Decision) {
+        guard let key = decision.key, decision.revocable else { return }
+        postDecisions(["revoke": AnyEncodable(key)])
     }
 
     /// Lets Auto go on where it paused after too many refusals.

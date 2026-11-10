@@ -34,7 +34,7 @@ import { askedAbout, escapeRegex, fencePolicy, realish, type FencePolicy } from 
 import { GUARDED } from "../fence/seatbelt";
 import { commandTemporary, conversationPlaces } from "../fence/state";
 import { readLine } from "./policy";
-import { repositoryOf } from "./project-trees";
+import { inTime, repositoryOf } from "./project-trees";
 
 /** What's judged: a command to run outside the sandbox (in `folder`), a file one of the agent's
  * own tools reads or writes outside its folder, or another tool's call with its arguments. A
@@ -106,9 +106,13 @@ const RUNS_ANOTHER = new Set([...WRAPPERS, "find", "watch", "parallel", "-exec",
 const DELETERS = new Set(["rm", "rmdir", "unlink", "shred", "srm", "trash"]);
 const SHELLS = /^((ba|z|da|k|fi)?sh|eval)$/;
 
-const inside = (where: string, wall: string) => where === wall || where.startsWith(wall + "/");
+// A Mac's disk, as it's usually set up, doesn't tell `~/.SSH` from `~/.ssh`: a wall is matched there
+// by any case (`exactly`, where what's the conversation's own is matched, never widens it).
+const fold = (where: string) => (process.platform === "darwin" ? where.toLowerCase() : where);
+const exactly = (where: string, wall: string) => where === wall || where.startsWith(wall + "/");
+const inside = (where: string, wall: string) => exactly(fold(where), fold(wall));
 // (Whether `folder` holds `wall`, below it.)
-const holds = (folder: string, wall: string) => folder === "/" || wall.startsWith(folder + "/");
+const holds = (folder: string, wall: string) => folder === "/" || fold(wall).startsWith(fold(folder) + "/");
 const matching = (where: string, patterns: readonly string[] = []) => patterns.some(each => new RegExp(each).test(where));
 const nameOf = (word: string) => word.split("/").pop() ?? "";
 const homeWord = (text: string) => text.replace(/^(~|\$HOME|\$\{HOME\})(?=\/|$)/, homeFolder());
@@ -157,9 +161,10 @@ const SYSTEM_LOGIN = ["/Library/LaunchAgents", "/Library/LaunchDaemons", "/Libra
   "/private/etc/profile", "/private/etc/zshrc", "/private/etc/zprofile", "/private/etc/bashrc", "/private/etc/sudoers", "/private/etc/sudoers.d"];
 
 /** Whether `where` is what runs as you (or anyone) log in. */
-function atLogin(where: string, home: string): boolean {
-  if (SYSTEM_LOGIN.some(wall => inside(where, wall))) return true;
-  if (!where.startsWith(home + "/")) return false;
+function atLogin(given: string, home: string): boolean {
+  if (SYSTEM_LOGIN.some(wall => inside(given, wall))) return true;
+  const where = fold(given);
+  if (!where.startsWith(fold(home) + "/")) return false;
   const rest = where.slice(home.length + 1);
   return LOGIN.some(wall => inside(rest, wall)) || (!rest.includes("/") && LOGIN_PREFIXES.some(prefix => rest.startsWith(prefix)));
 }
@@ -169,7 +174,7 @@ function atLogin(where: string, home: string): boolean {
  * `ownInside` has them: its commands' temporary folder, its folder). Anything else, your secrets
  * too, is the model's to judge. */
 function inKuvo(where: string, policy: FencePolicy, own: readonly string[] = []): boolean {
-  return (policy.kuvo.some(wall => inside(where, wall)) || matching(where, policy.kuvoPatterns)) && !own.some(folder => inside(where, folder));
+  return (policy.kuvo.some(wall => inside(where, wall)) || matching(where, policy.kuvoPatterns)) && !own.some(folder => exactly(where, folder));
 }
 
 /** Of the folders a conversation works in as its own (its folder, its commands' temporary folder, the
@@ -203,7 +208,7 @@ function conversationPlace(at: string): boolean {
 /** Whether deleting `where` would delete your home: it, a folder that holds it, or everything in it. */
 function deletesHome(where: string, home: string): boolean {
   const target = where.endsWith("/*") ? where.slice(0, -2) || "/" : where;
-  return target === home || holds(target, home);
+  return fold(target) === fold(home) || holds(target, home);
 }
 
 /** Why an agent in Auto can't start a session in `folder`, whose commands would write it whole in
@@ -219,7 +224,7 @@ export async function keptFromSessions(folder: string, policy: FencePolicy = fen
   const homes = [...new Set([policy.home, ...(policy.homeWrites ?? [])].map(realish))];
   const reach = (wall: string) => `its commands would reach ${wall}`;
   if (homes.some(home => deletesHome(at, home))) return "its commands could delete your home folder";
-  if ((policy.personal ?? []).some(each => at === each || holds(at, each))) return "its commands could delete a whole personal folder of yours";
+  if ((policy.personal ?? []).some(each => fold(at) === fold(each) || holds(at, each))) return "its commands could delete a whole personal folder of yours";
   if ([...policy.secrets, ...homes.map(home => home + "/.ssh")].some(each => inside(at, each) || holds(at, each))) return reach("your secrets");
   // (Kuvo Code's own: one holding them, or one in them but where it keeps conversations' own, as its
   // engine's tools read and write a session's folder without asking. A wall that holds your home is
@@ -460,11 +465,12 @@ const GIT_GLOBAL = [".gitconfig", ".config/git/config"];
 
 /** Which of yours `where` is, if it's one: in ~/.ssh (its keys, its config and who may log in with
  * a key, not the hosts you trust), your credential files, your global git settings. */
-function ownAt(where: string, home: string): OwnKind | null {
+function ownAt(given: string, home: string): OwnKind | null {
+  const where = fold(given);
   if (where === "/etc/gitconfig" || where === "/private/etc/gitconfig") return "git";
   // (opencode's sign-ins where your own XDG_DATA_HOME puts them.)
-  if (where === realish(opencodeAuthFile(home))) return "credentials";
-  if (!where.startsWith(home + "/")) return null;
+  if (where === fold(realish(opencodeAuthFile(home)))) return "credentials";
+  if (!where.startsWith(fold(home) + "/")) return null;
   const rest = where.slice(home.length + 1);
   if (GIT_GLOBAL.some(each => inside(rest, each))) return "git";
   if (CREDENTIALS.some(each => inside(rest, each))) return "credentials";
@@ -743,41 +749,57 @@ export function scriptsOf(command: string, start: string): { files: string[]; ur
 /** Whether `where` holds your keys and secrets (a private key in ~/.ssh by any name, there now or
  * not; the policy's secrets): what the agent's own tools read there is the model's to judge, where
  * any other read goes ahead. */
-function isSecret(where: string, policy: FencePolicy): boolean {
-  const ssh = /\/\.ssh\/([^/]+)/.exec(where.slice(policy.home.length));
-  const sshKey = where.startsWith(policy.home + "/.ssh/") && ssh && !/^(config|config\.d|known_hosts.*|authorized_keys.*|rc|environment|.*\.pub)$/.test(ssh[1]);
-  return Boolean(sshKey) || where === policy.home + "/.ssh" || policy.secrets.some(wall => inside(where, wall));
+function isSecret(given: string, policy: FencePolicy): boolean {
+  const where = fold(given), home = fold(policy.home);
+  const ssh = /\/\.ssh\/([^/]+)/.exec(where.slice(home.length));
+  const sshKey = where.startsWith(home + "/.ssh/") && ssh && !/^(config|config\.d|known_hosts.*|authorized_keys.*|rc|environment|.*\.pub)$/.test(ssh[1]);
+  return Boolean(sshKey) || where === home + "/.ssh" || policy.secrets.some(wall => inside(where, wall));
 }
 
 // What runs outside the sandbox once it's written in a folder (git's hooks and settings, the
-// engine's and the coding agents' settings there): never allowed again by a place (`placeAllowed`).
+// engine's and the coding agents' settings there): never allowed again by a place (`keptPlace`).
 // (On a Mac's disk, as it's usually set up, `.Claude` is `.claude`.)
 const RUNS_OUTSIDE = new RegExp(`^/${GUARDED}`, process.platform === "darwin" ? "i" : "");
 
 /** git as the box runs it by itself (`shared/git`: nothing the repository's settings name runs), in
- * `folder`: what it printed, or null where it failed or wouldn't run. */
-async function gitIn(folder: string, args: string[]): Promise<string | null> {
+ * `folder`: what it printed (where it ended with one of `ok`), or null where it failed or wouldn't
+ * run. */
+async function gitIn(folder: string, args: string[], ok: readonly number[] = [0]): Promise<string | null> {
   const run = await ownArgsLater(args, folder);
   if (!run) return null;
   const env = { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_OPTIONAL_LOCKS: "0", GIT_CONFIG_NOSYSTEM: "1", GIT_LITERAL_PATHSPECS: "1" };
-  return new Promise(resolve => execFile("git", run, { cwd: folder, env, encoding: "utf8", timeout: 20_000, maxBuffer: 8 * 1024 * 1024 }, (error, out) => resolve(error ? null : String(out ?? ""))));
+  return new Promise(resolve => execFile("git", run, { cwd: folder, env, encoding: "utf8", timeout: 20_000, maxBuffer: 8 * 1024 * 1024 }, (error, out) =>
+    resolve(!error || ok.includes(Number((error as { code?: unknown }).code)) ? String(out ?? "") : null)));
 }
 
 /** A script a command runs that's too long to read whole, as the model reads it where it's the
- * project's own (in the conversation's own folders, tracked in its git): its start, and its changes
- * not yet committed, whole, told as only that (what the agent committed past the start isn't read). Why it's held back where what changed is too long to
- * read too; null where it isn't the project's own. (Reading the whole of a test file was never all
- * a command runs: the modules it imports aren't read either.) */
+ * project's own (in the conversation's own folders, tracked in its git): its start, and how it
+ * differs from its last commit, whole, told as only that (what the agent committed past the start
+ * isn't read). Compared with the committed copy as git keeps it, never by what git says changed,
+ * which the index (`--skip-worktree`, `--assume-unchanged`) or `.gitattributes` (`-diff`) can hide.
+ * Why it's held back where the difference is too long to read too; null where it isn't the
+ * project's own. (Reading the whole of a test file was never all a command runs: the modules it
+ * imports aren't read either.) */
 async function projectScript(file: string, text: string, folders: readonly string[]): Promise<{ name: string; text: string } | string | null> {
   const at = realish(file);
   if (!folders.some(folder => inside(at, realish(folder)))) return null;
   const where = path.dirname(at);
-  if (await gitIn(where, ["ls-files", "--error-unmatch", "--", path.basename(at)]) === null) return null;
-  const changed = await gitIn(where, ["diff", "--no-color", "HEAD", "--", path.basename(at)]);
-  if (changed === null) return null;
+  const name = path.basename(at);
+  if (await gitIn(where, ["ls-files", "--error-unmatch", "--", name]) === null) return null;
+  const committed = await gitIn(where, ["show", `HEAD:./${name}`]);
+  if (committed === null) return null;
+  let changed = "";
+  if (committed !== text) {
+    fs.mkdirSync(FETCHED_FOLDER, { recursive: true, mode: 0o700 });
+    const copy = path.join(FETCHED_FOLDER, `${randomBytes(8).toString("hex")}.committed`);
+    writePrivate(copy, committed);
+    try { changed = await gitIn(where, ["diff", "--no-index", "--text", "--no-color", "--", copy, at], [0, 1]) ?? ""; }
+    finally { fs.rmSync(copy, { force: true }); }
+    if (!changed) return null;
+  }
   if (changed.length > MOST_SCRIPT) return `It runs ${path.basename(file)}, too long to be read whole first, and changed too much since its last commit to show what changed.`;
-  const name = `${file} (tracked in git, too long to show whole: only its start is shown${changed ? ", then its changes not yet committed" : ""}; what's past the start, as committed, isn't shown, and the agent may have committed it)`;
-  return { name, text: changed ? `${cut(text, MOST_SCRIPT)}\n\n${changed}` : cut(text, MOST_SCRIPT) };
+  const label = `${file} (tracked in git, too long to show whole: only its start is shown${changed ? ", then how it differs from its last commit" : ""}; what's past the start, as committed, isn't shown, and the agent may have committed it)`;
+  return { name: label, text: changed ? `${cut(text, MOST_SCRIPT)}\n\n${changed}` : cut(text, MOST_SCRIPT) };
 }
 
 /** The prompt the small model reads: the rules, what you said, the action and what it runs. Each
@@ -929,7 +951,7 @@ const PLACES = 50;
 
 /** A decision kept; whether it paused the conversation now (refusals in a row, or in all, but
  * those for want of a model). `place`: a folder the model allowed its agent to change files in,
- * kept for the rest of the conversation (`placeAllowed`). */
+ * kept for the rest of the conversation (`keptPlace`). */
 export function keepDecision(session: string, decision: Decision, folder = REVIEWS_FOLDER, place?: string): boolean {
   return changeLog(session, folder, log => {
     log.decisions = latest([...log.decisions, { id: decisionID(), ...decision }]);
@@ -951,12 +973,6 @@ export function keepDecision(session: string, decision: Decision, folder = REVIE
   });
 }
 
-/** Whether the model allowed the conversation's agent to change files in a folder that holds
- * `where` (by where it really is), earlier in it. */
-function placeAllowed(log: ReviewLog, where: string): boolean {
-  const at = realish(where);
-  return (log.places ?? []).some(place => inside(at, place));
-}
 
 /** You looked at what's held back (Decisions, on any client): what was held back by now is seen. */
 export function seeHeld(session: string, now = Date.now(), folder = REVIEWS_FOLDER): ReviewLog {
@@ -1002,6 +1018,16 @@ export function revokePlace(session: string, id: string, now = Date.now(), folde
     given.revoked = now;
     log.places = (log.places ?? []).filter(each => each !== given.place);
     return { ...given };
+  });
+}
+
+/** Every place taken back at once, as the conversation leaves Auto: back in it, each change is
+ * judged again until the model allows one there anew. */
+export function clearPlaces(session: string, now = Date.now(), folder = REVIEWS_FOLDER): void {
+  if (!reviewLog(session, folder).places?.length) return;
+  changeLog(session, folder, log => {
+    for (const each of log.decisions) if (each.place && !each.revoked) each.revoked = now;
+    log.places = [];
   });
 }
 
@@ -1113,7 +1139,7 @@ export async function review(action: ReviewedAction, context: ReviewContext, giv
 async function keptPlace(action: ReviewedAction, policy: FencePolicy, own: readonly string[]): Promise<string | undefined> {
   if (action.kind !== "file" || action.access !== "write" || !action.tool || !action.input) return undefined;
   const file = realish(action.path);
-  const repository = repositoryOf(path.dirname(file));
+  const repository = await inTime(repositoryOf(path.dirname(file)), null);
   const place = repository?.top ?? path.dirname(file);
   const home = own[0] ? realish(own[0]) : null;
   if (home && holds(place, home)) return undefined;
@@ -1216,12 +1242,14 @@ async function judge(action: ReviewedAction, context: ReviewContext, given: Revi
     return done(heldBack(`It changes ${OWN[own].words}, for every project, which the user didn't ask for. ${OWN[own].instead}`, "unasked"));
   }
   const persists = persistenceOf(action, policy);
-  // A change in a folder the model allowed its agent to change files in before, in this
-  // conversation: the same again, so the same answer, without it (never your own settings, your
-  // secrets, what runs at login, nor git's hooks and settings and the agents' there, each judged on
-  // its own).
-  if (action.kind === "file" && action.access === "write" && !own && !persists && !isSecret(realish(action.path), policy)
-    && !runsLater(realish(action.path), policy) && placeAllowed(log, action.path)) {
+  // A change its file tool makes in a place the model allowed it to change files in before, in
+  // this conversation (the same place, as it's worked out now: never one in a repository inside
+  // it, nor room asked for): the same again, so the same answer, without it (never your own
+  // settings, your secrets, what runs at login or later, nor git's hooks and settings and the
+  // agents' there, each judged on its own).
+  if (action.kind === "file" && action.access === "write" && action.tool && action.input && log.places?.length && !own && !persists
+    && !isSecret(realish(action.path), policy) && !runsLater(realish(action.path), policy)
+    && log.places.includes(await keptPlace(action, policy, context.folders ?? given.own ?? []) ?? "")) {
     return done({ decision: "allow", reason: "Auto's reviewer allowed changing files there earlier in this conversation.", by: "code" });
   }
   const environments = environmentsOf(action);

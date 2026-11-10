@@ -3829,7 +3829,10 @@ while a box is away goes there when it's back.
   sessions is brought back (a client shows it then, and not before).
   `worktrees` (bridge 0.9.207), `{"<folder>": "<project>"}`: the project each of the box's worktrees
   belongs to, by the folder its sessions run in (and its top folder), for those it keeps, those it
-  removed that can come back and those removed before. A client files a session whose folder is
+  removed that can come back and those removed before; and each project's git worktrees made
+  elsewhere (`git worktree add /tmp/try`; as its repository lists them and they name it back, by
+  their real paths, looked for again every few seconds, off the box's thread; not one that's a
+  project of its own; #422). A client files a session whose folder is
   here under that project, never as a project of its own; the events line changes with them. A box
   from before doesn't say: a client goes by `kuvo/worktrees` then.
 - `PUT kuvo/projects?directory=<folder>` with any of `{name, folders, run, terminal, removed}`
@@ -4466,15 +4469,20 @@ folder and its other worktrees stay the reviewer's.
   model that fails or doesn't answer within a minute, or a review that fails on the box's side
   (`failed`: no quota, offline). A model that answers `ask` refuses (`reviewer`).
 - Once the model allows a change the agent's own file tool makes (never a folder a command goes
-  to, nor room asked for), a change in the same place goes ahead again without the model for the
-  rest of the conversation (#422: the same kind of action in the same place gets the same answer),
-  and isn't kept as a decision. The place is the repository the file is in (its working folder),
-  or else the file's folder; none where that holds the conversation's own folder or another
-  repository, where an agent in Auto couldn't start a session (above), what runs later outside the
-  sandbox (the folders on PATH, tools' settings, `~/Library`), or Kuvo Code's own. Never for a
-  change to your own settings, your secrets, what runs at login, what runs later (the same), or
-  git's hooks and settings and the agents' (on a Mac by any case), each judged on its own. Kept
-  with the decisions (`places`, never shown), the last 50.
+  to, nor room asked for), a change its file tool makes in the same place goes ahead again without
+  the model for the rest of the conversation (#422: the same kind of action in the same place gets
+  the same answer), and isn't kept as a decision. The place is the repository the file is in (its
+  working folder), or else the file's folder, worked out again for each change, which must be that
+  very place (a folder in a place that isn't a repository, or a repository inside one, is another);
+  none where that holds the conversation's own folder or another repository, where an agent in
+  Auto couldn't start a session (above), what runs later outside the sandbox (the folders on PATH,
+  tools' settings, `~/Library`), or Kuvo Code's own. Never for a change to your own settings, your
+  secrets, what runs at login, what runs later (the same), or git's hooks and settings and the
+  agents' (on a Mac by any case, as are your settings and what runs at login), each judged on its
+  own. A place new to the conversation is a decision of its own (`Change <place>`, "Auto allowed
+  edits in <place> for this session.", with `place`), which any client can take back (`revoke`,
+  below); one past the last 50 is taken back by itself, and every one as the conversation leaves
+  Auto.
 - Three refusals in a row, or twenty in a conversation, pause Auto there: its run is stopped, and
   what it wants next is held back (`why: "paused"`) until you let it go on or approve one. Those for
   want of a model (`noModel`, `failed`, `unreadable`) don't count; the model's allow starts the
@@ -4483,13 +4491,16 @@ folder and its other worktrees stay the reviewer's.
   (a full disk) is refused with why (`failed`), never asked.
 - `GET kuvo/sessions/<id>/decisions` → `{decisions, paused?, seen?}`: the conversation's decisions, the
   latest last (the last 200), each `{id, at, action, kind, decision, reason, by, why?, held?,
-  approved?, used?}`: `kind` `command`, `file` or `tool`; `decision` `allowed` or `refused`; `by`
+  approved?, used?, place?, revoked?}`: `kind` `command`, `file` or `tool`; `decision` `allowed` or `refused`; `by`
   `code`, `model` or `you` (one you approved, run again); for a refusal, `why` (above), and `held`
   where you can approve it (then `approved`, when you did, and `used`, when it ran again). Code's
   own allows (a read outside its folder) aren't kept. Decisions from before bridge 0.9.185 may say
   `asked`, or `why: "always"` with which kind in `always`. `paused`: since when Auto is paused
   there. `seen`: when you last looked at them on any client; one held back with an `at` after it
   is news, which a client shows over its composer (bridge 0.9.187).
+- `POST kuvo/sessions/<id>/decisions` `{revoke: <id>}` takes back a place (a decision with
+  `place`): each change there is judged again; the decision gets `revoked`, when. 404 for one that
+  isn't a place, or is taken back already.
 - `POST kuvo/sessions/<id>/decisions` `{approve: <id>}` approves one held back, from any client:
   allowed once, the next time the agent does it the same way (a command in the same folder running
   the same scripts as read then: one changed since is judged again; the same file with the same

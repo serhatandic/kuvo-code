@@ -28,7 +28,7 @@ import { approvalOf, approvalRules, defaultApproval, effectiveApproval, isApprov
 import { settleAgain } from "../areas/approval";
 import { noteFullAccess } from "../work/full";
 import { keptFromSessions } from "../work/reviewer";
-import { findLinkedTrees, inProjectWorktree } from "../work/project-trees";
+import { findLinkedTrees, inProjectWorktree, inTime } from "../work/project-trees";
 import type { Approval } from "../work/approval";
 import { linkSession, pauseGoal, runningGoal } from "../work/goals";
 import { nextMidnight, startOfDay } from "../work/clock";
@@ -196,10 +196,12 @@ const projectNames = () => readProjects().filter(each => !each.removed).map(each
 
 // Whether `folder` is in the project at `directory`: in its folder or its other folders, or in one
 // of its worktrees, wherever that is (by where each really is).
-function inProject(folder: string, directory: string): boolean {
+async function inProject(folder: string, directory: string): Promise<boolean> {
+  await askedAbout([folder, directory]);
   const at = realish(folder);
   const others = readProjects().find(each => each.directory === directory)?.folders ?? [];
-  return [directory, ...others].map(realish).some(each => at === each || at.startsWith(each + "/")) || inProjectWorktree(at, directory);
+  await askedAbout(others);
+  return [directory, ...others].map(realish).some(each => at === each || at.startsWith(each + "/")) || inTime(inProjectWorktree(at, directory), false);
 }
 
 /** A new session with `given`'s task, from the conversation `by` (null: from a client). A bot's
@@ -269,7 +271,7 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
       const fullAccess = Boolean(by?.place && approvalOf(by.place.data, { agents: Boolean(bridgeNow && by.place.target.port === bridgeNow.port), bot: Boolean(botOfConversation(by.session) ?? worksFor(by.place.data)) }).effective === "fullAccess");
       const kept = by && !fullAccess && !ours.includes(at) ? await keptFromSessions(at) : null;
       if (kept) return no(403, `An agent in Auto can't start a session in ${written} on ${HERE}: ${kept}. Ask the user to start it there.`);
-      if (named && !inProject(at, named.directory)) return no(400, `${written} isn't in ${named.name} on ${HERE}: give a folder in it or in one of its worktrees, or leave out project.`);
+      if (named && !await inProject(at, named.directory)) return no(400, `${written} isn't in ${named.name} on ${HERE}: give a folder in it or in one of its worktrees, or leave out project.`);
       folder = isBotFolder(at) ? CHATS : at;
     }
   }
@@ -402,7 +404,7 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
   const applied = asBefore ? wanted : effectiveApproval(wanted, { agents }).approval;
   const got = applied !== (requested ?? wanted) && lowerOf(applied, requested ?? wanted) === applied ? applied : undefined;
   // (A worktree made elsewhere is its project's, as the projects' worktrees are found now.)
-  if (folder !== CHATS) await findLinkedTrees();
+  if (folder !== CHATS) await inTime(findLinkedTrees(), undefined, 3_000);
   const project = named && realish(folder) !== realish(named.directory) ? { name: named.name, folders: [] as readonly string[] } : projectOf(named?.directory ?? folder);
   const title = typeof given.title === "string" && given.title.trim() ? given.title.trim() : null;
   const rules = rulesFor(applied, parent, project?.folders ?? []);
