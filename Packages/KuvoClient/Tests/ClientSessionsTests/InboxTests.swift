@@ -5,16 +5,21 @@ import ClientSessions
 /// What an inbox lists, from the facts each conversation's sidebar mark goes by.
 @Suite struct InboxTests {
     @Test func whatWaitsOnYouIsInItWhateverElseHolds() {
-        #expect(Inbox.reason(needsYou: true, failed: true, isNew: false) == .needsYou)
-        #expect(Inbox.reason(needsYou: true, failed: false, isNew: true) == .needsYou)
+        #expect(Inbox.reason(needsYou: true, atWork: true, failed: true, isNew: false) == .needsYou)
+        #expect(Inbox.reason(needsYou: true, atWork: false, failed: false, isNew: true) == .needsYou)
     }
 
     @Test func aFinishedOrFailedRunIsInItOnlyUntilYouveLooked() {
-        #expect(Inbox.reason(needsYou: false, failed: false, isNew: true) == .finished)
-        #expect(Inbox.reason(needsYou: false, failed: true, isNew: true) == .failed)
+        #expect(Inbox.reason(needsYou: false, atWork: false, failed: false, isNew: true) == .finished)
+        #expect(Inbox.reason(needsYou: false, atWork: false, failed: true, isNew: true) == .failed)
         // Read since: out, failed or not.
-        #expect(Inbox.reason(needsYou: false, failed: true, isNew: false) == nil)
-        #expect(Inbox.reason(needsYou: false, failed: false, isNew: false) == nil)
+        #expect(Inbox.reason(needsYou: false, atWork: false, failed: true, isNew: false) == nil)
+        #expect(Inbox.reason(needsYou: false, atWork: false, failed: false, isNew: false) == nil)
+    }
+
+    @Test func oneAtWorkAgainIsntNewsUntilItsDone() {
+        #expect(Inbox.reason(needsYou: false, atWork: true, failed: false, isNew: true) == nil)
+        #expect(Inbox.reason(needsYou: false, atWork: true, failed: true, isNew: true) == nil)
     }
 
     @Test func whatWaitsOnYouComesFirstThenTheLatestNews() {

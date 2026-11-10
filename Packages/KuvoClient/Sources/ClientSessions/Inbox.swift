@@ -18,10 +18,12 @@ public enum Inbox {
         public var needsYou: Bool { self == .needsYou }
     }
 
-    /// Why a conversation is in the inbox, if it is: from the facts its sidebar mark goes by.
-    public static func reason(needsYou: Bool, failed: Bool, isNew: Bool) -> Reason? {
+    /// Why a conversation is in the inbox, if it is, from what its sidebar mark says (`needsYou`:
+    /// its mark is Needs You; `atWork`: its mark is working, its subagents' or a move's included)
+    /// and whether it ended since you looked: one at work again isn't news until it's done.
+    public static func reason(needsYou: Bool, atWork: Bool, failed: Bool, isNew: Bool) -> Reason? {
         if needsYou { return .needsYou }
-        guard isNew else { return nil }
+        guard isNew, !atWork else { return nil }
         return failed ? .failed : .finished
     }
 
