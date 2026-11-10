@@ -240,10 +240,8 @@ public enum WorkQueue {
 
     public static let inProgressID = "in-progress"
 
-    /// In progress: at work on now. Done isn't, nor anything deleted.
-    public static func isInProgress(_ item: WorkItem) -> Bool {
-        item.inProgress && !item.isDone && item.removed == nil
-    }
+    /// In progress, as the box says (it never says so of one that's Done or deleted).
+    public static func isInProgress(_ item: WorkItem) -> Bool { item.inProgress }
 
     /// The view's sections, In progress first, then every category (empty ones too: the panel says
     /// how many each holds).
@@ -251,13 +249,9 @@ public enum WorkQueue {
         let working = view.items.filter(isInProgress)
         var sections = [Section(id: inProgressID, name: "In progress", category: nil, items: working)]
         let rest = view.items.filter { !isInProgress($0) }
-        let known = Set(view.categories.map(\.id))
         for category in view.categories {
             sections.append(Section(id: category.id, name: category.name, category: category.id, items: rest.filter { $0.category == category.id }))
         }
-        // An item in a category the list doesn't name (it came from elsewhere): with Next.
-        let strays = rest.filter { !known.contains($0.category) }
-        if !strays.isEmpty, let next = sections.firstIndex(where: { $0.category == "next" }) { sections[next].items += strays }
         return sections
     }
 

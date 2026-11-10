@@ -17,7 +17,7 @@ import ClientSessions
             item(3, "Dark mode", "later", owner: "ses_child"),
             item(4, "Old idea", "parked"),
             item(5, "Shipped", "done"),
-            item(6, "Odd one", "cat_gone"),
+            item(6, "Also next", "next", order: 3),
             item(nil, "Waiting", "cat_design"),
         ].joined(separator: ",")
         let json = """

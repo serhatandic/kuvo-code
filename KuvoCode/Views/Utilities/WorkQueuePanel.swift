@@ -35,9 +35,7 @@ struct WorkQueuePanel: View {
         owner == nil ? .all : store.scopes[panel] ?? .own
     }
 
-    private var key: WorkQueues.Key {
-        WorkQueues.Key(box: box, owner: scope == .all ? WorkQueueView.all : owner ?? WorkQueueView.all)
-    }
+    private var key: WorkQueues.Key { store.key(for: utilities) }
 
     private var view: WorkQueueView? { store.views[key] }
 
@@ -56,9 +54,9 @@ struct WorkQueuePanel: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
             .overlay(alignment: .bottom) { bars }
-            // An item a chip opened that the conversation's own queue doesn't have: All has it.
-            .onChange(of: openedMissing) { _, missing in
-                if missing { store.scopes[panel] = .all }
+            // Two panes folding to one: back to the list, not to the item that was open beside it.
+            .onChange(of: width >= Self.twoPanes) { wasWide, isWide in
+                if wasWide, !isWide, store.opened[panel]?.id != nil { store.opened[panel] = nil }
             }
             .alert((naming ?? nil).map { "Rename “\($0.name)”" } ?? "New Category", isPresented: Binding { naming != nil } set: { if !$0 { naming = nil } }) {
                 TextField("Name", text: $name)
@@ -78,7 +76,7 @@ struct WorkQueuePanel: View {
     }
 
     /// Rename and Remove for a category of your own (the built-in ones stay as they are).
-    @ViewBuilder private func categoryMenu(_ id: String?, count: Int) -> some View {
+    @ViewBuilder private func categoryMenu(_ id: String?, count: Int, adds: Bool = true) -> some View {
         if let id, let category = view?.categories.first(where: { $0.id == id }), !category.builtIn {
             Button("Rename “\(category.name)”…") {
                 name = category.name
@@ -86,17 +84,15 @@ struct WorkQueuePanel: View {
             }
             Button("Remove “\(category.name)”", role: .destructive) { Task { await store.removeCategory(category.id, on: box) } }
                 .disabled(count > 0)
-            Divider()
+                .help(count > 0 ? "Move its items out first." : "")
+            if adds { Divider() }
         }
-        Button("New Category…") {
-            name = ""
-            naming = .some(nil)
+        if adds {
+            Button("New Category…") {
+                name = ""
+                naming = .some(nil)
+            }
         }
-    }
-
-    private var openedMissing: Bool {
-        guard let number = opened?.number, scope == .own, let view else { return false }
-        return !view.items.contains { $0.number == number } && !view.removed.contains { $0.number == number }
     }
 
     @ViewBuilder private var content: some View {
@@ -119,6 +115,7 @@ struct WorkQueuePanel: View {
                 }
             } else if let opened {
                 WorkItemPage(opened: opened, view: view, utilities: utilities, back: { store.opened[panel] = nil })
+                    .id(opened)
             } else {
                 VStack(spacing: 0) {
                     header(view)
@@ -307,7 +304,7 @@ struct WorkQueuePanel: View {
                     overview(view, wide: wide)
                 }
             }
-            .padding(.bottom, store.undoable != nil || store.refusal != nil ? 56 : 12)
+            .padding(.bottom, store.undoable?.box == box || store.refusal?.box == box ? 56 : 12)
         }
     }
 
@@ -450,14 +447,25 @@ struct WorkQueuePanel: View {
     }
 
     private func row(_ item: WorkItem, view: WorkQueueView, ordinal: Int?, wide: Bool) -> some View {
-        WorkItemRow(item: item, ownerName: WorkQueue.ownerName(of: item, in: view), ordinal: ordinal, isSelected: wide && opened?.matches(item) == true,
-                    openSession: item.sessions.first(where: \.working).map { linked in { app.open(.session(linked.session)) } }) {
+        // In progress hides which category an item is kept in: dropping there would move it to
+        // one you can't see, so nothing drops on it.
+        let takesDrops = !WorkQueue.isInProgress(item)
+        return WorkItemRow(item: item, ownerName: WorkQueue.ownerName(of: item, in: view), ordinal: ordinal, isSelected: wide && opened?.matches(item) == true,
+                           openSession: item.sessions.first(where: \.working).map { linked in { app.open(.session(linked.session)) } }) {
             store.opened[panel] = WorkQueues.Opened(box: box, id: item.id, number: item.number)
         }
         .padding(.horizontal, 6)
-        .draggable(item.id)
-        .dropDestination(for: String.self) { ids, _ in drop(ids, at: .before(item)) }
+        // Dragged as it's written ("#243"): dropped in the composer, it names the item.
+        .draggable(item.number.map { "#\($0)" } ?? item.title)
+        .dropDestination(for: String.self) { ids, _ in takesDrops && drop(ids, at: .before(item)) }
         .contextMenu { menu(item, view: view) }
+        .accessibilityActions {
+            ForEach(WorkQueue.moveTargets(for: item, in: view.categories)) { category in
+                Button("Move to \(category.name)") { Task { await store.move(item, to: .category(category.id), on: box) } }
+            }
+            Button("Move to Top") { Task { await store.move(item, to: .top(item.category), on: box) } }
+            Button("Delete") { Task { await store.delete(item, on: box) } }
+        }
     }
 
     private func deletedRow(_ item: WorkItem) -> some View {
@@ -491,7 +499,9 @@ struct WorkQueuePanel: View {
 
     /// Items dropped on a row go before it (in its category); on a category, to its top.
     private func drop(_ ids: [String], at place: WorkQueues.Place?) -> Bool {
-        guard let place, let view, let id = ids.first, let item = view.items.first(where: { $0.id == id }) else { return false }
+        guard let place, let view, let dragged = ids.first else { return false }
+        let number = dragged.hasPrefix("#") ? Int(dragged.dropFirst()) : nil
+        guard let item = view.items.first(where: { number != nil ? $0.number == number : $0.number == nil && $0.title == dragged }) else { return false }
         if case .before(let other) = place, other.id == item.id { return false }
         Task { await store.move(item, to: place, on: box) }
         return true
@@ -502,6 +512,7 @@ struct WorkQueuePanel: View {
     @ViewBuilder private func detailPane(_ view: WorkQueueView) -> some View {
         if let opened {
             WorkItemPage(opened: opened, view: view, utilities: utilities, back: nil)
+                .id(opened)
         } else {
             ContentUnavailableView("No Item Open", systemImage: "checklist", description: Text("Choose an item to see what it says, how far it’s come and who’s on it."))
         }
@@ -510,8 +521,8 @@ struct WorkQueuePanel: View {
     // MARK: Undo and refusals
 
     @ViewBuilder private var bars: some View {
-        if let refusal = store.refusal {
-            PanelNotice(text: refusal, action: nil) { store.refusal = nil }
+        if let refusal = store.refusal, refusal.box == box {
+            PanelNotice(text: refusal.text, action: nil) { store.refusal = nil }
                 .padding(10)
         } else if let undo = store.undoable, undo.box == box {
             PanelNotice(text: "Deleted \(undo.item.name) “\(WorkItemChip.shownTitle(undo.item.title))”", action: ("Undo", { Task { await store.undo() } })) { store.dismissUndo() }
@@ -645,7 +656,7 @@ struct WorkItemRow: View {
             }
             .buttonStyle(ListRowButtonStyle(isSelected: isSelected))
             .accessibilityElement(children: .combine)
-            .accessibilityLabel([item.number.map { "Work item \($0)" } ?? "New work item", item.title, working ? "in progress" : "", WorkQueue.currentWork(item) ?? "", ownerName.map { "in \($0)" } ?? ""].filter { !$0.isEmpty }.joined(separator: ", "))
+            .accessibilityLabel([ordinal.map { "\($0)." } ?? "", item.number.map { "Work item \($0)" } ?? "New work item", item.title, working ? "in progress" : "", WorkQueue.currentWork(item) ?? "", working ? WorkQueue.updated(item.updated.date) : "", ownerName.map { "in \($0)" } ?? ""].filter { !$0.isEmpty }.joined(separator: ", "))
             if working, let openSession {
                 Button(action: openSession) {
                     Label("Open Agent Session", systemImage: "arrow.up.right")

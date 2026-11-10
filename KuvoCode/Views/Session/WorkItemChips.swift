@@ -37,6 +37,7 @@ nonisolated struct WorkItemChipAttachment: Attachment {
         let renderer = ImageRenderer(content: WorkItemChip(number: chip.number, title: chip.title, mark: chip.mark, size: size, dark: dark))
         renderer.scale = 2 * max(1, (NSScreen.main?.backingScaleFactor ?? 2) / 2)
         let image = renderer.nsImage ?? NSImage()
+        image.accessibilityDescription = WorkItemChip.spoken(number: chip.number, title: chip.title, mark: chip.mark)
         images[key] = image
         return image
     }

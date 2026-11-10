@@ -2,6 +2,7 @@ import AppKit
 import ClientDesign
 import ClientSandbox
 import ClientSessions
+import ClientText
 import OpenCodeKit
 import SwiftUI
 
@@ -219,26 +220,13 @@ struct ToolCallView: View {
 
     private func string(_ key: String) -> String? { input?[key]?.string }
 
-    /// A Work Queue tool's call, in words: the item by its number ("#243"), or a new one by title.
+    /// A Work Queue tool's call, in words (`WorkQueueWords`): a hand-off names the session by its
+    /// title where this Mac knows it.
     private func queueSummary(_ name: String) -> String {
-        let item = input?["item"]?.number.flatMap { Int(exactly: $0.rounded()) }.map { "#\($0)" }
-            ?? string("item").map { $0.hasPrefix("#") || Int($0) == nil ? $0 : "#" + $0 } ?? "an item"
-        let title = string("title").map { "“\($0)”" } ?? "an item"
-        switch name {
-        case "queue_list": return isActive ? "Reading the Work Queue" : "Read the Work Queue"
-        case "queue_show": return (isActive ? "Reading " : "Read ") + item
-        case "queue_add": return (isActive ? "Adding " : "Added ") + title + " to the Work Queue"
-        case "queue_update":
-            if string("category") == "done" { return (isActive ? "Marking " : "Marked ") + item + " done" }
-            return (isActive ? "Updating " : "Updated ") + item
-        case "queue_hand": return (isActive ? "Handing " : "Handed ") + item + (string("to").map { " to \($0)" } ?? " on")
-        case "queue_remove": return input?["undo"]?.bool == true ? (isActive ? "Bringing back " : "Brought back ") + item : (isActive ? "Deleting " : "Deleted ") + item
-        case "queue_categories": return string("add").map { (isActive ? "Adding the category " : "Added the category ") + "“\($0)”" } ?? (isActive ? "Reading the categories" : "Read the categories")
-        case "queue_import": return isActive ? "Importing a backlog into the Work Queue" : "Imported a backlog into the Work Queue"
-        default: return "Used the Work Queue"
-        }
+        let item = input?["item"]?.number.flatMap { Int(exactly: $0.rounded()) }.map { "#\($0)" } ?? string("item")
+        let to = string("to").map { AgentMail.shared.name(of: $0) }
+        return WorkQueueWords.summary(name, item: item, title: string("title"), to: to, category: string("category"), undo: input?["undo"]?.bool == true, add: string("add"), isActive: isActive)
     }
-
     private func relative(_ path: String?) -> String? {
         guard let path else { return nil }
         // A machine's engine names files as they are there, without the ssh:// prefix.
@@ -484,6 +472,7 @@ struct ToolCallView: View {
         case "browser_ask_user": "hand.raised"
         case "list_agents": "person.2"
         case "send_message": "paperplane"
+        case let name where name.hasPrefix("queue_"): WorkQueueWords.symbol
         case "read_conversation": "text.bubble"
         case "schedule_wake_up": "alarm"
         case "watch_for_change": "eye"

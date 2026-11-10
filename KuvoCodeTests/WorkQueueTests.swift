@@ -153,6 +153,13 @@ import Textual
         #expect(yours.runs.contains { $0[WorkItemChipMark.self]?.number == 243 && $0.link == WorkItemRefs.link(243) })
         #expect(String(yours.characters) == "See #243")
 
+        // The agent marks it done: the chip, drawn again a while later, says so.
+        store.refreshAfter = 0
+        var done = Self.item(243, "Work Queue panel", category: "done", order: 1)
+        done["doneAt"] = Date.now.timeIntervalSince1970 * 1000
+        try keep([done], for: "ses_lead", on: machine)
+        try await until { store.refs(in: message, box: BoxClient.mac)[243]?.category == "done" }
+
         // Clicked: the panel shows the Work Queue with the item open.
         app.openWorkItem(243)
         #expect(app.utilities.selected?.kind == .workQueue)

@@ -35,8 +35,10 @@ final class WorkQueues {
     private(set) var refs: [String: [Int: WorkRef]] = [:]
     /// The last item you deleted, for Undo, until you do something else.
     private(set) var undoable: (box: String, item: WorkItem)?
-    /// What the box said when it refused something you did.
-    var refusal: String?
+    /// What a box said when it refused something you did there.
+    var refusal: (box: String, text: String)?
+    /// An item that couldn't be read for another reason than not being there (its box away), and why.
+    private(set) var loadFailures: [String: String] = [:]
 
     /// The panel's own state, by the conversation whose panel it is: the scope, the filter, the
     /// item open, and one a chip asked to open.
@@ -145,11 +147,18 @@ final class WorkQueues {
             let detail = try await client.value(DetailAnswer.self, "GET", "kuvo/work-queue/items/\(path(item))").item
             details[box + "|" + detail.item.id] = detail
             if let number = detail.item.number { details[box + "|#\(number)"] = detail }
+            loadFailures[box + "|" + item] = nil
             return detail
+        } catch let refused as BoxRefusal where refused.status == 404 {
+            loadFailures[box + "|" + item] = nil
         } catch {
-            return nil
+            loadFailures[box + "|" + item] = (error as? BoxRefusal)?.message ?? error.localizedDescription
         }
+        return nil
     }
+
+    /// Why item `item` (an id or a number) couldn't be read just now, other than not being there.
+    func loadFailure(box: String, item: String) -> String? { loadFailures[box + "|" + item] }
 
     func detail(box: String, id: String?, number: Int?) -> WorkItemDetail? {
         if let id, let found = details[box + "|" + id] { return found }
@@ -244,9 +253,9 @@ final class WorkQueues {
             if box != BoxClient.mac { for key in views.keys where key.box == box { await read(key) } }
             return answer
         } catch let refused as BoxRefusal {
-            refusal = refused.message
+            refusal = (box, refused.message)
         } catch {
-            refusal = error.localizedDescription
+            refusal = (box, error.localizedDescription)
         }
         return nil
     }
@@ -255,18 +264,44 @@ final class WorkQueues {
 
     /// What the refs in `text` name on `box`, as far as it's known now; the ones not known yet are
     /// asked (once a minute at most each), and their chips come when the box answers.
-    func refs(in text: String, box: String) -> [Int: WorkRef] {
-        let numbers = WorkItemRefs.numbers(in: text)
-        guard !numbers.isEmpty else { return [:] }
-        let known = refs[box] ?? [:]
+    func refs(in text: String, box: String, typing: Bool = false) -> [Int: WorkRef] {
+        var found = WorkItemRefs.find(in: text)
+        // One being typed at the end of a draft isn't asked for until it's whole ("#2" of "#243").
+        if typing, let last = found.last, last.range.upperBound == text.endIndex { found.removeLast() }
+        guard !found.isEmpty else { return [:] }
+        let numbers = Set(found.map(\.number))
         let now = Date()
-        let wanted = numbers.filter { known[$0] == nil && (asked[box]?[$0].map { now.timeIntervalSince($0) > 60 } ?? true) }
+        // Known ones too, a minute on: a chip shows where its item stands now, not when it came.
+        let wanted = numbers.filter { asked[box]?[$0].map { now.timeIntervalSince($0) > refreshAfter } ?? true }
         if !wanted.isEmpty {
             for number in wanted { asked[box, default: [:]][number] = now }
-            Task { await lookUp(wanted, on: box) }
+            Task { await lookUp(Array(wanted), on: box) }
         }
+        startRefreshing()
+        let known = refs[box] ?? [:]
         return known.filter { numbers.contains($0.key) }
     }
+
+    /// Every half minute, what the chips asked for lately name now: a chip on screen follows its
+    /// item (in progress, then done) without anything else on screen changing.
+    private func startRefreshing() {
+        guard refreshing == nil else { return }
+        refreshing = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(30))
+                guard let self else { return }
+                let now = Date()
+                for (box, numbers) in asked {
+                    let recent = numbers.filter { now.timeIntervalSince($0.value) < 600 }.map(\.key)
+                    if !recent.isEmpty { await lookUp(recent, on: box) }
+                }
+            }
+        }
+    }
+
+    @ObservationIgnored private var refreshing: Task<Void, Never>?
+    /// How long before a chip's item is asked about again when it's drawn (a test's own).
+    @ObservationIgnored var refreshAfter: TimeInterval = 60
 
     /// Asks the box what `numbers` name.
     func lookUp(_ numbers: [Int], on box: String) async {
@@ -281,13 +316,19 @@ final class WorkQueues {
         if refs[box] != known { refs[box] = known }
     }
 
+    /// The view the panel of the conversation in view shows: its own queue, or All.
+    func key(for utilities: Utilities) -> Key {
+        let owner = utilities.queueOwner
+        let scope: Scope = owner == nil ? .all : scopes[utilities.panelKey] ?? .own
+        return Key(box: utilities.queueBox, owner: scope == .all ? WorkQueueView.all : owner ?? WorkQueueView.all)
+    }
+
     // MARK: Opening
 
-    /// Opens item `number` in the panel of the conversation in view: from a chip. The panel shows
-    /// All when its own view doesn't have it.
+    /// Opens item `number` in the panel of the conversation in view: from a chip. It's read by
+    /// its number, so one from another conversation's queue opens too.
     func open(_ number: Int, on box: String, panel: String) {
         opened[panel] = Opened(box: box, number: number)
-        filters[panel] = .all
     }
 
     private func query(_ value: String) -> String {

@@ -15,8 +15,15 @@ struct WorkItemPage: View {
     @Environment(AppModel.self) private var app
     @State private var pictures: URL?
     @State private var missing = false
+    /// This page's own folder for the item's files (another page of the same item has its own).
+    @State private var folder = FileManager.default.temporaryDirectory.appending(path: "WorkQueue/\(UUID().uuidString)", directoryHint: .isDirectory)
+
+    @State private var retries = 0
 
     private var store: WorkQueues { app.workQueues }
+
+    /// How it's asked for: by its id, else its number.
+    private var name: String { opened.id ?? opened.number.map(String.init) ?? "" }
 
     /// The item as the list has it now (it moves as it changes), else as it was read.
     private var item: WorkItem? {
@@ -48,15 +55,22 @@ struct WorkItemPage: View {
                         .padding(.vertical, 14)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
+            } else if let failure = store.loadFailure(box: opened.box, item: name) {
+                ContentUnavailableView {
+                    Label("Can’t Read the Item", systemImage: "exclamationmark.triangle")
+                } description: {
+                    Text(failure)
+                } actions: {
+                    Button("Try Again") { retries += 1 }
+                }
             } else if missing {
-                ContentUnavailableView("Item Not Found", systemImage: "questionmark.circle", description: Text("It isn’t on this computer’s Work Queue."))
+                ContentUnavailableView("Item Not Found", systemImage: "questionmark.circle", description: Text("It isn’t on this computer’s Work Queue, or it was deleted for good."))
             } else {
                 Spinner(size: 16).frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
         // Read again whenever it changes, so what it says now shows.
-        .task(id: "\(opened.box)|\(opened.id ?? "")|\(opened.number ?? 0)|\(item?.updated.at ?? 0)") {
-            let name = opened.id ?? opened.number.map(String.init) ?? ""
+        .task(id: "\(opened.box)|\(name)|\(item?.updated.at ?? 0)|\(retries)") {
             let loaded = await store.load(box: opened.box, item: name)
             missing = loaded == nil
             if let loaded { pictures = await keepPictures(loaded) }
@@ -243,15 +257,19 @@ struct WorkItemPage: View {
                 }
             }
             ForEach(detail.files.filter { !$0.isPicture }, id: \.name) { file in
-                HStack(spacing: 6) {
-                    Image(systemName: "doc")
-                        .foregroundStyle(.secondary)
-                    Text(file.name)
-                        .lineLimit(1)
-                    Text(ByteCountFormatter.string(fromByteCount: Int64(file.size), countStyle: .file))
-                        .foregroundStyle(.tertiary)
+                Button { openFile(file, of: detail.item) } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "doc.text")
+                            .foregroundStyle(.secondary)
+                        Text(file.name)
+                            .lineLimit(1)
+                        Text(ByteCountFormatter.string(fromByteCount: Int64(file.size), countStyle: .file))
+                            .foregroundStyle(.tertiary)
+                    }
+                    .font(.system(size: 13))
                 }
-                .font(.system(size: 12))
+                .buttonStyle(TextButtonStyle(outset: true, dimsAtRest: false))
+                .help("Open it in the panel")
             }
         }
     }
@@ -274,15 +292,15 @@ struct WorkItemPage: View {
 
     // MARK: Pictures
 
-    /// The item's pictures, copied from its box into a folder of the app's own temporary one, so
-    /// its description shows them by name; gone when the page closes.
+    /// The item's pictures, copied from its box into this page's own folder in the app's temporary
+    /// one, so its description shows them by name; read again each time the item changes (an
+    /// agent may have replaced one), and gone when the page closes.
     private func keepPictures(_ detail: WorkItemDetail) async -> URL? {
         // (Names as the box keeps them: never a path.)
-        let wanted = detail.files.filter { $0.isPicture && !$0.name.contains("/") && !$0.name.hasPrefix(".") }
+        let wanted = detail.files.filter { $0.isPicture && Self.isPlainName($0.name) }
         guard !wanted.isEmpty else { return nil }
-        let folder = FileManager.default.temporaryDirectory.appending(path: "WorkQueue/\(detail.item.id)", directoryHint: .isDirectory)
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        for file in wanted where !FileManager.default.fileExists(atPath: folder.appending(path: file.name).path) {
+        for file in wanted {
             if let data = await store.file(box: opened.box, item: detail.item.id, name: file.name) {
                 try? data.write(to: folder.appending(path: file.name))
             }
@@ -290,8 +308,22 @@ struct WorkItemPage: View {
         return folder
     }
 
+    private static func isPlainName(_ name: String) -> Bool { !name.contains("/") && !name.hasPrefix(".") }
+
+    /// A file that isn't a picture, opened in the panel (a Markdown note, a log), copied from its box.
+    private func openFile(_ file: WorkItemDetail.File, of item: WorkItem) {
+        guard Self.isPlainName(file.name) else { return }
+        Task {
+            guard let data = await store.file(box: opened.box, item: item.id, name: file.name) else { return }
+            try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            let url = folder.appending(path: file.name)
+            guard (try? data.write(to: url)) != nil else { return }
+            utilities.show(url)
+        }
+    }
+
     private func removePictures() {
-        if let pictures { try? FileManager.default.removeItem(at: pictures) }
+        try? FileManager.default.removeItem(at: folder)
         pictures = nil
     }
 }

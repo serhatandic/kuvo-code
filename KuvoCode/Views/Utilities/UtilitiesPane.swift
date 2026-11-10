@@ -150,11 +150,7 @@ struct UtilitiesPane: View {
 
     /// The Work Queue view the panel shows (see `WorkQueuePanel`): followed while its tab is open,
     /// so the tab's count stays current on another tab too.
-    private var queueKey: WorkQueues.Key {
-        let owner = utilities.queueOwner
-        let scope: WorkQueues.Scope = owner == nil ? .all : app.workQueues.scopes[utilities.panelKey] ?? .own
-        return WorkQueues.Key(box: utilities.queueBox, owner: scope == .all ? WorkQueueView.all : owner ?? WorkQueueView.all)
-    }
+    private var queueKey: WorkQueues.Key { app.workQueues.key(for: utilities) }
 
     private var followsQueue: Bool { utilities.visibleTabs.contains { $0.kind == .workQueue } }
 
