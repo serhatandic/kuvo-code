@@ -66,11 +66,13 @@ your keychain, serves it from `127.0.0.1`, and points the Kuvo Code in /Applicat
 **Check for Updates…** there to go through the update window, the install, the restart and
 What's New. Ctrl-C stops the server and puts the real feed back.
 
-Pushes to `main`, release tags and release dry runs from `main` run on the maintainer's Mac
-(labels `self-hosted, macOS, ARM64, kuvo-mini`), each job in a fresh macOS VM that's deleted
-after it, with no folders shared and no network to that Mac or its LAN. Pull requests always run
-on GitHub's own runners, so a pull request's code never reaches that Mac, which refuses any other
-job anyway. `scripts/ci-runner/` has the orchestrator, the VM image's build and the setup.
+CI (`.github/workflows/ci.yml`) runs on GitHub's hosted runners, its jobs side by side: the
+generated files and What's New on Linux, the box's and the bridge's tests on macOS and Linux, the
+Swift packages' tests, and the app's. It doesn't build the app itself: only the release workflow
+does, signed, for a tag or a dry run. So run a dry run from `main` (Actions › Release › Run
+workflow) before tagging a release whose build changed. The release's signing job runs in the
+`release` environment (Settings › Environments), which should allow only `main` and `v*` tags and
+hold the signing, notarization and update keys.
 
 A release also carries what remote machines run, for them to update themselves
 with, once the `KUVO_BOX_SIGNING_KEY` secret (an Ed25519 key) is set
