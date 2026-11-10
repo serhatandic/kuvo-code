@@ -144,11 +144,11 @@ import Testing
     /// the browser needs Kuvo Code open.
     @Test func anAgentAsksToGoOutsideTheSandboxWithTheAppClosed() async throws {
         let asked = Asked()
-        let ask: [String: Any] = ["name": "sandbox_ask", "description": "Ask the user to run a command outside the sandbox.", "inputSchema": ["type": "object"]]
+        let sandboxTools = StubWeb.json(["tools": [["name": "sandbox_ask", "description": "Ask the user to run a command outside the sandbox.", "inputSchema": ["type": "object"]]]])
         let box = try await StubListener { request, body in
             asked.note(request, body)
             guard request.url?.path() == "/kuvo/sandbox/tools" else { return StubWeb.Answer(status: 404) }
-            if request.httpMethod == "GET" { return StubWeb.json(["tools": [ask]]) }
+            if request.httpMethod == "GET" { return sandboxTools }
             return StubWeb.json(["text": "Allowed once. It printed: done", "isError": false])
         }
         let endpoint = box.endpoint

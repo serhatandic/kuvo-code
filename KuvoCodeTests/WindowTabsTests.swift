@@ -1,6 +1,7 @@
 import AppKit
 import ClientDesign
 import Foundation
+import KuvoLink
 import OpenCodeKit
 import SwiftTerm
 import Testing
