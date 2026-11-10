@@ -510,9 +510,10 @@ test("in a bot's conversation the model reads what you wrote there beside its go
   expect(ask.shown[0]).toContain("Add a cron job that syncs every hour")
 })
 
-test("once the model allows changing files in a folder, the same there goes ahead again without it for the rest of the conversation, starting the refusals in a row over; elsewhere it still judges each (#422)", async () => {
+test("once the model allows a change its file tool makes in a folder, the same there goes ahead again without it for the rest of the conversation; elsewhere, and what runs later, it still judges each (#422)", async () => {
   const context = yours("Compare the models on three past fixes, each in its own copy")
-  const change = (where: string) => ({ kind: "file" as const, path: where, access: "write" as const, folder: project })
+  // As the engine's file tools ask: the file the tool call names, with its arguments.
+  const change = (where: string) => ({ kind: "file" as const, path: where, access: "write" as const, folder: project, tool: "edit", input: { filePath: where } })
   const copy = join(box, "eval-copy")
   mkdirSync(join(copy, "Tests"), { recursive: true })
   expect(await reviewer.review(change(join(copy, "Tests", "vault.test.js")), context, given(model(allows)))).toMatchObject({ decision: "allow", by: "model" })
@@ -521,20 +522,37 @@ test("once the model allows changing files in a folder, the same there goes ahea
   expect(await reviewer.review(change(join(copy, "Tests", "vault.test.js")), context, given(ask))).toMatchObject({ decision: "allow", by: "code" })
   expect(await reviewer.review(change(join(copy, "Tests", "Bridge", "new.test.js")), context, given(ask))).toMatchObject({ decision: "allow", by: "code" })
   expect(ask.shown).toHaveLength(0)
-  // Refusals elsewhere, with changes there between them, never pause it: each change there starts
-  // the count over, as the model's allow did.
-  for (const other of ["a", "b", "c"]) {
-    expect(await reviewer.review(change(join(box, `elsewhere-${other}`, "notes.md")), context, given(ask))).toMatchObject({ decision: "refuse", by: "model" })
-    expect(await reviewer.review(change(join(copy, "Tests", `${other}.test.js`)), context, given(ask))).toMatchObject({ decision: "allow", by: "code" })
-  }
-  expect(reviewer.reviewLog(context.session, join(box, "reviews")).paused).toBeUndefined()
-  // git's hooks there are judged on their own, and so is a change in another conversation.
-  expect(await reviewer.review(change(join(copy, ".git", "hooks", "pre-commit")), context, given(ask))).toMatchObject({ decision: "refuse", by: "model" })
+  // git's hooks and the agents' settings there (by any case, on a Mac) are judged on their own,
+  // and so is the same change in another conversation.
+  expect(await reviewer.review(change(join(copy, "Tests", ".git", "hooks", "pre-commit")), context, given(ask))).toMatchObject({ decision: "refuse", by: "model" })
+  expect(await reviewer.review(change(join(copy, "Tests", process.platform === "darwin" ? ".Claude" : ".claude", "settings.json")), context, given(ask))).toMatchObject({ decision: "refuse", by: "model" })
   expect(await reviewer.review(change(join(copy, "Tests", "d.test.js")), yours("Something else"), given(ask))).toMatchObject({ decision: "refuse", by: "model" })
-  // Nor is a change your home allowed whole after one there is.
-  const home = model(allows)
-  await reviewer.review(change(join(homedir(), "kuvo-test-notes.md")), context, given(home))
-  expect(await reviewer.review(change(join(homedir(), "kuvo-test-other.md")), context, given(ask))).toMatchObject({ decision: "refuse", by: "model" })
+  // No place is kept from a folder a command goes to (no file tool's change), from your home, nor
+  // from a folder on PATH, whose programs run later outside the sandbox.
+  const room = { kind: "file" as const, path: join(box, "room"), access: "write" as const, folder: project }
+  mkdirSync(room.path)
+  const next = yours("Fix the build")
+  await reviewer.review(room, next, given(model(allows)))
+  expect(await reviewer.review(change(join(box, "room", "a.txt")), next, given(ask))).toMatchObject({ decision: "refuse", by: "model" })
+  await reviewer.review(change(join(homedir(), "kuvo-test-notes.md")), next, given(model(allows)))
+  expect(await reviewer.review(change(join(homedir(), "kuvo-test-other.md")), next, given(ask))).toMatchObject({ decision: "refuse", by: "model" })
+  const bin = join(box, "bin")
+  mkdirSync(bin)
+  const before = process.env.PATH
+  process.env.PATH = `${bin}:${before}`
+  try {
+    const tools = yours("Fix the build")
+    await reviewer.review(change(join(bin, "helper")), tools, given(model(allows)))
+    expect(await reviewer.review(change(join(bin, "git")), tools, given(ask))).toMatchObject({ decision: "refuse", by: "model" })
+  } finally {
+    process.env.PATH = before
+  }
+  // Changes there don't start the refusals in a row over (two so far, above): the agent may make
+  // them anyway, so a third refusal pauses it.
+  expect(await reviewer.review(change(join(copy, "Tests", "a.test.js")), context, given(ask))).toMatchObject({ decision: "allow", by: "code" })
+  expect(reviewer.reviewLog(context.session, join(box, "reviews")).paused).toBeUndefined()
+  expect(await reviewer.review(change(join(box, "elsewhere", "notes.md")), context, given(ask))).toMatchObject({ decision: "refuse", by: "model" })
+  expect(reviewer.reviewLog(context.session, join(box, "reviews")).paused).toBeNumber()
 })
 
 // A repository of the test's own, as git makes it (none of your settings).
@@ -558,7 +576,7 @@ test("a long test file of the project's own (in its git, in the conversation's f
   const context = { ...yours("Fix the reset under load"), folders: [repo] }
   const ask = model(allows)
   expect(await reviewer.review(run("Tests/sandbox-asks.test.js"), context, given(ask))).toMatchObject({ decision: "allow", by: "model" })
-  expect(ask.shown[0]).toContain("the project's own file, tracked in its git")
+  expect(ask.shown[0]).toContain("tracked in git, too long to show whole: only its start is shown, then its changes not yet committed")
   expect(ask.shown[0]).toContain("import test from 'node:test'")
   expect(ask.shown[0]).toContain("+test('holds a request open past the timeout', () => {})")
   // One it made and never added, or the project's run from a conversation working elsewhere: held

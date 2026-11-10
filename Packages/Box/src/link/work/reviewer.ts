@@ -34,6 +34,7 @@ import { askedAbout, escapeRegex, fencePolicy, realish, type FencePolicy } from 
 import { GUARDED } from "../fence/seatbelt";
 import { commandTemporary, conversationPlaces } from "../fence/state";
 import { readLine } from "./policy";
+import { repositoryOf } from "./project-trees";
 
 /** What's judged: a command to run outside the sandbox (in `folder`), a file one of the agent's
  * own tools reads or writes outside its folder, or another tool's call with its arguments. A
@@ -750,7 +751,8 @@ function isSecret(where: string, policy: FencePolicy): boolean {
 
 // What runs outside the sandbox once it's written in a folder (git's hooks and settings, the
 // engine's and the coding agents' settings there): never allowed again by a place (`placeAllowed`).
-const RUNS_OUTSIDE = new RegExp(`^/${GUARDED}`);
+// (On a Mac's disk, as it's usually set up, `.Claude` is `.claude`.)
+const RUNS_OUTSIDE = new RegExp(`^/${GUARDED}`, process.platform === "darwin" ? "i" : "");
 
 /** git as the box runs it by itself (`shared/git`: nothing the repository's settings name runs), in
  * `folder`: what it printed, or null where it failed or wouldn't run. */
@@ -762,8 +764,8 @@ async function gitIn(folder: string, args: string[]): Promise<string | null> {
 }
 
 /** A script a command runs that's too long to read whole, as the model reads it where it's the
- * project's own (in the conversation's own folders, tracked in its git): its start, and what
- * changed in it since its last commit, whole. Why it's held back where what changed is too long to
+ * project's own (in the conversation's own folders, tracked in its git): its start, and its changes
+ * not yet committed, whole, told as only that (what the agent committed past the start isn't read). Why it's held back where what changed is too long to
  * read too; null where it isn't the project's own. (Reading the whole of a test file was never all
  * a command runs: the modules it imports aren't read either.) */
 async function projectScript(file: string, text: string, folders: readonly string[]): Promise<{ name: string; text: string } | string | null> {
@@ -774,7 +776,7 @@ async function projectScript(file: string, text: string, folders: readonly strin
   const changed = await gitIn(where, ["diff", "--no-color", "HEAD", "--", path.basename(at)]);
   if (changed === null) return null;
   if (changed.length > MOST_SCRIPT) return `It runs ${path.basename(file)}, too long to be read whole first, and changed too much since its last commit to show what changed.`;
-  const name = `${file} (the project's own file, tracked in its git; too long to show whole, so its start is shown${changed ? ", then what changed in it since its last commit" : ", and nothing in it changed since its last commit"})`;
+  const name = `${file} (tracked in git, too long to show whole: only its start is shown${changed ? ", then its changes not yet committed" : ""}; what's past the start, as committed, isn't shown, and the agent may have committed it)`;
   return { name, text: changed ? `${cut(text, MOST_SCRIPT)}\n\n${changed}` : cut(text, MOST_SCRIPT) };
 }
 
@@ -869,7 +871,7 @@ export interface Decision {
 /** A conversation's log: its decisions (the latest last), refusals in a row and in all, since
  * when it's paused, and when you last looked at what's held back (`seen`, from any client).
  * `places`: the folders the model allowed its agent to change files in, where the same goes ahead
- * again without it (`placeOf`), never shown. */
+ * again without it (`keptPlace`), never shown. */
 export interface ReviewLog {
   decisions: Decision[];
   refusedInRow: number;
@@ -934,20 +936,6 @@ export function keepDecision(session: string, decision: Decision, folder = REVIE
     return pausing;
   });
 }
-
-/** One allowed again where the model allowed it before (`placeAllowed`): as its allow would have,
- * it starts the refusals in a row over. */
-function allowedAgain(session: string, folder: string): void {
-  if (!reviewLog(session, folder).refusedInRow) return;
-  changeLog(session, folder, log => { log.refusedInRow = 0; });
-}
-
-/** Where a change to `where` is kept as allowed, once the model allows it: the folder it names (one
- * that's there), or the folder of the file it names. */
-const placeOf = (where: string): string => {
-  const at = realish(where);
-  return fs.statSync(at, { throwIfNoEntry: false })?.isDirectory() ? at : path.dirname(at);
-};
 
 /** Whether the model allowed the conversation's agent to change files in a folder that holds
  * `where` (by where it really is), earlier in it. */
@@ -1064,16 +1052,15 @@ export async function review(action: ReviewedAction, context: ReviewContext, giv
   // (What it names that macOS may ask about, asked off the box's thread first: `askedAbout`.)
   await askedAbout([...namedBy(action), ...(given.own ?? [])]);
   // (One it fails to judge is held back like any it can't, on the log for you to approve.)
-  const { verdict, key, again } = await judge(action, context, given, now(), folder)
-    .catch(error => ({ verdict: heldBack(`Auto's reviewer couldn't review it (${oneLine(String((error as Error)?.message ?? error), 120)}).`, "failed"), key: actionKey(action), again: false }));
-  if (verdict.decision === "allow" && verdict.by === "code") {
-    if (again) try { allowedAgain(context.session, folder); } catch {}
-    return verdict;
-  }
+  // (Code's own allows, a change in a place among them, aren't kept, nor start the refusals in a
+  // row over: an agent can't reset the count with what it may do anyway.)
+  const { verdict, key } = await judge(action, context, given, now(), folder)
+    .catch(error => ({ verdict: heldBack(`Auto's reviewer couldn't review it (${oneLine(String((error as Error)?.message ?? error), 120)}).`, "failed"), key: actionKey(action) }));
+  if (verdict.decision === "allow" && verdict.by === "code") return verdict;
   // A change the model allows: the same in its folder goes ahead again without it, for the rest of
   // the conversation (not where code holds a line: `keptPlace`).
   const place = verdict.decision === "allow" && verdict.by === "model" && action.kind === "file" && action.access === "write"
-    ? await keptPlace(action.path, given.policy ?? fencePolicy()).catch(() => undefined) : undefined;
+    ? await keptPlace(action, given.policy ?? fencePolicy(), context.folders ?? given.own ?? []).catch(() => undefined) : undefined;
   let paused: boolean;
   try {
     paused = keepDecision(context.session, {
@@ -1089,23 +1076,51 @@ export async function review(action: ReviewedAction, context: ReviewContext, giv
   return paused ? { ...verdict, paused } : verdict;
 }
 
-/** The folder a change the model allowed is kept for (`placeOf`), unless it's where an agent in
- * Auto couldn't start a session (your home or a folder holding it, a whole personal folder, your
- * secrets, Kuvo Code's own folders, what runs at login: `keptFromSessions`), or what runs later
- * outside the sandbox (the folders on your PATH, tools' settings, ~/Library): each change there is
- * judged on its own. */
-async function keptPlace(where: string, policy: FencePolicy): Promise<string | undefined> {
-  const place = placeOf(where);
-  if (inKuvo(place, policy) || [...policy.readOnly, ...(policy.homeKept ?? [])].some(wall => inside(place, wall) || holds(place, wall))) return undefined;
+/** The folder a change the model allowed is kept for: only one its own file tool made (never a
+ * folder a command went to, nor room asked for), and then the repository the file is in (its working
+ * folder's top), or else its folder. None where that holds the conversation's own folder or another
+ * repository, nor where an agent in Auto couldn't start a session (your home or a folder holding it,
+ * a whole personal folder, your secrets, Kuvo Code's own folders, what runs at login:
+ * `keptFromSessions`), nor what runs later outside the sandbox (the folders on PATH, tools'
+ * settings, ~/Library): each change there is judged on its own. */
+async function keptPlace(action: ReviewedAction, policy: FencePolicy, own: readonly string[]): Promise<string | undefined> {
+  if (action.kind !== "file" || action.access !== "write" || !action.tool || !action.input) return undefined;
+  const file = realish(action.path);
+  const repository = repositoryOf(path.dirname(file));
+  const place = repository?.top ?? path.dirname(file);
+  const home = own[0] ? realish(own[0]) : null;
+  if (home && holds(place, home)) return undefined;
+  if (!repository && holdsRepository(place)) return undefined;
+  if (inKuvo(place, policy) || [...policy.readOnly, ...(policy.homeKept ?? []), ...pathFolders()].some(wall => inside(place, wall) || holds(place, wall))) return undefined;
   return await keptFromSessions(place, policy) ? undefined : place;
+}
+
+/** The folders on PATH, by where they really are: what's there runs later, outside the sandbox. */
+const pathFolders = (): string[] => (process.env.PATH ?? "").split(":").filter(folder => path.isAbsolute(folder)).map(realish);
+
+/** Whether a folder in `folder` is a repository's (a `.git` in it). */
+function holdsRepository(folder: string): boolean {
+  try {
+    return fs.readdirSync(folder, { withFileTypes: true }).some(each => each.isDirectory() && fs.existsSync(path.join(folder, each.name, ".git")));
+  } catch (error) {
+    // (One not made yet holds none; one that can't be read might.)
+    return (error as NodeJS.ErrnoException)?.code !== "ENOENT";
+  }
+}
+
+/** Whether a change to `where` would be run later outside the sandbox: git's hooks and settings and
+ * the agents' in a folder, a folder on PATH, tools' settings and caches that run (`readOnly`,
+ * `readOnlyPatterns`). */
+function runsLater(where: string, policy: FencePolicy): boolean {
+  return RUNS_OUTSIDE.test(where) || [...policy.readOnly, ...pathFolders()].some(wall => inside(where, wall))
+    || (policy.readOnlyPatterns ?? []).some(pattern => new RegExp(pattern).test(where));
 }
 
 /** A refusal code makes, held back for you to approve: one it couldn't judge, or a pause. */
 const heldBack = (reason: string, why: ReviewWhy): Verdict => ({ decision: "refuse", reason, by: "code", held: true, why });
 
-/** What's decided, and the key the action is matched by again (with the scripts it runs, as read).
- * `again`: allowed where the model allowed the same before (`placeAllowed`). */
-async function judge(action: ReviewedAction, context: ReviewContext, given: ReviewWith, now: number, folder: string): Promise<{ verdict: Verdict; key: string; again?: boolean }> {
+/** What's decided, and the key the action is matched by again (with the scripts it runs, as read). */
+async function judge(action: ReviewedAction, context: ReviewContext, given: ReviewWith, now: number, folder: string): Promise<{ verdict: Verdict; key: string }> {
   const policy = given.policy ?? fencePolicy();
   const ours = ownInside(given.own ?? [], policy);
   const line = hardLine(action, policy, ours);
@@ -1179,8 +1194,8 @@ async function judge(action: ReviewedAction, context: ReviewContext, given: Revi
   // secrets, what runs at login, nor git's hooks and settings and the agents' there, each judged on
   // its own).
   if (action.kind === "file" && action.access === "write" && !own && !persists && !isSecret(realish(action.path), policy)
-    && !RUNS_OUTSIDE.test(realish(action.path)) && placeAllowed(log, action.path)) {
-    return { ...done({ decision: "allow", reason: "Auto's reviewer allowed changing files there earlier in this conversation.", by: "code" }), again: true };
+    && !runsLater(realish(action.path), policy) && placeAllowed(log, action.path)) {
+    return done({ decision: "allow", reason: "Auto's reviewer allowed changing files there earlier in this conversation.", by: "code" });
   }
   const environments = environmentsOf(action);
   const notes = [environments ? `${environments} Allow it only when what the user said plainly asks to see them; listing processes doesn't (ps without them, pgrep, top).` : null, persists ? `${persists} Allow it only when what the user said (or the bot's goal) plainly asks for that kind of thing: a login item, a scheduled job, a background service, a change to a shell's start-up file. Installing a tool isn't asking for its PATH line in a start-up file (its maker's installer adds that itself). Otherwise refuse it.` : null, own ? `It changes ${OWN[own].words}, for every project, not only this one. Allow it only when what the user said plainly asks for that very change; otherwise refuse it.` : null].filter(Boolean).join(" ");

@@ -780,8 +780,8 @@ its own, which a `SIGTERM` stops waiting.
   - Where and how, each optional (bridge 0.9.106, "Work"): `project` (a project's name or folder
     here) or `chat: true` instead of `folder`; `project` with `folder`, a folder in that project or
     in one of its git worktrees wherever that is (one its repository lists that names it back),
-    where the session works, filed as the project's (400 for a folder that's neither, never dropped
-    as before #422); `worktree: true`, a worktree of its project on a
+    where the session works, its answer's `project` the project's (400 for a folder that's neither,
+    or with `worktree: true` too: never dropped, as before #422); `worktree: true`, a worktree of its project on a
     branch of its own; `model` (`"provider/model"` or `{providerID, id}`, one there's an account for
     here, on the engine or the coding agents' bridge as it runs) and `effort` (one of its variants);
     `mode` `build` or `plan`; `approval` (Approval, below: `askFirst`, `acceptEdits`, `auto` or
@@ -4366,7 +4366,7 @@ conversation is taken as the box last found it; one it never found then has its 
 back (`why: "failed"`, code's lines still refused), never left waiting on you (bridge 0.9.186), but
 one the box marked as in Full Access, which runs (bridge 0.9.187).
 
-What's a conversation's own is never reviewed, as its folder isn't: its folder, its project's other
+What's a conversation's own is never reviewed by its agent's own file tools, as its folder isn't (the sandbox's walls for its commands are as they were): its folder, its project's other
 folders, the files sent with it, its commands' temporary folder, a bot's own and its projects, and,
 for one at work in a project's main folder, the project's linked git worktrees wherever they are
 (`git worktree add /tmp/try`: each its repository's `.git/worktrees` lists whose own `.git` names it
@@ -4420,9 +4420,9 @@ folder and its other worktrees stay the reviewer's.
   path, `bash x.sh`, `python x.py`, and the project's build files its program runs (`package.json`
   for npm, pnpm, yarn and bun, a Makefile, a justfile, `conftest.py`, `build.rs`, Gradle's, a
   Rakefile, a Taskfile). One too long to read whole that's the project's own (in the
-  conversation's own folders, tracked in its git) is read in part: its start, and what changed in
-  it since its last commit, whole (a test file was never all a command runs: the modules it
-  imports aren't read either); one that changed too much to show, or isn't the project's, is held
+  conversation's own folders, tracked in its git) is read in part, told as that: its start, and its
+  changes not yet committed, whole (a test file was never all a command runs: the modules it
+  imports aren't read either); one whose changes are too long too, or isn't the project's, is held
   back (`unread`). Each piece is in tags of that prompt's own, so none can pass for the
   rules. Never the agent's own words, its `why`, nor what its tools printed.
 - A script from the web (`curl … | sh`, `bash -c "$(curl …)"`, `eval "$(curl …)"`, `wget -qO- … |
@@ -4446,18 +4446,21 @@ folder and its other worktrees stay the reviewer's.
   answer that isn't one JSON object with a known decision (`unreadable`), no model (`noModel`), or a
   model that fails or doesn't answer within a minute, or a review that fails on the box's side
   (`failed`: no quota, offline). A model that answers `ask` refuses (`reviewer`).
-- Once the model allows a change to files in a folder (the folder named, or the file's), a change
-  in it, and in the folders in it, goes ahead again without the model for the rest of the
-  conversation (#422: the same kind of action in the same place gets the same answer), and isn't
-  kept as a decision. Not for a place where an agent in Auto couldn't start a session (above), what
-  runs later outside the sandbox (the folders on your PATH, tools' settings, `~/Library`), nor
-  Kuvo Code's own; and never for a change to your own settings, your secrets, what runs at login,
-  or git's hooks and settings and the agents' there, each judged on its own. Kept with the
-  decisions (`places`, never shown), the last 50.
+- Once the model allows a change the agent's own file tool makes (never a folder a command goes
+  to, nor room asked for), a change in the same place goes ahead again without the model for the
+  rest of the conversation (#422: the same kind of action in the same place gets the same answer),
+  and isn't kept as a decision. The place is the repository the file is in (its working folder),
+  or else the file's folder; none where that holds the conversation's own folder or another
+  repository, where an agent in Auto couldn't start a session (above), what runs later outside the
+  sandbox (the folders on PATH, tools' settings, `~/Library`), or Kuvo Code's own. Never for a
+  change to your own settings, your secrets, what runs at login, what runs later (the same), or
+  git's hooks and settings and the agents' (on a Mac by any case), each judged on its own. Kept
+  with the decisions (`places`, never shown), the last 50.
 - Three refusals in a row, or twenty in a conversation, pause Auto there: its run is stopped, and
   what it wants next is held back (`why: "paused"`) until you let it go on or approve one. Those for
-  want of a model (`noModel`, `failed`, `unreadable`) don't count; an allow starts the count in a
-  row over, and so does a change the model allowed there before (above). A review that can't be had at all
+  want of a model (`noModel`, `failed`, `unreadable`) don't count; the model's allow starts the
+  count in a row over (code's own allows, a place's among them, don't: an agent can't reset it with
+  what it may do anyway). A review that can't be had at all
   (a full disk) is refused with why (`failed`), never asked.
 - `GET kuvo/sessions/<id>/decisions` → `{decisions, paused?, seen?}`: the conversation's decisions, the
   latest last (the last 200), each `{id, at, action, kind, decision, reason, by, why?, held?,

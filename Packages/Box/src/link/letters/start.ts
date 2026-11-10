@@ -366,6 +366,11 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
   // In a worktree of its project's, on a branch of its own (taken away again should the session not
   // start).
   let madeTree: string | null = null;
+  // (A worktree of its own is made from the project: one given a folder too would leave that.)
+  if (given.worktree === true && named && folder && realish(folder) !== realish(named.directory)) {
+    giveBack();
+    return no(400, "Give a folder or worktree: true, not both: a new worktree is made from the project.");
+  }
   if (given.worktree === true) {
     const project = projectDirectory ?? (folder !== CHATS ? projectOfFolder(folder) : null);
     if (!project) {
@@ -396,7 +401,7 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
   const asBefore = Boolean(from && !from.stored && wanted === starters && !bot);
   const applied = asBefore ? wanted : effectiveApproval(wanted, { agents }).approval;
   const got = applied !== (requested ?? wanted) && lowerOf(applied, requested ?? wanted) === applied ? applied : undefined;
-  const project = named && folder !== named.directory ? { name: named.name, folders: [] as readonly string[] } : projectOf(folder);
+  const project = named && realish(folder) !== realish(named.directory) ? { name: named.name, folders: [] as readonly string[] } : projectOf(named?.directory ?? folder);
   const title = typeof given.title === "string" && given.title.trim() ? given.title.trim() : null;
   const rules = rulesFor(applied, parent, project?.folders ?? []);
   // Its mode: the one asked for, else the conversation's (one that plans starts sessions that plan).

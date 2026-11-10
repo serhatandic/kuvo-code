@@ -348,6 +348,18 @@ async function ownFolders(at: Conversation): Promise<string[]> {
  * start a session either (`keptFromSessions`: your home, a whole personal folder, your secrets, what
  * runs at login), and Kuvo Code's own (another session's worktree there), each judged as before. */
 async function projectTrees(folder: string): Promise<string[]> {
+  // (Worked out once for the asks of a moment: an ask is looked at several times as it's judged.)
+  const known = treesFound.get(folder);
+  if (known && Date.now() - known.at < TREES_FOR) return known.trees;
+  const trees = foundTrees(folder);
+  treesFound.set(folder, { at: Date.now(), trees });
+  if (treesFound.size > 100) treesFound.delete(treesFound.keys().next().value!);
+  return trees.catch(() => []);
+}
+const treesFound = new Map<string, { at: number; trees: Promise<string[]> }>();
+const TREES_FOR = 5_000;
+
+async function foundTrees(folder: string): Promise<string[]> {
   const trees = projectWorktrees(folder);
   if (!trees.length) return [];
   const policy = fencePolicy();
