@@ -391,7 +391,7 @@ describe("Claude Code, on its own", () => {
     await until(() => idles(id).length === 2)
     expect(shells(root).find((one) => one.id === job.id)?.status).toBe("exited")
     const notice = sessions.messages(id).find((message) => message.type === "synthetic") as any
-    expect(notice.metadata).toMatchObject({ source: "shell", state: "completed", exit: 0, title: "Start the dev server" })
+    expect(notice.metadata).toMatchObject({ source: "shell", state: "completed", exit: 0 })
     expect(notice.description).toBe("npm run dev")
     expect(texts(id).join(" ")).toContain("The server stopped.")
   })

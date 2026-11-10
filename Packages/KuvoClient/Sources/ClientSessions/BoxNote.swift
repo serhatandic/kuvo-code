@@ -6,7 +6,8 @@ import OpenCodeKit
 /// happened rather than as a bubble of yours. Every box marks one as it sends it
 /// (`metadata.kuvo.note`, the box's `boxNote`); those sent before it did are read from how it
 /// wrote them. Its sessions' news reads as messages from those sessions (`news`, each in the
-/// To/From design of messages between agents); the rest as a pill or a line (`TranscriptNote`).
+/// To/From design of messages between agents); the rest shows nothing but what `ReplyChanges` says
+/// of it in the next reply's footer.
 public struct BoxNote: Equatable, Sendable {
     /// Who it's from: "Goal", "Its sessions", "Your answer".
     public let from: String
@@ -16,8 +17,6 @@ public struct BoxNote: Equatable, Sendable {
     /// other note).
     public let news: [SessionNews]
 
-    /// The SF Symbol its line shows with: a goal's mark for a goal's, otherwise an info mark.
-    public var symbol: String { from == "Goal" ? "scope" : "info.circle" }
 
     public init(from: String, line: String, news: [SessionNews] = []) {
         self.from = from

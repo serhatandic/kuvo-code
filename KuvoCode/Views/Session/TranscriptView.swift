@@ -408,6 +408,9 @@ struct TranscriptView: View {
         // Auto's are the model it picked for that turn.
         let firstSwitch = all.lazy.compactMap { if case .modelSwitched(let change) = $0 { change } else { nil } }.first
         var current = firstSwitch.map(\.previous) ?? model.session.model
+        // What changed since the last reply (the model, the mode, a summary): said in the next
+        // reply's footer, never as a pill (KuvoClient's ReplyChanges, the same on the phone).
+        var changes = ReplyChanges()
         // Summed up: the agent's steps between its replies, gathered into one row.
         var steps: [Message.Content] = []
         var stepKeys: [String] = []
@@ -441,6 +444,7 @@ struct TranscriptView: View {
             switch message {
             case .user(let user):
                 turn = TurnStats(started: user.time.created, message: user, model: current)
+                if let note = BoxNote.of(user) { changes.note(note) }
                 rows += Row.messages(user)
             case .assistant(let assistant):
                 turn.add(assistant)
@@ -510,38 +514,26 @@ struct TranscriptView: View {
                     rows.append(.assistant(end, showsError: showsError))
                 }
             case .idle(let idle):
+                turn.changes = changes.replied()
                 rows.append(.turnEnd(idle, turn, isLast: index == last, isLatest: index == latestEnd))
                 turn = TurnStats()
             case .modelSwitched(let change):
                 current = change.model
                 // By its name, as the model menu shows it ("Big Pickle", not big-pickle).
-                rows.append(.notice(change.id, "cpu", "Switched to \(catalog.model(change.model)?.name ?? change.model.id)" + (change.model.variant.map { " · \(EffortLevel.title($0))" } ?? "")))
+                changes.switched(to: change.model, from: change.previous,
+                                 words: (catalog.model(change.model)?.name ?? change.model.id) + (change.model.variant.map { " " + EffortLevel.title($0) } ?? ""))
             case .agentSwitched(let change):
-                rows.append(.notice(change.id, change.agent == "plan" ? "list.bullet.clipboard" : "hammer", "\(change.agent.capitalized) mode"))
+                changes.switched(toMode: change.agent, from: change.previous)
             case .compaction(let compaction):
-                let words = switch compaction.status {
-                case "running": "Summarizing the conversation…"
-                case "failed": "Couldn’t summarize the conversation"
-                default: "Summarized the conversation to save space"
-                }
-                rows.append(.notice(compaction.id, "rectangle.compress.vertical", words))
+                changes.summarized(compaction.status)
             case .shell(let shell):
                 rows.append(.shell(shell))
             case .synthetic(let notice), .system(let notice):
                 // A turn the app or the engine started (a model switched mid-run carries on), timed
                 // from it as one you started is from your message.
                 if turn.started == nil { turn.started = notice.time.created }
-                // Pills for a change of state, lines for the rest; never the words for the model
-                // (KuvoClient's TranscriptNote, the same on the phone).
-                let previous: TranscriptNote? = switch steps.isEmpty ? rows.last : nil {
-                case .notice(_, let symbol, let text)?: TranscriptNote(.pill, symbol: symbol, text: text)
-                default: nil
-                }
-                let shown = TranscriptNote.of(notice, after: previous).map { Row.note(notice.id, $0) }
-                if let shown {
-                    flushSteps(live: false)
-                    rows.append(shown)
-                }
+                // Words for the model, never shown: what changed is said in the next reply's footer.
+                changes.note(notice)
             case .other:
                 break
             }
@@ -613,6 +605,9 @@ struct TurnStats: Hashable {
     var model: ModelRef?
     /// The files the agent changed, in the order first changed, with their lines.
     var files: [TurnFile] = []
+    /// What changed since the reply before (the model, the mode, a summary), in a word or two each
+    /// (KuvoClient's ReplyChanges): said beside its time.
+    var changes: [String] = []
 
     /// A file a turn changed. A file written whole has no line counts.
     struct TurnFile: Hashable, Identifiable {
@@ -689,10 +684,9 @@ enum Row: Identifiable, Hashable {
     /// latest turn's end, whose row (its time, Copy and Reply) stays in view, though notes or a
     /// command you ran may come after it.
     case turnEnd(Message.Idle, TurnStats, isLast: Bool, isLatest: Bool)
-    /// A change of state, in a pill: the model or the mode switched, the conversation summarized.
+    /// A quiet line of where the conversation stands with nothing after it to say it: a run cut
+    /// off before it finished. (What changed between replies is said in the next one's footer.)
     case notice(String, String, String)
-    /// A note of what happened, in a line that opens to its details (KuvoClient's TranscriptNote).
-    case line(String, TranscriptNote)
     /// One of its sessions telling the agent what it did, as a message from it (`SessionNews`);
     /// `at`, when it came, and none while it waits to go in.
     case news(String, SessionNews, at: Milliseconds?)
@@ -728,8 +722,8 @@ enum Row: Identifiable, Hashable {
     }
 
     /// A message in the conversation as its rows: yours as your bubble; one the box wrote to the
-    /// agent as what happened: its sessions' news as a message from each, the rest as a pill or a
-    /// line.
+    /// agent as a message from each session whose news it tells, and otherwise nothing (what it
+    /// changed shows in the next reply's footer).
     static func messages(_ user: Message.User) -> [Row] {
         BoxNote.of(user).map { rows(of: $0, id: user.id, at: user.time.created) } ?? [.user(user)]
     }
@@ -740,15 +734,7 @@ enum Row: Identifiable, Hashable {
     }
 
     private static func rows(of note: BoxNote, id: String, at: Milliseconds?) -> [Row] {
-        guard note.news.isEmpty else {
-            return note.news.enumerated().map { index, news in .news(index == 0 ? id : "\(id)#\(index)", news, at: at) }
-        }
-        return [.note(id, TranscriptNote.of(note))]
-    }
-
-    /// A note as its row: a pill for a change of state, a line for the rest.
-    static func note(_ id: String, _ note: TranscriptNote) -> Row {
-        note.look == .pill ? .notice(id, note.symbol, note.text) : .line(id, note)
+        note.news.enumerated().map { index, news in .news(index == 0 ? id : "\(id)#\(index)", news, at: at) }
     }
 
     /// The words Find looks in, as the row shows them: messages, replies, and commands you ran
@@ -832,7 +818,6 @@ enum Row: Identifiable, Hashable {
         case .subagent(let call): call.id
         case .turnEnd(let m, _, _, _): m.id
         case .notice(let id, _, _): id
-        case .line(let id, _): id
         case .news(let id, _, _): id
         case .shell(let m): m.id
         case .pending(let item): item.id
@@ -935,17 +920,11 @@ private struct RowView: View, Equatable {
         case .shell(let shell):
             ShellRow(shell: shell)
         case .notice(_, _, let text):
-            // A change of state. Its words say what it is: no symbol beside them.
+            // Quiet, at the conversation's edge, as the steps' line is: no pill.
             Text(text)
-                .font(.caption)
+                .font(.callout)
                 .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 5)
-                .background(.quaternary.opacity(0.5), in: .capsule)
-                .frame(maxWidth: .infinity)
-        case .line(let id, let note):
-            NoteLine(id: id, note: note, scope: scope)
+                .frame(maxWidth: .infinity, alignment: .leading)
         case .news(let id, let news, let at):
             AgentMessageRow(id: id, from: news.title, session: news.session, text: news.body, at: at, status: news.status)
         case .undone(let count):
@@ -956,12 +935,10 @@ private struct RowView: View, Equatable {
                     .disabled(isOffline)
                     .fontWeight(.semibold)
             }
-            .font(.caption)
+            // Quiet, at the conversation's edge: no pill.
+            .font(.callout)
             .foregroundStyle(.secondary)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .background(.quaternary.opacity(0.5), in: .capsule)
-            .frame(maxWidth: .infinity)
+            .frame(maxWidth: .infinity, alignment: .leading)
             .help("Sending a message makes the undo final")
         case .working(let since, let quiet, let followsHeard, let holds, let summarizing):
             HStack(spacing: 8) {
@@ -1644,7 +1621,7 @@ private struct TurnEndView: View {
     /// ended: always laid out, shown as `isShown` says, so nothing moves when they appear.
     private var helpers: some View {
         HStack(spacing: 6) {
-            Text(([MessageTime.sentAt(ended)] + parts).joined(separator: " · "))
+            Text(([MessageTime.sentAt(ended)] + stats.changes + parts).joined(separator: " · "))
                 .font(.caption)
                 .foregroundStyle(.tertiary)
                 .help(SentTime.full(ended))
@@ -1664,7 +1641,7 @@ private struct TurnEndView: View {
         // VoiceOver reads it, and offers its buttons, shown or not: hidden, it would be skipped.
         .accessibilityRepresentation {
             HStack {
-                Text(([SentTime.full(ended)] + parts).joined(separator: ", "))
+                Text(([SentTime.full(ended)] + stats.changes + parts).joined(separator: ", "))
                 if !stats.text.isEmpty {
                     Button("Copy the Reply") { Clipboard.copy(stats.text.joined(separator: "\n\n")) }
                     if let reply { Button("Reply") { reply(stats.text.joined(separator: "\n\n")) } }

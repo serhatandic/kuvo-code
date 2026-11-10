@@ -5,11 +5,11 @@ import Testing
 @testable import KuvoCode
 
 /// What the box and the engine write to an agent in its conversation, as the transcript draws it:
-/// a lead's sessions telling it what they did read as messages from each (#404), in the design of a
-/// message from another agent, opening that session; the engine's notes for the model (work moved
-/// to the background for a message, a background run ending) are short lines that open to their
-/// details, never the words written for the model (#406). Pills are only for changes of state. The
-/// engine is stubbed.
+/// no pills (the user, 11-10). A lead's sessions telling it what they did read as messages from each
+/// (#404), in the design of a message from another agent, opening that session (one still working
+/// too: the user, 11-10, "not ideal to only see your messages without the trigger"); the engine's notes for the model (work moved to the background for a
+/// message, a background run ending) show nothing (#406); what changed (the model, a summary) is a
+/// word in the next reply's footer. The engine is stubbed.
 @MainActor
 @Suite(.serialized) struct TranscriptNotesTests {
     let engine = StubEngine(port: 47871)
@@ -30,12 +30,13 @@ import Testing
         return TranscriptView.rows(of: model, catalog: Catalog(), detail: .summary)
     }
 
-    private func pills(_ rows: [Row]) -> [String] {
+    private func notices(_ rows: [Row]) -> [String] {
         rows.compactMap { if case .notice(_, _, let text) = $0 { text } else { nil } }
     }
 
-    private func lines(_ rows: [Row]) -> [TranscriptNote] {
-        rows.compactMap { if case .line(_, let note) = $0 { note } else { nil } }
+    private func reply(_ id: String, at: Double, _ text: String, model: String = "m") -> [String: Any] {
+        ["id": id, "type": "assistant", "agent": "build", "time": ["created": at, "completed": at + 1], "model": ["id": model, "providerID": "p"],
+         "content": [["type": "text", "text": text]]]
     }
 
     @Test func itsSessionsNewsReadsAsMessagesFromThem() async throws {
@@ -61,31 +62,32 @@ import Testing
         ])
         #expect(news.map(\.1) == [2_000, 3_000, 3_000])
         // No pill for any of them, nor the words the lead was told to act on.
-        #expect(pills(rows).isEmpty)
+        #expect(notices(rows).isEmpty)
         #expect(!news.contains { $0.0.body.contains("answer_ask") })
         // Each its own row, and Find reads what it shows.
         #expect(Set(rows.map(\.id)).count == rows.count)
         #expect(rows.contains { if case .news = $0 { $0.findParts.count == 1 } else { false } })
     }
 
-    @Test func workMovedToTheBackgroundIsALineThatSaysWhoAndWhy() async throws {
+    @Test func notesForTheModelShowNothingAndAModelChangeIsInTheNextFooter() async throws {
         defer { engine.stop() }
-        let command = "cd /tmp/kuvo-373/phone && KUVO_HEAVY_SLOTS=2 ONLY=KuvoCodeMobileUITests/PictureGalleryTests timeout -k 30 2400 ../kuvo-ai/scripts/heavy.sh phone sh scripts/test-app.sh > /tmp/phone-ui.log 2>&1; echo exit $?"
+        let command = "cd /tmp/kuvo-373/phone && timeout -k 30 2400 ../kuvo-ai/scripts/heavy.sh phone sh scripts/test-app.sh > /tmp/phone-ui.log 2>&1; echo exit $?"
         let rows = try await rows([
             ["id": "msg_01", "type": "user", "time": ["created": 1_000], "text": "Run the phone's UI tests."],
-            ["id": "msg_02", "type": "model-switched", "time": ["created": 1_500], "model": ["id": "claude-opus", "providerID": "p"], "previous": ["id": "m", "providerID": "p"]],
-            ["id": "msg_03", "type": "synthetic", "time": ["created": 2_000],
+            reply("msg_02", at: 1_100, "Running them."),
+            ["id": "msg_03", "type": "idle", "time": ["created": 1_200], "outcome": "succeeded"],
+            ["id": "msg_04", "type": "model-switched", "time": ["created": 1_500], "model": ["id": "claude-sonnet", "providerID": "p", "variant": "high"], "previous": ["id": "m", "providerID": "p"]],
+            ["id": "msg_05", "type": "user", "time": ["created": 1_600], "text": "How did it go?"],
+            ["id": "msg_06", "type": "synthetic", "time": ["created": 2_000],
              "text": "User requested that active blocking work be moved to the background.\n\nBackgrounded work:\n- shell: \(command)\n\nThe backgrounded work is still unfinished. Move on to other work if you can. If there is nothing else useful to do, finish your response. Do not wait, sleep, poll, or report the backgrounded work as complete until a later completion notification is added to the conversation."],
-            ["id": "msg_04", "type": "synthetic", "time": ["created": 3_000], "text": "<shell id=\"sh_1\" state=\"completed\" command=\"\(command)\">\nexit 0\n</shell>",
+            ["id": "msg_07", "type": "synthetic", "time": ["created": 3_000], "text": "<shell id=\"sh_1\" state=\"completed\" command=\"\(command)\">\nexit 0\n</shell>",
              "description": command, "metadata": ["source": "shell", "shellID": "sh_1", "state": "completed", "exit": 0]],
+            reply("msg_08", at: 3_100, "All passed.", model: "claude-sonnet"),
+            ["id": "msg_09", "type": "idle", "time": ["created": 3_200], "outcome": "succeeded"],
         ])
-        let lines = lines(rows)
-        #expect(lines.map(\.text) == ["Moved heavy.sh phone to the background for a new message", "Background run finished: heavy.sh phone"])
-        #expect(lines.allSatisfy { $0.opens })
-        #expect(lines.first?.detail?.contains("Kuvo Code moved this to the background") == true)
-        #expect(lines.last?.command == command)
-        // Only the model's change is a pill; nothing says the user asked.
-        #expect(pills(rows) == ["Switched to claude-opus"])
-        #expect(!lines.contains { $0.text.contains("User requested") || ($0.detail ?? "").contains("User requested") })
+        #expect(notices(rows).isEmpty)
+        #expect(!rows.contains { $0.copiedText(folders: []).contains("User requested") || $0.copiedText(folders: []).contains("Background command") })
+        let footers = rows.compactMap { if case .turnEnd(_, let stats, _, _) = $0 { stats.changes } else { nil } }
+        #expect(footers == [[], ["claude-sonnet High"]])
     }
 }

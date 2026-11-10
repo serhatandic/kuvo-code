@@ -1226,8 +1226,6 @@ class ClaudeThread implements Thread {
       const metadata: Record<string, unknown> = { source: "shell", state: ended.status === "completed" ? "completed" : "error" }
       if (exit !== undefined) metadata.exit = Number(exit)
       if (ended.status === "stopped") metadata.signal = "SIGTERM"
-      // What Claude Code called the command ("Run the tests"), which clients say in its place.
-      if (ended.command && ended.description && ended.description !== ended.command) metadata.title = ended.description
       return { text: `A command left running in the background ${ended.status === "completed" ? "finished" : ended.status}.`, description: ended.command ?? ended.description, metadata }
     }
     if (ended) return { text: `A task it had going ${ended.status === "completed" ? "finished" : ended.status}.`, description: `${ended.status === "completed" ? "Finished" : "Ended"}: ${ended.description}` }
