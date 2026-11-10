@@ -2,7 +2,9 @@ import ClientSessions
 import ClientText
 import Foundation
 import KuvoLink
+import OpenCodeKit
 import Testing
+import Textual
 @testable import KuvoCode
 
 /// The Work Queue in the panel (PROTOCOL.md, "The Work Queue"): a conversation's items as its box
