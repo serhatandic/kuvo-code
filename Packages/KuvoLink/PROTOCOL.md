@@ -2279,6 +2279,17 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     last changed, opaque to a client), by path, so a client reads one again (`kuvo/file`) only when
     it changed; `uncommitted`, anything not committed yet
     (always true but for `branch`). `500 {"message"}` when git couldn't say.
+  - `POST kuvo/git/changes/count {"directory", "scope"?, "base"?}` (`git.changes.count`, bridge
+    0.9.209): how much `kuvo/git/changes` would show, without the diff, for a count (the phone's
+    ••• says how many files changed) → `{"repository": false}`, or `{"repository": true, root,
+    against, files, additions, deletions, untracked, uncommitted, partial?}`. `root`, `against`
+    and `uncommitted` as `kuvo/git/changes` has them; `files`, each changed file once, as a client
+    lists them from `patch` and `untracked` (a rename by its new path, a file that changed kind as
+    one, a repository inside this one as one); `untracked`, how many of them are new files git
+    doesn't know (none for `staged`); `additions` and `deletions`, git's count of lines (a binary
+    file has none), new files' lines included, read up to 32 MB of them in all: past that the rest
+    aren't counted and `partial` is `true`. `500 {"message"}` when git couldn't say. A box without
+    it (no `git.changes.count`): read `kuvo/git/changes` and count.
   - `POST kuvo/git/stage`, `…/unstage` or `…/discard` with `{"root", "path", "oldPath"?, "status":
     "added|deleted|modified|renamed", "scope"?}` → `200 {}`, or `422 {"message"}` with what went
     wrong. `path` as `kuvo/git/changes` lists it: a repository inside this one may end in "/"
@@ -3078,6 +3089,7 @@ the route scenarios (`Vectors/routes/routing.json`).
 | `folders` | `kuvo/folders` |
 | `folders.files` | `kuvo/folders?files=1`: a folder's files too, and `reason` on a refusal |
 | `git` | `kuvo/git/…`: Changes (bridge 0.9.94) |
+| `git.changes.count` | `POST kuvo/git/changes/count`: how much changed, without the diff (bridge 0.9.209) |
 | `git.merge` | `POST kuvo/git/merge`: Merge into… (bridge 0.9.143) |
 | `git.pull-request` | `POST kuvo/git/pull-request`: Create Pull Request (bridge 0.9.143) |
 | `git.pull-request.draft` | `POST kuvo/git/pull-request/draft`: Create Pull Request's confirmation (bridge 0.9.179) |

@@ -10,7 +10,7 @@ import os from "node:os";
 import path from "node:path";
 import { askedArgs, ownArgsLater } from "../../shared/git";
 import { parsed } from "../../shared/json";
-import type { GitChanges, PullRequestDraft } from "../../shared/routes/changes";
+import type { GitChanges, GitChangesCount, PullRequestDraft } from "../../shared/routes/changes";
 import { IS_MAC, K } from "../home";
 import type { AnswerPiece, RouteContext } from "../server/context";
 import { FILE_LIMIT } from "./file";
@@ -96,12 +96,12 @@ const realOr = (folder: string) => {
   }
 };
 
-/** What changed in `directory`'s repository in `scope` (`base`: the branch the Branch scope
- * compares with), or `{repository: false}` outside one. */
-export async function changesIn(directory: string, scope: Scope, base?: string): Promise<GitChanges | null> {
-  const top = (await text(directory, ["rev-parse", "--show-toplevel"]))?.trim();
-  if (!top) return { repository: false };
-  const root = top;
+/** Where `directory`'s changes in `scope` are read: its repository's top folder, what they're
+ * compared with, the folder's part of it, and what `git diff` takes for the scope; null outside
+ * a repository. */
+async function scoped(directory: string, scope: Scope, base?: string) {
+  const root = (await text(directory, ["rev-parse", "--show-toplevel"]))?.trim();
+  if (!root) return null;
   let against = (await git(root, ["rev-parse", "--verify", "-q", "HEAD"])).ok ? "HEAD" : EMPTY_TREE;
   // Since the branch left its base: from where they part, to the files as they are now.
   if (scope === "branch" && base) {
@@ -110,19 +110,40 @@ export async function changesIn(directory: string, scope: Scope, base?: string):
   }
   const relative = path.relative(realOr(root), realOr(directory));
   const limit = relative && !relative.startsWith("..") ? relative.split(path.sep).join("/") : ".";
+  const compared = scope === "staged" ? ["--cached", against] : scope === "unstaged" ? [] : [against];
+  return { root, against, limit, compared };
+}
+
+/** The new files git doesn't know in `limit` (not for `staged`): a repository inside this one
+ * ends in "/". */
+async function untrackedIn(root: string, limit: string, scope: Scope) {
+  if (scope === "staged") return [];
+  return ((await text(root, ["-c", "core.quotepath=off", "ls-files", "--others", "--exclude-standard", "-z", "--", limit])) ?? "").split("\0").filter(Boolean);
+}
+
+/** Something not committed yet, new files included whatever git's settings say; as if there were
+ * when git can't say, so nothing is thrown away on a guess. Always for all but `branch`. */
+async function uncommittedIn(root: string, scope: Scope) {
+  const status = scope === "branch" ? await text(root, ["status", "--porcelain", "--untracked-files=normal"]) : "x";
+  return status === null || status.length > 0;
+}
+
+/** What changed in `directory`'s repository in `scope` (`base`: the branch the Branch scope
+ * compares with), or `{repository: false}` outside one. */
+export async function changesIn(directory: string, scope: Scope, base?: string): Promise<GitChanges | null> {
+  const found = await scoped(directory, scope, base);
+  if (!found) return { repository: false };
+  const { root, against, limit, compared } = found;
   // Its own prefixes, whatever the git settings (diff.noprefix, diff.mnemonicPrefix): a client
   // reads the paths after them. The whole file as context, so a client folds what's unchanged.
   // (The file's own lines, whatever your settings: an unchanged blank line written as " ", none
   // through a converter (textconv). Clients count each line, and review comments name them.)
   const args = ["-c", "core.quotepath=off", "-c", "diff.suppressBlankEmpty=false", "diff", "--no-color", "--no-ext-diff", "--no-textconv", "--find-renames", "--src-prefix=a/", "--dst-prefix=b/", "-U100000"];
-  if (scope === "uncommitted" || scope === "branch") args.push(against);
-  if (scope === "staged") args.push("--cached", against);
-  const patch = await text(root, [...args, "--", limit]);
+  const patch = await text(root, [...args, ...compared, "--", limit]);
   if (patch === null) return null;
-  let untracked: string[] = [];
+  const untracked = await untrackedIn(root, limit, scope);
   const hashes: Record<string, string> = {};
   if (scope !== "staged") {
-    untracked = ((await text(root, ["-c", "core.quotepath=off", "ls-files", "--others", "--exclude-standard", "-z", "--", limit])) ?? "").split("\0").filter(Boolean);
     // A stamp of each new file (its size and when it last changed), so a client reads one again
     // only when it changed. Cheap for thousands (a project with no .gitignore after an install),
     // which hashing each on every look isn't; read a few at a time, so the box goes on answering
@@ -140,10 +161,80 @@ export async function changesIn(directory: string, scope: Scope, base?: string):
       }));
     }
   }
-  // Something not committed yet, new files included whatever git's settings say; as if there were
-  // when git can't say, so nothing is thrown away on a guess.
-  const status = scope === "branch" ? await text(root, ["status", "--porcelain", "--untracked-files=normal"]) : "x";
-  return { repository: true, root, against, patch, untracked, hashes, uncommitted: status === null || status.length > 0 };
+  return { repository: true, root, against, patch, untracked, hashes, uncommitted: await uncommittedIn(root, scope) };
+}
+
+/** The most of new files' bytes `countIn` reads for their lines, all of them together. */
+const COUNT_READ_LIMIT = 32 * 1024 * 1024;
+
+/** How much changed in `directory`'s repository in `scope`, as `changesIn` would list it but
+ * without the diff: each changed file once (a rename by its new path, a file that changed kind as
+ * one), new files git doesn't know among them, and git's count of lines added and removed, a new
+ * file's lines included (a binary one has none, as git counts it). New files' lines are read only
+ * up to `COUNT_READ_LIMIT` in all: past it the rest aren't counted, and `partial` says so. */
+export async function countIn(directory: string, scope: Scope, base?: string): Promise<GitChangesCount | null> {
+  const found = await scoped(directory, scope, base);
+  if (!found) return { repository: false };
+  const { root, against, limit, compared } = found;
+  const numbers = await git(root, ["-c", "core.quotepath=off", "diff", "--no-color", "--no-ext-diff", "--no-textconv", "--find-renames", "--numstat", "-z", ...compared, "--", limit]);
+  if (!numbers.ok) return null;
+  // `added<TAB>deleted<TAB>path`, or for a rename `added<TAB>deleted<TAB>` then its old and new
+  // paths as fields of their own; "-" for a binary file's.
+  const seen = new Set<string>();
+  let additions = 0;
+  let deletions = 0;
+  const fields = numbers.out.toString("utf8").split("\0");
+  for (let at = 0; at < fields.length; at++) {
+    const field = fields[at]!;
+    if (!field) continue;
+    const [added = "", deleted = "", ...rest] = field.split("\t");
+    let name = rest.join("\t");
+    if (!name) {
+      at += 2;
+      name = fields[at] ?? "";
+    }
+    seen.add(name);
+    additions += Number(added) || 0;
+    deletions += Number(deleted) || 0;
+  }
+  const untracked = (await untrackedIn(root, limit, scope)).filter(name => !seen.has(name.endsWith("/") ? name.slice(0, -1) : name) && !seen.has(name));
+  let budget = COUNT_READ_LIMIT;
+  let partial = false;
+  // A few at a time, so the box goes on answering meanwhile.
+  const files = untracked.filter(name => !name.endsWith("/"));
+  for (let at = 0; at < files.length && !partial; at += 16) {
+    const batch: string[] = [];
+    for (const name of files.slice(at, at + 16)) {
+      const size = kind(path.join(root, name))?.size ?? 0;
+      if (size > budget) {
+        partial = true;
+        break;
+      }
+      budget -= size;
+      batch.push(name);
+    }
+    const counts = await Promise.all(batch.map(name => linesOf(path.join(root, name))));
+    for (const count of counts) additions += count;
+  }
+  return {
+    repository: true, root, against, files: seen.size + untracked.length, additions, deletions, untracked: untracked.length,
+    uncommitted: await uncommittedIn(root, scope), ...(partial ? { partial: true as const } : {}),
+  };
+}
+
+/** A new file's lines as git counts them for one added: none for a binary one (a NUL in its
+ * first 8000 bytes), one for a link (where it points), and a last line without its newline. */
+async function linesOf(file: string): Promise<number> {
+  try {
+    if ((await fs.promises.lstat(file)).isSymbolicLink()) return 1;
+    const bytes = await fs.promises.readFile(file);
+    if (bytes.subarray(0, 8000).includes(0)) return 0;
+    let lines = 0;
+    for (let at = bytes.indexOf(10); at !== -1; at = bytes.indexOf(10, at + 1)) lines++;
+    return bytes.length && bytes[bytes.length - 1] !== 10 ? lines + 1 : lines;
+  } catch {
+    return 0;
+  }
 }
 
 /** To the Trash: on this Mac its own, elsewhere (a machine, whoever's at it or not) Kuvo Code's on
@@ -557,6 +648,12 @@ export async function* changesRoute(context: RouteContext): AsyncGenerator<Answe
     const directory = folderAt(body.directory);
     if (!directory) return yield* json(404, { message: "That folder isn’t there." });
     const found = await changesIn(directory, scope, typeof body.base === "string" && body.base && !body.base.startsWith("-") ? body.base : undefined);
+    return yield* found ? json(200, found) : json(500, { message: "git couldn’t read the changes." });
+  }
+  if (route === "kuvo/git/changes/count") {
+    const directory = folderAt(body.directory);
+    if (!directory) return yield* json(404, { message: "That folder isn’t there." });
+    const found = await countIn(directory, scope, typeof body.base === "string" && body.base && !body.base.startsWith("-") ? body.base : undefined);
     return yield* found ? json(200, found) : json(500, { message: "git couldn’t read the changes." });
   }
   if (route === "kuvo/git/stage" || route === "kuvo/git/unstage" || route === "kuvo/git/discard") {

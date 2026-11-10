@@ -15,6 +15,20 @@ export const GIT_CHANGES = oneOf(
 );
 export type GitChanges = Infer<typeof GIT_CHANGES>;
 
+/** How much changed in a scope, as `GIT_CHANGES` would list it but without the diff: outside a
+ * repository `repository: false`; in one, its top folder, what it was compared with, how many
+ * files changed (`untracked` of them new files git doesn't know), git's count of lines added and
+ * removed (new files' lines too, but past what's read of them when `partial`), and whether
+ * anything isn't committed yet. */
+export const GIT_CHANGES_COUNT = oneOf(
+  object({ repository: literal(false) }),
+  object({
+    repository: literal(true), root: string, against: string, files: number, additions: number, deletions: number,
+    untracked: number, uncommitted: bool, "partial?": literal(true),
+  }),
+);
+export type GitChangesCount = Infer<typeof GIT_CHANGES_COUNT>;
+
 /** What a commit would take, for writing its message: the diff, cut short, and whether it's what's staged. */
 export const COMMIT_DIFF = object({ diff: string, staged: bool });
 
@@ -60,6 +74,7 @@ const REFUSED = object({ message: string });
 
 export const CHANGES_ROUTES: RouteShape[] = [
   { route: "POST kuvo/git/changes", answers: { 200: GIT_CHANGES } },
+  { route: "POST kuvo/git/changes/count", answers: { 200: GIT_CHANGES_COUNT } },
   { route: "POST kuvo/git/stage", answers: { 200: NOTHING } },
   { route: "POST kuvo/git/unstage", answers: { 200: NOTHING } },
   { route: "POST kuvo/git/discard", answers: { 200: NOTHING } },
