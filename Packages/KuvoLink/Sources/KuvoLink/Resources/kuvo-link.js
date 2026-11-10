@@ -8587,7 +8587,7 @@ var keptAgent = ({ session, name, kind, project, about, machine, id, look }) => 
   ...typeof about === "string" && about ? { about: about.slice(0, 500) } : {},
   ...typeof machine === "string" && machine ? { machine: machine.slice(0, 200) } : {}
 });
-var keptFeatures = (features) => Array.isArray(features) ? features.filter((each) => typeof each === "string" && each.length <= 60).slice(0, 80) : [];
+var keptFeatures = (features) => Array.isArray(features) ? features.filter((each) => typeof each === "string" && each.length <= 60).slice(0, 300) : [];
 var keptMoved = (moved) => moved.filter((each) => isObject(each) && typeof each.session === "string" && /^ses_[A-Za-z0-9]{1,60}$/.test(each.session) && typeof each.key === "string" && KEY.test(each.key) && typeof each.at === "number").slice(0, 400).map(({ session, key, at }) => ({ session, key, at }));
 function takeAgents(sender, given, file = PEER_AGENTS_FILE, lock = PEER_LOCK) {
   if (!isObject(given) || typeof given.at !== "number" || !Array.isArray(given.list))
@@ -20358,6 +20358,8 @@ async function pushQueues(host, link = readLink(), targets, now = Date.now()) {
   for (const key of toldKeys())
     if (removed.has(key))
       forgetTold(key);
+  if (!peers.some((peer) => takesQueues(peer.key)))
+    return;
   const changed = marks2();
   if (!telling || changed !== builtMarks || now - builtAt > 60000) {
     building = true;

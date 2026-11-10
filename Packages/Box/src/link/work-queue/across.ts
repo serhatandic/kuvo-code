@@ -111,6 +111,8 @@ export async function pushQueues(host: Pick<LinkHost, "send">, link: LinkState |
   // What's kept of computers you removed goes.
   const removed = removedBoxes(link);
   for (const key of toldKeys()) if (removed.has(key)) forgetTold(key);
+  // (Nothing to work out while no computer takes it.)
+  if (!peers.some(peer => takesQueues(peer.key))) return;
   const changed = marks();
   if (!telling || changed !== builtMarks || now - builtAt > 60_000) {
     building = true;
