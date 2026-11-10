@@ -330,7 +330,10 @@ connection.
     `id` runs once (remembered 30 days, noted once answered); one running now that comes again is
     dropped (a list's remembered two days, as a letter's). Calls aren't counted as messages. `from` may not be a conversation on the receiving
     box (refused); while it moves between computers, or while this box knows it to live on another
-    box than the one calling (that word may be stale), it's answered `retry`; otherwise the receiver
+    box than the one calling (that word may be stale), it's answered `retry`, but from the box it's
+    moving to once this box has asked that box to switch to its copy (`switching`, `finishing`):
+    a copy is held until it's switched to, so a call from it there is from it as it runs there,
+    taken at once while its original here is still let go; otherwise the receiver
     notes `from` lives on the box that called. So a lead that moved twice (A to B to C) while A was
     away more than two days, never hearing of the second move, keeps getting `retry` from A until
     A hears where it went: its list says A isn't answering meanwhile, and a kept stop is let go and
@@ -908,7 +911,8 @@ client shows it from the same routes.
 - **Tools** (`POST kuvo/agent-tools`, any conversation, for the sessions under it):
   `list_sessions` (each with where it stands: working, asking and what, with the ask's id,
   finished, failed, stopped; its model, the tokens in its context now, or that it was just
-  summarized, the tokens it used in total, and last reply's first lines), `stop_session`
+  summarized, the tokens it used in total, and last reply's first lines: for one stopped or
+  failed, only what it said in that turn, never an earlier turn's reply), `stop_session`
   (`{session, archive?}`; only one of its own), `compact_session` (`{session}`; only one of its
   own, by `POST api/session/<id>/compact` where it runs), `answer_ask` (`{session, ask, decision: allow|deny,
   reason}`, or `{session, ask, answer, reason}` for a question), `list_models` (the models there's
@@ -1771,7 +1775,10 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     and `PUT {lists}` → `{data: {entries, lists: [{id, name, entries: [{providerID, modelID,
     variant?}]}], limits: [{key, until, scope, known}]}}` (the first list's ID is `auto`;
     `entries` is the first list's; `key` is a provider for an account's limit, `provider/model`
-    for a model's; `until` in ms); `DELETE …/auto/limits` tries them all again. The event
+    for a model's; `until` in ms; each entry names its model by the model's own id, so one saved
+    under another id it's known by, such as Claude Code's `default`, comes as the model that
+    stands for now, and a second entry for the same model at the same effort is left out);
+    `DELETE …/auto/limits` tries them all again. The event
     `kuvo.auto.updated` says the lists or their limits changed. An account with a `provider`
     limit whose `until` hasn't come is at its usage limit: mark it (the Mac says "Usage limit ·
     Resets in …").

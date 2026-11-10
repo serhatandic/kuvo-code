@@ -2694,6 +2694,17 @@ function isLimit(text) {
 // Packages/Box/src/agents/auto.ts
 var autoProvider = "auto";
 var firstList = "auto";
+function foldEntries(entries, own) {
+  const seen = new Set;
+  return entries.flatMap((entry) => {
+    const named = { ...entry, modelID: own(entry) ?? entry.modelID };
+    const key = `${named.providerID}/${named.modelID}/${named.variant ?? ""}`;
+    if (seen.has(key))
+      return [];
+    seen.add(key);
+    return [named];
+  });
+}
 var unknownReset = 30 * 60000;
 var briefReset = 3 * 60000;
 
@@ -19379,7 +19390,7 @@ ${text.slice(0, 4000)}
       if (!hasMessage && late.size && !input.adopt)
         delete record.agent.lateShells;
       const partway = at < 0 ? [] : record.messages.slice(Math.max(at, seenAt) + 1);
-      const handed = handover(before, partway, (message) => this.stepName(message));
+      const handed = handover(before, partway, await this.stepNames([...before, ...partway]));
       const text = withHandover(hasMessage ? carryOn : input.text, handed);
       const files = hasMessage ? [] : input.files;
       reached = true;
@@ -19408,7 +19419,7 @@ ${text.slice(0, 4000)}
     try {
       return await this.runAutoList(id, record, live, run, input, userMessage, heldBefore);
     } finally {
-      record.agent.autoHeld = this.auto.list(input.model.id).filter((entry) => this.auto.isHeld(entry)).map((entry) => Auto.modelKey(entry));
+      record.agent.autoHeld = (await this.autoEntries(input.model.id)).filter((entry) => this.auto.isHeld(entry)).map((entry) => Auto.modelKey(entry));
       this.store.save(id);
     }
   }
@@ -19436,7 +19447,7 @@ ${text.slice(0, 4000)}
         return last ?? { outcome: "failed", error: { type: "limit", message: `Your Custom Auto list has no model to run. Edit it in Settings \u203A Custom Auto.` } };
       }
       if (!tried.size && heldBefore.has(Auto.modelKey(entry)))
-        turn.notice(`Back on ${this.entryName(entry)}: its limit has reset.`);
+        turn.notice(`Back on ${await this.entryName(entry)}: its limit has reset.`);
       tried.add(Auto.modelKey(entry));
       const model = { providerID: entry.providerID, id: entry.modelID, ...entry.variant ? { variant: entry.variant } : {} };
       if (note) {
@@ -19454,7 +19465,7 @@ ${text.slice(0, 4000)}
           live.subagents.delete(child);
           live.background.delete(child);
         }
-        turn.notice(`${note} Going on with ${this.entryName(entry)}.`);
+        turn.notice(`${note} Going on with ${await this.entryName(entry)}.`);
       }
       earlier = new Set(live.subagents.keys());
       const from = record.messages.length;
@@ -19477,17 +19488,17 @@ ${text.slice(0, 4000)}
         if (account && !account.signedIn)
           emit("integration.updated", { integrationID: entry.providerID });
         const message = last.error?.message?.trim() || "it stopped with an error";
-        note = account && !account.signedIn ? `${this.entryName(entry, true)} needs you to sign in again.` : `${this.entryName(entry)} stopped: ${message.replace(/\.$/, "")}.`;
+        note = account && !account.signedIn ? `${await this.entryName(entry, true)} needs you to sign in again.` : `${await this.entryName(entry)} stopped: ${message.replace(/\.$/, "")}.`;
         continue;
       }
       this.auto.hold(entry, last.limit);
       emit("kuvo.auto.updated", {});
       const whole = last.limit.scope === "provider";
-      note = `${this.entryName(entry, whole)} reached ${whole ? "its usage limit" : "this model's limit"}${last.limit.resetsAt ? ` (it resets at ${resetTime(last.limit.resetsAt)})` : ""}.`;
+      note = `${await this.entryName(entry, whole)} reached ${whole ? "its usage limit" : "this model's limit"}${last.limit.resetsAt ? ` (it resets at ${resetTime(last.limit.resetsAt)})` : ""}.`;
     }
   }
   async nextEntry(tried, list) {
-    for (const entry of this.auto.list(list)) {
+    for (const entry of await this.autoEntries(list)) {
       if (tried.has(Auto.modelKey(entry)))
         continue;
       if (!await this.whyNot(entry))
@@ -19520,18 +19531,18 @@ ${text.slice(0, 4000)}
     const signIn = new Set;
     const held = new Map;
     const gone = [];
-    for (const entry of this.auto.list(list)) {
+    for (const entry of await this.autoEntries(list)) {
       if (tried.has(Auto.modelKey(entry)))
         continue;
       const why = await this.whyNot(entry);
       if (!why)
         continue;
       if (why.kind === "signedOut")
-        signIn.add(this.entryName(entry, true));
+        signIn.add(await this.entryName(entry, true));
       else if (why.kind === "held")
-        held.set(this.entryName(entry, why.whole), why.until);
+        held.set(await this.entryName(entry, why.whole), why.until);
       else
-        gone.push(this.entryName(entry));
+        gone.push(await this.entryName(entry));
     }
     if (!signIn.size && !held.size && !gone.length)
       return;
@@ -19559,13 +19570,45 @@ ${text.slice(0, 4000)}
     const known = this.auto.limits().filter((limit) => limit.known).map((limit) => limit.until);
     return known.length ? `; the first resets at ${resetTime(Math.min(...known))}` : "";
   }
-  entryName(entry, agentOnly = false) {
+  async entryName(entry, agentOnly = false) {
     const name = this.agent(entry.providerID)?.name ?? entry.providerID;
-    return agentOnly ? name : `${name} (${entry.modelID}${entry.variant ? `, ${entry.variant}` : ""})`;
+    return agentOnly ? name : `${name} (${await this.modelName(entry.providerID, entry.modelID)}${entry.variant ? `, ${entry.variant}` : ""})`;
   }
-  stepName(message) {
-    const agent = this.agent(message.model.providerID);
-    return `${agent?.name ?? message.model.providerID}, ${message.model.id}`;
+  async stepNames(messages) {
+    const names = new Map;
+    for (const message of messages) {
+      if (message.type !== "assistant")
+        continue;
+      const key = Auto.modelKey({ providerID: message.model.providerID, modelID: message.model.id });
+      if (names.has(key))
+        continue;
+      const agent = this.agent(message.model.providerID);
+      names.set(key, `${agent?.name ?? message.model.providerID}, ${await this.modelName(message.model.providerID, message.model.id)}`);
+    }
+    return (message) => names.get(Auto.modelKey({ providerID: message.model.providerID, modelID: message.model.id })) ?? `${message.model.providerID}, ${message.model.id}`;
+  }
+  async listedModels(providerID) {
+    const agent = this.agent(providerID);
+    if (!agent)
+      return [];
+    return await Promise.race([agent.models().catch(() => []), Bun.sleep(3000).then(() => [])]);
+  }
+  static modelIn(models, id) {
+    return models.find((model) => model.id === id) ?? models.find((model) => model.aliases?.includes(id));
+  }
+  async modelName(providerID, id) {
+    return Sessions.modelIn(await this.listedModels(providerID), id)?.name ?? id;
+  }
+  async autoEntries(list) {
+    return await this.folded(this.auto.list(list));
+  }
+  async autoLists() {
+    return await Promise.all(this.auto.all().map(async (list) => ({ ...list, entries: await this.folded(list.entries) })));
+  }
+  async folded(entries) {
+    const providers = [...new Set(entries.map((entry) => entry.providerID))];
+    const listed = new Map(await Promise.all(providers.map(async (providerID) => [providerID, await this.listedModels(providerID)])));
+    return foldEntries(entries, (entry) => Sessions.modelIn(listed.get(entry.providerID) ?? [], entry.modelID)?.id);
   }
   async interrupt(id, resume = false) {
     const live = this.live.get(id);
@@ -25889,7 +25932,7 @@ function handler(context) {
           emit("kuvo.auto.updated", {});
         }
         if (!b && (method === "GET" || method === "PUT"))
-          return json12({ data: { entries: auto.list(), lists: auto.all(), limits: auto.limits() } });
+          return json12({ data: { entries: await sessions.autoEntries(), lists: await sessions.autoLists(), limits: auto.limits() } });
       }
       if (area === "experimental" && a === "session" && b) {
         const id = b;
@@ -26453,4 +26496,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents f72cc9b43524cdfc08c97d95d223baf73e2368c16cb978fc9d9fb2c06f058c95
+// Built from Packages/Box/src/agents 779be5bfd6243c83ddc09982e98e20db54b4e32310abd106e935823f0c937aa6
