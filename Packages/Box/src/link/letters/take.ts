@@ -249,7 +249,7 @@ export async function takeLetter(sender: LetterSender, letter: unknown, { send, 
       const arrived = switched?.peer === sender.key ? switched : null;
       const listed = arrived || peerOf(letter.from as string, peers, told, moved)?.key === sender.key ? (told[sender.key]?.list ?? []).find(agent => agent.session === letter.from) : null;
       if (listed && (arrived || !(await placeOfSession(letter.from as string, targets).catch(() => ({}))))) fromAgent = listed;
-      else if (arrived && arrived.kind !== "group" && arrived.sessions[0] === letter.from) fromAgent = { session: letter.from as string, name: arrived.name, kind: arrived.kind === "bot" ? "bot" : "session" };
+      else if (arrived && arrived.kind !== "group" && arrived.sessions[0] === letter.from) fromAgent = { session: letter.from as string, name: arrived.name, ...(arrived.kind === "bot" ? { kind: "bot", id: arrived.thing } : { kind: "session" }) };
       const name = fromAgent?.name ?? `an agent on ${plainName(sender.name) || "another computer"}`;
       prompt = messageID();
       const waits = letter.wait === true && Boolean(fromAgent);
