@@ -890,9 +890,12 @@ the branch, the model, effort and account, and the pull request with its checks 
 - `GET kuvo/sessions/glance?sessions=<id>,<id>…` (at most 200) → `{"sessions": {<id>: {branch?,
   additions?, deletions?, pull?: {number, url, state?, additions?, deletions?, checks?: {passed,
   failed, pending}}, account?: {name, label?}, asked?}}}`. A session the box doesn't have is left
-  out; `400 {"message"}` for none named, `503` with neither the engine nor the coding agents' bridge
-  running. `GET kuvo/sessions/glance/events?sessions=…` sends the same now (ndjson), and again when
-  it changes: an ask coming or answered, a pull request linked, and once a minute for the rest. A
+  out (only when every place said it has none: `503 {"message"}` while one isn't answering, rather
+  than say it's gone); `400 {"message"}` for none named, `503` with neither the engine nor the coding
+  agents' bridge running. `GET kuvo/sessions/glance/events?sessions=…` sends the same now (ndjson),
+  and again when it changes: an ask coming or answered and a pull request linked (a moment after, so
+  a few at once are one line), and once a minute for the rest; nothing while a place isn't
+  answering, so what it said last stands. A
   client follows it for the rows on its screen only, and opens it again as they change; through
   `box route` it answers its first line, and a client asks again a minute later.
 - `branch`: the session's own, a worktree's of the box's (`box/worktrees.json`), else its pull
@@ -900,23 +903,32 @@ the branch, the model, effort and account, and the pull request with its checks 
   `additions` and `deletions`, without a pull request: the lines its branch changed since it left
   its base, uncommitted changes too (`kuvo/git/changes/count`'s `branch` scope).
 - `pull`: the pull request it made, else, in a worktree, its branch's latest on origin's GitHub
-  repository (open, merged or closed). It made it when Create Pull Request named it
-  (`kuvo/git/pull-request` with `session`), or when its own `gh pr create` (or one of its
-  subagents') printed it, which the box catches as the call ends. Kept in `box/pulls.json` (the
-  latest 500), so two sessions in one folder never show each other's. `state`: `open`, `draft`,
-  `merged` or `closed`, with `additions`, `deletions` and `checks` the pull request's, as GitHub said
-  within the last minute; all left out until GitHub's been read, or when it can't be (only `number`
-  and `url`). `checks` counts the last commit's check runs and statuses: skipped and neutral ones as
+  repository (open, merged or closed) from origin's repository itself (not a fork's branch of the
+  same name) and made since the worktree was (not an earlier branch's of the same name). It made it
+  when Create Pull Request named it (`kuvo/git/pull-request` with `session`), or when its own `gh pr
+  create` (or one of its subagents') printed it, which the box catches as the call ends: a command
+  that starts with it (or after `&&`, `;`, `|`), the last pull request it printed, and only on the
+  host of the session folder's origin. Kept in `box/pulls.json` (the latest 500), so two sessions in
+  one folder never show each other's. `state`: `open`, `draft`, `merged` or `closed`, with
+  `additions`, `deletions` and `checks` the pull request's, as GitHub last said; all left out until
+  GitHub's been read, or when it can't be (only `number` and `url`). `checks` counts the last commit's check runs and statuses: skipped and neutral ones as
   passed; failed, errors, cancelled, timed out, stale and those needing action as failed; the rest
   pending. Left out for none.
 - GitHub is read with GitHub's own `gh` on the box and its sign-in (Kuvo Code keeps no key of
-  GitHub's for it): one GraphQL query for every pull request asked for at once, each read at most
-  once a minute and only while a client asks; kept in `run/glance/github.json` (half an hour). A
-  box without `gh`, or signed out, reads nothing for five minutes, then tries again.
+  GitHub's for it): one GraphQL query for every pull request asked for at once, only while a client
+  asks, and each only as often as it can change: once a minute while its checks run, every five
+  minutes while it's open otherwise (or a worktree's branch has none yet), every half hour once it's
+  merged or closed. Kept in `run/glance/github.json` (two hours), which one process at a time
+  writes, so a box asks GitHub once however many processes and clients ask it. A box without `gh`,
+  or signed out, reads nothing for five minutes, then tries again.
 - `account`: the account it runs on, as `kuvo/work` says one ("Work"); none on Custom Auto.
-- `asked`: while it waits on you, when the oldest ask still open came (ms), its subagents' too: as
-  the box's long-running process heard it (`run/glance/asks.json`). An ask made while the box
-  couldn't hear it has none, and a client says how long since the session last changed instead.
+- `asked`: while it waits on you, when the oldest ask still open came (ms), its subagents' too: a
+  permission or a question (not one Auto's reviewer took up), or what the box asks you for it (a
+  command outside the sandbox, the vault), as the box's long-running process heard it
+  (`run/glance/asks.json`). An ask is let go as it's answered, as its run ends or it's deleted, and
+  with all of its place's (engine, bridge) once that place is heard again after it couldn't be. An
+  ask made while the box couldn't hear it has none, and a client says how long since the session
+  last changed instead.
 - What a client draws from it (which mark, which lines on the card) is the clients' to decide
   alike; a box without `sessions.glance` gives no marks beyond the worktree's branch, as before.
 
