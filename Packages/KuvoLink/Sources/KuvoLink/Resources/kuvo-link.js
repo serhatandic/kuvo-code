@@ -13638,7 +13638,7 @@ async function takeLetter(sender, letter, { send, targets, answer = () => {}, to
       if (listed && (arrived || !await placeOfSession(letter.from, targets).catch(() => ({}))))
         fromAgent = listed;
       else if (arrived && arrived.kind !== "group" && arrived.sessions[0] === letter.from)
-        fromAgent = { session: letter.from, name: arrived.name, kind: arrived.kind === "bot" ? "bot" : "session" };
+        fromAgent = { session: letter.from, name: arrived.name, ...arrived.kind === "bot" ? { kind: "bot", id: arrived.thing } : { kind: "session" } };
       const name = fromAgent?.name ?? `an agent on ${plainName(sender.name) || "another computer"}`;
       prompt = messageID();
       const waits = letter.wait === true && Boolean(fromAgent);
@@ -29888,17 +29888,18 @@ import fs100 from "node:fs";
 
 // Packages/Box/src/link/work/accounts.ts
 var ASK_WAIT = 5000;
-async function accountOf(target, provider, signal) {
+async function accountsOn(target, signal) {
   const wait = AbortSignal.timeout(ASK_WAIT);
-  const listed = await call(target, "GET", `/api/integration/${encodeURIComponent(provider)}`, undefined, signal ? AbortSignal.any([signal, wait]) : wait).catch(() => null);
-  if (!isObject(listed) || typeof listed.name !== "string" || !listed.name.trim())
-    return null;
-  const name = listed.name.trim();
-  const named = (label) => typeof label === "string" && label.trim() ? { name, label: label.trim() } : { name };
-  if (isObject(listed.metadata) && listed.metadata.source === "agent")
-    return named(listed.metadata.accountLabel);
-  const signIns = Array.isArray(listed.connections) ? listed.connections.filter((each) => isObject(each) && each.type === "credential") : [];
-  return signIns.length > 1 ? named(signIns[0].label) : { name };
+  const listed = await call(target, "GET", "/api/integration", undefined, signal ? AbortSignal.any([signal, wait]) : wait).catch(() => null);
+  const accounts = new Map;
+  for (const each of Array.isArray(listed) ? listed : []) {
+    if (!isObject(each) || typeof each.id !== "string" || typeof each.name !== "string" || !each.name.trim())
+      continue;
+    const name = each.name.trim();
+    const label = isObject(each.metadata) && each.metadata.source === "agent" && typeof each.metadata.accountLabel === "string" ? each.metadata.accountLabel.trim() : "";
+    accounts.set(each.id, label ? { name, label } : { name });
+  }
+  return accounts;
 }
 async function workAccounts(sessions, signal) {
   const asked = new Map;
@@ -29906,10 +29907,9 @@ async function workAccounts(sessions, signal) {
   await Promise.all(sessions.map(async ({ id, target, provider }) => {
     if (!provider || provider === "auto")
       return;
-    const key = `${target.port}|${provider}`;
-    if (!asked.has(key))
-      asked.set(key, accountOf(target, provider, signal));
-    const account = await asked.get(key);
+    if (!asked.has(target.port))
+      asked.set(target.port, accountsOn(target, signal));
+    const account = (await asked.get(target.port)).get(provider);
     if (account)
       accounts.set(id, account);
   }));

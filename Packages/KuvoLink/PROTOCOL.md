@@ -1005,15 +1005,15 @@ client shows it from the same routes.
   only what it said in that turn, never an earlier turn's reply. `today.working` stays, since clients until 0.7.2 need it to read the
   report, but no client shows it (see At work).
   `account` (bridge 0.9.209) is `{name, label?}`, the account it runs on as Settings › Accounts
-  lists it where it runs (`api/integration/<provider>` there): `name` its provider's ("Claude
-  Code", "GitHub Copilot", "Anthropic"); `label` the account's own name where it tells it apart: one
-  you added to a coding agent and named ("Work"; its own sign-in has none), or the engine's sign-in
-  in use where that provider has more than one (the engine uses one at a time). Left out on Custom
-  Auto (it picks one each turn) and where the engine or bridge can't say within a few seconds.
-  Clients show it on a row as `ClientSessions`' `WorkWords.account` does: a short name for the
-  plans people know ("Claude" for Claude Code, "ChatGPT" for Codex, "Copilot", "Grok", "Cursor",
-  "Google" for Antigravity), else `name`, then `label` ("Claude · Athas"); in a row too short for it
-  the account goes whole before the project does, and the session's title always keeps its room.
+  lists it where it runs (`api/integration` there, as last checked, never `fresh`): `name` its
+  provider's ("Claude Code", "GitHub Copilot", "Anthropic"); `label` the name you gave a coding
+  agent's account you added ("Work"; its own sign-in has none, and the engine's sign-ins have no
+  names of yours). Left out on Custom Auto (it picks one each turn) and where the engine or bridge
+  can't say within a few seconds. Clients show it on a row as `ClientSessions`' `WorkWords.account`
+  does: the provider's short name, as the usage panel names it (`ClientAccounts`' `AccountNames`:
+  "Claude" for Claude Code, "Codex", "Copilot"), else `name`, then `label` ("Claude · Athas"); in
+  a row too short for it the account goes whole before the project does, and the session's title
+  always keeps its room.
 - **`GET kuvo/work/events`** (ndjson): `{"changed": {<bot>: <ms>}}` now and at each change to a
   bot's work (a session started, stopped, finished or asking, an ask answered, its limits); a
   client reads that bot's work again when its time moves. Kept in `run/work/changes.json`.

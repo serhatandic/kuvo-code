@@ -86,6 +86,7 @@ function resetEngine() {
   held = [];
 }
 resetEngine();
+let integrationsAskedFresh = 0;
 const engineAccounts = {
   anthropic: { id: "anthropic", name: "Anthropic", metadata: {}, connections: [{ type: "credential", id: "crd_work", label: "Work", method: "key" }, { type: "credential", id: "crd_home", label: "Personal", method: "key" }] },
   deepseek: { id: "deepseek", name: "DeepSeek", metadata: {}, connections: [{ type: "credential", id: "crd_ds", label: "API key", method: "key" }] },
@@ -201,10 +202,10 @@ const standIn = onBridge => (request, response) => {
     if (request.url.includes("/instructions/entries/")) return reply({});
     // An account as Settings › Accounts lists it: the engine's plans with their sign-ins (the one in
     // use first), the coding agents' accounts with the names you gave them.
-    const integration = url.pathname.match(/^\/api\/integration\/([^/]+)$/);
-    if (integration && request.method === "GET") {
-      const listed = (onBridge ? bridgeAccounts : engineAccounts)[decodeURIComponent(integration[1])];
-      return listed ? reply({ location: { directory: home }, data: listed }) : reply({ message: "No such integration." }, 404);
+    if (url.pathname.startsWith("/api/integration") && request.method === "GET") {
+      // (Asked of each agent's program again, the bridge's `fresh` and one account's: what a read of a bot's work never needs.)
+      if (url.pathname !== "/api/integration" || url.searchParams.has("fresh")) integrationsAskedFresh += 1;
+      else return reply({ location: { directory: home }, data: Object.values(onBridge ? bridgeAccounts : engineAccounts) });
     }
     reply({ message: "Not here." }, 404);
   });
@@ -596,7 +597,7 @@ test("a client sees a bot's work: its sessions, the answers it gave and today's 
   assert.deepEqual(work.body.limits, { atOnce: 3 });
 });
 
-test("a client sees which account each of a bot's sessions runs on, as Settings › Accounts names it: its provider, and the account's own name where that tells it apart", async t => {
+test("a client sees which account each of a bot's sessions runs on, as Settings › Accounts names it: its provider, and the name you gave a coding agent's account", async t => {
   write(path.join(home, "run", "bridge.json"), JSON.stringify({ port: bridge.address().port, password: "b", pid: await runningAs("kuvo-agents", t) }));
   t.after(() => fs.rmSync(path.join(home, "run", "bridge.json"), { force: true }));
   const start = async (title, model, onBridge = false) => {
@@ -604,7 +605,7 @@ test("a client sees which account each of a bot's sessions runs on, as Settings 
     Object.assign(sessions.get(session), { model, ...(onBridge ? { bridge: true } : {}) });
     return title;
   };
-  // The engine's plan with two sign-ins: the one in use, by its name.
+  // The engine's plan with two sign-ins: by its name alone (they have no names of yours).
   await start("On the work key", { providerID: "anthropic", id: "claude-opus-5-5" });
   // One sign-in: the plan says which.
   await start("On DeepSeek", { providerID: "deepseek", id: "deepseek-v4" });
@@ -614,16 +615,18 @@ test("a client sees which account each of a bot's sessions runs on, as Settings 
   // Custom Auto picks an account each turn; a provider where it runs can't say: none.
   await start("On Auto", { providerID: "auto", id: "auto" });
   await start("On a gone plan", { providerID: "gone", id: "x" });
+  integrationsAskedFresh = 0;
   const work = await route("GET", "kuvo/work?bot=bot_pixel00001");
   assert.equal(work.status, 200);
   assert.deepEqual(Object.fromEntries(work.body.sessions.map(each => [each.title, each.account ?? null])), {
-    "On the work key": { name: "Anthropic", label: "Work" },
+    "On the work key": { name: "Anthropic" },
     "On DeepSeek": { name: "DeepSeek" },
     "On Claude Code": { name: "Claude Code" },
     "On Athas": { name: "Claude Code", label: "Athas" },
     "On Auto": null,
     "On a gone plan": null,
   });
+  assert.equal(integrationsAskedFresh, 0, "each agent's sign-in isn't checked again for a read of the work");
 });
 
 test("a client stops all of a bot's work at once", async () => {

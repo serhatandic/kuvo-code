@@ -136,7 +136,7 @@ public struct LimitsAccount: Decodable, Hashable, Sendable, Identifiable {
     /// Its row's name: "Claude", "Claude · Work" for one you added, "Copilot" for the engine's.
     public var title: String {
         if let name { return name }
-        let base = agent.map { Self.agentNames[$0] ?? $0.capitalized } ?? Self.serviceNames[service] ?? service.capitalized
+        let base = agent.map { AccountNames.agents[$0] ?? $0.capitalized } ?? AccountNames.services[service] ?? service.capitalized
         guard let label = label?.trimmingCharacters(in: .whitespacesAndNewlines), !label.isEmpty else { return base }
         return "\(base) · \(label)"
     }
@@ -152,10 +152,6 @@ public struct LimitsAccount: Decodable, Hashable, Sendable, Identifiable {
         "openrouter": "#6467F2", "antigravity": "#4285F4", "copilot": "#A855F7", "zai": "#2D2D2D", "ollama": "#6E6E73",
     ]
 
-    /// The coding agents, as the usage panel names their rows.
-    static let agentNames = ["claude": "Claude", "codex": "Codex", "grok": "Grok", "cursor": "Cursor", "antigravity": "Antigravity"]
-    /// The engine's sign-ins, by what they're the limits of.
-    static let serviceNames = ["codex": "ChatGPT", "grok": "SuperGrok", "copilot": "Copilot", "openrouter": "OpenRouter", "zai": "Z.ai", "ollama": "Ollama", "opencode": "OpenCode Go"]
 
     /// Its windows still current: one that started over since it was read is left out (what's used
     /// now isn't known).

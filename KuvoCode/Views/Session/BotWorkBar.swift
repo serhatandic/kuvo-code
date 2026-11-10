@@ -149,6 +149,7 @@ private struct BotWorkRow: View {
                         ForEach(about, id: \.self) { ShimmerText(text: $0) }
                     }
                     .help(about.first ?? "")
+                    .accessibilityLabel(about.first ?? "")
                 }
             }
             .font(.system(size: 12))

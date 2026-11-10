@@ -1,3 +1,4 @@
+import ClientAccounts
 import Foundation
 import OpenCodeKit
 
@@ -346,18 +347,14 @@ public enum WorkWords {
         atWork > 0 ? "\(atWork) working" : "\(today) today"
     }
 
-    /// The account a session runs on, in a word or two: its provider as people know the plan
-    /// ("Claude" for Claude Code's, "ChatGPT" for Codex's, "Copilot"), else as its box names it,
-    /// then the account's own name where it has one: "Claude · Athas".
+    /// The account a session runs on, in a word or two, as the usage panel names it (`AccountNames`:
+    /// "Claude" for Claude Code's, "Copilot"), else as its box names its provider, then the name
+    /// you gave it, where you did: "Claude · Athas".
     public static func account(_ account: BotWorkReport.Item.Account, provider: String?) -> String {
-        let base = provider.map { $0.split(separator: "@", maxSplits: 1).first.map(String.init) ?? $0 }
-        let name = base.flatMap { planNames[$0] } ?? account.name
+        let name = provider.flatMap(AccountNames.short(provider:)) ?? account.name
         guard let label = account.label?.trimmingCharacters(in: .whitespacesAndNewlines), !label.isEmpty, label != name else { return name }
         return "\(name) · \(label)"
     }
-
-    /// The plans people know by another name than their provider's, by provider.
-    static let planNames = ["claude-code": "Claude", "codex-cli": "ChatGPT", "grok-cli": "Grok", "cursor": "Cursor", "antigravity": "Google", "github-copilot": "Copilot"]
 
     /// What a session's row says of it while it works, in a few words, the longest first: its model
     /// (`model`, as the client names it), effort and mode, the account it runs on and its project
