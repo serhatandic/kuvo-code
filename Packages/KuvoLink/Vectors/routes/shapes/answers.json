@@ -3283,6 +3283,9 @@
             "literal": "work-queue"
            },
            {
+            "literal": "browser"
+           },
+           {
             "literal": "accounts.ended"
            },
            {
@@ -3622,6 +3625,9 @@
            },
            {
             "literal": "work-queue"
+           },
+           {
+            "literal": "browser"
            }
           ]
          }
@@ -3851,6 +3857,128 @@
       "blocked": {
        "oneOf": [
         "string",
+        "null"
+       ]
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/browser",
+   "answers": {
+    "200": {
+     "object": {
+      "state": {
+       "oneOf": [
+        {
+         "literal": "missing"
+        },
+        {
+         "literal": "checking"
+        },
+        {
+         "literal": "downloading"
+        },
+        {
+         "literal": "installing"
+        },
+        {
+         "literal": "ready"
+        },
+        {
+         "literal": "failed"
+        }
+       ]
+      },
+      "chromium": {
+       "oneOf": [
+        "string",
+        "null"
+       ]
+      },
+      "installed": {
+       "oneOf": [
+        "string",
+        "null"
+       ]
+      },
+      "progress": {
+       "oneOf": [
+        "number",
+        "null"
+       ]
+      },
+      "message": {
+       "oneOf": [
+        "string",
+        "null"
+       ]
+      },
+      "retryAt": {
+       "oneOf": [
+        "number",
+        "null"
+       ]
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/browser",
+   "answers": {
+    "202": {
+     "object": {
+      "state": {
+       "oneOf": [
+        {
+         "literal": "missing"
+        },
+        {
+         "literal": "checking"
+        },
+        {
+         "literal": "downloading"
+        },
+        {
+         "literal": "installing"
+        },
+        {
+         "literal": "ready"
+        },
+        {
+         "literal": "failed"
+        }
+       ]
+      },
+      "chromium": {
+       "oneOf": [
+        "string",
+        "null"
+       ]
+      },
+      "installed": {
+       "oneOf": [
+        "string",
+        "null"
+       ]
+      },
+      "progress": {
+       "oneOf": [
+        "number",
+        "null"
+       ]
+      },
+      "message": {
+       "oneOf": [
+        "string",
+        "null"
+       ]
+      },
+      "retryAt": {
+       "oneOf": [
+        "number",
         "null"
        ]
       }
