@@ -17,10 +17,6 @@ public struct BarFolds<Bar: Hashable>: Equatable {
     public private(set) var open: Bar?
     /// Opened by you, so it stays open while a card asks.
     public private(set) var openedByYou = false
-    private var isWriting = false
-
-    /// News is still marked while writing, but must not replace the layout to restore.
-    public mutating func writing(_ active: Bool) { isWriting = active }
 
     /// Whether `bar` is folded, among `bars`; `own` is how it was left with fewer bars.
     public func isHidden(_ bar: Bar, among bars: [Bar], asking: Bool, own: Bool) -> Bool {
@@ -43,7 +39,6 @@ public struct BarFolds<Bar: Hashable>: Equatable {
     /// Something changed in `bar` that you'd want to see: it opens, unless a card asks. While one
     /// asks, a bar you opened stays the open one.
     public mutating func changed(_ bar: Bar, asking: Bool = false) {
-        guard !isWriting else { return }
         if asking, openedByYou, open != nil { return }
         open = bar
         openedByYou = false
@@ -116,7 +111,9 @@ public struct BarTuck<Bar: Hashable>: Equatable {
     private var openedWhileWriting = false
     private var sentWithFocus = false
 
-    /// Focus or a draft temporarily tucks the card without changing any bar's fold.
+    /// A draft, or a keyboard that takes the room (the phone's, up for the composer), tucks the
+    /// card for a while without changing any bar's fold. (The Mac's field has the keyboard
+    /// whenever a conversation shows: there, writing is what's in it.)
     public mutating func writing(focused: Bool, hasText: Bool) {
         if !focused || hasText { sentWithFocus = false }
         let active = hasText || (focused && !sentWithFocus)

@@ -176,7 +176,8 @@ struct BottomStack: View {
     /// Whether its bars are tucked into one line: as you left them in this conversation, until
     /// you bring them back (nothing does by itself), or none are left.
     private var tucked: Bool { model.tuck.isOn(among: liveBars) }
-    @State private var composerHasFocus = false
+    /// Writing: what you write and the conversation over it keep the room while the bars take
+    /// their line, until it's sent or cleared (`BarTuck`).
     private var composerHasText: Bool { !model.draftText.isEmpty || model.draftQuotes.contains { !$0.response.isEmpty } }
 
     /// The bars but those put away, whose Undo shows in their place for a moment: what Hide
@@ -631,7 +632,6 @@ struct BottomStack: View {
                             }
                             lastModel = ref
                         },
-                        onFocusChange: { composerHasFocus = $0 },
                         onSend: { send(queue: false) },
                         onQueue: { send(queue: true) },
                         onEditLast: model.editLast,
@@ -653,10 +653,9 @@ struct BottomStack: View {
             .animation(.ui, value: folds)
             .animation(.ui, value: isAsking)
             .animation(.ui, value: tucked)
-            .onChange(of: Seen(conversation: model.id, value: [composerHasFocus, composerHasText]), initial: true) { _, _ in
-                model.tuck.writing(focused: composerHasFocus, hasText: composerHasText)
+            .onChange(of: Seen(conversation: model.id, value: composerHasText), initial: true) { _, now in
+                model.tuck.writing(focused: false, hasText: now.value)
             }
-            .onChange(of: model.tuck.isWriting, initial: true) { _, active in folds.writing(active) }
             .animation(.ui, value: removedWorktree?.folder)
             .animation(.ui, value: waitingMove != nil)
             .animation(.ui, value: model.unseenHeld.map(\.id))

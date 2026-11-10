@@ -247,13 +247,18 @@ import Testing
     #expect(!tuck.isOn(among: bars))
 }
 
-@Test func newsWhileWritingKeepsTheFullCardsLayout() {
+@Test func newsWhileWritingIsMarkedAndOpenWhenTheCardComesBack() {
     var folds = BarFoldsTests.BarFolds()
     let bars: [BarFoldsTests.ComposerBar] = [.goal, .review, .wakes]
-    folds.changed(.review)
-    folds.writing(true)
-    folds.news(from: [.goal: false], to: [.goal: true])
-    folds.writing(false)
+    folds.changed(.goal)
+    var tuck = BarTuck<BarFoldsTests.ComposerBar>()
+    tuck.writing(focused: false, hasText: true)
+    for bar in folds.news(from: [.review: false], to: [.review: true]) { tuck.changed(bar) }
+    #expect(tuck.marked == [.review])
+    tuck.sent()
+    tuck.writing(focused: false, hasText: false)
+    #expect(!tuck.isOn(among: bars))
+    #expect(tuck.marked.isEmpty)
     #expect(!folds.isHidden(.review, among: bars, asking: false, own: false))
     #expect(folds.isHidden(.goal, among: bars, asking: false, own: false))
 }

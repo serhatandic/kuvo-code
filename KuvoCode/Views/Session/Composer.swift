@@ -81,7 +81,6 @@ struct Composer: View {
     /// Sessions to start with the message, each in a worktree of its own.
     var attempts = 1
     var onSelectAttempts: (Int) -> Void = { _ in }
-    var onFocusChange: (Bool) -> Void = { _ in }
     var onSend: () -> Void
     /// ⌘Return: after the run, and anything queued before. Where nothing can be running yet (a
     /// new session's composer), it sends.
@@ -117,8 +116,6 @@ struct Composer: View {
     @Environment(\.messageFont) private var messageFont
     @Environment(\.bot) private var bot
     /// Asks the field for the keyboard; nil once it has it.
-    @State private var mainHasFocus = false
-    @State private var quoteHasFocus: Set<UUID> = []
     @State private var fieldFocus: MessageField.FocusRequest?
     /// The quote whose answer is to take the keyboard; nil once it has it.
     @State private var answerFocus: (id: UUID, request: MessageField.FocusRequest)?
@@ -239,8 +236,7 @@ struct Composer: View {
                 QuoteList(quotes: quotes, focus: answerFocus, blur: blurRequest, font: messageFont.field, images: imageFiles.count,
                           onKey: answerKey, onFocus: { id, focused in
                               if focused, answerFocus?.id == id { answerFocus = nil }
-                              if focused { quoteHasFocus.insert(id) } else { quoteHasFocus.remove(id) }
-                              fieldFocused(mainHasFocus || !quoteHasFocus.isEmpty)
+                              fieldFocused(focused)
                           }, onPaste: pasteAttachments)
             }
             if let note {
@@ -266,8 +262,7 @@ struct Composer: View {
                     onKey: key,
                     onFocus: { focused in
                         if focused { fieldFocus = nil }
-                        mainHasFocus = focused
-                        fieldFocused(focused || !quoteHasFocus.isEmpty)
+                        fieldFocused(focused)
                     },
                     onPaste: pasteAttachments,
                     handle: field,
@@ -505,7 +500,6 @@ struct Composer: View {
     /// so the window's commands follow.
     private func fieldFocused(_ focused: Bool) {
         fieldHasKeyboard = focused
-        onFocusChange(focused)
         if focused {
             composerFocused?()
             offerVoice()
