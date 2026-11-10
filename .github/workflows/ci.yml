@@ -59,8 +59,9 @@ jobs:
   box:
     name: box and bridge (${{ matrix.system }})
     # The box runs on Macs (this Mac's own box, in macOS's sandbox) and on Linux machines (in
-    # Landlock), so its tests run on both. The Linux run is new here: it doesn't hold up a run
-    # until it has passed on main; then take its continue-on-error out.
+    # Landlock), so its tests run on both. The Linux run is new here: until it has passed on main,
+    # its failures are only marked on its steps and don't fail the run (or hold up a release, which
+    # calls this workflow); then take their continue-on-error out.
     strategy:
       fail-fast: false
       matrix:
@@ -72,7 +73,6 @@ jobs:
             runner: ubuntu-24.04
             blocking: false
     runs-on: ${{ matrix.runner }}
-    continue-on-error: ${{ !matrix.blocking }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -94,6 +94,7 @@ jobs:
           key: bun-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Packages/Box/bun.lock') }}
 
       - name: Test the box's code (its link and the coding agents' bridge)
+        continue-on-error: ${{ !matrix.blocking }}
         working-directory: Packages/Box
         env:
           BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0"
@@ -103,6 +104,7 @@ jobs:
 
       # (After the box's install: its stand-in Claude Code loads the box's packages.)
       - name: Test the machines' bridge
+        continue-on-error: ${{ !matrix.blocking }}
         working-directory: Packages/KuvoLink
         run: node --test Tests/Bridge/*.test.js
 
@@ -116,19 +118,17 @@ jobs:
           persist-credentials: false
 
       - name: Toolchain
-        id: toolchain
         run: |
           xcodebuild -version
           swift --version
-          echo "key=$(sw_vers -productVersion)-$(xcodebuild -version | awk '/Build version/ { print $3 }')" >> "$GITHUB_OUTPUT"
 
       # SwiftPM's own cache of the packages' dependencies, so they're not cloned again. (Their
       # .build folders aren't kept: a checkout's fresh file times rebuild everything in them.)
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/Library/Caches/org.swift.swiftpm
-          key: swiftpm-${{ steps.toolchain.outputs.key }}-${{ hashFiles('Packages/*/Package.resolved') }}
-          restore-keys: swiftpm-${{ steps.toolchain.outputs.key }}-
+          key: swiftpm-${{ runner.os }}-${{ hashFiles('Packages/*/Package.resolved') }}
+          restore-keys: swiftpm-${{ runner.os }}-
 
       # OpenCodeKit's launcher tests run Node.
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -164,19 +164,17 @@ jobs:
           persist-credentials: false
 
       - name: Toolchain
-        id: toolchain
         run: |
           xcodebuild -version
           swift --version
-          echo "key=$(sw_vers -productVersion)-$(xcodebuild -version | awk '/Build version/ { print $3 }')" >> "$GITHUB_OUTPUT"
 
       # The Xcode project's packages, as cloned and downloaded. Resolving checks them against
       # Package.resolved below either way.
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: build/SourcePackages
-          key: source-packages-${{ steps.toolchain.outputs.key }}-${{ hashFiles('KuvoCode.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
-          restore-keys: source-packages-${{ steps.toolchain.outputs.key }}-
+          key: source-packages-${{ runner.os }}-${{ hashFiles('KuvoCode.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+          restore-keys: source-packages-${{ runner.os }}-
 
       # Package.resolved is part of the build input: fail if building would
       # change it rather than testing a different dependency graph. Generating

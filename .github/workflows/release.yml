@@ -40,9 +40,10 @@ name: Release
 # workflow artifact instead of publishing a release. Use it to check the secrets,
 # and the release build itself, which CI doesn't make on every push.
 #
-# The signing job runs in the `release` environment, which GitHub settings limit to
-# main and v* tags: create it (Settings › Environments) before the next release, or
-# the job waits for it.
+# The signing job runs in the `release` environment. GitHub makes one with no rules
+# if it doesn't exist, so set it up in Settings › Environments before the next
+# release: deployments from main and v* tags only, and the secrets above kept there
+# rather than in the repository's, where any branch's workflow could read them.
 on:
   push:
     tags:
@@ -122,7 +123,7 @@ jobs:
       (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v'))
       || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
     runs-on: xcode-27
-    # GitHub settings limit this environment to main and v* tags (create it before releasing).
+    # Limited in GitHub settings to main and v* tags, and holding the secrets (see the top).
     environment: release
     # Building takes about 20 minutes and each notarization a few; a hung one mustn't run for hours.
     timeout-minutes: 120

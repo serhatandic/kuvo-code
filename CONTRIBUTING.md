@@ -71,7 +71,8 @@ generated files and What's New on Linux, the box's and the bridge's tests on mac
 Swift packages' tests, and the app's. It doesn't build the app itself: only the release workflow
 does, signed, for a tag or a dry run. So run a dry run from `main` (Actions › Release › Run
 workflow) before tagging a release whose build changed. The release's signing job runs in the
-`release` environment, which only `main` and `v*` tags may use.
+`release` environment (Settings › Environments), which should allow only `main` and `v*` tags and
+hold the signing, notarization and update keys.
 
 A release also carries what remote machines run, for them to update themselves
 with, once the `KUVO_BOX_SIGNING_KEY` secret (an Ed25519 key) is set
