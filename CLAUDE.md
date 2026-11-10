@@ -85,11 +85,12 @@ A pattern matches the user's other apps and other sessions: on 2026-11-07 one `p
 - **Reproduce a user's bug the way they saw it where you can**: in a demo copy, or with their logger or steps. A fix to a nearby test is not a fix to their bug. Once the fix completes its review loop it goes to local main, and the user confirms it in their own copy (see "Carry work to main in checkpoints"). Until then, report it as merged and not yet seen by the user, not as fixed.
 - **Keep tests deterministic.** No sleeps, timeouts or retries, and no device clocks. A flaky test gets fixed, not retried. Each test runs alone, in folders of its own.
 - **Skip low-value tests**: trivial getters, wiring, and edge cases no one would hit. A visual nitpick gets a look before and after, not a UI test.
-- **Running them:** Run quick, targeted tests locally. Commit the work and run
-  `scripts/ci-branch.sh --wait` for the full Mac app, package, box and bridge CI suites on GitHub;
-  only committed changes are tested. The helper pushes the work branch to `origin` as a `ci/`
-  branch over SSH. The phone has no CI: run its tests locally, and use `scripts/heavy.sh` for
-  those and any other heavy work CI doesn't cover (see `CONTRIBUTING.md`).
+- **Running them:** Run quick, targeted box and bridge tests locally with
+  `scripts/test-box.sh [box|bridge|all] [extra test args]`. For the full Mac app, package, box
+  and bridge suites, commit the work and run `scripts/ci-branch.sh --wait` on GitHub; only
+  committed changes are tested. The helper pushes the work branch to `origin` as a `ci/` branch
+  over SSH. The phone has no CI: run its tests locally through `scripts/heavy.sh phone` (see
+  `CONTRIBUTING.md`).
 
   Never drive the Mac app's window from tests, because it takes over the user's keyboard and mouse.
 
