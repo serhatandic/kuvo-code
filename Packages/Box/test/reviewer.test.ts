@@ -47,7 +47,12 @@ function model(reply: string | (() => never)) {
 }
 const allows = '{"decision": "allow", "reason": "Builds the project, as asked."}'
 const refuses = '{"decision": "refuse", "reason": "Not what the user asked."}'
-const given = (ask: ReturnType<typeof model> | null) => ({ model: ask, folder: join(box, "reviews") })
+// The policy as a review works it out from this account's home, worked out once for them all: it
+// reads and resolves a few hundred paths, which on a busy Mac takes a review a tenth of a second or
+// more, and a test of twenty refusals (forty reviews) past bun's five seconds. (One that changes
+// what it's worked out from asks for it afresh, as "your own settings" does.)
+let policy: ReturnType<typeof fencePolicy> | undefined
+const given = (ask: ReturnType<typeof model> | null) => ({ model: ask, folder: join(box, "reviews"), policy: (policy ??= fencePolicy()) })
 
 test("only Kuvo Code's own folders and wrecking your home are refused by code, and those can't be approved", async () => {
   const ask = model(allows)
@@ -385,7 +390,7 @@ test("your own settings for every project (global git, SSH keys, sign-ins' files
   const kept = process.env.KUVO_OWN_XDG_DATA_HOME
   process.env.KUVO_OWN_XDG_DATA_HOME = join(box, "your-data")
   try {
-    expect(await reviewer.review(command(`echo '{}' > ${join(box, "your-data", "opencode", "auth.json")}`), yours("Commit the fix"), given(ask))).toMatchObject({ decision: "refuse", by: "code", held: true, why: "unasked" })
+    expect(await reviewer.review(command(`echo '{}' > ${join(box, "your-data", "opencode", "auth.json")}`), yours("Commit the fix"), { ...given(ask), policy: undefined })).toMatchObject({ decision: "refuse", by: "code", held: true, why: "unasked" })
   } finally {
     if (kept === undefined) delete process.env.KUVO_OWN_XDG_DATA_HOME
     else process.env.KUVO_OWN_XDG_DATA_HOME = kept
