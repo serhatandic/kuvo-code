@@ -1949,10 +1949,12 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   `subagent_model` (`provider/model`, a coding agent's account's too; none: the conversation's),
   which the engine doesn't read: the box puts it on the engine's subagents and yours without a
   model of their own, in its own settings file beside yours (see "Settings per box"), as each
-  change is made and whenever the settings are read, and the coding agents' bridge gives your
+  change is made, whenever the settings are read, and as a run starts once the file was changed
+  by hand; and the coding agents' bridge gives your
   subagents and that model to each agent with subagents of its own, one it runs (Claude Code's
   `agents` and `CLAUDE_CODE_SUBAGENT_MODEL`, Codex's roles and `agents.default_subagent_model`,
-  Cursor's `agents`, a plugin of Grok's with an agent each, Antigravity's custom agents), on a
+  Cursor's `agents`, a plugin of Grok's with an agent each, Antigravity's custom agents; a model
+  of one of that agent's accounts, never its maker's API models in the engine), on a
   Mac from where its box's `KUVO_ENGINE_CONFIG` says, on a machine from `box/opencode.json`;
   Settings › Commands, `commands.<name>`; Settings › MCP Servers, `mcp.servers.<name>`. A
   machine's box answers `409 {"message"}` until a Mac has made its settings its own ("Settings

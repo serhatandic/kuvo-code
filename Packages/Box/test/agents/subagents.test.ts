@@ -27,12 +27,14 @@ describe("Your subagents, for each coding agent", () => {
     expect(claudeDisallowed([{ action: "*", resource: "*", effect: "deny" }])).toContain("Bash")
   })
 
-  test("a model goes to the agent that runs it: any of its accounts, or its maker's own; Antigravity's as Flash or Pro", () => {
+  test("a model goes to the agent that runs it, from any of its accounts; Antigravity's as Flash or Pro", () => {
     expect(nativeModel("claude", { providerID: "claude-code@5348f21e", id: "haiku" })).toBe("haiku")
-    expect(nativeModel("claude", { providerID: "anthropic", id: "claude-sonnet-4-5" })).toBe("claude-sonnet-4-5")
+    // Not its maker's API models in the engine: a plan doesn't run all of them.
+    expect(nativeModel("claude", { providerID: "anthropic", id: "claude-sonnet-4-5" })).toBeUndefined()
+    expect(nativeModel("codex", { providerID: "openai", id: "gpt-4.1" })).toBeUndefined()
     expect(nativeModel("claude", { providerID: "github-copilot", id: "claude-sonnet-4.5" })).toBeUndefined()
     expect(nativeModel("claude", { providerID: "claude-code", id: "default" })).toBeUndefined()
-    expect(nativeModel("codex", { providerID: "openai", id: "gpt-5" })).toBe("gpt-5")
+    expect(nativeModel("codex", { providerID: "codex-cli", id: "gpt-5" })).toBe("gpt-5")
     expect(nativeModel("cursor", { providerID: "openai", id: "gpt-5" })).toBeUndefined()
     expect(antigravityTier({ providerID: "antigravity", id: "gemini-3-pro" })).toBe("pro")
     expect(antigravityTier({ providerID: "antigravity", id: "gemini-3-flash" })).toBe("flash")

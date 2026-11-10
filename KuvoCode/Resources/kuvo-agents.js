@@ -9286,7 +9286,7 @@ function copySkillsInto(folder, skills) {
 
 // Packages/Box/src/agents/subagents.ts
 import { createHash as createHash5 } from "crypto";
-import { existsSync as existsSync11, mkdirSync as mkdirSync12, readdirSync as readdirSync11, readFileSync as readFileSync17, renameSync as renameSync9, rmSync as rmSync9, statSync as statSync7, utimesSync as utimesSync2, writeFileSync as writeFileSync14 } from "fs";
+import { existsSync as existsSync11, lstatSync as lstatSync4, mkdirSync as mkdirSync12, readdirSync as readdirSync11, readFileSync as readFileSync17, realpathSync as realpathSync5, renameSync as renameSync9, rmSync as rmSync9, statSync as statSync7, utimesSync as utimesSync2, writeFileSync as writeFileSync14 } from "fs";
 import { join as join19 } from "path";
 
 // Packages/Box/src/shared/json.ts
@@ -9326,18 +9326,21 @@ function settingsFile(env = process.env) {
     return join19(machineHome, "box", "opencode.json");
   return;
 }
-function settingModel() {
+function readSetting() {
   if (!file)
     return;
   try {
-    return modelRef(subagentModel(JSON.parse(readFileSync17(file, "utf8"))));
+    const settings = JSON.parse(readFileSync17(file, "utf8"));
+    const agents = settings?.agents && typeof settings.agents === "object" && !Array.isArray(settings.agents) ? settings.agents : {};
+    return { model: modelRef(subagentModel(settings)), agents };
   } catch {
     return;
   }
 }
 var lastListed = new Map;
 async function subagentsFor(directory) {
-  const model = settingModel();
+  const setting = readSetting();
+  const model = setting?.model;
   const listed = (link3?.ready ? await link3.agents(directory).catch(() => {
     return;
   }) : undefined) ?? lastListed.get(directory);
@@ -9352,21 +9355,19 @@ async function subagentsFor(directory) {
       continue;
     const description = typeof entry.description === "string" && entry.description.trim() ? entry.description.trim() : name;
     const prompt = typeof entry.system === "string" ? entry.system.trim() : "";
-    const own = entry.model && typeof entry.model.id === "string" && typeof entry.model.providerID === "string" ? { id: entry.model.id, providerID: entry.model.providerID } : undefined;
+    const given = setting && name in setting.agents ? setting.agents[name]?.model !== undefined : true;
+    const own = given && entry.model && typeof entry.model.id === "string" && typeof entry.model.providerID === "string" ? { id: entry.model.id, providerID: entry.model.providerID } : undefined;
     agents.push({ name, description, prompt, model: own ?? model, permissions: Array.isArray(entry.permissions) ? entry.permissions : [] });
   }
   return { agents, model };
 }
-var makers2 = { claude: "anthropic", codex: "openai", grok: "xai" };
 function nativeModel(kind, ref) {
   if (!ref || !ref.id || ref.id === "default")
     return;
-  if (parseProvider(ref.providerID)?.kind === kind || makers2[kind] === ref.providerID)
-    return ref.id;
-  return;
+  return parseProvider(ref.providerID)?.kind === kind ? ref.id : undefined;
 }
 function antigravityTier(ref) {
-  const id = nativeModel("antigravity", ref) ?? (ref?.providerID === "google" ? ref.id : undefined);
+  const id = nativeModel("antigravity", ref);
   if (!id)
     return;
   if (/flash/i.test(id))
@@ -9392,7 +9393,7 @@ function claudeDisallowed(rules) {
 }
 function claudeSubagents(subagents) {
   const agents = {};
-  for (const agent of subagents.agents) {
+  for (const agent of subagents.agents.filter((each) => !each.name.includes(":"))) {
     const model = nativeModel("claude", agent.model);
     const disallowed = claudeDisallowed(agent.permissions);
     agents[agent.name] = {
@@ -9426,7 +9427,7 @@ function named2(agents, separator = "-") {
     return { agent, slug: name };
   });
 }
-var quoted = (text) => JSON.stringify(text);
+var quoted = (text) => JSON.stringify(text.toWellFormed()).replace(/\x7f/g, "\\u007f");
 var codexReserved = new Set(["enabled", "max_threads", "max_concurrent_threads_per_session", "max_depth", "default_subagent_model", "default_subagent_reasoning_effort", "interrupt_message", "job_max_runtime_seconds"]);
 function codexSubagents(subagents) {
   const config = {};
@@ -9467,26 +9468,42 @@ function grokSubagents(subagents) {
 `;
   return setFolder("grok", files);
 }
-function antigravityCustomAgents(folder, subagents) {
+var ownFile = /^[a-z0-9_-]+\.md$/;
+function antigravityCustomAgents(home, subagents) {
   const after = {};
   for (const { agent, slug: file } of named2(subagents.agents)) {
     const tier = antigravityTier(agent.model);
     after[`${file}.md`] = frontMatter({ name: agent.name, description: agent.description, subagent: true, mainAgent: false, ...tier ? { model: tier } : {} }, agent.prompt);
   }
-  const record = join19(folder, ".kuvo-code");
-  let before = {};
-  try {
-    before = JSON.parse(readFileSync17(record, "utf8"));
-  } catch {}
   const stamps = Object.fromEntries(Object.entries(after).map(([name, text]) => [name, createHash5("sha256").update(text).digest("hex").slice(0, 16)]));
-  if (JSON.stringify(before) !== JSON.stringify(stamps)) {
+  try {
+    const config = join19(home, "config");
+    const folder = join19(config, "agents");
     mkdirSync12(folder, { recursive: true, mode: 448 });
-    for (const name of Object.keys(before))
-      if (!(name in after))
-        rmSync9(join19(folder, name), { force: true });
-    for (const [name, text] of Object.entries(after))
-      writeFileSync14(join19(folder, name), text);
-    writeFileSync14(record, JSON.stringify(stamps));
+    if (lstatSync4(config).isSymbolicLink() || lstatSync4(folder).isSymbolicLink() || realpathSync5(folder) !== join19(realpathSync5(home), "config", "agents")) {
+      throw new Error("its agents folder isn't its own");
+    }
+    const record = join19(folder, ".kuvo-code");
+    let before = {};
+    try {
+      const read = lstatSync4(record).isFile() ? JSON.parse(readFileSync17(record, "utf8")) : {};
+      if (read && typeof read === "object" && !Array.isArray(read))
+        before = read;
+    } catch {}
+    if (JSON.stringify(before) !== JSON.stringify(stamps)) {
+      for (const name of Object.keys(before))
+        if (ownFile.test(name) && !(name in after))
+          rmSync9(join19(folder, name), { force: true });
+      for (const [name, text] of Object.entries({ ...after, ".kuvo-code": JSON.stringify(stamps) })) {
+        const making = join19(folder, `.${name}.${process.pid}.tmp`);
+        rmSync9(making, { force: true });
+        writeFileSync14(making, text, { mode: 384, flag: "wx" });
+        renameSync9(making, join19(folder, name));
+      }
+    }
+  } catch (error) {
+    console.error(`Antigravity's custom agents couldn't be written: ${error.message}`);
+    return;
   }
   return Object.keys(after).length ? createHash5("sha256").update(JSON.stringify(stamps)).digest("hex").slice(0, 16) : undefined;
 }
@@ -10165,7 +10182,7 @@ ${rpc.stderr.trim()}`);
         return copySkillsInto(join20(agent.profile, "config", "skills"), await skillsFor(directory, agent.ownSkillFolders(directory), turnedOff(hooks)));
       },
       async subagents(directory) {
-        return antigravityCustomAgents(join20(agent.profile, "config", "agents"), await subagentsFor(directory));
+        return antigravityCustomAgents(agent.profile, await subagentsFor(directory));
       },
       asksSignIn: (line) => line.includes(signInLine),
       limitReply: (text) => {
@@ -10228,7 +10245,7 @@ import { basename as basename8, dirname as dirname12, join as join23, resolve as
 import { pathToFileURL as pathToFileURL3 } from "url";
 
 // Packages/Box/src/agents/maintenance.ts
-import { existsSync as existsSync13, realpathSync as realpathSync5 } from "fs";
+import { existsSync as existsSync13, realpathSync as realpathSync6 } from "fs";
 import { basename as basename7, join as join21 } from "path";
 var checked = new Map;
 var newest = new Map;
@@ -10349,7 +10366,7 @@ async function npmLatest(name, fresh, tag = "latest") {
 async function resolveUpdater(definition) {
   let realPath = definition.executable;
   try {
-    realPath = realpathSync5(definition.executable);
+    realPath = realpathSync6(definition.executable);
   } catch {}
   const name = basename7(definition.executable);
   const native = definition.nativeUpdate;
@@ -10375,7 +10392,7 @@ async function resolveUpdater(definition) {
       let brewPrefix = said;
       try {
         if (said)
-          brewPrefix = realpathSync5(said);
+          brewPrefix = realpathSync6(said);
       } catch {}
       if (brewPrefix && brewPrefix === keg.prefix) {
         const cask = keg.kind === "cask";
@@ -13273,7 +13290,7 @@ function describe(status) {
 }
 
 // Packages/Box/src/agents/agents/codex.ts
-import { existsSync as existsSync15, lstatSync as lstatSync4, mkdirSync as mkdirSync16, readdirSync as readdirSync14, readFileSync as readFileSync22, readlinkSync, rmSync as rmSync12, symlinkSync as symlinkSync2 } from "fs";
+import { existsSync as existsSync15, lstatSync as lstatSync5, mkdirSync as mkdirSync16, readdirSync as readdirSync14, readFileSync as readFileSync22, readlinkSync, rmSync as rmSync12, symlinkSync as symlinkSync2 } from "fs";
 import { homedir as homedir2 } from "os";
 import { basename as basename10, join as join24 } from "path";
 
@@ -14231,6 +14248,7 @@ class CodexThread {
       ...subagents.config
     };
     const common = { cwd: this.session.location.directory, model: input.model.id, developerInstructions: instructions, config };
+    const withoutSubagents = Object.fromEntries(Object.entries(config).filter(([key]) => !(key in subagents.config)));
     if (this.nativeID) {
       try {
         await rpc.request("thread/resume", { threadId: this.nativeID, excludeTurns: true, ...common }, 60000);
@@ -14243,9 +14261,25 @@ class CodexThread {
           this.loaded = true;
           return rpc;
         }
+        if (Object.keys(subagents.config).length && error instanceof RPCError) {
+          const without = await rpc.request("thread/resume", { threadId: this.nativeID, excludeTurns: true, ...common, config: withoutSubagents }, 60000).then(() => true, () => false);
+          if (without) {
+            console.error(`Codex turned your subagents away, so this conversation goes on without them: ${error.message}`);
+            this.loaded = true;
+            return rpc;
+          }
+        }
       }
     }
-    const started = await rpc.request("thread/start", common, 60000);
+    let started;
+    try {
+      started = await rpc.request("thread/start", common, 60000);
+    } catch (error) {
+      if (!Object.keys(subagents.config).length || !(error instanceof RPCError))
+        throw error;
+      console.error(`Codex turned your subagents away, so this conversation starts without them: ${error.message}`);
+      started = await rpc.request("thread/start", { ...common, config: withoutSubagents }, 60000);
+    }
     if (this.nativeID && this.nativeID !== started.thread.id)
       this.startedOver = true;
     this.nativeID = started.thread.id;
@@ -15568,7 +15602,7 @@ function shadowHome(home, own) {
     const link = join24(home, name);
     const target = join24(own, name);
     try {
-      const stat = lstatSync4(link, { throwIfNoEntry: false });
+      const stat = lstatSync5(link, { throwIfNoEntry: false });
       if (stat?.isSymbolicLink() && readlinkSync(link) === target)
         continue;
       if (stat && !stat.isSymbolicLink())
@@ -15581,7 +15615,7 @@ function shadowHome(home, own) {
   for (const name of readdirSync14(home)) {
     const link = join24(home, name);
     try {
-      if (lstatSync4(link).isSymbolicLink() && !wanted.includes(name))
+      if (lstatSync5(link).isSymbolicLink() && !wanted.includes(name))
         rmSync12(link, { force: true });
     } catch {}
   }
@@ -17243,7 +17277,7 @@ async function branchRoutes(places, method, parts, body) {
 // Packages/Box/src/agents/sessions.ts
 import { createHash as createHash9 } from "crypto";
 import { spawn as spawnProcess } from "child_process";
-import { readFileSync as readFileSync26, realpathSync as realpathSync6, statSync as statSync11 } from "fs";
+import { readFileSync as readFileSync26, realpathSync as realpathSync7, statSync as statSync11 } from "fs";
 import { homedir as homedir5 } from "os";
 import { dirname as dirname15, join as join28, resolve as resolve7 } from "path";
 import { fileURLToPath as fileURLToPath2 } from "url";
@@ -18295,7 +18329,7 @@ function outsidePaths(ask, directory, attached, own = ownPlaces(), owns) {
 }
 function realFolder(folder) {
   try {
-    return realpathSync6(folder);
+    return realpathSync7(folder);
   } catch {
     return folder;
   }
@@ -26853,4 +26887,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 7af109e2ff3fd4ad68e23147578b5493e753e6ec81a80cdfc4d38d833f9dbc2d
+// Built from Packages/Box/src/agents 5a6261b7a51a1c4823ce153b52744408d59fad9fdeeac71a5fbc5bdb1953922e

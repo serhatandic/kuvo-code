@@ -3,7 +3,7 @@
 
 import "../safety"
 import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test"
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { execFileSync } from "node:child_process"
 import { createHash } from "node:crypto"
 import { tmpdir } from "node:os"
@@ -684,7 +684,7 @@ describe("What ACP agents ask", () => {
 describe("Your subagents (Settings › Agents), in Grok and Antigravity", () => {
   test("Grok is given them as a plugin of its own, each on a model Grok runs, and started again when they change", async () => {
     const engine = subagentEngine(root)
-    engine.agents.push({ id: "scout", name: "scout", mode: "subagent", description: "Looks: around.", system: "You scout.", model: { providerID: "xai", id: "grok-4.6" }, permissions: [] })
+    engine.agents.push({ id: "scout", name: "scout", mode: "subagent", description: "Looks: around.", system: "You scout.", model: { providerID: "grok-cli", id: "grok-4.6" }, permissions: [] })
     engine.model = "anthropic/claude-haiku-4-5"
     await engine.serve()
     try {
@@ -732,6 +732,39 @@ describe("Your subagents (Settings › Agents), in Grok and Antigravity", () => 
     }
     expect(readdirSync(folder).sort()).toEqual([".kuvo-code", "mine.md", "reviewer.md"])
     expect(readFileSync(join(folder, "mine.md"), "utf8")).toBe("yours")
+  })
+
+  test("what Antigravity put in its agents folder itself (it writes its home, in the sandbox) never makes the bridge remove or write anything outside it", async () => {
+    const engine = subagentEngine(root)
+    await engine.serve()
+    const agent = new TestAntigravity(fakeAcp([said("Done.")]), root)
+    const profile = (agent as any).profile as string
+    const folder = join(profile, "config", "agents")
+    mkdirSync(folder, { recursive: true })
+    const outside = join(root, "outside")
+    mkdirSync(outside)
+    writeFileSync(join(outside, "keep.txt"), "mine")
+    writeFileSync(join(outside, "target.txt"), "mine")
+    // A record naming a file elsewhere, and an agent's file that's a link to one.
+    writeFileSync(join(folder, ".kuvo-code"), JSON.stringify({ "../../../../outside/keep.txt": "x", "gone.md": "x" }))
+    symlinkSync(join(outside, "target.txt"), join(folder, "reviewer.md"))
+    try {
+      await run(agent)
+      expect(readFileSync(join(outside, "keep.txt"), "utf8")).toBe("mine")
+      expect(readFileSync(join(outside, "target.txt"), "utf8")).toBe("mine")
+      expect(lstatSync(join(folder, "reviewer.md")).isSymbolicLink()).toBe(false)
+      expect(readFileSync(join(folder, "reviewer.md"), "utf8")).toContain('name: "reviewer"')
+      // Its whole agents folder a link elsewhere: nothing's written there, and the session still starts.
+      rmSync(folder, { recursive: true })
+      symlinkSync(outside, folder)
+      engine.agents.push({ id: "extra", name: "extra", mode: "subagent", description: "More.", system: "", permissions: [] })
+      root = mkdtempSync(join(base, "case-"))
+      const id = await run(new TestAntigravity(fakeAcp([said("Done.")]), dirname(dirname(dirname(dirname(folder))))))
+      expect(readdirSync(outside).sort()).toEqual(["keep.txt", "target.txt"])
+      expect(ended(id)).toMatchObject({ type: "idle", outcome: "succeeded" })
+    } finally {
+      engine.stop()
+    }
   })
 })
 

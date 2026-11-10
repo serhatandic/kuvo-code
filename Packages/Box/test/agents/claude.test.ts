@@ -2362,9 +2362,9 @@ describe("Your subagents (Settings › Agents), in Claude Code", () => {
   })
 
   test("the model changed in Settings: the next message starts it again with that one; one it doesn't run leaves its subagents on the conversation's", async () => {
-    const { engine, id } = await started("anthropic/claude-sonnet-4-5")
+    const { engine, id } = await started("claude-code/sonnet")
     try {
-      expect(fake.options.env.CLAUDE_CODE_SUBAGENT_MODEL).toBe("claude-sonnet-4-5")
+      expect(fake.options.env.CLAUDE_CODE_SUBAGENT_MODEL).toBe("sonnet")
       const first = fake.sent[0].uuid
       fake.result([first])
       await until(() => idles(id).length === 1)
@@ -2375,6 +2375,23 @@ describe("Your subagents (Settings › Agents), in Claude Code", () => {
       expect(fake.closed).toBe(true)
       expect(fake.options.env.CLAUDE_CODE_SUBAGENT_MODEL).toBeUndefined()
       expect(Object.keys(fake.options.agents)).toContain("reviewer")
+    } finally {
+      engine.stop()
+    }
+  })
+
+  test("a subagent of yours with no model of its own takes the one subagents use as it is now, not the one the engine still has for it a moment", async () => {
+    const engine = subagentEngine(root)
+    // The engine still lists the model it had before for it (it reads the box's layer again later).
+    engine.agents = engine.agents.map((agent) => (agent.id === "reviewer" ? { ...agent, model: { providerID: "claude-code", id: "haiku" } } : agent))
+    engine.inSettings = { reviewer: { mode: "subagent" } }
+    engine.model = "claude-code/sonnet"
+    await engine.serve()
+    try {
+      const id = sessions.create({ model: { providerID: provider, id: "default" }, location: { directory: root } }).id
+      sessions.prompt(id, { id: "msg_claude_subs_004", text: "review it", files: [], delivery: "steer" })
+      await until(() => fake.sent.length === 1)
+      expect(fake.options.agents.reviewer.model).toBe("sonnet")
     } finally {
       engine.stop()
     }

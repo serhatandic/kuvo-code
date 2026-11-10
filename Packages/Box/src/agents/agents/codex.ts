@@ -1113,6 +1113,7 @@ class CodexThread implements Thread {
       ...subagents.config,
     }
     const common = { cwd: this.session.location.directory, model: input.model.id, developerInstructions: instructions, config }
+    const withoutSubagents = Object.fromEntries(Object.entries(config).filter(([key]) => !(key in subagents.config)))
     if (this.nativeID) {
       try {
         await rpc.request("thread/resume", { threadId: this.nativeID, excludeTurns: true, ...common }, 60_000)
@@ -1125,10 +1126,27 @@ class CodexThread implements Thread {
           this.loaded = true
           return rpc
         }
+        // Your subagents turned away (a Codex older than its roles' settings): the same thread
+        // without them, rather than a new one.
+        if (Object.keys(subagents.config).length && error instanceof RPCError) {
+          const without = await rpc.request("thread/resume", { threadId: this.nativeID, excludeTurns: true, ...common, config: withoutSubagents }, 60_000).then(() => true, () => false)
+          if (without) {
+            console.error(`Codex turned your subagents away, so this conversation goes on without them: ${error.message}`)
+            this.loaded = true
+            return rpc
+          }
+        }
         // Gone (deleted, or another Codex's): a new thread, without what came before.
       }
     }
-    const started: any = await rpc.request("thread/start", common, 60_000)
+    let started: any
+    try {
+      started = await rpc.request("thread/start", common, 60_000)
+    } catch (error) {
+      if (!Object.keys(subagents.config).length || !(error instanceof RPCError)) throw error
+      console.error(`Codex turned your subagents away, so this conversation starts without them: ${error.message}`)
+      started = await rpc.request("thread/start", { ...common, config: withoutSubagents }, 60_000)
+    }
     if (this.nativeID && this.nativeID !== started.thread.id) this.startedOver = true
     this.nativeID = started.thread.id
     this.state.codexThread = this.nativeID

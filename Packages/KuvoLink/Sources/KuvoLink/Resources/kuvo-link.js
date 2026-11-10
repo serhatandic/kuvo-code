@@ -23569,6 +23569,20 @@ function applyCompatibility(layer = readCompatibility(), file = ENGINE_LAYER_FIL
   writePrivate(file, wanted);
   return true;
 }
+var settingsSeen;
+function followSettingsFile(file = CONFIG_FILE) {
+  let stamp = "none";
+  try {
+    const info = fs78.statSync(file);
+    stamp = `${info.mtimeMs}:${info.size}`;
+  } catch {}
+  if (stamp === settingsSeen)
+    return;
+  settingsSeen = stamp;
+  try {
+    applyCompatibility();
+  } catch {}
+}
 function lastSubagents(file) {
   try {
     const text = fs78.readFileSync(file, "utf8");
@@ -24814,6 +24828,8 @@ async function watchEvents(read, tell, signal, answered = () => {}, { bots = fal
       letSessionFilesGo(attachmentsLooked);
       lastLearned = 0;
       learn(source);
+      if (learns)
+        followSettingsFile();
       if (learns && modelsDue())
         settleDueModels(source).catch(() => {});
       if (queues)
@@ -24841,6 +24857,8 @@ async function watchEvents(read, tell, signal, answered = () => {}, { bots = fal
           forgetDecided(event.data.sessionID);
         }
         learn(source, LEARN_NOW.has(event.type));
+        if (learns && (event.type === "session.execution.started" || event.type === "config.updated"))
+          followSettingsFile();
         if (learns && WORK_ENDS.has(event.type) && modelsDue())
           settleDueModels(source).catch(() => {});
         steer?.(event);

@@ -35,10 +35,12 @@ export function subagentEngine(folder: string) {
       { id: "Keyword Research", name: "Keyword Research", mode: "all", description: "Finds keywords.", system: "You research keywords.", model: { providerID: "openai", id: "gpt-5" }, permissions: [] },
       { id: "Research", name: "Research", mode: "primary", system: "A mode, not a subagent.", permissions: [] },
     ] as any[],
+    /** Your agents as your settings file has them (not a project's), by id. */
+    inSettings: {} as Record<string, unknown>,
     /** The model subagents use, as Settings › Agents writes it (undefined: the conversation's). */
     set model(value: string | undefined) {
       mkdirSync(join(folder, "settings"), { recursive: true })
-      writeFileSync(settings, JSON.stringify(value === undefined ? {} : { subagent_model: value }))
+      writeFileSync(settings, JSON.stringify({ ...(value === undefined ? {} : { subagent_model: value }), agents: fake.inSettings }))
     },
     async serve() {
       engine = Bun.serve({

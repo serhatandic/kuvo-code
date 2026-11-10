@@ -327,7 +327,7 @@ private struct AgentEditor: View {
                 }
             }
             ConfigTextField(title: "Description", path: path + ["description"], prompt: builtInDescription ?? "What it's for, like: Finds bugs and explains them, without changing code", multiline: true)
-            ConfigModelPicker(title: "Model", path: path + ["model"], defaultTitle: mode == "subagent" ? "The subagents' model" : "The session's model")
+            ConfigModelPicker(title: "Model", path: path + ["model"], defaultTitle: Self.defaultModelTitle(mode))
             ConfigNumberField(title: "Most steps per message", path: path + ["steps"], prompt: "No limit")
             if id != nil {
                 Toggle("Use this agent", isOn: Binding(
@@ -367,6 +367,16 @@ private struct AgentEditor: View {
             // Verbatim: as Markdown, the asterisks would turn part of the sentence into italics.
             Text(verbatim: "For particular commands, files or sites, like letting it run \"npm test *\" while other commands ask first. * matches anything. When rules overlap, the one lower in the list wins.")
                 .foregroundStyle(.secondary)
+        }
+    }
+
+    /// What an agent with no model of its own runs on: the session's as a mode, the one Subagents
+    /// use as a subagent (the session's when that's set so).
+    static func defaultModelTitle(_ mode: String) -> String {
+        switch mode {
+        case "subagent": "The subagents' model"
+        case "all": "The session's or subagents' model"
+        default: "The session's model"
         }
     }
 

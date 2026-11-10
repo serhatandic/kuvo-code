@@ -18,7 +18,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { isObject } from "../../shared/json";
 import { subagentLayer } from "../../shared/subagents";
-import { deepMerged, readSettings } from "../areas/config";
+import { CONFIG_FILE, deepMerged, readSettings } from "../areas/config";
 import { writePrivate } from "../files";
 import { ENGINE_CONFIG, K, RUN, SANDBOX_NOTE } from "../home";
 import { engineGet } from "./client";
@@ -76,6 +76,22 @@ export function applyCompatibility(layer: Record<string, unknown> = readCompatib
   if (there === wanted) return false;
   writePrivate(file, wanted);
   return true;
+}
+
+// Your settings file as the layer last followed it (when it was changed, how big).
+let settingsSeen: string | undefined;
+
+/** The layer brought to your settings file once it changed since it last was (by hand, say: one
+ * changed through the box is followed at once), so an agent you took away isn't named there. */
+export function followSettingsFile(file = CONFIG_FILE): void {
+  let stamp = "none";
+  try {
+    const info = fs.statSync(file);
+    stamp = `${info.mtimeMs}:${info.size}`;
+  } catch {}
+  if (stamp === settingsSeen) return;
+  settingsSeen = stamp;
+  try { applyCompatibility(); } catch {}
 }
 
 /** What the layer at `file` has for the subagents now. */

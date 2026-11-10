@@ -726,7 +726,7 @@ export class AntigravityAgent implements Agent {
         // Your subagents (Settings › Agents), as its custom agents in its home's folder for them,
         // on Flash or Pro when their model is one (it takes no other, nor a model for its own).
         async subagents(directory) {
-          return antigravityCustomAgents(join(agent.profile, "config", "agents"), await subagentsFor(directory))
+          return antigravityCustomAgents(agent.profile, await subagentsFor(directory))
         },
         // Its access lasts an hour, renewed from the sign-in it keeps: one that asks for a new
         // sign-in partway is started again, which renews it.

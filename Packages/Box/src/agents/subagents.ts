@@ -14,7 +14,7 @@
 // agents' own: files, where an agent needs them, are in the bridge's home (`subagents/<set>`).
 
 import { createHash } from "node:crypto"
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs"
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { parseProvider, type AgentKind } from "./accounts"
 import type { EngineLink } from "./engine"
@@ -64,11 +64,16 @@ export function settingsFile(env: Record<string, string | undefined> = process.e
   return undefined
 }
 
-/** The model subagents use, as the settings file says now (a small file, read as each turn starts). */
-function settingModel(): ModelRef | undefined {
+/**
+ * The model subagents use, as the settings file says now (a small file, read as each turn starts),
+ * and the agents of yours it has: undefined when it can't be read.
+ */
+function readSetting(): { model?: ModelRef; agents: Record<string, any> } | undefined {
   if (!file) return undefined
   try {
-    return modelRef(subagentModel(JSON.parse(readFileSync(file, "utf8"))))
+    const settings = JSON.parse(readFileSync(file, "utf8"))
+    const agents = settings?.agents && typeof settings.agents === "object" && !Array.isArray(settings.agents) ? settings.agents : {}
+    return { model: modelRef(subagentModel(settings)), agents }
   } catch {
     return undefined
   }
@@ -79,7 +84,8 @@ const lastListed = new Map<string, any[]>()
 
 /** Your subagents for a conversation's folder, and the model they use: as last known while the engine can't say, none before it has. */
 export async function subagentsFor(directory: string): Promise<Subagents> {
-  const model = settingModel()
+  const setting = readSetting()
+  const model = setting?.model
   const listed = (link?.ready ? await link.agents(directory).catch(() => undefined) : undefined) ?? lastListed.get(directory)
   if (listed) lastListed.set(directory, listed)
   const agents: Subagent[] = []
@@ -89,27 +95,28 @@ export async function subagentsFor(directory: string): Promise<Subagents> {
     if (entry.mode !== "subagent" && entry.mode !== "all") continue
     const description = typeof entry.description === "string" && entry.description.trim() ? entry.description.trim() : name
     const prompt = typeof entry.system === "string" ? entry.system.trim() : ""
-    const own = entry.model && typeof entry.model.id === "string" && typeof entry.model.providerID === "string" ? { id: entry.model.id, providerID: entry.model.providerID } : undefined
-    // (One of the engine's has the model subagents use already, where it has none of its own: the
-    // engine has it so. One of a coding agent's, which the engine doesn't take, is put on it here.)
+    // Its own model: the engine's word for it, but where your settings give it none (the engine
+    // has the model subagents use on it then, as the box put it, and may still have the one before
+    // for a while). An agent of a project's own is as the engine has it.
+    const given = setting && name in setting.agents ? setting.agents[name]?.model !== undefined : true
+    const own = given && entry.model && typeof entry.model.id === "string" && typeof entry.model.providerID === "string" ? { id: entry.model.id, providerID: entry.model.providerID } : undefined
     agents.push({ name, description, prompt, model: own ?? model, permissions: Array.isArray(entry.permissions) ? entry.permissions : [] })
   }
   return { agents, model }
 }
 
-/** The makers' own providers in the engine, whose models an agent of theirs runs too. */
-const makers: Partial<Record<AgentKind, string>> = { claude: "anthropic", codex: "openai", grok: "xai" }
-
-/** A model as `kind` runs it, if it can: one of its own accounts' (any of them), or its maker's. */
+/**
+ * A model as `kind` runs it, if it can: one of its own accounts' (any of them). Not its maker's API
+ * models in the engine: an agent signed in with a plan doesn't run all of those.
+ */
 export function nativeModel(kind: AgentKind, ref: ModelRef | undefined): string | undefined {
   if (!ref || !ref.id || ref.id === "default") return undefined
-  if (parseProvider(ref.providerID)?.kind === kind || makers[kind] === ref.providerID) return ref.id
-  return undefined
+  return parseProvider(ref.providerID)?.kind === kind ? ref.id : undefined
 }
 
 /** Antigravity's subagents take a tier, not a model: Flash or Pro, as its own model's name says. */
 export function antigravityTier(ref: ModelRef | undefined): "flash" | "pro" | undefined {
-  const id = nativeModel("antigravity", ref) ?? (ref?.providerID === "google" ? ref.id : undefined)
+  const id = nativeModel("antigravity", ref)
   if (!id) return undefined
   if (/flash/i.test(id)) return "flash"
   if (/\bpro\b|-pro/i.test(id)) return "pro"
@@ -140,7 +147,8 @@ export function claudeDisallowed(rules: PermissionRule[]): string[] {
 /** Your subagents as Claude Code's `agents`, and the model its others use (CLAUDE_CODE_SUBAGENT_MODEL), if it runs it. */
 export function claudeSubagents(subagents: Subagents): { agents: Record<string, Record<string, unknown>>; model?: string } {
   const agents: Record<string, Record<string, unknown>> = {}
-  for (const agent of subagents.agents) {
+  // (A colon is for its plugins' agents: a name with one would turn the rest away.)
+  for (const agent of subagents.agents.filter((each) => !each.name.includes(":"))) {
     const model = nativeModel("claude", agent.model)
     const disallowed = claudeDisallowed(agent.permissions)
     agents[agent.name] = {
@@ -186,7 +194,7 @@ function named(agents: Subagent[], separator = "-"): { agent: Subagent; slug: st
 }
 
 /** A string as TOML and YAML both read it (a double-quoted one, escapes and all). */
-const quoted = (text: string) => JSON.stringify(text)
+const quoted = (text: string) => JSON.stringify(text.toWellFormed()).replace(/\x7f/g, "\\u007f")
 
 /** The `[agents]` settings that aren't roles: a role can't be called one of them. */
 const codexReserved = new Set(["enabled", "max_threads", "max_concurrent_threads_per_session", "max_depth", "default_subagent_model", "default_subagent_reasoning_effort", "interrupt_message", "job_max_runtime_seconds"])
@@ -232,28 +240,51 @@ export function grokSubagents(subagents: Subagents): string | undefined {
   return setFolder("grok", files)
 }
 
+/** The names of the files `antigravityCustomAgents` makes: never a path, nor anything else in the folder. */
+const ownFile = /^[a-z0-9_-]+\.md$/
+
 /**
- * Your subagents in a folder Antigravity reads its custom agents from (its home's, which is Kuvo
- * Code's): made to match, the files it put there before named in `.kuvo-code` (anything else in it
- * stays). Says what's there, for telling one set from another.
+ * Your subagents in the folder Antigravity reads its custom agents from (`config/agents` in its
+ * home, Kuvo Code's, which every session of the account shares, as its skills are): made to match,
+ * the files it put there before named in `.kuvo-code` (anything else in it stays). Antigravity
+ * writes its home itself, in the box's sandbox, and this doesn't run there: so the folder must be
+ * the home's own (no link to elsewhere), only a name this makes is ever removed, and each file is
+ * written new and renamed into place (which replaces a link put there, never writes through it).
+ * Left out, for this start, when any of that fails. Says what's there, for telling one set from another.
  */
-export function antigravityCustomAgents(folder: string, subagents: Subagents): string | undefined {
+export function antigravityCustomAgents(home: string, subagents: Subagents): string | undefined {
   const after: Record<string, string> = {}
   for (const { agent, slug: file } of named(subagents.agents)) {
     const tier = antigravityTier(agent.model)
     after[`${file}.md`] = frontMatter({ name: agent.name, description: agent.description, subagent: true, mainAgent: false, ...(tier ? { model: tier } : {}) }, agent.prompt)
   }
-  const record = join(folder, ".kuvo-code")
-  let before: Record<string, string> = {}
-  try {
-    before = JSON.parse(readFileSync(record, "utf8"))
-  } catch {}
   const stamps = Object.fromEntries(Object.entries(after).map(([name, text]) => [name, createHash("sha256").update(text).digest("hex").slice(0, 16)]))
-  if (JSON.stringify(before) !== JSON.stringify(stamps)) {
+  try {
+    const config = join(home, "config")
+    const folder = join(config, "agents")
     mkdirSync(folder, { recursive: true, mode: 0o700 })
-    for (const name of Object.keys(before)) if (!(name in after)) rmSync(join(folder, name), { force: true })
-    for (const [name, text] of Object.entries(after)) writeFileSync(join(folder, name), text)
-    writeFileSync(record, JSON.stringify(stamps))
+    if (lstatSync(config).isSymbolicLink() || lstatSync(folder).isSymbolicLink() || realpathSync(folder) !== join(realpathSync(home), "config", "agents")) {
+      throw new Error("its agents folder isn't its own")
+    }
+    const record = join(folder, ".kuvo-code")
+    let before: Record<string, string> = {}
+    try {
+      const read = lstatSync(record).isFile() ? JSON.parse(readFileSync(record, "utf8")) : {}
+      if (read && typeof read === "object" && !Array.isArray(read)) before = read
+    } catch {}
+    if (JSON.stringify(before) !== JSON.stringify(stamps)) {
+      for (const name of Object.keys(before)) if (ownFile.test(name) && !(name in after)) rmSync(join(folder, name), { force: true })
+      for (const [name, text] of Object.entries({ ...after, ".kuvo-code": JSON.stringify(stamps) })) {
+        const making = join(folder, `.${name}.${process.pid}.tmp`)
+        rmSync(making, { force: true })
+        // (Made new, never through a link put in its place meanwhile.)
+        writeFileSync(making, text, { mode: 0o600, flag: "wx" })
+        renameSync(making, join(folder, name))
+      }
+    }
+  } catch (error) {
+    console.error(`Antigravity's custom agents couldn't be written: ${(error as Error).message}`)
+    return undefined
   }
   return Object.keys(after).length ? createHash("sha256").update(JSON.stringify(stamps)).digest("hex").slice(0, 16) : undefined
 }
