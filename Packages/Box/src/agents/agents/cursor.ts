@@ -15,6 +15,7 @@ import { allowedFolders, fenceAgent, fenceAttachments, fenceCopy, fenceKey, fenc
 import { kuvoTools } from "../kuvotools"
 import { pictureData, pictureFile, withPictures } from "../pictures"
 import { skillsFolder, skillsFor, turnedOff, upward } from "../skills"
+import { cursorSubagents, subagentsFor } from "../subagents"
 import { dropRelayed, relayedServers, relayedTools, relayPort } from "../toolrelay"
 import { computerServers } from "../servers"
 import type { Turn } from "../turn"
@@ -338,6 +339,8 @@ class CursorThread implements Thread {
     const servers = relayedServers(this.session.id, this, cwd, await computerServers(cwd))
     const mcpServers: Record<string, unknown> = Object.fromEntries(servers.map((each) => [each.name, { type: "http", url: each.url, headers: each.headers }]))
     if (tools) mcpServers[tools.name] = tools.kind === "http" ? { type: "http", url: tools.url, headers: tools.headers } : { type: "stdio", command: tools.command, args: tools.args, env: tools.env }
+    // Your subagents (Settings › Agents), on a model of Cursor's when theirs is one.
+    const agents = cursorSubagents(await subagentsFor(cwd))
     return {
       model: selection,
       name: `Kuvo Code: ${this.session.title ?? "session"}`,
@@ -358,6 +361,7 @@ class CursorThread implements Thread {
         store: this.owner.agentStore(fenced ? CursorWorker : sdk),
       },
       ...(Object.keys(mcpServers).length ? { mcpServers } : {}),
+      ...(Object.keys(agents).length ? { agents } : {}),
     }
   }
 
@@ -365,10 +369,10 @@ class CursorThread implements Thread {
   private async ensureAgent(sdk: any, options: any, hooks: TurnHooks) {
     const approvesAll = hooks.approvesAll(false)
     // Its sandbox, review, folders and Kuvo Code's tools are set as it starts: another approval
-    // mode, other skills or other tools (Kuvo Code's, or another set of the computer's servers)
-    // start it again.
+    // mode, other skills or other tools (Kuvo Code's, or another set of the computer's servers),
+    // or other subagents, start it again.
     const skills = options.local?.dirs?.[0] as string | undefined
-    const tools = JSON.stringify([kuvoTools(this.session.id)?.key, Object.keys(options.mcpServers ?? {}).sort()])
+    const tools = JSON.stringify([kuvoTools(this.session.id)?.key, Object.keys(options.mcpServers ?? {}).sort(), options.agents ?? {}])
     // In the sandbox: its rules and the folders Also Allowed gives the project, as it starts.
     const fence = fenceRules() ? fenceKey() + JSON.stringify(allowedFolders(this.session.location.directory)) + fullAccessMark(this.session.id) : ""
     // (And the worker it runs in, as it starts again, or once it has stopped.)

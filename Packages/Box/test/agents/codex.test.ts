@@ -13,6 +13,7 @@ import { CodexAgent, codexTiming } from "../../src/agents/agents/codex"
 import { Auto } from "../../src/agents/auto"
 import { canFence, realFence } from "./support/fence"
 import { callServer, computerServers, KEYS } from "./support/servers"
+import { subagentEngine } from "./support/subagents"
 import { fencePolicy } from "../../src/link/fence/policy"
 import type { Roster } from "../../src/agents/roster"
 import { Sessions, timing } from "../../src/agents/sessions"
@@ -176,6 +177,8 @@ process.stdin.on("data", (chunk) => {
     appendFileSync(require("node:path").join(process.cwd(), "sent.jsonl"), line + "\\n")
     const message = JSON.parse(line)
     if (message.method === undefined) answered.get(message.id)?.()
+    // (A Codex that doesn't know your subagents' settings, as the test says: it turns them away.)
+    else if (message.method === "thread/start" && process.env.KUVO_TEST_CODEX_REFUSES_AGENTS && Object.keys(message.params.config ?? {}).some((key) => key.startsWith("agents."))) send({ id: message.id, error: { code: -32600, message: "unknown field agents" } })
     else if (message.method === "thread/start") send({ id: message.id, result: { thread: { id: thread } } })
     else if (message.method === "thread/compact/start") {
       // As Codex 0.166 does: its answer says nothing, and a turn of its own does it.
@@ -1595,6 +1598,63 @@ describe("Codex and the computer's MCP servers", () => {
       expect(await callServer({ url: given.tracker.url, headers: given.tracker.http_headers })).toBe(`auth:Bearer ${KEYS.tracker},key:none,at:/tracker`)
     } finally {
       servers.stop()
+    }
+  })
+})
+
+describe("Your subagents (Settings › Agents), in Codex", () => {
+  test("they're its roles in the thread, each with its instructions and a model it runs, and the model its other subagents use", async () => {
+    const engine = subagentEngine(root)
+    engine.model = "codex-cli/gpt-6-luna"
+    await engine.serve()
+    try {
+      await run([["item/completed", { item: { type: "agentMessage", id: "m1", text: "Done." } }]])
+      const config = sent().find((message) => message.method === "thread/start").params.config as Record<string, any>
+      expect(config["agents.default_subagent_model"]).toBe("gpt-6-luna")
+      expect(config["agents.reviewer.description"]).toBe("Reviews a finished change.")
+      expect(config["agents.keyword_research.description"]).toBe("Finds keywords.")
+      // A mode isn't a subagent, and the engine's own aren't yours.
+      expect(Object.keys(config).filter((key) => key.startsWith("agents.") && key.endsWith(".description")).sort()).toEqual(["agents.keyword_research.description", "agents.reviewer.description"])
+      // Each role's file, in the bridge's home: what it's told, and its model (its own, or the one
+      // subagents use) when Codex runs it.
+      const reviewer = readFileSync(config["agents.reviewer.config_file"], "utf8")
+      expect(reviewer).toBe('developer_instructions = "You review. You never edit."\nmodel = "gpt-6-luna"\n')
+      // Its own model is the engine's OpenAI one, not one of Codex's: it takes the subagents' one then.
+      expect(readFileSync(config["agents.keyword_research.config_file"], "utf8")).toBe('developer_instructions = "You research keywords."\n')
+      expect(config["agents.reviewer.config_file"].startsWith(root)).toBe(true)
+    } finally {
+      engine.stop()
+    }
+  })
+
+  test("a Codex that turns them away still starts the conversation, without them", async () => {
+    const engine = subagentEngine(root)
+    engine.model = "codex-cli/gpt-6-luna"
+    await engine.serve()
+    process.env.KUVO_TEST_CODEX_REFUSES_AGENTS = "1"
+    try {
+      const id = await run([["item/completed", { item: { type: "agentMessage", id: "m1", text: "Done." } }]])
+      const starts = sent().filter((message) => message.method === "thread/start")
+      expect(starts).toHaveLength(2)
+      expect(Object.keys(starts[1].params.config).some((key) => key.startsWith("agents."))).toBe(false)
+      expect(sessions.messages(id).at(-1)).toMatchObject({ type: "idle", outcome: "succeeded" })
+    } finally {
+      delete process.env.KUVO_TEST_CODEX_REFUSES_AGENTS
+      engine.stop()
+    }
+  })
+
+  test("one of another maker's models stays out: its subagents use the conversation's", async () => {
+    const engine = subagentEngine(root)
+    engine.model = "anthropic/claude-haiku-4-5"
+    await engine.serve()
+    try {
+      await run([["item/completed", { item: { type: "agentMessage", id: "m1", text: "Done." } }]])
+      const config = sent().find((message) => message.method === "thread/start").params.config as Record<string, any>
+      expect(config["agents.default_subagent_model"]).toBeUndefined()
+      expect(config["agents.reviewer.description"]).toBe("Reviews a finished change.")
+    } finally {
+      engine.stop()
     }
   })
 })

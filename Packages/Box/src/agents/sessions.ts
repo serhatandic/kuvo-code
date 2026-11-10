@@ -2801,7 +2801,7 @@ export class Sessions {
     const parts = partsOf(ask)
     if (live.blocks && strictest(live.blocks, ask.action, parts) === "deny") return "deny"
     if (plan && changes.has(ask.action)) return "deny"
-    const rules = [...(live.agentRules ?? engineDefaults), ...(session.permissions ?? [])]
+    const rules = [...(ask.agentRules ?? live.agentRules ?? engineDefaults), ...(session.permissions ?? [])]
     const effect = strictest(rules, ask.action, parts)
     if (effect === "deny") return "deny"
     // Paths outside the project: your rules for working there too.
@@ -2873,7 +2873,7 @@ export class Sessions {
       const folders = outsideFolders(ask, away)
       const refusable = outsideRefusable(ask, away, folders)
       if (live.blocks && strictest(live.blocks, "external_directory", refusable) === "deny") return "reject"
-      const rules = [...(live.agentRules ?? engineDefaults), ...(session.permissions ?? [])]
+      const rules = [...(ask.agentRules ?? live.agentRules ?? engineDefaults), ...(session.permissions ?? [])]
       if (strictest(rules, "external_directory", refusable) === "deny") return "reject"
       const outside = strictest(rules, "external_directory", folders)
       const own = strictest(rules, ask.action, parts) ?? "allow"
@@ -2886,7 +2886,7 @@ export class Sessions {
     // defaults, reading a .env file asks first), with the session's rules over them.
     const matched = ask.weighed
       ? strictest(session.permissions ?? [], ask.action, parts)
-      : strictest([...(live.agentRules ?? engineDefaults), ...(session.permissions ?? [])], ask.action, parts)
+      : strictest([...(ask.agentRules ?? live.agentRules ?? engineDefaults), ...(session.permissions ?? [])], ask.action, parts)
     const effect = ask.weighed ? matched : (matched ?? "allow")
     if (effect === "deny") return "reject"
     // What the agent asked about, not known by its kind and no rule of yours about it, under Ask

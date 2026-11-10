@@ -397,6 +397,9 @@ final class MacBoxRunner {
         // The box's queues, where a chat's part for a conversation you stopped waits until you
         // resume it, as a machine's are in `~/.kuvo-code/run`.
         environment["KUVO_RUN"] = BoxProcess.run.path
+        // Where this Mac's engine settings are, as its box has them: the model your subagents use
+        // (Settings › Agents) is in them, for the coding agents' subagents too.
+        environment["KUVO_ENGINE_CONFIG"] = AppModel.engineFolders.configHome.path
         // This Mac's group chats, in its own folder, as a machine's are in `~/.kuvo-code`: their
         // bots are its bots, what they let go of goes to the box's trash (and on to the Finder's,
         // `kuvo.group.trashed`), and a bot remembers them under the key it always has.

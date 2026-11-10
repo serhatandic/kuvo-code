@@ -26,6 +26,7 @@ import { chatGPTIdentity, LimitsProblem, type LimitReading, type LimitsSource, t
 import { RPC, RPCError } from "../rpc"
 import { CodexCitations, plainCitations, type Said } from "./codex-citations"
 import { engineSkills, skillsFolder, skillsFor, skillsRoot, turnedOff, upward, within } from "../skills"
+import { codexSubagents, subagentsFor, subagentsRoot } from "../subagents"
 import { instructionsNote, toldOf } from "../told"
 import type { Turn } from "../turn"
 import type { FileDiff, FormField, Model, ModelRef, OAuthStatus, Session } from "../wire"
@@ -385,11 +386,14 @@ export class CodexAgent implements Agent {
 
   /**
    * Its own places, as it runs whole in the box's sandbox: its home (an added account's, and your
-   * Codex's, which it links to), and the skills it's given (only read).
+   * Codex's, which it links to), and the skills and subagents it's given (only read).
    */
   private fenced(directory: string, sessionID?: string, bot?: string) {
     const skills = skillsRoot()
     if (skills) mkdirSync(skills, { recursive: true, mode: 0o700 })
+    // And the files of your subagents' instructions (only read).
+    const subagents = subagentsRoot()
+    if (subagents) mkdirSync(subagents, { recursive: true, mode: 0o700 })
     const homes = [this.home, ...(this.instance.home && !onMachine ? [this.yourCodex] : [])]
     // The files you attach in the session, copied where only the box writes (`fenceCopy`).
     const attached = sessionID ? fenceAttachments(directory) : undefined
@@ -397,7 +401,7 @@ export class CodexAgent implements Agent {
       homes,
       state: STATE_IN_HOME,
       kept: KEPT_IN_HOME,
-      read: [...(skills ? [skills] : []), ...(attached ? [attached] : [])],
+      read: [...(skills ? [skills] : []), ...(subagents ? [subagents] : []), ...(attached ? [attached] : [])],
       port: relayPort(),
       session: sessionID,
       bot,
@@ -963,6 +967,7 @@ class CodexThread implements Thread {
   /** The computer's servers it was loaded with (their names). */
   private serversKey?: string
   private skillsKey?: string
+  private subagentsKey?: string
   /** The agents it spawned, by their thread: their sessions, across turns, kept with the conversation. */
   private get spawnedSessions(): Record<string, KnownSpawn> {
     const known = this.state.codexSubagents
@@ -1081,12 +1086,15 @@ class CodexThread implements Thread {
     // relay, which keeps their keys.
     const computer = await computerServers(directory)
     const servers = relayedServers(this.session.id, this.agent, directory, computer)
+    // Your subagents (Settings › Agents), as its roles, and the model its subagents use.
+    const subagents = codexSubagents(await subagentsFor(directory))
     // Loaded again when Kuvo Code's tools moved (the app started again), to reach them, or the
-    // skills or the servers changed.
-    if (this.nativeID && this.loaded && instructions === this.instructions && tools?.key === this.toolsKey && skillsKey === this.skillsKey && computer.key === this.serversKey) return rpc
+    // skills, the servers or the subagents changed.
+    if (this.nativeID && this.loaded && instructions === this.instructions && tools?.key === this.toolsKey && skillsKey === this.skillsKey && computer.key === this.serversKey && subagents.key === this.subagentsKey) return rpc
     this.toolsKey = tools?.key
     this.serversKey = computer.key
     this.skillsKey = skillsKey
+    this.subagentsKey = subagents.key
     this.instructions = instructions
     // Kuvo Code's own tools, as the engine's models have them (a setting for this thread alone).
     const timeout = tools ? { tool_timeout_sec: Math.ceil(tools.timeout / 1000) } : {}
@@ -1102,8 +1110,10 @@ class CodexThread implements Thread {
       // (A command's server can take a while to start the first time, fetching its package.)
       ...Object.fromEntries(servers.map((each) => [`mcp_servers.${each.name}`, { url: each.url, http_headers: each.headers, tool_timeout_sec: Math.ceil(each.timeout / 1000), startup_timeout_sec: 120 }])),
       ...(turnedOffHere.length ? { "skills.config": [...this.agent.ownSkillSettings(), ...turnedOffHere] } : {}),
+      ...subagents.config,
     }
     const common = { cwd: this.session.location.directory, model: input.model.id, developerInstructions: instructions, config }
+    const withoutSubagents = Object.fromEntries(Object.entries(config).filter(([key]) => !(key in subagents.config)))
     if (this.nativeID) {
       try {
         await rpc.request("thread/resume", { threadId: this.nativeID, excludeTurns: true, ...common }, 60_000)
@@ -1116,10 +1126,27 @@ class CodexThread implements Thread {
           this.loaded = true
           return rpc
         }
+        // Your subagents turned away (a Codex older than its roles' settings): the same thread
+        // without them, rather than a new one.
+        if (Object.keys(subagents.config).length && error instanceof RPCError) {
+          const without = await rpc.request("thread/resume", { threadId: this.nativeID, excludeTurns: true, ...common, config: withoutSubagents }, 60_000).then(() => true, () => false)
+          if (without) {
+            console.error(`Codex turned your subagents away, so this conversation goes on without them: ${error.message}`)
+            this.loaded = true
+            return rpc
+          }
+        }
         // Gone (deleted, or another Codex's): a new thread, without what came before.
       }
     }
-    const started: any = await rpc.request("thread/start", common, 60_000)
+    let started: any
+    try {
+      started = await rpc.request("thread/start", common, 60_000)
+    } catch (error) {
+      if (!Object.keys(subagents.config).length || !(error instanceof RPCError)) throw error
+      console.error(`Codex turned your subagents away, so this conversation starts without them: ${error.message}`)
+      started = await rpc.request("thread/start", { ...common, config: withoutSubagents }, 60_000)
+    }
     if (this.nativeID && this.nativeID !== started.thread.id) this.startedOver = true
     this.nativeID = started.thread.id
     this.state.codexThread = this.nativeID
