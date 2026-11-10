@@ -917,13 +917,8 @@ the branch, the model, effort and account, and the pull request with its checks 
 - `asked`: while it waits on you, when the oldest ask still open came (ms), its subagents' too: as
   the box's long-running process heard it (`run/glance/asks.json`). An ask made while the box
   couldn't hear it has none, and a client says how long since the session last changed instead.
-- Clients draw it from ClientSessions' `SessionGlance` and ClientDesign's `SessionGlanceCard`: the
-  pull request's mark in its state's color (open green, merged purple, draft and closed gray), all
-  of it red while a check fails on an open or draft one; on the card, a ring filling as checks
-  pass, a red ✕ when one fails, a green ✓ when all have. The folder shows on the card only for a
-  row away from its project's heading (Recents, Pinned, search), never for a chat; the computer
-  only in search results across computers. A box without `sessions.glance` gives no marks beyond
-  the worktree's branch, as before.
+- What a client draws from it (which mark, which lines on the card) is the clients' to decide
+  alike; a box without `sessions.glance` gives no marks beyond the worktree's branch, as before.
 
 ### Work
 
