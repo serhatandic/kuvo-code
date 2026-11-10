@@ -25,7 +25,7 @@ import { markedFullAccess } from "../work/full";
 import { findConversation, heldUnreached, inAuto, inFullAccess, refusalWords, reviewIn } from "../work/reviewing";
 import { forgetFetched } from "../work/reviewer";
 import { addRule, ownerOf, writeRuleWouldBe } from "./allowed";
-import { fencePolicy, type FencePolicy } from "./policy";
+import { askedAbout, fencePolicy, type FencePolicy } from "./policy";
 
 /** Your answer, and who gave it: "Mac", or a phone's name. */
 export interface SandboxAnswer {
@@ -121,15 +121,16 @@ export async function stopsFor(session: string, command: string, minutes = 3, si
  * itself; when the log says so and it may be given. Else nothing, and it can only be allowed once:
  * also for what's in its own project, which its commands write already but for what's kept from
  * them there (the settings agents start with), which no rule gives. */
-function alwaysFor(stops: SandboxStop[], project: string): SandboxAsk["always"] {
+async function alwaysFor(stops: SandboxStop[], project: string): Promise<SandboxAsk["always"]> {
   const writes = [...new Set(stops.filter(stop => stop.kind === "write" && stop.path).map(stop => stop.path!))];
   if (writes.length !== 1 || !stops.every(stop => stop.kind === "write")) return undefined;
+  await askedAbout([project, writes[0], path.dirname(writes[0])]);
   const real = (where: string) => { try { return fs.realpathSync(where); } catch { return path.resolve(where); } };
   const own = real(project);
   const where = real(path.dirname(writes[0]));
   if (where === own || where.startsWith(own + "/")) return undefined;
   const isFolder = (() => { try { return fs.statSync(writes[0]).isDirectory(); } catch { return false; } })();
-  const given = (isFolder ? null : writeRuleWouldBe(path.dirname(writes[0]))) ?? writeRuleWouldBe(writes[0]);
+  const given = (isFolder ? null : await writeRuleWouldBe(path.dirname(writes[0]))) ?? await writeRuleWouldBe(writes[0]);
   return given ? { kind: "write", path: given } : undefined;
 }
 
@@ -164,6 +165,7 @@ async function askToRun(caller: Caller, args: Record<string, unknown>, signal?: 
   if (!command) return failed("Give the command, exactly as you ran it.");
   if (!why) return failed("Say why the task needs it.");
   if (command.length > 8000) return failed("That command is too long to ask about: put it in a script in your project and ask to run that.");
+  await askedAbout([caller.folder]);
   const project = caller.folder && fs.existsSync(caller.folder) ? caller.folder : null;
   if (!project) return failed("This conversation's folder isn't there, so nothing can run for it.");
 
@@ -186,7 +188,7 @@ async function askToRun(caller: Caller, args: Record<string, unknown>, signal?: 
   const asks = !full && verdict?.decision !== "allow";
   // (By the command as it ran, whitespace and all.)
   const stopped = asks && caller.session ? await stopsFor(caller.session, String(args.command)) : [];
-  let always = alwaysFor(stopped, project);
+  let always = await alwaysFor(stopped, project);
   // macOS writes what its sandbox refused to its log a while after (a busy Mac, seconds): until
   // it's there, the ask goes up without it, and gets it once it is.
   let asking: string | undefined;
@@ -197,7 +199,7 @@ async function askToRun(caller: Caller, args: Record<string, unknown>, signal?: 
       if (heard.signal.aborted) return;
       const found = await stopsFor(caller.session!, String(args.command), 3, heard.signal);
       if (heard.signal.aborted || !found.length) continue;
-      always = alwaysFor(found, project);
+      always = await alwaysFor(found, project);
       if (asking) book.update(asking, { stopped: found, ...(always ? { always } : {}) });
       return;
     }
@@ -212,7 +214,7 @@ async function askToRun(caller: Caller, args: Record<string, unknown>, signal?: 
     ...(error ? { error } : {}),
     ...(always ? { always } : {}),
     ...(IS_MAC ? {} : { machine: os.hostname() }),
-    owner: ownerOf(project),
+    owner: await ownerOf(project),
   }, signal, undefined, id => { asking = id; }).finally(() => heard.abort());
   // (A script from the web, fetched once for the review: that copy is what runs, then it's gone.)
   const fetched = verdict?.fetched;
@@ -220,7 +222,7 @@ async function askToRun(caller: Caller, args: Record<string, unknown>, signal?: 
   if (answered.answer === "no") return { text: "The user said no: don't run it, nor get around the sandbox another way. Find another way to do the task, or ask them why.", isError: false };
   let how: "once" | "always" = "once";
   if (answered.answer === "always" && always) {
-    try { addRule({ project, ...always, ...(answered.client ? { by: answered.client } : {}) }); how = "always"; } catch {}
+    try { await addRule({ project, ...always, ...(answered.client ? { by: answered.client } : {}) }); how = "always"; } catch {}
   }
   const left = Math.floor((CALL_BUDGET - (Date.now() - started)) / 1000);
   const seconds = Math.max(1, Math.min(600, left, Number(args.timeout) || 300));
@@ -255,11 +257,13 @@ function stoppedBySandbox(printed: string, policy: FencePolicy): boolean {
 export async function stoppedInAuto(caller: Caller, input: Record<string, unknown>, printed: string, calling: () => Promise<boolean>, signal?: AbortSignal): Promise<{ text: string; exit?: number } | null> {
   const started = Date.now();
   const command = typeof input.command === "string" ? input.command : "";
+  await askedAbout([caller.folder]);
   const project = caller.folder && fs.existsSync(caller.folder) ? caller.folder : null;
   if (caller.seat || !command.trim() || command.length > 8000 || !project) return null;
   // (Where the agent ran it: its shell tool's own folder, from the conversation's.)
   const given = typeof input.workdir === "string" ? input.workdir : typeof input.cwd === "string" ? input.cwd : "";
   const folder = given ? path.resolve(project, given.replace(/^~(?=\/|$)/, os.homedir())) : project;
+  await askedAbout([folder]);
   if (!fs.existsSync(folder)) return null;
   const conversation = caller.root ?? caller.session;
   const at = conversation ? (await findConversation(conversation).catch(() => ({ at: null }))).at : null;

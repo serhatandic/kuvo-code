@@ -18,7 +18,7 @@ import { botHere } from "../bots/here";
 import { newID } from "../../shared/text";
 import { writePrivate } from "../files";
 import { accountHome, BOTS, BOX, CHATS, RUN } from "../home";
-import { fencePolicy, realish } from "./policy";
+import { askedAbout, fencePolicy, realish } from "./policy";
 
 const FILE = path.join(BOX, "sandbox-allowed.json");
 const FOR_LAUNCHER = path.join(realish(path.join(RUN, "fence")), "allowed");
@@ -61,9 +61,10 @@ export function readAllowed(): SandboxRule[] {
 }
 
 /** A project's rules (any project's with none named), oldest first. */
-export function allowedFor(project?: string): SandboxRule[] {
+export async function allowedFor(project?: string): Promise<SandboxRule[]> {
   const all = readAllowed();
   if (!project) return all;
+  await askedAbout([project]);
   const real = realProject(project);
   return all.filter(rule => rule.project === real);
 }
@@ -72,7 +73,8 @@ const BOT_ID = /^bot_[A-Za-z0-9]+$/;
 
 /** Whose a conversation's folder is: the chats', a bot's own (its folder's workspace, by the name
  * it has now) or else a project's, by its folder's name. */
-export function ownerOf(project: string): SandboxOwner {
+export async function ownerOf(project: string): Promise<SandboxOwner> {
+  await askedAbout([project]);
   const real = realProject(project);
   if (real === realish(CHATS)) return { kind: "chats", name: "Chats" };
   const [id, workspace, ...more] = path.relative(realish(BOTS), real).split(path.sep);
@@ -83,13 +85,15 @@ export function ownerOf(project: string): SandboxOwner {
 }
 
 /** The rules as a client lists them: each with whose it is, and whether its folder is gone. */
-export function listed(rules: SandboxRule[]): SandboxRule[] {
+export async function listed(rules: SandboxRule[]): Promise<SandboxRule[]> {
   const owners = new Map<string, { owner: SandboxOwner; gone: boolean }>();
-  return rules.map(rule => {
+  const all: SandboxRule[] = [];
+  for (const rule of rules) {
     let known = owners.get(rule.project);
-    if (!known) owners.set(rule.project, known = { owner: ownerOf(rule.project), gone: !fs.existsSync(rule.project) });
-    return { ...rule, owner: known.owner, ...(known.gone ? { gone: true } : {}) };
-  });
+    if (!known) owners.set(rule.project, known = { owner: await ownerOf(rule.project), gone: !fs.existsSync(rule.project) });
+    all.push({ ...rule, owner: known.owner, ...(known.gone ? { gone: true } : {}) });
+  }
+  return all;
 }
 
 /** Those a client may add a folder for besides its projects: each bot here working in its own
@@ -157,7 +161,8 @@ const programFolders = () => (process.env.PATH ?? "").split(":").filter(folder =
 
 /** A folder (or file) that may be given to a project's commands: one of your projects, or a folder
  * of your own on a drive; never one of Kuvo Code's own, a secret or a folder that holds one, your home
- * folder, its settings, the system's folders, programs on your PATH or the whole disk. */
+ * folder, its settings, the system's folders, programs on your PATH or the whole disk. (macOS asked
+ * about it first: `askedAbout`.) */
 function checkedPath(given: unknown): string {
   if (typeof given !== "string" || !path.isAbsolute(given) || given.includes("\n")) throw new RuleRefusal("Name the folder by its full path.");
   const where = realish(given);
@@ -184,9 +189,10 @@ function checkedPath(given: unknown): string {
 }
 
 /** Adds a rule; the same one again is the one there already. */
-export function addRule(given: { project?: unknown; kind?: unknown; path?: unknown; by?: string }): SandboxRule {
+export async function addRule(given: { project?: unknown; kind?: unknown; path?: unknown; by?: string }): Promise<SandboxRule> {
   if (typeof given.project !== "string" || !path.isAbsolute(given.project)) throw new RuleRefusal("Name the project by its folder's full path.");
   if (given.kind !== "write") throw new RuleRefusal("Send {project, kind: \"write\", path}: a folder its commands may write in.");
+  await askedAbout([given.project, given.path]);
   const project = realProject(given.project);
   const rules = readAllowed();
   const where = checkedPath(given.path);
@@ -220,6 +226,7 @@ export function removeRule(id: string): boolean {
 }
 
 /** A write rule for what Always would allow, checked as one added by hand would be; null for none. */
-export function writeRuleWouldBe(where: string): string | null {
+export async function writeRuleWouldBe(where: string): Promise<string | null> {
+  await askedAbout([where]);
   try { return checkedPath(where); } catch { return null; }
 }

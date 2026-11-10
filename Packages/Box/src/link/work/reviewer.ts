@@ -23,8 +23,8 @@ import path from "node:path";
 import { isObject } from "../../shared/json";
 import { cut, oneLine } from "../../shared/text";
 import { locked, textOf, writePrivate } from "../files";
-import { BOX, homeFolder, IN_TEST_FOLDER, opencodeAuthFile, RUN } from "../home";
-import { escapeRegex, fencePolicy, realish, type FencePolicy } from "../fence/policy";
+import { attachmentRoots, BOX, homeFolder, IN_TEST_FOLDER, opencodeAuthFile, RUN } from "../home";
+import { askedAbout, escapeRegex, fencePolicy, realish, type FencePolicy } from "../fence/policy";
 import { commandTemporary, conversationPlaces } from "../fence/state";
 import { readLine } from "./policy";
 
@@ -143,10 +143,10 @@ function inKuvo(where: string, policy: FencePolicy, own: readonly string[] = [])
   return (policy.kuvo.some(wall => inside(where, wall)) || matching(where, policy.kuvoPatterns)) && !own.some(folder => inside(where, folder));
 }
 
-/** Of the folders a conversation works in as its own (its folder, its commands' temporary folder, a
- * bot's own), those that are its inside Kuvo Code's folders too: only where Kuvo Code keeps
- * conversations' own (`conversationPlaces`), and its commands' temporary folder as `commandTemporary`
- * names it (never through a link). Any other there (a conversation started in its keys) is no
+/** Of the folders a conversation works in as its own (its folder, its commands' temporary folder, the
+ * files sent with its messages, a bot's own), those that are its inside Kuvo Code's folders too: only
+ * where Kuvo Code keeps conversations' own (`conversationPlaces`), a session's files' folder where
+ * they're kept, and its commands' temporary folder as `commandTemporary` names it (never through a link). Any other there (a conversation started in its keys) is no
  * conversation's. */
 export function ownInside(own: readonly string[], policy: FencePolicy): string[] {
   const temporaries = new Set(own.map(commandTemporary).filter((each): each is string => Boolean(each)));
@@ -154,8 +154,14 @@ export function ownInside(own: readonly string[], policy: FencePolicy): string[]
     if (temporaries.has(folder)) return [folder];
     const at = realish(folder);
     const walled = policy.kuvo.some(wall => inside(at, wall) || inside(wall, at)) || matching(at, policy.kuvoPatterns);
-    return !walled || conversationPlace(at) ? [at] : [];
+    return !walled || conversationPlace(at) || attachmentsPlace(at) ? [at] : [];
   });
+}
+
+/** Whether `at` (a real path) is a session's own folder of files sent with its messages: one in
+ * where they're kept (`attachmentRoots`), by the session's name. */
+function attachmentsPlace(at: string): boolean {
+  return /^ses_[A-Za-z0-9_-]{1,120}$/.test(path.basename(at)) && attachmentRoots().some(root => realish(root) === path.dirname(at));
 }
 
 /** Whether `at` (a real path) is where Kuvo Code keeps a conversation's own folder in its own: a
@@ -177,7 +183,8 @@ function deletesHome(where: string, home: string): boolean {
  * it, or a whole personal folder of it (`~/Documents`; a project in one is fine). Null where it
  * can: the rest of your home, your tools' settings and the folders on your PATH are its to work
  * in, as any project. (From Full Access, nothing stops it.) */
-export function keptFromSessions(folder: string, policy: FencePolicy = fencePolicy()): string | null {
+export async function keptFromSessions(folder: string, policy: FencePolicy = fencePolicy()): Promise<string | null> {
+  await askedAbout([folder]);
   const at = realish(folder);
   // (Your account's home, and the one HOME names where it's another.)
   const homes = [...new Set([policy.home, ...(policy.homeWrites ?? [])].map(realish))];
@@ -954,6 +961,8 @@ function answerWithin(model: NonNullable<SmallModel>, prompt: string, within: nu
 export async function review(action: ReviewedAction, context: ReviewContext, given: ReviewWith): Promise<Verdict & { paused?: boolean }> {
   const now = given.now ?? Date.now;
   const folder = given.folder ?? REVIEWS_FOLDER;
+  // (What it names that macOS may ask about, asked off the box's thread first: `askedAbout`.)
+  await askedAbout([action.folder, ...(action.kind === "file" ? [action.path] : []), ...(given.own ?? [])]);
   // (One it fails to judge is held back like any it can't, on the log for you to approve.)
   const { verdict, key } = await judge(action, context, given, now(), folder)
     .catch(error => ({ verdict: heldBack(`Auto's reviewer couldn't review it (${oneLine(String((error as Error)?.message ?? error), 120)}).`, "failed"), key: actionKey(action) }));
