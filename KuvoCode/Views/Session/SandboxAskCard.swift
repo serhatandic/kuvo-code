@@ -4,9 +4,9 @@ import SwiftUI
 
 /// A command the sandbox stopped, which its agent asks to run outside it: who asks, what the
 /// sandbox stopped (on a Mac, what it tried and where; on Linux, the error the command got), the
-/// command, the agent's reason; Don't Allow, Always Allow <place> (where the box names the one place
-/// to let the project's, the bot's own or every chat's commands write, still in the sandbox) and
-/// Allow Once.
+/// command, the agent's reason; its answers numbered: Allow Once, Always Allow <place> (where the
+/// box names the one place to let the project's, the bot's own or every chat's commands write,
+/// still in the sandbox) and Don't Allow.
 struct SandboxAskCard: View {
     let asked: SandboxAsk
     let box: String
@@ -79,57 +79,40 @@ struct SandboxAskCard: View {
                     .foregroundStyle(.red)
             }
 
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 8) {
-                    dontAllow
-                    Spacer()
-                    always(whole: true)
-                    allowOnce
-                }
-                // A narrow window: the answers stacked, the one that leaves the sandbox least last.
-                VStack(alignment: .trailing, spacing: 8) {
-                    HStack(spacing: 8) {
-                        dontAllow
-                        Spacer()
-                        allowOnce
-                    }
-                    always(whole: false)
+            // Its answers numbered, as every ask's (the permission card's). No number key or
+            // Return runs it outside the sandbox: that's a click you mean. Esc says no.
+            VStack(spacing: 2) {
+                ForEach(Array(answers.enumerated()), id: \.element.answer) { index, row in
+                    ChoiceRow(number: index + 1, label: row.words) { answer(row.answer) }
+                        .help(row.hint)
+                        .accessibilityLabel(row.spoken)
                 }
             }
-            .buttonStyle(.glass)
-            .controlSize(.large)
+            .padding(.horizontal, -ChoiceRow.inset)
+            .background(escape)
             .disabled(Sandboxes.shared.answering.contains(asked.id))
         }
         .padding(16)
     }
 
-    private var dontAllow: some View {
-        Button("Don’t Allow", role: .cancel) { answer(.no) }
-            .keyboardShortcut(takesKeys ? .cancelAction : nil)
-    }
-
-    /// Its path whole in one row with the others; where that doesn't fit, on a row of its own,
-    /// cut in the middle when even that is too narrow.
-    @ViewBuilder private func always(whole: Bool) -> some View {
+    /// Allow Once, Always Allow <place> where its box names one, and Don't Allow.
+    private var answers: [(answer: SandboxAnswer, words: Text, spoken: String, hint: String)] {
+        var rows: [(answer: SandboxAnswer, words: Text, spoken: String, hint: String)] = [(.once, Text("Allow Once"), "Allow once: run it outside the sandbox", "Runs it outside the sandbox this once")]
         if let path = asked.alwaysPath {
-            Button { answer(.always) } label: {
-                // A chat's is every chat's: said on the button.
-                Text("Always Allow \(Text(path).monospaced())\(asked.alwaysScope.map { " " + $0 } ?? "")")
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .fixedSize(horizontal: whole, vertical: false)
-            }
-            .help(asked.alwaysHint ?? "")
-            .accessibilityLabel(asked.alwaysTitle ?? "Always Allow")
-            .accessibilityHint(asked.alwaysHint ?? "")
+            // A chat's is every chat's: said on the row.
+            rows.append((.always, Text("Always Allow \(Text(path).monospaced())\(asked.alwaysScope.map { " " + $0 } ?? "")"), asked.alwaysTitle ?? "Always Allow", asked.alwaysHint ?? ""))
         }
+        rows.append((.no, Text("Don’t Allow"), "Don’t Allow", "It goes on without running it"))
+        return rows
     }
 
-    // (No Return for it: running outside the sandbox is a click you mean.)
-    private var allowOnce: some View {
-        Button("Allow Once") { answer(.once) }
-            .buttonStyle(.glassProminent)
-            .accessibilityLabel("Allow once: run it outside the sandbox")
+    /// Esc: Don't Allow.
+    private var escape: some View {
+        Button("") { answer(.no) }
+            .keyboardShortcut(takesKeys ? .cancelAction : nil)
+            .frame(width: 0, height: 0)
+            .opacity(0)
+            .accessibilityHidden(true)
     }
 
     private func answer(_ answer: SandboxAnswer) {

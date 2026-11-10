@@ -2080,6 +2080,7 @@ var FEATURES = [
   "sandbox",
   "sandbox.check",
   "sandbox.asks",
+  "sandbox.reviews.whole",
   "approval",
   "approval.reviewer",
   "git.backups",
@@ -16895,6 +16896,18 @@ async function reviewPermission(source, event, signal, found) {
     throw error;
   }
 }
+async function takeUpWaitingAsks(source, sessions, signal) {
+  for (const session of sessions) {
+    if (signal?.aborted)
+      return;
+    const { permissions } = await asksIn(source, session, signal).catch(() => ({ permissions: [] }));
+    for (const each of permissions) {
+      if (each.action !== "external_directory" || reviewing.has(each.id) || askReviews.has(each.id))
+        continue;
+      await reviewPermission(source, { type: "permission.asked", data: { id: each.id, sessionID: each.asker, action: each.action } }, signal).catch(() => null);
+    }
+  }
+}
 function ownFolders(at) {
   const folder = at.data.location?.directory;
   const folders = typeof folder === "string" ? [folder, commandTemporary(folder)].filter((each) => Boolean(each)) : [];
@@ -16926,7 +16939,12 @@ function realPath(file) {
 async function answerPermission(source, id, sessionID, signal, found) {
   const { permissions } = await asksIn(source, sessionID, signal);
   const permission = permissions.find((each) => each.id === id && each.asker === sessionID);
-  if (permission?.action !== "external_directory")
+  if (!permission) {
+    if (askReviews.get(id)?.state === "checking")
+      noteReview(id, sessionID, "yours", askReviews.get(id)?.call);
+    return null;
+  }
+  if (permission.action !== "external_directory")
     return null;
   const seen = await callOf(source, permission, signal);
   const at = found === undefined ? await conversationOf2(sessionID) : found;
@@ -24771,6 +24789,8 @@ async function watchEvents(read, tell, signal, answered = () => {}, { bots = fal
         settleGoalHolds(source, goalHeld).catch(() => {});
       if (work)
         noteFullAccessAtWork(source, atWork3).catch(() => {});
+      if (work)
+        atWork3(source).then((sessions) => takeUpWaitingAsks(source, sessions, connection.signal)).catch(() => {});
       for await (const event of serverEvents(response.body)) {
         if (event.type === "session.execution.started")
           freshenBot(source, event.data?.sessionID).catch(() => {});

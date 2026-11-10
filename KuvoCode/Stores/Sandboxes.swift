@@ -37,17 +37,12 @@ final class Sandboxes {
     private(set) var released: [String: Set<String>] = [:]
     /// How Auto's reviewer takes up asks to work outside a folder, by box and ask.
     private(set) var reviews: [String: [String: AskReview]] = [:]
-    /// Boxes that say how their reviewer takes up asks: what they may review waits for their word.
-    private(set) var tellReviews: Set<String> = []
-    /// Asks that waited for their box's word long enough: they're yours.
-    private(set) var overdue: Set<String> = []
-    /// Told when an ask held back for its box's word turns out to be yours (left for you, or no
-    /// word in time), for its notification.
-    @ObservationIgnored var onYours: ((String) -> Void)?
-    /// Asks waiting for their box's word, by ask: its box.
-    @ObservationIgnored private var awaiting: [String: String] = [:]
-    /// Asks that were yours once: they stay yours, whatever the box lists after (restarted, say).
-    @ObservationIgnored private var wereYours: Set<String> = []
+    /// Boxes whose word on them is whole (`sandbox.reviews.whole`): one they haven't listed isn't
+    /// yours yet. This Mac's box is this app's version; a machine's says so in its `kuvo/info`.
+    private(set) var listAll: Set<String> = [BoxClient.mac]
+    /// Told when its box lists an ask as yours (one held back meanwhile), for its notification;
+    /// nil when every one held back is to be looked at again (a box whose word isn't whole).
+    @ObservationIgnored var onYours: ((String?) -> Void)?
 
     /// A conversation's open asks, on its box.
     func asks(for session: String, on box: String) -> [SandboxAsk] {
@@ -134,6 +129,12 @@ final class Sandboxes {
         while !Task.isCancelled {
             if let client = client(box) {
                 do {
+                    // Whether its word on the reviewer's asks is whole: read once a connection.
+                    if box != BoxClient.mac {
+                        struct Info: Decodable { var features: [String]? }
+                        let whole = (try? await client.value(Info.self, "GET", "kuvo/info"))?.features?.contains(AskReview.listsAllFeature) == true
+                        takeListsAll(whole, from: box)
+                    }
                     for try await line in client.follow(SandboxRoutes.asks + "/events") {
                         guard let list = try? JSONDecoder().decode(SandboxAsks.self, from: line) else { continue }
                         take(list.asks, from: box)
@@ -199,39 +200,18 @@ final class Sandboxes {
 
     // MARK: Auto's reviewer
 
-    /// Whether a permission its agent asks is yours to answer, as its box takes it up (`AskReview`).
-    /// One its box doesn't list yet waits for its word, however it was found (an ask read with its
-    /// conversation, one the box no longer lists): yours if none comes in time.
+    /// Whether a permission its agent asks is yours to answer, as its box says (`AskReview`): its
+    /// box's word alone, waiting on nothing of this app's own.
     func isYours(_ request: PermissionRequest, on box: String) -> Bool {
-        if wereYours.contains(request.id) { return true }
-        let review = reviews[box]?[request.id]
-        let yours = AskReview.isYours(action: request.action, review: review, boxTells: tellReviews.contains(box), overdue: overdue.contains(request.id))
-        if yours {
-            wereYours.insert(request.id)
-        } else if review == nil, awaiting[request.id] == nil {
-            Task { awaitReview(request, on: box) }
-        }
-        return yours
+        AskReview.isYours(action: request.action, review: reviews[box]?[request.id], listsAll: listAll.contains(box))
     }
 
-    /// An ask answered or gone: nothing more to keep of it.
-    func settled(_ id: String) {
-        wereYours.remove(id)
-        overdue.remove(id)
-        awaiting[id] = nil
-    }
-
-    /// Waits for `box`'s word on an ask it may review: told by `onYours` once it's yours.
-    func awaitReview(_ request: PermissionRequest, on box: String) {
-        guard awaiting[request.id] == nil else { return }
-        awaiting[request.id] = box
-        Task {
-            try? await Task.sleep(for: AskReview.wait)
-            guard awaiting[request.id] != nil, reviews[box]?[request.id] == nil else { return }
-            overdue.insert(request.id)
-            awaiting[request.id] = nil
-            onYours?(request.id)
-        }
+    /// Whether `box`'s word on its reviewer's asks is whole (`sandbox.reviews.whole`).
+    func takeListsAll(_ whole: Bool, from box: String) {
+        guard whole != listAll.contains(box) else { return }
+        if whole { listAll.insert(box) } else { listAll.remove(box) }
+        // Not whole: what it hasn't listed is yours now.
+        if !whole { onYours?(nil) }
     }
 
     /// What Auto did with each of `box`'s asks, by the step that asked, for its mark.
@@ -239,33 +219,18 @@ final class Sandboxes {
         Dictionary((reviews[box] ?? [:]).values.compactMap { review in review.call.map { ($0, review) } }, uniquingKeysWith: { $0.at > $1.at ? $0 : $1 })
     }
 
-    /// How `box`'s reviewer takes up asks now (nil: a box from before, which doesn't say).
+    /// How `box`'s reviewer takes up asks now (nil: a box from before, which doesn't say). Each
+    /// it lists as yours now that wasn't is told (`onYours`), for its notification.
     func take(reviews listed: [AskReview]?, from box: String) {
-        guard let listed else {
-            if tellReviews.remove(box) != nil { reviews[box] = nil }
-            return
-        }
-        tellReviews.insert(box)
-        let now = Dictionary(listed.map { ($0.id, $0) }, uniquingKeysWith: { $1 })
+        let now = Dictionary((listed ?? []).map { ($0.id, $0) }, uniquingKeysWith: { $1 })
         guard now != reviews[box] ?? [:] else { return }
-        reviews[box] = now
-        // (Being checked, it waits on: the check can end as yours.)
-        for (id, waits) in awaiting where waits == box {
-            guard let review = now[id], review.state != .checking else { continue }
-            awaiting[id] = nil
-            if review.state == .yours { onYours?(id) }
-        }
+        let before = reviews[box] ?? [:]
+        reviews[box] = now.isEmpty ? nil : now
+        for (id, review) in now where review.state == .yours && before[id]?.state != .yours { onYours?(id) }
     }
 
     private func forgetReviews(of box: String) {
         reviews[box] = nil
-        tellReviews.remove(box)
-        // (What waited on it is yours: there's no word to wait for now.)
-        for (id, waits) in awaiting where waits == box {
-            awaiting[id] = nil
-            overdue.insert(id)
-            onYours?(id)
-        }
     }
 
     // MARK: Restarting the agents started before the sandbox

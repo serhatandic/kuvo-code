@@ -275,6 +275,21 @@ export async function reviewPermission(source: Target, event: { type?: string; d
   }
 }
 
+/** The asks to work outside a folder already waiting as the box (re)connects to an engine or the
+ * bridge, in the sessions at work there (an ask holds its session's run): taken up as they would
+ * have been as they came, so the box lists each one, as `sandbox.reviews.whole` says (one asked
+ * while it was starting again, or whose event went by unheard). */
+export async function takeUpWaitingAsks(source: Target, sessions: string[], signal?: AbortSignal): Promise<void> {
+  for (const session of sessions) {
+    if (signal?.aborted) return;
+    const { permissions } = await asksIn(source, session, signal).catch(() => ({ permissions: [] as { id: string; asker: string; action: string }[] }));
+    for (const each of permissions) {
+      if (each.action !== "external_directory" || reviewing.has(each.id) || askReviews.has(each.id)) continue;
+      await reviewPermission(source, { type: "permission.asked", data: { id: each.id, sessionID: each.asker, action: each.action } }, signal).catch(() => null);
+    }
+  }
+}
+
 /** The folders a conversation works in as its own: its project's, its commands' temporary folder
  * (their TMPDIR, in Kuvo Code's), and for a bot's conversation or work, the bot's own folder, the
  * projects it made and its running goal's. */
@@ -311,8 +326,14 @@ function realPath(file: string): string {
 async function answerPermission(source: Target, id: string, sessionID: string, signal?: AbortSignal, found?: Conversation | null): Promise<Verdict | null> {
   const { permissions } = await asksIn(source, sessionID, signal);
   const permission = permissions.find(each => each.id === id && each.asker === sessionID);
+  // Not listed (answered meanwhile, or it can't be read): never left checked, which no client
+  // would show; yours, as an ask it doesn't take up is.
+  if (!permission) {
+    if (askReviews.get(id)?.state === "checking") noteReview(id, sessionID, "yours", askReviews.get(id)?.call);
+    return null;
+  }
   // (Anything else asked is your own rules'.)
-  if (permission?.action !== "external_directory") return null;
+  if (permission.action !== "external_directory") return null;
   const seen = await callOf(source, permission, signal);
   const at = found === undefined ? await conversationOf(sessionID) : found;
   const folder = at?.data.location?.directory;

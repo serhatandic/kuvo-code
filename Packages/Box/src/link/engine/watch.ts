@@ -15,7 +15,7 @@ import { applyCompatibility, learnCompatibility } from "./compatibility";
 import { modelsDue, settleDueModels, WORK_ENDS } from "./models";
 import { goalHolds, settleGoalHolds } from "../work/goals";
 import { workWatcher } from "../work/wakes";
-import { reviewPermission } from "../work/reviewing";
+import { reviewPermission, takeUpWaitingAsks } from "../work/reviewing";
 import { forgetReviews } from "../work/reviewer";
 import { forgetDecided } from "../work/autopilot";
 import { backUpSession } from "../work/backups";
@@ -351,6 +351,9 @@ export async function watchEvents(read: () => Target, tell: (notice: Notice) => 
       if (goalHeld) settleGoalHolds(source, goalHeld).catch(() => {});
       // Full Access's list for the sandbox's launcher, for those at work now (one changed meanwhile).
       if (work) noteFullAccessAtWork(source, atWork).catch(() => {});
+      // Asks to work outside a folder waiting already (it started again as they came, or their
+      // event went by unheard): taken up now, so every client's list of them is whole.
+      if (work) atWork(source).then(sessions => takeUpWaitingAsks(source, sessions, connection.signal)).catch(() => {});
       for await (const event of serverEvents(response.body)) {
         // The box's own work, Mac connected or not: a session made in one of its worktrees told
         // so; a worktree's branch named after its session (as it's made with a title, or given

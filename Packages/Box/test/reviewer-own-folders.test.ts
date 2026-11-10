@@ -191,3 +191,27 @@ test.skipIf(!canFence)("in Auto, a conversation whose folder is in Kuvo Code's (
   })
   expect(prompts.length).toBe(2)
 }, 60_000)
+
+test.skipIf(!canFence)("asks waiting as the box starts again are taken up and listed, and one gone before it's read isn't left checked (sandbox.reviews.whole)", async () => {
+  const project = realpathSync(mkdtempSync(join(tmpdir(), "kuvo-waiting-")))
+  try {
+    const { said } = await inBox({ ses_wait: project }, `
+      // Asked while the box was starting again: its event went by unheard.
+      const file = path.join(${JSON.stringify(project)}, "notes.md");
+      const call = { type: "tool", id: "call_w", name: "write", state: { input: { filePath: file } } };
+      const asked = { id: "per_w", action: "external_directory", resources: [${JSON.stringify(project)} + "/*"], source: { id: "call_w", messageID: "msg_1" } };
+      await fetch("http://127.0.0.1:" + engine.port + "/test/asking", { method: "POST", body: JSON.stringify({ session: "ses_wait", call, ask: asked }) });
+      said.before = reviewing.listAskReviews().find(each => each.id === "per_w")?.state ?? null;
+      await reviewing.takeUpWaitingAsks(engine, ["ses_wait"]);
+      said.after = reviewing.listAskReviews().find(each => each.id === "per_w")?.state ?? null;
+      // Heard, but answered before the box could read it: listed as yours, never left checked.
+      await reviewing.reviewPermission(engine, { type: "permission.asked", data: { id: "per_gone", sessionID: "ses_wait", action: "external_directory" } });
+      said.gone = reviewing.listAskReviews().find(each => each.id === "per_gone")?.state ?? null;
+    `)
+    expect(said.before).toBeNull()
+    expect(said.after).toBe("allowed")
+    expect(said.gone).toBe("yours")
+  } finally {
+    rmSync(project, { recursive: true, force: true })
+  }
+})

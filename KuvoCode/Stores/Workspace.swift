@@ -2982,19 +2982,20 @@ final class Workspace {
     private func settled(_ request: String) {
         asking[request] = nil
         awaitingReview[request] = nil
-        Sandboxes.shared.settled(request)
         if notifying.contains(request) { settledWhileNotifying.insert(request) }
         Notifier.shared.clear(request: request)
     }
 
-    /// Whether a permission is yours now; one its box's reviewer may take up is kept until its
-    /// box says (`Sandboxes.awaitReview`), and told then, if it's yours.
+    /// Whether a permission is yours now; one its box's reviewer takes up is kept until its box
+    /// lists it as yours (`Sandboxes.onYours`), and told then.
     private func tellsOnceYours(_ request: PermissionRequest) -> Bool {
-        let box = sessionMachines[request.sessionID] ?? session(request.sessionID).map { Self.box(of: $0.location.directory) } ?? BoxClient.mac
-        guard !Sandboxes.shared.isYours(request, on: box) else { return true }
+        guard !Sandboxes.shared.isYours(request, on: box(of: request)) else { return true }
         awaitingReview[request.id] = request
-        Sandboxes.shared.awaitReview(request, on: box)
         return false
+    }
+
+    private func box(of request: PermissionRequest) -> String {
+        sessionMachines[request.sessionID] ?? session(request.sessionID).map { Self.box(of: $0.location.directory) } ?? BoxClient.mac
     }
 
     /// A permission that's yours: waiting on you, and told.
@@ -3003,10 +3004,14 @@ final class Workspace {
         notifyAsk(request.sessionID, body: Self.describe(request, home: askHome(request.sessionID)), request: request.id, isPermission: true, answerable: Self.showsAll(request), always: alwaysWords(request))
     }
 
-    /// One kept for its box's word turned out to be yours.
-    func reviewLeftForYou(_ id: String) {
-        guard let request = awaitingReview.removeValue(forKey: id) else { return }
-        tellYours(request)
+    /// One kept for its box's word turned out to be yours (nil: each kept, looked at again).
+    func reviewLeftForYou(_ id: String?) {
+        let ids = id.map { [$0] } ?? Array(awaitingReview.keys)
+        for id in ids {
+            guard let request = awaitingReview[id], Sandboxes.shared.isYours(request, on: box(of: request)) else { continue }
+            awaitingReview[id] = nil
+            tellYours(request)
+        }
     }
 
     /// A question in a conversation on Autopilot counts and tells you only if its box says it waits

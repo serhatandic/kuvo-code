@@ -257,16 +257,17 @@ public struct AskReview: Codable, Equatable, Sendable {
         self.at = at
     }
 
-    /// How long an ask its box would review waits for word of it before it's yours anyway (a box
-    /// that started again as it asked has no word of it).
-    public static let wait: Duration = .seconds(5)
+    /// The feature of a box that lists every ask its reviewer may take up, from the moment it
+    /// hears it (PROTOCOL.md, "Sandbox"): its word is the whole of it.
+    public static let listsAllFeature = "sandbox.reviews.whole"
 
-    /// Whether an ask is yours to answer: one the box left for you, or one it doesn't take up
-    /// (only asks to work outside the folder are, by a box that tells it); one it may take up but
-    /// hasn't said of yet, only once it's waited `wait` (`overdue`).
-    public static func isYours(action: String, review: AskReview?, boxTells: Bool, overdue: Bool) -> Bool {
+    /// Whether an ask is yours to answer, as its box says: one it left for you, or one it doesn't
+    /// take up (only asks to work outside the folder are). One it may take up and hasn't listed is
+    /// yours only from a box that doesn't list them all (`listsAll`, from before
+    /// `sandbox.reviews.whole`); a client waits for nothing of its own.
+    public static func isYours(action: String, review: AskReview?, listsAll: Bool) -> Bool {
         if let review { return review.state == .yours }
-        return !boxTells || action != "external_directory" || overdue
+        return action != "external_directory" || !listsAll
     }
 
     /// The step's mark: what Auto did with what it asked.
