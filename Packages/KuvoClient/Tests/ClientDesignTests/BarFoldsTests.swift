@@ -246,3 +246,22 @@ import Testing
     #expect(!folds.isHidden(.wakes, among: bars, asking: false, own: false))
     #expect(!tuck.isOn(among: bars))
 }
+
+@Test func newsWhileWritingKeepsTheFullCardsLayout() {
+    var folds = BarFoldsTests.BarFolds()
+    let bars: [BarFoldsTests.ComposerBar] = [.goal, .review, .wakes]
+    folds.changed(.review)
+    folds.writing(true)
+    folds.news(from: [.goal: false], to: [.goal: true])
+    folds.writing(false)
+    #expect(!folds.isHidden(.review, among: bars, asking: false, own: false))
+    #expect(folds.isHidden(.goal, among: bars, asking: false, own: false))
+}
+
+@Test func barsArrivingWhileWritingTuckWithoutAnExplicitOpening() {
+    var tuck = BarTuck<String>()
+    tuck.writing(focused: true, hasText: false)
+    tuck.bars(from: ["work"], to: [])
+    tuck.bars(from: [], to: ["wakes"])
+    #expect(tuck.isOn(among: ["wakes"]))
+}

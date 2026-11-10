@@ -177,6 +177,7 @@ struct BottomStack: View {
     /// you bring them back (nothing does by itself), or none are left.
     private var tucked: Bool { model.tuck.isOn(among: liveBars) }
     @State private var composerHasFocus = false
+    private var composerHasText: Bool { !model.draftText.isEmpty || model.draftQuotes.contains { !$0.response.isEmpty } }
 
     /// The bars but those put away, whose Undo shows in their place for a moment: what Hide
     /// tucks away, and what its line names.
@@ -652,8 +653,9 @@ struct BottomStack: View {
             .animation(.ui, value: folds)
             .animation(.ui, value: isAsking)
             .animation(.ui, value: tucked)
-            .onChange(of: Seen(conversation: model.id, value: [composerHasFocus, !model.draftText.isEmpty]), initial: true) { _, _ in
-                model.tuck.writing(focused: composerHasFocus, hasText: !model.draftText.isEmpty)
+            .onChange(of: Seen(conversation: model.id, value: [composerHasFocus, composerHasText]), initial: true) { _, _ in
+                model.tuck.writing(focused: composerHasFocus, hasText: composerHasText)
+                folds.writing(model.tuck.isWriting)
             }
             .animation(.ui, value: removedWorktree?.folder)
             .animation(.ui, value: waitingMove != nil)

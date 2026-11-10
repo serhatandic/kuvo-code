@@ -17,6 +17,10 @@ public struct BarFolds<Bar: Hashable>: Equatable {
     public private(set) var open: Bar?
     /// Opened by you, so it stays open while a card asks.
     public private(set) var openedByYou = false
+    private var isWriting = false
+
+    /// News is still marked while writing, but must not replace the layout to restore.
+    public mutating func writing(_ active: Bool) { isWriting = active }
 
     /// Whether `bar` is folded, among `bars`; `own` is how it was left with fewer bars.
     public func isHidden(_ bar: Bar, among bars: [Bar], asking: Bool, own: Bool) -> Bool {
@@ -39,6 +43,7 @@ public struct BarFolds<Bar: Hashable>: Equatable {
     /// Something changed in `bar` that you'd want to see: it opens, unless a card asks. While one
     /// asks, a bar you opened stays the open one.
     public mutating func changed(_ bar: Bar, asking: Bool = false) {
+        guard !isWriting else { return }
         if asking, openedByYou, open != nil { return }
         open = bar
         openedByYou = false
@@ -107,7 +112,7 @@ public struct BarTuck<Bar: Hashable>: Equatable {
     public init() {}
 
     private var hidden = false
-    private var isWriting = false
+    public private(set) var isWriting = false
     private var openedWhileWriting = false
     private var sentWithFocus = false
 
@@ -149,7 +154,11 @@ public struct BarTuck<Bar: Hashable>: Equatable {
     /// The bars went from `old` to `new`: while tucked, those that came are marked; none left,
     /// it's over.
     public mutating func bars(from old: [Bar], to new: [Bar]) {
-        if new.isEmpty { return show() }
+        if new.isEmpty {
+            hidden = false
+            marked = []
+            return
+        }
         guard isHidden else { return }
         marked.formUnion(new.filter { !old.contains($0) })
     }
