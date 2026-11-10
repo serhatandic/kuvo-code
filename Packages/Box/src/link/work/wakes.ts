@@ -111,16 +111,15 @@ function notSummarizedLine(session: Partial<EngineSession> & { id: string }, why
 }
 
 /** What a conversation is told of one of its sessions, as a line, or null for nothing. */
-export async function wakeLine(event: WorkEvent, session: Partial<EngineSession> & { id: string }, target: Target, still?: BackgroundWork | null, working = false): Promise<string | null> {
+export async function wakeLine(event: WorkEvent, session: Partial<EngineSession> & { id: string }, target: Target, still?: BackgroundWork | null): Promise<string | null> {
   const named = namedOf(session);
   switch (event.type) {
     case "session.execution.succeeded": {
       const reply = await lastReplyOf({ target, data: session as never });
       const since = session.time?.created ? `, after ${took(Date.now() - session.time.created)}` : "";
       const running = still ? `\n(Still running in the background: ${backgroundWords(still)}. It may write again once that ends.)` : "";
-      // Its turn ended, but what it left running goes on and the lead is told anyway (the hold ran
-      // out): nothing is finished, and the line says so.
-      return `[Session ${working ? "still working" : "finished"}] ${named}${since}:\n${reply ? cut(reply, 1200) : "(It ended without a reply.)"}${running}`;
+      // (Told while what it left running goes on only once the hold ran out: the line says what runs.)
+      return `[Session finished] ${named}${since}:\n${reply ? cut(reply, 1200) : "(It ended without a reply.)"}${running}`;
     }
     case "session.execution.failed": {
       // Why, in its engine's words; one at its account or its limit fails the same way again there.
@@ -147,7 +146,8 @@ export async function wakeLine(event: WorkEvent, session: Partial<EngineSession>
 export const wakeText = (lines: string[]) => lines.join("\n\n");
 
 /** What a conversation shows for the lines told it (`wakeLine`'s), in place of them: "“Sign-in”
- * finished" (or "still working"), or how many there are. */
+ * finished", or how many there are. ("still working" is what boxes before #420 told a lead whose
+ * session's turn ended while what it left running went on: still read, from a line kept.) */
 export function wakeLineShown(lines: string[]): string {
   if (lines.length !== 1) return `${lines.length} updates from its sessions`;
   const said = /^\[Session (finished|still working|failed|asks)\] "([^"\n]*)"/.exec(lines[0]!);
@@ -459,7 +459,7 @@ export function workWatcher(source: Target, targets: () => Target[], { gather = 
     if (reply && readTold(toldFile)?.sessions[session]?.reply === reply) return noteTold(session, { reply });
     if (waited !== "answered") tell(starter, line, false);
     // One of a bot's sessions done: for clients to show it seeing that, once, as it's told.
-    // (One still working isn't finished: its bot sees that once what it left running ends.)
+    // (While what it left running goes on, its bot sees it finish only once that ends, even if its lead was told at the limit.)
     if (about.bot) { if (about.working) markLater.set(session, about.bot); else noteOversight(about.bot, session, "finished"); }
     noteTold(session, { reply, at, said: about.said, early: about.early });
   };
@@ -519,8 +519,9 @@ export function workWatcher(source: Target, targets: () => Target[], { gather = 
     const was = readTold(toldFile)?.sessions[session.id] ?? {};
     letGoOf(session.id);
     if (last && !isNews(was, last)) return noteTold(session.id, { reply: last.id ?? undefined });
-    // Told while what it left running goes on (the hold ran out): still working, not finished.
-    const line = await wakeLine({ type: "session.execution.succeeded", data: { sessionID: session.id } }, session, source, still, working);
+    // (Told while what it left running goes on, once the hold ran out: it says what runs, so a lead
+    // whose session leaves a dev server up still hears of it. No "still working" line goes before.)
+    const line = await wakeLine({ type: "session.execution.succeeded", data: { sessionID: session.id } }, session, source, still);
     if (!line) return;
     tellUnlessAnswered(session.id, starter, last?.id ?? undefined, line, at, { said: last?.text ? hashed(last.text) : "", early: Boolean(still) || waitedSince !== undefined, bot: worksFor(session)?.bot, working });
   };
