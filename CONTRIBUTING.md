@@ -714,18 +714,20 @@ and the lists they add to merge line by line:
   compares it: clients check `features`. A note of when something came in (PROTOCOL.md) names its
   feature, not a bridge version.
 - **What a box answers** (`FEATURES` in `Packages/Box/src/shared/features.ts`, `MAC_FEATURES` in
-  `shared/routes/mac.ts`): add a name on a line of its own, in order (`LC_ALL=C sort`). Git
-  merges `features.ts` by union (`.gitattributes`), so two branches' names both stay; the box's
-  tests (`test/features.test.ts`) fail on a list out of order or a name twice, as a union can
-  leave it. Change nothing else in that file in a branch that adds a name, and don't remove a
-  name next to one another branch adds (union keeps it); the bridge's tests check every name has
-  its route.
+  `shared/routes/mac.ts`): add a name on a line of its own, in order (`LC_ALL=C sort`). Names
+  two branches add in different places merge cleanly; git merges `features.ts` (and
+  `BoxFeatures.swift`) by union (`.gitattributes`), so two names added side by side both stay
+  too, though maybe out of order: the box's tests (`test/features.test.ts`) fail on a list out
+  of order or a name twice, so put them in order. Change nothing else in `features.ts` in a
+  branch that adds a name, and don't remove a name next to one another branch adds (union keeps
+  it; the bridge's tests check every name has its route).
 - **What's written from those**: `./scripts/route-shapes.sh` writes `routes/shapes/answers.json`,
   `routes/features.json` (each box's `kuvo/info` features, which both route runners check) and
   the Mac app's `KuvoCode/Stores/BoxFeatures.swift`; `./scripts/build-box.sh` and
   `./scripts/build-agents.sh` write `kuvo-link.js` and `kuvo-agents.js`. Never edit them. After a
   merge, run the three scripts again and commit what they write: that settles a conflict in
-  one, and CI's `--check` fails on one that isn't what its sources write.
+  one (take either side first: names added side by side conflict in the JSON, and the bundles
+  always do), and CI's `--check` fails on one that isn't what its sources write.
 - **`CHANGELOG.md`**: add lines; it's merged by union too.
 
 ## Pull requests
