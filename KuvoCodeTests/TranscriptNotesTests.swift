@@ -87,4 +87,29 @@ import Testing
         let footers = rows.compactMap { if case .turnEnd(_, let stats, _, _) = $0 { stats.changes } else { nil } }
         #expect(footers == [[], ["claude-sonnet High"]])
     }
+
+    /// What shows nothing (a summary partway through, your approval told late) doesn't split the
+    /// turn's steps; a note of the bridge's for you is a quiet line; what you approved is marked on
+    /// the step that does it (#406).
+    @Test func hiddenThingsDontSplitTheStepsAndNotesForYouShow() async throws {
+        defer { engine.stop() }
+        let rows = try await rows([
+            ["id": "msg_01", "type": "user", "time": ["created": 1_000], "text": "Run the tests."],
+            ["id": "msg_02", "type": "assistant", "agent": "build", "time": ["created": 2_000, "completed": 2_001], "model": ["id": "m", "providerID": "p"],
+             "content": [["type": "tool", "id": "call_1", "name": "bash", "state": ["status": "completed", "input": ["command": "node --test"], "content": [["type": "text", "text": "held"]]]]]],
+            ["id": "msg_03", "type": "compaction", "time": ["created": 3_000], "status": "completed", "reason": "auto"],
+            ["id": "msg_04", "type": "user", "time": ["created": 4_000], "text": "[The user approved what Auto's reviewer held back] node --test\nIt's allowed once now.",
+             "metadata": ["kuvo": ["note": ["from": "Your answer", "line": "You approved: node --test"]]]],
+            ["id": "msg_05", "type": "assistant", "agent": "build", "time": ["created": 5_000, "completed": 5_001], "model": ["id": "m", "providerID": "p"],
+             "content": [["type": "tool", "id": "call_2", "name": "bash", "state": ["status": "completed", "input": ["command": "node --test"], "content": [["type": "text", "text": "ok"]]]]]],
+            ["id": "msg_06", "type": "synthetic", "time": ["created": 6_000], "text": "Your PreToolUse hook failed.", "metadata": ["kuvo": ["notice": true]]],
+            reply("msg_07", at: 7_000, "All green."),
+            ["id": "msg_08", "type": "idle", "time": ["created": 8_000], "outcome": "succeeded"],
+        ])
+        let steps = rows.compactMap { if case .steps(_, let blocks, _, _) = $0 { blocks.count } else { nil } }
+        #expect(steps == [2], "one line of steps around the summary and your approval")
+        #expect(notices(rows) == ["Your PreToolUse hook failed."])
+        let changes = rows.compactMap { if case .turnEnd(_, let stats, _, _) = $0 { stats.changes } else { nil } }
+        #expect(changes == [["summarized"]])
+    }
 }

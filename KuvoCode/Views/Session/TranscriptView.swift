@@ -59,7 +59,8 @@ struct TranscriptView: View {
     /// subagent's) the one it works for.
     private var workAnswers: [String: WorkAnswer] {
         let root = workspace.root(of: model.id)
-        let own = WorkAnswer.byCall(model.session)
+        // What you approved after Auto's reviewer held it back, on the step that does it.
+        let own = WorkAnswer.byCall(model.session).merging(WorkAnswer.yours(in: model.transcript.messages)) { bot, _ in bot }
         guard root != model.id, let above = workspace.session(root) else { return own }
         return own.merging(WorkAnswer.byCall(above)) { mine, _ in mine }
     }
@@ -436,16 +437,26 @@ struct TranscriptView: View {
         }
         for (index, message) in messages.enumerated() {
             // Only what shows ends the run of steps: guidance the engine adds partway through a
-            // turn shows nothing, so the turn's steps stay one line around it.
+            // turn, a summary or a switch (said in the next reply's footer) and a note of the box's
+            // show nothing, so the turn's steps stay one line around them.
             switch message {
-            case .assistant, .synthetic, .system, .other: break
+            case .assistant, .synthetic, .system, .other, .compaction, .modelSwitched, .agentSwitched, .user: break
             default: flushSteps(live: false)
             }
             switch message {
             case .user(let user):
+                let note = BoxNote.of(user)
+                let shown = Row.messages(user, note: note)
+                if let note { changes.note(note) }
+                // A note of the box's that shows nothing (your answer told late) neither splits the
+                // turn's steps nor starts a turn of its own, unless it's what started one.
+                if shown.isEmpty {
+                    if turn.started == nil { turn = TurnStats(started: user.time.created, message: user, model: current) }
+                    break
+                }
+                flushSteps(live: false)
                 turn = TurnStats(started: user.time.created, message: user, model: current)
-                if let note = BoxNote.of(user) { changes.note(note) }
-                rows += Row.messages(user)
+                rows += shown
             case .assistant(let assistant):
                 turn.add(assistant)
                 // The run's error shows once, at the end of the turn. A step you stopped isn't an
@@ -520,8 +531,7 @@ struct TranscriptView: View {
             case .modelSwitched(let change):
                 current = change.model
                 // By its name, as the model menu shows it ("Big Pickle", not big-pickle).
-                changes.switched(to: change.model, from: change.previous,
-                                 words: (catalog.model(change.model)?.name ?? change.model.id) + (change.model.variant.map { " " + EffortLevel.title($0) } ?? ""))
+                changes.switched(to: change.model, from: change.previous, name: catalog.model(change.model)?.name ?? change.model.id)
             case .agentSwitched(let change):
                 changes.switched(toMode: change.agent, from: change.previous)
             case .compaction(let compaction):
@@ -532,6 +542,12 @@ struct TranscriptView: View {
                 // A turn the app or the engine started (a model switched mid-run carries on), timed
                 // from it as one you started is from your message.
                 if turn.started == nil { turn.started = notice.time.created }
+                // A note of the bridge's for you ("Your hook failed…"): a quiet line.
+                if notice.isForYou {
+                    flushSteps(live: false)
+                    rows.append(.notice(notice.id, "info.circle", notice.text))
+                    break
+                }
                 // Words for the model, never shown: what changed is said in the next reply's footer.
                 changes.note(notice)
             case .other:
@@ -725,7 +741,12 @@ enum Row: Identifiable, Hashable {
     /// agent as a message from each session whose news it tells, and otherwise nothing (what it
     /// changed shows in the next reply's footer).
     static func messages(_ user: Message.User) -> [Row] {
-        BoxNote.of(user).map { rows(of: $0, id: user.id, at: user.time.created) } ?? [.user(user)]
+        messages(user, note: BoxNote.of(user))
+    }
+
+    /// The same, with the note it is already read.
+    static func messages(_ user: Message.User, note: BoxNote?) -> [Row] {
+        note.map { rows(of: $0, id: user.id, at: user.time.created) } ?? [.user(user)]
     }
 
     /// A message on its way in, the same way.
@@ -743,6 +764,8 @@ enum Row: Identifiable, Hashable {
         switch self {
         case .news(_, let news, _):
             return [.markdown(news.body)]
+        case .notice(_, _, let text):
+            return [.plain(text)]
         case .user(let message):
             let text = CommandMessages.shared.text(of: message)
             if let mail = AgentMail.parse(text) { return [.markdown(mail.text)] }
@@ -1621,22 +1644,27 @@ private struct TurnEndView: View {
     /// ended: always laid out, shown as `isShown` says, so nothing moves when they appear.
     private var helpers: some View {
         HStack(spacing: 6) {
+            // A reply after a change (another model, a summary) says so in view, as on the phone,
+            // where a pill used to be; its buttons still wait for the pointer.
             Text(([MessageTime.sentAt(ended)] + stats.changes + parts).joined(separator: " · "))
                 .font(.caption)
                 .foregroundStyle(.tertiary)
                 .help(SentTime.full(ended))
+                .opacity(isShown || !stats.changes.isEmpty ? 1 : 0)
             if !stats.text.isEmpty {
-                CopyButton(text: stats.text.joined(separator: "\n\n"), help: "Copy the Reply")
-                    .focused($focused, equals: .copy)
-                if let reply {
-                    MessageActionButton(symbol: "arrowshape.turn.up.left", help: "Reply: quotes the whole reply in the composer") {
-                        reply(stats.text.joined(separator: "\n\n"))
+                HStack(spacing: 6) {
+                    CopyButton(text: stats.text.joined(separator: "\n\n"), help: "Copy the Reply")
+                        .focused($focused, equals: .copy)
+                    if let reply {
+                        MessageActionButton(symbol: "arrowshape.turn.up.left", help: "Reply: quotes the whole reply in the composer") {
+                            reply(stats.text.joined(separator: "\n\n"))
+                        }
+                        .focused($focused, equals: .reply)
                     }
-                    .focused($focused, equals: .reply)
                 }
+                .opacity(isShown ? 1 : 0)
             }
         }
-        .opacity(isShown ? 1 : 0)
         .animation(.easeOut(duration: 0.12), value: isShown)
         // VoiceOver reads it, and offers its buttons, shown or not: hidden, it would be skipped.
         .accessibilityRepresentation {

@@ -3,7 +3,7 @@ import OpenCodeKit
 
 /// What changed in a conversation since the reply before, as both apps say it: no pill in the
 /// conversation, but a word or two in the next reply's footer, beside its time and tokens
-/// ("18:52 · Claude Sonnet 5.5 · 999 tokens"), only when it changed since that reply. The model or
+/// ("18:52 · Claude Sonnet High · 999 tokens"), only when it changed since that reply. The model or
 /// its effort (the new one), the mode, the conversation summarized, the project's folders, a goal
 /// started. Nothing else a note says shows: the engine's, the box's and the bridge's notes are words
 /// for the model (a background command ending, work moved to the background, a reply carried on),
@@ -23,12 +23,12 @@ public struct ReplyChanges: Hashable, Sendable {
 
     public init() {}
 
-    /// The model switched to `model` (from `previous`, the first time), said as `words`: its name
-    /// as the model menu has it, and its effort ("Claude Sonnet 5.5 High").
-    public mutating func switched(to model: ModelRef, from previous: ModelRef?, words: String) {
+    /// The model switched to `model` (from `previous`, the first time), said by `name`, as the
+    /// model menu has it, and its effort ("Claude Sonnet High").
+    public mutating func switched(to model: ModelRef, from previous: ModelRef?, name: String) {
         if self.model == nil { self.model = previous }
         switchedModel = model
-        modelWords = words
+        modelWords = name + (model.variant.map { " " + EffortLevel.title($0) } ?? "")
     }
 
     /// The mode switched to `agent` ("plan", "build").
@@ -91,5 +91,24 @@ public struct ReplyChanges: Hashable, Sendable {
 
     private mutating func add(_ word: String) {
         if !others.contains(word) { others.append(word) }
+    }
+}
+
+extension Message.Notice {
+    /// A note from Kuvo Code for you, not the model ("Your PreToolUse hook failed…", "Codex asks
+    /// for verification to go on…"), as the agents bridge marks it (`metadata.kuvo.notice`): both
+    /// apps show it as a quiet line. Notes for the model look the same otherwise, and show nothing.
+    public var isForYou: Bool { metadata?["kuvo"]?["notice"]?.bool == true }
+}
+
+/// Effort levels as people say them, as both apps' model pickers do: "xhigh" is Extra.
+public enum EffortLevel {
+    public static func title(_ id: String) -> String {
+        switch id.lowercased() {
+        case "xhigh", "x-high", "extra-high", "extra_high", "extrahigh": "Extra"
+        case "max", "maximum": "Max"
+        case "none", "off": "Off"
+        default: id.prefix(1).uppercased() + id.dropFirst()
+        }
     }
 }

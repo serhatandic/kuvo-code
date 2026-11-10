@@ -22,13 +22,13 @@ struct ReplyChangesTests {
     @Test func aModelOrModeSwitchedShowsOnceInTheNextFooter() {
         var changes = ReplyChanges()
         #expect(changes.replied() == [])
-        changes.switched(to: sonnet, from: opus, words: "Claude Sonnet 5.5 High")
+        changes.switched(to: sonnet, from: opus, name: "Claude Sonnet")
         changes.switched(toMode: "plan", from: "build")
-        #expect(changes.replied() == ["Plan mode", "Claude Sonnet 5.5 High"])
+        #expect(changes.replied() == ["Plan mode", "Claude Sonnet High"])
         #expect(changes.replied() == [])
         // Switched and back before the next reply: nothing changed.
-        changes.switched(to: opus, from: sonnet, words: "Claude Opus 5.5")
-        changes.switched(to: sonnet, from: opus, words: "Claude Sonnet 5.5 High")
+        changes.switched(to: opus, from: sonnet, name: "Claude Opus")
+        changes.switched(to: sonnet, from: opus, name: "Claude Sonnet")
         #expect(changes.replied() == [])
     }
 

@@ -99,4 +99,26 @@ struct BoxNoteTests {
         #expect(BoxNote.of(try message("Write a weekly summary\n\n<sent-with>\nThe user sent this as a goal, with Kuvo Code's /goal. Plan it, check what it needs, and put it to them with propose_goal before doing any of the work:\n/goal\n</sent-with>")) == nil)
         #expect(BoxNote.of(try message("hello", metadata: #"{"kuvo": {"other": 1}}"#)) == nil)
     }
+
+    /// A session that wasn't summarized is its own message, and doesn't run into the one before.
+    @Test func notSummarizedIsItsOwnMessage() throws {
+        let text = "[Session finished] \"A\" in tidepool (address ses_a), after 3 min:\nDone.\n\n[Session not summarized] \"B\" in tidepool (address ses_b): The model refused. Its conversation and work are as they were."
+        let note = try #require(BoxNote.of(try message(text, metadata: #"{"kuvo": {"note": {"from": "Its sessions", "line": "2 updates from its sessions"}}}"#)))
+        #expect(note.shown.map(\.body) == ["Done.", "The model refused."])
+        #expect(note.shown.map(\.status) == ["finished", "not summarized"])
+        #expect(note.shown.map(\.session) == ["ses_a", "ses_b"])
+    }
+
+    /// Its sessions' news worded in a way this app doesn't read shows whole rather than nothing;
+    /// a kind it doesn't know ends the part before it and is left out; a title may have quotes.
+    @Test func unreadNewsShowsWhole() throws {
+        let marked = #"{"kuvo": {"note": {"from": "Its sessions", "line": "News"}}}"#
+        let odd = try #require(BoxNote.of(try message("[Session paused] something new", metadata: marked)))
+        #expect(odd.shown.map(\.body) == ["[Session paused] something new"])
+        #expect(odd.shown.first?.status == nil)
+        let mixed = try #require(BoxNote.of(try message("[Session finished] \"Fix \"login\" form\" in tidepool (address ses-1.a), after 3 min:\nDone.\n\n[Session paused] \"B\" in tidepool (address ses_b): later.", metadata: marked)))
+        #expect(mixed.shown.map(\.title) == ["Fix \"login\" form"])
+        #expect(mixed.shown.map(\.session) == ["ses-1.a"])
+        #expect(mixed.shown.map(\.body) == ["Done."])
+    }
 }

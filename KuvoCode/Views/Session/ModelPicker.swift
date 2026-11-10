@@ -1,17 +1,6 @@
+import ClientSessions
 import OpenCodeKit
 import SwiftUI
-
-/// Effort levels as people say them: "xhigh" is Extra.
-enum EffortLevel {
-    static func title(_ id: String) -> String {
-        switch id.lowercased() {
-        case "xhigh", "x-high", "extra-high", "extra_high", "extrahigh": "Extra"
-        case "max", "maximum": "Max"
-        case "none", "off": "Off"
-        default: id.prefix(1).uppercased() + id.dropFirst()
-        }
-    }
-}
 
 /// The model's effort, and the model, in one card that stays open, as Codex does: it opens on the
 /// effort, a slider, under the level and the model, which open the model list. The list is by

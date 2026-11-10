@@ -18,15 +18,27 @@ public struct BoxNote: Equatable, Sendable {
     public let news: [SessionNews]
 
 
-    /// The news shown, each as a message from its session: one that finished, failed or asks. One
-    /// still working shows nothing (the user, 11-10: they're no longer sent, and those in a
-    /// conversation from before show nothing either).
-    public var shown: [SessionNews] { news.filter { $0.kind != .working } }
+    /// Its sessions' news worded in a way this app doesn't read (a newer box's): shown whole, as
+    /// a message from them, rather than lost.
+    let unread: String?
+
+    /// The news shown, each as a message from its session: one that finished, failed, asks or
+    /// wasn't summarized. One still working shows nothing (the user, 11-10: they're no longer
+    /// sent, and those in a conversation from before show nothing either).
+    public var shown: [SessionNews] {
+        if let unread { return [SessionNews(session: "", title: Self.sessions, kind: .other, said: unread)] }
+        return news.filter { $0.kind != .working }
+    }
 
     public init(from: String, line: String, news: [SessionNews] = []) {
+        self.init(from: from, line: line, news: news, unread: nil)
+    }
+
+    init(from: String, line: String, news: [SessionNews], unread: String?) {
         self.from = from
         self.line = line
         self.news = news
+        self.unread = unread
     }
 
     /// The note `user` is, or nil for a message of yours.
@@ -37,7 +49,10 @@ public struct BoxNote: Equatable, Sendable {
     /// The note a message with `text` and `metadata` is (one waiting to go in, say).
     public static func of(text: String, metadata: JSONValue?) -> BoxNote? {
         if let note = metadata?["kuvo"]?["note"], let from = note["from"]?.string, let line = note["line"]?.string {
-            return BoxNote(from: from, line: line, news: from == sessions ? SessionNews.all(in: text) : [])
+            guard from == sessions else { return BoxNote(from: from, line: line) }
+            let news = SessionNews.all(in: text)
+            let unread = news.isEmpty ? text.trimmingCharacters(in: .whitespacesAndNewlines) : nil
+            return BoxNote(from: from, line: line, news: news, unread: unread?.isEmpty == true ? nil : unread)
         }
         return before(text)
     }
@@ -73,8 +88,22 @@ public struct BoxNote: Equatable, Sendable {
         return BoxNote(from: sessions, line: "“\(first.title)” \(first.kind.words)", news: news)
     }
 
+    // Made once: rows are made again as a reply streams in.
+    nonisolated(unsafe) private static var regexes: [String: NSRegularExpression] = [:]
+    private static let regexLock = NSLock()
+
+    static func regex(_ pattern: String, options: NSRegularExpression.Options = []) -> NSRegularExpression? {
+        let key = "\(options.rawValue) \(pattern)"
+        regexLock.lock()
+        defer { regexLock.unlock() }
+        if let made = regexes[key] { return made }
+        let made = try? NSRegularExpression(pattern: pattern, options: options)
+        regexes[key] = made
+        return made
+    }
+
     static func firstMatch(_ pattern: String, in text: String, options: NSRegularExpression.Options = []) -> [String]? {
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: options),
+        guard let regex = regex(pattern, options: options),
               let found = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) else { return nil }
         return (1..<found.numberOfRanges).map { Range(found.range(at: $0), in: text).map { String(text[$0]) } ?? "" }
     }
@@ -85,7 +114,9 @@ public struct BoxNote: Equatable, Sendable {
 /// message from that session, in the design of a message from another agent, opening it.
 public struct SessionNews: Hashable, Sendable {
     public enum Kind: String, Hashable, Sendable {
-        case finished, working, failed, asks
+        case finished, working, failed, asks, notSummarized
+        /// Words from its sessions this app doesn't read: shown whole.
+        case other
 
         /// What happened, after its name: "finished", "still working".
         public var words: String {
@@ -94,6 +125,8 @@ public struct SessionNews: Hashable, Sendable {
             case .working: "still working"
             case .failed: "stopped with an error"
             case .asks: "asks something"
+            case .notSummarized: "wasn’t summarized"
+            case .other: "has news"
             }
         }
     }
@@ -123,29 +156,33 @@ public struct SessionNews: Hashable, Sendable {
         case .working:
             let still = running.map { "Still running in the background: \($0)." }
             return [said.isEmpty ? nil : said, still].compactMap { $0 }.joined(separator: "\n\n").nonEmpty ?? "Still working."
-        case .failed, .asks:
+        case .failed, .asks, .notSummarized, .other:
             return said
         }
     }
 
-    /// What its card says beside its name, in a word or two: "finished", "still working", "asks".
-    public var status: String {
+    /// What its card says beside its name, in a word or two: "finished", "still working", "asks"
+    /// (nothing for words it doesn't read).
+    public var status: String? {
         switch kind {
         case .finished: "finished"
         case .working: "still working"
         case .failed: "stopped"
         case .asks: "asks"
+        case .notSummarized: "not summarized"
+        case .other: nil
         }
     }
 
     // `[Session finished] "Title" in place (address ses_1), after 3 min:` and what follows; those
-    // gathered into one message go one after the other, a blank line between them.
-    private static let header = #"\[Session (finished|still working|failed|asks)\] "([^"\n]*)"[^\n]*?\(address ([A-Za-z0-9_]+)\)"#
+    // gathered into one message go one after the other, a blank line between them. Any kind ends
+    // the one before it, one this app doesn't know too (it's left out).
+    private static let header = #"\[Session ([a-z ]+)\] "(.*?)"[^"\n]*?\(address ([^)\s]+)\)"#
     private static let ended = "(It ended without a reply.)"
 
     /// Each session's news in a message the box wrote, in order.
     static func all(in text: String) -> [SessionNews] {
-        guard let regex = try? NSRegularExpression(pattern: "(?m)^" + header) else { return [] }
+        guard let regex = BoxNote.regex("(?m)^" + header) else { return [] }
         let whole = NSRange(text.startIndex..., in: text)
         let found = regex.matches(in: text, range: whole)
         return found.enumerated().compactMap { index, match in
@@ -158,7 +195,7 @@ public struct SessionNews: Hashable, Sendable {
         }
     }
 
-    private static func news(kind: String, title: String, session: String, rest: String) -> SessionNews {
+    private static func news(kind: String, title: String, session: String, rest: String) -> SessionNews? {
         switch kind {
         case "finished", "still working":
             // `, after 3 min:` then its reply on the lines after.
@@ -181,12 +218,20 @@ public struct SessionNews: Hashable, Sendable {
             }
             said = said.trimmingCharacters(in: .whitespaces)
             return SessionNews(session: session, title: title, kind: .failed, said: sentence(said.isEmpty ? "stopped with an error" : said))
-        default:
+        case "not summarized":
+            // `: <why>. Its conversation and work are as they were.`
+            var said = rest.hasPrefix(":") ? String(rest.dropFirst()) : rest
+            if let cut = said.range(of: " Its conversation and work are as they were.") { said = String(said[..<cut.lowerBound]) }
+            said = said.trimmingCharacters(in: .whitespaces)
+            return SessionNews(session: session, title: title, kind: .notSummarized, said: sentence(said.isEmpty || said == "It couldn't." ? "It couldn’t summarize its conversation" : said))
+        case "asks":
             // `asks to <what> (ask per_1). Answer with …`, or `asks: <question> (ask frm_1). …`
             var said = rest
             if let cut = said.range(of: " (ask ", options: .backwards) { said = String(said[..<cut.lowerBound]) }
             if said.hasPrefix("asks: ") { said = String(said.dropFirst("asks: ".count)) }
             return SessionNews(session: session, title: title, kind: .asks, said: sentence(said.isEmpty ? "asks something" : said))
+        default:
+            return nil
         }
     }
 

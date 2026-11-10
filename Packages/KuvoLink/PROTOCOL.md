@@ -2718,6 +2718,12 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   rest show nothing. The same goes for the engine's and the bridge's notes (`synthetic`, `system`):
   they're for the model and show nothing, but what changed (the model or its effort, the mode, a
   summary, the project's folders) is said in a word beside the next reply's time (`ReplyChanges`).
+  The agents bridge's own notes for the user ("Your PreToolUse hook failed…", "Codex asks for
+  verification to go on…", "… Going on with Codex.") carry `metadata.kuvo.notice: true`, and show
+  as a quiet line (`Message.Notice.isForYou`); those from before it marked them show nothing. A
+  `Your answer` note `You approved: <what>` (what you approved after Auto's reviewer held it back)
+  shows as "Allowed by you" on the first step after it that does `<what>` (`WorkAnswer.yours`), and
+  nowhere if none does.
 - A prompt a phone sends (`POST api/session/<id>/prompt`, and `kuvo/agents/api/…` alike) gets a
   block at the end of its text that tells the agent it's from the phone: a line `<from-phone>`,
   the words in `FromPhone.swift`, and a line `</from-phone>`. Every box adds it, in the same
