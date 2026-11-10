@@ -1,5 +1,6 @@
 import Foundation
 import OpenCodeKit
+import ServiceManagement
 import Testing
 @testable import KuvoCode
 
