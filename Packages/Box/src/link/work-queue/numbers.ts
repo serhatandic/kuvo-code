@@ -126,14 +126,18 @@ export function changeNumbers<T>(work: (kept: Numbers) => T, file = NUMBERS_FILE
   });
 }
 
+/** The primary's counter: as kept, or, lost with its file, past every number here (never #1 again). */
+function counterOf(kept: Numbers): number {
+  return kept.next ?? Math.max(0, ...allItems().map(item => Math.max(item.number ?? 0, item.importedAs ?? 0))) + 1;
+}
+
 /** The next number for a new item here, or null when it has to wait for one (`primary`: who hands
  * them out, as `primaryOf` says). The first number taken keeps that primary for good. */
 export function takeNumber(primary: Primary, { file = NUMBERS_FILE, now = Date.now(), link = readLink() }: { file?: string; now?: number; link?: LinkState | null } = {}): number | null {
   return changeNumbers(kept => {
     kept.primary ??= keyOf(primary, link);
     if ("self" in primary) {
-      // (A counter lost with its file starts past every number here, never at #1 again.)
-      const number = kept.next ?? Math.max(0, ...allItems().map(item => item.number ?? 0)) + 1;
+      const number = counterOf(kept);
       kept.next = number + 1;
       return number;
     }
@@ -153,7 +157,7 @@ export function takeNumber(primary: Primary, { file = NUMBERS_FILE, now = Date.n
 // of it, or granted it before), the counter moved past them.
 function grantOn(kept: Numbers, by: string, claims: Ranges): Ranges {
   const before = kept.granted?.[by] ?? [];
-  const next = kept.next ?? 1;
+  const next = counterOf(kept);
   const ranges = joined(overlap(claims, [[next, Math.min(next + CLAIM_REACH, MOST_NUMBER - 1)]]), overlap(claims, before));
   if (ranges.length) {
     kept.next = Math.max(next, ranges[ranges.length - 1][1] + 1);
@@ -202,7 +206,7 @@ export function giveBlock(by: string, ask: unknown, { file = NUMBERS_FILE, now =
     const given = kept.given?.[id];
     if (given) return { id, from: given.from, to: given.to, granted: given.granted ?? [] };
     const granted = grantOn(kept, by, claims);
-    const from = kept.next ?? 1;
+    const from = counterOf(kept);
     const to = from + count - 1;
     kept.next = to + 1;
     const all = Object.entries({ ...(kept.given ?? {}), [id]: { from, to, granted, at: now } });
@@ -262,13 +266,13 @@ export function reclaimWaiting(primary: Primary = primaryOf(), options: { file?:
   const wanted = waiting.flatMap(item => (item.wanted !== undefined && !inRanges(asked, item.wanted) ? [item.wanted] : []));
   if ("self" in primary) {
     const granted = wanted.length ? claimNumbers(primary, wanted, options).granted : [];
-    changeQueues(book => numberWaiting(book, primary, granted, options));
+    changeQueues(book => numberWaiting(book, primary, granted, options), undefined, { onItsOwn: true });
     return true;
   }
   if (wanted.length) claimNumbers(primary, wanted, options);
   else if (!kept.asking && !leftIn(kept.leases)) changeNumbers(numbers => { numbers.asking ??= { id: askID(), count: BLOCK, since: options.now ?? Date.now() }; }, options.file);
   // (A lease left: numbered now.)
-  if (leftIn(readNumbers(options.file).leases)) changeQueues(book => numberWaiting(book, primary, null, options));
+  if (leftIn(readNumbers(options.file).leases)) changeQueues(book => numberWaiting(book, primary, null, options), undefined, { onItsOwn: true });
   return true;
 }
 
@@ -310,6 +314,6 @@ export function takeNumbersMail(sender: MailSender, given: unknown, host: Pick<L
 export function blockArrived(give: unknown, primary: Primary, options: { file?: string } = {}): boolean {
   const granted = takeBlock(give, options);
   if (!granted) return false;
-  changeQueues(book => numberWaiting(book, primary, granted, options));
+  changeQueues(book => numberWaiting(book, primary, granted, options), undefined, { onItsOwn: true });
   return true;
 }

@@ -14067,9 +14067,11 @@ function itemOf(given, owner) {
 
 class UnreadableQueue extends Error {
   owner;
-  constructor(owner) {
+  aside;
+  constructor(owner, aside) {
     super(`${owner}'s Work Queue file can't be read`);
     this.owner = owner;
+    this.aside = aside;
   }
 }
 function readQueue(owner) {
@@ -14080,27 +14082,44 @@ function readQueue(owner) {
   } catch (error) {
     if (error.code === "ENOENT")
       return { owner, items: [] };
-    throw new UnreadableQueue(owner);
+    throw new UnreadableQueue(owner, false);
   }
   let kept;
   try {
     kept = JSON.parse(text);
   } catch {
-    throw new UnreadableQueue(owner);
+    throw new UnreadableQueue(owner, true);
   }
   if (!isObject(kept) || !Array.isArray(kept.items))
-    throw new UnreadableQueue(owner);
+    throw new UnreadableQueue(owner, true);
   const seen = new Set;
   const items = kept.items.map((each) => itemOf(each, owner)).filter((each) => each !== null && !seen.has(each.id) && seen.add(each.id) !== undefined);
   return { owner, items };
 }
 function setAside(owner, now = Date.now()) {
   const aside = path52.join(QUEUES, "aside", `${owner}-${now}.json`);
-  fs49.mkdirSync(path52.dirname(aside), { recursive: true, mode: 448 });
   try {
+    fs49.mkdirSync(path52.dirname(aside), { recursive: true, mode: 448 });
     fs49.renameSync(fileOf2(owner), aside);
-  } catch {}
-  return aside;
+    return aside;
+  } catch {
+    return null;
+  }
+}
+function refusedOver(error, now) {
+  if (!error.aside)
+    return new QueueSetAside(`${error.message} just now, so nothing was changed: try again.`);
+  const aside = setAside(error.owner, now);
+  return new QueueSetAside(aside ? `${error.message}, so nothing was changed. It's kept at ${aside} for you to look at; try again to carry on with an empty queue for ${error.owner}.` : `${error.message}, so nothing was changed, and it couldn't be moved aside: look at ${fileOf2(error.owner)}.`);
+}
+function readQueueSettingAside(owner, now = Date.now()) {
+  try {
+    return readQueue(owner);
+  } catch (error) {
+    if (!(error instanceof UnreadableQueue) || !error.aside || !setAside(owner, now))
+      throw error;
+    return { owner, items: [] };
+  }
 }
 var readQueueOrNone = (owner) => {
   try {
@@ -14188,7 +14207,7 @@ class Book {
     return any;
   }
 }
-function changeQueues(work, now = Date.now()) {
+function changeQueues(work, now = Date.now(), { onItsOwn = false } = {}) {
   fs49.mkdirSync(WORK_QUEUE, { recursive: true, mode: 448 });
   const { value, changed } = locked(LOCK10, () => {
     let book;
@@ -14197,8 +14216,11 @@ function changeQueues(work, now = Date.now()) {
     } catch (error) {
       if (!(error instanceof UnreadableQueue))
         throw error;
-      const aside = setAside(error.owner, now);
-      throw new QueueSetAside(`${error.message}, so nothing was changed. It's kept at ${aside} for you to look at; try again to carry on with an empty queue for ${error.owner}.`);
+      const refused = refusedOver(error, now);
+      if (!onItsOwn || !error.aside)
+        throw refused;
+      console.error(`Work Queue: ${refused.message}`);
+      book = new Book;
     }
     const purged = [];
     for (const queue of owners().map((owner) => book.queue(owner))) {
@@ -14322,11 +14344,14 @@ function changeNumbers(work, file = NUMBERS_FILE) {
     return value;
   });
 }
+function counterOf(kept) {
+  return kept.next ?? Math.max(0, ...allItems().map((item) => Math.max(item.number ?? 0, item.importedAs ?? 0))) + 1;
+}
 function takeNumber(primary, { file = NUMBERS_FILE, now = Date.now(), link = readLink() } = {}) {
   return changeNumbers((kept) => {
     kept.primary ??= keyOf3(primary, link);
     if ("self" in primary) {
-      const number = kept.next ?? Math.max(0, ...allItems().map((item) => item.number ?? 0)) + 1;
+      const number = counterOf(kept);
       kept.next = number + 1;
       return number;
     }
@@ -14346,7 +14371,7 @@ function takeNumber(primary, { file = NUMBERS_FILE, now = Date.now(), link = rea
 }
 function grantOn(kept, by, claims) {
   const before = kept.granted?.[by] ?? [];
-  const next = kept.next ?? 1;
+  const next = counterOf(kept);
   const ranges = joined(overlap(claims, [[next, Math.min(next + CLAIM_REACH, MOST_NUMBER - 1)]]), overlap(claims, before));
   if (ranges.length) {
     kept.next = Math.max(next, ranges[ranges.length - 1][1] + 1);
@@ -14389,7 +14414,7 @@ function giveBlock(by, ask, { file = NUMBERS_FILE, now = Date.now() } = {}) {
     if (given)
       return { id, from: given.from, to: given.to, granted: given.granted ?? [] };
     const granted = grantOn(kept, by, claims);
-    const from = kept.next ?? 1;
+    const from = counterOf(kept);
     const to = from + count - 1;
     kept.next = to + 1;
     const all = Object.entries({ ...kept.given ?? {}, [id]: { from, to, granted, at: now } });
@@ -14445,7 +14470,7 @@ function reclaimWaiting(primary = primaryOf(), options = {}) {
   const wanted = waiting.flatMap((item) => item.wanted !== undefined && !inRanges(asked, item.wanted) ? [item.wanted] : []);
   if ("self" in primary) {
     const granted = wanted.length ? claimNumbers(primary, wanted, options).granted : [];
-    changeQueues((book) => numberWaiting(book, primary, granted, options));
+    changeQueues((book) => numberWaiting(book, primary, granted, options), undefined, { onItsOwn: true });
     return true;
   }
   if (wanted.length)
@@ -14455,7 +14480,7 @@ function reclaimWaiting(primary = primaryOf(), options = {}) {
       numbers.asking ??= { id: askID(), count: BLOCK, since: options.now ?? Date.now() };
     }, options.file);
   if (leftIn(readNumbers(options.file).leases))
-    changeQueues((book) => numberWaiting(book, primary, null, options));
+    changeQueues((book) => numberWaiting(book, primary, null, options), undefined, { onItsOwn: true });
   return true;
 }
 var lookedForWaiting = 0;
@@ -14501,7 +14526,7 @@ function blockArrived(give, primary, options = {}) {
   const granted = takeBlock(give, options);
   if (!granted)
     return false;
-  changeQueues((book) => numberWaiting(book, primary, granted, options));
+  changeQueues((book) => numberWaiting(book, primary, granted, options), undefined, { onItsOwn: true });
   return true;
 }
 
@@ -18128,7 +18153,7 @@ function keepCategory(id, name) {
 
 // Packages/Box/src/link/work-queue/moves.ts
 function packWorkQueues(owners) {
-  const items = owners.filter((owner) => OWNER.test(owner)).flatMap((owner) => readQueue(owner).items);
+  const items = owners.filter((owner) => OWNER.test(owner)).flatMap((owner) => readQueueSettingAside(owner).items);
   if (!items.length)
     return null;
   const used = new Set(items.map((item) => item.category));
@@ -18188,7 +18213,7 @@ function placeWorkQueues(carried, owners, opened) {
         } catch {}
       }
     }
-  });
+  }, undefined, { onItsOwn: true });
 }
 function forgetWorkQueues(owners) {
   const gone = new Set(owners);
@@ -18201,7 +18226,7 @@ function forgetWorkQueues(owners) {
         fs64.rmSync(filesOf(item.id), { recursive: true, force: true });
       queue.items = [];
     }
-  });
+  }, undefined, { onItsOwn: true });
 }
 function carryWorkQueue(from, to) {
   if (!OWNER.test(from) || !OWNER.test(to) || from === to)
@@ -18216,7 +18241,7 @@ function carryWorkQueue(from, to) {
       if (item.handedBy === from)
         item.handedBy = to;
     }
-  });
+  }, undefined, { onItsOwn: true });
 }
 
 // Packages/Box/src/link/moves/bundle.ts
@@ -26089,8 +26114,8 @@ function changeItem2(book, item, fields, acting) {
   }
   const listed = (value) => value === undefined ? [] : (Array.isArray(value) ? value : [value]).map(String);
   const removing = listed(fields.remove);
-  if (fields.remove_links !== undefined || removing.length) {
-    const gone = new Set([...listed(fields.remove_links), ...removing]);
+  if (removing.length) {
+    const gone = new Set(removing);
     item.links = item.links.filter((link) => !gone.has(link.url));
   }
   if (fields.links !== undefined) {
@@ -26100,7 +26125,7 @@ function changeItem2(book, item, fields, acting) {
     if (item.links.length > MOST_LINKS)
       refuse(`An item keeps ${MOST_LINKS} links at most.`);
   }
-  const gone = new Set([...listed(fields.remove_files), ...removing]);
+  const gone = new Set(removing);
   const staged = fields.files === undefined ? [] : acting.staged ?? refuse("Only an agent's own files are kept with an item.");
   const left = item.files.filter((file) => !gone.has(file.name));
   if (left.length + staged.length > MOST_FILES)
@@ -31437,6 +31462,8 @@ var ALL = "all";
 class Missing extends Refusal {
 }
 var ONLY_CLIENTS = "Only Kuvo Code on your Mac or iPhone can do this: agents change the Work Queue with their tools.";
+var NOT_PROVED = "This machine couldn't tell the request was from the Mac that set it up (its proof was missing or too old; check both computers' clocks): try again.";
+var notClient = ({ request }) => request.fromMac && request.headers["x-kuvo-vault-proof"] ? NOT_PROVED : ONLY_CLIENTS;
 var fromClient = ({ request, phone }) => Boolean(phone?.key || request.fromApp || request.fromMac && provedRequest(request));
 var queryOf = (request) => new URLSearchParams(request.path.split("?")[1] ?? "");
 async function viewOf(owner, targets, facts, signal, cache) {
@@ -31499,7 +31526,7 @@ async function* workQueueRoute(context, match) {
     if (method !== "POST")
       return yield* json(405, {});
     if (!fromClient(context))
-      return yield* json(403, { message: ONLY_CLIENTS });
+      return yield* json(403, { message: notClient(context) });
     const used = (id) => readAll2().flatMap((queue) => queue.items).filter((item) => item.category === id).length;
     const outcome = typeof given.add === "string" ? addCategory(given.add, given.after) : given.rename !== undefined ? renameCategory(given.rename, given.to) : given.remove !== undefined ? removeCategory(given.remove, used) : { refused: "Send {add, after}, {rename, to} or {remove}." };
     if ("refused" in outcome)
@@ -31510,7 +31537,7 @@ async function* workQueueRoute(context, match) {
     if (method !== "POST")
       return yield* json(405, {});
     if (!fromClient(context))
-      return yield* json(403, { message: ONLY_CLIENTS });
+      return yield* json(403, { message: notClient(context) });
     const owner = typeof given.owner === "string" && OWNER.test(given.owner) ? given.owner : null;
     if (!owner)
       return yield* json(400, { message: "Say whose queue it goes in (owner): a conversation's address." });
@@ -31523,7 +31550,14 @@ async function* workQueueRoute(context, match) {
     if ("refused" in read)
       return yield* json(400, { message: read.refused });
     const { items, skipped } = parseBacklog(read.texts);
-    const outcome = changeQueues((book) => importItems(book, owner, items, YOU, primaryOf()));
+    let outcome;
+    try {
+      outcome = changeQueues((book) => importItems(book, owner, items, YOU, primaryOf()));
+    } catch (error) {
+      if (error instanceof Refusal)
+        return yield* json(400, { message: error.message });
+      throw error;
+    }
     const names = (id) => categories().find((each) => each.id === id)?.name ?? id;
     return yield* json(200, { added: outcome.added, byCategory: outcome.byCategory, waiting: outcome.waiting, skipped: [...skipped, ...outcome.skipped], said: importWords(outcome, skipped, names) });
   }
@@ -31566,7 +31600,7 @@ async function* workQueueRoute(context, match) {
     return yield { body: bytes };
   }
   if (!fromClient(context))
-    return yield* json(403, { message: ONLY_CLIENTS });
+    return yield* json(403, { message: notClient(context) });
   const now = Date.now();
   const primary = primaryOf();
   const inBook = (work) => () => changeQueues((book) => {

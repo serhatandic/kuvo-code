@@ -132,15 +132,16 @@ export function itemOf(given: unknown, owner: string): Item | null {
   };
 }
 
-/** A queue file that's there but can't be read as one (cut short, changed by hand, unreadable). */
+/** A queue file that's there but isn't one (cut short, changed by hand): `aside` true. Or one that
+ * can't be read just now (too many files open, a disk error): left where it is. */
 export class UnreadableQueue extends Error {
-  constructor(readonly owner: string) {
+  constructor(readonly owner: string, readonly aside: boolean) {
     super(`${owner}'s Work Queue file can't be read`);
   }
 }
 
 /** An owner's queue as it's kept: empty for one with none; `UnreadableQueue` for a file that's
- * there but isn't one, never read as empty (a change would write over what it holds). */
+ * there but can't be read as one, never read as empty (a change would write over what it holds). */
 export function readQueue(owner: string): Queue {
   const file = fileOf(owner);
   let text: string;
@@ -148,28 +149,52 @@ export function readQueue(owner: string): Queue {
     text = fs.readFileSync(file, "utf8");
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return { owner, items: [] };
-    throw new UnreadableQueue(owner);
+    throw new UnreadableQueue(owner, false);
   }
   let kept: unknown;
   try {
     kept = JSON.parse(text);
   } catch {
-    throw new UnreadableQueue(owner);
+    throw new UnreadableQueue(owner, true);
   }
-  if (!isObject(kept) || !Array.isArray(kept.items)) throw new UnreadableQueue(owner);
-  // (An item twice, as a cut-off hand-off could leave it: once.)
+  if (!isObject(kept) || !Array.isArray(kept.items)) throw new UnreadableQueue(owner, true);
+  // (An item twice in one file: once.)
   const seen = new Set<string>();
   const items = kept.items.map(each => itemOf(each, owner)).filter((each): each is Item => each !== null && !seen.has(each.id) && seen.add(each.id) !== undefined);
   return { owner, items };
 }
 
-/** A queue file that can't be read, moved aside (`queues/aside/`), so it's kept for a person to
- * look at and the owner's queue starts again empty: where it went. */
-export function setAside(owner: string, now = Date.now()): string {
+/** A queue file that isn't one, moved aside (`queues/aside/`), so it's kept for a person to look at
+ * and the owner's queue starts again empty: where it went, or null when it couldn't be moved. */
+export function setAside(owner: string, now = Date.now()): string | null {
   const aside = path.join(QUEUES, "aside", `${owner}-${now}.json`);
-  fs.mkdirSync(path.dirname(aside), { recursive: true, mode: 0o700 });
-  try { fs.renameSync(fileOf(owner), aside); } catch {}
-  return aside;
+  try {
+    fs.mkdirSync(path.dirname(aside), { recursive: true, mode: 0o700 });
+    fs.renameSync(fileOf(owner), aside);
+    return aside;
+  } catch {
+    return null;
+  }
+}
+
+/** The words for a change refused over `error`'s file, set aside first where it isn't a queue. */
+function refusedOver(error: UnreadableQueue, now: number): QueueSetAside {
+  if (!error.aside) return new QueueSetAside(`${error.message} just now, so nothing was changed: try again.`);
+  const aside = setAside(error.owner, now);
+  return new QueueSetAside(aside
+    ? `${error.message}, so nothing was changed. It's kept at ${aside} for you to look at; try again to carry on with an empty queue for ${error.owner}.`
+    : `${error.message}, so nothing was changed, and it couldn't be moved aside: look at ${fileOf(error.owner)}.`);
+}
+
+/** A queue that isn't one (`readQueue`) set aside, and an empty one in its place: for what runs on
+ * its own (a move, numbers coming), which mustn't stall on it. */
+export function readQueueSettingAside(owner: string, now = Date.now()): Queue {
+  try {
+    return readQueue(owner);
+  } catch (error) {
+    if (!(error instanceof UnreadableQueue) || !error.aside || !setAside(owner, now)) throw error;
+    return { owner, items: [] };
+  }
 }
 
 /** An owner's queue for a view: one that can't be read shows as empty (and stays as it is). */
@@ -279,7 +304,7 @@ export class Book {
 
 /** `work` done on the queues here, one process at a time; what it changed written, and those
  * following told. Deleted items past their 30 days go first (and their files). */
-export function changeQueues<T>(work: (book: Book) => T, now = Date.now()): T {
+export function changeQueues<T>(work: (book: Book) => T, now = Date.now(), { onItsOwn = false }: { onItsOwn?: boolean } = {}): T {
   fs.mkdirSync(WORK_QUEUE, { recursive: true, mode: 0o700 });
   const { value, changed } = locked(LOCK, () => {
     let book: Book;
@@ -287,8 +312,11 @@ export function changeQueues<T>(work: (book: Book) => T, now = Date.now()): T {
       book = new Book();
     } catch (error) {
       if (!(error instanceof UnreadableQueue)) throw error;
-      const aside = setAside(error.owner, now);
-      throw new QueueSetAside(`${error.message}, so nothing was changed. It's kept at ${aside} for you to look at; try again to carry on with an empty queue for ${error.owner}.`);
+      const refused = refusedOver(error, now);
+      // What runs on its own carries on, the bad file set aside (it said so in the box's log).
+      if (!onItsOwn || !error.aside) throw refused;
+      console.error(`Work Queue: ${refused.message}`);
+      book = new Book();
     }
     const purged: string[] = [];
     for (const queue of owners().map(owner => book.queue(owner))) {

@@ -28,10 +28,13 @@ const ALL = "all";
 // An item a client named that isn't here.
 class Missing extends Refusal {}
 const ONLY_CLIENTS = "Only Kuvo Code on your Mac or iPhone can do this: agents change the Work Queue with their tools.";
+// A Mac over SSH whose proof didn't hold (too old, its clock off, or a Mac that didn't set this one up).
+const NOT_PROVED = "This machine couldn't tell the request was from the Mac that set it up (its proof was missing or too old; check both computers' clocks): try again.";
 
 // A paired phone, this Mac's app, or Kuvo Code on another computer (`box route`) with its Mac's
 // proof for this request alone, as the vault takes it (anyone on this computer can run `box route`,
 // an agent's command too): you.
+const notClient = ({ request }: RouteContext) => (request.fromMac && request.headers["x-kuvo-vault-proof"] ? NOT_PROVED : ONLY_CLIENTS);
 const fromClient = ({ request, phone }: RouteContext) => Boolean(phone?.key || request.fromApp || (request.fromMac && provedRequest(request)));
 const queryOf = (request: RouteContext["request"]) => new URLSearchParams(request.path.split("?")[1] ?? "");
 
@@ -98,7 +101,7 @@ export async function* workQueueRoute(context: RouteContext, match: RegExpMatchA
   if (part === "categories") {
     if (method === "GET") return yield* json(200, { categories: categories() });
     if (method !== "POST") return yield* json(405, {});
-    if (!fromClient(context)) return yield* json(403, { message: ONLY_CLIENTS });
+    if (!fromClient(context)) return yield* json(403, { message: notClient(context) });
     // (Deleted ones too: brought back, they'd have nowhere to go.)
     const used = (id: string) => readAll().flatMap(queue => queue.items).filter(item => item.category === id).length;
     const outcome = typeof given.add === "string" ? addCategory(given.add, given.after)
@@ -111,7 +114,7 @@ export async function* workQueueRoute(context: RouteContext, match: RegExpMatchA
 
   if (part === "import") {
     if (method !== "POST") return yield* json(405, {});
-    if (!fromClient(context)) return yield* json(403, { message: ONLY_CLIENTS });
+    if (!fromClient(context)) return yield* json(403, { message: notClient(context) });
     const owner = typeof given.owner === "string" && OWNER.test(given.owner) ? given.owner : null;
     if (!owner) return yield* json(400, { message: "Say whose queue it goes in (owner): a conversation's address." });
     try {
@@ -122,7 +125,13 @@ export async function* workQueueRoute(context: RouteContext, match: RegExpMatchA
     const read = readBacklogFiles(given.files);
     if ("refused" in read) return yield* json(400, { message: read.refused });
     const { items, skipped } = parseBacklog(read.texts);
-    const outcome = changeQueues(book => importItems(book, owner, items, YOU, primaryOf()));
+    let outcome: ReturnType<typeof importItems>;
+    try {
+      outcome = changeQueues(book => importItems(book, owner, items, YOU, primaryOf()));
+    } catch (error) {
+      if (error instanceof Refusal) return yield* json(400, { message: error.message });
+      throw error;
+    }
     const names = (id: string) => categories().find(each => each.id === id)?.name ?? id;
     return yield* json(200, { added: outcome.added, byCategory: outcome.byCategory, waiting: outcome.waiting, skipped: [...skipped, ...outcome.skipped], said: importWords(outcome, skipped, names) });
   }
@@ -161,7 +170,7 @@ export async function* workQueueRoute(context: RouteContext, match: RegExpMatchA
     yield { head: { status: 200, headers: { "content-type": kept.type } } };
     return yield { body: bytes };
   }
-  if (!fromClient(context)) return yield* json(403, { message: ONLY_CLIENTS });
+  if (!fromClient(context)) return yield* json(403, { message: notClient(context) });
   const now = Date.now();
   const primary = primaryOf();
   const inBook = (work: (item: Item, book: Parameters<Parameters<typeof changeQueues>[0]>[0]) => void) => () => changeQueues(book => {

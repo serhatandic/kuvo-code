@@ -366,7 +366,7 @@ test("files kept with an item come only from the conversation's own folders, and
   }
   assert.equal((await route("GET", "kuvo/work-queue/items/1")).body.item.files.length, 1, "nothing refused was kept");
   // A change that's refused leaves the files as they were, the one it would take away too.
-  const mixed = await tool("queue_update", { item: 1, remove_files: ["login.png"], files: ["/etc/hosts"] }, "ses_lead");
+  const mixed = await tool("queue_update", { item: 1, remove: ["login.png"], files: ["/etc/hosts"] }, "ses_lead");
   assert.equal(mixed.isError, true);
   assert.deepEqual([(await route("GET", "kuvo/work-queue/items/1")).body.item.files.length, (await route("GET", "kuvo/work-queue/items/1/files/login.png")).raw], [1, "PNG-bytes"]);
   // A file with another name elsewhere (a hard link) isn't taken; one in a temporary folder is.
@@ -501,6 +501,14 @@ test("the primary hands out numbers: a block to another box, the same block for 
   assert.equal(link.readNumbers(primary).next, 5001);
 });
 
+test("a primary whose counter was lost hands out numbers past those it has, never #1 again", async () => {
+  for (const title of ["One", "Two", "Three"]) await tool("queue_add", { title }, "ses_lead");
+  fs.rmSync(path.join(queues, "numbers.json"));
+  const block = link.giveBlock("machine-key", { id: "wqn_lostlostlost1", count: 10 }, { file: path.join(queues, "numbers.json") });
+  assert.deepEqual([block.from, block.to], [4, 13]);
+  assert.equal(numberIn((await tool("queue_add", { title: "Four" }, "ses_lead")).text), 14);
+});
+
 test("an import keeps numbers of six digits at most, and one far past the numbers in use is numbered afresh", async () => {
   const imported = await tool("queue_import", { items: [{ number: 3, title: "Near" }, { number: 1_234_567, title: "Seven digits" }, { number: 900_000, title: "Far" }] }, "ses_lead");
   assert.match(imported.text, /#1234567 \(it needs a whole number of six digits at most, and a title\)/);
@@ -542,6 +550,27 @@ test("a queue file that can't be read is never written over: the change is refus
   assert.equal(aside.length, 1);
   assert.match(fs.readFileSync(path.join(queues, "queues", "aside", aside[0]), "utf8"), /cut off/, "what it held is kept");
   assert.equal((await tool("queue_add", { title: "New" }, "ses_lead")).isError, false, "then the queue carries on");
+});
+
+test("a queue file that can't be read just now (no permission) is refused, and left where it is", async () => {
+  await tool("queue_add", { title: "Precious" }, "ses_lead");
+  const lead = path.join(queues, "queues", "ses_lead.json");
+  fs.chmodSync(lead, 0o000);
+  try {
+    const refused = await tool("queue_add", { title: "New" }, "ses_lead");
+    assert.equal(refused.isError, true);
+    assert.match(refused.text, /can't be read just now, so nothing was changed: try again/);
+    assert.equal(fs.existsSync(path.join(queues, "queues", "aside")), false, "nothing set aside");
+  } finally {
+    fs.chmodSync(lead, 0o600);
+  }
+  assert.deepEqual((await view("ses_lead")).items.map(item => item.title), ["Precious"]);
+});
+
+test("a move of a conversation whose queue file isn't one sets it aside and carries on", async () => {
+  write(path.join(queues, "queues", "ses_scout.json"), "not json");
+  assert.equal(link.packWorkQueues(["ses_scout"]), null);
+  assert.equal(fs.readdirSync(path.join(queues, "queues", "aside")).length, 1);
 });
 
 test("what a newer box keeps of an item is kept here when this box writes it", async () => {

@@ -104,6 +104,32 @@ import Textual
         #expect(store.refusal == nil)
     }
 
+    @Test func onAMachineYouActOnlyWithThisMacsProofForThatRequest() async throws {
+        let machine = try await MachineTestBox(name: "lab")
+        defer { machine.stop() }
+        try keep([Self.item(1, "First", order: 1)], for: "ses_lead", on: machine)
+        let store = app.workQueues
+        store.boxes = { _ in machine.client }
+        let key = WorkQueues.Key(box: "lab", owner: "ses_lead")
+        await store.read(key)
+        let item = try #require(store.views[key]?.items.first)
+
+        // No proof to give (this Mac can't sign now): nothing is sent, and it says so.
+        store.proof = { _, _, _, _ in nil }
+        await store.move(item, to: .category("later"), on: "lab")
+        #expect(store.refusal?.text.contains("can’t prove it’s yours") == true)
+
+        // A proof the machine can't check (not from the Mac that set it up): refused there, in words.
+        // (This test's box is reached over HTTP, not `box route`: it says only Kuvo Code can.)
+        var signed: [String] = []
+        store.proof = { _, method, path, _ in signed.append("\(method) \(path)"); return "bm90LWEtcHJvb2Y" }
+        await store.move(item, to: .category("later"), on: "lab")
+        #expect(signed == ["POST kuvo/work-queue/items/\(item.id)/move"])
+        #expect(store.refusal?.text.isEmpty == false)
+        await store.read(key)
+        #expect(store.views[key]?.items.first?.category == "next", "nothing moved")
+    }
+
     @Test func aLeadSeesWhatItHandedOnWithWhoseItIsAndAllShowsEveryQueue() async throws {
         let machine = try await MachineTestBox(name: "lab")
         defer { machine.stop() }

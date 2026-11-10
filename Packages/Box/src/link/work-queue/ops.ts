@@ -181,9 +181,7 @@ export interface Fields {
   progress_note?: unknown;
   note?: unknown;
   links?: unknown;
-  remove_links?: unknown;
   files?: unknown;
-  remove_files?: unknown;
   /** Links (by address) and files (by name) to take away: one list for both. */
   remove?: unknown;
 }
@@ -285,8 +283,8 @@ export function changeItem(book: Book, item: Item, fields: Fields, acting: Actin
   }
   const listed = (value: unknown): string[] => (value === undefined ? [] : (Array.isArray(value) ? value : [value]).map(String));
   const removing = listed(fields.remove);
-  if (fields.remove_links !== undefined || removing.length) {
-    const gone = new Set([...listed(fields.remove_links), ...removing]);
+  if (removing.length) {
+    const gone = new Set(removing);
     item.links = item.links.filter(link => !gone.has(link.url));
   }
   if (fields.links !== undefined) {
@@ -295,7 +293,7 @@ export function changeItem(book: Book, item: Item, fields: Fields, acting: Actin
   }
   // Files: everything checked first; what's on disk changes only as the change is kept
   // (`applyFileOps`), those taken away before those added.
-  const gone = new Set([...listed(fields.remove_files), ...removing]);
+  const gone = new Set(removing);
   const staged = fields.files === undefined ? [] : acting.staged ?? refuse("Only an agent's own files are kept with an item.");
   const left = item.files.filter(file => !gone.has(file.name));
   if (left.length + staged.length > MOST_FILES) refuse(`An item keeps ${MOST_FILES} files at most: take some away first (remove).`);
