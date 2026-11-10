@@ -143,14 +143,17 @@ public struct SessionGlanceCard<ModelMark: View>: View {
     let facts: GlanceCardFacts
     let size: CGFloat
     let now: Date
+    let fitsWidth: Bool
     let modelMark: ModelMark
 
-    /// `size`: the text's size (13 on a Mac, as its sidebar's text is; a phone's own). `modelMark`:
-    /// the model's maker's mark.
-    public init(_ facts: GlanceCardFacts, size: CGFloat = 13, now: Date = .now, @ViewBuilder modelMark: () -> ModelMark) {
+    /// `size`: the text's size (13 on a Mac, as its sidebar's text is; a phone's own). `fitsWidth`:
+    /// as wide as it's given (a phone's, the row's), rather than its own width. `modelMark`: the
+    /// model's maker's mark.
+    public init(_ facts: GlanceCardFacts, size: CGFloat = 13, now: Date = .now, fitsWidth: Bool = false, @ViewBuilder modelMark: () -> ModelMark) {
         self.facts = facts
         self.size = size
         self.now = now
+        self.fitsWidth = fitsWidth
         self.modelMark = modelMark()
     }
 
@@ -207,7 +210,7 @@ public struct SessionGlanceCard<ModelMark: View>: View {
         .lineLimit(1)
         .padding(.horizontal, size + 1)
         .padding(.vertical, size)
-        .frame(minWidth: size * 21, maxWidth: size * 30, alignment: .leading)
+        .frame(minWidth: fitsWidth ? nil : size * 21, maxWidth: fitsWidth ? .infinity : size * 30, alignment: .leading)
         .fixedSize(horizontal: false, vertical: true)
         .accessibilityElement(children: .combine)
     }
@@ -232,6 +235,28 @@ public struct SessionGlanceCard<ModelMark: View>: View {
             Spacer(minLength: 12)
             trailing()
         }
+    }
+}
+
+/// What a row's card says, for VoiceOver on the row, which can't reach the card: each of its lines
+/// as the row's custom content (the same lines every time, so the row isn't made again as one comes).
+public struct GlanceSpoken: ViewModifier {
+    let facts: GlanceCardFacts
+
+    public init(_ facts: GlanceCardFacts) {
+        self.facts = facts
+    }
+
+    public func body(content: Content) -> some View {
+        let lines = Dictionary(facts.spoken().map { ($0.label, $0.value) }) { first, _ in first }
+        let said = { (label: String) in lines[label].map { Text(verbatim: $0) } }
+        content
+            .accessibilityCustomContent(Text("State"), said("State"))
+            .accessibilityCustomContent(Text("Project"), said("Project"))
+            .accessibilityCustomContent(Text("Computer"), said("Computer"))
+            .accessibilityCustomContent(Text("Branch"), said("Branch"))
+            .accessibilityCustomContent(Text("Model"), said("Model"))
+            .accessibilityCustomContent(Text("Pull request"), said("Pull request"))
     }
 }
 

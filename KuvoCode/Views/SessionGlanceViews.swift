@@ -51,6 +51,7 @@ struct SessionGlanceHover: ViewModifier {
     @Environment(\.pageInView) private var pageInView
     @State private var anchor = GlanceAnchor()
     @State private var isVisible = false
+    @State private var isThere = false
     /// Counted as on screen in `RowGlances`.
     @State private var isCounted = false
 
@@ -61,7 +62,7 @@ struct SessionGlanceHover: ViewModifier {
                                            isUnread: isUnread, folded: folded, workspace: workspace, app: app)
         content
             .background(GlanceAnchorView(anchor: anchor))
-            .modifier(SpokenCard(lines: facts.spoken()))
+            .modifier(GlanceSpoken(facts))
             .onHover { inside in
                 if inside {
                     let card = GlanceCardForRow(id: session.id, fallback: session, underItsProject: underItsProject, acrossComputers: acrossComputers,
@@ -77,30 +78,26 @@ struct SessionGlanceHover: ViewModifier {
             }
             .onScrollVisibilityChange(threshold: 0.01) { visible in
                 isVisible = visible
-                count(visible && pageInView)
+                recount()
             }
-            .onChange(of: pageInView) { _, inView in count(isVisible && inView) }
+            .onChange(of: pageInView) { recount() }
+            .onAppear {
+                isThere = true
+                recount()
+            }
             .onDisappear {
                 GlanceCardPanel.shared.left(row)
-                count(false)
+                isThere = false
+                recount()
             }
     }
 
-    private func count(_ shown: Bool) {
+    /// On screen: scrolled into view, on the page in view, and there at all (not folded away).
+    private func recount() {
+        let shown = isVisible && pageInView && isThere
         guard shown != isCounted else { return }
         isCounted = shown
         app.glances.show(session.id, on: box, shown)
-    }
-}
-
-/// What a row's card says, for VoiceOver on the row.
-private struct SpokenCard: ViewModifier {
-    let lines: [(label: String, value: String)]
-
-    func body(content: Content) -> some View {
-        lines.reduce(AnyView(content)) { view, line in
-            AnyView(view.accessibilityCustomContent(Text(line.label), Text(line.value)))
-        }
     }
 }
 
