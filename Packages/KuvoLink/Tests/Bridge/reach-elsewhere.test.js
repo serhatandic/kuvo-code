@@ -193,9 +193,9 @@ async function ask(method, p, given) {
 }
 // A tool on this Mac, from Foreman's conversation.
 const onMac = async (name, args) => (await ask("POST", "kuvo/agent-tools", { name, arguments: args, session: "ses_lead" })).json;
-// A tool on lab, from Wren's conversation, as kuvo-browser.js asks it there: a process of its own.
+// A route on lab, as kuvo-browser.js asks one there: a process of its own (`box route`).
 const machineEnv = { PATH: process.env.PATH, HOME: support, KUVO_HOME: machineHome, TMPDIR: support };
-function onLab(name, args) {
+function routeOnLab(request) {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [script, "box", "route"], { env: machineEnv, stdio: ["pipe", "pipe", "inherit"] });
     let out = "";
@@ -205,9 +205,16 @@ function onLab(name, args) {
       const said = JSON.parse(out.trim().split("\n").pop());
       resolve(JSON.parse(said.body));
     });
-    child.stdin.end(JSON.stringify({ method: "POST", path: "kuvo/agent-tools", body: { name, arguments: args, session: "ses_wren" } }));
+    child.stdin.end(JSON.stringify(request));
   });
 }
+// A tool on lab, from Wren's conversation.
+const onLab = (name, args) => routeOnLab({ method: "POST", path: "kuvo/agent-tools", body: { name, arguments: args, session: "ses_wren" } });
+const timed = async (run) => {
+  const began = Date.now();
+  const value = await run();
+  return { value, took: Date.now() - began };
+};
 const labPid = () => { try { return Number(fs.readFileSync(path.join(machineHome, "run", "link.pid"), "utf8")); } catch { return 0; } };
 async function stopLab() {
   const pid = labPid();
@@ -348,11 +355,13 @@ test("the other way: a bot that moved to the machine reaches the sessions it lef
   link.stopMacLink();
   await eventually(() => !relay.has(macAddress));
   // (A process of its own, as a machine's tools are: its call goes the moment the machine's link
-  // sees it in its outbox, and the relay's word comes back as fast.)
-  const began = Date.now();
-  const away = await onLab("list_sessions", {});
-  assert.ok(Date.now() - began < 2000, `took ${Date.now() - began} ms`);
-  assert.match(away.text, /^On Studio Mac, as of .+\. Studio Mac isn't answering/m);
+  // sees it in its outbox, and the relay's word comes back as fast. What that adds is timed, past
+  // what a box route takes that asks nothing: on a busy Mac, starting one alone takes seconds.)
+  const asksNothing = await timed(() => routeOnLab({ method: "GET", path: "kuvo/info" }));
+  const { took, value: away } = await timed(() => onLab("list_sessions", {}));
+  assert.ok(took - asksNothing.took < 2000, `took ${took} ms, ${asksNothing.took} ms for one that asks nothing`);
+  // The relay's word, not the call's wait (20 s) running out.
+  assert.match(away.text, /^On Studio Mac, as of .+\. Studio Mac isn't answering \(it may be asleep, off or offline\)/m);
   const stop = await onLab("stop_session", { session: "ses_mleft1" });
   assert.match(stop.text, /^Studio Mac isn't answering .+ Your stop is kept/);
   assert.ok(!macEngine.seen.interrupted.includes("ses_mleft1"));
