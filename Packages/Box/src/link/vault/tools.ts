@@ -31,16 +31,16 @@ const failed = (text: string): ToolAnswer => ({ text, isError: true });
 export const VAULT_TOOLS = [
   {
     name: "vault_items",
-    description: "List the items in the user's vault that you may use: sign-ins, keys, files and notes, by name, with where each may be used and whether you use it on your own or the user is asked each time. You never see a value: you name an item, and Kuvo Code fills it in (browser_sign_in, browser_fill) or hands it to a command (vault_run).",
+    description: "List the vault items you may use (sign-ins, keys, files and notes) by name, with where each may be used and whether the user is asked each time. You never see a value: you name an item, and Kuvo Code fills it in (browser_sign_in, browser_fill) or hands it to a command (vault_run).",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
   },
   {
     name: "vault_ask",
-    description: "Ask the user for something you need from their vault that vault_items doesn't list, such as a sign-in for a site or an API key. They pick an item (or say no); you get its name, never its value. Waits for their answer.",
+    description: "Ask the user for something you need from their vault that vault_items doesn't list, like a site's sign-in or an API key. They pick an item or say no; you get its name, never its value. Waits for their answer.",
     inputSchema: {
       type: "object",
       properties: {
-        need: { type: "string", description: "What you need, in a few words: “a sign-in for play.google.com”, “an App Store Connect API key”." },
+        need: { type: "string", description: "What you need, in a few words, like “a sign-in for play.google.com”." },
         why: { type: "string", description: "Why you need it, in one sentence the user reads." },
         site: { type: "string", description: "The site or host it's for, if any." },
       },
@@ -50,14 +50,14 @@ export const VAULT_TOOLS = [
   },
   {
     name: "vault_run",
-    description: "Run a shell command in your project's folder with values from the vault in its environment, never on its command line: each variable you name gets an item's value (`\"GITHUB_TOKEN\": \"GitHub token\"`, or `\"Item.field\"` for one field), and a file item's variable gets the path of a temporary copy of the file (removed when the command ends). Its output comes back with every vault value hidden. Use the variables in the command (`curl -H \"Authorization: Bearer $GITHUB_TOKEN\" …`); never print them.",
+    description: "Run a shell command in your project's folder with values from the vault in its environment, never on its command line: each variable gets an item's value (`\"GITHUB_TOKEN\": \"GitHub token\"`, or `\"Item.field\"` for one field), and a file item's variable gets the path of a temporary copy, removed when the command ends. Vault values are hidden in its output. Use the variables in the command (`curl -H \"Authorization: Bearer $GITHUB_TOKEN\" …`); never print them.",
     inputSchema: {
       type: "object",
       properties: {
-        command: { type: "string", description: "The command, run with the user's shell." },
-        variables: { type: "object", additionalProperties: { type: "string" }, description: "Each environment variable, and the item (or `Item.field`) whose value it gets." },
+        command: { type: "string", description: "Run with the user's shell." },
+        variables: { type: "object", additionalProperties: { type: "string" }, description: "Each variable, and the item (or `Item.field`) whose value it gets." },
         why: { type: "string", description: "Why you need these, in one sentence the user reads." },
-        timeout: { type: "number", description: "How long it may run, in seconds (300 unless you say; at most 600)." },
+        timeout: { type: "number", description: "In seconds: 300 by default, 600 at most." },
       },
       required: ["command", "variables", "why"],
       additionalProperties: false,

@@ -31,6 +31,22 @@ export interface AutoList {
 /** The first list's ID, which Auto had before there were lists. */
 export const firstList = "auto"
 
+/**
+ * `entries` as the models they name: one named by another id its model is known by (Claude Code's
+ * `default`, whichever model it recommends now) under that model's own id (`own`'s, undefined for
+ * none), and one that's then the same model at the same effort as one before it left out.
+ */
+export function foldEntries(entries: AutoEntry[], own: (entry: AutoEntry) => string | undefined): AutoEntry[] {
+  const seen = new Set<string>()
+  return entries.flatMap((entry) => {
+    const named = { ...entry, modelID: own(entry) ?? entry.modelID }
+    const key = `${named.providerID}/${named.modelID}/${named.variant ?? ""}`
+    if (seen.has(key)) return []
+    seen.add(key)
+    return [named]
+  })
+}
+
 export interface Limit {
   /** A whole account or plan (`provider`), or one model of it (`model`). */
   scope: "provider" | "model"

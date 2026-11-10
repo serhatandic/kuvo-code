@@ -70,6 +70,27 @@ export function workOutcome(messages: unknown, outcome: unknown): unknown {
   return work.length < rows.length ? work.find(row => row?.type === "idle")?.outcome ?? outcome : outcome;
 }
 
+/** What's part of a turn: what began it, and what its agent said. */
+export const ofTurn = (message: { type?: unknown }) => message.type === "user" || message.type === "synthetic" || message.type === "assistant";
+
+/**
+ * Where a session's latest turn lies in its messages, newest first (read as it runs too, not ended
+ * yet): from `from` up to, not including, `before` (-1 for to the end of what was read).
+ */
+export function turnIn(messages: { type?: unknown }[]): { from: number; before: number } {
+  // (Commands you ran after it, above where it ended, are no part of it.)
+  const lastEnd = messages.findIndex(message => message.type === "idle");
+  const from = lastEnd >= 0 && !messages.slice(0, lastEnd).some(ofTurn) ? lastEnd + 1 : 0;
+  return { from, before: messages.findIndex((message, index) => index >= from && message.type === "idle") };
+}
+
+/** A session's latest turn of work, newest first, past the summaries asked for after it. */
+export function lastTurn<Row extends ConversationRow>(messages: unknown): Row[] {
+  const work = pastSummaries(asRows(messages) as Row[]);
+  const { from, before } = turnIn(work);
+  return work.slice(from, before < 0 ? undefined : before);
+}
+
 /** Where a session's last turn of work ended. */
 export const lastTurnEnd = (messages: unknown): ConversationRow | undefined =>
   pastSummaries(asRows(messages)).find(row => row?.type === "idle");

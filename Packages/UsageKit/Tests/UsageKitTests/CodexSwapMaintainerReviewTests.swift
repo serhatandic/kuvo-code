@@ -10,8 +10,7 @@ final class CodexSwapMaintainerReviewTests: XCTestCase {
 
     private func defaults() throws -> UserDefaults {
         let suite = "CodexSwapMaintainer.\(UUID().uuidString)"
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
-        addTeardownBlock { defaults.removePersistentDomain(forName: suite) }
+        let defaults = try XCTUnwrap(testDefaults(suiteName: suite))
         return defaults
     }
 

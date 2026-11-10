@@ -411,6 +411,160 @@ describe("Claude Code, on its own", () => {
   })
 })
 
+describe("Claude Code ended between turns, with work in the background (#262)", () => {
+  /** A session whose turn started `scripts/test.sh` in the background and ended, waiting for it. */
+  async function waiting(id: string) {
+    sessions.prompt(id, { id: "msg_claude_lost_001", text: "run the tests in the background", files: [], delivery: "steer" })
+    await until(() => fake.sent.length === 1)
+    const [first] = fake.sent.map((message) => message.uuid)
+    fake.out.push({ type: "assistant", message: { id: "m1", content: [{ type: "tool_use", id: "tool1", name: "Bash", input: { command: "scripts/test.sh", run_in_background: true } }] }, parent_tool_use_id: null, user_message_uuids: [first] })
+    fake.out.push({ type: "system", subtype: "task_started", task_id: "t1", task_type: "local_bash", description: "Run the tests", tool_use_id: "tool1", is_backgrounded: true })
+    fake.out.push({ type: "system", subtype: "background_tasks_changed", tasks: [{ task_id: "t1", task_type: "local_bash", description: "Run the tests" }] })
+    fake.say("Waiting for the tests to report back.", [first])
+    fake.result([first])
+    await until(() => idles(id).length === 1)
+    await until(() => (sessions.background()[id]?.commands.length ?? 0) === 1)
+  }
+
+  test("killed from outside: the session is woken, told the command stopped unfinished, rather than waiting for ever", async () => {
+    const id = sessions.create({ model: { providerID: provider, id: "default" }, location: { directory: root } }).id
+    await waiting(id)
+    // What it printed so far, as the bar read it.
+    fake.outputs.set("t1", "PASS a.test\n")
+    const [job] = shells(root).filter((job) => job.metadata.sessionID === id && job.status === "running")
+    await shellOutput(job.id, 0, 24_000)
+    const before = fake.sent.length
+    // (The Claude Code that starts again for the note has a stream of its own.)
+    const killed = fake.out
+    fake.out = new Queue<any>()
+    ;(fake as any).crashed = new Error("Claude Code process exited with code 143")
+    killed.close()
+    await until(() => fake.sent.length === before + 1)
+    const told = fake.sent.at(-1).message.content.find((part: any) => part.type === "text")?.text ?? fake.sent.at(-1).message.content
+    expect(String(told)).toContain("scripts/test.sh")
+    expect(String(told)).toContain("stopped")
+    expect(String(told)).toContain("PASS a.test")
+    // It shows as the command stopping, and nothing runs for it any more.
+    const notice = sessions.messages(id).find((message) => message.type === "synthetic") as any
+    expect(notice.description).toBe("scripts/test.sh")
+    expect(notice.metadata).toMatchObject({ source: "shell", state: "error", signal: "SIGTERM" })
+    expect(shells(root).find((one) => one.id === job.id)?.status).toBe("exited")
+    fake.say("The tests stopped; running them again.", [fake.sent.at(-1).uuid])
+    fake.result([fake.sent.at(-1).uuid])
+    await until(() => idles(id).length === 2)
+  })
+
+  test("killed while an undo is staged: the note waits for your next message, and the undo stays", async () => {
+    const id = sessions.create({ model: { providerID: provider, id: "default" }, location: { directory: root } }).id
+    await waiting(id)
+    await sessions.stageRevert(id, "msg_claude_lost_001")
+    const killed = fake.out
+    fake.out = new Queue<any>()
+    ;(fake as any).crashed = new Error("Claude Code process exited with code 143")
+    killed.close()
+    await until(() => sessions.inbox(id).length === 1)
+    await Bun.sleep(50)
+    expect(sessions.inbox(id)[0]).toMatchObject({ type: "synthetic", delivery: "queue" })
+    expect(fake.sent).toHaveLength(1)
+    expect(sessions.get(id).revert?.messageID).toBe("msg_claude_lost_001")
+    // Redo: it goes now, as it would have.
+    await sessions.clearRevert(id)
+    await until(() => fake.sent.length === 2)
+    expect(String(fake.sent[1].message.content.find?.((part: any) => part.type === "text")?.text ?? fake.sent[1].message.content)).toContain("scripts/test.sh")
+  })
+
+  test("an undo made final while a command still runs: its Claude Code starts over, and the session is told once, after your message", async () => {
+    const id = sessions.create({ model: { providerID: provider, id: "default" }, location: { directory: root } }).id
+    await waiting(id)
+    await sessions.stageRevert(id, "msg_claude_lost_001")
+    fake.out = new Queue<any>()
+    sessions.prompt(id, { id: "msg_claude_lost_003", text: "start over", files: [], delivery: "steer" })
+    await until(() => fake.sent.length === 2)
+    const text = (message: any) => String(message.message.content.find?.((part: any) => part.type === "text")?.text ?? message.message.content)
+    expect(text(fake.sent[1])).toContain("start over")
+    fake.say("ok", [fake.sent[1].uuid])
+    fake.result([fake.sent[1].uuid])
+    await until(() => fake.sent.length === 3)
+    expect(text(fake.sent[2])).toContain("scripts/test.sh")
+    fake.say("noted", [fake.sent[2].uuid])
+    fake.result([fake.sent[2].uuid])
+    // (The undo took the first turn away: these are the two since.)
+    await until(() => idles(id).length === 2)
+    expect(fake.sent).toHaveLength(3)
+    expect(sessions.inbox(id)).toHaveLength(0)
+  })
+
+  test("started again for a command (/review): the session hears it as a note", async () => {
+    const id = sessions.create({ model: { providerID: provider, id: "default" }, location: { directory: root } }).id
+    await waiting(id)
+    claude.programUpdated()
+    fake.out = new Queue<any>()
+    sessions.prompt(id, { id: "msg_claude_lost_004", text: "/review", files: [], delivery: "steer" })
+    await until(() => fake.sent.length === 2)
+    expect(String(fake.sent[1].message.content.find?.((part: any) => part.type === "text")?.text ?? fake.sent[1].message.content)).toBe("/review")
+    await until(() => sessions.inbox(id).length + sessions.messages(id).filter((message) => message.type === "synthetic").length === 1)
+    const note = [...sessions.inbox(id).map((item: any) => item.payload.text), ...sessions.messages(id).flatMap((message: any) => (message.type === "synthetic" ? [message.text] : []))][0]
+    expect(note).toContain("scripts/test.sh")
+  })
+
+  test("closed by the box itself (its account removed): no note, nothing more starts", async () => {
+    const id = sessions.create({ model: { providerID: provider, id: "default" }, location: { directory: root } }).id
+    await waiting(id)
+    sessions.forgetProvider(provider)
+    await until(() => fake.closed)
+    await Bun.sleep(50)
+    expect(sessions.messages(id).some((message) => message.type === "synthetic")).toBe(false)
+    expect(fake.sent).toHaveLength(1)
+  })
+
+  test("started again for your next message (Claude Code was updated): that message says what stopped with it", async () => {
+    const id = sessions.create({ model: { providerID: provider, id: "default" }, location: { directory: root } }).id
+    await waiting(id)
+    claude.programUpdated()
+    fake.out = new Queue<any>()
+    sessions.prompt(id, { id: "msg_claude_lost_002", text: "how are the tests doing?", files: [], delivery: "steer" })
+    await until(() => fake.sent.length === 2)
+    const told = String(fake.sent[1].message.content.find?.((part: any) => part.type === "text")?.text ?? fake.sent[1].message.content)
+    expect(told).toContain("Claude Code started again before this message")
+    expect(told).toContain("scripts/test.sh")
+    expect(told).toContain("how are the tests doing?")
+    // Not a turn of its own besides.
+    expect(sessions.messages(id).some((message) => message.type === "synthetic")).toBe(false)
+  })
+
+  test("the bridge stops meanwhile: once it's back, the session is woken with what stopped", async () => {
+    const store = join(root, "sessions")
+    const id = sessions.create({ model: { providerID: provider, id: "default" }, location: { directory: root } }).id
+    await waiting(id)
+    sessions.closeAll()
+    // A bridge started again, on the same sessions.
+    fake = new FakeClaude()
+    claude = new TestClaude(fake, root)
+    sessions = new Sessions(new Store(store), { find: (provider: string | undefined) => (provider === claude.providerID ? claude : undefined) } as unknown as Roster, new Auto(root), undefined, async () => [])
+    expect(fake.sent).toHaveLength(0)
+    sessions.wakeLost()
+    await until(() => fake.sent.length === 1)
+    const told = String(fake.sent[0].message.content.find?.((part: any) => part.type === "text")?.text ?? fake.sent[0].message.content)
+    expect(told).toContain("Kuvo Code stopped")
+    expect(told).toContain("scripts/test.sh")
+  })
+
+  test("the bridge back only after a while (Kuvo Code quit for the night): nothing starts, and the note waits for your next message", async () => {
+    const store = join(root, "sessions")
+    const id = sessions.create({ model: { providerID: provider, id: "default" }, location: { directory: root } }).id
+    await waiting(id)
+    sessions.closeAll()
+    fake = new FakeClaude()
+    claude = new TestClaude(fake, root)
+    sessions = new Sessions(new Store(store), { find: (provider: string | undefined) => (provider === claude.providerID ? claude : undefined) } as unknown as Roster, new Auto(root), undefined, async () => [])
+    sessions.wakeLost(Date.now() + 11 * 60_000)
+    await Bun.sleep(50)
+    expect(fake.sent).toHaveLength(0)
+    // It goes with your next message instead.
+    expect(sessions.inbox(id)).toMatchObject([{ type: "synthetic", delivery: "queue" }])
+  })
+})
+
 describe("Claude Code, on its own, twice", () => {
   test("two turns of its own one after the other are two turns here", async () => {
     const id = sessions.create({ model: { providerID: provider, id: "default" }, location: { directory: root } }).id
@@ -480,6 +634,123 @@ describe("Claude Code's subagents in the background", () => {
     fake.out.push({ type: "system", subtype: "task_notification", task_id: "ag1", status: "completed", tool_use_id: "call1", output_file: "", summary: "done" })
     await until(() => !sessions.active().includes(child))
     expect(sessions.messages(child).at(-1)).toMatchObject({ type: "idle", outcome: "succeeded" })
+  })
+
+  /** A turn that sends a subagent (call1, Claude Code's ag1) off as Claude Code does by default: `run_in_background` left out. */
+  async function sendOffByDefault(id: string, said: boolean) {
+    sessions.prompt(id, { id: "msg_claude_sub_0101", text: "have a reviewer look", files: [], delivery: "steer" })
+    await until(() => fake.sent.length === 1)
+    const [first] = fake.sent.map((message) => message.uuid)
+    fake.out.push({ type: "assistant", message: { id: "m1", content: [{ type: "tool_use", id: "call1", name: "Agent", input: { description: "Review it", prompt: "Review it", subagent_type: "reviewer" } }] }, parent_tool_use_id: null, user_message_uuids: [first] })
+    fake.out.push({ type: "system", subtype: "task_started", task_id: "ag1", task_type: "local_agent", description: "Review it", tool_use_id: "call1", is_backgrounded: true })
+    fake.out.push({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "call1", content: "Async agent launched successfully." }] }, parent_tool_use_id: null })
+    if (said) fake.out.push({ type: "assistant", message: { id: "m2", content: [{ type: "text", text: "Reading the diff." }] }, parent_tool_use_id: "call1" })
+    fake.say("A reviewer is on it.", [first])
+    fake.result([first])
+    await until(() => idles(id).length === 1)
+    const child = sessions.list(root, id)[0]?.id
+    expect(child).toBeTruthy()
+    return child
+  }
+
+  test("one sent off without saying (Claude Code's default is the background) works on after the turn, under your rules", async () => {
+    const id = sessions.create({ model: { providerID: provider, id: "default" }, location: { directory: root } }).id
+    const child = await sendOffByDefault(id, true)
+    expect(sessions.active()).toContain(child)
+    // Its tools after the turn: what you allow runs, what asks is asked in the conversation, and
+    // what you refused stays refused.
+    expect((await fake.canUse("Read", { file_path: join(root, "a.ts") }, "t1", { agentID: "ag1" })).behavior).toBe("allow")
+    sessions.update(id, { permissions: [{ action: "shell", resource: "*", effect: "ask" }, { action: "shell", resource: "rm *", effect: "deny" }] })
+    const asked = fake.canUse("Bash", { command: "git diff" }, "t2", { agentID: "ag1" })
+    await until(() => sessions.permissions(id).length === 1)
+    sessions.replyPermission(id, sessions.permissions(id)[0].id, "once")
+    expect((await asked).behavior).toBe("allow")
+    expect(await fake.hook("Bash", { command: "rm -rf build" }, "t3")).toMatchObject({ decision: "deny" })
+    expect((await fake.canUse("Bash", { command: "rm -rf build" }, "t3", { agentID: "ag1" })).behavior).toBe("deny")
+    fake.out.push({ type: "assistant", message: { id: "m3", content: [{ type: "text", text: "Looks right." }] }, parent_tool_use_id: "call1" })
+    await until(() => texts(child).includes("Looks right."))
+    fake.out.push({ type: "system", subtype: "task_notification", task_id: "ag1", status: "completed", tool_use_id: "call1", output_file: "", summary: "done" })
+    await until(() => !sessions.active().includes(child))
+    // Done: a call that still comes from it is a stray, and refused.
+    expect((await fake.canUse("Bash", { command: "git status" }, "t4", { agentID: "ag1" })).behavior).toBe("deny")
+  })
+
+  test("one whose first words come after the turn ended is still its own session's, and still asks", async () => {
+    const id = sessions.create({ model: { providerID: provider, id: "default" }, location: { directory: root } }).id
+    const child = await sendOffByDefault(id, false)
+    expect(sessions.active()).toContain(child)
+    expect((await fake.canUse("Read", { file_path: join(root, "a.ts") }, "t1", { agentID: "ag1" })).behavior).toBe("allow")
+    fake.out.push({ type: "assistant", message: { id: "m2", content: [{ type: "text", text: "Reading the diff." }] }, parent_tool_use_id: "call1" })
+    await until(() => texts(child).includes("Reading the diff."))
+  })
+
+  test("one sent to work in the foreground and moved to the background on the way goes on after the turn", async () => {
+    const id = sessions.create({ model: { providerID: provider, id: "default" }, location: { directory: root } }).id
+    sessions.prompt(id, { id: "msg_claude_sub_0102", text: "have a reviewer look", files: [], delivery: "steer" })
+    await until(() => fake.sent.length === 1)
+    const [first] = fake.sent.map((message) => message.uuid)
+    fake.out.push({ type: "assistant", message: { id: "m1", content: [{ type: "tool_use", id: "call1", name: "Agent", input: { description: "Review it", prompt: "Review it", subagent_type: "reviewer", run_in_background: false } }] }, parent_tool_use_id: null, user_message_uuids: [first] })
+    fake.out.push({ type: "system", subtype: "task_started", task_id: "ag1", task_type: "local_agent", description: "Review it", tool_use_id: "call1", is_backgrounded: false })
+    fake.out.push({ type: "assistant", message: { id: "m2", content: [{ type: "text", text: "Reading the diff." }] }, parent_tool_use_id: "call1" })
+    fake.out.push({ type: "system", subtype: "task_updated", task_id: "ag1", patch: { is_backgrounded: true } })
+    fake.out.push({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "call1", content: "The agent was moved to the background." }] }, parent_tool_use_id: null })
+    fake.say("It's in the background now.", [first])
+    fake.result([first])
+    await until(() => idles(id).length === 1)
+    const child = sessions.list(root, id)[0].id
+    expect(sessions.active()).toContain(child)
+    expect((await fake.canUse("Read", { file_path: join(root, "a.ts") }, "t1", { agentID: "ag1" })).behavior).toBe("allow")
+  })
+
+  test("one sent off in an earlier turn goes on when you stop a later one it spoke in, and is listed once meanwhile", async () => {
+    const id = sessions.create({ model: { providerID: provider, id: "default" }, location: { directory: root } }).id
+    const child = await sendOffByDefault(id, true)
+    fake.out.push({ type: "system", subtype: "background_tasks_changed", tasks: [{ task_id: "ag1", task_type: "local_agent", description: "Review it" }] })
+    sessions.prompt(id, { id: "msg_claude_sub_0104", text: "meanwhile, something else", files: [], delivery: "steer" })
+    await until(() => fake.sent.length === 2)
+    const second = fake.sent[1].uuid
+    fake.out.push({ type: "assistant", message: { id: "m4", content: [{ type: "text", text: "Still reading." }] }, parent_tool_use_id: "call1" })
+    await until(() => texts(child).includes("Still reading."))
+    // The reviewer is one subagent, not a task besides.
+    expect(sessions.background()[id]).toMatchObject({ subagents: [{ id: child }], tasks: [] })
+    fake.onInterrupt = () => fake.result([second], "error_during_execution")
+    await sessions.interrupt(id, false)
+    await until(() => idles(id).length === 2)
+    expect(sessions.active()).toContain(child)
+    expect((await fake.canUse("Read", { file_path: join(root, "a.ts") }, "t1", { agentID: "ag1" })).behavior).toBe("allow")
+    fake.out.push({ type: "assistant", message: { id: "m5", content: [{ type: "text", text: "Done reading." }] }, parent_tool_use_id: "call1" })
+    await until(() => texts(child).includes("Done reading."))
+    fake.out.push({ type: "system", subtype: "task_notification", task_id: "ag1", status: "completed", tool_use_id: "call1", output_file: "", summary: "done" })
+    await until(() => !sessions.active().includes(child))
+    expect(idles(child).at(-1)?.outcome).toBe("succeeded")
+  })
+
+  test("a Claude Code that says only in the launch's result that it went to the background: it goes on after the turn", async () => {
+    const id = sessions.create({ model: { providerID: provider, id: "default" }, location: { directory: root } }).id
+    sessions.prompt(id, { id: "msg_claude_sub_0105", text: "have a reviewer look", files: [], delivery: "steer" })
+    await until(() => fake.sent.length === 1)
+    const [first] = fake.sent.map((message) => message.uuid)
+    fake.out.push({ type: "assistant", message: { id: "m1", content: [{ type: "tool_use", id: "call1", name: "Agent", input: { description: "Review it", prompt: "Review it", subagent_type: "reviewer" } }] }, parent_tool_use_id: null, user_message_uuids: [first] })
+    fake.out.push({ type: "system", subtype: "task_started", task_id: "ag1", task_type: "local_agent", description: "Review it", tool_use_id: "call1" })
+    fake.out.push({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "call1", content: "Async agent launched successfully." }] }, parent_tool_use_id: null, tool_use_result: { status: "async_launched", agentId: "ag1", description: "Review it", prompt: "Review it" } })
+    fake.say("A reviewer is on it.", [first])
+    fake.result([first])
+    await until(() => idles(id).length === 1)
+    const child = sessions.list(root, id)[0].id
+    expect(sessions.active()).toContain(child)
+    expect((await fake.canUse("Read", { file_path: join(root, "a.ts") }, "t1", { agentID: "ag1" })).behavior).toBe("allow")
+  })
+
+  test("a call from a subagent the box doesn't know, with no turn under way, is refused", async () => {
+    const id = sessions.create({ model: { providerID: provider, id: "default" }, location: { directory: root } }).id
+    sessions.prompt(id, { id: "msg_claude_sub_0103", text: "hello", files: [], delivery: "steer" })
+    await until(() => fake.sent.length === 1)
+    const [first] = fake.sent.map((message) => message.uuid)
+    fake.say("hi", [first])
+    fake.result([first])
+    await until(() => idles(id).length === 1)
+    expect((await fake.canUse("Bash", { command: "git status" }, "t1", { agentID: "nobody" })).behavior).toBe("deny")
+    expect((await fake.canUse("Bash", { command: "git status" }, "t2")).behavior).toBe("deny")
   })
 })
 

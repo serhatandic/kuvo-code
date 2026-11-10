@@ -749,6 +749,8 @@ private struct PlanAccountRow: View {
     /// Where it's signed in: this Mac's engine, or a machine's.
     @Environment(Catalog.self) private var catalog
     @State private var failure: String?
+    @State private var refreshFailure: String?
+    @State private var refreshWaits = false
 
     private var box: SidebarBox { catalog.machine.map { .machine($0) } ?? .mac }
 
@@ -766,10 +768,11 @@ private struct PlanAccountRow: View {
     private var limit: Date? { isInUse && !needsSignIn ? agents.auto.limit(for: plan.id) : nil }
 
     var body: some View {
-        AccountLine(label: nil, who: needsSignIn ? nil : who, note: nil,
+        AccountLine(label: nil, who: needsSignIn ? nil : who, note: isInUse && refreshWaits ? refreshWaitsNote : nil,
                     problem: needsSignIn ? AccountProblem.signInEnded.text : limit.map { AccountProblem.atLimit(until: $0).text },
                     signIn: needsSignIn ? connect : nil,
-                    badge: isInUse && !isOnly ? "In use" : nil) {
+                    badge: isInUse && !isOnly ? "In use" : nil,
+                    isWorking: isInUse && catalog.refreshingModels[plan.id] != nil) {
             if connection.type == "credential" {
                 if !isInUse, let id = connection.credentialID {
                     Button("Use This Account") {
@@ -778,10 +781,16 @@ private struct PlanAccountRow: View {
                     }
                 }
                 Button("Sign In Again…", action: connect)
+                // The engine reads the models of the account in use.
+                if isInUse { RefreshModelsButton(provider: plan.id, failure: $refreshFailure, waits: $refreshWaits) }
                 Divider()
                 Button("Remove Account", role: .destructive, action: remove)
             } else {
                 Text("Set in your shell's environment")
+                if isInUse, catalog.refreshesModels(plan.id) {
+                    Divider()
+                    RefreshModelsButton(provider: plan.id, failure: $refreshFailure, waits: $refreshWaits)
+                }
             }
         }
         .alert("Couldn't Change This Account", isPresented: Binding(get: { failure != nil }, set: { if !$0 { failure = nil } })) {
@@ -789,6 +798,7 @@ private struct PlanAccountRow: View {
         } message: {
             Text(failure ?? "")
         }
+        .refreshModelsFailure($refreshFailure)
     }
 
     /// Removes the account from the computer it's on: with it the last, that computer is signed
@@ -828,6 +838,8 @@ private struct AccountLine<Menu: View>: View {
     let problem: String?
     let signIn: (() -> Void)?
     var badge: String? = nil
+    /// Refresh Models under way: a spinner in the menu's place.
+    var isWorking = false
     @ViewBuilder let menu: () -> Menu
 
     var body: some View {
@@ -869,21 +881,64 @@ private struct AccountLine<Menu: View>: View {
             }
             // Always there, in quiet ink, as System Settings has it: the line itself doesn't change
             // under the pointer. Right-click has the same.
-            SwiftUI.Menu(content: menu) {
-                Image(systemName: "ellipsis")
-                    .frame(width: 22, height: 22)
-                    .contentShape(.rect)
+            if isWorking {
+                Spinner(size: 13)
+                    .frame(width: 26, height: 22)
+                    .accessibilityLabel("Refreshing models")
+            } else {
+                SwiftUI.Menu(content: menu) {
+                    Image(systemName: "ellipsis")
+                        .frame(width: 22, height: 22)
+                        .contentShape(.rect)
+                }
+                .menuStyle(.button)
+                .buttonStyle(IconButtonStyle(width: 26, height: 22))
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .accessibilityLabel("More")
+                .help("More")
             }
-            .menuStyle(.button)
-            .buttonStyle(IconButtonStyle(width: 26, height: 22))
-            .menuIndicator(.hidden)
-            .fixedSize()
-            .accessibilityLabel("More")
-            .help("More")
         }
         .frame(minHeight: 30)
         .contentShape(.rect)
         .contextMenu(menuItems: menu)
+    }
+}
+
+/// Refresh Models, in the menu of the account in use: its provider's models asked of again on the
+/// computer whose page this is, without restarting its engine (the box's
+/// `kuvo/accounts/<provider>/refresh`); a model the account gained shows in the model pickers once
+/// it's done. Only for the providers that computer's box brings new models to.
+struct RefreshModelsButton: View {
+    let provider: String
+    @Binding var failure: String?
+    /// Some of that computer's projects get them only once their work is done.
+    @Binding var waits: Bool
+    @Environment(Catalog.self) private var catalog
+
+    var body: some View {
+        if catalog.refreshesModels(provider) {
+            Button("Refresh Models") {
+                Task {
+                    do { waits = try await catalog.refreshModels(provider) } catch { failure = error.localizedDescription }
+                }
+            }
+            .disabled(catalog.refreshingModels[provider] != nil)
+        }
+    }
+}
+
+/// What the account's line says after Refresh Models, while some projects wait for their work.
+let refreshWaitsNote = "Projects at work get new models when done"
+
+extension View {
+    /// Why Refresh Models didn't go, in an alert of its own.
+    func refreshModelsFailure(_ failure: Binding<String?>) -> some View {
+        alert("Couldn't Refresh Models", isPresented: Binding(get: { failure.wrappedValue != nil }, set: { if !$0 { failure.wrappedValue = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(failure.wrappedValue ?? "")
+        }
     }
 }
 
