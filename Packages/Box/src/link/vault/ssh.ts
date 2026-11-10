@@ -200,11 +200,25 @@ export function keepSshAgents(): () => void {
   look();
   let watcher: fs.FSWatcher | null = null;
   try { watcher = fs.watch(SSH_FOR, () => look()); watcher.unref?.(); } catch {}
+  // On a busy Mac the watch tells late or not at all, and the launcher waits for the agent only a
+  // moment before the command runs without it (git over SSH then finds no key): the notes' folder
+  // is looked at each second too (its time, which a note moved in changes), and looked into when
+  // it changed.
+  let noted = 0;
+  const quick = setInterval(() => {
+    let changed = 0;
+    try { changed = fs.statSync(SSH_FOR).mtimeMs; } catch { return; }
+    if (changed === noted) return;
+    noted = changed;
+    look();
+  }, 1000);
+  quick.unref?.();
   // The vault's items and the sandbox change too: looked at again now and then.
   const every = setInterval(look, 30_000);
   every.unref?.();
   const stop = () => {
     watcher?.close();
+    clearInterval(quick);
     clearInterval(every);
     for (const note of [...agents.keys()]) close(note);
     try { if (safeFolder()) fs.rmSync(SSH_AGENTS, { recursive: true, force: true }); } catch {}

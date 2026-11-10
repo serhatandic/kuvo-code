@@ -29217,10 +29217,25 @@ function keepSshAgents() {
     watcher = fs97.watch(SSH_FOR, () => look());
     watcher.unref?.();
   } catch {}
+  let noted = 0;
+  const quick = setInterval(() => {
+    let changed = 0;
+    try {
+      changed = fs97.statSync(SSH_FOR).mtimeMs;
+    } catch {
+      return;
+    }
+    if (changed === noted)
+      return;
+    noted = changed;
+    look();
+  }, 1000);
+  quick.unref?.();
   const every = setInterval(look, 30000);
   every.unref?.();
   const stop = () => {
     watcher?.close();
+    clearInterval(quick);
     clearInterval(every);
     for (const note of [...agents.keys()])
       close(note);
