@@ -24,6 +24,14 @@ import type { AnyPiece, LinkHandler } from "./context";
 // a connection with none.)
 const IDLE_TOLD = 5_000;
 const IDLE_KEPT = 60_000;
+/** How often a request whose answer's head hasn't come says it's still being worked on, with an
+ * interim `102 Processing` (ms): a route that holds a request (an ask waiting for you, a sandbox
+ * tool, a vault wait, a move) never looks gone to a client's wait between bytes (a URLSession
+ * request's timeout, which counts it as activity; Node's fetch's for a head, five minutes) while it
+ * works. Clients ignore it otherwise (Node's and Bun's fetch, curl, URLSession), and a client that
+ * wants a limit on the whole request keeps its own (the keeper's, KeeperBoxTools). An HTTP/1.0
+ * client, which mustn't get one, never does. */
+export const HEARTBEAT = 20_000;
 export function serveBox(password: string, handle: LinkHandler = engineHandler(readEngineFile, { name: os.hostname() })): http.Server {
   const expected = Buffer.from("Basic " + Buffer.from(`opencode:${password}`).toString("base64"));
   // (`any`: nothing reads what it gives back, and its early `return response.end()` lines would
@@ -44,12 +52,22 @@ export function serveBox(password: string, handle: LinkHandler = engineHandler(r
     const abort = new AbortController();
     response.on("close", () => abort.abort());
     let headed = false;
+    const alive = request.httpVersionMajor > 1 || (request.httpVersionMajor === 1 && request.httpVersionMinor >= 1)
+      ? setInterval(() => {
+        if (headed || response.headersSent || response.destroyed || response.writableEnded) return;
+        try { response.writeProcessing(); } catch {}
+      }, HEARTBEAT)
+      : undefined;
+    alive?.unref?.();
+    const quiet = () => clearInterval(alive);
+    response.once("close", quiet);
     try {
       // The app's own (the Mac's link says which aren't a phone's), not a phone using this box.
       const fromApp = request.headers["x-kuvo-from"] === "app";
       for await (const part of handle({ method: request.method ?? "GET", path: sent, headers: request.headers, body: Buffer.concat(chunks), fromApp }, {}, abort.signal) as AsyncIterable<AnyPiece>) {
         if (abort.signal.aborted) break;
         if (part.head && !headed) {
+          quiet();
           response.writeHead(part.head.status, part.head.headers ?? {});
           response.flushHeaders();
           headed = true;
@@ -62,6 +80,8 @@ export function serveBox(password: string, handle: LinkHandler = engineHandler(r
       response.writeHead(500, { "content-type": "application/json" });
       response.write(JSON.stringify({ message: String((error as Error | undefined)?.message ?? error) }));
       headed = true;
+    } finally {
+      quiet();
     }
     if (!headed) response.writeHead(502);
     response.end();
