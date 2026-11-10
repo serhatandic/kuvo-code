@@ -314,6 +314,8 @@ self = requester(`http://127.0.0.1:${server.port}`, password)
 // Once the engine's there (the app says where, a moment after this starts on the Mac): parts under
 // way are followed again, and meetings held.
 void link.whenReady().then(() => {
+  // Sessions whose background work ended as the bridge last stopped hear so now.
+  sessions.wakeLost()
   goals.start()
   sideQuestions.start()
   reviews.resume()
