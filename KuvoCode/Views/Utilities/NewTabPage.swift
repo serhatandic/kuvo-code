@@ -39,6 +39,9 @@ struct NewTabPage: View {
                                     replace { utilities.showFiles() }
                                 }
                             }
+                            ToolCard(title: "Work Queue", symbol: "checklist", shortcut: "⌥⌘U") {
+                                replace { utilities.showWorkQueue() }
+                            }
                             ToolCard(title: "Customize…", symbol: "slider.horizontal.3", shortcut: nil) {
                                 app.openSettings(.panel)
                             }

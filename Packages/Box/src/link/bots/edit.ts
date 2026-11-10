@@ -121,7 +121,7 @@ export async function changeBot(id: string, given: BotChange | null | undefined,
         if (!here.agents) {
           let agents: Target | null = null;
           try { agents = readBridge(); } catch {}
-          const carried = await carryToAgents(here.session, model, readEngine, agents, signal);
+          const carried = await carryToAgents(here.session, model, readEngine, agents);
           if (carried.status !== 200) return carried;
           Object.assign(here, botHere(id) ?? {});
         }

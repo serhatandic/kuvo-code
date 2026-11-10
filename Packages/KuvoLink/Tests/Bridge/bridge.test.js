@@ -1398,6 +1398,7 @@ test("each feature kuvo/info names is a route the machine answers, and one it do
     "approval.stopped": ["POST", "kuvo/sandbox/stopped"],
     // (Each account's plan limits, on the coding agents' bridge.)
     limits: ["GET", "kuvo/agents/api/kuvo/limits"],
+    "work-queue": ["GET", "kuvo/work-queue/categories"],
     "git.backups": ["GET", "kuvo/git/backups?folder=/"],
     // (Moves with a coding agent's own conversation, and the check before one holds anything: what
     // kuvo/moves takes besides, and a box asks of another in its mail.)

@@ -256,7 +256,11 @@ connection.
     time; after that it's refused as for no conversation (bridge 0.9.123). The same goes while its
     engine isn't there to ask, as when it's starting (bridge 0.9.203).
   - **Sender**: it names the sender as the sending box named that agent, when that box alone
-    lists `from` and it isn't one of the receiver's own conversations. Otherwise the letter is from
+    lists `from` and it isn't one of the receiver's own conversations. One that moved from the
+    receiver to the sending box, once the receiver has asked that box to switch to its copy
+    (`switching`, `finishing`), is that box's though its original on the receiver is still being let
+    go: by that
+    box's name for it, or before it lists it, by the name it moved with. Otherwise the letter is from
     "an agent on <box>", with no address to answer.
   - **`delivered`**: it answers `{"delivered": {id, ok, why?, retry?, answer?, lives?}}`. `retry`: not
     now (an engine restarting, too many lately), so the sender tries again. `answer: false`: there,
@@ -994,12 +998,22 @@ client shows it from the same routes.
   `run/tool-limits.json` before the limits are looked at, and counts those before it the engine
   doesn't show as the bot's yet.
 - **`GET kuvo/work?bot=<id>`** → `{bot, sessions: [{session, title, folder, project?, startedBy,
-  depth, model?, mode?, state, asks?, started, tokens, cost?, lastReply?}], answered: [answer with
+  depth, model?, mode?, account?, state, asks?, started, tokens, cost?, lastReply?}], answered: [answer with
   its session], today: {started, working, tokens, cost?}, limits}`: its sessions the latest first,
   archived ones left out. 400 without `bot`, 404 for no such bot here, 503 with no engine. Each
   `state` is as of the read; `lastReply` is what it said last, and for one `stopped` or `failed`
   only what it said in that turn, never an earlier turn's reply. `today.working` stays, since clients until 0.7.2 need it to read the
   report, but no client shows it (see At work).
+  `account` (bridge 0.9.209) is `{name, label?}`, the account it runs on as Settings › Accounts
+  lists it where it runs (`api/integration` there, as last checked, never `fresh`): `name` its
+  provider's ("Claude Code", "GitHub Copilot", "Anthropic"); `label` the name you gave a coding
+  agent's account you added ("Work"; its own sign-in has none, and the engine's sign-ins have no
+  names of yours). Left out on Custom Auto (it picks one each turn) and where the engine or bridge
+  can't say within a few seconds. Clients show it on a row as `ClientSessions`' `WorkWords.account`
+  does: the provider's short name, as the usage panel names it (`ClientAccounts`' `AccountNames`:
+  "Claude" for Claude Code, "Codex", "Copilot"), else `name`, then `label` ("Claude · Athas"); in
+  a row too short for it the account goes whole before the project does, and the session's title
+  always keeps its room.
 - **`GET kuvo/work/events`** (ndjson): `{"changed": {<bot>: <ms>}}` now and at each change to a
   bot's work (a session started, stopped, finished or asking, an ask answered, its limits); a
   client reads that bot's work again when its time moves. Kept in `run/work/changes.json`.
@@ -1498,6 +1512,16 @@ with a mail frame, sealed with the sender's static key for the phone's. Its payl
 | `blocked` | A bot's goal needs you (`quiet`, or `wake` where you asked to be woken). |
 | `message` | Something in a group chat. |
 
+**Handed over, and how it went.** A push counts as handed over only once the box's relay
+connection takes it: one closing as it's handed over is held and tried again, as when the relay
+isn't there (`kuvo/attention`, below). The relay answers each push with `pushed` (above). Each box
+keeps the last answer for each of its phones in `run/notices/pushed.json`, by the phone's key:
+`{"<key>": {"at", "outcome": "sent"|"noPhone"|"notAllowed"|"refused"|"unknown", "sent"?}}`, `at` and `sent`
+(when one last went through) in ms since 1970. So a phone that hears nothing can be told from one
+that was sent nothing: `noPhone` is no registration at its address (it registers again as it
+connects), `notAllowed` a registration that doesn't name this box among its senders, `refused`
+Apple's no, `unknown` an answer the box doesn't know. No route reads it yet (bridge 0.9.210).
+
 A phone should ignore a category it doesn't know, and show the notification plainly.
 
 What's news, each box decides alike (`notices/news.ts`), for your phones and its clients
@@ -1892,25 +1916,37 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   answers `503` as Machines' changes do. A phone takes this list for all your machines and forgets
   the rest, so where those can't be told, the box answers `503 {"message"}` rather than a short list.
 - `POST kuvo/sessions/<id>/agents` with `{"model": {providerID, id, variant?}}`: a
-  conversation the engine runs (on the Mac or a machine it reaches) carried on with the coding
-  agents on that model (one of theirs, or Custom Auto's `auto`), as picking it in the
-  conversation does: a session of theirs with the whole conversation, what was waiting and its
-  draft; the engine's goes to Archived, and a bot's conversation becomes the new one. `200
-  {"session"}`, the new one, to open (read through `kuvo/agents/api/…`). Errors are
+  conversation this box's engine runs carried on with its coding agents on that model (one of
+  theirs, or Custom Auto's `auto`), as picking it in the conversation does: a session of theirs
+  with the whole conversation (without what an undo not yet kept took back) and what was waiting;
+  the engine's goes to Archived, and a bot's conversation becomes the new one. Every box answers it
+  for its own conversations, a Mac's with its app closed too, and every client asks the box the
+  conversation lives on (the Mac's model picker as a phone's; a client carries the draft itself).
+  `200 {"session"}`, the new one, to open (read through `kuvo/agents/api/…`). Errors are
   `{"message"}`: 400 for a model that isn't theirs; 404 for no such conversation; 409 for one
-  with them already, or while it moves; 422 for a model it can't use where it is (signed out);
-  503 while the coding agents aren't running there; 502 when the move failed. Nothing opens on
-  the Mac. A machine's bridge does the same for its own, with the Mac closed: a phone asks the
-  computer the conversation lives on. There the session's wake-ups and watches go
-  with it, the engine's is marked `kuvo.carriedTo` (the new one's id) as it's archived, the new
-  one `kuvo.carriedFrom` (the old one's id, under `kuvo` in its metadata), and once
-  started it goes to its end, whatever becomes of the request. A client that carries one itself
-  marks both too, as it archives it: a session archived so takes its queue on the
-  box with it, once (paused, stopped by you, it stays so in the new one, with what waited on the
-  box). One brought back keeps the mark and its own queue, archived again too (the box keeps the
-  carries it made in `run/queues-carried.json`). Changing a machine's bot's model there to
-  one of the agents' (`PATCH kuvo/bots/<id>`) carries its conversation on with them too; the Mac
-  takes in its new conversation as it next connects.
+  with them already, or while it moves; 422 for a model it can't use where it is (not installed, or
+  signed out: the box checks its bridge's integration, `metadata.installed` and `connections`);
+  503 while the engine or the coding agents aren't running there; 502 when the move failed. Nothing
+  opens on the Mac. The session's wake-ups and watches go with it, the engine's is marked
+  `kuvo.carriedTo` (the new one's id) as it's archived, the new one `kuvo.carriedFrom` (the old
+  one's id, under `kuvo` in its metadata) and its approval and Autopilot, and it's told its
+  worktree (`kuvo.worktree`) and its project's other folders (`kuvo.project-folders`; one in a
+  worktree too). One carry at a time for each conversation, whichever of the box's processes runs
+  it (a phone's in the long-running one, a client's `box route` in its own): a mark in
+  `run/carrying/<id>` holds it, and another answers 409 meanwhile. It's all or nothing (bridge
+  0.9.209): once started it goes to its end, whatever becomes of the request, and until the
+  engine's is marked (a bot's, its record names the new one) anything that fails deletes the new
+  one again (and any the bridge made from it without saying so: its sessions marked `carriedFrom`
+  this one, made since), and a run it stopped goes on as before (its queue resumed, unless it was
+  paused already), so the conversation stays as it was, with what waited, and can be tried again;
+  a failed move never leaves a copy. Only when the engine stops answering as it's marked, so
+  whether it took it can't be told, the new one stays, and the 502 says to look before trying
+  again. A client with it open follows `kuvo.carriedTo` as it's archived, whoever moved it: the
+  new one takes its place there, with its draft. A session archived so takes its queue on the box
+  with it, once (paused, stopped by you, it stays so in the new one, with what waited on the box). One brought back keeps the mark and its own queue, archived again too (the
+  box keeps the carries it made in `run/queues-carried.json`). Changing a bot's model to one of the
+  agents' (`PATCH kuvo/bots/<id>`) carries its conversation on with them the same way; a Mac takes
+  in a machine's bot's new conversation as it next connects.
 - `POST kuvo/sign-in/return` with `{"url"}`: where a sign-in's page sent the browser back to the
   computer (`http://127.0.0.1:<port>/…?code=…`: a plan's that finishes there, an MCP server's at
   `127.0.0.1:19876`, a coding agent's), which a phone can't load. The computer loads it, as the
@@ -2280,7 +2316,7 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     it changed; `uncommitted`, anything not committed yet
     (always true but for `branch`). `500 {"message"}` when git couldn't say.
   - `POST kuvo/git/changes/count {"directory", "scope"?, "base"?}` (`git.changes.count`, bridge
-    0.9.209): how much `kuvo/git/changes` would show, without the diff, for a count (the phone's
+    0.9.211): how much `kuvo/git/changes` would show, without the diff, for a count (the phone's
     ••• says how many files changed) → `{"repository": false}`, or `{"repository": true, root,
     against, files, additions, deletions, untracked, uncommitted}`. `root`, `against` and
     `uncommitted` as `kuvo/git/changes` has them; `files`, each changed file once, as a client
@@ -2906,6 +2942,111 @@ the last reading in its folder (`limits.json`), through a restart. A client reac
   used, when each resets and as of when, and why one couldn't be read just now.
 - Times are ms since 1970.
 
+### The Work Queue
+
+Each conversation keeps its work items in a Work Queue of its own, on the box it lives on, the
+same on a Mac's box and a machine's, with no client there too: a session's, a bot's (its
+conversation's), or a group chat's (`grp_…`, the queue its seats write to). It replaces the
+hand-kept backlog file: agents write items through tools, every agent kind alike; clients show
+them, and you reorder them, move them between categories, delete them and bring them back, never
+change what they say. Kept in `run/work-queue/` (`queues/<owner>.json`, files kept with items in
+`files/<item>/`, `categories.json`, `numbers.json`); a deleted item stays 30 days. Where
+`features` has `work-queue`. Times are milliseconds since 1970.
+
+**An item**: `id` (`wqi_…`, never shown), `number` (its `#n`; missing while it waits for one,
+shown as new), `wanted` (a number an import asked for, until it's granted), `owner` (`ses_…` or
+`grp_…`), `title`, `category`, `order` (its place in its category, among every owner's items on
+the box), `inProgress`, `progress` (`{value?: 0…1, note?}`: how far, and what's being done now),
+`sessions` (`[{session, title, working}]`: the sessions working on it, and which are at work now),
+`noteCount`, `lastNote`, `fileCount`, `linkCount`, `handedBy` (the first owner that handed it on),
+`source` (an outside source's item, later), `created` and `updated` (`{at, by}`: `by` is
+`{user: true}` or `{session, name}`), `doneAt`, `removed` (`{at, by}`, deleted). Whole, it has
+`body` (Markdown), `notes` (`[{at, by, text}]`), `files` (`[{name, size, type, at}]`), `links`
+(`[{url, title?}]`) and `handed` (`[{from, to, at}]`, the last 20).
+
+**In progress** isn't a category: an item is in progress while a session linked to it is at work
+(its turn running, or what it left running), unless it's Done or deleted. A session is linked to
+3 items at most (linking a fourth drops its oldest link); Done or a delete unlinks everyone.
+
+**Categories**: one set for every queue on the box: `next`, `later`, `parked`, `done` (built in),
+and custom ones (`cat_…`), between Later and Parked: `{id, name, builtIn}`.
+
+**Who sees what**: an owner's view is its own items, those of the sessions it oversees (started by
+it, or by those, put away ones too), and those it handed on, each living once in its owner's queue.
+
+- `GET kuvo/work-queue?owner=<ses_…|grp_…>` → `{owner, categories, items, owners, removed}`:
+  `items` in the categories' order, then each one's; `owners` (`[{owner, kind: bot|session|group,
+  title, bot?: {id, name}, startedBy?}]`) names each owner in the view; `removed`, what's deleted
+  in it, newest first. `owner=all` is every queue on the box at once (the panel's All; piece 3 adds
+  every other computer's). `kuvo/work-queue/events?owner=` is the same as NDJSON: a line now and one
+  each time it changes (a change here or by another process, or a linked session starting or
+  stopping work).
+- `GET kuvo/work-queue/items/<id or number>` → `{item}`, whole. `…/files/<name>` → its bytes.
+- `GET kuvo/work-queue/refs?refs=243,12` → `{refs: {"243": {id, number, title, category,
+  inProgress, owner, removed?} | null}}`: what each ref names, for a chip; null for one this box
+  doesn't know.
+- `GET kuvo/work-queue/categories` → `{categories}`.
+
+**What you do** (a paired phone, this Mac's app, or Kuvo Code on another computer through `box
+route` with its Mac's proof for that request alone, `x-kuvo-vault-proof` as the vault takes it; anything
+else, a command on that computer included, gets 403): `POST kuvo/work-queue/items/<item>/move` `{category?, before?,
+after?, top?}` (a category by its id or name; `before`/`after` an item in the same category);
+`DELETE kuvo/work-queue/items/<item>` and `POST …/restore`; `POST kuvo/work-queue/categories`
+`{add, after?}`, `{rename, to}` or `{remove}` (a custom one, once nothing is in it); `POST
+kuvo/work-queue/import` `{owner, files: [paths]}` (Markdown files on the box: each list line
+starting with `#N` is an item, in the category of the nearest heading above it that names one
+(Done, Shelved/Parked, Later/Ideas), else Next, Done with `[x]`; a line `NOW:`/`LATER:`/… with
+refs sets theirs; the first line naming a number gives its title, every line naming it its body)
+→ `{added, byCategory, waiting, skipped, said}`. An import skips a number here already under the
+same title; under another title, the item is imported with a new number and a note. Each change
+answers `{item}`; a category removed only once nothing, deleted items included, is in it.
+
+**Tools**: `GET kuvo/work-queue/tools` → `{tools, instructions}` (MCP definitions, and what the
+tool servers add to what they tell agents); `POST kuvo/work-queue/tools {name, arguments, session}`
+→ `{text, isError}`, run only while the session named is making that call (as the vault's). The
+tool servers (this Mac's app, a machine's `kuvo-browser.js`) list them and pass on every `queue_…`
+call. `queue_list`, `queue_show`, `queue_add`, `queue_update`, `queue_hand` (into a session's
+queue on this box, linked to it), `queue_remove` (`undo` brings back an agent's delete; only you
+bring back yours), `queue_categories` (list, or add one), `queue_import` (items an agent read from
+an old backlog, with their numbers). `item` is a number (`#243` or `243`), or the id of one that has
+none yet (the tool says it). A caller's queue is its conversation's (a subagent's is its
+conversation's; a seat's, its group chat's, while the chat lives on this box: a seat of one that
+lives elsewhere is refused); it changes what's in its view (by a number two computers gave twice,
+the one in its view). Files an agent keeps with an item come only from its conversation's folder,
+its project's folders or a temporary folder (links followed, nothing hidden, no other name by a
+hard link, nothing of Kuvo Code's but its own folder), 25 MB each; they're read before the change
+and kept with it, all or none.
+
+**References in messages** (for chips, the same in every client: KuvoClient's `WorkItemRefs`):
+`#243` names item 243 when the `#` is at the start or after a space or one of `([{"'/,–-`, with 1
+to 6 digits and then no letter, digit or underscore; not inside a code span or block, a Markdown
+link or a web address, and not after "PR", "MR", "pull request", "issue" or "step" (someone
+else's numbers; outside sources get a prefix, `gh:owner/repo#12`). A client asks `refs` for the
+numbers in a message and draws each one the box knows as a chip (its category's color, a ring in
+progress, a check when done, `#243` and the title on one line), leaving one it doesn't know as
+written; the message's words never change. A chip opens the item.
+
+**Numbers**: one `#n` per item, unique across your computers, handed out by the primary: the box of
+the Mac that set this one up (a Mac's own box, and a box with no Mac, is its own), kept once it's
+first used. The primary numbers its own items from its counter; another box numbers from blocks of
+50 the primary gave it, and asks for the next when 15 or fewer are left, by mail, on its rounds:
+`{workQueue: {ask: {id, count, claims?}}}`, sent again every 30 s until answered with
+`{workQueue: {give: {id, from, to, granted}}}`. The primary keeps what it gave for each ask, so an
+ask sent again gets the same answer. `claims` are numbers an import wants to keep (six digits at most, what a chip reads): the primary
+grants those at or above its counter and within 10,000 of it (or granted that box before) and moves its counter past them;
+an imported item waits without a number until then, and one refused gets the next number, with a
+note. An item made with no number left waits too, and takes one, oldest first, when a block comes; one left
+waiting with nothing under way (a crash midway, a move) is claimed or numbered again within a minute.
+A queue file that can't be read is never written over: the change is refused and the file set aside
+(`queues/aside/`); fields a newer box keeps in an item are kept as they are.
+
+**Moves**: a move carries its conversations' queues (a group chat's, its own) and their files
+(`move.json`'s `workQueue`, the files in the bundle's `work-queue/<item>/`), put in place under the
+same owners and numbers, each item checked as this box's own are (a category it can't keep is
+Next); once it's over, the box it left forgets them. While it's under way nothing changes those
+queues (a tool's change, a hand-off into one, or yours: refused, with words to try again once
+it's there), so nothing is left behind. A conversation carried on as another takes its queue.
+
 ### Side questions, handoffs and reviews
 
 Three more keywords each box answers in its agents bridge, as it does goals ("Goals"), and its
@@ -3088,7 +3229,7 @@ the route scenarios (`Vectors/routes/routing.json`).
 | `folders` | `kuvo/folders` |
 | `folders.files` | `kuvo/folders?files=1`: a folder's files too, and `reason` on a refusal |
 | `git` | `kuvo/git/…`: Changes (bridge 0.9.94) |
-| `git.changes.count` | `POST kuvo/git/changes/count`: how much changed, without the diff (bridge 0.9.209) |
+| `git.changes.count` | `POST kuvo/git/changes/count`: how much changed, without the diff (bridge 0.9.211) |
 | `git.merge` | `POST kuvo/git/merge`: Merge into… (bridge 0.9.143) |
 | `git.pull-request` | `POST kuvo/git/pull-request`: Create Pull Request (bridge 0.9.143) |
 | `git.pull-request.draft` | `POST kuvo/git/pull-request/draft`: Create Pull Request's confirmation (bridge 0.9.179) |
@@ -3382,8 +3523,10 @@ What a phone asks, it answers itself for the areas that have moved onto it and i
 (`kuvo/phones…`), and, as every box answers them, `kuvo/file`, `kuvo/sign-in/return`,
 `kuvo/accounts/credentials`, `kuvo/shell/<id>/stop`, the engine's API and the coding agents'
 (`api/…`, `kuvo/agents/…`, telling who a message names with `&`; bridge 0.9.64), and `kuvo/named`
-and `kuvo/groups…` (bridge 0.9.65); the app did each before. While its engine starts, or starts
-again, the engine's routes answer `503 {"message": "This Mac's engine is starting. Try again in a
+and `kuvo/groups…` (bridge 0.9.65), and a session's own routes: its queue, `stop`, approval,
+decisions, Autopilot (`kuvo/sessions/<id>/autopilot…`) and its move to the coding agents
+(`kuvo/sessions/<id>/agents`, both from bridge 0.9.209); the app did each before. While its
+engine starts, or starts again, the engine's routes answer `503 {"message": "This Mac's engine is starting. Try again in a
 moment."}` (a machine's say "This machine's"). From 0.9.66, once the app has given up on it (no try
 can help; the app's `run/engine-stopped`, why, until it starts or stops it again),
 they say "This Mac's engine isn't running." with why, and that Try Again on the Mac starts it (or
@@ -3401,7 +3544,9 @@ What it asks the app goes through the app's `hello` proof first (the host interf
 the link's keys (`link/identity`) are never asked of a host that hasn't given it. When the app's
 host interface starts again (it failed, or Try Again), what the link has open through it ends: a
 phone's followed `link/route` streams end (the phone follows again), and a request in the gap is a
-`503`.
+`503`. While the keeper runs the box, the record in `run/host.json` is the keeper's alone: the app's
+own host interface failing or starting again leaves it, and the app tells the keeper where it
+answers now.
 
 For the app only (anyone else gets `403`):
 
@@ -4585,8 +4730,9 @@ On macOS `top` runs outside the sandbox as it is (it's setuid, which the sandbox
 shows no program's environment); `ps` stays refused in it, as it would show every program's
 environment: in Auto it goes to the reviewer as any stopped command.
 
-The tool is the box's, so an agent has it on every box (`sandbox.asks`): this Mac's tool server and a
-machine's (`kuvo-browser.js mcp`, through `box route`) list what `GET kuvo/sandbox/tools` gives (only
+The tool is the box's, so an agent has it on every box (`sandbox.asks`): this Mac's tool server
+(the app's, and the keeper's with the app closed) and a machine's (`kuvo-browser.js mcp`, through
+`box route`) list what `GET kuvo/sandbox/tools` gives (only
 while the sandbox is `on`) and pass a call to `POST kuvo/sandbox/tools` `{session, name, arguments}`
 → `{text, isError}`, which, as the vault's, the box carries out only while that conversation is
 making that call. The asks, the tool and the answers live in the box's long-running process, as the
