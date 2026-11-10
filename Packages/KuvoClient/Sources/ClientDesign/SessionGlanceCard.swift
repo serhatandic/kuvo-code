@@ -249,14 +249,13 @@ public struct GlanceSpoken: ViewModifier {
 
     public func body(content: Content) -> some View {
         let lines = Dictionary(facts.spoken().map { ($0.label, $0.value) }) { first, _ in first }
-        let said = { (label: String) in lines[label].map { Text(verbatim: $0) } }
         content
-            .accessibilityCustomContent(Text("State"), said("State"))
-            .accessibilityCustomContent(Text("Project"), said("Project"))
-            .accessibilityCustomContent(Text("Computer"), said("Computer"))
-            .accessibilityCustomContent(Text("Branch"), said("Branch"))
-            .accessibilityCustomContent(Text("Model"), said("Model"))
-            .accessibilityCustomContent(Text("Pull request"), said("Pull request"))
+            .accessibilityCustomContent("State", lines["State"])
+            .accessibilityCustomContent("Project", lines["Project"])
+            .accessibilityCustomContent("Computer", lines["Computer"])
+            .accessibilityCustomContent("Branch", lines["Branch"])
+            .accessibilityCustomContent("Model", lines["Model"])
+            .accessibilityCustomContent("Pull request", lines["Pull request"])
     }
 }
 
