@@ -19,6 +19,7 @@ import { IS_MAC, RUN } from "../home";
 import { locked, textOf, writePrivate } from "../files";
 import { KEY, macsOf, mailFor, ownKey, peersOf, removedBoxes } from "../peers/known";
 import { readTold, toldKeys } from "./told";
+import { awaySince, readReach } from "../peers/reach";
 import { readLink } from "../state";
 import { allItems, changeQueues, OWNER, WORK_QUEUE } from "./store";
 import type { Book } from "./store";
@@ -120,7 +121,8 @@ export function readNumbers(file = NUMBERS_FILE): Numbers {
 export function primaryOf(link: LinkState | null | undefined = readLink(), file = NUMBERS_FILE, now = Date.now()): Primary {
   const kept = readNumbers(file);
   const own = link ? ownKey(link) : null;
-  const all = candidatesOf(link, kept, own, file);
+  const gone = goneOf(link, now);
+  const all = candidatesOf(link, kept, own, file, gone);
   const macs = IS_MAC ? [] : macsOf(link);
   // (A machine set up from a Mac never numbers on its own.)
   const choices = macs.length ? all.filter(each => !each.self) : all;
@@ -128,7 +130,7 @@ export function primaryOf(link: LinkState | null | undefined = readLink(), file 
   const keptKey = kept.primary === "self" || (own && kept.primary === own) ? "self" : kept.primary;
   let current: Candidate | null | "away" = null;
   if (keptKey === "self") current = all.find(each => each.self) ?? null;
-  else if (keptKey) {
+  else if (keptKey && !gone.has(keptKey)) {
     current = all.find(each => each.key === keptKey) ?? null;
     // Not heard of now (one of its Macs whose peers document isn't here yet, one a peer stopped
     // naming for a while, no link yet): it waits, so a box never goes back and forth between two;
@@ -147,15 +149,36 @@ export function primaryOf(link: LinkState | null | undefined = readLink(), file 
   return { away: true };
 }
 
-/** How long a box's primary may go unheard of (no peer names it) before it's taken to be gone. */
+/** How long a box's primary may go unheard of (no peer names it), or not answer the box that reaches
+ * it, before it's taken to be gone. */
 export const LOST_FOR = 3 * 86_400_000;
+
+/** The computers taken to be gone, for numbering: a peer that hasn't answered this box for days
+ * (a Mac set up again with new keys, or put away, that its machines still list a while), and a
+ * primary a peer says the same of (one this box doesn't reach itself). Heard from again, it's back,
+ * and the earliest again: a box moves back to it, and it moves past what was numbered meanwhile
+ * (`top`). */
+function goneOf(link: LinkState | null | undefined, now: number): Set<string> {
+  const gone = new Set<string>();
+  const peers = peersOf(link);
+  const reach = readReach();
+  for (const peer of peers) {
+    const away = awaySince(peer.key, reach);
+    if (away !== null && now - away > LOST_FOR) gone.add(peer.key);
+  }
+  for (const peer of peers) {
+    const named = readTold(peer.key)?.primary;
+    if (named?.away !== undefined && now - named.away > LOST_FOR && !peers.some(each => each.key === named.key)) gone.add(named.key);
+  }
+  return gone;
+}
 
 /** Whether the primary this box keeps is one it hears of now: for `notePrimaryNow`, which notes
  * since when it hasn't been. */
-function keptHeardOf(link: LinkState | null | undefined, kept: Numbers, file: string): boolean {
+function keptHeardOf(link: LinkState | null | undefined, kept: Numbers, file: string, now: number): boolean {
   if (!kept.primary || kept.primary === "self") return true;
   const own = link ? ownKey(link) : null;
-  return kept.primary === own || candidatesOf(link, kept, own, file).some(each => each.key === kept.primary);
+  return kept.primary === own || candidatesOf(link, kept, own, file, goneOf(link, now)).some(each => each.key === kept.primary);
 }
 
 /** A computer that may be the primary: this box, a peer, or a primary a peer named (reached
@@ -178,13 +201,13 @@ const earlier = (a: Candidate, b: Candidate): boolean => (a.kind !== b.kind ? a.
 // A Mac first, then the one set up first (one that hasn't said is last), then by key.
 const rank = (a: Candidate, b: Candidate): number => (a.kind === b.kind ? 0 : a.kind === "mac" ? -1 : 1) || a.since - b.since || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0);
 
-function candidatesOf(link: LinkState | null | undefined, kept: Numbers, own: string | null, file: string): Candidate[] {
+function candidatesOf(link: LinkState | null | undefined, kept: Numbers, own: string | null, file: string, gone: Set<string> = goneOf(link, Date.now())): Candidate[] {
   const all: Candidate[] = [{ key: own ?? "self", kind: IS_MAC ? "mac" : "machine", since: kept.since ?? ownSince(Date.now(), file), self: true }];
-  const peers = peersOf(link);
+  const peers = peersOf(link).filter(peer => !gone.has(peer.key));
   for (const peer of peers) all.push({ key: peer.key, kind: peer.kind, since: readTold(peer.key)?.since ?? Number.MAX_SAFE_INTEGER, peer, name: peer.name });
   for (const peer of peers) {
     const named = readTold(peer.key)?.primary;
-    if (!named || named.key === own) continue;
+    if (!named || named.key === own || gone.has(named.key)) continue;
     const known = all.find(each => each.key === named.key);
     if (known) {
       if (known.since === Number.MAX_SAFE_INTEGER && named.since) known.since = named.since;
@@ -352,7 +375,7 @@ export function askToSend({ file = NUMBERS_FILE, now = Date.now() }: { file?: st
 export function notePrimaryNow(link: LinkState | null | undefined = readLink(), { file = NUMBERS_FILE, now = Date.now() }: { file?: string; now?: number } = {}): void {
   // Since when the one it keeps hasn't been heard of.
   const before = readNumbers(file);
-  const heard = keptHeardOf(link, before, file);
+  const heard = keptHeardOf(link, before, file, now);
   if (heard === (before.lost !== undefined)) changeNumbers(numbers => {
     if (heard) delete numbers.lost;
     else numbers.lost ??= now;
@@ -411,7 +434,7 @@ export function numberWaiting(book: Book, primary: Primary, granted: Ranges | nu
   const now = options.now ?? Date.now();
   if (granted) {
     for (const item of book.items()) {
-      if (item.wanted === undefined || item.number !== undefined || !OWNER.test(item.owner)) continue;
+      if (item.wanted === undefined || item.number !== undefined || item.source || !OWNER.test(item.owner)) continue;
       if (inRanges(granted, item.wanted)) item.number = item.wanted;
       else {
         item.notes.push({ at: now, by: { user: true }, text: `Imported as #${item.wanted}, a number that couldn't be kept (another of your computers was given it already, or it's far past the numbers in use), so it has a new one.` });

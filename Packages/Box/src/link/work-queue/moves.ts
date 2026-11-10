@@ -8,7 +8,7 @@ import path from "node:path";
 import { isObject } from "../../shared/json";
 import { categories, keepCategory } from "./categories";
 import { categoryNamed } from "./categories";
-import { changeQueues, FILE_NAME, filesOf, itemOf, KEPT_OWNER, OWNER, readQueueSettingAside, type Item } from "./store";
+import { changeQueues, FILE_NAME, filesOf, itemOf, OWNER, readKeptQueue, readQueueSettingAside, type Item } from "./store";
 
 /** What a move carries: each owner's items, the custom categories they're in, and which items
  * have files (packed beside `move.json`, in `work-queue/<item>/`). */
@@ -20,7 +20,8 @@ export interface CarriedQueues {
 
 /** The queues of `owners`, as a move carries them; null for none. */
 export function packWorkQueues(owners: readonly string[]): CarriedQueues | null {
-  const items = owners.filter(owner => KEPT_OWNER.test(owner)).flatMap(owner => readQueueSettingAside(owner).items);
+  // (One of a kind a newer box keeps goes only when it reads whole here: else it stays, as it is.)
+  const items = owners.flatMap(owner => (OWNER.test(owner) ? readQueueSettingAside(owner).items : readKeptQueue(owner)?.items ?? []));
   if (!items.length) return null;
   const used = new Set(items.map(item => item.category));
   return {
@@ -58,6 +59,8 @@ export function placeWorkQueues(carried: unknown, owners: readonly string[], ope
   for (const item of items) if (!categoryNamed(item.category)) item.category = "next";
   changeQueues(book => {
     for (const item of items) {
+      // (Not into a queue of a kind a newer box keeps here that this one can't read whole.)
+      try { book.queue(item.owner); } catch { continue; }
       const before = book.find({ id: item.id });
       if (before) book.queue(before.owner).items = book.queue(before.owner).items.filter(each => each.id !== item.id);
       book.queue(item.owner).items.push(item);
@@ -86,7 +89,7 @@ export function forgetWorkQueues(owners: readonly string[]): void {
   const gone = new Set(owners);
   changeQueues(book => {
     for (const owner of gone) {
-      if (!KEPT_OWNER.test(owner)) continue;
+      if (!OWNER.test(owner) && !readKeptQueue(owner)) continue;
       const queue = book.queue(owner);
       for (const item of queue.items) fs.rmSync(filesOf(item.id), { recursive: true, force: true });
       queue.items = [];

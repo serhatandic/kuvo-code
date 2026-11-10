@@ -16,7 +16,7 @@ import { boxOf } from "../letters/calls";
 import { placeOfSession } from "../letters/letter";
 import { rootOf } from "../letters/tools";
 import { frozen } from "../moves/records";
-import { peersOf } from "../peers/known";
+import { peersOf, removedBoxes } from "../peers/known";
 import { awaySince } from "../peers/reach";
 import { readLink } from "../state";
 import { categories, categoryNamed, keepCategory } from "./categories";
@@ -26,6 +26,7 @@ import {
   type Book, type Item, type Who,
 } from "./store";
 import { mailsFor } from "./parts";
+import { numberWaiting, primaryOf } from "./numbers";
 import { nameOf } from "./view";
 import type { PeerPlaces } from "../engine/client";
 import type { MailSender, Peer } from "../peers/known";
@@ -76,19 +77,42 @@ function handPayload(item: Item): Record<string, unknown> {
   return { hand: { id: handing!.id, to: handing!.to, from: item.owner, by: handing!.by, at: handing!.at, item: rest, files, ...(category ? { categories: [{ id: category.id, name: category.name }] } : {}) } };
 }
 
+/** Hand-offs that can't go on, given back, each with a note of why: one to a computer you removed,
+ * or that's no longer one of yours (and its conversation isn't on another), at once; any other
+ * after 30 days. On every round, with the relay or without. What's on its way still. */
+export function handUpkeep(link: LinkState | null, now = Date.now()): Item[] {
+  if (!link?.key) return [];
+  const handing = allItems().filter(item => item.handing && !item.removed);
+  if (!handing.length) return [];
+  const peers = peersOf(link);
+  const removed = removedBoxes(link);
+  const gone = (item: Item) => !boxOf(item.handing!.to, link) && (removed.has(item.handing!.key) || !peers.some(peer => peer.key === item.handing!.key));
+  const late = handing.filter(item => now - item.handing!.at > HAND_LIFE);
+  const left = handing.filter(item => !late.includes(item) && gone(item));
+  if (late.length) giveBack(late.map(item => item.handing!.id), "it couldn't be reached for 30 days", now);
+  if (left.length) giveBack(left.map(item => item.handing!.id), "that computer isn't one of yours any more", now);
+  return handing.filter(item => !late.includes(item) && !left.includes(item));
+}
+
+// When the hand-offs were last looked after on a round without the relay: once a minute.
+let lookedAfter = 0;
+
+/** `handUpkeep` on a box's rounds while it isn't on the relay (on it, `sendHandings` does it). */
+export function handUpkeepSoon(link: LinkState | null, now = Date.now()): void {
+  if (now - lookedAfter < 60_000) return;
+  lookedAfter = now;
+  handUpkeep(link, now);
+}
+
 /** The items on their way to another computer, sent (`across.ts`' rounds): to the box their
- * conversation lives on now, again each minute until it says it has them; given up after 30 days,
- * with a note. Nothing goes to a box that isn't answering. */
+ * conversation lives on now, again each minute until it says it has them (`handUpkeep` first).
+ * Nothing goes to a box that isn't answering. */
 export function sendHandings(host: Pick<LinkHost, "send">, link: LinkState | null, targets: Target[], now = Date.now()): void {
   void targets;
-  if (!link?.key) return;
-  const handing = allItems().filter(item => item.handing && !item.removed);
-  if (!handing.length) return;
+  const handing = handUpkeep(link, now);
+  if (!link?.key || !handing.length) return;
   const peers = peersOf(link);
-  const late = handing.filter(item => now - item.handing!.at > HAND_LIFE);
-  if (late.length) giveBack(late.map(item => item.handing!.id), "it couldn't be reached for 30 days", now);
   for (const item of handing) {
-    if (late.includes(item)) continue;
     const last = sent.get(item.handing!.id);
     if (last && now - last.at < 60_000) continue;
     // Where it lives now (it may have moved since), else where it was.
@@ -104,6 +128,16 @@ export function sendHandings(host: Pick<LinkHost, "send">, link: LinkState | nul
       sent.set(item.handing!.id, { at: now, key: peer.key });
     } catch {}
   }
+}
+
+/** `item`'s hand-off called off (you deleted it, or an agent did): it isn't sent again. (One that got
+ * there already is that computer's, as its view says.) */
+export function callOffHanding(item: Item, who: Who, now: number): void {
+  if (!item.handing) return;
+  const { id, name, to } = item.handing;
+  delete item.handing;
+  item.notes.push({ at: now, by: who, text: `Its hand-off to ${name || to} on another computer was called off.` });
+  sent.delete(id);
 }
 
 /** Hand-offs that won't go, back as they were, each with a note of why. */
@@ -194,6 +228,7 @@ export async function handArrived(sender: MailSender, given: unknown, reply: (pa
   const by: Who = typeof (kept as { name?: unknown }).name === "string" ? { ...kept, name: plainName((kept as { name: string }).name).slice(0, 100) } as Who : kept;
   let refused: string | null = null;
   let again = false;
+  const primary = primaryOf();
   changeQueues((book: Book) => {
     const here = book.find({ id: item.id });
     // One handed from here that hasn't heard it arrived yet (its receipt lost) and comes back: it
@@ -220,6 +255,8 @@ export async function handArrived(sender: MailSender, given: unknown, reply: (pa
       fs.mkdirSync(filesOf(item.id), { recursive: true, mode: 0o700 });
       fs.writeFileSync(path.join(filesOf(item.id), file.name), file.bytes, { mode: 0o600 });
     }
+    // (One that came without a number takes one here, as one added here would.)
+    if (item.number === undefined) numberWaiting(book, primary, null);
   }, now, { onItsOwn: true });
   if (again) return answer(false, `${HERE} is still handing that item on: it comes again once that's done.`, true);
   if (refused) return answer(false, refused);

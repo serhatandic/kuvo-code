@@ -243,14 +243,30 @@ const readQueueOrNone = (owner: string): Queue => {
   }
 };
 
-/** The owners with a queue here (one a newer box keeps, of a kind this box doesn't know, too: kept
- * as it is). */
+/** The owners with a queue here. (A queue of a kind a newer box keeps, of an owner this box doesn't
+ * know, isn't one: it's read only when a move carries it, `readKeptQueue`, and never changed here
+ * otherwise.) */
 export function owners(): string[] {
-  return listOf(QUEUES).filter(name => name.endsWith(".json")).map(name => name.slice(0, -5)).filter(owner => KEPT_OWNER.test(owner));
+  return listOf(QUEUES).filter(name => name.endsWith(".json")).map(name => name.slice(0, -5)).filter(owner => OWNER.test(owner));
 }
 
 /** Every queue here. */
 export const readAll = (): Queue[] => onceEach(owners().map(readQueueOrNone));
+
+/** A queue of a kind a newer box keeps (`KEPT_OWNER`, not `OWNER`), as a move carries it: only when
+ * every item in it reads as one here, else null (left as it is, and where it is). */
+export function readKeptQueue(owner: string): Queue | null {
+  if (!KEPT_OWNER.test(owner) || OWNER.test(owner)) return null;
+  let kept: unknown;
+  try {
+    kept = JSON.parse(fs.readFileSync(fileOf(owner), "utf8"));
+  } catch {
+    return null;
+  }
+  if (!isObject(kept) || !Array.isArray(kept.items)) return null;
+  const items = kept.items.map(each => itemOf(each, owner));
+  return items.every(each => each !== null) ? { owner, items: items as Item[] } : null;
+}
 
 /** An item two queues hold (a hand-off or a move cut off between its two writes) kept once: in the
  * queue it went to last (the newer change), the queues changed in place. */
@@ -269,7 +285,7 @@ function onceEach(queues: Queue[]): Queue[] {
 }
 
 /** Every item here, of every owner (deleted ones too). */
-export const allItems = (): Item[] => readAll().filter(queue => OWNER.test(queue.owner)).flatMap(queue => queue.items);
+export const allItems = (): Item[] => readAll().flatMap(queue => queue.items);
 
 /** The queues here as one change sees them: each read once, written back if it changed. */
 export class Book {
@@ -291,8 +307,16 @@ export class Book {
     return queue;
   }
 
-  /** An owner's queue (made when it has none). */
+  /** An owner's queue (made when it has none). One of a kind a newer box keeps is read now, only
+   * here (a move's), and only when it reads whole (`readKeptQueue`); one that doesn't is refused,
+   * left as it is. */
   queue(owner: string): Queue {
+    if (!OWNER.test(owner) && !this.queues.has(owner)) {
+      const kept = fs.existsSync(fileOf(owner)) ? readKeptQueue(owner) : { owner, items: [] };
+      if (!kept) throw new Refusal(`${owner}'s Work Queue was kept by a newer Kuvo Code, in a way this one can't read: it's left as it is.`);
+      this.queues.set(owner, kept);
+      this.before.set(owner, JSON.stringify(kept.items));
+    }
     return this.load(owner);
   }
 
@@ -356,7 +380,7 @@ export function changeQueues<T>(work: (book: Book) => T, now = Date.now(), { onI
       book = new Book();
     }
     const purged: string[] = [];
-    for (const queue of owners().filter(owner => OWNER.test(owner)).map(owner => book.queue(owner))) {
+    for (const queue of owners().map(owner => book.queue(owner))) {
       const gone = queue.items.filter(item => item.removed && now - item.removed.at > KEPT_REMOVED);
       if (!gone.length) continue;
       queue.items = queue.items.filter(item => !gone.includes(item));

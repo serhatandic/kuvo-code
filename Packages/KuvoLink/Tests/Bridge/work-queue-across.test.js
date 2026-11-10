@@ -136,7 +136,7 @@ beforeEach(() => {
   write(path.join(run, "engine.json"), { ...target, version: "0.0.0" });
   sent.length = 0;
   calling.clear();
-  link.tellQueuesAgain();
+  link.forgetQueuesTold();
   fresh();
   agentsTold();
 });
@@ -192,11 +192,15 @@ test("what your other computers told shows in the All view and a lead's view, wi
   const shown = await tool("queue_show", { item: 500 }, "ses_lead");
   assert.match(shown.text, /^#500 "Item 500" · In progress \(kept in Next\) · on lab, in the queue of ses_far/);
 
-  // What lab told a moment before, come late, is had but not kept over what it told since.
+  // What lab told a moment before, come late, isn't kept over what it told since, nor said to be
+  // had (had, lab would never send it again, were it what lab tells next).
   const late = telling([told(503, "ses_far")], { at: tellsNow.told.at - 5000 });
   receive(lab, { workQueue: late });
-  assert.deepEqual(mailTo(lab).map(each => each.workQueue), [{ had: late.told.id }]);
+  assert.deepEqual(mailTo(lab), []);
   assert.equal((await view("all")).items.some(item => item.number === 503), false);
+  // The same again (lab's had lost): had again.
+  receive(lab, { workQueue: tellsNow });
+  assert.deepEqual(mailTo(lab).map(each => each.workQueue), [{ had: tellsNow.told.id }]);
   // One an hour "older" is lab's clock set back: its newer word after all.
   const setBack = telling([told(504, "ses_far")], { at: tellsNow.told.at - 3_600_000 });
   receive(lab, { workQueue: setBack });
@@ -443,4 +447,161 @@ test("an item handed here from another computer lands in its conversation's queu
   const refused = mailTo(lab).map(each => each.workQueue.handed);
   assert.equal(refused[0].ok, false);
   assert.match(refused[0].why, /There's no conversation ses_nobody on /);
+});
+
+test("a hand-off to a computer that's no longer one of yours comes back at once, relay or not; one that waits 30 days too; and deleting one calls it off", async () => {
+  write(path.join(queues, "numbers.json"), { primary: mac.pub, leases: [[100, 149]] });
+  await tool("queue_add", { title: "Stuck" }, "ses_lead");
+  assert.equal((await tool("queue_hand", { item: "#100", to: "ses_far" }, "ses_lead")).isError, false);
+  // You remove lab, the only machine that took the Work Queue's mail: back at the next round,
+  // though nothing's told now.
+  fresh({ peers: [mac, here] });
+  agentsTold({ [mac.pub]: { at: 1, heard: Date.now(), kind: "mac", list: [], features: ["work-queue"] } });
+  await link.pushQueues(host, link.readLink(), targets, Date.now());
+  const back = await tool("queue_show", { item: 100 }, "ses_lead");
+  assert.match(back.text, /Couldn't be handed to Far on another computer: that computer isn't one of yours any more\. It's still here\./);
+  assert.equal((await tool("queue_update", { item: 100, note: "Mine again" }, "ses_lead")).isError, false);
+
+  // One waiting on lab while this box is off the relay: given up after 30 days all the same.
+  fresh();
+  agentsTold();
+  assert.equal((await tool("queue_hand", { item: "#100", to: "ses_far" }, "ses_lead")).isError, false);
+  link.handUpkeep(link.readLink(), Date.now() + 1000);
+  assert.equal((await view("ses_lead")).items.find(item => item.number === 100).handing?.to, "ses_far", "on its way still");
+  link.handUpkeep(link.readLink(), Date.now() + 31 * 86_400_000);
+  assert.match((await tool("queue_show", { item: 100 }, "ses_lead")).text, /it couldn't be reached for 30 days\. It's still here\./);
+
+  // You delete one on its way: its hand-off is called off, and it goes no more.
+  await tool("queue_hand", { item: "#100", to: "ses_far" }, "ses_lead");
+  const deleted = await route("DELETE", "kuvo/work-queue/items/100");
+  assert.equal(deleted.status, 200, JSON.stringify(deleted.body));
+  sent.length = 0;
+  await link.pushQueues(host, link.readLink(), targets, Date.now() + 120_000);
+  assert.equal(mailTo(lab).filter(each => each.workQueue.hand).length, 0);
+  const restored = await route("POST", "kuvo/work-queue/items/100/restore");
+  assert.equal(restored.status, 200);
+  assert.match((await tool("queue_show", { item: 100 }, "ses_lead")).text, /Its hand-off to Far on another computer was called off\./);
+  // An agent's queue_remove calls one off too.
+  await tool("queue_hand", { item: "#100", to: "ses_far" }, "ses_lead");
+  assert.equal((await tool("queue_remove", { item: 100 }, "ses_lead")).isError, false);
+  // One that had got to lab already (its receipt lost) is lab's: the copy deleted here never hides it.
+  const id = (await view("ses_lead")).removed[0].id;
+  receive(lab, { workQueue: telling([told(100, "ses_far", { id, title: "Stuck", updated: { at: Date.now(), by: { user: true } } })]) });
+  const all = await view("all");
+  assert.equal(all.items.find(item => item.id === id)?.computer?.name, "lab");
+});
+
+test("an item handed here without a number takes one as it arrives", async () => {
+  write(path.join(queues, "numbers.json"), { primary: mac.pub, leases: [[100, 149]] });
+  const { number: _, ...item } = told(1, "ses_farlead", { id: "wqi_handedwithoutnumber1", body: "", notes: [], files: [], links: [], handed: [] });
+  await takeFrom(lab, { hand: { id: "wqh_nonumber00000001", to: "ses_child", from: "ses_farlead", by: { user: true }, at: Date.now(), item, files: [] } });
+  assert.deepEqual(mailTo(lab).map(each => each.workQueue), [{ handed: { id: "wqh_nonumber00000001", ok: true } }]);
+  assert.equal((await route("GET", "kuvo/work-queue/items/wqi_handedwithoutnumber1")).body.item.number, 100);
+});
+
+test("an outside source's item never takes a number an import claimed", async () => {
+  const file = path.join(queues, "numbers.json");
+  write(file, { primary: mac.pub, leases: [], asking: { id: "wqn_sourcesource01", count: 50, since: 1, claims: [[40, 41]] } });
+  await tool("queue_add", { title: "Ours" }, "ses_lead");
+  const lead = path.join(queues, "queues", "ses_lead.json");
+  const kept = read(lead);
+  kept.items.push({ ...kept.items[0], id: "wqi_sourcewantedsource01", wanted: 40, title: "An issue", source: { kind: "github", ref: "gh:o/r#1" } });
+  kept.items.push({ ...kept.items[0], id: "wqi_importedwantedimp001", wanted: 41, title: "Imported" });
+  write(lead, kept);
+  assert.equal(link.blockArrived({ id: "wqn_sourcesource01", from: 300, to: 349, granted: [[40, 41]] }, link.primaryOf(link.readLink())), true);
+  const items = (await view("ses_lead")).items;
+  assert.equal(items.find(item => item.title === "An issue").number, undefined);
+  assert.equal(items.find(item => item.title === "Imported").number, 41);
+});
+
+test("a duplicate told by two computers (one handed between them, the first not told again yet) shows once, as the newer word says", async () => {
+  const id = "wqi_handedbetweenboxes01";
+  receive(mac, { workQueue: telling([told(800, "ses_far", { id, title: "Stale", updated: { at: 2000, by: { user: true } } })], { kind: "mac" }) });
+  receive(lab, { workQueue: telling([told(800, "ses_far", { id, title: "Live", updated: { at: 9000, by: { user: true } } })]) });
+  sent.length = 0;
+  const shown = (await view("all")).items.filter(item => item.id === id);
+  assert.deepEqual(shown.map(item => [item.title, item.computer.name]), [["Live", "lab"]]);
+  assert.equal((await route("GET", "kuvo/work-queue/refs?refs=800")).body.refs["800"].computer.name, "lab");
+});
+
+test("a change from a client tells your other computers sooner, never more often than every 15 seconds, and not what they have", async () => {
+  write(path.join(queues, "numbers.json"), { primary: mac.pub, leases: [[100, 149]] });
+  await tool("queue_add", { title: "First" }, "ses_lead");
+  const now = Date.now();
+  await link.pushQueues(host, link.readLink(), targets, now);
+  assert.equal(mailTo(lab).length, 1);
+  sent.length = 0;
+  // You move it: lab hasn't said it has the first yet. Not within 15 seconds of the last.
+  link.tellQueuesAgain();
+  await link.pushQueues(host, link.readLink(), targets, now + 1000);
+  assert.equal(mailTo(lab).length, 0, "not within 15 seconds");
+  await link.pushQueues(host, link.readLink(), targets, now + 16_000);
+  const again = mailTo(lab);
+  assert.equal(again.length, 1, "sooner than a minute");
+  sent.length = 0;
+  // Had: a client's change that changed nothing told sends nothing.
+  receive(lab, { workQueue: { had: again[0].workQueue.told.id } });
+  receive(mac, { workQueue: { had: again[0].workQueue.told.id } });
+  sent.length = 0;
+  link.tellQueuesAgain();
+  await link.pushQueues(host, link.readLink(), targets, now + 40_000);
+  assert.equal(mailTo(lab).length, 0);
+});
+
+test("the primary's custom categories are this box's: added, renamed and removed as it says; one still in use here, and one only this box has, stay", async () => {
+  write(path.join(queues, "numbers.json"), { primary: mac.pub, leases: [[100, 149]] });
+  const names = async () => (await route("GET", "kuvo/work-queue/categories")).body.categories.filter(each => !each.builtIn).map(each => `${each.id}=${each.name}`);
+  receive(mac, { workQueue: telling([], { kind: "mac", categories: [{ id: "cat_design", name: "Design" }, { id: "cat_review", name: "Review" }, { id: "cat_used", name: "Used" }] }) });
+  assert.deepEqual(await names(), ["cat_design=Design", "cat_review=Review", "cat_used=Used"]);
+  await tool("queue_categories", { add: "Mine" }, "ses_lead");
+  await tool("queue_add", { title: "In use", category: "Used" }, "ses_lead");
+  receive(mac, { workQueue: telling([], { kind: "mac", categories: [{ id: "cat_review", name: "Reviewing" }] }) });
+  assert.deepEqual(await names(), ["cat_review=Reviewing", "cat_used=Used", "cat_mine=Mine"]);
+  // Not from another computer than the primary.
+  receive(lab, { workQueue: telling([], { categories: [{ id: "cat_labs", name: "Lab's" }] }) });
+  assert.deepEqual(await names(), ["cat_review=Reviewing", "cat_used=Used", "cat_mine=Mine"]);
+  // Emptied here, the one the primary removed goes with its next word.
+  await tool("queue_update", { item: 100, category: "Next" }, "ses_lead");
+  receive(mac, { workQueue: telling([], { kind: "mac", categories: [{ id: "cat_review", name: "Reviewing" }] }) });
+  assert.deepEqual(await names(), ["cat_review=Reviewing", "cat_mine=Mine"]);
+  // A primary reached through a peer: its list as that peer tells it.
+  const first = box("mac", "Old Mac");
+  receive(lab, { workQueue: telling([], { categories: [{ id: "cat_old", name: "Old" }], primary: { key: first.pub, kind: "mac", since: 500 } }) });
+  assert.equal(link.primaryOf(link.readLink()).via?.key, lab.pub);
+  receive(lab, { workQueue: telling([], { categories: [{ id: "cat_old", name: "Old" }], primary: { key: first.pub, kind: "mac", since: 500 } }) });
+  assert.deepEqual(await names(), ["cat_old=Old", "cat_mine=Mine"]);
+  sent.length = 0;
+});
+
+test("a first computer that's gone (put away, or set up again with new keys) stops being the primary once it hasn't answered for days; heard again, it's the primary again", async () => {
+  const file = path.join(queues, "numbers.json");
+  // A machine set up from two Macs: the first one set up is the primary.
+  fresh({ macs: [mac, later] });
+  write(file, { primary: mac.pub, leases: [] });
+  write(path.join(queues, "peers", `${mac.pub}.json`), { id: "wqt_aaaaaaaaaaaa", at: 1, heard: 1, kind: "mac", since: 1_000, items: [], owners: [], categories: [] });
+  write(path.join(queues, "peers", `${later.pub}.json`), { id: "wqt_bbbbbbbbbbbb", at: 1, heard: 1, kind: "mac", since: 9_000, items: [], owners: [], categories: [] });
+  const now = Date.now();
+  assert.equal(link.primaryOf(link.readLink(), file, now).peer.key, mac.pub);
+  // It stops answering: a day, still the primary; past three, the next.
+  write(path.join(run, "peer-reach.json"), { [mac.pub]: now - 86_400_000 });
+  assert.equal(link.primaryOf(link.readLink(), file, now).peer.key, mac.pub);
+  // What this box tells says so, for a box that reaches that Mac only through this one.
+  assert.deepEqual((await link.queueTellingNow(targets, link.readLink())).payload.told.primary, { key: mac.pub, kind: "mac", since: 1_000, away: now - 86_400_000 });
+  write(path.join(run, "peer-reach.json"), { [mac.pub]: now - 4 * 86_400_000 });
+  assert.equal(link.primaryOf(link.readLink(), file, now).peer.key, later.pub);
+  link.notePrimaryNow(link.readLink(), { file, now });
+  assert.equal(link.readNumbers(file).primary, later.pub);
+  // Heard from again: the first again.
+  fs.rmSync(path.join(run, "peer-reach.json"));
+  assert.equal(link.primaryOf(link.readLink(), file, now).peer.key, mac.pub);
+
+  // A primary this box reaches only through lab, that lab says hasn't answered it for days (the
+  // first Mac, set up again with new keys): not this box's.
+  fresh();
+  write(file, { primary: mac.pub, leases: [] });
+  const old = box("mac", "Old Mac");
+  write(path.join(queues, "peers", `${lab.pub}.json`), { id: "wqt_cccccccccccc", at: 3, heard: 3, kind: "machine", since: 10, items: [], owners: [], categories: [], primary: { key: old.pub, kind: "mac", since: 500, away: now - 4 * 86_400_000 } });
+  assert.equal(link.primaryOf(link.readLink(), file, now).peer.key, mac.pub);
+  write(path.join(queues, "peers", `${lab.pub}.json`), { id: "wqt_cccccccccccc", at: 3, heard: 3, kind: "machine", since: 10, items: [], owners: [], categories: [], primary: { key: old.pub, kind: "mac", since: 500, away: now - 3_600_000 } });
+  assert.equal(link.primaryOf(link.readLink(), file, now).peer.key, old.pub, "away an hour: still the first");
 });

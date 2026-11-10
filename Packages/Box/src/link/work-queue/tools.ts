@@ -16,7 +16,7 @@ import { numberWaiting, primaryOf } from "./numbers";
 import { addItem, applyFileOps, changeItem, handItem, linkSession, Refusal, refuseHanding, refuseMoving, removeItem, restoreItem, stageFiles, type Acting, type Fields, type FilePlaces } from "./ops";
 import { allItems, byUser, changeQueues, matching, whoWords, type Book, type Item, type Who } from "./store";
 import { computerName, itemElsewhere, itemsElsewhere, takesQueues, type ItemElsewhere } from "./across";
-import { elsewhereOf, handElsewhere } from "./hand";
+import { callOffHanding, elsewhereOf, handElsewhere } from "./hand";
 import { readPeerAgents } from "../peers/directory";
 import { awaySince } from "../peers/reach";
 import type { Peer } from "../peers/known";
@@ -294,13 +294,15 @@ async function run(name: string, args: Record<string, unknown>, caller: QueueCal
       const item = change(book => {
         const item = itemFor(book.items(), args.item, caller, overseen);
         refuseMoving([item.owner]);
-        refuseHanding(item);
         if (args.undo === true) {
+          refuseHanding(item);
           if (!item.removed) throw new Refusal(`${nameOf(item)} isn't deleted.`);
           if (byUser(item.removed.by)) throw new Refusal(deletedWords(item));
           restoreItem(book, item, caller.who, now);
         } else {
           if (item.removed) throw new Refusal(`${nameOf(item)} is deleted already.`);
+          // (One on its way to another computer: its hand-off called off.)
+          callOffHanding(item, caller.who, now);
           removeItem(item, caller.who, now);
         }
         return item;

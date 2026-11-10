@@ -9,6 +9,7 @@ import { deliverLeftAnswers, givenUp, macWaiting, outboxSoon, sendOutbox } from 
 import { pushRows } from "../work/elsewhere";
 import { pushNumbers } from "../work-queue/numbers";
 import { pushQueues } from "../work-queue/across";
+import { handUpkeepSoon } from "../work-queue/hand";
 import { attentionGiven } from "../notices/hold";
 import { announce, refreshOwn } from "../peers/agents";
 import { mailFor, peersOf } from "../peers/known";
@@ -64,6 +65,7 @@ export function runMacPeers(): void {
       // its queue told to your other computers as it changes, with what it's handing to theirs.
       try { pushNumbers(host); } catch {}
       if (host?.welcomed) pushQueues(host, readLink(), peerTargets()).catch(() => {});
+      else try { handUpkeepSoon(readLink()); } catch {}
     }, 3_000),
   ];
   macLink.stopPeers = () => {

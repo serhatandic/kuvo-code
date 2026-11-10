@@ -15,6 +15,7 @@ import { importItems, importWords, parseBacklog, readBacklogFiles } from "../wor
 import { numberWaiting, primaryOf } from "../work-queue/numbers";
 import { itemElsewhere, itemsElsewhere, tellQueuesAgain } from "../work-queue/across";
 import { changeItem, Refusal, refuseHanding, refuseMoving, removeItem, restoreItem } from "../work-queue/ops";
+import { callOffHanding } from "../work-queue/hand";
 import { TOLD } from "../work-queue/told";
 import { readLink } from "../state";
 import { allItems, changeQueues, FILE_NAME, filesOf, matching, OWNER, queueFollowers, readAll, WORK_QUEUE, type Item } from "../work-queue/store";
@@ -51,8 +52,9 @@ export async function viewOf(owner: string, targets: Target[], facts?: Facts, si
   // (A queue of a kind a newer box keeps isn't one to show.)
   const all = here.filter(item => owner === ALL || inView(owner, item, overseen));
   const { owners, titles } = await ownersOf(owner, all, known, targets, cache);
-  // Your other computers' items in this view, as each last told them.
-  const elsewhere = itemsElsewhere(owner, readLink(), new Set(here.map(item => item.id)));
+  // Your other computers' items in this view, as each last told them (one deleted here that's live
+  // there, a hand-off called off that had got there, is theirs).
+  const elsewhere = itemsElsewhere(owner, readLink(), new Set(here.filter(item => !item.removed).map(item => item.id)));
   const named = new Set(owners.map(each => each.owner));
   // The categories: this box's, then custom ones only another computer has, before Parked.
   const own = categories();
@@ -222,20 +224,23 @@ export async function* workQueueRoute(context: RouteContext, match: RegExpMatchA
   // One on another of your computers is changed there (a client asks that computer).
   const far = !find(allItems()) ? itemElsewhere(ref) : null;
   if (far) return yield* json(409, { message: `${nameOf(far)} is on ${far.computer.name}: change it there.`, computer: far.computer });
-  const inBook = (work: (item: Item, book: Parameters<Parameters<typeof changeQueues>[0]>[0]) => void) => () => changeQueues(book => {
+  const inBook = (work: (item: Item, book: Parameters<Parameters<typeof changeQueues>[0]>[0]) => void, { handing = false } = {}) => () => changeQueues(book => {
     const item = find(book.items());
     if (!item) throw new Missing("There's no item like that.");
     refuseMoving([item.owner]);
-    refuseHanding(item);
+    if (!handing) refuseHanding(item);
     work(item, book);
     numberWaiting(book, primary, null);
     return item;
   });
+  // (Deleting one on its way to another computer calls its hand-off off: one stuck going to a
+  // computer that doesn't answer is yours to let go of.)
   if (action === undefined && method === "DELETE") {
     return yield* changed(inBook(item => {
       if (item.removed) throw new Refusal("It's deleted already.");
+      callOffHanding(item, YOU, now);
       removeItem(item, YOU, now);
-    }), json);
+    }, { handing: true }), json);
   }
   if (action === "restore" && method === "POST") {
     return yield* changed(inBook((item, book) => {

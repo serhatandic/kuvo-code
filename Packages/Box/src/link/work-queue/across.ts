@@ -15,7 +15,7 @@ import { readPeerAgents } from "../peers/directory";
 import { ownKey, peersOf, removedBoxes } from "../peers/known";
 import { awaySince } from "../peers/reach";
 import { readLink } from "../state";
-import { categories, keepCategory } from "./categories";
+import { categories, takePrimaryCategories } from "./categories";
 import { handArrived, handedBack, sendHandings } from "./hand";
 import { mailsFor, takePart } from "./parts";
 import { movePast, ownSince, primaryOf, takeNumbersMail, topOf } from "./numbers";
@@ -57,8 +57,12 @@ export function numberingNow(link: LinkState | null): Numbering {
   let named: Numbering["primary"];
   if ("self" in primary) named = own ? { key: own, kind, since } : undefined;
   else if ("peer" in primary) {
-    const told = primary.via ? readTold(primary.via.key)?.primary?.since : readTold(primary.peer.key)?.since;
-    named = { key: primary.peer.key, kind: primary.peer.kind, ...(told ? { since: told } : {}) };
+    // (With since when it hasn't answered, where it doesn't: a box that reaches it through this
+    // one counts it gone after a while, as this one does.)
+    const through = primary.via ? readTold(primary.via.key)?.primary : undefined;
+    const since = primary.via ? through?.since : readTold(primary.peer.key)?.since;
+    const away = primary.via ? through?.away : awaySince(primary.peer.key) ?? undefined;
+    named = { key: primary.peer.key, kind: primary.peer.kind, ...(since ? { since } : {}), ...(away ? { away } : {}) };
   }
   return { kind, since, top: topOf(), ...(named ? { primary: named } : {}) };
 }
@@ -86,7 +90,7 @@ export async function tellingNow(targets: Target[], link: LinkState | null, sign
 }
 
 // What this box last told each computer: the id, whether it said it has it, and when it last went.
-const pushed = new Map<string, { id: string; done: boolean; sent: number }>();
+const pushed = new Map<string, { id: string; done: boolean; sent: number; soon?: boolean }>();
 let telling: Telling | null = null;
 let builtAt = -Infinity;
 let builtMarks = "";
@@ -103,16 +107,17 @@ let titlesAt = 0;
 /** This box's Work Queue told to each computer that takes it, on its rounds: worked out again when
  * a queue changes, and each minute (who's at work changes it too); to one computer once in 15
  * seconds at most, again each minute until it says it has it, and nothing while it's the same and
- * had; nothing while that computer isn't answering. Then the items it's handing to another
- * computer's conversations go (`hand.ts`). */
+ * had; nothing while that computer isn't answering. The items it's handing to another computer's
+ * conversations go first (`hand.ts`), whatever's told. */
 export async function pushQueues(host: Pick<LinkHost, "send">, link: LinkState | null = readLink(), targets: Target[], now = Date.now()): Promise<void> {
-  if (!link?.key || building) return;
+  if (!link?.key) return;
   const peers = peersOf(link);
   // What's kept of computers you removed goes.
   const removed = removedBoxes(link);
   for (const key of toldKeys()) if (removed.has(key)) forgetTold(key);
+  sendHandings(host, link, targets, now);
   // (Nothing to work out while no computer takes it.)
-  if (!peers.some(peer => takesQueues(peer.key))) return;
+  if (building || !peers.some(peer => takesQueues(peer.key))) return;
   const changed = marks();
   if (!telling || changed !== builtMarks || now - builtAt > 60_000) {
     building = true;
@@ -134,8 +139,11 @@ export async function pushQueues(host: Pick<LinkHost, "send">, link: LinkState |
   for (const peer of peers) {
     if (!takesQueues(peer.key) || awaySince(peer.key) !== null) continue;
     const before = pushed.get(peer.key);
-    if (before?.id === telling.id && (before.done || now - before.sent < 60_000)) continue;
-    if (before && before.id !== telling.id && now - before.sent < TELL_SPACING) continue;
+    // (Had: nothing while it's the same. Never two to one computer within 15 seconds; the same one
+    // again after a minute, or sooner when this box's queue was changed from a client.)
+    if (before?.id === telling.id && before.done) continue;
+    if (before && now - before.sent < TELL_SPACING) continue;
+    if (before?.id === telling.id && !before.soon && now - before.sent < 60_000) continue;
     const mails = fittedMails(peer, telling, link, now);
     if (!mails) continue;
     try {
@@ -143,7 +151,6 @@ export async function pushQueues(host: Pick<LinkHost, "send">, link: LinkState |
       pushed.set(peer.key, { id: telling.id, done: false, sent: now });
     } catch {}
   }
-  sendHandings(host, link, targets, now);
 }
 
 // What's told, as mails for `peer`: whole, or, too big even in parts, with its items cut (Done ones
@@ -168,26 +175,36 @@ export function queuesBack(key: string): void {
   if (before && !before.done) pushed.set(key, { ...before, sent: 0 });
 }
 
-/** Told again from the start (a test's, or a box that asks for agents: it may have missed it). */
+/** Told again: to `key` from the start (a box that asks for agents: it may have missed it); to every
+ * computer, what it hasn't said it has, at the next round rather than after a minute (a change from
+ * a client), never sooner than 15 seconds after the last. */
 export function tellQueuesAgain(key?: string): void {
-  if (key) pushed.delete(key);
-  else pushed.clear();
+  if (key) return void pushed.delete(key);
+  for (const [each, before] of pushed) if (!before.done) pushed.set(each, { ...before, soon: true });
 }
 
-/** What a computer told of its Work Queue, kept (unless what's kept is newer), and said to be had;
+/** All that was told forgotten (a test's). */
+export function forgetPushed(): void {
+  pushed.clear();
+}
+
+/** What a computer told of its Work Queue, kept (unless what's kept is newer) and said to be had;
  * the primary moves its counter past the numbers it uses; a box takes the custom categories of the
- * primary it numbers from. */
+ * primary it numbers from (from the peer it reaches it through, one that numbers from it too). */
 function takeTold(sender: MailSender, given: unknown, reply: (payload: Record<string, unknown>) => void): void {
   const told = toldOf(given);
   if (!told) return;
   const link = readLink();
   // (Only from one of your computers that's still a peer: a Mac that set this one up is one.)
   if (!peersOf(link).some(peer => peer.key === sender.key)) return;
-  keepTold(sender.key, told);
+  // (What came late, older than what's kept, isn't had: had, it would never go again.)
+  if (!keepTold(sender.key, told)) return;
   reply({ had: told.id });
   const primary = primaryOf(link);
   if ("self" in primary) movePast(Math.max(told.top ?? 0, ...told.items.map(item => item.number ?? 0)));
-  else if ("peer" in primary && primary.peer.key === sender.key) for (const each of told.categories) keepCategory(each.id, each.name);
+  else if ("peer" in primary && (primary.via ? primary.via.key === sender.key && told.primary?.key === primary.peer.key : primary.peer.key === sender.key)) {
+    takePrimaryCategories(told.categories, id => allItems().filter(item => item.category === id).length);
+  }
   for (const tell of queueFollowers) tell();
 }
 
@@ -224,41 +241,50 @@ export type ItemElsewhere = ToldItem & { computer: Computer };
  * those of the sessions it oversees there (their rows, "Work"), those it handed on, its own; with
  * the owners they name, their custom categories, and when each computer told them. Items this box
  * has itself (one on its way here, say) are left to it. */
-export function itemsElsewhere(owner: string, link: LinkState | null = readLink(), here: Set<string> = new Set(allItems().map(item => item.id))): {
+export function itemsElsewhere(owner: string, link: LinkState | null = readLink(), here: Set<string> = new Set(allItems().filter(item => !item.removed).map(item => item.id))): {
   items: ItemElsewhere[];
   owners: OwnerFacts[];
   categories: { id: string; name: string }[];
   computers: (Computer & { at: number })[];
 } {
   const overseen = owner === "all" ? null : new Set(rowsOf(owner).flatMap(each => each.rows.map(row => row.session)));
-  const items: ItemElsewhere[] = [];
   const owners = new Map<string, OwnerFacts>();
   const custom = new Map<string, string>();
   const computers: (Computer & { at: number })[] = [];
-  const seen = new Set(here);
+  // (An item two computers told of, one handed between them and the first not told again yet: the
+  // newer word, so a stale copy never hides the live one.)
+  const best = new Map<string, { item: ItemElsewhere; at: number }>();
   for (const peer of peersOf(link)) {
     const told = readTold(peer.key);
     if (!told) continue;
     const computer: Computer = { key: peer.key, name: computerName(peer), kind: peer.kind, ...(peer.id ? { id: peer.id } : {}) };
     computers.push({ ...computer, at: told.at });
     for (const item of told.items) {
-      if (seen.has(item.id)) continue;
-      if (overseen && item.owner !== owner && !overseen.has(item.owner) && item.handedBy !== owner && !item.handedFrom?.includes(owner)) continue;
-      seen.add(item.id);
-      items.push({ ...item, computer });
+      if (here.has(item.id)) continue;
+      const other = best.get(item.id);
+      if (!other || newer(item, told.at, other.item, other.at)) best.set(item.id, { item: { ...item, computer }, at: told.at });
     }
     for (const each of told.owners) if (!owners.has(each.owner)) owners.set(each.owner, each);
     for (const each of told.categories) if (!custom.has(each.id)) custom.set(each.id, each.name);
   }
+  const items = [...best.values()].map(each => each.item)
+    .filter(item => !overseen || item.owner === owner || overseen.has(item.owner) || item.handedBy === owner || item.handedFrom?.includes(owner));
   const named = new Set(items.flatMap(item => [item.owner, ...(item.handedBy ? [item.handedBy] : [])]));
   return { items, owners: [...owners.values()].filter(each => named.has(each.owner)), categories: [...custom].map(([id, name]) => ({ id, name })), computers };
 }
 
-/** The item another computer told of that `ref` names (by id or number), or null. */
+/** The item another computer told of that `ref` names (by id or number), or null: of two, the newer
+ * word. */
 export function itemElsewhere(ref: { id: string } | { number: number }, link: LinkState | null = readLink()): ItemElsewhere | null {
+  let found: { item: ItemElsewhere; at: number } | null = null;
   for (const peer of peersOf(link)) {
-    const found = readTold(peer.key)?.items.find(item => ("id" in ref ? item.id === ref.id : item.number === ref.number));
-    if (found) return { ...found, computer: { key: peer.key, name: computerName(peer), kind: peer.kind, ...(peer.id ? { id: peer.id } : {}) } };
+    const told = readTold(peer.key);
+    const item = told?.items.find(each => ("id" in ref ? each.id === ref.id : each.number === ref.number));
+    if (item && (!found || newer(item, told!.at, found.item, found.at))) found = { item: { ...item, computer: { key: peer.key, name: computerName(peer), kind: peer.kind, ...(peer.id ? { id: peer.id } : {}) } }, at: told!.at };
   }
-  return null;
+  return found?.item ?? null;
 }
+
+// Whether `a` (told at `aAt`) is newer word of an item than `b`: changed later, or the same and
+// told later.
+const newer = (a: ToldItem, aAt: number, b: ToldItem, bAt: number): boolean => a.updated.at > b.updated.at || (a.updated.at === b.updated.at && aAt > bAt);

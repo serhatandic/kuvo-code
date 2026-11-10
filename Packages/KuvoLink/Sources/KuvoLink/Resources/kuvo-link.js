@@ -12495,9 +12495,9 @@ var phoneDocs = (link) => Object.values(link?.docs ?? {}).map(held).filter((doc)
 
 // Packages/Box/src/link/documents/parts.ts
 import crypto18 from "node:crypto";
-var fitsPart = (part) => isObject(part) && typeof part.whole === "string" && Number.isInteger(part.i) && Number.isInteger(part.of) && part.of >= 2 && part.of <= MOST_PARTS && part.i >= 0 && part.i < part.of && typeof part.d === "string" && part.d.length <= DOC_PART && typeof part.s === "string";
-function assemble(parts, from, part) {
-  if (!fitsPart(part))
+var fitsPart = (part, most) => isObject(part) && typeof part.whole === "string" && Number.isInteger(part.i) && Number.isInteger(part.of) && part.of >= 2 && part.of <= most && part.i >= 0 && part.i < part.of && typeof part.d === "string" && part.d.length <= DOC_PART && typeof part.s === "string";
+function assemble(parts, from, part, most = MOST_PARTS) {
+  if (!fitsPart(part, most))
     return null;
   const key = `${from} ${part.whole}`;
   let pending = parts.get(key);
@@ -14217,9 +14217,23 @@ var readQueueOrNone = (owner) => {
   }
 };
 function owners() {
-  return listOf(QUEUES).filter((name) => name.endsWith(".json")).map((name) => name.slice(0, -5)).filter((owner) => KEPT_OWNER.test(owner));
+  return listOf(QUEUES).filter((name) => name.endsWith(".json")).map((name) => name.slice(0, -5)).filter((owner) => OWNER.test(owner));
 }
 var readAll2 = () => onceEach(owners().map(readQueueOrNone));
+function readKeptQueue(owner) {
+  if (!KEPT_OWNER.test(owner) || OWNER.test(owner))
+    return null;
+  let kept;
+  try {
+    kept = JSON.parse(fs50.readFileSync(fileOf2(owner), "utf8"));
+  } catch {
+    return null;
+  }
+  if (!isObject(kept) || !Array.isArray(kept.items))
+    return null;
+  const items = kept.items.map((each) => itemOf(each, owner));
+  return items.every((each) => each !== null) ? { owner, items } : null;
+}
 function onceEach(queues) {
   const seen = new Map;
   for (const queue of queues) {
@@ -14237,7 +14251,7 @@ function onceEach(queues) {
   }
   return queues;
 }
-var allItems = () => readAll2().filter((queue) => OWNER.test(queue.owner)).flatMap((queue) => queue.items);
+var allItems = () => readAll2().flatMap((queue) => queue.items);
 
 class Book {
   queues = new Map;
@@ -14257,6 +14271,13 @@ class Book {
     return queue;
   }
   queue(owner) {
+    if (!OWNER.test(owner) && !this.queues.has(owner)) {
+      const kept = fs50.existsSync(fileOf2(owner)) ? readKeptQueue(owner) : { owner, items: [] };
+      if (!kept)
+        throw new Refusal(`${owner}'s Work Queue was kept by a newer Kuvo Code, in a way this one can't read: it's left as it is.`);
+      this.queues.set(owner, kept);
+      this.before.set(owner, JSON.stringify(kept.items));
+    }
     return this.load(owner);
   }
   items() {
@@ -14309,7 +14330,7 @@ function changeQueues(work, now = Date.now(), { onItsOwn = false } = {}) {
       book = new Book;
     }
     const purged = [];
-    for (const queue of owners().filter((owner) => OWNER.test(owner)).map((owner) => book.queue(owner))) {
+    for (const queue of owners().map((owner) => book.queue(owner))) {
       const gone = queue.items.filter((item) => item.removed && now - item.removed.at > KEPT_REMOVED);
       if (!gone.length)
         continue;
@@ -14415,7 +14436,7 @@ var ownerOf2 = (given) => {
 };
 function numberingOf(given) {
   const kind = KIND(given.kind) ?? "machine";
-  const primary = isObject(given.primary) && typeof given.primary.key === "string" && KEY.test(given.primary.key) && KIND(given.primary.kind) ? { key: given.primary.key, kind: KIND(given.primary.kind), ...time(given.primary.since) ? { since: time(given.primary.since) } : {} } : undefined;
+  const primary = isObject(given.primary) && typeof given.primary.key === "string" && KEY.test(given.primary.key) && KIND(given.primary.kind) ? { key: given.primary.key, kind: KIND(given.primary.kind), ...time(given.primary.since) ? { since: time(given.primary.since) } : {}, ...time(given.primary.away) ? { away: time(given.primary.away) } : {} } : undefined;
   return { kind, ...time(given.since) ? { since: time(given.since) } : {}, ...whole(given.top) ? { top: whole(given.top) } : {}, ...primary ? { primary } : {} };
 }
 function toldOf2(given, now = Date.now()) {
@@ -14506,7 +14527,8 @@ function readNumbers(file = NUMBERS_FILE) {
 function primaryOf(link = readLink(), file = NUMBERS_FILE, now = Date.now()) {
   const kept = readNumbers(file);
   const own = link ? ownKey(link) : null;
-  const all = candidatesOf(link, kept, own, file);
+  const gone = goneOf(link, now);
+  const all = candidatesOf(link, kept, own, file, gone);
   const macs = IS_MAC ? [] : macsOf(link);
   const choices = macs.length ? all.filter((each) => !each.self) : all;
   const best = choices.sort(rank)[0];
@@ -14514,7 +14536,7 @@ function primaryOf(link = readLink(), file = NUMBERS_FILE, now = Date.now()) {
   let current = null;
   if (keptKey === "self")
     current = all.find((each) => each.self) ?? null;
-  else if (keptKey) {
+  else if (keptKey && !gone.has(keptKey)) {
     current = all.find((each) => each.key === keptKey) ?? null;
     const removed = removedBoxes(link);
     if (!current && !removed.has(keptKey) && !(kept.through && removed.has(kept.through)) && !(kept.lost !== undefined && now - kept.lost > LOST_FOR))
@@ -14536,22 +14558,38 @@ function primaryOf(link = readLink(), file = NUMBERS_FILE, now = Date.now()) {
   return { away: true };
 }
 var LOST_FOR = 3 * 86400000;
-function keptHeardOf(link, kept, file) {
+function goneOf(link, now) {
+  const gone = new Set;
+  const peers = peersOf(link);
+  const reach = readReach();
+  for (const peer of peers) {
+    const away = awaySince(peer.key, reach);
+    if (away !== null && now - away > LOST_FOR)
+      gone.add(peer.key);
+  }
+  for (const peer of peers) {
+    const named = readTold2(peer.key)?.primary;
+    if (named?.away !== undefined && now - named.away > LOST_FOR && !peers.some((each) => each.key === named.key))
+      gone.add(named.key);
+  }
+  return gone;
+}
+function keptHeardOf(link, kept, file, now) {
   if (!kept.primary || kept.primary === "self")
     return true;
   const own = link ? ownKey(link) : null;
-  return kept.primary === own || candidatesOf(link, kept, own, file).some((each) => each.key === kept.primary);
+  return kept.primary === own || candidatesOf(link, kept, own, file, goneOf(link, now)).some((each) => each.key === kept.primary);
 }
 var earlier = (a, b) => a.kind !== b.kind ? a.kind === "mac" : b.since !== Number.MAX_SAFE_INTEGER && a.since < b.since;
 var rank = (a, b) => (a.kind === b.kind ? 0 : a.kind === "mac" ? -1 : 1) || a.since - b.since || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0);
-function candidatesOf(link, kept, own, file) {
+function candidatesOf(link, kept, own, file, gone = goneOf(link, Date.now())) {
   const all = [{ key: own ?? "self", kind: IS_MAC ? "mac" : "machine", since: kept.since ?? ownSince(Date.now(), file), self: true }];
-  const peers = peersOf(link);
+  const peers = peersOf(link).filter((peer) => !gone.has(peer.key));
   for (const peer of peers)
     all.push({ key: peer.key, kind: peer.kind, since: readTold2(peer.key)?.since ?? Number.MAX_SAFE_INTEGER, peer, name: peer.name });
   for (const peer of peers) {
     const named = readTold2(peer.key)?.primary;
-    if (!named || named.key === own)
+    if (!named || named.key === own || gone.has(named.key))
       continue;
     const known = all.find((each) => each.key === named.key);
     if (known) {
@@ -14703,7 +14741,7 @@ function askToSend({ file = NUMBERS_FILE, now = Date.now() } = {}) {
 }
 function notePrimaryNow(link = readLink(), { file = NUMBERS_FILE, now = Date.now() } = {}) {
   const before = readNumbers(file);
-  const heard = keptHeardOf(link, before, file);
+  const heard = keptHeardOf(link, before, file, now);
   if (heard === (before.lost !== undefined))
     changeNumbers((numbers) => {
       if (heard)
@@ -14760,7 +14798,7 @@ function numberWaiting(book, primary, granted, options = {}) {
   const now = options.now ?? Date.now();
   if (granted) {
     for (const item of book.items()) {
-      if (item.wanted === undefined || item.number !== undefined || !OWNER.test(item.owner))
+      if (item.wanted === undefined || item.number !== undefined || item.source || !OWNER.test(item.owner))
         continue;
       if (inRanges(granted, item.wanted))
         item.number = item.wanted;
@@ -14889,14 +14927,17 @@ var BUILT_IN = [
   { id: "done", name: "Done", builtIn: true }
 ];
 var CUSTOM_ID = /^cat_[a-z0-9-]{1,40}$/;
-function readCustom() {
+function readKept3() {
   try {
     const kept = JSON.parse(textOf(CATEGORIES_FILE) ?? "null");
-    return (isObject(kept) && Array.isArray(kept.custom) ? kept.custom : []).filter((each) => isObject(each) && typeof each.id === "string" && CUSTOM_ID.test(each.id) && typeof each.name === "string").map(({ id, name }) => ({ id, name, builtIn: false }));
+    const custom = (isObject(kept) && Array.isArray(kept.custom) ? kept.custom : []).filter((each) => isObject(each) && typeof each.id === "string" && CUSTOM_ID.test(each.id) && typeof each.name === "string").map(({ id, name }) => ({ id, name, builtIn: false }));
+    const fromPrimary = isObject(kept) && Array.isArray(kept.fromPrimary) ? kept.fromPrimary.filter((each) => typeof each === "string" && CUSTOM_ID.test(each)) : [];
+    return { custom, fromPrimary };
   } catch {
-    return [];
+    return { custom: [], fromPrimary: [] };
   }
 }
+var readCustom = () => readKept3().custom;
 function categories() {
   return [BUILT_IN[0], BUILT_IN[1], ...readCustom(), BUILT_IN[2], BUILT_IN[3]];
 }
@@ -14909,10 +14950,11 @@ function categoryNamed(given) {
 var slugOf = (name) => name.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40);
 var change3 = (work) => {
   const outcome = locked(LOCK11, () => {
-    const custom = readCustom();
-    const outcome = work(custom);
+    const kept = readKept3();
+    const outcome = work(kept.custom, kept);
+    const fromPrimary = kept.fromPrimary.filter((id) => kept.custom.some((each) => each.id === id));
     if ("done" in outcome)
-      writePrivate(CATEGORIES_FILE, JSON.stringify({ custom: custom.map(({ id, name }) => ({ id, name })) }));
+      writePrivate(CATEGORIES_FILE, JSON.stringify({ custom: kept.custom.map(({ id, name }) => ({ id, name })), ...fromPrimary.length ? { fromPrimary } : {} }));
     return outcome;
   });
   if ("done" in outcome)
@@ -15001,6 +15043,28 @@ function keepCategory(id, name) {
     const made = { id, name: plainName(name).slice(0, MOST_NAME) || id.slice(4), builtIn: false };
     custom.push(made);
     return { done: made };
+  });
+}
+function takePrimaryCategories(given, used) {
+  const theirs = given.filter((each) => CUSTOM_ID.test(each.id)).slice(0, MOST_CUSTOM).map((each) => ({ id: each.id, name: plainName(each.name).slice(0, MOST_NAME) || each.id.slice(4), builtIn: false }));
+  const ids = new Set(theirs.map((each) => each.id));
+  const worked = (kept) => {
+    const left = kept.custom.filter((each) => !ids.has(each.id) && (!kept.fromPrimary.includes(each.id) || used(each.id) > 0));
+    const custom = [...theirs, ...left].slice(0, MOST_CUSTOM);
+    const fromPrimary = custom.filter((each) => ids.has(each.id) || kept.fromPrimary.includes(each.id)).map((each) => each.id);
+    return { custom, fromPrimary };
+  };
+  const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  const before = readKept3();
+  if (same(worked(before), before))
+    return;
+  change3((custom, kept) => {
+    const now = worked({ custom, fromPrimary: kept.fromPrimary });
+    if (same(now, { custom, fromPrimary: kept.fromPrimary }))
+      return { refused: "" };
+    custom.splice(0, custom.length, ...now.custom);
+    kept.fromPrimary = now.fromPrimary;
+    return { done: now.custom[0] ?? BUILT_IN[0] };
   });
 }
 
@@ -20068,9 +20132,7 @@ function handItem(book, item, to, who, now) {
 
 // Packages/Box/src/link/work-queue/parts.ts
 import crypto28 from "node:crypto";
-var PART = 40000;
 var MOST_PARTS2 = 200;
-var PART_ID = /^[A-Za-z0-9_-]{20,64}$/;
 function mailsFor(peer, payload, link, now = Date.now()) {
   const one = mailFor(peer, { workQueue: payload, at: now }, link);
   if (one)
@@ -20078,13 +20140,13 @@ function mailsFor(peer, payload, link, now = Date.now()) {
   if (!peer.address)
     return null;
   const d = Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
-  const of = Math.ceil(d.length / PART);
+  const of = Math.ceil(d.length / DOC_PART);
   if (of > MOST_PARTS2)
     return null;
   const whole = crypto28.createHash("sha256").update(d).digest("base64url");
   const mails = [];
   for (let i = 0;i < of; i++) {
-    const bytes = mailFor(peer, { workQueue: { part: { whole, i, of, d: d.slice(i * PART, (i + 1) * PART) } }, at: now }, link);
+    const bytes = mailFor(peer, { workQueue: { part: { whole, i, of, d: d.slice(i * DOC_PART, (i + 1) * DOC_PART), s: "" } }, at: now }, link);
     if (!bytes)
       return null;
     mails.push(bytes);
@@ -20092,37 +20154,12 @@ function mailsFor(peer, payload, link, now = Date.now()) {
   return mails;
 }
 var pending = new Map;
-function takePart(sender, part, now = Date.now()) {
-  for (const [key, each] of pending)
-    if (now - each.at > 600000)
-      pending.delete(key);
-  if (!isObject(part) || typeof part.whole !== "string" || !PART_ID.test(part.whole) || !Number.isInteger(part.i) || !Number.isInteger(part.of) || typeof part.d !== "string")
-    return null;
-  const { of, i } = part;
-  if (of < 1 || of > MOST_PARTS2 || i < 0 || i >= of || part.d.length > PART)
-    return null;
-  const key = `${sender.key} ${part.whole}`;
-  if (!pending.has(key)) {
-    const theirs = [...pending].filter(([each]) => each.startsWith(`${sender.key} `)).sort((a, b) => a[1].at - b[1].at);
-    for (const [old] of theirs.slice(0, Math.max(0, theirs.length - 5)))
-      pending.delete(old);
-  }
-  const kept = pending.get(key) ?? { of, parts: new Array(of).fill(undefined), got: 0, at: now };
-  if (kept.of !== of)
-    return null;
-  if (kept.parts[i] === undefined) {
-    kept.parts[i] = part.d;
-    kept.got++;
-  }
-  pending.set(key, kept);
-  if (kept.got < of)
-    return null;
-  pending.delete(key);
-  const d = kept.parts.join("");
-  if (crypto28.createHash("sha256").update(d).digest("base64url") !== part.whole)
+function takePart(sender, part) {
+  const done = assemble(pending, sender.key, part, MOST_PARTS2);
+  if (!done)
     return null;
   try {
-    const whole = JSON.parse(Buffer.from(d, "base64url").toString("utf8"));
+    const whole = JSON.parse(Buffer.from(done.d, "base64url").toString("utf8"));
     return isObject(whole) && !isObject(whole.part) ? whole : null;
   } catch {
     return null;
@@ -20164,19 +20201,36 @@ function handPayload(item) {
   const category = categories().find((each) => each.id === item.category && !each.builtIn);
   return { hand: { id: handing.id, to: handing.to, from: item.owner, by: handing.by, at: handing.at, item: rest, files, ...category ? { categories: [{ id: category.id, name: category.name }] } : {} } };
 }
-function sendHandings(host, link, targets, now = Date.now()) {
+function handUpkeep(link, now = Date.now()) {
   if (!link?.key)
-    return;
+    return [];
   const handing = allItems().filter((item) => item.handing && !item.removed);
   if (!handing.length)
-    return;
+    return [];
   const peers = peersOf(link);
+  const removed = removedBoxes(link);
+  const gone = (item) => !boxOf(item.handing.to, link) && (removed.has(item.handing.key) || !peers.some((peer) => peer.key === item.handing.key));
   const late = handing.filter((item) => now - item.handing.at > HAND_LIFE);
+  const left = handing.filter((item) => !late.includes(item) && gone(item));
   if (late.length)
     giveBack(late.map((item) => item.handing.id), "it couldn't be reached for 30 days", now);
+  if (left.length)
+    giveBack(left.map((item) => item.handing.id), "that computer isn't one of yours any more", now);
+  return handing.filter((item) => !late.includes(item) && !left.includes(item));
+}
+var lookedAfter = 0;
+function handUpkeepSoon(link, now = Date.now()) {
+  if (now - lookedAfter < 60000)
+    return;
+  lookedAfter = now;
+  handUpkeep(link, now);
+}
+function sendHandings(host, link, targets, now = Date.now()) {
+  const handing = handUpkeep(link, now);
+  if (!link?.key || !handing.length)
+    return;
+  const peers = peersOf(link);
   for (const item of handing) {
-    if (late.includes(item))
-      continue;
     const last = sent.get(item.handing.id);
     if (last && now - last.at < 60000)
       continue;
@@ -20194,6 +20248,14 @@ function sendHandings(host, link, targets, now = Date.now()) {
       sent.set(item.handing.id, { at: now, key: peer.key });
     } catch {}
   }
+}
+function callOffHanding(item, who, now) {
+  if (!item.handing)
+    return;
+  const { id, name, to } = item.handing;
+  delete item.handing;
+  item.notes.push({ at: now, by: who, text: `Its hand-off to ${name || to} on another computer was called off.` });
+  sent.delete(id);
 }
 function giveBack(ids, why, now) {
   const gone = new Set(ids);
@@ -20293,6 +20355,7 @@ async function handArrived(sender, given, reply, places, now = Date.now()) {
   const by = typeof kept.name === "string" ? { ...kept, name: plainName(kept.name).slice(0, 100) } : kept;
   let refused = null;
   let again = false;
+  const primary = primaryOf();
   changeQueues((book) => {
     const here = book.find({ id: item.id });
     if (here?.handing) {
@@ -20320,6 +20383,8 @@ async function handArrived(sender, given, reply, places, now = Date.now()) {
       fs66.mkdirSync(filesOf(item.id), { recursive: true, mode: 448 });
       fs66.writeFileSync(path72.join(filesOf(item.id), file.name), file.bytes, { mode: 384 });
     }
+    if (item.number === undefined)
+      numberWaiting(book, primary, null);
   }, now, { onItsOwn: true });
   if (again)
     return answer(false, `${HERE} is still handing that item on: it comes again once that's done.`, true);
@@ -20345,8 +20410,10 @@ function numberingNow(link) {
   if ("self" in primary)
     named = own ? { key: own, kind, since } : undefined;
   else if ("peer" in primary) {
-    const told = primary.via ? readTold2(primary.via.key)?.primary?.since : readTold2(primary.peer.key)?.since;
-    named = { key: primary.peer.key, kind: primary.peer.kind, ...told ? { since: told } : {} };
+    const through = primary.via ? readTold2(primary.via.key)?.primary : undefined;
+    const since = primary.via ? through?.since : readTold2(primary.peer.key)?.since;
+    const away = primary.via ? through?.away : awaySince(primary.peer.key) ?? undefined;
+    named = { key: primary.peer.key, kind: primary.peer.kind, ...since ? { since } : {}, ...away ? { away } : {} };
   }
   return { kind, since, top: topOf(), ...named ? { primary: named } : {} };
 }
@@ -20383,14 +20450,15 @@ var marks2 = () => [path73.join(WORK_QUEUE, "queues"), path73.join(WORK_QUEUE, "
 var titles = new Map;
 var titlesAt = 0;
 async function pushQueues(host, link = readLink(), targets, now = Date.now()) {
-  if (!link?.key || building)
+  if (!link?.key)
     return;
   const peers = peersOf(link);
   const removed = removedBoxes(link);
   for (const key of toldKeys())
     if (removed.has(key))
       forgetTold(key);
-  if (!peers.some((peer) => takesQueues(peer.key)))
+  sendHandings(host, link, targets, now);
+  if (building || !peers.some((peer) => takesQueues(peer.key)))
     return;
   const changed = marks2();
   if (!telling || changed !== builtMarks || now - builtAt > 60000) {
@@ -20413,9 +20481,11 @@ async function pushQueues(host, link = readLink(), targets, now = Date.now()) {
     if (!takesQueues(peer.key) || awaySince(peer.key) !== null)
       continue;
     const before = pushed.get(peer.key);
-    if (before?.id === telling.id && (before.done || now - before.sent < 60000))
+    if (before?.id === telling.id && before.done)
       continue;
-    if (before && before.id !== telling.id && now - before.sent < TELL_SPACING)
+    if (before && now - before.sent < TELL_SPACING)
+      continue;
+    if (before?.id === telling.id && !before.soon && now - before.sent < 60000)
       continue;
     const mails = fittedMails(peer, telling, link, now);
     if (!mails)
@@ -20426,7 +20496,6 @@ async function pushQueues(host, link = readLink(), targets, now = Date.now()) {
       pushed.set(peer.key, { id: telling.id, done: false, sent: now });
     } catch {}
   }
-  sendHandings(host, link, targets, now);
 }
 function fittedMails(peer, telling, link, now) {
   const told = telling.payload.told;
@@ -20450,9 +20519,13 @@ function queuesBack(key) {
 }
 function tellQueuesAgain(key) {
   if (key)
-    pushed.delete(key);
-  else
-    pushed.clear();
+    return void pushed.delete(key);
+  for (const [each, before] of pushed)
+    if (!before.done)
+      pushed.set(each, { ...before, soon: true });
+}
+function forgetPushed() {
+  pushed.clear();
 }
 function takeTold(sender, given, reply) {
   const told = toldOf2(given);
@@ -20461,14 +20534,15 @@ function takeTold(sender, given, reply) {
   const link = readLink();
   if (!peersOf(link).some((peer) => peer.key === sender.key))
     return;
-  keepTold(sender.key, told);
+  if (!keepTold(sender.key, told))
+    return;
   reply({ had: told.id });
   const primary = primaryOf(link);
   if ("self" in primary)
     movePast(Math.max(told.top ?? 0, ...told.items.map((item) => item.number ?? 0)));
-  else if ("peer" in primary && primary.peer.key === sender.key)
-    for (const each of told.categories)
-      keepCategory(each.id, each.name);
+  else if ("peer" in primary && (primary.via ? primary.via.key === sender.key && told.primary?.key === primary.peer.key : primary.peer.key === sender.key)) {
+    takePrimaryCategories(told.categories, (id) => allItems().filter((item) => item.category === id).length);
+  }
   for (const tell of queueFollowers2)
     tell();
 }
@@ -20502,13 +20576,12 @@ async function takeWorkQueueMail(sender, given, host, places) {
   if (isObject(whole.hand))
     await handArrived(sender, whole.hand, reply, places).catch(() => {});
 }
-function itemsElsewhere(owner, link = readLink(), here = new Set(allItems().map((item) => item.id))) {
+function itemsElsewhere(owner, link = readLink(), here = new Set(allItems().filter((item) => !item.removed).map((item) => item.id))) {
   const overseen = owner === "all" ? null : new Set(rowsOf2(owner).flatMap((each) => each.rows.map((row) => row.session)));
-  const items = [];
   const owners = new Map;
   const custom = new Map;
   const computers = [];
-  const seen = new Set(here);
+  const best = new Map;
   for (const peer of peersOf(link)) {
     const told = readTold2(peer.key);
     if (!told)
@@ -20516,12 +20589,11 @@ function itemsElsewhere(owner, link = readLink(), here = new Set(allItems().map(
     const computer = { key: peer.key, name: computerName(peer), kind: peer.kind, ...peer.id ? { id: peer.id } : {} };
     computers.push({ ...computer, at: told.at });
     for (const item of told.items) {
-      if (seen.has(item.id))
+      if (here.has(item.id))
         continue;
-      if (overseen && item.owner !== owner && !overseen.has(item.owner) && item.handedBy !== owner && !item.handedFrom?.includes(owner))
-        continue;
-      seen.add(item.id);
-      items.push({ ...item, computer });
+      const other = best.get(item.id);
+      if (!other || newer(item, told.at, other.item, other.at))
+        best.set(item.id, { item: { ...item, computer }, at: told.at });
     }
     for (const each of told.owners)
       if (!owners.has(each.owner))
@@ -20530,17 +20602,21 @@ function itemsElsewhere(owner, link = readLink(), here = new Set(allItems().map(
       if (!custom.has(each.id))
         custom.set(each.id, each.name);
   }
+  const items = [...best.values()].map((each) => each.item).filter((item) => !overseen || item.owner === owner || overseen.has(item.owner) || item.handedBy === owner || item.handedFrom?.includes(owner));
   const named = new Set(items.flatMap((item) => [item.owner, ...item.handedBy ? [item.handedBy] : []]));
   return { items, owners: [...owners.values()].filter((each) => named.has(each.owner)), categories: [...custom].map(([id, name]) => ({ id, name })), computers };
 }
 function itemElsewhere(ref, link = readLink()) {
+  let found = null;
   for (const peer of peersOf(link)) {
-    const found = readTold2(peer.key)?.items.find((item) => ("id" in ref) ? item.id === ref.id : item.number === ref.number);
-    if (found)
-      return { ...found, computer: { key: peer.key, name: computerName(peer), kind: peer.kind, ...peer.id ? { id: peer.id } : {} } };
+    const told = readTold2(peer.key);
+    const item = told?.items.find((each) => ("id" in ref) ? each.id === ref.id : each.number === ref.number);
+    if (item && (!found || newer(item, told.at, found.item, found.at)))
+      found = { item: { ...item, computer: { key: peer.key, name: computerName(peer), kind: peer.kind, ...peer.id ? { id: peer.id } : {} } }, at: told.at };
   }
-  return null;
+  return found?.item ?? null;
 }
+var newer = (a, aAt, b, bAt) => a.updated.at > b.updated.at || a.updated.at === b.updated.at && aAt > bAt;
 
 // Packages/Box/src/link/notices/hold.ts
 import path74 from "node:path";
@@ -21926,7 +22002,7 @@ import path82 from "node:path";
 import fs75 from "node:fs";
 import path81 from "node:path";
 function packWorkQueues(owners) {
-  const items = owners.filter((owner) => KEPT_OWNER.test(owner)).flatMap((owner) => readQueueSettingAside(owner).items);
+  const items = owners.flatMap((owner) => OWNER.test(owner) ? readQueueSettingAside(owner).items : readKeptQueue(owner)?.items ?? []);
   if (!items.length)
     return null;
   const used = new Set(items.map((item) => item.category));
@@ -21965,6 +22041,11 @@ function placeWorkQueues(carried, owners, opened) {
       item.category = "next";
   changeQueues((book) => {
     for (const item of items) {
+      try {
+        book.queue(item.owner);
+      } catch {
+        continue;
+      }
       const before = book.find({ id: item.id });
       if (before)
         book.queue(before.owner).items = book.queue(before.owner).items.filter((each) => each.id !== item.id);
@@ -21992,7 +22073,7 @@ function forgetWorkQueues(owners) {
   const gone = new Set(owners);
   changeQueues((book) => {
     for (const owner of gone) {
-      if (!KEPT_OWNER.test(owner))
+      if (!OWNER.test(owner) && !readKeptQueue(owner))
         continue;
       const queue = book.queue(owner);
       for (const item of queue.items)
@@ -24169,6 +24250,10 @@ function runMacPeers() {
       } catch {}
       if (host?.welcomed)
         pushQueues(host, readLink(), peerTargets()).catch(() => {});
+      else
+        try {
+          handUpkeepSoon(readLink());
+        } catch {}
     }, 3000)
   ];
   macLink.stopPeers = () => {
@@ -24990,7 +25075,7 @@ var WORK_ASKS2 = path88.join(WORK_FOLDER, "asks.json");
 var LOCK13 = path88.join(WORK_FOLDER, ".asks.lock");
 var WORK_ACTIONS = ["makeProject", "cloneProject"];
 var askFollowers = new Set;
-var readKept3 = (file = WORK_ASKS2) => {
+var readKept4 = (file = WORK_ASKS2) => {
   try {
     const asks = JSON.parse(textOf(file) ?? "").asks;
     return Array.isArray(asks) ? asks.filter((each) => isObject(each) && typeof each.id === "string" && WORK_ACTIONS.includes(each.action)) : [];
@@ -25001,7 +25086,7 @@ var readKept3 = (file = WORK_ASKS2) => {
 function changeKept2(change, file = WORK_ASKS2) {
   fs82.mkdirSync(WORK_FOLDER, { recursive: true });
   const result = locked(LOCK13, () => {
-    const asks = readKept3(file);
+    const asks = readKept4(file);
     const value = change(asks);
     const kept = asks.filter((each) => each.answered ? Date.now() - each.answered.at < 15 * 60000 || each.late === true && !each.toldLate && Date.now() - each.answered.at < 7 * 86400000 : (!each.bot || botHere(each.bot)) && Date.now() - each.at < 7 * 86400000);
     writePrivate(file, JSON.stringify({ asks: kept }, null, 2));
@@ -25012,7 +25097,7 @@ function changeKept2(change, file = WORK_ASKS2) {
   return result;
 }
 function workAsks(file = WORK_ASKS2) {
-  return readKept3(file).filter((each) => !each.answered && (!each.bot || botHere(each.bot))).map((kept) => {
+  return readKept4(file).filter((each) => !each.answered && (!each.bot || botHere(each.bot))).map((kept) => {
     const { given: _, late: __, answering: ____, answered: ___, toldLate: _____, ...listed } = kept;
     const root = projectsFolder();
     const named = kept.given?.folder;
@@ -25078,7 +25163,7 @@ function askWork(asker, action, given, file = WORK_ASKS2) {
 async function answerOf(id, { wait = 10 * 60000, every = 1000, signal, file = WORK_ASKS2 } = {}) {
   const until = Date.now() + wait;
   while (!signal?.aborted) {
-    const ask = readKept3(file).find((each) => each.id === id);
+    const ask = readKept4(file).find((each) => each.id === id);
     if (!ask || ask.bot && !botHere(ask.bot))
       return null;
     if (ask.answered)
@@ -25106,7 +25191,7 @@ async function doWork(action, given, asker) {
   return { text: madeWords(outcome.made, HERE), isError: false };
 }
 async function answerWork(id, given, targets, file = WORK_ASKS2) {
-  const ask = readKept3(file).find((each) => each.id === id && !each.answered);
+  const ask = readKept4(file).find((each) => each.id === id && !each.answered);
   if (!ask)
     return { refused: { status: 404, message: "That's been answered, or it isn't asked any more." } };
   const answer = given.answer;
@@ -25164,7 +25249,7 @@ async function answerWork(id, given, targets, file = WORK_ASKS2) {
   return { answered };
 }
 async function tellLate(id, targets, file, bridgeRuns = () => peerPlaces().bridge) {
-  const ask = readKept3(file).find((each) => each.id === id);
+  const ask = readKept4(file).find((each) => each.id === id);
   if (!ask?.answered || !ask.late || ask.toldLate || frozen().has(ask.session))
     return;
   const said = `[The user answered] ${ask.answered.text}`;
@@ -25189,7 +25274,7 @@ async function tellLate(id, targets, file, bridgeRuns = () => peerPlaces().bridg
   }, file);
 }
 async function tellLateAnswers(targets, file = WORK_ASKS2, bridgeRuns) {
-  for (const ask of readKept3(file).filter((each) => each.answered && each.late && !each.toldLate))
+  for (const ask of readKept4(file).filter((each) => each.answered && each.late && !each.toldLate))
     await tellLate(ask.id, targets, file, bridgeRuns);
 }
 function workAskWords(ask) {
@@ -32283,8 +32368,8 @@ async function run3(name, args, caller, targets, signal) {
       const item = change4((book) => {
         const item = itemFor(book.items(), args.item, caller, overseen);
         refuseMoving([item.owner]);
-        refuseHanding(item);
         if (args.undo === true) {
+          refuseHanding(item);
           if (!item.removed)
             throw new Refusal(`${nameOf3(item)} isn't deleted.`);
           if (byUser(item.removed.by))
@@ -32293,6 +32378,7 @@ async function run3(name, args, caller, targets, signal) {
         } else {
           if (item.removed)
             throw new Refusal(`${nameOf3(item)} is deleted already.`);
+          callOffHanding(item, caller.who, now);
           removeItem2(item, caller.who, now);
         }
         return item;
@@ -32497,7 +32583,7 @@ async function viewOf(owner, targets, facts, signal, cache) {
   const here = allItems();
   const all = here.filter((item) => owner === ALL || inView(owner, item, overseen));
   const { owners, titles } = await ownersOf(owner, all, known, targets, cache);
-  const elsewhere = itemsElsewhere(owner, readLink(), new Set(here.map((item) => item.id)));
+  const elsewhere = itemsElsewhere(owner, readLink(), new Set(here.filter((item) => !item.removed).map((item) => item.id)));
   const named = new Set(owners.map((each) => each.owner));
   const own = categories();
   const others = elsewhere.categories.filter((each) => !own.some((mine) => mine.id === each.id)).map((each) => ({ ...each, builtIn: false }));
@@ -32659,12 +32745,13 @@ async function* workQueueRoute(context, match) {
   const far = !find(allItems()) ? itemElsewhere(ref) : null;
   if (far)
     return yield* json(409, { message: `${nameOf3(far)} is on ${far.computer.name}: change it there.`, computer: far.computer });
-  const inBook = (work) => () => changeQueues((book) => {
+  const inBook = (work, { handing = false } = {}) => () => changeQueues((book) => {
     const item = find(book.items());
     if (!item)
       throw new Missing("There's no item like that.");
     refuseMoving([item.owner]);
-    refuseHanding(item);
+    if (!handing)
+      refuseHanding(item);
     work(item, book);
     numberWaiting(book, primary, null);
     return item;
@@ -32673,8 +32760,9 @@ async function* workQueueRoute(context, match) {
     return yield* changed2(inBook((item) => {
       if (item.removed)
         throw new Refusal("It's deleted already.");
+      callOffHanding(item, YOU, now);
       removeItem2(item, YOU, now);
-    }), json);
+    }, { handing: true }), json);
   }
   if (action === "restore" && method === "POST") {
     return yield* changed2(inBook((item, book) => {
@@ -34775,6 +34863,10 @@ async function run4() {
     } catch {}
     if (current?.welcomed)
       pushQueues(current, readLink(), peerTargets()).catch(() => {});
+    else
+      try {
+        handUpkeepSoon(readLink());
+      } catch {}
   }, 3000);
   let attempt = 0;
   while (true) {
@@ -35346,6 +35438,7 @@ export {
   forgetOldMacs,
   forgetPhones,
   forgetPlan,
+  forgetPushed as forgetQueuesTold,
   forgetWorkQueues,
   frame,
   freshenBot,
@@ -35357,6 +35450,7 @@ export {
   goalHolds,
   greetWork,
   groupNotice,
+  handUpkeep,
   holdArchived,
   holdFor,
   isSecretName,

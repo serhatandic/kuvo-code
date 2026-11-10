@@ -612,6 +612,30 @@ test("a queue of a kind this box doesn't know (a newer box's) is kept as it is: 
   assert.deepEqual(link.packWorkQueues(["prj_storefront"]).items.map(item => item.title), ["A project's"]);
 });
 
+test("a queue of a kind this box doesn't know that it can't read, or that holds one of its own items too, is left untouched, and its own item stays", async () => {
+  // A newer box's file in a shape this box doesn't know: never set aside or written, and never in
+  // the way of a change here.
+  const odd = path.join(queues, "queues", "prj_odd.json");
+  write(odd, JSON.stringify({ owner: "prj_odd", rows: [{ anything: true }] }));
+  const added = await tool("queue_add", { title: "Ours" }, "ses_lead");
+  assert.equal(added.isError, false, added.text);
+  assert.equal(fs.readFileSync(odd, "utf8"), JSON.stringify({ owner: "prj_odd", rows: [{ anything: true }] }));
+  assert.equal(fs.existsSync(path.join(queues, "queues", "aside")), false, "nothing set aside");
+  assert.equal(link.packWorkQueues(["prj_odd"]), null, "nor carried: it stays as it is");
+  link.forgetWorkQueues(["prj_odd"]);
+  assert.equal(fs.existsSync(odd), true);
+  // A newer box's queue holding a copy of one of this box's items, changed later: this box's item
+  // stays in its own queue, and that file as it was.
+  const ours = (await view("ses_lead")).items[0];
+  const kept = JSON.parse(fs.readFileSync(path.join(queues, "queues", "ses_lead.json"), "utf8")).items[0];
+  const copy = JSON.stringify({ owner: "prj_copy", items: [{ ...kept, owner: "prj_copy", title: "Their copy", updated: { at: Date.now() + 60_000, by: { user: true } } }] });
+  write(path.join(queues, "queues", "prj_copy.json"), copy);
+  assert.equal((await tool("queue_update", { item: ours.number, note: "Still ours" }, "ses_lead")).isError, false);
+  assert.deepEqual((await view("ses_lead")).items.map(item => item.title), ["Ours"]);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(queues, "queues", "ses_lead.json"), "utf8")).items.length, 1);
+  assert.equal(fs.readFileSync(path.join(queues, "queues", "prj_copy.json"), "utf8"), copy);
+});
+
 test("an outside source's item (an issue) is never numbered, and is named by its ref", async () => {
   await tool("queue_add", { title: "Ours" }, "ses_lead");
   const lead = path.join(queues, "queues", "ses_lead.json");

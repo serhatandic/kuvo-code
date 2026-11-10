@@ -24,17 +24,21 @@ export const BUILT_IN: readonly Category[] = [
 ];
 const CUSTOM_ID = /^cat_[a-z0-9-]{1,40}$/;
 
-// The custom ones, as they're kept, in order.
-function readCustom(): Category[] {
+// The custom ones, as they're kept, in order; and which of them came from the primary
+// (`takePrimaryCategories`).
+function readKept(): { custom: Category[]; fromPrimary: string[] } {
   try {
     const kept = JSON.parse(textOf(CATEGORIES_FILE) ?? "null");
-    return (isObject(kept) && Array.isArray(kept.custom) ? kept.custom : [])
+    const custom = (isObject(kept) && Array.isArray(kept.custom) ? kept.custom : [])
       .filter((each: unknown): each is { id: string; name: string } => isObject(each) && typeof each.id === "string" && CUSTOM_ID.test(each.id) && typeof each.name === "string")
       .map(({ id, name }: { id: string; name: string }) => ({ id, name, builtIn: false }));
+    const fromPrimary = isObject(kept) && Array.isArray(kept.fromPrimary) ? kept.fromPrimary.filter((each: unknown): each is string => typeof each === "string" && CUSTOM_ID.test(each)) : [];
+    return { custom, fromPrimary };
   } catch {
-    return [];
+    return { custom: [], fromPrimary: [] };
   }
 }
+const readCustom = (): Category[] => readKept().custom;
 
 /** Every category, in the order clients show them: Next, Later, the custom ones, Parked, Done. */
 export function categories(): Category[] {
@@ -53,11 +57,12 @@ const slugOf = (name: string) => name.toLowerCase().normalize("NFKD").replace(/[
 /** What a change says: done (with the categories now), or why not. */
 export type CategoryOutcome = { done: Category } | { refused: string };
 
-const change = (work: (custom: Category[]) => CategoryOutcome): CategoryOutcome => {
+const change = (work: (custom: Category[], kept: { fromPrimary: string[] }) => CategoryOutcome): CategoryOutcome => {
   const outcome = locked(LOCK, () => {
-    const custom = readCustom();
-    const outcome = work(custom);
-    if ("done" in outcome) writePrivate(CATEGORIES_FILE, JSON.stringify({ custom: custom.map(({ id, name }) => ({ id, name })) }));
+    const kept = readKept();
+    const outcome = work(kept.custom, kept);
+    const fromPrimary = kept.fromPrimary.filter(id => kept.custom.some(each => each.id === id));
+    if ("done" in outcome) writePrivate(CATEGORIES_FILE, JSON.stringify({ custom: kept.custom.map(({ id, name }) => ({ id, name })), ...(fromPrimary.length ? { fromPrimary } : {}) }));
     return outcome;
   });
   // (Every queue's view names them.)
@@ -133,5 +138,30 @@ export function keepCategory(id: string, name: string): boolean {
     const made = { id, name: plainName(name).slice(0, MOST_NAME) || id.slice(4), builtIn: false };
     custom.push(made);
     return { done: made };
+  });
+}
+
+/** The custom categories of the primary this box numbers from, as it told them: its list, in its
+ * order, names and all, is this box's; one it removed goes here too, once no item here is in it
+ * (`used`: how many are). Those only this box has (added here) stay, after them. */
+export function takePrimaryCategories(given: { id: string; name: string }[], used: (id: string) => number): void {
+  const theirs = given.filter(each => CUSTOM_ID.test(each.id)).slice(0, MOST_CUSTOM).map(each => ({ id: each.id, name: plainName(each.name).slice(0, MOST_NAME) || each.id.slice(4), builtIn: false }));
+  const ids = new Set(theirs.map(each => each.id));
+  const worked = (kept: { custom: Category[]; fromPrimary: string[] }) => {
+    const left = kept.custom.filter(each => !ids.has(each.id) && (!kept.fromPrimary.includes(each.id) || used(each.id) > 0));
+    const custom = [...theirs, ...left].slice(0, MOST_CUSTOM);
+    // (One it removed that's still in use here stays the primary's, to go once it's empty.)
+    const fromPrimary = custom.filter(each => ids.has(each.id) || kept.fromPrimary.includes(each.id)).map(each => each.id);
+    return { custom, fromPrimary };
+  };
+  const same = (a: { custom: Category[]; fromPrimary: string[] }, b: { custom: Category[]; fromPrimary: string[] }) => JSON.stringify(a) === JSON.stringify(b);
+  const before = readKept();
+  if (same(worked(before), before)) return;
+  change((custom, kept) => {
+    const now = worked({ custom, fromPrimary: kept.fromPrimary });
+    if (same(now, { custom, fromPrimary: kept.fromPrimary })) return { refused: "" };
+    custom.splice(0, custom.length, ...now.custom);
+    kept.fromPrimary = now.fromPrimary;
+    return { done: now.custom[0] ?? BUILT_IN[0] };
   });
 }
