@@ -98,7 +98,7 @@ async function addItem(title) {
 const ownPeers = () => {
   let body = null;
   link.updateLink(current => {
-    const made = link.ownDoc(current, "peers", link.macPeersBodyOf(current));
+    const made = link.ownDoc(current, "peers", link.macPeersBody(current));
     body = link.readDoc(made.envelope).body;
     return current;
   });
@@ -128,4 +128,63 @@ test("this Mac numbers through a machine it shares with a Mac set up before it: 
   assert.equal(asked.length, 1);
   assert.equal(asked[0].to, other.pub);
   assert.ok(asked[0].ask.top >= 11, "telling how far it got");
+});
+
+test("this Mac, numbering on its own, leads a setup of its own: its peers document names it, its numbers go on where they were (#41, then #42), and kuvo/setup says it's the main computer", async () => {
+  write(numbers, { primary: "self", next: 42, leases: [], since: 1_000 });
+  labTold({ primary: { key: self.pub, kind: "mac", since: 1_000 } });
+  assert.equal(ownPeers().setup, undefined, "none before it's looked at");
+  link.noteSetupNow(Date.now(), { soon: 0 });
+  const named = ownPeers().setup;
+  assert.match(named?.id ?? "", /^set_[A-Za-z0-9_-]{22}$/);
+  assert.deepEqual({ epoch: named.epoch, primary: named.primary }, { epoch: 1, primary: self.pub });
+  // Looked at again: the same setup, never a new one.
+  link.noteSetupNow(Date.now(), { soon: 0 });
+  assert.equal(ownPeers().setup.id, named.id);
+
+  assert.match(await addItem("Ship it"), /^Added #42 /);
+  const shown = await route("GET", "kuvo/setup");
+  assert.equal(shown.status, 200);
+  assert.deepEqual(shown.json, {
+    setup: named.id, epoch: 1,
+    primary: { key: self.pub, name: "Studio", kind: "mac" },
+    you: { key: self.pub, role: "primary" },
+    computers: [{ key: self.pub, name: "Studio", kind: "mac", role: "primary", app: true }, { key: lab.pub, name: "lab", kind: "machine", role: "member", app: false }],
+    startsFromOthers: { value: null, default: "off" },
+  });
+  // Its card, as it's next written: the same, with the item made since.
+  link.writeCard();
+  const card = read(path.join(run, "setup-card.json"));
+  assert.deepEqual({ setup: card.setup, role: card.role, primary: card.primary.key, app: card.app, computers: card.computers, items: card.items }, { setup: named.id, role: "primary", primary: self.pub, app: true, computers: 2, items: 1 });
+});
+
+test("a Mac whose numbers go through another Mac, or whose machine another Mac shares, leads no setup and numbers as before; one that led it steps aside once it hears its machine is shared, and leads it again, the same, once it isn't", () => {
+  write(numbers, { primary: "self", next: 12, leases: [], since: 9_000 });
+  labTold({ primary: { key: other.pub, kind: "mac", since: 1_000 } });
+  link.noteSetupNow(Date.now(), { soon: 0 });
+  assert.equal(link.readLink().setup, undefined, "it numbers from the Mac set up first: no setup of its own");
+  assert.equal(ownPeers().setup, undefined);
+  assert.equal(link.primaryOf(link.readLink(), numbers).via?.key, lab.pub, "and through lab, as before");
+
+  // lab numbers from this Mac, but says another Mac set it up too.
+  write(numbers, { primary: "self", next: 12, leases: [], since: 1_000 });
+  labTold({ primary: { key: self.pub, kind: "mac", since: 1_000 }, shared: true });
+  link.noteSetupNow(Date.now(), { soon: 0 });
+  assert.equal(link.readLink().setup, undefined);
+
+  // lab isn't shared: it leads. Then it hears lab is (another Mac set it up since): it steps aside,
+  // numbering on as it was, and its peers document names no setup.
+  labTold({ primary: { key: self.pub, kind: "mac", since: 1_000 } });
+  link.noteSetupNow(Date.now(), { soon: 0 });
+  const led = ownPeers().setup;
+  assert.ok(led);
+  labTold({ primary: { key: self.pub, kind: "mac", since: 1_000 }, shared: true });
+  link.noteSetupNow(Date.now(), { soon: 0 });
+  assert.equal(ownPeers().setup, undefined);
+  assert.equal(link.readLink().setup.aside, true, "kept aside, never made again");
+  assert.deepEqual(link.primaryOf(link.readLink(), numbers), { self: true });
+  assert.deepEqual(link.setupView(link.readLink()).you, { key: self.pub, role: null });
+  labTold({ primary: { key: self.pub, kind: "mac", since: 1_000 } });
+  link.noteSetupNow(Date.now(), { soon: 0 });
+  assert.deepEqual(ownPeers().setup, led, "the same setup, at the same epoch");
 });

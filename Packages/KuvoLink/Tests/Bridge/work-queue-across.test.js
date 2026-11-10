@@ -322,6 +322,42 @@ test("numbers come from the first computer you set up: a Mac before a machine, t
   assert.equal(link.primaryOf(link.readLink(), file, lost + 4 * 86_400_000).peer.key, mac.pub);
 });
 
+test("a machine in a setup numbers from its main computer, whatever a peer says of a Mac set up earlier; one Macs share outside one setup works it out as before, and says it's shared", async () => {
+  const file = path.join(queues, "numbers.json");
+  // Its Mac leads a setup, as the Mac's signed peers document says.
+  const seed = link.newSigningSeed();
+  const sign = link.signingKeyOf(seed);
+  const body = { boxes: [{ ...mac.peer, sign }, lab.peer, here.peer], moved: [], left: [], setup: { id: "set_AAAAAAAAAAAAAAAAAAAAAA", epoch: 1, primary: mac.pub } };
+  link.updateLink(() => ({ secret: crypto.randomBytes(32).toString("base64url"), key: k(here.key), sign: link.newSigningSeed(), relay: "wss://relay.test", name: "devbox", id: "devbox", mac: mac.pub, macs: [mac.pub], macSigns: { [mac.pub]: sign }, phones: [] }));
+  link.updateLink(current => { link.docsWork({ link: current, library: { personalities: [], removed: [] } }, { key: mac.pub, sign }, { give: [link.signDoc(seed, "peers", 1, body)] }); return current; });
+  assert.equal(link.readLink().setup?.primary, mac.pub);
+  write(file, { primary: mac.pub, leases: [], asking: { id: "wqn_tothemainmac01", count: 50, since: 1 } });
+  // lab says it numbers from a Mac set up earlier (as piece 3 would follow): this box doesn't.
+  const first = box("mac", "Old Mac");
+  write(path.join(queues, "peers", `${lab.pub}.json`), { id: "wqt_cccccccccccc", at: 3, heard: 3, kind: "machine", since: 10, items: [], owners: [], categories: [], primary: { key: first.pub, kind: "mac", since: 500 } });
+  assert.deepEqual(link.primaryOf(link.readLink(), file), { peer: link.peersOf(link.readLink()).find(peer => peer.key === mac.pub) });
+  link.notePrimaryNow(link.readLink(), { file });
+  assert.equal(link.readNumbers(file).primary, mac.pub);
+  sent.length = 0;
+  link.pushNumbers(host, link.readLink());
+  assert.equal(mailTo(lab).length, 0, "nothing through lab");
+  const asked = mailTo(mac).map(each => each.workQueue);
+  assert.equal(asked[0]?.ask?.id, "wqn_tothemainmac01");
+  assert.equal(asked[0].to, undefined, "to its main computer itself");
+  // It tells your other computers it isn't shared.
+  await link.pushQueues(host, link.readLink(), targets, Date.now());
+  assert.equal(mailTo(lab)[0].workQueue.told.shared, undefined);
+
+  // Two Macs set it up, in no one setup: as before, and it says it's shared.
+  fresh({ macs: [mac, later] });
+  sent.length = 0;
+  link.forgetQueuesTold();
+  // (What it tells is made again at most once a minute.)
+  await link.pushQueues(host, link.readLink(), targets, Date.now() + 120_000);
+  assert.equal(mailTo(lab)[0].workQueue.told.shared, true);
+  sent.length = 0;
+});
+
 test("a box asked for numbers on behalf of its primary passes the ask on and the block back, one hop", () => {
   const file = path.join(queues, "numbers.json");
   write(file, { primary: mac.pub, leases: [[100, 149]] });

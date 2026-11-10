@@ -19,6 +19,7 @@ import { categories, takePrimaryCategories } from "./categories";
 import { handArrived, handedBack, sendHandings } from "./hand";
 import { mailsFor, takePart } from "./parts";
 import { movePast, ownSince, primaryOf, takeNumbersMail, topOf } from "./numbers";
+import { sharedMachine } from "../setup/settle";
 import { allItems, OWNER, queueFollowers, WORK_QUEUE, type Item } from "./store";
 import { forgetTold, keepTold, MOST_TOLD, MOST_TOLD_DONE, readTold, TOLD, toldKeys, toldOf, type Numbering, type ToldItem } from "./told";
 import { factsOf, ownersOf, summaryOf, type Computer, type OwnerFacts } from "./view";
@@ -48,7 +49,8 @@ interface Telling {
 }
 
 /** How this box numbers, as it tells its peers: its kind, when it was set up, the highest number it
- * used or holds, and its primary (itself, or another, with when that one was set up). */
+ * used or holds, its primary (itself, or another, with when that one was set up), and whether it's a
+ * machine Macs share outside one setup. */
 export function numberingNow(link: LinkState | null): Numbering {
   const primary = primaryOf(link);
   const own = link ? ownKey(link) : null;
@@ -60,7 +62,7 @@ export function numberingNow(link: LinkState | null): Numbering {
     const told = primary.via ? readTold(primary.via.key)?.primary?.since : readTold(primary.peer.key)?.since;
     named = { key: primary.peer.key, kind: primary.peer.kind, ...(told ? { since: told } : {}) };
   }
-  return { kind, since, top: topOf(), ...(named ? { primary: named } : {}) };
+  return { kind, since, top: topOf(), ...(named ? { primary: named } : {}), ...(sharedMachine(link) ? { shared: true as const } : {}) };
 }
 
 /** An item as this box tells it: its summary, with who handed it on. */

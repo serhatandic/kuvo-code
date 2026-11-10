@@ -1404,6 +1404,8 @@ test("each feature kuvo/info names is a route the machine answers, and one it do
     browser: ["GET", "kuvo/browser"],
     "work-queue": ["GET", "kuvo/work-queue/categories"],
     "work-queue.elsewhere": ["POST", "kuvo/work-queue/refs"],
+    // (Your setup, and who's its main computer.)
+    setup: ["GET", "kuvo/setup"],
     "git.backups": ["GET", "kuvo/git/backups?folder=/"],
     // (Moves with a coding agent's own conversation, and the check before one holds anything: what
     // kuvo/moves takes besides, and a box asks of another in its mail.)

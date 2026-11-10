@@ -32,6 +32,7 @@ const personalitiesBody = { personalities: [{ id: "custom.calm", name: "Calm", d
 
 const taken = [
   { name: "a Mac's peers", seed: mac, kind: "peers", n: 1, body: peersBody },
+  { name: "a main computer's peers, naming the setup it leads", seed: mac, kind: "peers", n: 2, body: { ...peersBody, setup: { id: `set_${b64(Buffer.alloc(16, 5))}`, epoch: 3, primary: peersBody.boxes[0].key } } },
   { name: "a machine's phones, with a removal and words that aren't ASCII", seed: machine, kind: "phones", n: 7, body: phonesBody },
   { name: "a view of your personalities, at a high version", seed: machine, kind: "personalities", n: 9007199254740991, body: personalitiesBody },
 ].map(({ name, seed, kind, n, body }) => {

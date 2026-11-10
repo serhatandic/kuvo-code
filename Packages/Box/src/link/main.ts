@@ -61,6 +61,8 @@ import { SENDING } from "./letters/letter";
 import { watchFolders } from "./follow";
 import { pushRows } from "./work/elsewhere";
 import { pushNumbers } from "./work-queue/numbers";
+import { noteSetupNow } from "./setup/lead";
+import { writeCard } from "./setup/card";
 import { pushQueues } from "./work-queue/across";
 import { handUpkeepSoon } from "./work-queue/hand";
 import { clearStaging } from "./work-queue/ops";
@@ -167,7 +169,12 @@ export { forgetOldMacs, leaveMac, macsOf, mailFor, movedOf, noteOnline, openMail
 export { noteDocsChanged } from "./documents/changed";
 export { authorizePhone, confirmPhone, foldPhones, newPairing, pairPhone, removeAsMac, removePhones } from "./phones";
 export { noLongerNeeded } from "./keeper";
-export { changedWork, digestOf, docMails, docsWork, greetWork, ownDoc, takeDoc } from "./documents/work";
+export { changedWork, digestOf, docMails, docsWork, greetWork, macPeersBody, ownDoc, takeDoc } from "./documents/work";
+export { leadsNow, noteSetupNow, settleOwnSetup } from "./setup/lead";
+export { settleSetup, sharedMachine } from "./setup/settle";
+export { followedSetup, newSetupID, startsFromOthers } from "./setup/record";
+export { setupView } from "./setup/view";
+export { cardNow, SETUP_CARD, writeCard } from "./setup/card";
 export { peerOf, readPeerAgents, takeAgents } from "./peers/directory";
 export { composeLetter } from "./letters/letter";
 export { composeAgents } from "./peers/directory";
@@ -178,7 +185,7 @@ export { answered, deliverLeftAnswers, letterMail, letterWent, sendOutbox } from
 export { takeLetter } from "./letters/take";
 export { callAs, callsBack, takeCall } from "./letters/calls";
 export { pushRows, takeRows } from "./work/elsewhere";
-export { askToSend, blockArrived, BLOCK as QUEUE_BLOCK, CLAIM_REACH as QUEUE_CLAIM_REACH, claimNumbers, giveBlock, LOW as QUEUE_LOW, notePrimaryNow, primaryOf, pushNumbers, readNumbers, reclaimWaiting, takeBlock, takeNumber, takeNumbersMail } from "./work-queue/numbers";
+export { askToSend, blockArrived, BLOCK as QUEUE_BLOCK, CLAIM_REACH as QUEUE_CLAIM_REACH, claimNumbers, giveBlock, LOW as QUEUE_LOW, notePrimaryNow, primaryOf, pushNumbers, rankedPrimary, readNumbers, reclaimWaiting, takeBlock, takeNumber, takeNumbersMail } from "./work-queue/numbers";
 export { forgetPushed as forgetQueuesTold, itemsElsewhere, pushQueues, takeWorkQueueMail, tellingNow as queueTellingNow, tellQueuesAgain } from "./work-queue/across";
 export { handUpkeep } from "./work-queue/hand";
 export { mailsFor as queueMailsFor, takePart as takeQueuePart } from "./work-queue/parts";
@@ -407,6 +414,8 @@ async function run(): Promise<void> {
     if (current?.welcomed) pushRows(current, readLink(), peerTargets()).catch(() => {});
     // The Work Queue's ask for more numbers, to the primary, while one is under way; and this box's
     // queue told to your other computers as it changes, with what it's handing to theirs.
+    // Your setup, as this box leads it or follows it (once a minute), before its numbers go by it.
+    noteSetupNow();
     try { pushNumbers(current); } catch {}
     if (current?.welcomed) pushQueues(current, readLink(), peerTargets()).catch(() => {});
     else try { handUpkeepSoon(readLink()); } catch {}
@@ -766,8 +775,9 @@ async function setup(): Promise<void> {
     return next;
   });
   if (work && library !== before) await takePersonalities(library).catch(() => {});
-  // The running bridge tells your other computers what changed.
+  // The running bridge tells your other computers what changed; its setup card says what it's in now.
   noteDocsChanged();
+  try { writeCard(); } catch {}
   // None paired any more (each removed for good, as one at a time would be): no bridge.
   if (!link) {
     if (running) process.kill(running, "SIGTERM");
@@ -828,6 +838,7 @@ export function leave(mac: unknown): boolean {
   if (!link) return false;
   forgetMacsAgents(mac, link);
   noteDocsChanged();
+  try { writeCard(); } catch {}
   return true;
 }
 

@@ -186,6 +186,101 @@ test("a peers document a box forges, alters or replays is turned away; only its 
   assert.equal(c.state.link.docs[`${m.entry.sign} peers`].d, second.d);
 });
 
+// A setup a Mac leads, as its peers document names it (PROTOCOL.md, "Your setup").
+const setupID = name => `set_${crypto.createHash("sha256").update(name).digest().subarray(0, 16).toString("base64url")}`;
+const leads = (by, epoch, id = setupID("one")) => ({ setup: { id, epoch, primary: by.entry.key } });
+
+test("a machine follows the setup its Mac leads; a lower epoch of it is never taken, nor a Mac's word on its boxes when the setup names that Mac as a member; another main computer at its epoch is noted, never taken", () => {
+  const main = mac("MacBook"), member = mac("iMac"), b = machine("b"), c = machine("c"), rogue = machine("rogue");
+  const net = relay([b, c]);
+  const first = main.peers([b, c, member], leads(main, 2));
+  setUp(b, main, [first]);
+  setUp(c, main, [first]);
+  assert.deepEqual(b.state.link.setup, { id: setupID("one"), epoch: 2, primary: main.entry.key, sign: main.entry.sign, role: "member" });
+  const view = link.setupView(b.state.link);
+  assert.deepEqual([view.setup, view.epoch, view.primary, view.you], [setupID("one"), 2, { key: main.entry.key, name: "MacBook", kind: "mac" }, { key: b.entry.key, role: "member" }]);
+  assert.deepEqual(view.computers.map(each => `${each.name}:${each.role}:${each.app}`), ["MacBook:primary:true", "b:member:false", "c:member:false", "iMac:member:true"]);
+  assert.deepEqual(view.startsFromOthers, { value: null, default: "on" }, "on, on a computer that isn't the main one");
+
+  // A lower epoch of it, signed by its main computer as a newer version: never taken.
+  net.give(main, [b], [main.peers([b, c, member, rogue], leads(main, 1))]);
+  assert.equal(b.state.link.docs[`${main.entry.sign} peers`].d, first.d);
+  assert.equal(b.state.link.setup.epoch, 2);
+  assert.equal(names(b).includes("rogue"), false);
+
+  // iMac, which the setup names as one of its Macs, set b up too: its word on b's boxes isn't taken.
+  setUp(b, member, [member.peers([b, rogue])]);
+  assert.deepEqual(names(b), ["MacBook", "c", "iMac"]);
+  assert.equal(b.state.link.docs[`${member.entry.sign} peers`], undefined);
+  assert.equal(link.sharedMachine(b.state.link), false, "both its Macs are in its setup");
+  assert.equal(b.state.link.setup.aside, undefined);
+
+  // iMac says it's the main computer of the same setup, at the same epoch: kept as it was, and noted.
+  net.give(member, [b], [member.peers([b], leads(member, 2))]);
+  assert.equal(b.state.link.setup.primary, main.entry.key);
+  assert.deepEqual(b.state.link.setup.conflict, { primary: member.entry.key, epoch: 2 });
+  assert.deepEqual(link.setupView(b.state.link).conflict, { primary: member.entry.key, epoch: 2 });
+  // Its main computer at a later epoch: taken, and what was noted at the one before goes.
+  net.give(main, [b], [main.peers([b, c, member], leads(main, 3))]);
+  assert.equal(b.state.link.setup.epoch, 3);
+  assert.equal(b.state.link.setup.conflict, undefined);
+});
+
+test("a machine's Mac sets it up again signing with a new key: it follows that Mac's setup as its new documents say", () => {
+  const main = mac("MacBook"), b = machine("b"), c = machine("c");
+  setUp(b, main, [main.peers([b], leads(main, 1))]);
+  assert.equal(b.state.link.setup.sign, main.entry.sign);
+  // Its Keychain's signing key made anew: its setup over SSH gives the new one, and its documents.
+  const again = mac("MacBook");
+  again.entry.key = main.entry.key;
+  setUp(b, again, [again.peers([b, c], leads(again, 1))]);
+  assert.equal(b.state.link.setup.sign, again.entry.sign);
+  assert.deepEqual(names(b), ["MacBook", "c"]);
+});
+
+test("a machine Macs share that aren't in one setup follows none: it takes each Mac's word on its boxes, as before, and says it's shared; once one lets it go, it follows the other's setup again", () => {
+  const first = mac("MacBook"), second = mac("iMac"), b = machine("b"), c = machine("c"), d = machine("d");
+  setUp(b, first, [first.peers([b, c], leads(first, 1))]);
+  assert.equal(b.state.link.setup.role, "member");
+  setUp(b, second, [second.peers([b, d], leads(second, 1, setupID("two")))]);
+  assert.equal(b.state.link.setup.aside, true);
+  assert.equal(link.followedSetup(b.state.link), null);
+  assert.equal(link.sharedMachine(b.state.link), true);
+  assert.deepEqual(names(b), ["MacBook", "c", "d", "iMac"]);
+  assert.equal(link.setupView(b.state.link).setup, null);
+  assert.deepEqual(link.setupView(b.state.link).you, { key: b.entry.key, role: null });
+  // iMac removes it.
+  link.docsWork(b.state, second.entry, { give: [second.peers([d], { left: [b.entry.key], ...leads(second, 1, setupID("two")) })] });
+  assert.deepEqual(b.state.link.macs, [first.entry.key]);
+  assert.equal(link.sharedMachine(b.state.link), false);
+  assert.equal(link.followedSetup(b.state.link)?.primary, first.entry.key);
+  assert.deepEqual(names(b), ["MacBook", "c"]);
+});
+
+test("a machine no Mac set up leads a setup of its own; once a Mac sets it up, it follows the Mac's (an empty setup joins); its Mac stops naming a setup, and it follows none, keeping the epoch it had", () => {
+  const main = mac("MacBook"), lone = machine("lone"), c = machine("c");
+  link.settleOwnSetup(lone.state.link);
+  const own = lone.state.link.setup;
+  assert.deepEqual([own.role, own.primary, own.epoch], ["primary", lone.entry.key, 1]);
+  assert.match(own.id, /^set_[A-Za-z0-9_-]{22}$/);
+  const view = link.setupView(lone.state.link);
+  assert.deepEqual(view.computers, [{ key: lone.entry.key, name: "", kind: "machine", role: "primary", app: false }]);
+  assert.deepEqual(view.startsFromOthers, { value: null, default: "off" });
+  setUp(lone, main, [main.peers([lone, c], leads(main, 4))]);
+  assert.deepEqual([lone.state.link.setup.role, lone.state.link.setup.primary, lone.state.link.setup.epoch], ["member", main.entry.key, 4]);
+  link.settleOwnSetup(lone.state.link);
+  assert.equal(lone.state.link.setup.role, "member", "a machine a Mac set up never leads");
+  // Its Mac's next document names no setup (another Mac shares one of its machines now).
+  link.docsWork(lone.state, main.entry, { give: [main.peers([lone, c])] });
+  assert.equal(link.followedSetup(lone.state.link), null);
+  assert.equal(lone.state.link.setup.epoch, 4);
+  assert.deepEqual(names(lone), ["MacBook", "c"], "its Mac's word, as before");
+  link.docsWork(lone.state, main.entry, { give: [main.peers([lone, c], leads(main, 3))] });
+  assert.equal(link.followedSetup(lone.state.link), null, "never a lower epoch");
+  link.docsWork(lone.state, main.entry, { give: [main.peers([lone, c], leads(main, 4))] });
+  assert.equal(link.followedSetup(lone.state.link)?.epoch, 4);
+});
+
 test("no clock decides anything: the same exchanges come out the same whatever each box's clock says", () => {
   const run = offset => {
     const real = Date.now;

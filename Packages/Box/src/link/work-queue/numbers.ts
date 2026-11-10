@@ -1,11 +1,13 @@
 // The Work Queue's numbers (PROTOCOL.md, "The Work Queue", "Numbers"): one #n per item, unique
-// across your computers, handed out by the primary: the box of the Mac that set this one up (a Mac's
-// own box, and a box with no Mac, is its own), kept once it's first used, so a Mac switching later
-// doesn't move the counter. The primary keeps the one counter; every other box numbers from blocks
-// the primary leased it, so it numbers at once, offline too, and asks for another block by mail
-// before it runs out. An ask has an id, and the primary keeps what it gave for each, so one sent
-// again gets the same block. With no number left and the primary away, an item waits for one, and
-// takes it, oldest first, when a block comes.
+// across your computers, handed out by the primary: your setup's main computer (PROTOCOL.md, "Your
+// setup"). A box in no setup (COMPAT(183 first-computer): a machine Macs share that aren't joined in
+// one setup yet, the Macs and machines numbering with it, or one beside an older box) works out the
+// first computer you set up from what it and its peers know, so Macs that set up the same machine
+// already number from one of them, the one set up first. The primary keeps the one counter; every
+// other box numbers from blocks the primary leased it, so it numbers at once, offline too, and asks
+// for another block by mail before it runs out. An ask has an id, and the primary keeps what it gave
+// for each, so one sent again gets the same block. With no number left and the primary away, an item
+// waits for one, and takes it, oldest first, when a block comes.
 //
 // An import keeps its items' numbers by claiming them: the primary grants a claimed number only at
 // or above its counter (below it, it may have handed it out already), and moves its counter past.
@@ -20,6 +22,7 @@ import { locked, textOf, writePrivate } from "../files";
 import { KEY, macsOf, mailFor, ownKey, peersOf, removedBoxes } from "../peers/known";
 import { readTold, toldKeys } from "./told";
 import { awaySince, lastFoundAway, PEER_CHECKED, readReach } from "../peers/reach";
+import { followedSetup } from "../setup/record";
 import { readLink } from "../state";
 import { allItems, changeQueues, OWNER, WORK_QUEUE } from "./store";
 import type { Book } from "./store";
@@ -112,13 +115,25 @@ export function readNumbers(file = NUMBERS_FILE): Numbers {
   }
 }
 
-/** This box's primary, the first computer you set up, as far as this box can tell (PROTOCOL.md,
+/** This box's primary: its setup's main computer, itself when it's that (PROTOCOL.md, "Your setup");
+ * one it can't write to yet (its document isn't here, or names no address) is waited for, never
+ * passed over. In no setup, the first computer you set up (`rankedPrimary`). */
+export function primaryOf(link: LinkState | null | undefined = readLink(), file = NUMBERS_FILE, now = Date.now()): Primary {
+  const setup = followedSetup(link);
+  if (!setup) return rankedPrimary(link, file, now);
+  if (setup.role === "primary") return { self: true };
+  const peer = peersOf(link).find(each => each.key === setup.primary);
+  return peer?.address ? { peer } : { away: true };
+}
+
+/** COMPAT(183 first-computer): for a box in no setup. Goes once every supported box knows setups.
+ * The first computer you set up, as far as this box can tell (PROTOCOL.md,
  * "The Work Queue", "Numbers"): of this box, its peers and the primaries they say they number from,
  * a Mac before a machine (a machine is always set up from a Mac), then the one set up first, then by
  * key. The one it numbers from now is kept while it's still one of your computers and none set up
  * earlier is known; a box that hears of an earlier one moves to it (never back), and one whose
  * primary was removed or forgotten finds the next. A machine with a Mac is never its own. */
-export function primaryOf(link: LinkState | null | undefined = readLink(), file = NUMBERS_FILE, now = Date.now()): Primary {
+export function rankedPrimary(link: LinkState | null | undefined = readLink(), file = NUMBERS_FILE, now = Date.now()): Primary {
   const kept = readNumbers(file);
   const own = link ? ownKey(link) : null;
   const gone = goneOf(link, now);

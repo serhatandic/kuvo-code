@@ -15,6 +15,7 @@ import path from "node:path";
 import { IS_MAC, RUN } from "../home";
 import { MOVED_FOR, movedAway } from "../moves/records";
 import { Frame, frame, relaySend } from "../relay/frames";
+import { setupDoc } from "../setup/record";
 import { macSign, updateLink } from "../state";
 import type { LinkState } from "../state";
 
@@ -147,6 +148,8 @@ export function leaveMac(link: LinkState, mac: string): void {
   // COMPAT(beta.1 peers-list): `legacy`, a beta.1 Mac's list. Goes when 0.8.0 ships.
   for (const field of ["macSeen", "macSigns", "macNames", "legacy"] as const) if (link[field]) delete link[field][mac];
   link.phones = (link.phones ?? []).filter(phone => !(phone.from === "mac" && phone.mac === mac));
+  // The setup that Mac leads goes with it, as its peers document does (PROTOCOL.md, "Your setup").
+  if (link.setup?.role === "member" && link.setup.primary === mac) delete link.setup;
 }
 
 export const MOST_PEERS = 64;
@@ -169,8 +172,10 @@ export function takeLegacyPeers(link: LinkState, mac: string, peers: unknown, at
 }
 
 // Each of this box's Macs' word on its boxes: its peers document, or the list it gave before it
-// signed them (`legacy`).
+// signed them (`legacy`). In a setup, its main computer's word alone (PROTOCOL.md, "Your setup").
 function macWords(link: LinkState | null | undefined): MacWord[] {
+  const setup = setupDoc(link);
+  if (setup) return [{ boxes: Array.isArray(setup.body.boxes) ? setup.body.boxes.slice(0, MOST_PEERS) : [], moved: setup.body.moved }];
   return macsOf(link).map(mac => {
     const doc = macDoc(link, mac, "peers");
     if (doc) return { boxes: Array.isArray(doc.body.boxes) ? doc.body.boxes.slice(0, MOST_PEERS) : [], moved: doc.body.moved };
@@ -212,10 +217,12 @@ export function movesTold(link: LinkState | null | undefined, now = Date.now()):
 }
 
 /** The boxes you removed, so they're no peers of this one (`left`: this Mac's own record, or what
- * its Macs' peers documents say), not those just missing from a list for now. */
+ * its Macs' peers documents say, or in a setup its main computer's), not those just missing from a
+ * list for now. */
 export function removedBoxes(link: LinkState | null | undefined): Set<string> {
-  const left = IS_MAC ? (Array.isArray(link?.left) ? link.left : []) : macsOf(link).flatMap(mac => {
-    const named = macDoc(link, mac, "peers")?.body.left;
+  const setup = setupDoc(link);
+  const left = IS_MAC ? (Array.isArray(link?.left) ? link.left : []) : (setup ? [setup] : macsOf(link).map(mac => macDoc(link, mac, "peers"))).flatMap(doc => {
+    const named = doc?.body.left;
     return Array.isArray(named) ? named.filter((key): key is string => typeof key === "string") : [];
   });
   const peers = new Set(peersOf(link).map(peer => peer.key));
