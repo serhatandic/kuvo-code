@@ -15217,7 +15217,10 @@ function writeCard() {
 function leadsNow(link) {
   if (!IS_MAC)
     return !macsOf(link).length;
-  return "self" in rankedPrimary(link) && peersOf(link).every((peer) => readTold2(peer.key)?.shared === false);
+  if (!("self" in rankedPrimary(link)))
+    return false;
+  const said = peersOf(link).map((peer) => readTold2(peer.key)?.shared);
+  return followedSetup(link)?.role === "primary" ? !said.includes(true) : said.every((shared) => shared === false);
 }
 function settleOwnSetup(link) {
   settleSetup(link);
@@ -32514,7 +32517,7 @@ async function* setupRoute(context) {
     return yield* json(405, {});
   if (route === "kuvo/setup/events") {
     yield { head: { status: 200, headers: { "content-type": "application/x-ndjson" } } };
-    return yield* followed(() => setupView(readLink()), followers, signal, { folders: [RUN], recursive: false });
+    return yield* followed(() => setupView(readLink()), followers, signal);
   }
   return yield* json(200, setupView(readLink()));
 }

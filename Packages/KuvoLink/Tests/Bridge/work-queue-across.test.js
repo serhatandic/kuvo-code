@@ -348,8 +348,16 @@ test("a machine in a setup numbers from its main computer, whatever a peer says 
   await link.pushQueues(host, link.readLink(), targets, Date.now());
   assert.equal(mailTo(lab)[0].workQueue.told.shared, false);
 
-  // Two Macs set it up, in no one setup: as before, and it says it's shared.
-  fresh({ macs: [mac, later] });
+  // A second Mac sets it up, in no one setup: it sets its setup aside, numbers as before, and says
+  // it's shared.
+  const second = link.newSigningSeed();
+  link.updateLink(current => {
+    current.macs = [mac.pub, later.pub];
+    current.macSigns = { ...current.macSigns, [later.pub]: link.signingKeyOf(second) };
+    link.docsWork({ link: current, library: { personalities: [], removed: [] } }, { key: later.pub, sign: link.signingKeyOf(second) }, { give: [link.signDoc(second, "peers", 1, { boxes: [{ ...later.peer, sign: link.signingKeyOf(second) }, here.peer], moved: [], left: [] })] });
+    return current;
+  });
+  assert.equal(link.readLink().setup.aside, true);
   sent.length = 0;
   link.forgetQueuesTold();
   // (What it tells is made again at most once a minute.)

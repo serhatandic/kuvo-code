@@ -13,17 +13,21 @@ import { updateLink } from "../state";
 import { readTold } from "../work-queue/told";
 import { rankedPrimary } from "../work-queue/numbers";
 import { writeCard } from "./card";
-import { newSetupID } from "./record";
+import { followedSetup, newSetupID } from "./record";
 import { settleSetup } from "./settle";
 import type { LinkState } from "../state";
 
 /** Whether this box leads its setup now: this Mac's box, while it's the first computer you set up as
- * it and its peers know (it numbers from none other) and each machine of it has said no other Mac
- * shares it (one that hasn't said, an older box, holds it back: nothing changes for it meanwhile); a
- * machine, while no Mac set it up. */
+ * it and its peers know (it numbers from none other) and no machine of it says another Mac shares it;
+ * to start leading (or lead again), each machine must have said so (one that hasn't, an older box,
+ * holds it back: nothing changes meanwhile), while one that leads goes on through a machine that
+ * hasn't said yet (one just added, its first word still on its way). A machine leads while no Mac
+ * set it up. */
 export function leadsNow(link: LinkState): boolean {
   if (!IS_MAC) return !macsOf(link).length;
-  return "self" in rankedPrimary(link) && peersOf(link).every(peer => readTold(peer.key)?.shared === false);
+  if (!("self" in rankedPrimary(link))) return false;
+  const said = peersOf(link).map(peer => readTold(peer.key)?.shared);
+  return followedSetup(link)?.role === "primary" ? !said.includes(true) : said.every(shared => shared === false);
 }
 
 /** This box's setup as it stands now (in place, under link.json's lock): one it leads made, or set

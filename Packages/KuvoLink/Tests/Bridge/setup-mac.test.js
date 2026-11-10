@@ -213,3 +213,50 @@ test("a Mac whose keys were made anew while it doesn't lead lets the setup it le
     link.macLink.overlay = before;
   }
 });
+
+test("what a machine tells of how it numbers is looked at as it comes: lab, now on a box that knows setups, says it isn't shared, and this Mac leads at once; a machine added since that hasn't said yet doesn't stop it, one that says it's shared does", async () => {
+  write(numbers, { primary: "self", next: 12, leases: [], since: 1_000 });
+  labTold({ primary: { key: self.pub, kind: "mac", since: 1_000 }, shared: undefined });
+  link.noteSetupNow(Date.now(), { soon: 0 });
+  assert.equal(link.readLink().setup, undefined, "held back by lab, an older box");
+  // lab's next word, by mail, as its updated box tells it.
+  const told = { id: "wqt_labupdatedlabupdat", at: Date.now(), kind: "machine", since: 50, top: 0, primary: { key: self.pub, kind: "mac", since: 1_000 }, shared: false, items: [], owners: [], categories: [] };
+  await link.takeWorkQueueMail(lab.peer, { told }, host, () => ({ targets: [target], bridge: false }));
+  const led = ownPeers().setup;
+  assert.ok(led, "leads now, not at its next minute");
+  // You add a machine: until it says, this Mac leads on.
+  const added = box("machine", "vps");
+  link.updateLink(current => ({ ...current, macPeers: [lab.peer, added.peer] }));
+  link.noteSetupNow(Date.now(), { soon: 0 });
+  assert.deepEqual(ownPeers().setup, led);
+  write(path.join(queues, "peers", `${added.pub}.json`), { id: "wqt_vpstoldvpstold", at: 1, heard: 1, kind: "machine", since: 60, items: [], owners: [], categories: [], primary: { key: self.pub, kind: "mac", since: 1_000 }, shared: true });
+  link.noteSetupNow(Date.now(), { soon: 0 });
+  assert.equal(ownPeers().setup, undefined, "stepped aside");
+});
+
+test("kuvo/setup/events says it now, and again as link.json changes, written here or by another process (setup over SSH)", async () => {
+  write(numbers, { primary: "self", next: 12, leases: [], since: 1_000 });
+  labTold({ primary: { key: self.pub, kind: "mac", since: 1_000 } });
+  const stop = new AbortController();
+  const lines = handle({ method: "GET", path: "kuvo/setup/events", headers: {}, body: undefined, fromApp: true }, undefined, stop.signal)[Symbol.asyncIterator]();
+  const next = async () => {
+    for (;;) {
+      const { value, done } = await lines.next();
+      if (done) return null;
+      if (value.body) return JSON.parse(value.body.toString());
+    }
+  };
+  try {
+    assert.equal((await next()).setup, null);
+    link.noteSetupNow(Date.now(), { soon: 0 });
+    const led = await next();
+    assert.equal(led.you.role, "primary");
+    // Another process sets it aside in the file.
+    const kept = JSON.parse(fs.readFileSync(path.join(run, "link.json"), "utf8"));
+    fs.writeFileSync(path.join(run, "link.json"), JSON.stringify({ ...kept, setup: { ...kept.setup, aside: true } }));
+    assert.equal((await next()).setup, null);
+  } finally {
+    stop.abort();
+    await lines.return?.();
+  }
+});

@@ -222,7 +222,8 @@ setups, and pairing and adding only from the main computer come later: #183.)
 - **Who leads one**: this Mac's box, once it numbers on its own (the Work Queue's first computer,
   "Numbers") and each of its machines has said no other Mac shares it (`shared: false` in what it
   tells of its Work Queue; one that hasn't said, an older box, holds it back, and nothing changes
-  meanwhile); and a box no Mac set up (one paired with a phone by itself, on Linux say). It's made
+  meanwhile; once it leads, a machine just added that hasn't said yet doesn't stop it, only one
+  saying `shared: true` does); and a box no Mac set up (one paired with a phone by itself, on Linux say). It's made
   once, at epoch 1, and looked at once a minute and as a machine's word on how it numbers changes:
   a Mac that stops leading (a machine of it is shared now, or it numbers through another Mac) sets
   it aside and its document names it no more; leading again, it names the same one. A Mac whose
