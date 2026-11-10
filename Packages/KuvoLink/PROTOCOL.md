@@ -2795,6 +2795,15 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   browser, with the Mac closed too: `saved` is empty and `offersToSave` false (saved passwords
   are the Mac's), and a `saved` answer gets `400 {"message"}`. A Mac connected to the machine
   lists the same asks, by the same `id`: the first answer counts, and the ask goes from both.
+  The Mac's copy names the machine's box too, `box`: its link address, as `kuvo/hosts` gives it
+  (left out while the Mac doesn't know it, and on a box's own list, whose asks are all its own).
+  The machine's own list is the one that counts: a client that follows that box shows the
+  machine's copy, and leaves out one the Mac lists (a Mac that went to sleep never says it's
+  over) that the box, followed now, doesn't. An answer goes where the copy shown came from; when
+  that computer can't take it (unreachable, or `503` with Kuvo Code closed on a Mac), it goes to
+  the other one listing the same ask: the box a Mac's copy names, unless that box doesn't serve
+  `kuvo/asks` (a bridge from before it, whose `404` would read as answered), or a Mac whose list
+  has it. A `404` from a box that serves `kuvo/asks` means it's answered or no longer asked.
   The browser keeps them in `~/.kuvo-code/run/browser-asks.json` for the bridge, and waits the
   whole 15 minutes for an answer while the bridge runs, rather than a few for a Mac.
 - `kuvo/groups`: the group chats that live on the computer asked, with their bots (face, name, session), who's
@@ -3011,7 +3020,9 @@ the last reading in its folder (`limits.json`), through a restart. A client reac
 
 Each conversation keeps its work items in a Work Queue of its own, on the box it lives on, the
 same on a Mac's box and a machine's, with no client there too: a session's, a bot's (its
-conversation's), or a group chat's (`grp_…`, the queue its seats write to). It replaces the
+conversation's), or a group chat's (`grp_…`, the queue its seats write to). Together they're one
+list across your computers: each item lives once, in its owner's queue on its owner's box, and
+every box shows every other's ("Across your computers"). It replaces the
 hand-kept backlog file: agents write items through tools, every agent kind alike; clients show
 them, and you reorder them, move them between categories, delete them and bring them back, never
 change what they say. Kept in `run/work-queue/` (`queues/<owner>.json`, files kept with items in
@@ -3024,40 +3035,68 @@ shown as new), `wanted` (a number an import asked for, until it's granted), `own
 the box), `inProgress`, `progress` (`{value?: 0…1, note?}`: how far, and what's being done now),
 `sessions` (`[{session, title, working}]`: the sessions working on it, and which are at work now),
 `noteCount`, `lastNote`, `fileCount`, `linkCount`, `handedBy` (the first owner that handed it on),
-`source` (an outside source's item, later), `created` and `updated` (`{at, by}`: `by` is
-`{user: true}` or `{session, name}`), `doneAt`, `removed` (`{at, by}`, deleted). Whole, it has
-`body` (Markdown), `notes` (`[{at, by, text}]`), `files` (`[{name, size, type, at}]`), `links`
-(`[{url, title?}]`) and `handed` (`[{from, to, at}]`, the last 20).
+`source` (an outside source's item, later: `{kind, ref, url?, host?, id?}`, named by `ref` and
+never numbered; one that had a number keeps it, never shown again), `handing` (`{to, name}`: on its
+way to a conversation on another computer, unchanged until it's there), `computer` (`{key, name,
+kind: mac|machine, id?}`: the computer it's on, when that isn't the box asked, as that one last told
+it; `id`, a machine's name on this Mac, for a client to reach it), `created` and `updated` (`{at,
+by}`: `by` is `{user: true}`, `{session, name}`, or another shape kept as it came, such as an outside
+tracker's `{source, name?}`: a client shows its `name`, never takes it for you), `doneAt`, `removed`
+(`{at, by}`, deleted). Whole, it has `body` (Markdown), `notes` (`[{at, by, text}]`), `files`
+(`[{name, size, type, at}]`), `links` (`[{url, title?, kind?, ref?}]`) and `handed` (`[{from, to,
+at}]`, the last 20).
 
 **In progress** isn't a category: an item is in progress while a session linked to it is at work
 (its turn running, or what it left running), unless it's Done or deleted. A session is linked to
 3 items at most (linking a fourth drops its oldest link); Done or a delete unlinks everyone.
 
-**Categories**: one set for every queue on the box: `next`, `later`, `parked`, `done` (built in),
-and custom ones (`cat_…`), between Later and Parked: `{id, name, builtIn}`.
+**Categories**: one set for every queue: `next`, `later`, `parked`, `done` (built in), and custom
+ones (`cat_…`), between Later and Parked: `{id, name, builtIn}`. Each box takes the custom ones of
+the primary it numbers from as it tells them, and of an item handed to it; a view also lists a
+custom one only another computer has (before Parked), for its items there.
 
 **Who sees what**: an owner's view is its own items, those of the sessions it oversees (started by
-it, or by those, put away ones too), and those it handed on, each living once in its owner's queue.
+it, or by those, put away ones too), and those it handed on, each living once in its owner's queue,
+on any of your computers: those on another, as it last told them (its `rows` say which sessions
+there are under the owner, "Work").
 
-- `GET kuvo/work-queue?owner=<ses_…|grp_…>` → `{owner, categories, items, owners, removed}`:
-  `items` in the categories' order, then each one's; `owners` (`[{owner, kind: bot|session|group,
-  title, bot?: {id, name}, startedBy?}]`) names each owner in the view; `removed`, what's deleted
-  in it, newest first. `owner=all` is every queue on the box at once (the panel's All; piece 3 adds
-  every other computer's). `kuvo/work-queue/events?owner=` is the same as NDJSON: a line now and one
-  each time it changes (a change here or by another process, or a linked session starting or
-  stopping work).
-- `GET kuvo/work-queue/items/<id or number>` → `{item}`, whole. `…/files/<name>` → its bytes.
-- `GET kuvo/work-queue/refs?refs=243,12` → `{refs: {"243": {id, number, title, category,
-  inProgress, owner, removed?} | null}}`: what each ref names, for a chip; null for one this box
-  doesn't know.
+- `GET kuvo/work-queue?owner=<ses_…|grp_…>` → `{owner, categories, items, owners, removed,
+  computers}`: `items` in the categories' order, then this box's first and each other computer's
+  after, by its name (each computer keeps its own order), then each one's order; `owners` (`[{owner, kind:
+  bot|session|group, title, bot?: {id, name}, startedBy?}]`) names each owner in the view;
+  `removed`, what's deleted in it here, newest first; `computers` (`[{key, name, kind, id?, at}]`),
+  each other computer that told of its queue, and as of when. `owner=all` is every queue on the box
+  and on every other computer that told of its own (the panel's All). An item on another computer
+  has `computer`. `kuvo/work-queue/events?owner=` is the same as NDJSON: a line now and one each
+  time it changes (a change here or by another process, another computer telling of its queue, or a
+  linked session starting or stopping work).
+- `GET kuvo/work-queue/items/<id or number>` → `{item}`, whole. `…/files/<name>` → its bytes. An
+  item on another computer answers as that one told it, with `computer` and an empty `body`,
+  `notes`, `files`, `links` and `handed`: a client reads it whole, and its files, from that computer
+  (a machine by `computer.id`; a Mac, its own box).
+- `GET kuvo/work-queue/refs?refs=243,12`, or `POST kuvo/work-queue/refs {refs: [...],
+  conversation?}` (a list, so a ref with a comma in it, an outside one later, goes whole;
+  `conversation` is taken and not used yet: it's for "issue #12" in a project bound to a tracker,
+  later) →
+  `{refs: {"243": {id, number?, source?, title, category, inProgress, owner?, removed?, computer?}
+  | null}}`: what each ref names, by the ref as it was asked, for a chip; one on another computer as
+  it last told it, with `computer`; null for one no computer told this box of. A client reads each
+  on its own (one it can't read is as null, the others still chips), and keeps what it learns by
+  the ref as asked, not by a number.
 - `GET kuvo/work-queue/categories` → `{categories}`.
 
 **What you do** (a paired phone, this Mac's app, or Kuvo Code on another computer through `box
 route` with its Mac's proof for that request alone, `x-kuvo-vault-proof` as the vault takes it; anything
-else, a command on that computer included, gets 403): `POST kuvo/work-queue/items/<item>/move` `{category?, before?,
+else, a command on that computer included, gets 403). An item on another computer is changed
+there: here, each of these answers 409 `{message, computer}`, and a client sends it to that
+computer instead. One on its way to another computer (`handing`) is refused (400) until it's there,
+but for `DELETE`, which calls its hand-off off (a note says so) and deletes it.
+`POST kuvo/work-queue/items/<item>/move` `{category?, before?,
 after?, top?}` (a category by its id or name; `before`/`after` an item in the same category);
 `DELETE kuvo/work-queue/items/<item>` and `POST …/restore`; `POST kuvo/work-queue/categories`
-`{add, after?}`, `{rename, to}` or `{remove}` (a custom one, once nothing is in it); `POST
+`{add, after?}`, `{rename, to}` or `{remove}` (a custom one, once nothing is in it; on a box that
+numbers from another, that one's custom categories come back as it says, "Across your computers");
+`POST
 kuvo/work-queue/import` `{owner, files: [paths]}` (Markdown files on the box: each list line
 starting with `#N` is an item, in the category of the nearest heading above it that names one
 (Done, Shelved/Parked, Later/Ideas), else Next, Done with `[x]`; a line `NOW:`/`LATER:`/… with
@@ -3070,11 +3109,15 @@ answers `{item}`; a category removed only once nothing, deleted items included, 
 tool servers add to what they tell agents); `POST kuvo/work-queue/tools {name, arguments, session}`
 → `{text, isError}`, run only while the session named is making that call (as the vault's). The
 tool servers (this Mac's app, a machine's `kuvo-browser.js`) list them and pass on every `queue_…`
-call. `queue_list`, `queue_show`, `queue_add`, `queue_update`, `queue_hand` (into a session's
-queue on this box, linked to it), `queue_remove` (`undo` brings back an agent's delete; only you
-bring back yours), `queue_categories` (list, or add one), `queue_import` (items an agent read from
+call. `queue_list` (its own and its view's items, then those on your other computers, as each last
+told them), `queue_show` (one on another computer as it told it, saying it lives there),
+`queue_add`, `queue_update`, `queue_hand` (into a session's queue, linked to it: one on this box at
+once; one on another computer that takes the Work Queue's mail, by address or a bot's name, by mail,
+"Across your computers"), `queue_remove` (`undo` brings back an agent's delete; only you
+bring back yours; one on its way to another computer has its hand-off called off), `queue_categories` (list, or add one), `queue_import` (items an agent read from
 an old backlog, with their numbers). `item` is a number (`#243` or `243`), or the id of one that has
-none yet (the tool says it). A caller's queue is its conversation's (a subagent's is its
+none yet (the tool says it); one on another computer is changed there, and a change from here is
+refused saying so. A caller's queue is its conversation's (a subagent's is its
 conversation's; a seat's, its group chat's, while the chat lives on this box: a seat of one that
 lives elsewhere is refused); it changes what's in its view (by a number two computers gave twice,
 the one in its view). Files an agent keeps with an item come only from its conversation's folder,
@@ -3091,26 +3134,108 @@ numbers in a message and draws each one the box knows as a chip (its category's 
 progress, a check when done, `#243` and the title on one line), leaving one it doesn't know as
 written; the message's words never change. A chip opens the item.
 
-**Numbers**: one `#n` per item, unique across your computers, handed out by the primary: the box of
-the Mac that set this one up (a Mac's own box, and a box with no Mac, is its own), kept once it's
-first used. The primary numbers its own items from its counter; another box numbers from blocks of
-50 the primary gave it, and asks for the next when 15 or fewer are left, by mail, on its rounds:
-`{workQueue: {ask: {id, count, claims?}}}`, sent again every 30 s until answered with
-`{workQueue: {give: {id, from, to, granted}}}`. The primary keeps what it gave for each ask, so an
+**Numbers**: one `#n` per item, unique across your computers, handed out by the primary: the first
+computer you set up. Each box works it out the same way from what it knows: of itself, its peers and
+the primaries they say they number from ("Across your computers", `told`), a Mac comes before a
+machine (a machine is always set up from a Mac), then the one set up first (`since`: when that box
+was set up, the earliest it can tell: its folder's making where the system keeps that, or its oldest
+item; one that hasn't said is never earlier), then by key. A box keeps the primary it numbers from
+(`numbers.json`, `primary`) while that one is still one of your computers and none set up earlier is
+known: it moves only to an earlier one, never back, and one whose primary was removed or forgotten
+finds the next. A primary no peer names any more (the one this box reaches it through stopped
+saying it) is waited for: once three days go by unheard (`numbers.json`, `lost`), or at once once the
+peer it was reached through (`through`) is removed, or once that peer names another primary (it
+found this one gone, or one set up earlier), the box finds the next. A peer that hasn't answered for
+three days and was still found away in the last hour (`run/peer-reach.json`, and
+`run/peer-reach-checked.json`, when the relay last found it not there: not one that was away when
+this box itself went off the relay; a Mac put away, or set up again with new keys, that its machines
+still list a while) isn't one to number from; a box that reached it through that peer follows that
+peer to its next. Heard from again, it's the earliest again, and boxes move back to it, which moves
+past what was numbered meanwhile (`top`). A machine set up from a
+Mac never numbers on its own; while it knows of no Mac that
+can be reached yet, items wait. (#183 will let you choose the primary.) The primary numbers its own
+items from its counter; another box numbers from blocks of 50 the primary gave it, and asks for the
+next when 15 or fewer are left, by mail, on its rounds: `{workQueue: {ask: {id, count, claims?,
+top?}}}`, sent again every 30 s until answered with `{workQueue: {give: {id, from, to, granted}}}`.
+`top` is the highest number the asking box used, holds or handed out: the primary moves its counter
+past it (a box that numbered on its own before, or a primary that lost its file), and past any number
+its peers tell it they use. A box that stops numbering on its own asks its new primary at once. A
+primary that isn't one of the asking box's peers (an earlier Mac known only through a machine both
+set up) is asked through the peer that named it: `{workQueue: {ask, to: <primary key>}}` to that
+peer, which passes it on as `{ask, for: <asking box's key>}` if it's its own primary, and the block
+back as `{give}`; one hop only, and a box takes a block only from its primary or the peer it asks
+through. The primary keeps what it gave for each ask, so an
 ask sent again gets the same answer. `claims` are numbers an import wants to keep (six digits at most, what a chip reads): the primary
 grants those at or above its counter and within 10,000 of it (or granted that box before) and moves its counter past them;
 an imported item waits without a number until then, and one refused gets the next number, with a
 note. An item made with no number left waits too, and takes one, oldest first, when a block comes; one left
 waiting with nothing under way (a crash midway, a move) is claimed or numbered again within a minute.
 A queue file that can't be read is never written over: the change is refused and the file set aside
-(`queues/aside/`); fields a newer box keeps in an item are kept as they are.
+(`queues/aside/`); fields a newer box keeps in an item are kept as they are, and so is a queue of a
+kind of owner this box doesn't know (`queues/<kind>_….json`, a newer box's): never read, shown,
+numbered, set aside or written over but by a move of an owner of that name, which carries it when
+every item in it reads as one here (else it's left as it is, where it is).
 
 **Moves**: a move carries its conversations' queues (a group chat's, its own) and their files
 (`move.json`'s `workQueue`, the files in the bundle's `work-queue/<item>/`), put in place under the
 same owners and numbers, each item checked as this box's own are (a category it can't keep is
 Next); once it's over, the box it left forgets them. While it's under way nothing changes those
 queues (a tool's change, a hand-off into one, or yours: refused, with words to try again once
-it's there), so nothing is left behind. A conversation carried on as another takes its queue.
+it's there), so nothing is left behind. A conversation carried on as another takes its queue. An
+item on its way to another computer (`handing`) goes with the move and is sent from where it lands.
+
+**Across your computers** (bridge 0.9.211, to a peer whose agents' mail `features` say
+`work-queue.elsewhere`; mail as "Peers" says, under the top-level `workQueue`):
+
+- **Told**: each box tells every such peer its Work Queue, unasked, so the others have it while it
+  sleeps: `{workQueue: {told: {id, at, kind, since, top, primary?: {key, kind, since?}, items,
+  owners, categories}}}`. `items` are its items as a view gives them (not deleted ones; the 100
+  latest Done; 1,500 at most), each with `handedFrom` (who handed it on); `owners` names their
+  owners; `categories` its custom ones; `kind`, `since` and `top` how it numbers, and `primary` the
+  one it numbers from (itself when it's the primary). `id` (`wqt_…`) is the same while all that is.
+  It's worked out again when a queue changes and each minute (who's at work changes it), and goes
+  to one computer once in 15 s at most, again each minute (sooner after a change you made from a
+  client, at the next round 15 s on) until that computer answers `{workQueue: {had: id}}`, nothing
+  while it's the same and had, and nothing while that computer isn't answering
+  (`run/peer-reach.json`; it goes once its mail comes again, and again in full to one that asks for
+  agents as it connects). The receiver keeps the newest from each peer
+  (`run/work-queue/peers/<key>.json`; one older than what it has by less than ten minutes, mail
+  come late, is neither kept nor had; one older by more is its clock set back, and kept), cleaned as
+  it takes it, and only from a box that's one of its peers; what's kept of a computer you removed
+  goes. An item two computers tell of (one handed between them, the first not told again yet) shows
+  once, as the one that changed it last says; one deleted here that another tells of is that
+  computer's (a hand-off called off after it got there), unless it told of it on its way here. The primary's custom categories are those of every box
+  that numbers from it (one reached through a peer: as that peer tells them): added, renamed and
+  removed as it tells them (one still in use on a box stays there until it's empty); those only a
+  box has itself stay, after them (past 30 in all, its unused ones go; never one in use).
+- **Parts**: Work Queue mail too big for one goes as `{workQueue: {part: {whole, i, of, d, s}}}`,
+  as a document's parts go ("Peers"): `d` pieces of 40,000 characters of the base64url of the
+  whole's JSON (`{told: …}`, `{hand: …}`), `whole` the SHA-256 of all of it (base64url), `s` empty,
+  at least 2 and at most 200 parts. The receiver puts them together once the last is here (four
+  under way from each box at most), checks `whole`, and takes it as if it came in one.
+- **Hand-offs**: `queue_hand` to a conversation on another computer leaves the item where it is,
+  unchanged (`handing`: changes to it are refused meanwhile), and sends `{workQueue: {hand: {id, to,
+  from, by, at, item, files, categories?}}}` (`id` `wqh_…`; `item` the item whole, as kept; `files`
+  `[{name, data}]`, base64, 4 MB at most in all, one with more refused at once; `categories` the
+  custom one it's in) to the box `to` lives on now, again each minute until it answers
+  `{workQueue: {handed: {id, ok, why?, retry?}}}`, from that box only. Had (`ok`), the item and its
+  files go from the sender; refused for good, it's back as it was with a note saying why; `retry`, it
+  goes again; given back with a note at once when you removed the box it goes to, three days after
+  that box stopped being one of its peers (`handing.missing`: a computer can be missing from the
+  list a while) and `to` isn't on another, and after 30 days otherwise, whether this box is on the
+  relay or not; deleted, it's called off (a copy that got there already is that computer's, shows as
+  its, and the one deleted here isn't brought back beside it). The receiver takes each `id` once
+  (remembered 30
+  days, and an item it has already is had, but one deleted here, which the live one replaces), only
+  from one of its peers, into the queue of `to`'s
+  root conversation (a subagent's, its conversation's; a group chat's seat refused), linked to it,
+  noted as handed from `from`, in a category it can keep (else Next), with its number as it was (one
+  with none takes one there at once); it
+  answers `retry` while `to` moves between computers or it can't look it up (its engine starting, or
+  the coding agents' bridge not running), and while the item is still on its way from it to
+  another computer itself (handed back before its receipt came), and refuses one for a conversation it doesn't have, or a
+  queue that's full. So the item lives once, and stays in the hander's view on every computer
+  (`handedBy`, `handedFrom`).
 
 ### Side questions, handoffs and reviews
 
@@ -3319,6 +3444,8 @@ the route scenarios (`Vectors/routes/routing.json`).
 | `sessions.start` | `POST kuvo/sessions`: a session started with a task (bridge 0.9.100) |
 | `letters-read` | (in a peer's agents' mail) it takes a letter with `read` (bridge 0.9.100) |
 | `work.elsewhere` | (in a peer's agents' mail) it takes a lead's `call` and tells `rows` ("Peers"; bridge 0.9.204) |
+| `work-queue` | `kuvo/work-queue…` and the `queue_…` tools ("The Work Queue") |
+| `work-queue.elsewhere` | (in a peer's agents' mail) it tells and takes the Work Queue across your computers: `told`, `had`, `part`, `hand`, `handed`, and numbers' asks through a peer ("The Work Queue", Across your computers); also `POST kuvo/work-queue/refs`, `computer` and `computers` in its views, and 409 for an item elsewhere |
 | `queue` | `kuvo/sessions/<id>/queue…`, `…/stop` and `kuvo/sessions/queues/events`: the box carries the queue (bridge 0.9.100) |
 | `queue.waits` | A Stop holds the conversation: what arrives waits on the box (`waiting`), `…/queue/add` and `DELETE …/queue/<item>` (bridge 0.9.128) |
 | `work` | a bot's work ("Work"): `kuvo/work`, `…/events`, `kuvo/bots/<id>/stop-all`, `start_session`'s and `kuvo/sessions`' new fields, the work tools, `limits` in `kuvo/bots` (bridge 0.9.106) |
