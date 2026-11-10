@@ -30,19 +30,26 @@ interface Case { id: string; kind: "command" | "file" | "tool"; command?: string
 const cases = readFileSync(join(import.meta.dir, "..", "eval", "reviewer", "actions.jsonl"), "utf8").split("\n").filter(Boolean).map(line => JSON.parse(line) as Case)
   .filter(each => !each.on || each.on === process.platform)
 
-test("the eval set's code cases are settled by code as it says, and the rest reach the model", async () => {
-  const project = join(box, "project")
-  const wrong: string[] = []
-  for (const each of cases) {
-    const action = each.kind === "command" ? { kind: "command" as const, command: each.command!, folder: project }
-      : each.kind === "file" ? { kind: "file" as const, path: each.path!.replace(/^~(?=\/)/, homedir()), access: each.access ?? "read", folder: project }
-      : { kind: "tool" as const, tool: each.tool!, args: each.args ?? {}, folder: project }
-    const context = each.bot ? { session: `eval_${each.id}`, said: [], bot: { id: "bot_eval", name: "Eval", goal: each.bot } } : { session: `eval_${each.id}`, said: each.said ?? [] }
-    const verdict = await reviewer.review(action, context, { model: null, folder: join(box, "reviews"), fetch: async () => each.fetched ?? Promise.reject(new Error("not in the eval set")) })
-    reviewer.forgetFetched(verdict.fetched)
-    const byCode = verdict.by === "code" && !(verdict.decision === "refuse" && verdict.why === "noModel")
-    if (each.by === "code" ? !byCode || verdict.decision !== each.expect : byCode) wrong.push(`${each.id}: ${verdict.decision} by ${verdict.by} (${verdict.reason})`)
-  }
-  expect(wrong).toEqual([])
+// (Each case a test of its own: a hundred and more reviews in one would run over a test's time
+// limit on a busy Mac, though each takes a moment.)
+test("the eval set has its hundred cases and more", () => {
   expect(cases.length).toBeGreaterThanOrEqual(100)
+})
+
+test.each(cases.map(each => [each.id, each] as const))("eval case %s: settled by code as it says, or left to the model", async (_, each) => {
+  const project = join(box, "project")
+  const action = each.kind === "command" ? { kind: "command" as const, command: each.command!, folder: project }
+    : each.kind === "file" ? { kind: "file" as const, path: each.path!.replace(/^~(?=\/)/, homedir()), access: each.access ?? "read", folder: project }
+    : { kind: "tool" as const, tool: each.tool!, args: each.args ?? {}, folder: project }
+  const context = each.bot ? { session: `eval_${each.id}`, said: [], bot: { id: "bot_eval", name: "Eval", goal: each.bot } } : { session: `eval_${each.id}`, said: each.said ?? [] }
+  const verdict = await reviewer.review(action, context, { model: null, folder: join(box, "reviews"), fetch: async () => each.fetched ?? Promise.reject(new Error("not in the eval set")) })
+  reviewer.forgetFetched(verdict.fetched)
+  const byCode = verdict.by === "code" && !(verdict.decision === "refuse" && verdict.why === "noModel")
+  const seen = `${verdict.decision} by ${verdict.by} (${verdict.reason})`
+  if (each.by === "code") {
+    expect(byCode, seen).toBe(true)
+    expect<string>(verdict.decision, seen).toBe(each.expect)
+  } else {
+    expect(byCode, seen).toBe(false)
+  }
 })

@@ -5,7 +5,7 @@ import { spawn as spawn12 } from "node:child_process";
 import crypto45 from "node:crypto";
 import fs111 from "node:fs";
 import os15 from "node:os";
-import path114 from "node:path";
+import path115 from "node:path";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
 
 // Packages/Box/src/shared/text.ts
@@ -1859,7 +1859,7 @@ var cutText = (text, most = LETTER_TEXT) => {
   return words.slice(0, /[\uDC00-\uDFFF]/.test(words[most]) ? most - 1 : most);
 };
 var LETTER_ID = /^[A-Za-z0-9_-]{6,80}$/;
-var composeLetter = (name, session, words, waits) => `[Message from ${name} · ${session}] (${waits ? "They're waiting for your reply: just answer, in your words." : session === "unknown" ? "It can't be answered: who sent it isn't known." : `To answer, use send_message to ${session}.`})
+var composeLetter = (name, session, words, waits, finishHeard = false) => `[Message from ${name} · ${session}] (${waits ? "They're waiting for your reply: just answer, in your words." : session === "unknown" ? "It can't be answered: who sent it isn't known." : finishHeard ? `They get your last reply when you finish: end with your report there, not in a message. Use send_message to ${session} only to ask something or say how it's going.` : `To answer, use send_message to ${session}.`})
 
 ${words}`;
 var pausedNote = (name) => `${name ? `${name} is stopped: the user paused its conversation.` : "That conversation is stopped: the user paused it."} Your message waits there and goes once they resume it; its answer, if it writes one, comes to you as a message.`;
@@ -2069,6 +2069,7 @@ var FEATURES = [
   "folders",
   "folders.files",
   "git",
+  "git.changes.count",
   "git.merge",
   "git.pull-request",
   "git.pull-request.draft",
@@ -27096,7 +27097,7 @@ import path96 from "node:path";
 var OUTSIDE = { session: "unknown", place: null, name: "another agent" };
 var ASKS_FIRST = [{ action: "shell", resource: "*", effect: "ask" }];
 var goalNote = "This is part of a goal the user may not be watching: what you ask can wait a while, so carry on with what doesn't depend on it, and report what you couldn't do.";
-var sessionNote = (bot) => `You were started by ${bot}, a bot coordinating this work. When you're done, review your work with reviewer subagents, fix what they find, and end with a short report as your last reply: what you did, what the reviewers found and how you fixed it, and anything left. ${bot} reads that report.`;
+var sessionNote = (bot, heard = true) => `You were started by ${bot}, a bot coordinating this work. When you're done, review your work with reviewer subagents, fix what they find, and end with a short report as your last reply: what you did, what the reviewers found and how you fixed it, and anything left. ${heard ? `${bot} gets that reply when you finish: don't also send it with send_message.` : `${bot} reads that report.`}`;
 var WAKES = ["finished", "asks"];
 function wakesFrom(given, byBot, waits) {
   if (given === undefined || given === null)
@@ -27376,9 +27377,10 @@ async function startSession(given, by, place) {
     linkSession(bot.bot, given.step, session);
   const waits = given.wait === true;
   const id = messageID();
-  const text = by ? composeLetter(by.name, by.session, task, waits) + (bot ? `
+  const heard = wakes.includes("finished");
+  const text = by ? composeLetter(by.name, by.session, task, waits, heard) + (bot ? `
 
-${sessionNote(bot.name)}${goal ? `
+${sessionNote(bot.name, heard)}${goal ? `
 
 ${goalNote}` : ""}` : "") : task;
   try {
@@ -28443,11 +28445,10 @@ var realOr2 = (folder) => {
     return folder;
   }
 };
-async function changesIn(directory, scope, base) {
-  const top = (await text3(directory, ["rev-parse", "--show-toplevel"]))?.trim();
-  if (!top)
-    return { repository: false };
-  const root = top;
+async function scoped(directory, scope, base) {
+  const root = (await text3(directory, ["rev-parse", "--show-toplevel"]))?.trim();
+  if (!root)
+    return null;
   let against = (await git2(root, ["rev-parse", "--verify", "-q", "HEAD"])).ok ? "HEAD" : EMPTY_TREE;
   if (scope === "branch" && base) {
     const fork = (await text3(root, ["merge-base", "HEAD", base]))?.trim();
@@ -28456,18 +28457,30 @@ async function changesIn(directory, scope, base) {
   }
   const relative = path100.relative(realOr2(root), realOr2(directory));
   const limit = relative && !relative.startsWith("..") ? relative.split(path100.sep).join("/") : ".";
-  const args = ["-c", "core.quotepath=off", "-c", "diff.suppressBlankEmpty=false", "diff", "--no-color", "--no-ext-diff", "--no-textconv", "--find-renames", "--src-prefix=a/", "--dst-prefix=b/", "-U100000"];
-  if (scope === "uncommitted" || scope === "branch")
-    args.push(against);
+  const compared = scope === "staged" ? ["--cached", against] : scope === "unstaged" ? [] : [against];
+  return { root, against, limit, compared };
+}
+async function untrackedIn(root, limit, scope) {
   if (scope === "staged")
-    args.push("--cached", against);
-  const patch = await text3(root, [...args, "--", limit]);
+    return [];
+  return (await text3(root, ["-c", "core.quotepath=off", "ls-files", "--others", "--exclude-standard", "-z", "--", limit]) ?? "").split("\x00").filter(Boolean);
+}
+async function uncommittedIn(root, scope) {
+  const status = scope === "branch" ? await text3(root, ["status", "--porcelain", "--untracked-files=normal"]) : "x";
+  return status === null || status.length > 0;
+}
+async function changesIn(directory, scope, base) {
+  const found = await scoped(directory, scope, base);
+  if (!found)
+    return { repository: false };
+  const { root, against, limit, compared } = found;
+  const args = ["-c", "core.quotepath=off", "-c", "diff.suppressBlankEmpty=false", "-c", "diff.submodule=short", "diff", "--no-color", "--no-ext-diff", "--no-textconv", "--find-renames", "--src-prefix=a/", "--dst-prefix=b/", "-U100000"];
+  const patch = await text3(root, [...args, ...compared, "--", limit]);
   if (patch === null)
     return null;
-  let untracked = [];
+  const untracked = await untrackedIn(root, limit, scope);
   const hashes = {};
   if (scope !== "staged") {
-    untracked = (await text3(root, ["-c", "core.quotepath=off", "ls-files", "--others", "--exclude-standard", "-z", "--", limit]) ?? "").split("\x00").filter(Boolean);
     const files = untracked.filter((name) => !name.endsWith("/"));
     const now = BigInt(Date.now()) * 1000000n;
     for (let at = 0;at < files.length; at += 64) {
@@ -28480,8 +28493,41 @@ async function changesIn(directory, scope, base) {
       }));
     }
   }
-  const status = scope === "branch" ? await text3(root, ["status", "--porcelain", "--untracked-files=normal"]) : "x";
-  return { repository: true, root, against, patch, untracked, hashes, uncommitted: status === null || status.length > 0 };
+  return { repository: true, root, against, patch, untracked, hashes, uncommitted: await uncommittedIn(root, scope) };
+}
+async function countIn(directory, scope, base) {
+  const found = await scoped(directory, scope, base);
+  if (!found)
+    return { repository: false };
+  const { root, against, limit, compared } = found;
+  const numbers = await git2(root, ["-c", "core.quotepath=off", "diff", "--no-color", "--no-ext-diff", "--no-textconv", "--find-renames", "--numstat", "-z", ...compared, "--", limit]);
+  if (!numbers.ok)
+    return null;
+  const seen = new Set;
+  let additions = 0;
+  let deletions = 0;
+  const fields = numbers.out.toString("utf8").split("\x00");
+  for (let at = 0;at < fields.length; at++) {
+    const field = fields[at];
+    if (!field)
+      continue;
+    const [added = "", deleted = "", ...rest] = field.split("\t");
+    let name = rest.join("\t");
+    if (!name) {
+      at += 2;
+      name = fields[at] ?? "";
+    }
+    seen.add(name);
+    additions += Number(added) || 0;
+    deletions += Number(deleted) || 0;
+  }
+  if (scope === "staged") {
+    const unmerged = await git2(root, ["-c", "core.quotepath=off", "diff", "--no-ext-diff", "--name-only", "-z", "--diff-filter=U", ...compared, "--", limit]);
+    for (const name of unmerged.out.toString("utf8").split("\x00"))
+      seen.delete(name);
+  }
+  const untracked = (await untrackedIn(root, limit, scope)).filter((name) => !seen.has(name));
+  return { repository: true, root, against, files: seen.size + untracked.length, additions, deletions, untracked: untracked.length, uncommitted: await uncommittedIn(root, scope) };
 }
 function trash(file) {
   const name = path100.basename(file);
@@ -28860,6 +28906,13 @@ async function* changesRoute(context) {
     const found = await changesIn(directory, scope, typeof body.base === "string" && body.base && !body.base.startsWith("-") ? body.base : undefined);
     return yield* found ? json(200, found) : json(500, { message: "git couldn’t read the changes." });
   }
+  if (route === "kuvo/git/changes/count") {
+    const directory = folderAt(body.directory);
+    if (!directory)
+      return yield* json(404, { message: "That folder isn’t there." });
+    const found = await countIn(directory, scope, typeof body.base === "string" && body.base && !body.base.startsWith("-") ? body.base : undefined);
+    return yield* found ? json(200, found) : json(500, { message: "git couldn’t read the changes." });
+  }
   if (route === "kuvo/git/stage" || route === "kuvo/git/unstage" || route === "kuvo/git/discard") {
     const root = folderAt(body.root);
     const name = inRepository(body.path);
@@ -29137,7 +29190,7 @@ import fs95 from "node:fs";
 import path102 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "0.9.210";
+var BRIDGE_VERSION = "0.9.211";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
@@ -29369,7 +29422,7 @@ async function* add({ request, bridge, readEngine, json, signal }, target, sessi
 
 // Packages/Box/src/link/areas/work-queue.ts
 import fs103 from "node:fs";
-import path108 from "node:path";
+import path109 from "node:path";
 
 // Packages/Box/src/link/areas/vault.ts
 import crypto42 from "node:crypto";
@@ -29705,17 +29758,18 @@ async function fill(given, caller, signal) {
 import crypto40 from "node:crypto";
 import fs99 from "node:fs";
 import net4 from "node:net";
-import path106 from "node:path";
+import path107 from "node:path";
 
 // Packages/Box/src/link/vault/ssh.ts
 import crypto39 from "node:crypto";
 import fs98 from "node:fs";
-import path105 from "node:path";
+import path106 from "node:path";
 
 // Packages/Box/src/link/vault/ssh-agent.ts
 import crypto38 from "node:crypto";
 import fs97 from "node:fs";
 import net3 from "node:net";
+import path105 from "node:path";
 var FAILURE = 5;
 var REQUEST_IDENTITIES = 11;
 var IDENTITIES_ANSWER = 12;
@@ -29959,9 +30013,13 @@ function serveAgent(socket, source) {
   server.close = (done) => {
     for (const connection of open)
       connection.destroy();
+    try {
+      fs97.rmSync(socket, { force: true });
+    } catch {}
     return close(done);
   };
-  if (Buffer.byteLength(socket) > LONGEST_PATH) {
+  const bound = path105.join(path105.dirname(socket), `.${crypto38.randomBytes(6).toString("base64url")}`);
+  if (Math.max(Buffer.byteLength(socket), Buffer.byteLength(bound)) > LONGEST_PATH) {
     queueMicrotask(() => server.emit("error", new Error(`An SSH agent's socket can't be this long: ${socket}`)));
     return server;
   }
@@ -29970,9 +30028,20 @@ function serveAgent(socket, source) {
   } catch {}
   const old = process.umask(127);
   try {
-    server.listen(socket);
+    server.listen(bound);
   } finally {
     process.umask(old);
+  }
+  try {
+    fs97.renameSync(bound, socket);
+  } catch (error) {
+    if (fs97.existsSync(bound)) {
+      server.close();
+      try {
+        fs97.rmSync(bound, { force: true });
+      } catch {}
+      queueMicrotask(() => server.emit("error", error instanceof Error ? error : new Error(String(error))));
+    }
   }
   server.unref();
   return server;
@@ -29987,7 +30056,7 @@ var IDLE = 60 * 60000;
 function safeFolder() {
   if (process.platform !== "darwin")
     return true;
-  const parent = path105.dirname(SSH_AGENTS);
+  const parent = path106.dirname(SSH_AGENTS);
   try {
     const seen = fs98.lstatSync(parent);
     return seen.isDirectory() && seen.uid === process.getuid?.() && (seen.mode & 63) === 0;
@@ -30001,7 +30070,7 @@ var real2 = (where) => {
   try {
     return fs98.realpathSync(where);
   } catch {
-    return path105.resolve(where);
+    return path106.resolve(where);
   }
 };
 function callerFor(note, folder) {
@@ -30011,7 +30080,7 @@ function callerFor(note, folder) {
       return who.folder && real2(who.folder) === real2(folder) ? who : null;
     };
   return async () => {
-    const bot = listBots().find((each) => each.folder && (folder === each.folder || folder.startsWith(each.folder + path105.sep)));
+    const bot = listBots().find((each) => each.folder && (folder === each.folder || folder.startsWith(each.folder + path106.sep)));
     return { folder, yours: true, ...bot ? { bot: bot.id, botName: bot.name, ...bot.session ? { session: bot.session, root: bot.session } : {} } : {} };
   };
 }
@@ -30113,7 +30182,7 @@ function keepSshAgents() {
       if (Date.now() - agent.used < IDLE)
         continue;
       close(note);
-      fs98.rmSync(path105.join(SSH_FOR, note), { force: true });
+      fs98.rmSync(path106.join(SSH_FOR, note), { force: true });
     }
     let notes = [];
     try {
@@ -30122,11 +30191,11 @@ function keepSshAgents() {
     for (const note of notes) {
       let folder = "";
       try {
-        folder = fs98.readFileSync(path105.join(SSH_FOR, note), "utf8");
+        folder = fs98.readFileSync(path106.join(SSH_FOR, note), "utf8");
       } catch {
         continue;
       }
-      if (!path105.isAbsolute(folder) || note.startsWith("dir-") && note !== `dir-${sumOf2(folder)}`)
+      if (!path106.isAbsolute(folder) || note.startsWith("dir-") && note !== `dir-${sumOf2(folder)}`)
         continue;
       if (agents.get(note)?.folder === folder)
         continue;
@@ -30134,11 +30203,15 @@ function keepSshAgents() {
       const prefix = sumOf2(note).slice(0, 16);
       for (const old of fs98.readdirSync(SSH_AGENTS))
         if (old.startsWith(prefix))
-          fs98.rmSync(path105.join(SSH_AGENTS, old), { force: true });
-      const socket = path105.join(SSH_AGENTS, `${prefix}${crypto39.randomBytes(9).toString("base64url")}.sock`);
+          fs98.rmSync(path106.join(SSH_AGENTS, old), { force: true });
+      const socket = path106.join(SSH_AGENTS, `${prefix}${crypto39.randomBytes(9).toString("base64url")}.sock`);
       const agent = { folder, server: serveAgent(socket, sourceFor(callerFor(note, folder))), used: Date.now() };
       agent.server.on("connection", () => {
         agent.used = Date.now();
+      });
+      agent.server.on("error", () => {
+        if (agents.get(note) === agent)
+          agents.delete(note);
       });
       agents.set(note, agent);
     }
@@ -30152,8 +30225,8 @@ function keepSshAgents() {
       fs98.rmSync(SSH_AGENTS, { recursive: true, force: true });
     for (const note of fs98.readdirSync(SSH_FOR)) {
       try {
-        if (Date.now() - fs98.statSync(path105.join(SSH_FOR, note)).mtimeMs > NOTE_KEPT)
-          fs98.rmSync(path105.join(SSH_FOR, note), { force: true });
+        if (Date.now() - fs98.statSync(path106.join(SSH_FOR, note)).mtimeMs > NOTE_KEPT)
+          fs98.rmSync(path106.join(SSH_FOR, note), { force: true });
       } catch {}
     }
   } catch {}
@@ -30163,10 +30236,26 @@ function keepSshAgents() {
     watcher = fs98.watch(SSH_FOR, () => look());
     watcher.unref?.();
   } catch {}
+  let noted = "";
+  const quick = setInterval(() => {
+    let seen;
+    try {
+      seen = fs98.statSync(SSH_FOR);
+    } catch {
+      return;
+    }
+    const changed = `${seen.mtimeMs}:${seen.ctimeMs}:${seen.size}`;
+    if (changed === noted && Date.now() - seen.mtimeMs > 1500)
+      return;
+    noted = changed;
+    look();
+  }, 1000);
+  quick.unref?.();
   const every = setInterval(look, 30000);
   every.unref?.();
   const stop = () => {
     watcher?.close();
+    clearInterval(quick);
     clearInterval(every);
     for (const note of [...agents.keys()])
       close(note);
@@ -30180,7 +30269,7 @@ function keepSshAgents() {
 }
 
 // Packages/Box/src/link/vault/holder.ts
-var VAULT_SOCKET = path106.join(RUN, "vault.sock");
+var VAULT_SOCKET = path107.join(RUN, "vault.sock");
 var holding = false;
 var holdsVault = () => holding;
 var heldHere = (route) => /^kuvo\/(vault|sandbox\/(asks|tools|allowed|stopped))(\/|\?|$)/.test(route);
@@ -30193,7 +30282,7 @@ function holdVault(handle) {
   holding = true;
   fs99.mkdirSync(RUN, { recursive: true, mode: 448 });
   try {
-    fs99.rmSync(path106.join(RUN, "vault-run"), { recursive: true, force: true });
+    fs99.rmSync(path107.join(RUN, "vault-run"), { recursive: true, force: true });
   } catch {}
   try {
     fs99.rmSync(VAULT_SOCKET, { force: true });
@@ -30397,7 +30486,7 @@ function askHolder(request, signal) {
 import crypto41 from "node:crypto";
 import fs101 from "node:fs";
 import os11 from "node:os";
-import path107 from "node:path";
+import path108 from "node:path";
 
 // Packages/Box/src/link/vault/mask.ts
 var SHORTEST = 4;
@@ -30654,7 +30743,7 @@ async function askForItem(caller, args, signal) {
 var MOST_OUTPUT2 = 64 * 1024;
 var CALL_BUDGET = 15.5 * 60000;
 var VARIABLE = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
-var RUN_FOLDER = path107.join(RUN, "vault-run");
+var RUN_FOLDER = path108.join(RUN, "vault-run");
 function namedValue(named) {
   const whole = itemNamed(named);
   if (whole)
@@ -30683,7 +30772,7 @@ async function runWith(caller, args, signal) {
   if (!isObject(args.variables) || !Object.keys(args.variables).length)
     return failed("Name at least one variable and the item it gets.");
   const started = Date.now();
-  const program = path107.basename(command.split(/\s+/)[0] ?? "");
+  const program = path108.basename(command.split(/\s+/)[0] ?? "");
   const folder = caller.folder && fs101.existsSync(caller.folder) ? caller.folder : homeFolder();
   const wanted = [];
   for (const [variable, named] of Object.entries(args.variables)) {
@@ -30710,7 +30799,7 @@ async function runWith(caller, args, signal) {
       return may.leftUndone ? { text: may.message, isError: false } : failed(may.message);
     allowed.set(item.id, may.how);
   }
-  const scratch = path107.join(RUN_FOLDER, crypto41.randomBytes(8).toString("hex"));
+  const scratch = path108.join(RUN_FOLDER, crypto41.randomBytes(8).toString("hex"));
   const env = commandEnv();
   const hidden = [];
   try {
@@ -30720,9 +30809,9 @@ async function runWith(caller, args, signal) {
       if (value === undefined)
         return failed(`“${item.name}” has no ${field} kept.`);
       if (item.kind === "file" && field === "file") {
-        const name = path107.basename(item.fileName ?? "");
-        const file = path107.join(scratch, variable, name && name !== "." && name !== ".." ? name : variable.toLowerCase());
-        fs101.mkdirSync(path107.dirname(file), { recursive: true, mode: 448 });
+        const name = path108.basename(item.fileName ?? "");
+        const file = path108.join(scratch, variable, name && name !== "." && name !== ".." ? name : variable.toLowerCase());
+        fs101.mkdirSync(path108.dirname(file), { recursive: true, mode: 448 });
         const bytes = Buffer.from(value, "base64");
         fs101.writeFileSync(file, bytes, { mode: 384 });
         env[variable] = file;
@@ -31774,7 +31863,7 @@ async function* workQueueRoute(context, match) {
       return yield* json(404, { message: "There's no such file." });
     let bytes;
     try {
-      bytes = fs103.readFileSync(path108.join(filesOf(item.id), name));
+      bytes = fs103.readFileSync(path109.join(filesOf(item.id), name));
     } catch {
       return yield* json(404, { message: "There's no such file." });
     }
@@ -31828,7 +31917,7 @@ async function* followView(owner, targets, signal) {
     wake?.();
   };
   queueFollowers2.add(told);
-  const queuesWatch = watchFolders([path108.join(WORK_QUEUE, "queues")], told, { recursive: false });
+  const queuesWatch = watchFolders([path109.join(WORK_QUEUE, "queues")], told, { recursive: false });
   const categoriesWatch = watchFolders([WORK_QUEUE], (_, name) => {
     if (String(name ?? "") === "categories.json")
       told();
@@ -31929,7 +32018,7 @@ async function* pluginSearchRoute(context) {
 
 // Packages/Box/src/link/areas/programs.ts
 import fs104 from "node:fs";
-import path109 from "node:path";
+import path110 from "node:path";
 function findProgram(requestPath, PATH = process.env.PATH ?? "") {
   const name = (new URLSearchParams(requestPath.split("?")[1] ?? "").get("name") ?? "").trim();
   if (!name)
@@ -31945,10 +32034,10 @@ function findProgram(requestPath, PATH = process.env.PATH ?? "") {
   if (/^\.\.?\//.test(name) || name.includes("$") || /^~[^/]/.test(name))
     return { status: 200, value: { name, path: null, unknown: true } };
   if (name.includes("/")) {
-    const file = name.startsWith("~/") ? path109.join(homeFolder(), name.slice(2)) : name;
-    return { status: 200, value: { name, path: path109.isAbsolute(file) && runnable(file) ? file : null } };
+    const file = name.startsWith("~/") ? path110.join(homeFolder(), name.slice(2)) : name;
+    return { status: 200, value: { name, path: path110.isAbsolute(file) && runnable(file) ? file : null } };
   }
-  const found = PATH.split(path109.delimiter).filter(Boolean).map((folder) => path109.join(folder, name)).find(runnable);
+  const found = PATH.split(path110.delimiter).filter(Boolean).map((folder) => path110.join(folder, name)).find(runnable);
   return { status: 200, value: { name, path: found ?? null } };
 }
 async function* programsRoute(context) {
@@ -31961,9 +32050,9 @@ async function* programsRoute(context) {
 
 // Packages/Box/src/link/areas/backups.ts
 import fs105 from "node:fs";
-import path110 from "node:path";
+import path111 from "node:path";
 function folderAt2(value) {
-  if (typeof value !== "string" || !path110.isAbsolute(value))
+  if (typeof value !== "string" || !path111.isAbsolute(value))
     return null;
   try {
     return fs105.statSync(value).isDirectory() ? value : null;
@@ -32079,7 +32168,7 @@ import { spawn as spawn11 } from "node:child_process";
 import crypto43 from "node:crypto";
 import fs106 from "node:fs";
 import os12 from "node:os";
-import path111 from "node:path";
+import path112 from "node:path";
 var book2 = askBook("sq_", { answer: "no", unanswered: true });
 var listSandboxAsks = book2.list;
 var onSandboxAsksChanged = book2.onChanged;
@@ -32168,11 +32257,11 @@ function alwaysFor2(stops, project) {
     try {
       return fs106.realpathSync(where);
     } catch {
-      return path111.resolve(where);
+      return path112.resolve(where);
     }
   };
   const own = real(project);
-  const where = real(path111.dirname(writes[0]));
+  const where = real(path112.dirname(writes[0]));
   if (where === own || where.startsWith(own + "/"))
     return;
   const isFolder = (() => {
@@ -32182,7 +32271,7 @@ function alwaysFor2(stops, project) {
       return false;
     }
   })();
-  const given = (isFolder ? null : writeRuleWouldBe(path111.dirname(writes[0]))) ?? writeRuleWouldBe(writes[0]);
+  const given = (isFolder ? null : writeRuleWouldBe(path112.dirname(writes[0]))) ?? writeRuleWouldBe(writes[0]);
   return given ? { kind: "write", path: given } : undefined;
 }
 function sandboxAskNotice(asked) {
@@ -32291,7 +32380,7 @@ function stoppedBySandbox(printed, policy) {
     return true;
   const named = printed.match(/(?:~|\/)[^\s'"`:,;()]+/g) ?? [];
   return /no such file or directory/i.test(printed) && named.some((word) => {
-    const where = path111.resolve(word.replace(/^~(?=\/|$)/, policy.home));
+    const where = path112.resolve(word.replace(/^~(?=\/|$)/, policy.home));
     return policy.secrets.some((wall) => where === wall || where.startsWith(wall + "/"));
   });
 }
@@ -32302,7 +32391,7 @@ async function stoppedInAuto(caller, input, printed, calling, signal) {
   if (caller.seat || !command.trim() || command.length > 8000 || !project)
     return null;
   const given = typeof input.workdir === "string" ? input.workdir : typeof input.cwd === "string" ? input.cwd : "";
-  const folder = given ? path111.resolve(project, given.replace(/^~(?=\/|$)/, os12.homedir())) : project;
+  const folder = given ? path112.resolve(project, given.replace(/^~(?=\/|$)/, os12.homedir())) : project;
   if (!fs106.existsSync(folder))
     return null;
   const conversation = caller.root ?? caller.session;
@@ -33039,7 +33128,7 @@ async function* appIconRoute(context) {
 
 // Packages/Box/src/link/mac/routes.ts
 import fs109 from "node:fs";
-import path112 from "node:path";
+import path113 from "node:path";
 var macPhones = () => {
   const link = readLink();
   return {
@@ -33200,7 +33289,7 @@ async function* macLinkRoute(route, request, signal) {
             peer: letter.peer,
             ...typeof letter.answers === "string" ? { answers: letter.answers } : {}
           };
-          writePrivate(path112.join(SENDING, `${letter.id}.json`), JSON.stringify(kept));
+          writePrivate(path113.join(SENDING, `${letter.id}.json`), JSON.stringify(kept));
         }
         if (isObject(given.seen)) {
           locked(PEER_LOCK, () => {
@@ -33388,9 +33477,9 @@ async function* passedOn(response, signal) {
 
 // Packages/Box/src/link/mac/machines.ts
 import fs110 from "node:fs";
-import path113 from "node:path";
-var LIST_FILE = path113.join(K, "machines.json");
-var PHONE_LINK_FILE = path113.join(path113.dirname(K), "phone-link.json");
+import path114 from "node:path";
+var LIST_FILE = path114.join(K, "machines.json");
+var PHONE_LINK_FILE = path114.join(path114.dirname(K), "phone-link.json");
 var HEARD_LATELY = 30 * 60000;
 var TIMING = { wait: 5000, look: 1e4 };
 var macName = () => macLink.config?.name || "this Mac";
@@ -33748,9 +33837,9 @@ async function run4() {
   fs111.writeFileSync(VERSION_FILE, BRIDGE_VERSION, { mode: 384 });
   const saved = savedLoginPath(K);
   if (saved)
-    process.env.PATH = joinPath(path114.join(K, "bin"), saved);
+    process.env.PATH = joinPath(path115.join(K, "bin"), saved);
   for (const folder of ["present", "connected"])
-    fs111.rmSync(path114.join(RUN, folder), { recursive: true, force: true });
+    fs111.rmSync(path115.join(RUN, folder), { recursive: true, force: true });
   try {
     keepJobs();
   } catch {}
