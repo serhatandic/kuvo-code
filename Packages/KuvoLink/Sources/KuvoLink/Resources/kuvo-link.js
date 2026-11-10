@@ -14498,6 +14498,7 @@ function readNumbers(file = NUMBERS_FILE) {
     return {
       ...typeof kept.primary === "string" ? { primary: kept.primary } : {},
       ...typeof kept.since === "number" && Number.isFinite(kept.since) && kept.since > 0 ? { since: kept.since } : {},
+      ...typeof kept.lost === "number" && Number.isFinite(kept.lost) ? { lost: kept.lost } : {},
       ...typeof kept.next === "number" && Number.isInteger(kept.next) && kept.next > 0 ? { next: kept.next } : {},
       ...isObject(kept.given) ? { given: kept.given } : {},
       ...isObject(kept.granted) ? { granted: Object.fromEntries(Object.entries(kept.granted).map(([box, ranges]) => [box, cleanRanges(ranges)])) } : {},
@@ -14508,7 +14509,7 @@ function readNumbers(file = NUMBERS_FILE) {
     return { leases: [] };
   }
 }
-function primaryOf(link = readLink(), file = NUMBERS_FILE) {
+function primaryOf(link = readLink(), file = NUMBERS_FILE, now = Date.now()) {
   const kept = readNumbers(file);
   const own = link ? ownKey(link) : null;
   const all = candidatesOf(link, kept, own, file);
@@ -14521,7 +14522,7 @@ function primaryOf(link = readLink(), file = NUMBERS_FILE) {
     current = all.find((each) => each.self) ?? null;
   else if (keptKey) {
     current = all.find((each) => each.key === keptKey) ?? null;
-    if (!current && (macs.includes(keptKey) || !all.some((each) => !each.self)))
+    if (!current && !removedBoxes(link).has(keptKey) && !(kept.lost !== undefined && now - kept.lost > LOST_FOR))
       current = "away";
   }
   if (current === "away")
@@ -14538,6 +14539,13 @@ function primaryOf(link = readLink(), file = NUMBERS_FILE) {
   if (chosen.via?.address)
     return { peer: { key: chosen.key, address: "", kind: chosen.kind, name: chosen.name ?? "" }, via: chosen.via };
   return { away: true };
+}
+var LOST_FOR = 3 * 86400000;
+function keptHeardOf(link, kept, file) {
+  if (!kept.primary || kept.primary === "self")
+    return true;
+  const own = link ? ownKey(link) : null;
+  return kept.primary === own || candidatesOf(link, kept, own, file).some((each) => each.key === kept.primary);
 }
 var earlier = (a, b) => a.kind !== b.kind ? a.kind === "mac" : a.since < b.since;
 var rank = (a, b) => (a.kind === b.kind ? 0 : a.kind === "mac" ? -1 : 1) || a.since - b.since || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0);
@@ -14691,7 +14699,16 @@ function askToSend({ file = NUMBERS_FILE, now = Date.now() } = {}) {
   return { ...asked, ...top ? { top } : {} };
 }
 function notePrimaryNow(link = readLink(), { file = NUMBERS_FILE, now = Date.now() } = {}) {
-  const primary = primaryOf(link, file);
+  const before = readNumbers(file);
+  const heard = keptHeardOf(link, before, file);
+  if (heard === (before.lost !== undefined))
+    changeNumbers((numbers) => {
+      if (heard)
+        delete numbers.lost;
+      else
+        numbers.lost ??= now;
+    }, file);
+  const primary = primaryOf(link, file, now);
   const kept = readNumbers(file);
   if (kept.primary === undefined || "away" in primary || kept.primary === keyOf3(primary, link))
     return;

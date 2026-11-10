@@ -17,7 +17,7 @@ import path from "node:path";
 import { isObject } from "../../shared/json";
 import { IS_MAC, RUN } from "../home";
 import { locked, textOf, writePrivate } from "../files";
-import { KEY, macsOf, mailFor, ownKey, peersOf } from "../peers/known";
+import { KEY, macsOf, mailFor, ownKey, peersOf, removedBoxes } from "../peers/known";
 import { readTold, toldKeys } from "./told";
 import { readLink } from "../state";
 import { allItems, changeQueues, OWNER, WORK_QUEUE } from "./store";
@@ -48,6 +48,8 @@ export interface Numbers {
   primary?: string;
   /** When this box was set up, as it ranks for numbering (`ownSince`). */
   since?: number;
+  /** Since when the primary it keeps hasn't been heard of (`notePrimaryNow`). */
+  lost?: number;
   next?: number;
   given?: Record<string, { from: number; to: number; granted: Ranges; at: number }>;
   granted?: Record<string, Ranges>;
@@ -94,6 +96,7 @@ export function readNumbers(file = NUMBERS_FILE): Numbers {
     return {
       ...(typeof kept.primary === "string" ? { primary: kept.primary } : {}),
       ...(typeof kept.since === "number" && Number.isFinite(kept.since) && kept.since > 0 ? { since: kept.since } : {}),
+      ...(typeof kept.lost === "number" && Number.isFinite(kept.lost) ? { lost: kept.lost } : {}),
       ...(typeof kept.next === "number" && Number.isInteger(kept.next) && kept.next > 0 ? { next: kept.next } : {}),
       ...(isObject(kept.given) ? { given: kept.given as Numbers["given"] } : {}),
       ...(isObject(kept.granted) ? { granted: Object.fromEntries(Object.entries(kept.granted).map(([box, ranges]) => [box, cleanRanges(ranges)])) } : {}),
@@ -111,7 +114,7 @@ export function readNumbers(file = NUMBERS_FILE): Numbers {
  * key. The one it numbers from now is kept while it's still one of your computers and none set up
  * earlier is known; a box that hears of an earlier one moves to it (never back), and one whose
  * primary was removed or forgotten finds the next. A machine with a Mac is never its own. */
-export function primaryOf(link: LinkState | null | undefined = readLink(), file = NUMBERS_FILE): Primary {
+export function primaryOf(link: LinkState | null | undefined = readLink(), file = NUMBERS_FILE, now = Date.now()): Primary {
   const kept = readNumbers(file);
   const own = link ? ownKey(link) : null;
   const all = candidatesOf(link, kept, own, file);
@@ -124,9 +127,10 @@ export function primaryOf(link: LinkState | null | undefined = readLink(), file 
   if (keptKey === "self") current = all.find(each => each.self) ?? null;
   else if (keptKey) {
     current = all.find(each => each.key === keptKey) ?? null;
-    // Still one of its Macs, with no address known yet (its peers document not here): it waits.
-    // Not one of your computers now, and none to go by (no link yet): it waits too.
-    if (!current && (macs.includes(keptKey) || !all.some(each => !each.self))) current = "away";
+    // Not heard of now (one of its Macs whose peers document isn't here yet, one a peer stopped
+    // naming for a while, no link yet): it waits, so a box never goes back and forth between two;
+    // only one you removed, or one not heard of for days (gone), makes way for the next.
+    if (!current && !removedBoxes(link).has(keptKey) && !(kept.lost !== undefined && now - kept.lost > LOST_FOR)) current = "away";
   }
   if (current === "away") return { away: true };
   // A machine kept itself (before it was set up from a Mac): its Mac now.
@@ -137,6 +141,17 @@ export function primaryOf(link: LinkState | null | undefined = readLink(), file 
   if (chosen.peer?.address) return { peer: chosen.peer };
   if (chosen.via?.address) return { peer: { key: chosen.key, address: "", kind: chosen.kind, name: chosen.name ?? "" }, via: chosen.via };
   return { away: true };
+}
+
+/** How long a box's primary may go unheard of (no peer names it) before it's taken to be gone. */
+export const LOST_FOR = 3 * 86_400_000;
+
+/** Whether the primary this box keeps is one it hears of now: for `notePrimaryNow`, which notes
+ * since when it hasn't been. */
+function keptHeardOf(link: LinkState | null | undefined, kept: Numbers, file: string): boolean {
+  if (!kept.primary || kept.primary === "self") return true;
+  const own = link ? ownKey(link) : null;
+  return kept.primary === own || candidatesOf(link, kept, own, file).some(each => each.key === kept.primary);
 }
 
 /** A computer that may be the primary: this box, a peer, or a primary a peer named (reached
@@ -319,7 +334,14 @@ export function askToSend({ file = NUMBERS_FILE, now = Date.now() }: { file?: st
 /** Whether this box's primary changed (one set up earlier heard of, or the one it had gone): noted
  * now, so a box that numbered on its own asks its new primary at once. */
 export function notePrimaryNow(link: LinkState | null | undefined = readLink(), { file = NUMBERS_FILE, now = Date.now() }: { file?: string; now?: number } = {}): void {
-  const primary = primaryOf(link, file);
+  // Since when the one it keeps hasn't been heard of.
+  const before = readNumbers(file);
+  const heard = keptHeardOf(link, before, file);
+  if (heard === (before.lost !== undefined)) changeNumbers(numbers => {
+    if (heard) delete numbers.lost;
+    else numbers.lost ??= now;
+  }, file);
+  const primary = primaryOf(link, file, now);
   const kept = readNumbers(file);
   if (kept.primary === undefined || "away" in primary || kept.primary === keyOf(primary, link)) return;
   changeNumbers(numbers => notePrimary(numbers, primary, link, now), file);

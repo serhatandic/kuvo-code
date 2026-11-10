@@ -286,6 +286,18 @@ test("numbers come from the first computer you set up: a Mac before a machine, t
   // The block comes back through lab: taken.
   receive(lab, { workQueue: { give: { id: "wqn_throughlab01", from: 900, to: 949, granted: [] } } });
   assert.deepEqual(link.readNumbers(file).leases.at(-1), [900, 949]);
+
+  // lab stops naming it a while (it can't say now): this box waits rather than going back to its
+  // Mac; only once it's gone unheard of for days does it take the next.
+  link.notePrimaryNow(link.readLink());
+  assert.equal(link.readNumbers(file).primary, first.pub);
+  write(path.join(queues, "peers", `${lab.pub}.json`), { id: "wqt_cccccccccccc", at: 4, heard: 4, kind: "machine", since: 10, items: [], owners: [], categories: [] });
+  assert.deepEqual(link.primaryOf(link.readLink()), { away: true });
+  link.notePrimaryNow(link.readLink());
+  const lost = link.readNumbers(file).lost;
+  assert.ok(lost, "noted since when");
+  assert.deepEqual(link.primaryOf(link.readLink(), file, lost + 86_400_000), { away: true });
+  assert.equal(link.primaryOf(link.readLink(), file, lost + 4 * 86_400_000).peer.key, mac.pub);
 });
 
 test("a box asked for numbers on behalf of its primary passes the ask on and the block back, one hop", () => {
