@@ -550,7 +550,8 @@ export function handler(context: Context) {
           else return error(400, "Send the lists, or the first one's entries.")
           emit("kuvo.auto.updated", {})
         }
-        if (!b && (method === "GET" || method === "PUT")) return json({ data: { entries: auto.list(), lists: auto.all(), limits: auto.limits() } })
+        // (Each as the models it names: one named by another id it's known by, as that model, once.)
+        if (!b && (method === "GET" || method === "PUT")) return json({ data: { entries: await sessions.autoEntries(), lists: await sessions.autoLists(), limits: auto.limits() } })
       }
 
       if (area === "experimental" && a === "session" && b) {
