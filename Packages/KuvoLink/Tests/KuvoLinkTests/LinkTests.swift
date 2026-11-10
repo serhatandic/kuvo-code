@@ -169,6 +169,11 @@ final class ManualClock: @unchecked Sendable {
         }
     }
 
+    /// How many sleepers wait to wake within `duration` from now.
+    func due(within duration: Duration) -> Int {
+        lock.withLock { sleepers.count { $0.until <= elapsed + duration } }
+    }
+
     /// Moves time on by `duration`, once `count` sleepers wait to wake by then (the ones the test
     /// expects), and wakes everything due.
     func advance(by duration: Duration, waking count: Int = 1) async {
@@ -844,9 +849,15 @@ private func collect(_ stream: LinkResponse) async throws -> (status: Int, heade
         let paired = try await client.pair(host.link)
         let big = randomBytes(1_300_000)
         #expect(try await collect(client.send(LinkRequest(method: "POST", path: "api/upload", body: big), to: paired)).body == big)
+        // Its own wait, over.
+        await clock.advance(by: Link.answerWithin)
         relay.deafen(host.secret.address)
         let sending = Task { try await collect(client.send(LinkRequest(path: "api/info"), to: paired)) }
         await clock.advance(by: Link.answerWithin)
+        // The check that went (with the request's next wait) has only its own time.
+        await clock.sleepers(2, dueWithin: .seconds(3600))
+        #expect(clock.due(within: Link.checkTimeout) == clock.due(within: .seconds(3600)))
+        guard clock.due(within: Link.checkTimeout) == clock.due(within: .seconds(3600)) else { return sending.cancel() }
         await clock.advance(by: Link.checkTimeout, waking: 2)
         await #expect(throws: LinkError.timedOut) { try await sending.value }
     }
@@ -1245,3 +1256,4 @@ private func collect(_ stream: LinkResponse) async throws -> (status: Int, heade
         for piece in pieces { #expect(try LinkMessage(piece.data) == piece) }
     }
 }
+
