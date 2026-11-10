@@ -15,8 +15,8 @@ import type { AnyPiece, LinkHandler } from "./context";
 // comes, and stops when the client goes. The engine and the agents' bridge are found as on a
 // machine (`run/engine.json`, `run/bridge.json`), which the app writes.
 //
-// A connection left open between requests is closed by its client, never from under it: clients
-// are told 5 seconds (`Keep-Alive: timeout=5`), and the box closes one only a minute after that.
+// A connection left open between requests is closed by its client first: clients are told 5
+// seconds (`Keep-Alive: timeout=5`), and the box closes one only a minute after that.
 // Closed after a second more, Node's and Bun's own, a busy client (its timers late, its loop held
 // up) sent its next request on a connection the box had just closed: the request never arrived,
 // and a POST, which a client doesn't send again, failed (`ECONNRESET`), an agent's sandbox_ask

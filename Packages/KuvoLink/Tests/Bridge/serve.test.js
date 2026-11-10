@@ -132,9 +132,13 @@ test("a connection a busy client left open past the time the box told it still t
   socket.on("data", chunk => { heard += chunk; });
   socket.on("end", () => { ended ??= "closed by the box"; });
   socket.on("error", error => { ended ??= error.code; });
-  // An answer, whole (its last chunk), or the connection gone.
+  // An answer, whole (its last chunk), or the connection gone; none in 10 seconds fails.
   const answered = async () => {
-    while (!heard.includes("\r\n0\r\n\r\n") && !ended) await new Promise(resolve => setTimeout(resolve, 20));
+    const until = Date.now() + 10_000;
+    while (!heard.includes("\r\n0\r\n\r\n") && !ended) {
+      if (Date.now() > until) assert.fail(`no answer in 10 seconds; heard: ${JSON.stringify(heard)}`);
+      await new Promise(resolve => setTimeout(resolve, 20));
+    }
     const answer = heard;
     heard = "";
     return answer;
