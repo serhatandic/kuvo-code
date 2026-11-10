@@ -303,7 +303,14 @@ import Testing
             model.draftText = ""
             model.tuck.show()
             try await until { elements.contains { $0.label == "Fold all bars" } && elements.contains { $0.label?.hasPrefix("Running in the background") == true } }
-            func keep(_ state: String) throws {
+            func keep(_ state: String) async throws {
+                var previous: [NSRect] = []
+                var changed = Date.now
+                try await until {
+                    let frames = elements.map(\.frame)
+                    if frames != previous { previous = frames; changed = .now }
+                    return Date.now.timeIntervalSince(changed) > 0.6
+                }
                 let host = try #require(window.contentView)
                 host.layoutSubtreeIfNeeded()
                 host.display()
@@ -311,17 +318,17 @@ import Testing
                 host.cacheDisplay(in: host.bounds, to: rep)
                 try #require(rep.representation(using: .png, properties: [:])).write(to: out.appending(path: "mac-\(look)-\(state).png"))
             }
-            try keep("open")
+            try await keep("open")
             #expect(try #require(elements.first { $0.label == "Fold all bars" }).press())
             try await until { elements.contains { $0.label?.hasPrefix("Bars: ") == true } }
             #expect(try #require(elements.first { $0.label?.hasPrefix("Bars: ") == true }).press())
             window.makeFirstResponder(field)
             field.insertText("Keep the conversation in sight", replacementRange: NSRange(location: NSNotFound, length: 0))
             try await until { model.tuck.isOn(among: [.goal, .background]) }
-            try keep("typing")
+            try await keep("typing")
             #expect(try #require(elements.first { $0.label == "Send" }).press())
             try await until { model.draftText.isEmpty && !model.tuck.isOn(among: [.goal, .background]) }
-            try keep("sent")
+            try await keep("sent")
         }
     }
 
