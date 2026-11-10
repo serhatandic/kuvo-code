@@ -18,7 +18,9 @@
 # time, each waiting on its kind's lock in this user's own temporary folder (getconf's, not
 # $TMPDIR, which a caller may point elsewhere). Jobs of different kinds run side by side. Once its
 # turn comes, a job also waits while the Mac is busy (its load over the last minute above
-# KUVO_HEAVY_LOAD, 40 unless set), so it stays usable.
+# KUVO_HEAVY_LOAD, 40 unless set), so it stays usable. While the Mac app's suite (mac) waits there,
+# new phone, mac-build and box jobs wait for it to start, for 15 minutes at most
+# (KUVO_HEAVY_MAC_FIRST_FOR): the jobs that kept starting kept the Mac busy, and it rarely got in.
 #
 # phone has two slots, so two phone jobs can run at once, each on a simulator of its own (the Mac
 # mini has room for it). Slot 1 is the lock above, unchanged, with the simulator "Kuvo Code Tests";
@@ -54,6 +56,18 @@
 #
 #   KUVO_HEAVY_WAIT=0   don't wait: say what it would wait for, and exit 75
 #   KUVO_HEAVY_DIR      where the locks are (for the helper's own tests)
+#
+# Every job has a time limit, so one that hangs can't hold its kind's turn for hours: past it, the
+# job is stopped (its process group, as below: TERM, then KILL), it says what was running, and
+# heavy.sh exits 124. The clock runs only while the job runs, not while it waits for its turn or for
+# a busy Mac. Generous, per kind: mac 45 minutes (the app's whole suite), phone 45, mac-build 30
+# (a build, a package's tests), box 40 (the box's and the bridge's suites, which may go together).
+#
+#   KUVO_HEAVY_LIMIT    this job's limit instead: 90m, 600s, 2h, or plain minutes; 0 for none
+#
+# A job inside one of its kind (above) runs within that one's limit; one of another kind has its
+# own as well. In a terminal a job has none: you're there to stop it. Older copies of this helper
+# start their jobs with no limit, and take turns with these as before.
 set -eu
 
 usage() {
@@ -90,6 +104,7 @@ esac
 OLD="$DIR/kuvo-code-heavy-$(id -u).lock"
 MAX_LOAD="${KUVO_HEAVY_LOAD:-40}"
 WAITS="${KUVO_HEAVY_WAIT:-1}"
+case "$kind" in mac | phone) DEFAULT_LIMIT=45m ;; mac-build) DEFAULT_LIMIT=30m ;; box) DEFAULT_LIMIT=40m ;; esac
 
 # Whether `ps` answers. A sandbox can refuse it (Auto mode), and then no process can be asked what
 # it runs under.
@@ -162,6 +177,31 @@ if [ -n "$holds" ]; then
     exit
 fi
 
+# A time like 90m, 600s or 2h (plain: minutes), in seconds; $2 names the variable it came from.
+# (Its number in base 10, whatever zeros lead it, and at most six digits.)
+seconds_of() {
+    case "$1" in
+        *[!0-9smh]* | "" | [smh]* | *[smh]?*) ;;
+        *)
+            number=${1%[smh]}
+            while [ "${number#0}" != "$number" ] && [ "${#number}" -gt 1 ]; do number=${number#0}; done
+            if [ "${#number}" -le 6 ]; then
+                case "$1" in *s) echo "$number" ;; *h) echo $((number * 3600)) ;; *) echo $((number * 60)) ;; esac
+                return
+            fi
+            ;;
+    esac
+    echo "$2 is a time like 90m, 600s or 2h, or 0 for none (it's $1)." >&2
+    exit 64
+}
+GIVEN_LIMIT="${KUVO_HEAVY_LIMIT:-$DEFAULT_LIMIT}"
+LIMIT=$(seconds_of "$GIVEN_LIMIT" KUVO_HEAVY_LIMIT) || exit 64
+# How long the Mac app's suite, waiting on a busy Mac with its turn, holds back new jobs of the
+# other kinds (below).
+GIVEN_MAC_FIRST="${KUVO_HEAVY_MAC_FIRST_FOR:-15m}"
+MAC_FIRST_FOR=$(seconds_of "$GIVEN_MAC_FIRST" KUVO_HEAVY_MAC_FIRST_FOR) || exit 64
+MAC_FIRST="$DIR/kuvo-code-heavy-mac-first-$(id -u)"
+
 # The lock whose turn this process has just taken (below), if any.
 TAKEN=
 for candidate in "$LOCK" "$LOCK2"; do
@@ -176,6 +216,10 @@ done
 if [ -n "$TAKEN" ]; then
     # Its turn, just taken (below).
     unset KUVO_HEAVY_HOLDING
+    # Started inside another heavy job (of another kind: one of its own kind runs at once, above),
+    # which says so in KUVO_HEAVY_HELD while it runs: a part of a job already running.
+    NESTED=
+    for claim in ${KUVO_HEAVY_HELD:-}; do kill -0 "${claim##*:}" 2>/dev/null && NESTED=1; done
     # What runs under this turn knows it holds the lock, for when `ps` can't say.
     KUVO_HEAVY_HELD="${KUVO_HEAVY_HELD:-} $TAKEN:$PPID"
     [ -z "$LOCK2" ] || slot_env "$TAKEN"
@@ -226,13 +270,43 @@ fi
 
 # The Mac busy: wait until it isn't.
 load() { sysctl -n vm.loadavg | awk '{ print $2 }'; }
+busy() { [ "$(load | awk -v max="$MAX_LOAD" '{ print ($1 > max) }')" = 1 ]; }
+
+# The Mac app's suite first: with its turn, it waits for the Mac to be less busy, and phone,
+# mac-build and box jobs that kept starting meanwhile kept it busy, so it rarely got in. While it
+# waits there (it says so in $MAC_FIRST: its pid and since when), a new job of another kind waits
+# for it to start, for $MAC_FIRST_FOR at most. Jobs already running go on. A suite that's gone, or
+# that started, says nothing; a job started inside one already running doesn't wait (it's part of
+# that one); older copies of this helper neither say it nor wait for it.
+mac_waits() {
+    [ -f "$MAC_FIRST" ] || return 1
+    read -r pid since < "$MAC_FIRST" 2>/dev/null || return 1
+    [ -n "${pid:-}" ] && [ -n "${since:-}" ] && kill -0 "$pid" 2>/dev/null && [ $(($(date +%s) - since)) -lt "$MAC_FIRST_FOR" ]
+}
+if [ "$kind" != mac ] && [ -z "${NESTED:-}" ]; then
+    said=
+    while mac_waits; do
+        [ "$WAITS" = 0 ] && cannot_wait "The Mac app's suite is waiting for the Mac to be less busy, and goes first."
+        [ -n "$said" ] || echo "Waiting for the Mac app's suite to start first: it's waiting for the Mac to be less busy (for $GIVEN_MAC_FIRST at most)…" >&2
+        said=1
+        sleep 5
+    done
+fi
+
 said=
-while [ "$(load | awk -v max="$MAX_LOAD" '{ print ($1 > max) }')" = 1 ]; do
+if [ "$kind" = mac ] && busy && [ "$WAITS" != 0 ]; then
+    printf '%s %s\n' "$$" "$(date +%s)" > "$MAC_FIRST.$$" && mv -f "$MAC_FIRST.$$" "$MAC_FIRST"
+fi
+while busy; do
     [ "$WAITS" = 0 ] && cannot_wait "The Mac is busy (load $(load), over $MAX_LOAD)."
     [ -n "$said" ] || echo "Waiting while the Mac is busy (load $(load), over $MAX_LOAD)…" >&2
     said=1
     sleep 15
 done
+# (Its own say, not another suite's since.)
+if [ "$kind" = mac ] && [ -f "$MAC_FIRST" ] && read -r pid since < "$MAC_FIRST" 2>/dev/null && [ "$pid" = "$$" ]; then
+    rm -f "$MAC_FIRST"
+fi
 
 # The job runs in a process group of its own, and the group ends with the job: once the command is
 # over, or this helper is stopped, everything the command started that stays in its group is
@@ -263,10 +337,19 @@ stopped() {
         early="$1 $2"
         return 0
     fi
-    trap '' HUP INT TERM
+    trap '' HUP INT TERM USR1
     end_group "$1"
     end_watch
     exit "$2"
+}
+# Past its time limit (the watcher, below, says so).
+over_time() {
+    trap '' HUP INT TERM USR1
+    echo "heavy.sh: this $kind job ran past its time limit ($GIVEN_LIMIT) and was stopped: $*" >&2
+    echo "heavy.sh: if it wasn't stuck, give it longer with KUVO_HEAVY_LIMIT (like KUVO_HEAVY_LIMIT=90m)." >&2
+    end_group TERM
+    end_watch
+    exit 124
 }
 
 # In a terminal the job stays in the terminal's own group: one in a group of its own couldn't read
@@ -279,6 +362,9 @@ fi
 trap 'stopped HUP 129' HUP
 trap 'stopped INT 130' INT
 trap 'stopped TERM 143' TERM
+# (The command as it was given, for what over_time says.)
+command_line=$*
+trap 'over_time "$command_line"' USR1
 set -m
 if [ -n "${old_way:-}" ]; then
     lockf -k "$OLD" "$@" &
@@ -293,8 +379,17 @@ group=$!
 # killed, and a helper above it may have stopped it before it was done.
 parent=$PPID
 me=$$
+# The watcher keeps its time limit too: once it's up, it tells this shell (USR1), only while the
+# parent still runs, so never a process that took a pid since.
 (
-    while kill -0 "$parent" 2>/dev/null; do sleep 0.2; done
+    ticks=$((LIMIT * 5))
+    while kill -0 "$parent" 2>/dev/null; do
+        if [ "$LIMIT" -gt 0 ] && [ "$ticks" -ge 0 ]; then
+            [ "$ticks" -gt 0 ] || kill -s USR1 "$me" 2>/dev/null || true
+            ticks=$((ticks - 1))
+        fi
+        sleep 0.2
+    done
     kill -s TERM "$me" 2>/dev/null || true
     waits=0
     while [ "$waits" -lt 100 ] && kill -0 "$me" 2>/dev/null; do
@@ -308,6 +403,8 @@ set +m
 [ -z "$early" ] || stopped ${early}
 status=0
 wait "$group" || status=$?
+# (Over, by itself: the limit no longer counts.)
+trap '' USR1
 end_group TERM
 end_watch
 exit "$status"
