@@ -170,6 +170,14 @@ export function frozen(records = liveMoves()): Set<string> {
   return new Set(records.filter(record => record.step !== "check").flatMap(record => [record.thing, ...record.sessions]));
 }
 
+/** The box a conversation moving from here is switched to (a box's key), while its original here is
+ * still being let go; null for none. Its copy there is held until it's switched to, so whatever
+ * comes from it there comes from it as it runs there now. */
+export function switchedTo(session: string, records = liveMoves()): string | null {
+  const record = records.find(each => each.role === "from" && (each.stage === "switching" || each.stage === "finishing") && each.sessions.includes(session));
+  return record?.peer ?? null;
+}
+
 /** A conversation moved away from here in the last two days, and where it lives now (a box's key). */
 export interface MovedAway {
   session: string;
