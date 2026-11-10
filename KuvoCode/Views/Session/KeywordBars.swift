@@ -15,6 +15,8 @@ struct KeywordBars: View {
     let hidden: (ComposerBar, Binding<Bool>) -> Binding<Bool>
     @Environment(Workspace.self) private var workspace
     @Environment(AppModel.self) private var app
+    /// The conversation this is in, where what it opens comes back to.
+    @Environment(\.conversationTab) private var here
 
     /// The handoff to show: under way, failed, or done, until it's put away.
     private var shownHandoff: Handoff? {
@@ -76,7 +78,7 @@ struct KeywordBars: View {
                     // As this conversation: its model and permissions, in its folder (a worktree's
                     // too, where the changes are).
                     let session = try await workspace.createSession(in: model.session.location.directory, model: model.session.model, agent: nil, approval: model.approval)
-                    app.open(.session(session.id))
+                    app.open(.session(session.id), from: here)
                     workspace.model(for: session.id)?.sendReviewFix(text)
                 } catch {
                     model.failure = "A new session couldn’t be started: \(error.localizedDescription)"
@@ -84,7 +86,7 @@ struct KeywordBars: View {
             case .session(let id):
                 // There, and open, so you see it go.
                 workspace.model(for: id)?.sendReviewFix(text)
-                app.open(.session(id))
+                app.open(.session(id), from: here)
             case .copy:
                 Clipboard.copy(text)
             }
@@ -123,7 +125,7 @@ struct KeywordBars: View {
                 guard let session = part.session else { return }
                 // In the conversation's place, as a subagent's: its header goes back.
                 workspace.rememberReviewPart(session, of: model.id)
-                app.tabs.openInPlace(session)
+                app.open(.session(session), from: here)
             }
             .modifier(CardRow())
             .transition(.fold)

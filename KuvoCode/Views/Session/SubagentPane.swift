@@ -90,6 +90,7 @@ private struct SubagentsBarRow: View {
     @Environment(Workspace.self) private var workspace
     @Environment(AppModel.self) private var app
     @Environment(Catalog.self) private var catalog
+    @Environment(\.conversationTab) private var here
     @State private var model: SessionModel?
 
     private var agentName: String? {
@@ -116,7 +117,7 @@ private struct SubagentsBarRow: View {
             .lineLimit(1)
             .frame(maxWidth: .infinity, alignment: .leading)
             Button("Open") {
-                app.tabs.openInPlace(subagent.id)
+                app.open(.session(subagent.id), from: here)
             }
             .buttonStyle(TextButtonStyle())
             .font(.system(size: 13))
@@ -153,8 +154,6 @@ struct SubagentPane: View {
     let folder: String
     /// The session whose agent started it.
     let parent: String
-    /// Opens a session: the one that started it.
-    let open: (String) -> Void
     @Environment(Workspace.self) private var workspace
     @State private var model: SessionModel?
     @State private var isMissing = false
@@ -163,7 +162,7 @@ struct SubagentPane: View {
         // One over the other, so the placeholder and the conversation cross-fade.
         ZStack {
             if let model {
-                SubagentConversation(model: model, parent: parent, open: open)
+                SubagentConversation(model: model, parent: parent)
                     .transition(.replacingPlaceholder)
             } else if isMissing {
                 // A review's part goes with its review: said so, not as a subagent missing.
@@ -202,7 +201,6 @@ struct SubagentPane: View {
 private struct SubagentConversation: View {
     @Bindable var model: SessionModel
     let parent: String
-    let open: (String) -> Void
     @Environment(Workspace.self) private var workspace
     @Environment(Catalog.self) private var catalog
     @Environment(AppModel.self) private var app
@@ -277,6 +275,8 @@ private struct SubagentConversation: View {
         // Its row under the card's title stays put: the conversation scrolls under that row, not
         // under the card's header.
         .preference(key: CardTopIsFixed.self, value: true)
+        // What's opened from it comes back to it.
+        .environment(\.conversationTab, .session(model.id))
     }
 
     private var header: some View {
@@ -292,20 +292,13 @@ private struct SubagentConversation: View {
             }
             .frame(width: 18)
             VStack(alignment: .leading, spacing: 1) {
-                // Its task is the card's title: here, the way back to the conversation it works
-                // for, in its place.
-                Button { open(parent) } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: "chevron.left")
-                            .font(.system(size: 10, weight: .semibold))
-                        Text(parentTitle).fontWeight(.semibold)
-                    }
-                    .font(.system(size: 13))
-                    .lineLimit(1)
-                    .truncationMode(.tail)
+                // Its task is the card's title: here, the way back to where you opened it from
+                // (the conversation it works for, unless you came another way), in its place.
+                let back = app.tabs.back(of: .session(model.id))
+                BackLink(to: back.map(app.backName) ?? parentTitle,
+                         help: back == nil || back == .session(parent) ? "Back to the conversation that started it" : nil) {
+                    app.tabs.goBack()
                 }
-                .buttonStyle(TextButtonStyle(outset: true))
-                .help("Back to the conversation that started it")
                 // That it's a subagent, then its agent and what it's doing.
                 Group {
                     if isWorking {

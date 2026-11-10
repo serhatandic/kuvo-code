@@ -95,6 +95,92 @@ import Testing
         #expect(tabs.selection == .session("ses_timer"))
     }
 
+    /// A conversation opened from inside another (a bot's session from its bot, a session's
+    /// subagent from it, a bot's conversation from a group chat) opens in its place, in its tab,
+    /// with the way back to it; Back goes a step at a time, one it came through opened again is
+    /// gone back to rather than round again, and one picked in the sidebar starts fresh. Opened
+    /// from anywhere but the tab in view, it's a tab of its own, with no way back.
+    @Test func aConversationOpenedFromAnotherGoesBackAStepAtATime() async {
+        defer { done() }
+        engine.list([
+            StubEngine.session("ses_bot", title: "Foreman", directory: folder),
+            StubEngine.session("ses_work", title: "Timer cycle", directory: folder),
+            StubEngine.session("ses_other", title: "Settings page", directory: folder),
+            StubEngine.session("ses_find", title: "Find the timer", directory: folder, extra: ["parentID": "ses_work"]),
+        ])
+        await app.workspace.refresh()
+        tabs.open(.session("ses_other"))
+        tabs.open(.session("ses_bot"))
+
+        tabs.go(to: .session("ses_work"), from: .session("ses_bot"))
+        #expect(keys == ["ses_other", "ses_work"], "in the bot's tab")
+        #expect(tabs.back(of: .session("ses_work")) == .session("ses_bot"))
+        tabs.go(to: .session("ses_find"), from: .session("ses_work"))
+        #expect(keys == ["ses_other", "ses_find"])
+        #expect(tabs.back(of: .session("ses_find")) == .session("ses_work"))
+        #expect(tabs.isKept(.session("ses_bot")) && tabs.isKept(.session("ses_work")), "kept made, to be where you were")
+
+        tabs.goBack()
+        #expect(keys == ["ses_other", "ses_work"])
+        #expect(tabs.back(of: .session("ses_work")) == .session("ses_bot"))
+        tabs.goBack()
+        #expect(keys == ["ses_other", "ses_bot"])
+        #expect(tabs.selection == .session("ses_bot"))
+        #expect(tabs.back(of: .session("ses_bot")) == nil, "back at the start")
+        #expect(!tabs.isKept(.session("ses_work")))
+
+        // The bot opened again from the subagent: back to it, not round again.
+        tabs.go(to: .session("ses_work"), from: .session("ses_bot"))
+        tabs.go(to: .session("ses_find"), from: .session("ses_work"))
+        tabs.go(to: .session("ses_bot"), from: .session("ses_find"))
+        #expect(keys == ["ses_other", "ses_bot"])
+        #expect(tabs.back(of: .session("ses_bot")) == nil)
+
+        // Picked in the sidebar: no way back.
+        tabs.go(to: .session("ses_work"), from: .session("ses_bot"))
+        tabs.choose(.session("ses_work"))
+        #expect(tabs.back(of: .session("ses_work")) == nil)
+
+        // From a group chat, and back to it.
+        tabs.open(.group("grp_crew"))
+        tabs.go(to: .session("ses_bot"), from: .group("grp_crew"))
+        #expect(keys == ["ses_other", "ses_work", "ses_bot"])
+        #expect(tabs.back(of: .session("ses_bot")) == .group("grp_crew"))
+        tabs.goBack()
+        #expect(tabs.selection == .group("grp_crew"))
+
+        // From a conversation that isn't the tab in view: a tab of its own, with no way back.
+        tabs.go(to: .session("ses_other"), from: .session("ses_work"))
+        #expect(tabs.selection == .session("ses_other"))
+        #expect(keys == ["ses_other", "ses_work", "group:grp_crew"], "nothing in another's place")
+        #expect(tabs.back(of: .session("ses_other")) == nil)
+    }
+
+    /// Opened from another conversation, one that had a tab of its own takes the place of the one
+    /// in view: its old tab goes, the session beside it there keeping that tab rather than going
+    /// with it. A conversation on the way back that's deleted leaves the way back.
+    @Test func aConversationOpenedFromAnotherLeavesNothingBehind() async throws {
+        defer { done() }
+        await sessions(["ses_bot", "ses_work", "ses_side"])
+        engine.on("DELETE", "/api/session/ses_bot", json: [:])
+        tabs.open(.session("ses_work"))
+        tabs.openBeside("ses_side")
+        tabs.open(.session("ses_bot"))
+        #expect(keys == ["ses_work", "ses_bot"])
+
+        tabs.go(to: .session("ses_work"), from: .session("ses_bot"))
+        #expect(keys == ["ses_side", "ses_work"], "one tab of it, and the session that was beside it kept")
+        #expect(tabs.selection == .session("ses_work"))
+        #expect(tabs.splitModel == nil)
+        #expect(tabs.back(of: .session("ses_work")) == .session("ses_bot"))
+
+        try await app.workspace.delete("ses_bot")
+        // (As the window does when the list changes.)
+        tabs.dropClosed()
+        #expect(tabs.back(of: .session("ses_work")) == nil, "no way back to a conversation that's gone")
+        #expect(!tabs.isKept(.session("ses_bot")))
+    }
+
     /// A conversation deleted while one of its subagents shows in its tab (its own subagent's
     /// too): the tab goes with it, rather than showing a subagent of a conversation that's gone.
     @Test func deletingAConversationClosesItsSubagentsTab() async throws {

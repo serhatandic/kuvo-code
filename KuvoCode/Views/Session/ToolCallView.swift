@@ -15,6 +15,8 @@ struct ToolCallView: View {
     /// What your opening it is kept by, as its view may not last (see `CardFolds`).
     var foldKey: String? = nil
     @Environment(AppModel.self) private var app
+    /// The conversation this is in, where what it opens comes back to.
+    @Environment(\.conversationTab) private var here
     /// Open by itself rather than by you: a subagent at work.
     @State private var opened = false
     @Environment(\.scrollAnchor) private var scrollAnchor
@@ -86,7 +88,7 @@ struct ToolCallView: View {
                 } else if let started = startedSession {
                     // A session the agent started: a click opens it.
                     Button {
-                        app.tabs.open(.session(started))
+                        app.open(.session(started), from: here)
                     } label: {
                         header
                     }

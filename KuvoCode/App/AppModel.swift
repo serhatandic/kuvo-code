@@ -272,6 +272,33 @@ final class AppModel {
 
     /// Shows the main window, with `request` open in it.
     func open(_ request: Request) {
+        showWindow()
+        switch request {
+        case .folder(let path): tabs.newSession(in: workspace.addFolder(path))
+        case .session(let id): openFresh(TabKey(id))
+        case .newSession: tabs.newSession(in: nil)
+        case .bot(let recipe): tabs.openBotEditor(bot: nil, recipe: recipe)
+        }
+    }
+
+    /// A conversation opened from inside `origin`, the one a view is in (`conversationTab`): in its
+    /// place, with the way back to it (`WindowTabs.go`). From no conversation, as from outside.
+    func open(_ key: TabKey, from origin: TabKey?) {
+        guard origin != nil else {
+            showWindow()
+            return openFresh(key)
+        }
+        tabs.go(to: key, from: origin)
+    }
+
+    /// From outside the conversations (a notification, the menu bar): no way back.
+    private func openFresh(_ key: TabKey) {
+        tabs.open(key)
+        tabs.startFresh(key)
+    }
+
+    /// The main window in front, unless a demo copy keeps to the background.
+    private func showWindow() {
         #if DEBUG
         // A demo copy launched with KUVO_DEMO_BACKGROUND stays behind, so it never takes the keyboard
         // (opening the window activates the app too).
@@ -282,12 +309,6 @@ final class AppModel {
         if !background {
             openMainWindow?()
             NSApp.activate()
-        }
-        switch request {
-        case .folder(let path): tabs.newSession(in: workspace.addFolder(path))
-        case .session(let id): tabs.open(TabKey(id))
-        case .newSession: tabs.newSession(in: nil)
-        case .bot(let recipe): tabs.openBotEditor(bot: nil, recipe: recipe)
         }
     }
 

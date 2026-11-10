@@ -126,6 +126,8 @@ private struct BotWorkRow: View {
     let bot: Bot
     let item: BotWorkReport.Item
     @Environment(AppModel.self) private var app
+    /// The conversation this is in, where what it opens comes back to.
+    @Environment(\.conversationTab) private var here
     @Environment(Catalog.self) private var catalog
     @State private var isStopping = false
     @State private var isHovered = false
@@ -156,7 +158,7 @@ private struct BotWorkRow: View {
             .lineLimit(1)
             .frame(maxWidth: .infinity, alignment: .leading)
             Button("Open", systemImage: "arrow.turn.down.right") {
-                app.tabs.open(.session(item.session))
+                app.open(.session(item.session), from: here)
             }
             .buttonStyle(TextButtonStyle())
             .font(.system(size: 13))
@@ -194,6 +196,8 @@ struct BotWorkList: View {
     let bot: Bot
     let report: BotWorkReport
     @Environment(AppModel.self) private var app
+    /// The conversation this is in, where what it opens comes back to.
+    @Environment(\.conversationTab) private var here
     @Environment(Catalog.self) private var catalog
     @State private var isStopping = false
     @State private var failure: String?
@@ -253,7 +257,7 @@ struct BotWorkList: View {
                 .tracking(0.4)
             ForEach(items) { item in
                 Button {
-                    app.tabs.open(.session(item.session))
+                    app.open(.session(item.session), from: here)
                 } label: {
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
                         StatusMark(showing: Self.mark(item))

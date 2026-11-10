@@ -173,7 +173,7 @@ struct WorkItemPage: View {
             }
             ForEach(item.sessions, id: \.session) { session in
                 let known = app.workspace.session(session.session) != nil
-                Button { app.open(.session(session.session)) } label: {
+                Button { app.open(.session(session.session), from: app.tabs.messageTarget) } label: {
                     HStack(spacing: 5) {
                         Image(systemName: "bubble.left")
                         Text(item.sessions.count > 1 ? "Open \(session.title.isEmpty ? "agent session" : session.title)" : "Open agent session")
