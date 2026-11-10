@@ -506,6 +506,13 @@ test("the app's own notices go out on the box's connection", async () => {
 
 test("the app removes a phone as the Mac; the link's routes are the app's alone", async () => {
   const { it } = await paired();
+  // A paired phone over the relay never reads or changes them.
+  const before = fs.readFileSync(link.MAC_LINK_FILE, "utf8");
+  for (const [method, p, body] of [["GET", "kuvo/link/status"], ["GET", "kuvo/link/phones"], ["GET", "kuvo/link/config"], ["PUT", "kuvo/link/config", { phones: false, machines: false, relay: "https://example.com" }]]) {
+    assert.equal((await it.request(method, p, body)).status, 403, `${method} ${p}`);
+  }
+  assert.equal(fs.readFileSync(link.MAC_LINK_FILE, "utf8"), before, "what's kept is as it was");
+  assert.equal((await ask("GET", "kuvo/link/status")).json.state, "connected");
   assert.ok((await ask("GET", "kuvo/link/phones")).json.phones.some(each => each.key === it.public));
   assert.equal((await ask("POST", "kuvo/phones/remove", { phones: [{ key: it.public }] })).status, 200);
   assert.ok(!(await ask("GET", "kuvo/link/phones")).json.phones.some(each => each.key === it.public));

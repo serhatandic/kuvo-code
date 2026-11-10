@@ -646,7 +646,8 @@ async function serve(): Promise<void> {
   keepBridgeAnswering();
   // Its wake-ups and watches, sent while it runs, with the app's window closed too.
   sendWakes();
-  // This Mac's link to your phones and machines, once its app says it's wanted.
+  // This Mac's link to your phones and machines, as its app last said it's wanted (kept in
+  // run/mac-link.json, so it's back on the relay after a restart before the app opens), or once it says so.
   if (IS_MAC) runMacLink().catch(() => {});
   // Its agents and their letters, and its group chats' mail, for your other computers. (Not for
   // the app's route scenarios, `KUVO_TEST_NO_PEERS`, whose fixture tells its bridge who they are.)

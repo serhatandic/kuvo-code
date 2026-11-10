@@ -1813,11 +1813,6 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   its `name` and `app` as the app last said them (kept, "The relay, on this Mac's box"), its
   `engine` the version running, or the one the app brings while none runs, its integrations from
   the catalog the app leaves it (`bin/integrations.json`), and its `features` the box's own list.
-  While an older keeper makes way for a newer app's (it goes once nothing is under way, which can
-  take hours), its box, from before this change, answers as a machine's does (its own `chats`, `running`
-  false, a machine's features): the app says it as this Mac in its place, from what that box said
-  (its engine's version, `agents`, `started`), with this Mac's chats folder and the Mac's features
-  for a machine's own (`COMPAT(0.8 keeper handover)`, going 3 months after 0.8.0).
 - `kuvo/agents/api/…`: the coding agents you already have (Claude Code, Codex, Cursor, Grok,
   Antigravity), through the agents bridge beside the host's engine, which answers the same paths
   as the engine for them: sessions, messages, prompts, permissions, questions, events
@@ -3574,8 +3569,8 @@ application/json`:
   Finder's Trash (bridge 0.9.52); one anywhere else stays where it is;
 - for its link (bridge 0.9.61, "The relay, on this Mac's box"):
   - `link/identity {}` → `{"key", "secret", "sign"}` (each 32 bytes, base64url): this Mac's link
-    key, relay secret and signing key, from the Keychain; `503` while the link isn't wanted or the
-    Keychain won't give them;
+    key, relay secret and signing key, from the Keychain, read without asking you; `503` while the
+    link isn't wanted or the Keychain won't give them (read again a minute later);
   - `link/route {"method", "path", "headers", "body", "phone"}` (`body` base64, `phone` the asking
     phone's key, base64url) → that request's answer as the app gives it: its status, its
     `content-type` and `cache-control`, `x-kuvo-answer: 1` (the app's own answer, whatever its
@@ -3644,8 +3639,10 @@ For the app only (anyone else gets `403`):
   there are machines from the app's list of them (`box/machines.json`, one that won't read
   counting), so this Mac is back on the relay for your phones and machines before the app opens:
   the phone link turned off stays off, and machines you've removed don't bring it back. Its keys
-  come through the keeper's host interface then, which reads them again a minute later while your
-  Keychain was locked. An older app also sent `features`, what it answered: the box says that
+  come through the keeper's host interface then, which reads them without asking you (a locked
+  Keychain refuses at once, never with a prompt that would hold up the keeper) and again a minute
+  later while it won't give them. The app also says it again when the phone link is turned on or
+  off while it's open. An older app also sent `features`, what it answered: the box says that
   itself now (`kuvo/info`, its agents' mail), and leaves it.
 - `GET kuvo/link/status` → `{"state": "off" | "connecting" | "connected" | "failed", "reason"?}`;
   `GET kuvo/link/status/events` follows it (ndjson).

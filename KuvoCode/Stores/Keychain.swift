@@ -15,8 +15,13 @@ nonisolated enum Keychain {
                              file: StaticString = #fileID, line: UInt = #line) -> OSStatus {
         if inMemory {
             return lock.withLock {
-                // (As a locked Keychain refuses a read without asking: a test's own service's items.)
-                if let service = query[kSecAttrService as String] as? String, lockedServices.contains(service) { return errSecInteractionNotAllowed }
+                // (As a locked Keychain does: a read that may ask gets your answer, one that may
+                // not fails at once. A test's own service's items.)
+                if let service = query[kSecAttrService as String] as? String, let answer = lockedServices[service] {
+                    if (query[kSecUseAuthenticationUI as String] as AnyObject?)?.isEqual(kSecUseAuthenticationUIFail) == true { return errSecInteractionNotAllowed }
+                    prompted[service, default: 0] += 1
+                    return answer
+                }
                 return standIn.copyMatching(query, result)
             }
         }
@@ -56,12 +61,24 @@ nonisolated enum Keychain {
         return status
     }
 
-    /// Hosting tests: the items of these services read as a locked Keychain's do (a test's own
-    /// services, while it says so).
-    static func lockForTests(_ service: String, _ locked: Bool) {
-        lock.withLock { if locked { lockedServices.insert(service) } else { lockedServices.remove(service) } }
+    /// A read that fails rather than ask you anything (a Keychain to unlock, or whether this app may
+    /// use an item): `errSecInteractionNotAllowed` then, never a prompt that holds up the caller.
+    static func withoutAsking(_ query: [String: Any]) -> [String: Any] {
+        var query = query
+        query[kSecUseAuthenticationUI as String] = kSecUseAuthenticationUIFail
+        return query
     }
-    nonisolated(unsafe) private static var lockedServices: Set<String> = []
+
+    /// Hosting tests: the items of these services read as a locked Keychain's do (a test's own
+    /// services, while it says so): one that may ask gets `answer` (yours to its prompt, like
+    /// `errSecUserCanceled`), one that may not (`withoutAsking`) `errSecInteractionNotAllowed`.
+    static func lockForTests(_ service: String, _ locked: Bool, answer: OSStatus = errSecInteractionNotAllowed) {
+        lock.withLock { lockedServices[service] = locked ? answer : nil }
+    }
+    nonisolated(unsafe) private static var lockedServices: [String: OSStatus] = [:]
+    /// How many times macOS would have asked you, by a locked service's.
+    static func promptsForTests(_ service: String) -> Int { lock.withLock { prompted[service] ?? 0 } }
+    nonisolated(unsafe) private static var prompted: [String: Int] = [:]
 
     /// Hosting tests, never the real Keychain: SecItem isn't called at all.
     private static let inMemory = AppInfo.isHostingTests

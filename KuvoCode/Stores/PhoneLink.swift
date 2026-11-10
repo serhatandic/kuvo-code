@@ -115,7 +115,16 @@ final class PhoneLink {
 
     /// This Mac's key and relay secret, from the Keychain, made the first time the link is on
     /// (with it off, Kuvo Code keeps nothing for it).
-    @ObservationIgnored private lazy var identity: (key: LinkKey, secret: RelaySecret) = loadIdentity()
+    private var identity: (key: LinkKey, secret: RelaySecret) {
+        get {
+            if let keptIdentity { return keptIdentity }
+            let read = took(Self.readIdentity(in: service))
+            keptIdentity = read
+            return read
+        }
+        set { keptIdentity = newValue }
+    }
+    @ObservationIgnored private var keptIdentity: (key: LinkKey, secret: RelaySecret)?
     private var key: LinkKey { identity.key }
     private var secret: RelaySecret { identity.secret }
     /// This Mac's box, which holds the relay connection (`BoxProcess`); set by AppModel.
@@ -144,17 +153,17 @@ final class PhoneLink {
         paired = Self.without(toRemove, PairedPhones(phones: saved.phones, removed: saved.removed))
         machineHosts = saved.machines
         if let identity {
-            self.identity = identity
-            self.signing = signing ?? Documents.SigningKey()
+            keptIdentity = identity
+            keptSigning = signing ?? Documents.SigningKey()
         }
     }
 
-    /// The Keychain wouldn't give out this Mac's key or secret this launch.
+    /// The Keychain wouldn't give out this Mac's key or secret: read again, without asking you,
+    /// `readAgainAfter` later (a minute) and every so often after, when its box asks for them
+    /// (`boxIdentity`), as it does every half a minute. The keeper starting this Mac's box at login,
+    /// before your Keychain was unlocked, has them once it is; a prompt you said no to isn't shown
+    /// again.
     @ObservationIgnored private var unreadable = false
-    /// Only because it was locked then (the keeper starting this Mac's box at login, before your
-    /// Keychain was unlocked): read again `readAgainAfter` later (a minute), and every so often
-    /// after, rather than not until the next launch.
-    @ObservationIgnored private var wasLocked = false
     @ObservationIgnored private var readAgainAt: Date?
     @ObservationIgnored var readAgainAfter: TimeInterval = 60
 
@@ -166,35 +175,52 @@ final class PhoneLink {
 
     /// The key this Mac signs its documents with (PROTOCOL.md, "Documents"), from the Keychain beside
     /// the others, made the first time.
-    @ObservationIgnored private lazy var signing: Documents.SigningKey = loadSigning()
+    private var signing: Documents.SigningKey {
+        get {
+            if let keptSigning { return keptSigning }
+            let read = took(Self.readSigning(in: service))
+            keptSigning = read
+            return read
+        }
+        set { keptSigning = newValue }
+    }
+    @ObservationIgnored private var keptSigning: Documents.SigningKey?
 
-    private func loadIdentity() -> (key: LinkKey, secret: RelaySecret) {
-        (kept("key", read: { try? LinkKey(rawRepresentation: $0) }, make: LinkKey.init, bytes: \.rawRepresentation),
-         kept("secret", read: RelaySecret.init(bytes:), make: RelaySecret.init, bytes: \.bytes))
+    /// What was read, noting a key the Keychain wouldn't give out (`unreadable`).
+    private func took<T>(_ read: (value: T, refused: Bool)) -> T {
+        if read.refused {
+            unreadable = true
+            if readAgainAt == nil { readAgainAt = .now }
+        }
+        return read.value
     }
 
-    private func loadSigning() -> Documents.SigningKey {
-        kept("sign", read: { try? Documents.SigningKey(rawRepresentation: $0) }, make: Documents.SigningKey.init, bytes: \.rawRepresentation)
+    nonisolated private static func readIdentity(in service: String, asking: Bool = true) -> (value: (key: LinkKey, secret: RelaySecret), refused: Bool) {
+        let key = kept("key", in: service, asking: asking, read: { try? LinkKey(rawRepresentation: $0) }, make: LinkKey.init, bytes: \.rawRepresentation)
+        // (Not asked twice: refused once, it would be again.)
+        guard !key.refused else { return ((key.value, RelaySecret()), true) }
+        let secret = kept("secret", in: service, asking: asking, read: RelaySecret.init(bytes:), make: RelaySecret.init, bytes: \.bytes)
+        return ((key.value, secret.value), secret.refused)
+    }
+
+    nonisolated private static func readSigning(in service: String, asking: Bool = true) -> (value: Documents.SigningKey, refused: Bool) {
+        kept("sign", in: service, asking: asking, read: { try? Documents.SigningKey(rawRepresentation: $0) }, make: Documents.SigningKey.init, bytes: \.rawRepresentation)
     }
 
     /// One of them from the Keychain, made the first time. One the Keychain won't give out (you
-    /// said no when it asked, or it's locked) isn't replaced, and the link stays off
-    /// (`unreadable`): your phones and other computers would take a stand-in for another Mac. It's
-    /// tried again next launch, or once it may have been unlocked (`readAgainIfLocked`).
-    private func kept<T>(_ account: String, read: (Data) -> T?, make: () -> T, bytes: (T) -> Data) -> T {
+    /// said no when it asked, or it's locked) isn't replaced, and the link stays off (`refused`):
+    /// your phones and other computers would take a stand-in for another Mac. `asking`: whether
+    /// macOS may ask you first (to unlock the Keychain); without, a locked one refuses at once.
+    nonisolated private static func kept<T>(_ account: String, in service: String, asking: Bool, read: (Data) -> T?, make: () -> T, bytes: (T) -> Data) -> (value: T, refused: Bool) {
         do {
-            if let data = try Self.keychain(account, in: service), let value = read(data) { return value }
+            if let data = try keychain(account, in: service, asking: asking), let value = read(data) { return (value, false) }
         } catch {
             Logger(subsystem: "run.kuvo.code", category: "phone").error("Couldn’t read the phone link’s \(account, privacy: .public) from the Keychain: \(error.localizedDescription, privacy: .public)")
-            let locked = (error as NSError).code == Int(errSecInteractionNotAllowed)
-            wasLocked = locked && (wasLocked || !unreadable)
-            unreadable = true
-            if locked, readAgainAt == nil { readAgainAt = .now }
-            return make()
+            return (make(), true)
         }
         let value = make()
-        Self.setKeychain(bytes(value), for: account, in: service)
-        return value
+        setKeychain(bytes(value), for: account, in: service)
+        return (value, false)
     }
 
     /// This Mac's name, as Sharing settings has it.
@@ -223,6 +249,11 @@ final class PhoneLink {
         self.endpoint = endpoint
         guard running == nil else { return }
         running = Task { [weak self] in await self?.follow() }
+        // The phone link turned on or off meanwhile: the box is told, and keeps it for after a
+        // restart (run/mac-link.json).
+        enabledWatch = UserDefaults.standard.observe(\.phoneLink, options: [.new]) { [weak self] _, _ in
+            Task { @MainActor in self?.tellLinkConfig() }
+        }
         #if DEBUG
         showRemovalForDemo()
         #endif
@@ -258,7 +289,10 @@ final class PhoneLink {
     func stop() {
         running?.cancel()
         running = nil
+        enabledWatch = nil
     }
+
+    @ObservationIgnored private var enabledWatch: NSKeyValueObservation?
 
     /// What this Mac's box is told of its link: whether the phone link is on, whether there are
     /// machines to meet, the relay, and how it's named to your phones.
@@ -351,12 +385,16 @@ final class PhoneLink {
     /// (and they each other); with the last gone (and no phone link), it stops. The others hear who
     /// their peers are now.
     func machinesChanged() {
-        if let client = box() {
-            let config = linkConfig
-            Task { _ = try? await client.send("PUT", "kuvo/link/config", body: config) }
-        }
+        tellLinkConfig()
         syncMachines()
         peersChanged()
+    }
+
+    /// Tells this Mac's box what's wanted of its link now.
+    private func tellLinkConfig() {
+        guard let client = box() else { return }
+        let config = linkConfig
+        Task { _ = try? await client.send("PUT", "kuvo/link/config", body: config) }
     }
 
     /// Shows a pairing link (as a QR code) for a phone to scan, made by this Mac's box: one of its
@@ -751,8 +789,6 @@ final class PhoneLink {
             // The app's own requests (no phone asking) say so: they aren't a phone using the box.
             let forwarded = EngineRoutes.forward(request, to: base, password: box.password, session: Self.boxSession, adding: asking == nil ? ["x-kuvo-from": "app"] : [:],
                                                  allowing: { path, _ in path.hasPrefix("kuvo/") })
-            // COMPAT(0.8 keeper handover): what an older keeper's box says of this Mac; remove 3 months after 0.8.0.
-            if route == Self.handoverRoute, request.method.uppercased() == "GET" { return Self.handedOver(forwarded) }
             // A change to a conversation's wake-ups, or to your personalities: what the app shows
             // of them (and `kuvo/bots` and its templates list) has it before the answer goes back,
             // so what's read next agrees.
@@ -845,28 +881,46 @@ final class PhoneLink {
     /// This Mac's keys, for its box's link (asked through the host interface): its link key, relay
     /// secret and signing key, as your phones and machines know this Mac. None while the link isn't
     /// wanted (nothing's made for it then), or the Keychain won't give them out.
-    func boxIdentity() -> [String: String]? {
+    /// Read off the main actor and without asking you (the keeper has no window to ask from, and a
+    /// prompt to unlock the Keychain would hold up everything it answers meanwhile).
+    func boxIdentity() async -> [String: String]? {
         guard relayWanted else { return nil }
-        readAgainIfLocked()
-        guard hasIdentity else { return nil }
-        // Read before the check: one the Keychain won't give out isn't stood in for.
-        let sign = signing.rawRepresentation.base64URL
-        guard !unreadable else { return nil }
-        return ["key": key.rawRepresentation.base64URL, "secret": secret.bytes.base64URL, "sign": sign]
+        await readForBox()
+        // One the Keychain won't give out isn't stood in for.
+        guard !unreadable, let keptIdentity, let keptSigning else { return nil }
+        return ["key": keptIdentity.key.rawRepresentation.base64URL, "secret": keptIdentity.secret.bytes.base64URL, "sign": keptSigning.rawRepresentation.base64URL]
     }
 
-    /// This Mac's keys read again, once a minute at most, while the Keychain was only locked when
-    /// they were read: what it gives then is this Mac's own (one it never gave is never stood in for).
-    private func readAgainIfLocked() {
-        guard unreadable, wasLocked, readAgainAt.map({ Date.now.timeIntervalSince($0) >= readAgainAfter }) ?? true else { return }
-        readAgainAt = .now
-        unreadable = false
-        wasLocked = false
-        let again = loadIdentity()
-        let sign = loadSigning()
-        guard !unreadable else { return }
-        identity = again
-        signing = sign
+    @ObservationIgnored private var readingForBox: Task<Void, Never>?
+
+    /// This Mac's keys, those not read yet, or all of them again once a minute at most while the
+    /// Keychain wouldn't give them out: what it gives then is this Mac's own (one it never gave is
+    /// never stood in for). One read at a time.
+    private func readForBox() async {
+        if let readingForBox { return await readingForBox.value }
+        let again = unreadable
+        guard again ? readAgainAt.map({ Date.now.timeIntervalSince($0) >= readAgainAfter }) ?? true : keptIdentity == nil || keptSigning == nil else { return }
+        let service = service
+        let identity = again || keptIdentity == nil, signing = again || keptSigning == nil
+        let task = Task {
+            let read = await Task.detached {
+                (identity ? Self.readIdentity(in: service, asking: false) : nil, signing ? Self.readSigning(in: service, asking: false) : nil)
+            }.value
+            if again {
+                readAgainAt = .now
+                guard read.0?.refused == false, read.1?.refused == false, let newIdentity = read.0?.value, let newSigning = read.1?.value else { return }
+                unreadable = false
+                readAgainAt = nil
+                keptIdentity = newIdentity
+                keptSigning = newSigning
+            } else {
+                if let identity = read.0, keptIdentity == nil { keptIdentity = took(identity) }
+                if let signing = read.1, keptSigning == nil { keptSigning = took(signing) }
+            }
+        }
+        readingForBox = task
+        await task.value
+        readingForBox = nil
     }
 
     /// That it's this Mac asking a machine it set up for its vault's key (PROTOCOL.md, "Vault"):
@@ -1321,13 +1375,14 @@ final class PhoneLink {
     static var keychainService: String { (Bundle.main.bundleIdentifier ?? "run.kuvo.code") + ".phone-link" }
 
     /// The item, or nil when there's none; throws when the Keychain can't be read.
-    private static func keychain(_ account: String, in service: String) throws -> Data? {
-        let query: [String: Any] = [
+    nonisolated private static func keychain(_ account: String, in service: String, asking: Bool) throws -> Data? {
+        var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
             kSecReturnData as String: true,
         ]
+        if !asking { query = Keychain.withoutAsking(query) }
         var result: CFTypeRef?
         let status = Keychain.copyMatching(query, &result)
         switch status {
@@ -1337,7 +1392,7 @@ final class PhoneLink {
         }
     }
 
-    private static func setKeychain(_ data: Data, for account: String, in service: String) {
+    nonisolated private static func setKeychain(_ data: Data, for account: String, in service: String) {
         let base: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -1350,4 +1405,9 @@ final class PhoneLink {
         item[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
         Keychain.add(item)
     }
+}
+
+extension UserDefaults {
+    /// `phoneLink` (`PhoneLink.isEnabled`), for following a change to it.
+    @objc dynamic var phoneLink: Bool { bool(forKey: "phoneLink") }
 }
