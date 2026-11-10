@@ -655,8 +655,8 @@ struct BottomStack: View {
             .animation(.ui, value: tucked)
             .onChange(of: Seen(conversation: model.id, value: [composerHasFocus, composerHasText]), initial: true) { _, _ in
                 model.tuck.writing(focused: composerHasFocus, hasText: composerHasText)
-                folds.writing(model.tuck.isWriting)
             }
+            .onChange(of: model.tuck.isWriting, initial: true) { _, active in folds.writing(active) }
             .animation(.ui, value: removedWorktree?.folder)
             .animation(.ui, value: waitingMove != nil)
             .animation(.ui, value: model.unseenHeld.map(\.id))
