@@ -1,4 +1,5 @@
 import AppKit
+import ClientDesign
 import ClientSessions
 import KuvoLink
 import OpenCodeKit
