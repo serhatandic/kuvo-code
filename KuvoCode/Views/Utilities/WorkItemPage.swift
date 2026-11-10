@@ -34,6 +34,11 @@ struct WorkItemPage: View {
         store.detail(box: opened.box, id: opened.id, number: opened.number)
     }
 
+    /// The box the item is kept on: the panel's, or the computer it says it's on.
+    private var keptOn: String {
+        (view.items.first(where: opened.matches) ?? detail?.item).map { store.box(of: $0, in: opened.box) } ?? opened.box
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             if let back {
@@ -115,6 +120,8 @@ struct WorkItemPage: View {
                 HStack(spacing: 4) {
                     Text("\(WorkQueue.updated(item.updated.date)) by \(item.updated.by.words)")
                     if let owner = WorkQueue.ownerName(of: item, in: view) { Text("· in \(owner)") }
+                    if let computer = WorkQueue.computerName(of: item) { Text("· on \(computer)") }
+                    if let handing = item.handing { Text("· handing to \(handing.name.isEmpty ? "another computer" : handing.name)") }
                 }
                 .font(.system(size: 11.5))
                 .foregroundStyle(.secondary)
@@ -301,7 +308,7 @@ struct WorkItemPage: View {
         guard !wanted.isEmpty else { return nil }
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         for file in wanted {
-            if let data = await store.file(box: opened.box, item: detail.item.id, name: file.name) {
+            if let data = await store.file(box: keptOn, item: detail.item.id, name: file.name) {
                 try? data.write(to: folder.appending(path: file.name))
             }
         }
@@ -314,7 +321,7 @@ struct WorkItemPage: View {
     private func openFile(_ file: WorkItemDetail.File, of item: WorkItem) {
         guard Self.isPlainName(file.name) else { return }
         Task {
-            guard let data = await store.file(box: opened.box, item: item.id, name: file.name) else { return }
+            guard let data = await store.file(box: keptOn, item: item.id, name: file.name) else { return }
             try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
             let url = folder.appending(path: file.name)
             guard (try? data.write(to: url)) != nil else { return }

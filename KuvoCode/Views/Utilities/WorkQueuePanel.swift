@@ -502,7 +502,7 @@ struct WorkQueuePanel: View {
         guard let place, let view, let dragged = ids.first else { return false }
         let number = dragged.hasPrefix("#") ? Int(dragged.dropFirst()) : nil
         guard let item = view.items.first(where: { number != nil ? $0.number == number : $0.number == nil && $0.title == dragged }) else { return false }
-        if case .before(let other) = place, other.id == item.id { return false }
+        if case .before(let other) = place, other.id == item.id || other.computer?.key != item.computer?.key { return false }
         Task { await store.move(item, to: place, on: box) }
         return true
     }
@@ -544,7 +544,8 @@ struct WorkItemMenu: View {
 
     var body: some View {
         let store = app.workQueues
-        let mates = view.items.filter { $0.category == item.category && !WorkQueue.isInProgress($0) == !WorkQueue.isInProgress(item) }
+        // (Its order is among the items on its own computer.)
+        let mates = view.items.filter { $0.category == item.category && !WorkQueue.isInProgress($0) == !WorkQueue.isInProgress(item) && $0.computer?.key == item.computer?.key }
         let index = mates.firstIndex { $0.id == item.id }
         Menu("Move To") {
             ForEach(WorkQueue.moveTargets(for: item, in: view.categories)) { category in
@@ -656,7 +657,7 @@ struct WorkItemRow: View {
             }
             .buttonStyle(ListRowButtonStyle(isSelected: isSelected))
             .accessibilityElement(children: .combine)
-            .accessibilityLabel([ordinal.map { "\($0)." } ?? "", item.number.map { "Work item \($0)" } ?? "New work item", item.title, working ? "in progress" : "", WorkQueue.currentWork(item) ?? "", working ? WorkQueue.updated(item.updated.date) : "", ownerName.map { "in \($0)" } ?? ""].filter { !$0.isEmpty }.joined(separator: ", "))
+            .accessibilityLabel([ordinal.map { "\($0)." } ?? "", item.number.map { "Work item \($0)" } ?? "New work item", item.title, working ? "in progress" : "", WorkQueue.currentWork(item) ?? "", working ? WorkQueue.updated(item.updated.date) : "", ownerName.map { "in \($0)" } ?? "", WorkQueue.computerName(of: item).map { "on \($0)" } ?? ""].filter { !$0.isEmpty }.joined(separator: ", "))
             if working, let openSession {
                 Button(action: openSession) {
                     Label("Open Agent Session", systemImage: "arrow.up.right")
@@ -669,12 +670,14 @@ struct WorkItemRow: View {
         }
     }
 
-    /// "#181 · Updated 8m ago · in Sign-in": the number, when it's in progress how fresh it is, and
-    /// whose it is when it isn't the view's own.
+    /// "#181 · Updated 8m ago · in Sign-in · on lab": the number, when it's in progress how fresh
+    /// it is, whose it is when it isn't the view's own, and the computer it's on when that's another.
     private func footer(working: Bool) -> String {
         var parts = [item.name]
         if working { parts.append(WorkQueue.updated(item.updated.date)) }
         if let ownerName { parts.append("in \(ownerName)") }
+        if let computer = WorkQueue.computerName(of: item) { parts.append("on \(computer)") }
+        if let handing = item.handing { parts.append("handing to \(handing.name.isEmpty ? "another computer" : handing.name)") }
         return parts.joined(separator: " · ")
     }
 }
