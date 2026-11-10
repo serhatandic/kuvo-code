@@ -19,7 +19,7 @@ import { IS_MAC, RUN } from "../home";
 import { locked, textOf, writePrivate } from "../files";
 import { KEY, macsOf, mailFor, ownKey, peersOf, removedBoxes } from "../peers/known";
 import { readTold, toldKeys } from "./told";
-import { awaySince, readReach } from "../peers/reach";
+import { awaySince, lastFoundAway, PEER_CHECKED, readReach } from "../peers/reach";
 import { readLink } from "../state";
 import { allItems, changeQueues, OWNER, WORK_QUEUE } from "./store";
 import type { Book } from "./store";
@@ -134,9 +134,13 @@ export function primaryOf(link: LinkState | null | undefined = readLink(), file 
     current = all.find(each => each.key === keptKey) ?? null;
     // Not heard of now (one of its Macs whose peers document isn't here yet, one a peer stopped
     // naming for a while, no link yet): it waits, so a box never goes back and forth between two;
-    // only one you removed, or one not heard of for days (gone), makes way for the next.
+    // only one you removed, or one not heard of for days (gone), makes way for the next; and one
+    // the peer it was reached through now says it numbers from another instead of (it found it
+    // gone, or one set up earlier).
     const removed = removedBoxes(link);
-    if (!current && !removed.has(keptKey) && !(kept.through && removed.has(kept.through)) && !(kept.lost !== undefined && now - kept.lost > LOST_FOR)) current = "away";
+    const through = kept.through ? readTold(kept.through)?.primary : undefined;
+    const movedOn = Boolean(kept.through && through && through.key !== keptKey && peersOf(link).some(peer => peer.key === kept.through) && !gone.has(kept.through));
+    if (!current && !movedOn && !removed.has(keptKey) && !(kept.through && removed.has(kept.through)) && !(kept.lost !== undefined && now - kept.lost > LOST_FOR)) current = "away";
   }
   if (current === "away") return { away: true };
   // A machine kept itself (before it was set up from a Mac): its Mac now.
@@ -153,25 +157,26 @@ export function primaryOf(link: LinkState | null | undefined = readLink(), file 
  * it, before it's taken to be gone. */
 export const LOST_FOR = 3 * 86_400_000;
 
-/** The computers taken to be gone, for numbering: a peer that hasn't answered this box for days
- * (a Mac set up again with new keys, or put away, that its machines still list a while), and a
- * primary a peer says the same of (one this box doesn't reach itself). Heard from again, it's back,
- * and the earliest again: a box moves back to it, and it moves past what was numbered meanwhile
- * (`top`). */
+/** The computers taken to be gone, for numbering: a peer that hasn't answered this box for days,
+ * and still didn't lately (a Mac put away, or set up again with new keys, that its machines still
+ * list a while; not one that was away when this box itself went off the relay). A box that reaches
+ * that one through this one hears of it no more once this box numbers from another. Heard from
+ * again, it's back, and the earliest again: a box moves back to it, and it moves past what was
+ * numbered meanwhile (`top`). */
 function goneOf(link: LinkState | null | undefined, now: number): Set<string> {
   const gone = new Set<string>();
-  const peers = peersOf(link);
   const reach = readReach();
-  for (const peer of peers) {
+  const checked = readReach(PEER_CHECKED);
+  for (const peer of peersOf(link)) {
     const away = awaySince(peer.key, reach);
-    if (away !== null && now - away > LOST_FOR) gone.add(peer.key);
-  }
-  for (const peer of peers) {
-    const named = readTold(peer.key)?.primary;
-    if (named?.away !== undefined && now - named.away > LOST_FOR && !peers.some(each => each.key === named.key)) gone.add(named.key);
+    const last = lastFoundAway(peer.key, checked);
+    if (away !== null && now - away > LOST_FOR && last !== null && now - last < FOUND_AWAY_WITHIN) gone.add(peer.key);
   }
   return gone;
 }
+
+/** How lately a peer has to have been found away for it to count as gone. */
+const FOUND_AWAY_WITHIN = 3_600_000;
 
 /** Whether the primary this box keeps is one it hears of now: for `notePrimaryNow`, which notes
  * since when it hasn't been. */

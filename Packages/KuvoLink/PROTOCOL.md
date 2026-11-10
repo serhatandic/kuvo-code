@@ -3060,12 +3060,14 @@ item; one that hasn't said is never earlier), then by key. A box keeps the prima
 known: it moves only to an earlier one, never back, and one whose primary was removed or forgotten
 finds the next. A primary no peer names any more (the one this box reaches it through stopped
 saying it) is waited for: once three days go by unheard (`numbers.json`, `lost`), or at once once the
-peer it was reached through (`through`) is removed, the box finds the next. A computer that hasn't
-answered the box that reaches it for three days (`run/peer-reach.json`: a Mac put away, or set up
-again with new keys, that its machines still list for a while) isn't one to number from, nor is a
-primary the peer it's reached through says the same of (`told`'s `primary.away`); heard from again,
-it's the earliest again, and boxes move back to it, which moves past what was numbered meanwhile
-(`top`). A machine set up from a
+peer it was reached through (`through`) is removed, or once that peer names another primary (it
+found this one gone, or one set up earlier), the box finds the next. A peer that hasn't answered for
+three days and was still found away in the last hour (`run/peer-reach.json`, and
+`run/peer-reach-checked.json`, when the relay last found it not there: not one that was away when
+this box itself went off the relay; a Mac put away, or set up again with new keys, that its machines
+still list a while) isn't one to number from; a box that reached it through that peer follows that
+peer to its next. Heard from again, it's the earliest again, and boxes move back to it, which moves
+past what was numbered meanwhile (`top`). A machine set up from a
 Mac never numbers on its own; while it knows of no Mac that
 can be reached yet, items wait. (#183 will let you choose the primary.) The primary numbers its own
 items from its counter; another box numbers from blocks of 50 the primary gave it, and asks for the
@@ -3102,12 +3104,11 @@ item on its way to another computer (`handing`) goes with the move and is sent f
 `work-queue.elsewhere`; mail as "Peers" says, under the top-level `workQueue`):
 
 - **Told**: each box tells every such peer its Work Queue, unasked, so the others have it while it
-  sleeps: `{workQueue: {told: {id, at, kind, since, top, primary?: {key, kind, since?, away?},
-  items, owners, categories}}}`. `items` are its items as a view gives them (not deleted ones; the 100
+  sleeps: `{workQueue: {told: {id, at, kind, since, top, primary?: {key, kind, since?}, items,
+  owners, categories}}}`. `items` are its items as a view gives them (not deleted ones; the 100
   latest Done; 1,500 at most), each with `handedFrom` (who handed it on); `owners` names their
   owners; `categories` its custom ones; `kind`, `since` and `top` how it numbers, and `primary` the
-  one it numbers from (itself when it's the primary; `away`, since when it hasn't answered this
-  box, when it doesn't). `id` (`wqt_…`) is the same while all that is.
+  one it numbers from (itself when it's the primary). `id` (`wqt_…`) is the same while all that is.
   It's worked out again when a queue changes and each minute (who's at work changes it), and goes
   to one computer once in 15 s at most, again each minute (sooner after a change you made from a
   client, at the next round 15 s on) until that computer answers `{workQueue: {had: id}}`, nothing
@@ -3118,10 +3119,11 @@ item on its way to another computer (`handing`) goes with the move and is sent f
   come late, is neither kept nor had; one older by more is its clock set back, and kept), cleaned as
   it takes it, and only from a box that's one of its peers; what's kept of a computer you removed
   goes. An item two computers tell of (one handed between them, the first not told again yet) shows
-  once, as the one that changed it last says. The primary's custom categories are those of every box
+  once, as the one that changed it last says; one deleted here that another tells of is that
+  computer's (a hand-off called off after it got there), unless it told of it on its way here. The primary's custom categories are those of every box
   that numbers from it (one reached through a peer: as that peer tells them): added, renamed and
   removed as it tells them (one still in use on a box stays there until it's empty); those only a
-  box has itself stay, after them.
+  box has itself stay, after them (past 30 in all, its unused ones go; never one in use).
 - **Parts**: Work Queue mail too big for one goes as `{workQueue: {part: {whole, i, of, d, s}}}`,
   as a document's parts go ("Peers"): `d` pieces of 40,000 characters of the base64url of the
   whole's JSON (`{told: …}`, `{hand: …}`), `whole` the SHA-256 of all of it (base64url), `s` empty,
@@ -3134,11 +3136,14 @@ item on its way to another computer (`handing`) goes with the move and is sent f
   custom one it's in) to the box `to` lives on now, again each minute until it answers
   `{workQueue: {handed: {id, ok, why?, retry?}}}`, from that box only. Had (`ok`), the item and its
   files go from the sender; refused for good, it's back as it was with a note saying why; `retry`, it
-  goes again; given back at once, with a note, when the box it goes to is no longer one of your
-  computers (removed, or no longer a peer, and `to` isn't on another), and after 30 days otherwise,
-  whether this box is on the relay or not; deleted, it's called off (a copy that got there already
-  is that computer's, and shows as its). The receiver takes each `id` once (remembered 30
-  days, and an item it has already is had), only from one of its peers, into the queue of `to`'s
+  goes again; given back with a note at once when you removed the box it goes to, three days after
+  that box stopped being one of its peers (`handing.missing`: a computer can be missing from the
+  list a while) and `to` isn't on another, and after 30 days otherwise, whether this box is on the
+  relay or not; deleted, it's called off (a copy that got there already is that computer's, shows as
+  its, and the one deleted here isn't brought back beside it). The receiver takes each `id` once
+  (remembered 30
+  days, and an item it has already is had, but one deleted here, which the live one replaces), only
+  from one of its peers, into the queue of `to`'s
   root conversation (a subagent's, its conversation's; a group chat's seat refused), linked to it,
   noted as handed from `from`, in a category it can keep (else Next), with its number as it was (one
   with none takes one there at once); it

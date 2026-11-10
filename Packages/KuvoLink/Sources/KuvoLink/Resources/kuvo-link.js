@@ -13793,19 +13793,28 @@ function readReach(file = PEER_REACH) {
     return {};
   }
 }
-var change2 = (edit) => {
+var change2 = (edit, file = PEER_REACH) => {
   try {
     fs48.mkdirSync(RUN, { recursive: true, mode: 448 });
     locked(LOCK8, () => {
-      const reach = readReach();
+      const reach = readReach(file);
       if (edit(reach))
-        writePrivate(PEER_REACH, JSON.stringify(reach));
+        writePrivate(file, JSON.stringify(reach));
     });
   } catch {}
 };
+var PEER_CHECKED = path51.join(RUN, "peer-reach-checked.json");
+var CHECKED_EVERY = 300000;
 function noteUnreachable(address, now = Date.now()) {
   const peer = peersOf(readLink()).find((each) => each.address === address.toString("base64url"));
-  if (!peer || readReach()[peer.key] !== undefined)
+  if (!peer)
+    return;
+  if (now - (readReach(PEER_CHECKED)[peer.key] ?? 0) > CHECKED_EVERY)
+    change2((checked) => {
+      checked[peer.key] = now;
+      return true;
+    }, PEER_CHECKED);
+  if (readReach()[peer.key] !== undefined)
     return;
   change2((reach) => {
     if (reach[peer.key] !== undefined)
@@ -13815,6 +13824,8 @@ function noteUnreachable(address, now = Date.now()) {
   });
 }
 function noteHeard(key) {
+  if (readReach(PEER_CHECKED)[key] !== undefined)
+    change2((checked) => delete checked[key], PEER_CHECKED);
   if (readReach()[key] === undefined)
     return false;
   let back = false;
@@ -13828,6 +13839,7 @@ function noteHeard(key) {
   return back;
 }
 var awaySince = (key, reach = readReach()) => reach[key] ?? null;
+var lastFoundAway = (key, checked = readReach(PEER_CHECKED)) => checked[key] ?? null;
 
 // Packages/Box/src/link/work/elsewhere.ts
 var ELSEWHERE = path52.join(WORK_FOLDER, "elsewhere");
@@ -14115,7 +14127,7 @@ var KNOWN2 = new Set(["id", "number", "owner", "title", "body", "category", "ord
 var handingOf = (given) => {
   if (!isObject(given) || typeof given.id !== "string" || !/^wqh_[A-Za-z0-9_-]{8,40}$/.test(given.id) || typeof given.to !== "string" || !OWNER.test(given.to) || typeof given.key !== "string" || typeof given.at !== "number")
     return null;
-  return { id: given.id, to: given.to, key: given.key, name: typeof given.name === "string" ? given.name : "", at: given.at, by: whoOf(given.by) ?? { user: true }, ...typeof given.sent === "number" ? { sent: given.sent } : {} };
+  return { id: given.id, to: given.to, key: given.key, name: typeof given.name === "string" ? given.name : "", at: given.at, by: whoOf(given.by) ?? { user: true }, ...typeof given.sent === "number" ? { sent: given.sent } : {}, ...typeof given.missing === "number" ? { missing: given.missing } : {} };
 };
 function itemOf(given, owner) {
   if (!isObject(given) || typeof given.id !== "string" || !ITEM_ID.test(given.id) || typeof given.title !== "string" || typeof given.category !== "string")
@@ -14422,6 +14434,7 @@ function toldItemOf(given) {
     ...typeof given.handedBy === "string" && OWNER.test(given.handedBy) ? { handedBy: given.handedBy } : {},
     ...Array.isArray(given.handedFrom) ? { handedFrom: given.handedFrom.filter((each) => typeof each === "string" && OWNER.test(each)).slice(0, 20) } : {},
     ...source ? { source } : {},
+    ...isObject(given.handing) && typeof given.handing.to === "string" && OWNER.test(given.handing.to) ? { handing: { to: given.handing.to, name: words2(given.handing.name, 100) } } : {},
     created: stamp2(given.created),
     updated: stamp2(given.updated),
     ...typeof given.doneAt === "number" ? { doneAt: time(given.doneAt) } : {}
@@ -14436,7 +14449,7 @@ var ownerOf2 = (given) => {
 };
 function numberingOf(given) {
   const kind = KIND(given.kind) ?? "machine";
-  const primary = isObject(given.primary) && typeof given.primary.key === "string" && KEY.test(given.primary.key) && KIND(given.primary.kind) ? { key: given.primary.key, kind: KIND(given.primary.kind), ...time(given.primary.since) ? { since: time(given.primary.since) } : {}, ...time(given.primary.away) ? { away: time(given.primary.away) } : {} } : undefined;
+  const primary = isObject(given.primary) && typeof given.primary.key === "string" && KEY.test(given.primary.key) && KIND(given.primary.kind) ? { key: given.primary.key, kind: KIND(given.primary.kind), ...time(given.primary.since) ? { since: time(given.primary.since) } : {} } : undefined;
   return { kind, ...time(given.since) ? { since: time(given.since) } : {}, ...whole(given.top) ? { top: whole(given.top) } : {}, ...primary ? { primary } : {} };
 }
 function toldOf2(given, now = Date.now()) {
@@ -14539,7 +14552,9 @@ function primaryOf(link = readLink(), file = NUMBERS_FILE, now = Date.now()) {
   else if (keptKey && !gone.has(keptKey)) {
     current = all.find((each) => each.key === keptKey) ?? null;
     const removed = removedBoxes(link);
-    if (!current && !removed.has(keptKey) && !(kept.through && removed.has(kept.through)) && !(kept.lost !== undefined && now - kept.lost > LOST_FOR))
+    const through = kept.through ? readTold2(kept.through)?.primary : undefined;
+    const movedOn = Boolean(kept.through && through && through.key !== keptKey && peersOf(link).some((peer) => peer.key === kept.through) && !gone.has(kept.through));
+    if (!current && !movedOn && !removed.has(keptKey) && !(kept.through && removed.has(kept.through)) && !(kept.lost !== undefined && now - kept.lost > LOST_FOR))
       current = "away";
   }
   if (current === "away")
@@ -14560,20 +14575,17 @@ function primaryOf(link = readLink(), file = NUMBERS_FILE, now = Date.now()) {
 var LOST_FOR = 3 * 86400000;
 function goneOf(link, now) {
   const gone = new Set;
-  const peers = peersOf(link);
   const reach = readReach();
-  for (const peer of peers) {
+  const checked = readReach(PEER_CHECKED);
+  for (const peer of peersOf(link)) {
     const away = awaySince(peer.key, reach);
-    if (away !== null && now - away > LOST_FOR)
+    const last = lastFoundAway(peer.key, checked);
+    if (away !== null && now - away > LOST_FOR && last !== null && now - last < FOUND_AWAY_WITHIN)
       gone.add(peer.key);
-  }
-  for (const peer of peers) {
-    const named = readTold2(peer.key)?.primary;
-    if (named?.away !== undefined && now - named.away > LOST_FOR && !peers.some((each) => each.key === named.key))
-      gone.add(named.key);
   }
   return gone;
 }
+var FOUND_AWAY_WITHIN = 3600000;
 function keptHeardOf(link, kept, file, now) {
   if (!kept.primary || kept.primary === "self")
     return true;
@@ -15050,7 +15062,10 @@ function takePrimaryCategories(given, used) {
   const ids = new Set(theirs.map((each) => each.id));
   const worked = (kept) => {
     const left = kept.custom.filter((each) => !ids.has(each.id) && (!kept.fromPrimary.includes(each.id) || used(each.id) > 0));
-    const custom = [...theirs, ...left].slice(0, MOST_CUSTOM);
+    const custom = [...theirs, ...left];
+    for (let index = custom.length - 1;index >= theirs.length && custom.length > MOST_CUSTOM; index--)
+      if (!used(custom[index].id))
+        custom.splice(index, 1);
     const fromPrimary = custom.filter((each) => ids.has(each.id) || kept.fromPrimary.includes(each.id)).map((each) => each.id);
     return { custom, fromPrimary };
   };
@@ -20201,22 +20216,53 @@ function handPayload(item) {
   const category = categories().find((each) => each.id === item.category && !each.builtIn);
   return { hand: { id: handing.id, to: handing.to, from: item.owner, by: handing.by, at: handing.at, item: rest, files, ...category ? { categories: [{ id: category.id, name: category.name }] } : {} } };
 }
+var scanned = null;
+var queuesMark = () => {
+  try {
+    return String(fs66.statSync(path72.join(WORK_QUEUE, "queues"), { bigint: true }).mtimeNs);
+  } catch {
+    return "-";
+  }
+};
+function handingNow() {
+  const mark = queuesMark();
+  if (!scanned || scanned.mark !== mark || Date.now() - scanned.at > 60000)
+    scanned = { mark, at: Date.now(), items: allItems().filter((item) => item.handing && !item.removed) };
+  return scanned.items;
+}
 function handUpkeep(link, now = Date.now()) {
   if (!link?.key)
     return [];
-  const handing = allItems().filter((item) => item.handing && !item.removed);
+  const handing = handingNow();
   if (!handing.length)
     return [];
   const peers = peersOf(link);
   const removed = removedBoxes(link);
-  const gone = (item) => !boxOf(item.handing.to, link) && (removed.has(item.handing.key) || !peers.some((peer) => peer.key === item.handing.key));
+  const there = (item) => Boolean(boxOf(item.handing.to, link)) || peers.some((peer) => peer.key === item.handing.key);
   const late = handing.filter((item) => now - item.handing.at > HAND_LIFE);
-  const left = handing.filter((item) => !late.includes(item) && gone(item));
+  const left = handing.filter((item) => !late.includes(item) && !boxOf(item.handing.to, link) && removed.has(item.handing.key));
+  const missing = handing.filter((item) => !late.includes(item) && !left.includes(item) && !there(item));
+  const lost = missing.filter((item) => item.handing.missing !== undefined && now - item.handing.missing > LOST_FOR);
+  const noted = new Map([...missing.filter((item) => item.handing.missing === undefined).map((item) => [item.handing.id, now]), ...handing.filter((item) => there(item) && item.handing.missing !== undefined).map((item) => [item.handing.id, undefined])]);
+  if (noted.size)
+    changeQueues((book) => {
+      for (const item of book.items()) {
+        if (!item.handing || !noted.has(item.handing.id))
+          continue;
+        const since = noted.get(item.handing.id);
+        if (since === undefined)
+          delete item.handing.missing;
+        else
+          item.handing.missing = since;
+      }
+    }, now, { onItsOwn: true });
   if (late.length)
     giveBack(late.map((item) => item.handing.id), "it couldn't be reached for 30 days", now);
   if (left.length)
-    giveBack(left.map((item) => item.handing.id), "that computer isn't one of yours any more", now);
-  return handing.filter((item) => !late.includes(item) && !left.includes(item));
+    giveBack(left.map((item) => item.handing.id), "you removed that computer", now);
+  if (lost.length)
+    giveBack(lost.map((item) => item.handing.id), "that computer hasn't been one of yours for 3 days", now);
+  return handing.filter((item) => !late.includes(item) && !left.includes(item) && !missing.includes(item));
 }
 var lookedAfter = 0;
 function handUpkeepSoon(link, now = Date.now()) {
@@ -20256,6 +20302,11 @@ function callOffHanding(item, who, now) {
   delete item.handing;
   item.notes.push({ at: now, by: who, text: `Its hand-off to ${name || to} on another computer was called off.` });
   sent.delete(id);
+}
+function refuseLiveElsewhere(item) {
+  const far = itemElsewhere({ id: item.id });
+  if (far && !far.handing)
+    refuse2(`${nameOf3(item)} is on ${far.computer.name} now (it got there before its hand-off was called off): change it there.`);
 }
 function giveBack(ids, why, now) {
   const gone = new Set(ids);
@@ -20357,10 +20408,14 @@ async function handArrived(sender, given, reply, places, now = Date.now()) {
   let again = false;
   const primary = primaryOf();
   changeQueues((book) => {
-    const here = book.find({ id: item.id });
+    let here = book.find({ id: item.id });
     if (here?.handing) {
       again = true;
       return;
+    }
+    if (here?.removed) {
+      book.queue(here.owner).items = book.queue(here.owner).items.filter((each) => each.id !== here.id);
+      here = null;
     }
     if (here)
       return;
@@ -20410,10 +20465,8 @@ function numberingNow(link) {
   if ("self" in primary)
     named = own ? { key: own, kind, since } : undefined;
   else if ("peer" in primary) {
-    const through = primary.via ? readTold2(primary.via.key)?.primary : undefined;
-    const since = primary.via ? through?.since : readTold2(primary.peer.key)?.since;
-    const away = primary.via ? through?.away : awaySince(primary.peer.key) ?? undefined;
-    named = { key: primary.peer.key, kind: primary.peer.kind, ...since ? { since } : {}, ...away ? { away } : {} };
+    const told = primary.via ? readTold2(primary.via.key)?.primary?.since : readTold2(primary.peer.key)?.since;
+    named = { key: primary.peer.key, kind: primary.peer.kind, ...told ? { since: told } : {} };
   }
   return { kind, since, top: topOf(), ...named ? { primary: named } : {} };
 }
@@ -20541,7 +20594,15 @@ function takeTold(sender, given, reply) {
   if ("self" in primary)
     movePast(Math.max(told.top ?? 0, ...told.items.map((item) => item.number ?? 0)));
   else if ("peer" in primary && (primary.via ? primary.via.key === sender.key && told.primary?.key === primary.peer.key : primary.peer.key === sender.key)) {
-    takePrimaryCategories(told.categories, (id) => allItems().filter((item) => item.category === id).length);
+    let counts = null;
+    takePrimaryCategories(told.categories, (id) => {
+      if (!counts) {
+        counts = new Map;
+        for (const item of allItems())
+          counts.set(item.category, (counts.get(item.category) ?? 0) + 1);
+      }
+      return counts.get(id) ?? 0;
+    });
   }
   for (const tell of queueFollowers2)
     tell();
@@ -20576,7 +20637,12 @@ async function takeWorkQueueMail(sender, given, host, places) {
   if (isObject(whole.hand))
     await handArrived(sender, whole.hand, reply, places).catch(() => {});
 }
-function itemsElsewhere(owner, link = readLink(), here = new Set(allItems().filter((item) => !item.removed).map((item) => item.id))) {
+function itemsElsewhere(owner, link = readLink(), here, deleted) {
+  if (!here || !deleted) {
+    const all = allItems();
+    here ??= new Set(all.filter((item) => !item.removed).map((item) => item.id));
+    deleted ??= new Set(all.filter((item) => item.removed).map((item) => item.id));
+  }
   const overseen = owner === "all" ? null : new Set(rowsOf2(owner).flatMap((each) => each.rows.map((row) => row.session)));
   const owners = new Map;
   const custom = new Map;
@@ -20589,7 +20655,7 @@ function itemsElsewhere(owner, link = readLink(), here = new Set(allItems().filt
     const computer = { key: peer.key, name: computerName(peer), kind: peer.kind, ...peer.id ? { id: peer.id } : {} };
     computers.push({ ...computer, at: told.at });
     for (const item of told.items) {
-      if (here.has(item.id))
+      if (here.has(item.id) || deleted.has(item.id) && item.handing)
         continue;
       const other = best.get(item.id);
       if (!other || newer(item, told.at, other.item, other.at))
@@ -22041,11 +22107,6 @@ function placeWorkQueues(carried, owners, opened) {
       item.category = "next";
   changeQueues((book) => {
     for (const item of items) {
-      try {
-        book.queue(item.owner);
-      } catch {
-        continue;
-      }
       const before = book.find({ id: item.id });
       if (before)
         book.queue(before.owner).items = book.queue(before.owner).items.filter((each) => each.id !== item.id);
@@ -32374,6 +32435,7 @@ async function run3(name, args, caller, targets, signal) {
             throw new Refusal(`${nameOf3(item)} isn't deleted.`);
           if (byUser(item.removed.by))
             throw new Refusal(deletedWords(item));
+          refuseLiveElsewhere(item);
           restoreItem(book, item, caller.who, now);
         } else {
           if (item.removed)
@@ -32583,7 +32645,7 @@ async function viewOf(owner, targets, facts, signal, cache) {
   const here = allItems();
   const all = here.filter((item) => owner === ALL || inView(owner, item, overseen));
   const { owners, titles } = await ownersOf(owner, all, known, targets, cache);
-  const elsewhere = itemsElsewhere(owner, readLink(), new Set(here.filter((item) => !item.removed).map((item) => item.id)));
+  const elsewhere = itemsElsewhere(owner, readLink(), new Set(here.filter((item) => !item.removed).map((item) => item.id)), new Set(here.filter((item) => item.removed).map((item) => item.id)));
   const named = new Set(owners.map((each) => each.owner));
   const own = categories();
   const others = elsewhere.categories.filter((each) => !own.some((mine) => mine.id === each.id)).map((each) => ({ ...each, builtIn: false }));
@@ -32768,6 +32830,7 @@ async function* workQueueRoute(context, match) {
     return yield* changed2(inBook((item, book) => {
       if (!item.removed)
         throw new Refusal("It isn't deleted.");
+      refuseLiveElsewhere(item);
       restoreItem(book, item, YOU, now);
     }), json);
   }

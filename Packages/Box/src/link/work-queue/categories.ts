@@ -149,7 +149,9 @@ export function takePrimaryCategories(given: { id: string; name: string }[], use
   const ids = new Set(theirs.map(each => each.id));
   const worked = (kept: { custom: Category[]; fromPrimary: string[] }) => {
     const left = kept.custom.filter(each => !ids.has(each.id) && (!kept.fromPrimary.includes(each.id) || used(each.id) > 0));
-    const custom = [...theirs, ...left].slice(0, MOST_CUSTOM);
+    // (Past the most there may be, this box's own unused ones go, the last first; never one in use.)
+    const custom = [...theirs, ...left];
+    for (let index = custom.length - 1; index >= theirs.length && custom.length > MOST_CUSTOM; index--) if (!used(custom[index].id)) custom.splice(index, 1);
     // (One it removed that's still in use here stays the primary's, to go once it's empty.)
     const fromPrimary = custom.filter(each => ids.has(each.id) || kept.fromPrimary.includes(each.id)).map(each => each.id);
     return { custom, fromPrimary };

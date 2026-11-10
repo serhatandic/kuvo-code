@@ -26,8 +26,9 @@ import {
   type Book, type Item, type Who,
 } from "./store";
 import { mailsFor } from "./parts";
-import { numberWaiting, primaryOf } from "./numbers";
+import { LOST_FOR, numberWaiting, primaryOf } from "./numbers";
 import { nameOf } from "./view";
+import { itemElsewhere } from "./across";
 import type { PeerPlaces } from "../engine/client";
 import type { MailSender, Peer } from "../peers/known";
 import type { LinkHost } from "../relay/host";
@@ -77,21 +78,48 @@ function handPayload(item: Item): Record<string, unknown> {
   return { hand: { id: handing!.id, to: handing!.to, from: item.owner, by: handing!.by, at: handing!.at, item: rest, files, ...(category ? { categories: [{ id: category.id, name: category.name }] } : {}) } };
 }
 
-/** Hand-offs that can't go on, given back, each with a note of why: one to a computer you removed,
- * or that's no longer one of yours (and its conversation isn't on another), at once; any other
- * after 30 days. On every round, with the relay or without. What's on its way still. */
+// The items on their way to another computer, as last read: read again when the queues change, and
+// each minute, so a round doesn't read every queue every few seconds.
+let scanned: { mark: string; at: number; items: Item[] } | null = null;
+const queuesMark = (): string => {
+  try { return String(fs.statSync(path.join(WORK_QUEUE, "queues"), { bigint: true }).mtimeNs); } catch { return "-"; }
+};
+function handingNow(): Item[] {
+  const mark = queuesMark();
+  if (!scanned || scanned.mark !== mark || Date.now() - scanned.at > 60_000) scanned = { mark, at: Date.now(), items: allItems().filter(item => item.handing && !item.removed) };
+  return scanned.items;
+}
+
+/** Hand-offs that can't go on, given back, each with a note of why: one to a computer you removed
+ * at once; one to a computer that's no longer one of yours (and its conversation isn't on another)
+ * once it's been so three days (a computer can be missing from the list a while: one that couldn't
+ * be set up just now); any other after 30 days. On every round, with the relay or without. What's
+ * on its way still. */
 export function handUpkeep(link: LinkState | null, now = Date.now()): Item[] {
   if (!link?.key) return [];
-  const handing = allItems().filter(item => item.handing && !item.removed);
+  const handing = handingNow();
   if (!handing.length) return [];
   const peers = peersOf(link);
   const removed = removedBoxes(link);
-  const gone = (item: Item) => !boxOf(item.handing!.to, link) && (removed.has(item.handing!.key) || !peers.some(peer => peer.key === item.handing!.key));
+  const there = (item: Item) => Boolean(boxOf(item.handing!.to, link)) || peers.some(peer => peer.key === item.handing!.key);
   const late = handing.filter(item => now - item.handing!.at > HAND_LIFE);
-  const left = handing.filter(item => !late.includes(item) && gone(item));
+  const left = handing.filter(item => !late.includes(item) && !boxOf(item.handing!.to, link) && removed.has(item.handing!.key));
+  const missing = handing.filter(item => !late.includes(item) && !left.includes(item) && !there(item));
+  const lost = missing.filter(item => item.handing!.missing !== undefined && now - item.handing!.missing > LOST_FOR);
+  // Since when each is missing, kept with it; one back again, no longer.
+  const noted = new Map([...missing.filter(item => item.handing!.missing === undefined).map(item => [item.handing!.id, now] as const), ...handing.filter(item => there(item) && item.handing!.missing !== undefined).map(item => [item.handing!.id, undefined] as const)]);
+  if (noted.size) changeQueues(book => {
+    for (const item of book.items()) {
+      if (!item.handing || !noted.has(item.handing.id)) continue;
+      const since = noted.get(item.handing.id);
+      if (since === undefined) delete item.handing.missing;
+      else item.handing.missing = since;
+    }
+  }, now, { onItsOwn: true });
   if (late.length) giveBack(late.map(item => item.handing!.id), "it couldn't be reached for 30 days", now);
-  if (left.length) giveBack(left.map(item => item.handing!.id), "that computer isn't one of yours any more", now);
-  return handing.filter(item => !late.includes(item) && !left.includes(item));
+  if (left.length) giveBack(left.map(item => item.handing!.id), "you removed that computer", now);
+  if (lost.length) giveBack(lost.map(item => item.handing!.id), "that computer hasn't been one of yours for 3 days", now);
+  return handing.filter(item => !late.includes(item) && !left.includes(item) && !missing.includes(item));
 }
 
 // When the hand-offs were last looked after on a round without the relay: once a minute.
@@ -138,6 +166,13 @@ export function callOffHanding(item: Item, who: Who, now: number): void {
   delete item.handing;
   item.notes.push({ at: now, by: who, text: `Its hand-off to ${name || to} on another computer was called off.` });
   sent.delete(id);
+}
+
+/** A deleted item isn't brought back while another of your computers has it (a hand-off called off
+ * after it had got there): two would live. */
+export function refuseLiveElsewhere(item: Item): void {
+  const far = itemElsewhere({ id: item.id });
+  if (far && !far.handing) refuse(`${nameOf(item)} is on ${far.computer.name} now (it got there before its hand-off was called off): change it there.`);
 }
 
 /** Hand-offs that won't go, back as they were, each with a note of why. */
@@ -230,12 +265,18 @@ export async function handArrived(sender: MailSender, given: unknown, reply: (pa
   let again = false;
   const primary = primaryOf();
   changeQueues((book: Book) => {
-    const here = book.find({ id: item.id });
+    let here = book.find({ id: item.id });
     // One handed from here that hasn't heard it arrived yet (its receipt lost) and comes back: it
     // waits until that's settled, so it's never lost between the two.
     if (here?.handing) {
       again = true;
       return;
+    }
+    // One deleted here, its hand-off called off after it had got there: what comes back is the live
+    // one, in its place.
+    if (here?.removed) {
+      book.queue(here.owner).items = book.queue(here.owner).items.filter(each => each.id !== here!.id);
+      here = null;
     }
     if (here) return;
     if (book.queue(owner).items.filter(each => !each.removed && each.category !== "done").length >= MOST_ITEMS) {

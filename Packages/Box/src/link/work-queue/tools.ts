@@ -16,7 +16,7 @@ import { numberWaiting, primaryOf } from "./numbers";
 import { addItem, applyFileOps, changeItem, handItem, linkSession, Refusal, refuseHanding, refuseMoving, removeItem, restoreItem, stageFiles, type Acting, type Fields, type FilePlaces } from "./ops";
 import { allItems, byUser, changeQueues, matching, whoWords, type Book, type Item, type Who } from "./store";
 import { computerName, itemElsewhere, itemsElsewhere, takesQueues, type ItemElsewhere } from "./across";
-import { callOffHanding, elsewhereOf, handElsewhere } from "./hand";
+import { callOffHanding, elsewhereOf, handElsewhere, refuseLiveElsewhere } from "./hand";
 import { readPeerAgents } from "../peers/directory";
 import { awaySince } from "../peers/reach";
 import type { Peer } from "../peers/known";
@@ -298,6 +298,7 @@ async function run(name: string, args: Record<string, unknown>, caller: QueueCal
           refuseHanding(item);
           if (!item.removed) throw new Refusal(`${nameOf(item)} isn't deleted.`);
           if (byUser(item.removed.by)) throw new Refusal(deletedWords(item));
+          refuseLiveElsewhere(item);
           restoreItem(book, item, caller.who, now);
         } else {
           if (item.removed) throw new Refusal(`${nameOf(item)} is deleted already.`);

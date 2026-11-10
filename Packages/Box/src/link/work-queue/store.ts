@@ -66,7 +66,7 @@ export interface Handed { from: string; to: string; at: number }
 export interface Source { kind: string; ref: string; url?: string; host?: string; id?: string }
 /** An item on its way to a conversation on another computer (`hand.ts`): it stays here, unchanged,
  * until that computer has it. */
-export interface Handing { id: string; to: string; key: string; name: string; at: number; by: Who; sent?: number }
+export interface Handing { id: string; to: string; key: string; name: string; at: number; by: Who; sent?: number; missing?: number }
 
 /** One item, as it's kept. */
 export interface Item {
@@ -130,7 +130,7 @@ const KNOWN = new Set(["id", "number", "owner", "title", "body", "category", "or
 const handingOf = (given: unknown): Handing | null => {
   if (!isObject(given) || typeof given.id !== "string" || !/^wqh_[A-Za-z0-9_-]{8,40}$/.test(given.id) || typeof given.to !== "string" || !OWNER.test(given.to)
     || typeof given.key !== "string" || typeof given.at !== "number") return null;
-  return { id: given.id, to: given.to, key: given.key, name: typeof given.name === "string" ? given.name : "", at: given.at, by: whoOf(given.by) ?? { user: true }, ...(typeof given.sent === "number" ? { sent: given.sent } : {}) };
+  return { id: given.id, to: given.to, key: given.key, name: typeof given.name === "string" ? given.name : "", at: given.at, by: whoOf(given.by) ?? { user: true }, ...(typeof given.sent === "number" ? { sent: given.sent } : {}), ...(typeof given.missing === "number" ? { missing: given.missing } : {}) };
 };
 
 /** An item as it was read (or as a move brought it), checked: null for one that isn't. Fields this

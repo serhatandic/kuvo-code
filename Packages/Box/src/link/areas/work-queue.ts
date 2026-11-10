@@ -15,7 +15,7 @@ import { importItems, importWords, parseBacklog, readBacklogFiles } from "../wor
 import { numberWaiting, primaryOf } from "../work-queue/numbers";
 import { itemElsewhere, itemsElsewhere, tellQueuesAgain } from "../work-queue/across";
 import { changeItem, Refusal, refuseHanding, refuseMoving, removeItem, restoreItem } from "../work-queue/ops";
-import { callOffHanding } from "../work-queue/hand";
+import { callOffHanding, refuseLiveElsewhere } from "../work-queue/hand";
 import { TOLD } from "../work-queue/told";
 import { readLink } from "../state";
 import { allItems, changeQueues, FILE_NAME, filesOf, matching, OWNER, queueFollowers, readAll, WORK_QUEUE, type Item } from "../work-queue/store";
@@ -54,7 +54,7 @@ export async function viewOf(owner: string, targets: Target[], facts?: Facts, si
   const { owners, titles } = await ownersOf(owner, all, known, targets, cache);
   // Your other computers' items in this view, as each last told them (one deleted here that's live
   // there, a hand-off called off that had got there, is theirs).
-  const elsewhere = itemsElsewhere(owner, readLink(), new Set(here.filter(item => !item.removed).map(item => item.id)));
+  const elsewhere = itemsElsewhere(owner, readLink(), new Set(here.filter(item => !item.removed).map(item => item.id)), new Set(here.filter(item => item.removed).map(item => item.id)));
   const named = new Set(owners.map(each => each.owner));
   // The categories: this box's, then custom ones only another computer has, before Parked.
   const own = categories();
@@ -245,6 +245,7 @@ export async function* workQueueRoute(context: RouteContext, match: RegExpMatchA
   if (action === "restore" && method === "POST") {
     return yield* changed(inBook((item, book) => {
       if (!item.removed) throw new Refusal("It isn't deleted.");
+      refuseLiveElsewhere(item);
       restoreItem(book, item, YOU, now);
     }), json);
   }

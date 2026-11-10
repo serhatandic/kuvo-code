@@ -21,8 +21,7 @@ export interface Numbering {
   kind: "mac" | "machine";
   since?: number;
   top?: number;
-  /** `away`: since when it hasn't answered the box that tells (its clock), when it doesn't. */
-  primary?: { key: string; kind: "mac" | "machine"; since?: number; away?: number };
+  primary?: { key: string; kind: "mac" | "machine"; since?: number };
 }
 
 /** An item as another computer tells it: its summary, and who handed it on. */
@@ -87,6 +86,7 @@ export function toldItemOf(given: unknown): ToldItem | null {
     ...(typeof given.handedBy === "string" && OWNER.test(given.handedBy) ? { handedBy: given.handedBy } : {}),
     ...(Array.isArray(given.handedFrom) ? { handedFrom: given.handedFrom.filter((each): each is string => typeof each === "string" && OWNER.test(each)).slice(0, 20) } : {}),
     ...(source ? { source } : {}),
+    ...(isObject(given.handing) && typeof given.handing.to === "string" && OWNER.test(given.handing.to) ? { handing: { to: given.handing.to, name: words(given.handing.name, 100) } } : {}),
     created: stamp(given.created),
     updated: stamp(given.updated),
     ...(typeof given.doneAt === "number" ? { doneAt: time(given.doneAt) } : {}),
@@ -104,7 +104,7 @@ const ownerOf = (given: unknown): OwnerFacts | null => {
 export function numberingOf(given: Record<string, unknown>): Numbering {
   const kind = KIND(given.kind) ?? "machine";
   const primary = isObject(given.primary) && typeof given.primary.key === "string" && KEY.test(given.primary.key) && KIND(given.primary.kind)
-    ? { key: given.primary.key, kind: KIND(given.primary.kind)!, ...(time(given.primary.since) ? { since: time(given.primary.since) } : {}), ...(time(given.primary.away) ? { away: time(given.primary.away) } : {}) } : undefined;
+    ? { key: given.primary.key, kind: KIND(given.primary.kind)!, ...(time(given.primary.since) ? { since: time(given.primary.since) } : {}) } : undefined;
   return { kind, ...(time(given.since) ? { since: time(given.since) } : {}), ...(whole(given.top) ? { top: whole(given.top) } : {}), ...(primary ? { primary } : {}) };
 }
 

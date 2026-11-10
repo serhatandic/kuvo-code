@@ -57,12 +57,8 @@ export function numberingNow(link: LinkState | null): Numbering {
   let named: Numbering["primary"];
   if ("self" in primary) named = own ? { key: own, kind, since } : undefined;
   else if ("peer" in primary) {
-    // (With since when it hasn't answered, where it doesn't: a box that reaches it through this
-    // one counts it gone after a while, as this one does.)
-    const through = primary.via ? readTold(primary.via.key)?.primary : undefined;
-    const since = primary.via ? through?.since : readTold(primary.peer.key)?.since;
-    const away = primary.via ? through?.away : awaySince(primary.peer.key) ?? undefined;
-    named = { key: primary.peer.key, kind: primary.peer.kind, ...(since ? { since } : {}), ...(away ? { away } : {}) };
+    const told = primary.via ? readTold(primary.via.key)?.primary?.since : readTold(primary.peer.key)?.since;
+    named = { key: primary.peer.key, kind: primary.peer.kind, ...(told ? { since: told } : {}) };
   }
   return { kind, since, top: topOf(), ...(named ? { primary: named } : {}) };
 }
@@ -203,7 +199,15 @@ function takeTold(sender: MailSender, given: unknown, reply: (payload: Record<st
   const primary = primaryOf(link);
   if ("self" in primary) movePast(Math.max(told.top ?? 0, ...told.items.map(item => item.number ?? 0)));
   else if ("peer" in primary && (primary.via ? primary.via.key === sender.key && told.primary?.key === primary.peer.key : primary.peer.key === sender.key)) {
-    takePrimaryCategories(told.categories, id => allItems().filter(item => item.category === id).length);
+    // (Read only when a category it no longer has is one this box might keep.)
+    let counts: Map<string, number> | null = null;
+    takePrimaryCategories(told.categories, id => {
+      if (!counts) {
+        counts = new Map();
+        for (const item of allItems()) counts.set(item.category, (counts.get(item.category) ?? 0) + 1);
+      }
+      return counts.get(id) ?? 0;
+    });
   }
   for (const tell of queueFollowers) tell();
 }
@@ -240,13 +244,19 @@ export type ItemElsewhere = ToldItem & { computer: Computer };
 /** Your other computers' items that `owner`'s view has (`all`: every one), as each last told them:
  * those of the sessions it oversees there (their rows, "Work"), those it handed on, its own; with
  * the owners they name, their custom categories, and when each computer told them. Items this box
- * has itself (one on its way here, say) are left to it. */
-export function itemsElsewhere(owner: string, link: LinkState | null = readLink(), here: Set<string> = new Set(allItems().filter(item => !item.removed).map(item => item.id))): {
+ * has itself (`here`: one on its way here, say) are left to it; one deleted here (`deleted`) is
+ * theirs, unless they told of it on its way here. */
+export function itemsElsewhere(owner: string, link: LinkState | null = readLink(), here?: Set<string>, deleted?: Set<string>): {
   items: ItemElsewhere[];
   owners: OwnerFacts[];
   categories: { id: string; name: string }[];
   computers: (Computer & { at: number })[];
 } {
+  if (!here || !deleted) {
+    const all = allItems();
+    here ??= new Set(all.filter(item => !item.removed).map(item => item.id));
+    deleted ??= new Set(all.filter(item => item.removed).map(item => item.id));
+  }
   const overseen = owner === "all" ? null : new Set(rowsOf(owner).flatMap(each => each.rows.map(row => row.session)));
   const owners = new Map<string, OwnerFacts>();
   const custom = new Map<string, string>();
@@ -260,7 +270,8 @@ export function itemsElsewhere(owner: string, link: LinkState | null = readLink(
     const computer: Computer = { key: peer.key, name: computerName(peer), kind: peer.kind, ...(peer.id ? { id: peer.id } : {}) };
     computers.push({ ...computer, at: told.at });
     for (const item of told.items) {
-      if (here.has(item.id)) continue;
+      // (Not one here; nor one deleted here that this one told of on its way here: it got here.)
+      if (here.has(item.id) || (deleted.has(item.id) && item.handing)) continue;
       const other = best.get(item.id);
       if (!other || newer(item, told.at, other.item, other.at)) best.set(item.id, { item: { ...item, computer }, at: told.at });
     }

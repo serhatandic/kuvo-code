@@ -59,8 +59,8 @@ export function placeWorkQueues(carried: unknown, owners: readonly string[], ope
   for (const item of items) if (!categoryNamed(item.category)) item.category = "next";
   changeQueues(book => {
     for (const item of items) {
-      // (Not into a queue of a kind a newer box keeps here that this one can't read whole.)
-      try { book.queue(item.owner); } catch { continue; }
+      // (Into a queue of a kind a newer box keeps here that this one can't read whole: refused, so
+      // the move fails and the box it comes from keeps it.)
       const before = book.find({ id: item.id });
       if (before) book.queue(before.owner).items = book.queue(before.owner).items.filter(each => each.id !== item.id);
       book.queue(item.owner).items.push(item);
