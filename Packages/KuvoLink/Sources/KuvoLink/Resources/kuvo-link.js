@@ -3552,8 +3552,7 @@ async function allowedFor(project) {
   return all.filter((rule) => rule.project === real);
 }
 var BOT_ID = /^bot_[A-Za-z0-9]+$/;
-async function ownerOf(project) {
-  await askedAbout([project]);
+function ownerOf(project) {
   const real = realProject(project);
   if (real === realish(CHATS))
     return { kind: "chats", name: "Chats" };
@@ -3564,15 +3563,14 @@ async function ownerOf(project) {
   return { kind: "project", name: path14.basename(real) || real };
 }
 async function listed(rules) {
+  await askedAbout(rules.map((rule) => rule.project));
   const owners = new Map;
-  const all = [];
-  for (const rule of rules) {
+  return rules.map((rule) => {
     let known = owners.get(rule.project);
     if (!known)
-      owners.set(rule.project, known = { owner: await ownerOf(rule.project), gone: !fs15.existsSync(rule.project) });
-    all.push({ ...rule, owner: known.owner, ...known.gone ? { gone: true } : {} });
-  }
-  return all;
+      owners.set(rule.project, known = { owner: ownerOf(rule.project), gone: !fs15.existsSync(rule.project) });
+    return { ...rule, owner: known.owner, ...known.gone ? { gone: true } : {} };
+  });
 }
 function addableOwners() {
   const bots = [];
@@ -28568,10 +28566,13 @@ async function stopsFor(session, command, minutes = 3, signal) {
   }
   return stops.slice(-MOST_STOPS);
 }
-async function alwaysFor(stops, project) {
+function alwaysFor(stops, project) {
   const writes = [...new Set(stops.filter((stop) => stop.kind === "write" && stop.path).map((stop) => stop.path))];
   if (writes.length !== 1 || !stops.every((stop) => stop.kind === "write"))
     return;
+  return alwaysForWrite(writes, project);
+}
+async function alwaysForWrite(writes, project) {
   await askedAbout([project, writes[0], path99.dirname(writes[0])]);
   const real = (where) => {
     try {
@@ -28623,7 +28624,8 @@ async function askToRun(caller, args, signal) {
     return failed("Say why the task needs it.");
   if (command.length > 8000)
     return failed("That command is too long to ask about: put it in a script in your project and ask to run that.");
-  await askedAbout([caller.folder]);
+  if (caller.folder && macMayAsk(caller.folder))
+    await askedAbout([caller.folder]);
   const project = caller.folder && fs94.existsSync(caller.folder) ? caller.folder : null;
   if (!project)
     return failed("This conversation's folder isn't there, so nothing can run for it.");
@@ -28637,7 +28639,8 @@ async function askToRun(caller, args, signal) {
     return { text: refusalWords(verdict), isError: false };
   const asks = !full && verdict?.decision !== "allow";
   const stopped = asks && caller.session ? await stopsFor(caller.session, String(args.command)) : [];
-  let always = await alwaysFor(stopped, project);
+  const alwaysNow = alwaysFor(stopped, project);
+  let always = alwaysNow && await alwaysNow;
   let asking;
   const heard = new AbortController;
   if (asks && !stopped.length && caller.session && process.platform === "darwin")
@@ -28665,7 +28668,7 @@ async function askToRun(caller, args, signal) {
     ...error ? { error } : {},
     ...always ? { always } : {},
     ...IS_MAC ? {} : { machine: os9.hostname() },
-    owner: await ownerOf(project)
+    owner: ownerOf(project)
   }, signal, undefined, (id) => {
     asking = id;
   }).finally(() => heard.abort());

@@ -25,7 +25,7 @@ import { markedFullAccess } from "../work/full";
 import { findConversation, heldUnreached, inAuto, inFullAccess, refusalWords, reviewIn } from "../work/reviewing";
 import { forgetFetched } from "../work/reviewer";
 import { addRule, ownerOf, writeRuleWouldBe } from "./allowed";
-import { askedAbout, fencePolicy, type FencePolicy } from "./policy";
+import { askedAbout, fencePolicy, macMayAsk, type FencePolicy } from "./policy";
 
 /** Your answer, and who gave it: "Mac", or a phone's name. */
 export interface SandboxAnswer {
@@ -121,9 +121,14 @@ export async function stopsFor(session: string, command: string, minutes = 3, si
  * itself; when the log says so and it may be given. Else nothing, and it can only be allowed once:
  * also for what's in its own project, which its commands write already but for what's kept from
  * them there (the settings agents start with), which no rule gives. */
-async function alwaysFor(stops: SandboxStop[], project: string): Promise<SandboxAsk["always"]> {
+function alwaysFor(stops: SandboxStop[], project: string): Promise<SandboxAsk["always"]> | undefined {
   const writes = [...new Set(stops.filter(stop => stop.kind === "write" && stop.path).map(stop => stop.path!))];
+  // (None at once, so an ask with none goes up without waiting a turn.)
   if (writes.length !== 1 || !stops.every(stop => stop.kind === "write")) return undefined;
+  return alwaysForWrite(writes, project);
+}
+
+async function alwaysForWrite(writes: string[], project: string): Promise<SandboxAsk["always"]> {
   await askedAbout([project, writes[0], path.dirname(writes[0])]);
   const real = (where: string) => { try { return fs.realpathSync(where); } catch { return path.resolve(where); } };
   const own = real(project);
@@ -165,7 +170,7 @@ async function askToRun(caller: Caller, args: Record<string, unknown>, signal?: 
   if (!command) return failed("Give the command, exactly as you ran it.");
   if (!why) return failed("Say why the task needs it.");
   if (command.length > 8000) return failed("That command is too long to ask about: put it in a script in your project and ask to run that.");
-  await askedAbout([caller.folder]);
+  if (caller.folder && macMayAsk(caller.folder)) await askedAbout([caller.folder]);
   const project = caller.folder && fs.existsSync(caller.folder) ? caller.folder : null;
   if (!project) return failed("This conversation's folder isn't there, so nothing can run for it.");
 
@@ -188,7 +193,8 @@ async function askToRun(caller: Caller, args: Record<string, unknown>, signal?: 
   const asks = !full && verdict?.decision !== "allow";
   // (By the command as it ran, whitespace and all.)
   const stopped = asks && caller.session ? await stopsFor(caller.session, String(args.command)) : [];
-  let always = await alwaysFor(stopped, project);
+  const alwaysNow = alwaysFor(stopped, project);
+  let always = alwaysNow && await alwaysNow;
   // macOS writes what its sandbox refused to its log a while after (a busy Mac, seconds): until
   // it's there, the ask goes up without it, and gets it once it is.
   let asking: string | undefined;
@@ -214,7 +220,7 @@ async function askToRun(caller: Caller, args: Record<string, unknown>, signal?: 
     ...(error ? { error } : {}),
     ...(always ? { always } : {}),
     ...(IS_MAC ? {} : { machine: os.hostname() }),
-    owner: await ownerOf(project),
+    owner: ownerOf(project),
   }, signal, undefined, id => { asking = id; }).finally(() => heard.abort());
   // (A script from the web, fetched once for the review: that copy is what runs, then it's gone.)
   const fetched = verdict?.fetched;

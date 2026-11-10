@@ -72,9 +72,8 @@ export async function allowedFor(project?: string): Promise<SandboxRule[]> {
 const BOT_ID = /^bot_[A-Za-z0-9]+$/;
 
 /** Whose a conversation's folder is: the chats', a bot's own (its folder's workspace, by the name
- * it has now) or else a project's, by its folder's name. */
-export async function ownerOf(project: string): Promise<SandboxOwner> {
-  await askedAbout([project]);
+ * it has now) or else a project's, by its folder's name. (macOS asked about it first: `askedAbout`.) */
+export function ownerOf(project: string): SandboxOwner {
   const real = realProject(project);
   if (real === realish(CHATS)) return { kind: "chats", name: "Chats" };
   const [id, workspace, ...more] = path.relative(realish(BOTS), real).split(path.sep);
@@ -86,14 +85,13 @@ export async function ownerOf(project: string): Promise<SandboxOwner> {
 
 /** The rules as a client lists them: each with whose it is, and whether its folder is gone. */
 export async function listed(rules: SandboxRule[]): Promise<SandboxRule[]> {
+  await askedAbout(rules.map(rule => rule.project));
   const owners = new Map<string, { owner: SandboxOwner; gone: boolean }>();
-  const all: SandboxRule[] = [];
-  for (const rule of rules) {
+  return rules.map(rule => {
     let known = owners.get(rule.project);
-    if (!known) owners.set(rule.project, known = { owner: await ownerOf(rule.project), gone: !fs.existsSync(rule.project) });
-    all.push({ ...rule, owner: known.owner, ...(known.gone ? { gone: true } : {}) });
-  }
-  return all;
+    if (!known) owners.set(rule.project, known = { owner: ownerOf(rule.project), gone: !fs.existsSync(rule.project) });
+    return { ...rule, owner: known.owner, ...(known.gone ? { gone: true } : {}) };
+  });
 }
 
 /** Those a client may add a folder for besides its projects: each bot here working in its own
