@@ -281,7 +281,7 @@ import Testing
         defer { done() }
         app.workspace.handle(try engine.event("form.replied", session: "ses_pixel", ["id": "frm_concept", "sessionID": "ses_pixel"]))
         app.workspace.handle(try engine.event("shell.created", session: "ses_pixel", ["info": [
-            "id": "sh_408", "sessionID": "ses_pixel", "status": "running", "command": "swift build",
+            "id": "sh_408", "metadata": ["sessionID": "ses_pixel"], "status": "running", "command": "swift build",
             "time": ["started": 1700000000000]
         ]] as [String: Any]))
         show(NSSize(width: 820, height: 1000))
