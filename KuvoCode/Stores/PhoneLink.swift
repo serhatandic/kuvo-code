@@ -56,8 +56,6 @@ final class PhoneLink {
     @ObservationIgnored var agents: OutsideAgents?
     /// Starts this Mac's engine over, as Settings › Engine's Restart does; set by AppModel.
     @ObservationIgnored var restartEngine: () -> Void = {}
-    /// When the engine running now came up, for `kuvo/info`; set by AppModel.
-    @ObservationIgnored var engineStarted: () -> Date? = { nil }
 
     struct MachineHost: Codable, Hashable {
         var name: String
@@ -149,6 +147,10 @@ final class PhoneLink {
 
     /// The Keychain wouldn't give out this Mac's key or secret this launch.
     private static var unreadable = false
+    /// Only because it was locked then (the keeper starting this Mac's box at login, before your
+    /// Keychain was unlocked): read again a minute later, rather than not until the next launch.
+    private static var wasLocked = false
+    @ObservationIgnored private var readAgainAt: Date?
 
     /// This Mac's own key and secret, as your phones and machines know them (not a stand-in).
     private var hasIdentity: Bool {
@@ -174,6 +176,8 @@ final class PhoneLink {
             if let data = try keychain(account), let value = read(data) { return value }
         } catch {
             Logger(subsystem: "run.kuvo.code", category: "phone").error("Couldn’t read the phone link’s \(account, privacy: .public) from the Keychain: \(error.localizedDescription, privacy: .public)")
+            if !unreadable { wasLocked = (error as NSError).code == Int(errSecInteractionNotAllowed) }
+            else if (error as NSError).code != Int(errSecInteractionNotAllowed) { wasLocked = false }
             unreadable = true
             return make()
         }
@@ -248,9 +252,8 @@ final class PhoneLink {
     /// What this Mac's box is told of its link: whether the phone link is on, whether there are
     /// machines to meet, the relay, and how it's named to your phones.
     private var linkConfig: Data {
-        // (What it answers, for its agents' mail to your other computers: `features`.)
         let config: [String: Any] = ["phones": Self.isEnabled, "machines": hasMachines(), "relay": relay.absoluteString,
-                                     "name": Self.computerName, "app": AppInfo.version, "features": Self.features]
+                                     "name": Self.computerName, "app": AppInfo.version]
         return (try? JSONSerialization.data(withJSONObject: config)) ?? Data()
     }
 
@@ -730,8 +733,8 @@ final class PhoneLink {
         // Which route answers, by its path alone: a query string never changes it (as on a machine).
         // Those that read the query get the request whole; the rest, its route.
         let route = request.path.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init) ?? request.path
-        // An area that's moved onto this Mac's box: answered there, as a machine's box answers it.
-        if Self.movedToBox(route) {
+        // All but this Mac's own areas are its box's: answered there, as a machine's box answers them.
+        if !Self.appAnswers(route) {
             guard let box = Self.box.withLock({ $0 }) else { return Self.boxUnavailable() }
             let base = box.url.absoluteString.hasSuffix("/") ? box.url : URL(string: box.url.absoluteString + "/")!
             // The app's own requests (no phone asking) say so: they aren't a phone using the box.
@@ -830,11 +833,27 @@ final class PhoneLink {
     /// secret and signing key, as your phones and machines know this Mac. None while the link isn't
     /// wanted (nothing's made for it then), or the Keychain won't give them out.
     func boxIdentity() -> [String: String]? {
-        guard relayWanted, hasIdentity else { return nil }
+        guard relayWanted else { return nil }
+        readAgainIfLocked()
+        guard hasIdentity else { return nil }
         // Read before the check: one the Keychain won't give out isn't stood in for.
         let sign = signing.rawRepresentation.base64URL
         guard !Self.unreadable else { return nil }
         return ["key": key.rawRepresentation.base64URL, "secret": secret.bytes.base64URL, "sign": sign]
+    }
+
+    /// This Mac's keys read again, once a minute at most, while the Keychain was only locked when
+    /// they were read: what it gives then is this Mac's own (one it never gave is never stood in for).
+    private func readAgainIfLocked() {
+        guard Self.unreadable, Self.wasLocked, readAgainAt.map({ Date.now.timeIntervalSince($0) >= 60 }) ?? true else { return }
+        readAgainAt = .now
+        Self.unreadable = false
+        Self.wasLocked = false
+        let again = Self.loadIdentity()
+        let sign = Self.kept("sign", read: { try? Documents.SigningKey(rawRepresentation: $0) }, make: Documents.SigningKey.init, bytes: \.rawRepresentation)
+        guard !Self.unreadable else { return }
+        identity = again
+        signing = sign
     }
 
     /// That it's this Mac asking a machine it set up for its vault's key (PROTOCOL.md, "Vault"):
@@ -951,10 +970,10 @@ final class PhoneLink {
         _ = done.wait(timeout: .now() + 2)
     }
 
-    /// The areas that have moved onto this Mac's box (`BoxProcess`), by their routes: a phone's
-    /// requests and the app's own (`BoxClient`) go there.
-    nonisolated static let boxRoutes = ["kuvo/projects", "kuvo/worktrees", "kuvo/plugins", "kuvo/folders", "kuvo/programs", "kuvo/providers", "kuvo/wakes", "kuvo/config", "kuvo/mcp/catalog", "kuvo/skills", "kuvo/skill-library", "kuvo/skill-trash", "kuvo/integrations", "kuvo/keys", "kuvo/bots", "kuvo/personalities",
-                                                  "kuvo/phones", "kuvo/link", "kuvo/attention", "kuvo/accounts/ended", "kuvo/accounts/refreshable", "kuvo/accounts/credentials", "kuvo/accounts/found", "kuvo/file", "kuvo/sign-in/return", "kuvo/named", "kuvo/groups", "kuvo/artifacts", "kuvo/search", "kuvo/git", "kuvo/agent-tools", "kuvo/moves", "kuvo/work", "kuvo/vault", "kuvo/approval"]
+    /// This Mac's own areas, which the app answers itself: what its box hands it of a phone's
+    /// (the box's `MAC_APP_ROUTES`, the one list of them, which a test holds this to). Everything
+    /// else, a phone's or the app's own (`BoxClient`), is its box's (`BoxProcess`).
+    nonisolated static let appRoutes = ["kuvo/machines", "kuvo/hosts", "kuvo/usage", "kuvo/asks", "kuvo/mac", "kuvo/claude-code", "kuvo/engine"]
     /// Where this Mac's box is reached while it runs.
     nonisolated static let box = OSAllocatedUnfairLock<ServerEndpoint?>(initialState: nil)
     /// Connections of its own to this Mac's box, plenty of them: the streams that follow it
@@ -986,34 +1005,8 @@ final class PhoneLink {
     /// machine's link checks them.
     nonisolated private static let groupRoute = #"\Akuvo/groups(?:/(?:events|joinable|grp_[a-z0-9]+(?:/(?:events|stop|keep-going|viewed|undo|start))?))?\z"#
 
-    /// What this Mac answers, one name per route or group of routes a client might check
-    /// (PROTOCOL.md, "Features"): what a machine's bridge has too (its `FEATURES`, but
-    /// `engine.start` and `update`), and the Mac's own. `usage` is added while the usage panel is.
-    static let features = [
-        "accounts.credentials", "accounts.found", "accounts.refresh", "agents", "artifacts", "asks", "attention", "bots", "bots.edit", "bots.events", "bots.job", "bots.keys", "bots.make", "branch", "btw", "btw.threads", "config", "config.apply", "engine.restart",
-        "file", "folders", "folders.files", "git", "git.merge", "git.pull-request", "git.pull-request.draft", "git.push", "goals", "groups", "groups.delete", "groups.edit", "groups.joinable", "groups.make", "groups.seats", "handoff", "integrations", "keys", "mcp.catalog", "moves", "moves.agents", "moves.check",
-        "named", "personalities", "phones", "phones.pair", "plugins.search", "programs", "projects", "providers.models", "reviews", "reviews.parts", "reviews.scopes", "search", "sessions.agents", "shell.stop", "sign-in.return", "skills",
-        "personalities.events", "skills.trash", "sandbox", "sandbox.check", "sandbox.asks", "vault", "wakes", "wakes.edit", "wakes.events", "worktrees", "worktrees.events", "worktrees.where",
-        "agent-tools", "sessions.start", "letters-read", "work.elsewhere", "queue", "queue.waits", "work", "work.projects", "work.goals", "work.goals.apps", "work.goals.projects", "work.unanswering", "autopilot", "approval", "approval.reviewer", "git.backups", "approval.fullAccess", "approval.held", "approval.default", "approval.seen", "approval.stopped", "limits",
-        // The Mac's own.
-        "accounts.ended", "claude-code", "hosts", "mac", "machines",
-    ]
-
-    /// Kuvo's own routes, beside the engine's.
+    /// This Mac's own routes that answer at once (`appRoutes`).
     private func answer(_ request: LinkRequest) -> (Int, Data) {
-        /// `chats`: the folder of conversations of no project, which the phone lists as Chats.
-        /// `agents`: the outside agents' bridge is up, at `kuvo/agents/api/…`.
-        struct Info: Encodable {
-            var kind = "mac"; var name: String; var app: String; var engine: String; var chats: String
-            var agents = false
-            /// When the engine running now came up, in seconds since 1970: a restart changes it
-            /// (null while none runs).
-            @SentAsNull var started: Double? = nil
-            /// Integrations' names by their MCP server's, for what a server asks.
-            var integrations = Dictionary(uniqueKeysWithValues: Integrations.all.map { ($0.id, $0.title) })
-            /// What this Mac answers (PROTOCOL.md, "Features"), which a client checks rather than versions.
-            var features: [String]
-        }
         struct Hosts: Encodable {
             /// `machine`: its id, as bots name theirs. `anotherMac`: its engine is another Mac's,
             /// which gives it its settings, so this Mac's (`kuvo/config`) don't reach it (as it
@@ -1031,12 +1024,6 @@ final class PhoneLink {
             return (405, Data("{}".utf8))
         }
         switch request.path {
-        case "kuvo/info":
-            var info = Info(name: Self.computerName, app: AppInfo.version, engine: OpenCodeEngine.version, chats: Workspace.chatsFolder,
-                            features: (Self.features + (usageJSON() == nil ? [] : ["usage"])).sorted())
-            info.agents = agents?.api != nil
-            info.started = engineStarted()?.timeIntervalSince1970
-            return (200, (try? encoder.encode(info)) ?? Data())
         case "kuvo/hosts":
             let machines = bots?.app?.machines
             let hosts = machineHosts.sorted { $0.value.name < $1.value.name }.map { id, host in
@@ -1069,7 +1056,7 @@ final class PhoneLink {
             return (405, Data("{}".utf8))
         case "kuvo/engine/restart" where request.method.uppercased() == "POST":
             // Answered first: the restart takes the link down with the engine, and the phone sees
-            // this Mac come back (`kuvo/info` answers again).
+            // this Mac come back (its box's `kuvo/info` says when it started).
             let restart = restartEngine
             Task { @MainActor in
                 try? await Task.sleep(for: .seconds(1))
@@ -1251,21 +1238,9 @@ final class PhoneLink {
         }
     }
 
-    /// Whether a route is answered by this Mac's box: an area that's moved there (`boxRoutes`).
-    nonisolated static func movedToBox(_ route: String) -> Bool {
-        boxRoutes.contains { route == $0 || route.hasPrefix($0 + "/") }
-            // A session started with a task, a session's queue, its approval, its reviewer's decisions, its Autopilot,
-            // and carrying it on with the coding agents.
-            || route == "kuvo/sessions" || route.wholeMatch(of: /kuvo\/sessions\/(queues\/events|[^\/]+\/(stop|approval|decisions|autopilot(\/asked)?|queue(\/.+)?|agents))/) != nil
-            // A plan signed out (`kuvo/accounts/<id>/forget`), a provider's models asked of again
-            // (`kuvo/accounts/<id>/refresh`), and a command stopped (`kuvo/shell/<id>/stop`): the box's too.
-            || Self.oneOf(route, "kuvo/accounts/", "/forget") || Self.oneOf(route, "kuvo/accounts/", "/refresh") || Self.oneOf(route, "kuvo/shell/", "/stop")
-    }
-
-    /// Whether `route` is `<start><one part><end>`.
-    nonisolated private static func oneOf(_ route: String, _ start: String, _ end: String) -> Bool {
-        route.hasPrefix(start) && route.hasSuffix(end) && route.count > start.count + end.count
-            && !route.dropFirst(start.count).dropLast(end.count).contains("/")
+    /// Whether a route is this Mac's own, which the app answers itself (`appRoutes`).
+    nonisolated static func appAnswers(_ route: String) -> Bool {
+        appRoutes.contains { route == $0 || route.hasPrefix($0 + "/") }
     }
 
     /// A response that doesn't end: `current()` now, as a line of JSON, and again each time it

@@ -2,4 +2,4 @@
 
 // Goes up with every change, so `setup` replaces a running bridge that's older. Clients don't
 // compare it: they check `FEATURES`.
-export const BRIDGE_VERSION = "0.9.209";
+export const BRIDGE_VERSION = "0.9.210";

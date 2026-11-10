@@ -31,10 +31,7 @@ import Testing
     }
 
     @Test func theEngineStartsOverOnceTheAnswerIsOut() async throws {
-        // When the engine running now came up, which the phone watches change.
-        let up = Date(timeIntervalSince1970: 1_792_660_000)
-        link.engineStarted = { up }
-        #expect(try await ask("kuvo/info").json?["started"] as? Double == up.timeIntervalSince1970)
+        // (When it came up, which the phone watches change, is its box's to say: `kuvo/info`.)
         var restarted = false
         link.restartEngine = {
             restarted = true

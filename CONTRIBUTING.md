@@ -246,8 +246,8 @@ Every route a phone uses is answered twice: by this Mac (`PhoneLink`) and by a m
 (`kuvo-link.js`). The scenarios in `Packages/KuvoLink/Vectors/routes/*.json` are written once and
 run against both: `RouteContractTests` (in `./scripts/test-app.sh`) drives the Mac's real
 `PhoneLink` and stores, and `node --test Tests/Bridge/contract.test.js` in `Packages/KuvoLink` the
-bridge's real handler. `Tests/Bridge/contract-mac.test.js` runs the scenarios of the areas that
-have moved onto this Mac's box (`PhoneLink.boxRoutes`) against the bridge's handler as this Mac's
+bridge's real handler. `Tests/Bridge/contract-mac.test.js` runs scenarios this Mac's box answers
+(all but the app's own routes, `PhoneLink.appRoutes`) against the bridge's handler as this Mac's
 box, with the app's folders and kit, checking what's expected of a Mac. Only the engine is a
 stand-in, the same small one on each. To add one:
 
