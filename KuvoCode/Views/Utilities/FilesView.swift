@@ -622,6 +622,8 @@ struct FileViewer: View {
     @Environment(\.isPanelShown) private var isShown
     @State private var content: Content?
     @State private var showsSource = false
+    @State private var pictureScale: CGFloat = 1
+    @State private var pictureFitScale: CGFloat = 1
 
     enum Content {
         case text(String)
@@ -670,13 +672,9 @@ struct FileViewer: View {
                                 app.utilities.addToMessage?("@\(mention):\(range)")
                             }
                         case .image(let image):
-                            ScrollView([.horizontal, .vertical]) {
-                                Image(nsImage: image)
-                                    .resizable()
-                                    .aspectRatio(contentMode: .fit)
-                                    .frame(maxWidth: image.size.width, maxHeight: image.size.height)
-                                    .padding(20)
-                            }
+                            PictureCanvas(image: image, scale: $pictureScale, fitScale: $pictureFitScale, name: url.lastPathComponent)
+                                .padding(20)
+                                .id(url)
                         case .unavailable(let why):
                             ContentUnavailableView("No Preview", systemImage: "doc", description: Text(why))
                         case .preview where !url.isFileURL:
@@ -697,6 +695,7 @@ struct FileViewer: View {
         .task(id: "\(url.absoluteString)\n\(app.utilities.fileShown)\n\(isShown)") {
             // The panel hidden, it's read again as it shows.
             guard isShown else { return }
+            pictureScale = 1
             content = await Self.load(url, from: RemoteFolder.parse(url).map { app.box($0.machine) })
             // Changed on disk (by the agent, say): shown again as it is. A machine's file is read
             // again when it's shown again, which reading it each time would cost a round trip for.
