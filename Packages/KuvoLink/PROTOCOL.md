@@ -2857,7 +2857,9 @@ the last reading in its folder (`limits.json`), through a restart. A client reac
 - The bridge's events (`kuvo/agents/api/event`) carry `kuvo.limits.updated` `{accounts}` each time
   the list changes.
 - Listing them (KuvoClient's `UsageListing`, as the Mac and the phone do): one row per account
-  across the boxes a client lists, in their order (its own computer's first): rows of one
+  across the boxes a client lists (the Mac: its own and its machines'; the phone: every computer
+  it reaches, the first Mac whose usage panel answers taken as its own, that panel placing the
+  rows), in their order (its own computer's first): rows of one
   `service` with one `identity` are one row, from any box, and a row without one is its box's
   own. Two windows are one limit when they have the same `model` (ignoring case), `name` and
   `minutes` (by `id` where a window has none of the three): a coding agent and the engine name a
