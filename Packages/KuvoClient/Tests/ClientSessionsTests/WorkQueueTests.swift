@@ -85,4 +85,43 @@ import ClientSessions
         #expect(detail.notes.first?.by.words == "Mira")
         #expect(detail.files.first?.isPicture == true)
     }
+
+    @Test func whoAChangeIsFromNeverTurnsSomeoneElseIntoYou() throws {
+        let stamps = try JSONDecoder().decode([WorkStamp].self, from: Data("""
+        [{"at":1,"by":{"user":true}},{"at":2,"by":{"session":"ses_a","name":"Mira"}},{"at":3,"by":{"source":"github","name":"octocat"}},{"at":4,"by":{"source":"linear"}}]
+        """.utf8))
+        #expect(stamps.map(\.by.words) == ["you", "Mira", "octocat", "linear"])
+    }
+
+    @Test func oneRefThisClientCantReadLeavesTheOthersChips() throws {
+        let refs = try JSONDecoder().decode(WorkRefs.self, from: Data("""
+        {"refs":{"243":{"id":"wqi_1","number":243,"title":"Panel","category":"next","inProgress":false,"owner":"ses_a"},
+                 "gh:owner/repo#12":{"id":"wqi_2","source":{"kind":"github","ref":"gh:owner/repo#12"},"title":"Login loops","category":"later","inProgress":true},
+                 "500":{"id":"wqi_3","number":500,"title":"Far","category":"next","inProgress":false,"owner":"ses_far","computer":{"key":"k","name":"lab","kind":"machine","id":"lab"}},
+                 "9":null,
+                 "77":{"id":7}}}
+        """.utf8))
+        #expect(refs.refs["243"]??.title == "Panel")
+        #expect(refs.refs["gh:owner/repo#12"]??.owner == nil, "an outside ref may have no owner")
+        #expect(refs.refs["500"]??.computer?.name == "lab")
+        #expect(refs.refs["9"] != nil && refs.refs["9"]! == nil)
+        #expect(refs.refs["77"]! == nil, "one it can't read is as one the box doesn't know")
+    }
+
+    @Test func anItemFromAnOutsideSourceIsNamedByItsRefAndOneElsewhereSaysWhere() throws {
+        let json = """
+        {"owner":"all","categories":[{"id":"next","name":"Next","builtIn":true}],"owners":[],"removed":[],
+         "items":[{"id":"wqi_1","number":250,"source":{"kind":"github","ref":"gh:owner/repo#12"},"owner":"ses_a","title":"Login loops","category":"next","order":1,"inProgress":false,"sessions":[],"noteCount":0,"fileCount":0,"linkCount":0,"created":{"at":1,"by":{"user":true}},"updated":{"at":1,"by":{"user":true}}},
+                  {"id":"wqi_2","number":500,"owner":"ses_far","title":"Far","category":"next","order":2,"inProgress":false,"sessions":[],"noteCount":0,"fileCount":0,"linkCount":0,"computer":{"key":"k","name":"lab","kind":"machine","id":"lab"},"handing":{"to":"ses_b","name":"Wren"},"created":{"at":1,"by":{"user":true}},"updated":{"at":1,"by":{"user":true}}}],
+         "computers":[{"key":"k","name":"lab","kind":"machine","id":"lab","at":5000}]}
+        """
+        let view = try JSONDecoder().decode(WorkQueueView.self, from: Data(json.utf8))
+        #expect(view.items.map(\.name) == ["gh:owner/repo#12", "#500"], "its old number is never shown")
+        #expect(view.items.map { WorkQueue.computerName(of: $0) } == [nil, "lab"])
+        #expect(view.items[1].handing?.name == "Wren")
+        #expect(view.computers.first?.date == Date(timeIntervalSince1970: 5))
+        // A box from before piece 3 says nothing of other computers.
+        let older = try JSONDecoder().decode(WorkQueueView.self, from: Data(#"{"owner":"all","categories":[],"items":[],"owners":[],"removed":[]}"#.utf8))
+        #expect(older.computers.isEmpty)
+    }
 }

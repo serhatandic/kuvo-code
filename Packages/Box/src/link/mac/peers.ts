@@ -8,6 +8,8 @@ import { peerTargets, readEngineFile } from "../engine/client";
 import { deliverLeftAnswers, givenUp, macWaiting, outboxSoon, sendOutbox } from "../letters/outbox";
 import { pushRows } from "../work/elsewhere";
 import { pushNumbers } from "../work-queue/numbers";
+import { pushQueues } from "../work-queue/across";
+import { handUpkeepSoon } from "../work-queue/hand";
 import { attentionGiven } from "../notices/hold";
 import { announce, refreshOwn } from "../peers/agents";
 import { mailFor, peersOf } from "../peers/known";
@@ -59,8 +61,11 @@ export function runMacPeers(): void {
       // The rows of sessions here whose lead lives on another computer, told to it as they change.
       const host = macLink.host;
       if (host?.welcomed) pushRows(host, readLink(), peerTargets()).catch(() => {});
-      // The Work Queue's ask for more numbers, to the primary (a Mac's box is its own: none).
+      // The Work Queue's ask for more numbers, to the primary (when that isn't this Mac's box); and
+      // its queue told to your other computers as it changes, with what it's handing to theirs.
       try { pushNumbers(host); } catch {}
+      if (host?.welcomed) pushQueues(host, readLink(), peerTargets()).catch(() => {});
+      else try { handUpkeepSoon(readLink()); } catch {}
     }, 3_000),
   ];
   macLink.stopPeers = () => {

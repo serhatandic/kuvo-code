@@ -160,7 +160,10 @@ function clock(start = Date.now() + 60 * 1000) {
 }
 const SECONDS = 1000;
 const watcher = time => link.workWatcher(source, () => [source], { schedule: time.schedule, now: time.now });
-const finished = () => state.prompts.filter(each => each.to === "ses_pixel").flatMap(each => each.text.split("\n\n").filter(line => line.startsWith("[Session finished]") || line.startsWith("[Session still working]")));
+const leadLines = () => state.prompts.filter(each => each.to === "ses_pixel").flatMap(each => each.text.split("\n\n").filter(line => line.startsWith("[Session ")));
+const finished = () => leadLines().filter(line => line.startsWith("[Session finished]"));
+// (#420: a lead is never told "still working": a session at work shows so in its list.)
+const stillWorking = () => leadLines().filter(line => line.startsWith("[Session still working]"));
 const atWork = async () => [...await link.atWorkNow([source])];
 const handle = link.engineHandler(() => source, { name: "test" }, () => null);
 async function route(method, where) {
@@ -185,7 +188,7 @@ test("a session waiting on its own command isn't finished: told once, when it's 
   said("Started the tests; they'll take a while.");
   await watch(ended());
   await time.pass(10 * SECONDS);
-  assert.deepEqual(finished(), [], "nothing while its command runs");
+  assert.deepEqual(leadLines(), [], "nothing at all while its command runs: not 'still working' either");
   assert.deepEqual(await atWork(), ["ses_tests"], "and it counts as at work");
   // It ends with nothing more to say.
   await watch(exited("sh_1"));
@@ -434,7 +437,7 @@ test("an archived session tells nothing and begins nothing on its own", async ()
   assert.deepEqual(state.interrupted, ["ses_tests"]);
 });
 
-test("a command that never ends: the lead hears at the limit, saying what still runs, then what it says after that; it stops counting as at work later", async () => {
+test("a command that never ends: the lead hears at the limit, as finished, saying what still runs, then what it says after that; it stops counting as at work later", async () => {
   const time = clock();
   const watch = watcher(time);
   await watch.caughtUp;
@@ -447,8 +450,9 @@ test("a command that never ends: the lead hears at the limit, saying what still 
   await time.pass(61 * SECONDS);
   await time.pass(5 * SECONDS);
   assert.equal(finished().length, 1, "at the limit it's told");
-  assert.match(finished()[0], /^\[Session still working\] "Tests"/, "not finished: its command runs");
+  assert.match(finished()[0], /^\[Session finished\] "Tests"/, "a dev server doesn't keep its lead waiting for good");
   assert.match(finished()[0], /Still running in the background: the command `npm run dev`/);
+  assert.deepEqual(stillWorking(), [], "never told 'still working'");
   assert.deepEqual(await atWork(), ["ses_tests"], "it does still run");
   assert.equal(link.AT_WORK_LIMIT > link.FINISH_HOLD_LIMIT, true);
   // Long after, it's gone quiet: it doesn't show at work for ever.
@@ -467,7 +471,8 @@ test("told at the limit, what it says when the command does end is told, however
   await time.pass(link.FINISH_HOLD_LIMIT + 1);
   await time.pass(5 * SECONDS);
   assert.equal(finished().length, 1);
-  assert.match(finished()[0], /^\[Session still working\] "Tests"/);
+  assert.match(finished()[0], /^\[Session finished\] "Tests"/);
+  assert.match(finished()[0], /Still running in the background/);
   await watch(exited("sh_1"));
   ownWord();
   said("All pass.");
@@ -477,6 +482,7 @@ test("told at the limit, what it says when the command does end is told, however
   assert.match(finished()[1], /^\[Session finished\] "Tests"/, "really finished now");
   assert.match(finished()[1], /All pass\./);
   assert.doesNotMatch(finished()[1], /Still running/);
+  assert.deepEqual(stillWorking(), []);
 });
 
 test("the engine gone with its commands: a new connection finds none, and the lead is told once", async () => {
@@ -802,11 +808,11 @@ test("not reachable at its limit: looked at again, so a command that never ends 
   await time.pass(61 * SECONDS);
   await time.pass(5 * SECONDS);
   assert.equal(finished().length, 1);
-  assert.match(finished()[0], /^\[Session still working\] "Tests"/);
+  assert.match(finished()[0], /^\[Session finished\] "Tests"/);
   assert.match(finished()[0], /Still running in the background/);
 });
 
-test("told still working at the limit, a command that ends with nothing new said tells the lead nothing more, and its bot still sees it finish", async () => {
+test("told at the limit, a command that ends with nothing new said tells the lead nothing more, and its bot still sees it finish", async () => {
   const time = clock();
   const watch = watcher(time);
   await watch.caughtUp;
@@ -817,8 +823,8 @@ test("told still working at the limit, a command that ends with nothing new said
   await watch(ended());
   await time.pass(link.FINISH_HOLD_LIMIT + 1);
   await time.pass(5 * SECONDS);
-  assert.match(finished()[0], /^\[Session still working\]/);
-  assert.equal(await marks(), 0, "not finished, so not shown finishing");
+  assert.match(finished()[0], /^\[Session finished\]/);
+  assert.equal(await marks(), 0, "its command runs, so not shown finishing yet");
   // Its command ends; the agent is woken and has nothing to add.
   await watch(exited("sh_1"));
   ownWord();
