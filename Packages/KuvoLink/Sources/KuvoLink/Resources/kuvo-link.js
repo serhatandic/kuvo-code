@@ -1915,8 +1915,10 @@ function frozen(records = liveMoves()) {
   return new Set(records.filter((record) => record.step !== "check").flatMap((record) => [record.thing, ...record.sessions]));
 }
 function switchedTo(session, records = liveMoves()) {
-  const record = records.find((each) => each.role === "from" && (each.stage === "switching" || each.stage === "finishing") && each.sessions.includes(session));
-  return record?.peer ?? null;
+  return switchedMove(session, records)?.peer ?? null;
+}
+function switchedMove(session, records = liveMoves()) {
+  return records.find((each) => each.role === "from" && (each.stage === "switching" || each.stage === "finishing") && each.sessions.includes(session)) ?? null;
 }
 function movedAway(now = Date.now()) {
   try {
@@ -13628,9 +13630,13 @@ async function takeLetter(sender, letter, { send, targets, answer = () => {}, to
     else if (!await listedOrUnder(letter.from, letter.to, targets))
       return notDelivered("That conversation isn't one this computer lists, nor one you started: write to one that list_agents names.");
     else {
-      const listed = peerOf(letter.from, peers, told, moved)?.key === sender.key ? (told[sender.key]?.list ?? []).find((agent) => agent.session === letter.from) : null;
-      if (listed && !await placeOfSession(letter.from, targets).catch(() => ({})))
+      const switched = typeof letter.from === "string" ? switchedMove(letter.from) : null;
+      const arrived = switched?.peer === sender.key ? switched : null;
+      const listed = arrived || peerOf(letter.from, peers, told, moved)?.key === sender.key ? (told[sender.key]?.list ?? []).find((agent) => agent.session === letter.from) : null;
+      if (listed && (arrived || !await placeOfSession(letter.from, targets).catch(() => ({}))))
         fromAgent = listed;
+      else if (arrived && arrived.kind !== "group" && arrived.sessions[0] === letter.from)
+        fromAgent = { session: letter.from, name: arrived.name, kind: arrived.kind === "bot" ? "bot" : "session" };
       const name = fromAgent?.name ?? `an agent on ${plainName(sender.name) || "another computer"}`;
       prompt = messageID();
       const waits = letter.wait === true && Boolean(fromAgent);

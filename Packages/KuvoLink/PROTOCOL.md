@@ -256,7 +256,11 @@ connection.
     time; after that it's refused as for no conversation (bridge 0.9.123). The same goes while its
     engine isn't there to ask, as when it's starting (bridge 0.9.203).
   - **Sender**: it names the sender as the sending box named that agent, when that box alone
-    lists `from` and it isn't one of the receiver's own conversations. Otherwise the letter is from
+    lists `from` and it isn't one of the receiver's own conversations. One that moved from the
+    receiver to the sending box, once the receiver has asked that box to switch to its copy
+    (`switching`, `finishing`), is that box's though its original on the receiver is still being let
+    go: by that
+    box's name for it, or before it lists it, by the name it moved with. Otherwise the letter is from
     "an agent on <box>", with no address to answer.
   - **`delivered`**: it answers `{"delivered": {id, ok, why?, retry?, answer?, lives?}}`. `retry`: not
     now (an engine restarting, too many lately), so the sender tries again. `answer: false`: there,

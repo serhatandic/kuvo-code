@@ -220,6 +220,30 @@ test("a lead that moved from here is reached from where it went as soon as it's 
   assert.deepEqual([copying.ok, copying.retry], [false, true]);
 });
 
+test("a message from a lead that moved from here is from it, by its name and with a way back, as soon as it's switched to there, while its original here is still being let go", async () => {
+  eng.all.set("ses_lead", { id: "ses_lead", title: "Foreman", time: { created: 1, updated: 1 }, directory: "/work" });
+  const move = stage => write(path.join(run, "moves", "mov_test0000000002.json"), { id: "mov_test0000000002", kind: "bot", thing: by.bot, name: "Foreman", from: here.pub, to: mini.pub, peer: mini.pub, role: "from", stage, step: stage === "finishing" ? "done" : stage === "switching" ? "switch" : "parts", sessions: ["ses_lead"], wasPaused: false, tries: 0, started: Date.now() });
+  const letter = { from: "ses_lead", to: "ses_user", text: "How's it going?", wait: false };
+  const send = async (sender, told) => {
+    const said = [];
+    await link.takeLetter(sender, { ...letter, id: "ltr_" + crypto.randomBytes(6).toString("hex"), at: Date.now() }, { send: (_to, message) => said.push(message.delivered), targets: [eng.target], peers: [mini.peer, third.peer], told, moved: new Map(), wait: 1 });
+    assert.equal(said[0].ok, true, said[0].why);
+    return eng.seen.prompts.at(-1).text;
+  };
+  const listed = { [mini.pub]: { at: 1, kind: "machine", list: [{ session: "ses_lead", name: "Foreman", kind: "bot", id: by.bot }] } };
+  const fromLead = link.composeLetter("Foreman", "ses_lead", "How's it going?", false);
+  const fromSomeone = box => link.composeLetter(`an agent on ${box}`, "unknown", "How's it going?", false);
+  move("finishing");
+  assert.equal(await send(mini.peer, listed), fromLead, "as the box it went to lists it");
+  assert.equal(await send(mini.peer, {}), fromLead, "before that box has listed it: by the name it moved with");
+  assert.equal(await send(third.peer, {}), fromSomeone("third"), "from any other box, it isn't");
+  move("switching");
+  assert.equal(await send(mini.peer, {}), fromLead);
+  // Its copy there held until it's switched to: what comes from there isn't from it yet.
+  move("copying");
+  assert.equal(await send(mini.peer, listed), fromSomeone("mini"));
+});
+
 test("an allow goes only as far as the lead could go itself, never past this box's Don't Allow rules, and one kept over a day isn't given", async () => {
   eng.seen.asks.set("ses_billing", [
     { id: "per_1", action: "shell", resources: ["git status"] },
