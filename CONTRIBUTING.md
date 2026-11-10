@@ -313,9 +313,15 @@ README says how.
 
 A machine's browser is Chrome for Testing, the full browser run in Chrome's own headless mode
 (the separate headless shell is one sites take for a bot), with its libraries and fonts, in
-`~/.kuvo-code/browser` there (`scripts/browser-runtime.py` lists what it brings; on a Mac machine,
-Chrome for Testing as it comes, pinned in `browser-runtime-mac.json`, with a `chrome` launcher, as
-it won't run through a link). One script,
+`~/.kuvo-code/browser` there. The machine's box sets it up itself, with or without a Mac
+(`Packages/Box/src/link/browser`, PROTOCOL.md's "The browser on a machine"): the build pinned in
+`linux.json` and `mac.json` there (`scripts/browser-runtime.py` writes them; on a Mac machine,
+Chrome for Testing as it comes, with a `chrome` launcher, as it won't run through a link),
+downloaded only from Google's Chrome for Testing and Rocky Linux over HTTPS, each file checked
+against its size and SHA-256 before it's unpacked (by the box itself: no `unzip`, `xz` or `rpm`
+on the machine). The Mac only shows how it goes (`kuvo/browser`). Its tests serve stand-ins
+(`Tests/Bridge/browser-source-stand-in.js`): never the real sources, never a real `~/.kuvo-code`.
+One script,
 `KuvoCode/Resources/kuvo-browser.js`, runs with the engine's own runtime in three ways:
 
 - **host**, the keeper: it starts Chromium, holds it over a pipe, and serves the DevTools
@@ -327,6 +333,9 @@ it won't run through a link). One script,
   start runs the new one.
 - **mcp**, the agent's browser tools for the machine's engine, talking to the keeper.
 - **connect**, the Mac's live view of the pages, over SSH, also through the keeper.
+
+The first two, finding no browser, have the box set it up and wait for it (`kuvo-link.js browser
+install`); a browser that doesn't start because its build isn't whole is set up again once.
 
 What agents ask you for there also goes to `run/browser-asks.json`, for the machine's phone link,
 which answers it for a phone with the Mac closed (`Kuvo.answer` on the keeper's socket).

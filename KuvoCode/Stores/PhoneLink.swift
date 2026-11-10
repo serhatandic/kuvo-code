@@ -652,8 +652,8 @@ final class PhoneLink {
     #if DEBUG
     /// A test's machine, as if it was set up for your computers: its box's key, and its bridge
     /// talking to them itself.
-    func standIn(machine: String, key: String) {
-        machineHosts[machine] = MachineHost(name: machine, address: "", key: key, peers: true)
+    func standIn(machine: String, key: String, address: String = "") {
+        machineHosts[machine] = MachineHost(name: machine, address: address, key: key, peers: true)
     }
     #endif
 
@@ -988,12 +988,12 @@ final class PhoneLink {
 
     /// What this Mac answers, one name per route or group of routes a client might check
     /// (PROTOCOL.md, "Features"): what a machine's bridge has too (its `FEATURES`, but
-    /// `engine.start` and `update`), and the Mac's own. `usage` is added while the usage panel is.
+    /// `engine.start`, `update` and `browser`), and the Mac's own. `usage` is added while the usage panel is.
     static let features = [
         "accounts.credentials", "accounts.found", "accounts.refresh", "agents", "artifacts", "asks", "attention", "bots", "bots.edit", "bots.events", "bots.job", "bots.keys", "bots.make", "branch", "btw", "btw.threads", "config", "config.apply", "engine.restart",
         "file", "folders", "folders.files", "git", "git.changes.count", "git.merge", "git.pull-request", "git.pull-request.draft", "git.push", "goals", "groups", "groups.delete", "groups.edit", "groups.joinable", "groups.make", "groups.seats", "handoff", "integrations", "keys", "mcp.catalog", "moves", "moves.agents", "moves.check",
         "named", "personalities", "phones", "phones.pair", "plugins.search", "programs", "projects", "providers.models", "reviews", "reviews.parts", "reviews.scopes", "search", "sessions.agents", "shell.stop", "sign-in.return", "skills",
-        "personalities.events", "skills.trash", "sandbox", "sandbox.check", "sandbox.asks", "vault", "wakes", "wakes.edit", "wakes.events", "worktrees", "worktrees.events", "worktrees.where",
+        "personalities.events", "skills.trash", "sandbox", "sandbox.check", "sandbox.asks", "sandbox.reviews.whole", "vault", "wakes", "wakes.edit", "wakes.events", "worktrees", "worktrees.events", "worktrees.where",
         "agent-tools", "sessions.start", "letters-read", "work.elsewhere", "queue", "queue.waits", "work", "work.projects", "work.goals", "work.goals.apps", "work.goals.projects", "work.unanswering", "autopilot", "approval", "approval.reviewer", "git.backups", "approval.fullAccess", "approval.held", "approval.default", "approval.seen", "approval.stopped", "limits", "work-queue",
         // The Mac's own.
         "accounts.ended", "claude-code", "hosts", "mac", "machines",
@@ -1104,6 +1104,9 @@ final class PhoneLink {
                 var host: String
                 /// The machine whose browser it is, by name; none for this Mac's.
                 var machine: String?
+                /// That machine's box, by its link address (as `kuvo/hosts` gives it), when your
+                /// phones can reach it: the ask is its own, and its answer goes there too.
+                var box: String?
                 var session: String?
                 var asker: String?
                 var username: Bool?
@@ -1119,7 +1122,8 @@ final class PhoneLink {
             var asks: [Ask]
         }
         let asks = (browserAsks?.asks ?? []).map { ask in
-            var listed = Listed.Ask(id: ask.id, kind: "", host: ask.host, machine: ask.machine.map { machineName($0) ?? $0 }, session: ask.session, asker: ask.asker)
+            let box = ask.machine.flatMap { machineHosts[$0]?.address }.flatMap { $0.isEmpty ? nil : $0 }
+            var listed = Listed.Ask(id: ask.id, kind: "", host: ask.host, machine: ask.machine.map { machineName($0) ?? $0 }, box: box, session: ask.session, asker: ask.asker)
             if ask.passkey { listed.passkey = true }
             switch ask.kind {
             case .signIn(let username, let password):

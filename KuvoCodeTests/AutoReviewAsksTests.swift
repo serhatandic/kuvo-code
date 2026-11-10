@@ -6,8 +6,9 @@ import Testing
 
 /// In Auto, what the agent asks to work outside its folder is its reviewer's: no card, no
 /// notification and no "needs you" while the box checks it, nor once it allowed or held it back,
-/// only a quiet mark on the step that asked; one the box leaves for you is yours as any ask, and so
-/// is one it says nothing of in time. The engine and the box's word are stubbed.
+/// only a quiet mark on the step that asked; one the box leaves for you is yours as any ask. The
+/// box's word is the whole of it (`sandbox.reviews.whole`): nothing waits on a timer of the app's.
+/// The engine and the box's word are stubbed.
 @MainActor
 @Suite(.serialized) struct AutoReviewAsksTests {
     let engine = StubEngine(port: 47993)
@@ -45,7 +46,8 @@ import Testing
             engine.stop()
         }
         let model = try await open()
-        // The box says how its reviewer takes asks up.
+        // The box says how its reviewer takes asks up, its asks heard now.
+        Sandboxes.shared.setLive(true, box)
         Sandboxes.shared.take(reviews: [], from: box)
         workspace.handle(try engine.event("permission.asked", outside("per_r1")))
         #expect(model.permissions.map(\.id) == ["per_r1"])
@@ -65,16 +67,66 @@ import Testing
         let box = box
         #expect(model.permissions.filter { Sandboxes.shared.isYours($0, on: box) }.map(\.id) == ["per_r2"])
 
-        // Its box restarted, and lists none of them now: what was yours stays yours.
+        // Its box started again, and lists none of them yet: not yours until it says (it takes up
+        // what waits as it starts, PROTOCOL.md's `sandbox.reviews.whole`); then yours again.
         Sandboxes.shared.take(reviews: [], from: box)
-        #expect(workspace.needsAttention(id))
+        #expect(model.permissions.filter { Sandboxes.shared.isYours($0, on: box) }.isEmpty)
+        Sandboxes.shared.take(reviews: [review("per_r2", .yours)], from: box)
         #expect(model.permissions.filter { Sandboxes.shared.isYours($0, on: box) }.map(\.id) == ["per_r2"])
     }
 
-    /// A command isn't the reviewer's to take up, and a box from before says nothing of reviews:
-    /// either is yours at once.
+    /// An ask kept while its box checks it is told once the box leaves it for you: the
+    /// notification, and "needs you", come then, with no wait of the app's own.
+    @Test func anAskLeftForYouIsToldThen() async throws {
+        let workspace = workspace
+        Sandboxes.shared.onYours = { workspace.reviewLeftForYou($0) }
+        defer {
+            Sandboxes.shared.forget(box)
+            Sandboxes.shared.onYours = nil
+            engine.stop()
+        }
+        _ = try await open()
+        Sandboxes.shared.setLive(true, box)
+        workspace.handle(try engine.event("permission.asked", outside("per_t1")))
+        Sandboxes.shared.take(reviews: [review("per_t1", .checking)], from: box)
+        #expect(!workspace.needsAttention(id))
+        #expect(workspace.asking["per_t1"] == nil, "not told while it's checked")
+        Sandboxes.shared.take(reviews: [review("per_t1", .yours)], from: box)
+        #expect(workspace.needsAttention(id))
+        #expect(workspace.asking["per_t1"] == id, "told once it's yours")
+    }
+
+    /// Its box's link down (crashed, restarting), with its engine still asking: nothing lists what
+    /// it asks now, so one it never listed is yours, not hidden while the agent waits; one it said
+    /// it's checking stays so, as a moment's cut doesn't tell you of it.
+    @Test func withItsBoxNotHeardAnAskNotListedIsYours() async throws {
+        let workspace = workspace
+        Sandboxes.shared.onYours = { workspace.reviewLeftForYou($0) }
+        defer {
+            Sandboxes.shared.forget(box)
+            Sandboxes.shared.onYours = nil
+            engine.stop()
+        }
+        _ = try await open()
+        Sandboxes.shared.setLive(true, box)
+        workspace.handle(try engine.event("permission.asked", outside("per_d1")))
+        #expect(!workspace.needsAttention(id), "heard, and not listed yet: its box's to say")
+        Sandboxes.shared.take(reviews: [review("per_d1", .checking)], from: box)
+        #expect(!workspace.needsAttention(id), "being checked")
+        // Not heard for a moment: what it last said of one stands (a blip doesn't tell you of it).
+        Sandboxes.shared.setLive(false, box)
+        #expect(!workspace.needsAttention(id), "still its box's to check")
+        // One it never listed, asked while it isn't heard: nothing would list it, so it's yours.
+        workspace.handle(try engine.event("permission.asked", outside("per_d2")))
+        #expect(workspace.needsAttention(id), "its box not heard: one it never listed is yours")
+        #expect(workspace.asking["per_d2"] == id, "and told")
+    }
+
+    /// A command isn't the reviewer's to take up, and a box whose word isn't whole (from before
+    /// `sandbox.reviews.whole`) has one it hasn't listed yours at once.
     @Test func whatTheReviewerNeverTakesUpIsYoursAtOnce() async throws {
         defer {
+            Sandboxes.shared.takeListsAll(true, from: box)
             Sandboxes.shared.forget(box)
             engine.stop()
         }
@@ -83,7 +135,7 @@ import Testing
         workspace.handle(try engine.event("permission.asked", ["id": "per_c1", "sessionID": id, "action": "shell", "resources": ["npm test"]]))
         #expect(workspace.needsAttention(id))
         workspace.handle(try engine.event("permission.replied", ["sessionID": id, "requestID": "per_c1"]))
-        Sandboxes.shared.take(reviews: nil, from: box)
+        Sandboxes.shared.takeListsAll(false, from: box)
         workspace.handle(try engine.event("permission.asked", outside("per_c2")))
         #expect(workspace.needsAttention(id))
     }

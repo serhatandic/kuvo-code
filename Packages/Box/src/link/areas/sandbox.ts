@@ -82,19 +82,19 @@ export async function* sandboxRoute(context: RouteContext): AsyncGenerator<Answe
       // GET with none named answers, and an add's or a removal's with `?all`.
       const query = new URLSearchParams(request.path.split("?")[1] ?? "");
       forgetGoneBots();
-      const answer = (of?: string) => ({ allowed: listed(allowedFor(of)), ...(of ? {} : { owners: addableOwners() }) });
-      if (route === "kuvo/sandbox/allowed" && method === "GET") return yield* json(200, answer(query.get("project") ?? undefined));
+      const answer = async (of?: string) => ({ allowed: await listed(await allowedFor(of)), ...(of ? {} : { owners: addableOwners() }) });
+      if (route === "kuvo/sandbox/allowed" && method === "GET") return yield* json(200, await answer(query.get("project") ?? undefined));
       if (route === "kuvo/sandbox/allowed" && method === "POST") {
         // For a project by its folder, or for a bot's own folder or the chats' by `owner`.
         const project = given.project === undefined && given.owner !== undefined ? folderOfOwner(given.owner) : given.project;
-        const rule = addRule({ ...given, project, by: clientName(context) });
-        return yield* json(200, answer(query.has("all") ? undefined : rule.project));
+        const rule = await addRule({ ...given, project, by: clientName(context) });
+        return yield* json(200, await answer(query.has("all") ? undefined : rule.project));
       }
       if (parts.length === 4 && method === "DELETE") {
         const id = idOf(parts[3]);
-        const rule = allowedFor().find(each => each.id === id);
+        const rule = (await allowedFor()).find(each => each.id === id);
         if (!rule || !removeRule(id)) return yield* json(404, { message: "That isn't in Also Allowed." });
-        return yield* json(200, answer(query.has("all") ? undefined : rule.project));
+        return yield* json(200, await answer(query.has("all") ? undefined : rule.project));
       }
       return yield* json(405, {});
     } catch (error) {

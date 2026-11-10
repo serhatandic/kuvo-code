@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-"""Pins the browser Kuvo Code runs on machines: on Linux in KuvoCode/Resources/browser-runtime.json,
-on Macs in browser-runtime-mac.json.
+"""Pins the browser Kuvo Code runs on machines: on Linux in Packages/Box/src/link/browser/linux.json,
+on Macs in mac.json beside it. Each box sets it up itself from these (KuvoLink's PROTOCOL.md, "The
+browser on a machine"): rebuild kuvo-link.js after running this (scripts/build-box.sh).
 
 The browser is Google's Chrome for Testing, the full browser, run headless (Chrome's own headless
 mode, not the separate headless shell, which sites take for a bot: Google won't sign anyone in from
 it, and X limits it). It needs shared libraries that servers often don't have, and fonts, which
 they often have none of. Rather than have anyone
-install packages on their machine, the app brings them along, into ~/.kuvo-code/browser there,
+install packages on their machine, the box brings them along, into ~/.kuvo-code/browser there,
 and points the browser at them: it uses nothing from the machine but the C library (glibc),
 which the engine needs too.
 
@@ -14,8 +15,8 @@ The libraries are Enterprise Linux 8's (Rocky Linux 8's builds): built against g
 than the engine's own minimum (2.30), they load on any distribution the engine runs on, and they
 get security fixes until 2029. Starting from the libraries the Chromium build links to, this
 script finds the packages that provide them, and what those need in turn, and writes down each
-file's checksum. The app downloads only those files, and checks each one before it sends
-anything to a machine.
+file's checksum. The box downloads only those files, and checks each one before it unpacks
+anything.
 
     scripts/browser-runtime.py                      # latest stable Chromium
     scripts/browser-runtime.py --chromium 155.0.8059.79
@@ -37,10 +38,10 @@ import urllib.request
 import xml.etree.ElementTree as ElementTree
 import zipfile
 
-OUT = os.path.join(os.path.dirname(__file__), "..", "KuvoCode", "Resources", "browser-runtime.json")
+OUT = os.path.join(os.path.dirname(__file__), "..", "Packages", "Box", "src", "link", "browser", "linux.json")
 # Macs that are machines run Chrome for Testing as it comes: nothing else to bring. In a file of its
-# own, as a machine is sent a new build whenever its system's file changes.
-MAC_OUT = os.path.join(os.path.dirname(__file__), "..", "KuvoCode", "Resources", "browser-runtime-mac.json")
+# own, as a box sets up a new build whenever its system's file changes.
+MAC_OUT = os.path.join(os.path.dirname(__file__), "..", "Packages", "Box", "src", "link", "browser", "mac.json")
 
 CFT = "https://storage.googleapis.com/chrome-for-testing-public"
 CHROMIUM_ZIPS = {"x86_64": "linux64/chrome-linux64.zip", "aarch64": "linux-arm64/chrome-linux-arm64.zip"}
