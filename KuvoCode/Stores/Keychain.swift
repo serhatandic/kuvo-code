@@ -15,10 +15,9 @@ nonisolated enum Keychain {
                              file: StaticString = #fileID, line: UInt = #line) -> OSStatus {
         if inMemory {
             return lock.withLock {
-                // (As a locked Keychain does: a read that may ask gets your answer, one that may
-                // not fails at once. A test's own service's items.)
+                // (As a locked Keychain does: it asks you to unlock it, and gives your answer. A
+                // test's own service's items.)
                 if let service = query[kSecAttrService as String] as? String, let answer = lockedServices[service] {
-                    if (query[kSecUseAuthenticationUI as String] as AnyObject?)?.isEqual(kSecUseAuthenticationUIFail) == true { return errSecInteractionNotAllowed }
                     prompted[service, default: 0] += 1
                     return answer
                 }
@@ -61,17 +60,28 @@ nonisolated enum Keychain {
         return status
     }
 
-    /// A read that fails rather than ask you anything (a Keychain to unlock, or whether this app may
-    /// use an item): `errSecInteractionNotAllowed` then, never a prompt that holds up the caller.
-    static func withoutAsking(_ query: [String: Any]) -> [String: Any] {
-        var query = query
-        query[kSecUseAuthenticationUI as String] = kSecUseAuthenticationUIFail
-        return query
+    /// A read that never asks you to unlock your Keychain: while it's locked,
+    /// `errSecInteractionNotAllowed` at once. (SecItem doesn't take `kSecUseAuthenticationUIFail`
+    /// for a login Keychain's items, where the app keeps its own, so it's looked at first.)
+    static func copyWithoutAsking(_ query: [String: Any], _ result: UnsafeMutablePointer<CFTypeRef?>?,
+                                  file: StaticString = #fileID, line: UInt = #line) -> OSStatus {
+        if isLocked(query[kSecAttrService as String] as? String) { return errSecInteractionNotAllowed }
+        return copyMatching(query, result, file: file, line: line)
+    }
+
+    /// Whether the Keychain the app keeps its items in is locked now (a test's: whether its service's
+    /// are, `lockForTests`).
+    private static func isLocked(_ service: String?) -> Bool {
+        if inMemory { return lock.withLock { service.map { lockedServices[$0] != nil } ?? false } }
+        var keychain: SecKeychain?
+        var status: SecKeychainStatus = 0
+        guard SecKeychainCopyDefault(&keychain) == errSecSuccess, let keychain, SecKeychainGetStatus(keychain, &status) == errSecSuccess else { return false }
+        return status & SecKeychainStatus(kSecUnlockStateStatus) == 0
     }
 
     /// Hosting tests: the items of these services read as a locked Keychain's do (a test's own
-    /// services, while it says so): one that may ask gets `answer` (yours to its prompt, like
-    /// `errSecUserCanceled`), one that may not (`withoutAsking`) `errSecInteractionNotAllowed`.
+    /// services, while it says so): a read asks you to unlock it, and gets `answer` (yours, like
+    /// `errSecUserCanceled`); one that never asks (`copyWithoutAsking`) doesn't read.
     static func lockForTests(_ service: String, _ locked: Bool, answer: OSStatus = errSecInteractionNotAllowed) {
         lock.withLock { lockedServices[service] = locked ? answer : nil }
     }

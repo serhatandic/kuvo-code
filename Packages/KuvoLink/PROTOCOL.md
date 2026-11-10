@@ -215,8 +215,7 @@ connection.
   about?, machine?, look?}], "features"?}}`: a bot's `id` (`bot_…`, as group chats name their
   members) and `look` (`{color, shape, face}`, as `kuvo/bots` has it: a colour, shape or face the
   apps don't draw is kept as the plain look's, `graphite`, `round`, `calm`), and `features` as the box's
-  `kuvo/info` names them (the box that takes them keeps the first 300 names, an older one
-  the first 80: a Mac's box puts those its peers check among the first 80). A box sends its bots and its 40 latest
+  `kuvo/info` names them (the box that takes them keeps the first 300 names). A box sends its bots and its 40 latest
   sessions (its engine's and its coding agents') when they change and every ten minutes. Each box
   keeps the newest list from each peer. The relay keeps nothing, so a box that has just connected adds `"ask": "agents"` to
   what it sends first (its agents; a Mac's digest), and whoever gets it tells that box its agents
@@ -3696,8 +3695,9 @@ application/json`:
   Finder's Trash (bridge 0.9.52); one anywhere else stays where it is;
 - for its link (bridge 0.9.61, "The relay, on this Mac's box"):
   - `link/identity {}` → `{"key", "secret", "sign"}` (each 32 bytes, base64url): this Mac's link
-    key, relay secret and signing key, from the Keychain, read without asking you; `503` while the
-    link isn't wanted or the Keychain won't give them (read again a minute later);
+    key, relay secret and signing key, from the Keychain, never asking you to unlock it; `503` while
+    the link isn't wanted or the Keychain won't give them (read again a minute later while it was
+    locked);
   - `link/route {"method", "path", "headers", "body", "phone"}` (`body` base64, `phone` the asking
     phone's key, base64url) → that request's answer as the app gives it: its status, its
     `content-type` and `cache-control`, `x-kuvo-answer: 1` (the app's own answer, whatever its
@@ -3766,9 +3766,9 @@ For the app only (anyone else gets `403`):
   there are machines from the app's list of them (`box/machines.json`, one that won't read
   counting), so this Mac is back on the relay for your phones and machines before the app opens:
   the phone link turned off stays off, and machines you've removed don't bring it back. Its keys
-  come through the keeper's host interface then, which reads them without asking you (a locked
-  Keychain refuses at once, never with a prompt that would hold up the keeper) and again a minute
-  later while it won't give them. The app also says it again when the phone link is turned on or
+  come through the keeper's host interface then, which never asks you to unlock your Keychain
+  for them (while it's locked, they're refused at once, never with a prompt that would hold up
+  the keeper) and reads them again a minute later while it was locked. The app also says it again when the phone link is turned on or
   off while it's open. An older app also sent `features`, what it answered: the box says that
   itself now (`kuvo/info`, its agents' mail), and leaves it.
 - `GET kuvo/link/status` → `{"state": "off" | "connecting" | "connected" | "failed", "reason"?}`;

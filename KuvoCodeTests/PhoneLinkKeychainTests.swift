@@ -58,9 +58,10 @@ import Testing
         #expect(items() == 3)
     }
 
-    /// Where macOS would ask (to unlock the Keychain) and you'd say no, the keeper never asks: the
-    /// read fails at once as a locked one does, and is tried again once you've unlocked it.
-    @Test func theKeeperNeverAsksSoACancelledPromptDoesntKeepTheLinkOffUntilARestart() async throws {
+    /// Its box asking for them never asks you to unlock your Keychain (the keeper has no window, and
+    /// a prompt you cancelled would keep the link off until a restart): while it's locked, the read
+    /// fails at once, and it's tried again once you've unlocked it.
+    @Test func theBoxsAskingNeverAsksYouToUnlockTheKeychainAndHasThemOnceItsUnlocked() async throws {
         defer { cleanUp() }
         let mine = try await made().identity
 
@@ -76,9 +77,28 @@ import Testing
         #expect(await keeper.boxIdentity() == mine)
     }
 
-    /// The open app reads them as it did (it may ask), and a prompt you said no to there leaves the
-    /// link off, nothing made; its box's asking reads them again later, without asking.
-    @Test func aPromptCancelledInTheAppIsntShownAgainAndTheBoxsAskingReadsThemLater() async throws {
+    /// Two reading them for the first time at once (the app's own read and its box's asking, or the
+    /// keeper's and the app's): one key each, the one kept, never one in use and another kept.
+    @Test func keysMadeByTwoAtOnceAreOne() async throws {
+        defer { cleanUp() }
+        let first = PhoneLink(file: file, keychain: service), second = PhoneLink(file: file, keychain: service)
+        first.hasMachines = { true }
+        second.hasMachines = { true }
+        async let one = first.boxIdentity()
+        async let other = second.boxIdentity()
+        let (a, b) = await (one, other)
+        #expect(a != nil && a == b)
+        #expect(first.macKey == second.macKey)
+        #expect(items() == 3)
+        let next = PhoneLink(file: file, keychain: service)
+        next.hasMachines = { true }
+        #expect(await next.boxIdentity() == a)
+    }
+
+    /// The open app reads them as it did (it may ask you). A prompt you said no to there leaves the
+    /// link off, nothing made, and isn't shown again (its box's asking never reads them again this
+    /// launch); the next launch reads them as they were.
+    @Test func aPromptYouSaidNoToInTheAppIsntShownAgainThisLaunch() async throws {
         defer { cleanUp() }
         let (mine, macKey) = try await made()
 
@@ -88,10 +108,15 @@ import Testing
         app.readAgainAfter = 0
         #expect(app.macKey == nil, "you said no: not this Mac's, and no stand-in")
         #expect(app.macKey == nil)
+        #expect(await app.boxIdentity() == nil)
         #expect(Keychain.promptsForTests(service) == 1, "asked once, not again")
         Keychain.lockForTests(service, false)
+        #expect(await app.boxIdentity() == nil, "not read again this launch")
         #expect(items() == 3, "nothing made")
-        #expect(await app.boxIdentity() == mine)
-        #expect(app.macKey != nil && app.macKey == macKey)
+
+        let next = PhoneLink(file: file, keychain: service)
+        next.hasMachines = { true }
+        #expect(next.macKey != nil && next.macKey == macKey)
+        #expect(await next.boxIdentity() == mine)
     }
 }

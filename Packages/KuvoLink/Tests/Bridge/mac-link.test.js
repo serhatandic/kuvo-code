@@ -390,11 +390,9 @@ test("what the app last said of the link is kept, never its keys: the box takes 
   assert.deepEqual(JSON.parse(fs.readFileSync(link.MAC_LINK_FILE, "utf8")), { phones: true, relay: relay.url, name: "Studio Mac", app: "0.9.0" }, "the latest word kept");
 });
 
-test("what this Mac's box says it answers holds what its peers check within the 80 names an older box keeps of it, and a newer box keeps it whole", () => {
+test("what this Mac's box says it answers holds what its peers check, and a peer keeps it whole", () => {
   const features = link.macFeatures();
-  for (const checked of ["moves", "moves.agents", "moves.check", "letters-read", "groups.seats", "work.elsewhere"]) {
-    assert.ok(features.indexOf(checked) >= 0 && features.indexOf(checked) < 80, checked);
-  }
+  for (const checked of ["moves", "moves.agents", "moves.check", "letters-read", "groups.seats", "work.elsewhere"]) assert.ok(features.includes(checked), checked);
   assert.equal(new Set(features).size, features.length);
   assert.deepEqual(link.keptFeatures(features), features);
 });
