@@ -6,7 +6,7 @@ final class CodexSwapReviewRegressionTests: XCTestCase {
     func testPartialDefaultIdentityStaysVisibleBesideSwapWithoutBorrowingItsCredentials() async throws {
         for missingWorkspace in [true, false] {
             let suite = "CodexSwapPartial.\(UUID().uuidString)"
-            let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+            let defaults = try XCTUnwrap(testDefaults(suiteName: suite))
             defer { defaults.removePersistentDomain(forName: suite) }
             let claims = missingWorkspace ? #"{"email":"personal@example.com"}"# : "{}"
             let idToken = "header." + Data(claims.utf8).base64EncodedString() + ".signature"

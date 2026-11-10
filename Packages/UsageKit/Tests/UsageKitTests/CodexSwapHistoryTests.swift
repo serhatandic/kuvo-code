@@ -57,7 +57,7 @@ final class CodexSwapHistoryTests: XCTestCase {
         ]))
         for identity in ["workspace-a|", "|personal@example.com"] {
             let suite = "CodexSwapPartialHistory.\(UUID().uuidString)"
-            let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+            let defaults = try XCTUnwrap(testDefaults(suiteName: suite))
             defer { defaults.removePersistentDomain(forName: suite) }
             let cache = ProviderSnapshotCache(userDefaults: defaults, storageKey: "test-cache")
             cache.store(ProviderSnapshot(providerID: "codex", displayName: "Codex", lines: [], usageHistory: history),
@@ -78,7 +78,7 @@ final class CodexSwapHistoryTests: XCTestCase {
     @MainActor
     func testExportedCodexCardsIncludeTheirIdentitiesAndValidate() throws {
         let suite = "CodexSwapExport.\(UUID().uuidString)"
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let defaults = try XCTUnwrap(testDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let identities = ["codex": "a|a@example.com", "codex@1234abcd": "b|b@example.com"]
         let providers = identities.keys.sorted().map { CodexProvider.makeProvider(id: $0) }

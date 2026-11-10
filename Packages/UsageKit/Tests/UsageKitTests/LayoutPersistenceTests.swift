@@ -68,7 +68,7 @@ final class LayoutPersistenceTests: XCTestCase {
 
     private func makeDefaults(_ name: String) -> UserDefaults {
         let suite = "OpenUsageTests.LayoutPersistence.\(name).\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
+        let defaults = testDefaults(suiteName: suite)!
         defaults.removePersistentDomain(forName: suite)
         return defaults
     }

@@ -143,7 +143,7 @@ final class FirstRunSeederTests: XCTestCase {
 
     private func makeDefaults(_ name: String) -> UserDefaults {
         let suiteName = "OpenUsageTests.FirstRunSeeder.\(name).\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suiteName)!
+        let defaults = testDefaults(suiteName: suiteName)!
         defaults.removePersistentDomain(forName: suiteName)
         return defaults
     }

@@ -6,7 +6,7 @@ import XCTest
 final class ProviderSnapshotCacheTests: XCTestCase {
     private func makeDefaults() -> (UserDefaults, String) {
         let suite = "providerSnapshotCache.test.\(UUID().uuidString)"
-        return (UserDefaults(suiteName: suite)!, suite)
+        return (testDefaults(suiteName: suite)!, suite)
     }
 
     private func snapshot(_ id: String, used: Double, now: Date) -> ProviderSnapshot {

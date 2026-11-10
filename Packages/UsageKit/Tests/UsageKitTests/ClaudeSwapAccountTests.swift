@@ -28,7 +28,7 @@ final class ClaudeSwapAccountTests: XCTestCase {
             """#
         ])
         let suite = "ClaudeSwapTests.\(UUID().uuidString)"
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let defaults = try XCTUnwrap(testDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let store = ProviderAccountsStore(defaults: defaults)
         let observer = DefaultAccountObserver(environment: FakeEnvironment([:]), files: files,

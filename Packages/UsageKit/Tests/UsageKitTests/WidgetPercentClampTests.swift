@@ -54,7 +54,7 @@ final class WidgetPercentClampTests: XCTestCase {
             )
         )
         let suiteName = "OpenUsageTests.PercentClamp.\(suite).\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suiteName)!
+        let defaults = testDefaults(suiteName: suiteName)!
         defaults.removePersistentDomain(forName: suiteName)
         let cache = ProviderSnapshotCache(userDefaults: defaults, storageKey: "snapshots", ttl: 600, now: { Date() })
         let store = WidgetDataStore(

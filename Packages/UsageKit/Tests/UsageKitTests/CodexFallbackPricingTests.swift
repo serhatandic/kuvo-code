@@ -172,7 +172,7 @@ final class CodexFallbackPricingTests: XCTestCase {
 
     func testPreferenceDefaultsToNoneAndPersistsAnExplicitChoice() throws {
         let suite = "fallback-setting-tests-\(UUID().uuidString)"
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let defaults = try XCTUnwrap(testDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         XCTAssertNil(CodexFallbackModelSetting.current(defaults: defaults))
         defaults.set(reference, forKey: CodexFallbackModelSetting.key)

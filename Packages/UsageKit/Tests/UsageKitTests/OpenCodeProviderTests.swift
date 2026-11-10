@@ -153,7 +153,7 @@ final class OpenCodeProviderTests: XCTestCase {
         let descriptors = runtime.widgetDescriptors
         let registry = WidgetRegistry(providers: [runtime.provider], descriptors: descriptors)
         let suiteName = "OpenCodeProviderTests.sub-one-percent.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suiteName)!
+        let defaults = testDefaults(suiteName: suiteName)!
         defaults.removePersistentDomain(forName: suiteName)
         defer { defaults.removePersistentDomain(forName: suiteName) }
         let fixedNow = self.now
@@ -201,7 +201,7 @@ final class OpenCodeProviderTests: XCTestCase {
         let descriptors = runtime.widgetDescriptors
         let registry = WidgetRegistry(providers: [runtime.provider], descriptors: descriptors)
         let suiteName = "OpenCodeProviderTests.untouched.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suiteName)!
+        let defaults = testDefaults(suiteName: suiteName)!
         defaults.removePersistentDomain(forName: suiteName)
         defer { defaults.removePersistentDomain(forName: suiteName) }
         let fixedNow = self.now

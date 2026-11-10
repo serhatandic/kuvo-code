@@ -10,7 +10,7 @@ final class CodexSwapAccountTests: XCTestCase {
 
     private func defaults() throws -> UserDefaults {
         let suite = "CodexSwap.\(UUID().uuidString)"
-        let value = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let value = try XCTUnwrap(testDefaults(suiteName: suite))
         addTeardownBlock { value.removePersistentDomain(forName: suite) }
         return value
     }

@@ -9,7 +9,7 @@ final class ProviderHeaderLayoutTests: XCTestCase {
     func testDashboardHeaderFitsOversizedPlanInBothDensities() throws {
         for density in DensitySetting.allCases {
             let suite = "ProviderHeaderLayoutTests.\(UUID().uuidString)"
-            let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+            let defaults = try XCTUnwrap(testDefaults(suiteName: suite))
             defaults.set(density.rawValue, forKey: DensitySetting.key)
             defer { defaults.removePersistentDomain(forName: suite) }
 

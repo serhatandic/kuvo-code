@@ -385,7 +385,7 @@ final class SettingsMigratorTests: XCTestCase {
 
     private func makeDefaults(_ name: String) -> (UserDefaults, String) {
         let suite = "OpenUsageTests.SettingsMigrator.\(name).\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
+        let defaults = testDefaults(suiteName: suite)!
         defaults.removePersistentDomain(forName: suite)
         return (defaults, suite)
     }

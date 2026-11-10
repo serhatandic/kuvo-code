@@ -110,7 +110,7 @@ final class OllamaMonthlyUsageTests: XCTestCase {
 
     private func makeDefaults() -> UserDefaults {
         let suiteName = "OpenUsageTests.OllamaMonthly.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suiteName)!
+        let defaults = testDefaults(suiteName: suiteName)!
         addTeardownBlock { defaults.removePersistentDomain(forName: suiteName) }
         return defaults
     }

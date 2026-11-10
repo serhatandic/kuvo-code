@@ -127,7 +127,7 @@ final class WidgetMeterStyleTests: XCTestCase {
 
     func testMeterStylePersistsAcrossStoreInstances() {
         let suiteName = "OpenUsageTests.MeterStyle.persist.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suiteName)!
+        let defaults = testDefaults(suiteName: suiteName)!
         defaults.removePersistentDomain(forName: suiteName)
         defer { defaults.removePersistentDomain(forName: suiteName) }
 
@@ -216,7 +216,7 @@ final class WidgetMeterStyleTests: XCTestCase {
 
     private func makeUserDefaults(_ name: String) -> UserDefaults {
         let suiteName = "OpenUsageTests.MeterStyle.\(name).\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suiteName)!
+        let defaults = testDefaults(suiteName: suiteName)!
         defaults.removePersistentDomain(forName: suiteName)
         return defaults
     }
