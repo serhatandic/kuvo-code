@@ -18,7 +18,9 @@
 # time, each waiting on its kind's lock in this user's own temporary folder (getconf's, not
 # $TMPDIR, which a caller may point elsewhere). Jobs of different kinds run side by side. Once its
 # turn comes, a job also waits while the Mac is busy (its load over the last minute above
-# KUVO_HEAVY_LOAD, 40 unless set), so it stays usable. While the Mac app's suite (mac) waits there,
+# KUVO_HEAVY_LOAD, 40 unless set), so it stays usable, and a new one while it's short of memory
+# (below; KUVO_HEAVY_MEMORY, 20% available unless set, 0 for never, for KUVO_HEAVY_MEMORY_WAIT_FOR,
+# 15 minutes, at most). While the Mac app's suite (mac) waits there,
 # new phone, mac-build and box jobs wait for it to start, for 15 minutes at most
 # (KUVO_HEAVY_MAC_FIRST_FOR): the jobs that kept starting kept the Mac busy, and it rarely got in.
 #
@@ -201,6 +203,21 @@ LIMIT=$(seconds_of "$GIVEN_LIMIT" KUVO_HEAVY_LIMIT) || exit 64
 GIVEN_MAC_FIRST="${KUVO_HEAVY_MAC_FIRST_FOR:-15m}"
 MAC_FIRST_FOR=$(seconds_of "$GIVEN_MAC_FIRST" KUVO_HEAVY_MAC_FIRST_FOR) || exit 64
 MAC_FIRST="$DIR/kuvo-code-heavy-mac-first-$(id -u)"
+# Memory a new job waits for (below): the share of it available, in percent (0: it doesn't wait).
+MIN_FREE="${KUVO_HEAVY_MEMORY:-20}"
+case "$MIN_FREE" in
+    "" | *[!0-9]* | ????*) MIN_FREE=bad ;;
+esac
+if [ "$MIN_FREE" = bad ] || [ "${KUVO_HEAVY_MEMORY:-20}" -gt 100 ]; then
+    echo "KUVO_HEAVY_MEMORY is a share of memory in percent, 0 to 100 (it's ${KUVO_HEAVY_MEMORY:-})." >&2
+    exit 64
+fi
+# Swapping, in MB a second, that counts as short of memory too.
+SWAP_MB="${KUVO_HEAVY_SWAP:-10}"
+case "$SWAP_MB" in "" | *[!0-9]* | ???????*) echo "KUVO_HEAVY_SWAP is MB a second (it's $SWAP_MB)." >&2; exit 64 ;; esac
+MEMORY_SHORT="$DIR/kuvo-code-heavy-memory-short-$(id -u)"
+GIVEN_MEMORY_WAIT="${KUVO_HEAVY_MEMORY_WAIT_FOR:-15m}"
+MEMORY_WAIT_FOR=$(seconds_of "$GIVEN_MEMORY_WAIT" KUVO_HEAVY_MEMORY_WAIT_FOR) || exit 64
 
 # The lock whose turn this process has just taken (below), if any.
 TAKEN=
@@ -293,15 +310,97 @@ if [ "$kind" != mac ] && [ -z "${NESTED:-}" ]; then
     done
 fi
 
+# Short of memory: with two simulators, the app's suite, builds and the engine going, the Mac ran
+# out of memory long before CPU (15 of 16 GB used, 9 GB swapped, the CPU half idle), and the load
+# grew with the swapping. So a new job (not one started inside a job already running) also waits
+# while memory is short, by what the system does and says: it's swapping (pages in and out, more
+# than $SWAP_MB MB a second since the last look, from vm_stat), its memory pressure is at warn or
+# worse (kern.memorystatus_vm_pressure_level), or less than $MIN_FREE% of it is available
+# (kern.memorystatus_level, what `memory_pressure -Q` calls free; it counts memory in use by apps
+# too, so it falls late). Not swap used: it stays long after the pressure is gone. Short, it waits
+# until two looks in a row find it isn't, so the jobs that waited don't all start at once, and for
+# $MEMORY_WAIT_FOR at most from when any job found it short ($MEMORY_SHORT): then the load alone
+# decides.
+memory_level() { sysctl -n kern.memorystatus_vm_pressure_level 2>/dev/null || echo 1; }
+memory_free() { sysctl -n kern.memorystatus_level 2>/dev/null || echo 100; }
+page_size=$(vm_stat 2>/dev/null | sed -n 's/.*page size of \([0-9]*\) bytes.*/\1/p')
+page_size=${page_size:-16384}
+# Pages swapped in and out so far.
+swapped() { vm_stat 2>/dev/null | awk '/^Swapins/ { gsub("\\.", "", $2); n += $2 } /^Swapouts/ { gsub("\\.", "", $2); n += $2 } END { print n + 0 }'; }
+swap_pages=
+swap_at=
+swap_rate=0
+# Looks again: how much it swapped a second since the last look (the first, over three seconds).
+look_at_memory() {
+    if [ -z "$swap_pages" ]; then
+        swap_pages=$(swapped)
+        swap_at=$(date +%s)
+        sleep 3
+    fi
+    pages=$(swapped)
+    at=$(date +%s)
+    seconds=$((at - swap_at))
+    [ "$seconds" -gt 0 ] || seconds=1
+    swap_rate=$(((pages - swap_pages) * page_size / 1000000 / seconds))
+    swap_pages=$pages
+    swap_at=$at
+}
+memory_short() {
+    [ "$swap_rate" -gt "$SWAP_MB" ] || [ "$(memory_level)" -ge 2 ] || [ "$(memory_free)" -lt "$MIN_FREE" ]
+}
+memory_said() {
+    case "$(memory_level)" in 1) pressure=normal ;; 2) pressure=warn ;; 4) pressure=critical ;; *) pressure="level $(memory_level)" ;; esac
+    echo "swapping ${swap_rate} MB a second, pressure $pressure, $(memory_free)% available"
+}
+# How long memory has been short, for any job: since the first that found it so.
+short_for() {
+    since=
+    [ -f "$MEMORY_SHORT" ] && read -r since < "$MEMORY_SHORT" 2>/dev/null
+    if [ -z "${since:-}" ]; then
+        since=$(date +%s)
+        printf '%s\n' "$since" > "$MEMORY_SHORT.$$" && mv -f "$MEMORY_SHORT.$$" "$MEMORY_SHORT"
+    fi
+    echo $(($(date +%s) - since))
+}
+# Why it waits now, if it does (in `why`): memory, or the load.
+was_short=
+calm=0
+decide() {
+    why=
+    if [ "$MIN_FREE" -gt 0 ] && [ -z "${NESTED:-}" ]; then
+        look_at_memory
+        if memory_short; then
+            calm=0
+            was_short=1
+            [ "$(short_for)" -lt "$MEMORY_WAIT_FOR" ] && why=memory && return
+        elif [ -n "$was_short" ] && [ "$calm" -lt 1 ]; then
+            # (Once more, so it's not a moment's calm.)
+            calm=$((calm + 1))
+            why=memory
+            return
+        else
+            rm -f "$MEMORY_SHORT"
+        fi
+    fi
+    if busy; then why=load; fi
+}
+
 said=
-if [ "$kind" = mac ] && busy && [ "$WAITS" != 0 ]; then
+decide
+if [ "$kind" = mac ] && [ -n "$why" ] && [ "$WAITS" != 0 ]; then
     printf '%s %s\n' "$$" "$(date +%s)" > "$MAC_FIRST.$$" && mv -f "$MAC_FIRST.$$" "$MAC_FIRST"
 fi
-while busy; do
-    [ "$WAITS" = 0 ] && cannot_wait "The Mac is busy (load $(load), over $MAX_LOAD)."
-    [ -n "$said" ] || echo "Waiting while the Mac is busy (load $(load), over $MAX_LOAD)…" >&2
-    said=1
+while [ -n "$why" ]; do
+    if [ "$why" = memory ]; then
+        [ "$WAITS" = 0 ] && cannot_wait "The Mac is short of memory ($(memory_said))."
+        [ "$said" = memory ] || echo "Waiting for memory: the Mac is short of it ($(memory_said)), for $GIVEN_MEMORY_WAIT at most…" >&2
+    else
+        [ "$WAITS" = 0 ] && cannot_wait "The Mac is busy (load $(load), over $MAX_LOAD)."
+        [ "$said" = load ] || echo "Waiting while the Mac is busy (load $(load), over $MAX_LOAD)…" >&2
+    fi
+    said=$why
     sleep 15
+    decide
 done
 # (Its own say, not another suite's since.)
 if [ "$kind" = mac ] && [ -f "$MAC_FIRST" ] && read -r pid since < "$MAC_FIRST" 2>/dev/null && [ "$pid" = "$$" ]; then
