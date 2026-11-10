@@ -3831,7 +3831,7 @@ while a box is away goes there when it's back.
   belongs to, by the folder its sessions run in (and its top folder), for those it keeps, those it
   removed that can come back and those removed before; and each project's git worktrees made
   elsewhere (`git worktree add /tmp/try`; as its repository lists them and they name it back, by
-  their real paths, looked for again every few seconds, off the box's thread; not one that's a
+  their real paths, looked for again every 15 seconds or so, off the box's thread; not one that's a
   project of its own; #422). A client files a session whose folder is
   here under that project, never as a project of its own; the events line changes with them. A box
   from before doesn't say: a client goes by `kuvo/worktrees` then.
@@ -4391,8 +4391,9 @@ one the box marked as in Full Access, which runs (bridge 0.9.187).
 What's a conversation's own is never reviewed by its agent's own file tools, as its folder isn't (the sandbox's walls for its commands are as they were): its folder, its project's other
 folders, the files sent with it, its commands' temporary folder, a bot's own and its projects, and,
 for one at work in a project's main folder, the project's linked git worktrees wherever they are
-(`git worktree add /tmp/try`: each its repository's `.git/worktrees` lists whose own `.git` names it
-back; never one in Kuvo Code's own folders, another session's, nor one where an agent in Auto
+(`git worktree add /tmp/try`: each its repository's `.git/worktrees` lists, that folder and the
+entry where they're named, whose own `.git` names it back; what runs later there, and Kuvo Code's
+own, still judged; never one in Kuvo Code's own folders, another session's, nor one where an agent in Auto
 couldn't start a session: your home or a folder holding it, a whole personal folder, your secrets,
 what runs at login). A conversation in a linked worktree has only that one: the project's main
 folder and its other worktrees stay the reviewer's.

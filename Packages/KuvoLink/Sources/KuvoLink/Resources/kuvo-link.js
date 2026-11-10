@@ -5811,13 +5811,19 @@ async function realishLater(where) {
   }
 }
 async function smallFile(file) {
+  let handle;
   try {
-    const kind = await fsp.lstat(file);
+    handle = await fsp.open(file, fs23.constants.O_RDONLY | fs23.constants.O_NONBLOCK | fs23.constants.O_NOFOLLOW);
+    const kind = await handle.stat();
     if (!kind.isFile() || kind.size > MOST_READ)
       return null;
-    return await fsp.readFile(file, "utf8");
+    const buffer = Buffer.alloc(MOST_READ);
+    const { bytesRead } = await handle.read(buffer, 0, MOST_READ, 0);
+    return buffer.subarray(0, bytesRead).toString("utf8");
   } catch {
     return null;
+  } finally {
+    await handle?.close().catch(() => {});
   }
 }
 async function isRepository(git) {
@@ -5923,13 +5929,14 @@ function linkedTrees() {
 var looking = false;
 var looks = Promise.resolve();
 function findLinkedTrees() {
-  looks = looks.then(lookForTrees, lookForTrees);
+  const look = () => inTime(lookForTrees(), undefined, 30000);
+  looks = looks.then(look, look);
   return looks;
 }
 async function lookForTrees() {
   try {
     const projects = projectsOf();
-    const own = new Set(await Promise.all(projects.map(realishLater)));
+    const own = new Set(await Promise.all(projects.map((project) => inTime(realishLater(project), project))));
     const found = {};
     for (const project of projects) {
       for (const tree of await inTime(projectWorktrees(project), []))
@@ -16250,7 +16257,7 @@ var fold = (where) => process.platform === "darwin" ? where.toLowerCase() : wher
 var exactly = (where, wall) => where === wall || where.startsWith(wall + "/");
 var inside3 = (where, wall) => exactly(fold(where), fold(wall));
 var holds = (folder, wall) => folder === "/" || fold(wall).startsWith(fold(folder) + "/");
-var matching3 = (where, patterns = []) => patterns.some((each) => new RegExp(each).test(where));
+var matching3 = (where, patterns = []) => patterns.some((each) => new RegExp(each, process.platform === "darwin" ? "i" : "").test(where));
 var nameOf = (word) => word.split("/").pop() ?? "";
 var homeWord = (text) => text.replace(/^(~|\$HOME|\$\{HOME\})(?=\/|$)/, homeFolder());
 function pathOf(word, folder) {
@@ -16377,7 +16384,7 @@ function attachmentsPlace(at) {
 }
 function conversationPlace(at) {
   const { inside: holders, shared } = conversationPlaces();
-  return holders.some((each) => at.startsWith(each + "/")) || shared.some((each) => inside3(at, each));
+  return holders.some((each) => at.startsWith(each + "/")) || shared.some((each) => exactly(at, each));
 }
 function deletesHome(where, home) {
   const target = where.endsWith("/*") ? where.slice(0, -2) || "/" : where;
@@ -16953,17 +16960,17 @@ async function gitIn2(folder, args, ok = [0]) {
   if (!run)
     return null;
   const env = { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_OPTIONAL_LOCKS: "0", GIT_CONFIG_NOSYSTEM: "1", GIT_LITERAL_PATHSPECS: "1" };
-  return new Promise((resolve) => execFile7("git", run, { cwd: folder, env, encoding: "utf8", timeout: 20000, maxBuffer: 8 * 1024 * 1024 }, (error, out) => resolve(!error || ok.includes(Number(error.code)) ? String(out ?? "") : null)));
+  return new Promise((resolve) => execFile7("git", run, { cwd: folder, env, encoding: "utf8", timeout: 20000, maxBuffer: 8 * 1024 * 1024 }, (error, out) => resolve(!error || typeof error.code === "number" && !error.killed && ok.includes(error.code) ? String(out ?? "") : null)));
 }
 async function projectScript(file, text, folders) {
   const at = realish(file);
-  if (!folders.some((folder) => inside3(at, realish(folder))))
+  if (!folders.some((folder) => exactly(at, realish(folder))))
     return null;
   const where = path61.dirname(at);
   const name = path61.basename(at);
   if (await gitIn2(where, ["ls-files", "--error-unmatch", "--", name]) === null)
     return null;
-  const committed = await gitIn2(where, ["show", `HEAD:./${name}`]);
+  const committed = await gitIn2(where, ["cat-file", "--filters", `HEAD:./${name}`]) ?? await gitIn2(where, ["show", `HEAD:./${name}`]);
   if (committed === null)
     return null;
   let changed = "";
@@ -16972,7 +16979,7 @@ async function projectScript(file, text, folders) {
     const copy = path61.join(FETCHED_FOLDER, `${randomBytes(8).toString("hex")}.committed`);
     writePrivate(copy, committed);
     try {
-      changed = await gitIn2(where, ["diff", "--no-index", "--text", "--no-color", "--", copy, at], [0, 1]) ?? "";
+      changed = await gitIn2(where, ["diff", "--no-index", "--text", "--no-textconv", "--no-ext-diff", "--no-color", "--", copy, at], [0, 1]) ?? "";
     } finally {
       fs57.rmSync(copy, { force: true });
     }
@@ -17264,8 +17271,12 @@ function holdsRepository(folder) {
     return error?.code !== "ENOENT";
   }
 }
+function walledForOwn(where, policy = fencePolicy()) {
+  const at = realish(where);
+  return inKuvo(at, policy) || runsLater(at, policy);
+}
 function runsLater(where, policy) {
-  return RUNS_OUTSIDE.test(where) || [...policy.readOnly, ...pathFolders()].some((wall) => inside3(where, wall)) || (policy.readOnlyPatterns ?? []).some((pattern) => new RegExp(pattern).test(where));
+  return RUNS_OUTSIDE.test(where) || [...policy.readOnly, ...pathFolders()].some((wall) => inside3(where, wall)) || matching3(where, policy.readOnlyPatterns);
 }
 var heldBack = (reason, why) => ({ decision: "refuse", reason, by: "code", held: true, why });
 async function judge(action, context, given, now, folder) {
@@ -17595,8 +17606,12 @@ async function reviewIn(session, action, signal, found, pin = true) {
   if (!at)
     return null;
   const bot = botOf(at.data);
-  if (!inAuto(at))
+  if (!inAuto(at)) {
+    try {
+      clearPlaces(at.data.id);
+    } catch {}
     return null;
+  }
   const own = bot && !botOfConversation(at.data.id) ? botHere(bot.id)?.session : undefined;
   const ownAt = own && own !== at.data.id ? await conversationOf2(own).catch(() => null) : null;
   const said = [...ownAt ? await yourMessages(ownAt, signal) : [], ...await yourMessages(at, signal)];
@@ -17707,11 +17722,11 @@ async function takeUpWaitingAsks(source, sessions, signal) {
   }
 }
 var attachedOf = (session) => attachmentRoots().map((root) => path62.join(root, session));
-async function ownFolders(at) {
+async function ownFolders(at, withTrees = true) {
   const folder = at.data.location?.directory;
   const folders = typeof folder === "string" ? [folder, commandTemporary(folder)].filter((each) => Boolean(each)) : [];
   folders.push(...[at.data.id, at.data.parentID].filter((each) => typeof each === "string").flatMap(attachedOf));
-  if (typeof folder === "string")
+  if (typeof folder === "string" && withTrees)
     folders.push(...await projectTrees(folder));
   const bot = botOfConversation(at.data.id) ?? worksFor(at.data);
   if (!bot)
@@ -17737,9 +17752,15 @@ async function foundTrees(folder) {
   if (!trees.length)
     return [];
   const policy = fencePolicy();
-  const ours = (tree) => policy.kuvo.some((wall) => tree === wall || tree.startsWith(wall + "/") || wall.startsWith(tree + "/")) || policy.kuvoPatterns.some((pattern) => new RegExp(pattern).test(tree + "/"));
+  const flags = process.platform === "darwin" ? "i" : "";
+  const ours = (tree) => policy.kuvo.some((wall) => tree === wall || tree.startsWith(wall + "/") || wall.startsWith(tree + "/")) || policy.kuvoPatterns.some((pattern) => new RegExp(pattern, flags).test(tree + "/")) || (policy.patternFolders ?? []).some((pattern) => holdsMatch(tree, pattern, flags));
   const kept = await Promise.all(trees.map((tree) => ours(tree) ? Promise.resolve("Kuvo Code's own") : keptFromSessions(tree, policy)));
   return trees.filter((_, at) => !kept[at]);
+}
+function holdsMatch(tree, pattern, flags) {
+  const parts = pattern.replace(/^\^/, "").replace(/\$$/, "").replaceAll("[^/]+", "\x00").split("/").slice(1).map((part) => part.replaceAll("\x00", "[^/]+"));
+  const names = tree.split("/").slice(1);
+  return names.length <= parts.length && names.every((name, at) => new RegExp(`^(?:${parts[at]})$`, flags).test(name));
 }
 async function workFolders(at) {
   const folder = at.data.location?.directory;
@@ -17809,6 +17830,9 @@ async function answerPermission(source, id, sessionID, signal, found) {
     return inside === "" || !inside.startsWith("..") && !path62.isAbsolute(inside);
   });
   if (!ownByName && !inAuto(at)) {
+    try {
+      clearPlaces(at.data.id);
+    } catch {}
     noteReview(id, sessionID, "yours", call2);
     return null;
   }
@@ -17823,8 +17847,11 @@ async function answerPermission(source, id, sessionID, signal, found) {
     return null;
   }
   const reply = (body) => call(source, "POST", `/api/session/${encodeURIComponent(permission.asker)}/permission/${encodeURIComponent(permission.id)}/reply`, body, signal);
-  const own = await ownFolders(at);
-  if (actions.every((action) => action.kind === "file" && own.some((folder) => isWithin(action.path, folder)))) {
+  const own = await ownFolders(at, false);
+  const trees = typeof folder === "string" ? await projectTrees(folder) : [];
+  const policy = trees.length ? fencePolicy() : null;
+  const ownFile = (file) => own.some((each) => isWithin(file, each)) || policy !== null && trees.some((each) => isWithin(file, each)) && !walledForOwn(file, policy);
+  if (actions.every((action) => action.kind === "file" && ownFile(action.path))) {
     await reply({ decision: "once" });
     noteReview(id, sessionID, "allowed", call2);
     return { decision: "allow", reason: "Its own project.", by: "code" };
@@ -18046,6 +18073,10 @@ async function reapplyApprovals(engine, bridge, settings = false) {
         const bot = found2(target, data, agents).bot;
         const now = approvalOf(data, { agents, bot }, since, byDefault);
         markConversation(data.id, now.effective === "fullAccess");
+        if (now.effective !== "auto")
+          try {
+            clearPlaces(data.id);
+          } catch {}
         const remade = settings && now.stored && changeFor(found2(target, data, agents), now.approval) !== null;
         if (!remade && kept !== "auto" && kept !== "fullAccess" && !(bot && kept === undefined) && !now.pending)
           continue;
