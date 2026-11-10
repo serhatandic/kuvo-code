@@ -90,7 +90,9 @@ A pattern matches the user's other apps and other sessions: on 2026-11-07 one `p
   and bridge suites, commit the work and run `scripts/ci-branch.sh --wait` on GitHub; only
   committed changes are tested. The helper pushes the work branch to `origin` as a `ci/` branch
   over SSH. The phone has no CI: run its tests locally through `scripts/heavy.sh phone` (see
-  `CONTRIBUTING.md`).
+  `CONTRIBUTING.md`), but only a run that boots a simulator takes a `phone` slot: build the phone
+  app (and anything else that boots no simulator) with the phone's `scripts/build-app.sh`, which
+  takes `scripts/heavy.sh phone-build`, the build lane, so it never queues behind test runs.
 
   Never drive the Mac app's window from tests, because it takes over the user's keyboard and mouse.
 
