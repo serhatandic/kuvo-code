@@ -26,9 +26,10 @@ import Testing
         let before = try JSONDecoder().decode(SandboxAsks.self, from: Data(#"{"asks":[]}"#.utf8))
         #expect(before.reviews == nil)
         #expect(AskReview.isYours(action: outside, review: nil, listsAll: false))
-        // Its box not heard now (its link down): nothing reviews it, so it's yours, checked or not.
-        #expect(AskReview.isYours(action: outside, review: reviews[0], listsAll: true, heard: false))
+        // Its box not heard now (its link down, or starting again): one it never listed is yours, as
+        // nothing would list it; what it last said of one stands.
         #expect(AskReview.isYours(action: outside, review: nil, listsAll: true, heard: false))
+        #expect(!AskReview.isYours(action: outside, review: reviews[0], listsAll: true, heard: false))
     }
 
     @Test func aStateThatIsntOnSaysWhyAndWhatToDo() throws {

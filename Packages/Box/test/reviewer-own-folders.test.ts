@@ -207,10 +207,15 @@ test.skipIf(!canFence)("asks waiting as the box starts again are taken up and li
       // Heard, but answered before the box could read it: listed as yours, never left checked.
       await reviewing.reviewPermission(engine, { type: "permission.asked", data: { id: "per_gone", sessionID: "ses_wait", action: "external_directory" } });
       said.gone = reviewing.listAskReviews().find(each => each.id === "per_gone")?.state ?? null;
+      // Answered: one left for you leaves the list; what the reviewer decided stays, for its mark.
+      reviewing.settleAskReview("per_gone");
+      reviewing.settleAskReview("per_w");
+      said.listed = reviewing.listAskReviews().map(each => each.id);
     `)
     expect(said.before).toBeNull()
     expect(said.after).toBe("allowed")
     expect(said.gone).toBe("yours")
+    expect(said.listed).toEqual(["per_w"])
   } finally {
     rmSync(project, { recursive: true, force: true })
   }

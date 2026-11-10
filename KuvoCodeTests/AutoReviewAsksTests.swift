@@ -96,8 +96,9 @@ import Testing
         #expect(workspace.asking["per_t1"] == id, "told once it's yours")
     }
 
-    /// Its box's link down (crashed, restarting), with its engine still asking: nothing reviews or
-    /// lists what it asks, so one not listed is yours, not hidden while the agent waits.
+    /// Its box's link down (crashed, restarting), with its engine still asking: nothing lists what
+    /// it asks now, so one it never listed is yours, not hidden while the agent waits; one it said
+    /// it's checking stays so, as a moment's cut doesn't tell you of it.
     @Test func withItsBoxNotHeardAnAskNotListedIsYours() async throws {
         let workspace = workspace
         Sandboxes.shared.onYours = { workspace.reviewLeftForYou($0) }
@@ -112,9 +113,13 @@ import Testing
         #expect(!workspace.needsAttention(id), "heard, and not listed yet: its box's to say")
         Sandboxes.shared.take(reviews: [review("per_d1", .checking)], from: box)
         #expect(!workspace.needsAttention(id), "being checked")
+        // Not heard for a moment: what it last said of one stands (a blip doesn't tell you of it).
         Sandboxes.shared.setLive(false, box)
-        #expect(workspace.needsAttention(id), "its box not heard: nothing checks it now, so it's yours")
-        #expect(workspace.asking["per_d1"] == id, "and told")
+        #expect(!workspace.needsAttention(id), "still its box's to check")
+        // One it never listed, asked while it isn't heard: nothing would list it, so it's yours.
+        workspace.handle(try engine.event("permission.asked", outside("per_d2")))
+        #expect(workspace.needsAttention(id), "its box not heard: one it never listed is yours")
+        #expect(workspace.asking["per_d2"] == id, "and told")
     }
 
     /// A command isn't the reviewer's to take up, and a box whose word isn't whole (from before

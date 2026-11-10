@@ -15,7 +15,7 @@ import { applyCompatibility, followSettingsFile, learnCompatibility } from "./co
 import { modelsDue, settleDueModels, WORK_ENDS } from "./models";
 import { goalHolds, settleGoalHolds } from "../work/goals";
 import { workWatcher } from "../work/wakes";
-import { reviewPermission, settleAskReview, takeUpWaitingAsks } from "../work/reviewing";
+import { reviewPermission, settleAskReview, settleRunReviews, takeUpWaitingAsks } from "../work/reviewing";
 import { forgetReviews } from "../work/reviewer";
 import { forgetDecided } from "../work/autopilot";
 import { backUpSession } from "../work/backups";
@@ -400,6 +400,8 @@ export async function watchEvents(read: () => Target, tell: (notice: Notice) => 
         // An ask answered: off the list of what waits (on every source, the bridge's too).
         const settled = ANSWERED.has(event.type) ? event.data?.requestID ?? event.data?.id : undefined;
         if (typeof settled === "string") settleAskReview(settled);
+        // A run's end takes what it asked with it, with no word of each.
+        if (RUN_ENDS.has(event.type) && typeof event.data?.sessionID === "string") settleRunReviews(event.data.sessionID);
         if (!notices) continue;
         if (ANSWERED.has(event.type)) answered(event.data?.requestID ?? event.data?.id);
         // A run's end: what it asked the engine let go with it, without a word (stopped, say). Looked

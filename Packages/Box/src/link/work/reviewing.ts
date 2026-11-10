@@ -247,6 +247,15 @@ export function settleAskReview(id: string): void {
   for (const changed of reviewFollowers) changed();
 }
 
+/** A run's end, which takes what it asked with it, without a word of each: its asks left for you
+ * or still checked are off the list, as `settleAskReview` takes one. */
+export function settleRunReviews(session: string): void {
+  const gone = [...askReviews.values()].filter(each => each.session === session && (each.state === "yours" || each.state === "checking"));
+  if (!gone.length) return;
+  for (const each of gone) askReviews.delete(each.id);
+  for (const changed of reviewFollowers) changed();
+}
+
 /** Tells `changed` each time an ask's review changes, until the function it returns is called. */
 export function onAskReviewsChanged(changed: () => void): () => void {
   reviewFollowers.add(changed);

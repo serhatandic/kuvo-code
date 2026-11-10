@@ -16870,6 +16870,15 @@ function settleAskReview(id) {
   for (const changed of reviewFollowers)
     changed();
 }
+function settleRunReviews(session) {
+  const gone = [...askReviews.values()].filter((each) => each.session === session && (each.state === "yours" || each.state === "checking"));
+  if (!gone.length)
+    return;
+  for (const each of gone)
+    askReviews.delete(each.id);
+  for (const changed of reviewFollowers)
+    changed();
+}
 function onAskReviewsChanged(changed) {
   reviewFollowers.add(changed);
   return () => {
@@ -24919,6 +24928,8 @@ async function watchEvents(read, tell, signal, answered = () => {}, { bots = fal
         const settled = ANSWERED2.has(event.type) ? event.data?.requestID ?? event.data?.id : undefined;
         if (typeof settled === "string")
           settleAskReview(settled);
+        if (RUN_ENDS.has(event.type) && typeof event.data?.sessionID === "string")
+          settleRunReviews(event.data.sessionID);
         if (!notices)
           continue;
         if (ANSWERED2.has(event.type))

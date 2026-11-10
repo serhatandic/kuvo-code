@@ -4593,7 +4593,11 @@ vault does (`run/vault.sock`); another passes them on.
   quiet mark on its step. A box with `sandbox.reviews.whole` lists every such ask from the moment it
   hears it (`checking` at once), takes up those already waiting as it starts again, and lists one it
   can't take up as `yours`: a client shows such an ask only once it's listed `yours`, and waits for
-  nothing of its own. From a box without that word, a client takes one not listed as yours at once. An ask: `{id, at, session?, sessionName?, bot?, botName?,
+  nothing of its own. An answered ask (or one gone with its run) leaves the list unless the reviewer
+  decided it, whose entry stays for its step's mark. While a client doesn't hear the box's asks
+  (its link down or starting again, the stream cut), what it last listed of an ask stands, and one
+  it never listed is yours, as nothing would list it. From a box without that word, a client takes
+  one not listed as yours at once. An ask: `{id, at, session?, sessionName?, bot?, botName?,
   project, command, why, stopped?, error?, always?, machine?, owner?, review?}`. `session` is the conversation's root
   (a bot's sub-agent asks as its bot's conversation). `stopped`, on macOS: what the sandbox refused
   that command, from the system's log, each `{kind, path?}` (`kind`: `write`, `read`, `connect`,

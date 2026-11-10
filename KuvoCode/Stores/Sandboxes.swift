@@ -132,11 +132,13 @@ final class Sandboxes {
             if let client = client(box) {
                 do {
                     // Whether its word on the reviewer's asks is whole: read once a connection.
+                    // (Counted once read: one that fails is read again on the next try.)
                     if box != BoxClient.mac, !featuresRead.contains(box) {
-                        featuresRead.insert(box)
                         struct Info: Decodable { var features: [String]? }
-                        let whole = (try? await client.value(Info.self, "GET", "kuvo/info"))?.features?.contains(AskReview.listsAllFeature) == true
-                        takeListsAll(whole, from: box)
+                        if let info = try? await client.value(Info.self, "GET", "kuvo/info") {
+                            featuresRead.insert(box)
+                            takeListsAll(info.features?.contains(AskReview.listsAllFeature) == true, from: box)
+                        }
                     }
                     for try await line in client.follow(SandboxRoutes.asks + "/events") {
                         guard let list = try? JSONDecoder().decode(SandboxAsks.self, from: line) else { continue }
