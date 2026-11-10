@@ -275,6 +275,8 @@ export interface SubagentRun {
   end(outcome: Outcome, error?: StructuredError): void
   /** What it asks you, as its own (one in the background asks after its turn too). */
   permission(ask: PermissionAsk): Promise<Decision>
+  /** Its agent moved it to the background after it started: it goes on past the turn that started it. */
+  inBackground(): void
   /** Set by its agent: stops it (Stop in its session, or in the conversation that started it once that turn is over). */
   stop?: () => Promise<void>
   /** How you can write to it, as its agent learns it (a Codex agent's thread says as it starts). */
@@ -290,6 +292,29 @@ export interface RunResult {
   error?: StructuredError
   /** It stopped at a usage or rate limit (Auto goes on with the next model in your list). */
   limit?: Limit
+}
+
+/** Something an agent left running in the background: a command, or a subagent or other task. */
+export interface LostWork {
+  kind: "command" | "task"
+  /** The command it runs, or what the task is for. */
+  what: string
+  /** The end of what it printed, when that's known; or the file it went to, for the agent to read. */
+  output?: string
+  outputFile?: string
+}
+
+/**
+ * The note that tells an agent its background work ended unfinished with its process (`why`, a
+ * sentence on how), so it won't hear of it again: what each was, and the end of what it printed.
+ */
+export function lostWorkNote(why: string, lost: LostWork[]): string {
+  const lines = lost.flatMap((work) => {
+    const head = work.kind === "command" ? `- The command \`${work.what.split("\n")[0]}\`` : `- ${work.what.split("\n")[0]}`
+    if (work.output) return [head, "  It had printed, at the end:", ...work.output.split("\n").map((line) => `  ${line}`)]
+    return work.outputFile ? [head, `  What it printed is in ${work.outputFile}`] : [head]
+  })
+  return [`${why} What you left running in the background stopped with it, unfinished, and won't report back:`, ...lines, "Run again what you still need."].join("\n")
 }
 
 export interface Thread {
@@ -337,6 +362,16 @@ export interface Thread {
   readonly backgroundTasks?: { id: string; since: number }[]
   /** Those tasks ended. */
   stopBackgroundTasks?(): Promise<void>
+  /**
+   * What it has going in the background that wakes it as it ends (Claude Code's and Grok's
+   * commands and subagents): what closing it now would end unfinished, without a word to it.
+   */
+  readonly wakingWork?: LostWork[]
+  /**
+   * Set by the session: its agent's process ended by itself between turns (killed, or crashed; not
+   * closed here) while it had that work going, which ended with it and so will never wake it.
+   */
+  onWorkLost?: (lost: LostWork[]) => void
   /** Its commands run in the box's sandbox now: the agent's whole program runs in it. */
   readonly sandboxed?: boolean
   /** A process of its that runs commands was started outside the box's sandbox, and still runs. */

@@ -2150,6 +2150,7 @@ private struct FoldingCard<Header: View, Accessory: View, Content: View>: View {
         .padding(.horizontal, Self.padding.width)
         .padding(.vertical, Self.padding.height)
         .recessedWell(RoundedRectangle(cornerRadius: Self.radius))
+        .padding(.horizontal, -Self.padding.width)
         .help(help)
     }
 }
@@ -2282,6 +2283,7 @@ struct WakeRow: View {
             .padding(.horizontal, 10)
             .padding(.vertical, 9)
             .recessedWell(RoundedRectangle(cornerRadius: 10))
+            .padding(.horizontal, -10)
             .help(Self.help)
         }
     }

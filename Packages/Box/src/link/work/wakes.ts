@@ -34,7 +34,7 @@ import { projectNameOf } from "../notices/news";
 import type { Target } from "../../shared/records";
 import type { EngineSession } from "../engine/sessions";
 import type { EngineForm, PermissionAsked } from "../notices/news";
-import { pastSummaries, workOutcome } from "../../shared/summaries";
+import { ofTurn, pastSummaries, turnIn, workOutcome } from "../../shared/summaries";
 
 export const WORK_WAKES = path.join(WORK_FOLDER, "wakes.json");
 /** What each followed session's starter was told (its last reply's message, its asks), and when the
@@ -272,14 +272,7 @@ interface LastReply {
 // started after it that wrote none (`turn`, its idle message, and when: a turn that failed
 // before it replied), and what began its latest turn; it throws when it can't be read.
 // A session's messages, newest first, back as far as its latest turn begins (a long one is many
-// steps, each a message). Where that turn lies in them: `from` up to, not including, `before`.
-const ofTurn = (message: { type?: unknown }) => message.type === "user" || message.type === "synthetic" || message.type === "assistant";
-function turnIn(messages: { type?: unknown }[]): { from: number; before: number } {
-  // (Commands you ran after it, above where it ended, are no part of it.)
-  const lastEnd = messages.findIndex(message => message.type === "idle");
-  const from = lastEnd >= 0 && !messages.slice(0, lastEnd).some(ofTurn) ? lastEnd + 1 : 0;
-  return { from, before: messages.findIndex((message, index) => index >= from && message.type === "idle") };
-}
+// steps, each a message).
 async function latestMessages(target: Target, session: string) {
   const address = encodeURIComponent(session);
   const messages: { id: string; type?: unknown; text?: unknown; metadata?: unknown; time?: unknown; content?: unknown }[] = [];

@@ -330,7 +330,10 @@ connection.
     `id` runs once (remembered 30 days, noted once answered); one running now that comes again is
     dropped (a list's remembered two days, as a letter's). Calls aren't counted as messages. `from` may not be a conversation on the receiving
     box (refused); while it moves between computers, or while this box knows it to live on another
-    box than the one calling (that word may be stale), it's answered `retry`; otherwise the receiver
+    box than the one calling (that word may be stale), it's answered `retry`, but from the box it's
+    moving to once this box has asked that box to switch to its copy (`switching`, `finishing`):
+    a copy is held until it's switched to, so a call from it there is from it as it runs there,
+    taken at once while its original here is still let go; otherwise the receiver
     notes `from` lives on the box that called. So a lead that moved twice (A to B to C) while A was
     away more than two days, never hearing of the second move, keeps getting `retry` from A until
     A hears where it went: its list says A isn't answering meanwhile, and a kept stop is let go and
@@ -908,7 +911,8 @@ client shows it from the same routes.
 - **Tools** (`POST kuvo/agent-tools`, any conversation, for the sessions under it):
   `list_sessions` (each with where it stands: working, asking and what, with the ask's id,
   finished, failed, stopped; its model, the tokens in its context now, or that it was just
-  summarized, the tokens it used in total, and last reply's first lines), `stop_session`
+  summarized, the tokens it used in total, and last reply's first lines: for one stopped or
+  failed, only what it said in that turn, never an earlier turn's reply), `stop_session`
   (`{session, archive?}`; only one of its own), `compact_session` (`{session}`; only one of its
   own, by `POST api/session/<id>/compact` where it runs), `answer_ask` (`{session, ask, decision: allow|deny,
   reason}`, or `{session, ask, answer, reason}` for a question), `list_models` (the models there's
@@ -993,7 +997,8 @@ client shows it from the same routes.
   depth, model?, mode?, state, asks?, started, tokens, cost?, lastReply?}], answered: [answer with
   its session], today: {started, working, tokens, cost?}, limits}`: its sessions the latest first,
   archived ones left out. 400 without `bot`, 404 for no such bot here, 503 with no engine. Each
-  `state` is as of the read. `today.working` stays, since clients until 0.7.2 need it to read the
+  `state` is as of the read; `lastReply` is what it said last, and for one `stopped` or `failed`
+  only what it said in that turn, never an earlier turn's reply. `today.working` stays, since clients until 0.7.2 need it to read the
   report, but no client shows it (see At work).
 - **`GET kuvo/work/events`** (ndjson): `{"changed": {<bot>: <ms>}}` now and at each change to a
   bot's work (a session started, stopped, finished or asking, an ask answered, its limits); a
@@ -1078,10 +1083,27 @@ client shows it from the same routes.
   - **Which agents can say**: the engine's own agents say all of it (`GET api/shell` one folder at
     a time, `shell.created`, `shell.exited`, and child sessions in `/api/session/active`). Only
     folders with something at work are asked, because asking starts a folder's tools. Claude Code:
-    commands, subagents and tasks. Codex: subagents, not background terminals. Antigravity:
-    subagents, which is how its own timers run. Grok and Cursor: subagents only within a turn. What
-    an agent can't report doesn't count: the session shows as not at work, and its lead is told at
-    the end of its turn, so nothing hangs on it.
+    commands, subagents and tasks. Codex: subagents, and commands it left running in background
+    terminals as tasks (listed again every 30 seconds while any runs: Codex doesn't say when one
+    ends, and isn't woken by it, as in its own CLI). Grok: what it keeps going in the background
+    (its commands and subagents) as tasks. Antigravity: subagents, which is how its own timers run.
+    Cursor: subagents only within a turn. What an agent can't report doesn't count: the session
+    shows as not at work, and its lead is told at the end of its turn, so nothing hangs on it.
+  - **Kept going, and lost**: a session's agent process is kept while what it left running goes
+    (it isn't closed 15 minutes after its last turn), since that work goes with it. For the agents
+    that are woken as such work ends (Claude Code, Grok), when it ends unfinished with their process
+    instead, the bridge wakes the session itself, with a `synthetic` note saying what stopped (and
+    the end of what it printed, or the file it went to, when known): `metadata` `{source: "shell",
+    state: "error", signal: "SIGTERM", kuvo: {lostWork: <when>, work}}` (`source: "agent"` when none
+    of it was a command), `description` the command. That's when the process ends by itself between
+    turns (killed from outside, or crashed); and as the bridge stops, when the note waits in the
+    session's queue (`kuvo.restarted`) and wakes it once the bridge is back, if that's within 10
+    minutes (a restart or an update; after a quit for longer, it waits for the session's next message
+    instead). While an undo is staged it waits: Redo sends it, and your next message (which makes the
+    undo final, starting the agent over) is followed by one note for all of it. When the agent starts
+    again for your next message (an update, its settings changed), that message says so instead (a
+    command, as typed, is followed by the note). A move to another computer is refused while such
+    work runs, as before.
   - **The bridge's side**: `GET api/session/background` → `{data: {<session>: {commands: [{id,
     command, started}], subagents: [{id, since}], tasks: [{id, since}]}}}`, `DELETE
     api/session/<id>/background` ends them all, and the event `session.background.updated` says to
@@ -1618,7 +1640,7 @@ like HTTP:
 | `{"t": "res", "id": 7, "s": 200, "h": {"content-type": "…"}, "end": false}` | The response's status and headers, with the first piece of its body. |
 | `{"t": "data", "id": 7, "end": false}` | More body. Event streams (`api/event`) go on until cancelled. |
 | `{"t": "cancel", "id": 7}` | Either side stops request 7. |
-| `{"t": "ping"}`, `{"t": "pong"}` | Is the other end still there? The relay's own pings only reach the relay. The phone pings while a request waits with nothing from the host, once its own frames have gone out: a host whose connection died without closing takes frames until the relay notices, and never answers. No answer ends the session. A host that started again or left is told by the relay (`gone`), so a quiet session isn't checked. Answer at once. |
+| `{"t": "ping"}`, `{"t": "pong"}` | Is the other end still there? The relay's own pings only reach the relay. The phone pings while a request waits with nothing from the host, once its own frames have gone out: a host whose connection died without closing takes frames until the relay notices, and never answers. No answer ends the session, after 5 s and a second more for each 64 KB the phone sent that no host has answered yet (by answering a request sent after it, or a ping): frames the phone's connection says it sent may still be in the system's buffers, on a slow network or at the relay, ahead of the ping. So a host whose connection died is found out that much later after a big body (a 10 MB one: about 2.5 minutes). A host that started again or left is told by the relay (`gone`), so a quiet session isn't checked. Answer at once. |
 
 `h` holds `x-opencode-directory` and `content-type`; the host adds the engine's password
 itself. Which route answers is told by its path before any `?`: a query string never changes it,
@@ -1754,7 +1776,13 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     and `PUT {lists}` → `{data: {entries, lists: [{id, name, entries: [{providerID, modelID,
     variant?}]}], limits: [{key, until, scope, known}]}}` (the first list's ID is `auto`;
     `entries` is the first list's; `key` is a provider for an account's limit, `provider/model`
-    for a model's; `until` in ms); `DELETE …/auto/limits` tries them all again. The event
+    for a model's; `until` in ms; each entry names its model by the model's own id, so one saved
+    under another id it's known by, such as Claude Code's `default`, comes as the model that
+    stands for now, as its agent listed it (as saved until it has), and a second entry for the
+    same model at the same effort is left out; a list `PUT` back as it came keeps each entry under
+    the id it was saved by, so one saved as `default` goes on following it, and runs go down the
+    lists as `GET` gives them);
+    `DELETE …/auto/limits` tries them all again. The event
     `kuvo.auto.updated` says the lists or their limits changed. An account with a `provider`
     limit whose `until` hasn't come is at its usage limit: mark it (the Mac says "Usage limit ·
     Resets in …").
@@ -2564,6 +2592,12 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   message without it (everything from a line `<from-phone>` to the line `</from-phone>`), as
   sent from the phone. It tells the agent to keep replies short and to show files with
   `show_file`.
+- A message whose request arrived whole (`POST api/session/<id>/prompt`, and
+  `kuvo/agents/api/…` alike) goes on to its conversation even if the phone that sent it ends its
+  session or cancels meanwhile: its files are kept on the box by then. So one a client counted as
+  failed may have arrived: sent again under the same `id` (as the share sheet does), it's taken
+  once; under a new one, it's a second message. A command (`…/command`, which has no `id`) still
+  stops with the session that sent it.
 - An agent shows a file in the conversation with `show_file`, one of Kuvo Code's tools (on the
   Mac and machines, for the engine and the coding agents): a tool call named
   `kuvo-browser_show_file` with input `{"path": "<full path on the computer it runs on>",

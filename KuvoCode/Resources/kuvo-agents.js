@@ -2694,6 +2694,17 @@ function isLimit(text) {
 // Packages/Box/src/agents/auto.ts
 var autoProvider = "auto";
 var firstList = "auto";
+function foldEntries(entries, own) {
+  const seen = new Set;
+  return entries.flatMap((entry) => {
+    const named = { ...entry, modelID: own(entry) ?? entry.modelID };
+    const key = `${named.providerID}/${named.modelID}/${named.variant ?? ""}`;
+    if (seen.has(key))
+      return [];
+    seen.add(key);
+    return [named];
+  });
+}
 var unknownReset = 30 * 60000;
 var briefReset = 3 * 60000;
 
@@ -2947,6 +2958,19 @@ class KnownAccount {
     this.known = undefined;
     this.failure = undefined;
   }
+}
+function lostWorkNote(why, lost) {
+  const lines = lost.flatMap((work) => {
+    const head = work.kind === "command" ? `- The command \`${work.what.split(`
+`)[0]}\`` : `- ${work.what.split(`
+`)[0]}`;
+    if (work.output)
+      return [head, "  It had printed, at the end:", ...work.output.split(`
+`).map((line) => `  ${line}`)];
+    return work.outputFile ? [head, `  What it printed is in ${work.outputFile}`] : [head];
+  });
+  return [`${why} What you left running in the background stopped with it, unfinished, and won't report back:`, ...lines, "Run again what you still need."].join(`
+`);
 }
 
 class ContextWindows {
@@ -7469,6 +7493,8 @@ class AcpThread {
       relayedServers(this.session.id, this, this.session.location.directory, computer);
     if (this.rpc && !this.rpc.isClosed && this.spawnedWith === key && this.rpc !== this.stale)
       return this.rpc;
+    if (this.rpc && !this.rpc.isClosed && this.tasks.size)
+      this.cut.push(...this.taskWork());
     this.close();
     const launch = await this.flavor.command(mode);
     const whole = this.wholeLaunch(launch.argv, launch.env, launch.cleanEnv, skills);
@@ -7508,8 +7534,13 @@ class AcpThread {
     rpc.onExit = () => {
       launch.onExit?.();
       ended?.();
-      if (this.rpc === rpc)
+      const lost = this.rpc === rpc && !this.active ? this.taskWork() : [];
+      if (this.rpc === rpc) {
         this.rpc = undefined;
+        this.leftRunning();
+      }
+      if (lost.length)
+        this.onWorkLost?.(lost);
       const young = Date.now() - startedAt < acpTiming.signInGrace;
       if (asksSignIn && young)
         flavor.signInEnded?.();
@@ -7723,6 +7754,11 @@ ${text}`;
 Attached files:
 ${others.map((path) => `- ${path}`).join(`
 `)}`;
+    if (this.cut.length)
+      text = `${lostWorkNote(`${this.name} started again before this message.`, this.cut)}
+
+${text}`;
+    this.cut = [];
     prompt.unshift({ type: "text", text });
     return new Promise((resolve) => {
       const active = { turn, hooks, resolve, rpc, tools: new Map, toolsSinceText: false, ended: false, instructed, children: new Map, served: new Map, started: Date.now(), prompt: 0, input };
@@ -7821,6 +7857,14 @@ ${others.map((path) => `- ${path}`).join(`
           this.own.ended = true;
         else if (this.own)
           this.own = undefined;
+      },
+      background: (tasks, sessionID, replayed) => {
+        if (this.loading || replayed || sessionID && this.sessionID && sessionID !== this.sessionID)
+          return;
+        const before = this.tasks;
+        this.tasks = new Map(tasks.map((task) => [task.id, { ...task, started: before.get(task.id)?.started ?? task.started ?? Date.now() }]));
+        if (before.size !== this.tasks.size || [...this.tasks.keys()].some((id) => !before.has(id)))
+          emit("session.background.updated", { sessionID: this.session.id }, this.session.location.directory);
       }
     };
   }
@@ -8278,9 +8322,43 @@ ${others.map((path) => `- ${path}`).join(`
     if (this.rpc === rpc && (!this.active || this.active.rpc !== rpc))
       this.close();
   }
+  tasks = new Map;
+  cut = [];
+  onWorkLost;
+  get keepsWorking() {
+    return Boolean(this.rpc && !this.rpc.isClosed) && this.tasks.size > 0;
+  }
+  get wakingWork() {
+    return this.rpc && !this.rpc.isClosed ? this.taskWork() : [];
+  }
+  get backgroundTasks() {
+    if (!this.rpc || this.rpc.isClosed)
+      return [];
+    return [...this.tasks.values()].map((task) => ({ id: task.id, since: task.started ?? Date.now() }));
+  }
+  async stopBackgroundTasks() {
+    if (!this.tasks.size || this.active)
+      return;
+    this.close();
+  }
+  taskWork() {
+    return [...this.tasks.values()].map((task) => {
+      const outputFile = task.outputFile;
+      if (task.command && task.kind !== "subagent")
+        return { kind: "command", what: task.command, outputFile };
+      return { kind: "task", what: task.description || task.command || "A task in the background", outputFile };
+    });
+  }
+  leftRunning() {
+    const had = this.tasks.size;
+    this.tasks = new Map;
+    if (had)
+      emit("session.background.updated", { sessionID: this.session.id }, this.session.location.directory);
+  }
   close() {
     this.rpc?.kill();
     this.rpc = undefined;
+    this.leftRunning();
     dropRelayed(this.session.id, this);
     this.fenced = false;
   }
@@ -11520,8 +11598,10 @@ class ClaudeThread {
     const tools = fenceOn() ? relayedTools(this.session.id, this) : kuvoTools(this.session.id);
     const skills = skillsFolder(await skillsFor(this.session.location.directory, this.agent.ownSkillFolders(this.session.location.directory), turnedOff(hooks)));
     const fence = fenceKey() + fullAccessMark(this.session.id);
-    if (this.query && (this.opened?.append !== append || this.opened?.program !== this.agent.program || this.opened?.tools !== tools?.key || this.opened?.skills !== skills || this.opened?.fence !== fence))
+    if (this.query && (this.opened?.append !== append || this.opened?.program !== this.agent.program || this.opened?.tools !== tools?.key || this.opened?.skills !== skills || this.opened?.fence !== fence)) {
+      this.cut.push(...this.wakingWork);
       this.close();
+    }
     const computer = await computerServers(this.session.location.directory);
     const servers = relayedServers(this.session.id, this, this.session.location.directory, computer);
     const opening = !this.query;
@@ -11556,8 +11636,15 @@ class ClaudeThread {
     }
     return new Promise((resolve) => {
       this.lastHooks = hooks;
-      const note = input.compact || input.text.trimStart().startsWith("/") ? undefined : instructionsNote(toldOf(this.state, "claudeTold"), append);
-      const message = userMessage(note ? { ...input, text: `${note}
+      const command = input.compact || input.text.trimStart().startsWith("/");
+      const note = command ? undefined : instructionsNote(toldOf(this.state, "claudeTold"), append);
+      const lostNote = this.cut.length && !command ? lostWorkNote("Claude Code started again before this message.", this.cut.splice(0)) : undefined;
+      if (this.cut.length && command)
+        this.onWorkLost?.(this.cut.splice(0));
+      const ahead = [lostNote, note].filter(Boolean).join(`
+
+`);
+      const message = userMessage(ahead ? { ...input, text: `${ahead}
 
 ${input.text}` } : input, this.copies());
       let active;
@@ -11580,11 +11667,9 @@ ${input.text}` } : input, this.copies());
   turnFor(turn, hooks, resolve, auto, steered) {
     const active = { turn, hooks, resolve, streamed: new Set, blockTools: new Map, calls: new Map, subagents: new Map, auto, steered };
     active.resolve = (result) => {
-      if (result.outcome === "succeeded") {
-        for (const [callID, lane] of active.subagents)
-          if (lane.background && !lane.turn.isEnded)
-            this.backgroundLanes.set(callID, lane);
-      }
+      for (const [callID, lane] of active.subagents)
+        if (lane.background && !lane.turn.isEnded)
+          this.backgroundLanes.set(callID, lane);
       resolve(result);
     };
     return active;
@@ -11658,19 +11743,32 @@ ${input.text}` } : input, this.copies());
         const known = this.tasks.get(message.task_id);
         const type = message.task_type ?? known?.type ?? "";
         const resumed = type === "local_agent" && known?.toolUseID && message.tool_use_id && message.tool_use_id !== known.toolUseID ? known.toolUseID : undefined;
-        this.tasks.set(message.task_id, { ...known, type, description: message.description ?? known?.description ?? "", toolUseID: resumed ?? message.tool_use_id ?? known?.toolUseID });
-        if (type === "local_agent" && typeof message.tool_use_id === "string" && !resumed)
+        const backgrounded = typeof message.is_backgrounded === "boolean" ? message.is_backgrounded : known?.backgrounded;
+        this.tasks.set(message.task_id, { ...known, type, description: message.description ?? known?.description ?? "", toolUseID: resumed ?? message.tool_use_id ?? known?.toolUseID, backgrounded });
+        if (type === "local_agent" && typeof message.tool_use_id === "string" && !resumed) {
           this.rememberSubagent(message.tool_use_id, { agentID: message.task_id });
+          if (this.active)
+            this.subagentLane(this.active, message.tool_use_id);
+          if (backgrounded)
+            this.toBackground(message.tool_use_id);
+        }
         if (resumed && this.active)
           this.resumedLane(this.active, resumed);
         if (message.is_backgrounded && !message.ambient)
           this.shellFor(message.task_id);
         return;
       }
-      case "task_updated":
-        if (message.patch?.is_backgrounded)
-          this.shellFor(message.task_id);
+      case "task_updated": {
+        if (!message.patch?.is_backgrounded)
+          return;
+        const task = this.tasks.get(message.task_id);
+        if (task)
+          task.backgrounded = true;
+        this.shellFor(message.task_id);
+        if (task?.type === "local_agent" && task.toolUseID)
+          this.toBackground(task.toolUseID);
         return;
+      }
       case "task_notification": {
         const task = this.tasks.get(message.task_id);
         if (task && typeof message.output_file === "string")
@@ -11748,12 +11846,25 @@ ${input.text}` } : input, this.copies());
   get keepsWorking() {
     return Boolean(this.query) && this.liveTasks.size > 0;
   }
+  onWorkLost;
+  cut = [];
+  get wakingWork() {
+    if (!this.query)
+      return [];
+    return [...this.liveTasks].map((id) => {
+      const task = this.tasks.get(id);
+      const output = task?.last?.output.trim().slice(-2000) || undefined;
+      if (task?.type === "local_bash")
+        return { kind: "command", what: (task.toolUseID ? this.commands.get(task.toolUseID) : undefined) ?? task.description, output };
+      return { kind: "task", what: task?.description || "A task in the background", output };
+    });
+  }
   get backgroundTasks() {
     if (!this.query)
       return [];
     return [...this.liveTasks].flatMap((id) => {
       const task = this.tasks.get(id);
-      if (task?.shell || task?.type === "local_bash" || task?.toolUseID && this.backgroundLanes.has(task.toolUseID))
+      if (task?.shell || task?.type === "local_bash" || task?.toolUseID && (this.backgroundLanes.has(task.toolUseID) || this.active?.subagents.has(task.toolUseID)))
         return [];
       return [{ id, since: task?.since ?? Date.now() }];
     });
@@ -11895,11 +12006,14 @@ ${input.text}` } : input, this.copies());
       ended = error;
     }
     if (this.query === query) {
+      const lost = this.active ? [] : this.wakingWork;
       this.query = undefined;
       this.input = undefined;
       this.lastEnd = ended;
       this.leftRunning();
       emit("session.background.updated", { sessionID: this.session.id }, this.session.location.directory);
+      if (lost.length)
+        this.onWorkLost?.(lost);
     }
     const active = this.active;
     if (!active || this.query)
@@ -12244,10 +12358,10 @@ ${input.text}` } : input, this.copies());
       const input = call.input;
       if (kuvoTool2(call.name, input).name !== "subagent")
         return;
-      background = input.run_in_background === true;
+      const agentID = [...this.tasks].find(([, task]) => task.toolUseID === callID && task.type === "local_agent")?.[0];
+      background = (agentID ? this.tasks.get(agentID)?.backgrounded : undefined) ?? input.run_in_background === true;
       run = active.hooks.subagent(callID, { title: String(input.description ?? ""), prompt: typeof input.prompt === "string" ? input.prompt : undefined, agent: input.subagent_type, background, messages: subagentRoute(input.subagent_type) });
       run.stop = () => this.stopSubagent(callID);
-      const agentID = [...this.tasks].find(([, task]) => task.toolUseID === callID && task.type === "local_agent")?.[0];
       this.rememberSubagent(callID, { sessionID: run.sessionID, title: String(input.description ?? ""), ...typeof input.subagent_type === "string" ? { kind: input.subagent_type } : {}, ...agentID ? { agentID } : {} });
     } else if (before) {
       run = active.hooks.subagent(callID, { title: before.title, sessionID: before.sessionID, background: true, messages: subagentRoute(before.kind) });
@@ -12346,6 +12460,8 @@ ${input.text}` } : input, this.copies());
       } catch {}
     }
     const subagent = active && lane === active ? active.subagents.get(id) : undefined;
+    if (subagent && structured?.status === "async_launched")
+      this.toBackground(id);
     if (active && subagent && !subagent.background) {
       subagent.run.end(block.is_error ? "failed" : "succeeded", block.is_error ? { type: "agent", message: text || "The subagent failed." } : undefined);
       active.subagents.delete(id);
@@ -12505,6 +12621,13 @@ ${input.text}` } : input, this.copies());
       if (task.toolUseID === callID)
         await this.query?.stopTask?.(taskID).catch(() => {});
   }
+  toBackground(callID) {
+    const lane = this.active?.subagents.get(callID) ?? this.keptLane(callID);
+    if (!lane || lane.background || lane.run.turn.isEnded)
+      return;
+    lane.background = true;
+    lane.run.inBackground();
+  }
   keptLane(callID) {
     const lane = this.backgroundLanes.get(callID);
     if (!lane?.run.turn.isEnded)
@@ -12583,6 +12706,9 @@ ${input.text}` } : input, this.copies());
     for (const task of this.tasks.values())
       if (task.shell)
         endShell(task.shell);
+    for (const lane of this.active?.subagents.values() ?? [])
+      if (lane.background)
+        lane.run.end("interrupted");
     for (const lane of this.backgroundLanes.values())
       lane.run.end("interrupted");
     this.backgroundLanes.clear();
@@ -13675,6 +13801,7 @@ function citationsOf(lane, item) {
   return citations;
 }
 var ASKING_WORDS = "Outside Plan mode, ask the user with request_user_input_async: request_user_input refuses there, which doesn't mean you can't ask. It returns at once, and the answer comes as a new user message, which also ends a sleep you're in.";
+var codexTiming = { terminals: 30000 };
 var WORK_ITEMS = new Set(["commandExecution", "fileChange", "mcpToolCall", "dynamicToolCall", "webSearch", "imageGeneration", "imageView", "collabAgentToolCall"]);
 var STEER_AGAIN = 1000;
 var STEER_AGAIN_LAST = 64000;
@@ -13841,7 +13968,61 @@ class CodexThread {
     for (const [threadID, lane] of this.backgroundLanes)
       if (lane.ended || lane.run.turn.isEnded)
         this.backgroundLanes.delete(threadID);
-    return this.backgroundLanes.size > 0;
+    return this.backgroundLanes.size > 0 || this.liveTerminals.length > 0;
+  }
+  terminals = [];
+  terminalsRead;
+  listFailures = 0;
+  get liveTerminals() {
+    return this.server && !this.server.isClosed ? this.terminals : [];
+  }
+  get backgroundTasks() {
+    return this.liveTerminals.map((terminal) => ({ id: terminal.id, since: terminal.since }));
+  }
+  async stopBackgroundTasks() {
+    const server = this.server;
+    if (!this.liveTerminals.length || !server || !this.nativeID)
+      return;
+    await server.request("thread/backgroundTerminals/clean", { threadId: this.nativeID }, 30000).catch(() => {});
+    await this.readTerminals();
+  }
+  async readTerminals() {
+    clearTimeout(this.terminalsRead);
+    const server = this.server;
+    const threadID = this.nativeID;
+    let listed = [];
+    if (server && !server.isClosed && threadID) {
+      try {
+        listed = [];
+        const seen = new Set;
+        let cursor;
+        do {
+          const answer = await server.request("thread/backgroundTerminals/list", { threadId: threadID, ...cursor ? { cursor } : {} }, 30000);
+          for (const terminal of Array.isArray(answer?.data) ? answer.data : [])
+            if (typeof terminal?.processId === "string")
+              listed.push({ id: terminal.processId, command: String(terminal.command ?? "") });
+          cursor = typeof answer?.nextCursor === "string" && answer.nextCursor && !seen.has(answer.nextCursor) ? answer.nextCursor : undefined;
+          if (cursor)
+            seen.add(cursor);
+        } while (cursor && seen.size < 20);
+        this.listFailures = 0;
+      } catch {
+        listed = server.isClosed || ++this.listFailures >= 5 ? [] : undefined;
+      }
+    }
+    if (server !== this.server || this.inTurn)
+      return;
+    if (!listed) {
+      if (this.terminals.length)
+        this.terminalsRead = setTimeout(() => void this.readTerminals(), codexTiming.terminals);
+      return;
+    }
+    const before = this.terminals;
+    this.terminals = listed.map((terminal) => ({ ...terminal, since: before.find((known) => known.id === terminal.id)?.since ?? Date.now() }));
+    if (before.length !== this.terminals.length || this.terminals.some((terminal) => !before.some((known) => known.id === terminal.id)))
+      emit("session.background.updated", { sessionID: this.session.id }, this.session.location.directory);
+    if (this.terminals.length)
+      this.terminalsRead = setTimeout(() => void this.readTerminals(), codexTiming.terminals);
   }
   async steer(input) {
     const [first] = this.waiting;
@@ -13932,6 +14113,7 @@ class CodexThread {
         await Promise.all(this.asking);
       this.answers = [];
       this.inTurn = false;
+      this.readTerminals();
     }
   }
   ask(questions, hooks) {
@@ -14951,6 +15133,10 @@ From memory: ${cited.join("; ")}`);
     for (const lane of this.backgroundLanes.values())
       this.endSubagent(lane, "interrupted");
     this.backgroundLanes.clear();
+    clearTimeout(this.terminalsRead);
+    if (this.terminals.length)
+      emit("session.background.updated", { sessionID: this.session.id }, this.session.location.directory);
+    this.terminals = [];
     const server = this.server;
     if (this.nativeID && this.loaded && server && !server.isClosed && !this.agent.isFenced(server))
       server.request("thread/unsubscribe", { threadId: this.nativeID }).catch(() => {});
@@ -16604,6 +16790,10 @@ class GrokAgent {
       },
       notification(method, params, context) {
         const name = method.replace(/^_/, "");
+        if (name === "x.ai/session/update" && params?.update?.sessionUpdate === "background_tasks" && Array.isArray(params.update.tasks)) {
+          const running = params.update.tasks.filter((task) => typeof task?.task_id === "string" && task.status === "running");
+          context.background(running.map((task) => ({ id: task.task_id, command: typeof task.command === "string" ? task.command : undefined, description: typeof task.description === "string" ? task.description : undefined, kind: typeof task.kind === "string" ? task.kind : undefined, started: Date.parse(task.started_at) || undefined, outputFile: typeof task.output_file === "string" ? task.output_file : undefined })), typeof params.sessionId === "string" ? params.sessionId : undefined, Boolean(params?._meta?.isReplay));
+        }
         if (name === "x.ai/session/prompt_complete" && String(params?.promptId ?? "").startsWith("task-completed-"))
           context.endOwn();
         if (name === "x.ai/session/prompt_complete" && !String(params?.promptId ?? "").startsWith("task-completed-")) {
@@ -17279,6 +17469,18 @@ function safeJSON(text) {
 var AGENTS_TEXT_BYTES = 200000;
 
 // Packages/Box/src/agents/sessions.ts
+function lostWorkInput(why, lost, delivery = "steer", restarted = false) {
+  const command = lost.find((work) => work.kind === "command");
+  const first = (command ?? lost[0]).what.split(`
+`)[0];
+  const more = lost.length > 1 ? ` (and ${lost.length - 1} more)` : "";
+  const metadata = { source: command ? "shell" : "agent", state: "error", signal: "SIGTERM", kuvo: { lostWork: Date.now(), work: lost, ...restarted ? { restarted: true } : {} } };
+  return { id: newID("msg"), text: lostWorkNote(why, lost), files: [], delivery, synthetic: { description: command ? `${first}${more}` : `Background work stopped: ${first}${more}`, metadata } };
+}
+function lostWorkOf(input) {
+  const kept = input.synthetic?.metadata?.kuvo;
+  return typeof kept?.lostWork === "number" ? { at: kept.lostWork, work: Array.isArray(kept.work) ? kept.work : [], restarted: kept.restarted === true } : undefined;
+}
 function isBusy(doing) {
   return doing.kind !== "idle" && doing.kind !== "deleting";
 }
@@ -17293,7 +17495,7 @@ function runOf(doing) {
 }
 var legacyKeys = ["claudeSession", "claudeStarted", "codexThread", "acpSession", "acpInstructed", "cursorAgent", "cursorInstructed"];
 var carryOn = "Carry on with my last message from where you left off: you're on another model now.";
-var timing = { stopGrace: 8000, idleClose: 15 * 60000, cutShort: 2 * 60000, shellGrace: 5000 };
+var timing = { stopGrace: 8000, idleClose: 15 * 60000, cutShort: 2 * 60000, shellGrace: 5000, lostWorkWake: 10 * 60000 };
 var changes2 = new Set(["edit", "write", "patch"]);
 var shellProcesses = { spawn: spawnProcess, kill: (pid, signal) => void process.kill(pid, signal) };
 function groupRuns(group) {
@@ -18430,10 +18632,19 @@ class Sessions {
     delete record.agent.revertNow;
     delete record.agent.revertAt;
     delete record.agent.revertFiles;
+    const lost = this.queue(record).filter((input) => lostWorkOf(input) && input.delivery === "queue");
+    for (const input of lost) {
+      input.delivery = "steer";
+      emit("session.inbox.delivery.changed", { sessionID: id, inboxID: input.id, delivery: "steer" }, directory);
+    }
     this.store.save(id, true);
     emit("session.revert.cleared", { sessionID: id }, directory);
+    if (lost.length)
+      live.go = true;
     if (live.doing === reverting)
       this.free(id, live);
+    else if (lost.length)
+      this.wake(id);
   }
   mustBeIdle(id, live) {
     if (live.doing.kind === "deleting")
@@ -18456,12 +18667,21 @@ class Sessions {
     delete record.agent.revertNow;
     delete record.agent.revertAt;
     delete record.agent.revertFiles;
+    const lost = [...live.threads].flatMap(([provider, thread]) => (thread.wakingWork ?? []).map((work) => ({ provider, work })));
     for (const thread of live.threads.values())
       thread.close();
+    const name = lost.length ? this.agentName(lost[0].provider) : undefined;
     live.threads.clear();
     for (const [provider, slot] of Object.entries(this.slots(record)))
       this.agent(provider)?.forgetConversation?.(slot.state).catch(() => {});
     record.agent.threads = {};
+    const queue = this.queue(record);
+    const waiting = queue.filter((input) => lostWorkOf(input));
+    const work = [...waiting.flatMap((input) => lostWorkOf(input).work), ...lost.map(({ work }) => work)];
+    for (const input of waiting)
+      this.cancelInput(id, input.id);
+    if (work.length)
+      this.queueLost(id, record, lostWorkInput(`${name ?? this.agentName(record.session.model?.providerID ?? "")} stopped while it had work going in the background (an undo made final starts it over).`, work, "queue"));
     this.store.save(id, true);
     emit("session.revert.committed", { sessionID: id, to: revert.messageID }, record.session.location.directory);
   }
@@ -18699,6 +18919,7 @@ ${others.join(`
     const slot = this.slots(record)[provider] ??= { state: {} };
     const thread = agent.thread(record.session, slot.state);
     thread.onOwnTurn = (note) => this.ownTurn(id, provider, note);
+    thread.onWorkLost = (lost) => this.workLost(id, provider, lost, `${this.agentName(provider)} stopped between turns: its process was ended from outside Kuvo Code, or crashed.`);
     live.threads.set(provider, thread);
     if (live.doing.kind === "idle")
       this.closeWhenIdle(id, live);
@@ -19103,6 +19324,20 @@ ${text.slice(0, 4000)}
       live.threads.clear();
     }, timing.idleClose);
   }
+  workLost(id, provider, lost, why) {
+    const record = this.store.get(id);
+    const live = this.live.get(id);
+    if (!record || !live || live.doing.kind === "deleting" || record.session.parentID)
+      return;
+    if (!record.session.revert)
+      return this.enqueue(id, record, live, lostWorkInput(why, lost));
+    this.queueLost(id, record, lostWorkInput(why, lost, "queue"));
+  }
+  queueLost(id, record, input) {
+    this.queue(record).push(input);
+    this.store.save(id, true);
+    emit("session.inbox.enqueued", { sessionID: id, inboxID: input.id, item: { type: "synthetic", payload: { text: input.text, description: input.synthetic.description, metadata: input.synthetic.metadata }, delivery: input.delivery } }, record.session.location.directory);
+  }
   ownTurn(id, provider, note) {
     const record = this.store.get(id);
     const live = this.live.get(id);
@@ -19178,7 +19413,7 @@ ${text.slice(0, 4000)}
       if (!hasMessage && late.size && !input.adopt)
         delete record.agent.lateShells;
       const partway = at < 0 ? [] : record.messages.slice(Math.max(at, seenAt) + 1);
-      const handed = handover(before, partway, (message) => this.stepName(message));
+      const handed = handover(before, partway, await this.stepNames([...before, ...partway]));
       const text = withHandover(hasMessage ? carryOn : input.text, handed);
       const files = hasMessage ? [] : input.files;
       reached = true;
@@ -19207,7 +19442,7 @@ ${text.slice(0, 4000)}
     try {
       return await this.runAutoList(id, record, live, run, input, userMessage, heldBefore);
     } finally {
-      record.agent.autoHeld = this.auto.list(input.model.id).filter((entry) => this.auto.isHeld(entry)).map((entry) => Auto.modelKey(entry));
+      record.agent.autoHeld = (await this.autoEntries(input.model.id)).filter((entry) => this.auto.isHeld(entry)).map((entry) => Auto.modelKey(entry));
       this.store.save(id);
     }
   }
@@ -19235,7 +19470,7 @@ ${text.slice(0, 4000)}
         return last ?? { outcome: "failed", error: { type: "limit", message: `Your Custom Auto list has no model to run. Edit it in Settings \u203A Custom Auto.` } };
       }
       if (!tried.size && heldBefore.has(Auto.modelKey(entry)))
-        turn.notice(`Back on ${this.entryName(entry)}: its limit has reset.`);
+        turn.notice(`Back on ${await this.entryName(entry)}: its limit has reset.`);
       tried.add(Auto.modelKey(entry));
       const model = { providerID: entry.providerID, id: entry.modelID, ...entry.variant ? { variant: entry.variant } : {} };
       if (note) {
@@ -19253,7 +19488,7 @@ ${text.slice(0, 4000)}
           live.subagents.delete(child);
           live.background.delete(child);
         }
-        turn.notice(`${note} Going on with ${this.entryName(entry)}.`);
+        turn.notice(`${note} Going on with ${await this.entryName(entry)}.`);
       }
       earlier = new Set(live.subagents.keys());
       const from = record.messages.length;
@@ -19276,17 +19511,17 @@ ${text.slice(0, 4000)}
         if (account && !account.signedIn)
           emit("integration.updated", { integrationID: entry.providerID });
         const message = last.error?.message?.trim() || "it stopped with an error";
-        note = account && !account.signedIn ? `${this.entryName(entry, true)} needs you to sign in again.` : `${this.entryName(entry)} stopped: ${message.replace(/\.$/, "")}.`;
+        note = account && !account.signedIn ? `${await this.entryName(entry, true)} needs you to sign in again.` : `${await this.entryName(entry)} stopped: ${message.replace(/\.$/, "")}.`;
         continue;
       }
       this.auto.hold(entry, last.limit);
       emit("kuvo.auto.updated", {});
       const whole = last.limit.scope === "provider";
-      note = `${this.entryName(entry, whole)} reached ${whole ? "its usage limit" : "this model's limit"}${last.limit.resetsAt ? ` (it resets at ${resetTime(last.limit.resetsAt)})` : ""}.`;
+      note = `${await this.entryName(entry, whole)} reached ${whole ? "its usage limit" : "this model's limit"}${last.limit.resetsAt ? ` (it resets at ${resetTime(last.limit.resetsAt)})` : ""}.`;
     }
   }
   async nextEntry(tried, list) {
-    for (const entry of this.auto.list(list)) {
+    for (const entry of await this.autoEntries(list)) {
       if (tried.has(Auto.modelKey(entry)))
         continue;
       if (!await this.whyNot(entry))
@@ -19319,18 +19554,18 @@ ${text.slice(0, 4000)}
     const signIn = new Set;
     const held = new Map;
     const gone = [];
-    for (const entry of this.auto.list(list)) {
+    for (const entry of await this.autoEntries(list)) {
       if (tried.has(Auto.modelKey(entry)))
         continue;
       const why = await this.whyNot(entry);
       if (!why)
         continue;
       if (why.kind === "signedOut")
-        signIn.add(this.entryName(entry, true));
+        signIn.add(await this.entryName(entry, true));
       else if (why.kind === "held")
-        held.set(this.entryName(entry, why.whole), why.until);
+        held.set(await this.entryName(entry, why.whole), why.until);
       else
-        gone.push(this.entryName(entry));
+        gone.push(await this.entryName(entry));
     }
     if (!signIn.size && !held.size && !gone.length)
       return;
@@ -19358,13 +19593,78 @@ ${text.slice(0, 4000)}
     const known = this.auto.limits().filter((limit) => limit.known).map((limit) => limit.until);
     return known.length ? `; the first resets at ${resetTime(Math.min(...known))}` : "";
   }
-  entryName(entry, agentOnly = false) {
+  async entryName(entry, agentOnly = false) {
     const name = this.agent(entry.providerID)?.name ?? entry.providerID;
-    return agentOnly ? name : `${name} (${entry.modelID}${entry.variant ? `, ${entry.variant}` : ""})`;
+    return agentOnly ? name : `${name} (${await this.modelName(entry.providerID, entry.modelID)}${entry.variant ? `, ${entry.variant}` : ""})`;
   }
-  stepName(message) {
-    const agent = this.agent(message.model.providerID);
-    return `${agent?.name ?? message.model.providerID}, ${message.model.id}`;
+  async stepNames(messages) {
+    const names = new Map;
+    for (const message of messages) {
+      if (message.type !== "assistant")
+        continue;
+      const key = Auto.modelKey({ providerID: message.model.providerID, modelID: message.model.id });
+      if (names.has(key))
+        continue;
+      const agent = this.agent(message.model.providerID);
+      names.set(key, `${agent?.name ?? message.model.providerID}, ${await this.modelName(message.model.providerID, message.model.id)}`);
+    }
+    return (message) => names.get(Auto.modelKey({ providerID: message.model.providerID, modelID: message.model.id })) ?? `${message.model.providerID}, ${message.model.id}`;
+  }
+  async listedModels(providerID) {
+    const agent = this.agent(providerID);
+    if (!agent)
+      return [];
+    return await Promise.race([agent.models().catch(() => []), Bun.sleep(3000).then(() => [])]);
+  }
+  static modelIn(models, id) {
+    return models.find((model) => model.id === id) ?? models.find((model) => model.aliases?.includes(id));
+  }
+  async modelName(providerID, id) {
+    return Sessions.modelIn(await this.listedModels(providerID), id)?.name ?? id;
+  }
+  async autoEntries(list) {
+    return await this.folded(this.auto.list(list));
+  }
+  async autoLists() {
+    return await Promise.all(this.auto.all().map(async (list) => ({ ...list, entries: await this.folded(list.entries) })));
+  }
+  async folded(entries) {
+    const own = await this.ownIDs(entries);
+    return foldEntries(entries, (entry) => own.get(Auto.modelKey(entry)));
+  }
+  async ownIDs(entries) {
+    const keys = [...new Set(entries.map((entry) => Auto.modelKey(entry)))];
+    const own = new Map;
+    await Promise.all(keys.map(async (key) => {
+      const entry = entries.find((each) => Auto.modelKey(each) === key);
+      const agent = this.agent(entry.providerID);
+      if (!agent?.concreteModel)
+        return;
+      const id = await Promise.race([agent.concreteModel(entry.modelID).catch(() => {
+        return;
+      }), Bun.sleep(3000).then(() => {
+        return;
+      })]);
+      if (id)
+        own.set(key, id);
+    }));
+    return own;
+  }
+  async asKept(lists) {
+    const kept = new Map(this.auto.all().map((list) => [list.id, list.entries]));
+    return await Promise.all(lists.map(async (list) => {
+      const before = list && typeof list === "object" && Array.isArray(list.entries) ? kept.get(list.id) : undefined;
+      if (!before)
+        return list;
+      const own = await this.ownIDs(before);
+      const named = before.map((entry) => ({ entry, as: { ...entry, modelID: own.get(Auto.modelKey(entry)) ?? entry.modelID } }));
+      const same = (one, other) => one.providerID === other?.providerID && one.modelID === other?.modelID && (one.variant ?? "") === (other?.variant ?? "");
+      const entries = list.entries.map((given) => {
+        const was = named.find((each) => same(each.as, given));
+        return was && given && typeof given === "object" ? { ...given, modelID: was.entry.modelID } : given;
+      });
+      return { ...list, entries };
+    }));
   }
   async interrupt(id, resume = false) {
     const live = this.live.get(id);
@@ -19513,6 +19813,10 @@ ${live.agentPrompt}` : ""
         }
       },
       permission: (ask) => this.askPermission(id, live, turn, ask, plan),
+      inBackground: () => {
+        if (live.subagents.get(session.id) === turn && !turn.isEnded)
+          live.background.add(session.id);
+      },
       messages: (route) => this.setMessages(session.id, route)
     };
     live.runs.set(session.id, run);
@@ -19806,6 +20110,7 @@ ${live.agentPrompt}` : ""
     clearInterval(this.pruning);
     this.pruning = undefined;
     for (const [id, live] of this.live) {
+      const lost = live.doing.kind === "idle" || onFiles(live.doing) ? [...live.threads].flatMap(([provider, thread]) => (thread.wakingWork ?? []).map((work) => ({ provider, work }))) : [];
       live.go = false;
       live.own = undefined;
       const run = runOf(live.doing);
@@ -19817,6 +20122,35 @@ ${live.agentPrompt}` : ""
       live.subagents.clear();
       for (const thread of live.threads.values())
         thread.close();
+      const record = this.store.get(id);
+      if (!lost.length || !record || record.session.parentID)
+        continue;
+      const input = lostWorkInput(`Kuvo Code stopped (it quit or restarted), and ${this.agentName(lost[0].provider)} with it.`, lost.map(({ work }) => work), "steer", true);
+      this.queue(record).push(input);
+      this.store.save(id, true);
+    }
+  }
+  wakeLost(now = Date.now()) {
+    for (const session of this.store.all()) {
+      const record = this.store.get(session.id);
+      if (!record)
+        continue;
+      const waiting = this.queue(record).filter((input) => lostWorkOf(input)?.restarted);
+      if (!waiting.length)
+        continue;
+      let wakes = false;
+      for (const input of waiting) {
+        const kuvo = input.synthetic.metadata.kuvo;
+        const soon = now - lostWorkOf(input).at < timing.lostWorkWake && !record.session.revert;
+        delete kuvo.restarted;
+        this.store.save(session.id, true);
+        if (soon)
+          wakes = true;
+        else
+          this.setDelivery(session.id, input.id, "queue");
+      }
+      if (wakes)
+        this.wake(session.id);
     }
   }
   forgetProvider(providerID) {
@@ -25647,18 +25981,18 @@ function handler(context) {
           const { entries, lists } = await body();
           if (Array.isArray(lists)) {
             try {
-              auto.setLists(lists);
+              auto.setLists(await sessions.asKept(lists));
             } catch (problem) {
               return error2(400, problem.message);
             }
           } else if (Array.isArray(entries))
-            auto.set(entries);
+            auto.set((await sessions.asKept([{ ...auto.all()[0], entries }]))[0].entries);
           else
             return error2(400, "Send the lists, or the first one's entries.");
           emit("kuvo.auto.updated", {});
         }
         if (!b && (method === "GET" || method === "PUT"))
-          return json12({ data: { entries: auto.list(), lists: auto.all(), limits: auto.limits() } });
+          return json12({ data: { entries: await sessions.autoEntries(), lists: await sessions.autoLists(), limits: auto.limits() } });
       }
       if (area === "experimental" && a === "session" && b) {
         const id = b;
@@ -26166,6 +26500,7 @@ try {
 console.log(JSON.stringify({ url: `http://127.0.0.1:${server4.port}` }));
 self = server3(`http://127.0.0.1:${server4.port}`, password);
 link3.whenReady().then(() => {
+  sessions.wakeLost();
   goals.start();
   sideQuestions.start();
   reviews.resume();
@@ -26221,4 +26556,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents b9cac80a98858918b3fb85ebad5ac236e228cd9c80c22dfa203b33a6f37219e5
+// Built from Packages/Box/src/agents 2a59541e0a9af1bc957bade508ed9f5a673023a2aeea91ce401fe5624bd0ccdc
