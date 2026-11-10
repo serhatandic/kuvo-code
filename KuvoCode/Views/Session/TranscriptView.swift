@@ -734,7 +734,7 @@ enum Row: Identifiable, Hashable {
     }
 
     private static func rows(of note: BoxNote, id: String, at: Milliseconds?) -> [Row] {
-        note.news.enumerated().map { index, news in .news(index == 0 ? id : "\(id)#\(index)", news, at: at) }
+        note.shown.enumerated().map { index, news in .news(index == 0 ? id : "\(id)#\(index)", news, at: at) }
     }
 
     /// The words Find looks in, as the row shows them: messages, replies, and commands you ran

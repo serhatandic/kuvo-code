@@ -64,6 +64,9 @@ struct BoxNoteTests {
         let working = try message("[Session still working] \"Tests\" in tidepool (address ses_7), after 30 min:\n(It ended without a reply.)\n(Still running in the background: the command `npm test`. It may write again once that ends.)")
         #expect(BoxNote.of(working)?.news.first?.body == "Still running in the background: the command `npm test`.")
         #expect(BoxNote.of(working)?.news.first?.status == "still working")
+        // Shown: nothing (the user, 11-10).
+        #expect(BoxNote.of(working)?.shown == [])
+        #expect(BoxNote.of(finished)?.shown.count == 1)
 
         let asks = try message("[Session asks] \"Deploy\" in tidepool (address ses_5) asks to run `fly deploy` (ask per_1). Answer with answer_ask if it's yours to allow, or tell the user in a line and carry on.")
         #expect(BoxNote.of(asks)?.news.first?.body == "Asks to run `fly deploy`.")

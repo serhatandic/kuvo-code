@@ -6,8 +6,8 @@ import Testing
 
 /// What the box and the engine write to an agent in its conversation, as the transcript draws it:
 /// no pills (the user, 11-10). A lead's sessions telling it what they did read as messages from each
-/// (#404), in the design of a message from another agent, opening that session (one still working
-/// too: the user, 11-10, "not ideal to only see your messages without the trigger"); the engine's notes for the model (work moved to the background for a
+/// (#404), in the design of a message from another agent, opening that session, and one still
+/// working shows nothing (the user, 11-10: they're no longer sent); the engine's notes for the model (work moved to the background for a
 /// message, a background run ending) show nothing (#406); what changed (the model, a summary) is a
 /// word in the next reply's footer. The engine is stubbed.
 @MainActor
@@ -52,15 +52,12 @@ import Testing
              "metadata": note("2 updates from its sessions")],
         ])
         let news = rows.compactMap { if case .news(_, let news, let at) = $0 { (news, at) } else { nil } }
-        #expect(news.map(\.0.title) == ["#398 sign-in card answers the wrong computer", "#399 keep-alive", "#400 deploy"])
-        #expect(news.map(\.0.session) == ["ses_398", "ses_399", "ses_400"])
-        #expect(news.map(\.0.status) == ["still working", "finished", "asks"])
-        #expect(news.map(\.0.body) == [
-            "The phone and Mac tests are still running.\n\nStill running in the background: the command `scripts/heavy.sh phone`.",
-            "Merged to main. Tests green.",
-            "Asks to run `npm run deploy`.",
-        ])
-        #expect(news.map(\.1) == [2_000, 3_000, 3_000])
+        // Still working: nothing.
+        #expect(news.map(\.0.title) == ["#399 keep-alive", "#400 deploy"])
+        #expect(news.map(\.0.session) == ["ses_399", "ses_400"])
+        #expect(news.map(\.0.status) == ["finished", "asks"])
+        #expect(news.map(\.0.body) == ["Merged to main. Tests green.", "Asks to run `npm run deploy`."])
+        #expect(news.map(\.1) == [3_000, 3_000])
         // No pill for any of them, nor the words the lead was told to act on.
         #expect(notices(rows).isEmpty)
         #expect(!news.contains { $0.0.body.contains("answer_ask") })

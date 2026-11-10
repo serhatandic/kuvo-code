@@ -5,7 +5,7 @@ import OpenCodeKit
 /// your answer told late): the agent reads it whole, and both apps show it in its place as what
 /// happened rather than as a bubble of yours. Every box marks one as it sends it
 /// (`metadata.kuvo.note`, the box's `boxNote`); those sent before it did are read from how it
-/// wrote them. Its sessions' news reads as messages from those sessions (`news`, each in the
+/// wrote them. Its sessions' news reads as messages from those sessions (`shown`, each in the
 /// To/From design of messages between agents); the rest shows nothing but what `ReplyChanges` says
 /// of it in the next reply's footer.
 public struct BoxNote: Equatable, Sendable {
@@ -17,6 +17,11 @@ public struct BoxNote: Equatable, Sendable {
     /// other note).
     public let news: [SessionNews]
 
+
+    /// The news shown, each as a message from its session: one that finished, failed or asks. One
+    /// still working shows nothing (the user, 11-10: they're no longer sent, and those in a
+    /// conversation from before show nothing either).
+    public var shown: [SessionNews] { news.filter { $0.kind != .working } }
 
     public init(from: String, line: String, news: [SessionNews] = []) {
         self.from = from
