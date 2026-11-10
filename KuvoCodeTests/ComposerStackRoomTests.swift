@@ -283,7 +283,7 @@ import Testing
         app.workspace.handle(try engine.event("form.replied", session: "ses_pixel", ["id": "frm_concept", "sessionID": "ses_pixel"]))
         app.workspace.handle(try engine.event("shell.created", session: "ses_pixel", ["info": [
             "id": "sh_408", "metadata": ["sessionID": "ses_pixel"], "status": "running", "command": "swift build",
-            "time": ["started": 1700000000000]
+            "time": ["started": Date.now.timeIntervalSince1970 * 1000 - 120_000]
         ]] as [String: Any]))
         show(NSSize(width: 820, height: 1000))
         try await until { app.workspace.lastingShellJobs.contains("sh_408") }
@@ -319,7 +319,14 @@ import Testing
                 host.display()
                 let rep = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
                 host.cacheDisplay(in: host.bounds, to: rep)
-                try #require(rep.representation(using: .png, properties: [:])).write(to: out.appending(path: "mac-\(look)-\(state).png"))
+                let cg = try #require(rep.cgImage)
+                let context = try #require(CGContext(data: nil, width: cg.width, height: cg.height, bitsPerComponent: 8, bytesPerRow: 0,
+                                                     space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+                context.setFillColor(CGColor(gray: dark ? 0.12 : 0.97, alpha: 1))
+                context.fill(CGRect(x: 0, y: 0, width: cg.width, height: cg.height))
+                context.draw(cg, in: CGRect(x: 0, y: 0, width: cg.width, height: cg.height))
+                let png = try #require(context.makeImage().flatMap { NSBitmapImageRep(cgImage: $0).representation(using: .png, properties: [:]) })
+                try png.write(to: out.appending(path: "mac-\(look)-\(state).png"))
             }
             try await keep("open")
             #expect(try #require(elements.first { $0.label == "Fold all bars" }).press())
@@ -327,11 +334,15 @@ import Testing
             #expect(try #require(elements.first { $0.label?.hasPrefix("Bars: ") == true }).press())
             window.makeFirstResponder(field)
             field.insertText("Keep the conversation in sight", replacementRange: NSRange(location: NSNotFound, length: 0))
-            try await until { model.tuck.isOn(among: [.goal, .background]) }
+            try await until { model.draftText == "Keep the conversation in sight" && model.tuck.isOn(among: [.goal, .background]) }
             try await keep("typing")
-            #expect(try #require(elements.first { $0.label == "Send" }).press())
+            let enter = try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber,
+                                                    context: nil, characters: "\r", charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: 36))
+            field.keyDown(with: enter)
             try await until { model.draftText.isEmpty && !model.tuck.isOn(among: [.goal, .background]) }
             try await keep("sent")
+            #expect(model.failure == nil, "\(model.failure ?? "")")
+            #expect(model.draftText.isEmpty)
         }
     }
 

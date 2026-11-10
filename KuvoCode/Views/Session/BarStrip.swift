@@ -46,6 +46,7 @@ struct BarStrip: View {
         .accessibilityLabel("Bars: " + items.map(\.words).joined(separator: ", "))
         .accessibilityValue(marked.isEmpty ? "" : "New: " + items.filter { marked.contains($0.bar) }.map(\.words).joined(separator: ", "))
         .accessibilityAddTraits(.isButton)
+        .accessibilityAction { show() }
     }
 
     private func line(words: Bool) -> some View {
