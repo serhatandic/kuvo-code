@@ -21,7 +21,7 @@ WAITS = 75
 def clean_environment():
     """The environment of the run without what a job of heavy.sh leaves in it (a test run from inside
     one would otherwise see that job's turn and slot)."""
-    return {k: v for k, v in os.environ.items() if k not in ("KUVO_HEAVY_SLOTS", "KUVO_HEAVY_HELD", "KUVO_HEAVY_HOLDING", "KUVO_HEAVY_SLOT", "KUVO_HEAVY_BUILD_SUFFIX", "KUVO_TEST_SIMULATOR", "KUVO_HEAVY_WAIT")}
+    return {k: v for k, v in os.environ.items() if k not in ("KUVO_HEAVY_SLOTS", "KUVO_HEAVY_HELD", "KUVO_HEAVY_HOLDING", "KUVO_HEAVY_SLOT", "KUVO_HEAVY_BUILD_SUFFIX", "KUVO_TEST_SIMULATOR", "KUVO_HEAVY_WAIT", "KUVO_HEAVY_LIMIT", "KUVO_HEAVY_MAC_FIRST_FOR")}
 
 
 class Held:
@@ -428,6 +428,82 @@ class HeavyTests(unittest.TestCase):
         self.assertIn("The Mac is busy", said)
         self.assertEqual(self.run_heavy("box", "true", KUVO_HEAVY_LOAD="1000")[0], 0)
 
+    def waiting_mac(self, **env):
+        """A Mac app suite that has its turn and waits for the Mac to be less busy (to it, the Mac is
+        always busy), once it says so. Stopped with its whole session at the end of the test."""
+        mac = subprocess.Popen([HEAVY, "mac", "true"], env=dict(self.env, KUVO_HEAVY_LOAD="-1", **env), stderr=subprocess.PIPE, text=True, start_new_session=True)
+        def stop():
+            try:
+                os.killpg(mac.pid, signal.SIGKILL)
+            except ProcessLookupError:  # stopped by the test already
+                pass
+            mac.wait(timeout=30)
+            mac.stderr.close()
+        self.addCleanup(stop)
+        self.assertTrue(select.select([mac.stderr], [], [], 30)[0], "the suite said nothing")
+        self.assertIn("Waiting while the Mac is busy", mac.stderr.readline())
+        return mac
+
+    def test_while_the_app_suite_waits_for_a_less_busy_mac_new_jobs_of_other_kinds_wait_for_it(self):
+        self.waiting_mac()
+        for kind in ("phone", "mac-build", "box"):
+            with self.subTest(kind):
+                code, said = self.run_heavy(kind, "true")
+                self.assertEqual(code, WAITS)
+                self.assertIn("The Mac app's suite is waiting for the Mac to be less busy, and goes first", said)
+        # Waiting (not told not to), it says why, once.
+        waiting = subprocess.Popen([HEAVY, "box", "true"], env=self.env, stderr=subprocess.PIPE, text=True, start_new_session=True)
+        try:
+            self.assertIn("Waiting for the Mac app's suite to start first", waiting.stderr.readline())
+            self.assertIsNone(waiting.poll(), "it started before the suite")
+        finally:
+            os.killpg(waiting.pid, signal.SIGKILL)
+            waiting.wait(timeout=30)
+            waiting.stderr.close()
+
+    def test_the_app_suite_holds_other_jobs_back_only_so_long_and_only_while_it_waits(self):
+        mac = self.waiting_mac()
+        # Past the time it may hold them back, they go.
+        self.assertEqual(self.run_heavy("phone", "true", KUVO_HEAVY_MAC_FIRST_FOR="0")[0], 0)
+        # A suite that's gone holds nothing back.
+        os.killpg(mac.pid, signal.SIGKILL)
+        mac.wait(timeout=30)
+        self.assertEqual(self.run_heavy("box", "true")[0], 0)
+
+    def test_an_app_suite_that_isnt_waiting_holds_nothing_back(self):
+        marker = os.path.join(self.locks, f"kuvo-code-heavy-mac-first-{os.getuid()}")
+        # Told not to wait, it says so and leaves nothing behind that holds others back.
+        code, said = self.run_heavy("mac", "true", KUVO_HEAVY_LOAD="-1")
+        self.assertEqual(code, WAITS)
+        self.assertFalse(os.path.exists(marker), "a suite that didn't wait said it does")
+        # Once it started (and while it runs), neither.
+        suite = Held([HEAVY, "mac"], self.env)
+        try:
+            self.assertFalse(os.path.exists(marker), "a suite that started still says it waits")
+            self.assertEqual(self.run_heavy("phone", "true")[0], 0)
+            self.assertEqual(self.run_heavy("box", "true")[0], 0)
+        finally:
+            suite.let_go()
+
+    def test_a_job_started_inside_one_already_running_doesnt_wait_for_the_app_suite(self):
+        """A job of another kind that a running job starts (a test run starting the box's suite) is
+        part of that one, which was going before the suite began to wait."""
+        folder = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, folder, ignore_errors=True)
+        running, go, inner = (os.path.join(folder, name) for name in ("running", "go", "inner"))
+        os.mkfifo(running)
+        os.mkfifo(go)
+        script = f'echo yes > "{running}"; read x < "{go}"; KUVO_HEAVY_WAIT=0 "{HEAVY}" phone true; echo $? > "{inner}"'
+        outer = subprocess.Popen([HEAVY, "box", "/bin/sh", "-c", script], env=self.env)
+        with open(running) as said:
+            said.read()
+        self.waiting_mac()
+        with open(go, "w") as told:
+            told.write("go\n")
+        self.assertEqual(outer.wait(timeout=30), 0)
+        with open(inner) as f:
+            self.assertEqual(f.read().strip(), "0", "it waited for the suite")
+
     def test_its_command_runs_with_its_arguments_and_answer(self):
         result = subprocess.run([HEAVY, "box", "/bin/sh", "-c", 'echo "$1"; exit 3', "sh", "a b"], env=self.env, capture_output=True, text=True, timeout=30)
         self.assertEqual((result.returncode, result.stdout), (3, "a b\n"))
@@ -501,19 +577,19 @@ class StoppingTests(unittest.TestCase):
         self.pids.append(pid)
         return pid
 
-    def start(self, job, kind="box", env=None, child="sleep 300"):
+    def start(self, job, kind="box", env=None, child="sleep 300", stderr=None):
         """Runs `job` (shell) under heavy.sh once it has started a child of its own (`child`, which
         sleeps) and said so. Returns the process and the child's pid."""
         self.fresh()  # folders of their own for each job: one job's leftovers aren't the next one's
         ready, pidfile = (os.path.join(self.folder, name) for name in ("ready", "pid"))
         script = f'{child} & echo $! > "{pidfile}"; echo "${{KUVO_HEAVY_SLOT-}}" > "{self.folder}/slot"; echo yes > "{ready}"; {job}'
-        process = self.run_job(["/bin/sh", "-c", script], kind, env)
+        process = self.run_job(["/bin/sh", "-c", script], kind, env, stderr)
         self.ready()
         return process, self.child("pid")
 
-    def run_job(self, command, kind="box", env=None):
+    def run_job(self, command, kind="box", env=None, stderr=None):
         """In a session of its own, as a harness runs a command, and not under a shell's `&`."""
-        return subprocess.Popen([HEAVY, kind, *command], env=env or self.env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, start_new_session=True,
+        return subprocess.Popen([HEAVY, kind, *command], env=env or self.env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=stderr, start_new_session=True,
                                 preexec_fn=lambda: signal.signal(signal.SIGINT, signal.SIG_DFL))
 
     def test_stopping_it_stops_what_its_command_started(self):
@@ -586,6 +662,59 @@ class StoppingTests(unittest.TestCase):
             first.send_signal(signal.SIGTERM)
             first.wait(timeout=30)
             self.over(first)
+
+    def test_a_job_past_its_time_limit_is_stopped_and_says_what_was_running(self):
+        """A job that hangs (here, one waiting for good on a child that takes no TERM) is stopped
+        once its time is up, all of it, and its turn is free again: it can't hold its kind for hours.
+        (The job never ends by itself, so only its limit ends it; five seconds is plenty for it to
+        start its child and say so, which takes milliseconds.)"""
+        env = dict(self.env, KUVO_HEAVY_LIMIT="5s")
+        process, child = self.start("wait", env=env, child=self.STUBBORN, stderr=subprocess.PIPE)
+        self.assertEqual(process.wait(timeout=30), 124)
+        said = process.stderr.read().decode()
+        process.stderr.close()
+        self.over(process)
+        self.gone(child, "a child of a job past its time limit is still running")
+        self.assertIn("this box job ran past its time limit (5s) and was stopped: /bin/sh -c", said)
+        self.assertIn("KUVO_HEAVY_LIMIT", said)
+        free = subprocess.run([HEAVY, "box", "true"], env=self.env, capture_output=True, timeout=30)
+        self.assertEqual(free.returncode, 0, "its turn is still held")
+        self.assertEqual(self.left_in(process), [], "something of the helper is still running")
+
+    def left_in(self, process):
+        """What's still running in the session the job was started in (the helper's watcher, a
+        command's child): by session, never by name."""
+        left = []
+        for line in subprocess.run(["ps", "-axo", "pid="], capture_output=True, text=True).stdout.split():
+            try:
+                if os.getsid(int(line)) == process.pid:
+                    left.append(int(line))
+            except (ProcessLookupError, PermissionError):
+                pass
+        return left
+
+    def test_a_job_within_its_limit_ends_as_it_would_have(self):
+        """With a limit, a job that ends in time keeps its own answer and leaves nothing behind: not
+        its command's child, nor the helper's watcher, which keeps the limit."""
+        env = dict(self.env, KUVO_HEAVY_LIMIT="2h")
+        process, child = self.start("exit 7", env=env)
+        self.assertEqual(process.wait(timeout=30), 7)
+        self.over(process)
+        self.gone(child, "a background child of a finished command is still running")
+        self.assertEqual(self.left_in(process), [], "something of the helper is still running")
+
+    def test_a_limit_is_read_in_base_ten_whatever_zeros_lead_it(self):
+        for given in ("08m", "010", "0", "009s"):
+            with self.subTest(given):
+                result = subprocess.run([HEAVY, "box", "true"], env=dict(self.env, KUVO_HEAVY_LIMIT=given), capture_output=True, text=True, timeout=30)
+                self.assertEqual((result.returncode, result.stderr), (0, ""))
+
+    def test_a_limit_that_isnt_a_time_is_refused(self):
+        for given in ("soon", "1.5m", "5ms", "m", "1234567m"):
+            with self.subTest(given):
+                result = subprocess.run([HEAVY, "box", "true"], env=dict(self.env, KUVO_HEAVY_LIMIT=given), capture_output=True, text=True, timeout=30)
+                self.assertEqual(result.returncode, 64)
+                self.assertIn("KUVO_HEAVY_LIMIT is a time like 90m", result.stderr)
 
     def test_the_old_way_lock_changes_nothing(self):
         env = dict(self.env, KUVO_HEAVY_OLD_UNTIL="20991231")

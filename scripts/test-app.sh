@@ -131,6 +131,8 @@ cleanup_run() {
     if [ "$finished" -eq 0 ] || [ "$result" -ne 0 ]; then
         stop_new_hosts
     fi
+    # Stopped before it was over (heavy.sh's time limit, a caller): where to look for what it was on.
+    if [ "$finished" -eq 0 ] && [ -n "$xcode_pid" ]; then echo "Stopped before the tests were over. The whole log: $BUILD/test.log" >&2; fi
     kill "$caffeinate_pid" 2>/dev/null || true
     wait "$caffeinate_pid" 2>/dev/null || true
     clean

@@ -176,7 +176,9 @@ scripts/heavy.sh box sh -c 'cd Packages/Box && bun test'
 - `box`: the box's whole suites (`bun test`, `node --test`) and runs on a test machine.
 
 A job also waits while the Mac is busy (its load over the last minute above 40;
-`KUVO_HEAVY_LOAD` sets another). Both apps' `scripts/test-app.sh` take their turn
+`KUVO_HEAVY_LOAD` sets another). While the Mac app's suite waits there, new jobs of the other
+kinds wait for it to start, 15 minutes at most (`KUVO_HEAVY_MAC_FIRST_FOR`), so the jobs that keep
+starting can't keep it out. Both apps' `scripts/test-app.sh` take their turn
 this way themselves. `python3 -m unittest discover -s scripts -p test_heavy.py`
 tries the helper.
 
@@ -188,6 +190,13 @@ the job's group is left behind to clean up. Never stop a process by name or patt
 `kill $(pgrep …)`): a pattern matches other people's apps and other sessions. Stop only a process
 you started, by its PID (`$!`, a pid file) or by a process group you created, never the one you
 were started in. On macOS every option goes before the pattern, in `pgrep` too.
+
+Every job has a time limit, so a hung one can't hold its kind's turn for hours: `mac` and `phone`
+45 minutes, `mac-build` 30, `box` 40, counted while it runs (not while it waits for its turn).
+Past it, its group is stopped (TERM, then KILL), it says what was running, and the helper exits
+124. `KUVO_HEAVY_LIMIT` gives one job another (`90m`, `600s`, `2h`; `0` for none). A job inside
+one of its kind runs within that one's limit (one of another kind has its own too), and one in a
+terminal has none.
 
 `KuvoCodeTests` tries what the app does on its own code, scenario by scenario:
 Discard in Changes on throwaway git repositories, say, checking what's on disk
