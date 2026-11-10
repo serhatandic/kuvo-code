@@ -2,14 +2,14 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, "ci/**"]
   pull_request:
   workflow_call:
 
 permissions:
   contents: read
 
-# A newer push to a pull request or to main cancels the run it supersedes. A release's run
+# A newer push to a pull request, main, or a ci/ branch cancels the run it supersedes. A release's run
 # (release.yml calls this workflow, and `github` is the caller's there, so github.workflow is
 # "Release") is in a group of its own and is never cancelled.
 concurrency:

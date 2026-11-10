@@ -99,16 +99,12 @@ act on those (a window's tracking areas and cursor rectangles once the pointer c
 drawing as Core Animation commits), the test does it itself: `WindowServer.appKitsTurn` and
 `CATransaction.flush()` after `displayIfNeeded()`.
 
-The app, the engine client and the usage tracker have tests:
-
-```sh
-./scripts/test-app.sh
-cd Packages/OpenCodeKit && swift test
-cd Packages/UsageKit && swift test
-cd Packages/KuvoClient && swift test
-cd Packages/KuvoLink && swift test && node --test Tests/Bridge/*.test.js
-cd Packages/Box && bun install && bun run check && bun test
-```
+Run quick, targeted tests locally while working. Commit the changes to a work branch, then run
+`scripts/ci-branch.sh --wait` to push it over SSH to `origin` as a `ci/` branch and run the full
+CI suites on GitHub. Pass a local branch name to test a different branch. The script prints the run
+URL, job conclusions and failed logs; it never pushes `main` or tags. Only committed changes run.
+CI covers the Mac app, Swift packages, box and bridge; the phone has no CI, so run its tests locally.
+Use `scripts/heavy.sh` for the phone and for local builds or tests that CI doesn't cover.
 
 The bridge's tests that run the box itself need a Bun: `bun` on your PATH, or
 `KUVO_TEST_BUN` naming one or an engine (a machine's `~/.kuvo-code/engine/<version>/opencode`,
@@ -142,7 +138,7 @@ its home as it ends, and the next run clears what a killed one left.
 `./scripts/test-app.sh` runs one at a time: a run started while another is going
 waits for it, since they share the test copy's settings and temporary folders.
 
-Builds and test runs are heavy, so start them with `scripts/heavy.sh <kind>`, which
+When running heavy builds or tests locally, start them with `scripts/heavy.sh <kind>`, which
 waits for jobs of the same kind (they share build folders) and runs the other
 kinds alongside:
 
