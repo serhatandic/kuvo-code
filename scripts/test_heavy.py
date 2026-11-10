@@ -1,6 +1,6 @@
 """scripts/heavy.sh: jobs of different kinds run together, two of one kind queue (two phone jobs that
 handle slots run at once, each with a simulator of its own, and two mac-build jobs, each with a build
-folder of its own, beside the app suite's mac; the phone's builds are phone-build, which is mac-build's lane), a job started the
+folder of its own, beside the app suite's mac; the phone's builds, phone-build, take mac-build's slots), a job started the
 old way (under the one lock for every kind) holds up every kind, and a busy Mac holds a job back.
 Each test has locks of its own (KUVO_HEAVY_DIR), and asks with KUVO_HEAVY_WAIT=0, which says what a
 job would wait for instead of waiting."""

@@ -10,6 +10,7 @@
 #   mac-build  what doesn't drive the UI: the Mac's xcodebuild (builds, demo builds), swift build
 #              or test of its packages. Two slots, and it doesn't take mac's lock, so these run
 #              beside the app suite and each other.
+#              The phone's builds share these slots (phone-build, below).
 #   phone-build  the phone's builds, and anything else of the phone's that boots no simulator. The
 #              same lane as mac-build, not a lane of its own: it is mac-build under another name
 #              (the same two slots and locks, so a phone build and a Mac build count against each
