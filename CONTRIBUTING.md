@@ -147,7 +147,8 @@ kinds alongside:
 scripts/heavy.sh mac scripts/test-app.sh
 scripts/heavy.sh mac-build sh -c 'xcodebuild … -derivedDataPath "$(getconf DARWIN_USER_CACHE_DIR)KuvoShared-MacBuild$KUVO_HEAVY_BUILD_SUFFIX" …'
 scripts/heavy.sh mac-build sh -c 'cd Packages/KuvoClient && swift test'
-scripts/heavy.sh phone <phone-test-command>
+scripts/heavy.sh phone-build <phone-build-command>   # the phone's `scripts/build-app.sh` does this
+scripts/heavy.sh phone <phone-test-command>          # only a run that boots a simulator
 scripts/test-box.sh box <test-filter>
 ```
 
@@ -163,7 +164,17 @@ scripts/test-box.sh box <test-filter>
   `-clonedSourcePackagesDirPath` in that folder too (`…/KuvoShared-MacBuild$KUVO_HEAVY_BUILD_SUFFIX/SourcePackages`),
   not the checkout's `build/SourcePackages` (the app suite's) or `build/DerivedData`, which two
   jobs in one checkout would share. A package's `.build` is its own to each checkout;
-- `phone`: the iPhone app's (`KuvoShared-PhoneBuild`, `KuvoCodeMobileTests-build`). It has two
+- `phone-build`: the iPhone app's builds, and anything of the phone's that boots no simulator. It is
+  `mac-build`'s lane under another name (the same two slots, locks and 30-minute time limit, which
+  `KUVO_HEAVY_LIMIT=60m` raises), not one of its own: a phone build and a Mac build are both `xcodebuild` compiles that compete for the same CPU and
+  memory, so they count against each other, and neither waits for a simulator. Take the slot's
+  folder from `KUVO_HEAVY_SLOT` and `KUVO_HEAVY_BUILD_SUFFIX` (`-1` or `-2`) and build in
+  `KuvoShared-PhoneLane$KUVO_HEAVY_BUILD_SUFFIX`, a folder of its own (not `KuvoShared-PhoneBuild-2`,
+  which phone's slot 2 builds in). The phone's `scripts/build-app.sh` does all of it. A build never
+  takes a `phone` slot: those are for test runs, which each need a simulator, and a build that held
+  one only made the test runs queue behind it;
+- `phone`: **only the phone's test runs that boot a simulator** (`KuvoShared-PhoneBuild`,
+  `KuvoCodeMobileTests-build`; the phone's `scripts/test-app.sh`). It has two
   slots, so two phone test runs go at once, each on a simulator of its own: "Kuvo Code Tests" in
   slot 1 and "Kuvo Code Tests 2" in slot 2, both fixed (the phone's `scripts/test-app.sh` makes each
   once, on the same runtime and device, and keeps it; nothing makes or deletes one per run). A

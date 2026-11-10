@@ -9029,7 +9029,7 @@ function namedOf(session) {
 function notSummarizedLine(session, why) {
   return `[Session not summarized] ${namedOf(session)}: ${why ? cut(why.replace(/\.+$/, ""), 400) : "It couldn't"}. Its conversation and work are as they were.`;
 }
-async function wakeLine(event, session, target, still, working = false) {
+async function wakeLine(event, session, target, still) {
   const named = namedOf(session);
   switch (event.type) {
     case "session.execution.succeeded": {
@@ -9037,7 +9037,7 @@ async function wakeLine(event, session, target, still, working = false) {
       const since = session.time?.created ? `, after ${took(Date.now() - session.time.created)}` : "";
       const running = still ? `
 (Still running in the background: ${backgroundWords(still)}. It may write again once that ends.)` : "";
-      return `[Session ${working ? "still working" : "finished"}] ${named}${since}:
+      return `[Session finished] ${named}${since}:
 ${reply ? cut(reply, 1200) : "(It ended without a reply.)"}${running}`;
     }
     case "session.execution.failed": {
@@ -9364,7 +9364,7 @@ function workWatcher(source, targets, { gather = GATHER, schedule = setTimeout, 
     letGoOf(session.id);
     if (last && !isNews(was, last))
       return noteTold(session.id, { reply: last.id ?? undefined });
-    const line = await wakeLine({ type: "session.execution.succeeded", data: { sessionID: session.id } }, session, source, still, working);
+    const line = await wakeLine({ type: "session.execution.succeeded", data: { sessionID: session.id } }, session, source, still);
     if (!line)
       return;
     tellUnlessAnswered(session.id, starter, last?.id ?? undefined, line, at, { said: last?.text ? hashed(last.text) : "", early: Boolean(still) || waitedSince !== undefined, bot: worksFor(session)?.bot, working });
