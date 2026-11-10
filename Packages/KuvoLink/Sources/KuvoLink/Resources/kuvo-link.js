@@ -36758,9 +36758,11 @@ async function runMacLink() {
 import crypto46 from "node:crypto";
 import http from "node:http";
 import os15 from "node:os";
+var IDLE_TOLD = 5000;
+var IDLE_KEPT = 60000;
 function serveBox(password, handle = engineHandler(readEngineFile, { name: os15.hostname() })) {
   const expected = Buffer.from("Basic " + Buffer.from(`opencode:${password}`).toString("base64"));
-  return http.createServer(async (request, response) => {
+  return http.createServer({ keepAliveTimeout: IDLE_TOLD, keepAliveTimeoutBuffer: IDLE_KEPT }, async (request, response) => {
     const given = Buffer.from(request.headers.authorization ?? "");
     if (given.length !== expected.length || !crypto46.timingSafeEqual(given, expected)) {
       response.writeHead(401);
