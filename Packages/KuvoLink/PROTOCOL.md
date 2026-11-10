@@ -911,7 +911,9 @@ client shows it from the same routes.
     conversation this box has always wins over a home, and a computer you removed is no one's home.
     A note's `about` counts as of its `made`.
   Its task ends with the session's half of the playbook: review your work with reviewer subagents,
-  fix what they find, and end with a short report.
+  fix what they find, and end with a short report. A session whose starter hears it finish is told
+  that report, its last reply, reaches them then, so it doesn't send it again with `send_message`
+  (that's for asking something or saying how it goes); its task's first line says so too.
 - **Tools** (`POST kuvo/agent-tools`, any conversation, for the sessions under it):
   `list_sessions` (each with where it stands: working, asking and what, with the ask's id,
   finished, failed, stopped; its model, the tokens in its context now, or that it was just
