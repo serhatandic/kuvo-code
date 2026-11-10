@@ -7162,6 +7162,11 @@
      "object": {
       "message": "string"
      }
+    },
+    "503": {
+     "object": {
+      "message": "string"
+     }
     }
    }
   },
@@ -7220,6 +7225,11 @@
      }
     },
     "400": {
+     "object": {
+      "message": "string"
+     }
+    },
+    "503": {
      "object": {
       "message": "string"
      }

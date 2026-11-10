@@ -37,7 +37,7 @@ const github = data => fs.writeFileSync(answer, JSON.stringify({ data }));
 
 // A pull request as GitHub's GraphQL answers it, its checks counted by state.
 const pr = (number, { state = "OPEN", isDraft = false, branch = "kuvo/timer", runs = { SUCCESS: 12, QUEUED: 2 }, statuses = {} } = {}) => ({
-  number, url: `https://github.com/kuvo-test/app/pull/${number}`, state, isDraft, additions: 435, deletions: 4, headRefName: branch,
+  number, url: `https://github.com/kuvo-test/app/pull/${number}`, state, isDraft, additions: 435, deletions: 4, headRefName: branch, headRepositoryOwner: { login: "kuvo-test" },
   commits: { nodes: [{ commit: { statusCheckRollup: { contexts: {
     checkRunCountsByState: Object.entries(runs).map(([state, count]) => ({ state, count })),
     statusContextCountsByState: Object.entries(statuses).map(([state, count]) => ({ state, count })),
