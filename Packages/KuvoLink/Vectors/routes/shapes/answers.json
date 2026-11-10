@@ -4204,10 +4204,7 @@
         "additions": "number",
         "deletions": "number",
         "untracked": "number",
-        "uncommitted": "bool",
-        "partial?": {
-         "literal": true
-        }
+        "uncommitted": "bool"
        }
       }
      ]

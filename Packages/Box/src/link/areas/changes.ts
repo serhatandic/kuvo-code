@@ -137,8 +137,9 @@ export async function changesIn(directory: string, scope: Scope, base?: string):
   // Its own prefixes, whatever the git settings (diff.noprefix, diff.mnemonicPrefix): a client
   // reads the paths after them. The whole file as context, so a client folds what's unchanged.
   // (The file's own lines, whatever your settings: an unchanged blank line written as " ", none
-  // through a converter (textconv). Clients count each line, and review comments name them.)
-  const args = ["-c", "core.quotepath=off", "-c", "diff.suppressBlankEmpty=false", "diff", "--no-color", "--no-ext-diff", "--no-textconv", "--find-renames", "--src-prefix=a/", "--dst-prefix=b/", "-U100000"];
+  // through a converter (textconv). Clients count each line, and review comments name them.) A
+  // submodule as git's own diff of its commit, whatever diff.submodule says, so it's listed.
+  const args = ["-c", "core.quotepath=off", "-c", "diff.suppressBlankEmpty=false", "-c", "diff.submodule=short", "diff", "--no-color", "--no-ext-diff", "--no-textconv", "--find-renames", "--src-prefix=a/", "--dst-prefix=b/", "-U100000"];
   const patch = await text(root, [...args, ...compared, "--", limit]);
   if (patch === null) return null;
   const untracked = await untrackedIn(root, limit, scope);
@@ -164,14 +165,10 @@ export async function changesIn(directory: string, scope: Scope, base?: string):
   return { repository: true, root, against, patch, untracked, hashes, uncommitted: await uncommittedIn(root, scope) };
 }
 
-/** The most of new files' bytes `countIn` reads for their lines, all of them together. */
-const COUNT_READ_LIMIT = 32 * 1024 * 1024;
-
 /** How much changed in `directory`'s repository in `scope`, as `changesIn` would list it but
  * without the diff: each changed file once (a rename by its new path, a file that changed kind as
- * one), new files git doesn't know among them, and git's count of lines added and removed, a new
- * file's lines included (a binary one has none, as git counts it). New files' lines are read only
- * up to `COUNT_READ_LIMIT` in all: past it the rest aren't counted, and `partial` says so. */
+ * one), new files git doesn't know among them, and git's count of lines added and removed in the
+ * files it knows (a binary one has none). New files aren't read: counting is cheap however many. */
 export async function countIn(directory: string, scope: Scope, base?: string): Promise<GitChangesCount | null> {
   const found = await scoped(directory, scope, base);
   if (!found) return { repository: false };
@@ -179,7 +176,7 @@ export async function countIn(directory: string, scope: Scope, base?: string): P
   const numbers = await git(root, ["-c", "core.quotepath=off", "diff", "--no-color", "--no-ext-diff", "--no-textconv", "--find-renames", "--numstat", "-z", ...compared, "--", limit]);
   if (!numbers.ok) return null;
   // `added<TAB>deleted<TAB>path`, or for a rename `added<TAB>deleted<TAB>` then its old and new
-  // paths as fields of their own; "-" for a binary file's.
+  // paths as fields of their own; "-" for a binary file's. A conflicted file comes more than once.
   const seen = new Set<string>();
   let additions = 0;
   let deletions = 0;
@@ -197,44 +194,15 @@ export async function countIn(directory: string, scope: Scope, base?: string): P
     additions += Number(added) || 0;
     deletions += Number(deleted) || 0;
   }
-  const untracked = (await untrackedIn(root, limit, scope)).filter(name => !seen.has(name.endsWith("/") ? name.slice(0, -1) : name) && !seen.has(name));
-  let budget = COUNT_READ_LIMIT;
-  let partial = false;
-  // A few at a time, so the box goes on answering meanwhile.
-  const files = untracked.filter(name => !name.endsWith("/"));
-  for (let at = 0; at < files.length && !partial; at += 16) {
-    const batch: string[] = [];
-    for (const name of files.slice(at, at + 16)) {
-      const size = kind(path.join(root, name))?.size ?? 0;
-      if (size > budget) {
-        partial = true;
-        break;
-      }
-      budget -= size;
-      batch.push(name);
-    }
-    const counts = await Promise.all(batch.map(name => linesOf(path.join(root, name))));
-    for (const count of counts) additions += count;
+  // A conflicted file isn't staged: git's staged diff only names it ("Unmerged path"), and a
+  // client lists none.
+  if (scope === "staged") {
+    const unmerged = await git(root, ["-c", "core.quotepath=off", "diff", "--no-ext-diff", "--name-only", "-z", "--diff-filter=U", ...compared, "--", limit]);
+    for (const name of unmerged.out.toString("utf8").split("\0")) seen.delete(name);
   }
-  return {
-    repository: true, root, against, files: seen.size + untracked.length, additions, deletions, untracked: untracked.length,
-    uncommitted: await uncommittedIn(root, scope), ...(partial ? { partial: true as const } : {}),
-  };
-}
-
-/** A new file's lines as git counts them for one added: none for a binary one (a NUL in its
- * first 8000 bytes), one for a link (where it points), and a last line without its newline. */
-async function linesOf(file: string): Promise<number> {
-  try {
-    if ((await fs.promises.lstat(file)).isSymbolicLink()) return 1;
-    const bytes = await fs.promises.readFile(file);
-    if (bytes.subarray(0, 8000).includes(0)) return 0;
-    let lines = 0;
-    for (let at = bytes.indexOf(10); at !== -1; at = bytes.indexOf(10, at + 1)) lines++;
-    return bytes.length && bytes[bytes.length - 1] !== 10 ? lines + 1 : lines;
-  } catch {
-    return 0;
-  }
+  // As a client lists them: a new file once, unless the diff has it by that very path.
+  const untracked = (await untrackedIn(root, limit, scope)).filter(name => !seen.has(name));
+  return { repository: true, root, against, files: seen.size + untracked.length, additions, deletions, untracked: untracked.length, uncommitted: await uncommittedIn(root, scope) };
 }
 
 /** To the Trash: on this Mac its own, elsewhere (a machine, whoever's at it or not) Kuvo Code's on

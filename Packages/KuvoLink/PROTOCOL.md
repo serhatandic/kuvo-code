@@ -2282,13 +2282,12 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   - `POST kuvo/git/changes/count {"directory", "scope"?, "base"?}` (`git.changes.count`, bridge
     0.9.209): how much `kuvo/git/changes` would show, without the diff, for a count (the phone's
     ••• says how many files changed) → `{"repository": false}`, or `{"repository": true, root,
-    against, files, additions, deletions, untracked, uncommitted, partial?}`. `root`, `against`
-    and `uncommitted` as `kuvo/git/changes` has them; `files`, each changed file once, as a client
-    lists them from `patch` and `untracked` (a rename by its new path, a file that changed kind as
-    one, a repository inside this one as one); `untracked`, how many of them are new files git
-    doesn't know (none for `staged`); `additions` and `deletions`, git's count of lines (a binary
-    file has none), new files' lines included, read up to 32 MB of them in all: past that the rest
-    aren't counted and `partial` is `true`. `500 {"message"}` when git couldn't say. A box without
+    against, files, additions, deletions, untracked, uncommitted}`. `root`, `against` and
+    `uncommitted` as `kuvo/git/changes` has them; `files`, each changed file once, as a client
+    lists them from `patch` and `untracked` (a rename by its new path, a file that changed kind or
+    a conflicted one as one, but no conflicted one in `staged`, as `patch` names it only); `untracked`, how many of them are new files git doesn't know (none
+    for `staged`); `additions` and `deletions`, git's count of lines in the files it knows (a
+    binary file has none; new files aren't read). `500 {"message"}` when git couldn't say. A box without
     it (no `git.changes.count`): read `kuvo/git/changes` and count.
   - `POST kuvo/git/stage`, `…/unstage` or `…/discard` with `{"root", "path", "oldPath"?, "status":
     "added|deleted|modified|renamed", "scope"?}` → `200 {}`, or `422 {"message"}` with what went

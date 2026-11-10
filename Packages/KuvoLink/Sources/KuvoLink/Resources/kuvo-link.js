@@ -27077,7 +27077,7 @@ async function changesIn(directory, scope, base) {
   if (!found)
     return { repository: false };
   const { root, against, limit, compared } = found;
-  const args = ["-c", "core.quotepath=off", "-c", "diff.suppressBlankEmpty=false", "diff", "--no-color", "--no-ext-diff", "--no-textconv", "--find-renames", "--src-prefix=a/", "--dst-prefix=b/", "-U100000"];
+  const args = ["-c", "core.quotepath=off", "-c", "diff.suppressBlankEmpty=false", "-c", "diff.submodule=short", "diff", "--no-color", "--no-ext-diff", "--no-textconv", "--find-renames", "--src-prefix=a/", "--dst-prefix=b/", "-U100000"];
   const patch = await text2(root, [...args, ...compared, "--", limit]);
   if (patch === null)
     return null;
@@ -27098,7 +27098,6 @@ async function changesIn(directory, scope, base) {
   }
   return { repository: true, root, against, patch, untracked, hashes, uncommitted: await uncommittedIn(root, scope) };
 }
-var COUNT_READ_LIMIT = 32 * 1024 * 1024;
 async function countIn(directory, scope, base) {
   const found = await scoped(directory, scope, base);
   if (!found)
@@ -27125,51 +27124,13 @@ async function countIn(directory, scope, base) {
     additions += Number(added) || 0;
     deletions += Number(deleted) || 0;
   }
-  const untracked = (await untrackedIn(root, limit, scope)).filter((name) => !seen.has(name.endsWith("/") ? name.slice(0, -1) : name) && !seen.has(name));
-  let budget = COUNT_READ_LIMIT;
-  let partial = false;
-  const files = untracked.filter((name) => !name.endsWith("/"));
-  for (let at = 0;at < files.length && !partial; at += 16) {
-    const batch = [];
-    for (const name of files.slice(at, at + 16)) {
-      const size = kind(path93.join(root, name))?.size ?? 0;
-      if (size > budget) {
-        partial = true;
-        break;
-      }
-      budget -= size;
-      batch.push(name);
-    }
-    const counts = await Promise.all(batch.map((name) => linesOf(path93.join(root, name))));
-    for (const count of counts)
-      additions += count;
+  if (scope === "staged") {
+    const unmerged = await git2(root, ["-c", "core.quotepath=off", "diff", "--no-ext-diff", "--name-only", "-z", "--diff-filter=U", ...compared, "--", limit]);
+    for (const name of unmerged.out.toString("utf8").split("\x00"))
+      seen.delete(name);
   }
-  return {
-    repository: true,
-    root,
-    against,
-    files: seen.size + untracked.length,
-    additions,
-    deletions,
-    untracked: untracked.length,
-    uncommitted: await uncommittedIn(root, scope),
-    ...partial ? { partial: true } : {}
-  };
-}
-async function linesOf(file) {
-  try {
-    if ((await fs88.promises.lstat(file)).isSymbolicLink())
-      return 1;
-    const bytes = await fs88.promises.readFile(file);
-    if (bytes.subarray(0, 8000).includes(0))
-      return 0;
-    let lines = 0;
-    for (let at = bytes.indexOf(10);at !== -1; at = bytes.indexOf(10, at + 1))
-      lines++;
-    return bytes.length && bytes[bytes.length - 1] !== 10 ? lines + 1 : lines;
-  } catch {
-    return 0;
-  }
+  const untracked = (await untrackedIn(root, limit, scope)).filter((name) => !seen.has(name));
+  return { repository: true, root, against, files: seen.size + untracked.length, additions, deletions, untracked: untracked.length, uncommitted: await uncommittedIn(root, scope) };
 }
 function trash(file) {
   const name = path93.basename(file);

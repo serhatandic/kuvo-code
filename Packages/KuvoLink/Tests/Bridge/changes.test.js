@@ -121,8 +121,14 @@ test("a folder outside a repository has no changes to list", async () => {
 });
 
 const count = (scope = "uncommitted", directory = repo, base) => route("POST", "kuvo/git/changes/count", { directory, scope, ...(base ? { base } : {}) });
-// The files a client lists from the whole changes: each path in the diff once, and each new file.
-const listed = json => new Set([...json.patch.matchAll(/^diff --git a\/.* b\/(.*)$/gm)].map(match => match[1]).concat(json.untracked)).size;
+// The files a client lists from the whole changes: each path in the diff once (its new one, as git
+// writes it, in quotes when it has a tab: "b/t\tab"), and each new file not already there.
+const listed = json => {
+  const named = header => (header.endsWith('"') ? JSON.parse(header.slice(header.lastIndexOf(' "') + 1)) : header.split(" b/").at(-1)).replace(/^b\//, "");
+  const paths = new Set([...json.patch.matchAll(/^diff --git (.*)$/gm)].map(match => named(match[1])).concat([...json.patch.matchAll(/^diff --cc (.*)$/gm)].map(match => match[1])));
+  for (const name of json.untracked) paths.add(name);
+  return paths.size;
+};
 
 test("how much changed, in each scope, as many files as the whole changes list, without the diff", async () => {
   git("checkout", "-q", "-b", "feature");
@@ -134,9 +140,9 @@ test("how much changed, in each scope, as many files as the whole changes list, 
   write("notes/todo.txt", "one\ntwo");
   const expected = {
     staged: { files: 1, additions: 1, deletions: 0, untracked: 0 },
-    unstaged: { files: 2, additions: 2, deletions: 0, untracked: 1 },
-    uncommitted: { files: 3, additions: 3, deletions: 0, untracked: 1 },
-    branch: { files: 4, additions: 4, deletions: 1, untracked: 1 },
+    unstaged: { files: 2, additions: 0, deletions: 0, untracked: 1 },
+    uncommitted: { files: 3, additions: 1, deletions: 0, untracked: 1 },
+    branch: { files: 4, additions: 2, deletions: 1, untracked: 1 },
   };
   for (const [scope, numbers] of Object.entries(expected)) {
     const base = scope === "branch" ? "main" : undefined;
@@ -154,7 +160,7 @@ test("how much changed, in each scope, as many files as the whole changes list, 
   });
 });
 
-test("a move, a file that became a link, and a repository inside this one count once each", async () => {
+test("a move, a file that became a link, a repository inside this one, a conflict and a name with a tab count once each", async () => {
   git("mv", "README.md", "GUIDE.md");
   fs.rmSync(path.join(repo, "src/app.js"));
   fs.symlinkSync("../logo.png", path.join(repo, "src/app.js"));
@@ -165,6 +171,41 @@ test("a move, a file that became a link, and a repository inside this one count 
   assert.equal(json.files, 3);
   assert.equal(json.untracked, 1);
   assert.equal(json.files, listed((await changes()).json));
+
+  git("reset", "-q", "--hard");
+  fs.rmSync(path.join(repo, "web"), { recursive: true });
+  write("t\tab.txt", "one\n");
+  git("add", "-A");
+  git("commit", "-qm", "Tab");
+  git("checkout", "-q", "-b", "other");
+  write("README.md", "Hello from other\n");
+  git("commit", "-qam", "Other");
+  git("checkout", "-q", "main");
+  write("README.md", "Hello from main\n");
+  git("commit", "-qam", "Main");
+  assert.throws(() => git("merge", "-q", "other"));
+  git("mv", "t\tab.txt", "t\tab moved.txt");
+  for (const scope of ["uncommitted", "unstaged", "staged"]) {
+    const counted = (await count(scope)).json;
+    assert.equal(counted.files, listed((await changes(scope)).json), scope);
+  }
+  assert.equal((await count()).json.files, 2, "the conflict and the move");
+  assert.equal((await count("staged")).json.files, 1, "the move: the conflict isn't staged");
+});
+
+test("a submodule that moved counts as the list shows it, whatever diff.submodule says", async () => {
+  fs.mkdirSync(path.join(repo, "web"));
+  const web = (...args) => execFileSync("git", ["-c", "user.name=Ada", "-c", "user.email=ada@example.com", ...args], { cwd: path.join(repo, "web"), env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" } });
+  web("init", "-q");
+  web("commit", "-q", "--allow-empty", "-m", "One");
+  git("add", "web");
+  git("commit", "-qm", "Web");
+  web("commit", "-q", "--allow-empty", "-m", "Two");
+  git("config", "diff.submodule", "log");
+  const whole = (await changes()).json;
+  assert.match(whole.patch, /^diff --git a\/web b\/web$/m);
+  assert.equal((await count()).json.files, 1);
+  assert.equal(listed(whole), 1);
 });
 
 test("no changes: a repository with nothing changed counts none, and a folder outside one isn't a repository", async () => {
@@ -176,7 +217,7 @@ test("no changes: a repository with nothing changed counts none, and a folder ou
   assert.equal((await count("everything")).status, 400);
 });
 
-test("a big change is counted without sending its diff, and new files past what's read say the count is partial", async () => {
+test("a big change is counted without sending its diff, and many new files without reading them", async () => {
   const lines = n => Array.from({ length: n }, (_, at) => `line ${at} ${"x".repeat(40)}\n`).join("");
   write("big.txt", lines(100_000));
   git("add", "big.txt");
@@ -186,13 +227,11 @@ test("a big change is counted without sending its diff, and new files past what'
   assert.ok(answer.body.length < 500, `${answer.body.length} bytes`);
   assert.deepEqual(answer.json, { repository: true, root: repo, against: "HEAD", files: 1, additions: 100_000, deletions: 100_000, untracked: 0, uncommitted: true });
   assert.ok((await changes()).body.length > 5_000_000, "the whole changes are that big");
-  write("a-new.txt", "one\n");
-  fs.writeFileSync(path.join(repo, "b-huge.log"), Buffer.alloc(33 * 1024 * 1024, "z\n"));
-  const partial = (await count()).json;
-  assert.equal(partial.files, 3);
-  assert.equal(partial.untracked, 2);
-  assert.equal(partial.additions, 100_001, "the huge one's lines aren't counted");
-  assert.equal(partial.partial, true);
+  for (let at = 0; at < 300; at++) write(`node_modules/pkg${at}/index.js`, `module.exports = ${at}\n`);
+  const many = await route("POST", "kuvo/git/changes/count", { directory: repo });
+  assert.ok(many.body.length < 500, `${many.body.length} bytes`);
+  assert.equal(many.json.files, 301);
+  assert.equal(many.json.untracked, 300);
 });
 
 test("Stage moves an edit to Staged, and Unstage moves it back", async () => {
