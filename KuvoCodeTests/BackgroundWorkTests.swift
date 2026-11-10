@@ -591,6 +591,44 @@ import Testing
         #expect(engineStarts == 1)
     }
 
+    /// Asking launchd to start the keeper (as the app opens, or a keeper that stopped answering is
+    /// started over) never holds the main thread while launchctl runs, and its answer is heard
+    /// from its end however soon that comes.
+    @Test func askingLaunchdToStartTheKeeperNeverHoldsTheMainThread() async throws {
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let launchctl = folder.appending(path: "launchctl")
+        let asked = folder.appending(path: "asked")
+        try "#!/bin/sh\necho \"$*\" >>'\(asked.path(percentEncoded: false))'\nsleep 1\nexit 0\n".write(to: launchctl, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: launchctl.path(percentEncoded: false))
+        BackgroundWork.status = { .enabled }
+        BackgroundWork.asUsersCopy = true
+        BackgroundWork.launchctlForTests = launchctl.path(percentEncoded: false)
+        BackgroundWork.shared.refresh()
+        defer {
+            BackgroundWork.status = nil
+            BackgroundWork.asUsersCopy = false
+            BackgroundWork.launchctlForTests = nil
+            BackgroundWork.shared.refresh()
+            try? FileManager.default.removeItem(at: folder)
+        }
+        let ticks = Ticks()
+        let ticking = Task { @MainActor in
+            while !Task.isCancelled {
+                ticks.count += 1
+                try? await Task.sleep(for: .milliseconds(50))
+            }
+        }
+        defer { ticking.cancel() }
+        let before = ticks.count
+        #expect(await BackgroundWork.shared.start(over: true))
+        #expect(ticks.count - before >= 5, "the main thread went on while launchctl ran")
+        #expect(try String(contentsOf: asked, encoding: .utf8) == "kickstart -k gui/\(getuid())/\(BackgroundWork.label)\n")
+
+        // One that fails says so.
+        try "#!/bin/sh\nexit 113\n".write(to: launchctl, atomically: false, encoding: .utf8)
+        #expect(await BackgroundWork.shared.start() == false)
+    }
+
     /// The keeper's control address, reached as it is rather than stood in for.
     private static func reach(keeper record: KeeperRecord?) throws {
         let record = try #require(record, "the keeper recorded itself")
@@ -605,6 +643,11 @@ import Testing
               let all = copied?.takeRetainedValue() as? [NSNumber: [[String: Any]]] else { return false }
         return (all[NSNumber(value: getpid())] ?? []).contains { $0["AssertName"] as? String == "Agents are working in Kuvo Code" }
     }
+}
+
+/// How many times the main thread came round while something else ran.
+@MainActor private final class Ticks {
+    var count = 0
 }
 
 /// How a test's keeper went (`Keeper.finish`), once it has.

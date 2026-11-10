@@ -3281,6 +3281,7 @@ the route scenarios (`Vectors/routes/routing.json`).
 | `sandbox` | `kuvo/sandbox` ("Sandbox", bridge 0.9.118) |
 | `sandbox.check` | `reason`, `action` and the rest in `kuvo/sandbox`, and `POST kuvo/sandbox/check` |
 | `sandbox.asks` | `kuvo/sandbox/asks…`, `kuvo/sandbox/allowed…` and `kuvo/sandbox/tools` ("Sandbox", "Asks", bridge 0.9.118) |
+| `sandbox.reviews.whole` | `reviews` on `kuvo/sandbox/asks` lists every ask to work outside a conversation's folder, so a client shows one only once it's listed `yours` ("Sandbox") |
 | `approval` | `kuvo/approval` and `kuvo/sessions/<id>/approval` ("Approval", bridge 0.9.180) |
 | `approval.reviewer` | Auto's reviewer: `kuvo/sessions/<id>/decisions` and a sandbox ask's `review` ("Approval", "Auto's reviewer", bridge 0.9.181) |
 | `approval.fullAccess` | Full Access as it is since bridge 0.9.184: its commands run outside the sandbox, nothing asks or is reviewed, `kuvo/approval`'s `fullAccess` is whether you confirmed it on this computer (asked the first time it's picked), and Tell Auto is gone ("Approval") |
@@ -4750,9 +4751,14 @@ vault does (`run/vault.sock`); another passes them on.
   reviewer's: not in Auto, no folder, or it couldn't judge). Its own project, and a bot's (its
   folder, a project it made, its goal's), go ahead as `allowed` with no review. A client shows no
   card, notification or "needs you" for such an ask while it's checked or once it's decided, only a
-  quiet mark on its step; a box that lists `reviews` lists each such ask within moments, so a client
-  waits a few seconds for it before taking the ask as yours, and takes it as yours at once from a
-  box without `reviews`. An ask: `{id, at, session?, sessionName?, bot?, botName?,
+  quiet mark on its step. A box with `sandbox.reviews.whole` lists every such ask from the moment it
+  hears it (`checking` at once), takes up those already waiting as it starts again, and lists one it
+  can't take up as `yours`: a client shows such an ask only once it's listed `yours`, and waits for
+  nothing of its own. An answered ask (or one gone with its run) leaves the list unless the reviewer
+  decided it, whose entry stays for its step's mark. While a client doesn't hear the box's asks
+  (its link down or starting again, the stream cut), what it last listed of an ask stands, and one
+  it never listed is yours, as nothing would list it. From a box without that word, a client takes
+  one not listed as yours at once. An ask: `{id, at, session?, sessionName?, bot?, botName?,
   project, command, why, stopped?, error?, always?, machine?, owner?, review?}`. `session` is the conversation's root
   (a bot's sub-agent asks as its bot's conversation). `stopped`, on macOS: what the sandbox refused
   that command, from the system's log, each `{kind, path?}` (`kind`: `write`, `read`, `connect`,

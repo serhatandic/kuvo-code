@@ -12,7 +12,7 @@ import { asked, call, engineGet } from "../engine/client";
 import { writtenByYou } from "../engine/queue";
 import { messageID } from "../engine/sessions";
 import { BOTS, CHATS, HERE, homeFolder } from "../home";
-import { realish } from "../fence/policy";
+import { askedAbout, realish } from "../fence/policy";
 import { changeProjects, PROJECT_FOLDERS_ENTRY, PROJECTS_FILE, projectFoldersNote, readProjects } from "../areas/projects";
 import { projectOf as projectOfFolder, readWorktrees } from "../areas/worktree-records";
 import { answerWorktrees, settleNewSession } from "../areas/worktrees";
@@ -236,19 +236,24 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
   } else if (typeof given.folder === "string" && given.folder.trim()) {
     const written = given.folder.trim();
     const full = written.replace(/^~(?=$|\/)/, homeFolder());
+    // (Each folder it's checked by that macOS may ask about, asked off the box's thread first: a
+    // project on your Desktop holds whoever opens it until you answer, and the box answers no one
+    // meanwhile.)
+    const oursGiven = [...readProjects().filter(each => !each.removed).flatMap(each => [each.directory, ...(each.folders ?? [])]),
+      ...readWorktrees().map(each => each.folder ?? each.root), ...(parentFolder ? [parentFolder] : [])];
+    if (path.isAbsolute(full)) await askedAbout([full, ...(by ? oursGiven : [])]);
     let isFolder = false;
     try { isFolder = fs.statSync(full).isDirectory(); } catch {}
     if (!path.isAbsolute(full) || !isFolder) return no(400, `${written} isn't a folder on ${HERE}. Give a full path to one.`);
     // (Its commands would write it whole, in the sandbox: an agent in Auto never starts one where
     // that's real damage, its own conversation's folder and your projects aside; one in Full
     // Access, anywhere, as its own commands go.)
-    const ours = [...readProjects().filter(each => !each.removed).flatMap(each => [each.directory, ...(each.folders ?? [])]),
-      ...readWorktrees().map(each => each.folder ?? each.root), ...(parentFolder ? [parentFolder] : [])].map(realish);
+    const ours = by ? oursGiven.map(realish) : [];
     // (An agent's by where it really is as it's checked: a link swapped in after is never followed.)
     const at = by ? fs.realpathSync(full) : full;
     const bridgeNow = place.bridge?.() ?? null;
     const fullAccess = Boolean(by?.place && approvalOf(by.place.data, { agents: Boolean(bridgeNow && by.place.target.port === bridgeNow.port), bot: Boolean(botOfConversation(by.session) ?? worksFor(by.place.data)) }).effective === "fullAccess");
-    const kept = by && !fullAccess && !ours.includes(at) ? keptFromSessions(at) : null;
+    const kept = by && !fullAccess && !ours.includes(at) ? await keptFromSessions(at) : null;
     if (kept) return no(403, `An agent in Auto can't start a session in ${written} on ${HERE}: ${kept}. Ask the user to start it there.`);
     folder = isBotFolder(at) ? CHATS : at;
   }
