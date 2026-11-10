@@ -8954,7 +8954,7 @@ async function keepWorkRead(target, session, signal) {
   const viewed = data.time?.viewed ?? 0;
   if (idle === undefined || idle <= viewed)
     return;
-  if (readTold().some((told) => told.by === "agent" && told.notice.data?.session === data.id && told.at > viewed))
+  if (heldForYou.get(data.id) === viewed)
     return;
   const { rows, whole } = await turnsSince(target, data.id, viewed, signal);
   if (signal?.aborted || rows === null)
@@ -8964,19 +8964,29 @@ async function keepWorkRead(target, session, signal) {
     if (row.type !== "idle" || (row.time?.created ?? Infinity) <= viewed)
       continue;
     judged++;
-    if (row.outcome === "failed")
-      return;
+    const failed = row.outcome === "failed" || summaryAtEnd(rows.slice(index)) === "failed";
     const end = rows.findIndex((each, at) => at > index && each.type === "idle");
     const began = rows.slice(index + 1, end < 0 ? undefined : end).some((each) => each.type === "user" || each.type === "synthetic");
-    if (began && answersYou(turnFor(rows.slice(index), whole), data))
+    if (failed || began && answersYou(turnFor(rows.slice(index), whole), data)) {
+      holdForYou(data.id, viewed);
       return;
+    }
   }
   if (!judged)
+    return;
+  if (readTold().some((told) => told.by === "agent" && told.notice.data?.session === data.id && told.at > viewed))
     return;
   const { permissions, questions, whole: allAsks } = await asksIn(target, data.id, signal);
   if (signal?.aborted || permissions.length || questions.length || !allAsks)
     return;
   await call(target, "POST", `/api/session/${encodeURIComponent(data.id)}/view`, { idle }, signal).catch(() => {});
+}
+var heldForYou = new Map;
+function holdForYou(session, viewed) {
+  heldForYou.delete(session);
+  heldForYou.set(session, viewed);
+  if (heldForYou.size > 500)
+    heldForYou.delete(heldForYou.keys().next().value);
 }
 var SINCE_PAGES = 20;
 async function turnsSince(target, session, viewed, signal) {

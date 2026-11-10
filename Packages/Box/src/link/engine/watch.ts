@@ -356,7 +356,7 @@ export async function watchEvents(read: () => Target, tell: (notice: Notice) => 
       // event went by unheard): taken up now, so every client's list of them is whole.
       if (work) atWork(source).then(sessions => takeUpWaitingAsks(source, sessions, connection.signal)).catch(() => {});
       // Agents' work that ended while it wasn't listening (or before boxes read it so): read, unless
-      // its last turn answers you (READ_RULE).
+      // what came since you read it is news to you, or it asks you (READ_RULE).
       if (work) settleWorkRead(source, connection.signal).catch(() => {});
       for await (const event of serverEvents(response.body)) {
         // The box's own work, Mac connected or not: a session made in one of its worktrees told
@@ -393,7 +393,8 @@ export async function watchEvents(read: () => Target, tell: (notice: Notice) => 
         goalHeld?.(event).catch(() => {});
         if (signIns) noteSignIn(event, source).catch(() => {}).finally(() => signedIn(event));
         if (work && event.type === "session.execution.succeeded" && typeof event.data?.sessionID === "string") keepReadThroughSummary(source, event.data.sessionID, connection.signal).catch(() => {});
-        // An agent's work read as each turn of it ends, unless the turn answers you (READ_RULE).
+        // An agent's work read as each turn of it ends, unless what came since you read it is news to
+        // you, or it asks you (READ_RULE).
         if (work && RUN_ENDS.has(event.type) && typeof event.data?.sessionID === "string") keepWorkRead(source, event.data.sessionID, connection.signal).catch(() => {});
         if (!bots) {
           if (event.type === "session.created") settleNewSession(source, event.data?.sessionID ?? event.data?.info?.id).catch(() => {});

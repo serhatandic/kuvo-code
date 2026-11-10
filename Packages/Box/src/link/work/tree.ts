@@ -204,25 +204,42 @@ export async function keepWorkRead(target: Target, session: string | Listed["dat
   const idle = data.time?.idle;
   const viewed = data.time?.viewed ?? 0;
   if (idle === undefined || idle <= viewed) return;
-  if (readTold().some(told => told.by === "agent" && told.notice.data?.session === data.id && told.at > viewed)) return;
-  // (Read after its end, so a turn that ended since is in what's judged, and stays unread here.)
+  // Held for news to you at this read: nothing to judge again until it's read.
+  if (heldForYou.get(data.id) === viewed) return;
+  // (Read after its end, so a turn that ended since is in what's judged, and stays unread here.
+  // Past SINCE_PAGES only what's in reach is judged: a session you never opened, long, still clears.)
   const { rows, whole } = await turnsSince(target, data.id, viewed, signal);
   if (signal?.aborted || rows === null) return;
   let judged = 0;
   for (const [index, row] of rows.entries()) {
     if (row.type !== "idle" || (row.time?.created ?? Infinity) <= viewed) continue;
     judged++;
-    if (row.outcome === "failed") return;
+    // (A summary that failed ends as one that succeeded: its own row says so.)
+    const failed = row.outcome === "failed" || summaryAtEnd(rows.slice(index)) === "failed";
     // (A turn nothing began, a summary, say, answers no one.)
     const end = rows.findIndex((each, at) => at > index && each.type === "idle");
     const began = rows.slice(index + 1, end < 0 ? undefined : end).some(each => each.type === "user" || each.type === "synthetic");
-    if (began && answersYou(turnFor(rows.slice(index), whole), data)) return;
+    if (failed || (began && answersYou(turnFor(rows.slice(index), whole), data))) {
+      holdForYou(data.id, viewed);
+      return;
+    }
   }
   // (Nothing that ended since was found to judge: left as it is.)
   if (!judged) return;
+  // (Looked at last, just before it's read: one sent meanwhile isn't cleared with it.)
+  if (readTold().some(told => told.by === "agent" && told.notice.data?.session === data.id && told.at > viewed)) return;
   const { permissions, questions, whole: allAsks } = await asksIn(target, data.id, signal);
   if (signal?.aborted || permissions.length || questions.length || !allAsks) return;
   await call(target, "POST", `/api/session/${encodeURIComponent(data.id)}/view`, { idle }, signal).catch(() => {});
+}
+
+// The sessions of agents' work left unread for news to you, by the read they were judged at, so
+// each turn end after doesn't read them back again (a few hundred at most, the oldest let go).
+const heldForYou = new Map<string, number>();
+function holdForYou(session: string, viewed: number): void {
+  heldForYou.delete(session);
+  heldForYou.set(session, viewed);
+  if (heldForYou.size > 500) heldForYou.delete(heldForYou.keys().next().value!);
 }
 
 // How far back a session's messages are read for the turns that ended since it was read.

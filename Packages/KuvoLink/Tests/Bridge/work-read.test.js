@@ -22,7 +22,7 @@ const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
 
 // The engine: its sessions (each one's `time.idle` and `time.viewed`), each one's messages (newest
 // first), what each asks, and every client told what was read (`session.viewed`), as the engine does.
-let sessions, pages, asks, followers, viewed;
+let sessions, pages, paged, asks, followers, viewed;
 const engine = http.createServer((request, response) => {
   let body = "";
   request.on("data", chunk => { body += chunk; });
@@ -44,7 +44,15 @@ const engine = http.createServer((request, response) => {
     const session = sessions[decodeURIComponent(id ?? "")];
     if (!session) return reply({ message: "Not here." }, 404);
     if (!rest && request.method === "GET") return reply({ data: session });
-    if (rest === "/message") return pages[session.id] === null ? reply({ message: "Couldn't read it." }, 500) : reply({ data: pages[session.id] ?? [], cursor: null });
+    if (rest === "/message") {
+      // Paged as the engine pages it, newest first, from where the last page ended.
+      if (pages[session.id] === null) return reply({ message: "Couldn't read it." }, 500);
+      const all = pages[session.id] ?? [];
+      const from = Number(url.searchParams.get("cursor") ?? 0);
+      const limit = Number(url.searchParams.get("limit") ?? 50);
+      paged[session.id] = (paged[session.id] ?? 0) + 1;
+      return reply({ data: all.slice(from, from + limit), cursor: from + limit < all.length ? { next: String(from + limit) } : null });
+    }
     if (rest === "/permission") return reply({ data: asks[session.id] ?? [] });
     if (rest === "/form") return reply({ data: [] });
     if (rest === "/view" && request.method === "POST") {
@@ -73,6 +81,7 @@ const told = path.join(home, "run", "notices", "told.json");
 beforeEach(() => {
   sessions = {};
   pages = {};
+  paged = {};
   asks = {};
   followers = [];
   viewed = [];
@@ -152,6 +161,8 @@ test("what's news to you since you read it stays new, as its notification does: 
     ses_mixed: [end(2000), reply("Done, and the button's blue now."), user("Make the button blue too"), reply("On it."), user(letter)],
     ses_answered: [end(2000), reply("Using Postgres."), user("[The user answered] Postgres")],
     ses_failed: [end(2000, "failed"), user(letter)],
+    // A summary the bot asked for that failed: its end says it succeeded, its own row doesn't.
+    ses_summary_failed: [end(2000), { type: "compaction", status: "failed", reason: "manual" }],
     // Your reply came first, the bot's word after it: yours is still to be read.
     ses_then_bot: [end(2000), reply("On it."), user(letter), end(1500), reply("Yes, merged."), user("Did you merge it?")],
   };
@@ -168,6 +179,12 @@ test("what's news to you since you read it stays new, as its notification does: 
   fs.writeFileSync(told, JSON.stringify([{ id: "ntc_1", at: 1500, by: "agent", notice: { title: "ses_notified", body: "I need your Stripe key.", category: "finished", thread: "ses_notified", data: { session: "ses_notified" } } }]));
   await link.keepWorkRead(target, "ses_notified");
   assert.equal(isUnread("ses_notified"), true);
+  // One sent before you last read it is no news now.
+  bots("ses_notified_before");
+  pages.ses_notified_before = [end(2000), reply("Done."), user(letter), ...before];
+  fs.writeFileSync(told, JSON.stringify([{ id: "ntc_2", at: 500, by: "agent", notice: { title: "ses_notified_before", body: "Started.", category: "finished", thread: "ses_notified_before", data: { session: "ses_notified_before" } } }]));
+  await link.keepWorkRead(target, "ses_notified_before");
+  assert.equal(isUnread("ses_notified_before"), false);
   // One whose turns can't be read is left as it is.
   bots("ses_unreadable");
   pages.ses_unreadable = null;
@@ -232,4 +249,27 @@ test("what ended before the box was listening (the 16 sessions at work for days)
   await link.settleWorkRead(target);
   assert.equal(isUnread("ses_to_you"), true);
   assert.equal(isUnread("ses_yours"), true);
+});
+
+test("a long session is read back page by page only as far as you last read it; a reply to you a few pages back still holds it", async () => {
+  // Forty turns of the bot's since you read it, over many pages, and a long history before.
+  const turns = count => Array.from({ length: count }, (_, index) => [end(2000 - index), reply(`Step ${count - index} done.`), user(letter)]).flat();
+  const history = Array.from({ length: 100 }, (_, index) => [end(999 - index), reply("Earlier."), user(letter)]).flat();
+  bots("ses_long");
+  pages.ses_long = [...turns(40), ...history];
+  await link.keepWorkRead(target, "ses_long");
+  assert.equal(isUnread("ses_long"), false);
+  assert.equal(paged.ses_long, 2, "120 rows since you read it: a page of 50, then one of 100 that reaches your last read, and no further");
+
+  bots("ses_long_to_you");
+  pages.ses_long_to_you = [...turns(30), end(1900), reply("Yes, merged."), user("Did you merge it?"), ...turns(5).map(row => row.type === "idle" ? end(row.time.created - 200) : row), ...history];
+  await link.keepWorkRead(target, "ses_long_to_you");
+  assert.equal(isUnread("ses_long_to_you"), true);
+  // Held for you: the bot's next turn reads nothing back again until you've read it.
+  const reads = paged.ses_long_to_you;
+  sessions.ses_long_to_you.time.idle = 2100;
+  pages.ses_long_to_you = [end(2100), reply("Next step done."), user(letter), ...pages.ses_long_to_you];
+  await link.keepWorkRead(target, "ses_long_to_you");
+  assert.equal(isUnread("ses_long_to_you"), true);
+  assert.equal(paged.ses_long_to_you, reads);
 });
