@@ -59,6 +59,8 @@ import { deliverLeftAnswers, outboxSoon, sendOutbox } from "./letters/outbox";
 import { SENDING } from "./letters/letter";
 import { watchFolders } from "./follow";
 import { pushRows } from "./work/elsewhere";
+import { pushNumbers } from "./work-queue/numbers";
+import { clearStaging } from "./work-queue/ops";
 import { macLinkCheck } from "./mac/link";
 import { macNoticeHold, macTell } from "./mac/notices";
 import { runMacPeers } from "./mac/peers";
@@ -172,6 +174,9 @@ export { answered, deliverLeftAnswers, letterMail, letterWent, sendOutbox } from
 export { takeLetter } from "./letters/take";
 export { callAs, callsBack, takeCall } from "./letters/calls";
 export { pushRows, takeRows } from "./work/elsewhere";
+export { askToSend, blockArrived, BLOCK as QUEUE_BLOCK, CLAIM_REACH as QUEUE_CLAIM_REACH, claimNumbers, giveBlock, LOW as QUEUE_LOW, primaryOf, readNumbers, reclaimWaiting, takeBlock, takeNumber } from "./work-queue/numbers";
+export { parseBacklog } from "./work-queue/import";
+export { carryWorkQueue, forgetWorkQueues, packWorkQueues, placeWorkQueues } from "./work-queue/moves";
 export { readReach } from "./peers/reach";
 export { peerPlaces } from "./engine/client";
 export { answerPersonalities, retellBots, takePersonalities, takePersonalitiesDocument } from "./personalities/take";
@@ -374,6 +379,8 @@ async function run(): Promise<void> {
   setInterval(nightly, 600_000);
   // Recently Deleted's skills past their 30 days, gone with no client there too.
   keepSkillTrashClear();
+  // What a Work Queue change left half read as the box stopped.
+  clearStaging();
   setInterval(() => {
     if (current?.welcomed) announce(current, readEngineFile).catch(() => {});
     else refreshOwn(readEngineFile).catch(() => {});
@@ -406,6 +413,8 @@ async function run(): Promise<void> {
     deliverLeftAnswers().catch(() => {});
     // The rows of sessions here whose lead lives on another computer, told to it as they change.
     if (current?.welcomed) pushRows(current, readLink(), peerTargets()).catch(() => {});
+    // The Work Queue's ask for more numbers, to the primary, while one is under way.
+    try { pushNumbers(current); } catch {}
   }, 3_000);
 
   let attempt = 0;
@@ -658,6 +667,8 @@ async function serve(): Promise<void> {
   if (IS_MAC && !testsAlone) runMacPeers();
   // Recently Deleted's skills past their 30 days, gone with no client there too.
   keepSkillTrashClear();
+  // What a Work Queue change left half read as the box stopped.
+  clearStaging();
   // Its bots' jobs kept in their folders, taken once from where they were before, once its app
   // makes them this box's (it gives the box its kit then).
   if (readKit()) try { keepJobs(); } catch {}

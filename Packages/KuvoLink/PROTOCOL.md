@@ -2922,6 +2922,111 @@ the last reading in its folder (`limits.json`), through a restart. A client reac
   used, when each resets and as of when, and why one couldn't be read just now.
 - Times are ms since 1970.
 
+### The Work Queue
+
+Each conversation keeps its work items in a Work Queue of its own, on the box it lives on, the
+same on a Mac's box and a machine's, with no client there too: a session's, a bot's (its
+conversation's), or a group chat's (`grp_…`, the queue its seats write to). It replaces the
+hand-kept backlog file: agents write items through tools, every agent kind alike; clients show
+them, and you reorder them, move them between categories, delete them and bring them back, never
+change what they say. Kept in `run/work-queue/` (`queues/<owner>.json`, files kept with items in
+`files/<item>/`, `categories.json`, `numbers.json`); a deleted item stays 30 days. Where
+`features` has `work-queue`. Times are milliseconds since 1970.
+
+**An item**: `id` (`wqi_…`, never shown), `number` (its `#n`; missing while it waits for one,
+shown as new), `wanted` (a number an import asked for, until it's granted), `owner` (`ses_…` or
+`grp_…`), `title`, `category`, `order` (its place in its category, among every owner's items on
+the box), `inProgress`, `progress` (`{value?: 0…1, note?}`: how far, and what's being done now),
+`sessions` (`[{session, title, working}]`: the sessions working on it, and which are at work now),
+`noteCount`, `lastNote`, `fileCount`, `linkCount`, `handedBy` (the first owner that handed it on),
+`source` (an outside source's item, later), `created` and `updated` (`{at, by}`: `by` is
+`{user: true}` or `{session, name}`), `doneAt`, `removed` (`{at, by}`, deleted). Whole, it has
+`body` (Markdown), `notes` (`[{at, by, text}]`), `files` (`[{name, size, type, at}]`), `links`
+(`[{url, title?}]`) and `handed` (`[{from, to, at}]`, the last 20).
+
+**In progress** isn't a category: an item is in progress while a session linked to it is at work
+(its turn running, or what it left running), unless it's Done or deleted. A session is linked to
+3 items at most (linking a fourth drops its oldest link); Done or a delete unlinks everyone.
+
+**Categories**: one set for every queue on the box: `next`, `later`, `parked`, `done` (built in),
+and custom ones (`cat_…`), between Later and Parked: `{id, name, builtIn}`.
+
+**Who sees what**: an owner's view is its own items, those of the sessions it oversees (started by
+it, or by those, put away ones too), and those it handed on, each living once in its owner's queue.
+
+- `GET kuvo/work-queue?owner=<ses_…|grp_…>` → `{owner, categories, items, owners, removed}`:
+  `items` in the categories' order, then each one's; `owners` (`[{owner, kind: bot|session|group,
+  title, bot?: {id, name}, startedBy?}]`) names each owner in the view; `removed`, what's deleted
+  in it, newest first. `owner=all` is every queue on the box at once (the panel's All; piece 3 adds
+  every other computer's). `kuvo/work-queue/events?owner=` is the same as NDJSON: a line now and one
+  each time it changes (a change here or by another process, or a linked session starting or
+  stopping work).
+- `GET kuvo/work-queue/items/<id or number>` → `{item}`, whole. `…/files/<name>` → its bytes.
+- `GET kuvo/work-queue/refs?refs=243,12` → `{refs: {"243": {id, number, title, category,
+  inProgress, owner, removed?} | null}}`: what each ref names, for a chip; null for one this box
+  doesn't know.
+- `GET kuvo/work-queue/categories` → `{categories}`.
+
+**What you do** (a paired phone, this Mac's app, or Kuvo Code on another computer through `box
+route` with its Mac's proof for that request alone, `x-kuvo-vault-proof` as the vault takes it; anything
+else, a command on that computer included, gets 403): `POST kuvo/work-queue/items/<item>/move` `{category?, before?,
+after?, top?}` (a category by its id or name; `before`/`after` an item in the same category);
+`DELETE kuvo/work-queue/items/<item>` and `POST …/restore`; `POST kuvo/work-queue/categories`
+`{add, after?}`, `{rename, to}` or `{remove}` (a custom one, once nothing is in it); `POST
+kuvo/work-queue/import` `{owner, files: [paths]}` (Markdown files on the box: each list line
+starting with `#N` is an item, in the category of the nearest heading above it that names one
+(Done, Shelved/Parked, Later/Ideas), else Next, Done with `[x]`; a line `NOW:`/`LATER:`/… with
+refs sets theirs; the first line naming a number gives its title, every line naming it its body)
+→ `{added, byCategory, waiting, skipped, said}`. An import skips a number here already under the
+same title; under another title, the item is imported with a new number and a note. Each change
+answers `{item}`; a category removed only once nothing, deleted items included, is in it.
+
+**Tools**: `GET kuvo/work-queue/tools` → `{tools, instructions}` (MCP definitions, and what the
+tool servers add to what they tell agents); `POST kuvo/work-queue/tools {name, arguments, session}`
+→ `{text, isError}`, run only while the session named is making that call (as the vault's). The
+tool servers (this Mac's app, a machine's `kuvo-browser.js`) list them and pass on every `queue_…`
+call. `queue_list`, `queue_show`, `queue_add`, `queue_update`, `queue_hand` (into a session's
+queue on this box, linked to it), `queue_remove` (`undo` brings back an agent's delete; only you
+bring back yours), `queue_categories` (list, or add one), `queue_import` (items an agent read from
+an old backlog, with their numbers). `item` is a number (`#243` or `243`), or the id of one that has
+none yet (the tool says it). A caller's queue is its conversation's (a subagent's is its
+conversation's; a seat's, its group chat's, while the chat lives on this box: a seat of one that
+lives elsewhere is refused); it changes what's in its view (by a number two computers gave twice,
+the one in its view). Files an agent keeps with an item come only from its conversation's folder,
+its project's folders or a temporary folder (links followed, nothing hidden, no other name by a
+hard link, nothing of Kuvo Code's but its own folder), 25 MB each; they're read before the change
+and kept with it, all or none.
+
+**References in messages** (for chips, the same in every client: KuvoClient's `WorkItemRefs`):
+`#243` names item 243 when the `#` is at the start or after a space or one of `([{"'/,–-`, with 1
+to 6 digits and then no letter, digit or underscore; not inside a code span or block, a Markdown
+link or a web address, and not after "PR", "MR", "pull request", "issue" or "step" (someone
+else's numbers; outside sources get a prefix, `gh:owner/repo#12`). A client asks `refs` for the
+numbers in a message and draws each one the box knows as a chip (its category's color, a ring in
+progress, a check when done, `#243` and the title on one line), leaving one it doesn't know as
+written; the message's words never change. A chip opens the item.
+
+**Numbers**: one `#n` per item, unique across your computers, handed out by the primary: the box of
+the Mac that set this one up (a Mac's own box, and a box with no Mac, is its own), kept once it's
+first used. The primary numbers its own items from its counter; another box numbers from blocks of
+50 the primary gave it, and asks for the next when 15 or fewer are left, by mail, on its rounds:
+`{workQueue: {ask: {id, count, claims?}}}`, sent again every 30 s until answered with
+`{workQueue: {give: {id, from, to, granted}}}`. The primary keeps what it gave for each ask, so an
+ask sent again gets the same answer. `claims` are numbers an import wants to keep (six digits at most, what a chip reads): the primary
+grants those at or above its counter and within 10,000 of it (or granted that box before) and moves its counter past them;
+an imported item waits without a number until then, and one refused gets the next number, with a
+note. An item made with no number left waits too, and takes one, oldest first, when a block comes; one left
+waiting with nothing under way (a crash midway, a move) is claimed or numbered again within a minute.
+A queue file that can't be read is never written over: the change is refused and the file set aside
+(`queues/aside/`); fields a newer box keeps in an item are kept as they are.
+
+**Moves**: a move carries its conversations' queues (a group chat's, its own) and their files
+(`move.json`'s `workQueue`, the files in the bundle's `work-queue/<item>/`), put in place under the
+same owners and numbers, each item checked as this box's own are (a category it can't keep is
+Next); once it's over, the box it left forgets them. While it's under way nothing changes those
+queues (a tool's change, a hand-off into one, or yours: refused, with words to try again once
+it's there), so nothing is left behind. A conversation carried on as another takes its queue.
+
 ### Side questions, handoffs and reviews
 
 Three more keywords each box answers in its agents bridge, as it does goals ("Goals"), and its

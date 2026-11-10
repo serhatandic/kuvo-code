@@ -26,6 +26,7 @@ import { noticesRoute } from "../areas/notices";
 import { personalitiesDocumentRoute, personalityEventsRoute, personalityRoute } from "../areas/personalities";
 import { pairingRoute, phonesRemoveRoute, phonesRoute } from "../areas/phones";
 import { QUEUE_ROUTE, queueRoute } from "../areas/queue";
+import { WORK_QUEUE_ROUTE, workQueueRoute } from "../areas/work-queue";
 import { pluginSearchRoute } from "../areas/plugins";
 import { programsRoute } from "../areas/programs";
 import { backupsRoute } from "../areas/backups";
@@ -88,6 +89,8 @@ const ROUTES: (Route | Route<RegExpMatchArray>)[] = [
   { when: route => route === "kuvo/approval" || SESSION_APPROVAL_ROUTE.test(route) || SESSION_DECISIONS_ROUTE.test(route), answer: approvalRoute },
   { when: route => SESSION_AUTOPILOT_ROUTE.test(route), answer: autopilotRoute },
   { when: route => route.match(QUEUE_ROUTE), answer: queueRoute },
+  // The Work Queue (PROTOCOL.md, "The Work Queue"), before a bot's work, whose routes it starts like.
+  { when: route => route.match(WORK_QUEUE_ROUTE), answer: workQueueRoute },
   { when: route => route === "kuvo/search", answer: searchRoute },
   { when: route => route === "kuvo/git/backups" || route === "kuvo/git/backups/restore", answer: backupsRoute },
   { when: route => route.startsWith("kuvo/git/"), answer: changesRoute },

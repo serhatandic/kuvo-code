@@ -2307,6 +2307,16 @@ async function vaultTools() {
   return vaultToolList ?? [];
 }
 
+/// The Work Queue's tools (`queue_…`), and what agents are told of them, as this machine's box
+/// gives them (PROTOCOL.md, "The Work Queue"): kept once it's said.
+let workQueueList = null;
+async function workQueueTools() {
+  if (workQueueList) return workQueueList;
+  const answer = await vaultRoute({ method: "GET", path: "kuvo/work-queue/tools" }, null, 15_000);
+  if (answer?.status === 200 && Array.isArray(answer.value?.tools)) workQueueList = { tools: answer.value.tools, instructions: typeof answer.value.instructions === "string" ? answer.value.instructions : "" };
+  return workQueueList ?? { tools: [], instructions: "" };
+}
+
 /// The sandbox's way out (`sandbox_ask`), as this machine's box lists it while its commands run in
 /// the sandbox: kept once it's listed, asked again while it isn't.
 let sandboxToolList = null;
@@ -2870,11 +2880,11 @@ async function mcp() {
       case "initialize": {
         const supported = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
         // What the vault's tools are for, only where this machine's box lets agents use it.
-        return vaultTools().then((more) => reply({
+        return Promise.all([vaultTools(), workQueueTools()]).then(([more, queue]) => reply({
           protocolVersion: supported.includes(params.protocolVersion) ? params.protocolVersion : "2025-06-18",
           capabilities: { tools: { listChanged: false } },
           serverInfo: { name: "kuvo-browser", title: "Kuvo Code browser", version: CONFIG.version },
-          instructions: CONFIG.instructions + (more.length ? CONFIG.vaultInstructions ?? "" : ""),
+          instructions: CONFIG.instructions + (more.length ? CONFIG.vaultInstructions ?? "" : "") + queue.instructions,
         }));
       }
       case "ping":
@@ -2884,7 +2894,7 @@ async function mcp() {
         // without them). (browser_fill, and browser_sign_in's vault item, only with the vault's: none
         // while the vault isn't open to agents here, when a sign-in fills only one you let agents
         // make on their own.)
-        return Promise.all([vaultTools(), sandboxTools()]).then(([more, sandbox]) => reply({ tools: [...(more.length ? CONFIG.tools : closedVaultTools(CONFIG.tools)), ...more, ...sandbox] }));
+        return Promise.all([vaultTools(), sandboxTools(), workQueueTools()]).then(([more, sandbox, queue]) => reply({ tools: [...(more.length ? CONFIG.tools : closedVaultTools(CONFIG.tools)), ...more, ...sandbox, ...queue.tools] }));
       case "tools/call": {
         // The session it's for: the engine says so with each call; an agent of the agents bridge
         // starts this for one session, named in KUVO_SESSION.
@@ -2896,9 +2906,11 @@ async function mcp() {
           wake(params.name, params.arguments || {}, call.session).then(reply, (error) => reply(text(error instanceof ToolError ? error.message : String(error), true)));
           return;
         }
-        // The vault's and the sandbox's, which this machine's box carries out (and may ask you).
+        // The vault's, the sandbox's and the Work Queue's, which this machine's box carries out (and
+        // may ask you).
         const boxTool = typeof params.name === "string" && (params.name.startsWith("vault_") ? ["kuvo/vault/tools", "This machine's vault can't be reached now. Try again in a moment."]
-          : params.name.startsWith("sandbox_") ? ["kuvo/sandbox/tools", "This machine's box can't be reached now. Try again in a moment."] : null);
+          : params.name.startsWith("sandbox_") ? ["kuvo/sandbox/tools", "This machine's box can't be reached now. Try again in a moment."]
+          : params.name.startsWith("queue_") ? ["kuvo/work-queue/tools", "This machine's box can't be reached now. Try again in a moment."] : null);
         if (boxTool) {
           const asked = call;
           vaultRoute({ method: "POST", path: boxTool[0], body: { name: params.name, arguments: params.arguments || {}, session: asked.session } }, asked, 16 * 60_000)

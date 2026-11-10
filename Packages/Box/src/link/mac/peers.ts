@@ -7,6 +7,7 @@ import type { Body } from "../../shared/json";
 import { peerTargets, readEngineFile } from "../engine/client";
 import { deliverLeftAnswers, givenUp, macWaiting, outboxSoon, sendOutbox } from "../letters/outbox";
 import { pushRows } from "../work/elsewhere";
+import { pushNumbers } from "../work-queue/numbers";
 import { attentionGiven } from "../notices/hold";
 import { announce, refreshOwn } from "../peers/agents";
 import { mailFor, peersOf } from "../peers/known";
@@ -58,6 +59,8 @@ export function runMacPeers(): void {
       // The rows of sessions here whose lead lives on another computer, told to it as they change.
       const host = macLink.host;
       if (host?.welcomed) pushRows(host, readLink(), peerTargets()).catch(() => {});
+      // The Work Queue's ask for more numbers, to the primary (a Mac's box is its own: none).
+      try { pushNumbers(host); } catch {}
     }, 3_000),
   ];
   macLink.stopPeers = () => {

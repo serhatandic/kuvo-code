@@ -17,6 +17,7 @@ import { BOTS, HERE, SESSION_WAKES } from "../home";
 import { settleAgain } from "./approval";
 import { holdArchived } from "./wakes";
 import { carryDecided, tellAutopilot } from "../work/autopilot";
+import { carryWorkQueue } from "../work-queue/moves";
 import { tellWorktree } from "./worktrees";
 import { PROJECT_FOLDERS_ENTRY, projectFoldersNote, readProjects } from "./projects";
 import { projectOf as projectOfFolder } from "./worktree-records";
@@ -241,9 +242,11 @@ export async function carryToAgents(id: string, model: unknown, readEngine: () =
     }
     // At once, before anything it waits for: what follows the conversation goes on in the new one,
     // before a client that heard it archived holds it there. Stopped by you, its queue stays
-    // stopped there, with what waited on the box; Autopilot's calls come along.
+    // stopped there, with what waited on the box; Autopilot's calls and its Work Queue come along.
     carryQueue(id, moved, renamed);
     carryDecided(id, moved);
+    // Its Work Queue too: the new one's, items, links and all.
+    try { carryWorkQueue(id, moved); } catch (error) { console.error(`Work Queue: ${id}'s queue wasn't carried to ${moved}: ${(error as Error).message}`); }
     if (!bot) {
       // Its wake-ups and watches go with it, as on a Mac (WakeUps.carry); held as archived by a
       // client meanwhile, they aren't in the new one, which isn't.
