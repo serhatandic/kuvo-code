@@ -11,7 +11,7 @@ import { freshenBot, freshenBots } from "../bots/tell";
 import { ANSWERED, GROUP_NEWS, NEWS, RUN_ENDS, groupNotice, noticeFor, settleHeld } from "../notices/news";
 import { keepReadThroughSummary } from "../work/tree";
 import { bridgeTarget, engineGet, peerTargets, readBridgeFile, readEngineFile } from "./client";
-import { applyCompatibility, learnCompatibility } from "./compatibility";
+import { applyCompatibility, followSettingsFile, learnCompatibility } from "./compatibility";
 import { modelsDue, settleDueModels, WORK_ENDS } from "./models";
 import { goalHolds, settleGoalHolds } from "../work/goals";
 import { workWatcher } from "../work/wakes";
@@ -342,6 +342,7 @@ export async function watchEvents(read: () => Target, tell: (notice: Notice) => 
       letSessionFilesGo(attachmentsLooked);
       lastLearned = 0;
       learn(source);
+      if (learns) followSettingsFile();
       if (learns && modelsDue()) settleDueModels(source).catch(() => {});
       if (queues) scanQueues(source, found).catch(() => {});
       // Its worktrees' sessions titled while it wasn't listening: their branches named; and those
@@ -376,6 +377,8 @@ export async function watchEvents(read: () => Target, tell: (notice: Notice) => 
           forgetDecided(event.data.sessionID);
         }
         learn(source, LEARN_NOW.has(event.type));
+        // Your settings changed by hand meanwhile: the model your subagents use follows them.
+        if (learns && (event.type === "session.execution.started" || event.type === "config.updated")) followSettingsFile();
         // Folders a refresh of the models left at work, closed once their work is done.
         if (learns && WORK_ENDS.has(event.type) && modelsDue()) settleDueModels(source).catch(() => {});
         steer?.(event);

@@ -162,6 +162,13 @@ export class EngineLink {
     return { system: typeof found.system === "string" && found.system.trim() ? found.system.trim() : undefined, permissions: Array.isArray(found.permissions) ? found.permissions : undefined }
   }
 
+  /** The engine's agents for a folder, as it lists them (yours and its own); undefined when it never answered. */
+  async agents(directory: string): Promise<any[] | undefined> {
+    const answer = await this.read("/api/agent", directory, (value) => Array.isArray(value?.data) && value.data.length > 0)
+    if (answer === undefined) return undefined
+    return Array.isArray(answer?.data) ? answer.data : []
+  }
+
   /**
    * Settings › Permissions' Blocks for tools and commands (the engine's `policies`, "shell:git push
    * *"), as rules: what nothing allows. Undefined when they aren't known (the engine never answered).

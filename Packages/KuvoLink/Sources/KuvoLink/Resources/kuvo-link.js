@@ -23501,11 +23501,49 @@ function macDocsChanged() {
 // Packages/Box/src/link/engine/compatibility.ts
 import fs78 from "node:fs";
 import path82 from "node:path";
+
+// Packages/Box/src/shared/subagents.ts
+var SUBAGENT_MODEL = ["subagent_model"];
+var ENGINE_AGENTS = new Set(["build", "plan", "general", "explore", "compaction", "title", "summary"]);
+var ENGINE_SUBAGENTS = ["general", "explore"];
+var AGENT_PROVIDERS2 = new Set(["claude-code", "codex-cli", "cursor", "grok-cli", "antigravity"]);
+var isEngineModel = (ref) => !AGENT_PROVIDERS2.has(ref.providerID.split("@")[0]);
+function modelRef(value) {
+  if (typeof value !== "string")
+    return;
+  const at = value.indexOf("/");
+  if (at <= 0 || at === value.length - 1)
+    return;
+  return { providerID: value.slice(0, at), id: value.slice(at + 1) };
+}
+function subagentModel(settings) {
+  const value = isObject(settings) ? settings[SUBAGENT_MODEL[0]] : undefined;
+  return modelRef(value) ? value : undefined;
+}
+var isSubagent = (entry) => isObject(entry) && (entry.mode === "subagent" || entry.mode === "all") && entry.disabled !== true;
+function subagentLayer(settings) {
+  const model = subagentModel(settings);
+  if (!model || !isEngineModel(modelRef(model)))
+    return {};
+  const agents = isObject(settings) && isObject(settings.agents) ? settings.agents : {};
+  const ids = [...ENGINE_SUBAGENTS, ...Object.keys(agents).filter((id) => !ENGINE_AGENTS.has(id) && isSubagent(agents[id]))];
+  const layer = {};
+  for (const id of ids) {
+    const own = agents[id];
+    if (isObject(own) && (own.model !== undefined || own.disabled === true))
+      continue;
+    layer[id] = { model };
+  }
+  return Object.keys(layer).length ? { agents: layer } : {};
+}
+
+// Packages/Box/src/link/engine/compatibility.ts
 var COMPATIBILITY_FILE = path82.join(RUN, "compatibility.json");
 var ENGINE_LAYER_FILE = path82.join(ENGINE_CONFIG || path82.join(K, "config"), "opencode", "opencode.jsonc");
 var LAYER_MARK = "// Kept by Kuvo Code";
 var LAYER_HEADER = `${LAYER_MARK}: what some providers need from this engine, as this computer learned it from
-// it. Not your settings, which Kuvo Code keeps apart; changes here are replaced.
+// it, and the model your subagents use (Settings › Agents). Not your settings, which Kuvo Code keeps
+// apart; changes here are replaced.
 `;
 function knowsEngineSettings(environment = process.env) {
   if (ENGINE_CONFIG)
@@ -23523,7 +23561,9 @@ function knowsEngineSettings(environment = process.env) {
   return real(named) === real(path82.join(K, "config"));
 }
 var saidNotOurs = false;
-function applyCompatibility(layer = readCompatibility(), file = ENGINE_LAYER_FILE) {
+function applyCompatibility(layer = readCompatibility(), file = ENGINE_LAYER_FILE, settings = readSettings().settings) {
+  const subagents = settings === undefined ? lastSubagents(file) : subagentLayer(settings);
+  layer = deepMerged(layer, subagents);
   let there = null;
   try {
     there = fs78.readFileSync(file, "utf8");
@@ -23546,6 +23586,33 @@ function applyCompatibility(layer = readCompatibility(), file = ENGINE_LAYER_FIL
     return false;
   writePrivate(file, wanted);
   return true;
+}
+var settingsSeen;
+function followSettingsFile(file = CONFIG_FILE) {
+  let stamp = "none";
+  try {
+    const info = fs78.statSync(file);
+    stamp = `${info.mtimeMs}:${info.size}`;
+  } catch {}
+  if (stamp === settingsSeen)
+    return;
+  settingsSeen = stamp;
+  try {
+    applyCompatibility();
+  } catch {}
+}
+function lastSubagents(file) {
+  try {
+    const text = fs78.readFileSync(file, "utf8");
+    if (!text.startsWith(LAYER_MARK))
+      return {};
+    const kept = JSON.parse(text.split(`
+`).filter((line) => !line.startsWith("//")).join(`
+`));
+    return isObject(kept) && isObject(kept.agents) ? { agents: kept.agents } : {};
+  } catch {
+    return {};
+  }
 }
 function compatibilityLayer(models) {
   if (!models.length)
@@ -24779,6 +24846,8 @@ async function watchEvents(read, tell, signal, answered = () => {}, { bots = fal
       letSessionFilesGo(attachmentsLooked);
       lastLearned = 0;
       learn(source);
+      if (learns)
+        followSettingsFile();
       if (learns && modelsDue())
         settleDueModels(source).catch(() => {});
       if (queues)
@@ -24808,6 +24877,8 @@ async function watchEvents(read, tell, signal, answered = () => {}, { bots = fal
           forgetDecided(event.data.sessionID);
         }
         learn(source, LEARN_NOW.has(event.type));
+        if (learns && (event.type === "session.execution.started" || event.type === "config.updated"))
+          followSettingsFile();
         if (learns && WORK_ENDS.has(event.type) && modelsDue())
           settleDueModels(source).catch(() => {});
         steer?.(event);
@@ -29785,6 +29856,7 @@ function applySettings(body, file = CONFIG_FILE, lock = CONFIG_LOCK, options = {
 // Packages/Box/src/link/areas/settings.ts
 var FOLLOW_WAIT = 5000;
 async function followSettings2({ readEngine, bridge }) {
+  subagentsFollow();
   let engine = null;
   try {
     engine = readEngine();
@@ -29795,6 +29867,11 @@ async function followSettings2({ readEngine, bridge }) {
   })]);
   clearTimeout(timer);
 }
+function subagentsFollow(settings) {
+  try {
+    applyCompatibility(undefined, undefined, settings);
+  } catch {}
+}
 async function* settingsRoute(context) {
   const { request, route, json } = context;
   if (!ownsSettings())
@@ -29804,6 +29881,8 @@ async function* settingsRoute(context) {
   if (route === "kuvo/config") {
     if (method === "GET") {
       const { settings, problem } = readSettings();
+      if (settings)
+        subagentsFollow(settings);
       return yield* problem ? json(409, { message: `The engine's settings file can't be changed from here: ${problem}`, problem }) : json(200, settings);
     }
     if (method === "PATCH") {
