@@ -42,6 +42,14 @@ export function readProjects(file = PROJECTS_FILE): Project[] {
   }
 }
 
+/** The instruction entry a session in a project of several folders gets, naming them. */
+export const PROJECT_FOLDERS_ENTRY = "kuvo.project-folders";
+
+/** What a session in a project of several folders is told of them (`PROJECT_FOLDERS_ENTRY`), as
+ * the Mac told it (ProjectFolders.instructions). */
+export const projectFoldersNote = (primary: string, folders: readonly string[]): string =>
+  `This project spans several folders. You work in its primary folder, ${path.basename(primary)} (${primary}). These folders belong to the project too, and you can read, search and change files in them the same way:\n${folders.map(folder => `- ${path.basename(folder)}: ${folder}`).join("\n")}\nWhen the user mentions one of these folders by name, they mean that folder.`;
+
 /** The projects New Bot offers here, `{directory, name}` each: the box's own, once it keeps them;
  * before, those its Mac named in the kit. */
 export function boxProjects(kit: { projects?: OfferedProject[] } | null | undefined, file = PROJECTS_FILE): OfferedProject[] {

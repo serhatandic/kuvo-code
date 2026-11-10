@@ -1,0 +1,340 @@
+// What changes the Work Queue (PROTOCOL.md, "The Work Queue"): an item added, changed, handed on,
+// deleted or brought back, moved by you, and files kept with it. The tools and the routes both come
+// here, so an agent's change and yours follow the same rules.
+
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import crypto from "node:crypto";
+import { isObject } from "../../shared/json";
+import { plainName } from "../../shared/text";
+import { BOTS, IS_MAC, K } from "../home";
+import { categoryNamed } from "./categories";
+import { takeNumber, type Primary } from "./numbers";
+import {
+  FILES, filesOf, matching, MOST_BODY, MOST_FILE, MOST_FILES, MOST_ITEMS, MOST_LINKS, MOST_NOTE, MOST_NOTES, MOST_TITLE, newItemID, noteHanded, placeBeside, placeIn, Refusal,
+  type Book, type Item, type KeptFile, type Who,
+} from "./store";
+import { nameOf, refOf } from "./view";
+import { frozen } from "../moves/records";
+
+/** A session is linked to this many items at most: linking one more drops its oldest link. */
+export const LINKS_EACH = 3;
+const MOST_PROGRESS_NOTE = 300;
+
+export { Refusal };
+const refuse = (words: string): never => { throw new Refusal(words); };
+
+// Where files an agent named wait, read, until the change that keeps them.
+const STAGING = path.join(path.dirname(FILES), "staging");
+
+/** What's left in the staging folder by a box that stopped midway: gone, once it's an hour old. */
+export function clearStaging(now = Date.now()): void {
+  for (const name of (() => { try { return fs.readdirSync(STAGING); } catch { return []; } })()) {
+    try {
+      if (now - fs.statSync(path.join(STAGING, name)).mtimeMs > 3_600_000) fs.rmSync(path.join(STAGING, name), { recursive: true, force: true });
+    } catch {}
+  }
+}
+
+// A file's name, short enough to keep with " 2" added and stay within a name's 255 bytes: its stem
+// cut, its extension kept.
+const shortName = (name: string): string => {
+  const ext = path.extname(name).slice(0, 20);
+  let stem = name.slice(0, name.length - path.extname(name).length);
+  while (stem && Buffer.byteLength(stem + ext) > 180) stem = Array.from(stem).slice(0, -1).join("");
+  return stem + ext;
+};
+
+/** Changes to the queues of owners that are moving to another computer wait until they're there:
+ * what's changed meanwhile would be left behind. */
+export function refuseMoving(owners: (string | undefined)[], moving: Set<string> = frozen()): void {
+  for (const owner of owners) if (owner && moving.has(owner)) refuse(owner.startsWith("grp_") ? "This group chat is moving to another computer, with its Work Queue: try again once it's there." : "That conversation is moving to another computer, with its Work Queue: try again once it's there.");
+}
+
+/** Where an agent's files may come from: its conversation's folder, its project's other folders,
+ * and the temporary folders; never Kuvo Code's own (but for its own folder there, a bot's). */
+export interface FilePlaces { own: string | null; others: readonly string[] }
+
+const real = (place: string): string | null => {
+  try { return fs.realpathSync(place); } catch { return null; }
+};
+const within = (file: string, folder: string) => file === folder || file.startsWith(folder.endsWith(path.sep) ? folder : folder + path.sep);
+
+/** A file an agent named, read into `staging` (outside the queue's lock): checked where it really
+ * is (links followed) to be a plain file of a size the queue keeps, in one of `places`, with no
+ * hidden folder or file on the way; then opened without following a link or waiting on it, and
+ * kept only if what was opened is that same file, with no other name (a hard link elsewhere). */
+export function stageFile(given: string, places: FilePlaces, staging: string): Staged {
+  if (!path.isAbsolute(given)) refuse(`Give ${given} as a full path.`);
+  const file = real(given) ?? refuse(`There's no file at ${given}.`);
+  const own = places.own ? real(places.own) : null;
+  const roots = [own, ...places.others.map(real), real(os.tmpdir()), real("/tmp")].filter((each): each is string => Boolean(each));
+  const root = roots.find(each => within(file, each));
+  // Kuvo Code's own folders (on a Mac, the app's around its box's): never, unless the conversation's
+  // own folder is itself in them (a bot's, a chat's), and then only what's in that folder. A project
+  // that holds them (one at the home folder) doesn't make them its own.
+  const boxes = [real(K), real(BOTS), IS_MAC ? real(path.dirname(path.resolve(K))) : null].filter((each): each is string => Boolean(each));
+  const ownOK = own !== null && root === own && boxes.some(box => within(own, box));
+  if (!root || (!ownOK && boxes.some(box => within(file, box)))) refuse(`${given} isn't in this conversation's folder, its project or a temporary folder: only files from there are kept with an item.`);
+  if (path.relative(root!, file).split(path.sep).some(part => part.startsWith("."))) refuse(`${given} is hidden (a name starting with a dot): it isn't kept with an item.`);
+  const checked = fs.lstatSync(file);
+  if (!checked.isFile()) refuse(`${given} isn't a file.`);
+  if (checked.size > MOST_FILE) refuse(`${given} is over ${Math.round(MOST_FILE / 1_000_000)} MB: too big to keep with an item.`);
+  let handle: number;
+  try {
+    handle = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0));
+  } catch {
+    return refuse(`${given} can't be read.`);
+  }
+  try {
+    const opened = fs.fstatSync(handle);
+    // (And still where it was found: a folder on the way swapped for a link meanwhile is said.)
+    if (!opened.isFile() || opened.dev !== checked.dev || opened.ino !== checked.ino || real(given) !== file) refuse(`${given} changed as it was read: try again.`);
+    if (opened.nlink !== 1) refuse(`${given} has other names (a hard link): it isn't kept with an item.`);
+    const size = Math.min(opened.size, MOST_FILE);
+    const bytes = Buffer.alloc(size);
+    let read = 0;
+    while (read < size) {
+      const got = fs.readSync(handle, bytes, read, size - read, read);
+      if (!got) break;
+      read += got;
+    }
+    fs.mkdirSync(staging, { recursive: true, mode: 0o700 });
+    const staged = path.join(staging, `${crypto.randomBytes(8).toString("hex")}`);
+    fs.writeFileSync(staged, bytes.subarray(0, read), { mode: 0o600 });
+    return { staged, name: path.basename(file), size: read };
+  } finally {
+    fs.closeSync(handle);
+  }
+}
+
+/** A file read for an item, waiting in the staging folder until the change that keeps it. */
+export interface Staged { staged: string; name: string; size: number }
+
+/** The files an agent named, read before the queue's lock is taken: what was read, and a way to
+ * clear what's left of it. */
+export function stageFiles(given: unknown, places: FilePlaces | null): { staged: Staged[]; clear: () => void } {
+  const named = given === undefined ? [] : (Array.isArray(given) ? given : [given]).map(each => (typeof each === "string" ? each.trim() : "")).filter(Boolean);
+  if (named.length && !places) refuse("Only an agent's own files are kept with an item.");
+  if (named.length > MOST_FILES) refuse(`An item keeps ${MOST_FILES} files at most.`);
+  const staging = path.join(STAGING, crypto.randomBytes(8).toString("hex"));
+  const clear = () => fs.rmSync(staging, { recursive: true, force: true });
+  try {
+    return { staged: named.map(each => stageFile(each, places!, staging)), clear };
+  } catch (error) {
+    clear();
+    throw error;
+  }
+}
+
+const TYPES: Record<string, string> = {
+  ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp", ".heic": "image/heic", ".svg": "image/svg+xml",
+  ".pdf": "application/pdf", ".md": "text/markdown", ".txt": "text/plain", ".json": "application/json", ".csv": "text/csv", ".mp4": "video/mp4", ".mov": "video/quicktime",
+};
+export const typeOf = (name: string) => TYPES[path.extname(name).toLowerCase()] ?? "application/octet-stream";
+
+const text = (value: unknown, most: number, what: string): string => {
+  if (typeof value !== "string") return refuse(`${what} should be text.`);
+  if (value.length > most) refuse(`${what} is over ${most.toLocaleString("en-US")} characters: make it shorter.`);
+  return value;
+};
+
+const linksOf = (value: unknown): { url: string; title?: string }[] => {
+  const given = Array.isArray(value) ? value : [value];
+  return given.map(each => {
+    const url = typeof each === "string" ? each : isObject(each) && typeof each.url === "string" ? each.url : "";
+    if (!/^https?:\/\/\S+$/i.test(url.trim())) refuse(`${url || "A link"} isn't a web address (https://…).`);
+    const title = isObject(each) && typeof each.title === "string" ? plainName(each.title).slice(0, 200) : "";
+    return { url: url.trim().slice(0, 2000), ...(title ? { title } : {}) };
+  });
+};
+
+/** A category an agent or you named for an item, or why not. */
+export function categoryFor(given: unknown): string {
+  if (typeof given === "string" && /^\s*in[ -]?progress\s*$/i.test(given)) refuse("In progress isn't a category you set: an item is in progress while a session linked to it is at work. Link one with working: true (or sessions).");
+  const found = categoryNamed(given);
+  if (!found) return refuse(`There's no category ${String(given ?? "")}: queue_categories lists them.`);
+  return found.id;
+}
+
+/** `session` linked to `item`, its oldest other link dropped when it has `LINKS_EACH` already. */
+export function linkSession(book: Book, item: Item, session: string, now: number): void {
+  if (item.sessions.some(each => each.session === session)) return;
+  const others = book.items().filter(each => each.id !== item.id && each.sessions.some(link => link.session === session));
+  if (others.length >= LINKS_EACH) {
+    const oldest = others.sort((a, b) => a.sessions.find(link => link.session === session)!.since - b.sessions.find(link => link.session === session)!.since)[0];
+    oldest.sessions = oldest.sessions.filter(link => link.session !== session);
+  }
+  item.sessions.push({ session, since: now });
+}
+
+/** What an add or a change gives: the fields, as the tools name them. */
+export interface Fields {
+  title?: unknown;
+  body?: unknown;
+  category?: unknown;
+  top?: unknown;
+  before?: unknown;
+  after?: unknown;
+  progress?: unknown;
+  progress_note?: unknown;
+  note?: unknown;
+  links?: unknown;
+  files?: unknown;
+  /** Links (by address) and files (by name) to take away: one list for both. */
+  remove?: unknown;
+}
+
+/** Who acts, when, the files it read for the change (`stageFiles`), and what's to be done on disk
+ * once the change is sure (`applyFileOps`). */
+export interface Acting { who: Who; now: number; staged?: Staged[]; fileOps: (() => void)[] }
+
+/** What a change does on disk, done once nothing more can refuse it. */
+export function applyFileOps(acting: Acting): void {
+  for (const op of acting.fileOps.splice(0)) op();
+}
+
+const openIn = (book: Book, owner: string) => book.queue(owner).items.filter(item => !item.removed && item.category !== "done").length;
+
+/** A new item in `owner`'s queue: numbered now if there's a number to give, else once one comes. */
+export function addItem(book: Book, owner: string, fields: Fields, acting: Acting, primary: Primary): Item {
+  const title = plainName(text(fields.title ?? "", MOST_TITLE * 4, "The title")).slice(0, MOST_TITLE);
+  if (!title) refuse("Say what it is (title), in a line.");
+  if (openIn(book, owner) >= MOST_ITEMS) refuse(`Your queue has ${MOST_ITEMS} open items already: mark some done or remove them first.`);
+  const category = fields.category === undefined ? "next" : categoryFor(fields.category);
+  const { now, who } = acting;
+  const item: Item = {
+    id: newItemID(),
+    owner,
+    title,
+    body: "",
+    category,
+    order: placeIn(book.items(), category, { top: fields.top === true }),
+    notes: [],
+    files: [],
+    links: [],
+    sessions: [],
+    created: { at: now, by: who },
+    updated: { at: now, by: who },
+    ...(category === "done" ? { doneAt: now } : {}),
+  };
+  book.queue(owner).items.push(item);
+  // (Its details as a change makes them, so the same checks hold.)
+  changeItem(book, item, { ...fields, title: undefined, category: undefined, top: undefined }, acting);
+  const number = takeNumber(primary);
+  if (number !== null) item.number = number;
+  return item;
+}
+
+/** `item` changed as `fields` say. */
+export function changeItem(book: Book, item: Item, fields: Fields, acting: Acting): void {
+  const { who, now } = acting;
+  if (fields.title !== undefined) {
+    const title = plainName(text(fields.title, MOST_TITLE * 4, "The title")).slice(0, MOST_TITLE);
+    if (!title) refuse("A title can't be empty.");
+    item.title = title;
+  }
+  if (fields.body !== undefined) item.body = text(fields.body, MOST_BODY, "The description (body)");
+  if (fields.category !== undefined) {
+    const category = categoryFor(fields.category);
+    if (category !== item.category) {
+      item.category = category;
+      item.order = placeIn(book.items(), category, { top: fields.top === true });
+      if (category === "done") {
+        item.doneAt = now;
+        item.sessions = [];
+      } else {
+        delete item.doneAt;
+      }
+    }
+  }
+  const beside = (given: unknown) => {
+    const ref = refOf(given);
+    const all = ref ? matching(book.items(), ref).filter(each => !each.removed && each.id !== item.id) : [];
+    // (Where two computers gave one number twice, the one in this item's category.)
+    const found = all.find(each => each.category === item.category) ?? all[0];
+    if (!found) refuse(`There's no other item ${String(given)} to put it beside.`);
+    if (found!.category !== item.category) refuse(`${nameOf(found!)} is in another category: move it there first (category).`);
+    return found!;
+  };
+  if (fields.before !== undefined) item.order = placeBeside(book.items(), beside(fields.before), false, item);
+  else if (fields.after !== undefined) item.order = placeBeside(book.items(), beside(fields.after), true, item);
+  else if (fields.top === true && fields.category === undefined) item.order = placeIn(book.items().filter(each => each.id !== item.id), item.category, { top: true });
+  if (fields.progress !== undefined) {
+    if (fields.progress === null) {
+      if (item.progress) delete item.progress.value;
+    } else if (typeof fields.progress !== "number" || !(fields.progress >= 0 && fields.progress <= 1)) {
+      refuse("progress is a number from 0 to 1 (3 of 8 is 0.375), or null to take it away.");
+    } else {
+      item.progress = { ...(item.progress ?? {}), value: fields.progress };
+    }
+  }
+  if (fields.progress_note !== undefined) {
+    const note = fields.progress_note === null ? "" : plainName(text(fields.progress_note, MOST_PROGRESS_NOTE * 2, "progress_note")).slice(0, MOST_PROGRESS_NOTE);
+    item.progress = { ...(item.progress ?? {}) };
+    if (note) item.progress.note = note;
+    else delete item.progress.note;
+  }
+  if (item.progress && item.progress.value === undefined && item.progress.note === undefined) delete item.progress;
+  if (fields.note !== undefined) {
+    const note = text(fields.note, MOST_NOTE, "The note").trim();
+    if (note) item.notes = [...item.notes, { at: now, by: who, text: note }].slice(-MOST_NOTES);
+  }
+  const listed = (value: unknown): string[] => (value === undefined ? [] : (Array.isArray(value) ? value : [value]).map(String));
+  const removing = listed(fields.remove);
+  if (removing.length) {
+    const gone = new Set(removing);
+    item.links = item.links.filter(link => !gone.has(link.url));
+  }
+  if (fields.links !== undefined) {
+    for (const link of linksOf(fields.links)) if (!item.links.some(each => each.url === link.url)) item.links.push(link);
+    if (item.links.length > MOST_LINKS) refuse(`An item keeps ${MOST_LINKS} links at most.`);
+  }
+  // Files: everything checked first; what's on disk changes only as the change is kept
+  // (`applyFileOps`), those taken away before those added.
+  const gone = new Set(removing);
+  const staged = fields.files === undefined ? [] : acting.staged ?? refuse("Only an agent's own files are kept with an item.");
+  const left = item.files.filter(file => !gone.has(file.name));
+  if (left.length + staged.length > MOST_FILES) refuse(`An item keeps ${MOST_FILES} files at most: take some away first (remove).`);
+  for (const file of item.files) if (gone.has(file.name)) acting.fileOps.push(() => fs.rmSync(path.join(filesOf(item.id), file.name), { force: true }));
+  item.files = left;
+  for (const each of staged) {
+    const base = shortName(each.name.replace(/[\\\0]/g, "_").replace(/^\.+/, "")) || "file";
+    const ext = path.extname(base);
+    let name = base;
+    for (let n = 2; item.files.some(file => file.name === name); n++) name = `${base.slice(0, base.length - ext.length)} ${n}${ext}`;
+    item.files.push({ name, size: each.size, type: typeOf(name), at: now });
+    acting.fileOps.push(() => {
+      fs.mkdirSync(filesOf(item.id), { recursive: true, mode: 0o700 });
+      fs.renameSync(each.staged, path.join(filesOf(item.id), name));
+    });
+  }
+  item.updated = { at: now, by: who };
+}
+
+/** `item` deleted: kept 30 days for an undo, no session linked any more. */
+export function removeItem(item: Item, who: Who, now: number): void {
+  item.removed = { at: now, by: who };
+  item.sessions = [];
+  item.updated = { at: now, by: who };
+}
+
+/** `item` brought back, at the end of its category (Next, for one whose category is gone). */
+export function restoreItem(book: Book, item: Item, who: Who, now: number): void {
+  delete item.removed;
+  if (!categoryNamed(item.category)) item.category = "next";
+  item.order = placeIn(book.items(), item.category);
+  item.updated = { at: now, by: who };
+}
+
+/** `item` handed to the conversation `to`: into its queue, linked to it. */
+export function handItem(book: Book, item: Item, to: string, who: Who, now: number): void {
+  const from = item.owner;
+  if (from === to) refuse(`${nameOf(item)} is in that queue already.`);
+  if (openIn(book, to) >= MOST_ITEMS) refuse(`That queue has ${MOST_ITEMS} open items already.`);
+  book.give(item, to);
+  noteHanded(item, from, to, now);
+  if (to.startsWith("ses_") && item.category !== "done") linkSession(book, item, to, now);
+  item.updated = { at: now, by: who };
+}

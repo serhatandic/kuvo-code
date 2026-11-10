@@ -374,28 +374,6 @@ final class WakeUps {
         try? await setPaused(isArchived, Self.owner(of: session), byArchiving: true)
     }
 
-    /// A conversation that carries on in another session (moved to the coding agents): its
-    /// wake-ups and watches go with it, held still if you'd held them, rather than staying with
-    /// the old one, which goes to Archived and holds them there.
-    static func carry(from old: Session, to new: Session) async {
-        let from = owner(of: old), to = owner(of: new)
-        guard from.folder != to.folder, from.machine == to.machine else { return }
-        let directory = RemoteFolder.parse(to.directory)?.path ?? to.directory
-        if let machine = from.machine {
-            let source = shell(from.folder), target = shell(to.folder)
-            let via = to.agents ? "printf bridge >\(target)/via" : "rm -f \(target)/via"
-            let script = "[ -f \(source)/session ] && [ ! -e \(target) ] && mv \(source) \(target) && printf '%s' \(SSHConnection.quoted(to.session)) >\(target)/session && printf '%s' \(SSHConnection.quoted(directory)) >\(target)/directory && \(via); true"
-            _ = await Task.detached { RemoteShell.run(script, on: machine) }.value
-            return
-        }
-        let manager = FileManager.default
-        guard manager.fileExists(atPath: path(from, "session")), !manager.fileExists(atPath: to.folder),
-              (try? manager.moveItem(atPath: from.folder, toPath: to.folder)) != nil else { return }
-        try? Data(to.session.utf8).write(to: URL(filePath: path(to, "session")))
-        try? Data(directory.utf8).write(to: URL(filePath: path(to, "directory")))
-        if to.agents { try? Data("bridge".utf8).write(to: URL(filePath: path(to, "via"))) } else { try? manager.removeItem(atPath: path(to, "via")) }
-    }
-
     /// A session that's gone takes its wake-ups and watches with it; a bot's go with its folder.
     func forget(_ session: Session) {
         let owner = Self.owner(of: session)

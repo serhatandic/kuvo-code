@@ -1369,7 +1369,7 @@ test("each feature kuvo/info names is a route the machine answers, and one it do
     "accounts.credentials": ["GET", "kuvo/accounts/credentials"], "accounts.ended": ["GET", "kuvo/accounts/ended"], "accounts.found": ["GET", "kuvo/accounts/found"], "accounts.refresh": ["GET", "kuvo/accounts/refreshable"], agents: ["GET", "kuvo/agents/api/session"], artifacts: ["GET", "kuvo/artifacts?bot=bot_none"], asks: ["GET", "kuvo/asks"], attention: ["GET", "kuvo/attention"],
     bots: ["GET", "kuvo/bots"], "bots.events": ["GET", "kuvo/bots/events"], "bots.job": ["GET", "kuvo/bots"], "bots.edit": ["DELETE", "kuvo/bots/bot_none"], "bots.keys": ["GET", "kuvo/bots/bot_none/keys"],
     "bots.make": ["GET", "kuvo/bots/templates"], config: ["GET", "kuvo/config"], "config.apply": ["GET", "kuvo/config/apply"], "engine.restart": ["GET", "kuvo/engine/restart"],
-    "engine.start": ["GET", "kuvo/engine/start"], file: ["GET", "kuvo/file"], git: ["POST", "kuvo/git/changes"], "git.merge": ["POST", "kuvo/git/merge"], "git.pull-request": ["POST", "kuvo/git/pull-request"], "git.pull-request.draft": ["POST", "kuvo/git/pull-request/draft"], "git.push": ["POST", "kuvo/git/push"], goals: ["GET", "kuvo/agents/api/kuvo/goals"], btw: ["GET", "kuvo/agents/api/kuvo/btw"], "btw.threads": ["GET", "kuvo/agents/api/kuvo/btw"], handoff: ["POST", "kuvo/agents/api/kuvo/handoff/ses_none"], branch: ["POST", "kuvo/agents/api/kuvo/branch/ses_none"], reviews: ["GET", "kuvo/agents/api/kuvo/reviews"], "reviews.scopes": ["GET", "kuvo/agents/api/kuvo/reviews"], "reviews.parts": ["GET", "kuvo/agents/api/kuvo/reviews"], groups: ["GET", "kuvo/groups"],
+    "engine.start": ["GET", "kuvo/engine/start"], file: ["GET", "kuvo/file"], git: ["POST", "kuvo/git/changes"], "git.changes.count": ["POST", "kuvo/git/changes/count"], "git.merge": ["POST", "kuvo/git/merge"], "git.pull-request": ["POST", "kuvo/git/pull-request"], "git.pull-request.draft": ["POST", "kuvo/git/pull-request/draft"], "git.push": ["POST", "kuvo/git/push"], goals: ["GET", "kuvo/agents/api/kuvo/goals"], btw: ["GET", "kuvo/agents/api/kuvo/btw"], "btw.threads": ["GET", "kuvo/agents/api/kuvo/btw"], handoff: ["POST", "kuvo/agents/api/kuvo/handoff/ses_none"], branch: ["POST", "kuvo/agents/api/kuvo/branch/ses_none"], reviews: ["GET", "kuvo/agents/api/kuvo/reviews"], "reviews.scopes": ["GET", "kuvo/agents/api/kuvo/reviews"], "reviews.parts": ["GET", "kuvo/agents/api/kuvo/reviews"], groups: ["GET", "kuvo/groups"],
     "groups.delete": ["DELETE", "kuvo/groups/grp_none"], "groups.edit": ["PATCH", "kuvo/groups/grp_none"], "groups.joinable": ["GET", "kuvo/groups/joinable"], "groups.make": ["POST", "kuvo/groups"],
     // Its turns for chats on other computers, which kuvo/groups/joinable shows from theirs.
     "groups.seats": ["GET", "kuvo/groups/joinable"],
@@ -1400,6 +1400,7 @@ test("each feature kuvo/info names is a route the machine answers, and one it do
     "approval.stopped": ["POST", "kuvo/sandbox/stopped"],
     // (Each account's plan limits, on the coding agents' bridge.)
     limits: ["GET", "kuvo/agents/api/kuvo/limits"],
+    "work-queue": ["GET", "kuvo/work-queue/categories"],
     "git.backups": ["GET", "kuvo/git/backups?folder=/"],
     // (Moves with a coding agent's own conversation, and the check before one holds anything: what
     // kuvo/moves takes besides, and a box asks of another in its mail.)

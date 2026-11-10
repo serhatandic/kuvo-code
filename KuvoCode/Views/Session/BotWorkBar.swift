@@ -142,7 +142,14 @@ private struct BotWorkRow: View {
                     Text(item.asks.map(WorkWords.asking) ?? "Waiting for an answer")
                         .foregroundStyle(.orange)
                 } else {
-                    ShimmerText(text: BotWorkList.about(item, catalog: catalog))
+                    // The first that fits beside the title, which keeps its room: the account goes
+                    // before the project, and the last is cut at its end.
+                    let about = BotWorkList.about(item, catalog: catalog)
+                    ViewThatFits(in: .horizontal) {
+                        ForEach(about, id: \.self) { ShimmerText(text: $0) }
+                    }
+                    .help(about.first ?? "")
+                    .accessibilityLabel(about.first ?? "")
                 }
             }
             .font(.system(size: 12))
@@ -255,7 +262,7 @@ struct BotWorkList: View {
                             Text(item.title)
                                 .font(.system(size: 13))
                                 .lineLimit(1)
-                            Text(item.state == .asking ? (item.asks.map(WorkWords.asking) ?? "Waiting for an answer") : item.lastReply ?? Self.about(item, catalog: catalog))
+                            Text(item.state == .asking ? (item.asks.map(WorkWords.asking) ?? "Waiting for an answer") : item.lastReply ?? Self.about(item, catalog: catalog).first ?? "")
                                 .font(.system(size: 12))
                                 .foregroundStyle(item.state == .asking ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
                                 .lineLimit(2)
@@ -312,10 +319,11 @@ struct BotWorkList: View {
         }
     }
 
-    /// Its model, effort and mode, and where, in a few words: "Claude Sonnet 5.5 · high · Plan · Tidepool".
-    static func about(_ item: BotWorkReport.Item, catalog: Catalog) -> String {
+    /// Its model, effort and mode, the account it runs on, and where, in a few words, the longest
+    /// first (`WorkWords.about`): "Claude Sonnet 5.5 · high · Plan · Claude · Work · Tidepool".
+    static func about(_ item: BotWorkReport.Item, catalog: Catalog) -> [String] {
         let model = item.model.map { model in catalog.model(ModelRef(id: model.id, providerID: model.providerID))?.name ?? model.id }
-        return [model, item.model?.variant, item.mode == "plan" ? "Plan" : nil, item.project].compactMap { $0 }.joined(separator: " · ")
+        return WorkWords.about(item, model: model)
     }
 
     private func stopAll() {

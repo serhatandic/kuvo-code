@@ -1,5 +1,6 @@
 import AppKit
 import ClientDesign
+import ClientSessions
 import ClientText
 import SwiftUI
 
@@ -31,6 +32,8 @@ struct MessageField: NSViewRepresentable {
     /// The keyword the message starts with ("/goal"), drawn as a token: its mark in place of the
     /// "/", the rest in bold, in the accent. The text stays as typed.
     var token: Token?
+    /// What the Work Queue items it names are (`#243`): each drawn with its mark, in its color.
+    var refs: [Int: WorkRef] = [:]
     /// In grey after what's written (a keyword's example, "what to do each time"), until more is.
     var example: String?
 
@@ -195,9 +198,9 @@ struct MessageField: NSViewRepresentable {
         view.isAutomaticDashSubstitutionEnabled = !plain && checker.isAutomaticDashSubstitutionEnabled
         view.isAutomaticTextReplacementEnabled = !plain && checker.isAutomaticTextReplacementEnabled
         view.isAutomaticSpellingCorrectionEnabled = !plain && checker.isAutomaticSpellingCorrectionEnabled
-        if coordinator.styled != Styled(marks: marks, images: images, token: token) || changed {
-            coordinator.styled = Styled(marks: marks, images: images, token: token)
-            view.restyle(marks: marks, images: images, token: token)
+        if coordinator.styled != Styled(marks: marks, images: images, token: token, refs: refs) || changed {
+            coordinator.styled = Styled(marks: marks, images: images, token: token, refs: refs)
+            view.restyle(marks: marks, images: images, token: token, refs: refs)
         }
     }
 
@@ -217,6 +220,7 @@ struct MessageField: NSViewRepresentable {
         var marks: Bool
         var images: Int
         var token: Token?
+        var refs: [Int: WorkRef] = [:]
     }
 
     @MainActor final class Coordinator: NSObject, NSTextViewDelegate {
@@ -238,7 +242,7 @@ struct MessageField: NSViewRepresentable {
             // The keyword as it was until its owner reads the new text: one that's no longer whole
             // goes back to plain text.
             let token = parent.token.flatMap { view.string.utf16.count >= $0.length && view.string.hasPrefix("/") ? $0 : nil }
-            view.restyle(marks: parent.marks, images: parent.images, token: token)
+            view.restyle(marks: parent.marks, images: parent.images, token: token, refs: parent.refs)
             view.followCaret()
         }
 
@@ -536,7 +540,7 @@ final class MessageTextView: PointerAwareTextView {
 
     /// Styles what the text names, each time from the field's own look, so a mark no longer whole
     /// goes back to plain text.
-    func restyle(marks shown: Bool, images: Int, token: MessageField.Token? = nil) {
+    func restyle(marks shown: Bool, images: Int, token: MessageField.Token? = nil, refs: [Int: WorkRef] = [:]) {
         guard let storage = textStorage, !hasMarkedText() else { return }
         let font = font ?? .systemFont(ofSize: NSFont.systemFontSize)
         let text = string
@@ -544,7 +548,7 @@ final class MessageTextView: PointerAwareTextView {
         let all = NSRange(location: 0, length: length)
         // Only where there's something to style, or was: typing in a long pasted log stays as
         // quick as in any text. Addresses aren't looked for in one that long.
-        let mayMark = shown && (text.contains(AgentReferences.trigger) || text.contains("[Image ")
+        let mayMark = shown && (text.contains(AgentReferences.trigger) || text.contains("[Image ") || (!refs.isEmpty && text.contains("#"))
             || (length < Self.longest && (text.contains("http") || text.contains("www."))))
         guard mayMark || token != nil || styled || font != styledFont else { return }
         styledFont = font
@@ -581,6 +585,16 @@ final class MessageTextView: PointerAwareTextView {
                     face(look.flatMap { MessageMentions.face($0, size: size) } ?? TextFaces.symbol("bubble.left", size: size), at: span)
                     marks.append(span)
                 }
+            }
+            // A Work Queue item the box knows: its mark over the "#", the number in its color.
+            for (range, number) in refs.isEmpty ? [] : WorkItemRefs.find(in: text) {
+                guard let ref = refs[number] else { continue }
+                let span = NSRange(range, in: text)
+                guard span.upperBound <= length else { continue }
+                let mark = WorkItemMark(category: ref.category, inProgress: ref.inProgress, removed: ref.removed == true)
+                storage.addAttributes([.font: bold, .foregroundColor: NSColor(mark.color), .toolTip: "#\(number) \(ref.title)"], range: span)
+                face(WorkItemChipAttachment.dot(mark, size: size), at: span)
+                marks.append(span)
             }
             for (range, number) in ImageReferences.find(in: text) where number <= images {
                 let span = NSRange(range, in: text)

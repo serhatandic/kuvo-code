@@ -161,10 +161,49 @@ test("its socket is yours alone from the moment it's there, never for a moment a
   await agent.close();
 });
 
+// The launcher looks for the agent's socket by its name; what waits for it by watching its folder (as
+// the vault's own tests do) hears of it on macOS too, which never tells a watch of a socket being
+// bound there. Closed, its socket is gone, so no command is handed one nothing answers.
+test("a watch on its folder hears of its socket, and a closed agent leaves none behind", async () => {
+  const folder = fs.mkdtempSync(path.join(root, "w-"));
+  const socket = path.join(folder, "agent.sock");
+  const heard = new Set<string>();
+  let changed = () => {};
+  const watch = fs.watch(folder, (_, name) => {
+    heard.add(String(name));
+    changed();
+  });
+  const heardOf = (name: string) => new Promise<void>(resolve => {
+    const look = () => (heard.has(name) ? resolve() : void (changed = look));
+    look();
+  });
+  // (A watch starts a moment after it's made: once it hears a file of the test's, it's watching.)
+  fs.writeFileSync(path.join(folder, "probe"), "");
+  await heardOf("probe");
+  fs.rmSync(path.join(folder, "probe"));
+  const server = serveAgent(socket, { keys: async () => [], allow: async () => false });
+  await new Promise(resolve => server.once("listening", resolve));
+  await heardOf("agent.sock");
+  watch.close();
+  expect(fs.statSync(socket).isSocket()).toBe(true);
+  expect(fs.readdirSync(folder)).toEqual(["agent.sock"]);
+  await new Promise(resolve => server.close(resolve));
+  expect(fs.readdirSync(folder)).toEqual([]);
+});
+
 test("a socket the agent can't open is an error on it, never a crash of the box", async () => {
   const server = serveAgent(path.join(root, "x".repeat(200) + ".sock"), { keys: async () => [], allow: async () => false });
   const error = await new Promise<Error>(resolve => server.once("error", resolve));
   expect(error.message).toMatch(/can't be this long/);
   const missing = serveAgent(path.join(root, "no-such-folder", "a.sock"), { keys: async () => [], allow: async () => false });
   expect((await new Promise<Error & { code?: string }>(resolve => missing.once("error", resolve))).code).toBe("ENOENT");
+  // Bound, but its name taken by something it can't replace (a folder with files in it): an error
+  // too, and nothing left listening under the name it was bound as.
+  const folder = fs.mkdtempSync(path.join(root, "taken-"));
+  fs.mkdirSync(path.join(folder, "agent.sock"));
+  fs.writeFileSync(path.join(folder, "agent.sock", "file"), "");
+  const taken = serveAgent(path.join(folder, "agent.sock"), { keys: async () => [], allow: async () => false });
+  expect(await new Promise<Error>(resolve => taken.once("error", resolve))).toBeInstanceOf(Error);
+  expect(taken.listening).toBe(false);
+  expect(fs.readdirSync(folder)).toEqual(["agent.sock"]);
 });
