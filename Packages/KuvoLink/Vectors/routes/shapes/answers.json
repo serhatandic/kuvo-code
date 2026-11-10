@@ -2159,6 +2159,7 @@
          },
          "host": "string",
          "machine?": "string",
+         "box?": "string",
          "session?": "string",
          "asker?": "string",
          "username?": "bool",
