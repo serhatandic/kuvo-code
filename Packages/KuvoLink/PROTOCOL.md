@@ -997,7 +997,8 @@ client shows it from the same routes.
   depth, model?, mode?, state, asks?, started, tokens, cost?, lastReply?}], answered: [answer with
   its session], today: {started, working, tokens, cost?}, limits}`: its sessions the latest first,
   archived ones left out. 400 without `bot`, 404 for no such bot here, 503 with no engine. Each
-  `state` is as of the read. `today.working` stays, since clients until 0.7.2 need it to read the
+  `state` is as of the read; `lastReply` is what it said last, and for one `stopped` or `failed`
+  only what it said in that turn, never an earlier turn's reply. `today.working` stays, since clients until 0.7.2 need it to read the
   report, but no client shows it (see At work).
 - **`GET kuvo/work/events`** (ndjson): `{"changed": {<bot>: <ms>}}` now and at each change to a
   bot's work (a session started, stopped, finished or asking, an ask answered, its limits); a
@@ -1777,7 +1778,10 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     `entries` is the first list's; `key` is a provider for an account's limit, `provider/model`
     for a model's; `until` in ms; each entry names its model by the model's own id, so one saved
     under another id it's known by, such as Claude Code's `default`, comes as the model that
-    stands for now, and a second entry for the same model at the same effort is left out);
+    stands for now, as its agent listed it (as saved until it has), and a second entry for the
+    same model at the same effort is left out; a list `PUT` back as it came keeps each entry under
+    the id it was saved by, so one saved as `default` goes on following it, and runs go down the
+    lists as `GET` gives them);
     `DELETE …/auto/limits` tries them all again. The event
     `kuvo.auto.updated` says the lists or their limits changed. An account with a `provider`
     limit whose `until` hasn't come is at its usage limit: mark it (the Mac says "Usage limit ·

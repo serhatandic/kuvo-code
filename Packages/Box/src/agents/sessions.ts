@@ -2541,9 +2541,51 @@ export class Sessions {
   }
 
   private async folded(entries: AutoEntry[]): Promise<AutoEntry[]> {
-    const providers = [...new Set(entries.map((entry) => entry.providerID))]
-    const listed = new Map(await Promise.all(providers.map(async (providerID) => [providerID, await this.listedModels(providerID)] as const)))
-    return foldEntries(entries, (entry) => Sessions.modelIn(listed.get(entry.providerID) ?? [], entry.modelID)?.id)
+    const own = await this.ownIDs(entries)
+    return foldEntries(entries, (entry) => own.get(Auto.modelKey(entry)))
+  }
+
+  /**
+   * The model each of `entries` that names one by an alias stands for (by `provider/id`), as its
+   * agent itself listed it: never a guess (Claude Code's usual models, before it has said), and
+   * only of an agent that has aliases, as far as it says in a few seconds.
+   */
+  private async ownIDs(entries: AutoEntry[]): Promise<Map<string, string>> {
+    const keys = [...new Set(entries.map((entry) => Auto.modelKey(entry)))]
+    const own = new Map<string, string>()
+    await Promise.all(
+      keys.map(async (key) => {
+        const entry = entries.find((each) => Auto.modelKey(each) === key)!
+        const agent = this.agent(entry.providerID)
+        if (!agent?.concreteModel) return
+        const id = await Promise.race([agent.concreteModel(entry.modelID).catch(() => undefined), Bun.sleep(3_000).then(() => undefined)])
+        if (id) own.set(key, id)
+      }),
+    )
+    return own
+  }
+
+  /**
+   * Lists you saved as `kuvo/auto` gave them (each as the models it names), each entry kept under
+   * the id it was kept by: one kept as an alias of its model (Claude Code's `default`) goes on
+   * following whichever model that stands for.
+   */
+  async asKept(lists: unknown[]): Promise<unknown[]> {
+    const kept = new Map(this.auto.all().map((list) => [list.id, list.entries]))
+    return await Promise.all(
+      lists.map(async (list) => {
+        const before = list && typeof list === "object" && Array.isArray((list as AutoList).entries) ? kept.get((list as AutoList).id) : undefined
+        if (!before) return list
+        const own = await this.ownIDs(before)
+        const named = before.map((entry) => ({ entry, as: { ...entry, modelID: own.get(Auto.modelKey(entry)) ?? entry.modelID } }))
+        const same = (one: AutoEntry, other: Partial<AutoEntry> | null) => one.providerID === other?.providerID && one.modelID === other?.modelID && (one.variant ?? "") === (other?.variant ?? "")
+        const entries = (list as AutoList).entries.map((given) => {
+          const was = named.find((each) => same(each.as, given))
+          return was && given && typeof given === "object" ? { ...given, modelID: was.entry.modelID } : given
+        })
+        return { ...(list as AutoList), entries }
+      }),
+    )
   }
 
   /**

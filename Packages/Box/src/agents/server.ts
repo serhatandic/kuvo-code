@@ -4,7 +4,7 @@
 
 import { kinds, type AgentKind } from "./accounts"
 import type { Account, Agent, SignInAttempt } from "./agent"
-import type { Auto } from "./auto"
+import type { Auto, AutoList } from "./auto"
 import type { EngineLink } from "./engine"
 import type { Roster } from "./roster"
 import { emit, feed } from "./events"
@@ -540,13 +540,14 @@ export function handler(context: Context) {
         if (!b && method === "PUT") {
           const { entries, lists } = await body()
           // Your lists; or, as before there were lists, the first one's models.
+          // (As they were given: each entry under the id it was kept by.)
           if (Array.isArray(lists)) {
             try {
-              auto.setLists(lists)
+              auto.setLists(await sessions.asKept(lists))
             } catch (problem) {
               return error(400, (problem as Error).message)
             }
-          } else if (Array.isArray(entries)) auto.set(entries)
+          } else if (Array.isArray(entries)) auto.set(((await sessions.asKept([{ ...auto.all()[0], entries }]))[0] as AutoList).entries)
           else return error(400, "Send the lists, or the first one's entries.")
           emit("kuvo.auto.updated", {})
         }

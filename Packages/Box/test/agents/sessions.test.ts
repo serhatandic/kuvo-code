@@ -58,8 +58,13 @@ class FakeAgent implements Agent {
   }
   /** The models it lists. */
   listed: Model[] = []
+  /** What each alias of its own stands for, once it has said. */
+  aliases: Record<string, string> = {}
   async models() {
     return this.listed
+  }
+  async concreteModel(id: string) {
+    return this.aliases[id]
   }
   async signedOut() {
     return this.dropsSignedOut === true
@@ -2283,6 +2288,7 @@ describe("Auto", () => {
   test("what it says of each model names it as its agent lists it, one named by another id it's known by too", async () => {
     // (As Claude Code's `default`: whichever of its models it recommends now.)
     a.listed = [model("alpha", "one", "Alpha One", { aliases: ["default"] }), model("alpha", "two", "Alpha Two")]
+    a.aliases = { default: "one" }
     b.listed = [model("beta", "one", "Beta One")]
     auto.set([
       { providerID: "alpha", modelID: "default", variant: "high" },
@@ -2301,6 +2307,7 @@ describe("Auto", () => {
 
   test("a list naming a model twice, by its own id and another it's known by, has it once: listed, and run", async () => {
     a.listed = [model("alpha", "one", "Alpha One", { aliases: ["default"] }), model("alpha", "two", "Alpha Two")]
+    a.aliases = { default: "one" }
     auto.setLists([
       { id: "auto", name: "Custom Auto", entries: [{ providerID: "alpha", modelID: "one" }, { providerID: "alpha", modelID: "default" }, { providerID: "alpha", modelID: "default", variant: "high" }, { providerID: "beta", modelID: "one" }] },
       { id: "fixes", name: "Fixes", entries: [{ providerID: "alpha", modelID: "default" }, { providerID: "alpha", modelID: "two" }] },
@@ -2318,6 +2325,30 @@ describe("Auto", () => {
     await settled(id, 1)
     expect(a.runs.map((run) => run.model)).toEqual(["one"])
     expect(b.runs).toHaveLength(1)
+  })
+
+  test("a list saved as it was shown keeps an entry on another id its model is known by, which goes on following that", async () => {
+    a.listed = [model("alpha", "one", "Alpha One", { aliases: ["default"] }), model("alpha", "two", "Alpha Two")]
+    a.aliases = { default: "one" }
+    auto.setLists([{ id: "auto", name: "Custom Auto", entries: [{ providerID: "alpha", modelID: "default", variant: "high" }, { providerID: "alpha", modelID: "two" }] }])
+    const shown = await sessions.autoLists()
+    expect(shown[0].entries).toEqual([{ providerID: "alpha", modelID: "one", variant: "high" }, { providerID: "alpha", modelID: "two" }])
+    // Saved back as shown, with a list added and the order changed.
+    auto.setLists((await sessions.asKept([{ ...shown[0], entries: [...shown[0].entries].reverse() }, { id: "fixes", name: "Fixes", entries: [{ providerID: "alpha", modelID: "one" }] }])) as any[])
+    expect(auto.all().map((list) => list.entries)).toEqual([
+      [{ providerID: "alpha", modelID: "two" }, { providerID: "alpha", modelID: "default", variant: "high" }],
+      [{ providerID: "alpha", modelID: "one" }],
+    ])
+    // Its agent recommends another model now: the list follows it.
+    a.aliases = { default: "two" }
+    expect((await sessions.autoLists())[0].entries).toEqual([{ providerID: "alpha", modelID: "two" }, { providerID: "alpha", modelID: "two", variant: "high" }])
+  })
+
+  test("before its agent has said what an id stands for, the list is as it was kept: no guess", async () => {
+    // (Claude Code lists its usual models, `opus` known as `default`, until it has said which it has.)
+    a.listed = [model("alpha", "one", "Alpha One", { aliases: ["default"] })]
+    auto.set([{ providerID: "alpha", modelID: "one" }, { providerID: "alpha", modelID: "default" }])
+    expect(await sessions.autoEntries()).toEqual([{ providerID: "alpha", modelID: "one" }, { providerID: "alpha", modelID: "default" }])
   })
 
   test("on the fourth with three at their limits: the second, once it resets, though the first is still held", async () => {

@@ -19606,9 +19606,42 @@ ${text.slice(0, 4000)}
     return await Promise.all(this.auto.all().map(async (list) => ({ ...list, entries: await this.folded(list.entries) })));
   }
   async folded(entries) {
-    const providers = [...new Set(entries.map((entry) => entry.providerID))];
-    const listed = new Map(await Promise.all(providers.map(async (providerID) => [providerID, await this.listedModels(providerID)])));
-    return foldEntries(entries, (entry) => Sessions.modelIn(listed.get(entry.providerID) ?? [], entry.modelID)?.id);
+    const own = await this.ownIDs(entries);
+    return foldEntries(entries, (entry) => own.get(Auto.modelKey(entry)));
+  }
+  async ownIDs(entries) {
+    const keys = [...new Set(entries.map((entry) => Auto.modelKey(entry)))];
+    const own = new Map;
+    await Promise.all(keys.map(async (key) => {
+      const entry = entries.find((each) => Auto.modelKey(each) === key);
+      const agent = this.agent(entry.providerID);
+      if (!agent?.concreteModel)
+        return;
+      const id = await Promise.race([agent.concreteModel(entry.modelID).catch(() => {
+        return;
+      }), Bun.sleep(3000).then(() => {
+        return;
+      })]);
+      if (id)
+        own.set(key, id);
+    }));
+    return own;
+  }
+  async asKept(lists) {
+    const kept = new Map(this.auto.all().map((list) => [list.id, list.entries]));
+    return await Promise.all(lists.map(async (list) => {
+      const before = list && typeof list === "object" && Array.isArray(list.entries) ? kept.get(list.id) : undefined;
+      if (!before)
+        return list;
+      const own = await this.ownIDs(before);
+      const named = before.map((entry) => ({ entry, as: { ...entry, modelID: own.get(Auto.modelKey(entry)) ?? entry.modelID } }));
+      const same = (one, other) => one.providerID === other?.providerID && one.modelID === other?.modelID && (one.variant ?? "") === (other?.variant ?? "");
+      const entries = list.entries.map((given) => {
+        const was = named.find((each) => same(each.as, given));
+        return was && given && typeof given === "object" ? { ...given, modelID: was.entry.modelID } : given;
+      });
+      return { ...list, entries };
+    }));
   }
   async interrupt(id, resume = false) {
     const live = this.live.get(id);
@@ -25921,12 +25954,12 @@ function handler(context) {
           const { entries, lists } = await body();
           if (Array.isArray(lists)) {
             try {
-              auto.setLists(lists);
+              auto.setLists(await sessions.asKept(lists));
             } catch (problem) {
               return error2(400, problem.message);
             }
           } else if (Array.isArray(entries))
-            auto.set(entries);
+            auto.set((await sessions.asKept([{ ...auto.all()[0], entries }]))[0].entries);
           else
             return error2(400, "Send the lists, or the first one's entries.");
           emit("kuvo.auto.updated", {});
@@ -26496,4 +26529,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 779be5bfd6243c83ddc09982e98e20db54b4e32310abd106e935823f0c937aa6
+// Built from Packages/Box/src/agents 9bd50cae562a57db81f1d6db3cb267d5c952abcd3aafc766d91f4e52e6fa5db5
