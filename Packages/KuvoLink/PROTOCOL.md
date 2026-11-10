@@ -2720,6 +2720,11 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   browser, with the Mac closed too: `saved` is empty and `offersToSave` false (saved passwords
   are the Mac's), and a `saved` answer gets `400 {"message"}`. A Mac connected to the machine
   lists the same asks, by the same `id`: the first answer counts, and the ask goes from both.
+  The machine's own list is the one that counts: a client that follows it shows the machine's
+  copy, and leaves out one the Mac lists (a Mac that went to sleep never says it's over) that
+  the machine, followed now, doesn't. The answer goes to the machine itself; one only the Mac
+  listed goes there too when that Mac can't take it (unreachable, or `503` with Kuvo Code
+  closed there). The Mac's copy is for a client that doesn't reach the machine.
   The browser keeps them in `~/.kuvo-code/run/browser-asks.json` for the bridge, and waits the
   whole 15 minutes for an answer while the bridge runs, rather than a few for a Mac.
 - `kuvo/groups`: the group chats that live on the computer asked, with their bots (face, name, session), who's
