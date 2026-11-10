@@ -42,7 +42,7 @@ const engine = http.createServer((request, response) => {
     const one = request.url.match(/^\/api\/session\/([^/?]+)$/);
     if (one && request.method === "GET") {
       const id = decodeURIComponent(one[1]);
-      if (id === "ses_lead") return reply({ data: { id, location: { directory: work } } });
+      if (id === "ses_lead" || id === "ses_evals") return reply({ data: { id, location: { directory: work } } });
       if (id === "ses_helper") return reply({ data: { id, parentID: "ses_lead", location: { directory: work } } });
       if (id === "ses_run") return reply({ data: { id, location: { directory: work }, metadata: { kuvo: { engineFor: "ses_lead" } } } });
       return reply({ message: "No such session." }, 404);
@@ -120,7 +120,8 @@ function git(folder, ...args) {
 }
 
 test("a session started in a project with a folder of it, or of one of its worktrees wherever that is, works in that folder, as the project's; one that isn't the project's is refused, never dropped (#422)", async () => {
-  // The project, and a throwaway worktree of it elsewhere, as an evaluation makes it.
+  // The project, and a throwaway worktree of it elsewhere, as an evaluation makes it. (From a
+  // conversation of its own: one starts a few sessions in a while.)
   const repo = path.join(root, "kuvo-ai");
   fs.mkdirSync(path.join(repo, "Packages"), { recursive: true });
   fs.writeFileSync(path.join(repo, "Packages", "README.md"), "hi\n");
@@ -133,11 +134,11 @@ test("a session started in a project with a folder of it, or of one of its workt
   fs.mkdirSync(path.join(home, "box"), { recursive: true });
   fs.writeFileSync(path.join(home, "box", "projects.json"), JSON.stringify({ version: 1, projects: [{ directory: repo, name: "Kuvo Code", folders: [] }] }));
   for (const folder of [tree, path.join(tree, "Packages"), path.join(repo, "Packages")]) {
-    const result = await call("start_session", { task: "Fix it, in this folder only.", title: "Eval", project: "Kuvo Code", folder }, "ses_lead");
+    const result = await call("start_session", { task: "Fix it, in this folder only.", title: "Eval", project: "Kuvo Code", folder }, "ses_evals");
     assert.equal(result.isError ?? false, false, result.content?.[0]?.text);
     assert.equal(created.at(-1).location.directory, fs.realpathSync(folder));
   }
-  const elsewhere = await call("start_session", { task: "Fix it.", title: "Eval", project: "Kuvo Code", folder: work }, "ses_lead");
+  const elsewhere = await call("start_session", { task: "Fix it.", title: "Eval", project: "Kuvo Code", folder: work }, "ses_evals");
   assert.equal(elsewhere.isError, true);
   assert.match(elsewhere.content[0].text, /isn't in Kuvo Code/);
   // Nor did a worktree become a project of its own.
