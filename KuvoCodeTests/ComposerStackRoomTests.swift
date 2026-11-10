@@ -276,4 +276,52 @@ import Testing
             }
         }
     }
+    @Test func writingTucksTheCardAndSendingRestoresIt() async throws {
+        defer { done() }
+        app.workspace.handle(try engine.event("form.replied", session: "ses_pixel", ["id": "frm_concept", "sessionID": "ses_pixel"]))
+        app.workspace.handle(try engine.event("shell.created", session: "ses_pixel", ["info": [
+            "id": "sh_408", "sessionID": "ses_pixel", "status": "running", "command": "swift build",
+            "time": ["started": 1700000000000]
+        ]] as [String: Any]))
+        show(NSSize(width: 820, height: 1000))
+        func fields(_ view: NSView?) -> [MessageTextView] {
+            guard let view else { return [] }
+            return (view as? MessageTextView).map { [$0] } ?? view.subviews.flatMap { fields($0) }
+        }
+        let out = URL(fileURLWithPath: "/Users/serhatandic/Projects/kuvo-ai/.claude/notes/shots/408")
+        try FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+        let previousAppearance = NSApp.appearance
+        defer { NSApp.appearance = previousAppearance }
+        for dark in [false, true] {
+            window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+            NSApp.appearance = window.appearance
+            let look = dark ? "dark" : "light"
+            try await until { !fields(window.contentView).isEmpty }
+            let field = try #require(fields(window.contentView).first)
+            window.makeFirstResponder(nil)
+            model.draftText = ""
+            model.tuck.show()
+            try await until { elements.contains { $0.label == "Fold all bars" } && elements.contains { $0.label?.hasPrefix("Running in the background") == true } }
+            func keep(_ state: String) throws {
+                let host = try #require(window.contentView)
+                host.layoutSubtreeIfNeeded()
+                host.display()
+                let rep = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+                host.cacheDisplay(in: host.bounds, to: rep)
+                try #require(rep.representation(using: .png, properties: [:])).write(to: out.appending(path: "mac-\(look)-\(state).png"))
+            }
+            try keep("open")
+            #expect(try #require(elements.first { $0.label == "Fold all bars" }).press())
+            try await until { elements.contains { $0.label?.hasPrefix("Bars: ") == true } }
+            #expect(try #require(elements.first { $0.label?.hasPrefix("Bars: ") == true }).press())
+            window.makeFirstResponder(field)
+            field.insertText("Keep the conversation in sight", replacementRange: NSRange(location: NSNotFound, length: 0))
+            try await until { model.tuck.isOn(among: [.goal, .background]) }
+            try keep("typing")
+            #expect(try #require(elements.first { $0.label == "Send" }).press())
+            try await until { model.draftText.isEmpty && !model.tuck.isOn(among: [.goal, .background]) }
+            try keep("sent")
+        }
+    }
+
 }
