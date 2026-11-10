@@ -37,11 +37,11 @@ export const inProgress = (item: Item, working: Set<string>): boolean =>
 
 /** An item named in a tool's words or a route: `#243`, `243`, or its id. */
 export function refOf(given: unknown): { id: string } | { number: number } | null {
-  if (typeof given === "number" && Number.isInteger(given) && given > 0) return { number: given };
+  if (typeof given === "number" && Number.isInteger(given) && given > 0 && given < 1_000_000) return { number: given };
   if (typeof given !== "string") return null;
   const text = given.trim();
   if (ITEM_ID.test(text)) return { id: text };
-  const number = text.match(/^#?(\d{1,7})$/);
+  const number = text.match(/^#?(\d{1,6})$/);
   return number ? { number: Number(number[1]) } : null;
 }
 

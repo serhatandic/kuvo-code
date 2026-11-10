@@ -9,6 +9,7 @@ import { isObject, parsed } from "../../shared/json";
 import { watchFolders } from "../follow";
 import { targetsOf } from "../letters/tools";
 import { atWorkNow } from "../work/background";
+import { provedRequest } from "./vault";
 import { addCategory, categories, removeCategory, renameCategory } from "../work-queue/categories";
 import { importItems, importWords, parseBacklog, readBacklogFiles } from "../work-queue/import";
 import { numberWaiting, primaryOf } from "../work-queue/numbers";
@@ -28,8 +29,10 @@ const ALL = "all";
 class Missing extends Refusal {}
 const ONLY_CLIENTS = "Only Kuvo Code on your Mac or iPhone can do this: agents change the Work Queue with their tools.";
 
-// A paired phone, this Mac's app, or Kuvo Code on another computer (`box route`): you.
-const fromClient = ({ request, phone }: RouteContext) => Boolean(phone?.key || request.fromApp || request.fromMac);
+// A paired phone, this Mac's app, or Kuvo Code on another computer (`box route`) with its Mac's
+// proof for this request alone, as the vault takes it (anyone on this computer can run `box route`,
+// an agent's command too): you.
+const fromClient = ({ request, phone }: RouteContext) => Boolean(phone?.key || request.fromApp || (request.fromMac && provedRequest(request)));
 const queryOf = (request: RouteContext["request"]) => new URLSearchParams(request.path.split("?")[1] ?? "");
 
 /** An owner's view, as `kuvo/work-queue` gives it: the categories, its items and those it oversees

@@ -19,7 +19,7 @@ import { IS_MAC } from "../home";
 import { locked, textOf, writePrivate } from "../files";
 import { macsOf, mailFor, peersOf } from "../peers/known";
 import { readLink } from "../state";
-import { changeQueues, WORK_QUEUE } from "./store";
+import { allItems, changeQueues, WORK_QUEUE } from "./store";
 import type { Book } from "./store";
 import type { LinkHost } from "../relay/host";
 import type { LinkState } from "../state";
@@ -55,8 +55,11 @@ export interface Numbers {
 /** Who hands out this box's numbers: itself, the Mac it names, or a Mac it can't write to yet. */
 export type Primary = { self: true } | { peer: Peer } | { away: true };
 
-// (A number is below ten million: what an import takes, and far past what's ever handed out.)
-const MOST_NUMBER = 10_000_000;
+// (A number has six digits at most: what a chip reads (`#243`), and far past what's ever handed out.)
+export const MOST_NUMBER = 1_000_000;
+/** How far past the counter a claim is granted: an import's numbers, not one stray far number that
+ * would move the counter past every number there is. Beyond it, an item is numbered afresh. */
+export const CLAIM_REACH = 10_000;
 const isRange = (each: unknown): each is [number, number] => Array.isArray(each) && each.length === 2 && each.every(n => Number.isInteger(n) && n > 0 && n < MOST_NUMBER) && each[0] <= each[1];
 
 /** Runs sorted, and those that touch or overlap joined. */
@@ -75,7 +78,7 @@ export const rangesOf = (numbers: Iterable<number>): Ranges => joined([...number
 /** What of `ranges` is also in `within`. */
 const overlap = (ranges: Ranges, within: Ranges): Ranges => joined(ranges.flatMap(([from, to]) => within.flatMap(([a, b]): Ranges => (Math.max(from, a) <= Math.min(to, b) ? [[Math.max(from, a), Math.min(to, b)]] : []))));
 export const inRanges = (ranges: Ranges, n: number) => ranges.some(([from, to]) => n >= from && n <= to);
-const cleanRanges = (value: unknown): Ranges => (Array.isArray(value) ? value.filter(isRange).slice(0, MOST_RANGES) : []);
+const cleanRanges = (value: unknown): Ranges => (Array.isArray(value) ? value.filter(isRange).slice(-MOST_RANGES) : []);
 
 export function readNumbers(file = NUMBERS_FILE): Numbers {
   try {
@@ -129,7 +132,8 @@ export function takeNumber(primary: Primary, { file = NUMBERS_FILE, now = Date.n
   return changeNumbers(kept => {
     kept.primary ??= keyOf(primary, link);
     if ("self" in primary) {
-      const number = kept.next ?? 1;
+      // (A counter lost with its file starts past every number here, never at #1 again.)
+      const number = kept.next ?? Math.max(0, ...allItems().map(item => item.number ?? 0)) + 1;
       kept.next = number + 1;
       return number;
     }
@@ -145,12 +149,12 @@ export function takeNumber(primary: Primary, { file = NUMBERS_FILE, now = Date.n
   }, file);
 }
 
-// On the primary: which of `claims` the box `by` may have (at or above the counter, or granted it
-// before), the counter moved past them.
+// On the primary: which of `claims` the box `by` may have (at or above the counter and within reach
+// of it, or granted it before), the counter moved past them.
 function grantOn(kept: Numbers, by: string, claims: Ranges): Ranges {
   const before = kept.granted?.[by] ?? [];
   const next = kept.next ?? 1;
-  const ranges = joined(overlap(claims, [[next, MOST_NUMBER - 1]]), overlap(claims, before));
+  const ranges = joined(overlap(claims, [[next, Math.min(next + CLAIM_REACH, MOST_NUMBER - 1)]]), overlap(claims, before));
   if (ranges.length) {
     kept.next = Math.max(next, ranges[ranges.length - 1][1] + 1);
     kept.granted = { ...(kept.granted ?? {}), [by]: joined(before, ranges).slice(-MOST_RANGES) };
@@ -233,7 +237,7 @@ export function numberWaiting(book: Book, primary: Primary, granted: Ranges | nu
       if (item.wanted === undefined || item.number !== undefined) continue;
       if (inRanges(granted, item.wanted)) item.number = item.wanted;
       else {
-        item.notes.push({ at: now, by: { user: true }, text: `Imported as #${item.wanted}, a number another of your computers was given already, so it has a new one.` });
+        item.notes.push({ at: now, by: { user: true }, text: `Imported as #${item.wanted}, a number that couldn't be kept (another of your computers was given it already, or it's far past the numbers in use), so it has a new one.` });
         item.importedAs = item.wanted;
       }
       delete item.wanted;
@@ -247,8 +251,36 @@ export function numberWaiting(book: Book, primary: Primary, granted: Ranges | nu
   }
 }
 
+/** Items here still waiting for a number with nothing under way to give them one (a crash between
+ * a block's coming and its use, or items a move brought): their claims asked again (on the primary,
+ * granted at once), and a block asked for those with none. What it did: whether anything waited. */
+export function reclaimWaiting(primary: Primary = primaryOf(), options: { file?: string; now?: number } = {}): boolean {
+  const waiting = allItems().filter(item => item.number === undefined && !item.source && !item.removed);
+  if (!waiting.length) return false;
+  const kept = readNumbers(options.file);
+  const asked = kept.asking?.claims ?? [];
+  const wanted = waiting.flatMap(item => (item.wanted !== undefined && !inRanges(asked, item.wanted) ? [item.wanted] : []));
+  if ("self" in primary) {
+    const granted = wanted.length ? claimNumbers(primary, wanted, options).granted : [];
+    changeQueues(book => numberWaiting(book, primary, granted, options));
+    return true;
+  }
+  if (wanted.length) claimNumbers(primary, wanted, options);
+  else if (!kept.asking && !leftIn(kept.leases)) changeNumbers(numbers => { numbers.asking ??= { id: askID(), count: BLOCK, since: options.now ?? Date.now() }; }, options.file);
+  // (A lease left: numbered now.)
+  if (leftIn(readNumbers(options.file).leases)) changeQueues(book => numberWaiting(book, primary, null, options));
+  return true;
+}
+
+// When this box last looked for items waiting with nothing under way: once a minute.
+let lookedForWaiting = 0;
+
 /** The ask under way sent to the primary, on this box's rounds (every few seconds), when it's due. */
 export function pushNumbers(host: Pick<LinkHost, "send" | "welcomed"> | null | undefined, link: LinkState | null = readLink()): void {
+  if (Date.now() - lookedForWaiting > 60_000) {
+    lookedForWaiting = Date.now();
+    try { reclaimWaiting(primaryOf(link)); } catch {}
+  }
   if (!host?.welcomed || !link || !readNumbers().asking) return;
   const primary = primaryOf(link);
   if (!("peer" in primary)) return;

@@ -39,6 +39,8 @@ const sessions = new Map([
   ["ses_grandchild", { id: "ses_grandchild", title: "Tests", location: { directory: project }, metadata: { kuvo: { startedBy: "ses_child", depth: 2 } }, time: { created: 3, updated: 6 } }],
   ["ses_helper", { id: "ses_helper", parentID: "ses_lead", title: "Helper", location: { directory: project }, time: { created: 2, updated: 6 } }],
   ["ses_other", { id: "ses_other", title: "Release notes", location: { directory: project }, time: { created: 3, updated: 4 } }],
+  // A project around Kuvo Code's own folder, as one at the home folder is.
+  ["ses_wide", { id: "ses_wide", title: "Home", location: { directory: path.dirname(home) }, time: { created: 1, updated: 2 } }],
   ["ses_scout", { id: "ses_scout", title: "Scout", location: { directory: path.join(home, "bots", "bot_scout00001", "workspace") }, time: { created: 1, updated: 3 } }],
   ["ses_seat", { id: "ses_seat", title: "Seat", location: { directory: project }, metadata: { kuvo: { seat: { group: "grp_team", bot: "bot_scout00001" } } }, time: { created: 1, updated: 2 } }],
   ["ses_farseat", { id: "ses_farseat", title: "Seat", location: { directory: project }, metadata: { kuvo: { seat: { group: "grp_far", bot: "bot_scout00001" } } }, time: { created: 1, updated: 2 } }],
@@ -87,12 +89,11 @@ beforeEach(() => {
   calling.clear();
 });
 
-// The box's answer to one request, from a client (as Kuvo Code on another computer asks it):
-// answered here, by the real routes.
+// The box's answer to one request, from a client (this Mac's app): answered here, by the real routes.
 const handle = link.engineHandler();
 async function route(method, pathname, body) {
   const pieces = [];
-  for await (const piece of handle({ method, path: pathname, headers: {}, body: body === undefined ? undefined : Buffer.from(JSON.stringify(body)), fromMac: true }, undefined)) pieces.push(piece);
+  for await (const piece of handle({ method, path: pathname, headers: {}, body: body === undefined ? undefined : Buffer.from(JSON.stringify(body)), fromApp: true }, undefined)) pieces.push(piece);
   const head = pieces.find(each => each.head).head;
   const bytes = Buffer.concat(pieces.filter(each => each.body).map(each => each.body));
   let parsed = bytes.toString();
@@ -301,6 +302,11 @@ test("what acts as you answers only a client, never a command or an agent", asyn
     assert.equal(refused.status, 403, `${method} ${pathname}`);
   }
   assert.equal((await ask("GET", "kuvo/work-queue?owner=ses_lead")).status, 200, "reading isn't acting");
+  // `box route`, which any command on this computer can run (an agent's too), without its Mac's proof.
+  for (const [method, pathname, body] of [["DELETE", "kuvo/work-queue/items/1"], ["POST", "kuvo/work-queue/items/1/restore"], ["POST", "kuvo/work-queue/categories", { add: "Bugs" }]]) {
+    assert.equal((await spawnRoute(method, pathname, body)).status, 403, `box route ${method} ${pathname}`);
+  }
+  assert.equal((await ask("DELETE", "kuvo/work-queue/items/1", undefined, { fromMac: true })).status, 403, "a Mac over SSH proves it's one");
   assert.equal((await ask("DELETE", "kuvo/work-queue/items/1", undefined, { fromApp: true })).status, 200, "this Mac's app is a client");
 });
 
@@ -369,7 +375,7 @@ test("files kept with an item come only from the conversation's own folders, and
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-work-queue-scratch-"));
   removeAtEnd(scratch);
   write(path.join(scratch, "chart.png"), "CHART");
-  assert.equal((await tool("queue_update", { item: 1, files: [path.join(scratch, "chart.png")], remove_files: ["login.png"] }, "ses_lead")).isError, false);
+  assert.equal((await tool("queue_update", { item: 1, files: [path.join(scratch, "chart.png")], remove: ["login.png"] }, "ses_lead")).isError, false);
   assert.deepEqual((await route("GET", "kuvo/work-queue/items/1")).body.item.files.map(file => file.name), ["chart.png"]);
   assert.equal((await route("GET", "kuvo/work-queue/items/1/files/login.png")).status, 404);
   assert.deepEqual(fs.readdirSync(path.join(queues, "staging")), [], "nothing read is left waiting");
@@ -489,6 +495,76 @@ test("the primary hands out numbers: a block to another box, the same block for 
   assert.deepEqual(link.giveBlock("other-key", { id: "wqn_otherother1", claims: [[200, 200]] }, { file: primary }).granted, [], "never to another box");
   // On the primary, its own claims are granted at once.
   assert.deepEqual(link.claimNumbers({ self: true }, [5000], { file: primary }), { granted: [[5000, 5000]] });
+  // One far past the counter isn't: the counter stays where numbers are in use (one stray number
+  // mustn't move every number past what a chip reads).
+  assert.deepEqual(link.claimNumbers({ self: true }, [5001 + link.QUEUE_CLAIM_REACH + 1, 900_000], { file: primary }), { granted: [] });
+  assert.equal(link.readNumbers(primary).next, 5001);
+});
+
+test("an import keeps numbers of six digits at most, and one far past the numbers in use is numbered afresh", async () => {
+  const imported = await tool("queue_import", { items: [{ number: 3, title: "Near" }, { number: 1_234_567, title: "Seven digits" }, { number: 900_000, title: "Far" }] }, "ses_lead");
+  assert.match(imported.text, /#1234567 \(it needs a whole number of six digits at most, and a title\)/);
+  const items = (await view("ses_lead")).items;
+  assert.deepEqual(items.map(item => item.title), ["Near", "Far"]);
+  assert.equal(items[0].number, 3);
+  assert.ok(items[1].number < 100, `numbered afresh, not #${items[1].number}`);
+  assert.match((await route("GET", `kuvo/work-queue/items/${items[1].number}`)).body.item.notes[0].text, /^Imported as #900000, a number that couldn.t be kept/);
+  assert.ok(numberIn((await tool("queue_add", { title: "Next one" }, "ses_lead")).text) < 100, "new items go on numbering where they were");
+});
+
+test("a project around Kuvo Code's own folder (one at the home folder) doesn't make its files the project's", async () => {
+  write(path.join(home, "run", "secret.json"), "{}");
+  const refused = await tool("queue_add", { title: "Grab", files: [path.join(home, "run", "secret.json")] }, "ses_wide");
+  assert.equal(refused.isError, true);
+  assert.match(refused.text, /isn't in this conversation's folder/);
+});
+
+test("an item two queue files hold (a hand-off cut off between its writes) is one item, and the next change keeps it once", async () => {
+  await tool("queue_add", { title: "Handed" }, "ses_lead");
+  const lead = path.join(queues, "queues", "ses_lead.json");
+  const kept = JSON.parse(fs.readFileSync(lead, "utf8"));
+  write(path.join(queues, "queues", "ses_child.json"), JSON.stringify({ owner: "ses_child", items: [{ ...kept.items[0], owner: "ses_child", updated: { at: kept.items[0].updated.at + 1, by: { user: true } } }] }));
+  assert.deepEqual((await view("all")).items.filter(item => item.title === "Handed").map(item => item.owner), ["ses_child"], "shown once, where it went");
+  await tool("queue_add", { title: "Another" }, "ses_lead");
+  const all = (await view("all")).items;
+  assert.deepEqual(all.filter(item => item.title === "Handed").map(item => item.owner), ["ses_child"], "once, where it went");
+  assert.equal(JSON.parse(fs.readFileSync(lead, "utf8")).items.some(item => item.title === "Handed"), false);
+});
+
+test("a queue file that can't be read is never written over: the change is refused and the file set aside", async () => {
+  await tool("queue_add", { title: "Precious" }, "ses_lead");
+  const lead = path.join(queues, "queues", "ses_lead.json");
+  fs.writeFileSync(lead, "{\"owner\": \"ses_lead\", \"items\": [ cut off");
+  const refused = await tool("queue_add", { title: "New" }, "ses_lead");
+  assert.equal(refused.isError, true);
+  assert.match(refused.text, /ses_lead's Work Queue file can't be read, so nothing was changed\. It's kept at .*aside.*ses_lead-\d+\.json/);
+  const aside = fs.readdirSync(path.join(queues, "queues", "aside"));
+  assert.equal(aside.length, 1);
+  assert.match(fs.readFileSync(path.join(queues, "queues", "aside", aside[0]), "utf8"), /cut off/, "what it held is kept");
+  assert.equal((await tool("queue_add", { title: "New" }, "ses_lead")).isError, false, "then the queue carries on");
+});
+
+test("what a newer box keeps of an item is kept here when this box writes it", async () => {
+  await tool("queue_add", { title: "Has more" }, "ses_lead");
+  const lead = path.join(queues, "queues", "ses_lead.json");
+  const kept = JSON.parse(fs.readFileSync(lead, "utf8"));
+  kept.items[0].estimate = { hours: 3 };
+  write(lead, JSON.stringify(kept));
+  await tool("queue_update", { item: 1, note: "Still here?" }, "ses_lead");
+  assert.deepEqual(JSON.parse(fs.readFileSync(lead, "utf8")).items[0].estimate, { hours: 3 });
+});
+
+test("items left waiting for a number with nothing under way (a crash midway, a move) are numbered again", async () => {
+  await tool("queue_add", { title: "First" }, "ses_lead");
+  const lead = path.join(queues, "queues", "ses_lead.json");
+  const kept = JSON.parse(fs.readFileSync(lead, "utf8"));
+  kept.items.push({ ...kept.items[0], id: "wqi_waitingwaitingwait01", number: undefined, wanted: 40, title: "Imported, waiting" });
+  kept.items.push({ ...kept.items[0], id: "wqi_waitingwaitingnone01", number: undefined, title: "Made, waiting" });
+  write(lead, JSON.stringify(kept));
+  assert.equal(link.reclaimWaiting({ self: true }, { file: path.join(queues, "numbers.json") }), true);
+  const items = (await view("ses_lead")).items;
+  assert.deepEqual(items.map(item => [item.title, item.number]), [["First", 1], ["Imported, waiting", 40], ["Made, waiting", 41]]);
+  assert.equal(link.reclaimWaiting({ self: true }, { file: path.join(queues, "numbers.json") }), false, "nothing waits now");
 });
 
 test("a machine with no number left keeps its items waiting, shown without one, until its block comes", async () => {
@@ -520,7 +596,7 @@ test("an import on a machine waits for the primary to grant its numbers: granted
   assert.equal(link.blockArrived({ id: ask.id, from: 300, to: 349, granted: [[243, 243]] }, away, { file }), true);
   const items = (await view("ses_lead")).items;
   assert.deepEqual(items.map(item => [item.title, item.number]), [["The Work Queue", 243], ["Old one", 300], ["Made meanwhile", 301]]);
-  assert.match(items[1].lastNote.text, /^Imported as #5, a number another of your computers was given already, so it has a new one\./);
+  assert.match(items[1].lastNote.text, /^Imported as #5, a number that couldn.t be kept \(another of your computers was given it already, or it.s far past the numbers in use\), so it has a new one\./);
   assert.equal(link.blockArrived({ id: ask.id, from: 300, to: 349, granted: [] }, away, { file }), false, "taken once");
 });
 
@@ -599,7 +675,7 @@ test("every agent kind gets the tools through its tool server: a machine's kuvo-
     mcp.stdin.write(JSON.stringify({ jsonrpc: "2.0", id, method, params }) + "\n");
   });
   const started = await send("initialize", { protocolVersion: "2025-06-18" });
-  assert.match(started.instructions, /Your Work Queue keeps your work items/);
+  assert.match(started.instructions, /Keep work items in your Work Queue/);
   const listed = await send("tools/list", {});
   assert.deepEqual(listed.tools.map(each => each.name).filter(name => name.startsWith("queue_")), ["queue_list", "queue_show", "queue_add", "queue_update", "queue_hand", "queue_remove", "queue_categories", "queue_import"]);
   calling.set("ses_scout", { name: "queue_add", args: { title: "From Claude Code" } });

@@ -201,12 +201,12 @@ final class WorkQueues {
         case .category(let category): Move(category: category)
         }
         undoable = nil
-        await act(box) { try await $0.value(ItemAnswer.self, "POST", "kuvo/work-queue/items/\(self.path(item.id))/move", body: body) }
+        await act(ItemAnswer.self, "POST", "kuvo/work-queue/items/\(path(item.id))/move", body: body, on: box)
     }
 
     /// Deletes an item: Undo brings it back, as does Recently Deleted for 30 days.
     func delete(_ item: WorkItem, on box: String) async {
-        if let answer = await act(box, { try await $0.value(ItemAnswer.self, "DELETE", "kuvo/work-queue/items/\(self.path(item.id))") }) {
+        if let answer = await act(ItemAnswer.self, "DELETE", "kuvo/work-queue/items/\(path(item.id))", on: box) {
             undoable = (box, answer.item)
         }
     }
@@ -214,24 +214,24 @@ final class WorkQueues {
     /// Brings back a deleted item, into the category it was in.
     func restore(_ item: WorkItem, on box: String) async {
         if undoable?.item.id == item.id { undoable = nil }
-        await act(box) { try await $0.value(ItemAnswer.self, "POST", "kuvo/work-queue/items/\(self.path(item.id))/restore") }
+        await act(ItemAnswer.self, "POST", "kuvo/work-queue/items/\(path(item.id))/restore", on: box)
     }
 
     /// Adds a category of your own (after Later, or after `after`), renames or removes one: the
     /// box refuses to remove one that has items, saying how many.
     func addCategory(_ name: String, on box: String) async {
         struct Add: Encodable { var add: String }
-        await act(box) { try await $0.value(CategoriesAnswer.self, "POST", "kuvo/work-queue/categories", body: Add(add: name)) }
+        await act(CategoriesAnswer.self, "POST", "kuvo/work-queue/categories", body: Add(add: name), on: box)
     }
 
     func renameCategory(_ id: String, to name: String, on box: String) async {
         struct Rename: Encodable { var rename: String; var to: String }
-        await act(box) { try await $0.value(CategoriesAnswer.self, "POST", "kuvo/work-queue/categories", body: Rename(rename: id, to: name)) }
+        await act(CategoriesAnswer.self, "POST", "kuvo/work-queue/categories", body: Rename(rename: id, to: name), on: box)
     }
 
     func removeCategory(_ id: String, on box: String) async {
         struct Remove: Encodable { var remove: String }
-        await act(box) { try await $0.value(CategoriesAnswer.self, "POST", "kuvo/work-queue/categories", body: Remove(remove: id)) }
+        await act(CategoriesAnswer.self, "POST", "kuvo/work-queue/categories", body: Remove(remove: id), on: box)
     }
 
     private struct CategoriesAnswer: Decodable { var categories: [WorkCategory] }
@@ -243,11 +243,21 @@ final class WorkQueues {
 
     func dismissUndo() { undoable = nil }
 
+    /// What you do, sent as you: to a machine's box with this Mac's proof for that request alone
+    /// (as its vault takes one), since anything on that computer could ask its box otherwise.
     @discardableResult
-    private func act<T>(_ box: String, _ work: @escaping (BoxClient) async throws -> T) async -> T? {
+    private func act<T: Decodable>(_ type: T.Type, _ method: String, _ path: String, body: (any Encodable)? = nil, on box: String) async -> T? {
         guard let client = client(box) else { return nil }
         do {
-            let answer = try await work(client)
+            let sent = try body.map { try JSONEncoder().encode($0) }
+            var headers: [String: String] = [:]
+            if box != BoxClient.mac {
+                guard let proof = proof(box, method, path, sent ?? Data()) else { throw BoxRefusal(status: 503, message: "This Mac can’t prove it’s yours to that machine right now. Try again in a moment.") }
+                headers["x-kuvo-vault-proof"] = proof
+            }
+            let (status, data) = try await client.send(method, path, body: sent, headers: headers)
+            guard (200..<300).contains(status) else { throw BoxRefusal(status: status, data: data) }
+            let answer = try JSONDecoder().decode(T.self, from: data)
             refusal = nil
             // A box that doesn't stream shows the change once it's asked again.
             if box != BoxClient.mac { for key in views.keys where key.box == box { await read(key) } }
@@ -258,6 +268,11 @@ final class WorkQueues {
             refusal = (box, error.localizedDescription)
         }
         return nil
+    }
+
+    /// This Mac's proof for one request to a machine (the vault's, `PhoneLink.vaultRequestProof`).
+    @ObservationIgnored var proof: (_ machine: String, _ method: String, _ path: String, _ body: Data) -> String? = { machine, method, path, body in
+        Vaults.shared.requestProof(machine, method, path, body)
     }
 
     // MARK: Chips

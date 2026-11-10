@@ -95,13 +95,19 @@ const whoOf = (given: unknown): Who | null => {
 /** A file's name as an item keeps it: a name of its own, never a path. */
 export const FILE_NAME = /^(?!\.\.?$)[^/\\\0]{1,200}$/;
 
-/** An item as it was read (or as a move brought it), checked: null for one that isn't. */
+// What this box knows of an item: every other field a newer box wrote is kept as it was.
+const KNOWN = new Set(["id", "number", "owner", "title", "body", "category", "order", "progress", "notes", "files", "links", "sessions", "handed", "handedBy", "wanted", "importedAs", "source", "created", "updated", "doneAt", "removed"]);
+
+/** An item as it was read (or as a move brought it), checked: null for one that isn't. Fields this
+ * box doesn't know (a newer box's) are kept as they are, so writing it here doesn't drop them. */
 export function itemOf(given: unknown, owner: string): Item | null {
   if (!isObject(given) || typeof given.id !== "string" || !ITEM_ID.test(given.id) || typeof given.title !== "string" || typeof given.category !== "string") return null;
   const created = isObject(given.created) && typeof given.created.at === "number" ? { at: given.created.at, by: whoOf(given.created.by) ?? { user: true } as Who } : { at: 0, by: { user: true } as Who };
   const updated = isObject(given.updated) && typeof given.updated.at === "number" ? { at: given.updated.at, by: whoOf(given.updated.by) ?? created.by } : created;
   const list = <T>(value: unknown, keep: (each: Record<string, unknown>) => boolean): T[] => (Array.isArray(value) ? value.filter(each => isObject(each) && keep(each)) as T[] : []);
+  const unknown = Object.fromEntries(Object.entries(given).filter(([key]) => !KNOWN.has(key)));
   return {
+    ...unknown,
     id: given.id,
     ...(typeof given.number === "number" && Number.isInteger(given.number) && given.number > 0 ? { number: given.number } : {}),
     owner,
@@ -126,18 +132,55 @@ export function itemOf(given: unknown, owner: string): Item | null {
   };
 }
 
-/** An owner's queue as it's kept (empty for one with none). */
+/** A queue file that's there but can't be read as one (cut short, changed by hand, unreadable). */
+export class UnreadableQueue extends Error {
+  constructor(readonly owner: string) {
+    super(`${owner}'s Work Queue file can't be read`);
+  }
+}
+
+/** An owner's queue as it's kept: empty for one with none; `UnreadableQueue` for a file that's
+ * there but isn't one, never read as empty (a change would write over what it holds). */
 export function readQueue(owner: string): Queue {
-  const kept = (() => {
-    try {
-      return JSON.parse(textOf(fileOf(owner)) ?? "null");
-    } catch {
-      return null;
-    }
-  })();
-  const items = isObject(kept) && Array.isArray(kept.items) ? kept.items.map(each => itemOf(each, owner)).filter((each): each is Item => each !== null) : [];
+  const file = fileOf(owner);
+  let text: string;
+  try {
+    text = fs.readFileSync(file, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { owner, items: [] };
+    throw new UnreadableQueue(owner);
+  }
+  let kept: unknown;
+  try {
+    kept = JSON.parse(text);
+  } catch {
+    throw new UnreadableQueue(owner);
+  }
+  if (!isObject(kept) || !Array.isArray(kept.items)) throw new UnreadableQueue(owner);
+  // (An item twice, as a cut-off hand-off could leave it: once.)
+  const seen = new Set<string>();
+  const items = kept.items.map(each => itemOf(each, owner)).filter((each): each is Item => each !== null && !seen.has(each.id) && seen.add(each.id) !== undefined);
   return { owner, items };
 }
+
+/** A queue file that can't be read, moved aside (`queues/aside/`), so it's kept for a person to
+ * look at and the owner's queue starts again empty: where it went. */
+export function setAside(owner: string, now = Date.now()): string {
+  const aside = path.join(QUEUES, "aside", `${owner}-${now}.json`);
+  fs.mkdirSync(path.dirname(aside), { recursive: true, mode: 0o700 });
+  try { fs.renameSync(fileOf(owner), aside); } catch {}
+  return aside;
+}
+
+/** An owner's queue for a view: one that can't be read shows as empty (and stays as it is). */
+const readQueueOrNone = (owner: string): Queue => {
+  try {
+    return readQueue(owner);
+  } catch (error) {
+    if (error instanceof UnreadableQueue) return { owner, items: [] };
+    throw error;
+  }
+};
 
 /** The owners with a queue here. */
 export function owners(): string[] {
@@ -145,7 +188,23 @@ export function owners(): string[] {
 }
 
 /** Every queue here. */
-export const readAll = (): Queue[] => owners().map(readQueue);
+export const readAll = (): Queue[] => onceEach(owners().map(readQueueOrNone));
+
+/** An item two queues hold (a hand-off or a move cut off between its two writes) kept once: in the
+ * queue it went to last (the newer change), the queues changed in place. */
+function onceEach(queues: Queue[]): Queue[] {
+  const seen = new Map<string, { queue: Queue; item: Item }>();
+  for (const queue of queues) {
+    for (const item of [...queue.items]) {
+      const other = seen.get(item.id);
+      if (!other) { seen.set(item.id, { queue, item }); continue; }
+      const loser = item.updated.at >= other.item.updated.at ? other.queue : queue;
+      loser.items = loser.items.filter(each => each.id !== item.id);
+      if (loser === other.queue) seen.set(item.id, { queue, item });
+    }
+  }
+  return queues;
+}
 
 /** Every item here, of every owner (deleted ones too). */
 export const allItems = (): Item[] => readAll().flatMap(queue => queue.items);
@@ -157,6 +216,7 @@ export class Book {
 
   constructor() {
     for (const owner of owners()) this.load(owner);
+    onceEach([...this.queues.values()]);
   }
 
   private load(owner: string): Queue {
@@ -197,16 +257,21 @@ export class Book {
     this.load(owner).items.push(item);
   }
 
-  /** What changed, written. */
+  /** What changed, written: the queues that gained items first, so a write cut off between two
+   * leaves an item in both (read once, see `items`) rather than in neither. */
   save(): boolean {
     let any = false;
-    for (const [owner, queue] of this.queues) {
-      const now = JSON.stringify(queue.items);
-      if (now === this.before.get(owner)) continue;
+    const changed = [...this.queues].filter(([owner, queue]) => JSON.stringify(queue.items) !== this.before.get(owner));
+    const gained = (owner: string, queue: Queue) => {
+      const had = new Set((JSON.parse(this.before.get(owner) ?? "[]") as Item[]).map(item => item.id));
+      return queue.items.some(item => !had.has(item.id));
+    };
+    changed.sort(([a, queueA], [b, queueB]) => Number(gained(b, queueB)) - Number(gained(a, queueA)));
+    for (const [owner, queue] of changed) {
       any = true;
       if (!queue.items.length) fs.rmSync(fileOf(owner), { force: true });
       else writePrivate(fileOf(owner), JSON.stringify({ owner, items: queue.items }));
-      this.before.set(owner, now);
+      this.before.set(owner, JSON.stringify(queue.items));
     }
     return any;
   }
@@ -217,19 +282,36 @@ export class Book {
 export function changeQueues<T>(work: (book: Book) => T, now = Date.now()): T {
   fs.mkdirSync(WORK_QUEUE, { recursive: true, mode: 0o700 });
   const { value, changed } = locked(LOCK, () => {
-    const book = new Book();
+    let book: Book;
+    try {
+      book = new Book();
+    } catch (error) {
+      if (!(error instanceof UnreadableQueue)) throw error;
+      const aside = setAside(error.owner, now);
+      throw new QueueSetAside(`${error.message}, so nothing was changed. It's kept at ${aside} for you to look at; try again to carry on with an empty queue for ${error.owner}.`);
+    }
+    const purged: string[] = [];
     for (const queue of owners().map(owner => book.queue(owner))) {
       const gone = queue.items.filter(item => item.removed && now - item.removed.at > KEPT_REMOVED);
       if (!gone.length) continue;
       queue.items = queue.items.filter(item => !gone.includes(item));
-      for (const item of gone) fs.rmSync(path.join(FILES, item.id), { recursive: true, force: true });
+      purged.push(...gone.map(item => item.id));
     }
     const value = work(book);
-    return { value, changed: book.save() };
+    const changed = book.save();
+    // (Their files only once the queues no longer list them: a refused change leaves both.)
+    for (const id of purged) fs.rmSync(path.join(FILES, id), { recursive: true, force: true });
+    return { value, changed };
   });
   if (changed) noteQueuesChanged();
   return value;
 }
+
+/** A change refused, in words for whoever asked (an agent's tool, a client's route). */
+export class Refusal extends Error {}
+
+/** A change refused because a queue file couldn't be read (it's set aside now). */
+export class QueueSetAside extends Refusal {}
 
 /** Those following told of a change (made here, or by another process: its files say so too). */
 export function noteQueuesChanged(): void {

@@ -2929,7 +2929,8 @@ it, or by those, put away ones too), and those it handed on, each living once in
 - `GET kuvo/work-queue/categories` → `{categories}`.
 
 **What you do** (a paired phone, this Mac's app, or Kuvo Code on another computer through `box
-route`; anything else gets 403): `POST kuvo/work-queue/items/<item>/move` `{category?, before?,
+route` with its Mac's proof for that request alone, `x-kuvo-vault-proof` as the vault takes it; anything
+else, a command on that computer included, gets 403): `POST kuvo/work-queue/items/<item>/move` `{category?, before?,
 after?, top?}` (a category by its id or name; `before`/`after` an item in the same category);
 `DELETE kuvo/work-queue/items/<item>` and `POST …/restore`; `POST kuvo/work-queue/categories`
 `{add, after?}`, `{rename, to}` or `{remove}` (a custom one, once nothing is in it); `POST
@@ -2972,10 +2973,13 @@ first used. The primary numbers its own items from its counter; another box numb
 50 the primary gave it, and asks for the next when 15 or fewer are left, by mail, on its rounds:
 `{workQueue: {ask: {id, count, claims?}}}`, sent again every 30 s until answered with
 `{workQueue: {give: {id, from, to, granted}}}`. The primary keeps what it gave for each ask, so an
-ask sent again gets the same answer. `claims` are numbers an import wants to keep: the primary
-grants those at or above its counter (or granted that box before) and moves its counter past them;
+ask sent again gets the same answer. `claims` are numbers an import wants to keep (six digits at most, what a chip reads): the primary
+grants those at or above its counter and within 10,000 of it (or granted that box before) and moves its counter past them;
 an imported item waits without a number until then, and one refused gets the next number, with a
-note. An item made with no number left waits too, and takes one, oldest first, when a block comes.
+note. An item made with no number left waits too, and takes one, oldest first, when a block comes; one left
+waiting with nothing under way (a crash midway, a move) is claimed or numbered again within a minute.
+A queue file that can't be read is never written over: the change is refused and the file set aside
+(`queues/aside/`); fields a newer box keeps in an item are kept as they are.
 
 **Moves**: a move carries its conversations' queues (a group chat's, its own) and their files
 (`move.json`'s `workQueue`, the files in the bundle's `work-queue/<item>/`), put in place under the

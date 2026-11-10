@@ -174,7 +174,7 @@ export { answered, deliverLeftAnswers, letterMail, letterWent, sendOutbox } from
 export { takeLetter } from "./letters/take";
 export { callAs, callsBack, takeCall } from "./letters/calls";
 export { pushRows, takeRows } from "./work/elsewhere";
-export { askToSend, blockArrived, BLOCK as QUEUE_BLOCK, claimNumbers, giveBlock, LOW as QUEUE_LOW, primaryOf, readNumbers, takeBlock, takeNumber } from "./work-queue/numbers";
+export { askToSend, blockArrived, BLOCK as QUEUE_BLOCK, CLAIM_REACH as QUEUE_CLAIM_REACH, claimNumbers, giveBlock, LOW as QUEUE_LOW, primaryOf, readNumbers, reclaimWaiting, takeBlock, takeNumber } from "./work-queue/numbers";
 export { parseBacklog } from "./work-queue/import";
 export { carryWorkQueue, forgetWorkQueues, packWorkQueues, placeWorkQueues } from "./work-queue/moves";
 export { readReach } from "./peers/reach";

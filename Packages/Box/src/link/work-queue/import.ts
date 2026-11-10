@@ -7,7 +7,7 @@ import fs from "node:fs";
 import { isObject } from "../../shared/json";
 import { plainName } from "../../shared/text";
 import { categoryNamed } from "./categories";
-import { claimNumbers, numberWaiting, type Primary } from "./numbers";
+import { claimNumbers, MOST_NUMBER, numberWaiting, type Primary } from "./numbers";
 import { MOST_BODY, MOST_TITLE, newItemID, placeIn, type Book, type Item, type Who } from "./store";
 
 /** An item to import: its number, title, body and category id. */
@@ -134,10 +134,10 @@ export function givenItems(given: unknown): { items: Imported[]; skipped: string
   const items: Imported[] = [];
   const skipped: string[] = [];
   for (const each of given) {
-    const number = isObject(each) && typeof each.number === "number" && Number.isInteger(each.number) && each.number > 0 && each.number < 10_000_000 ? each.number : null;
+    const number = isObject(each) && typeof each.number === "number" && Number.isInteger(each.number) && each.number > 0 && each.number < MOST_NUMBER ? each.number : null;
     const title = isObject(each) ? plainName(each.title).slice(0, MOST_TITLE) : "";
     if (number === null || !title) {
-      skipped.push(isObject(each) && each.number !== undefined ? `#${String(each.number)} (it needs a whole number and a title)` : "an item with no number");
+      skipped.push(isObject(each) && each.number !== undefined ? `#${String(each.number)} (it needs a whole number of six digits at most, and a title)` : "an item with no number");
       continue;
     }
     const category = isObject(each) && each.done === true ? "done" : isObject(each) && each.category !== undefined ? categoryNamed(each.category)?.id : "next";
