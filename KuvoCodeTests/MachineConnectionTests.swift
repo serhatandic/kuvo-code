@@ -935,34 +935,6 @@ import Testing
         #expect(told.contains("/home/tests/shared") && !told.contains("ssh://"))
     }
 
-    /// A machine's session carried on with a coding agent there, in a project with other folders:
-    /// its agent is told the machine's own paths for them.
-    @Test func aMachinesSessionCarriedOnWithACodingAgentWorksInItsOtherFoldersThere() async throws {
-        defer { done() }
-        let id = Self.name()
-        let prefix = RemoteFolder.prefix(for: id)
-        let bridge = StubEngine(port: 47943, alongside: true)
-        defer { bridge.stop() }
-        let session = StubEngine.session("ses_mcarry", title: "Release", directory: "/home/tests/app")
-        machine.list([session])
-        machine.on("GET", "/api/session/ses_mcarry", json: ["data": session])
-        machine.conversation("ses_mcarry", [["id": "msg_01", "type": "user", "time": ["created": 1], "text": "Ship it"]])
-        machine.on("GET", "/api/session/ses_mcarry/inbox", json: ["data": []])
-        machine.on("PATCH", "/api/session/ses_mcarry", json: [:])
-        bridge.on("POST", "/api/session/import", json: ["data": StubEngine.session("ses_mcarried", title: "Release", directory: "/home/tests/app")])
-        bridge.on("PUT", "/api/experimental/session/ses_mcarried/instructions/entries/*", json: [:])
-        let engine = add(id, at: machine)
-        engine.agents.connect(bridge.api.client.endpoint, folderPrefix: prefix)
-        defer { engine.agents.disconnect() }
-        await app.connect(engine).value
-        try await until { app.workspace.session("ses_mcarry") != nil }
-        app.workspace.saveProject(prefix + "/home/tests/app", settings: Workspace.ProjectSettings(folders: [prefix + "/home/tests/shared"]))
-        _ = try await app.workspace.carryToAgents("ses_mcarry", model: ModelRef(id: "sonnet", providerID: "claude-code"))
-
-        let told = try #require(bridge.requests("PUT", "/api/experimental/session/ses_mcarried/instructions/entries/\(ProjectFolders.instructionKey)").last?.body["value"] as? String)
-        #expect(told.contains("/home/tests/shared") && !told.contains("ssh://"))
-    }
-
     /// A machine's session waiting on you keeps counting while the machine is away and this Mac's
     /// own engine is read again (the Mac waking up): it isn't dropped, to be told again as news once
     /// the machine is back.

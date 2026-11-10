@@ -15,6 +15,7 @@ import { isObject } from "../../shared/json";
 import { locked, writePrivate } from "../files";
 import { RUN } from "../home";
 import { asked } from "./client";
+import { carryUnderWay } from "./carrying";
 import { summaryAtEnd } from "../../shared/summaries";
 import { messageID } from "./sessions";
 import * as files from "../../shared/queues";
@@ -601,7 +602,8 @@ export function queueWatcher(target: Target, { after = DRAIN_AFTER, schedule = s
         // mark, which a client sends again with every later change, and its queue is its own.)
         const metadata = event.data?.metadata;
         const to = metadata?.["kuvo.carriedTo"];
-        if (metadata?.["kuvo.archived"] === true && typeof to === "string" && to.startsWith("ses_") && to !== session) carryQueue(session, to, {});
+        // (Not while this box carries it: the carry takes its queue itself, with what it renames.)
+        if (metadata?.["kuvo.archived"] === true && typeof to === "string" && to.startsWith("ses_") && to !== session && !carryUnderWay(session)) carryQueue(session, to, {});
         break;
       }
       case "session.deleted":

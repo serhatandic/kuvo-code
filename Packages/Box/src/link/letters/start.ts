@@ -13,7 +13,7 @@ import { writtenByYou } from "../engine/queue";
 import { messageID } from "../engine/sessions";
 import { BOTS, CHATS, HERE, homeFolder } from "../home";
 import { realish } from "../fence/policy";
-import { changeProjects, PROJECTS_FILE, readProjects } from "../areas/projects";
+import { changeProjects, PROJECT_FOLDERS_ENTRY, PROJECTS_FILE, projectFoldersNote, readProjects } from "../areas/projects";
 import { projectOf as projectOfFolder, readWorktrees } from "../areas/worktree-records";
 import { answerWorktrees, settleNewSession } from "../areas/worktrees";
 import { composeLetter } from "./letter";
@@ -168,9 +168,6 @@ function rulesFor(approval: Approval, parent: Partial<EngineSession> | null, fol
   const own = Array.isArray(parent?.permissions) ? parent.permissions.filter(rule => !isFolderRule(rule) || rule.resource.includes("/bots/bot_")) : [];
   return approvalRules(approval, [...own, ...folderRules(folders)]);
 }
-
-const projectsNote = (primary: string, folders: readonly string[]) =>
-  `This project spans several folders. You work in its primary folder, ${path.basename(primary)} (${primary}). These folders belong to the project too, and you can read, search and change files in them the same way:\n${folders.map(folder => `- ${path.basename(folder)}: ${folder}`).join("\n")}\nWhen the user mentions one of these folders by name, they mean that folder.`;
 
 // The project a folder is (one of its worktrees is its project's), its name and other folders; a
 // folder that's none yet becomes one, as a Mac adds it when a session starts there. Null for chats.
@@ -402,7 +399,7 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
   }
   const address = encodeURIComponent(session);
   if (project?.folders.length) {
-    await call(target, "PUT", `/api/experimental/session/${address}/instructions/entries/kuvo.project-folders`, { value: projectsNote(folder, project.folders) }).catch(() => {});
+    await call(target, "PUT", `/api/experimental/session/${address}/instructions/entries/${PROJECT_FOLDERS_ENTRY}`, { value: projectFoldersNote(folder, project.folders) }).catch(() => {});
   }
   if (autopilot) await tellAutopilot(target, session, true).catch(() => {});
   await settleNewSession(target, session).catch(() => {});

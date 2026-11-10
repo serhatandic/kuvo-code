@@ -10,8 +10,8 @@ nonisolated private let log = Logger(subsystem: "run.kuvo.code", category: "keep
 /// (`KeeperControl.Command.app`) and each call goes there as it is. While it isn't, the tools are
 /// still listed (as the app last listed them), and the box answers what a machine's box answers
 /// without any app (`KeeperBoxTools`): agents writing to each other and running their sessions,
-/// wake-ups, a bot's job, the vault, and a file or widget shown in the conversation. Only the
-/// browser and the side panel need the app: a call to them says so.
+/// wake-ups, a bot's job, the vault, the sandbox's way out, and a file or widget shown in the
+/// conversation. Only the browser and the side panel need the app: a call to them says so.
 @MainActor
 final class KeeperTools {
     private lazy var server = LoopbackServer { [weak self] request in await self?.respond(to: request) ?? .init(status: 503) }
@@ -176,10 +176,14 @@ final class KeeperTools {
     }
 
     /// The tools as the app last listed them; before it ever has, Kuvo Code's own, with the
-    /// vault's as this Mac's box lists them.
+    /// vault's as this Mac's box lists them. The sandbox's as the box lists them now, whatever the
+    /// app last listed: only while commands here run in the sandbox.
     private func listed() async -> [[String: Any]] {
-        if let kept = (try? Data(contentsOf: Self.listFile)).flatMap({ try? JSONSerialization.jsonObject(with: $0) as? [[String: Any]] }) { return kept }
-        return BrowserTools.definitions(vault: await boxTools.vaultDefinitions())
+        let sandbox = await boxTools.sandboxDefinitions()
+        if let kept = (try? Data(contentsOf: Self.listFile)).flatMap({ try? JSONSerialization.jsonObject(with: $0) as? [[String: Any]] }) {
+            return kept.filter { !BrowserTools.isSandbox($0["name"] as? String ?? "") } + sandbox
+        }
+        return BrowserTools.definitions(vault: await boxTools.vaultDefinitions()) + sandbox
     }
 
     private static func key(_ id: Any, client: String?) -> String { (client ?? "") + "|" + String(describing: id) }
