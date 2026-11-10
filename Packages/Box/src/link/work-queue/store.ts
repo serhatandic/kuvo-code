@@ -113,7 +113,7 @@ export const newItemID = () => `wqi_${crypto.randomBytes(15).toString("base64url
 
 // Who, as it was kept: you, an agent, or any other shape (an outside tracker's, a newer box's) kept
 // as it is, small values only, so a box that doesn't know it never turns it into you or drops it.
-const whoOf = (given: unknown): Who | null => {
+export const whoOf = (given: unknown): Who | null => {
   if (!isObject(given)) return null;
   if (given.user === true) return { user: true };
   if (typeof given.session === "string" && typeof given.name === "string") return { session: given.session, name: given.name };
@@ -269,7 +269,7 @@ function onceEach(queues: Queue[]): Queue[] {
 }
 
 /** Every item here, of every owner (deleted ones too). */
-export const allItems = (): Item[] => readAll().flatMap(queue => queue.items);
+export const allItems = (): Item[] => readAll().filter(queue => OWNER.test(queue.owner)).flatMap(queue => queue.items);
 
 /** The queues here as one change sees them: each read once, written back if it changed. */
 export class Book {
@@ -296,9 +296,9 @@ export class Book {
     return this.load(owner);
   }
 
-  /** Every item, of every owner. */
+  /** Every item, of every owner (not those of a kind a newer box keeps, left as they are). */
   items(): Item[] {
-    return [...this.queues.values()].flatMap(queue => queue.items);
+    return [...this.queues.values()].filter(queue => OWNER.test(queue.owner)).flatMap(queue => queue.items);
   }
 
   /** The item with this id or number (the first, where two computers gave one number twice). */

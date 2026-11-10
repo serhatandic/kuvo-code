@@ -192,11 +192,22 @@ test("what your other computers told shows in the All view and a lead's view, wi
   const shown = await tool("queue_show", { item: 500 }, "ses_lead");
   assert.match(shown.text, /^#500 "Item 500" · In progress \(kept in Next\) · on lab, in the queue of ses_far/);
 
-  // What lab told before is had, but kept no more than what it told since.
-  const older = telling([told(503, "ses_far")], { at: Date.now() - 3_600_000 });
-  receive(lab, { workQueue: older });
-  assert.deepEqual(mailTo(lab).map(each => each.workQueue), [{ had: older.told.id }]);
+  // What lab told a moment before, come late, is had but not kept over what it told since.
+  const late = telling([told(503, "ses_far")], { at: tellsNow.told.at - 5000 });
+  receive(lab, { workQueue: late });
+  assert.deepEqual(mailTo(lab).map(each => each.workQueue), [{ had: late.told.id }]);
   assert.equal((await view("all")).items.some(item => item.number === 503), false);
+  // One an hour "older" is lab's clock set back: its newer word after all.
+  const setBack = telling([told(504, "ses_far")], { at: tellsNow.told.at - 3_600_000 });
+  receive(lab, { workQueue: setBack });
+  sent.length = 0;
+  assert.equal((await view("all")).items.some(item => item.number === 504), true);
+  receive(lab, { workQueue: tellsNow });
+  sent.length = 0;
+  // An agent reads one on another computer only when it's in its view, as here.
+  const notTheirs = await tool("queue_show", { item: 501 }, "ses_lead");
+  assert.equal(notTheirs.isError, true);
+  assert.match(notTheirs.text, /#501 "Item 501" is on lab, and isn't in your Work Queue/);
   // A box that isn't one of your computers isn't heard at all.
   const stranger = box("machine", "stranger");
   link.receiveMail(link.sealOneWay(Buffer.from(JSON.stringify({ workQueue: telling([told(600, "ses_x")]), at: Date.now() })), stranger.key, link.publicOf(here.key)).message, host, (sender, given) => link.peerMail(sender, given, host, places));
@@ -264,7 +275,14 @@ test("numbers come from the first computer you set up: a Mac before a machine, t
   assert.equal(link.primaryOf(link.readLink()).peer.key, mac.pub);
   link.notePrimaryNow(link.readLink());
   assert.equal(link.readNumbers(file).primary, mac.pub, "noted");
-  // Never back to the later one, whatever it says next.
+  // Never back to the later one, whatever it says next; and never away from the one kept for one
+  // that hasn't said when it was set up (an older box mid-update): only for one known to be earlier.
+  write(file, { ...link.readNumbers(file), primary: later.pub });
+  write(path.join(queues, "peers", `${later.pub}.json`), { id: "wqt_bbbbbbbbbbbb", at: 1, heard: 1, kind: "mac", items: [], owners: [], categories: [] });
+  assert.equal(link.primaryOf(link.readLink()).peer.key, later.pub, "kept: it hasn't said, and may be the first");
+  write(path.join(queues, "peers", `${later.pub}.json`), { id: "wqt_bbbbbbbbbbbb", at: 1, heard: 1, kind: "mac", since: 9_000, items: [], owners: [], categories: [] });
+  assert.equal(link.primaryOf(link.readLink()).peer.key, mac.pub, "once it says, the earlier one");
+  write(file, { ...link.readNumbers(file), primary: mac.pub });
   write(path.join(queues, "peers", `${later.pub}.json`), { id: "wqt_bbbbbbbbbbbb", at: 2, heard: 2, kind: "mac", since: 9_000, items: [], owners: [], categories: [], primary: { key: later.pub, kind: "mac", since: 9_000 } });
   assert.equal(link.primaryOf(link.readLink()).peer.key, mac.pub);
 
@@ -322,6 +340,10 @@ test("the primary moves past what a box that numbered on its own used, and what 
   const block = link.giveBlock("box-a", { id: "wqn_movedpast001", count: 50, top: 480 }, { file });
   assert.deepEqual([block.from, block.to], [481, 530], "past the 480 it used");
   assert.deepEqual(link.giveBlock("box-a", { id: "wqn_movedpast001", count: 50, top: 9000 }, { file }), block, "an ask sent again gets the same block");
+  // A number an import was refused (far past the others) never moves the counter, nor does a top
+  // past what a chip reads.
+  const far = link.giveBlock("box-b", { id: "wqn_movedpast002", count: 50, top: 999_999 }, { file });
+  assert.ok(far.to < 1_000_000, `${far.from}–${far.to} still reads as a chip`);
   // A box that was its own primary and isn't now asks at once.
   const own = path.join(queues, "numbers.json");
   write(own, { primary: "self", next: 77, leases: [] });
@@ -361,20 +383,30 @@ test("an item handed to a session on another computer moves once: unchanged here
   receive(lab, { workQueue: { handed: { id: hand.id, ok: true } } });
   assert.equal((await view("all")).items.some(item => item.number === 100), false);
 
+  // One lab says to send again later (its conversation moving): again at its next minute, not at once.
+  await tool("queue_add", { title: "Retry me" }, "ses_lead");
+  await tool("queue_hand", { item: "#101", to: "ses_far" }, "ses_lead");
+  await link.pushQueues(host, link.readLink(), targets, now + 100_000);
+  const retried = mailTo(lab).map(each => each.workQueue).find(each => each.hand)?.hand;
+  receive(lab, { workQueue: { handed: { id: retried.id, ok: false, retry: true } } });
+  await link.pushQueues(host, link.readLink(), targets, Date.now());
+  assert.equal(mailTo(lab).filter(each => each.workQueue.hand).length, 0, "not at once");
+  receive(lab, { workQueue: { handed: { id: retried.id, ok: true } } });
+
   // One lab can't take comes back as it was, with why.
   await tool("queue_add", { title: "Second" }, "ses_lead");
-  await tool("queue_hand", { item: "#101", to: "Wren" }, "ses_lead");
+  await tool("queue_hand", { item: "#102", to: "Wren" }, "ses_lead");
   await link.pushQueues(host, link.readLink(), targets, now + 200_000);
   const second = mailTo(lab).map(each => each.workQueue).find(each => each.hand)?.hand;
   assert.equal(second.to, "ses_wren", "a bot on lab, by its name");
   receive(lab, { workQueue: { handed: { id: second.id, ok: false, why: "That queue has 2,000 open items already." } } });
-  const back = await tool("queue_show", { item: 101 }, "ses_lead");
+  const back = await tool("queue_show", { item: 102 }, "ses_lead");
   assert.match(back.text, /Couldn't be handed to Wren on another computer: That queue has 2,000 open items already\. It's still here\./);
-  assert.equal((await tool("queue_update", { item: 101, note: "ok" }, "ses_lead")).isError, false);
+  assert.equal((await tool("queue_update", { item: 102, note: "ok" }, "ses_lead")).isError, false);
 
   // To a computer that runs an older Kuvo Code: refused, saying so.
   agentsTold({ [lab.pub]: { at: 1, heard: Date.now(), kind: "machine", id: "lab", list: [{ session: "ses_far", name: "Far", kind: "session" }], features: ["work-queue"] } });
-  const older = await tool("queue_hand", { item: 101, to: "ses_far" }, "ses_lead");
+  const older = await tool("queue_hand", { item: 102, to: "ses_far" }, "ses_lead");
   assert.equal(older.isError, true);
   assert.match(older.text, /runs an older Kuvo Code/);
 });
@@ -396,6 +428,16 @@ test("an item handed here from another computer lands in its conversation's queu
   await takeFrom(lab, { hand });
   assert.deepEqual(mailTo(lab).map(each => each.workQueue), [{ handed: { id: hand.id, ok: true } }]);
   assert.equal((await view("all")).items.filter(each => each.number === 700).length, 1);
+  // Handed back here before this box heard it arrived there (its receipt lost): it waits.
+  write(path.join(queues, "numbers.json"), { primary: mac.pub, leases: [[100, 149]] });
+  await tool("queue_add", { title: "Round trip" }, "ses_lead");
+  await tool("queue_hand", { item: "#100", to: "ses_far" }, "ses_lead");
+  const mine = (await route("GET", "kuvo/work-queue/items/100")).body.item;
+  await takeFrom(lab, { hand: { ...hand, id: "wqh_fromlab00000009", to: "ses_lead", item: { ...told(100, "ses_far"), id: mine.id } } });
+  const waits = mailTo(lab).map(each => each.workQueue.handed);
+  assert.equal(waits[0].ok, false);
+  assert.equal(waits[0].retry, true);
+  assert.equal((await view("all")).items.filter(each => each.id === mine.id).length, 1);
   // For no conversation here.
   await takeFrom(lab, { hand: { ...hand, id: "wqh_fromlab00000002", to: "ses_nobody", item: { ...item, id: "wqi_handedfromlab0000002" } } });
   const refused = mailTo(lab).map(each => each.workQueue.handed);

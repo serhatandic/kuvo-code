@@ -41,8 +41,12 @@ export function takePart(sender: { key: string }, part: unknown, now = Date.now(
   const of = part.of as number, i = part.i as number;
   if (of < 1 || of > MOST_PARTS || i < 0 || i >= of || part.d.length > PART) return null;
   const key = `${sender.key} ${part.whole}`;
-  // (At most a few under way from each, so a box can't fill this one's memory.)
-  if (!pending.has(key) && [...pending.keys()].filter(each => each.startsWith(`${sender.key} `)).length >= 6) return null;
+  // (At most a few under way from each, so a box can't fill this one's memory: a new one takes the
+  // place of its oldest, one a hiccup left unfinished.)
+  if (!pending.has(key)) {
+    const theirs = [...pending].filter(([each]) => each.startsWith(`${sender.key} `)).sort((a, b) => a[1].at - b[1].at);
+    for (const [old] of theirs.slice(0, Math.max(0, theirs.length - 5))) pending.delete(old);
+  }
   const kept = pending.get(key) ?? { of, parts: new Array<string | undefined>(of).fill(undefined), got: 0, at: now };
   if (kept.of !== of) return null;
   if (kept.parts[i] === undefined) {

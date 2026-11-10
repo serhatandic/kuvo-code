@@ -22,7 +22,7 @@ import { readLink } from "../state";
 import { categories, categoryNamed, keepCategory } from "./categories";
 import { linkSession } from "./ops";
 import {
-  allItems, changeQueues, FILE_NAME, filesOf, itemOf, MOST_FILE, MOST_ITEMS, noteHanded, OWNER, placeIn, Refusal, WORK_QUEUE,
+  allItems, changeQueues, FILE_NAME, filesOf, itemOf, MOST_FILE, MOST_ITEMS, noteHanded, OWNER, placeIn, Refusal, WORK_QUEUE, whoOf,
   type Book, type Item, type Who,
 } from "./store";
 import { mailsFor } from "./parts";
@@ -129,7 +129,8 @@ export function handedBack(sender: MailSender, given: unknown, now = Date.now())
   if (!item) return;
   const went = sent.get(given.id)?.key ?? item.handing!.key;
   if (went !== sender.key) return;
-  if (given.retry === true) return void sent.delete(given.id);
+  // (Not at once: again at its next minute, as one that wasn't answered.)
+  if (given.retry === true) return void sent.set(given.id, { at: now, key: sender.key });
   if (given.ok !== true) return giveBack([given.id], typeof given.why === "string" ? plainName(given.why).slice(0, 300) || "it was refused" : "it was refused", now);
   sent.delete(given.id);
   changeQueues(book => {
@@ -189,10 +190,18 @@ export async function handArrived(sender: MailSender, given: unknown, reply: (pa
   });
   item.files = item.files.filter(file => files.some(each => each.name === file.name));
   for (const each of Array.isArray(given.categories) ? given.categories : []) if (isObject(each) && typeof each.id === "string" && typeof each.name === "string") keepCategory(each.id, each.name);
-  const by: Who = isObject(given.by) && given.by.user !== true && typeof given.by.session === "string" && typeof given.by.name === "string" ? { session: given.by.session, name: plainName(given.by.name).slice(0, 100) } : { user: true };
+  const by: Who = whoOf(given.by) ?? { name: "someone else" };
   let refused: string | null = null;
+  let again = false;
   changeQueues((book: Book) => {
-    if (book.find({ id: item.id })) return;
+    const here = book.find({ id: item.id });
+    // One handed from here that hasn't heard it arrived yet (its receipt lost) and comes back: it
+    // waits until that's settled, so it's never lost between the two.
+    if (here?.handing) {
+      again = true;
+      return;
+    }
+    if (here) return;
     if (book.queue(owner).items.filter(each => !each.removed && each.category !== "done").length >= MOST_ITEMS) {
       refused = `That queue has ${MOST_ITEMS} open items already.`;
       return;
@@ -211,6 +220,7 @@ export async function handArrived(sender: MailSender, given: unknown, reply: (pa
       fs.writeFileSync(path.join(filesOf(item.id), file.name), file.bytes, { mode: 0o600 });
     }
   }, now, { onItsOwn: true });
+  if (again) return answer(false, `${HERE} is still handing that item on: it comes again once that's done.`, true);
   if (refused) return answer(false, refused);
   seenHand(id, now, true);
   answer(true);

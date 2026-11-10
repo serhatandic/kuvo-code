@@ -136,7 +136,7 @@ export async function pushQueues(host: Pick<LinkHost, "send">, link: LinkState |
     const before = pushed.get(peer.key);
     if (before?.id === telling.id && (before.done || now - before.sent < 60_000)) continue;
     if (before && before.id !== telling.id && now - before.sent < TELL_SPACING) continue;
-    const mails = mailsFor(peer, telling.payload, link, now);
+    const mails = fittedMails(peer, telling, link, now);
     if (!mails) continue;
     try {
       for (const bytes of mails) host.send(bytes);
@@ -144,6 +144,21 @@ export async function pushQueues(host: Pick<LinkHost, "send">, link: LinkState |
     } catch {}
   }
   sendHandings(host, link, targets, now);
+}
+
+// What's told, as mails for `peer`: whole, or, too big even in parts, with its items cut (Done ones
+// and the longest unchanged first: they're last in the list), said in the box's log.
+function fittedMails(peer: Peer, telling: Telling, link: LinkState, now: number): Buffer[] | null {
+  const told = telling.payload.told as { items: unknown[] } & Record<string, unknown>;
+  for (const most of [told.items.length, 1000, 500, 200, 50]) {
+    if (most > told.items.length) continue;
+    const mails = mailsFor(peer, most === told.items.length ? telling.payload : { told: { ...told, items: told.items.slice(0, most) } }, link, now);
+    if (mails) {
+      if (most < told.items.length) console.error(`Work Queue: ${told.items.length} items were too many to tell ${computerName(peer)} at once: told the ${most} latest.`);
+      return mails;
+    }
+  }
+  return null;
 }
 
 /** A computer answers again: what's changed goes at the next round. */

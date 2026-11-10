@@ -10,7 +10,7 @@ import { isObject } from "../../shared/json";
 import { cut, plainName } from "../../shared/text";
 import { listOf, writePrivate } from "../files";
 import { KEY } from "../peers/known";
-import { ITEM_ID, OWNER, WORK_QUEUE, type Who } from "./store";
+import { ITEM_ID, OWNER, WORK_QUEUE, whoOf as keptWho, type Who } from "./store";
 import type { ItemSummary, OwnerFacts } from "./view";
 
 export const TOLD = path.join(WORK_QUEUE, "peers");
@@ -49,13 +49,9 @@ const count = (value: unknown) => (typeof value === "number" && Number.isInteger
 const time = (value: unknown) => (typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0);
 const whole = (value: unknown, most = 999_999) => (typeof value === "number" && Number.isInteger(value) && value > 0 && value <= most ? value : undefined);
 const words = (value: unknown, most: number) => (typeof value === "string" ? cut(plainName(value), most) : "");
-const whoOf = (value: unknown): Who => {
-  if (!isObject(value)) return { user: true };
-  if (value.user === true) return { user: true };
-  const kept = Object.fromEntries(Object.entries(value).filter(([key, each]) => key.length <= 40 && (typeof each === "string" ? each.length <= 200 : typeof each === "number" || typeof each === "boolean")).slice(0, 10));
-  return Object.keys(kept).length ? kept as Who : { user: true };
-};
-const stamp = (value: unknown) => (isObject(value) ? { at: time(value.at), by: whoOf(value.by) } : { at: 0, by: { user: true } as Who });
+// (As the box keeps one: an unknown shape as it came, and none at all as someone else, never you.)
+const whoOf = (value: unknown): Who => keptWho(value) ?? { name: "someone else" };
+const stamp = (value: unknown) => (isObject(value) ? { at: time(value.at), by: whoOf(value.by) } : { at: 0, by: whoOf(null) });
 
 /** An item as it came from another computer, cleaned: what a summary has, nothing more; null for
  * one that isn't. */
@@ -138,7 +134,9 @@ export function readTold(key: string): Told | null {
 export function keepTold(key: string, told: Omit<Told, "heard">, now = Date.now()): boolean {
   if (!KEY.test(key)) return false;
   const kept = readTold(key);
-  if (kept && kept.at > told.at) return false;
+  // Older than what's kept: mail come late, unless it's a good while older (its clock was set back),
+  // when it's the newer word after all.
+  if (kept && kept.at > told.at && kept.at - told.at < 600_000 && kept.id !== told.id) return false;
   fs.mkdirSync(TOLD, { recursive: true, mode: 0o700 });
   writePrivate(fileOf(key), JSON.stringify({ ...told, heard: now } satisfies Told));
   return true;

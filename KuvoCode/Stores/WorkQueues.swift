@@ -275,7 +275,11 @@ final class WorkQueues {
     /// (as its vault takes one), since anything on that computer could ask its box otherwise.
     @discardableResult
     private func act<T: Decodable>(_ type: T.Type, _ method: String, _ path: String, body: (any Encodable)? = nil, on box: String, shownOn: String? = nil) async -> T? {
-        guard let client = client(box) else { return nil }
+        guard let client = client(box) else {
+            // (An item on a computer this Mac doesn't reach, one another Mac set up.)
+            if let shownOn, shownOn != box { refusal = (shownOn, "That item is on a computer this Mac can’t reach. Change it from a Mac or iPhone that reaches it.") }
+            return nil
+        }
         do {
             let sent = try body.map { try JSONEncoder().encode($0) }
             var headers: [String: String] = [:]

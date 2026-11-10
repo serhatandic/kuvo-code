@@ -14,7 +14,7 @@ import { addCategory, categories, categoryNamed } from "./categories";
 import { importItems, importWords, givenItems } from "./import";
 import { numberWaiting, primaryOf } from "./numbers";
 import { addItem, applyFileOps, changeItem, handItem, linkSession, Refusal, refuseHanding, refuseMoving, removeItem, restoreItem, stageFiles, type Acting, type Fields, type FilePlaces } from "./ops";
-import { byUser, changeQueues, matching, readAll, whoWords, type Book, type Item, type Who } from "./store";
+import { allItems, byUser, changeQueues, matching, whoWords, type Book, type Item, type Who } from "./store";
 import { computerName, itemElsewhere, itemsElsewhere, takesQueues, type ItemElsewhere } from "./across";
 import { elsewhereOf, handElsewhere } from "./hand";
 import { readPeerAgents } from "../peers/directory";
@@ -230,9 +230,13 @@ async function run(name: string, args: Record<string, unknown>, caller: QueueCal
       return said(await listWords(caller, args, facts, overseen, targets));
     case "queue_show": {
       const ref = refOf(args.item);
-      const here = readAll().flatMap(queue => queue.items);
+      const here = allItems();
       const far = ref && !matching(here, ref).length ? itemElsewhere(ref) : null;
-      if (far) return said(farWords(far, caller));
+      if (far) {
+        // (Only one in its view, as one here.)
+        if (!itemsElsewhere(caller.owner).items.some(item => item.id === far.id)) return refused(`${nameOf(far)} is on ${far.computer.name}, and isn't in your Work Queue, nor in a session's you oversee: ask the conversation it belongs to, or the user.`);
+        return said(farWords(far, caller));
+      }
       const item = itemFor(here, args.item, caller, overseen);
       return said(await showWords(item, facts, targets, caller));
     }
@@ -388,7 +392,7 @@ async function listWords(caller: QueueCaller, args: Record<string, unknown>, fac
   const progressOnly = wanted !== null && /^in[ -]?progress$/i.test(wanted);
   const category = wanted && !progressOnly ? categoryNamed(wanted) : null;
   if (wanted && !progressOnly && !category) throw new Refusal(`There's no category ${wanted}: queue_categories lists them.`);
-  let items = readAll().flatMap(queue => queue.items).filter(item => !item.removed && inView(caller.owner, item, overseen));
+  let items = allItems().filter(item => !item.removed && inView(caller.owner, item, overseen));
   if (query) items = items.filter(item => item.title.toLowerCase().includes(query) || item.body.toLowerCase().includes(query));
   const { titles } = await ownersOf(caller.owner, items, facts, targets);
   const sections: string[] = [];

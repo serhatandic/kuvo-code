@@ -2977,7 +2977,8 @@ on any of your computers: those on another, as it last told them (its `rows` say
 there are under the owner, "Work").
 
 - `GET kuvo/work-queue?owner=<ses_…|grp_…>` → `{owner, categories, items, owners, removed,
-  computers}`: `items` in the categories' order, then each one's; `owners` (`[{owner, kind:
+  computers}`: `items` in the categories' order, then this box's first and each other computer's
+  after, by its name (each computer keeps its own order), then each one's order; `owners` (`[{owner, kind:
   bot|session|group, title, bot?: {id, name}, startedBy?}]`) names each owner in the view;
   `removed`, what's deleted in it here, newest first; `computers` (`[{key, name, kind, id?, at}]`),
   each other computer that told of its queue, and as of when. `owner=all` is every queue on the box
@@ -2990,7 +2991,9 @@ there are under the owner, "Work").
   `notes`, `files`, `links` and `handed`: a client reads it whole, and its files, from that computer
   (a machine by `computer.id`; a Mac, its own box).
 - `GET kuvo/work-queue/refs?refs=243,12`, or `POST kuvo/work-queue/refs {refs: [...],
-  conversation?}` (a list, so a ref with a comma in it, an outside one later, goes whole) →
+  conversation?}` (a list, so a ref with a comma in it, an outside one later, goes whole;
+  `conversation` is taken and not used yet: it's for "issue #12" in a project bound to a tracker,
+  later) →
   `{refs: {"243": {id, number?, source?, title, category, inProgress, owner?, removed?, computer?}
   | null}}`: what each ref names, by the ref as it was asked, for a chip; one on another computer as
   it last told it, with `computer`; null for one no computer told this box of. A client reads each
