@@ -81,6 +81,7 @@ struct Composer: View {
     /// Sessions to start with the message, each in a worktree of its own.
     var attempts = 1
     var onSelectAttempts: (Int) -> Void = { _ in }
+    var onFocusChange: (Bool) -> Void = { _ in }
     var onSend: () -> Void
     /// ⌘Return: after the run, and anything queued before. Where nothing can be running yet (a
     /// new session's composer), it sends.
@@ -500,6 +501,7 @@ struct Composer: View {
     /// so the window's commands follow.
     private func fieldFocused(_ focused: Bool) {
         fieldHasKeyboard = focused
+        onFocusChange(focused)
         if focused {
             composerFocused?()
             offerVoice()

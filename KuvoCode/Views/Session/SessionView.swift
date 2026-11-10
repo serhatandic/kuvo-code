@@ -176,6 +176,7 @@ struct BottomStack: View {
     /// Whether its bars are tucked into one line: as you left them in this conversation, until
     /// you bring them back (nothing does by itself), or none are left.
     private var tucked: Bool { model.tuck.isOn(among: liveBars) }
+    @State private var composerHasFocus = false
 
     /// The bars but those put away, whose Undo shows in their place for a moment: what Hide
     /// tucks away, and what its line names.
@@ -488,6 +489,7 @@ struct BottomStack: View {
                                 .modifier(CardRow())
                                 .transition(.fold)
                             } else {
+                                if !liveBars.isEmpty { BarTuckButton { model.tuck.hide() } }
                                 if let goal = model.goal, let text = model.putAways.text(.goal(started: goal.started)) {
                                     let item = PutAway.goal(started: goal.started)
                                     UndoLine(text: text, undo: model.putAways.canUndo(item) ? { model.putAways.undo(item) } : nil)
@@ -628,6 +630,7 @@ struct BottomStack: View {
                             }
                             lastModel = ref
                         },
+                        onFocusChange: { composerHasFocus = $0 },
                         onSend: { send(queue: false) },
                         onQueue: { send(queue: true) },
                         onEditLast: model.editLast,
@@ -649,6 +652,9 @@ struct BottomStack: View {
             .animation(.ui, value: folds)
             .animation(.ui, value: isAsking)
             .animation(.ui, value: tucked)
+            .onChange(of: Seen(conversation: model.id, value: [composerHasFocus, !model.draftText.isEmpty]), initial: true) { _, _ in
+                model.tuck.writing(focused: composerHasFocus, hasText: !model.draftText.isEmpty)
+            }
             .animation(.ui, value: removedWorktree?.folder)
             .animation(.ui, value: waitingMove != nil)
             .animation(.ui, value: model.unseenHeld.map(\.id))
@@ -864,6 +870,7 @@ struct BottomStack: View {
         let machine = RemoteFolder.machine(of: model.session.location.directory).map { id in app.machines.list.first { $0.id == id }?.name ?? id }
         let unavailable = model.session.model.flatMap { catalog.refusal($0, on: machine) }
         model.submitDraft(for: catalog.model(model.session.model), queue: queue, commands: catalog.commands(in: model.session.location.directory), unavailable: unavailable)
+        if model.draftText.isEmpty { model.tuck.sent() }
     }
 }
 

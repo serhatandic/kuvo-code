@@ -107,11 +107,33 @@ public struct BarTuck<Bar: Hashable>: Equatable {
     public init() {}
 
     private var hidden = false
+    private var isWriting = false
+    private var openedWhileWriting = false
+    private var sentWithFocus = false
+
+    /// Focus or a draft temporarily tucks the card without changing any bar's fold.
+    public mutating func writing(focused: Bool, hasText: Bool) {
+        if !focused || hasText { sentWithFocus = false }
+        let active = hasText || (focused && !sentWithFocus)
+        if active != isWriting { openedWhileWriting = false }
+        isWriting = active
+        if !isWriting && !hidden { marked = [] }
+    }
+
+    /// Sending ends this writing interval even where the field keeps the keyboard.
+    public mutating func sent() {
+        isWriting = false
+        openedWhileWriting = false
+        sentWithFocus = true
+        if !hidden { marked = [] }
+    }
+
+    private var isHidden: Bool { hidden || (isWriting && !openedWhileWriting) }
     /// What came, or changed in a way you'd want to see, since they were tucked.
     public private(set) var marked: Set<Bar> = []
 
     /// Whether they're tucked, among `bars` (none: nothing to tuck).
-    public func isOn(among bars: [Bar]) -> Bool { hidden && !bars.isEmpty }
+    public func isOn(among bars: [Bar]) -> Bool { isHidden && !bars.isEmpty }
 
     public mutating func hide() {
         hidden = true
@@ -120,6 +142,7 @@ public struct BarTuck<Bar: Hashable>: Equatable {
 
     public mutating func show() {
         hidden = false
+        openedWhileWriting = isWriting
         marked = []
     }
 
@@ -127,12 +150,12 @@ public struct BarTuck<Bar: Hashable>: Equatable {
     /// it's over.
     public mutating func bars(from old: [Bar], to new: [Bar]) {
         if new.isEmpty { return show() }
-        guard hidden else { return }
+        guard isHidden else { return }
         marked.formUnion(new.filter { !old.contains($0) })
     }
 
     /// Something changed in `bar` that you'd want to see: marked, while tucked.
     public mutating func changed(_ bar: Bar) {
-        if hidden { marked.insert(bar) }
+        if isHidden { marked.insert(bar) }
     }
 }
