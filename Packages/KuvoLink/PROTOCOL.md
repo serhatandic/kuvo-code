@@ -1070,7 +1070,7 @@ client shows it from the same routes.
     shows the session at work). At 30 minutes it's told anyway as `[Session finished]`, saying what
     still runs, so a lead isn't left without it when something never ends (a dev server). When it
     really finishes with something new to say, that's a normal `[Session finished]`; with nothing
-    new, nothing. Boxes up to bridge 0.9.211 told that at 30 minutes as `[Session still working]`, and
+    new, nothing. Boxes before #420 told that at 30 minutes as `[Session still working]`, and
     clients still read it so (“<title>” still working). A turn someone asked for doesn't wait on what was running before they asked (a dev server):
     it's told at once as `[Session finished]`, saying what still runs. After that a turn someone asked for is always told. A
     turn following the box's own word (what a session it started did, a limit that reset) is too, as

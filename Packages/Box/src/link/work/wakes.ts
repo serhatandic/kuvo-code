@@ -459,7 +459,7 @@ export function workWatcher(source: Target, targets: () => Target[], { gather = 
     if (reply && readTold(toldFile)?.sessions[session]?.reply === reply) return noteTold(session, { reply });
     if (waited !== "answered") tell(starter, line, false);
     // One of a bot's sessions done: for clients to show it seeing that, once, as it's told.
-    // (One still working isn't finished: its bot sees that once what it left running ends.)
+    // (While what it left running goes on, its bot sees it finish only once that ends, even if its lead was told at the limit.)
     if (about.bot) { if (about.working) markLater.set(session, about.bot); else noteOversight(about.bot, session, "finished"); }
     noteTold(session, { reply, at, said: about.said, early: about.early });
   };
