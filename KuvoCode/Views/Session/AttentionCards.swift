@@ -152,18 +152,34 @@ struct PermissionCard: View {
         .onChange(of: isEnabled, initial: true) { _, enabled in windowBox.isEnabled = enabled }
         .onChange(of: takesKeys, initial: true) { _, takes in
             if takes {
-                monitor = monitor ?? NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in key(event) ? nil : event }
-            } else if let monitor {
-                NSEvent.removeMonitor(monitor)
-                self.monitor = nil
+                guard monitor == nil else { return }
+                monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in key(event) ? nil : event }
+                #if DEBUG
+                Self.keysWatched += 1
+                #endif
+            } else {
+                stopWatchingKeys()
             }
         }
         .onAppear { typing.start() }
         .onDisappear {
             typing.stop()
-            if let monitor { NSEvent.removeMonitor(monitor) }
-            monitor = nil
+            stopWatchingKeys()
         }
+    }
+
+    #if DEBUG
+    /// How many cards watch the number keys, for a test to press once one does.
+    static var keysWatched = 0
+    #endif
+
+    private func stopWatchingKeys() {
+        guard let monitor else { return }
+        NSEvent.removeMonitor(monitor)
+        self.monitor = nil
+        #if DEBUG
+        Self.keysWatched -= 1
+        #endif
     }
 
     /// 4's line: Don't Allow, with what to do instead; Return says it.

@@ -22,8 +22,10 @@ import Testing
 
     init() throws {
         TestEnvironment.prepare()
-        // The keyboard still from the start: its keys answer at once.
+        // The keyboard still from the start: its keys answer at once. (No card of an earlier test's
+        // counted as watching.)
         KeysTyped.quietAfter = .zero
+        PermissionCard.keysWatched = 0
         let ask: [String: Any] = ["id": "per_keys", "sessionID": "ses_keys", "action": "shell", "resources": ["npm test"], "save": ["npm test *"]]
         let request = try JSONDecoder().decode(PermissionRequest.self, from: JSONSerialization.data(withJSONObject: ask))
         let replies = replies
@@ -44,11 +46,16 @@ import Testing
     /// `key`, pressed (with `modifiers`): queued, as a hand's would be, where the app's monitors see
     /// it first; then the card laid out again.
     private func press(_ key: String, code: UInt16, modifiers: NSEvent.ModifierFlags = []) async throws {
+        // The card in its window, watching its keys, and what it set up as it appeared done: one
+        // turn of the app's events after.
         try await until {
             window.contentView?.layoutSubtreeIfNeeded()
             TestPulse.beat()
-            return window.contentView?.subviews.isEmpty == false
+            return PermissionCard.keysWatched > 0
         }
+        let ready = TestClick()
+        NSApp.postEvent(ready.marker(in: window), atStart: false)
+        try await until { ready.isHandled }
         let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: modifiers, timestamp: ProcessInfo.processInfo.systemUptime,
                                      windowNumber: window.windowNumber, context: nil, characters: key, charactersIgnoringModifiers: key,
                                      isARepeat: false, keyCode: code)!
