@@ -992,7 +992,7 @@ final class PhoneLink {
     static let features = [
         "accounts.credentials", "accounts.found", "accounts.refresh", "agents", "artifacts", "asks", "attention", "bots", "bots.edit", "bots.events", "bots.job", "bots.keys", "bots.make", "branch", "btw", "btw.threads", "config", "config.apply", "engine.restart",
         "file", "folders", "folders.files", "git", "git.changes.count", "git.merge", "git.pull-request", "git.pull-request.draft", "git.push", "goals", "groups", "groups.delete", "groups.edit", "groups.joinable", "groups.make", "groups.seats", "handoff", "integrations", "keys", "mcp.catalog", "moves", "moves.agents", "moves.check",
-        "named", "personalities", "phones", "phones.pair", "plugins.search", "programs", "projects", "providers.models", "reviews", "reviews.parts", "reviews.scopes", "search", "sessions.agents", "shell.stop", "sign-in.return", "skills",
+        "named", "personalities", "phones", "phones.pair", "plugins.search", "programs", "projects", "providers.models", "reviews", "reviews.parts", "reviews.scopes", "search", "sessions.agents", "sessions.glance", "shell.stop", "sign-in.return", "skills",
         "personalities.events", "skills.trash", "sandbox", "sandbox.check", "sandbox.asks", "sandbox.reviews.whole", "vault", "wakes", "wakes.edit", "wakes.events", "worktrees", "worktrees.events", "worktrees.where",
         "agent-tools", "sessions.start", "letters-read", "work.elsewhere", "queue", "queue.waits", "work", "work.projects", "work.goals", "work.goals.apps", "work.goals.projects", "work.unanswering", "autopilot", "approval", "approval.reviewer", "git.backups", "approval.fullAccess", "approval.held", "approval.default", "approval.seen", "approval.stopped", "limits", "work-queue", "work-queue.elsewhere",
         // The Mac's own.
@@ -1259,8 +1259,8 @@ final class PhoneLink {
     nonisolated static func movedToBox(_ route: String) -> Bool {
         boxRoutes.contains { route == $0 || route.hasPrefix($0 + "/") }
             // A session started with a task, a session's queue, its approval, its reviewer's decisions, its Autopilot,
-            // and carrying it on with the coding agents.
-            || route == "kuvo/sessions" || route.wholeMatch(of: /kuvo\/sessions\/(queues\/events|[^\/]+\/(stop|approval|decisions|autopilot(\/asked)?|queue(\/.+)?|agents))/) != nil
+            // carrying it on with the coding agents, and sessions at a glance.
+            || route == "kuvo/sessions" || route.wholeMatch(of: /kuvo\/sessions\/(queues\/events|glance(\/events)?|[^\/]+\/(stop|approval|decisions|autopilot(\/asked)?|queue(\/.+)?|agents))/) != nil
             // A plan signed out (`kuvo/accounts/<id>/forget`), a provider's models asked of again
             // (`kuvo/accounts/<id>/refresh`), and a command stopped (`kuvo/shell/<id>/stop`): the box's too.
             || Self.oneOf(route, "kuvo/accounts/", "/forget") || Self.oneOf(route, "kuvo/accounts/", "/refresh") || Self.oneOf(route, "kuvo/shell/", "/stop")
