@@ -105,9 +105,9 @@ public struct BarFolds<Bar: Hashable>: Equatable {
 }
 
 /// The bars in the card over the composer tucked into one line (the Mac's and the phone's
-/// `BarStrip`), as you left them in a conversation: nothing brings them back by itself. What came
-/// or changed meanwhile is `marked`, until you bring them back. Once none are left, the next ones
-/// show.
+/// `BarStrip`). A manual fold stays until opened; writing temporarily tucks them, preserving
+/// the manual choice. What came or changed meanwhile is `marked` until they show again.
+/// Once none are left, the manual fold resets.
 public struct BarTuck<Bar: Hashable>: Equatable {
     public init() {}
 

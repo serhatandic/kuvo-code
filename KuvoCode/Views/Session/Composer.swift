@@ -117,6 +117,8 @@ struct Composer: View {
     @Environment(\.messageFont) private var messageFont
     @Environment(\.bot) private var bot
     /// Asks the field for the keyboard; nil once it has it.
+    @State private var mainHasFocus = false
+    @State private var quoteHasFocus: Set<UUID> = []
     @State private var fieldFocus: MessageField.FocusRequest?
     /// The quote whose answer is to take the keyboard; nil once it has it.
     @State private var answerFocus: (id: UUID, request: MessageField.FocusRequest)?
@@ -237,7 +239,8 @@ struct Composer: View {
                 QuoteList(quotes: quotes, focus: answerFocus, blur: blurRequest, font: messageFont.field, images: imageFiles.count,
                           onKey: answerKey, onFocus: { id, focused in
                               if focused, answerFocus?.id == id { answerFocus = nil }
-                              fieldFocused(focused)
+                              if focused { quoteHasFocus.insert(id) } else { quoteHasFocus.remove(id) }
+                              fieldFocused(mainHasFocus || !quoteHasFocus.isEmpty)
                           }, onPaste: pasteAttachments)
             }
             if let note {
@@ -263,7 +266,8 @@ struct Composer: View {
                     onKey: key,
                     onFocus: { focused in
                         if focused { fieldFocus = nil }
-                        fieldFocused(focused)
+                        mainHasFocus = focused
+                        fieldFocused(focused || !quoteHasFocus.isEmpty)
                     },
                     onPaste: pasteAttachments,
                     handle: field,
