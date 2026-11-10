@@ -1,11 +1,11 @@
 // Built from Packages/Box/src by scripts/build-box.sh: change those, then run it. Never edit this file.
 
 // Packages/Box/src/link/main.ts
-import { spawn as spawn12 } from "node:child_process";
-import crypto45 from "node:crypto";
-import fs112 from "node:fs";
-import os16 from "node:os";
-import path116 from "node:path";
+import { spawn as spawn13 } from "node:child_process";
+import crypto47 from "node:crypto";
+import fs114 from "node:fs";
+import os17 from "node:os";
+import path118 from "node:path";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
 
 // Packages/Box/src/shared/text.ts
@@ -627,6 +627,7 @@ var CONFIG_LOCK = path3.join(RUN, ".config.lock");
 var BOTS = process.env.KUVO_BOTS || path3.join(K, "bots");
 var CHATS = process.env.KUVO_CHATS || path3.join(K, "chats");
 var MAC_ATTACHMENTS = process.env.KUVO_MAC_ATTACHMENTS || null;
+var attachmentRoots = () => [path3.join(K, "attachments"), ...MAC_ATTACHMENTS ? [MAC_ATTACHMENTS] : []];
 var IS_MAC = process.env.KUVO_BOX === "mac";
 var MAC_APP_VERSION = process.env.KUVO_APP_VERSION || null;
 var MAC_ENGINE_VERSION = process.env.KUVO_ENGINE_VERSION || null;
@@ -2134,6 +2135,7 @@ var FEATURES = [
   "sandbox",
   "sandbox.check",
   "sandbox.asks",
+  "sandbox.reviews.whole",
   "approval",
   "approval.reviewer",
   "git.backups",
@@ -2143,7 +2145,8 @@ var FEATURES = [
   "approval.seen",
   "approval.stopped",
   "limits",
-  "work-queue"
+  "work-queue",
+  "browser"
 ];
 
 // Packages/Box/src/shared/shape.ts
@@ -2163,7 +2166,7 @@ var BYTES = "bytes";
 
 // Packages/Box/src/shared/routes/mac.ts
 var MAC_FEATURES = ["accounts.ended", "claude-code", "hosts", "mac", "machines", "usage"];
-var MACHINE_FEATURES = ["engine.start", "update"];
+var MACHINE_FEATURES = ["engine.start", "update", "browser"];
 var macFeatures = () => [...new Set([...FEATURES.filter((feature) => !MACHINE_FEATURES.includes(feature)), ...MAC_FEATURES])];
 var HOSTS = object({
   hosts: list(object({ kind: literal("machine"), name: string, address: string, key: string, relay: string, machine: string, anotherMac: bool, removed: bool }))
@@ -3109,12 +3112,9 @@ function sshSockets(home, system = "/etc/ssh/ssh_config") {
     if (depth > 8 || seen.has(file))
       return;
     seen.add(file);
-    let text = "";
-    try {
-      text = fs15.readFileSync(file, "utf8");
-    } catch {
+    const text = textFor(file).value;
+    if (text === null)
       return;
-    }
     for (const line of text.split(`
 `)) {
       const included = line.match(/^\s*Include\s*(?:=\s*|\s+)(.+)$/i);
@@ -3154,10 +3154,8 @@ function sshSockets(home, system = "/etc/ssh/ssh_config") {
     }
   };
   read(path14.join(home, ".ssh", "config"), path14.join(home, ".ssh"), 0);
-  try {
-    for (const name of fs15.readdirSync(path14.join(home, ".ssh", "config.d")))
-      read(path14.join(home, ".ssh", "config.d", name), path14.join(home, ".ssh"), 1);
-  } catch {}
+  for (const name of namesIn(path14.join(home, ".ssh", "config.d")).value ?? [])
+    read(path14.join(home, ".ssh", "config.d", name), path14.join(home, ".ssh"), 1);
   read(system, path14.dirname(system), 0);
   return { paths: [...paths], globs: [...globs] };
 }
@@ -3178,13 +3176,7 @@ function matching(pattern) {
       continue;
     }
     const like = new RegExp(`^${name.split("").map((char) => char === "*" ? ".*" : char === "?" ? "." : escapeRegex(char)).join("")}$`);
-    found = found.flatMap((at) => {
-      try {
-        return fs15.readdirSync(at).filter((each) => like.test(each) && (name.startsWith(".") || !each.startsWith("."))).sort().map((each) => path14.join(at, each));
-      } catch {
-        return [];
-      }
-    });
+    found = found.flatMap((at) => (namesIn(at).value ?? []).filter((each) => like.test(each) && (name.startsWith(".") || !each.startsWith("."))).sort().map((each) => path14.join(at, each)));
   }
   return found;
 }
@@ -3246,21 +3238,17 @@ function keychainDaemons(home) {
 }
 function sshKeys(home) {
   const folder = path14.join(home, ".ssh");
-  let names = [];
-  try {
-    names = fs15.readdirSync(folder);
-  } catch {
+  const { known, value: names } = namesIn(folder);
+  if (!known || !names && macMayAsk(folder))
+    return [folder];
+  if (!names)
     return [];
-  }
   return names.filter((name) => !(name === "config" || name === "config.d" || name.startsWith("known_hosts") || name.endsWith(".pub") || name === "authorized_keys")).map((name) => path14.join(folder, name));
 }
 function ghHosts(home) {
   const file = path14.join(home, ".config", "gh", "hosts.yml");
-  try {
-    return /oauth_token\s*:/.test(fs15.readFileSync(file, "utf8")) ? [file] : [];
-  } catch {
-    return [];
-  }
+  const { known, value: text } = textFor(file);
+  return !known || (text === null ? macMayAsk(file) : /oauth_token\s*:/.test(text)) ? [file] : [];
 }
 function appTemporary() {
   if (!IS_MAC)
@@ -3463,7 +3451,82 @@ function throughLinks(where) {
   if (process.platform !== "darwin")
     return realish(where);
   const found = deepestThere(where, followLinks);
-  return macAsksAbout(found) ? found : realish(found);
+  return macAsksAbout(found) || macAsksAbout(leadsTo(where)) ? found : realish(found);
+}
+function macMayAsk(where) {
+  return process.platform === "darwin" && (macAsksAbout(path14.resolve(where)) || macAsksAbout(leadsTo(where)));
+}
+async function askedAbout(paths) {
+  const named = paths.filter((each) => typeof each === "string" && path14.isAbsolute(each) && macMayAsk(each));
+  await Promise.all([...new Set(named.map((each) => path14.resolve(each)))].map(askOne));
+}
+var asking = new Map;
+async function askOne(where) {
+  const place = askingIn(macAsksAbout(where) ? where : leadsTo(where));
+  for (let pending = asking.get(place);pending; pending = asking.get(place))
+    await pending;
+  const asked = fs15.promises.realpath(where).then(() => {}, () => {}).finally(() => {
+    if (asking.get(place) === asked)
+      asking.delete(place);
+  });
+  asking.set(place, asked);
+  await asked;
+}
+function askingIn(at) {
+  macAsksAbout(at);
+  const found = macAsks.exec(at.toLowerCase());
+  if (!found)
+    return at;
+  if (found[2] === "/volumes/") {
+    const name = at.slice(found[0].length).split("/")[0];
+    return name ? at.slice(0, found[0].length) + name : at;
+  }
+  const folder = at.slice(0, found[0].length).replace(/\/$/, "");
+  return /\/library$/i.test(folder) ? at : folder;
+}
+var lateReads = new Map;
+var readLateChanged = () => {};
+function whenReadLate(changed) {
+  readLateChanged = changed;
+}
+function readLate(key, read) {
+  let kept = lateReads.get(key);
+  if (!kept)
+    lateReads.set(key, kept = { known: false, value: null });
+  if (!kept.reading) {
+    const entry = kept;
+    entry.reading = read().catch(() => null).then((value) => {
+      const changed = !entry.known || JSON.stringify(value) !== JSON.stringify(entry.value);
+      Object.assign(entry, { known: true, value, reading: undefined });
+      if (changed)
+        readLateChanged();
+    });
+  }
+  return { known: kept.known, value: kept.value };
+}
+function textFor(file) {
+  if (macMayAsk(file))
+    return readLate(`text ${path14.resolve(file)}`, async () => {
+      await askedAbout([file]);
+      return fs15.promises.readFile(file, "utf8");
+    });
+  try {
+    return { known: true, value: fs15.readFileSync(file, "utf8") };
+  } catch {
+    return { known: true, value: null };
+  }
+}
+function namesIn(folder) {
+  if (macMayAsk(folder))
+    return readLate(`names ${path14.resolve(folder)}`, async () => {
+      await askedAbout([folder]);
+      return fs15.promises.readdir(folder);
+    });
+  try {
+    return { known: true, value: fs15.readdirSync(folder) };
+  } catch {
+    return { known: true, value: null };
+  }
 }
 var MAC_ASKS = [...MAC_PERSONAL, "Library"];
 var macAsks;
@@ -3484,7 +3547,14 @@ function deepestThere(where, resolve) {
       return full;
   }
 }
-function followLinks(where) {
+function leadsTo(where) {
+  try {
+    return followLinks(path14.resolve(where), true);
+  } catch {
+    return path14.resolve(where);
+  }
+}
+function followLinks(where, loose = false) {
   let names = where.split("/");
   let at = "/";
   for (let links = 0;names.length; ) {
@@ -3496,7 +3566,15 @@ function followLinks(where) {
       continue;
     }
     const next = path14.join(at, name);
-    if (!fs15.lstatSync(next).isSymbolicLink()) {
+    let link;
+    try {
+      link = fs15.lstatSync(next).isSymbolicLink();
+    } catch (error) {
+      if (!loose)
+        throw error;
+      return path14.join(next, ...names);
+    }
+    if (!link) {
       at = next;
       continue;
     }
@@ -3549,10 +3627,11 @@ function readAllowed() {
     return [];
   }
 }
-function allowedFor(project) {
+async function allowedFor(project) {
   const all = readAllowed();
   if (!project)
     return all;
+  await askedAbout([project]);
   const real = realProject(project);
   return all.filter((rule) => rule.project === real);
 }
@@ -3567,7 +3646,8 @@ function ownerOf(project) {
   }
   return { kind: "project", name: path15.basename(real) || real };
 }
-function listed(rules) {
+async function listed(rules) {
+  await askedAbout(rules.map((rule) => rule.project));
   const owners = new Map;
   return rules.map((rule) => {
     let known = owners.get(rule.project);
@@ -3676,11 +3756,12 @@ function checkedPath(given) {
     throw new RuleRefusal(later);
   return where;
 }
-function addRule(given) {
+async function addRule(given) {
   if (typeof given.project !== "string" || !path15.isAbsolute(given.project))
     throw new RuleRefusal("Name the project by its folder's full path.");
   if (given.kind !== "write")
     throw new RuleRefusal('Send {project, kind: "write", path}: a folder its commands may write in.');
+  await askedAbout([given.project, given.path]);
   const project = realProject(given.project);
   const rules = readAllowed();
   const where = checkedPath(given.path);
@@ -3711,7 +3792,8 @@ function removeRule(id) {
   keep(left);
   return true;
 }
-function writeRuleWouldBe(where) {
+async function writeRuleWouldBe(where) {
+  await askedAbout([where]);
   try {
     return checkedPath(where);
   } catch {
@@ -3996,7 +4078,8 @@ function seatbeltProfile(policy, options) {
   allow("file-read-data file-write-data file-write-times file-write*", `(literal (param "MEMORY"))`);
   allow(`file-write* file-write-create file-write-data file-write-mode file-write-times file-write-unlink`, `(require-all ${under("MEMORY_RE", String.raw`\.tmp\.[0-9]+\.[0-9a-f]+$`)} (vnode-type REGULAR-FILE))`);
   out.push(";; what runs outside the sandbox, or changes the engine");
-  deny("file-write-unlink file-write-create", `(literal (param "WORK"))`, `(literal (param "GIT"))`, `(literal (param "TMP"))`);
+  deny("file-write-unlink file-write-create", `(literal (param "WORK"))`, `(literal (param "GIT"))`);
+  deny("file-write-create", `(require-all (literal (param "TMP")) (require-not (vnode-type DIRECTORY)))`);
   const holders = new Set;
   for (const kept of [...policy.secrets, ...policy.readOnly, ...policy.kuvo])
     for (let at = path16.dirname(kept);at !== path16.dirname(at); at = path16.dirname(at))
@@ -4896,6 +4979,12 @@ function sweepWakeFolders(now = Date.now()) {
 function keepFence(every = (round) => {
   setInterval(round, 1e4).unref?.();
 }) {
+  whenReadLate(() => {
+    try {
+      if (fenceWanted() && checked.passed)
+        writeProfiles();
+    } catch {}
+  });
   try {
     setUpFence();
   } catch {}
@@ -15757,7 +15846,7 @@ var NAMED_BLOCK = messageBlock("<named-agents>", "</named-agents>", [
 var foldName = (text) => text.replace(/[\uFB00-\uFB06]/g, (ligature) => ligature.normalize("NFKD")).normalize("NFD").replace(/\p{M}/gu, "").toLowerCase().replace(/ς/g, "σ").replace(/ß/g, "ss");
 var wordCharacter = /^[\p{L}\p{N}]/u;
 var graphemes = (text) => [...new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(text)];
-function namesIn(text, references) {
+function namesIn2(text, references) {
   if (!text.includes("&"))
     return [];
   let folded = "";
@@ -15811,7 +15900,7 @@ function agentsNamed(texts, excluding, agents) {
   const references = [...byName.values()].map((agent) => ({ name: agent.name, session: agent.session }));
   const named = [];
   for (const text of texts) {
-    for (const { reference } of namesIn(text, references).reverse()) {
+    for (const { reference } of namesIn2(text, references).reverse()) {
       if (named.some((agent) => agent.session === reference.session))
         continue;
       const agent = byName.get(foldName(reference.name));
@@ -15899,7 +15988,7 @@ function nameMissing(text, agents) {
   if (!text.includes("&"))
     return false;
   const references = agents.map((agent) => ({ name: String(agent.name ?? ""), session: agent.session }));
-  const named = new Set(namesIn(text, references).map((each) => each.lower));
+  const named = new Set(namesIn2(text, references).map((each) => each.lower));
   const characters = graphemes(text);
   for (let i = 0;i < characters.length; i++) {
     const { segment, index } = characters[i];
@@ -16179,13 +16268,31 @@ var matching3 = (where, patterns = []) => patterns.some((each) => new RegExp(eac
 var nameOf = (word) => word.split("/").pop() ?? "";
 var homeWord = (text) => text.replace(/^(~|\$HOME|\$\{HOME\})(?=\/|$)/, homeFolder());
 function pathOf(word, folder) {
+  const named = namedPath(word, folder);
+  return named === null ? null : realish(named);
+}
+function namedPath(word, folder) {
   let text = word.replace(/^['"]|['"]$/g, "").replace(/^[A-Za-z_][A-Za-z0-9_]*=/, "").replace(/^-[A-Za-z-]*=/, "");
   if (!text || /^[a-z][a-z0-9+.-]*:\/\//i.test(text))
     return null;
   text = homeWord(text);
   if (!text.includes("/") && !text.startsWith("."))
     return null;
-  return realish(path63.resolve(folder, text));
+  return path63.resolve(folder, text);
+}
+function namedBy(action) {
+  if (action.kind === "file")
+    return [action.folder, action.path];
+  if (action.kind === "tool")
+    return [action.folder];
+  const line = readLine(action.command, true);
+  const words = "unreadable" in line ? [] : line.parts.flatMap((part) => [...part.words, ...part.writes, ...part.reads]);
+  return [
+    action.folder,
+    ...words.map((word) => namedPath(word, action.folder)).filter((each) => each !== null),
+    ...scriptsOf(action.command, action.folder).files,
+    ...stoppedWrites(action)
+  ];
 }
 var LOGIN = [
   ".profile",
@@ -16275,8 +16382,11 @@ function ownInside(own, policy) {
       return [folder];
     const at = realish(folder);
     const walled = policy.kuvo.some((wall) => inside2(at, wall) || inside2(wall, at)) || matching3(at, policy.kuvoPatterns);
-    return !walled || conversationPlace(at) ? [at] : [];
+    return !walled || conversationPlace(at) || attachmentsPlace(at) ? [at] : [];
   });
+}
+function attachmentsPlace(at) {
+  return /^ses_[A-Za-z0-9_-]{1,120}$/.test(path63.basename(at)) && attachmentRoots().some((root) => realish(root) === path63.dirname(at));
 }
 function conversationPlace(at) {
   const { inside: holders, shared } = conversationPlaces();
@@ -16286,7 +16396,8 @@ function deletesHome(where, home) {
   const target = where.endsWith("/*") ? where.slice(0, -2) || "/" : where;
   return target === home || holds(target, home);
 }
-function keptFromSessions(folder, policy = fencePolicy()) {
+async function keptFromSessions(folder, policy = fencePolicy()) {
+  await askedAbout([folder]);
   const at = realish(folder);
   const homes = [...new Set([policy.home, ...policy.homeWrites ?? []].map(realish))];
   const reach = (wall) => `its commands would reach ${wall}`;
@@ -17026,6 +17137,7 @@ function answerWithin(model, prompt, within, signal) {
 async function review(action, context, given) {
   const now = given.now ?? Date.now;
   const folder = given.folder ?? REVIEWS_FOLDER;
+  await askedAbout([...namedBy(action), ...given.own ?? []]);
   const { verdict, key } = await judge(action, context, given, now(), folder).catch((error) => ({ verdict: heldBack(`Auto's reviewer couldn't review it (${oneLine(String(error?.message ?? error), 120)}).`, "failed"), key: actionKey(action) }));
   if (verdict.decision === "allow" && verdict.by === "code")
     return verdict;
@@ -17380,7 +17492,7 @@ async function heldUnreached(session, action, signal) {
   const unanswered = async () => {
     throw new Error("the engine didn't answer");
   };
-  const own = [action.folder, commandTemporary(action.folder)].filter((each) => Boolean(each));
+  const own = [action.folder, commandTemporary(action.folder), ...attachedOf(session)].filter((each) => Boolean(each));
   return review(action, { session, said: [] }, { model: unanswered, signal, own });
 }
 function botOf(data) {
@@ -17472,10 +17584,28 @@ It's allowed once now: run it again, the same way, if the task still needs it.`;
   return sendInto(at.target, at.data.id, { id: messageID(), text, delivery: "steer", metadata: boxNote("Your answer", line) }, { from: "Your answer", words: line }).then(() => true, () => false);
 }
 var READING = new Set(["read", "glob", "grep", "list", "ls", "view", "notebookread"]);
+var OWN_READING = new Set(["read", "view", "notebookread"]);
 var reviewing = new Set;
 var askReviews = new Map;
 var reviewFollowers = new Set;
 var listAskReviews = () => [...askReviews.values()];
+function settleAskReview(id) {
+  const review = askReviews.get(id);
+  if (!review || review.state !== "yours" && review.state !== "checking")
+    return;
+  askReviews.delete(id);
+  for (const changed of reviewFollowers)
+    changed();
+}
+function settleRunReviews(session) {
+  const gone = [...askReviews.values()].filter((each) => each.session === session && (each.state === "yours" || each.state === "checking"));
+  if (!gone.length)
+    return;
+  for (const each of gone)
+    askReviews.delete(each.id);
+  for (const changed of reviewFollowers)
+    changed();
+}
 function onAskReviewsChanged(changed) {
   reviewFollowers.add(changed);
   return () => {
@@ -17510,9 +17640,28 @@ async function reviewPermission(source, event, signal, found) {
     throw error;
   }
 }
+async function takeUpWaitingAsks(source, sessions, signal) {
+  const waiting = [];
+  for (const session of sessions) {
+    if (signal?.aborted)
+      return;
+    const { permissions } = await asksIn(source, session, signal).catch(() => ({ permissions: [] }));
+    for (const each of permissions) {
+      if (each.action !== "external_directory" || reviewing.has(each.id) || askReviews.has(each.id))
+        continue;
+      noteReview(each.id, each.asker, "checking");
+      waiting.push(each);
+    }
+  }
+  for (const each of waiting) {
+    await reviewPermission(source, { type: "permission.asked", data: { id: each.id, sessionID: each.asker, action: each.action } }, signal).catch(() => null);
+  }
+}
+var attachedOf = (session) => attachmentRoots().map((root) => path64.join(root, session));
 function ownFolders(at) {
   const folder = at.data.location?.directory;
   const folders = typeof folder === "string" ? [folder, commandTemporary(folder)].filter((each) => Boolean(each)) : [];
+  folders.push(...[at.data.id, at.data.parentID].filter((each) => typeof each === "string").flatMap(attachedOf));
   const bot = botOfConversation(at.data.id) ?? worksFor(at.data);
   if (!bot)
     return folders;
@@ -17539,9 +17688,19 @@ function realPath(file) {
   }
 }
 async function answerPermission(source, id, sessionID, signal, found) {
-  const { permissions } = await asksIn(source, sessionID, signal);
-  const permission = permissions.find((each) => each.id === id && each.asker === sessionID);
-  if (permission?.action !== "external_directory")
+  let { permissions } = await asksIn(source, sessionID, signal);
+  let permission = permissions.find((each) => each.id === id && each.asker === sessionID);
+  if (!permission) {
+    await new Promise((done) => setTimeout(done, 1000));
+    ({ permissions } = await asksIn(source, sessionID, signal));
+    permission = permissions.find((each) => each.id === id && each.asker === sessionID);
+  }
+  if (!permission) {
+    if (askReviews.get(id)?.state === "checking")
+      noteReview(id, sessionID, "yours", askReviews.get(id)?.call);
+    return null;
+  }
+  if (permission.action !== "external_directory")
     return null;
   const seen = await callOf(source, permission, signal);
   const at = found === undefined ? await conversationOf2(sessionID) : found;
@@ -17554,6 +17713,22 @@ async function answerPermission(source, id, sessionID, signal, found) {
   const file = seen && [seen.input.filePath, seen.input.file_path, seen.input.notebook_path, seen.input.path, seen.input.file].find((each) => typeof each === "string" && each.startsWith("/"));
   const named = permission.resources.filter((each) => each !== "*").map((each) => path64.resolve(folder, each.replace(/^~(?=\/|$)/, homeFolder()).replace(/\/\*$/, "") || "/"));
   const actions = seen && file ? [{ kind: "file", path: file, access: READING.has(seen.tool.toLowerCase()) ? "read" : "write", folder, tool: seen.tool, input: seen.input }] : named.length ? named.map((each) => ({ kind: "file", path: each, access: "write", folder })) : [{ kind: "tool", tool: seen?.tool || "work outside its folder", args: seen?.input ?? { asked: permission.resources }, folder }];
+  const readsOwn = [commandTemporary(folder), ...[at.data.id, at.data.parentID].filter((each) => typeof each === "string").flatMap(attachedOf)].filter((each) => Boolean(each));
+  const ownReads = (within) => actions.every((action) => action.kind === "file" && action.access === "read" && OWN_READING.has(String(action.tool).toLowerCase()) && readsOwn.some((place) => within(action.path, place)));
+  const ownByName = ownReads((file, place) => {
+    const inside = path64.relative(place, path64.resolve(file));
+    return inside === "" || !inside.startsWith("..") && !path64.isAbsolute(inside);
+  });
+  if (!ownByName && !inAuto(at)) {
+    noteReview(id, sessionID, "yours", call2);
+    return null;
+  }
+  await askedAbout([folder, ...actions.flatMap((action) => action.kind === "file" ? [action.path] : [])]);
+  if (ownByName && ownReads(isWithin)) {
+    await call(source, "POST", `/api/session/${encodeURIComponent(permission.asker)}/permission/${encodeURIComponent(permission.id)}/reply`, { decision: "once" }, signal);
+    noteReview(id, sessionID, "allowed", call2);
+    return { decision: "allow", reason: "Its own files.", by: "code" };
+  }
   if (!inAuto(at)) {
     noteReview(id, sessionID, "yours", call2);
     return null;
@@ -25124,7 +25299,7 @@ function listOf3(folder) {
   }
 }
 var SESSION4 = /^ses_[A-Za-z0-9_-]{1,120}$/;
-var keptIn = () => [path91.join(K, "attachments"), ...MAC_ATTACHMENTS ? [MAC_ATTACHMENTS] : []];
+var keptIn = attachmentRoots;
 var looking = Promise.resolve();
 function letAttachmentsGo(places, session) {
   looking = looking.then(() => letGo3(places, session)).catch(() => {});
@@ -25794,6 +25969,8 @@ async function watchEvents(read, tell, signal, answered = () => {}, { bots = fal
         settleGoalHolds(source, goalHeld).catch(() => {});
       if (work)
         noteFullAccessAtWork(source, atWork3).catch(() => {});
+      if (work)
+        atWork3(source).then((sessions) => takeUpWaitingAsks(source, sessions, connection.signal)).catch(() => {});
       for await (const event of serverEvents(response.body)) {
         if (event.type === "session.execution.started")
           freshenBot(source, event.data?.sessionID).catch(() => {});
@@ -25832,6 +26009,11 @@ async function watchEvents(read, tell, signal, answered = () => {}, { bots = fal
           if (event.type === "session.created" || event.type === "session.deleted" || RUN_ENDS.has(event.type) || event.type === "session.metadata.updated" && isArchiving(event))
             tidyWorktrees(connection.signal).catch(() => {});
         }
+        const settled = ANSWERED2.has(event.type) ? event.data?.requestID ?? event.data?.id : undefined;
+        if (typeof settled === "string")
+          settleAskReview(settled);
+        if (RUN_ENDS.has(event.type) && typeof event.data?.sessionID === "string")
+          settleRunReviews(event.data.sessionID);
         if (!notices)
           continue;
         if (ANSWERED2.has(event.type))
@@ -25861,31 +26043,2845 @@ async function atWork3(target) {
   return Array.isArray(active) ? active : Object.keys(active);
 }
 
-// Packages/Box/src/link/keeper.ts
-import { spawn as spawn8 } from "node:child_process";
+// Packages/Box/src/link/browser/install.ts
+import { execFileSync as execFileSync3, spawn as spawn8 } from "node:child_process";
+import crypto38 from "node:crypto";
+import fs88 from "node:fs";
+import os8 from "node:os";
+import path94 from "node:path";
+// Packages/Box/src/link/browser/linux.json
+var linux_default = {
+  chromium: {
+    version: "155.0.8059.79",
+    x86_64: {
+      url: "https://storage.googleapis.com/chrome-for-testing-public/155.0.8059.79/linux64/chrome-linux64.zip",
+      sha256: "bcd9a79130d7e44d70f93be87042e9bcee7fe0f0b3898e06b8c9bed5fb619dcd",
+      size: 198413482
+    },
+    aarch64: {
+      url: "https://storage.googleapis.com/chrome-for-testing-public/155.0.8059.79/linux-arm64/chrome-linux-arm64.zip",
+      sha256: "6ba365c60cb1cff5e742caaa1e8b6f2c019f93f7a644fa42ea0bcfcf029d7e67",
+      size: 198301406
+    }
+  },
+  packages: {
+    x86_64: [
+      {
+        name: "alsa-lib",
+        version: "1.2.10-2.el8",
+        repo: "AppStream",
+        path: "Packages/a/alsa-lib-1.2.10-2.el8.x86_64.rpm",
+        sha256: "e2533af17c8f83c4d9c71b968ec4121b08a035bdbf770497c65f4853be93574f",
+        size: 512192
+      },
+      {
+        name: "at-spi2-atk",
+        version: "2.26.2-1.el8",
+        repo: "AppStream",
+        path: "Packages/a/at-spi2-atk-2.26.2-1.el8.x86_64.rpm",
+        sha256: "8cf63781b34314ecd9931ac8cfcbd3ffdc526d720bae948a27e868d9beff08e3",
+        size: 90200
+      },
+      {
+        name: "at-spi2-core",
+        version: "2.28.0-1.el8",
+        repo: "AppStream",
+        path: "Packages/a/at-spi2-core-2.28.0-1.el8.x86_64.rpm",
+        sha256: "c9bba632f64d56e6a45b23dc9f79fc6868f292d2a21f638ead6bd48116184a8c",
+        size: 172052
+      },
+      {
+        name: "atk",
+        version: "2.28.1-1.el8",
+        repo: "AppStream",
+        path: "Packages/a/atk-2.28.1-1.el8.x86_64.rpm",
+        sha256: "01abcea12bbada68012f4933c190f269a5053da4e0c6372eea534f04be099530",
+        size: 276748
+      },
+      {
+        name: "audit-libs",
+        version: "3.1.2-1.el8_10.1",
+        repo: "BaseOS",
+        path: "Packages/a/audit-libs-3.1.2-1.el8_10.1.x86_64.rpm",
+        sha256: "80e99067d2ce6eb0fbb5b454a7984cbfe03440b8b526f1130c6efc76169087ba",
+        size: 126852
+      },
+      {
+        name: "avahi-libs",
+        version: "0.7-27.el8_10.1",
+        repo: "BaseOS",
+        path: "Packages/a/avahi-libs-0.7-27.el8_10.1.x86_64.rpm",
+        sha256: "43382568441f17b6bd316543f57574661639e99abe8766cff996654345d6ba0d",
+        size: 62704
+      },
+      {
+        name: "bzip2-libs",
+        version: "1.0.6-28.el8_10",
+        repo: "BaseOS",
+        path: "Packages/b/bzip2-libs-1.0.6-28.el8_10.x86_64.rpm",
+        sha256: "14ecb4995555392bd45644630196b6f864d93dba9c56133bb96f199841852ad0",
+        size: 48232
+      },
+      {
+        name: "cairo",
+        version: "1.15.12-6.el8",
+        repo: "AppStream",
+        path: "Packages/c/cairo-1.15.12-6.el8.x86_64.rpm",
+        sha256: "7fd42a923afbaebcff03073c443235685e4094ef7eab8ca48c8043d198b92673",
+        size: 734772
+      },
+      {
+        name: "cups-libs",
+        version: "2.2.6-68.el8_10",
+        repo: "BaseOS",
+        path: "Packages/c/cups-libs-2.2.6-68.el8_10.x86_64.rpm",
+        sha256: "9c4a672807d9e99eb468964b15c6fd8263c0efe71bbea0f597b0bf677bb36a42",
+        size: 448052
+      },
+      {
+        name: "dbus-libs",
+        version: "1.12.8-28.el8_10",
+        repo: "BaseOS",
+        path: "Packages/d/dbus-libs-1.12.8-28.el8_10.x86_64.rpm",
+        sha256: "977bb6e46172b5db9e121a1406b9b30910e37141b77288b7e24490f159df6592",
+        size: 188660
+      },
+      {
+        name: "dejavu-sans-fonts",
+        version: "2.35-7.el8",
+        repo: "BaseOS",
+        path: "Packages/d/dejavu-sans-fonts-2.35-7.el8.noarch.rpm",
+        sha256: "e6d02d1a8c0df5e81a27f3ce6990dd15eaf7fc9d28d754d6d59c58db6983245e",
+        size: 1557304
+      },
+      {
+        name: "expat",
+        version: "2.5.0-4.el8_10",
+        repo: "BaseOS",
+        path: "Packages/e/expat-2.5.0-4.el8_10.x86_64.rpm",
+        sha256: "ccbc060aebcd0ed4bccf1787dbcbd705991e00973eb34a13c5be4115d11c108a",
+        size: 136016
+      },
+      {
+        name: "fontconfig",
+        version: "2.13.1-4.el8",
+        repo: "BaseOS",
+        path: "Packages/f/fontconfig-2.13.1-4.el8.x86_64.rpm",
+        sha256: "6f8bbe7f9c22003405031deeb18ef38815d8dd4935b8766f711ac8abff276601",
+        size: 279692
+      },
+      {
+        name: "freetype",
+        version: "2.9.1-10.el8_10",
+        repo: "BaseOS",
+        path: "Packages/f/freetype-2.9.1-10.el8_10.x86_64.rpm",
+        sha256: "379878d60f3d4f01c61209ed57384d3c7f926d7429ec93dc886c22bf64a7cbfd",
+        size: 402128
+      },
+      {
+        name: "fribidi",
+        version: "1.0.4-9.el8",
+        repo: "AppStream",
+        path: "Packages/f/fribidi-1.0.4-9.el8.x86_64.rpm",
+        sha256: "140455eb981d3ea0296f5719b1026b29f8e6316caf885301b5607af38483edec",
+        size: 90468
+      },
+      {
+        name: "gawk",
+        version: "4.2.1-5.el8_10",
+        repo: "BaseOS",
+        path: "Packages/g/gawk-4.2.1-5.el8_10.x86_64.rpm",
+        sha256: "f7878baf194d001db5fee551325077225ba12828f3bd2e798cfa2d7560c2e1c1",
+        size: 1189580
+      },
+      {
+        name: "glib2",
+        version: "2.56.4-178.el8_10",
+        repo: "BaseOS",
+        path: "Packages/g/glib2-2.56.4-178.el8_10.x86_64.rpm",
+        sha256: "4de61005339df7500199c8a1b7f3201665363bdd7879a378783a7b78849baf7b",
+        size: 2616576
+      },
+      {
+        name: "gmp",
+        version: "6.1.2-12.el8",
+        repo: "BaseOS",
+        path: "Packages/g/gmp-6.1.2-12.el8.x86_64.rpm",
+        sha256: "df8ebe29fce2c3e431bcb5fb169ff8d72cb952aabb945a8ddd0cfb1a7900078f",
+        size: 324704
+      },
+      {
+        name: "gnutls",
+        version: "3.6.16-8.el8_10.6",
+        repo: "BaseOS",
+        path: "Packages/g/gnutls-3.6.16-8.el8_10.6.x86_64.rpm",
+        sha256: "767884dba7c0de979a7e896e068f4d6189db75f0f70a43a9e5d5eb2477500c4e",
+        size: 1045768
+      },
+      {
+        name: "google-droid-sans-fonts",
+        version: "20120715-13.el8",
+        repo: "AppStream",
+        path: "Packages/g/google-droid-sans-fonts-20120715-13.el8.noarch.rpm",
+        sha256: "3db706780458ab81531cf1adac22885bcc51ca37eceabc24fee5c2f5486e82f1",
+        size: 2602188
+      },
+      {
+        name: "google-noto-emoji-color-fonts",
+        version: "20200916-2.el8",
+        repo: "AppStream",
+        path: "Packages/g/google-noto-emoji-color-fonts-20200916-2.el8.noarch.rpm",
+        sha256: "1361deafeac4dd12c648898ddb7d3ecf58becbe687b6da95e3bf1899d1c1c944",
+        size: 9638932
+      },
+      {
+        name: "graphite2",
+        version: "1.3.10-10.el8",
+        repo: "AppStream",
+        path: "Packages/g/graphite2-1.3.10-10.el8.x86_64.rpm",
+        sha256: "b008a03eec2d111f34e4e4857fef2133997ee831d22ab06a5e47beb450d5093b",
+        size: 123012
+      },
+      {
+        name: "harfbuzz",
+        version: "1.7.5-4.el8",
+        repo: "AppStream",
+        path: "Packages/h/harfbuzz-1.7.5-4.el8.x86_64.rpm",
+        sha256: "248547c45cdb44b64f6d3c9cd4cc15dfb5a8eec1ba4696256929798a38665a90",
+        size: 301732
+      },
+      {
+        name: "hwdata",
+        version: "0.314-8.22.el8",
+        repo: "BaseOS",
+        path: "Packages/h/hwdata-0.314-8.22.el8.noarch.rpm",
+        sha256: "08f63531506cc8b97fc047cdd99a378d7ac8e10ebf594dbd7c4dcdb81b2dde69",
+        size: 1928200
+      },
+      {
+        name: "keyutils-libs",
+        version: "1.5.10-9.el8",
+        repo: "BaseOS",
+        path: "Packages/k/keyutils-libs-1.5.10-9.el8.x86_64.rpm",
+        sha256: "f44103f68ed2718427d03edb4a0ebdf187ca12bcb13024b9b88a7e7f802ba95c",
+        size: 33684
+      },
+      {
+        name: "krb5-libs",
+        version: "1.18.2-34.el8_10",
+        repo: "BaseOS",
+        path: "Packages/k/krb5-libs-1.18.2-34.el8_10.x86_64.rpm",
+        sha256: "1d034db734b2c4c2db6558d386ad2c2a1618240dd1dcbaafd3e4624214f0cd4a",
+        size: 863852
+      },
+      {
+        name: "libX11",
+        version: "1.6.8-9.el8_10",
+        repo: "AppStream",
+        path: "Packages/l/libX11-1.6.8-9.el8_10.x86_64.rpm",
+        sha256: "205140d4ec8722eeb29fd45461633b41f44a66865ef1636e179f27e12dabe7bd",
+        size: 625708
+      },
+      {
+        name: "libXau",
+        version: "1.0.9-3.el8",
+        repo: "AppStream",
+        path: "Packages/l/libXau-1.0.9-3.el8.x86_64.rpm",
+        sha256: "028141ae18fb41c9ee406307953e600eba388282b0d581c7132db5ff22ace362",
+        size: 37200
+      },
+      {
+        name: "libXcomposite",
+        version: "0.4.4-14.el8",
+        repo: "AppStream",
+        path: "Packages/l/libXcomposite-0.4.4-14.el8.x86_64.rpm",
+        sha256: "3d0681577ee2961431bcd2cd646f08ad99bf7f19d52b12483e71ebb14fee7ab8",
+        size: 28092
+      },
+      {
+        name: "libXdamage",
+        version: "1.1.4-14.el8",
+        repo: "AppStream",
+        path: "Packages/l/libXdamage-1.1.4-14.el8.x86_64.rpm",
+        sha256: "b0fa6e96826a5adf55337191c4c9f3b6a31a4eb1ed81981102058cb4b506e5ef",
+        size: 26224
+      },
+      {
+        name: "libXext",
+        version: "1.3.4-1.el8",
+        repo: "AppStream",
+        path: "Packages/l/libXext-1.3.4-1.el8.x86_64.rpm",
+        sha256: "d4b037882da8eb6c588eee822f3227e7caf6ed2e9352ed490f0cd3577ed78470",
+        size: 45408
+      },
+      {
+        name: "libXfixes",
+        version: "5.0.3-7.el8",
+        repo: "AppStream",
+        path: "Packages/l/libXfixes-5.0.3-7.el8.x86_64.rpm",
+        sha256: "be03c4d9a5ea3b1b1fb80f301f932ff0488fd80fb7acd9126153956f27cedb13",
+        size: 24384
+      },
+      {
+        name: "libXft",
+        version: "2.3.3-1.el8",
+        repo: "AppStream",
+        path: "Packages/l/libXft-2.3.3-1.el8.x86_64.rpm",
+        sha256: "2d4a1d4c0c9e61c70936873f0563ed2ac6b468549c3163bf73f91134ff2e9860",
+        size: 67216
+      },
+      {
+        name: "libXi",
+        version: "1.7.10-1.el8",
+        repo: "AppStream",
+        path: "Packages/l/libXi-1.7.10-1.el8.x86_64.rpm",
+        sha256: "50085caa63b1a131251449903e9918d847702e5a9b64ed33bd2b72b1ff657343",
+        size: 48768
+      },
+      {
+        name: "libXrandr",
+        version: "1.5.2-1.el8",
+        repo: "AppStream",
+        path: "Packages/l/libXrandr-1.5.2-1.el8.x86_64.rpm",
+        sha256: "6e162f68d0459598f596ee0698a504c795d6c992a807dec0e718efdc8a1e225e",
+        size: 33316
+      },
+      {
+        name: "libXrender",
+        version: "0.9.10-7.el8",
+        repo: "AppStream",
+        path: "Packages/l/libXrender-0.9.10-7.el8.x86_64.rpm",
+        sha256: "686856648531848c72434a295d276394d4dee6dab1336c6b745b9daab0613292",
+        size: 32344
+      },
+      {
+        name: "libXtst",
+        version: "1.2.3-7.el8",
+        repo: "AppStream",
+        path: "Packages/l/libXtst-1.2.3-7.el8.x86_64.rpm",
+        sha256: "2f095a882b0593cc3d19fae7d84859e8216a2c009fd5906c862daf84b6caa249",
+        size: 21108
+      },
+      {
+        name: "libblkid",
+        version: "2.32.1-48.el8_10",
+        repo: "BaseOS",
+        path: "Packages/l/libblkid-2.32.1-48.el8_10.x86_64.rpm",
+        sha256: "20cb24aecca504c9581e245ace7380e1b51a88e732305b43a4c1bebea9a76935",
+        size: 225436
+      },
+      {
+        name: "libcap",
+        version: "2.48-6.el8_10.1",
+        repo: "BaseOS",
+        path: "Packages/l/libcap-2.48-6.el8_10.1.x86_64.rpm",
+        sha256: "ad1acfa784efcf98d72f8eb268849805fe74d135d79d02384478421a87ffd024",
+        size: 75496
+      },
+      {
+        name: "libcap-ng",
+        version: "0.7.11-1.el8",
+        repo: "BaseOS",
+        path: "Packages/l/libcap-ng-0.7.11-1.el8.x86_64.rpm",
+        sha256: "761a00cbdad22fc3d308ce6e49aa3b3909cd2a8b93794da53ea74344a280cde5",
+        size: 33108
+      },
+      {
+        name: "libcom_err",
+        version: "1.45.6-7.el8_10",
+        repo: "BaseOS",
+        path: "Packages/l/libcom_err-1.45.6-7.el8_10.x86_64.rpm",
+        sha256: "0eb2a80054bc7e421ac4eec9aebfc08d576d8bbe93ffb7237227d32a6f5172e7",
+        size: 49712
+      },
+      {
+        name: "libdatrie",
+        version: "0.2.9-7.el8",
+        repo: "AppStream",
+        path: "Packages/l/libdatrie-0.2.9-7.el8.x86_64.rpm",
+        sha256: "af6561333c5b3e0a13d7539c5fc34756cb0facd69184a5dfc3c83cf1a148e8d7",
+        size: 32744
+      },
+      {
+        name: "libdrm",
+        version: "2.4.115-2.el8",
+        repo: "BaseOS",
+        path: "Packages/l/libdrm-2.4.115-2.el8.x86_64.rpm",
+        sha256: "86becbf4c7dd367cb2e5a1dd286690f64bd3d3b63f1cbcb36493ecc07d74810e",
+        size: 167392
+      },
+      {
+        name: "liberation-mono-fonts",
+        version: "2.00.3-7.el8",
+        repo: "BaseOS",
+        path: "Packages/l/liberation-mono-fonts-2.00.3-7.el8.noarch.rpm",
+        sha256: "5455e6eddd7c2d5c109775a8bdd39cc35fb2bf1f4790df9b530358d57926bd56",
+        size: 516364
+      },
+      {
+        name: "liberation-sans-fonts",
+        version: "2.00.3-7.el8",
+        repo: "BaseOS",
+        path: "Packages/l/liberation-sans-fonts-2.00.3-7.el8.noarch.rpm",
+        sha256: "3721a1315298f5fe4c3a635d7c3b7048428f711b6a6f90638dcb44aab624537d",
+        size: 623552
+      },
+      {
+        name: "liberation-serif-fonts",
+        version: "2.00.3-7.el8",
+        repo: "BaseOS",
+        path: "Packages/l/liberation-serif-fonts-2.00.3-7.el8.noarch.rpm",
+        sha256: "41ebbfca4b7fc586cd22ff6ece89461aa61cd346fda9b4f98d2817c83ef630ff",
+        size: 622248
+      },
+      {
+        name: "libffi",
+        version: "3.1-24.el8",
+        repo: "BaseOS",
+        path: "Packages/l/libffi-3.1-24.el8.x86_64.rpm",
+        sha256: "c643193dce9c134921489992a7befefba82bb2596d34b7166947c12b278f5f40",
+        size: 37456
+      },
+      {
+        name: "libgcrypt",
+        version: "1.8.5-8.el8_10",
+        repo: "BaseOS",
+        path: "Packages/l/libgcrypt-1.8.5-8.el8_10.x86_64.rpm",
+        sha256: "bd8bd915ab9e806a0d5b7af4ccef84b660b645bb56b1e4188ffc8596b1893df1",
+        size: 472988
+      },
+      {
+        name: "libgpg-error",
+        version: "1.31-1.el8",
+        repo: "BaseOS",
+        path: "Packages/l/libgpg-error-1.31-1.el8.x86_64.rpm",
+        sha256: "2bde4100ef033c41c0eaedfe4c33560bda625b838f2ad2c073d4420039399bdf",
+        size: 246192
+      },
+      {
+        name: "libidn2",
+        version: "2.2.0-1.el8",
+        repo: "BaseOS",
+        path: "Packages/l/libidn2-2.2.0-1.el8.x86_64.rpm",
+        sha256: "ea3af5771feed5c6e8372db9ab809acb23b7851dfb4936cf9b0ac1cddd9eb6c2",
+        size: 94544
+      },
+      {
+        name: "libmount",
+        version: "2.32.1-48.el8_10",
+        repo: "BaseOS",
+        path: "Packages/l/libmount-2.32.1-48.el8_10.x86_64.rpm",
+        sha256: "b19ccc46a0d6e35ef50ae4613e3ab890b91fdd5b3c935a8e55273f3b77389bab",
+        size: 241936
+      },
+      {
+        name: "libpciaccess",
+        version: "0.14-1.el8",
+        repo: "BaseOS",
+        path: "Packages/l/libpciaccess-0.14-1.el8.x86_64.rpm",
+        sha256: "ffa55e88d93b88b63f6bd254d324d220f261d99384caefcf861defdd367da064",
+        size: 32072
+      },
+      {
+        name: "libpng",
+        version: "1.6.34-11.el8_10",
+        repo: "BaseOS",
+        path: "Packages/l/libpng-1.6.34-11.el8_10.x86_64.rpm",
+        sha256: "9e38e76bf83800d2e2291e0d4aca4ee9a65ddf003f3f9c1c3398419c57fb9b7b",
+        size: 129552
+      },
+      {
+        name: "libselinux",
+        version: "2.9-11.el8_10",
+        repo: "BaseOS",
+        path: "Packages/l/libselinux-2.9-11.el8_10.x86_64.rpm",
+        sha256: "34356ec2bc643df7a2c0c1767db9207bce553bee694539cd60fc987ab3f65b8c",
+        size: 169120
+      },
+      {
+        name: "libsepol",
+        version: "2.9-3.el8",
+        repo: "BaseOS",
+        path: "Packages/l/libsepol-2.9-3.el8.x86_64.rpm",
+        sha256: "cc017c27e60d9f6d83db9d6828cad89b804d9f50476d88b23e0cd7a69b58f107",
+        size: 346936
+      },
+      {
+        name: "libsigsegv",
+        version: "2.11-5.el8",
+        repo: "BaseOS",
+        path: "Packages/l/libsigsegv-2.11-5.el8.x86_64.rpm",
+        sha256: "c822032759307cd42191a8b3ddebb4e883cc2bca051c1e629a6d233ca8594eb1",
+        size: 29864
+      },
+      {
+        name: "libstdc++",
+        version: "8.5.0-29.el8_10",
+        repo: "BaseOS",
+        path: "Packages/l/libstdc++-8.5.0-29.el8_10.x86_64.rpm",
+        sha256: "c165f433d6d275149f7be000799769d18b9708c204f4dad8d1f50c64bdfb07c3",
+        size: 485252
+      },
+      {
+        name: "libtasn1",
+        version: "4.13-6.el8_10",
+        repo: "BaseOS",
+        path: "Packages/l/libtasn1-4.13-6.el8_10.x86_64.rpm",
+        sha256: "4297cd64caf0652ce9403dd0383c8167a2410d31e1bd0f8f15556c2554490e28",
+        size: 77552
+      },
+      {
+        name: "libthai",
+        version: "0.1.27-2.el8",
+        repo: "AppStream",
+        path: "Packages/l/libthai-0.1.27-2.el8.x86_64.rpm",
+        sha256: "40184946b4bdf8e00577e89d2aaad32794785946834a92b9b7f6b5bba46da12f",
+        size: 206476
+      },
+      {
+        name: "libunistring",
+        version: "0.9.9-3.el8",
+        repo: "BaseOS",
+        path: "Packages/l/libunistring-0.9.9-3.el8.x86_64.rpm",
+        sha256: "89202bab5d105ed5c917959f84fda4c8a4d8ee9bd027099f716034e1ed30a103",
+        size: 428996
+      },
+      {
+        name: "libuuid",
+        version: "2.32.1-48.el8_10",
+        repo: "BaseOS",
+        path: "Packages/l/libuuid-2.32.1-48.el8_10.x86_64.rpm",
+        sha256: "f1748e5d96d72bf941a19932ad90388fc733b38393e3bed8181715041bc42dae",
+        size: 100980
+      },
+      {
+        name: "libverto",
+        version: "0.3.2-2.el8",
+        repo: "BaseOS",
+        path: "Packages/l/libverto-0.3.2-2.el8.x86_64.rpm",
+        sha256: "710a6b9deeb18e8e2972bc6738cd1ac9403c60bc5c2a83c6229be69075aa0a4e",
+        size: 23508
+      },
+      {
+        name: "libwayland-server",
+        version: "1.21.0-1.el8",
+        repo: "AppStream",
+        path: "Packages/l/libwayland-server-1.21.0-1.el8.x86_64.rpm",
+        sha256: "b84ffce6fee146d551c08c36b2e80e42bfdee0ec0e9d331361230a1f02b71c31",
+        size: 48592
+      },
+      {
+        name: "libxcb",
+        version: "1.13.1-1.el8",
+        repo: "AppStream",
+        path: "Packages/l/libxcb-1.13.1-1.el8.x86_64.rpm",
+        sha256: "f879eab6ae5acfddf7c6aa6cb7192fec725940babca04b33388fb1f0b5aadb5b",
+        size: 233644
+      },
+      {
+        name: "libxcrypt",
+        version: "4.1.1-6.el8",
+        repo: "BaseOS",
+        path: "Packages/l/libxcrypt-4.1.1-6.el8.x86_64.rpm",
+        sha256: "da47347fe8c12a83da4b3dc141396172f82cde14530b7746b2c0882651f1a468",
+        size: 73388
+      },
+      {
+        name: "libxkbcommon",
+        version: "0.9.1-1.el8",
+        repo: "AppStream",
+        path: "Packages/l/libxkbcommon-0.9.1-1.el8.x86_64.rpm",
+        sha256: "51f79ea9268dae9826ece0bc98c135dd5ca62b08581694ae5401971690fd3766",
+        size: 117432
+      },
+      {
+        name: "lz4-libs",
+        version: "1.8.3-5.el8_10",
+        repo: "BaseOS",
+        path: "Packages/l/lz4-libs-1.8.3-5.el8_10.x86_64.rpm",
+        sha256: "d093c42b6784901b035d84394ef2bcab2ffd9c1b51ad5ee8cb62c2a14c0234ed",
+        size: 66780
+      },
+      {
+        name: "mesa-libgbm",
+        version: "23.1.4-4.el8_10",
+        repo: "AppStream",
+        path: "Packages/m/mesa-libgbm-23.1.4-4.el8_10.x86_64.rpm",
+        sha256: "f3d8a910f6898d1b44e1d7a96e25f691beafdd2c99735f2afc904aa3ab63f5f5",
+        size: 61136
+      },
+      {
+        name: "mpfr",
+        version: "3.1.6-1.el8",
+        repo: "BaseOS",
+        path: "Packages/m/mpfr-3.1.6-1.el8.x86_64.rpm",
+        sha256: "64294d87f40c5e7ac7db7d3d7d4b80b7de6a8b9a8ebd4efca104fbb558fbcb94",
+        size: 224440
+      },
+      {
+        name: "ncurses-base",
+        version: "6.1-10.20180224.el8",
+        repo: "BaseOS",
+        path: "Packages/n/ncurses-base-6.1-10.20180224.el8.noarch.rpm",
+        sha256: "647aca6251968e8285c4a0b72670b85a3449096daf196807e9d85a19eacd0c2c",
+        size: 82176
+      },
+      {
+        name: "ncurses-libs",
+        version: "6.1-10.20180224.el8",
+        repo: "BaseOS",
+        path: "Packages/n/ncurses-libs-6.1-10.20180224.el8.x86_64.rpm",
+        sha256: "c429ae46a45c8e65361245ec8b50f553a13d4c339665ee9fe2247972571f282a",
+        size: 340540
+      },
+      {
+        name: "nettle",
+        version: "3.4.1-7.el8",
+        repo: "BaseOS",
+        path: "Packages/n/nettle-3.4.1-7.el8.x86_64.rpm",
+        sha256: "1c462fc46745eb337edf14bc05b508d7cc5cf109c15d8ec0981ba29b3fba779e",
+        size: 307132
+      },
+      {
+        name: "nspr",
+        version: "4.39.0-3.el8_10",
+        repo: "AppStream",
+        path: "Packages/n/nspr-4.39.0-3.el8_10.x86_64.rpm",
+        sha256: "3d6863c8c56363bd21dbe4b413a903d5af273f8e6f0d019cca96bb909b119ddb",
+        size: 146000
+      },
+      {
+        name: "nss",
+        version: "3.124.0-5.el8_10",
+        repo: "AppStream",
+        path: "Packages/n/nss-3.124.0-5.el8_10.x86_64.rpm",
+        sha256: "6aa8eb2babc54dc416ebea43c7d7c561fb09fe1ef84eb8f03a38207338c63ade",
+        size: 793352
+      },
+      {
+        name: "nss-softokn",
+        version: "3.124.0-5.el8_10",
+        repo: "AppStream",
+        path: "Packages/n/nss-softokn-3.124.0-5.el8_10.x86_64.rpm",
+        sha256: "66a3cfd2d5e60dcbbd8e95506f8a94ce76dff52de52f67ace9656d0bccdf8325",
+        size: 570756
+      },
+      {
+        name: "nss-softokn-freebl",
+        version: "3.124.0-5.el8_10",
+        repo: "AppStream",
+        path: "Packages/n/nss-softokn-freebl-3.124.0-5.el8_10.x86_64.rpm",
+        sha256: "cea3f12a61283773caba7baa5a29218ab2727c46de673b517584a0d4708be873",
+        size: 469600
+      },
+      {
+        name: "nss-util",
+        version: "3.124.0-5.el8_10",
+        repo: "AppStream",
+        path: "Packages/n/nss-util-3.124.0-5.el8_10.x86_64.rpm",
+        sha256: "1a8f27bced01b8fc31bb9e381544c2645236b18020ce9146b622a2d42ca8e900",
+        size: 146916
+      },
+      {
+        name: "openssl-libs",
+        version: "1.1.1k-17.el8_10",
+        repo: "BaseOS",
+        path: "Packages/o/openssl-libs-1.1.1k-17.el8_10.x86_64.rpm",
+        sha256: "a60dfe74bc3f8f77ca94de4c3656119199286e20b1c990d2b1f804a12745fafb",
+        size: 1542728
+      },
+      {
+        name: "p11-kit",
+        version: "0.23.22-2.el8",
+        repo: "BaseOS",
+        path: "Packages/p/p11-kit-0.23.22-2.el8.x86_64.rpm",
+        sha256: "4dffa72079b4babbc6c7dec13408ce75da08bb18239e5e37c0861c39f48f33cd",
+        size: 333700
+      },
+      {
+        name: "pango",
+        version: "1.42.4-8.el8",
+        repo: "AppStream",
+        path: "Packages/p/pango-1.42.4-8.el8.x86_64.rpm",
+        sha256: "481dc7c787260e8d261cd4f7d7499105def3a3a64835e4f7f4ed6ab0ddf92723",
+        size: 303228
+      },
+      {
+        name: "pcre",
+        version: "8.42-6.el8",
+        repo: "BaseOS",
+        path: "Packages/p/pcre-8.42-6.el8.x86_64.rpm",
+        sha256: "0c64dc4099b1af3af95760d573660c792e6df7a68eb5f45f7fdd5b1f5d2879fa",
+        size: 214540
+      },
+      {
+        name: "pcre2",
+        version: "10.32-4.el8_10",
+        repo: "BaseOS",
+        path: "Packages/p/pcre2-10.32-4.el8_10.x86_64.rpm",
+        sha256: "656c826a7067aeadcc1e24b5b89859cf3e1355b9ea57da9bcc16d18dc0691262",
+        size: 251956
+      },
+      {
+        name: "pixman",
+        version: "0.38.4-4.el8",
+        repo: "AppStream",
+        path: "Packages/p/pixman-0.38.4-4.el8.x86_64.rpm",
+        sha256: "1e77fd4d381fdfd58aea1d884b2e2a43d97971123ad802b281f8856910c74a7d",
+        size: 262656
+      },
+      {
+        name: "readline",
+        version: "7.0-10.el8",
+        repo: "BaseOS",
+        path: "Packages/r/readline-7.0-10.el8.x86_64.rpm",
+        sha256: "dec3360421313908f8c67f0781dc0bf48660bebfb25f7d629eb2172ac4382e46",
+        size: 202888
+      },
+      {
+        name: "sqlite-libs",
+        version: "3.26.0-21.el8_10",
+        repo: "BaseOS",
+        path: "Packages/s/sqlite-libs-3.26.0-21.el8_10.x86_64.rpm",
+        sha256: "db896e48ef74a6d7518be06f9c34fb6d39f1f1e81c8a4dd2390900c67e55db0a",
+        size: 594244
+      },
+      {
+        name: "systemd-libs",
+        version: "239-82.el8_10.19",
+        repo: "BaseOS",
+        path: "Packages/s/systemd-libs-239-82.el8_10.19.x86_64.rpm",
+        sha256: "4471691ef6ac446f602084bfd20bcdd7b3b60255b8146c6e7cfc220bfc50d11c",
+        size: 1201656
+      },
+      {
+        name: "xz-libs",
+        version: "5.2.4-4.el8_6",
+        repo: "BaseOS",
+        path: "Packages/x/xz-libs-5.2.4-4.el8_6.x86_64.rpm",
+        sha256: "283e7ac93ffee0cb93f33a991a9ab9f06a272caf88a6c56d17696ab1b2e83499",
+        size: 95016
+      },
+      {
+        name: "zlib",
+        version: "1.2.11-26.el8",
+        repo: "BaseOS",
+        path: "Packages/z/zlib-1.2.11-26.el8.x86_64.rpm",
+        sha256: "84465251ea8790b3d8a1c30bdfc8f11711ffe9060becb7335e1b50f4277c5162",
+        size: 104888
+      }
+    ],
+    aarch64: [
+      {
+        name: "alsa-lib",
+        version: "1.2.10-2.el8",
+        repo: "AppStream",
+        path: "Packages/a/alsa-lib-1.2.10-2.el8.aarch64.rpm",
+        sha256: "6f47e9f77b98c7cabb54573689a2b42004b814f401ac4c723fe3fe7e18bd43c8",
+        size: 480012
+      },
+      {
+        name: "at-spi2-atk",
+        version: "2.26.2-1.el8",
+        repo: "AppStream",
+        path: "Packages/a/at-spi2-atk-2.26.2-1.el8.aarch64.rpm",
+        sha256: "e3d811b78b5161ccd0ae6e52f2065346c7ef32cc04b30499e533463e51bc84e1",
+        size: 87432
+      },
+      {
+        name: "at-spi2-core",
+        version: "2.28.0-1.el8",
+        repo: "AppStream",
+        path: "Packages/a/at-spi2-core-2.28.0-1.el8.aarch64.rpm",
+        sha256: "ce49ea87477cbb515d99d553d6008c4938e483495915a1ac2157971a2c843603",
+        size: 167688
+      },
+      {
+        name: "atk",
+        version: "2.28.1-1.el8",
+        repo: "AppStream",
+        path: "Packages/a/atk-2.28.1-1.el8.aarch64.rpm",
+        sha256: "f4c86e7c30b7c32b74cde902e6e3c62b2bc94a8dfd90b2f84ff91f36a888cb3f",
+        size: 275232
+      },
+      {
+        name: "audit-libs",
+        version: "3.1.2-1.el8_10.1",
+        repo: "BaseOS",
+        path: "Packages/a/audit-libs-3.1.2-1.el8_10.1.aarch64.rpm",
+        sha256: "3978ae37f5d8729b9550dd7e866d955603a2bb8424f2efb078d18615e7ff80aa",
+        size: 122316
+      },
+      {
+        name: "avahi-libs",
+        version: "0.7-27.el8_10.1",
+        repo: "BaseOS",
+        path: "Packages/a/avahi-libs-0.7-27.el8_10.1.aarch64.rpm",
+        sha256: "bbe19406e78b900ef1243febbe82683d55de89db574adf8c22bd59faf21255af",
+        size: 61124
+      },
+      {
+        name: "bzip2-libs",
+        version: "1.0.6-28.el8_10",
+        repo: "BaseOS",
+        path: "Packages/b/bzip2-libs-1.0.6-28.el8_10.aarch64.rpm",
+        sha256: "717c4f0cacb8e8db90557145fa5252d0c596bd1babcd3aa16c891ed8a04047b0",
+        size: 48572
+      },
+      {
+        name: "cairo",
+        version: "1.15.12-6.el8",
+        repo: "AppStream",
+        path: "Packages/c/cairo-1.15.12-6.el8.aarch64.rpm",
+        sha256: "a2f61c36e8e33f99be42c3f06a6bf00a8291c5d4b82dd26d46678e6c37aa7da6",
+        size: 687520
+      },
+      {
+        name: "cups-libs",
+        version: "2.2.6-68.el8_10",
+        repo: "BaseOS",
+        path: "Packages/c/cups-libs-2.2.6-68.el8_10.aarch64.rpm",
+        sha256: "e47989925ac52cdbf7bb10573040cff1b88d0355f050d22646e6ccc2f5011a71",
+        size: 432088
+      },
+      {
+        name: "dbus-libs",
+        version: "1.12.8-28.el8_10",
+        repo: "BaseOS",
+        path: "Packages/d/dbus-libs-1.12.8-28.el8_10.aarch64.rpm",
+        sha256: "15c9ac45196c7d0e7f2bacb6ba01d8e15b45971ada1803aece475fd6e4ba33b6",
+        size: 180232
+      },
+      {
+        name: "dejavu-sans-fonts",
+        version: "2.35-7.el8",
+        repo: "BaseOS",
+        path: "Packages/d/dejavu-sans-fonts-2.35-7.el8.noarch.rpm",
+        sha256: "e6d02d1a8c0df5e81a27f3ce6990dd15eaf7fc9d28d754d6d59c58db6983245e",
+        size: 1557304
+      },
+      {
+        name: "expat",
+        version: "2.5.0-4.el8_10",
+        repo: "BaseOS",
+        path: "Packages/e/expat-2.5.0-4.el8_10.aarch64.rpm",
+        sha256: "59b267c05f2e53f16f04adbe464699ab74ff717032e9ac6512ec8cb5c40e7a76",
+        size: 125812
+      },
+      {
+        name: "fontconfig",
+        version: "2.13.1-4.el8",
+        repo: "BaseOS",
+        path: "Packages/f/fontconfig-2.13.1-4.el8.aarch64.rpm",
+        sha256: "5ef0bde77e19628d72c91a9c4eac7c2a220587aa5c260f7cb2da20e818352ed2",
+        size: 277760
+      },
+      {
+        name: "freetype",
+        version: "2.9.1-10.el8_10",
+        repo: "BaseOS",
+        path: "Packages/f/freetype-2.9.1-10.el8_10.aarch64.rpm",
+        sha256: "867f6909ef1fb9e7726904d3669c6318d303cab6392f32fcb6f255aba02bc505",
+        size: 377804
+      },
+      {
+        name: "fribidi",
+        version: "1.0.4-9.el8",
+        repo: "AppStream",
+        path: "Packages/f/fribidi-1.0.4-9.el8.aarch64.rpm",
+        sha256: "7964d32719cc4394bad28738c243f34d3a19768d1983cf75cea778c30c5f38e8",
+        size: 89604
+      },
+      {
+        name: "gawk",
+        version: "4.2.1-5.el8_10",
+        repo: "BaseOS",
+        path: "Packages/g/gawk-4.2.1-5.el8_10.aarch64.rpm",
+        sha256: "f03ff11b11f2f9d5a8bfc9d879690fe1b3e334df3bb2a18c710efba901dddee9",
+        size: 1161744
+      },
+      {
+        name: "glib2",
+        version: "2.56.4-178.el8_10",
+        repo: "BaseOS",
+        path: "Packages/g/glib2-2.56.4-178.el8_10.aarch64.rpm",
+        sha256: "d78a489948d2eb3a901ffd66f18510c9c63f8e0eb6f0a3413852705b364481e6",
+        size: 2555864
+      },
+      {
+        name: "gmp",
+        version: "6.1.2-12.el8",
+        repo: "BaseOS",
+        path: "Packages/g/gmp-6.1.2-12.el8.aarch64.rpm",
+        sha256: "e8e0dc01c5ee987bc3a2cbc918ad8df68d140c2b3b796bd9c874c449682580f6",
+        size: 268824
+      },
+      {
+        name: "gnutls",
+        version: "3.6.16-8.el8_10.6",
+        repo: "BaseOS",
+        path: "Packages/g/gnutls-3.6.16-8.el8_10.6.aarch64.rpm",
+        sha256: "7ed1ba74a22e6580d42f886c4f2b06d5856b06f9b0cafd3d5698aa1ecd431f7c",
+        size: 966360
+      },
+      {
+        name: "google-droid-sans-fonts",
+        version: "20120715-13.el8",
+        repo: "AppStream",
+        path: "Packages/g/google-droid-sans-fonts-20120715-13.el8.noarch.rpm",
+        sha256: "3db706780458ab81531cf1adac22885bcc51ca37eceabc24fee5c2f5486e82f1",
+        size: 2602188
+      },
+      {
+        name: "google-noto-emoji-color-fonts",
+        version: "20200916-2.el8",
+        repo: "AppStream",
+        path: "Packages/g/google-noto-emoji-color-fonts-20200916-2.el8.noarch.rpm",
+        sha256: "1361deafeac4dd12c648898ddb7d3ecf58becbe687b6da95e3bf1899d1c1c944",
+        size: 9638932
+      },
+      {
+        name: "graphite2",
+        version: "1.3.10-10.el8",
+        repo: "AppStream",
+        path: "Packages/g/graphite2-1.3.10-10.el8.aarch64.rpm",
+        sha256: "1129048fc6126041282299b03c3a9accf963e350f475420b4077c3ce3316eea6",
+        size: 114272
+      },
+      {
+        name: "harfbuzz",
+        version: "1.7.5-4.el8",
+        repo: "AppStream",
+        path: "Packages/h/harfbuzz-1.7.5-4.el8.aarch64.rpm",
+        sha256: "88d1d6cba1c9f6f6b04c2e63a4d5af32c287bdfff9ae39cb4d486d581f217d18",
+        size: 285704
+      },
+      {
+        name: "keyutils-libs",
+        version: "1.5.10-9.el8",
+        repo: "BaseOS",
+        path: "Packages/k/keyutils-libs-1.5.10-9.el8.aarch64.rpm",
+        sha256: "e292a3399c4f77784ec88a2a0429ca018de5dcdb8bede782bed68b81a27d45fa",
+        size: 33536
+      },
+      {
+        name: "krb5-libs",
+        version: "1.18.2-34.el8_10",
+        repo: "BaseOS",
+        path: "Packages/k/krb5-libs-1.18.2-34.el8_10.aarch64.rpm",
+        sha256: "4c046ec2fb32c4f5d8742e86139ae74a1e4d3c71846db3a9b95f51d52783387e",
+        size: 839992
+      },
+      {
+        name: "libX11",
+        version: "1.6.8-9.el8_10",
+        repo: "AppStream",
+        path: "Packages/l/libX11-1.6.8-9.el8_10.aarch64.rpm",
+        sha256: "355ba1be15738c2f0ffa19683488ac5f25194c18011dd524c92e4f78c3f325f0",
+        size: 602524
+      },
+      {
+        name: "libXau",
+        version: "1.0.9-3.el8",
+        repo: "AppStream",
+        path: "Packages/l/libXau-1.0.9-3.el8.aarch64.rpm",
+        sha256: "65137a5358789d01fbf2d44b86470c3c07b5256843a2decb4c1bafd5437e03be",
+        size: 37196
+      },
+      {
+        name: "libXcomposite",
+        version: "0.4.4-14.el8",
+        repo: "AppStream",
+        path: "Packages/l/libXcomposite-0.4.4-14.el8.aarch64.rpm",
+        sha256: "84317213c36de5f00f1e794d0d3c18925ea726511855e43dd79a90988f4c292e",
+        size: 28148
+      },
+      {
+        name: "libXdamage",
+        version: "1.1.4-14.el8",
+        repo: "AppStream",
+        path: "Packages/l/libXdamage-1.1.4-14.el8.aarch64.rpm",
+        sha256: "f766446d5270c5cf7326bb6987c6779a705261cf0dca38bdbfa4df0a78cee3fd",
+        size: 26292
+      },
+      {
+        name: "libXext",
+        version: "1.3.4-1.el8",
+        repo: "AppStream",
+        path: "Packages/l/libXext-1.3.4-1.el8.aarch64.rpm",
+        sha256: "04014cbecef59b96e53390b57eb6b2d99d4b5aac01967c70906d9f5fc65545df",
+        size: 43860
+      },
+      {
+        name: "libXfixes",
+        version: "5.0.3-7.el8",
+        repo: "AppStream",
+        path: "Packages/l/libXfixes-5.0.3-7.el8.aarch64.rpm",
+        sha256: "bfcf73a30f6dc9a35ea463d532af25450267763654afd600dc50912c01318b0a",
+        size: 24156
+      },
+      {
+        name: "libXft",
+        version: "2.3.3-1.el8",
+        repo: "AppStream",
+        path: "Packages/l/libXft-2.3.3-1.el8.aarch64.rpm",
+        sha256: "beba3d59eb167e557966466e1ffe40d1fd2855ec555023399b5103854e4cf31b",
+        size: 64984
+      },
+      {
+        name: "libXi",
+        version: "1.7.10-1.el8",
+        repo: "AppStream",
+        path: "Packages/l/libXi-1.7.10-1.el8.aarch64.rpm",
+        sha256: "16912b941e95518c407e230c8ae0f1cdb7b96a0e8ad4ac5ac401a2f696db442c",
+        size: 46264
+      },
+      {
+        name: "libXrandr",
+        version: "1.5.2-1.el8",
+        repo: "AppStream",
+        path: "Packages/l/libXrandr-1.5.2-1.el8.aarch64.rpm",
+        sha256: "8652123d8c1cd8afd548e758086467d652217219dfc8c6e22e921d7dc1bedc72",
+        size: 32356
+      },
+      {
+        name: "libXrender",
+        version: "0.9.10-7.el8",
+        repo: "AppStream",
+        path: "Packages/l/libXrender-0.9.10-7.el8.aarch64.rpm",
+        sha256: "6f7fec3924c0efeb10b3f694d1b41a7252aa9662e7dd93614ceaa86bfd5421e2",
+        size: 30984
+      },
+      {
+        name: "libXtst",
+        version: "1.2.3-7.el8",
+        repo: "AppStream",
+        path: "Packages/l/libXtst-1.2.3-7.el8.aarch64.rpm",
+        sha256: "9dac5c40c9b64d23ac84962353dad4988487542e36772f82fcb751f42915d81f",
+        size: 20972
+      },
+      {
+        name: "libblkid",
+        version: "2.32.1-48.el8_10",
+        repo: "BaseOS",
+        path: "Packages/l/libblkid-2.32.1-48.el8_10.aarch64.rpm",
+        sha256: "d3f610520255252288711f4e2b6cb962adde23a472f2c1f99f374aa0a889fc65",
+        size: 219040
+      },
+      {
+        name: "libcap",
+        version: "2.48-6.el8_10.1",
+        repo: "BaseOS",
+        path: "Packages/l/libcap-2.48-6.el8_10.1.aarch64.rpm",
+        sha256: "50bb67dd5e35184330ad3a31141a73d9ed7aaa3ea83cd357ad76a243cb728d6c",
+        size: 74612
+      },
+      {
+        name: "libcap-ng",
+        version: "0.7.11-1.el8",
+        repo: "BaseOS",
+        path: "Packages/l/libcap-ng-0.7.11-1.el8.aarch64.rpm",
+        sha256: "ca0c5cd3a6ff1505113b2b220844603077d282b81f790a205e7d23ab6cf68a61",
+        size: 32480
+      },
+      {
+        name: "libcom_err",
+        version: "1.45.6-7.el8_10",
+        repo: "BaseOS",
+        path: "Packages/l/libcom_err-1.45.6-7.el8_10.aarch64.rpm",
+        sha256: "5470171e197f6b99945ed4338117168866d61e3f20b79fdd296e43e6154364e8",
+        size: 49436
+      },
+      {
+        name: "libdatrie",
+        version: "0.2.9-7.el8",
+        repo: "AppStream",
+        path: "Packages/l/libdatrie-0.2.9-7.el8.aarch64.rpm",
+        sha256: "b681321215e0b6e09d8e9bf0ccb5bf3ea3ce4c9f340f1d7b8c5e26a187dad2cc",
+        size: 32164
+      },
+      {
+        name: "libdrm",
+        version: "2.4.115-2.el8",
+        repo: "BaseOS",
+        path: "Packages/l/libdrm-2.4.115-2.el8.aarch64.rpm",
+        sha256: "0617d33dae9769fbe5e42a96d85f898963829f7f63657b732ae0aca099ee06cc",
+        size: 139608
+      },
+      {
+        name: "liberation-mono-fonts",
+        version: "2.00.3-7.el8",
+        repo: "BaseOS",
+        path: "Packages/l/liberation-mono-fonts-2.00.3-7.el8.noarch.rpm",
+        sha256: "5455e6eddd7c2d5c109775a8bdd39cc35fb2bf1f4790df9b530358d57926bd56",
+        size: 516364
+      },
+      {
+        name: "liberation-sans-fonts",
+        version: "2.00.3-7.el8",
+        repo: "BaseOS",
+        path: "Packages/l/liberation-sans-fonts-2.00.3-7.el8.noarch.rpm",
+        sha256: "3721a1315298f5fe4c3a635d7c3b7048428f711b6a6f90638dcb44aab624537d",
+        size: 623552
+      },
+      {
+        name: "liberation-serif-fonts",
+        version: "2.00.3-7.el8",
+        repo: "BaseOS",
+        path: "Packages/l/liberation-serif-fonts-2.00.3-7.el8.noarch.rpm",
+        sha256: "41ebbfca4b7fc586cd22ff6ece89461aa61cd346fda9b4f98d2817c83ef630ff",
+        size: 622248
+      },
+      {
+        name: "libffi",
+        version: "3.1-24.el8",
+        repo: "BaseOS",
+        path: "Packages/l/libffi-3.1-24.el8.aarch64.rpm",
+        sha256: "fad785b129f8a1892cf759a08ccdb879e6ec846a65ffa977409124e67e744266",
+        size: 36432
+      },
+      {
+        name: "libgcrypt",
+        version: "1.8.5-8.el8_10",
+        repo: "BaseOS",
+        path: "Packages/l/libgcrypt-1.8.5-8.el8_10.aarch64.rpm",
+        sha256: "ead3e8122e50e74bc8bb4c4ed8240dd2c9ce93f6e93a21bfd6d8e39b35e7fbf1",
+        size: 399616
+      },
+      {
+        name: "libgpg-error",
+        version: "1.31-1.el8",
+        repo: "BaseOS",
+        path: "Packages/l/libgpg-error-1.31-1.el8.aarch64.rpm",
+        sha256: "5f50acbe7ca1061b08621b3e9e72360811ceafaa34626cb13aa153b9fcef5dd4",
+        size: 243864
+      },
+      {
+        name: "libidn2",
+        version: "2.2.0-1.el8",
+        repo: "BaseOS",
+        path: "Packages/l/libidn2-2.2.0-1.el8.aarch64.rpm",
+        sha256: "aa0cb5360ef9778dcc983ec8bb5e007829fd6345b855506ce807c760cef9b394",
+        size: 93916
+      },
+      {
+        name: "libmount",
+        version: "2.32.1-48.el8_10",
+        repo: "BaseOS",
+        path: "Packages/l/libmount-2.32.1-48.el8_10.aarch64.rpm",
+        sha256: "22b0a67000bba9c24670bc10e30963bb0b48c3da90e134f3aed7e1d46c3106e3",
+        size: 234608
+      },
+      {
+        name: "libpng",
+        version: "1.6.34-11.el8_10",
+        repo: "BaseOS",
+        path: "Packages/l/libpng-1.6.34-11.el8_10.aarch64.rpm",
+        sha256: "e13f61ca5028b42e2b791dd0d7199fc6267feee2c95d385ca3cf9e272a88413f",
+        size: 122296
+      },
+      {
+        name: "libselinux",
+        version: "2.9-11.el8_10",
+        repo: "BaseOS",
+        path: "Packages/l/libselinux-2.9-11.el8_10.aarch64.rpm",
+        sha256: "d2a988504e6da4e9e49cddf631341005dfc5da71679649ea0466ae15e00e41a2",
+        size: 165632
+      },
+      {
+        name: "libsepol",
+        version: "2.9-3.el8",
+        repo: "BaseOS",
+        path: "Packages/l/libsepol-2.9-3.el8.aarch64.rpm",
+        sha256: "e2c55fc5738b9129c59a4fb29fd81be32ee242380398dc007f88ef19429cb747",
+        size: 327420
+      },
+      {
+        name: "libsigsegv",
+        version: "2.11-5.el8",
+        repo: "BaseOS",
+        path: "Packages/l/libsigsegv-2.11-5.el8.aarch64.rpm",
+        sha256: "f7fe445c5d0651901674b165744bd89fe2d19746ed3c6c2e293ca4bb6fd63563",
+        size: 29820
+      },
+      {
+        name: "libstdc++",
+        version: "8.5.0-29.el8_10",
+        repo: "BaseOS",
+        path: "Packages/l/libstdc++-8.5.0-29.el8_10.aarch64.rpm",
+        sha256: "5d48cfa2ab1bcaa0e8c6a549ef871cb65fac78922d1bf135a9625f57e18f8060",
+        size: 454700
+      },
+      {
+        name: "libtasn1",
+        version: "4.13-6.el8_10",
+        repo: "BaseOS",
+        path: "Packages/l/libtasn1-4.13-6.el8_10.aarch64.rpm",
+        sha256: "dce6d632e2e4c0023b654fe20b42eb4026eae5c1f965354053efad8bf9eb6fbd",
+        size: 76180
+      },
+      {
+        name: "libthai",
+        version: "0.1.27-2.el8",
+        repo: "AppStream",
+        path: "Packages/l/libthai-0.1.27-2.el8.aarch64.rpm",
+        sha256: "8be3fbf7fb24f3f58f36c57dbc5fe84925ad936aec239554f7192c0f67e3cffd",
+        size: 205104
+      },
+      {
+        name: "libunistring",
+        version: "0.9.9-3.el8",
+        repo: "BaseOS",
+        path: "Packages/l/libunistring-0.9.9-3.el8.aarch64.rpm",
+        sha256: "d301863174a399aa70dbab12b92a6a8d709c5bb8001ae4a1501ebf19ef3e8a01",
+        size: 417572
+      },
+      {
+        name: "libuuid",
+        version: "2.32.1-48.el8_10",
+        repo: "BaseOS",
+        path: "Packages/l/libuuid-2.32.1-48.el8_10.aarch64.rpm",
+        sha256: "b1d139a5519ba83e6f333ea70a09bdc71cff588443f735b81e743d4c2fb09ad4",
+        size: 100228
+      },
+      {
+        name: "libverto",
+        version: "0.3.2-2.el8",
+        repo: "BaseOS",
+        path: "Packages/l/libverto-0.3.2-2.el8.aarch64.rpm",
+        sha256: "e4ddc4cd25f70d80627e43a09ac1ad358910f1ea99404e429dcef457951ebebb",
+        size: 23040
+      },
+      {
+        name: "libwayland-server",
+        version: "1.21.0-1.el8",
+        repo: "AppStream",
+        path: "Packages/l/libwayland-server-1.21.0-1.el8.aarch64.rpm",
+        sha256: "4c9138f140d7f2e90ab33630f1347be3a4c564272ff0c5bdb59087fb0478d31a",
+        size: 47280
+      },
+      {
+        name: "libxcb",
+        version: "1.13.1-1.el8",
+        repo: "AppStream",
+        path: "Packages/l/libxcb-1.13.1-1.el8.aarch64.rpm",
+        sha256: "22cd6b4ee21ed95199ad537921c8d2169c5ba039ab1e024b0da86b79a4e7c4c0",
+        size: 226828
+      },
+      {
+        name: "libxcrypt",
+        version: "4.1.1-6.el8",
+        repo: "BaseOS",
+        path: "Packages/l/libxcrypt-4.1.1-6.el8.aarch64.rpm",
+        sha256: "4297629a9d4951880629af6c9c87f48bc6b785577196fa690b377dbd48a513fd",
+        size: 73868
+      },
+      {
+        name: "libxkbcommon",
+        version: "0.9.1-1.el8",
+        repo: "AppStream",
+        path: "Packages/l/libxkbcommon-0.9.1-1.el8.aarch64.rpm",
+        sha256: "a0d5180639b9b1d89545bfd2f3490b05cd0f091a318cc320ba66e483e164a2cc",
+        size: 113120
+      },
+      {
+        name: "lz4-libs",
+        version: "1.8.3-5.el8_10",
+        repo: "BaseOS",
+        path: "Packages/l/lz4-libs-1.8.3-5.el8_10.aarch64.rpm",
+        sha256: "d5241a1d2801500e949b2fdd6b5092be78dcda8da354ed0c9fd900bd39f6d369",
+        size: 63968
+      },
+      {
+        name: "mesa-libgbm",
+        version: "23.1.4-4.el8_10",
+        repo: "AppStream",
+        path: "Packages/m/mesa-libgbm-23.1.4-4.el8_10.aarch64.rpm",
+        sha256: "5ed31c0909d0ddff3cb3911c01e0f8911d00efa74c1a447d20db525c9136f06f",
+        size: 60212
+      },
+      {
+        name: "mpfr",
+        version: "3.1.6-1.el8",
+        repo: "BaseOS",
+        path: "Packages/m/mpfr-3.1.6-1.el8.aarch64.rpm",
+        sha256: "db49b3117ec6268bf14b1ae636706a4ef92116e903c02bb59c31425adb7762a1",
+        size: 217688
+      },
+      {
+        name: "ncurses-base",
+        version: "6.1-10.20180224.el8",
+        repo: "BaseOS",
+        path: "Packages/n/ncurses-base-6.1-10.20180224.el8.noarch.rpm",
+        sha256: "647aca6251968e8285c4a0b72670b85a3449096daf196807e9d85a19eacd0c2c",
+        size: 82176
+      },
+      {
+        name: "ncurses-libs",
+        version: "6.1-10.20180224.el8",
+        repo: "BaseOS",
+        path: "Packages/n/ncurses-libs-6.1-10.20180224.el8.aarch64.rpm",
+        sha256: "0fb33a2d911f4d47dc5fff9465db1641a20691dd23c16798974b2da5b4b560eb",
+        size: 316632
+      },
+      {
+        name: "nettle",
+        version: "3.4.1-7.el8",
+        repo: "BaseOS",
+        path: "Packages/n/nettle-3.4.1-7.el8.aarch64.rpm",
+        sha256: "51eabb0ae5bf19165967d8926043b01302dd36590a0333126ca88b43c480afe8",
+        size: 313588
+      },
+      {
+        name: "nspr",
+        version: "4.39.0-3.el8_10",
+        repo: "AppStream",
+        path: "Packages/n/nspr-4.39.0-3.el8_10.aarch64.rpm",
+        sha256: "fe2321fcefbcac636254dedbf74251c3fb5a0f663486b2dd842508d75b8470f4",
+        size: 138704
+      },
+      {
+        name: "nss",
+        version: "3.124.0-5.el8_10",
+        repo: "AppStream",
+        path: "Packages/n/nss-3.124.0-5.el8_10.aarch64.rpm",
+        sha256: "10c342c757f3ece83a9af1dc328bcbcc50313e12cc0d6036709ebb1cd199836a",
+        size: 748828
+      },
+      {
+        name: "nss-softokn",
+        version: "3.124.0-5.el8_10",
+        repo: "AppStream",
+        path: "Packages/n/nss-softokn-3.124.0-5.el8_10.aarch64.rpm",
+        sha256: "486be6037a02aaeef68b5c164b0d97cd20851260bd63c9685669a686f80c9b47",
+        size: 550972
+      },
+      {
+        name: "nss-softokn-freebl",
+        version: "3.124.0-5.el8_10",
+        repo: "AppStream",
+        path: "Packages/n/nss-softokn-freebl-3.124.0-5.el8_10.aarch64.rpm",
+        sha256: "34c4d3c6293c900d7275c8420341f7cd201a7902b24dbd275b609896af924d43",
+        size: 438396
+      },
+      {
+        name: "nss-util",
+        version: "3.124.0-5.el8_10",
+        repo: "AppStream",
+        path: "Packages/n/nss-util-3.124.0-5.el8_10.aarch64.rpm",
+        sha256: "f5600fd7d1164dc82786389c7dffeeb4a55247d005340f2ca511fdc0c4ea76b8",
+        size: 143560
+      },
+      {
+        name: "openssl-libs",
+        version: "1.1.1k-17.el8_10",
+        repo: "BaseOS",
+        path: "Packages/o/openssl-libs-1.1.1k-17.el8_10.aarch64.rpm",
+        sha256: "fa7b3c7ce88ef2ee8b6343340d71bc1cc5bf8187c29d87294d7d2c3aede294e7",
+        size: 1413956
+      },
+      {
+        name: "p11-kit",
+        version: "0.23.22-2.el8",
+        repo: "BaseOS",
+        path: "Packages/p/p11-kit-0.23.22-2.el8.aarch64.rpm",
+        sha256: "b8e63efa3d10d30a54454885d7ade63eca35edcaf0c15eee78f1d64fd87dad66",
+        size: 315408
+      },
+      {
+        name: "pango",
+        version: "1.42.4-8.el8",
+        repo: "AppStream",
+        path: "Packages/p/pango-1.42.4-8.el8.aarch64.rpm",
+        sha256: "92dfee8a42a57a5f76512c0bbd046e247b21130d2307228a245a4612b44a2920",
+        size: 291112
+      },
+      {
+        name: "pcre",
+        version: "8.42-6.el8",
+        repo: "BaseOS",
+        path: "Packages/p/pcre-8.42-6.el8.aarch64.rpm",
+        sha256: "d2233f6aebbb5ac9f90a6d374650c445794fe5ecf857236228a4cc006206b068",
+        size: 190420
+      },
+      {
+        name: "pcre2",
+        version: "10.32-4.el8_10",
+        repo: "BaseOS",
+        path: "Packages/p/pcre2-10.32-4.el8_10.aarch64.rpm",
+        sha256: "309cb53677fdde882f3141ab40bb221d4b6f1030bbd865d71752adb404da7289",
+        size: 223568
+      },
+      {
+        name: "pixman",
+        version: "0.38.4-4.el8",
+        repo: "AppStream",
+        path: "Packages/p/pixman-0.38.4-4.el8.aarch64.rpm",
+        sha256: "f71f63385e1c23baa7a54d5bd89ae9c331873a34face544e17b18335593c9f7a",
+        size: 151768
+      },
+      {
+        name: "readline",
+        version: "7.0-10.el8",
+        repo: "BaseOS",
+        path: "Packages/r/readline-7.0-10.el8.aarch64.rpm",
+        sha256: "cee4b35e604faac3f4d785331654c74d3d6c3ded32c8d34ab8f7782ec9157f93",
+        size: 196356
+      },
+      {
+        name: "sqlite-libs",
+        version: "3.26.0-21.el8_10",
+        repo: "BaseOS",
+        path: "Packages/s/sqlite-libs-3.26.0-21.el8_10.aarch64.rpm",
+        sha256: "94884e7e803aed8f7860deb561139a6390efa239c5e031cc3e63839d55116385",
+        size: 562908
+      },
+      {
+        name: "systemd-libs",
+        version: "239-82.el8_10.19",
+        repo: "BaseOS",
+        path: "Packages/s/systemd-libs-239-82.el8_10.19.aarch64.rpm",
+        sha256: "7053d937a6c2d568cb8f99edbf0319bc2088781e21be40656515afc0567aa58f",
+        size: 1101084
+      },
+      {
+        name: "xz-libs",
+        version: "5.2.4-4.el8_6",
+        repo: "BaseOS",
+        path: "Packages/x/xz-libs-5.2.4-4.el8_6.aarch64.rpm",
+        sha256: "5813ddb231f6b96c4de61e76b8b393b9506d39e490e0b51e54000412b41474f5",
+        size: 91624
+      },
+      {
+        name: "zlib",
+        version: "1.2.11-26.el8",
+        repo: "BaseOS",
+        path: "Packages/z/zlib-1.2.11-26.el8.aarch64.rpm",
+        sha256: "cd82f7d2a702787c02cdda00adee2c53117155c63b08ce0e33f87ad064579db6",
+        size: 102728
+      }
+    ]
+  }
+};
+// Packages/Box/src/link/browser/mac.json
+var mac_default = {
+  chromium: {
+    version: "155.0.8059.79",
+    x86_64: {
+      url: "https://storage.googleapis.com/chrome-for-testing-public/155.0.8059.79/mac-x64/chrome-mac-x64.zip",
+      sha256: "11c407e24d7d98cacaec055a4d9ab2f33023db2478d30544c24e829d81022096",
+      size: 203545619
+    },
+    aarch64: {
+      url: "https://storage.googleapis.com/chrome-for-testing-public/155.0.8059.79/mac-arm64/chrome-mac-arm64.zip",
+      sha256: "e141a7cbf948780bb7d381860bd5a7944c6736f79b9918b9826fccb199d28ea4",
+      size: 192617424
+    }
+  }
+};
+
+// Packages/Box/src/link/browser/rpm.ts
+import zlib from "node:zlib";
+
+// Packages/Box/src/link/browser/xz.ts
+import crypto37 from "node:crypto";
+var MAGIC = [253, 55, 122, 88, 90, 0];
+var LZMA2 = 33;
+
+class XzError extends Error {
+}
+var corrupt = (why) => {
+  throw new XzError(`The package's contents are damaged (${why}).`);
+};
+var CRC32_TABLE = (() => {
+  const table = new Uint32Array(256);
+  for (let n = 0;n < 256; n++) {
+    let c = n;
+    for (let k = 0;k < 8; k++)
+      c = c & 1 ? 3988292384 ^ c >>> 1 : c >>> 1;
+    table[n] = c >>> 0;
+  }
+  return table;
+})();
+function crc32(data, start = 0, end = data.length) {
+  let crc = 4294967295;
+  for (let i = start;i < end; i++)
+    crc = CRC32_TABLE[(crc ^ data[i]) & 255] ^ crc >>> 8;
+  return (crc ^ 4294967295) >>> 0;
+}
+var CRC64_TABLE = (() => {
+  const low = new Uint32Array(256), high = new Uint32Array(256);
+  const polyLow = 3615952706, polyHigh = 3379320725;
+  for (let n = 0;n < 256; n++) {
+    let l = n, h = 0;
+    for (let k = 0;k < 8; k++) {
+      const carry = l & 1;
+      l = (l >>> 1 | (h & 1) << 31) >>> 0;
+      h = h >>> 1;
+      if (carry) {
+        l = (l ^ polyLow) >>> 0;
+        h = (h ^ polyHigh) >>> 0;
+      }
+    }
+    low[n] = l;
+    high[n] = h;
+  }
+  return { low, high };
+})();
+function crc64(data, start, end) {
+  let l = 4294967295, h = 4294967295;
+  for (let i = start;i < end; i++) {
+    const index = (l ^ data[i]) & 255;
+    l = ((l >>> 8 | (h & 255) << 24) ^ CRC64_TABLE.low[index]) >>> 0;
+    h = (h >>> 8 ^ CRC64_TABLE.high[index]) >>> 0;
+  }
+  const out = Buffer.alloc(8);
+  out.writeUInt32LE((l ^ 4294967295) >>> 0, 0);
+  out.writeUInt32LE((h ^ 4294967295) >>> 0, 4);
+  return out;
+}
+
+class Output {
+  buffer;
+  length = 0;
+  constructor(size) {
+    this.buffer = new Uint8Array(Math.max(size, 1024));
+  }
+  room(more, most) {
+    const needed = this.length + more;
+    if (needed > most)
+      corrupt("it's larger than it can be");
+    if (needed <= this.buffer.length)
+      return;
+    const grown = new Uint8Array(Math.min(most, Math.max(needed, this.buffer.length * 2)));
+    grown.set(this.buffer.subarray(0, this.length));
+    this.buffer = grown;
+  }
+}
+
+class RangeDecoder {
+  input;
+  at;
+  end;
+  range = 0;
+  code = 0;
+  constructor(input, at, end) {
+    this.input = input;
+    this.at = at;
+    this.end = end;
+    if (end - at < 5 || input[at] !== 0)
+      corrupt("a range coder's start");
+    this.range = 4294967295;
+    this.code = (input[at + 1] << 24 | input[at + 2] << 16 | input[at + 3] << 8 | input[at + 4]) >>> 0;
+    this.at += 5;
+    if (this.code === this.range)
+      corrupt("a range coder's start");
+  }
+  next() {
+    if (this.at >= this.end)
+      corrupt("it ends early");
+    return this.input[this.at++];
+  }
+  normalize() {
+    if (this.range < 16777216) {
+      this.range = this.range << 8 >>> 0;
+      this.code = (this.code << 8 | this.next()) >>> 0;
+    }
+  }
+  bit(probs, index) {
+    const p = probs[index];
+    const bound = (this.range >>> 11) * p;
+    if (this.code < bound) {
+      this.range = bound;
+      probs[index] = p + (2048 - p >>> 5);
+      this.normalize();
+      return 0;
+    }
+    this.range -= bound;
+    this.code -= bound;
+    probs[index] = p - (p >>> 5);
+    this.normalize();
+    return 1;
+  }
+  direct(count) {
+    let result = 0;
+    for (let i = 0;i < count; i++) {
+      this.range = this.range >>> 1;
+      let bit = 0;
+      if (this.code >= this.range) {
+        this.code -= this.range;
+        bit = 1;
+      }
+      result = result * 2 + bit;
+      this.normalize();
+    }
+    return result;
+  }
+  tree(probs, base, bits) {
+    let m = 1;
+    for (let i = 0;i < bits; i++)
+      m = (m << 1) + this.bit(probs, base + m);
+    return m - (1 << bits);
+  }
+  reverse(probs, base, bits) {
+    let m = 1, symbol = 0;
+    for (let i = 0;i < bits; i++) {
+      const bit = this.bit(probs, base + m);
+      m = (m << 1) + bit;
+      symbol |= bit << i;
+    }
+    return symbol;
+  }
+}
+var STATES3 = 12;
+var POS_STATES_MAX = 16;
+var LEN_PROBS = 2 + POS_STATES_MAX * 8 * 2 + 256;
+
+class Lzma {
+  lc = 0;
+  lp = 0;
+  pb = 0;
+  literal = new Uint16Array(0);
+  isMatch = new Uint16Array(STATES3 * POS_STATES_MAX);
+  isRep = new Uint16Array(STATES3);
+  isRepG0 = new Uint16Array(STATES3);
+  isRepG1 = new Uint16Array(STATES3);
+  isRepG2 = new Uint16Array(STATES3);
+  isRep0Long = new Uint16Array(STATES3 * POS_STATES_MAX);
+  posSlot = new Uint16Array(4 * 64);
+  posDecoders = new Uint16Array(115);
+  align = new Uint16Array(16);
+  length = new Uint16Array(LEN_PROBS);
+  repLength = new Uint16Array(LEN_PROBS);
+  state = 0;
+  reps = [0, 0, 0, 0];
+  properties(byte) {
+    if (byte > 224)
+      corrupt("its properties");
+    this.lc = byte % 9;
+    const rest = Math.floor(byte / 9);
+    this.lp = rest % 5;
+    this.pb = Math.floor(rest / 5);
+    if (this.lc + this.lp > 4)
+      corrupt("its properties");
+    this.literal = new Uint16Array(768 << this.lc + this.lp);
+  }
+  reset() {
+    for (const probs of [this.literal, this.isMatch, this.isRep, this.isRepG0, this.isRepG1, this.isRepG2, this.isRep0Long, this.posSlot, this.posDecoders, this.align, this.length, this.repLength])
+      probs.fill(1024);
+    this.state = 0;
+    this.reps = [0, 0, 0, 0];
+  }
+  len(rc, probs, posState) {
+    if (rc.bit(probs, 0) === 0)
+      return rc.tree(probs, 2 + (posState << 3), 3);
+    if (rc.bit(probs, 1) === 0)
+      return 8 + rc.tree(probs, 2 + POS_STATES_MAX * 8 + (posState << 3), 3);
+    return 16 + rc.tree(probs, 2 + POS_STATES_MAX * 8 * 2, 8);
+  }
+  distance(rc, len) {
+    const slot = rc.tree(this.posSlot, Math.min(len, 3) << 6, 6);
+    if (slot < 4)
+      return slot;
+    const direct = (slot >>> 1) - 1;
+    let distance = (2 | slot & 1) * 2 ** direct;
+    if (slot < 14)
+      return distance + rc.reverse(this.posDecoders, distance - slot, direct);
+    distance += rc.direct(direct - 4) * 16;
+    return distance + rc.reverse(this.align, 0, 4);
+  }
+  decode(rc, out, end, start) {
+    const buffer = out.buffer;
+    const pbMask = (1 << this.pb) - 1, lpMask = (1 << this.lp) - 1;
+    let at = out.length, state = this.state;
+    let [rep0, rep1, rep2, rep3] = this.reps;
+    while (at < end) {
+      const pos = at - start;
+      const posState = pos & pbMask;
+      if (rc.bit(this.isMatch, (state << 4) + posState) === 0) {
+        const previous = pos > 0 ? buffer[at - 1] : 0;
+        const base = 768 * (((pos & lpMask) << this.lc) + (previous >>> 8 - this.lc));
+        let symbol = 1;
+        if (state >= 7) {
+          if (rep0 >= pos)
+            corrupt("a distance");
+          let match = buffer[at - rep0 - 1];
+          do {
+            const matchBit = match >>> 7 & 1;
+            match <<= 1;
+            const bit = rc.bit(this.literal, base + (1 + matchBit << 8) + symbol);
+            symbol = symbol << 1 | bit;
+            if (matchBit !== bit)
+              break;
+          } while (symbol < 256);
+        }
+        while (symbol < 256)
+          symbol = symbol << 1 | rc.bit(this.literal, base + symbol);
+        buffer[at++] = symbol - 256;
+        state = state < 4 ? 0 : state < 10 ? state - 3 : state - 6;
+        continue;
+      }
+      let len;
+      if (rc.bit(this.isRep, state) !== 0) {
+        if (pos === 0)
+          corrupt("a distance");
+        if (rc.bit(this.isRepG0, state) === 0) {
+          if (rc.bit(this.isRep0Long, (state << 4) + posState) === 0) {
+            if (rep0 >= pos)
+              corrupt("a distance");
+            state = state < 7 ? 9 : 11;
+            buffer[at] = buffer[at - rep0 - 1];
+            at++;
+            continue;
+          }
+        } else {
+          let distance;
+          if (rc.bit(this.isRepG1, state) === 0) {
+            distance = rep1;
+          } else {
+            if (rc.bit(this.isRepG2, state) === 0) {
+              distance = rep2;
+            } else {
+              distance = rep3;
+              rep3 = rep2;
+            }
+            rep2 = rep1;
+          }
+          rep1 = rep0;
+          rep0 = distance;
+        }
+        len = this.len(rc, this.repLength, posState);
+        state = state < 7 ? 8 : 11;
+      } else {
+        rep3 = rep2;
+        rep2 = rep1;
+        rep1 = rep0;
+        len = this.len(rc, this.length, posState);
+        state = state < 7 ? 7 : 10;
+        rep0 = this.distance(rc, len);
+        if (rep0 === 4294967295)
+          corrupt("an end marker in LZMA2");
+      }
+      len += 2;
+      if (rep0 >= pos)
+        corrupt("a distance");
+      if (at + len > end)
+        corrupt("a match past its chunk");
+      for (let i = 0;i < len; i++, at++)
+        buffer[at] = buffer[at - rep0 - 1];
+    }
+    out.length = at;
+    this.state = state;
+    this.reps = [rep0, rep1, rep2, rep3];
+  }
+}
+function varint(input, at, end) {
+  let value = 0;
+  for (let i = 0;i < 9; i++) {
+    if (at >= end)
+      corrupt("a block's header");
+    const byte = input[at++];
+    value += (byte & 127) * 2 ** (7 * i);
+    if (!(byte & 128)) {
+      if (byte === 0 && i > 0)
+        corrupt("a block's header");
+      return [value, at];
+    }
+  }
+  return corrupt("a block's header");
+}
+var CHECK_SIZES = { 0: 0, 1: 4, 4: 8, 10: 32 };
+function unxz(input, most = 512 * 1024 * 1024) {
+  if (input.length < 24 || MAGIC.some((byte, i) => input[i] !== byte))
+    corrupt("it isn't xz");
+  if (input[6] !== 0 || (input[7] & 240) !== 0)
+    corrupt("its flags");
+  const view = Buffer.from(input.buffer, input.byteOffset, input.byteLength);
+  if (crc32(input, 6, 8) !== view.readUInt32LE(8))
+    corrupt("its header");
+  const check = input[7];
+  const checkSize = CHECK_SIZES[check];
+  if (checkSize === undefined)
+    corrupt("a check it doesn't know");
+  const out = new Output(Math.min(most, input.length * 4));
+  let at = 12;
+  while (true) {
+    if (at >= input.length)
+      corrupt("it ends early");
+    if (input[at] === 0)
+      break;
+    const blockStart = at, headerSize = (input[at] + 1) * 4;
+    if (at + headerSize > input.length)
+      corrupt("it ends early");
+    if (crc32(input, at, at + headerSize - 4) !== view.readUInt32LE(at + headerSize - 4))
+      corrupt("a block's header");
+    const flags = input[at + 1];
+    if (flags & 60)
+      corrupt("a block's header");
+    if ((flags & 3) !== 0)
+      corrupt("a filter it doesn't know");
+    let p = at + 2;
+    const headerEnd = at + headerSize - 4;
+    let packed = null, unpacked = null;
+    if (flags & 64)
+      [packed, p] = varint(input, p, headerEnd);
+    if (flags & 128)
+      [unpacked, p] = varint(input, p, headerEnd);
+    let filter, size;
+    [filter, p] = varint(input, p, headerEnd);
+    [size, p] = varint(input, p, headerEnd);
+    if (filter !== LZMA2 || size !== 1 || p >= headerEnd)
+      corrupt("a filter it doesn't know");
+    if (input[p] > 40)
+      corrupt("its dictionary's size");
+    p++;
+    for (;p < headerEnd; p++)
+      if (input[p] !== 0)
+        corrupt("a block's header");
+    at += headerSize;
+    const dataStart = at, outStart = out.length;
+    const lzma = new Lzma;
+    let start = out.length, haveDictionary = false, haveProperties = false, needState = true;
+    while (true) {
+      if (at >= input.length)
+        corrupt("it ends early");
+      const control = input[at++];
+      if (control === 0)
+        break;
+      if (control === 1 || control === 2) {
+        if (at + 2 > input.length)
+          corrupt("it ends early");
+        if (control === 1) {
+          start = out.length;
+          haveDictionary = true;
+          haveProperties = false;
+          needState = true;
+        } else if (!haveDictionary)
+          corrupt("a chunk before its dictionary");
+        const size = (input[at] << 8 | input[at + 1]) + 1;
+        at += 2;
+        if (at + size > input.length)
+          corrupt("it ends early");
+        out.room(size, most);
+        out.buffer.set(input.subarray(at, at + size), out.length);
+        out.length += size;
+        at += size;
+        continue;
+      }
+      if (control < 128)
+        corrupt("a chunk it doesn't know");
+      if (at + 4 > input.length)
+        corrupt("it ends early");
+      const size = ((control & 31) << 16) + (input[at] << 8 | input[at + 1]) + 1;
+      const compressed = (input[at + 2] << 8 | input[at + 3]) + 1;
+      at += 4;
+      const reset = control >>> 5 & 3;
+      if (reset === 3) {
+        start = out.length;
+        haveDictionary = true;
+      } else if (!haveDictionary)
+        corrupt("a chunk before its dictionary");
+      if (reset >= 2) {
+        if (at >= input.length)
+          corrupt("it ends early");
+        lzma.properties(input[at++]);
+        haveProperties = true;
+      } else if (!haveProperties)
+        corrupt("a chunk before its properties");
+      if (reset >= 1) {
+        lzma.reset();
+        needState = false;
+      } else if (needState)
+        corrupt("a chunk before its state");
+      if (at + compressed > input.length)
+        corrupt("it ends early");
+      out.room(size, most);
+      const rc = new RangeDecoder(input, at, at + compressed);
+      lzma.decode(rc, out, out.length + size, start);
+      if (rc.at !== at + compressed)
+        corrupt("a chunk's size");
+      at += compressed;
+    }
+    if (packed !== null && at - dataStart !== packed)
+      corrupt("a block's size");
+    if (unpacked !== null && out.length - outStart !== unpacked)
+      corrupt("a block's size");
+    while ((at - blockStart) % 4) {
+      if (input[at++] !== 0)
+        corrupt("a block's padding");
+    }
+    if (at + checkSize > input.length)
+      corrupt("it ends early");
+    const given = view.subarray(at, at + checkSize);
+    const content = out.buffer;
+    if (check === 1 && crc32(content, outStart, out.length) !== given.readUInt32LE(0))
+      corrupt("its check");
+    if (check === 4 && !crc64(content, outStart, out.length).equals(given))
+      corrupt("its check");
+    if (check === 10 && !crypto37.createHash("sha256").update(content.subarray(outStart, out.length)).digest().equals(given))
+      corrupt("its check");
+    at += checkSize;
+  }
+  return Buffer.from(out.buffer.buffer, out.buffer.byteOffset, out.length);
+}
+
+// Packages/Box/src/link/browser/rpm.ts
+var HEADER_MAGIC = Buffer.from([142, 173, 232, 1]);
+var PAYLOAD_FORMAT = 1124;
+var PAYLOAD_COMPRESSOR = 1125;
+
+class PackageError extends Error {
+}
+var damaged = (why) => {
+  throw new PackageError(`The package isn't one the browser can use (${why}).`);
+};
+function header(data, at) {
+  if (at + 16 > data.length || !data.subarray(at, at + 4).equals(HEADER_MAGIC))
+    damaged("its header");
+  const count = data.readUInt32BE(at + 8), size = data.readUInt32BE(at + 12);
+  const store = at + 16 + count * 16, end = store + size;
+  if (count > 1e5 || end > data.length)
+    damaged("its header");
+  const strings = new Map;
+  for (let i = 0;i < count; i++) {
+    const entry = at + 16 + i * 16;
+    const tag = data.readUInt32BE(entry), type = data.readUInt32BE(entry + 4), offset = data.readUInt32BE(entry + 8);
+    if (type !== 6 || offset >= size)
+      continue;
+    const from = store + offset, zero = data.indexOf(0, from);
+    if (zero < 0 || zero >= end)
+      damaged("its header");
+    strings.set(tag, data.toString("utf8", from, zero));
+  }
+  return { strings, end };
+}
+function payload(data) {
+  if (data.length < 96 || data.readUInt32BE(0) !== 3987467995)
+    damaged("it isn't a package");
+  const signature = header(data, 96);
+  const main = header(data, signature.end + (8 - signature.end % 8) % 8);
+  const format = main.strings.get(PAYLOAD_FORMAT) ?? "cpio";
+  if (format !== "cpio")
+    damaged(`files as ${format}`);
+  const compressor = main.strings.get(PAYLOAD_COMPRESSOR) ?? "gzip";
+  const compressed = data.subarray(main.end);
+  if (compressor === "xz")
+    return unxz(compressed);
+  if (compressor === "gzip")
+    return zlib.gunzipSync(compressed, { maxOutputLength: 512 * 1024 * 1024 });
+  return damaged(`files compressed with ${compressor}`);
+}
+var S_IFMT = 61440;
+var S_IFREG = 32768;
+var S_IFLNK = 40960;
+function cpioEntries(archive) {
+  const entries = [];
+  const linked = new Map;
+  let at = 0;
+  const field = (index) => {
+    const text = archive.toString("latin1", at + 6 + index * 8, at + 14 + index * 8);
+    if (!/^[0-9a-fA-F]{8}$/.test(text))
+      damaged("its files");
+    return parseInt(text, 16);
+  };
+  while (true) {
+    if (at + 110 > archive.length)
+      damaged("its files end early");
+    const magic = archive.toString("latin1", at, at + 6);
+    if (magic !== "070701" && magic !== "070702")
+      damaged("its files");
+    const ino = field(0), mode = field(1), links = field(4), size = field(6), nameSize = field(11);
+    const nameStart = at + 110;
+    if (nameSize < 1 || nameStart + nameSize > archive.length)
+      damaged("its files");
+    const name = archive.toString("utf8", nameStart, nameStart + nameSize - 1);
+    const dataStart = nameStart + nameSize + (4 - (110 + nameSize) % 4) % 4;
+    if (dataStart + size > archive.length)
+      damaged("its files end early");
+    if (name === "TRAILER!!!")
+      break;
+    const data = archive.subarray(dataStart, dataStart + size);
+    const type = mode & S_IFMT;
+    if (type === S_IFREG || type === S_IFLNK) {
+      const entry = { name, mode, data };
+      entries.push(entry);
+      if (type === S_IFREG && links > 1) {
+        const key = `${field(7)}:${field(8)}:${ino}`;
+        const same = [...linked.get(key) ?? [], entry];
+        linked.set(key, same);
+        const full = same.find((each) => each.data.length > 0);
+        if (full)
+          for (const each of same)
+            each.data = full.data;
+      }
+    }
+    at = dataStart + size + (4 - size % 4) % 4;
+  }
+  return entries;
+}
+
+// Packages/Box/src/link/browser/zip.ts
 import fs87 from "node:fs";
 import path93 from "node:path";
+import { pipeline } from "node:stream/promises";
+import { Transform } from "node:stream";
+import zlib2 from "node:zlib";
+
+class ZipError extends Error {
+}
+var refused2 = (why) => {
+  throw new ZipError(`The browser's download can't be unpacked (${why}).`);
+};
+var S_IFMT2 = 61440;
+var S_IFDIR = 16384;
+var S_IFLNK2 = 40960;
+var S_IFREG2 = 32768;
+function read2(fd, at, length) {
+  const buffer = Buffer.alloc(length);
+  let done = 0;
+  while (done < length) {
+    const got = fs87.readSync(fd, buffer, done, length - done, at + done);
+    if (got === 0)
+      refused2("it ends early");
+    done += got;
+  }
+  return buffer;
+}
+function entries(fd, fileSize) {
+  const tailSize = Math.min(fileSize, 22 + 65535);
+  const tail = read2(fd, fileSize - tailSize, tailSize);
+  let end = -1;
+  for (let i = tail.length - 22;i >= 0; i--) {
+    if (tail.readUInt32LE(i) === 101010256) {
+      end = i;
+      break;
+    }
+  }
+  if (end < 0)
+    refused2("it isn't a zip");
+  let count = tail.readUInt16LE(end + 10), directorySize = tail.readUInt32LE(end + 12), directoryAt = tail.readUInt32LE(end + 16);
+  if (count === 65535 || directorySize === 4294967295 || directoryAt === 4294967295) {
+    const locatorAt = fileSize - tailSize + end - 20;
+    if (locatorAt < 0)
+      refused2("its zip64 records");
+    const locator = read2(fd, locatorAt, 20);
+    if (locator.readUInt32LE(0) !== 117853008)
+      refused2("its zip64 records");
+    const record = read2(fd, Number(locator.readBigUInt64LE(8)), 56);
+    if (record.readUInt32LE(0) !== 101075792)
+      refused2("its zip64 records");
+    count = Number(record.readBigUInt64LE(32));
+    directorySize = Number(record.readBigUInt64LE(40));
+    directoryAt = Number(record.readBigUInt64LE(48));
+  }
+  if (directoryAt + directorySize > fileSize || count > 200000)
+    refused2("its directory");
+  const directory = read2(fd, directoryAt, directorySize);
+  const found = [];
+  let at = 0;
+  for (let i = 0;i < count; i++) {
+    if (at + 46 > directory.length || directory.readUInt32LE(at) !== 33639248)
+      refused2("its directory");
+    const madeBy = directory.readUInt16LE(at + 4) >>> 8;
+    const flags = directory.readUInt16LE(at + 8), method = directory.readUInt16LE(at + 10);
+    let compressed = directory.readUInt32LE(at + 20), size = directory.readUInt32LE(at + 24);
+    const nameLength = directory.readUInt16LE(at + 28), extraLength = directory.readUInt16LE(at + 30), commentLength = directory.readUInt16LE(at + 32);
+    const attributes = directory.readUInt32LE(at + 38);
+    let offset = directory.readUInt32LE(at + 42);
+    if (at + 46 + nameLength + extraLength + commentLength > directory.length)
+      refused2("its directory");
+    const nameBytes = directory.subarray(at + 46, at + 46 + nameLength);
+    const name = nameBytes.toString("utf8");
+    if (flags & 1)
+      refused2("it's encrypted");
+    let extra = at + 46 + nameLength;
+    const extraEnd = extra + extraLength;
+    while (extra + 4 <= extraEnd) {
+      const id = directory.readUInt16LE(extra), length = directory.readUInt16LE(extra + 2);
+      if (id === 1) {
+        let p = extra + 4;
+        const next = () => {
+          if (p + 8 > extra + 4 + length)
+            refused2("its zip64 records");
+          const value = Number(directory.readBigUInt64LE(p));
+          p += 8;
+          return value;
+        };
+        if (size === 4294967295)
+          size = next();
+        if (compressed === 4294967295)
+          compressed = next();
+        if (offset === 4294967295)
+          offset = next();
+      }
+      extra += 4 + length;
+    }
+    let mode = madeBy === 3 ? attributes >>> 16 : 0;
+    if (!(mode & S_IFMT2))
+      mode = (name.endsWith("/") ? S_IFDIR | 493 : S_IFREG2 | 420) | mode & 511;
+    found.push({ name, method, compressed, size, offset, mode });
+    at += 46 + nameLength + extraLength + commentLength;
+  }
+  return found;
+}
+function parts(name) {
+  if (!name || name.includes("\x00") || name.includes("\\") || name.startsWith("/"))
+    refused2(`a name, ${JSON.stringify(name)}`);
+  const each = name.replace(/\/$/, "").split("/");
+  if (each.some((part) => !part || part === "." || part === ".."))
+    refused2(`a name, ${JSON.stringify(name)}`);
+  return each;
+}
+function folderFor(root, given) {
+  let folder = root;
+  for (const part of given) {
+    folder = path93.join(folder, part);
+    let stat = null;
+    try {
+      stat = fs87.lstatSync(folder);
+    } catch {}
+    if (!stat)
+      fs87.mkdirSync(folder, { mode: 493 });
+    else if (!stat.isDirectory())
+      refused2(`a name goes through ${JSON.stringify(part)}, which isn't a folder`);
+  }
+  return folder;
+}
+function counted(most, seen) {
+  return new Transform({
+    transform(chunk, _encoding, done) {
+      seen.bytes += chunk.length;
+      if (seen.bytes > most)
+        return done(new ZipError("The browser's download can't be unpacked (a file is larger than it says)."));
+      done(null, chunk);
+    }
+  });
+}
+async function unzip(file, root) {
+  const fd = fs87.openSync(file, "r");
+  try {
+    const all = entries(fd, fs87.fstatSync(fd).size);
+    const links = [];
+    for (const entry of all) {
+      const given = parts(entry.name);
+      const type = entry.mode & S_IFMT2;
+      if (type === S_IFDIR) {
+        folderFor(root, given);
+        continue;
+      }
+      if (type === S_IFLNK2) {
+        links.push(entry);
+        continue;
+      }
+      if (type !== S_IFREG2)
+        refused2(`${JSON.stringify(entry.name)} isn't a file`);
+      if (entry.method !== 0 && entry.method !== 8)
+        refused2(`${JSON.stringify(entry.name)} is compressed in a way it doesn't know`);
+      const local = read2(fd, entry.offset, 30);
+      if (local.readUInt32LE(0) !== 67324752)
+        refused2("a file's header");
+      const start = entry.offset + 30 + local.readUInt16LE(26) + local.readUInt16LE(28);
+      const target = path93.join(folderFor(root, given.slice(0, -1)), given[given.length - 1]);
+      const out = fs87.openSync(target, fs87.constants.O_WRONLY | fs87.constants.O_CREAT | fs87.constants.O_EXCL | (fs87.constants.O_NOFOLLOW ?? 0), 384);
+      const seen = { bytes: 0 };
+      try {
+        const input = entry.compressed > 0 ? fs87.createReadStream("", { fd, start, end: start + entry.compressed - 1, autoClose: false }) : null;
+        const output = fs87.createWriteStream("", { fd: out, autoClose: false });
+        if (input) {
+          if (entry.method === 8)
+            await pipeline(input, zlib2.createInflateRaw(), counted(entry.size, seen), output);
+          else
+            await pipeline(input, counted(entry.size, seen), output);
+        }
+      } finally {
+        fs87.closeSync(out);
+      }
+      if (seen.bytes !== entry.size)
+        refused2(`${JSON.stringify(entry.name)} isn't the size it says`);
+      fs87.chmodSync(target, entry.mode & 493 | 384);
+    }
+    for (const entry of links) {
+      const given = parts(entry.name);
+      if (entry.method !== 0 || entry.size > 4096 || entry.compressed !== entry.size)
+        refused2(`the link ${JSON.stringify(entry.name)}`);
+      const local = read2(fd, entry.offset, 30);
+      if (local.readUInt32LE(0) !== 67324752)
+        refused2("a file's header");
+      const pointsTo = read2(fd, entry.offset + 30 + local.readUInt16LE(26) + local.readUInt16LE(28), entry.size).toString("utf8");
+      if (!pointsTo || pointsTo.includes("\x00") || pointsTo.startsWith("/"))
+        refused2(`the link ${JSON.stringify(entry.name)}`);
+      const resolved = path93.posix.normalize(path93.posix.join(...given.slice(0, -1), pointsTo));
+      if (resolved === ".." || resolved.startsWith("../"))
+        refused2(`the link ${JSON.stringify(entry.name)} points outside it`);
+      const folder = folderFor(root, given.slice(0, -1));
+      fs87.symlinkSync(pointsTo, path93.join(folder, given[given.length - 1]));
+    }
+    const real = fs87.realpathSync(root);
+    for (const entry of links) {
+      let leads = "";
+      try {
+        leads = fs87.realpathSync(path93.join(root, ...parts(entry.name)));
+      } catch {}
+      if (!leads.startsWith(real + path93.sep))
+        refused2(`the link ${JSON.stringify(entry.name)} points outside it`);
+    }
+  } finally {
+    fs87.closeSync(fd);
+  }
+}
+
+// Packages/Box/src/link/browser/install.ts
+var PINNED = { linux: linux_default, darwin: mac_default };
+var BROWSER = () => path94.join(K, "browser");
+var CURRENT = () => path94.join(BROWSER(), "current");
+var STATE = () => path94.join(RUN, "browser-install.json");
+var NEXT = () => path94.join(RUN, "browser.next");
+var LOCK14 = () => path94.join(RUN, ".browser-installing");
+var STAGING = ".box-staging-";
+var SOURCES = [
+  "https://storage.googleapis.com/chrome-for-testing-public/",
+  "https://dl.rockylinux.org/pub/rocky/8/",
+  "https://dl.rockylinux.org/vault/rocky/8.10/"
+];
+function allowedSource(url) {
+  let parsedURL;
+  try {
+    parsedURL = new URL(url);
+  } catch {
+    return false;
+  }
+  if (parsedURL.protocol !== "https:" || parsedURL.username || parsedURL.password || parsedURL.port || parsedURL.search || parsedURL.hash)
+    return false;
+  if (parsedURL.href !== url)
+    return false;
+  return SOURCES.some((source) => url.startsWith(source));
+}
+var downloads = () => !IS_MAC && (REAL_BOX || testSource() !== null);
+function testSource() {
+  return !REAL_BOX && process.env.KUVO_BROWSER_SOURCE ? process.env.KUVO_BROWSER_SOURCE.replace(/\/+$/, "") : null;
+}
+function testSystem() {
+  const given = process.env.KUVO_BROWSER_SYSTEM;
+  return !REAL_BOX && (given === "linux" || given === "darwin") ? given : null;
+}
+function pinned(system) {
+  if (!REAL_BOX && process.env.KUVO_BROWSER_PINS) {
+    try {
+      const given = JSON.parse(fs88.readFileSync(process.env.KUVO_BROWSER_PINS, "utf8"));
+      if (given?.[system])
+        return given[system];
+    } catch {}
+  }
+  return PINNED[system];
+}
+function runtimeHere(platform = testSystem() ?? process.platform, arch = os8.arch()) {
+  const system = platform === "linux" ? "linux" : platform === "darwin" ? "darwin" : null;
+  if (!system)
+    return { unsupported: `The browser runs on Linux and macOS; this machine is ${platform}.` };
+  const kind = arch === "x64" ? "x86_64" : arch === "arm64" ? "aarch64" : null;
+  if (!kind)
+    return { unsupported: `The browser runs on machines with x86-64 or ARM64 processors; this one is ${arch}.` };
+  const runtime = pinned(system);
+  const hash = crypto38.createHash("sha256").update(JSON.stringify(runtime)).digest("hex").slice(0, 8);
+  return { runtime, id: `${runtime.chromium.version}-${system === "darwin" ? "mac-" : ""}${hash}`, kind, mac: system === "darwin" };
+}
+function compareVersions(a, b) {
+  const x = a.split(".").map(Number), y = b.split(".").map(Number);
+  for (let i = 0;i < Math.max(x.length, y.length); i++) {
+    const d = (x[i] || 0) - (y[i] || 0);
+    if (d)
+      return d < 0 ? -1 : 1;
+  }
+  return 0;
+}
+function hasBrowser(build) {
+  for (const name of ["chrome", "chrome-headless-shell"]) {
+    try {
+      fs88.accessSync(path94.join(build, name), fs88.constants.X_OK);
+      if (fs88.statSync(path94.join(build, name)).isFile())
+        return true;
+    } catch {}
+  }
+  return false;
+}
+function inUse() {
+  let build;
+  try {
+    build = fs88.realpathSync(CURRENT());
+  } catch {
+    return null;
+  }
+  if (!hasBrowser(build))
+    return null;
+  let chromium = "0";
+  try {
+    chromium = fs88.readFileSync(path94.join(build, "chromium-version"), "utf8").trim() || "0";
+  } catch {}
+  return { build, id: path94.basename(build), chromium };
+}
+function running2(id) {
+  const folder = BROWSER();
+  let real = folder;
+  try {
+    real = fs88.realpathSync(folder);
+  } catch {}
+  const marks = [`${folder}/${id}/`, `${real}/${id}/`];
+  if (fs88.existsSync("/proc/self")) {
+    for (const pid of fs88.readdirSync("/proc").filter((name) => /^\d+$/.test(name))) {
+      try {
+        const line = fs88.readFileSync(`/proc/${pid}/cmdline`, "utf8");
+        if (marks.some((mark) => line.includes(mark)))
+          return true;
+      } catch {}
+    }
+    return false;
+  }
+  try {
+    const listed = execFileSync3("/bin/ps", ["-axww", "-o", "command="], { encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "ignore"], maxBuffer: 32 * 1024 * 1024 });
+    return marks.some((mark) => listed.includes(mark));
+  } catch {
+    return true;
+  }
+}
+var readRecord = () => {
+  try {
+    return JSON.parse(fs88.readFileSync(STATE(), "utf8")) ?? {};
+  } catch {
+    return {};
+  }
+};
+function note2(change) {
+  const record = { ...readRecord(), ...change, at: Date.now() };
+  for (const [key, value] of Object.entries(change))
+    if (value === undefined)
+      delete record[key];
+  try {
+    writePrivate(STATE(), JSON.stringify(record));
+  } catch {}
+  const next = record.state === "failed" ? record.retryAt === null || record.retryAt === undefined ? 9999999999 : Math.ceil(record.retryAt / 1000) : 0;
+  try {
+    writePrivate(NEXT(), `${next}
+`);
+  } catch {}
+}
+function installing() {
+  let pid = 0;
+  try {
+    pid = Number(fs88.readFileSync(path94.join(LOCK14(), "pid"), "utf8"));
+  } catch {
+    try {
+      return Date.now() - fs88.statSync(LOCK14()).mtimeMs < 60000;
+    } catch {
+      return false;
+    }
+  }
+  return pid === process.pid || processRuns(pid, "kuvo-link");
+}
+function browserStatus() {
+  const here = runtimeHere();
+  const chromium = "runtime" in here ? here.runtime.chromium.version : null;
+  const now = inUse();
+  const installed = now ? now.chromium : null;
+  if (IS_MAC)
+    return { state: "missing", chromium: null, installed: null, progress: null, message: "This Mac's agents browse in its app's panel.", retryAt: null };
+  if ("unsupported" in here)
+    return { state: "failed", chromium, installed, progress: null, message: here.unsupported, retryAt: null };
+  const record = readRecord();
+  const underWay = record.state === "checking" || record.state === "downloading" || record.state === "installing";
+  if (underWay && (installing() || record.state === "checking" && Date.now() - (record.at ?? 0) < 30000)) {
+    return { state: record.state, chromium, installed, progress: record.state === "downloading" ? record.progress ?? 0 : null, message: null, retryAt: null };
+  }
+  if (underWay)
+    return { state: "failed", chromium, installed, progress: null, message: "Setting up the browser stopped before it finished. It starts again in a minute.", retryAt: null };
+  if (now && chromium && compareVersions(now.chromium, chromium) >= 0)
+    return { state: "ready", chromium, installed, progress: null, message: null, retryAt: null };
+  if (record.state === "failed" && (!record.id || record.id === here.id))
+    return { state: "failed", chromium, installed, progress: null, message: record.message ?? "The browser couldn't be set up.", retryAt: record.retryAt ?? null };
+  if (now)
+    return { state: "ready", chromium, installed, progress: null, message: null, retryAt: null };
+  if (!downloads())
+    return { state: "missing", chromium, installed, progress: null, message: "Only a machine's own Kuvo Code folder downloads the browser.", retryAt: null };
+  return { state: "missing", chromium, installed, progress: null, message: null, retryAt: null };
+}
+
+class SetupError extends Error {
+  retry;
+  constructor(message, retry = true) {
+    super(message);
+    this.retry = retry;
+  }
+}
+var retryAfter = (failures) => [60000, 300000, 900000][failures - 1] ?? 3600000;
+var inWords = (ms) => ms < 120000 ? "in a minute" : ms < 3600000 ? `in ${Math.round(ms / 60000)} minutes` : "in an hour";
+function fetchedFrom(url) {
+  if (!allowedSource(url))
+    throw new SetupError(`Kuvo Code doesn't download the browser from ${url}.`, false);
+  const source = testSource();
+  return source ? `${source}/${url.slice("https://".length)}` : url;
+}
+var hostOf2 = (url) => new URL(url).host;
+async function download(url, expected, to, received, signal) {
+  const address = fetchedFrom(url);
+  if (signal.aborted)
+    throw new SetupError("Stopped.");
+  const controller = new AbortController;
+  const stop = () => controller.abort();
+  signal.addEventListener("abort", stop);
+  let idle = setTimeout(stop, 60000);
+  const deadline = setTimeout(stop, Math.max(600000, expected.size / 50000 * 1000));
+  const awake = () => {
+    clearTimeout(idle);
+    idle = setTimeout(stop, 60000);
+  };
+  const settle = () => {
+    clearTimeout(idle);
+    clearTimeout(deadline);
+    signal.removeEventListener("abort", stop);
+  };
+  let response;
+  try {
+    response = await fetch(address, { redirect: "error", signal: controller.signal });
+  } catch (error) {
+    settle();
+    const cause = error?.cause;
+    if (signal.aborted)
+      throw new SetupError("Stopped.");
+    throw new SetupError(`Couldn't reach ${hostOf2(url)} to download the browser (${cause?.code ?? cause?.message ?? error?.message ?? "no connection"}): the machine needs to reach storage.googleapis.com${testSystem() === "darwin" || !testSystem() && process.platform === "darwin" ? "" : " and dl.rockylinux.org"} over HTTPS.`);
+  }
+  if (response.status === 404) {
+    settle();
+    await response.body?.cancel().catch(() => {});
+    return "missing";
+  }
+  if (!response.ok || !response.body) {
+    settle();
+    await response.body?.cancel().catch(() => {});
+    throw new SetupError(`${hostOf2(url)} answered ${response.status} for the browser's download.`);
+  }
+  const fd = fs88.openSync(to, fs88.constants.O_WRONLY | fs88.constants.O_CREAT | fs88.constants.O_EXCL, 384);
+  const hash = crypto38.createHash("sha256");
+  let bytes = 0, done = false;
+  try {
+    for await (const chunk of response.body) {
+      awake();
+      bytes += chunk.length;
+      if (bytes > expected.size)
+        throw new SetupError(`The browser's download from ${hostOf2(url)} is larger than it should be, so it wasn't used.`);
+      hash.update(chunk);
+      let written = 0;
+      while (written < chunk.length)
+        written += fs88.writeSync(fd, chunk, written);
+      received(bytes);
+    }
+    if (bytes !== expected.size)
+      throw new SetupError(`The browser's download from ${hostOf2(url)} stopped partway.`);
+    if (hash.digest("hex") !== expected.sha256)
+      throw new SetupError(`The browser's download from ${hostOf2(url)} isn't what Kuvo Code expects (its checksum doesn't match), so it wasn't used.`);
+    done = true;
+    return "ok";
+  } catch (error) {
+    if (error instanceof SetupError)
+      throw error;
+    if (signal.aborted)
+      throw new SetupError("Stopped.");
+    throw new SetupError(`The browser's download from ${hostOf2(url)} stopped partway (${controller.signal.aborted ? "it came too slowly" : error?.message ?? "the connection closed"}).`);
+  } finally {
+    settle();
+    await response.body?.cancel().catch(() => {});
+    fs88.closeSync(fd);
+    if (!done)
+      fs88.rmSync(to, { force: true });
+  }
+}
+var packageURLs = (each, kind) => ["https://dl.rockylinux.org/pub/rocky/8", "https://dl.rockylinux.org/vault/rocky/8.10"].map((base) => `${base}/${each.repo}/${kind}/os/${each.path}`);
+var SAFE_NAME = /^[^/\0]+$/;
+var safe = (name) => SAFE_NAME.test(name) && name !== "." && name !== "..";
+function takeFrom(archive, bundle) {
+  const write = (file, data, mode) => {
+    let fd;
+    try {
+      fd = fs88.openSync(file, fs88.constants.O_WRONLY | fs88.constants.O_CREAT | fs88.constants.O_EXCL | (fs88.constants.O_NOFOLLOW ?? 0), mode);
+    } catch (error) {
+      if (error.code !== "EEXIST")
+        throw error;
+      return;
+    }
+    try {
+      let written = 0;
+      while (written < data.length)
+        written += fs88.writeSync(fd, data, written);
+    } finally {
+      fs88.closeSync(fd);
+    }
+  };
+  for (const entry of cpioEntries(archive)) {
+    const name = entry.name.replace(/^\.?\//, "");
+    const type = entry.mode & 61440;
+    let found;
+    if ((found = /^usr\/lib64\/([^/]+)$/.exec(name)) && found[1].includes(".so") && safe(found[1])) {
+      const target = path94.join(bundle, "lib", found[1]);
+      if (type === S_IFREG)
+        write(target, entry.data, 493);
+      else if (type === S_IFLNK) {
+        const pointsTo = entry.data.toString("utf8");
+        if (!/^[A-Za-z0-9._+-]+$/.test(pointsTo) || pointsTo === "." || pointsTo === "..")
+          continue;
+        try {
+          fs88.symlinkSync(pointsTo, target);
+        } catch (error) {
+          if (error.code !== "EEXIST")
+            throw error;
+        }
+      }
+    } else if ((found = /^usr\/share\/fonts\/(?:.+\/)?([^/]+\.(?:ttf|otf|ttc))$/i.exec(name)) && type === S_IFREG && safe(found[1])) {
+      write(path94.join(bundle, "fonts", found[1]), entry.data, 420);
+    } else if ((found = /^usr\/share\/licenses\/(.+)$/.exec(name)) && type === S_IFREG) {
+      const parts = found[1].split("/");
+      if (parts.length < 2 || !parts.every(safe))
+        continue;
+      let folder = path94.join(bundle, "licenses");
+      for (const part of parts.slice(0, -1)) {
+        folder = path94.join(folder, part);
+        if (fs88.existsSync(folder) && !fs88.lstatSync(folder).isDirectory())
+          break;
+        fs88.mkdirSync(folder, { recursive: true, mode: 493 });
+      }
+      if (fs88.lstatSync(folder).isDirectory())
+        write(path94.join(folder, parts[parts.length - 1]), entry.data, 420);
+    }
+  }
+}
+var MAC_LAUNCHER = `#!/bin/sh
+exec "$(dirname "$0")/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing" "$@"
+`;
+function freeRoom(folder) {
+  try {
+    const stats = fs88.statfsSync(folder);
+    return Number(stats.bavail) * Number(stats.bsize);
+  } catch {}
+  try {
+    const free = execFileSync3(fs88.existsSync("/bin/df") ? "/bin/df" : "/usr/bin/df", ["-Pk", folder], { encoding: "utf8", timeout: 5000 }).trim().split(`
+`).pop()?.trim().split(/\s+/)[3];
+    return free ? Number(free) * 1024 : null;
+  } catch {
+    return null;
+  }
+}
+function takeLock() {
+  fs88.mkdirSync(RUN, { recursive: true, mode: 448 });
+  try {
+    fs88.mkdirSync(LOCK14(), { mode: 448 });
+  } catch {
+    if (installing())
+      return false;
+    const holder = (() => {
+      try {
+        return fs88.readFileSync(path94.join(LOCK14(), "pid"), "utf8");
+      } catch {
+        return null;
+      }
+    })();
+    const aside = `${LOCK14()}.gone-${process.pid}-${crypto38.randomBytes(4).toString("hex")}`;
+    try {
+      fs88.renameSync(LOCK14(), aside);
+    } catch {
+      return false;
+    }
+    let moved = null;
+    try {
+      moved = fs88.readFileSync(path94.join(aside, "pid"), "utf8");
+    } catch {}
+    if (moved !== holder) {
+      try {
+        fs88.renameSync(aside, LOCK14());
+      } catch {
+        fs88.rmSync(aside, { recursive: true, force: true });
+      }
+      return false;
+    }
+    fs88.rmSync(aside, { recursive: true, force: true });
+    try {
+      fs88.mkdirSync(LOCK14(), { mode: 448 });
+    } catch {
+      return false;
+    }
+  }
+  fs88.writeFileSync(path94.join(LOCK14(), "pid"), String(process.pid), { mode: 384 });
+  return true;
+}
+function place(id, bundle) {
+  const folder = BROWSER(), target = path94.join(folder, id);
+  if (!(fs88.existsSync(target) && hasBrowser(target) && running2(id))) {
+    fs88.rmSync(target, { recursive: true, force: true });
+    fs88.renameSync(bundle, target);
+  }
+  const link = path94.join(folder, `.current-${process.pid}`);
+  fs88.rmSync(link, { force: true });
+  fs88.symlinkSync(id, link);
+  try {
+    fs88.renameSync(link, CURRENT());
+  } catch {
+    fs88.rmSync(CURRENT(), { recursive: true, force: true });
+    fs88.renameSync(link, CURRENT());
+  }
+}
+function clearOld(keep) {
+  const folder = BROWSER();
+  for (const name of fs88.readdirSync(folder)) {
+    const entry = path94.join(folder, name);
+    if (name.startsWith(STAGING) || name.startsWith(".current-")) {
+      const pid = Number(name.slice(name.startsWith(STAGING) ? STAGING.length : ".current-".length).split("-")[0]);
+      if (pid !== process.pid && processRuns(pid, "kuvo-link"))
+        continue;
+      fs88.rmSync(entry, { recursive: true, force: true });
+      continue;
+    }
+    if (name === keep || name === "profile" || name.startsWith("."))
+      continue;
+    let stat;
+    try {
+      stat = fs88.lstatSync(entry);
+    } catch {
+      continue;
+    }
+    if (!stat.isDirectory())
+      continue;
+    if (!fs88.existsSync(path94.join(entry, "chrome")) && !fs88.existsSync(path94.join(entry, "chrome-headless-shell")))
+      continue;
+    if (running2(name))
+      continue;
+    fs88.rmSync(entry, { recursive: true, force: true });
+  }
+}
+var REPAIR_EVERY = 6 * 3600000;
+function decide({ now, repair }) {
+  if (!downloads())
+    return { outcome: "off", repair: false };
+  const here = runtimeHere();
+  if ("unsupported" in here)
+    return { outcome: "failed", repair: false };
+  const before = readRecord();
+  const waits = !now && (before.failures ?? 0) > 0 && before.id === here.id && (before.retryAt == null || Date.now() < before.retryAt);
+  if (repair && !now && before.repairedId === here.id && Date.now() - (before.repairedAt ?? 0) < REPAIR_EVERY)
+    repair = false;
+  if (repair && waits)
+    repair = false;
+  const current = inUse();
+  if (repair && !current)
+    repair = false;
+  if (!repair && current && compareVersions(current.chromium, here.runtime.chromium.version) >= 0)
+    return { outcome: "ready", repair };
+  if (waits)
+    return { outcome: "waiting", repair };
+  if (installing())
+    return { outcome: "busy", repair };
+  return { outcome: null, repair };
+}
+async function installBrowser(asked = {}) {
+  const here = runtimeHere();
+  const { outcome, repair } = decide({ now: asked.now ?? false, repair: asked.repair ?? false });
+  const before = readRecord();
+  if (outcome === "failed" && "unsupported" in here) {
+    note2({ state: "failed", message: here.unsupported, retryAt: null, progress: undefined });
+    return "failed";
+  }
+  if (outcome === "ready") {
+    if (before.state !== "ready" && !installing())
+      note2({ state: "ready", message: undefined, progress: undefined });
+    return "ready";
+  }
+  if (outcome)
+    return outcome;
+  if ("unsupported" in here)
+    return "failed";
+  if (!takeLock())
+    return "busy";
+  const failedBefore = (before.failures ?? 0) > 0 && before.id === here.id;
+  const current = inUse();
+  const folder = BROWSER();
+  let staging = null;
+  const stop = new AbortController;
+  try {
+    note2({ state: "checking", progress: undefined, message: undefined });
+    fs88.mkdirSync(folder, { recursive: true, mode: 448 });
+    clearOld(current?.id ?? here.id);
+    const { runtime, id, kind, mac } = here;
+    const chromium = runtime.chromium[kind];
+    const packages = mac ? [] : runtime.packages?.[kind] ?? [];
+    if (!mac && !packages.length)
+      throw new SetupError("This build of Kuvo Code has no browser for this machine.", false);
+    const total = chromium.size + packages.reduce((sum, each) => sum + each.size, 0);
+    const needed = total * 4 + 200000000;
+    const room = freeRoom(folder);
+    if (room !== null && room < needed)
+      throw new SetupError(`There isn't room for the browser on this machine: it needs about ${Math.ceil(needed / 1e9 * 10) / 10} GB free where Kuvo Code keeps its files.`);
+    staging = path94.join(folder, `${STAGING}${process.pid}-${crypto38.randomBytes(4).toString("hex")}`);
+    const bundle = path94.join(staging, "bundle");
+    for (const each of [staging, bundle, path94.join(bundle, "lib"), path94.join(bundle, "fonts"), path94.join(bundle, "licenses")])
+      fs88.mkdirSync(each, { recursive: true, mode: 493 });
+    fs88.chmodSync(staging, 448);
+    const got = new Map;
+    let said = -1, saidAt = 0;
+    const received = (name, bytes) => {
+      if (stop.signal.aborted)
+        return;
+      got.set(name, bytes);
+      const progress = Math.min(1, [...got.values()].reduce((sum, each) => sum + each, 0) / total);
+      if (progress - said >= 0.01 || Date.now() - saidAt > 2000 || progress === 1) {
+        said = progress;
+        saidAt = Date.now();
+        note2({ state: "downloading", progress: Math.floor(progress * 1000) / 1000 });
+      }
+    };
+    note2({ state: "downloading", progress: 0 });
+    const zip = path94.join(staging, "chromium.zip");
+    if (await download(chromium.url, chromium, zip, (bytes) => received("chromium", bytes), stop.signal) === "missing") {
+      throw new SetupError(`${hostOf2(chromium.url)} doesn't have the browser this Kuvo Code pins (Chrome for Testing ${runtime.chromium.version}): update Kuvo Code.`, false);
+    }
+    const queue = [...packages];
+    const worker = async () => {
+      for (let each = queue.shift();each && !stop.signal.aborted; each = queue.shift()) {
+        const file = path94.join(staging, `${each.name.replace(/[^A-Za-z0-9._+-]/g, "_")}.rpm`);
+        let outcome = "missing";
+        for (const url of packageURLs(each, kind)) {
+          outcome = await download(url, each, file, (bytes) => received(each.name, bytes), stop.signal);
+          if (outcome === "ok")
+            break;
+        }
+        if (outcome === "missing")
+          throw new SetupError(`Rocky Linux no longer has ${each.name} ${each.version}, which the browser needs: update Kuvo Code.`, false);
+        if (stop.signal.aborted)
+          return;
+        const archive = payload(fs88.readFileSync(file));
+        fs88.rmSync(file, { force: true });
+        takeFrom(archive, bundle);
+      }
+    };
+    const settled = await Promise.allSettled(Array.from({ length: Math.min(4, packages.length) }, () => worker().catch((error) => {
+      stop.abort();
+      throw error;
+    })));
+    const failed = settled.find((each) => each.status === "rejected");
+    if (failed)
+      throw settled.map((each) => each.status === "rejected" ? each.reason : null).find((reason) => reason && !(reason instanceof SetupError && reason.message === "Stopped.")) ?? failed.reason;
+    note2({ state: "installing", progress: undefined });
+    const unpacked = path94.join(staging, "chromium");
+    fs88.mkdirSync(unpacked, { mode: 448 });
+    await unzip(zip, unpacked);
+    fs88.rmSync(zip, { force: true });
+    const top = fs88.readdirSync(unpacked).find((name) => name.startsWith("chrome-") && fs88.lstatSync(path94.join(unpacked, name)).isDirectory());
+    if (!top)
+      throw new SetupError("The browser's download has no browser in it.", false);
+    for (const name of fs88.readdirSync(path94.join(unpacked, top))) {
+      if (fs88.existsSync(path94.join(bundle, name)))
+        throw new SetupError(`The browser's download has ${name} twice.`, false);
+      fs88.renameSync(path94.join(unpacked, top, name), path94.join(bundle, name));
+    }
+    if (mac)
+      fs88.writeFileSync(path94.join(bundle, "chrome"), MAC_LAUNCHER, { mode: 493 });
+    fs88.writeFileSync(path94.join(bundle, "chromium-version"), runtime.chromium.version + `
+`, { mode: 420 });
+    fs88.writeFileSync(path94.join(bundle, "kuvo-version"), (boxVersion() ?? "") + `
+`, { mode: 420 });
+    if (!hasBrowser(bundle) || mac && !fs88.existsSync(path94.join(bundle, "Google Chrome for Testing.app", "Contents", "MacOS", "Google Chrome for Testing"))) {
+      throw new SetupError("The browser's download has no browser in it.", false);
+    }
+    linksInside(bundle);
+    fs88.chmodSync(bundle, 493);
+    place(id, bundle);
+    clearOld(id);
+    note2({ state: "ready", failures: 0, retryAt: null, message: undefined, progress: undefined, ...repair ? { repairedAt: Date.now(), repairedId: id } : {} });
+    return "installed";
+  } catch (error) {
+    stop.abort();
+    const failures = (failedBefore ? before.failures ?? 0 : 0) + 1;
+    const retry = !(error instanceof SetupError) || error.retry;
+    const wait = retryAfter(failures);
+    const message = String(error?.message ?? error).slice(0, 400);
+    note2({ state: "failed", id: here.id, failures, retryAt: retry ? Date.now() + wait : null, message: retry ? `${message} It tries again ${inWords(wait)}.` : message, progress: undefined });
+    return "failed";
+  } finally {
+    if (staging)
+      fs88.rmSync(staging, { recursive: true, force: true });
+    fs88.rmSync(LOCK14(), { recursive: true, force: true });
+  }
+}
+function linksInside(folder) {
+  const real = fs88.realpathSync(folder);
+  const walk = (at) => {
+    for (const entry of fs88.readdirSync(at, { withFileTypes: true })) {
+      const each = path94.join(at, entry.name);
+      if (entry.isSymbolicLink()) {
+        let leads;
+        try {
+          leads = fs88.realpathSync(each);
+        } catch {
+          leads = path94.resolve(fs88.realpathSync(at), fs88.readlinkSync(each));
+          if (leads.startsWith(real + path94.sep)) {
+            fs88.rmSync(each, { force: true });
+            continue;
+          }
+        }
+        if (!leads.startsWith(real + path94.sep))
+          throw new SetupError(`The browser's download has a link that leads outside it (${path94.relative(folder, each)}).`, false);
+      } else if (entry.isDirectory())
+        walk(each);
+    }
+  };
+  walk(folder);
+}
+function startBrowserInstall({ now = false, repair = false } = {}) {
+  const record = readRecord();
+  if (record.state === "checking" && Date.now() - (record.at ?? 0) < 30000)
+    return browserStatus();
+  const decided = decide({ now, repair });
+  if (decided.outcome === null && SCRIPT) {
+    note2({ state: "checking", progress: undefined, message: undefined });
+    const flags = [...now ? ["--now"] : [], ...decided.repair ? ["--repair"] : []];
+    const child = spawn8(process.execPath, [...OWN_RUNTIME, SCRIPT, "browser", "install", ...flags], { detached: true, stdio: "ignore", cwd: K, env: process.env });
+    const here = runtimeHere();
+    child.on("error", (error) => note2({ state: "failed", id: "id" in here ? here.id : undefined, retryAt: Date.now() + 60000, failures: (readRecord().failures ?? 0) + 1, message: `The browser's setup couldn't start (${error.message}). It tries again in a minute.` }));
+    child.unref();
+  }
+  return browserStatus();
+}
+async function* browserRoute(context) {
+  const { request, json } = context;
+  const method = request.method.toUpperCase();
+  if (method === "GET")
+    return yield* json(200, browserStatus());
+  if (method === "POST") {
+    const body = parsed(request.body);
+    return yield* json(202, startBrowserInstall({ now: body?.now === true, repair: body?.repair === true }));
+  }
+  return yield* json(405, {});
+}
+
+// Packages/Box/src/link/keeper.ts
+import { spawn as spawn9 } from "node:child_process";
+import fs89 from "node:fs";
+import path95 from "node:path";
 var isBridge2 = (pid) => pid !== process.pid && processRuns(pid, "kuvo-link.js");
 var needed = (link) => Boolean(link && ((link.phones ?? []).length || link.pairing && Date.now() < link.pairing.expires || peersOf(link).length)) || isMade();
 function noLongerNeeded() {
   try {
-    fs87.rmSync(NEEDED_FILE, { force: true });
+    fs89.rmSync(NEEDED_FILE, { force: true });
   } catch {}
   if (needed(readLink()))
     try {
-      fs87.writeFileSync(NEEDED_FILE, "", { mode: 384 });
+      fs89.writeFileSync(NEEDED_FILE, "", { mode: 384 });
     } catch {}
 }
 function keepKeeper() {
-  let start = path93.join(K, "bin", "kuvo-start");
-  if (!fs87.existsSync(start))
+  let start = path95.join(K, "bin", "kuvo-start");
+  if (!fs89.existsSync(start))
     return;
-  const copy = path93.join(K, "bin", ".kuvo-start-keeper");
-  if (!/\nkeep\)/.test(textOf(start) ?? "") && fs87.existsSync(copy))
+  const copy = path95.join(K, "bin", ".kuvo-start-keeper");
+  if (!/\nkeep\)/.test(textOf(start) ?? "") && fs89.existsSync(copy))
     start = copy;
   let keeper = null;
   try {
-    keeper = Number(fs87.readFileSync(path93.join(RUN, "box.pid"), "utf8"));
+    keeper = Number(fs89.readFileSync(path95.join(RUN, "box.pid"), "utf8"));
   } catch {}
   if (keeper && processRuns(keeper, "kuvo-start"))
     return;
@@ -25893,33 +28889,33 @@ function keepKeeper() {
   delete environment.BUN_BE_BUN;
   delete environment.BUN_RUNTIME_TRANSPILER_CACHE_PATH;
   try {
-    spawn8("sh", [start], { cwd: K, env: environment, detached: true, stdio: "ignore" }).unref();
+    spawn9("sh", [start], { cwd: K, env: environment, detached: true, stdio: "ignore" }).unref();
   } catch {}
 }
 function runningBridge() {
   try {
-    const pid = Number(fs87.readFileSync(PID_FILE, "utf8"));
+    const pid = Number(fs89.readFileSync(PID_FILE, "utf8"));
     return isBridge2(pid) ? pid : null;
   } catch {
     return null;
   }
 }
 function startBridge() {
-  const workspace = path93.join(K, "workspace");
-  const child = spawn8(process.execPath, [...OWN_RUNTIME, SCRIPT, "run"], {
+  const workspace = path95.join(K, "workspace");
+  const child = spawn9(process.execPath, [...OWN_RUNTIME, SCRIPT, "run"], {
     detached: true,
     stdio: "ignore",
-    cwd: fs87.existsSync(workspace) ? workspace : K,
+    cwd: fs89.existsSync(workspace) ? workspace : K,
     env: process.env
   });
   child.unref();
 }
 
 // Packages/Box/src/link/work-queue/ops.ts
-import fs88 from "node:fs";
-import os8 from "node:os";
-import path94 from "node:path";
-import crypto37 from "node:crypto";
+import fs90 from "node:fs";
+import os9 from "node:os";
+import path96 from "node:path";
+import crypto39 from "node:crypto";
 
 // Packages/Box/src/link/work-queue/view.ts
 async function factsOf(targets, signal) {
@@ -26028,24 +29024,24 @@ var MOST_PROGRESS_NOTE = 300;
 var refuse = (words) => {
   throw new Refusal(words);
 };
-var STAGING = path94.join(path94.dirname(FILES2), "staging");
+var STAGING2 = path96.join(path96.dirname(FILES2), "staging");
 function clearStaging(now = Date.now()) {
   for (const name of (() => {
     try {
-      return fs88.readdirSync(STAGING);
+      return fs90.readdirSync(STAGING2);
     } catch {
       return [];
     }
   })()) {
     try {
-      if (now - fs88.statSync(path94.join(STAGING, name)).mtimeMs > 3600000)
-        fs88.rmSync(path94.join(STAGING, name), { recursive: true, force: true });
+      if (now - fs90.statSync(path96.join(STAGING2, name)).mtimeMs > 3600000)
+        fs90.rmSync(path96.join(STAGING2, name), { recursive: true, force: true });
     } catch {}
   }
 }
 var shortName = (name) => {
-  const ext = path94.extname(name).slice(0, 20);
-  let stem = name.slice(0, name.length - path94.extname(name).length);
+  const ext = path96.extname(name).slice(0, 20);
+  let stem = name.slice(0, name.length - path96.extname(name).length);
   while (stem && Buffer.byteLength(stem + ext) > 180)
     stem = Array.from(stem).slice(0, -1).join("");
   return stem + ext;
@@ -26057,38 +29053,38 @@ function refuseMoving(owners, moving = frozen()) {
 }
 var real = (place) => {
   try {
-    return fs88.realpathSync(place);
+    return fs90.realpathSync(place);
   } catch {
     return null;
   }
 };
-var within2 = (file, folder) => file === folder || file.startsWith(folder.endsWith(path94.sep) ? folder : folder + path94.sep);
+var within2 = (file, folder) => file === folder || file.startsWith(folder.endsWith(path96.sep) ? folder : folder + path96.sep);
 function stageFile(given, places, staging) {
-  if (!path94.isAbsolute(given))
+  if (!path96.isAbsolute(given))
     refuse(`Give ${given} as a full path.`);
   const file = real(given) ?? refuse(`There's no file at ${given}.`);
   const own = places.own ? real(places.own) : null;
-  const roots = [own, ...places.others.map(real), real(os8.tmpdir()), real("/tmp")].filter((each) => Boolean(each));
+  const roots = [own, ...places.others.map(real), real(os9.tmpdir()), real("/tmp")].filter((each) => Boolean(each));
   const root = roots.find((each) => within2(file, each));
-  const boxes = [real(K), real(BOTS), IS_MAC ? real(path94.dirname(path94.resolve(K))) : null].filter((each) => Boolean(each));
+  const boxes = [real(K), real(BOTS), IS_MAC ? real(path96.dirname(path96.resolve(K))) : null].filter((each) => Boolean(each));
   const ownOK = own !== null && root === own && boxes.some((box) => within2(own, box));
   if (!root || !ownOK && boxes.some((box) => within2(file, box)))
     refuse(`${given} isn't in this conversation's folder, its project or a temporary folder: only files from there are kept with an item.`);
-  if (path94.relative(root, file).split(path94.sep).some((part) => part.startsWith(".")))
+  if (path96.relative(root, file).split(path96.sep).some((part) => part.startsWith(".")))
     refuse(`${given} is hidden (a name starting with a dot): it isn't kept with an item.`);
-  const checked = fs88.lstatSync(file);
+  const checked = fs90.lstatSync(file);
   if (!checked.isFile())
     refuse(`${given} isn't a file.`);
   if (checked.size > MOST_FILE)
     refuse(`${given} is over ${Math.round(MOST_FILE / 1e6)} MB: too big to keep with an item.`);
   let handle;
   try {
-    handle = fs88.openSync(file, fs88.constants.O_RDONLY | (fs88.constants.O_NOFOLLOW ?? 0) | (fs88.constants.O_NONBLOCK ?? 0));
+    handle = fs90.openSync(file, fs90.constants.O_RDONLY | (fs90.constants.O_NOFOLLOW ?? 0) | (fs90.constants.O_NONBLOCK ?? 0));
   } catch {
     return refuse(`${given} can't be read.`);
   }
   try {
-    const opened = fs88.fstatSync(handle);
+    const opened = fs90.fstatSync(handle);
     if (!opened.isFile() || opened.dev !== checked.dev || opened.ino !== checked.ino || real(given) !== file)
       refuse(`${given} changed as it was read: try again.`);
     if (opened.nlink !== 1)
@@ -26097,17 +29093,17 @@ function stageFile(given, places, staging) {
     const bytes = Buffer.alloc(size);
     let read = 0;
     while (read < size) {
-      const got = fs88.readSync(handle, bytes, read, size - read, read);
+      const got = fs90.readSync(handle, bytes, read, size - read, read);
       if (!got)
         break;
       read += got;
     }
-    fs88.mkdirSync(staging, { recursive: true, mode: 448 });
-    const staged = path94.join(staging, `${crypto37.randomBytes(8).toString("hex")}`);
-    fs88.writeFileSync(staged, bytes.subarray(0, read), { mode: 384 });
-    return { staged, name: path94.basename(file), size: read };
+    fs90.mkdirSync(staging, { recursive: true, mode: 448 });
+    const staged = path96.join(staging, `${crypto39.randomBytes(8).toString("hex")}`);
+    fs90.writeFileSync(staged, bytes.subarray(0, read), { mode: 384 });
+    return { staged, name: path96.basename(file), size: read };
   } finally {
-    fs88.closeSync(handle);
+    fs90.closeSync(handle);
   }
 }
 function stageFiles2(given, places) {
@@ -26116,8 +29112,8 @@ function stageFiles2(given, places) {
     refuse("Only an agent's own files are kept with an item.");
   if (named.length > MOST_FILES)
     refuse(`An item keeps ${MOST_FILES} files at most.`);
-  const staging = path94.join(STAGING, crypto37.randomBytes(8).toString("hex"));
-  const clear = () => fs88.rmSync(staging, { recursive: true, force: true });
+  const staging = path96.join(STAGING2, crypto39.randomBytes(8).toString("hex"));
+  const clear = () => fs90.rmSync(staging, { recursive: true, force: true });
   try {
     return { staged: named.map((each) => stageFile(each, places, staging)), clear };
   } catch (error) {
@@ -26141,7 +29137,7 @@ var TYPES = {
   ".mp4": "video/mp4",
   ".mov": "video/quicktime"
 };
-var typeOf = (name) => TYPES[path94.extname(name).toLowerCase()] ?? "application/octet-stream";
+var typeOf = (name) => TYPES[path96.extname(name).toLowerCase()] ?? "application/octet-stream";
 var text2 = (value, most, what) => {
   if (typeof value !== "string")
     return refuse(`${what} should be text.`);
@@ -26296,18 +29292,18 @@ function changeItem2(book, item, fields, acting) {
     refuse(`An item keeps ${MOST_FILES} files at most: take some away first (remove).`);
   for (const file of item.files)
     if (gone.has(file.name))
-      acting.fileOps.push(() => fs88.rmSync(path94.join(filesOf(item.id), file.name), { force: true }));
+      acting.fileOps.push(() => fs90.rmSync(path96.join(filesOf(item.id), file.name), { force: true }));
   item.files = left;
   for (const each of staged) {
     const base = shortName(each.name.replace(/[\\\0]/g, "_").replace(/^\.+/, "")) || "file";
-    const ext = path94.extname(base);
+    const ext = path96.extname(base);
     let name = base;
     for (let n = 2;item.files.some((file) => file.name === name); n++)
       name = `${base.slice(0, base.length - ext.length)} ${n}${ext}`;
     item.files.push({ name, size: each.size, type: typeOf(name), at: now });
     acting.fileOps.push(() => {
-      fs88.mkdirSync(filesOf(item.id), { recursive: true, mode: 448 });
-      fs88.renameSync(each.staged, path94.join(filesOf(item.id), name));
+      fs90.mkdirSync(filesOf(item.id), { recursive: true, mode: 448 });
+      fs90.renameSync(each.staged, path96.join(filesOf(item.id), name));
     });
   }
   item.updated = { at: now, by: who };
@@ -26338,12 +29334,12 @@ function handItem(book, item, to, who, now) {
 }
 
 // Packages/Box/src/link/mac/link.ts
-import fs90 from "node:fs";
-import path96 from "node:path";
+import fs92 from "node:fs";
+import path98 from "node:path";
 
 // Packages/Box/src/link/mac/machines.ts
-import fs89 from "node:fs";
-import path95 from "node:path";
+import fs91 from "node:fs";
+import path97 from "node:path";
 
 // Packages/Box/src/link/mac/app-route.ts
 async function appAnswer(request, phone, signal) {
@@ -26391,8 +29387,8 @@ async function* passedOn(response, signal) {
 }
 
 // Packages/Box/src/link/mac/machines.ts
-var LIST_FILE = path95.join(K, "machines.json");
-var PHONE_LINK_FILE = path95.join(path95.dirname(K), "phone-link.json");
+var LIST_FILE = path97.join(K, "machines.json");
+var PHONE_LINK_FILE = path97.join(path97.dirname(K), "phone-link.json");
 var HEARD_LATELY = 30 * 60000;
 var TIMING = { wait: 5000, look: 1e4 };
 var macName = () => macLink.config?.name || "this Mac";
@@ -26400,7 +29396,7 @@ var notOpen = () => `Kuvo Code isn’t open on ${macName()}`;
 var UNREADABLE = "This Mac’s list of machines can’t be read right now.";
 function keptHosts() {
   try {
-    return JSON.parse(fs89.readFileSync(PHONE_LINK_FILE, "utf8")).machines ?? {};
+    return JSON.parse(fs91.readFileSync(PHONE_LINK_FILE, "utf8")).machines ?? {};
   } catch (error) {
     return error.code === "ENOENT" ? undefined : null;
   }
@@ -26408,7 +29404,7 @@ function keptHosts() {
 function savedMachines(kept = keptHosts()) {
   let text;
   try {
-    text = fs89.readFileSync(LIST_FILE, "utf8");
+    text = fs91.readFileSync(LIST_FILE, "utf8");
   } catch (error) {
     if (error.code !== "ENOENT")
       return null;
@@ -26540,7 +29536,7 @@ function macNeeded(link, now = Date.now()) {
   const pairing = ["pairing", "appPairing"].some((slot) => link?.[slot] && now < link[slot].expires);
   return Boolean(config.phones && ((link?.phones ?? []).length || pairing));
 }
-var MAC_LINK_FILE = path96.join(RUN, "mac-link.json");
+var MAC_LINK_FILE = path98.join(RUN, "mac-link.json");
 function saveMacConfig(config) {
   const { phones, relay, name, app } = config;
   try {
@@ -26552,7 +29548,7 @@ function saveMacConfig(config) {
 function savedMacConfig(file = MAC_LINK_FILE) {
   let kept;
   try {
-    kept = JSON.parse(fs90.readFileSync(file, "utf8"));
+    kept = JSON.parse(fs92.readFileSync(file, "utf8"));
   } catch {
     return null;
   }
@@ -26675,10 +29671,10 @@ function stopMacLink() {
 }
 
 // Packages/Box/src/link/mac/notices.ts
-import fs91 from "node:fs";
+import fs93 from "node:fs";
 
 // Packages/Box/src/link/notices/push.ts
-import path97 from "node:path";
+import path99 from "node:path";
 
 // Packages/Box/src/link/notices/notice.ts
 var NOTICE_LIMIT = 2500;
@@ -26719,7 +29715,7 @@ function sendToPhones(host, link, notice) {
   return sent > 0;
 }
 var OUTCOMES = ["sent", "noPhone", "notAllowed", "refused"];
-var PUSHED_FILE = path97.join(RUN, "notices", "pushed.json");
+var PUSHED_FILE = path99.join(RUN, "notices", "pushed.json");
 function readPushed2() {
   try {
     const kept = JSON.parse(textOf(PUSHED_FILE) ?? "{}");
@@ -26751,7 +29747,7 @@ function notePushed(address, status, now = Date.now(), link = readLink()) {
 function macNoticeHold(clock = {}) {
   let held = [];
   try {
-    held = JSON.parse(fs91.readFileSync(HELD_FILE, "utf8"));
+    held = JSON.parse(fs93.readFileSync(HELD_FILE, "utf8"));
   } catch {}
   return new NoticeHold({
     ...clock,
@@ -26768,7 +29764,7 @@ function macNoticeHold(clock = {}) {
         if (entries.length)
           writePrivate(HELD_FILE, JSON.stringify(entries));
         else
-          fs91.rmSync(HELD_FILE, { force: true });
+          fs93.rmSync(HELD_FILE, { force: true });
       } catch {}
     }
   });
@@ -26780,7 +29776,7 @@ function macTell(notice) {
 }
 
 // Packages/Box/src/link/mac/relay.ts
-import os14 from "node:os";
+import os15 from "node:os";
 
 // Packages/Box/src/link/peers/mail.ts
 var answeringAsk = null;
@@ -27168,8 +30164,8 @@ class LinkHost {
 }
 
 // Packages/Box/src/link/letters/start.ts
-import fs92 from "node:fs";
-import path98 from "node:path";
+import fs94 from "node:fs";
+import path100 from "node:path";
 var OUTSIDE = { session: "unknown", place: null, name: "another agent" };
 var ASKS_FIRST = [{ action: "shell", resource: "*", effect: "ask" }];
 var goalNote = "This is part of a goal the user may not be watching: what you ask can wait a while, so carry on with what doesn't depend on it, and report what you couldn't do.";
@@ -27196,19 +30192,19 @@ function approvalGiven(given) {
 }
 var SEAT = "Not from a group chat: talk it through here; the work is handed out after the wrap-up.";
 var seatRefusal = () => ({ status: 403, message: SEAT });
-var isBotFolder = (folder) => folder.startsWith(path98.resolve(BOTS) + "/");
+var isBotFolder = (folder) => folder.startsWith(path100.resolve(BOTS) + "/");
 function folderRules(folders) {
   const paths = [];
   for (const folder of folders) {
     let real = folder;
     try {
-      real = fs92.realpathSync(folder);
+      real = fs94.realpathSync(folder);
     } catch {}
     for (const each of [folder, real])
       if (!paths.includes(each))
         paths.push(each);
   }
-  return paths.map((each) => ({ action: "external_directory", resource: path98.join(each, "*"), effect: "allow" }));
+  return paths.map((each) => ({ action: "external_directory", resource: path100.join(each, "*"), effect: "allow" }));
 }
 var isFolderRule = (rule) => rule.action === "external_directory" && rule.effect === "allow" && rule.resource.endsWith("/*");
 function rulesFor(approval, parent, folders) {
@@ -27220,20 +30216,20 @@ function projectOf3(folder) {
     return null;
   const directory = projectOf(folder);
   const known = readProjects().find((each) => each.directory === directory);
-  if (!known && directory === folder && fs92.existsSync(PROJECTS_FILE)) {
+  if (!known && directory === folder && fs94.existsSync(PROJECTS_FILE)) {
     try {
       changeProjects((projects) => projects.some((each) => each.directory === directory) ? projects : [{ directory, folders: [] }, ...projects]);
     } catch {}
   }
-  return { name: known?.name ?? path98.basename(directory), folders: directory !== folder ? [] : known?.folders ?? [] };
+  return { name: known?.name ?? path100.basename(directory), folders: directory !== folder ? [] : known?.folders ?? [] };
 }
 function findProject(named) {
   const written = named.trim().replace(/^~(?=$|\/)/, homeFolder());
   const projects = readProjects().filter((each) => !each.removed);
-  const found = projects.find((each) => each.directory === written) ?? projects.find((each) => (each.name ?? path98.basename(each.directory)).toLowerCase() === written.toLowerCase());
-  return found ? { directory: found.directory, name: found.name ?? path98.basename(found.directory) } : null;
+  const found = projects.find((each) => each.directory === written) ?? projects.find((each) => (each.name ?? path100.basename(each.directory)).toLowerCase() === written.toLowerCase());
+  return found ? { directory: found.directory, name: found.name ?? path100.basename(found.directory) } : null;
 }
-var projectNames = () => readProjects().filter((each) => !each.removed).map((each) => each.name ?? path98.basename(each.directory)).slice(0, 12);
+var projectNames = () => readProjects().filter((each) => !each.removed).map((each) => each.name ?? path100.basename(each.directory)).slice(0, 12);
 async function answersYou2(target, session) {
   const address = encodeURIComponent(session);
   let query = "limit=100&order=desc";
@@ -27275,21 +30271,24 @@ async function startSession(given, by, place) {
   } else if (typeof given.folder === "string" && given.folder.trim()) {
     const written = given.folder.trim();
     const full = written.replace(/^~(?=$|\/)/, homeFolder());
-    let isFolder = false;
-    try {
-      isFolder = fs92.statSync(full).isDirectory();
-    } catch {}
-    if (!path98.isAbsolute(full) || !isFolder)
-      return no(400, `${written} isn't a folder on ${HERE}. Give a full path to one.`);
-    const ours = [
+    const oursGiven = [
       ...readProjects().filter((each) => !each.removed).flatMap((each) => [each.directory, ...each.folders ?? []]),
       ...readWorktrees().map((each) => each.folder ?? each.root),
       ...parentFolder ? [parentFolder] : []
-    ].map(realish);
-    const at = by ? fs92.realpathSync(full) : full;
+    ];
+    if (path100.isAbsolute(full))
+      await askedAbout([full, ...by ? oursGiven : []]);
+    let isFolder = false;
+    try {
+      isFolder = fs94.statSync(full).isDirectory();
+    } catch {}
+    if (!path100.isAbsolute(full) || !isFolder)
+      return no(400, `${written} isn't a folder on ${HERE}. Give a full path to one.`);
+    const ours = by ? oursGiven.map(realish) : [];
+    const at = by ? fs94.realpathSync(full) : full;
     const bridgeNow = place.bridge?.() ?? null;
     const fullAccess = Boolean(by?.place && approvalOf(by.place.data, { agents: Boolean(bridgeNow && by.place.target.port === bridgeNow.port), bot: Boolean(botOfConversation(by.session) ?? worksFor(by.place.data)) }).effective === "fullAccess");
-    const kept = by && !fullAccess && !ours.includes(at) ? keptFromSessions(at) : null;
+    const kept = by && !fullAccess && !ours.includes(at) ? await keptFromSessions(at) : null;
     if (kept)
       return no(403, `An agent in Auto can't start a session in ${written} on ${HERE}: ${kept}. Ask the user to start it there.`);
     folder = isBotFolder(at) ? CHATS : at;
@@ -27395,7 +30394,7 @@ async function startSession(given, by, place) {
     const tree = made.value;
     if (made.status !== 200 || typeof tree.folder !== "string") {
       giveBack();
-      return no(made.status === 409 ? 400 : 502, `Couldn't make a worktree of ${path98.basename(project)}: ${String(tree.message ?? "it failed")}`);
+      return no(made.status === 409 ? 400 : 502, `Couldn't make a worktree of ${path100.basename(project)}: ${String(tree.message ?? "it failed")}`);
     }
     folder = tree.folder;
     madeTree = typeof tree.root === "string" ? tree.root : null;
@@ -27501,11 +30500,11 @@ ${answer}` : "It hasn't answered yet; it may still write back with send_message.
 }
 
 // Packages/Box/src/link/notices/told.ts
-import path99 from "node:path";
-var TOLD_FOLDER = path99.join(RUN, "notices");
-var TOLD_FILE2 = path99.join(TOLD_FOLDER, "told.json");
-var TOLD_LOCK = path99.join(TOLD_FOLDER, "told.lock");
-var TELLER_FILE = path99.join(TOLD_FOLDER, "teller");
+import path101 from "node:path";
+var TOLD_FOLDER = path101.join(RUN, "notices");
+var TOLD_FILE2 = path101.join(TOLD_FOLDER, "told.json");
+var TOLD_LOCK = path101.join(TOLD_FOLDER, "told.lock");
+var TELLER_FILE = path101.join(TOLD_FOLDER, "teller");
 function markTeller() {
   try {
     writePrivate(TELLER_FILE, String(process.pid));
@@ -27710,7 +30709,7 @@ async function planLimitsTool(bridge, signal) {
 var AGENT_TOOLS = ["list_agents", "send_message", "read_conversation", "start_session", "list_sessions", "stop_session", "compact_session", "answer_ask", "list_models", "make_project", "list_projects", "propose_goal", "goal_progress", "may_spend", "finish_goal", "notify_user", "plan_limits"];
 var isAgentTool = (name) => AGENT_TOOLS.includes(name);
 var said2 = (text) => ({ text, isError: false });
-var refused2 = (text) => ({ text, isError: true });
+var refused3 = (text) => ({ text, isError: true });
 var why2 = (error) => String(error?.message ?? error);
 function targetsOf(place) {
   const targets = [];
@@ -27790,10 +30789,10 @@ async function findAgent(wanted, caller, { agents, here }, targets, archivedOwn 
     const close = agents.filter((agent) => folded(agent.name).includes(folded(name))).slice(0, 8);
     const hint = close.length ? `Did you mean one of these?
 ` + describeAgents(close, caller, here) : "Use list_agents to see who there is.";
-    return { error: refused2(`There's no agent called ${name}. ` + hint) };
+    return { error: refused3(`There's no agent called ${name}. ` + hint) };
   }
   if (matches.length > 1)
-    return { error: refused2(`More than one agent is called ${name}: use one's address.
+    return { error: refused3(`More than one agent is called ${name}: use one's address.
 ` + describeAgents(matches, caller, here)) };
   return { agent: matches[0] };
 }
@@ -27805,9 +30804,9 @@ function peerFor(session) {
 }
 async function sendMessage(args, caller, all, targets, place) {
   if (typeof args.to !== "string" || !args.to.trim())
-    return refused2("Say who to write to (to).");
+    return refused3("Say who to write to (to).");
   if (typeof args.text !== "string" || !args.text.trim())
-    return refused2("Say what to write (text).");
+    return refused3("Say what to write (text).");
   const { text } = args;
   const waits = args.wait === true;
   const found = await findAgent(args.to, caller, all, targets);
@@ -27815,16 +30814,16 @@ async function sendMessage(args, caller, all, targets, place) {
     return found.error;
   const target = found.agent;
   if (target.session === caller)
-    return refused2("That's you.");
+    return refused3("That's you.");
   if (frozen().has(target.session))
-    return refused2(`${target.name} is moving to another computer. Try again in a minute.`);
+    return refused3(`${target.name} is moving to another computer. Try again in a minute.`);
   const key = caller ?? "outside";
   const counted = allowed2("messages", key);
   if (counted === null)
-    return refused2("You've sent a lot of messages in the last few minutes. Wait a while, or ask the user how to go on.");
+    return refused3("You've sent a lot of messages in the last few minutes. Wait a while, or ask the user how to go on.");
   const failed = (words) => {
     takeBack("messages", key, counted);
-    return refused2(words);
+    return refused3(words);
   };
   const sender = nameOf4(caller, all);
   const here = await placeOfSession(target.session, targets).catch(() => null);
@@ -27871,14 +30870,14 @@ ${answer.text}` : `${target.name} hasn't answered yet. It may still write back w
 async function readOne(args, caller, all, targets, place) {
   const of = typeof args.of === "string" ? args.of.trim() : "";
   if (!of)
-    return refused2("Say whose conversation to read (of).");
+    return refused3("Say whose conversation to read (of).");
   const query = typeof args.query === "string" && args.query.trim() ? args.query.trim() : null;
   const found = await findAgent(of, caller, all, targets, true);
   if ("error" in found)
     return found.error;
   const target = found.agent;
   if (target.session === caller)
-    return refused2("That's this conversation: you have it already.");
+    return refused3("That's this conversation: you have it already.");
   const intro = `${target.name}'s conversation (${whatAgent(target, all.here)}, address ${target.session}), oldest first. What's under **User** is the user's; under **${target.name}**, its agent's.
 
 `;
@@ -27889,38 +30888,38 @@ async function readOne(args, caller, all, targets, place) {
       noteOversightBy(caller, { ...here.data, id: target.session }, "read");
       return said2(intro + read);
     } catch (error) {
-      return refused2(`Couldn't read ${target.name}'s conversation: ${why2(error)}`);
+      return refused3(`Couldn't read ${target.name}'s conversation: ${why2(error)}`);
     }
   }
   const later = `${target.name}'s conversation can't be read now. Try again later, or write to it with send_message.`;
   const away = peerFor(target.session);
   if (!away || !caller || offRelay())
-    return refused2(later);
+    return refused3(later);
   if (!away.features.includes("letters-read"))
-    return refused2(`${target.name}'s computer doesn't share its conversations yet (it runs an older Kuvo Code). Ask it what you need with send_message.`);
+    return refused3(`${target.name}'s computer doesn't share its conversations yet (it runs an older Kuvo Code). Ask it what you need with send_message.`);
   const asleep = `${boxName(away.peer)} isn't answering (it may be asleep, off or offline), so ${target.name}'s conversation can't be read now. Try again later.`;
   if (awaySince(away.peer.key) !== null)
-    return refused2(asleep);
+    return refused3(asleep);
   let id;
   const sent = Date.now();
   try {
     id = leaveLetter({ from: caller, to: target.session, text: query ?? "read", peer: away.peer.key, wait: true, read: query ? { query } : {} });
   } catch {
-    return refused2(later);
+    return refused3(later);
   }
   const { answer, unreachable } = await awaitAnswer(id, away.peer.key, sent, place, { cut: READ_BY_MAIL, every: 1000 });
   if (answer && "text" in answer)
     return said2(intro + answer.text);
   if (answer && "failed" in answer)
-    return refused2(`Couldn't read ${target.name}'s conversation: ${answer.failed}`);
-  return refused2(unreachable ? asleep : later);
+    return refused3(`Couldn't read ${target.name}'s conversation: ${answer.failed}`);
+  return refused3(unreachable ? asleep : later);
 }
 async function agentTool(name, args, session, place) {
   const targets = targetsOf(place);
   const root = await rootOf(session, targets);
   const caller = root?.session ?? session;
   if (root?.place.data.metadata?.kuvo?.seat && (name === "send_message" || name === "start_session"))
-    return refused2(seatRefusal().message);
+    return refused3(seatRefusal().message);
   const all = await everyone(place);
   switch (name) {
     case "list_agents":
@@ -27947,19 +30946,19 @@ async function agentTool(name, args, session, place) {
       return planLimitsTool(place.bridge(), place.signal);
     case "make_project": {
       if (!root)
-        return refused2("Only a conversation on this computer makes projects here.");
+        return refused3("Only a conversation on this computer makes projects here.");
       return makeProjectTool({ ...root, name: nameOf4(root.session, all) }, args, { signal: place.signal, ...place.step ? { every: place.step } : {} });
     }
     case "notify_user":
       if (!root)
-        return refused2("Only a conversation on this computer can notify the user from here.");
+        return refused3("Only a conversation on this computer can notify the user from here.");
       return notifyUserTool({ session: root.session, data: root.place.data, name: all.agents.find((agent) => agent.session === root.session)?.name ?? null }, args);
     case "propose_goal":
     case "goal_progress":
     case "may_spend":
     case "finish_goal": {
       if (!root)
-        return refused2("Only a bot on this computer takes a goal here.");
+        return refused3("Only a bot on this computer takes a goal here.");
       const caller = { ...root, name: nameOf4(root.session, all) };
       if (name === "propose_goal")
         return proposeGoalTool(caller, args);
@@ -27974,7 +30973,7 @@ async function agentTool(name, args, session, place) {
     case "compact_session":
     case "answer_ask": {
       if (!root)
-        return refused2("Only a conversation on this computer has sessions of its own.");
+        return refused3("Only a conversation on this computer has sessions of its own.");
       const caller = { ...root, name: nameOf4(root.session, all) };
       if (name === "list_sessions") {
         const rows = await liveRows(caller.session, targets, place.signal);
@@ -28131,8 +31130,8 @@ async function* foundRoute(context) {
 }
 
 // Packages/Box/src/link/areas/search.ts
-import fs93 from "node:fs";
-import path100 from "node:path";
+import fs95 from "node:fs";
+import path102 from "node:path";
 var MOST3 = 50;
 var MOST_TEXT = 400000;
 var MOST_OUTPUT = 2000;
@@ -28246,7 +31245,7 @@ function textOf3(place, target, session) {
 }
 function fromDisk(name) {
   try {
-    const kept = JSON.parse(fs93.readFileSync(path100.join(SEARCH, name + ".json"), "utf8"));
+    const kept = JSON.parse(fs95.readFileSync(path102.join(SEARCH, name + ".json"), "utf8"));
     if (kept.version !== TEXT_VERSION || typeof kept.updated !== "number" || typeof kept.text !== "string" || typeof kept.folded !== "string")
       return null;
     texts.set(name, { updated: kept.updated, folded: kept.folded });
@@ -28256,14 +31255,14 @@ function fromDisk(name) {
   }
 }
 function toDisk(name, kept) {
-  const file = path100.join(SEARCH, name + ".json");
+  const file = path102.join(SEARCH, name + ".json");
   const writing = `${file}.${process.pid}.writing`;
   try {
-    fs93.mkdirSync(SEARCH, { recursive: true });
-    fs93.writeFileSync(writing, JSON.stringify(kept));
-    fs93.renameSync(writing, file);
+    fs95.mkdirSync(SEARCH, { recursive: true });
+    fs95.writeFileSync(writing, JSON.stringify(kept));
+    fs95.renameSync(writing, file);
   } catch {
-    fs93.rmSync(writing, { force: true });
+    fs95.rmSync(writing, { force: true });
   }
 }
 function forgetGone(known, places) {
@@ -28272,11 +31271,11 @@ function forgetGone(known, places) {
     if (listed(name) && !known.has(name))
       texts.delete(name);
   try {
-    for (const file of fs93.readdirSync(SEARCH)) {
+    for (const file of fs95.readdirSync(SEARCH)) {
       const name = file.slice(0, -5);
-      const gone = file.endsWith(".json") ? listed(name) && !known.has(name) : file.endsWith(".writing") && Date.now() - fs93.statSync(path100.join(SEARCH, file)).mtimeMs > 60000;
+      const gone = file.endsWith(".json") ? listed(name) && !known.has(name) : file.endsWith(".writing") && Date.now() - fs95.statSync(path102.join(SEARCH, file)).mtimeMs > 60000;
       if (gone)
-        fs93.rmSync(path100.join(SEARCH, file), { force: true });
+        fs95.rmSync(path102.join(SEARCH, file), { force: true });
     }
   } catch {}
 }
@@ -28354,7 +31353,7 @@ function ownWords(written) {
       kept.unshift(inside);
     if (block[0] === "<attached-files>")
       kept.unshift(inside.split(`
-`).map((line) => path100.basename(line.trim())).filter(Boolean).join(", "));
+`).map((line) => path102.basename(line.trim())).filter(Boolean).join(", "));
     words = words.slice(0, open).trim();
   }
   return [words, ...kept].filter(Boolean).join(`
@@ -28397,14 +31396,14 @@ function snippet(text, at, length) {
 }
 
 // Packages/Box/src/link/areas/changes.ts
-import { execFile as execFile8, execFileSync as execFileSync3, spawn as spawn9 } from "node:child_process";
-import fs95 from "node:fs";
-import os9 from "node:os";
-import path102 from "node:path";
+import { execFile as execFile8, execFileSync as execFileSync4, spawn as spawn10 } from "node:child_process";
+import fs97 from "node:fs";
+import os10 from "node:os";
+import path104 from "node:path";
 
 // Packages/Box/src/link/areas/file.ts
-import fs94 from "node:fs";
-import path101 from "node:path";
+import fs96 from "node:fs";
+import path103 from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 var FILE_LIMIT = 25 * 1024 * 1024;
 var TYPES2 = {
@@ -28441,7 +31440,7 @@ async function* fileAt(requestPath, json) {
     return yield* json(400, { message: "That isn’t a file:// address." });
   let stat;
   try {
-    stat = fs94.statSync(file);
+    stat = fs96.statSync(file);
   } catch {}
   if (!stat?.isFile())
     return yield* json(404, { message: "That file isn’t there anymore." });
@@ -28449,10 +31448,10 @@ async function* fileAt(requestPath, json) {
     return yield* json(413, { message: "That file is too big to open here." });
   if (Number.isFinite(max) && stat.size > max)
     return yield* json(413, { message: "That file is too big to show here." });
-  const type = TYPES2[path101.extname(file).slice(1).toLowerCase()] ?? "application/octet-stream";
+  const type = TYPES2[path103.extname(file).slice(1).toLowerCase()] ?? "application/octet-stream";
   let handle;
   try {
-    handle = await fs94.promises.open(file, "r");
+    handle = await fs96.promises.open(file, "r");
   } catch (error) {
     const refused = ["EACCES", "EPERM"].includes(error?.code);
     return yield* json(refused ? 403 : 404, { message: refused ? "That file can’t be opened here." : "That file isn’t there anymore." });
@@ -28484,7 +31483,7 @@ async function git2(folder, given, changing = false, more = {}, program = "git",
   return new Promise((resolve) => {
     const out = [];
     const said = [];
-    const child = spawn9(program, args, { cwd: folder, env, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn10(program, args, { cwd: folder, env, stdio: ["ignore", "pipe", "pipe"] });
     child.stdout.on("data", (piece) => out.push(piece));
     child.stderr.on("data", (piece) => said.push(piece));
     child.on("error", () => resolve({ ok: false, out: Buffer.alloc(0), said: `${program} isn’t there.` }));
@@ -28500,23 +31499,23 @@ var text3 = async (folder, args) => {
   return ran.ok ? ran.out.toString("utf8") : null;
 };
 function folderAt(value) {
-  if (typeof value !== "string" || !path102.isAbsolute(value))
+  if (typeof value !== "string" || !path104.isAbsolute(value))
     return null;
   try {
-    return fs95.statSync(value).isDirectory() ? value : null;
+    return fs97.statSync(value).isDirectory() ? value : null;
   } catch {
     return null;
   }
 }
 function inRepository(value) {
-  if (typeof value !== "string" || path102.isAbsolute(value))
+  if (typeof value !== "string" || path104.isAbsolute(value))
     return null;
   const name = value.endsWith("/") ? value.slice(0, -1) : value;
   return name && name.split("/").every((part) => part && part !== "." && part !== "..") ? name : null;
 }
 var realOr2 = (folder) => {
   try {
-    return fs95.realpathSync(folder);
+    return fs97.realpathSync(folder);
   } catch {
     return folder;
   }
@@ -28531,8 +31530,8 @@ async function scoped(directory, scope, base) {
     if (fork)
       against = fork;
   }
-  const relative = path102.relative(realOr2(root), realOr2(directory));
-  const limit = relative && !relative.startsWith("..") ? relative.split(path102.sep).join("/") : ".";
+  const relative = path104.relative(realOr2(root), realOr2(directory));
+  const limit = relative && !relative.startsWith("..") ? relative.split(path104.sep).join("/") : ".";
   const compared = scope === "staged" ? ["--cached", against] : scope === "unstaged" ? [] : [against];
   return { root, against, limit, compared };
 }
@@ -28562,7 +31561,7 @@ async function changesIn(directory, scope, base) {
     for (let at = 0;at < files.length; at += 64) {
       await Promise.all(files.slice(at, at + 64).map(async (name) => {
         try {
-          const stat = await fs95.promises.stat(path102.join(root, name), { bigint: true });
+          const stat = await fs97.promises.stat(path104.join(root, name), { bigint: true });
           if (now - stat.mtimeNs > 3000000000n)
             hashes[name] = `${stat.size}-${stat.mtimeNs}`;
         } catch {}
@@ -28606,32 +31605,32 @@ async function countIn(directory, scope, base) {
   return { repository: true, root, against, files: seen.size + untracked.length, additions, deletions, untracked: untracked.length, uncommitted: await uncommittedIn(root, scope) };
 }
 function trash(file) {
-  const name = path102.basename(file);
+  const name = path104.basename(file);
   let into;
   if (IS_MAC && process.platform === "darwin" && !process.env.KUVO_CHANGES_TRASH) {
-    if (fs95.existsSync("/usr/bin/trash"))
-      return void execFileSync3("/usr/bin/trash", [file], { stdio: "ignore" });
-    const bin = path102.join(os9.homedir(), ".Trash");
-    into = path102.join(bin, name);
-    for (let n = 2;fs95.existsSync(into); n++)
-      into = path102.join(bin, `${name} ${n}`);
+    if (fs97.existsSync("/usr/bin/trash"))
+      return void execFileSync4("/usr/bin/trash", [file], { stdio: "ignore" });
+    const bin = path104.join(os10.homedir(), ".Trash");
+    into = path104.join(bin, name);
+    for (let n = 2;fs97.existsSync(into); n++)
+      into = path104.join(bin, `${name} ${n}`);
   } else {
     const stamp = new Date().toISOString().replace(/[-:]/g, "").replace("T", "-").replace(/\..*/, "");
-    into = path102.join(process.env.KUVO_CHANGES_TRASH || path102.join(K, "trash"), `${stamp}-${process.pid}-${Math.random().toString(36).slice(2, 6)}`, name);
+    into = path104.join(process.env.KUVO_CHANGES_TRASH || path104.join(K, "trash"), `${stamp}-${process.pid}-${Math.random().toString(36).slice(2, 6)}`, name);
   }
-  fs95.mkdirSync(path102.dirname(into), { recursive: true });
+  fs97.mkdirSync(path104.dirname(into), { recursive: true });
   try {
-    fs95.renameSync(file, into);
+    fs97.renameSync(file, into);
   } catch (error) {
     if (error.code !== "EXDEV")
       throw error;
-    fs95.cpSync(file, into, { recursive: true, verbatimSymlinks: true });
-    fs95.rmSync(file, { recursive: true, force: true });
+    fs97.cpSync(file, into, { recursive: true, verbatimSymlinks: true });
+    fs97.rmSync(file, { recursive: true, force: true });
   }
 }
 var kind = (file) => {
   try {
-    return fs95.lstatSync(file);
+    return fs97.lstatSync(file);
   } catch {
     return null;
   }
@@ -28640,7 +31639,7 @@ function inTheWay(root, name) {
   const folders = name.split("/").slice(0, -1);
   let at = root;
   for (const folder of folders) {
-    at = path102.join(at, folder);
+    at = path104.join(at, folder);
     const found = kind(at);
     if (!found)
       return null;
@@ -28658,7 +31657,7 @@ async function perform(action, root, file, scope) {
       trash(target);
       return null;
     } catch {
-      return `Couldn’t move ${path102.basename(target)} out of the way.`;
+      return `Couldn’t move ${path104.basename(target)} out of the way.`;
     }
   };
   if (action === "stage") {
@@ -28682,7 +31681,7 @@ async function perform(action, root, file, scope) {
           return failed;
         continue;
       }
-      const target = path102.join(root, name);
+      const target = path104.join(root, name);
       if (!kind(target)?.isDirectory())
         continue;
       const kept = await text3(root, ["--literal-pathspecs", ...scope === "unstaged" ? ["ls-files", "-s"] : ["ls-tree", "HEAD"], "--", name]);
@@ -28696,14 +31695,14 @@ async function perform(action, root, file, scope) {
     }
     return null;
   };
-  const gone = (name) => kind(path102.join(root, name)) ? away(path102.join(root, name)) : null;
+  const gone = (name) => kind(path104.join(root, name)) ? away(path104.join(root, name)) : null;
   if (file.status === "added")
     return await untrack(file.path) ?? gone(file.path);
   if (file.status === "renamed" && file.oldPath) {
     const failed = await untrack(file.path) ?? await clear([file.oldPath]) ?? await run(scope === "unstaged" ? ["restore", "--worktree", "--", file.oldPath] : ["restore", "--source=HEAD", "--staged", "--worktree", "--", file.oldPath]);
     return failed ?? gone(file.path);
   }
-  if (file.status === "modified" && (await text3(root, ["--literal-pathspecs", "ls-files", "-s", "--", file.path]))?.startsWith("160000") && (await text3(path102.join(root, file.path), ["status", "--porcelain"]))?.trim()) {
+  if (file.status === "modified" && (await text3(root, ["--literal-pathspecs", "ls-files", "-s", "--", file.path]))?.startsWith("160000") && (await text3(path104.join(root, file.path), ["status", "--porcelain"]))?.trim()) {
     return `${file.path} is a submodule: its changes are in its own repository, so discard them there.`;
   }
   const failed = await clear(scope === "unstaged" ? paths : [file.path]);
@@ -28729,7 +31728,7 @@ async function commit(directory, message, push, author) {
     return { failed: "Not a git repository.", committed: false };
   const said = refusal(root, author);
   if (!await hasStaged(root)) {
-    const relative = path102.relative(realOr2(root), realOr2(directory));
+    const relative = path104.relative(realOr2(root), realOr2(directory));
     const failed = await said(["add", "-A", "--", relative && !relative.startsWith("..") ? relative : "."]);
     if (failed)
       return { failed, committed: false };
@@ -28755,11 +31754,11 @@ async function unready(directory, branch, target) {
 }
 function worktreeOf(directory) {
   const real = realOr2(directory);
-  return readWorktrees().find((tree) => real === realOr2(tree.root) || real.startsWith(realOr2(tree.root) + path102.sep));
+  return readWorktrees().find((tree) => real === realOr2(tree.root) || real.startsWith(realOr2(tree.root) + path104.sep));
 }
 async function mergeInto(directory, into, author = {}) {
   const tree = worktreeOf(directory);
-  if (!tree || !fs95.existsSync(tree.project))
+  if (!tree || !fs97.existsSync(tree.project))
     return { status: 409, failed: "Only a worktree’s branch is merged here. Create a pull request instead." };
   const branch = await branchOf(directory);
   if (!branch)
@@ -29151,8 +32150,8 @@ async function* botsRoute(context) {
 }
 
 // Packages/Box/src/link/areas/folders.ts
-import fs96 from "node:fs";
-import path103 from "node:path";
+import fs98 from "node:fs";
+import path105 from "node:path";
 var byName = (a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" });
 function refusal2(at, error) {
   const code = error?.code;
@@ -29169,13 +32168,13 @@ function listFolders(requestPath) {
   const query = new URLSearchParams(requestPath.split("?")[1] ?? "");
   const home = homeFolder();
   const given = (query.get("path") ?? "").trim();
-  const folder = !given || given === "~" ? home : given.startsWith("~/") ? path103.join(home, given.slice(2)) : given;
-  if (!path103.isAbsolute(folder))
+  const folder = !given || given === "~" ? home : given.startsWith("~/") ? path105.join(home, given.slice(2)) : given;
+  if (!path105.isAbsolute(folder))
     return { status: 400, value: { message: "Send a folder's full path, or one that starts with ~/." } };
-  const at = path103.resolve(folder);
+  const at = path105.resolve(folder);
   let entries;
   try {
-    entries = fs96.readdirSync(at, { withFileTypes: true });
+    entries = fs98.readdirSync(at, { withFileTypes: true });
   } catch (error) {
     return refusal2(at, error);
   }
@@ -29183,30 +32182,30 @@ function listFolders(requestPath) {
   const asks = at === home ? promptedFolders() : new Set;
   const isFolder = (entry) => entry.isDirectory() || entry.isSymbolicLink() && (() => {
     try {
-      return fs96.statSync(path103.join(at, entry.name)).isDirectory();
+      return fs98.statSync(path105.join(at, entry.name)).isDirectory();
     } catch {
       return false;
     }
   })();
-  const folders = entries.filter((entry) => (hidden || !entry.name.startsWith(".")) && isFolder(entry)).map((entry) => !asks.has(entry.name) && fs96.existsSync(path103.join(at, entry.name, ".git")) ? { name: entry.name, repository: true } : { name: entry.name }).sort((a, b) => byName(a.name, b.name));
+  const folders = entries.filter((entry) => (hidden || !entry.name.startsWith(".")) && isFolder(entry)).map((entry) => !asks.has(entry.name) && fs98.existsSync(path105.join(at, entry.name, ".git")) ? { name: entry.name, repository: true } : { name: entry.name }).sort((a, b) => byName(a.name, b.name));
   const files = query.get("files") === "1" ? entries.filter((entry) => (hidden || !entry.name.startsWith(".")) && entry.name !== ".DS_Store" && !isFolder(entry)).map((entry) => entry.name).sort(byName) : undefined;
-  return { status: 200, value: { path: at, home, parent: at === path103.dirname(at) ? null : path103.dirname(at), folders, ...files ? { files } : {} } };
+  return { status: 200, value: { path: at, home, parent: at === path105.dirname(at) ? null : path105.dirname(at), folders, ...files ? { files } : {} } };
 }
 function makeFolder(body) {
   const given = typeof body?.path === "string" ? body.path.trim() : "";
   const home = homeFolder();
-  const folder = given.startsWith("~/") ? path103.join(home, given.slice(2)) : given;
-  if (!path103.isAbsolute(folder))
+  const folder = given.startsWith("~/") ? path105.join(home, given.slice(2)) : given;
+  if (!path105.isAbsolute(folder))
     return { status: 400, value: { message: "Send the new folder's full path, or one that starts with ~/." } };
-  const at = path103.resolve(folder);
-  if (fs96.existsSync(at))
-    return { status: 409, value: { message: `There's already something called ${path103.basename(at)} there.` } };
+  const at = path105.resolve(folder);
+  if (fs98.existsSync(at))
+    return { status: 409, value: { message: `There's already something called ${path105.basename(at)} there.` } };
   try {
-    fs96.mkdirSync(at);
+    fs98.mkdirSync(at);
   } catch (error) {
     if (error?.code === "ENOENT")
-      return { status: 404, value: { message: `There's no folder ${path103.dirname(at)} here.` } };
-    return { status: 403, value: { message: `A folder can't be made in ${path103.dirname(at)} here.` } };
+      return { status: 404, value: { message: `There's no folder ${path105.dirname(at)} here.` } };
+    return { status: 403, value: { message: `A folder can't be made in ${path105.dirname(at)} here.` } };
   }
   return { status: 200, value: { path: at } };
 }
@@ -29262,9 +32261,9 @@ async function* artifactsRoute(context) {
 }
 
 // Packages/Box/src/link/areas/info.ts
-import fs97 from "node:fs";
-import os10 from "node:os";
-import path104 from "node:path";
+import fs99 from "node:fs";
+import os11 from "node:os";
+import path106 from "node:path";
 
 // Packages/Box/src/link/version.ts
 var BRIDGE_VERSION = "0.9.211";
@@ -29279,11 +32278,11 @@ async function* infoRoute(context) {
   let started = null;
   if (engine.pid)
     try {
-      started = fs97.statSync(ENGINE_FILE).mtimeMs / 1000;
+      started = fs99.statSync(ENGINE_FILE).mtimeMs / 1000;
     } catch {}
-  const chats = IS_MAC ? CHATS : path104.join(K, "chats");
+  const chats = IS_MAC ? CHATS : path106.join(K, "chats");
   try {
-    fs97.mkdirSync(chats, { recursive: true });
+    fs99.mkdirSync(chats, { recursive: true });
   } catch {}
   yield { head: { status: 200, headers: { "content-type": "application/json" } } };
   yield { body: Buffer.from(JSON.stringify(IS_MAC ? macInfo(engine, started, chats, Boolean(bridge())) : machineInfo(engine, started, chats, Boolean(bridge()), info))) };
@@ -29293,7 +32292,7 @@ function macInfo(engine, started, chats, agents) {
   const integrations = Object.fromEntries(integrationCatalog().filter((each) => typeof each.title === "string").map((each) => [each.id, each.title]));
   return {
     kind: "mac",
-    name: config?.name || os10.hostname(),
+    name: config?.name || os11.hostname(),
     app: config?.app || MAC_APP_VERSION || "",
     engine: engine.version ?? MAC_ENGINE_VERSION ?? "",
     features: macFeatures(),
@@ -29305,7 +32304,7 @@ function macInfo(engine, started, chats, agents) {
 }
 function machineInfo(engine, started, chats, agents, info) {
   const running = Boolean(engine.pid && processRuns(engine.pid, `${K}/engine/`));
-  const stopped = fs97.existsSync(path104.join(RUN, "stopped"));
+  const stopped = fs99.existsSync(path106.join(RUN, "stopped"));
   const notes = engine.notes ?? {};
   const home = typeof notes.mac === "string" ? { mac: notes.mac, ...typeof notes.macName === "string" ? { name: notes.macName } : {} } : undefined;
   let link = null;
@@ -29343,13 +32342,13 @@ async function* noticesRoute(context) {
 }
 
 // Packages/Box/src/link/areas/personalities.ts
-import path105 from "node:path";
+import path107 from "node:path";
 async function* personalityEventsRoute(context) {
   const { request, signal, json } = context;
   if (request.method.toUpperCase() !== "GET")
     return yield* json(405, {});
   yield { head: { status: 200, headers: { "content-type": "application/x-ndjson" } } };
-  return yield* followed(() => ({ personalities: readPersonalities().personalities }), personalityFollowers, signal, { folders: [path105.dirname(PERSONALITIES_FILE)], recursive: false });
+  return yield* followed(() => ({ personalities: readPersonalities().personalities }), personalityFollowers, signal, { folders: [path107.dirname(PERSONALITIES_FILE)], recursive: false });
 }
 async function* personalitiesDocumentRoute(context) {
   const { request, route, readEngine, readBridge, json } = context;
@@ -29679,25 +32678,25 @@ async function* add({ request, bridge, readEngine, json, signal }, target, sessi
 }
 
 // Packages/Box/src/link/areas/work-queue.ts
-import fs105 from "node:fs";
-import path111 from "node:path";
+import fs107 from "node:fs";
+import path113 from "node:path";
 
 // Packages/Box/src/link/areas/vault.ts
-import crypto42 from "node:crypto";
+import crypto44 from "node:crypto";
 
 // Packages/Box/src/link/vault/activity.ts
-import fs98 from "node:fs";
-import path106 from "node:path";
-var ACTIVITY = path106.join(VAULT_FOLDER, "activity.jsonl");
+import fs100 from "node:fs";
+import path108 from "node:path";
+var ACTIVITY = path108.join(VAULT_FOLDER, "activity.jsonl");
 var DAY5 = 86400000;
 var prunedAt = 0;
-function note2(what, now = Date.now()) {
+function note3(what, now = Date.now()) {
   const entry = { id: newID("a_"), at: now, ...what };
   if (entry.why)
     entry.why = oneLine(entry.why, 300);
   vaultWork(() => {
-    fs98.mkdirSync(VAULT_FOLDER, { recursive: true, mode: 448 });
-    fs98.appendFileSync(ACTIVITY, JSON.stringify(entry) + `
+    fs100.mkdirSync(VAULT_FOLDER, { recursive: true, mode: 448 });
+    fs100.appendFileSync(ACTIVITY, JSON.stringify(entry) + `
 `, { mode: 384 });
     if (now - prunedAt > DAY5) {
       prunedAt = now;
@@ -29712,14 +32711,14 @@ function prune(now) {
   if (kept.length === lines.length)
     return;
   const temporary = ACTIVITY + ".new";
-  fs98.writeFileSync(temporary, kept.map((entry) => JSON.stringify(entry) + `
+  fs100.writeFileSync(temporary, kept.map((entry) => JSON.stringify(entry) + `
 `).join(""), { mode: 384 });
-  fs98.renameSync(temporary, ACTIVITY);
+  fs100.renameSync(temporary, ACTIVITY);
 }
 function readLines() {
   let text = "";
   try {
-    text = fs98.readFileSync(ACTIVITY, "utf8");
+    text = fs100.readFileSync(ACTIVITY, "utf8");
   } catch {
     return [];
   }
@@ -29858,13 +32857,13 @@ function watchVaultAsks(tell, answered = () => {}, after = 2000) {
 }
 
 // Packages/Box/src/link/vault/use.ts
-import os11 from "node:os";
+import os12 from "node:os";
 var AUTOPILOT_HOW = "autopilot";
 var tell2 = () => false;
 var setVaultTell = (to) => {
   tell2 = to;
 };
-var machineName = () => IS_MAC ? undefined : os11.hostname();
+var machineName = () => IS_MAC ? undefined : os12.hostname();
 var whoOf2 = (caller) => ({
   ...caller.bot ? { bot: caller.bot } : {},
   ...caller.botName ? { botName: caller.botName } : {},
@@ -29902,7 +32901,7 @@ async function mayUse(item, caller, use) {
   const where = { ...use.site ? { site: use.site } : {}, ...use.program ? { program: use.program } : {}, ...use.why ? { why: use.why } : {} };
   const paused = pausedFor(caller.bot, caller.root ?? caller.session);
   if (paused) {
-    note2({ what: "refused", ...itemOf2(item), ...whoOf2(caller), ...where, how: "paused" });
+    note3({ what: "refused", ...itemOf2(item), ...whoOf2(caller), ...where, how: "paused" });
     return { ok: false, message: paused };
   }
   const how = grantFor(item, caller);
@@ -29911,31 +32910,31 @@ async function mayUse(item, caller, use) {
   if (hasOnce(caller, item.id, true))
     return { ok: true, how: "once" };
   if (how === null && !use.askWithout) {
-    note2({ what: "refused", ...itemOf2(item), ...whoOf2(caller), ...where, how: "no grant" });
+    note3({ what: "refused", ...itemOf2(item), ...whoOf2(caller), ...where, how: "no grant" });
     return { ok: false, message: `You may not use “${item.name}”. Ask the user for it with vault_ask.` };
   }
   const leftUndone = () => {
     if (!use.leftUndoneNoted)
-      note2({ what: "refused", ...itemOf2(item), ...whoOf2(caller), ...where, how: AUTOPILOT_HOW });
+      note3({ what: "refused", ...itemOf2(item), ...whoOf2(caller), ...where, how: AUTOPILOT_HOW });
     return { ok: false, message: LEFT_UNDONE_WORDS, leftUndone: true };
   };
   if (caller.autopilot)
     return leftUndone();
-  note2({ what: "asked", ...itemOf2(item), ...whoOf2(caller), ...where });
+  note3({ what: "asked", ...itemOf2(item), ...whoOf2(caller), ...where });
   const { value: answered, onAutopilot } = await untilOnAutopilot(caller.yours ? undefined : use.watch ?? caller.session, use.signal, (signal) => ask2({ kind: "use", ...whoOf2(caller), ...caller.group ? { group: caller.group } : {}, item: item.id, itemName: item.name, ...use.site ? { site: use.site } : {}, ...use.why ? { why: use.why } : {}, ...machineName() ? { machine: machineName() } : {} }, signal));
   if (onAutopilot)
     return leftUndone();
   if (answered.answer === "no") {
-    note2({ what: "declined", ...itemOf2(item), ...whoOf2(caller), ...where, ...answered.client ? { client: answered.client, by: answered.by } : {} });
+    note3({ what: "declined", ...itemOf2(item), ...whoOf2(caller), ...where, ...answered.client ? { client: answered.client, by: answered.by } : {} });
     return { ok: false, message: `The user didn't let you use “${item.name}”.` };
   }
   const always = answered.answer === "always" ? alwaysFor(caller) : null;
   if (always) {
     setGrant(item.id, always, "own");
-    note2({ what: "granted", ...itemOf2(item), ...whoOf2(caller), how: "own", ...answered.client ? { client: answered.client, by: answered.by } : {} });
+    note3({ what: "granted", ...itemOf2(item), ...whoOf2(caller), how: "own", ...answered.client ? { client: answered.client, by: answered.by } : {} });
   }
   const allowed = always ? "always" : "once";
-  note2({ what: "allowed", ...itemOf2(item), ...whoOf2(caller), ...where, how: allowed, ...answered.client ? { client: answered.client, by: answered.by } : {} });
+  note3({ what: "allowed", ...itemOf2(item), ...whoOf2(caller), ...where, how: allowed, ...answered.client ? { client: answered.client, by: answered.by } : {} });
   return { ok: true, how: allowed };
 }
 function tripwire(item, caller, site) {
@@ -29943,16 +32942,16 @@ function tripwire(item, caller, site) {
   const who = caller.bot ?? caller.root ?? caller.session;
   if (who)
     setPaused(true, who, why);
-  note2({ what: "refused", ...itemOf2(item), ...whoOf2(caller), site, how: "wrong site" });
+  note3({ what: "refused", ...itemOf2(item), ...whoOf2(caller), site, how: "wrong site" });
   try {
     tell2({ title: caller.botName ? `${caller.botName} paused` : "A fill was refused", subtitle: machineName(), body: why, category: "message", thread: caller.group ?? caller.root ?? "vault", data: caller.group ? { group: caller.group } : caller.root ? { session: caller.root } : {} });
   } catch {}
   return `${why} Kuvo Code only fills it on ${item.sites.join(", ")}.${who ? ` The user has been told, and this ${caller.bot ? "bot" : "conversation"}'s use of the vault is paused until they look.` : ""}`;
 }
-var noteUse = (item, caller, use, how) => note2({ what: "used", ...itemOf2(item), ...whoOf2(caller), ...use.site ? { site: use.site } : {}, ...use.program ? { program: use.program } : {}, ...use.why ? { why: use.why } : {}, how });
+var noteUse = (item, caller, use, how) => note3({ what: "used", ...itemOf2(item), ...whoOf2(caller), ...use.site ? { site: use.site } : {}, ...use.program ? { program: use.program } : {}, ...use.why ? { why: use.why } : {}, how });
 
 // Packages/Box/src/link/vault/fill.ts
-var refused3 = (status, message) => ({ status, value: { message } });
+var refused4 = (status, message) => ({ status, value: { message } });
 function pageSite(origin) {
   if (typeof origin !== "string")
     return null;
@@ -29969,41 +32968,41 @@ async function fill(given, caller, signal) {
   const body = isObject(given) ? given : {};
   const site = pageSite(body.origin);
   if (!site)
-    return refused3(400, "Kuvo Code fills only on a secure page (https).");
+    return refused4(400, "Kuvo Code fills only on a secure page (https).");
   const purpose = body.purpose === "field" ? "field" : "sign-in";
   const why = typeof body.why === "string" ? oneLine(body.why, 300) : undefined;
   let item;
   if (body.item !== undefined && body.item !== null && body.item !== "") {
     item = itemNamed(body.item);
     if (!item)
-      return refused3(404, `There's no item “${oneLine(body.item, 80)}” in the vault.`);
+      return refused4(404, `There's no item “${oneLine(body.item, 80)}” in the vault.`);
     if (!usableOn(item, site))
-      return refused3(403, tripwire(item, caller, site));
+      return refused4(403, tripwire(item, caller, site));
   } else {
     if (purpose === "field")
-      return refused3(400, "Name the item to fill from.");
+      return refused4(400, "Name the item to fill from.");
     const own = readItems().filter((each) => each.kind === "login" && usableOn(each, site) && (grantFor(each, { ...caller, seat: false }) === "own" || hasOnce(caller, each.id)));
     if (own.length !== 1)
-      return refused3(404, own.length ? "More than one sign-in fits this site." : "No sign-in in the vault is yours to use on this site.");
+      return refused4(404, own.length ? "More than one sign-in fits this site." : "No sign-in in the vault is yours to use on this site.");
     item = own[0];
   }
   if (purpose === "field" && item.signInOnly)
-    return refused3(403, `“${item.name}” is only for signing in: use browser_sign_in.`);
+    return refused4(403, `“${item.name}” is only for signing in: use browser_sign_in.`);
   const may = await mayUse(item, caller, { site, ...why ? { why } : {}, askWithout: true, signal });
   if (!may.ok)
-    return refused3(403, may.message);
+    return refused4(403, may.message);
   const values = await valuesOf(item.id);
   let filled;
   if (purpose === "sign-in") {
     if (item.kind !== "login")
-      return refused3(400, `“${item.name}” isn't a sign-in: fill one of its fields with browser_fill.`);
+      return refused4(400, `“${item.name}” isn't a sign-in: fill one of its fields with browser_fill.`);
     filled = values.password !== undefined ? { password: values.password } : {};
   } else {
     const field = typeof body.field === "string" && body.field ? body.field.trim().toLowerCase() : item.kind === "login" ? "password" : item.fields.length === 1 ? item.fields[0] : "";
     if (field === "username" && item.username)
       filled = { username: item.username };
     else if (!field || values[field] === undefined)
-      return refused3(400, `Say which of “${item.name}”'s fields to fill: ${["username", ...item.fields].filter((each) => each !== "username" || item.username).join(", ")}.`);
+      return refused4(400, `Say which of “${item.name}”'s fields to fill: ${["username", ...item.fields].filter((each) => each !== "username" || item.username).join(", ")}.`);
     else
       filled = { [field]: values[field] };
   }
@@ -30013,21 +33012,21 @@ async function fill(given, caller, signal) {
 }
 
 // Packages/Box/src/link/vault/holder.ts
-import crypto40 from "node:crypto";
-import fs101 from "node:fs";
+import crypto42 from "node:crypto";
+import fs103 from "node:fs";
 import net4 from "node:net";
-import path109 from "node:path";
+import path111 from "node:path";
 
 // Packages/Box/src/link/vault/ssh.ts
-import crypto39 from "node:crypto";
-import fs100 from "node:fs";
-import path108 from "node:path";
+import crypto41 from "node:crypto";
+import fs102 from "node:fs";
+import path110 from "node:path";
 
 // Packages/Box/src/link/vault/ssh-agent.ts
-import crypto38 from "node:crypto";
-import fs99 from "node:fs";
+import crypto40 from "node:crypto";
+import fs101 from "node:fs";
 import net3 from "node:net";
-import path107 from "node:path";
+import path109 from "node:path";
 var FAILURE = 5;
 var REQUEST_IDENTITIES = 11;
 var IDENTITIES_ANSWER = 12;
@@ -30138,12 +33137,12 @@ function openSSHKey(data) {
   if (type === "ssh-ed25519") {
     const pub = inner.bytes();
     const both = inner.bytes();
-    return crypto38.createPrivateKey({ key: { kty: "OKP", crv: "Ed25519", d: b64url(both.subarray(0, 32)), x: b64url(pub) }, format: "jwk" });
+    return crypto40.createPrivateKey({ key: { kty: "OKP", crv: "Ed25519", d: b64url(both.subarray(0, 32)), x: b64url(pub) }, format: "jwk" });
   }
   if (type === "ssh-rsa") {
     const [n, e, d, qi, p, q] = [inner.bytes(), inner.bytes(), inner.bytes(), inner.bytes(), inner.bytes(), inner.bytes()].map(unsigned);
     const big = { d: bigOf(d), p: bigOf(p), q: bigOf(q) };
-    return crypto38.createPrivateKey({
+    return crypto40.createPrivateKey({
       key: {
         kty: "RSA",
         n: b64url(n),
@@ -30166,7 +33165,7 @@ function openSSHKey(data) {
     const { jwk, size } = CURVES[curve];
     if (point[0] !== 4 || point.length !== 1 + 2 * size)
       throw new Error("That isn't a private key.");
-    return crypto38.createPrivateKey({
+    return crypto40.createPrivateKey({
       key: { kty: "EC", crv: jwk, x: b64url(point.subarray(1, 1 + size)), y: b64url(point.subarray(1 + size)), d: b64url(bufOf(bigOf(d), size)) },
       format: "jwk"
     });
@@ -30183,7 +33182,7 @@ function privateKeyOf(text) {
     if (/ENCRYPTED/.test(trimmed))
       throw new Error("This key has a passphrase: Kuvo Code's agent uses keys without one (ssh-keygen -p takes it off a copy).");
     try {
-      key = crypto38.createPrivateKey(trimmed);
+      key = crypto40.createPrivateKey(trimmed);
     } catch {
       throw new Error("That isn't a private key.");
     }
@@ -30193,14 +33192,14 @@ function privateKeyOf(text) {
 function signWith(agentKey, data, flags) {
   const { key, type } = agentKey;
   if (type === "ssh-ed25519")
-    return Buffer.concat([str(type), str(crypto38.sign(null, data, key))]);
+    return Buffer.concat([str(type), str(crypto40.sign(null, data, key))]);
   if (type === "ssh-rsa") {
     const [name, hash] = flags & RSA_SHA2_512 ? ["rsa-sha2-512", "sha512"] : flags & RSA_SHA2_256 ? ["rsa-sha2-256", "sha256"] : ["ssh-rsa", "sha1"];
-    return Buffer.concat([str(name), str(crypto38.sign(hash, data, key))]);
+    return Buffer.concat([str(name), str(crypto40.sign(hash, data, key))]);
   }
   const curve = type.replace("ecdsa-sha2-", "");
   const { hash, size } = CURVES[curve];
-  const both = crypto38.sign(hash, data, { key, dsaEncoding: "ieee-p1363" });
+  const both = crypto40.sign(hash, data, { key, dsaEncoding: "ieee-p1363" });
   return Buffer.concat([str(type), str(Buffer.concat([mpint(both.subarray(0, size)), mpint(both.subarray(size))]))]);
 }
 var message = (type, ...parts) => {
@@ -30272,17 +33271,17 @@ function serveAgent(socket, source) {
     for (const connection of open)
       connection.destroy();
     try {
-      fs99.rmSync(socket, { force: true });
+      fs101.rmSync(socket, { force: true });
     } catch {}
     return close(done);
   };
-  const bound = path107.join(path107.dirname(socket), `.${crypto38.randomBytes(6).toString("base64url")}`);
+  const bound = path109.join(path109.dirname(socket), `.${crypto40.randomBytes(6).toString("base64url")}`);
   if (Math.max(Buffer.byteLength(socket), Buffer.byteLength(bound)) > LONGEST_PATH) {
     queueMicrotask(() => server.emit("error", new Error(`An SSH agent's socket can't be this long: ${socket}`)));
     return server;
   }
   try {
-    fs99.rmSync(socket, { force: true });
+    fs101.rmSync(socket, { force: true });
   } catch {}
   const old = process.umask(127);
   try {
@@ -30291,12 +33290,12 @@ function serveAgent(socket, source) {
     process.umask(old);
   }
   try {
-    fs99.renameSync(bound, socket);
+    fs101.renameSync(bound, socket);
   } catch (error) {
-    if (fs99.existsSync(bound)) {
+    if (fs101.existsSync(bound)) {
       server.close();
       try {
-        fs99.rmSync(bound, { force: true });
+        fs101.rmSync(bound, { force: true });
       } catch {}
       queueMicrotask(() => server.emit("error", error instanceof Error ? error : new Error(String(error))));
     }
@@ -30307,16 +33306,16 @@ function serveAgent(socket, source) {
 
 // Packages/Box/src/link/vault/ssh.ts
 var isSshKey = (item) => item.kind === "key" && item.fields.includes("private_key");
-var sumOf2 = (text) => crypto39.createHash("sha256").update(text).digest("hex").slice(0, 32);
+var sumOf2 = (text) => crypto41.createHash("sha256").update(text).digest("hex").slice(0, 32);
 var REFUSED_FOR = 30000;
 var NOTE_KEPT = 30 * 24 * 60 * 60000;
 var IDLE = 60 * 60000;
 function safeFolder() {
   if (process.platform !== "darwin")
     return true;
-  const parent = path108.dirname(SSH_AGENTS);
+  const parent = path110.dirname(SSH_AGENTS);
   try {
-    const seen = fs100.lstatSync(parent);
+    const seen = fs102.lstatSync(parent);
     return seen.isDirectory() && seen.uid === process.getuid?.() && (seen.mode & 63) === 0;
   } catch {
     return true;
@@ -30326,9 +33325,9 @@ var EVERYONE_ONLY = process.platform !== "darwin";
 var NOTE2 = /^(ses_[A-Za-z0-9_]{1,80}|dir-[0-9a-f]{32})$/;
 var real2 = (where) => {
   try {
-    return fs100.realpathSync(where);
+    return fs102.realpathSync(where);
   } catch {
-    return path108.resolve(where);
+    return path110.resolve(where);
   }
 };
 function callerFor(note, folder) {
@@ -30338,7 +33337,7 @@ function callerFor(note, folder) {
       return who.folder && real2(who.folder) === real2(folder) ? who : null;
     };
   return async () => {
-    const bot = listBots().find((each) => each.folder && (folder === each.folder || folder.startsWith(each.folder + path108.sep)));
+    const bot = listBots().find((each) => each.folder && (folder === each.folder || folder.startsWith(each.folder + path110.sep)));
     return { folder, yours: true, ...bot ? { bot: bot.id, botName: bot.name, ...bot.session ? { session: bot.session, root: bot.session } : {} } : {} };
   };
 }
@@ -30432,37 +33431,37 @@ function keepSshAgents() {
       for (const note of [...agents.keys()])
         close(note);
       if (safeFolder())
-        fs100.rmSync(SSH_AGENTS, { recursive: true, force: true });
+        fs102.rmSync(SSH_AGENTS, { recursive: true, force: true });
       return;
     }
-    fs100.mkdirSync(SSH_AGENTS, { recursive: true, mode: 448 });
+    fs102.mkdirSync(SSH_AGENTS, { recursive: true, mode: 448 });
     for (const [note, agent] of agents) {
       if (Date.now() - agent.used < IDLE)
         continue;
       close(note);
-      fs100.rmSync(path108.join(SSH_FOR, note), { force: true });
+      fs102.rmSync(path110.join(SSH_FOR, note), { force: true });
     }
     let notes = [];
     try {
-      notes = fs100.readdirSync(SSH_FOR).filter((name) => NOTE2.test(name));
+      notes = fs102.readdirSync(SSH_FOR).filter((name) => NOTE2.test(name));
     } catch {}
     for (const note of notes) {
       let folder = "";
       try {
-        folder = fs100.readFileSync(path108.join(SSH_FOR, note), "utf8");
+        folder = fs102.readFileSync(path110.join(SSH_FOR, note), "utf8");
       } catch {
         continue;
       }
-      if (!path108.isAbsolute(folder) || note.startsWith("dir-") && note !== `dir-${sumOf2(folder)}`)
+      if (!path110.isAbsolute(folder) || note.startsWith("dir-") && note !== `dir-${sumOf2(folder)}`)
         continue;
       if (agents.get(note)?.folder === folder)
         continue;
       close(note);
       const prefix = sumOf2(note).slice(0, 16);
-      for (const old of fs100.readdirSync(SSH_AGENTS))
+      for (const old of fs102.readdirSync(SSH_AGENTS))
         if (old.startsWith(prefix))
-          fs100.rmSync(path108.join(SSH_AGENTS, old), { force: true });
-      const socket = path108.join(SSH_AGENTS, `${prefix}${crypto39.randomBytes(9).toString("base64url")}.sock`);
+          fs102.rmSync(path110.join(SSH_AGENTS, old), { force: true });
+      const socket = path110.join(SSH_AGENTS, `${prefix}${crypto41.randomBytes(9).toString("base64url")}.sock`);
       const agent = { folder, server: serveAgent(socket, sourceFor(callerFor(note, folder))), used: Date.now() };
       agent.server.on("connection", () => {
         agent.used = Date.now();
@@ -30478,27 +33477,27 @@ function keepSshAgents() {
         close(note);
   };
   try {
-    fs100.mkdirSync(SSH_FOR, { recursive: true, mode: 448 });
+    fs102.mkdirSync(SSH_FOR, { recursive: true, mode: 448 });
     if (safeFolder())
-      fs100.rmSync(SSH_AGENTS, { recursive: true, force: true });
-    for (const note of fs100.readdirSync(SSH_FOR)) {
+      fs102.rmSync(SSH_AGENTS, { recursive: true, force: true });
+    for (const note of fs102.readdirSync(SSH_FOR)) {
       try {
-        if (Date.now() - fs100.statSync(path108.join(SSH_FOR, note)).mtimeMs > NOTE_KEPT)
-          fs100.rmSync(path108.join(SSH_FOR, note), { force: true });
+        if (Date.now() - fs102.statSync(path110.join(SSH_FOR, note)).mtimeMs > NOTE_KEPT)
+          fs102.rmSync(path110.join(SSH_FOR, note), { force: true });
       } catch {}
     }
   } catch {}
   look();
   let watcher = null;
   try {
-    watcher = fs100.watch(SSH_FOR, () => look());
+    watcher = fs102.watch(SSH_FOR, () => look());
     watcher.unref?.();
   } catch {}
   let noted = "";
   const quick = setInterval(() => {
     let seen;
     try {
-      seen = fs100.statSync(SSH_FOR);
+      seen = fs102.statSync(SSH_FOR);
     } catch {
       return;
     }
@@ -30519,7 +33518,7 @@ function keepSshAgents() {
       close(note);
     try {
       if (safeFolder())
-        fs100.rmSync(SSH_AGENTS, { recursive: true, force: true });
+        fs102.rmSync(SSH_AGENTS, { recursive: true, force: true });
     } catch {}
   };
   process.once("exit", stop);
@@ -30527,23 +33526,23 @@ function keepSshAgents() {
 }
 
 // Packages/Box/src/link/vault/holder.ts
-var VAULT_SOCKET = path109.join(RUN, "vault.sock");
+var VAULT_SOCKET = path111.join(RUN, "vault.sock");
 var holding = false;
 var holdsVault = () => holding;
 var heldHere = (route) => /^kuvo\/(vault|sandbox\/(asks|tools|allowed|stopped))(\/|\?|$)/.test(route);
 var MOST4 = 8 * 1024 * 1024;
 var KEY3 = "x-kuvo-vault-key";
 var AUTH = "x-kuvo-vault-auth";
-var nonce = () => crypto40.randomBytes(18).toString("base64url");
-var covered = (theirs, method, route, body) => `${theirs}\x00${method.toUpperCase()}\x00${route}\x00${crypto40.createHash("sha256").update(body).digest("base64url")}`;
+var nonce = () => crypto42.randomBytes(18).toString("base64url");
+var covered = (theirs, method, route, body) => `${theirs}\x00${method.toUpperCase()}\x00${route}\x00${crypto42.createHash("sha256").update(body).digest("base64url")}`;
 function holdVault(handle) {
   holding = true;
-  fs101.mkdirSync(RUN, { recursive: true, mode: 448 });
+  fs103.mkdirSync(RUN, { recursive: true, mode: 448 });
   try {
-    fs101.rmSync(path109.join(RUN, "vault-run"), { recursive: true, force: true });
+    fs103.rmSync(path111.join(RUN, "vault-run"), { recursive: true, force: true });
   } catch {}
   try {
-    fs101.rmSync(VAULT_SOCKET, { force: true });
+    fs103.rmSync(VAULT_SOCKET, { force: true });
   } catch {}
   try {
     socketKey();
@@ -30650,7 +33649,7 @@ function holdVault(handle) {
 }
 function socketLooksHeld() {
   try {
-    const stat = fs101.lstatSync(VAULT_SOCKET);
+    const stat = fs103.lstatSync(VAULT_SOCKET);
     return stat.isSocket() && (process.getuid ? stat.uid === process.getuid() : true) && (stat.mode & 63) === 0;
   } catch {
     return false;
@@ -30741,10 +33740,10 @@ function askHolder(request, signal) {
 }
 
 // Packages/Box/src/link/vault/tools.ts
-import crypto41 from "node:crypto";
-import fs103 from "node:fs";
-import os12 from "node:os";
-import path110 from "node:path";
+import crypto43 from "node:crypto";
+import fs105 from "node:fs";
+import os13 from "node:os";
+import path112 from "node:path";
 
 // Packages/Box/src/link/vault/mask.ts
 var SHORTEST = 4;
@@ -30803,8 +33802,8 @@ function maskValues(text, hidden) {
 }
 
 // Packages/Box/src/link/run-command.ts
-import { spawn as spawn10 } from "node:child_process";
-import fs102 from "node:fs";
+import { spawn as spawn11 } from "node:child_process";
+import fs104 from "node:fs";
 var PRIVATE = ["BUN_BE_BUN", "BUN_RUNTIME_TRANSPILER_CACHE_PATH"];
 var MOST_KEPT2 = 4 * 1024 * 1024;
 function commandEnv(from = process.env) {
@@ -30827,9 +33826,9 @@ function commandEnv(from = process.env) {
   }
   return env;
 }
-var running2 = new Map;
+var running3 = new Map;
 process.once("exit", () => {
-  for (const { pid, ended } of running2.values()) {
+  for (const { pid, ended } of running3.values()) {
     try {
       process.kill(-pid, "SIGKILL");
     } catch {}
@@ -30840,10 +33839,10 @@ process.once("exit", () => {
 });
 function runCommand(command, folder, env, timeout, signal, name = String(Math.random()), ended) {
   return new Promise((resolve) => {
-    const shell = env.SHELL && fs102.existsSync(env.SHELL) ? env.SHELL : "/bin/sh";
-    const child = spawn10(shell, ["-lc", command], { cwd: folder, env, stdio: ["ignore", "pipe", "pipe"], detached: process.platform !== "win32" });
+    const shell = env.SHELL && fs104.existsSync(env.SHELL) ? env.SHELL : "/bin/sh";
+    const child = spawn11(shell, ["-lc", command], { cwd: folder, env, stdio: ["ignore", "pipe", "pipe"], detached: process.platform !== "win32" });
     if (child.pid)
-      running2.set(name, { pid: child.pid, ended });
+      running3.set(name, { pid: child.pid, ended });
     let output = Buffer.alloc(0);
     const take = (chunk) => {
       output = Buffer.concat([output, chunk]);
@@ -30879,7 +33878,7 @@ function runCommand(command, folder, env, timeout, signal, name = String(Math.ra
       done = true;
       clearTimeout(timer);
       signal?.removeEventListener("abort", stop);
-      running2.delete(name);
+      running3.delete(name);
       resolve({ output: output.toString("utf8"), code, timedOut });
     };
     child.on("error", (error) => {
@@ -30969,12 +33968,12 @@ async function askForItem(caller, args, signal) {
   const site = siteOf2(args.site) ?? undefined;
   const asker = { ...caller.bot ? { bot: caller.bot, botName: caller.botName } : {}, ...caller.root ? { session: caller.root, sessionName: caller.sessionName } : {} };
   const leftUndone = () => {
-    note2({ what: "refused", ...asker, why: `${need}: ${why}`, ...site ? { site } : {}, how: AUTOPILOT_HOW });
+    note3({ what: "refused", ...asker, why: `${need}: ${why}`, ...site ? { site } : {}, how: AUTOPILOT_HOW });
     return { text: LEFT_UNDONE_WORDS, isError: false };
   };
   if (caller.autopilot)
     return leftUndone();
-  note2({ what: "asked", ...asker, why: `${need}: ${why}`, ...site ? { site } : {} });
+  note3({ what: "asked", ...asker, why: `${need}: ${why}`, ...site ? { site } : {} });
   const { value: answered, onAutopilot } = await untilOnAutopilot(caller.session, signal, (stops) => ask2({
     kind: "item",
     need,
@@ -30982,7 +33981,7 @@ async function askForItem(caller, args, signal) {
     ...caller.group ? { group: caller.group } : {},
     ...site ? { site } : {},
     ...asker,
-    ...IS_MAC ? {} : { machine: os12.hostname() }
+    ...IS_MAC ? {} : { machine: os13.hostname() }
   }, stops));
   if (onAutopilot)
     return leftUndone();
@@ -30994,14 +33993,14 @@ async function askForItem(caller, args, signal) {
     setGrant(item.id, always, "own");
   else
     allowOnce(caller, item.id);
-  note2({ what: always ? "granted" : "allowed", item: item.id, itemName: item.name, kind: item.kind, ...caller.bot ? { bot: caller.bot, botName: caller.botName } : {}, ...caller.root ? { session: caller.root, sessionName: caller.sessionName } : {}, how: always ? "own" : "once", ...answered.client ? { client: answered.client, by: answered.by } : {} });
+  note3({ what: always ? "granted" : "allowed", item: item.id, itemName: item.name, kind: item.kind, ...caller.bot ? { bot: caller.bot, botName: caller.botName } : {}, ...caller.root ? { session: caller.root, sessionName: caller.sessionName } : {}, how: always ? "own" : "once", ...answered.client ? { client: answered.client, by: answered.by } : {} });
   const once = !always;
   return { text: `The user gave you “${item.name}” (a ${KIND_WORDS[item.kind]}${item.sites.length ? ` for ${item.sites.join(", ")}` : ""})${once ? ", for this once" : ""}. Use it by that name${item.kind === "login" ? " with browser_sign_in" : " with vault_run or browser_fill"}.`, isError: false };
 }
 var MOST_OUTPUT2 = 64 * 1024;
 var CALL_BUDGET = 15.5 * 60000;
 var VARIABLE = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
-var RUN_FOLDER = path110.join(RUN, "vault-run");
+var RUN_FOLDER = path112.join(RUN, "vault-run");
 function namedValue(named) {
   const whole = itemNamed(named);
   if (whole)
@@ -31030,8 +34029,8 @@ async function runWith(caller, args, signal) {
   if (!isObject(args.variables) || !Object.keys(args.variables).length)
     return failed("Name at least one variable and the item it gets.");
   const started = Date.now();
-  const program = path110.basename(command.split(/\s+/)[0] ?? "");
-  const folder = caller.folder && fs103.existsSync(caller.folder) ? caller.folder : homeFolder();
+  const program = path112.basename(command.split(/\s+/)[0] ?? "");
+  const folder = caller.folder && fs105.existsSync(caller.folder) ? caller.folder : homeFolder();
   const wanted = [];
   for (const [variable, named] of Object.entries(args.variables)) {
     if (!VARIABLE.test(variable))
@@ -31057,21 +34056,21 @@ async function runWith(caller, args, signal) {
       return may.leftUndone ? { text: may.message, isError: false } : failed(may.message);
     allowed.set(item.id, may.how);
   }
-  const scratch = path110.join(RUN_FOLDER, crypto41.randomBytes(8).toString("hex"));
+  const scratch = path112.join(RUN_FOLDER, crypto43.randomBytes(8).toString("hex"));
   const env = commandEnv();
   const hidden = [];
   try {
-    fs103.mkdirSync(scratch, { recursive: true, mode: 448 });
+    fs105.mkdirSync(scratch, { recursive: true, mode: 448 });
     for (const { variable, item, field } of wanted) {
       const value = (await valuesOf(item.id))[field];
       if (value === undefined)
         return failed(`“${item.name}” has no ${field} kept.`);
       if (item.kind === "file" && field === "file") {
-        const name = path110.basename(item.fileName ?? "");
-        const file = path110.join(scratch, variable, name && name !== "." && name !== ".." ? name : variable.toLowerCase());
-        fs103.mkdirSync(path110.dirname(file), { recursive: true, mode: 448 });
+        const name = path112.basename(item.fileName ?? "");
+        const file = path112.join(scratch, variable, name && name !== "." && name !== ".." ? name : variable.toLowerCase());
+        fs105.mkdirSync(path112.dirname(file), { recursive: true, mode: 448 });
         const bytes = Buffer.from(value, "base64");
-        fs103.writeFileSync(file, bytes, { mode: 384 });
+        fs105.writeFileSync(file, bytes, { mode: 384 });
         env[variable] = file;
         const base64 = bytes.toString("base64");
         const wrapped = (width) => base64.match(new RegExp(`.{1,${width}}`, "g")).join(`
@@ -31088,7 +34087,7 @@ async function runWith(caller, args, signal) {
     }
     const left = Math.floor((CALL_BUDGET - (Date.now() - started)) / 1000);
     const seconds = Math.max(1, Math.min(600, left, Number(args.timeout) || 300));
-    const { output, code, timedOut } = await runCommand(command, folder, env, seconds * 1000, signal, scratch, () => fs103.rmSync(scratch, { recursive: true, force: true }));
+    const { output, code, timedOut } = await runCommand(command, folder, env, seconds * 1000, signal, scratch, () => fs105.rmSync(scratch, { recursive: true, force: true }));
     let shown = maskValues(output, hidden);
     if (shown.length > MOST_OUTPUT2)
       shown = "…" + shown.slice(-MOST_OUTPUT2).replace(/^[^\n]*\n/, "");
@@ -31099,7 +34098,7 @@ async function runWith(caller, args, signal) {
 
 `}${ended} (Values from the vault are shown as [vault: <item>].)`, isError: timedOut || code !== 0 };
   } finally {
-    fs103.rmSync(scratch, { recursive: true, force: true });
+    fs105.rmSync(scratch, { recursive: true, force: true });
   }
 }
 async function callTool(name, args, caller, signal) {
@@ -31168,9 +34167,9 @@ function provedMac(given, tag = "kuvo-vault-key", rest = "") {
   if (usedProofs.has(nonce))
     return null;
   try {
-    const key = crypto42.createPublicKey({ key: Buffer.concat([ED_SPKI2, Buffer.from(sign, "base64url")]), format: "der", type: "spki" });
+    const key = crypto44.createPublicKey({ key: Buffer.concat([ED_SPKI2, Buffer.from(sign, "base64url")]), format: "der", type: "spki" });
     const signature = Buffer.from(given.proof, "base64url");
-    const good = signature.length === 64 && typeof link?.id === "string" && crypto42.verify(null, Buffer.from(`${tag}\x00${link.id}\x00${at}\x00${nonce}${rest}`), key, signature);
+    const good = signature.length === 64 && typeof link?.id === "string" && crypto44.verify(null, Buffer.from(`${tag}\x00${link.id}\x00${at}\x00${nonce}${rest}`), key, signature);
     if (good)
       usedProofs.set(nonce, now + 2 * PROOF_FOR);
     return good ? mac : null;
@@ -31188,7 +34187,7 @@ function provedRequest(request) {
   } catch {
     return null;
   }
-  const hash = crypto42.createHash("sha256").update(request.body ?? Buffer.alloc(0)).digest("hex");
+  const hash = crypto44.createHash("sha256").update(request.body ?? Buffer.alloc(0)).digest("hex");
   return provedMac(given, `kuvo-vault-request`, `\x00${request.method.toUpperCase()}\x00${request.path}\x00${hash}`);
 }
 var idOf4 = (part) => {
@@ -31301,7 +34300,7 @@ async function* answerVault(context) {
     const bot = typeof given.bot === "string" && /^[A-Za-z0-9_-]{1,100}$/.test(given.bot) ? given.bot : undefined;
     const paused = given.paused === true;
     setPaused(paused, bot);
-    note2({ what: paused ? "paused" : "resumed", client: client.name, by: client.by, ...bot ? { bot } : {} });
+    note3({ what: paused ? "paused" : "resumed", client: client.name, by: client.by, ...bot ? { bot } : {} });
     return yield* json(200, vaultState());
   }
   if (route === "kuvo/vault/activity") {
@@ -31337,7 +34336,7 @@ async function* answerVault(context) {
       return yield* json(400, { message: 'Send {"item", "who": {"bot"} or {"project"} or {"everyone": true}, "how": "own" | "ask" | null}.' });
     const grants = setGrant(given.item, who, given.how ?? null);
     const item = itemByID(given.item);
-    note2({ what: given.how ? "granted" : "ungranted", client: client.name, by: client.by, ...item ? { item: item.id, itemName: item.name, kind: item.kind } : {}, ...who.bot ? { bot: who.bot } : {}, ...typeof given.how === "string" ? { how: given.how } : {} });
+    note3({ what: given.how ? "granted" : "ungranted", client: client.name, by: client.by, ...item ? { item: item.id, itemName: item.name, kind: item.kind } : {}, ...who.bot ? { bot: who.bot } : {}, ...typeof given.how === "string" ? { how: given.how } : {} });
     return yield* json(200, { grants: shownGrants(grants) });
   }
   if (route === "kuvo/vault/asks" || route === "kuvo/vault/asks/events") {
@@ -31382,7 +34381,7 @@ async function* answerVault(context) {
     if (isLocked())
       return yield* json(423, { message: LOCKED });
     const item = await addItem(given);
-    note2({ what: "added", client: client.name, by: client.by, item: item.id, itemName: item.name, kind: item.kind });
+    note3({ what: "added", client: client.name, by: client.by, item: item.id, itemName: item.name, kind: item.kind });
     return yield* json(200, { item, ...key ? { key } : {} });
   }
   if (parts[2] === "items" && parts.length >= 4) {
@@ -31396,19 +34395,19 @@ async function* answerVault(context) {
       if (!item)
         return yield* json(404, { message: "That item isn't in this vault." });
       const values = await valuesOf(id);
-      note2({ what: "shown", client: client.name, by: client.by, item: item.id, itemName: item.name, kind: item.kind });
+      note3({ what: "shown", client: client.name, by: client.by, item: item.id, itemName: item.name, kind: item.kind });
       return yield* json(200, { values });
     }
     if (parts.length !== 4)
       return yield* json(404, {});
     if (method === "PATCH") {
       const item = await changeItem(id, given);
-      note2({ what: "changed", client: client.name, by: client.by, item: item.id, itemName: item.name, kind: item.kind });
+      note3({ what: "changed", client: client.name, by: client.by, item: item.id, itemName: item.name, kind: item.kind });
       return yield* json(200, { item });
     }
     if (method === "DELETE") {
       const item = await removeItem(id);
-      note2({ what: "removed", client: client.name, by: client.by, item: item.id, itemName: item.name, kind: item.kind });
+      note3({ what: "removed", client: client.name, by: client.by, item: item.id, itemName: item.name, kind: item.kind });
       return yield* json(200, {});
     }
     return yield* json(405, {});
@@ -31417,7 +34416,7 @@ async function* answerVault(context) {
 }
 
 // Packages/Box/src/link/work-queue/import.ts
-import fs104 from "node:fs";
+import fs106 from "node:fs";
 var MOST_SKIPPED_SAID = 40;
 function titleOf(text) {
   const plain = plainName(text.replace(/\*\*/g, "").replace(/`/g, ""));
@@ -31517,10 +34516,10 @@ function readBacklogFiles(files) {
   const texts = [];
   for (const file of named.slice(0, 10)) {
     try {
-      const kind = fs104.statSync(file);
+      const kind = fs106.statSync(file);
       if (!kind.isFile() || kind.size > 20000000)
         return { refused: `${file} isn't a Markdown file to import.` };
-      texts.push(fs104.readFileSync(file, "utf8"));
+      texts.push(fs106.readFileSync(file, "utf8"));
     } catch {
       return { refused: `${file} can't be read.` };
     }
@@ -31609,7 +34608,7 @@ function importWords(outcome, skipped, names) {
 
 // Packages/Box/src/link/work-queue/tools.ts
 var said3 = (text) => ({ text, isError: false });
-var refused4 = (text) => ({ text, isError: true });
+var refused5 = (text) => ({ text, isError: true });
 var ITEM = { type: ["string", "integer"], description: "Its number, like #243." };
 var TOP = { type: "boolean", description: "At the top of its category." };
 var CATEGORY = { type: "string", description: "Next, Later, Parked, Done or a custom one." };
@@ -31747,18 +34746,18 @@ function itemFor(items, given, caller, overseen) {
 var deletedWords = (item) => ("user" in item.removed.by) ? `The user deleted ${nameOf3(item)}: only they bring it back. Ask them if it's still needed.` : `${nameOf3(item)} was deleted by ${item.removed.by.name}: queue_remove with undo brings it back.`;
 async function callQueueTool(name, args, session, readEngine, readBridge, targets, signal) {
   if (typeof name !== "string" || !QUEUE_TOOL_NAMES.includes(name))
-    return refused4(`There's no tool ${String(name)}.`);
+    return refused5(`There's no tool ${String(name)}.`);
   if (typeof session !== "string" || !await isCalling(session, [name], args, readEngine, readBridge))
-    return refused4("Only a conversation's own tool call can change its Work Queue, and this one isn't running in it.");
+    return refused5("Only a conversation's own tool call can change its Work Queue, and this one isn't running in it.");
   const found = await queueCaller(await callerOf(session, readEngine, readBridge), readBridge);
   if ("refused" in found)
-    return refused4(found.refused);
+    return refused5(found.refused);
   try {
     return await run3(name, args, found, targets, signal);
   } catch (error) {
     if (error instanceof Refusal)
-      return refused4(error.message);
-    return refused4(`The Work Queue couldn't do that: ${why3(error)}`);
+      return refused5(error.message);
+    return refused5(`The Work Queue couldn't do that: ${why3(error)}`);
   }
 }
 var change4 = (work) => {
@@ -31820,7 +34819,7 @@ async function run3(name, args, caller, targets, signal) {
     case "queue_hand": {
       const to = await handTarget(args.to, caller, targets);
       if ("refused" in to)
-        return refused4(to.refused);
+        return refused5(to.refused);
       const item = change4((book) => {
         const item = itemFor(book.items(), args.item, caller, overseen);
         if (item.removed)
@@ -31854,7 +34853,7 @@ async function run3(name, args, caller, targets, signal) {
       if (typeof args.add === "string" && args.add.trim()) {
         const outcome = addCategory(args.add, args.after);
         if ("refused" in outcome)
-          return refused4(outcome.refused);
+          return refused5(outcome.refused);
         return said3(`Added the category ${outcome.done.name}. Categories now: ${categories().map((each) => each.name).join(", ")}.`);
       }
       return said3(`Categories (one set for every queue): ${categories().map((each) => each.name).join(", ")}. In progress isn't one you set: an item shows In progress while a session linked to it is at work.`);
@@ -31862,13 +34861,13 @@ async function run3(name, args, caller, targets, signal) {
     case "queue_import": {
       const given = givenItems(args.items);
       if ("refused" in given)
-        return refused4(given.refused);
+        return refused5(given.refused);
       refuseMoving([caller.owner]);
       const outcome = change4((book) => importItems(book, caller.owner, given.items, caller.who, primaryOf(), now));
       return said3(importWords(outcome, given.skipped, (id) => categoryNamed(id)?.name ?? id));
     }
   }
-  return refused4(`There's no tool ${name}.`);
+  return refused5(`There's no tool ${name}.`);
 }
 function withFiles(args, caller, acting, work) {
   if (args.files === undefined)
@@ -32121,7 +35120,7 @@ async function* workQueueRoute(context, match) {
       return yield* json(404, { message: "There's no such file." });
     let bytes;
     try {
-      bytes = fs105.readFileSync(path111.join(filesOf(item.id), name));
+      bytes = fs107.readFileSync(path113.join(filesOf(item.id), name));
     } catch {
       return yield* json(404, { message: "There's no such file." });
     }
@@ -32175,7 +35174,7 @@ async function* followView(owner, targets, signal) {
     wake?.();
   };
   queueFollowers2.add(told);
-  const queuesWatch = watchFolders([path111.join(WORK_QUEUE, "queues")], told, { recursive: false });
+  const queuesWatch = watchFolders([path113.join(WORK_QUEUE, "queues")], told, { recursive: false });
   const categoriesWatch = watchFolders([WORK_QUEUE], (_, name) => {
     if (String(name ?? "") === "categories.json")
       told();
@@ -32275,16 +35274,16 @@ async function* pluginSearchRoute(context) {
 }
 
 // Packages/Box/src/link/areas/programs.ts
-import fs106 from "node:fs";
-import path112 from "node:path";
+import fs108 from "node:fs";
+import path114 from "node:path";
 function findProgram(requestPath, PATH = process.env.PATH ?? "") {
   const name = (new URLSearchParams(requestPath.split("?")[1] ?? "").get("name") ?? "").trim();
   if (!name)
     return { status: 400, value: { message: "Name the program (name)." } };
   const runnable = (file) => {
     try {
-      fs106.accessSync(file, fs106.constants.X_OK);
-      return fs106.statSync(file).isFile();
+      fs108.accessSync(file, fs108.constants.X_OK);
+      return fs108.statSync(file).isFile();
     } catch {
       return false;
     }
@@ -32292,10 +35291,10 @@ function findProgram(requestPath, PATH = process.env.PATH ?? "") {
   if (/^\.\.?\//.test(name) || name.includes("$") || /^~[^/]/.test(name))
     return { status: 200, value: { name, path: null, unknown: true } };
   if (name.includes("/")) {
-    const file = name.startsWith("~/") ? path112.join(homeFolder(), name.slice(2)) : name;
-    return { status: 200, value: { name, path: path112.isAbsolute(file) && runnable(file) ? file : null } };
+    const file = name.startsWith("~/") ? path114.join(homeFolder(), name.slice(2)) : name;
+    return { status: 200, value: { name, path: path114.isAbsolute(file) && runnable(file) ? file : null } };
   }
-  const found = PATH.split(path112.delimiter).filter(Boolean).map((folder) => path112.join(folder, name)).find(runnable);
+  const found = PATH.split(path114.delimiter).filter(Boolean).map((folder) => path114.join(folder, name)).find(runnable);
   return { status: 200, value: { name, path: found ?? null } };
 }
 async function* programsRoute(context) {
@@ -32307,13 +35306,13 @@ async function* programsRoute(context) {
 }
 
 // Packages/Box/src/link/areas/backups.ts
-import fs107 from "node:fs";
-import path113 from "node:path";
+import fs109 from "node:fs";
+import path115 from "node:path";
 function folderAt2(value) {
-  if (typeof value !== "string" || !path113.isAbsolute(value))
+  if (typeof value !== "string" || !path115.isAbsolute(value))
     return null;
   try {
-    return fs107.statSync(value).isDirectory() ? value : null;
+    return fs109.statSync(value).isDirectory() ? value : null;
   } catch {
     return null;
   }
@@ -32422,11 +35421,11 @@ async function* autopilotRoute(context) {
 }
 
 // Packages/Box/src/link/fence/outside.ts
-import { spawn as spawn11 } from "node:child_process";
-import crypto43 from "node:crypto";
-import fs108 from "node:fs";
-import os13 from "node:os";
-import path114 from "node:path";
+import { spawn as spawn12 } from "node:child_process";
+import crypto45 from "node:crypto";
+import fs110 from "node:fs";
+import os14 from "node:os";
+import path116 from "node:path";
 var book2 = askBook("sq_", { answer: "no", unanswered: true });
 var listSandboxAsks = book2.list;
 var onSandboxAsksChanged = book2.onChanged;
@@ -32460,13 +35459,13 @@ var KINDS3 = [
   [/^job-creation/, "job"],
   [/^(appleevent-send|mach-lookup)/, "app"]
 ];
-var commandSum = (command) => crypto43.createHash("sha256").update(command).digest("hex").slice(0, 16);
+var commandSum = (command) => crypto45.createHash("sha256").update(command).digest("hex").slice(0, 16);
 async function stopsFor(session, command, minutes = 3, signal) {
   if (process.platform !== "darwin" || !/^ses_[A-Za-z0-9_]{1,80}$/.test(session) || signal?.aborted)
     return [];
   const tagged = `kuvo-sandbox ${session} ${commandSum(command)}`;
   const read = await new Promise((resolve) => {
-    const child = spawn11("/usr/bin/log", ["show", "--last", `${minutes}m`, "--style", "ndjson", "--predicate", `sender == "Sandbox" AND eventMessage CONTAINS "${tagged}"`], { stdio: ["ignore", "pipe", "ignore"] });
+    const child = spawn12("/usr/bin/log", ["show", "--last", `${minutes}m`, "--style", "ndjson", "--predicate", `sender == "Sandbox" AND eventMessage CONTAINS "${tagged}"`], { stdio: ["ignore", "pipe", "ignore"] });
     let out = "";
     const timer = setTimeout(() => child.kill("SIGKILL"), 20000);
     signal?.addEventListener("abort", () => child.kill("SIGKILL"), { once: true });
@@ -32511,25 +35510,29 @@ function alwaysFor2(stops, project) {
   const writes = [...new Set(stops.filter((stop) => stop.kind === "write" && stop.path).map((stop) => stop.path))];
   if (writes.length !== 1 || !stops.every((stop) => stop.kind === "write"))
     return;
+  return alwaysForWrite(writes, project);
+}
+async function alwaysForWrite(writes, project) {
+  await askedAbout([project, writes[0], path116.dirname(writes[0])]);
   const real = (where) => {
     try {
-      return fs108.realpathSync(where);
+      return fs110.realpathSync(where);
     } catch {
-      return path114.resolve(where);
+      return path116.resolve(where);
     }
   };
   const own = real(project);
-  const where = real(path114.dirname(writes[0]));
+  const where = real(path116.dirname(writes[0]));
   if (where === own || where.startsWith(own + "/"))
     return;
   const isFolder = (() => {
     try {
-      return fs108.statSync(writes[0]).isDirectory();
+      return fs110.statSync(writes[0]).isDirectory();
     } catch {
       return false;
     }
   })();
-  const given = (isFolder ? null : writeRuleWouldBe(path114.dirname(writes[0]))) ?? writeRuleWouldBe(writes[0]);
+  const given = (isFolder ? null : await writeRuleWouldBe(path116.dirname(writes[0]))) ?? await writeRuleWouldBe(writes[0]);
   return given ? { kind: "write", path: given } : undefined;
 }
 function sandboxAskNotice(asked) {
@@ -32561,7 +35564,9 @@ async function askToRun(caller, args, signal) {
     return failed2("Say why the task needs it.");
   if (command.length > 8000)
     return failed2("That command is too long to ask about: put it in a script in your project and ask to run that.");
-  const project = caller.folder && fs108.existsSync(caller.folder) ? caller.folder : null;
+  if (caller.folder && macMayAsk(caller.folder))
+    await askedAbout([caller.folder]);
+  const project = caller.folder && fs110.existsSync(caller.folder) ? caller.folder : null;
   if (!project)
     return failed2("This conversation's folder isn't there, so nothing can run for it.");
   const conversation = caller.root ?? caller.session;
@@ -32574,7 +35579,8 @@ async function askToRun(caller, args, signal) {
     return { text: refusalWords(verdict), isError: false };
   const asks = !full && verdict?.decision !== "allow";
   const stopped = asks && caller.session ? await stopsFor(caller.session, String(args.command)) : [];
-  let always = alwaysFor2(stopped, project);
+  const alwaysNow = alwaysFor2(stopped, project);
+  let always = alwaysNow && await alwaysNow;
   let asking;
   const heard = new AbortController;
   if (asks && !stopped.length && caller.session && process.platform === "darwin")
@@ -32586,7 +35592,7 @@ async function askToRun(caller, args, signal) {
         const found = await stopsFor(caller.session, String(args.command), 3, heard.signal);
         if (heard.signal.aborted || !found.length)
           continue;
-        always = alwaysFor2(found, project);
+        always = await alwaysFor2(found, project);
         if (asking)
           book2.update(asking, { stopped: found, ...always ? { always } : {} });
         return;
@@ -32601,7 +35607,7 @@ async function askToRun(caller, args, signal) {
     ...stopped.length ? { stopped } : {},
     ...error ? { error } : {},
     ...always ? { always } : {},
-    ...IS_MAC ? {} : { machine: os13.hostname() },
+    ...IS_MAC ? {} : { machine: os14.hostname() },
     owner: ownerOf(project)
   }, signal, undefined, (id) => {
     asking = id;
@@ -32614,7 +35620,7 @@ async function askToRun(caller, args, signal) {
   let how = "once";
   if (answered.answer === "always" && always) {
     try {
-      addRule({ project, ...always, ...answered.client ? { by: answered.client } : {} });
+      await addRule({ project, ...always, ...answered.client ? { by: answered.client } : {} });
       how = "always";
     } catch {}
   }
@@ -32638,19 +35644,21 @@ function stoppedBySandbox(printed, policy) {
     return true;
   const named = printed.match(/(?:~|\/)[^\s'"`:,;()]+/g) ?? [];
   return /no such file or directory/i.test(printed) && named.some((word) => {
-    const where = path114.resolve(word.replace(/^~(?=\/|$)/, policy.home));
+    const where = path116.resolve(word.replace(/^~(?=\/|$)/, policy.home));
     return policy.secrets.some((wall) => where === wall || where.startsWith(wall + "/"));
   });
 }
 async function stoppedInAuto(caller, input, printed, calling, signal) {
   const started = Date.now();
   const command = typeof input.command === "string" ? input.command : "";
-  const project = caller.folder && fs108.existsSync(caller.folder) ? caller.folder : null;
+  await askedAbout([caller.folder]);
+  const project = caller.folder && fs110.existsSync(caller.folder) ? caller.folder : null;
   if (caller.seat || !command.trim() || command.length > 8000 || !project)
     return null;
   const given = typeof input.workdir === "string" ? input.workdir : typeof input.cwd === "string" ? input.cwd : "";
-  const folder = given ? path114.resolve(project, given.replace(/^~(?=\/|$)/, os13.homedir())) : project;
-  if (!fs108.existsSync(folder))
+  const folder = given ? path116.resolve(project, given.replace(/^~(?=\/|$)/, os14.homedir())) : project;
+  await askedAbout([folder]);
+  if (!fs110.existsSync(folder))
     return null;
   const conversation = caller.root ?? caller.session;
   const at = conversation ? (await findConversation(conversation).catch(() => ({ at: null }))).at : null;
@@ -32772,20 +35780,20 @@ async function* sandboxRoute(context) {
     try {
       const query = new URLSearchParams(request.path.split("?")[1] ?? "");
       forgetGoneBots();
-      const answer = (of) => ({ allowed: listed(allowedFor(of)), ...of ? {} : { owners: addableOwners() } });
+      const answer = async (of) => ({ allowed: await listed(await allowedFor(of)), ...of ? {} : { owners: addableOwners() } });
       if (route === "kuvo/sandbox/allowed" && method === "GET")
-        return yield* json(200, answer(query.get("project") ?? undefined));
+        return yield* json(200, await answer(query.get("project") ?? undefined));
       if (route === "kuvo/sandbox/allowed" && method === "POST") {
         const project = given.project === undefined && given.owner !== undefined ? folderOfOwner(given.owner) : given.project;
-        const rule = addRule({ ...given, project, by: clientName(context) });
-        return yield* json(200, answer(query.has("all") ? undefined : rule.project));
+        const rule = await addRule({ ...given, project, by: clientName(context) });
+        return yield* json(200, await answer(query.has("all") ? undefined : rule.project));
       }
       if (parts.length === 4 && method === "DELETE") {
         const id = idOf5(parts[3]);
-        const rule = allowedFor().find((each) => each.id === id);
+        const rule = (await allowedFor()).find((each) => each.id === id);
         if (!rule || !removeRule(id))
           return yield* json(404, { message: "That isn't in Also Allowed." });
-        return yield* json(200, answer(query.has("all") ? undefined : rule.project));
+        return yield* json(200, await answer(query.has("all") ? undefined : rule.project));
       }
       return yield* json(405, {});
     } catch (error) {
@@ -32926,7 +35934,7 @@ async function* providerModelsRoute(context) {
 }
 
 // Packages/Box/src/link/areas/apply.ts
-import fs109 from "node:fs";
+import fs111 from "node:fs";
 var BUILT_IN_AGENTS = ["build", "plan", "general", "explore", "compaction", "title", "summary"];
 var isRules = (keys) => ["permissions", "policies"].includes(keys[keys.length - 1]);
 function keptOwn(change) {
@@ -32953,7 +35961,7 @@ function neededFor(change) {
 }
 function macOnlyServers(file = CATALOG_FILE) {
   try {
-    const catalog = JSON.parse(fs109.readFileSync(file, "utf8"));
+    const catalog = JSON.parse(fs111.readFileSync(file, "utf8"));
     const named = [...Array.isArray(catalog.macOnly) ? catalog.macOnly : [], ...(catalog.servers ?? []).filter((server) => server?.macOnly).map((server) => server.id)];
     return new Set(named.filter((id) => typeof id === "string"));
   } catch {
@@ -33159,7 +36167,7 @@ async function* movePlacesRoute(context) {
 }
 
 // Packages/Box/src/link/areas/work.ts
-import fs110 from "node:fs";
+import fs112 from "node:fs";
 
 // Packages/Box/src/link/work/accounts.ts
 var ASK_WAIT = 5000;
@@ -33376,7 +36384,7 @@ async function* appIconRoute(context) {
   const file = appIcon(id);
   let bytes = null;
   try {
-    bytes = file ? fs110.readFileSync(file) : null;
+    bytes = file ? fs112.readFileSync(file) : null;
   } catch {}
   if (!bytes)
     return yield* json(404, { message: "There's no icon for that app here." });
@@ -33385,8 +36393,8 @@ async function* appIconRoute(context) {
 }
 
 // Packages/Box/src/link/mac/routes.ts
-import fs111 from "node:fs";
-import path115 from "node:path";
+import fs113 from "node:fs";
+import path117 from "node:path";
 var macPhones = () => {
   const link = readLink();
   return {
@@ -33528,7 +36536,7 @@ async function* macLinkRoute(route, request, signal) {
         return yield* json(400, { message: "Send {letters, seen}." });
       const now = Date.now();
       try {
-        fs111.mkdirSync(SENDING, { recursive: true, mode: 448 });
+        fs113.mkdirSync(SENDING, { recursive: true, mode: 448 });
         for (const letter of Array.isArray(given.letters) ? given.letters.slice(0, 500) : []) {
           if (!isObject(letter) || !LETTER_ID.test(letter.id ?? "") || typeof letter.to !== "string" || typeof letter.text !== "string" || typeof letter.peer !== "string")
             continue;
@@ -33541,7 +36549,7 @@ async function* macLinkRoute(route, request, signal) {
             peer: letter.peer,
             ...typeof letter.answers === "string" ? { answers: letter.answers } : {}
           };
-          writePrivate(path115.join(SENDING, `${letter.id}.json`), JSON.stringify(kept));
+          writePrivate(path117.join(SENDING, `${letter.id}.json`), JSON.stringify(kept));
         }
         if (isObject(given.seen)) {
           locked(PEER_LOCK, () => {
@@ -33595,6 +36603,7 @@ var ROUTES = [
   { when: (route) => route === "kuvo/sandbox" || route.startsWith("kuvo/sandbox/"), answer: sandboxRoute },
   { when: (route) => route === "kuvo/file", answer: ({ request, json }) => fileAt(request.path, json) },
   { when: (route) => route === "kuvo/update", answer: updateRoute },
+  { when: (route) => !IS_MAC && route === "kuvo/browser", answer: browserRoute },
   { when: (route, request) => /^kuvo\/integrations(\/|\?|$)/.test(request.path), answer: integrationsRoute },
   { when: (route) => route === "kuvo/folders", answer: foldersRoute },
   { when: (route) => route === "kuvo/plugins/search", answer: pluginSearchRoute },
@@ -33693,7 +36702,7 @@ async function* toApp(request, phone, signal) {
   yield { head: { status: 503, headers: { "content-type": "application/json" } } };
   yield { body: Buffer.from(JSON.stringify({ message: APP_NOT_ANSWERING })) };
 }
-function macFront(handle = engineHandler(readEngineFile, { name: os14.hostname() }), timing) {
+function macFront(handle = engineHandler(readEngineFile, { name: os15.hostname() }), timing) {
   return async function* (request, phone, signal) {
     const route = String(request.path ?? "").split("?")[0];
     if (isMachinesRoute(route))
@@ -33778,14 +36787,14 @@ async function runMacLink() {
 }
 
 // Packages/Box/src/link/server/serve.ts
-import crypto44 from "node:crypto";
+import crypto46 from "node:crypto";
 import http from "node:http";
-import os15 from "node:os";
-function serveBox(password, handle = engineHandler(readEngineFile, { name: os15.hostname() })) {
+import os16 from "node:os";
+function serveBox(password, handle = engineHandler(readEngineFile, { name: os16.hostname() })) {
   const expected = Buffer.from("Basic " + Buffer.from(`opencode:${password}`).toString("base64"));
   return http.createServer(async (request, response) => {
     const given = Buffer.from(request.headers.authorization ?? "");
-    if (given.length !== expected.length || !crypto44.timingSafeEqual(given, expected)) {
+    if (given.length !== expected.length || !crypto46.timingSafeEqual(given, expected)) {
       response.writeHead(401);
       return response.end();
     }
@@ -33840,9 +36849,9 @@ onLinkWritten((link) => {
     return;
   }
   if (needed(link))
-    fs112.writeFileSync(NEEDED_FILE, "", { mode: 384 });
+    fs114.writeFileSync(NEEDED_FILE, "", { mode: 384 });
   else
-    fs112.rmSync(NEEDED_FILE, { force: true });
+    fs114.rmSync(NEEDED_FILE, { force: true });
 });
 function machineWelcomed(host) {
   announce(host, readEngineFile, undefined, undefined, true).catch(() => {});
@@ -33860,18 +36869,18 @@ function updateIsWell() {
 async function run4() {
   let old = null;
   try {
-    old = Number(fs112.readFileSync(PID_FILE, "utf8"));
+    old = Number(fs114.readFileSync(PID_FILE, "utf8"));
     if (isBridge2(old))
       process.kill(old, "SIGTERM");
   } catch {}
-  fs112.mkdirSync(RUN, { recursive: true, mode: 448 });
-  fs112.writeFileSync(PID_FILE, String(process.pid), { mode: 384 });
-  fs112.writeFileSync(VERSION_FILE, BRIDGE_VERSION, { mode: 384 });
+  fs114.mkdirSync(RUN, { recursive: true, mode: 448 });
+  fs114.writeFileSync(PID_FILE, String(process.pid), { mode: 384 });
+  fs114.writeFileSync(VERSION_FILE, BRIDGE_VERSION, { mode: 384 });
   const saved = savedLoginPath(K);
   if (saved)
-    process.env.PATH = joinPath(path116.join(K, "bin"), saved);
+    process.env.PATH = joinPath(path118.join(K, "bin"), saved);
   for (const folder of ["present", "connected"])
-    fs112.rmSync(path116.join(RUN, folder), { recursive: true, force: true });
+    fs114.rmSync(path118.join(RUN, folder), { recursive: true, force: true });
   try {
     keepJobs();
   } catch {}
@@ -33887,8 +36896,8 @@ async function run4() {
   });
   const cleanUp = () => {
     try {
-      if (fs112.readFileSync(PID_FILE, "utf8") === String(process.pid))
-        fs112.unlinkSync(PID_FILE);
+      if (fs114.readFileSync(PID_FILE, "utf8") === String(process.pid))
+        fs114.unlinkSync(PID_FILE);
     } catch {}
     process.exit(0);
   };
@@ -33899,7 +36908,7 @@ async function run4() {
   setInterval(() => {
     let owner = null;
     try {
-      owner = Number(fs112.readFileSync(PID_FILE, "utf8"));
+      owner = Number(fs114.readFileSync(PID_FILE, "utf8"));
     } catch {}
     const link = readLink();
     if (!needed(link)) {
@@ -33916,7 +36925,7 @@ async function run4() {
     await sleep(50);
   let held = [];
   try {
-    held = JSON.parse(fs112.readFileSync(HELD_FILE, "utf8"));
+    held = JSON.parse(fs114.readFileSync(HELD_FILE, "utf8"));
   } catch {}
   const hold = new NoticeHold({
     send: tellPhones,
@@ -33926,7 +36935,7 @@ async function run4() {
         if (entries.length)
           writePrivate(HELD_FILE, JSON.stringify(entries));
         else
-          fs112.rmSync(HELD_FILE, { force: true });
+          fs114.rmSync(HELD_FILE, { force: true });
       } catch {}
     }
   });
@@ -33944,7 +36953,7 @@ async function run4() {
   keepEngineDefaults();
   keepFence();
   keepApprovals();
-  holdVault(engineHandler(readEngineFile, { name: os16.hostname() }));
+  holdVault(engineHandler(readEngineFile, { name: os17.hostname() }));
   setVaultTell(tell);
   watchVaultAsks(tell, answered);
   watchSandboxAsks(tell, answered);
@@ -33994,7 +37003,7 @@ async function run4() {
     }, 50);
   };
   try {
-    fs112.mkdirSync(SENDING, { recursive: true, mode: 448 });
+    fs114.mkdirSync(SENDING, { recursive: true, mode: 448 });
   } catch {}
   let outboxWatch = watchFolders([SENDING], leftNow, { recursive: false });
   setInterval(() => {
@@ -34031,11 +37040,11 @@ async function run4() {
     } catch {}
     const host = new LinkHost({
       key: Buffer.from(link.key, "base64url"),
-      hello: { v: 1, kind: "machine", name: link.name || os16.hostname(), app: BRIDGE_VERSION, engine: engine.version ?? null },
+      hello: { v: 1, kind: "machine", name: link.name || os17.hostname(), app: BRIDGE_VERSION, engine: engine.version ?? null },
       authorize: authorizePhone,
       confirmed: confirmPhone,
       mail: (_from, body) => receiveMail(body, host, (sender, payload) => peerMail(sender, payload, host, peerPlaces), (mac, given, at) => hold.attend(`mac:${mac}`, given, at)),
-      handle: engineHandler(readEngineFile, { name: link.name || os16.hostname() }, readBridgeFile, (changed) => host.keepOnly(new Set((changed.phones ?? []).map((phone) => phone.key))), hold),
+      handle: engineHandler(readEngineFile, { name: link.name || os17.hostname() }, readBridgeFile, (changed) => host.keepOnly(new Set((changed.phones ?? []).map((phone) => phone.key))), hold),
       connect: engineConnect(readEngineFile),
       send: () => {}
     });
@@ -34091,7 +37100,7 @@ async function box(command) {
         return say({ status: 409, message: blocked });
       if (isUpdating())
         return say({ status: 409, message: "It's updating already." });
-      spawn12(process.execPath, [...OWN_RUNTIME, fileURLToPath3(import.meta.url), "update", "--now"], { detached: true, stdio: "ignore", cwd: K, env: process.env }).unref();
+      spawn13(process.execPath, [...OWN_RUNTIME, fileURLToPath3(import.meta.url), "update", "--now"], { detached: true, stdio: "ignore", cwd: K, env: process.env }).unref();
       return say({ status: 202, ...updateStatus(), updating: "checking" });
     }
     case "route": {
@@ -34100,7 +37109,7 @@ async function box(command) {
       try {
         given = JSON.parse(await input());
       } catch {}
-      const handle = engineHandler(readEngineFile, { name: os16.hostname() }, readBridgeFile);
+      const handle = engineHandler(readEngineFile, { name: os17.hostname() }, readBridgeFile);
       const folder = given?.headers?.["x-opencode-directory"];
       const vaultHeaders = {};
       for (const name of ["x-kuvo-vault-key", "x-kuvo-vault-proof"]) {
@@ -34203,7 +37212,7 @@ async function serve() {
     console.error('serve answers only with a password: on its stdin, {"password"}, or in OPENCODE_PASSWORD.');
     process.exit(2);
   }
-  fs112.mkdirSync(RUN, { recursive: true, mode: 448 });
+  fs114.mkdirSync(RUN, { recursive: true, mode: 448 });
   if (IS_MAC)
     addMacDefaults();
   try {
@@ -34211,7 +37220,7 @@ async function serve() {
   } catch {}
   if (IS_MAC)
     macLink.hold = macNoticeHold();
-  const server = serveBox(password, engineHandler(readEngineFile, { name: os16.hostname() }, readBridgeFile, () => {}, macLink.hold));
+  const server = serveBox(password, engineHandler(readEngineFile, { name: os17.hostname() }, readBridgeFile, () => {}, macLink.hold));
   await new Promise((resolve, reject) => {
     server.once("error", reject);
     server.listen(0, "127.0.0.1", resolve);
@@ -34223,7 +37232,7 @@ async function serve() {
   keepFence();
   keepApprovals();
   keepEngineDefaults();
-  holdVault(engineHandler(readEngineFile, { name: os16.hostname() }, readBridgeFile));
+  holdVault(engineHandler(readEngineFile, { name: os17.hostname() }, readBridgeFile));
   console.log(JSON.stringify({ url: `http://127.0.0.1:${server.address().port}` }));
   if (IS_MAC)
     (async () => {
@@ -34292,7 +37301,7 @@ async function setup() {
   const before = readPersonalities();
   let link = null, work = null, library = before;
   updateLink((current) => {
-    const next = current ?? { secret: crypto45.randomBytes(32).toString("base64url"), key: newKey().toString("base64url"), phones: [] };
+    const next = current ?? { secret: crypto47.randomBytes(32).toString("base64url"), key: newKey().toString("base64url"), phones: [] };
     next.sign ??= newSigningSeed();
     if (mac) {
       next.mac = mac;
@@ -34318,7 +37327,7 @@ async function setup() {
     if (!next.phones.length && !peersOf(next).length)
       return current ? next : null;
     next.relay = String(input.relay);
-    next.name = String(input.name || next.name || os16.hostname()).slice(0, 100);
+    next.name = String(input.name || next.name || os17.hostname()).slice(0, 100);
     link = next;
     return next;
   });
@@ -34334,7 +37343,7 @@ async function setup() {
   }
   let runningVersion = null;
   try {
-    runningVersion = fs112.readFileSync(VERSION_FILE, "utf8").trim();
+    runningVersion = fs114.readFileSync(VERSION_FILE, "utf8").trim();
   } catch {}
   const restart = old?.relay !== link.relay || old?.name !== link.name || runningVersion !== BRIDGE_VERSION;
   if (!isUpdating()) {
@@ -34383,7 +37392,7 @@ function leave(mac) {
 }
 function pair(relay) {
   const link = updateLink((current) => {
-    const next = current ?? { secret: crypto45.randomBytes(32).toString("base64url"), key: newKey().toString("base64url"), name: os16.hostname(), phones: [] };
+    const next = current ?? { secret: crypto47.randomBytes(32).toString("base64url"), key: newKey().toString("base64url"), name: os17.hostname(), phones: [] };
     next.sign ??= newSigningSeed();
     if (relay)
       next.relay = relay;
@@ -34413,7 +37422,7 @@ function selftest() {
   const ok = said.toString() === "hello" && payload.toString() === "welcome" && echoed.toString() === "ping" && mail.toString() === "mail" && responder.rs.equals(publicOf(phone)) && typeof WebSocket === "function" && typeof fetch === "function";
   return ok;
 }
-var main = process.argv[1] && fs112.realpathSync(process.argv[1]) === fs112.realpathSync(fileURLToPath3(import.meta.url));
+var main = process.argv[1] && fs114.realpathSync(process.argv[1]) === fs114.realpathSync(fileURLToPath3(import.meta.url));
 if (main) {
   const [mode, argument] = process.argv.slice(2);
   if (mode === "run")
@@ -34457,12 +37466,25 @@ if (main) {
       }
     }
     console.log(JSON.stringify(outcome));
+  } else if (mode === "browser") {
+    const args = process.argv.slice(3);
+    if (argument === "install") {
+      const outcome = await installBrowser({ now: args.includes("--now"), repair: args.includes("--repair") });
+      console.log(JSON.stringify({ outcome, ...browserStatus() }));
+    } else if (argument === "start") {
+      console.log(JSON.stringify(startBrowserInstall({ now: args.includes("--now"), repair: args.includes("--repair") })));
+    } else if (argument === "status") {
+      console.log(JSON.stringify(browserStatus()));
+    } else {
+      console.error("Usage: kuvo-link.js browser install|start [--now] [--repair] | status");
+      process.exit(2);
+    }
   } else if (mode === "selftest") {
     const ok = selftest();
     console.log(ok ? "ok" : "failed");
     process.exit(ok ? 0 : 1);
   } else {
-    console.error("Usage: kuvo-link.js run | serve | setup | pair [relay] | box <command> | leave <mac> | engine-config | login-path | update [--now] | selftest");
+    console.error("Usage: kuvo-link.js run | serve | setup | pair [relay] | box <command> | leave <mac> | engine-config | login-path | update [--now] | browser install|start|status | selftest");
     process.exit(2);
   }
 }
@@ -34650,7 +37672,7 @@ export {
   nameWorktreeBranch,
   namedAgents,
   namesHash,
-  namesIn,
+  namesIn2 as namesIn,
   newKey,
   newPairing,
   newSigningSeed,

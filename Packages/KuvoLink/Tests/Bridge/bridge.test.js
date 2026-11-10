@@ -1386,6 +1386,8 @@ test("each feature kuvo/info names is a route the machine answers, and one it do
     // (And a lead's call for the sessions it started here: list, stop, summarize, answer.)
     "work.elsewhere": ["POST", "kuvo/agent-tools"], queue: ["GET", "kuvo/sessions/ses_none/queue"], "queue.waits": ["POST", "kuvo/sessions/ses_none/queue/add"], work: ["GET", "kuvo/work"], "work.projects": ["GET", "kuvo/work/settings"], "work.goals": ["GET", "kuvo/work/goals"], "work.goals.apps": ["GET", "kuvo/work/apps/icon?app=com.example.none"], "work.goals.projects": ["POST", "kuvo/work/goals/goal_none"], autopilot: ["GET", "kuvo/sessions/ses_none/autopilot"], "work.unanswering": ["GET", "kuvo/work/unanswering"],
     vault: ["GET", "kuvo/vault/tools"], sandbox: ["GET", "kuvo/sandbox"], "sandbox.check": ["POST", "kuvo/sandbox/check"], "sandbox.asks": ["GET", "kuvo/sandbox/allowed"],
+    // (Its asks' `reviews` list every ask Auto's reviewer may take up: what kuvo/sandbox/asks says.)
+    "sandbox.reviews.whole": ["GET", "kuvo/sandbox/asks"],
     approval: ["GET", "kuvo/approval"],
     "approval.reviewer": ["GET", "kuvo/sessions/ses_none/decisions"],
     // (Full Access outside the sandbox, confirmed per computer: what kuvo/approval says.)
@@ -1398,6 +1400,8 @@ test("each feature kuvo/info names is a route the machine answers, and one it do
     "approval.stopped": ["POST", "kuvo/sandbox/stopped"],
     // (Each account's plan limits, on the coding agents' bridge.)
     limits: ["GET", "kuvo/agents/api/kuvo/limits"],
+    // (Its browser, set up by the box itself.)
+    browser: ["GET", "kuvo/browser"],
     "work-queue": ["GET", "kuvo/work-queue/categories"],
     "git.backups": ["GET", "kuvo/git/backups?folder=/"],
     // (Moves with a coding agent's own conversation, and the check before one holds anything: what

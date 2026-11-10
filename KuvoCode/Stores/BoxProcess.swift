@@ -73,8 +73,8 @@ final class BoxProcess {
     /// `content` (what the engine starts with in `OPENCODE_CONFIG_CONTENT`) with what some providers
     /// need from the engine on top, as this Mac's box last learned it from its engine (nothing before
     /// it has; `kuvo-link.js engine-config`, as a machine's start adds it); as it
-    /// is when that can't be run, or doesn't answer within `timeout` seconds (the engine's start never
-    /// waits on it longer), or the box's start was refused (what it would run isn't what it was), or
+    /// is when that can't be run, or doesn't answer within `timeout` seconds (it's stopped then, and
+    /// the engine's start waits only for that), or the box's start was refused (what it would run isn't what it was), or
     /// it isn't any more (checked again here when the box's own check is over a minute old: the
     /// engine restarts under a box that keeps running).
     func engineConfig(engine: URL, content: String?, environment: [String: String], timeout: TimeInterval = 10) async -> String? {
@@ -91,27 +91,13 @@ final class BoxProcess {
         env["BUN_RUNTIME_TRANSPILER_CACHE_PATH"] = "0"
         env["KUVO_HOME"] = home.path
         env["OPENCODE_CONFIG_CONTENT"] = content
-        let given = env
-        return await Task.detached {
-            let process = Process()
-            process.executableURL = engine
-            process.arguments = ["run", "--config=/dev/null", "--no-env-file", script.path, "engine-config"]
-            process.environment = given
-            // In its folder, as the box starts.
-            process.currentDirectoryURL = home
-            let output = Pipe()
-            process.standardOutput = output
-            process.standardError = FileHandle.nullDevice
-            process.standardInput = FileHandle.nullDevice
-            do { try process.run() } catch { return content }
-            let late = DispatchWorkItem { if process.isRunning { kill(process.processIdentifier, SIGKILL) } }
-            DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: late)
-            let data = output.fileHandleForReading.readDataToEndOfFile()
-            process.waitUntilExit()
-            late.cancel()
-            guard process.terminationStatus == 0, let text = String(data: data, encoding: .utf8), text.hasPrefix("{"), text.hasSuffix("}") else { return content }
-            return text
-        }.value
+        // In its folder, as the box starts. Its end from `ChildProcess`, which never misses it, nor
+        // waits on something it left running that holds its output open.
+        guard let result = try? await ChildProcess.run(engine.path, ["run", "--config=/dev/null", "--no-env-file", script.path, "engine-config"],
+                                                       environment: env, directory: home, errors: .discard, limit: .seconds(timeout)),
+              !result.timedOut, result.reason == .exit, result.status == 0,
+              let text = String(data: result.output, encoding: .utf8), text.hasPrefix("{"), text.hasSuffix("}") else { return content }
+        return text
     }
 
     /// Whether what it runs with is checked for opencode's signature before each start (the

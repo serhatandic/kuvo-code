@@ -9,12 +9,13 @@ import { any, bool, type Infer, list, literal, NOTHING, object, type RouteShape,
  * among them, which its app gives while it's open (PROTOCOL.md, "Features"). */
 export const MAC_FEATURES = ["accounts.ended", "claude-code", "hosts", "mac", "machines", "usage"] as const;
 
-/** What only a machine answers: it updates itself, and starts an engine an older Mac's Stop left down. */
-export const MACHINE_FEATURES = ["engine.start", "update"] as const;
+/** What only a machine answers: it updates itself, starts an engine an older Mac's Stop left down,
+ * and sets up its own browser (a Mac's is the app's). */
+export const MACHINE_FEATURES = ["engine.start", "update", "browser"] as const;
 
 /** What a Mac's box answers, as its `kuvo/info` and its agents' mail say: every box's but a
  * machine's own, in their order, then the Mac's own. The box's list alone: its app keeps none.
- * (In that order: a box before bridge 0.9.210 keeps only the first 80 names a peer's mail gives,
+ * (In that order: a box from before #191 step 2 keeps only the first 80 names a peer's mail gives,
  * and those its peers check, `work.elsewhere` the last of them, are among them.) */
 export const macFeatures = (): string[] => [...new Set([...FEATURES.filter(feature => !(MACHINE_FEATURES as readonly string[]).includes(feature)), ...MAC_FEATURES])];
 

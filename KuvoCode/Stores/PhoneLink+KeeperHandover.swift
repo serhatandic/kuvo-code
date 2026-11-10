@@ -2,7 +2,7 @@ import Foundation
 import KuvoLink
 import OpenCodeKit
 
-// COMPAT(0.8 keeper handover): an older keeper's box, before bridge 0.9.210, answers kuvo/info as a machine's; remove 3 months after 0.8.0.
+// COMPAT(0.8 keeper handover): an older keeper's box, from before #191 step 2, answers kuvo/info as a machine's; remove 3 months after 0.8.0.
 //
 // While an older app's keeper makes way for this one's (it goes once nothing is under way, which can
 // take hours), this app's box is that keeper's, from before boxes answered `kuvo/info` for their
@@ -47,7 +47,7 @@ extension PhoneLink {
     /// features those of every box and the Mac's own, without a machine's (`macFeatures`, as the
     /// box has them).
     static func macInfo(fromOlderBox info: [String: Any]) -> Data {
-        let machineOwn: Set = ["engine.start", "update"]
+        let machineOwn: Set = ["engine.start", "update", "browser"]
         var features = (info["features"] as? [String] ?? []).filter { !machineOwn.contains($0) }
         features += ["accounts.ended", "claude-code", "hosts", "mac", "machines", "usage"].filter { !features.contains($0) }
         let said: [String: Any] = [

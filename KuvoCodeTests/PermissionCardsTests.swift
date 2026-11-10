@@ -1,3 +1,4 @@
+import ClientSessions
 import Foundation
 import OpenCodeKit
 import Testing
@@ -90,8 +91,9 @@ import Testing
 
     /// The ask in the composer's place: permissions, then questions.
     private func shown(_ model: SessionModel) -> String? {
-        let ids = model.permissions.map(\.id) + model.forms.map(\.id)
-        return WaitingAskPosition(ids: ids, picked: nil).map { ids[$0.index] }
+        var place = AskPlace()
+        place.update(model.permissions.map(\.id) + model.forms.map(\.id))
+        return place.shown
     }
 
     /// An ask answered from your phone (or gone with its run) just before you answer it here: the

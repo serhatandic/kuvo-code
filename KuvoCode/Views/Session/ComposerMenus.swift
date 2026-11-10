@@ -188,7 +188,9 @@ struct ModeChip: View {
     private func label(words: Bool) -> some View {
         HStack(spacing: 5) {
             Image(systemName: approval.symbol)
-                .font(.caption)
+                // Beside its words, a step under them; alone, the row's size, as the paperclip and
+                // the mic (#362).
+                .font(words ? .caption : .system(size: 14, weight: .medium))
                 .foregroundStyle(.secondary)
             if words { Text(approval.title) }
             if holding != nil {

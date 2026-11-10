@@ -49,7 +49,7 @@ async function* toApp(request: LinkRequest, phone: Asker | undefined, signal?: A
 }
 
 // A phone's request on this Mac: the app's own areas from the app (its machines answered here too
-// while it isn't there), everything else here (bridge 0.9.210; before, the box answered only the
+// while it isn't there), everything else here (from #191 step 2; before, the box answered only the
 // areas that had moved onto it, and the app the rest).
 export function macFront(handle: LinkHandler = engineHandler(readEngineFile, { name: os.hostname() }), timing?: AppTiming): LinkHandler {
   return async function* (request: LinkRequest, phone: Asker | undefined, signal?: AbortSignal): AsyncGenerator<AnswerPiece> {

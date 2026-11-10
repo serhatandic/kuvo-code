@@ -32,6 +32,31 @@ import Testing
         #expect(given == content)
     }
 
+    /// One that answers and ends, but leaves something running that holds its output open (a
+    /// helper it started), is heard as it ends: the engine's start never waits on what it left.
+    @Test(.timeLimit(.minutes(1))) func anEngineConfigThatLeavesSomethingRunningIsHeardAsItEnds() async throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "kuvo-engine-config-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let left = folder.appending(path: "left")
+        defer {
+            if let pid = (try? String(contentsOf: left, encoding: .utf8)).flatMap({ Int32($0.trimmingCharacters(in: .whitespacesAndNewlines)) }) { kill(pid, SIGKILL) }
+            try? FileManager.default.removeItem(at: folder)
+        }
+        let engine = folder.appending(path: "opencode")
+        try """
+            #!/bin/sh
+            /bin/sleep 90 &
+            echo $! >'\(left.path)'
+            printf '%s' '{"model":"theirs"}'
+            exit 0
+            """.write(to: engine, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: engine.path)
+        let started = ContinuousClock.now
+        let given = await BoxProcess().engineConfig(engine: engine, content: #"{"model":"mine"}"#, environment: [:], timeout: 30)
+        #expect(given == #"{"model":"theirs"}"#)
+        #expect(ContinuousClock.now - started < .seconds(10))
+    }
+
     /// A `.env` in the box's folder (which an agent's command can write) sets nothing for it: the
     /// engine's Bun would load one before the box's code runs, and with it the vault's key, or
     /// the tests' stand-ins. The engine here is a stand-in that loads it as Bun does.

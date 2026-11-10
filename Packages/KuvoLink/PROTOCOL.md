@@ -215,8 +215,8 @@ connection.
   about?, machine?, look?}], "features"?}}`: a bot's `id` (`bot_…`, as group chats name their
   members) and `look` (`{color, shape, face}`, as `kuvo/bots` has it: a colour, shape or face the
   apps don't draw is kept as the plain look's, `graphite`, `round`, `calm`), and `features` as the box's
-  `kuvo/info` names them (the box that takes them keeps the first 300 names, 80 before bridge
-  0.9.210: a Mac's box puts those its peers check among the first 80). A box sends its bots and its 40 latest
+  `kuvo/info` names them (the box that takes them keeps the first 300 names, 80 before #191
+  step 2: a Mac's box puts those its peers check among the first 80). A box sends its bots and its 40 latest
   sessions (its engine's and its coding agents') when they change and every ten minutes. Each box
   keeps the newest list from each peer. The relay keeps nothing, so a box that has just connected adds `"ask": "agents"` to
   what it sends first (its agents; a Mac's digest), and whoever gets it tells that box its agents
@@ -1485,6 +1485,69 @@ did: the box keeps working as itself ("For released Macs").
 - `kuvo-link.js update [--now]` updates from a shell. Only in a test's folder, it also takes
   `--url <boxes.json> --key <public key>`.
 
+### The browser on a machine
+
+The browser agents use on a machine (`kuvo-browser.js`, its keeper and tools) is Chrome for
+Testing, run headless from `~/.kuvo-code/browser/current`. The box sets it up itself, with or
+without a Mac: no Mac sends it. On Linux and macOS, x86-64 and ARM64; a Mac's own box
+(`KUVO_BOX=mac`) has none (its agents browse in its app's panel).
+
+- **What**: the build this `kuvo-link.js` pins (`src/link/browser/linux.json` and `mac.json`,
+  written by `scripts/browser-runtime.py`): Chrome for Testing's zip for the machine's system and
+  processor, each with its size and SHA-256; on Linux also the Rocky Linux 8 packages that hold the
+  libraries and fonts Chrome needs, which servers often lack. A newer pin comes with a Kuvo Code
+  update (the signed release brings `kuvo-link.js`).
+- **From**: only `https://storage.googleapis.com/chrome-for-testing-public/` (Google's Chrome for
+  Testing) and `https://dl.rockylinux.org/pub/rocky/8/`, then `…/vault/rocky/8.10/` for a package
+  moved there. HTTPS, no redirects, the address exactly as pinned.
+- **Checked**: each download's size (it stops past it) and SHA-256 before anything of it is
+  unpacked; one that doesn't match is deleted and the setup fails, saying so. Nothing downloaded is
+  run while setting up. The box unpacks the zip and packages itself (no `unzip`, `xz` or `rpm`
+  needed): nothing outside the build's folder, no link that leads out of it (checked again once
+  the build is put together), no set-user-ID. Of
+  the packages it takes only `usr/lib64/*.so*` (links only to a name beside them), fonts and
+  licenses, by their own names.
+- **Where**: `browser/.box-staging-<pid>-<random>` while it works (downloads and all, removed
+  whatever happens, and by the next setup if one was cut off), then `browser/<build>` with
+  `chromium-version` and `kuvo-version` (the box's version), and `current` moved to it in one step.
+  A build a browser still runs from stays until nothing does; `browser/profile` (sign-ins) always
+  stays. It needs about 1 GB free to set up.
+- **When**: as the box's keeper starts (a newer pin is set up then), and each minute while there's
+  no browser or the last setup didn't go well, once `run/browser.next` (seconds since 1970, which
+  the box writes) says it may; when the browser's needed (`kuvo-browser.js`: the
+  live view and the tools wait for it, a tool up to four minutes); when a client asks (`POST
+  kuvo/browser`); and again when the browser doesn't start because its build isn't whole
+  (`--repair`: after one that went well, not again for six hours for the same build, unless asked
+  `now`; one that failed waits as any failure does). One setup at a time
+  (`run/.browser-installing`, taken over in one step when its process is gone). An older build
+  keeps working while a newer one is set up.
+- **Failures**: no network, a source that answers otherwise or too slowly, a checksum, no room. The
+  first failure stops every download still going; then it notes why and tries again by itself
+  after 1, 5, 15, then 60 minutes. What only an update fixes (a build Google or Rocky no longer
+  has, a system or processor it has none for) it doesn't try again by itself. Only a client asking
+  `now` (you, with Try Again) has it try at once; the tools and the live view wait as it says.
+- **State**: `run/browser-install.json`, `{state, progress?, message?, at, failures?, retryAt?, id?,
+  repairedAt?, repairedId?}`. A setup asked for says `checking` at once, before its process starts.
+- `kuvo/browser` (a machine's; feature `browser`):
+  - `GET` answers `{state, chromium, installed, progress, message, retryAt}`: `state` is `missing`
+    (none, and none being set up), `checking`, `downloading` (`progress`, 0 to 1), `installing`,
+    `ready` or `failed` (`message`; `retryAt` when it tries again, ms, or null). `chromium` is the
+    pinned version, `installed` the one in use.
+  - `POST {now?, repair?}` sets it up unless the pinned build's in use (or `repair`), or it waits
+    after a failure (unless `now`): 202 with the status.
+  - A Mac asks over SSH with `box route`. From a shell: `kuvo-link.js browser install [--now]
+    [--repair]` (the setup itself, as the keeper runs it), `browser start [--now] [--repair]` (in
+    a process of its own, as `POST`; `kuvo-browser.js` uses it) and `browser status`.
+- **The live view** (`kuvo-browser.js connect`) says `Kuvo.installing {state, progress}` while it
+  waits for the setup, then `Kuvo.hello`; a setup that failed is `Kuvo.error` with `kind: "missing"`
+  and why (an older Mac then puts the browser there itself, as it did). A tool that waited says
+  why, or to try again in a minute.
+- Only in a test's folder: `KUVO_BROWSER_SOURCE` (an address serving `<host>/<path>`),
+  `KUVO_BROWSER_PINS` and `KUVO_BROWSER_SYSTEM`; a test's folder without them downloads nothing.
+- An older Mac (before this) still sends its own build over SSH when the machine has none or an
+  older one. The box leaves a build of the same Chromium or a newer one in place, and that Mac
+  leaves the box's (marked by a newer Kuvo Code) as it is.
+
 ## Notifications
 
 What the Mac shows as a notification goes to each paired phone too, as the relay's `push`
@@ -1746,12 +1809,12 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   machine was off since), and `phones`, how many phones
   reach it. A Mac also names `integrations`, each integration's name by its MCP
   server's (`{"microsoft-365": "Outlook and Microsoft 365", …}`), for a card when one asks something.
-  A Mac's is its box's (bridge 0.9.210; its app answered it before), the same with the app closed:
+  A Mac's is its box's (from #191 step 2; its app answered it before), the same with the app closed:
   its `name` and `app` as the app last said them (kept, "The relay, on this Mac's box"), its
   `engine` the version running, or the one the app brings while none runs, its integrations from
   the catalog the app leaves it (`bin/integrations.json`), and its `features` the box's own list.
   While an older keeper makes way for a newer app's (it goes once nothing is under way, which can
-  take hours), its box, from before 0.9.210, answers as a machine's does (its own `chats`, `running`
+  take hours), its box, from before this change, answers as a machine's does (its own `chats`, `running`
   false, a machine's features): the app says it as this Mac in its place, from what that box said
   (its engine's version, `agents`, `started`), with this Mac's chats folder and the Mac's features
   for a machine's own (`COMPAT(0.8 keeper handover)`, going 3 months after 0.8.0).
@@ -3216,8 +3279,8 @@ Mac, its app for its keys), and on a
 machine `409` for `config`, `config.apply`, `keys`, `mcp.catalog` and `integrations` until a Mac has made its
 settings its own. A name comes with what it names and never changes meaning; one the client
 doesn't know, it ignores. Both boxes are held to their lists by
-the route scenarios (`Vectors/routes/routing.json`). A Mac's list is its box's (`macFeatures`, bridge
-0.9.210; the app gave it before): every box's but a machine's own, and the Mac's own, the same
+the route scenarios (`Vectors/routes/routing.json`). A Mac's list is its box's (`macFeatures`, from #191
+step 2; the app gave it before): every box's but a machine's own, and the Mac's own, the same
 with its app closed, when what needs the app answers `503 {"message"}`.
 
 | Name | What it answers |
@@ -3293,6 +3356,7 @@ with its app closed, when what needs the app answers `503 {"message"}`.
 | `sandbox` | `kuvo/sandbox` ("Sandbox", bridge 0.9.118) |
 | `sandbox.check` | `reason`, `action` and the rest in `kuvo/sandbox`, and `POST kuvo/sandbox/check` |
 | `sandbox.asks` | `kuvo/sandbox/asks…`, `kuvo/sandbox/allowed…` and `kuvo/sandbox/tools` ("Sandbox", "Asks", bridge 0.9.118) |
+| `sandbox.reviews.whole` | `reviews` on `kuvo/sandbox/asks` lists every ask to work outside a conversation's folder, so a client shows one only once it's listed `yours` ("Sandbox") |
 | `approval` | `kuvo/approval` and `kuvo/sessions/<id>/approval` ("Approval", bridge 0.9.180) |
 | `approval.reviewer` | Auto's reviewer: `kuvo/sessions/<id>/decisions` and a sandbox ask's `review` ("Approval", "Auto's reviewer", bridge 0.9.181) |
 | `approval.fullAccess` | Full Access as it is since bridge 0.9.184: its commands run outside the sandbox, nothing asks or is reviewed, `kuvo/approval`'s `fullAccess` is whether you confirmed it on this computer (asked the first time it's picked), and Tell Auto is gone ("Approval") |
@@ -3309,12 +3373,13 @@ with its app closed, when what needs the app answers `503 {"message"}`.
 | `groups.joinable` | `kuvo/groups/joinable` |
 | `groups.seats` | its bots take turns in chats on other computers ("Peers", group chats) |
 | `update` | a machine only: `kuvo/update` |
+| `browser` | a machine only: `kuvo/browser`, its browser set up by the box itself ("The browser on a machine") |
 | `accounts.ended` | `kuvo/accounts/ended` and `POST kuvo/accounts/<provider>/forget` (a machine from 0.9.61) |
 | `claude-code` | a Mac only: `kuvo/claude-code` |
 | `hosts` | a Mac only: `kuvo/hosts…` (with its app closed its box still lists them, and `DELETE` says the app must be open) |
 | `mac` | a Mac only: `kuvo/mac` |
 | `machines` | a Mac only: `kuvo/machines…` (with its app closed its box still lists them, and the rest says the app must be open) |
-| `usage` | a Mac only for now: `kuvo/usage…`, from its app while it's open (`404` without the usage panel, `503` with the app closed), spend and what the box doesn't state of a plan yet (a machine's box can't do this yet, on Linux or a Mac). Before bridge 0.9.210 a Mac named it only while its usage panel was there |
+| `usage` | a Mac only for now: `kuvo/usage…`, from its app while it's open (`404` without the usage panel, `503` with the app closed), spend and what the box doesn't state of a plan yet (a machine's box can't do this yet, on Linux or a Mac). Before #191 step 2 a Mac named it only while its usage panel was there |
 | `limits` | `kuvo/agents/api/kuvo/limits…` and `plan_limits`: each account's plan limits ("Plan limits") |
 
 Here "a Mac" is the box the app runs (`KUVO_BOX=mac`), and "a machine" any box in `~/.kuvo-code`,
@@ -3534,7 +3599,7 @@ as on a machine, without the keys, the relay or its name. Nothing its link meets
 frame that isn't one, the app away) stops the box's own routes.
 
 What a phone asks, it answers itself, as a machine's bridge does, with the app open or closed:
-everything but the Mac's own routes, below (bridge 0.9.210, `kuvo/info` among them). Before, it
+everything but the Mac's own routes, below (from #191 step 2, `kuvo/info` among them). Before, it
 answered only the areas that had moved onto it (a list of them, which the app kept a copy of), and
 handed the app the rest: its phones (`kuvo/phones…`), `kuvo/file`, `kuvo/sign-in/return`,
 `kuvo/accounts/credentials`, `kuvo/shell/<id>/stop`, the engine's API and the coding agents'
@@ -3572,7 +3637,7 @@ For the app only (anyone else gets `403`):
   name and version as phones are told them. The link is up while the phone link's on with a phone
   paired or a pairing waiting, or there are machines. Its keys are asked for before this answers,
   so a pairing link can be made right after. Answers the link's state. The app says it again each
-  time the box starts, and the box keeps what it last said (bridge 0.9.210; it kept none before) in
+  time the box starts, and the box keeps what it last said (from #191 step 2; it kept none before) in
   `box/run/mac-link.json` (`0600`): the phone link on or off, the relay, the name and version,
   never its keys nor whether there are machines. A box that starts before the app says it (the
   keeper's, at login with Background Work on, the app closed) takes it from there, with whether
@@ -4772,9 +4837,14 @@ vault does (`run/vault.sock`); another passes them on.
   reviewer's: not in Auto, no folder, or it couldn't judge). Its own project, and a bot's (its
   folder, a project it made, its goal's), go ahead as `allowed` with no review. A client shows no
   card, notification or "needs you" for such an ask while it's checked or once it's decided, only a
-  quiet mark on its step; a box that lists `reviews` lists each such ask within moments, so a client
-  waits a few seconds for it before taking the ask as yours, and takes it as yours at once from a
-  box without `reviews`. An ask: `{id, at, session?, sessionName?, bot?, botName?,
+  quiet mark on its step. A box with `sandbox.reviews.whole` lists every such ask from the moment it
+  hears it (`checking` at once), takes up those already waiting as it starts again, and lists one it
+  can't take up as `yours`: a client shows such an ask only once it's listed `yours`, and waits for
+  nothing of its own. An answered ask (or one gone with its run) leaves the list unless the reviewer
+  decided it, whose entry stays for its step's mark. While a client doesn't hear the box's asks
+  (its link down or starting again, the stream cut), what it last listed of an ask stands, and one
+  it never listed is yours, as nothing would list it. From a box without that word, a client takes
+  one not listed as yours at once. An ask: `{id, at, session?, sessionName?, bot?, botName?,
   project, command, why, stopped?, error?, always?, machine?, owner?, review?}`. `session` is the conversation's root
   (a bot's sub-agent asks as its bot's conversation). `stopped`, on macOS: what the sandbox refused
   that command, from the system's log, each `{kind, path?}` (`kind`: `write`, `read`, `connect`,

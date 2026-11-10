@@ -205,7 +205,7 @@ struct StorageSettings: View {
         }
         .confirmationDialog("Delete the downloads for machines?", isPresented: $confirmingDownloads) {
             Button("Delete", role: .destructive) {
-                let folders = [StorageReport.linuxEngineFolder, MachineBrowser.cache]
+                let folders = [StorageReport.linuxEngineFolder, StorageReport.oldBrowserFolder]
                 Task {
                     // Often hundreds of MB: not on the main thread.
                     await Task.detached { for folder in folders { try? FileManager.default.removeItem(at: folder) } }.value
@@ -222,9 +222,7 @@ struct StorageSettings: View {
     /// A machine being set up reads the downloads meanwhile: they stay until it's done.
     private var machineInstalling: Bool {
         app.machines.engines.values.contains { engine in
-            if engine.connection == .installing { return true }
-            if case .installing = engine.browser.setup { return true }
-            return false
+            engine.connection == .installing
         }
     }
 
@@ -392,6 +390,10 @@ nonisolated struct StorageReport: Sendable {
     static var support: URL { AppInfo.supportDirectory }
     static var engineData: URL { support.appending(path: "opencode/data/opencode") }
     static var linuxEngineFolder: URL { support.appending(path: "engine-linux") }
+    /// Where this Mac put the browser together for machines before their boxes set it up
+    /// themselves: removed once (`MachineBrowser`), and meanwhile shown and deleted with the
+    /// downloads for machines.
+    static var oldBrowserFolder: URL { support.appending(path: "browser-linux") }
     static var appLogs: URL { URL.libraryDirectory.appending(path: "Logs/\(AppInfo.name)") }
 
     static func measure(worktrees: [String]) -> StorageReport {
@@ -410,7 +412,7 @@ nonisolated struct StorageReport: Sendable {
             + size(of: support.appending(path: "opencode/config"))
         let snapshots = size(of: engineData.appending(path: "snapshot"))
         let logs = size(of: engineData.appending(path: "log")) + size(of: appLogs)
-        let linux = size(of: linuxEngineFolder) + size(of: support.appending(path: "browser-linux"))
+        let linux = size(of: linuxEngineFolder) + size(of: oldBrowserFolder)
         let engine = size(of: support.appending(path: "engine")) + linux
         let agents = size(of: support.appending(path: "agents"))
         let trees = worktrees.reduce(Int64(0)) { $0 + size(of: URL(filePath: $1)) }
