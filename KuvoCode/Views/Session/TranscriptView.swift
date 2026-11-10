@@ -455,7 +455,6 @@ struct TranscriptView: View {
                     break
                 }
                 // Its words as they are, its thinking and tool calls in the line before them.
-                let assistantRowsStart = rows.count
                 for (part, block) in assistant.content.enumerated() {
                     switch block {
                     case .text(let text):
@@ -480,7 +479,9 @@ struct TranscriptView: View {
                     case .tool(let call) where MadePictureRow.isMade(call):
                         // So does an image it made.
                         flushSteps(live: false)
-                        if MadePictureRow.isGroupable(call), rows.count > assistantRowsStart, case .pictures(let previous)? = rows.last {
+                        // One after another, with nothing between (in one step or the next), they're
+                        // one row of pictures to look through together.
+                        if MadePictureRow.isGroupable(call), case .pictures(let previous)? = rows.last {
                             rows.removeLast()
                             rows.append(.pictures(previous + [call]))
                         } else if MadePictureRow.isGroupable(call) {
@@ -711,6 +712,7 @@ enum Row: Identifiable, Hashable {
     case widget(Message.ToolCall)
     /// An image it made.
     case picture(Message.ToolCall)
+    /// Pictures it brought one after another (shown, made, of a page), in one row.
     case pictures([Message.ToolCall])
     /// What it wrote to another agent (send_message).
     case sent(Message.ToolCall)
@@ -1242,29 +1244,31 @@ private struct AssistantStepView: View {
     var body: some View {
         let marks = marks
         let groups = MadePictureRow.groups(in: message.content)
-        let groupedIndices = Set(groups.flatMap { start, calls in (start..<(start + calls.count)) })
+        // A row of pictures that came one after another takes the place of the first; the others
+        // are in it.
+        let grouped = Set(groups.flatMap { start, calls in start..<(start + calls.count) })
         VStack(alignment: .leading, spacing: 10) {
             ForEach(Array(message.content.enumerated()), id: \.offset) { index, block in
                 Group {
                     if let calls = groups[index] {
                         ShownPictures(calls: calls, directory: directory)
-                    } else if groupedIndices.contains(index) {
+                    } else if grouped.contains(index) {
                         EmptyView()
                     } else {
-                    switch block {
-                    case .text(let text):
-                        // The last of a step under way: its words as they stream in. The same view
-                        // once it's done, so finishing doesn't make the reply's views again (a
-                        // frame of a tenth of a second at the end of each reply).
-                        WritingText(row: message.id, part: index, text: text.text, folders: folders,
-                                    isWriting: message.time.completed == nil && index == message.content.count - 1)
-                    case .reasoning(let reasoning):
-                        ReasoningView(block: reasoning, foldKey: message.id + "#\(index)")
-                    case .tool(let call):
-                        ToolCallView(call: call, directory: directory, foldKey: message.id + "#" + call.id)
-                    case .other:
-                        EmptyView()
-                    }
+                        switch block {
+                        case .text(let text):
+                            // The last of a step under way: its words as they stream in. The same view
+                            // once it's done, so finishing doesn't make the reply's views again (a
+                            // frame of a tenth of a second at the end of each reply).
+                            WritingText(row: message.id, part: index, text: text.text, folders: folders,
+                                        isWriting: message.time.completed == nil && index == message.content.count - 1)
+                        case .reasoning(let reasoning):
+                            ReasoningView(block: reasoning, foldKey: message.id + "#\(index)")
+                        case .tool(let call):
+                            ToolCallView(call: call, directory: directory, foldKey: message.id + "#" + call.id)
+                        case .other:
+                            EmptyView()
+                        }
                     }
                 }
                 // Only its words: Find doesn't look in its thinking and steps.

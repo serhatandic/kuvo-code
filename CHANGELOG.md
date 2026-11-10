@@ -16,7 +16,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ### All Changes
 
-- Pictures an agent shows in a conversation appear together as pictures, including from your other computers. Open one to zoom and move between them; pictures in the side panel fit at first and can be zoomed too.
+- Pictures an agent shows appear as pictures again in a session on another of your computers, where they were file cards. Several shown one after another sit side by side in a row, with their captions. Every picture opens the same way, an agent's, your message's, the composer's: click one to look closer, zoom with a pinch, a double-click, ⌘+ ⌘− ⌘0 or the zoom menu, save it, and go between the row's pictures with ← →. A picture in the side panel fits the panel at first and zooms the same way, rather than opening at its full size, cropped.
 - A picture an agent changes and shows you again shows the change, not the picture it showed the first time. A file an agent on a machine shows is no longer drawn from a file at the same path on this Mac.
 - A bot on Claude Code saves its memory again on a Mac. Since the sandbox came in, every change it made to its `MEMORY.md` there was refused with "Operation not permitted", so it kept notes elsewhere or not at all. Bots on Codex, Grok, Cursor and Kuvo Code's own engine weren't affected.
 - Your computers' names over the sidebar take less room, as on your iPhone: the one in view first, larger and bold, then your other computers faded beside it, and "+3" for those that don't fit. Picking one slides it to the front. A long name is cut at its end rather than in the middle. Settings' sidebar shows them the same way.

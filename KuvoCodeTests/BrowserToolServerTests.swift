@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 import OpenCodeKit
 import Testing
@@ -62,6 +63,52 @@ import Testing
         #expect(groups[3]?.map(\.id) == ["d"])
         #expect(groups[0]?.first?.state.input?["caption"]?.string == "First")
         #expect(groups[2] == nil)
+    }
+
+    /// Pictures one after another are one row whatever brought them: shown, made, a page shown.
+    /// One still being shown, or a step that brought none, starts a row of its own after it.
+    @Test func picturesFromDifferentStepsShareARowOnlyWhenTheyFollowEachOther() throws {
+        func call(_ id: String, name: String, input: [String: Any], status: String = "completed", picture: Bool = true) throws -> Message.ToolCall {
+            let content: [[String: Any]] = picture ? [["type": "file", "uri": "data:image/png;base64,iVBORw0KGgo=", "mime": "image/png"]] : []
+            let json: [String: Any] = ["type": "tool", "id": id, "name": name, "state": ["status": status, "input": input, "content": content]]
+            return try JSONDecoder().decode(Message.ToolCall.self, from: JSONSerialization.data(withJSONObject: json))
+        }
+        let shown = try call("a", name: "kuvo-browser_show_file", input: ["path": "/tmp/a.png"], picture: false)
+        let made = try call("b", name: "generate_image", input: ["prompt": "a cat"])
+        let page = try call("c", name: "kuvo-browser_browser_screenshot", input: ["show": true])
+        let running = try call("d", name: "kuvo-browser_show_file", input: ["path": "/tmp/d.png"], status: "running", picture: false)
+        let empty = try call("e", name: "generate_image", input: ["prompt": "a dog"], picture: false)
+        let later = try call("f", name: "kuvo-browser_show_file", input: ["path": "/tmp/f.jpg"], picture: false)
+        #expect(MadePictureRow.isGroupable(made) && MadePictureRow.isGroupable(page))
+        #expect(!MadePictureRow.isGroupable(running) && !MadePictureRow.isGroupable(empty))
+        let groups = MadePictureRow.groups(in: [.tool(shown), .tool(made), .tool(page), .tool(running), .tool(empty), .tool(later)])
+        #expect(groups[0]?.map(\.id) == ["a", "b", "c"])
+        #expect(groups[5]?.map(\.id) == ["f"])
+        #expect(groups.count == 2)
+    }
+
+    /// The one zoom of every picture opened (the viewer and the side panel): fitted at 1, its own
+    /// pixels at 1 / fit, at most eight times those, never smaller than fitted; ⌘+ ⌘− ⌘0 and a
+    /// double-click step through them.
+    @Test func picturesZoomAlikeEverywhere() {
+        let fit = PictureZoom.fit(CGSize(width: 4000, height: 2000), in: CGSize(width: 1000, height: 1000))
+        #expect(fit == 0.25)
+        #expect(PictureZoom.fit(CGSize(width: 100, height: 50), in: CGSize(width: 1000, height: 1000)) == 1)
+        #expect(PictureZoom.fit(.zero, in: CGSize(width: 10, height: 10)) == 1)
+        #expect(PictureZoom.actual(fit: fit) == 4)
+        #expect(PictureZoom.percent(1, fit: fit) == 25)
+        #expect(PictureZoom.percent(4, fit: fit) == 100)
+        #expect(PictureZoom.toggled(1, fit: fit) == 4)
+        #expect(PictureZoom.toggled(4, fit: fit) == 1)
+        #expect(PictureZoom.toggled(1, fit: 1) == 2)
+        #expect(PictureZoom.key("+", scale: 1, fit: fit) == 1.25)
+        #expect(PictureZoom.key("=", scale: 1, fit: fit) == 1.25)
+        #expect(PictureZoom.key("-", scale: 1.25, fit: fit) == 1)
+        #expect(PictureZoom.key("-", scale: 1, fit: fit) == 1)
+        #expect(PictureZoom.key("0", scale: 3, fit: fit) == 1)
+        #expect(PictureZoom.key("k", scale: 3, fit: fit) == nil)
+        #expect(PictureZoom.clamped(1000, fit: fit) == 32)
+        #expect(PictureZoom.clamped(0.2, fit: fit) == 1)
     }
 
     @Test func onlyOnThisMac() async throws {

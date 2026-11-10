@@ -10,14 +10,12 @@ nonisolated enum AttachmentItem: Identifiable, Sendable {
     case stored(Message.User.Attachment, id: String)
     case local(URL)
     case path(String)
-    case remote(String, machine: String)
 
     var id: String {
         switch self {
         case .stored(_, let id): id
         case .local(let url): url.absoluteString
         case .path(let path): "path:" + path
-        case .remote(let path, let machine): "remote:" + machine + ":" + path
         }
     }
 
@@ -26,7 +24,6 @@ nonisolated enum AttachmentItem: Identifiable, Sendable {
         case .stored(let file, _): file.name ?? file.fileURL?.lastPathComponent ?? "Attachment"
         case .local(let url): url.lastPathComponent
         case .path(let path): (path as NSString).lastPathComponent
-        case .remote(let path, _): (path as NSString).lastPathComponent
         }
     }
 
@@ -36,7 +33,6 @@ nonisolated enum AttachmentItem: Identifiable, Sendable {
         case .stored(let file, _): file.fileURL
         case .local(let url): url
         case .path(let path): URL(filePath: path)
-        case .remote: nil
         }
         return url.flatMap { FileManager.default.fileExists(atPath: $0.path) ? $0 : nil }
     }
@@ -125,7 +121,6 @@ nonisolated enum AttachmentItem: Identifiable, Sendable {
     /// is written out first, once, as a download of its type.
     func localURL() -> URL? {
         if let url = fileURL { return url }
-        if let written = AttachmentImages.written(id), FileManager.default.fileExists(atPath: written.path) { return written }
         guard case .stored(let file, let id) = self else { return nil }
         if let written = AttachmentImages.written(id), FileManager.default.fileExists(atPath: written.path) { return written }
         guard let bytes = file.bytes, let url = Attachments.writeReceived(bytes, named: name, type: type) else { return nil }
@@ -141,7 +136,6 @@ nonisolated enum AttachmentItem: Identifiable, Sendable {
     }
 
     private var remoteLocation: (machine: String, path: String)? {
-        if case .remote(let path, let machine) = self { return (machine, path) }
         if case .stored(let file, _) = self, case .uri(let uri) = file.source,
            let url = URL(string: uri) { return RemoteFolder.parse(url) }
         return nil
@@ -342,21 +336,26 @@ struct MadePictureRow: View {
         call.name == "kuvo-browser_" + BrowserTools.showFile
     }
 
+    /// Whether it brought pictures to show among others beside it: a picture it showed, an image it
+    /// made, a page it took a screenshot of. One still at work, failed or with none (a file that
+    /// isn't a picture) shows on its own.
     static func isGroupable(_ call: Message.ToolCall) -> Bool {
-        guard isShownFile(call), case .completed = call.state,
-              let path = call.state.input?["path"]?.string,
-              UTType(filenameExtension: (path as NSString).pathExtension)?.conforms(to: .image) == true else { return false }
-        return true
+        guard isMade(call), case .completed(_, let output, _) = call.state else { return false }
+        guard isShownFile(call) else { return !StepPictures.items(in: output, step: call.id).isEmpty }
+        let path = call.state.input?["path"]?.string ?? ""
+        return UTType(filenameExtension: (path as NSString).pathExtension)?.conforms(to: .image) == true
     }
 
-    /// Consecutive pictures form one gallery; intervening content starts another.
+    /// Pictures that come one after another, with nothing between them, are one row to look
+    /// through together: by the index of the first, its steps.
     static func groups(in content: [Message.Content]) -> [Int: [Message.ToolCall]] {
         var groups: [Int: [Message.ToolCall]] = [:]
         var start: Int?
         for (index, block) in content.enumerated() {
             if case .tool(let call) = block, isGroupable(call) {
-                if start == nil { start = index }
-                groups[start!, default: []].append(call)
+                let first = start ?? index
+                start = first
+                groups[first, default: []].append(call)
             } else {
                 start = nil
             }
@@ -434,25 +433,23 @@ struct MadePictureRow: View {
     }
 }
 
+/// Pictures that came one after another (shown, made, screenshots of a page), side by side in a
+/// row, each with its caption: one opens the viewer on it, with the others a swipe or an arrow away.
 struct ShownPictures: View {
     let calls: [Message.ToolCall]
-    let directory: String
-
-    static func item(_ url: URL) -> AttachmentItem {
-        if let remote = RemoteFolder.parse(url) { return .remote(remote.path, machine: remote.machine) }
-        return .path(url.path)
-    }
+    var directory: String?
 
     var body: some View {
-        let items = calls.compactMap { call -> AttachmentItem? in
-            guard let path = call.state.input?["path"]?.string else { return nil }
-            return MadePictureRow.shown(path, in: directory, step: call.id)
+        let pictures = calls.flatMap { call -> [(AttachmentItem, String)] in
+            if MadePictureRow.isShownFile(call) {
+                guard let path = call.state.input?["path"]?.string else { return [] }
+                return [(MadePictureRow.shown(path, in: directory, step: call.id), call.state.input?["caption"]?.string ?? "")]
+            }
+            guard case .completed(_, let output, _) = call.state else { return [] }
+            return StepPictures.items(in: output, step: call.id).map { ($0, "") }
         }
-        StepPictures(items: items, height: items.count == 1 ? 420 : 140, maxWidth: items.count == 1 ? 560 : 220,
-                     captions: calls.compactMap { call in
-                         guard call.state.input?["path"]?.string != nil else { return nil }
-                         return call.state.input?["caption"]?.string ?? ""
-                     })
+        let single = pictures.count == 1
+        StepPictures(items: pictures.map(\.0), height: single ? 420 : 200, maxWidth: single ? 560 : 300, captions: pictures.map(\.1))
     }
 }
 
