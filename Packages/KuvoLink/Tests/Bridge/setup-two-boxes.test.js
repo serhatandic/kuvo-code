@@ -1,7 +1,7 @@
 // Your setup over the relay (PROTOCOL.md, "Your setup"): this Mac, numbering on its own, leads a
 // setup, its peers document names it, and its machine takes it, as it updates with nothing for you
 // to do: `kuvo/setup` says the same on both, each keeps its card, and both number on where they
-// were (this Mac from #42, the machine from the block it had), the machine asking this Mac, its
+// were (this Mac from #70, the machine from the block it had), the machine asking this Mac, its
 // main computer, for more.
 //
 // This Mac's box (`serve`'s link, here, with its app a stand-in) and one of its machines
@@ -151,10 +151,10 @@ async function onMac(name, args, session = "ses_lead") {
 const machineEnv = { PATH: process.env.PATH, HOME: support, KUVO_HOME: machineHome, TMPDIR: support };
 const labPid = () => { try { return Number(fs.readFileSync(path.join(machineHome, "run", "link.pid"), "utf8")); } catch { return 0; } };
 
-// What each kept of its numbers before this update: this Mac numbered on its own up to #41, and lab
-// has one number left of a block this Mac gave it.
-write(path.join(macHome, "run", "work-queue", "numbers.json"), { primary: "self", next: 42, leases: [], since: 1_000 });
-write(path.join(machineHome, "run", "work-queue", "numbers.json"), { primary: link.publicOf(macKey).toString("base64url"), leases: [[60, 60]], since: 2_000 });
+// What each kept of its numbers before this update: this Mac numbered on its own up to #69, and lab
+// has one number left of a block this Mac gave it before.
+write(path.join(macHome, "run", "work-queue", "numbers.json"), { primary: "self", next: 70, leases: [], since: 1_000 });
+write(path.join(machineHome, "run", "work-queue", "numbers.json"), { primary: link.publicOf(macKey).toString("base64url"), leases: [[41, 41]], since: 2_000 });
 
 let lab = null;
 before(async () => {
@@ -233,13 +233,13 @@ test("this Mac leads a setup and its machine takes it: kuvo/setup says the same 
   assert.deepEqual([card.setup, card.role, card.primary.key, card.app], [ours.setup, "member", macPub, false]);
   assert.equal(read(path.join(macHome, "run", "setup-card.json"))?.role, "primary");
 
-  // Numbers as they were: this Mac's from #42, lab's from the block it had.
-  assert.match((await onMac("queue_add", { title: "Ship the release" })).text, /^Added #42 /);
-  assert.match((await onLab("queue_add", { title: "Port the importer" })).text, /^Added #60 /);
-  // That was its last: lab asks its main computer, this Mac, for more, which gives a block past what
-  // lab had (and past its own), and lab's next item takes from it, now or once it comes.
+  // Numbers as they were: this Mac's from #70, lab's from the block it had.
+  assert.match((await onMac("queue_add", { title: "Ship the release" })).text, /^Added #70 /);
+  assert.match((await onLab("queue_add", { title: "Port the importer" })).text, /^Added #41 /);
+  // That was its last: lab asks its main computer, this Mac, for more, which gives the next block
+  // past its own, and lab's next item takes from it, now or once it comes.
   await eventually(() => Object.keys(read(path.join(macHome, "run", "work-queue", "numbers.json"))?.given ?? {}).length);
-  assert.deepEqual(Object.values(read(path.join(macHome, "run", "work-queue", "numbers.json")).given).map(each => each.from), [61]);
-  assert.match((await onLab("queue_add", { title: "Second" })).text, /#61/);
+  assert.deepEqual(Object.values(read(path.join(macHome, "run", "work-queue", "numbers.json")).given).map(each => each.from), [71]);
+  assert.match((await onLab("queue_add", { title: "Second" })).text, /#71/);
   assert.equal(read(path.join(machineHome, "run", "work-queue", "numbers.json")).primary, macPub);
 });
