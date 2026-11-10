@@ -279,14 +279,22 @@ extension Date {
 public enum UsageListing {
     public enum Item<Panel> {
         case panel(Panel)
-        /// A box's row, with the panel's entry whose other lines go under it.
-        case account(LimitsAccount, below: Panel?)
+        /// An account's row, with the panel's entry whose other lines go under it, and the boxes it's
+        /// from (`Box.key`, in their order).
+        case account(LimitsAccount, below: Panel?, from: [String])
     }
 
     /// `accounts`: one box's, as it states them (an account it has twice, a coding agent's and the
     /// engine's sign-in to it, is one row).
     public static func items<Panel>(panel: [Panel], covers: (Panel) -> String?, accounts: [LimitsAccount]) -> [Item<Panel>] {
-        let accounts = Self.accounts([Box(key: "", name: nil, accounts: accounts)]).map(\.account)
+        items(panel: panel, covers: covers, boxes: [Box(key: "", name: nil, accounts: accounts)])
+    }
+
+    /// Every box's accounts, one row per account across them (`accounts(_:)`), placed where the
+    /// panel (the client's own computer's, or the first Mac's) says each service goes, as the Mac's
+    /// menu bar lists this Mac's and its machines'.
+    public static func items<Panel>(panel: [Panel], covers: (Panel) -> String?, boxes: [Box]) -> [Item<Panel>] {
+        let listed = Self.accounts(boxes)
         var items: [Item<Panel>] = []
         var placed = Set<String>()
         for entry in panel {
@@ -294,18 +302,18 @@ public enum UsageListing {
                 items.append(.panel(entry))
                 continue
             }
-            let rows = accounts.filter { $0.service == service && !placed.contains($0.provider) }
+            let rows = listed.filter { $0.account.service == service && !placed.contains($0.id) }
             // (Not read from the box yet: what the panel has, as it is.)
             guard !rows.isEmpty else {
                 items.append(.panel(entry))
                 continue
             }
             for (index, row) in rows.enumerated() {
-                items.append(.account(row, below: index == 0 ? entry : nil))
-                placed.insert(row.provider)
+                items.append(.account(row.account, below: index == 0 ? entry : nil, from: row.sources.map(\.box)))
+                placed.insert(row.id)
             }
         }
-        for row in accounts where !placed.contains(row.provider) { items.append(.account(row, below: nil)) }
+        for row in listed where !placed.contains(row.id) { items.append(.account(row.account, below: nil, from: row.sources.map(\.box))) }
         return items
     }
 }
