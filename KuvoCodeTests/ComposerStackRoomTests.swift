@@ -1,4 +1,5 @@
 import AppKit
+import ClientDesign
 import ClientSessions
 import KuvoLink
 import OpenCodeKit
@@ -276,4 +277,80 @@ import Testing
             }
         }
     }
+    /// Writing tucks the card into its line, the bars as they were under it, and sending brings
+    /// them back (#408); the field having the keyboard alone, as it does whenever a conversation
+    /// shows, doesn't. The card's own control tucks it too, apart from each bar's chevron. With
+    /// KUVO_SHOTS_OUT, pictures of each, light and dark, go there.
+    @Test func writingTucksTheCardAndSendingRestoresIt() async throws {
+        defer { done() }
+        let out = ProcessInfo.processInfo.environment["KUVO_SHOTS_OUT"].map { URL(fileURLWithPath: $0) }
+        engine.on("POST", "/api/session/ses_pixel/prompt", json: [String: String]())
+        app.workspace.handle(try engine.event("form.replied", session: "ses_pixel", ["id": "frm_concept", "sessionID": "ses_pixel"]))
+        app.workspace.handle(try engine.event("shell.created", session: "ses_pixel", ["info": [
+            "id": "sh_408", "metadata": ["sessionID": "ses_pixel"], "status": "running", "command": "swift build"
+        ]] as [String: Any]))
+        show(NSSize(width: 820, height: 1000))
+        try await until { app.workspace.lastingShellJobs.contains("sh_408") }
+        func fields(_ view: NSView?) -> [MessageTextView] {
+            guard let view else { return [] }
+            return (view as? MessageTextView).map { [$0] } ?? view.subviews.flatMap { fields($0) }
+        }
+        let previousAppearance = NSApp.appearance
+        defer { NSApp.appearance = previousAppearance }
+        for dark in out == nil ? [false] : [false, true] {
+            window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+            NSApp.appearance = window.appearance
+            let look = dark ? "dark" : "light"
+            try await until { !fields(window.contentView).isEmpty }
+            let field = try #require(fields(window.contentView).first)
+            window.makeFirstResponder(field)
+            model.draftText = ""
+            model.tuck.show()
+            try await until { elements.contains { $0.label == "Fold all bars" } && elements.contains { $0.label?.hasPrefix("Running in the background") == true } }
+            #expect(window.firstResponder === field)
+            #expect(!model.tuck.isOn(among: [.goal, .background]), "the field's keyboard alone doesn't tuck the card")
+            func keep(_ state: String) async throws {
+                guard let out else { return }
+                var previous: [NSRect] = []
+                var changed = Date.now
+                try await until {
+                    let frames = elements.map(\.frame)
+                    if frames != previous { previous = frames; changed = .now }
+                    return Date.now.timeIntervalSince(changed) > 0.6
+                }
+                let host = try #require(window.contentView)
+                host.layoutSubtreeIfNeeded()
+                host.display()
+                let rep = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+                host.cacheDisplay(in: host.bounds, to: rep)
+                let cg = try #require(rep.cgImage)
+                let context = try #require(CGContext(data: nil, width: cg.width, height: cg.height, bitsPerComponent: 8, bytesPerRow: 0,
+                                                     space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+                context.setFillColor(CGColor(gray: dark ? 0.12 : 0.97, alpha: 1))
+                context.fill(CGRect(x: 0, y: 0, width: cg.width, height: cg.height))
+                context.draw(cg, in: CGRect(x: 0, y: 0, width: cg.width, height: cg.height))
+                let png = try #require(context.makeImage().flatMap { NSBitmapImageRep(cgImage: $0).representation(using: .png, properties: [:]) })
+                try FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+                try png.write(to: out.appending(path: "mac-\(look)-\(state).png"))
+            }
+            try await keep("open")
+            #expect(try #require(elements.first { $0.label == "Fold all bars" }).press())
+            try await until { elements.contains { $0.label?.hasPrefix("Bars: ") == true } }
+            try await keep("folded")
+            #expect(try #require(elements.first { $0.label?.hasPrefix("Bars: ") == true }).press())
+            try await until { elements.contains { $0.label == "Fold all bars" } }
+            window.makeFirstResponder(field)
+            field.insertText("Keep the conversation in sight", replacementRange: NSRange(location: NSNotFound, length: 0))
+            try await until { model.draftText == "Keep the conversation in sight" && model.tuck.isOn(among: [.goal, .background]) }
+            try await keep("typing")
+            let enter = try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber,
+                                                    context: nil, characters: "\r", charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: 36))
+            field.keyDown(with: enter)
+            try await until { model.draftText.isEmpty && !model.tuck.isOn(among: [.goal, .background]) }
+            try await until { elements.contains { $0.label == "Fold all bars" } }
+            try await keep("sent")
+            #expect(model.failure == nil, "\(model.failure ?? "")")
+        }
+    }
+
 }
