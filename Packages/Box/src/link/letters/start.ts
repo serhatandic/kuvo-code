@@ -22,7 +22,7 @@ import { answerTo } from "./take";
 import { noteWorkChanged } from "../work/changes";
 import { noteOversight } from "../work/oversight";
 import { botLimits, pastLimit } from "../work/limits";
-import { pickModel, usableModels } from "../work/models";
+import { modelNamed, pickModel, usableModels } from "../work/models";
 import { failedOn, holdOf, holdWords, turnError, unansweringNow } from "../work/unanswering";
 import { approvalOf, approvalRules, defaultApproval, effectiveApproval, isApproval, lowerOf, rememberApproval, unavailable } from "../work/approval";
 import { settleAgain } from "../areas/approval";
@@ -286,7 +286,7 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
     // An agent's, on one that just failed at its account or its limit, is started all the same (it
     // may answer again), with a word on it and a model that can. (You choose for yourself.)
     const held = by ? holdOf(choice.model, unansweringNow()) : null;
-    const own = model && models.find(each => each.providerID === model?.providerID && each.id === model?.id);
+    const own = modelNamed(model, models);
     if (held) warning = `${holdWords(held)}, so this may fail the same way. If it does, start it on a model that can, from list_models${own && !holdOf(own, unansweringNow()) ? `, like the one you run on (${own.providerID}/${own.id})` : ""}, or tell the user.`;
     free = choice.model.free;
     model = { providerID: choice.model.providerID, id: choice.model.id, ...(choice.variant ? { variant: choice.variant } : {}) };

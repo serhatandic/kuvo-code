@@ -86,8 +86,7 @@ final class HostLimitsTests: XCTestCase {
 
     func testAMeterThatStartedOverSinceIsNotShownAsUsed() {
         let now = Date(timeIntervalSince1970: 2_000_000_000)
-        let defaults = UserDefaults(suiteName: "HostLimitsTests")!
-        defer { defaults.removePersistentDomain(forName: "HostLimitsTests") }
+        let defaults = testDefaults(suiteName: "HostLimitsTests")!
         let store = WidgetDataStore(registry: WidgetRegistry(providers: [], descriptors: []), providers: [], defaults: defaults)
         let limits = HostLimitRow(id: "x", providerID: "copilot", name: "Copilot", meters: [
             HostLimitRow.Meter(title: "Session", fraction: 0.4, resetsAt: now.addingTimeInterval(-60)),

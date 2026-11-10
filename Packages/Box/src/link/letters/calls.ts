@@ -18,7 +18,7 @@ import { messageID } from "../engine/sessions";
 import { listOf, writePrivate } from "../files";
 import { HERE, IS_MAC } from "../home";
 import { macSendOutbox } from "../mac/peers";
-import { frozen } from "../moves/records";
+import { frozen, switchedTo } from "../moves/records";
 import { peerOf, readPeerAgents } from "../peers/directory";
 import { mailFor, movedOf, ownKey, peersOf, removedBoxes } from "../peers/known";
 import { awaySince } from "../peers/reach";
@@ -387,12 +387,14 @@ export async function takeCall(sender: LetterSender & { name?: string }, given: 
   running.add(id);
   try {
     // Who it's for: not one of this box's own, nor one this box knows lives on another computer
-    // (while it's moving, or as a word that may be stale: again later).
+    // (while it's moving, or as a word that may be stale: again later). One that moved from here
+    // to the box calling, switched to there, lives there, though its original here is still going.
     const own = ownKey(readLink() ?? {});
-    if (frozen().has(from)) return no("That conversation is moving between computers: it comes again once it's there.", true);
-    const lives = moved.get(from) ?? homesOf(readLink()).get(from);
+    const arrived = switchedTo(from) === sender.key;
+    if (!arrived && frozen().has(from)) return no("That conversation is moving between computers: it comes again once it's there.", true);
+    const lives = arrived ? sender.key : moved.get(from) ?? homesOf(readLink()).get(from);
     if (lives && lives !== sender.key && lives !== own) return no("That conversation lives on another computer, as this one knows it: it comes again.", true);
-    if (await placeOfSession(from, targets).catch(() => undefined)) return no("That conversation is on this computer: another can't speak for it.");
+    if (!arrived && await placeOfSession(from, targets).catch(() => undefined)) return no("That conversation is on this computer: another can't speak for it.");
     const session = typeof args.session === "string" ? args.session.trim() : "";
     if (tool !== "list_sessions") {
       if (!SESSION.test(session)) return no("Say which session.");

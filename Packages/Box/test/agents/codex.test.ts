@@ -9,13 +9,13 @@ import { pathToFileURL } from "node:url"
 import { existsSync, mkdirSync, readdirSync, realpathSync, symlinkSync, watch } from "node:fs"
 import { createHash } from "node:crypto"
 import { createServer } from "node:net"
-import { CodexAgent } from "../../src/agents/agents/codex"
+import { CodexAgent, codexTiming } from "../../src/agents/agents/codex"
 import { Auto } from "../../src/agents/auto"
 import { canFence, realFence } from "./support/fence"
 import { callServer, computerServers, KEYS } from "./support/servers"
 import { fencePolicy } from "../../src/link/fence/policy"
 import type { Roster } from "../../src/agents/roster"
-import { Sessions } from "../../src/agents/sessions"
+import { Sessions, timing } from "../../src/agents/sessions"
 import { Store } from "../../src/agents/store"
 import type { Message, PermissionRule } from "../../src/agents/wire"
 
@@ -42,6 +42,8 @@ const refusesNextSteer: [string, any] = ["(refuses the next steer)", {}]
 const refusesAsItSleeps: [string, any] = ["(refuses as it starts to sleep)", {}]
 /** In a turn's events: Codex takes what's steered, and says its turn is over in the same breath. */
 const endsAsTold: [string, any] = ["(ends as told)", {}]
+/** In a turn's events: Codex leaves `command` running in a background terminal, until a file `terminal-done` is in its folder. */
+const leavesTerminal = (command: string): [string, any] => ["(leaves a terminal)", { processId: "p1", command }]
 
 /**
  * A Codex whose turn sends `events` (each `[method, params]`, with the thread's id filled in): an
@@ -73,6 +75,7 @@ let turning = false
 let endsAsTold = false
 let summaryWorks = false
 let summarizing = false
+let terminals = []
 const send = (message) => process.stdout.write(JSON.stringify(message) + "\\n")
 // Its thread: "t1", but for a Codex of a session elsewhere (one of its own).
 const thread = process.cwd() === ${JSON.stringify(folder)} ? "t1" : "t-" + process.pid
@@ -84,6 +87,10 @@ async function turn() {
     if (method === ${JSON.stringify(untilStopped[0])}) return new Promise((resolve) => (stopped = resolve))
     if (method === ${JSON.stringify(summaryUntilStopped[0])}) {
       summaryWorks = true
+      continue
+    }
+    if (method === "(leaves a terminal)") {
+      terminals.push({ ...params, itemId: "c-" + params.processId, cwd: process.cwd() })
       continue
     }
     if (method === ${JSON.stringify(endsAsTold[0])}) {
@@ -221,6 +228,17 @@ process.stdin.on("data", (chunk) => {
       turning = false
       send({ method: "turn/completed", params: { threadId: "t1", turn: { id: summarizing ? "c1" : "u1", status: "interrupted" } } })
       stopped?.()
+    } else if (message.method === "thread/backgroundTerminals/list") {
+      // (It can't say, while a file "lists-fail" is there.)
+      if (require("node:fs").existsSync(require("node:path").join(process.cwd(), "lists-fail"))) {
+        send({ id: message.id, error: { code: -32603, message: "busy" } })
+        continue
+      }
+      if (require("node:fs").existsSync(require("node:path").join(process.cwd(), "terminal-done"))) terminals = []
+      send({ id: message.id, result: { data: terminals } })
+    } else if (message.method === "thread/backgroundTerminals/clean") {
+      terminals = []
+      send({ id: message.id, result: {} })
     } else if (message.method === "model/list") send({ id: message.id, result: { data: [{ id: "gpt-test", model: "gpt-test", displayName: "GPT Test", isDefault: true }] } })
     else if (message.id !== undefined) send({ id: message.id, result: {} })
   }
@@ -331,6 +349,61 @@ const askFirst: PermissionRule[] = ["edit", "write", "patch", "shell", "webfetch
 
 /** A command Codex runs, as it tells one (in your login shell). */
 const command = (id: string, line: string, more: Record<string, unknown> = {}) => ({ type: "commandExecution", id, command: `/bin/zsh -lc '${line}'`, cwd: root, status: "inProgress", ...more })
+
+describe("Commands Codex leaves running in a background terminal (#262)", () => {
+  /** With its idle close and the lists' while short, for a test. */
+  async function quickly(body: () => Promise<void>) {
+    const idleClose = timing.idleClose
+    const every = codexTiming.terminals
+    timing.idleClose = 50
+    codexTiming.terminals = 20
+    try {
+      await body()
+    } finally {
+      timing.idleClose = idleClose
+      codexTiming.terminals = every
+    }
+  }
+  const lists = () => sent().filter((message) => message.method === "thread/backgroundTerminals/list").length
+
+  test("they keep its Codex running past its idle close, shown as still at work, until they end; it isn't woken for that, as in Codex's own CLI", () =>
+    quickly(async () => {
+      const id = await run([leavesTerminal("npm run dev"), ["item/completed", { item: { type: "agentMessage", id: "m1", text: "Started the server." } }]])
+      await until(() => (sessions.background()[id]?.tasks.length ?? 0) === 1)
+      // (Listed again every 20 ms: its idle close, 50 ms after the turn, has come round meanwhile.)
+      const now = lists()
+      await until(() => lists() >= now + 6)
+      expect(sent().some((message) => message.method === "thread/unsubscribe")).toBe(false)
+      writeFileSync(join(root, "terminal-done"), "")
+      await until(() => sent().some((message) => message.method === "thread/unsubscribe"))
+      expect(sessions.background()[id]).toBeUndefined()
+      expect(sent().filter((message) => message.method === "turn/start")).toHaveLength(1)
+    }))
+
+  test("a list that fails isn't taken for none: they're still kept, and listed again", () =>
+    quickly(async () => {
+      const id = await run([leavesTerminal("npm run dev")])
+      await until(() => (sessions.background()[id]?.tasks.length ?? 0) === 1)
+      writeFileSync(join(root, "lists-fail"), "")
+      // (Three that fail, past its idle close: it gives up on them only after five in a row.)
+      const now = lists()
+      await until(() => lists() >= now + 3)
+      expect(sessions.background()[id]?.tasks.length).toBe(1)
+      expect(sent().some((message) => message.method === "thread/unsubscribe")).toBe(false)
+      rmSync(join(root, "lists-fail"))
+      writeFileSync(join(root, "terminal-done"), "")
+      await until(() => sent().some((message) => message.method === "thread/unsubscribe"))
+    }))
+
+  test("Stop on what it left running ends them", () =>
+    quickly(async () => {
+      const id = await run([leavesTerminal("npm run dev")])
+      await until(() => (sessions.background()[id]?.tasks.length ?? 0) === 1)
+      await sessions.stopBackground(id)
+      expect(sent().some((message) => message.method === "thread/backgroundTerminals/clean")).toBe(true)
+      expect(sessions.background()[id]).toBeUndefined()
+    }))
+})
 
 describe("Codex that won't start", () => {
   test("a Codex that turns down being started (an older or newer one) isn't left running, however often it's tried", async () => {

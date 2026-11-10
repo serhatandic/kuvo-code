@@ -194,6 +194,32 @@ test("what a box refuses, and from whom", async () => {
   assert.equal(eng.seen.interrupted.length, 0);
 });
 
+test("a lead that moved from here is reached from where it went as soon as it's switched to there, while its original here is still being let go", async () => {
+  // The bot moved from this box to mini: its original's still here as it's let go (`finishing`).
+  eng.all.set("ses_lead", { id: "ses_lead", title: "Foreman", time: { created: 1, updated: 1 }, directory: "/work" });
+  const move = stage => write(path.join(run, "moves", "mov_test0000000001.json"), { id: "mov_test0000000001", kind: "bot", thing: by.bot, name: "Foreman", from: here.pub, to: mini.pub, peer: mini.pub, role: "from", stage, step: stage === "finishing" ? "done" : "switch", sessions: ["ses_lead"], wasPaused: false, tries: 0, started: Date.now() });
+  move("finishing");
+  const list = callOf("list_sessions");
+  assert.deepEqual(await take(list), [{ id: list.id, ok: true }]);
+  assert.deepEqual(JSON.parse(answerOf(list).text).rows.map(row => row.session).sort(), ["ses_billing", "ses_left"]);
+  const stop = callOf("stop_session", { session: "ses_left" });
+  assert.deepEqual(await take(stop), [{ id: stop.id, ok: true }]);
+  assert.deepEqual(eng.seen.interrupted, ["ses_left"]);
+  // Asked to switch, not heard back yet: its copy there runs only once it's switched, so a call from it there says it is.
+  move("switching");
+  const switching = callOf("list_sessions");
+  assert.deepEqual(await take(switching), [{ id: switching.id, ok: true }]);
+  // From any other box, it's still moving: not now.
+  const elsewhere = callOf("list_sessions");
+  const [fromThird] = await take(elsewhere, third.peer);
+  assert.deepEqual([fromThird.ok, fromThird.retry], [false, true]);
+  // Still on its way (its copy there held): not now, from there either.
+  move("copying");
+  const early = callOf("list_sessions");
+  const [copying] = await take(early);
+  assert.deepEqual([copying.ok, copying.retry], [false, true]);
+});
+
 test("an allow goes only as far as the lead could go itself, never past this box's Don't Allow rules, and one kept over a day isn't given", async () => {
   eng.seen.asks.set("ses_billing", [
     { id: "per_1", action: "shell", resources: ["git status"] },

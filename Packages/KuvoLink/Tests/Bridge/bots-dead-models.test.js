@@ -247,3 +247,20 @@ test("a free model at its account's free-usage limit holds back the account's fr
   assert.doesNotMatch(text(await call("list_models", {})), /No free opencode model/, "a free one answering does");
   await runAll();
 });
+
+test("a bot on a model named by another id it's known by (Claude Code's default) is still pointed to the model it runs on", async () => {
+  // The paid opencode models can't answer.
+  await watch({ type: "session.execution.failed", data: { sessionID: "ses_concept", error: funds } });
+  await runAll();
+  const was = sessions.ses_lead.model;
+  sessions.ses_lead.model = { providerID: "opencode-go", id: "default" };
+  models[3].aliases = ["default"];
+  try {
+    const held = await call("start_session", { task: "Pick the concept.", title: "Pick the concept", folder: app, model: "opencode/gpt-6.1-sol", effort: "high" });
+    assert.match(text(held), /so this may fail the same way/);
+    assert.match(text(held), /like the one you run on \(opencode-go\/deepseek-v4\.1-flash\)/, "by the model's own id");
+  } finally {
+    sessions.ses_lead.model = was;
+    delete models[3].aliases;
+  }
+});

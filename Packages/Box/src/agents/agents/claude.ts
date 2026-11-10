@@ -9,9 +9,9 @@ import { homedir } from "node:os"
 import { basename, dirname, join, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
 import { providerID, type AgentAccount } from "../accounts"
-import type { Agent, AgentContext, Account, ConversationFiles, ConversationPlace, MessageInput, OwnTurn, RunInput, RunResult, SignInAttempt, SignInOptions, SubagentMessages, SubagentRun, Thread, TurnHooks, PromptFile } from "../agent"
+import type { Agent, AgentContext, Account, ConversationFiles, ConversationPlace, LostWork, MessageInput, OwnTurn, RunInput, RunResult, SignInAttempt, SignInOptions, SubagentMessages, SubagentRun, Thread, TurnHooks, PromptFile } from "../agent"
 import type { Limit } from "../auto"
-import { accountName, ContextWindows, failure, KnownAccount, model, signOutWith, TookTooLong } from "../agent"
+import { accountName, ContextWindows, failure, KnownAccount, lostWorkNote, model, signOutWith, TookTooLong } from "../agent"
 import { fileDiff, fromPatch } from "../diff"
 import { install, installedVersion, maintenance, update, type MaintenanceDefinition } from "../maintenance"
 import { fingerprint, type LimitsSource } from "../limits"
@@ -973,7 +973,7 @@ class ClaudeThread implements Thread {
   /** Subagents it sent off in the background, at work after the turn that started them: by their call. */
   private backgroundLanes = new Map<string, Lane & { run: SubagentRun; background: boolean }>()
   /** Its background tasks (commands, subagents), by its id: commands are in the bar. */
-  private tasks = new Map<string, { type: string; description: string; toolUseID?: string; shell?: string; outputFile?: string; last?: { output: string; total: number }; since?: number }>()
+  private tasks = new Map<string, { type: string; description: string; toolUseID?: string; shell?: string; outputFile?: string; last?: { output: string; total: number }; since?: number; backgrounded?: boolean }>()
   /** Its live background tasks, as it last listed them. */
   private liveTasks = new Set<string>()
   /** Commands it ran, by their call: what a background one runs. */
@@ -1069,7 +1069,11 @@ class ClaudeThread implements Thread {
     const skills = skillsFolder(await skillsFor(this.session.location.directory, this.agent.ownSkillFolders(this.session.location.directory), turnedOff(hooks)))
     // So does it when the box's sandbox was turned on or off, or its rules changed.
     const fence = fenceKey() + fullAccessMark(this.session.id)
-    if (this.query && (this.opened?.append !== append || this.opened?.program !== this.agent.program || this.opened?.tools !== tools?.key || this.opened?.skills !== skills || this.opened?.fence !== fence)) this.close()
+    // (What it left going in the background ends with it: this message says so.)
+    if (this.query && (this.opened?.append !== append || this.opened?.program !== this.agent.program || this.opened?.tools !== tools?.key || this.opened?.skills !== skills || this.opened?.fence !== fence)) {
+      this.cut.push(...this.wakingWork)
+      this.close()
+    }
     // The computer's MCP servers (yours, the integrations', a bot's with its own keys), through the
     // relay, which keeps their keys: another set of them is told to the same Claude Code.
     const computer = await computerServers(this.session.location.directory)
@@ -1107,8 +1111,13 @@ class ClaudeThread implements Thread {
       // A conversation it goes on with keeps the instructions it started with (until it's
       // summarized): what changed in them since is said ahead of the message, once. Not ahead of
       // a command (its /compact, a skill's), which goes as typed: the next message says it.
-      const note = input.compact || input.text.trimStart().startsWith("/") ? undefined : instructionsNote(toldOf(this.state, "claudeTold"), append)
-      const message = userMessage(note ? { ...input, text: `${note}\n\n${input.text}` } : input, this.copies())
+      const command = input.compact || input.text.trimStart().startsWith("/")
+      const note = command ? undefined : instructionsNote(toldOf(this.state, "claudeTold"), append)
+      const lostNote = this.cut.length && !command ? lostWorkNote("Claude Code started again before this message.", this.cut.splice(0)) : undefined
+      // (A command, as typed, has no room for it: the session hears it as a note instead.)
+      if (this.cut.length && command) this.onWorkLost?.(this.cut.splice(0))
+      const ahead = [lostNote, note].filter(Boolean).join("\n\n")
+      const message = userMessage(ahead ? { ...input, text: `${ahead}\n\n${input.text}` } : input, this.copies())
       let active: Active | undefined
       const answered = (result: RunResult) => {
         // (Said once it took the message, not one it never got to.)
@@ -1138,8 +1147,9 @@ class ClaudeThread implements Thread {
   private turnFor(turn: Turn, hooks: TurnHooks, resolve: (result: RunResult) => void, auto: boolean | undefined, steered: Map<string, string>): Active {
     const active: Active = { turn, hooks, resolve, streamed: new Set(), blockTools: new Map(), calls: new Map(), subagents: new Map(), auto, steered }
     active.resolve = (result) => {
-      // (A turn stopped or failed stops them: the session ends them with it.)
-      if (result.outcome === "succeeded") for (const [callID, lane] of active.subagents) if (lane.background && !lane.turn.isEnded) this.backgroundLanes.set(callID, lane)
+      // Whatever the outcome: one this turn started, stopped or failed with it, the session ends
+      // (and it's forgotten then); one an earlier turn sent off goes on, after a Stop too.
+      for (const [callID, lane] of active.subagents) if (lane.background && !lane.turn.isEnded) this.backgroundLanes.set(callID, lane)
       resolve(result)
     }
     return active
@@ -1222,15 +1232,29 @@ class ClaudeThread implements Thread {
         // A subagent picked up again (your message, passed on with SendMessage) keeps its id and
         // its call: what it says comes under the call that started it, in the same session.
         const resumed = type === "local_agent" && known?.toolUseID && message.tool_use_id && message.tool_use_id !== known.toolUseID ? known.toolUseID : undefined
-        this.tasks.set(message.task_id, { ...known, type, description: message.description ?? known?.description ?? "", toolUseID: resumed ?? message.tool_use_id ?? known?.toolUseID })
-        if (type === "local_agent" && typeof message.tool_use_id === "string" && !resumed) this.rememberSubagent(message.tool_use_id, { agentID: message.task_id })
+        // (Whether it runs in the background is Claude Code's to say: its Agent tool's default is.)
+        const backgrounded = typeof message.is_backgrounded === "boolean" ? message.is_backgrounded : known?.backgrounded
+        this.tasks.set(message.task_id, { ...known, type, description: message.description ?? known?.description ?? "", toolUseID: resumed ?? message.tool_use_id ?? known?.toolUseID, backgrounded })
+        if (type === "local_agent" && typeof message.tool_use_id === "string" && !resumed) {
+          this.rememberSubagent(message.tool_use_id, { agentID: message.task_id })
+          // A subagent's own (the turn's have theirs from their call): its session from the start,
+          // as the turn may end before it says anything.
+          if (this.active) this.subagentLane(this.active, message.tool_use_id)
+          if (backgrounded) this.toBackground(message.tool_use_id)
+        }
         if (resumed && this.active) this.resumedLane(this.active, resumed)
         if (message.is_backgrounded && !message.ambient) this.shellFor(message.task_id)
         return
       }
-      case "task_updated":
-        if (message.patch?.is_backgrounded) this.shellFor(message.task_id)
+      case "task_updated": {
+        if (!message.patch?.is_backgrounded) return
+        const task = this.tasks.get(message.task_id)
+        if (task) task.backgrounded = true
+        this.shellFor(message.task_id)
+        // A subagent moved to the background: it works on past the turn.
+        if (task?.type === "local_agent" && task.toolUseID) this.toBackground(task.toolUseID)
         return
+      }
       case "task_notification": {
         const task = this.tasks.get(message.task_id)
         if (task && typeof message.output_file === "string") task.outputFile = message.output_file
@@ -1313,12 +1337,28 @@ class ClaudeThread implements Thread {
     return Boolean(this.query) && this.liveTasks.size > 0
   }
 
+  onWorkLost?: (lost: LostWork[]) => void
+  /** What it had going when it was started again for a message, for that message to say. */
+  private cut: LostWork[] = []
+
+  /** What it left going, each of which tells it as it ends (Claude Code carries on then). */
+  get wakingWork(): LostWork[] {
+    if (!this.query) return []
+    return [...this.liveTasks].map((id) => {
+      const task = this.tasks.get(id)
+      const output = task?.last?.output.trim().slice(-2_000) || undefined
+      if (task?.type === "local_bash") return { kind: "command", what: (task.toolUseID ? this.commands.get(task.toolUseID) : undefined) ?? task.description, output }
+      return { kind: "task", what: task?.description || "A task in the background", output }
+    })
+  }
+
   /** What it keeps going that's neither a command (in the bar) nor a subagent (a session of its own). */
   get backgroundTasks() {
     if (!this.query) return []
     return [...this.liveTasks].flatMap((id) => {
       const task = this.tasks.get(id)
-      if (task?.shell || task?.type === "local_bash" || (task?.toolUseID && this.backgroundLanes.has(task.toolUseID))) return []
+      // (A subagent with a session is listed as one, under a turn or after it.)
+      if (task?.shell || task?.type === "local_bash" || (task?.toolUseID && (this.backgroundLanes.has(task.toolUseID) || this.active?.subagents.has(task.toolUseID)))) return []
       return [{ id, since: task?.since ?? Date.now() }]
     })
   }
@@ -1498,12 +1538,16 @@ class ClaudeThread implements Thread {
       ended = error
     }
     if (this.query === query) {
+      // Ended by itself between turns (killed, or crashed) with work going that would have woken
+      // it as it ended: that went with it, and nothing will (no turn here to fail and say so).
+      const lost = this.active ? [] : this.wakingWork
       this.query = undefined
       this.input = undefined
       this.lastEnd = ended
       // Claude Code stopped (or crashed): what it left running went with it.
       this.leftRunning()
       emit("session.background.updated", { sessionID: this.session.id }, this.session.location.directory)
+      if (lost.length) this.onWorkLost?.(lost)
     }
     // Ended under a turn of this Claude Code (not one started since on a new one).
     const active = this.active
@@ -1841,10 +1885,12 @@ class ClaudeThread implements Thread {
     if (call) {
       const input = call.input
       if (kuvoTool(call.name, input).name !== "subagent") return undefined
-      background = input.run_in_background === true
+      // As Claude Code says it runs (its Agent tool runs one in the background unless told not
+      // to); before it says, as the call asked.
+      const agentID = [...this.tasks].find(([, task]) => task.toolUseID === callID && task.type === "local_agent")?.[0]
+      background = (agentID ? this.tasks.get(agentID)?.backgrounded : undefined) ?? input.run_in_background === true
       run = active.hooks.subagent(callID, { title: String(input.description ?? ""), prompt: typeof input.prompt === "string" ? input.prompt : undefined, agent: input.subagent_type, background, messages: subagentRoute(input.subagent_type) })
       run.stop = () => this.stopSubagent(callID)
-      const agentID = [...this.tasks].find(([, task]) => task.toolUseID === callID && task.type === "local_agent")?.[0]
       this.rememberSubagent(callID, { sessionID: run.sessionID, title: String(input.description ?? ""), ...(typeof input.subagent_type === "string" ? { kind: input.subagent_type } : {}), ...(agentID ? { agentID } : {}) })
     } else if (before) {
       // One sent off in the background in an earlier turn, still at work: its session goes on.
@@ -1944,6 +1990,8 @@ class ClaudeThread implements Thread {
     // A subagent's task came back: its session's work is done (one sent off in the background
     // goes on, and ends with the turn).
     const subagent = active && lane === active ? active.subagents.get(id) : undefined
+    // Launched in the background, as its result says (a Claude Code that doesn't say so as it starts).
+    if (subagent && structured?.status === "async_launched") this.toBackground(id)
     if (active && subagent && !subagent.background) {
       subagent.run.end(block.is_error ? "failed" : "succeeded", block.is_error ? { type: "agent", message: text || "The subagent failed." } : undefined)
       active.subagents.delete(id)
@@ -2119,6 +2167,14 @@ class ClaudeThread implements Thread {
     for (const [taskID, task] of this.tasks) if (task.toolUseID === callID) await this.query?.stopTask?.(taskID).catch(() => {})
   }
 
+  /** A subagent Claude Code runs in the background, as it says: its session goes on past the turn. */
+  private toBackground(callID: string) {
+    const lane = this.active?.subagents.get(callID) ?? this.keptLane(callID)
+    if (!lane || lane.background || lane.run.turn.isEnded) return
+    lane.background = true
+    lane.run.inBackground()
+  }
+
   /** A subagent kept at work in the background, unless the session ended it since (with a turn that failed). */
   private keptLane(callID: string) {
     const lane = this.backgroundLanes.get(callID)
@@ -2212,6 +2268,8 @@ class ClaudeThread implements Thread {
   /** What it left running ends with it. */
   private leftRunning() {
     for (const task of this.tasks.values()) if (task.shell) endShell(task.shell)
+    // (Its subagents in the background, kept or with the turn under way now.)
+    for (const lane of this.active?.subagents.values() ?? []) if (lane.background) lane.run.end("interrupted")
     for (const lane of this.backgroundLanes.values()) lane.run.end("interrupted")
     this.backgroundLanes.clear()
     this.liveTasks.clear()
