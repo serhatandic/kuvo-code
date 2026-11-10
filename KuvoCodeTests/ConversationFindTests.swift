@@ -119,11 +119,11 @@ import Testing
         guard case .user(let message) = try JSONDecoder().decode(Message.self, from: JSONSerialization.data(withJSONObject: json)) else {
             Issue.record("not a user message"); return
         }
-        guard case .notice(_, _, let line) = Row.message(message) else { Issue.record("drawn as yours"); return }
+        guard case .notice(_, _, let line)? = Row.messages(message).first else { Issue.record("drawn as yours"); return }
         #expect(line == "Goal started")
-        #expect(Row.message(message).findParts.isEmpty)
+        #expect(Row.messages(message).flatMap(\.findParts).isEmpty)
         let waiting = Transcript.Pending(id: "msg_2", text: "[Not now] The user didn't start this goal. Don't start its work.", delivery: .queue, isLocal: false)
-        guard case .notice(_, _, let said) = Row.waiting(waiting) else { Issue.record("drawn as yours"); return }
+        guard case .notice(_, _, let said)? = Row.waiting(waiting).first else { Issue.record("drawn as yours"); return }
         #expect(said == "You said not now")
     }
 

@@ -441,7 +441,7 @@ struct TranscriptView: View {
             switch message {
             case .user(let user):
                 turn = TurnStats(started: user.time.created, message: user, model: current)
-                rows.append(.message(user))
+                rows += Row.messages(user)
             case .assistant(let assistant):
                 turn.add(assistant)
                 // The run's error shows once, at the end of the turn. A step you stopped isn't an
@@ -531,35 +531,13 @@ struct TranscriptView: View {
                 // A turn the app or the engine started (a model switched mid-run carries on), timed
                 // from it as one you started is from your message.
                 if turn.started == nil { turn.started = notice.time.created }
-                let sources = notice.instructionSources
-                var shown: Row?
-                if !sources.isEmpty, sources.allSatisfy({ $0.contains(ProjectFolders.instructionKey) }) {
-                    shown = .notice(notice.id, "folder", "Project folders updated")
-                } else if !sources.isEmpty, sources.allSatisfy({ $0.hasPrefix("core/") || $0.contains(Workspace.worktreeInstructionKey) || $0.contains(Bots.instructionKey) || $0.contains(AutopilotShown.instructionKey) }) {
-                    // The engine's own guidance (for the browser tools, say), or what Kuvo Code
-                    // adds for a worktree, a bot or Autopilot: nothing you set.
-                    break
-                } else if notice.metadata?["source"]?.string == "shell" {
-                    // A command the agent left running in the background ended, which wakes it.
-                    shown = .notice(notice.id, "terminal", Self.backgroundEnd(notice))
-                } else if notice.text.hasPrefix("<system-reminder>") {
-                    // The engine's word to the model, not to you. Plan mode's rules say the mode,
-                    // for a session that starts in it (a switch says so itself); not the one that
-                    // says it's left ("You are NO LONGER in Plan mode", after Build It).
-                    if notice.text.contains("Plan mode"), notice.text.range(of: "no longer in Plan mode", options: .caseInsensitive) == nil {
-                        if case .notice(_, "list.bullet.clipboard", _)? = rows.last {} else {
-                            shown = .notice(notice.id, "list.bullet.clipboard", "Plan mode: it explores and plans, without changing files")
-                        }
-                    }
-                } else if notice.text.hasPrefix(Goal.marker) {
-                    // The box keeping the agent at its goal: given it, or told what's left.
-                    shown = .notice(notice.id, "scope", notice.description ?? String(notice.text.dropFirst(Goal.marker.count)))
-                } else if let words = notice.carriedOn {
-                    // The engine asking the model to go on after a reply was cut off or ran out of room.
-                    shown = .notice(notice.id, "arrow.turn.down.right", words)
-                } else {
-                    shown = .notice(notice.id, "info.circle", notice.description ?? notice.text)
+                // Pills for a change of state, lines for the rest; never the words for the model
+                // (KuvoClient's TranscriptNote, the same on the phone).
+                let previous: TranscriptNote? = switch steps.isEmpty ? rows.last : nil {
+                case .notice(_, let symbol, let text)?: TranscriptNote(.pill, symbol: symbol, text: text)
+                default: nil
                 }
+                let shown = TranscriptNote.of(notice, after: previous).map { Row.note(notice.id, $0) }
                 if let shown {
                     flushSteps(live: false)
                     rows.append(shown)
@@ -579,7 +557,7 @@ struct TranscriptView: View {
         }
         // Messages waiting their turn are listed above the composer instead.
         let waiting = Set(model.waiting.map(\.id))
-        rows += model.transcript.pending.filter { !waiting.contains($0.id) }.map(Row.waiting)
+        rows += model.transcript.pending.filter { !waiting.contains($0.id) }.flatMap(Row.waiting)
         // Always while it works, with the time since your message, so a long step is plainly
         // still going.
         if model.transcript.isRunning {
@@ -711,7 +689,13 @@ enum Row: Identifiable, Hashable {
     /// latest turn's end, whose row (its time, Copy and Reply) stays in view, though notes or a
     /// command you ran may come after it.
     case turnEnd(Message.Idle, TurnStats, isLast: Bool, isLatest: Bool)
+    /// A change of state, in a pill: the model or the mode switched, the conversation summarized.
     case notice(String, String, String)
+    /// A note of what happened, in a line that opens to its details (KuvoClient's TranscriptNote).
+    case line(String, TranscriptNote)
+    /// One of its sessions telling the agent what it did, as a message from it (`SessionNews`);
+    /// `at`, when it came, and none while it waits to go in.
+    case news(String, SessionNews, at: Milliseconds?)
     /// A command you ran with "!".
     case shell(Message.Shell)
     case pending(Transcript.Pending)
@@ -743,21 +727,36 @@ enum Row: Identifiable, Hashable {
         }
     }
 
-    /// A message in the conversation as its row: yours as your bubble; one the box wrote to the
-    /// agent (a goal starting, its sessions' news) as the line of what happened.
-    static func message(_ user: Message.User) -> Row {
-        BoxNote.of(user).map { .notice(user.id, $0.symbol, $0.line) } ?? .user(user)
+    /// A message in the conversation as its rows: yours as your bubble; one the box wrote to the
+    /// agent as what happened: its sessions' news as a message from each, the rest as a pill or a
+    /// line.
+    static func messages(_ user: Message.User) -> [Row] {
+        BoxNote.of(user).map { rows(of: $0, id: user.id, at: user.time.created) } ?? [.user(user)]
     }
 
     /// A message on its way in, the same way.
-    static func waiting(_ item: Transcript.Pending) -> Row {
-        BoxNote.of(text: item.text, metadata: item.metadata).map { .notice(item.id, $0.symbol, $0.line) } ?? .pending(item)
+    static func waiting(_ item: Transcript.Pending) -> [Row] {
+        BoxNote.of(text: item.text, metadata: item.metadata).map { rows(of: $0, id: item.id, at: nil) } ?? [.pending(item)]
+    }
+
+    private static func rows(of note: BoxNote, id: String, at: Milliseconds?) -> [Row] {
+        guard note.news.isEmpty else {
+            return note.news.enumerated().map { index, news in .news(index == 0 ? id : "\(id)#\(index)", news, at: at) }
+        }
+        return [.note(id, TranscriptNote.of(note))]
+    }
+
+    /// A note as its row: a pill for a change of state, a line for the rest.
+    static func note(_ id: String, _ note: TranscriptNote) -> Row {
+        note.look == .pill ? .notice(id, note.symbol, note.text) : .line(id, note)
     }
 
     /// The words Find looks in, as the row shows them: messages, replies, and commands you ran
     /// with what they printed.
     var findParts: [ConversationFind.Part] {
         switch self {
+        case .news(_, let news, _):
+            return [.markdown(news.body)]
         case .user(let message):
             let text = CommandMessages.shared.text(of: message)
             if let mail = AgentMail.parse(text) { return [.markdown(mail.text)] }
@@ -808,7 +807,7 @@ enum Row: Identifiable, Hashable {
         // The space the Markdown style puts between those paragraphs.
         case (_, .more(_, let gap)): gap
         case (.more, .assistant), (.more, .turnEnd), (.more, .working), (.more, .steps): 10
-        case (_, .widget), (.widget, _), (_, .sent), (.sent, _): 14
+        case (_, .widget), (.widget, _), (_, .sent), (.sent, _), (_, .news), (.news, _): 14
         case (.assistant, .assistant), (.assistant, .turnEnd), (.assistant, .working),
              (.steps, .assistant), (.assistant, .steps), (.steps, .turnEnd), (.steps, .working),
              (.subagent, .subagent), (.steps, .subagent), (.subagent, .steps), (.assistant, .subagent), (.more, .subagent),
@@ -833,6 +832,8 @@ enum Row: Identifiable, Hashable {
         case .subagent(let call): call.id
         case .turnEnd(let m, _, _, _): m.id
         case .notice(let id, _, _): id
+        case .line(let id, _): id
+        case .news(let id, _, _): id
         case .shell(let m): m.id
         case .pending(let item): item.id
         case .undone: "undone"
@@ -934,7 +935,7 @@ private struct RowView: View, Equatable {
         case .shell(let shell):
             ShellRow(shell: shell)
         case .notice(_, _, let text):
-            // Its words say what it is: no symbol beside them.
+            // A change of state. Its words say what it is: no symbol beside them.
             Text(text)
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -943,6 +944,10 @@ private struct RowView: View, Equatable {
                 .padding(.vertical, 5)
                 .background(.quaternary.opacity(0.5), in: .capsule)
                 .frame(maxWidth: .infinity)
+        case .line(let id, let note):
+            NoteLine(id: id, note: note, scope: scope)
+        case .news(let id, let news, let at):
+            AgentMessageRow(id: id, from: news.title, session: news.session, text: news.body, at: at, status: news.status)
         case .undone(let count):
             HStack(spacing: 10) {
                 Text("Undid " + count.counting("message"))
@@ -2161,20 +2166,26 @@ private struct AgentMessageRow: View {
     let from: String
     let session: String
     let text: String
-    let at: Milliseconds
+    /// When it came; none while it waits to go in.
+    let at: Milliseconds?
+    /// What happened, after its name, for one of its sessions' news: "finished", "still working".
+    var status: String?
     @Environment(AppModel.self) private var app
 
     var body: some View {
-        FoldingCard(id: id, summary: text, startsOpen: FoldingCard<EmptyView, EmptyView, EmptyView>.isShort(text), help: "A message another agent sent this one") {
+        FoldingCard(id: id, summary: text, startsOpen: FoldingCard<EmptyView, EmptyView, EmptyView>.isShort(text),
+                    help: status == nil ? "A message another agent sent this one" : "One of the sessions this agent started, telling it what it did") {
             Image(systemName: "paperplane")
                 .foregroundStyle(.tint)
                 .frame(width: 16)
-            Text("From \(Text(from).fontWeight(.semibold).foregroundStyle(.primary))")
+            Text("From \(Text(from).fontWeight(.semibold).foregroundStyle(.primary))\(status.map { " · \($0)" } ?? "")")
                 .foregroundStyle(.secondary)
         } accessory: {
-            Text(Date(timeIntervalSince1970: at / 1000), format: .dateTime.hour().minute())
-                .font(.caption)
-                .foregroundStyle(.tertiary)
+            if let at {
+                Text(Date(timeIntervalSince1970: at / 1000), format: .dateTime.hour().minute())
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
             if app.workspace.session(session) != nil {
                 Button("Open") { app.open(.session(session)) }
                     .buttonStyle(TextButtonStyle(outset: true))
