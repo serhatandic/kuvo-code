@@ -63,6 +63,9 @@ final class AppModel {
     let bots = Bots()
     /// Bots' and sessions' wake-ups and watches.
     let wakeUps = WakeUps()
+    /// What sessions' rows on screen show beyond the sessions: their pull requests, branches and
+    /// accounts, as their boxes say.
+    let glances = RowGlances()
     /// The sessions bots run, as their boxes tell it.
     let botWork = BotWork()
     /// What bots ask you before they do it (making a project), on every box.
@@ -327,6 +330,7 @@ final class AppModel {
         workspace.machineAgents = { [weak self] machine in self?.machines.engine(machine)?.agents }
         bots.app = self
         wakeUps.app = self
+        glances.boxes = { [weak self] id in self?.box(id) }
         botWork.app = self
         botAsks.app = self
         botAsks.onChange = { [weak self] sessions in self?.workspace.askingForWork = sessions }
