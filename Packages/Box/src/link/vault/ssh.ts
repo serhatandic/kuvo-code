@@ -183,6 +183,8 @@ export function keepSshAgents(): () => void {
       const socket = path.join(SSH_AGENTS, `${prefix}${crypto.randomBytes(9).toString("base64url")}.sock`);
       const agent = { folder, server: serveAgent(socket, sourceFor(callerFor(note, folder))), used: Date.now() };
       agent.server.on("connection", () => { agent.used = Date.now(); });
+      // One that couldn't open (its socket couldn't be put at its name) is made anew at the next look.
+      agent.server.on("error", () => { if (agents.get(note) === agent) agents.delete(note); });
       agents.set(note, agent);
     }
     for (const note of [...agents.keys()]) if (!notes.includes(note)) close(note);
@@ -200,11 +202,28 @@ export function keepSshAgents(): () => void {
   look();
   let watcher: fs.FSWatcher | null = null;
   try { watcher = fs.watch(SSH_FOR, () => look()); watcher.unref?.(); } catch {}
+  // On a busy Mac the watch tells late or not at all, and the launcher waits for the agent only a
+  // moment before the command runs without it (git over SSH then finds no key): the notes' folder
+  // is looked at each second too (its time, which a note moved in changes), and looked into when
+  // it changed.
+  // (Its time, change time and size together; and while its time is this very second, each time:
+  // a folder whose times count whole seconds changes them once in a second.)
+  let noted = "";
+  const quick = setInterval(() => {
+    let seen: fs.Stats;
+    try { seen = fs.statSync(SSH_FOR); } catch { return; }
+    const changed = `${seen.mtimeMs}:${seen.ctimeMs}:${seen.size}`;
+    if (changed === noted && Date.now() - seen.mtimeMs > 1500) return;
+    noted = changed;
+    look();
+  }, 1000);
+  quick.unref?.();
   // The vault's items and the sandbox change too: looked at again now and then.
   const every = setInterval(look, 30_000);
   every.unref?.();
   const stop = () => {
     watcher?.close();
+    clearInterval(quick);
     clearInterval(every);
     for (const note of [...agents.keys()]) close(note);
     try { if (safeFolder()) fs.rmSync(SSH_AGENTS, { recursive: true, force: true }); } catch {}

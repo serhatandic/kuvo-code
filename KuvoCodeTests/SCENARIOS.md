@@ -141,7 +141,7 @@ for Linux's tools).
 | The context ring: how full, of what the model takes | ContextRingTests | the coding agents' windows, as each says (Packages/Box/test/agents) |
 | Export a conversation | ConversationExportTests | |
 | Your things after an update: backed up first, then brought up to date once (bots' descriptions in their folders); a list that won't read set aside | CalibrationTests | the window's Updating screen (UI); a machine's bots' descriptions (written over SSH as it connects) |
-| Updates: only a release build updates itself | UpdatesTests; the release bundle's feed in CI ("Check the app bundle") | Sparkle's own window and install |
+| Updates: only a release build updates itself | UpdatesTests; the release bundle's feed in the release workflow ("Check the app bundle") | Sparkle's own window and install |
 | Move to Applications (to update itself) | AppLocationTests | the offer, a modal alert, and a disk image's read-only copy |
 | Work Queue: the panel lists a conversation's items and keeps up with agents' changes; you reorder, move, delete and Undo; a lead sees what it handed on and All shows every queue; `#n` in a message is its chip and opens the item; an item on another computer says where it is, its page is read there and what you do to it is done there | WorkQueueTests (the box's own in `Packages/KuvoLink/Tests/Bridge/work-queue.test.js`, across computers in `work-queue-across.test.js` and over the relay in `work-queue-two-boxes.test.js`; the rule and the view in KuvoClient's `WorkItemRefsTests`, `WorkQueueTests`); pictures in WorkQueueShots | In progress from a session at work (the box's tests), drag and drop itself (by hand) |
 | Anonymous usage stays anonymous | AnalyticsPrivacyTests | |

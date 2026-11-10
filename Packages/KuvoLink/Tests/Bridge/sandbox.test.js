@@ -41,6 +41,11 @@ const ownRuntime = (() => {
   try { fs.linkSync(fs.realpathSync(process.execPath), linked); } catch { fs.copyFileSync(process.execPath, linked); fs.chmodSync(linked, 0o755); }
   return linked;
 })();
+// The link's script, for the commands that run it: a copy in this file's folder, as a machine has
+// its own in its box's folder. The checkout's may be in Kuvo Code's own folders (an agent's worktree
+// is, in `~/.kuvo-code`), which the sandbox hides from commands. (One file, all it needs inside it.)
+const ownScript = path.join(root, "kuvo-link.js");
+fs.copyFileSync(script, ownScript);
 // kuvo-wake, as Wakes.swift has it and BoxFiles puts it in every box's bin.
 const swift = fs.readFileSync(new URL("../../../OpenCodeKit/Sources/OpenCodeKit/Engine/Wakes.swift", import.meta.url), "utf8");
 const opening = 'public static let script = #"""\n';
@@ -264,8 +269,8 @@ test("on, a command writes in its own project, git works there, and Kuvo Code's 
       ["run its runtime", `${runtime} -e 'process.exit(0)'`],
       ["read the box's sockets' key", `cat ${JSON.stringify(keyFile)}`],
       ["reach the vault's socket", `${runtime} -e '${straight}'`],
-      ["read the link's script", `cat ${JSON.stringify(script)}`],
-      ["reach the vault through the box", `out=$(echo '${fill}' | KUVO_HOME=${JSON.stringify(box.home)} ${runtime} ${JSON.stringify(script)} box route 2>/dev/null); case $out in *'"status":503'*) false ;; *) true ;; esac`],
+      ["read the link's script", `cat ${JSON.stringify(ownScript)}`],
+      ["reach the vault through the box", `out=$(echo '${fill}' | KUVO_HOME=${JSON.stringify(box.home)} ${runtime} ${JSON.stringify(ownScript)} box route 2>/dev/null); case $out in *'"status":503'*) false ;; *) true ;; esac`],
       ["write in its project", "echo ok > made.txt"],
       ["git in its project", "git add made.txt && git -c user.name=t -c user.email=t@t commit -qm made"],
       ["its temporary files", `echo ok > "$TMPDIR/scratch"`],
@@ -281,10 +286,9 @@ test("on, a command writes in its own project, git works there, and Kuvo Code's 
     assert.equal(seen["run its runtime"], "allowed", ran.out);
     assert.equal(seen["read the box's sockets' key"], "refused", ran.out);
     assert.equal(seen["reach the vault's socket"], "refused", ran.out);
-    // (`box route` below is that script. A checkout inside Kuvo Code's own folders, as an agent's worktree
-    // is, is hidden from commands too: the route then can't start, and its failure looks like a refusal's
-    // opposite, an answer that isn't a 503.)
-    assert.equal(seen["read the link's script"], "allowed", `The sandbox hides this checkout's ${script} from commands, so the vault route can't be tried: run this test from a checkout outside Kuvo Code's folders (not under run.kuvo.code or ~/.kuvo-code).\n${ran.out}`);
+    // (`box route` below is that script: hidden, the route couldn't start, and its failure would look
+    // like a refusal's opposite, an answer that isn't a 503.)
+    assert.equal(seen["read the link's script"], "allowed", ran.out);
     assert.equal(seen["reach the vault through the box"], "refused", ran.out);
     assert.equal(seen["read the box's files"], "refused", ran.out);
     // (Linux shows a hidden folder's names, never what's in its files.)

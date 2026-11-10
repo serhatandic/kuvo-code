@@ -241,8 +241,8 @@ import Textual
         let all = WorkQueues.Key(box: BoxClient.mac, owner: WorkQueueView.all)
         await store.read(all)
         let item = try #require(store.views[all]?.items.first { $0.number == 500 })
-        #expect(item.computer?.name == "lab")
-        #expect(store.views[all]?.computers.map(\.name).sorted() == ["Laptop", "lab"])
+        #expect(item.computer?.name == "lab-elsewhere")
+        #expect(store.views[all]?.computers.map(\.name).sorted() == ["Laptop", "lab-elsewhere"])
         #expect(store.box(of: item, in: BoxClient.mac) == "lab", "by its key, as this Mac names it")
 
         // One on another Mac: said plainly, never sent to this Mac's box.

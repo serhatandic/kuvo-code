@@ -36,9 +36,11 @@ export const cutText = (text: unknown, most = LETTER_TEXT): string => {
 
 export const LETTER_ID = /^[A-Za-z0-9_-]{6,80}$/;
 
-// What the receiving agent reads, as the Mac and kuvo-browser.js word it (AgentMail.compose).
-export const composeLetter = (name: string, session: string, words: string, waits: boolean): string =>
-  `[Message from ${name} · ${session}] (${waits ? "They're waiting for your reply: just answer, in your words." : session === "unknown" ? "It can't be answered: who sent it isn't known." : `To answer, use send_message to ${session}.`})\n\n${words}`;
+// What the receiving agent reads, as the Mac and kuvo-browser.js word it (AgentMail.compose). A
+// session's task from a starter that hears it finish (`finishHeard`): its last reply is its report,
+// so it isn't sent again as a message too.
+export const composeLetter = (name: string, session: string, words: string, waits: boolean, finishHeard = false): string =>
+  `[Message from ${name} · ${session}] (${waits ? "They're waiting for your reply: just answer, in your words." : session === "unknown" ? "It can't be answered: who sent it isn't known." : finishHeard ? `They get your last reply when you finish: end with your report there, not in a message. Use send_message to ${session} only to ask something or say how it's going.` : `To answer, use send_message to ${session}.`})\n\n${words}`;
 
 // What a letter's sender hears when the conversation it wrote to is stopped: the box keeps it there.
 export const pausedNote = (name?: string): string =>

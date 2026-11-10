@@ -66,11 +66,13 @@ your keychain, serves it from `127.0.0.1`, and points the Kuvo Code in /Applicat
 **Check for Updates…** there to go through the update window, the install, the restart and
 What's New. Ctrl-C stops the server and puts the real feed back.
 
-Pushes to `main`, release tags and release dry runs from `main` run on the maintainer's Mac
-(labels `self-hosted, macOS, ARM64, kuvo-mini`), each job in a fresh macOS VM that's deleted
-after it, with no folders shared and no network to that Mac or its LAN. Pull requests always run
-on GitHub's own runners, so a pull request's code never reaches that Mac, which refuses any other
-job anyway. `scripts/ci-runner/` has the orchestrator, the VM image's build and the setup.
+CI (`.github/workflows/ci.yml`) runs on GitHub's hosted runners, its jobs side by side: the
+generated files and What's New on Linux, the box's and the bridge's tests on macOS and Linux, the
+Swift packages' tests, and the app's. It doesn't build the app itself: only the release workflow
+does, signed, for a tag or a dry run. So run a dry run from `main` (Actions › Release › Run
+workflow) before tagging a release whose build changed. The release's signing job runs in the
+`release` environment (Settings › Environments), which should allow only `main` and `v*` tags and
+hold the signing, notarization and update keys.
 
 A release also carries what remote machines run, for them to update themselves
 with, once the `KUVO_BOX_SIGNING_KEY` secret (an Ed25519 key) is set
@@ -97,19 +99,16 @@ act on those (a window's tracking areas and cursor rectangles once the pointer c
 drawing as Core Animation commits), the test does it itself: `WindowServer.appKitsTurn` and
 `CATransaction.flush()` after `displayIfNeeded()`.
 
-The app, the engine client and the usage tracker have tests:
+Run quick, targeted tests locally while working. Commit the changes to a work branch, then run
+`scripts/ci-branch.sh --wait` to push it over SSH to `origin` as a `ci/` branch and run the full
+CI suites on GitHub. Pass a local branch name to test a different branch. The script prints the run
+URL, job conclusions and failed logs; it never pushes `main` or tags. Only committed changes run.
+CI covers the Mac app, Swift packages, box and bridge; the phone has no CI, so run its tests locally
+through `scripts/heavy.sh phone`. Use `scripts/heavy.sh` for other local builds or tests CI doesn't cover.
 
-```sh
-./scripts/test-app.sh
-cd Packages/OpenCodeKit && swift test
-cd Packages/UsageKit && swift test
-cd Packages/KuvoClient && swift test
-cd Packages/KuvoLink && swift test && node --test Tests/Bridge/*.test.js
-cd Packages/Box && bun install && bun run check && bun test
-```
+Run quick, targeted box and bridge tests with `scripts/test-box.sh [box|bridge|all] [extra test args]`. It queues under the box heavy slot, installs locked dependencies when needed, and summarizes results.
 
-The bridge's tests that run the box itself need a Bun: `bun` on your PATH, or
-`KUVO_TEST_BUN` naming one or an engine (a machine's `~/.kuvo-code/engine/<version>/opencode`,
+The runner uses `~/.bun/bin/bun` by default; set `KUVO_TEST_BUN` to another Bun or an engine (a machine's `~/.kuvo-code/engine/<version>/opencode`,
 which they run as Bun). Run them on a Linux machine too, in a test folder of your own with
 `TMPDIR` inside it, before calling a box change done:
 `scripts/heavy.sh box scripts/test-linux.sh <ssh-host> sandbox.test.js …` does that on a machine
@@ -140,7 +139,7 @@ its home as it ends, and the next run clears what a killed one left.
 `./scripts/test-app.sh` runs one at a time: a run started while another is going
 waits for it, since they share the test copy's settings and temporary folders.
 
-Builds and test runs are heavy, so start them with `scripts/heavy.sh <kind>`, which
+When running heavy builds or tests locally, start them with `scripts/heavy.sh <kind>`, which
 waits for jobs of the same kind (they share build folders) and runs the other
 kinds alongside:
 
@@ -148,7 +147,8 @@ kinds alongside:
 scripts/heavy.sh mac scripts/test-app.sh
 scripts/heavy.sh mac-build sh -c 'xcodebuild … -derivedDataPath "$(getconf DARWIN_USER_CACHE_DIR)KuvoShared-MacBuild$KUVO_HEAVY_BUILD_SUFFIX" …'
 scripts/heavy.sh mac-build sh -c 'cd Packages/KuvoClient && swift test'
-scripts/heavy.sh box sh -c 'cd Packages/Box && bun test'
+scripts/heavy.sh phone <phone-test-command>
+scripts/test-box.sh box <test-filter>
 ```
 
 - `mac`: the Mac app's UI test suite, `scripts/test-app.sh` (`KuvoCodeTests-build`), which drives the
@@ -245,7 +245,7 @@ own, without SSH.
 Every route a phone uses is answered twice: by this Mac (`PhoneLink`) and by a machine's bridge
 (`kuvo-link.js`). The scenarios in `Packages/KuvoLink/Vectors/routes/*.json` are written once and
 run against both: `RouteContractTests` (in `./scripts/test-app.sh`) drives the Mac's real
-`PhoneLink` and stores, and `node --test Tests/Bridge/contract.test.js` in `Packages/KuvoLink` the
+`PhoneLink` and stores, and `scripts/test-box.sh bridge contract.test.js` the
 bridge's real handler. `Tests/Bridge/contract-mac.test.js` runs the scenarios of the areas that
 have moved onto this Mac's box (`PhoneLink.boxRoutes`) against the bridge's handler as this Mac's
 box, with the app's folders and kit, checking what's expected of a Mac. Only the engine is a
@@ -313,9 +313,15 @@ README says how.
 
 A machine's browser is Chrome for Testing, the full browser run in Chrome's own headless mode
 (the separate headless shell is one sites take for a bot), with its libraries and fonts, in
-`~/.kuvo-code/browser` there (`scripts/browser-runtime.py` lists what it brings; on a Mac machine,
-Chrome for Testing as it comes, pinned in `browser-runtime-mac.json`, with a `chrome` launcher, as
-it won't run through a link). One script,
+`~/.kuvo-code/browser` there. The machine's box sets it up itself, with or without a Mac
+(`Packages/Box/src/link/browser`, PROTOCOL.md's "The browser on a machine"): the build pinned in
+`linux.json` and `mac.json` there (`scripts/browser-runtime.py` writes them; on a Mac machine,
+Chrome for Testing as it comes, with a `chrome` launcher, as it won't run through a link),
+downloaded only from Google's Chrome for Testing and Rocky Linux over HTTPS, each file checked
+against its size and SHA-256 before it's unpacked (by the box itself: no `unzip`, `xz` or `rpm`
+on the machine). The Mac only shows how it goes (`kuvo/browser`). Its tests serve stand-ins
+(`Tests/Bridge/browser-source-stand-in.js`): never the real sources, never a real `~/.kuvo-code`.
+One script,
 `KuvoCode/Resources/kuvo-browser.js`, runs with the engine's own runtime in three ways:
 
 - **host**, the keeper: it starts Chromium, holds it over a pipe, and serves the DevTools
@@ -327,6 +333,9 @@ it won't run through a link). One script,
   start runs the new one.
 - **mcp**, the agent's browser tools for the machine's engine, talking to the keeper.
 - **connect**, the Mac's live view of the pages, over SSH, also through the keeper.
+
+The first two, finding no browser, have the box set it up and wait for it (`kuvo-link.js browser
+install`); a browser that doesn't start because its build isn't whole is set up again once.
 
 What agents ask you for there also goes to `run/browser-asks.json`, for the machine's phone link,
 which answers it for a phone with the Mac closed (`Kuvo.answer` on the keeper's socket).
@@ -349,7 +358,7 @@ JavaScript sides check against the same vectors in `Packages/KuvoLink/Vectors`.
 
 Group chats run in each computer's agents bridge (`Packages/Box/src/agents/groups`), this Mac's as a
 machine's: the app shows them and sends what you do in them (`BoxGroups`), and holds none of
-their rules. Their own tests are the bridge's (`bun test` in `Packages/Box`). What the app still reads
+their rules. Their own tests are the bridge's (`scripts/test-box.sh box`). What the app still reads
 the same way as a box (a bot's job from its memory, when a repeat comes back, what a message
 quotes) is held to `Packages/Box/test/agents/box-vectors.json`: after changing one on either side, run
 `./scripts/box-vectors.sh` (it writes the file from the Swift side), then the bridges' tests.

@@ -3061,6 +3061,9 @@
             "literal": "git"
            },
            {
+            "literal": "git.changes.count"
+           },
+           {
             "literal": "git.merge"
            },
            {
@@ -3247,6 +3250,9 @@
             "literal": "sandbox.asks"
            },
            {
+            "literal": "sandbox.reviews.whole"
+           },
+           {
             "literal": "approval"
            },
            {
@@ -3278,6 +3284,9 @@
            },
            {
             "literal": "work-queue.elsewhere"
+           },
+           {
+            "literal": "browser"
            },
            {
             "literal": "accounts.ended"
@@ -3399,6 +3408,9 @@
             "literal": "git"
            },
            {
+            "literal": "git.changes.count"
+           },
+           {
             "literal": "git.merge"
            },
            {
@@ -3585,6 +3597,9 @@
             "literal": "sandbox.asks"
            },
            {
+            "literal": "sandbox.reviews.whole"
+           },
+           {
             "literal": "approval"
            },
            {
@@ -3616,6 +3631,9 @@
            },
            {
             "literal": "work-queue.elsewhere"
+           },
+           {
+            "literal": "browser"
            }
           ]
          }
@@ -3845,6 +3863,128 @@
       "blocked": {
        "oneOf": [
         "string",
+        "null"
+       ]
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/browser",
+   "answers": {
+    "200": {
+     "object": {
+      "state": {
+       "oneOf": [
+        {
+         "literal": "missing"
+        },
+        {
+         "literal": "checking"
+        },
+        {
+         "literal": "downloading"
+        },
+        {
+         "literal": "installing"
+        },
+        {
+         "literal": "ready"
+        },
+        {
+         "literal": "failed"
+        }
+       ]
+      },
+      "chromium": {
+       "oneOf": [
+        "string",
+        "null"
+       ]
+      },
+      "installed": {
+       "oneOf": [
+        "string",
+        "null"
+       ]
+      },
+      "progress": {
+       "oneOf": [
+        "number",
+        "null"
+       ]
+      },
+      "message": {
+       "oneOf": [
+        "string",
+        "null"
+       ]
+      },
+      "retryAt": {
+       "oneOf": [
+        "number",
+        "null"
+       ]
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/browser",
+   "answers": {
+    "202": {
+     "object": {
+      "state": {
+       "oneOf": [
+        {
+         "literal": "missing"
+        },
+        {
+         "literal": "checking"
+        },
+        {
+         "literal": "downloading"
+        },
+        {
+         "literal": "installing"
+        },
+        {
+         "literal": "ready"
+        },
+        {
+         "literal": "failed"
+        }
+       ]
+      },
+      "chromium": {
+       "oneOf": [
+        "string",
+        "null"
+       ]
+      },
+      "installed": {
+       "oneOf": [
+        "string",
+        "null"
+       ]
+      },
+      "progress": {
+       "oneOf": [
+        "number",
+        "null"
+       ]
+      },
+      "message": {
+       "oneOf": [
+        "string",
+        "null"
+       ]
+      },
+      "retryAt": {
+       "oneOf": [
+        "number",
         "null"
        ]
       }
@@ -4180,6 +4320,36 @@
         "hashes": {
          "map": "string"
         },
+        "uncommitted": "bool"
+       }
+      }
+     ]
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/git/changes/count",
+   "answers": {
+    "200": {
+     "oneOf": [
+      {
+       "object": {
+        "repository": {
+         "literal": false
+        }
+       }
+      },
+      {
+       "object": {
+        "repository": {
+         "literal": true
+        },
+        "root": "string",
+        "against": "string",
+        "files": "number",
+        "additions": "number",
+        "deletions": "number",
+        "untracked": "number",
         "uncommitted": "bool"
        }
       }

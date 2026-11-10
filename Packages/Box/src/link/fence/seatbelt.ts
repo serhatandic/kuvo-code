@@ -180,9 +180,12 @@ export function seatbeltProfile(policy: FencePolicy, options: SeatbeltOptions): 
 
   out.push(";; what runs outside the sandbox, or changes the engine");
   // The conversation's folder and its repository's, themselves: never removed or made again, so
-  // never traded for a link to somewhere else (another bot's folder) the next command would work in;
-  // nor its temporary folder, which in Kuvo Code's would lead the next command into them (its keys).
-  deny("file-write-unlink file-write-create", `(literal (param "WORK"))`, `(literal (param "GIT"))`, `(literal (param "TMP"))`);
+  // never traded for a link to somewhere else (another bot's folder) the next command would work in.
+  deny("file-write-unlink file-write-create", `(literal (param "WORK"))`, `(literal (param "GIT"))`);
+  // Nor its temporary folder, which in Kuvo Code's would lead the next command into them (its keys):
+  // removed (`rm -rf $TMPDIR`) it may be, but made again only as a folder, never a link or a file in
+  // its place (nor one moved there).
+  deny("file-write-create", `(require-all (literal (param "TMP")) (require-not (vnode-type DIRECTORY)))`);
   // Nor any folder that holds what's kept from commands (a secret in a cache they write, what runs
   // later, Kuvo Code's own): moved away or cloned whole (clonefile, checked only for the folder),
   // what's in it would be read or changed by its new name; nor one that isn't there yet traded for a
