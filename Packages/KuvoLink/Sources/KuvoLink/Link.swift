@@ -15,6 +15,11 @@ public enum Link {
     static let answerWithin: Duration = .seconds(5)
     /// How long a check may take: a host that has the session answers at once.
     static let checkTimeout: Duration = .seconds(5)
+    /// How fast a slow connection sends, in bytes a second: a check gets a second more for each
+    /// of these that may still be on its way ahead of its ping. A frame the relay connection says
+    /// it sent has only left for the system's buffers, the network and the relay's (a few MB
+    /// between them), and on a slow connection reaches the host many seconds later (#358).
+    static let slowUpload = 64 * 1024
 }
 
 public enum LinkError: Error, Equatable, LocalizedError {
@@ -147,6 +152,12 @@ public actor LinkClient {
     private var sessions: [LinkAddress: Session] = [:]
     private var registration: PushRegistration?
     private var clock = LinkClock.real
+    /// How much this phone has sent on its relay connection, in bytes, and how much of it a host
+    /// has said it had (answering a request or a check sent after it). What's between may still be
+    /// on its way, however long ago the relay connection said it sent it. One mark for every host:
+    /// what holds a body up is this phone's own connection, which they share.
+    private var sent = 0
+    private var arrived = 0
 
     private final class Session {
         /// A new one if its handshake starts over (see `startOver`).
@@ -164,8 +175,12 @@ public actor LinkClient {
         /// it is, for its timeout.
         var checking = false
         var check = 0
-        /// Requests sent that have no answer yet.
-        var unanswered: Set<Int> = []
+        /// Requests sent that have no answer yet, each with how much this phone had sent once it
+        /// went (`LinkClient.sent`): an answer says the host had it all by then.
+        var unanswered: [Int: Int] = [:]
+        /// Where in what this phone sent each check's ping went, in order: its pong says the host
+        /// had it all.
+        var pings: [Int] = []
         var nextID = 1
         var streams: [Int: AsyncThrowingStream<LinkResponsePart, Error>.Continuation] = [:]
         var sockets: [Int: AsyncThrowingStream<LinkSocketEvent, Error>.Continuation] = [:]
@@ -363,7 +378,8 @@ public actor LinkClient {
         for waiter in session.waiting { waiter.resume(throwing: error) }
         session.waiting = []
         session.checking = false
-        session.unanswered = []
+        session.unanswered = [:]
+        session.pings = []
         for stream in session.streams.values { stream.finish(throwing: error) }
         session.streams = [:]
         for socket in session.sockets.values { socket.finish(throwing: error) }
@@ -407,7 +423,7 @@ public actor LinkClient {
             for piece in LinkMessage.pieces(head, body: request.body, end: true) {
                 try seal(piece, in: session)
             }
-            session.unanswered.insert(id)
+            session.unanswered[id] = sent
             watchAnswer(id, in: session)
         } catch {
             listener.failed(error)
@@ -419,18 +435,22 @@ public actor LinkClient {
     private func startCheck(_ session: Session) throws {
         guard !session.checking else { return }
         try seal(LinkMessage(.init(t: .ping)), in: session)
+        session.pings.append(sent)
         session.checking = true
         session.check += 1
-        timeCheck(session.check, on: session)
+        timeCheck(session.check, on: session, behind: sent - arrived)
     }
 
     /// Gives a check its time from when the ping has left: it may be behind this phone's own
-    /// frames on their way out (a big body on a slow connection).
-    private func timeCheck(_ check: Int, on session: Session) {
+    /// frames on their way out (a big body on a slow connection). Once the relay connection says
+    /// they've gone, what the host hasn't said it had (`behind` bytes) may still be on its way,
+    /// ahead of the ping: the check has time for that too, as a slow connection sends it.
+    private func timeCheck(_ check: Int, on session: Session, behind: Int) {
         let (relay, clock) = (relay, clock)
+        let wait = Link.checkTimeout + .seconds(behind / Link.slowUpload)
         Task {
             await relay?.allSent()
-            await clock.sleep(Link.checkTimeout)
+            await clock.sleep(wait)
             self.checkTimedOut(session, check: check)
         }
     }
@@ -447,7 +467,7 @@ public actor LinkClient {
     /// A request still without an answer: if the host hasn't said anything for a while either, a
     /// check finds out whether it's there. One that's there just takes long, and waits on.
     private func checkAnswer(_ id: Int, in session: Session) {
-        guard sessions[session.host.linkAddress] === session, session.unanswered.contains(id) else { return }
+        guard sessions[session.host.linkAddress] === session, session.unanswered[id] != nil else { return }
         // Not while this phone's own frames are still going out (a big body on a slow
         // connection): the host can't answer what hasn't reached it, and a ping would wait behind it.
         if relay?.isSending != true, clock.now() - session.lastHeard >= Link.answerWithin {
@@ -473,7 +493,7 @@ public actor LinkClient {
 
     private func cancel(_ ticket: Ticket, on host: PairedHost) {
         guard let (id, sessionID) = ticket.value, let session = sessions[host.linkAddress], session.id == sessionID else { return }
-        session.unanswered.remove(id)
+        session.unanswered[id] = nil
         let socket = session.sockets.removeValue(forKey: id)
         guard session.streams.removeValue(forKey: id) != nil || socket != nil else { return }
         socket?.finish()
@@ -494,7 +514,9 @@ public actor LinkClient {
         guard var transport = session.transport, let relay else { throw LinkError.closed }
         let ciphertext = try transport.seal(message.data)
         session.transport = transport
-        relay.send(.send(to: session.host.linkAddress, payload: LinkFrame(.transport, session: session.id, body: ciphertext).data))
+        let frame = LinkFrame(.transport, session: session.id, body: ciphertext).data
+        sent += frame.count
+        relay.send(.send(to: session.host.linkAddress, payload: frame))
     }
 
     // MARK: The relay
@@ -510,6 +532,8 @@ public actor LinkClient {
         do {
             let relay = try await task.value
             self.relay = relay
+            // Nothing sent before is on its way on this one.
+            arrived = sent
             if let registration { relay.send(.register(registration)) }
             Task { [weak self] in
                 for await message in relay.messages { await self?.receive(message) }
@@ -583,8 +607,8 @@ public actor LinkClient {
         let head = message.head
         switch head.t {
         case .res, .data:
-            // Answered, with a head or (a host that sends none) its body.
-            if let id = head.id { session.unanswered.remove(id) }
+            // Answered, with a head or (a host that sends none) its body: it had the request whole.
+            if let id = head.id, let went = session.unanswered.removeValue(forKey: id) { arrived = max(arrived, went) }
             if let id = head.id, let socket = session.sockets[id] {
                 if head.t == .res, head.s != 101 {
                     session.sockets[id] = nil
@@ -607,12 +631,15 @@ public actor LinkClient {
             }
         case .cancel:
             guard let id = head.id else { return }
-            session.unanswered.remove(id)
+            session.unanswered[id] = nil
             session.streams.removeValue(forKey: id)?.finish(throwing: LinkError.closed)
             session.sockets.removeValue(forKey: id)?.finish(throwing: LinkError.closed)
         case .ping:
             try? seal(LinkMessage(.init(t: .pong)), in: session)
-        case .req, .pong:
+        case .pong:
+            // It had everything this phone sent before the ping.
+            if !session.pings.isEmpty { arrived = max(arrived, session.pings.removeFirst()) }
+        case .req:
             break
         }
     }

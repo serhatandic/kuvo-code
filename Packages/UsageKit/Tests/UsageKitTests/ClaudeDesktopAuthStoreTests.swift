@@ -125,8 +125,7 @@ final class ClaudeDesktopAuthStoreTests: XCTestCase {
         fixture.files.files["\(home.path)/.codex/auth.json"] =
             #"{"tokens":{"access_token":"codex-token","account_id":"CODEX-1"}}"#
         let suite = "OpenUsageTests.UnreadableClaudeEnvironment.\(UUID().uuidString)"
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
-        defer { defaults.removePersistentDomain(forName: suite) }
+        let defaults = try XCTUnwrap(testDefaults(suiteName: suite))
         let fixtureHome = home
         let observer = DefaultAccountObserver(
             environment: FakeEnvironment(), files: fixture.files, keychain: FakeKeychain(),
@@ -159,8 +158,7 @@ final class ClaudeDesktopAuthStoreTests: XCTestCase {
         let previousIdentity = "\(accountUUID)|\(organization)"
         let currentIdentity = "\(accountUUID)|\(otherOrganization)"
         let suite = "OpenUsageTests.OrganizationSwitch.\(UUID().uuidString)"
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
-        defer { defaults.removePersistentDomain(forName: suite) }
+        let defaults = try XCTUnwrap(testDefaults(suiteName: suite))
         let existing = ProviderAccountRecord(
             id: "claude", family: "claude", identityKey: previousIdentity,
             label: "Personal",

@@ -9,7 +9,7 @@ import { cut } from "../../shared/text";
 import { call, engineGet } from "../engine/client";
 import { CHATS } from "../home";
 import { describePermission, projectNameOf } from "../notices/news";
-import { lastTurnEnd, summaryAtEnd, summaryRowAtEnd, workOutcome } from "../../shared/summaries";
+import { lastTurn, lastTurnEnd, summaryAtEnd, summaryRowAtEnd, workOutcome } from "../../shared/summaries";
 import { listBots } from "../bots/list";
 import { asksIn } from "./answers";
 import type { Target } from "../../shared/records";
@@ -120,15 +120,19 @@ export async function askingNow(listed: Listed, signal?: AbortSignal): Promise<{
   return null;
 }
 
-/** The first lines of a session's last reply, or null for none. */
-export async function lastReplyOf(listed: Listed, signal?: AbortSignal): Promise<string | null> {
-  const page = await call(listed.target, "GET", `/api/session/${encodeURIComponent(listed.data.id)}/message?limit=6&order=desc`, undefined, signal).catch(() => null);
-  for (const message of Array.isArray(page) ? page : []) {
+/** The first lines of what the latest of `messages` (newest first) to say something said, or null. */
+function replyIn(messages: unknown): string | null {
+  for (const message of Array.isArray(messages) ? messages : []) {
     if (!isObject(message) || message.type !== "assistant" || !Array.isArray(message.content)) continue;
     const text = message.content.filter((part: unknown) => isObject(part) && part.type === "text").map((part: { text?: unknown }) => String(part.text ?? "")).join(" ").replace(/\s+/g, " ").trim();
     if (text) return cut(text, 280);
   }
   return null;
+}
+
+/** The first lines of a session's last reply, or null for none. */
+export async function lastReplyOf(listed: Listed, signal?: AbortSignal): Promise<string | null> {
+  return replyIn(await lastMessages(listed.target, listed.data.id, signal));
 }
 
 /**
@@ -189,10 +193,16 @@ export async function describeWork(listed: Listed, working: Set<string>, { repli
   const folder = data.location?.directory ?? data.directory ?? "";
   const asking = await askingNow(listed, signal);
   // (With its last reply, read as well: how it ended, past a summary.)
-  const outcome = replies && !working.has(data.id) ? outcomeOf(listed, await call(listed.target, "GET", `/api/session/${encodeURIComponent(data.id)}/message?limit=6&order=desc`, undefined, signal).catch(() => null)) : data.outcome;
+  const read = replies && !working.has(data.id);
+  const page = read ? await lastMessages(listed.target, data.id, signal) : null;
+  const outcome = read ? outcomeOf(listed, page) : data.outcome;
   const state: WorkSession["state"] = asking ? "asking" : working.has(data.id) ? "working"
     : outcome === "succeeded" ? "finished" : outcome === "failed" ? "failed" : outcome === "interrupted" ? "stopped" : data.time?.idle ? "finished" : "idle";
-  const reply = replies && state !== "working" ? await lastReplyOf(listed, signal) : null;
+  // A turn cut short says what it said in that turn, if anything: an earlier turn's reply would
+  // read as how it ended.
+  const reply = !replies || state === "working" ? null
+    : state === "stopped" || state === "failed" ? replyIn(lastTurn(page))
+    : read ? replyIn(page) : await lastReplyOf(listed, signal);
   const project = folder === CHATS ? undefined : projectNameOf(folder);
   return {
     session: data.id,

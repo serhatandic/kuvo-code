@@ -315,6 +315,16 @@ export class GrokAgent implements Agent {
         notification(method, params, context) {
           // Grok can say the prompt is over before answering it.
           const name = method.replace(/^_/, "")
+          // What it keeps going in the background, each of which wakes it as it ends: listed whole
+          // at each change, those that ended still there (not running).
+          if (name === "x.ai/session/update" && params?.update?.sessionUpdate === "background_tasks" && Array.isArray(params.update.tasks)) {
+            const running = params.update.tasks.filter((task: any) => typeof task?.task_id === "string" && task.status === "running")
+            context.background(
+              running.map((task: any) => ({ id: task.task_id, command: typeof task.command === "string" ? task.command : undefined, description: typeof task.description === "string" ? task.description : undefined, kind: typeof task.kind === "string" ? task.kind : undefined, started: Date.parse(task.started_at) || undefined, outputFile: typeof task.output_file === "string" ? task.output_file : undefined })),
+              typeof params.sessionId === "string" ? params.sessionId : undefined,
+              Boolean(params?._meta?.isReplay),
+            )
+          }
           // One it ran on its own after a task of its own completed: that turn's end.
           if (name === "x.ai/session/prompt_complete" && String(params?.promptId ?? "").startsWith("task-completed-")) context.endOwn()
           if (name === "x.ai/session/prompt_complete" && !String(params?.promptId ?? "").startsWith("task-completed-")) {
