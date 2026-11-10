@@ -428,6 +428,56 @@ class HeavyTests(unittest.TestCase):
         self.assertIn("The Mac is busy", said)
         self.assertEqual(self.run_heavy("box", "true", KUVO_HEAVY_LOAD="1000")[0], 0)
 
+    def waiting_mac(self, **env):
+        """A Mac app suite that has its turn and waits for the Mac to be less busy (to it, the Mac is
+        always busy), once it says so. Stopped with its whole session at the end of the test."""
+        mac = subprocess.Popen([HEAVY, "mac", "true"], env=dict(self.env, KUVO_HEAVY_LOAD="0", **env), stderr=subprocess.PIPE, text=True, start_new_session=True)
+        def stop():
+            try:
+                os.killpg(mac.pid, signal.SIGKILL)
+            except ProcessLookupError:  # stopped by the test already
+                pass
+            mac.wait(timeout=30)
+            mac.stderr.close()
+        self.addCleanup(stop)
+        self.assertIn("Waiting while the Mac is busy", mac.stderr.readline())
+        return mac
+
+    def test_while_the_app_suite_waits_for_a_less_busy_mac_new_jobs_of_other_kinds_wait_for_it(self):
+        self.waiting_mac()
+        for kind in ("phone", "mac-build", "box"):
+            with self.subTest(kind):
+                code, said = self.run_heavy(kind, "true")
+                self.assertEqual(code, WAITS)
+                self.assertIn("The Mac app's suite is waiting for the Mac to be less busy, and goes first", said)
+        # Waiting (not told not to), it says why, once.
+        waiting = subprocess.Popen([HEAVY, "box", "true"], env=self.env, stderr=subprocess.PIPE, text=True, start_new_session=True)
+        try:
+            self.assertIn("Waiting for the Mac app's suite to start first", waiting.stderr.readline())
+            self.assertIsNone(waiting.poll(), "it started before the suite")
+        finally:
+            os.killpg(waiting.pid, signal.SIGKILL)
+            waiting.wait(timeout=30)
+            waiting.stderr.close()
+
+    def test_the_app_suite_holds_other_jobs_back_only_so_long_and_only_while_it_waits(self):
+        mac = self.waiting_mac()
+        # Past the time it may hold them back, they go.
+        self.assertEqual(self.run_heavy("phone", "true", KUVO_HEAVY_MAC_FIRST_FOR="0")[0], 0)
+        # A suite that's gone holds nothing back.
+        os.killpg(mac.pid, signal.SIGKILL)
+        mac.wait(timeout=30)
+        self.assertEqual(self.run_heavy("box", "true")[0], 0)
+
+    def test_an_app_suite_that_isnt_waiting_holds_nothing_back(self):
+        # Told not to wait, it says so and leaves nothing behind that holds others back.
+        code, said = self.run_heavy("mac", "true", KUVO_HEAVY_LOAD="0")
+        self.assertEqual(code, WAITS)
+        self.assertEqual(self.run_heavy("phone", "true")[0], 0)
+        # Once it started, neither.
+        self.assertEqual(self.run_heavy("mac", "true")[0], 0)
+        self.assertEqual(self.run_heavy("box", "true")[0], 0)
+
     def test_its_command_runs_with_its_arguments_and_answer(self):
         result = subprocess.run([HEAVY, "box", "/bin/sh", "-c", 'echo "$1"; exit 3', "sh", "a b"], env=self.env, capture_output=True, text=True, timeout=30)
         self.assertEqual((result.returncode, result.stdout), (3, "a b\n"))
