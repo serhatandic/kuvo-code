@@ -3250,6 +3250,9 @@
             "literal": "sandbox.asks"
            },
            {
+            "literal": "sandbox.reviews.whole"
+           },
+           {
             "literal": "approval"
            },
            {
@@ -3589,6 +3592,9 @@
            },
            {
             "literal": "sandbox.asks"
+           },
+           {
+            "literal": "sandbox.reviews.whole"
            },
            {
             "literal": "approval"

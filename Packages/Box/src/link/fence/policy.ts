@@ -215,8 +215,8 @@ export function sshSockets(home: string, system = "/etc/ssh/ssh_config"): { path
   const read = (file: string, relative: string, depth: number) => {
     if (depth > 8 || seen.has(file)) return;
     seen.add(file);
-    let text = "";
-    try { text = fs.readFileSync(file, "utf8"); } catch { return; }
+    const text = textFor(file).value;
+    if (text === null) return;
     for (const line of text.split("\n")) {
       const included = line.match(/^\s*Include\s*(?:=\s*|\s+)(.+)$/i);
       if (included) {
@@ -246,7 +246,7 @@ export function sshSockets(home: string, system = "/etc/ssh/ssh_config"): { path
     }
   };
   read(path.join(home, ".ssh", "config"), path.join(home, ".ssh"), 0);
-  try { for (const name of fs.readdirSync(path.join(home, ".ssh", "config.d"))) read(path.join(home, ".ssh", "config.d", name), path.join(home, ".ssh"), 1); } catch {}
+  for (const name of namesIn(path.join(home, ".ssh", "config.d")).value ?? []) read(path.join(home, ".ssh", "config.d", name), path.join(home, ".ssh"), 1);
   read(system, path.dirname(system), 0);
   return { paths: [...paths], globs: [...globs] };
 }
@@ -269,7 +269,7 @@ function matching(pattern: string): string[] {
   for (const name of pattern.split("/").filter(Boolean)) {
     if (!/[*?]/.test(name)) { found = found.map(at => path.join(at, name)); continue; }
     const like = new RegExp(`^${name.split("").map(char => (char === "*" ? ".*" : char === "?" ? "." : escapeRegex(char))).join("")}$`);
-    found = found.flatMap(at => { try { return fs.readdirSync(at).filter(each => like.test(each) && (name.startsWith(".") || !each.startsWith("."))).sort().map(each => path.join(at, each)); } catch { return []; } });
+    found = found.flatMap(at => (namesIn(at).value ?? []).filter(each => like.test(each) && (name.startsWith(".") || !each.startsWith("."))).sort().map(each => path.join(at, each)));
   }
   return found;
 }
@@ -310,8 +310,11 @@ function keychainDaemons(home: string): string[] {
  */
 export function sshKeys(home: string): string[] {
   const folder = path.join(home, ".ssh");
-  let names: string[] = [];
-  try { names = fs.readdirSync(folder); } catch { return []; }
+  const { known, value: names } = namesIn(folder);
+  // (One that leads into a folder macOS asks about, not listed yet, or not listed at all: hidden
+  // whole. If the box can't list it, commands can't read it either.)
+  if (!known || (!names && macMayAsk(folder))) return [folder];
+  if (!names) return [];
   return names.filter(name => !(name === "config" || name === "config.d" || name.startsWith("known_hosts") || name.endsWith(".pub") || name === "authorized_keys"))
     .map(name => path.join(folder, name));
 }
@@ -320,7 +323,9 @@ export function sshKeys(home: string): string[] {
  * it; with the token in the Keychain or the keyring, it holds none). */
 function ghHosts(home: string): string[] {
   const file = path.join(home, ".config", "gh", "hosts.yml");
-  try { return /oauth_token\s*:/.test(fs.readFileSync(file, "utf8")) ? [file] : []; } catch { return []; }
+  const { known, value: text } = textFor(file);
+  // (Hidden until it's read, where that waits on macOS, and where macOS said no.)
+  return !known || (text === null ? macMayAsk(file) : /oauth_token\s*:/.test(text)) ? [file] : [];
 }
 
 /** This Mac's app's temporary folder (`…/T/<bundle>`), where its box's own is (`…/T/<bundle>/box`),
@@ -493,25 +498,6 @@ function userTemporary(): string[] {
   return user ? [user] : [];
 }
 
-/** Whether a folder is one the walls keep from commands, as a conversation's own folder would write
- * it whole: inside what runs later or `~/Library`, one holding any wall (your home, the folders above
- * it, `~/.config`), a personal folder or what's in it but `ours` (your projects there, and the
- * starting conversation's own folder), or a folder on PATH outside your home (or one holding it).
- * Only you start a conversation there, never an agent. */
-export function keptFromWork(folder: string, ours: readonly string[] = [], policy: FencePolicy = fencePolicy()): boolean {
-  const at = realish(folder);
-  const inside = (wall: string) => at === wall || at.startsWith(wall + "/");
-  const holds = (wall: string) => wall.startsWith(at === "/" ? "/" : at + "/");
-  const personal = policy.personal ?? [];
-  const homes = (policy.homeWrites ?? [policy.home]);
-  const walls = [...policy.readOnly, ...(policy.homeKept ?? []), ...personal, ...policy.kuvo, ...policy.secrets, ...homes];
-  if ([...policy.readOnly, ...(policy.homeKept ?? [])].some(inside) || walls.some(holds)) return true;
-  if (personal.some(inside) && !ours.map(realish).some(own => !personal.includes(own) && inside(own))) return true;
-  const onPath = (process.env.PATH ?? "").split(":").filter(each => path.isAbsolute(each)).map(realish)
-    .filter(each => !homes.some(home => each === home || each.startsWith(home + "/")));
-  return onPath.some(each => inside(each) || holds(each));
-}
-
 /** A path as the system has it, through symlinks (`/tmp` is `/private/tmp` on macOS), as the
  * sandbox compares them: its deepest folder that's there resolved, the rest as it's named. */
 export function realish(where: string): string {
@@ -529,7 +515,101 @@ export function realish(where: string): string {
 export function throughLinks(where: string): string {
   if (process.platform !== "darwin") return realish(where);
   const found = deepestThere(where, followLinks);
-  return macAsksAbout(found) ? found : realish(found);
+  // (Nor one through a link that leads into one, whether what it names is there or not: following
+  // it would open it.)
+  return macAsksAbout(found) || macAsksAbout(leadsTo(where)) ? found : realish(found);
+}
+
+/** Whether opening `where` could hold whoever opens it until you answer macOS: it's in a folder
+ * macOS asks about, or leads into one through its links (on a Mac; never elsewhere). Asking opens
+ * nothing. */
+export function macMayAsk(where: string): boolean {
+  return process.platform === "darwin" && (macAsksAbout(path.resolve(where)) || macAsksAbout(leadsTo(where)));
+}
+
+/**
+ * Waits, off the box's thread, until macOS has said whether these paths may be opened, of those it
+ * may ask about (`macMayAsk`: a project on your Desktop, say). Opening one there holds whoever opens
+ * it until you answer macOS's prompt, so the box, which opens them with `realish` and the like as it
+ * answers, would answer no one meanwhile; asked here first, only the request that needs the answer
+ * waits for it, and after it they open at once. Anything else is never waited on.
+ */
+export async function askedAbout(paths: readonly unknown[]): Promise<void> {
+  const named = paths.filter((each): each is string => typeof each === "string" && path.isAbsolute(each) && macMayAsk(each));
+  await Promise.all([...new Set(named.map(each => path.resolve(each)))].map(askOne));
+}
+
+// The ask under way in each folder macOS asks about (`askingIn`): one at a time there, so prompts
+// nobody answers hold one of Bun's threads for files each, never all of them (the rest of the box
+// reads files on them too).
+const asking = new Map<string, Promise<void>>();
+
+async function askOne(where: string): Promise<void> {
+  const place = askingIn(macAsksAbout(where) ? where : leadsTo(where));
+  for (let pending = asking.get(place); pending; pending = asking.get(place)) await pending;
+  const asked: Promise<void> = fs.promises.realpath(where).then(() => {}, () => {}).finally(() => {
+    if (asking.get(place) === asked) asking.delete(place);
+  });
+  asking.set(place, asked);
+  await asked;
+}
+
+/** The folder macOS answers for as a whole that `at` is in: a personal folder of yours, iCloud
+ * Drive, another drive; in ~/Library, where it asks of each app's data, the path itself. */
+function askingIn(at: string): string {
+  macAsksAbout(at);
+  const found = macAsks!.exec(at.toLowerCase());
+  if (!found) return at;
+  if (found[2] === "/volumes/") {
+    const name = at.slice(found[0].length).split("/")[0];
+    return name ? at.slice(0, found[0].length) + name : at;
+  }
+  const folder = at.slice(0, found[0].length).replace(/\/$/, "");
+  return /\/library$/i.test(folder) ? at : folder;
+}
+
+// Files of yours the walls are read from (SSH's settings and the files they include, gh's sign-in)
+// and folders they list (~/.ssh), where they lead into a folder macOS asks about (a dotfiles folder
+// in Documents): read off the box's thread, each as it last read (`known` once it first has), so a
+// prompt nobody answers holds that read, never the box. Each policy starts the next read; one that
+// reads something new has the walls written again (`whenReadLate`).
+const lateReads = new Map<string, { known: boolean; value: unknown; reading?: Promise<void> }>();
+let readLateChanged: () => void = () => {};
+
+/** What to do when a file or folder read off the box's thread says something new. */
+export function whenReadLate(changed: () => void): void {
+  readLateChanged = changed;
+}
+
+/** The reads off the box's thread under way now, once they're done (for the tests). */
+export async function readsLate(): Promise<void> {
+  await Promise.all([...lateReads.values()].map(each => each.reading));
+}
+
+function readLate<T>(key: string, read: () => Promise<T>): { known: boolean; value: T | null } {
+  let kept = lateReads.get(key);
+  if (!kept) lateReads.set(key, kept = { known: false, value: null });
+  if (!kept.reading) {
+    const entry = kept;
+    entry.reading = read().catch(() => null).then(value => {
+      const changed = !entry.known || JSON.stringify(value) !== JSON.stringify(entry.value);
+      Object.assign(entry, { known: true, value, reading: undefined });
+      if (changed) readLateChanged();
+    });
+  }
+  return { known: kept.known, value: kept.value as T | null };
+}
+
+/** A file's text, null where it can't be read; `known`, false while it waits on macOS. */
+function textFor(file: string): { known: boolean; value: string | null } {
+  if (macMayAsk(file)) return readLate(`text ${path.resolve(file)}`, async () => { await askedAbout([file]); return fs.promises.readFile(file, "utf8"); });
+  try { return { known: true, value: fs.readFileSync(file, "utf8") }; } catch { return { known: true, value: null }; }
+}
+
+/** A folder's names, null where it can't be listed; `known`, false while it waits on macOS. */
+function namesIn(folder: string): { known: boolean; value: string[] | null } {
+  if (macMayAsk(folder)) return readLate(`names ${path.resolve(folder)}`, async () => { await askedAbout([folder]); return fs.promises.readdir(folder); });
+  try { return { known: true, value: fs.readdirSync(folder) }; } catch { return { known: true, value: null }; }
 }
 
 // What macOS guards as it's opened: those folders in your account's home, all of ~/Library (it holds a
@@ -554,8 +634,15 @@ function deepestThere(where: string, resolve: (at: string) => string): string {
   }
 }
 
-/** A whole path through its links, a name at a time; it throws where a name isn't there. */
-function followLinks(where: string): string {
+/** Where a path leads through its links, opening nothing: as `followLinks`, but past a name that
+ * isn't there (a link to it, say), the rest as it's named. */
+function leadsTo(where: string): string {
+  try { return followLinks(path.resolve(where), true); } catch { return path.resolve(where); }
+}
+
+/** A whole path through its links, a name at a time; it throws where a name isn't there (`loose`:
+ * the rest as it's named from there). */
+function followLinks(where: string, loose = false): string {
   let names = where.split("/");
   let at = "/";
   for (let links = 0; names.length;) {
@@ -566,7 +653,14 @@ function followLinks(where: string): string {
       continue;
     }
     const next = path.join(at, name);
-    if (!fs.lstatSync(next).isSymbolicLink()) {
+    let link: boolean;
+    try {
+      link = fs.lstatSync(next).isSymbolicLink();
+    } catch (error) {
+      if (!loose) throw error;
+      return path.join(next, ...names);
+    }
+    if (!link) {
       at = next;
       continue;
     }

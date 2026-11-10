@@ -627,6 +627,7 @@ var CONFIG_LOCK = path3.join(RUN, ".config.lock");
 var BOTS = process.env.KUVO_BOTS || path3.join(K, "bots");
 var CHATS = process.env.KUVO_CHATS || path3.join(K, "chats");
 var MAC_ATTACHMENTS = process.env.KUVO_MAC_ATTACHMENTS || null;
+var attachmentRoots = () => [path3.join(K, "attachments"), ...MAC_ATTACHMENTS ? [MAC_ATTACHMENTS] : []];
 var IS_MAC = process.env.KUVO_BOX === "mac";
 var HERE = IS_MAC ? "this Mac" : "this machine";
 var ENGINE_CONFIG = process.env.KUVO_ENGINE_CONFIG;
@@ -2132,6 +2133,7 @@ var FEATURES = [
   "sandbox",
   "sandbox.check",
   "sandbox.asks",
+  "sandbox.reviews.whole",
   "approval",
   "approval.reviewer",
   "git.backups",
@@ -3081,12 +3083,9 @@ function sshSockets(home, system = "/etc/ssh/ssh_config") {
     if (depth > 8 || seen.has(file))
       return;
     seen.add(file);
-    let text = "";
-    try {
-      text = fs15.readFileSync(file, "utf8");
-    } catch {
+    const text = textFor(file).value;
+    if (text === null)
       return;
-    }
     for (const line of text.split(`
 `)) {
       const included = line.match(/^\s*Include\s*(?:=\s*|\s+)(.+)$/i);
@@ -3126,10 +3125,8 @@ function sshSockets(home, system = "/etc/ssh/ssh_config") {
     }
   };
   read(path14.join(home, ".ssh", "config"), path14.join(home, ".ssh"), 0);
-  try {
-    for (const name of fs15.readdirSync(path14.join(home, ".ssh", "config.d")))
-      read(path14.join(home, ".ssh", "config.d", name), path14.join(home, ".ssh"), 1);
-  } catch {}
+  for (const name of namesIn(path14.join(home, ".ssh", "config.d")).value ?? [])
+    read(path14.join(home, ".ssh", "config.d", name), path14.join(home, ".ssh"), 1);
   read(system, path14.dirname(system), 0);
   return { paths: [...paths], globs: [...globs] };
 }
@@ -3150,13 +3147,7 @@ function matching(pattern) {
       continue;
     }
     const like = new RegExp(`^${name.split("").map((char) => char === "*" ? ".*" : char === "?" ? "." : escapeRegex(char)).join("")}$`);
-    found = found.flatMap((at) => {
-      try {
-        return fs15.readdirSync(at).filter((each) => like.test(each) && (name.startsWith(".") || !each.startsWith("."))).sort().map((each) => path14.join(at, each));
-      } catch {
-        return [];
-      }
-    });
+    found = found.flatMap((at) => (namesIn(at).value ?? []).filter((each) => like.test(each) && (name.startsWith(".") || !each.startsWith("."))).sort().map((each) => path14.join(at, each)));
   }
   return found;
 }
@@ -3218,21 +3209,17 @@ function keychainDaemons(home) {
 }
 function sshKeys(home) {
   const folder = path14.join(home, ".ssh");
-  let names = [];
-  try {
-    names = fs15.readdirSync(folder);
-  } catch {
+  const { known, value: names } = namesIn(folder);
+  if (!known || !names && macMayAsk(folder))
+    return [folder];
+  if (!names)
     return [];
-  }
   return names.filter((name) => !(name === "config" || name === "config.d" || name.startsWith("known_hosts") || name.endsWith(".pub") || name === "authorized_keys")).map((name) => path14.join(folder, name));
 }
 function ghHosts(home) {
   const file = path14.join(home, ".config", "gh", "hosts.yml");
-  try {
-    return /oauth_token\s*:/.test(fs15.readFileSync(file, "utf8")) ? [file] : [];
-  } catch {
-    return [];
-  }
+  const { known, value: text } = textFor(file);
+  return !known || (text === null ? macMayAsk(file) : /oauth_token\s*:/.test(text)) ? [file] : [];
 }
 function appTemporary() {
   if (!IS_MAC)
@@ -3435,7 +3422,82 @@ function throughLinks(where) {
   if (process.platform !== "darwin")
     return realish(where);
   const found = deepestThere(where, followLinks);
-  return macAsksAbout(found) ? found : realish(found);
+  return macAsksAbout(found) || macAsksAbout(leadsTo(where)) ? found : realish(found);
+}
+function macMayAsk(where) {
+  return process.platform === "darwin" && (macAsksAbout(path14.resolve(where)) || macAsksAbout(leadsTo(where)));
+}
+async function askedAbout(paths) {
+  const named = paths.filter((each) => typeof each === "string" && path14.isAbsolute(each) && macMayAsk(each));
+  await Promise.all([...new Set(named.map((each) => path14.resolve(each)))].map(askOne));
+}
+var asking = new Map;
+async function askOne(where) {
+  const place = askingIn(macAsksAbout(where) ? where : leadsTo(where));
+  for (let pending = asking.get(place);pending; pending = asking.get(place))
+    await pending;
+  const asked = fs15.promises.realpath(where).then(() => {}, () => {}).finally(() => {
+    if (asking.get(place) === asked)
+      asking.delete(place);
+  });
+  asking.set(place, asked);
+  await asked;
+}
+function askingIn(at) {
+  macAsksAbout(at);
+  const found = macAsks.exec(at.toLowerCase());
+  if (!found)
+    return at;
+  if (found[2] === "/volumes/") {
+    const name = at.slice(found[0].length).split("/")[0];
+    return name ? at.slice(0, found[0].length) + name : at;
+  }
+  const folder = at.slice(0, found[0].length).replace(/\/$/, "");
+  return /\/library$/i.test(folder) ? at : folder;
+}
+var lateReads = new Map;
+var readLateChanged = () => {};
+function whenReadLate(changed) {
+  readLateChanged = changed;
+}
+function readLate(key, read) {
+  let kept = lateReads.get(key);
+  if (!kept)
+    lateReads.set(key, kept = { known: false, value: null });
+  if (!kept.reading) {
+    const entry = kept;
+    entry.reading = read().catch(() => null).then((value) => {
+      const changed = !entry.known || JSON.stringify(value) !== JSON.stringify(entry.value);
+      Object.assign(entry, { known: true, value, reading: undefined });
+      if (changed)
+        readLateChanged();
+    });
+  }
+  return { known: kept.known, value: kept.value };
+}
+function textFor(file) {
+  if (macMayAsk(file))
+    return readLate(`text ${path14.resolve(file)}`, async () => {
+      await askedAbout([file]);
+      return fs15.promises.readFile(file, "utf8");
+    });
+  try {
+    return { known: true, value: fs15.readFileSync(file, "utf8") };
+  } catch {
+    return { known: true, value: null };
+  }
+}
+function namesIn(folder) {
+  if (macMayAsk(folder))
+    return readLate(`names ${path14.resolve(folder)}`, async () => {
+      await askedAbout([folder]);
+      return fs15.promises.readdir(folder);
+    });
+  try {
+    return { known: true, value: fs15.readdirSync(folder) };
+  } catch {
+    return { known: true, value: null };
+  }
 }
 var MAC_ASKS = [...MAC_PERSONAL, "Library"];
 var macAsks;
@@ -3456,7 +3518,14 @@ function deepestThere(where, resolve) {
       return full;
   }
 }
-function followLinks(where) {
+function leadsTo(where) {
+  try {
+    return followLinks(path14.resolve(where), true);
+  } catch {
+    return path14.resolve(where);
+  }
+}
+function followLinks(where, loose = false) {
   let names = where.split("/");
   let at = "/";
   for (let links = 0;names.length; ) {
@@ -3468,7 +3537,15 @@ function followLinks(where) {
       continue;
     }
     const next = path14.join(at, name);
-    if (!fs15.lstatSync(next).isSymbolicLink()) {
+    let link;
+    try {
+      link = fs15.lstatSync(next).isSymbolicLink();
+    } catch (error) {
+      if (!loose)
+        throw error;
+      return path14.join(next, ...names);
+    }
+    if (!link) {
       at = next;
       continue;
     }
@@ -3521,10 +3598,11 @@ function readAllowed() {
     return [];
   }
 }
-function allowedFor(project) {
+async function allowedFor(project) {
   const all = readAllowed();
   if (!project)
     return all;
+  await askedAbout([project]);
   const real = realProject(project);
   return all.filter((rule) => rule.project === real);
 }
@@ -3539,7 +3617,8 @@ function ownerOf(project) {
   }
   return { kind: "project", name: path15.basename(real) || real };
 }
-function listed(rules) {
+async function listed(rules) {
+  await askedAbout(rules.map((rule) => rule.project));
   const owners = new Map;
   return rules.map((rule) => {
     let known = owners.get(rule.project);
@@ -3648,11 +3727,12 @@ function checkedPath(given) {
     throw new RuleRefusal(later);
   return where;
 }
-function addRule(given) {
+async function addRule(given) {
   if (typeof given.project !== "string" || !path15.isAbsolute(given.project))
     throw new RuleRefusal("Name the project by its folder's full path.");
   if (given.kind !== "write")
     throw new RuleRefusal('Send {project, kind: "write", path}: a folder its commands may write in.');
+  await askedAbout([given.project, given.path]);
   const project = realProject(given.project);
   const rules = readAllowed();
   const where = checkedPath(given.path);
@@ -3683,7 +3763,8 @@ function removeRule(id) {
   keep(left);
   return true;
 }
-function writeRuleWouldBe(where) {
+async function writeRuleWouldBe(where) {
+  await askedAbout([where]);
   try {
     return checkedPath(where);
   } catch {
@@ -3968,7 +4049,8 @@ function seatbeltProfile(policy, options) {
   allow("file-read-data file-write-data file-write-times file-write*", `(literal (param "MEMORY"))`);
   allow(`file-write* file-write-create file-write-data file-write-mode file-write-times file-write-unlink`, `(require-all ${under("MEMORY_RE", String.raw`\.tmp\.[0-9]+\.[0-9a-f]+$`)} (vnode-type REGULAR-FILE))`);
   out.push(";; what runs outside the sandbox, or changes the engine");
-  deny("file-write-unlink file-write-create", `(literal (param "WORK"))`, `(literal (param "GIT"))`, `(literal (param "TMP"))`);
+  deny("file-write-unlink file-write-create", `(literal (param "WORK"))`, `(literal (param "GIT"))`);
+  deny("file-write-create", `(require-all (literal (param "TMP")) (require-not (vnode-type DIRECTORY)))`);
   const holders = new Set;
   for (const kept of [...policy.secrets, ...policy.readOnly, ...policy.kuvo])
     for (let at = path16.dirname(kept);at !== path16.dirname(at); at = path16.dirname(at))
@@ -4868,6 +4950,12 @@ function sweepWakeFolders(now = Date.now()) {
 function keepFence(every = (round) => {
   setInterval(round, 1e4).unref?.();
 }) {
+  whenReadLate(() => {
+    try {
+      if (fenceWanted() && checked.passed)
+        writeProfiles();
+    } catch {}
+  });
   try {
     setUpFence();
   } catch {}
@@ -15743,7 +15831,7 @@ var NAMED_BLOCK = messageBlock("<named-agents>", "</named-agents>", [
 var foldName = (text) => text.replace(/[\uFB00-\uFB06]/g, (ligature) => ligature.normalize("NFKD")).normalize("NFD").replace(/\p{M}/gu, "").toLowerCase().replace(/ς/g, "σ").replace(/ß/g, "ss");
 var wordCharacter = /^[\p{L}\p{N}]/u;
 var graphemes = (text) => [...new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(text)];
-function namesIn(text, references) {
+function namesIn2(text, references) {
   if (!text.includes("&"))
     return [];
   let folded = "";
@@ -15797,7 +15885,7 @@ function agentsNamed(texts, excluding, agents) {
   const references = [...byName.values()].map((agent) => ({ name: agent.name, session: agent.session }));
   const named = [];
   for (const text of texts) {
-    for (const { reference } of namesIn(text, references).reverse()) {
+    for (const { reference } of namesIn2(text, references).reverse()) {
       if (named.some((agent) => agent.session === reference.session))
         continue;
       const agent = byName.get(foldName(reference.name));
@@ -15885,7 +15973,7 @@ function nameMissing(text, agents) {
   if (!text.includes("&"))
     return false;
   const references = agents.map((agent) => ({ name: String(agent.name ?? ""), session: agent.session }));
-  const named = new Set(namesIn(text, references).map((each) => each.lower));
+  const named = new Set(namesIn2(text, references).map((each) => each.lower));
   const characters = graphemes(text);
   for (let i = 0;i < characters.length; i++) {
     const { segment, index } = characters[i];
@@ -16165,13 +16253,31 @@ var matching3 = (where, patterns = []) => patterns.some((each) => new RegExp(eac
 var nameOf = (word) => word.split("/").pop() ?? "";
 var homeWord = (text) => text.replace(/^(~|\$HOME|\$\{HOME\})(?=\/|$)/, homeFolder());
 function pathOf(word, folder) {
+  const named = namedPath(word, folder);
+  return named === null ? null : realish(named);
+}
+function namedPath(word, folder) {
   let text = word.replace(/^['"]|['"]$/g, "").replace(/^[A-Za-z_][A-Za-z0-9_]*=/, "").replace(/^-[A-Za-z-]*=/, "");
   if (!text || /^[a-z][a-z0-9+.-]*:\/\//i.test(text))
     return null;
   text = homeWord(text);
   if (!text.includes("/") && !text.startsWith("."))
     return null;
-  return realish(path63.resolve(folder, text));
+  return path63.resolve(folder, text);
+}
+function namedBy(action) {
+  if (action.kind === "file")
+    return [action.folder, action.path];
+  if (action.kind === "tool")
+    return [action.folder];
+  const line = readLine(action.command, true);
+  const words = "unreadable" in line ? [] : line.parts.flatMap((part) => [...part.words, ...part.writes, ...part.reads]);
+  return [
+    action.folder,
+    ...words.map((word) => namedPath(word, action.folder)).filter((each) => each !== null),
+    ...scriptsOf(action.command, action.folder).files,
+    ...stoppedWrites(action)
+  ];
 }
 var LOGIN = [
   ".profile",
@@ -16261,8 +16367,11 @@ function ownInside(own, policy) {
       return [folder];
     const at = realish(folder);
     const walled = policy.kuvo.some((wall) => inside2(at, wall) || inside2(wall, at)) || matching3(at, policy.kuvoPatterns);
-    return !walled || conversationPlace(at) ? [at] : [];
+    return !walled || conversationPlace(at) || attachmentsPlace(at) ? [at] : [];
   });
+}
+function attachmentsPlace(at) {
+  return /^ses_[A-Za-z0-9_-]{1,120}$/.test(path63.basename(at)) && attachmentRoots().some((root) => realish(root) === path63.dirname(at));
 }
 function conversationPlace(at) {
   const { inside: holders, shared } = conversationPlaces();
@@ -16272,7 +16381,8 @@ function deletesHome(where, home) {
   const target = where.endsWith("/*") ? where.slice(0, -2) || "/" : where;
   return target === home || holds(target, home);
 }
-function keptFromSessions(folder, policy = fencePolicy()) {
+async function keptFromSessions(folder, policy = fencePolicy()) {
+  await askedAbout([folder]);
   const at = realish(folder);
   const homes = [...new Set([policy.home, ...policy.homeWrites ?? []].map(realish))];
   const reach = (wall) => `its commands would reach ${wall}`;
@@ -17012,6 +17122,7 @@ function answerWithin(model, prompt, within, signal) {
 async function review(action, context, given) {
   const now = given.now ?? Date.now;
   const folder = given.folder ?? REVIEWS_FOLDER;
+  await askedAbout([...namedBy(action), ...given.own ?? []]);
   const { verdict, key } = await judge(action, context, given, now(), folder).catch((error) => ({ verdict: heldBack(`Auto's reviewer couldn't review it (${oneLine(String(error?.message ?? error), 120)}).`, "failed"), key: actionKey(action) }));
   if (verdict.decision === "allow" && verdict.by === "code")
     return verdict;
@@ -17366,7 +17477,7 @@ async function heldUnreached(session, action, signal) {
   const unanswered = async () => {
     throw new Error("the engine didn't answer");
   };
-  const own = [action.folder, commandTemporary(action.folder)].filter((each) => Boolean(each));
+  const own = [action.folder, commandTemporary(action.folder), ...attachedOf(session)].filter((each) => Boolean(each));
   return review(action, { session, said: [] }, { model: unanswered, signal, own });
 }
 function botOf(data) {
@@ -17458,10 +17569,28 @@ It's allowed once now: run it again, the same way, if the task still needs it.`;
   return sendInto(at.target, at.data.id, { id: messageID(), text, delivery: "steer", metadata: boxNote("Your answer", line) }, { from: "Your answer", words: line }).then(() => true, () => false);
 }
 var READING = new Set(["read", "glob", "grep", "list", "ls", "view", "notebookread"]);
+var OWN_READING = new Set(["read", "view", "notebookread"]);
 var reviewing = new Set;
 var askReviews = new Map;
 var reviewFollowers = new Set;
 var listAskReviews = () => [...askReviews.values()];
+function settleAskReview(id) {
+  const review = askReviews.get(id);
+  if (!review || review.state !== "yours" && review.state !== "checking")
+    return;
+  askReviews.delete(id);
+  for (const changed of reviewFollowers)
+    changed();
+}
+function settleRunReviews(session) {
+  const gone = [...askReviews.values()].filter((each) => each.session === session && (each.state === "yours" || each.state === "checking"));
+  if (!gone.length)
+    return;
+  for (const each of gone)
+    askReviews.delete(each.id);
+  for (const changed of reviewFollowers)
+    changed();
+}
 function onAskReviewsChanged(changed) {
   reviewFollowers.add(changed);
   return () => {
@@ -17496,9 +17625,28 @@ async function reviewPermission(source, event, signal, found) {
     throw error;
   }
 }
+async function takeUpWaitingAsks(source, sessions, signal) {
+  const waiting = [];
+  for (const session of sessions) {
+    if (signal?.aborted)
+      return;
+    const { permissions } = await asksIn(source, session, signal).catch(() => ({ permissions: [] }));
+    for (const each of permissions) {
+      if (each.action !== "external_directory" || reviewing.has(each.id) || askReviews.has(each.id))
+        continue;
+      noteReview(each.id, each.asker, "checking");
+      waiting.push(each);
+    }
+  }
+  for (const each of waiting) {
+    await reviewPermission(source, { type: "permission.asked", data: { id: each.id, sessionID: each.asker, action: each.action } }, signal).catch(() => null);
+  }
+}
+var attachedOf = (session) => attachmentRoots().map((root) => path64.join(root, session));
 function ownFolders(at) {
   const folder = at.data.location?.directory;
   const folders = typeof folder === "string" ? [folder, commandTemporary(folder)].filter((each) => Boolean(each)) : [];
+  folders.push(...[at.data.id, at.data.parentID].filter((each) => typeof each === "string").flatMap(attachedOf));
   const bot = botOfConversation(at.data.id) ?? worksFor(at.data);
   if (!bot)
     return folders;
@@ -17525,9 +17673,19 @@ function realPath(file) {
   }
 }
 async function answerPermission(source, id, sessionID, signal, found) {
-  const { permissions } = await asksIn(source, sessionID, signal);
-  const permission = permissions.find((each) => each.id === id && each.asker === sessionID);
-  if (permission?.action !== "external_directory")
+  let { permissions } = await asksIn(source, sessionID, signal);
+  let permission = permissions.find((each) => each.id === id && each.asker === sessionID);
+  if (!permission) {
+    await new Promise((done) => setTimeout(done, 1000));
+    ({ permissions } = await asksIn(source, sessionID, signal));
+    permission = permissions.find((each) => each.id === id && each.asker === sessionID);
+  }
+  if (!permission) {
+    if (askReviews.get(id)?.state === "checking")
+      noteReview(id, sessionID, "yours", askReviews.get(id)?.call);
+    return null;
+  }
+  if (permission.action !== "external_directory")
     return null;
   const seen = await callOf(source, permission, signal);
   const at = found === undefined ? await conversationOf2(sessionID) : found;
@@ -17540,6 +17698,22 @@ async function answerPermission(source, id, sessionID, signal, found) {
   const file = seen && [seen.input.filePath, seen.input.file_path, seen.input.notebook_path, seen.input.path, seen.input.file].find((each) => typeof each === "string" && each.startsWith("/"));
   const named = permission.resources.filter((each) => each !== "*").map((each) => path64.resolve(folder, each.replace(/^~(?=\/|$)/, homeFolder()).replace(/\/\*$/, "") || "/"));
   const actions = seen && file ? [{ kind: "file", path: file, access: READING.has(seen.tool.toLowerCase()) ? "read" : "write", folder, tool: seen.tool, input: seen.input }] : named.length ? named.map((each) => ({ kind: "file", path: each, access: "write", folder })) : [{ kind: "tool", tool: seen?.tool || "work outside its folder", args: seen?.input ?? { asked: permission.resources }, folder }];
+  const readsOwn = [commandTemporary(folder), ...[at.data.id, at.data.parentID].filter((each) => typeof each === "string").flatMap(attachedOf)].filter((each) => Boolean(each));
+  const ownReads = (within) => actions.every((action) => action.kind === "file" && action.access === "read" && OWN_READING.has(String(action.tool).toLowerCase()) && readsOwn.some((place) => within(action.path, place)));
+  const ownByName = ownReads((file, place) => {
+    const inside = path64.relative(place, path64.resolve(file));
+    return inside === "" || !inside.startsWith("..") && !path64.isAbsolute(inside);
+  });
+  if (!ownByName && !inAuto(at)) {
+    noteReview(id, sessionID, "yours", call2);
+    return null;
+  }
+  await askedAbout([folder, ...actions.flatMap((action) => action.kind === "file" ? [action.path] : [])]);
+  if (ownByName && ownReads(isWithin)) {
+    await call(source, "POST", `/api/session/${encodeURIComponent(permission.asker)}/permission/${encodeURIComponent(permission.id)}/reply`, { decision: "once" }, signal);
+    noteReview(id, sessionID, "allowed", call2);
+    return { decision: "allow", reason: "Its own files.", by: "code" };
+  }
   if (!inAuto(at)) {
     noteReview(id, sessionID, "yours", call2);
     return null;
@@ -25110,7 +25284,7 @@ function listOf3(folder) {
   }
 }
 var SESSION4 = /^ses_[A-Za-z0-9_-]{1,120}$/;
-var keptIn = () => [path91.join(K, "attachments"), ...MAC_ATTACHMENTS ? [MAC_ATTACHMENTS] : []];
+var keptIn = attachmentRoots;
 var looking = Promise.resolve();
 function letAttachmentsGo(places, session) {
   looking = looking.then(() => letGo3(places, session)).catch(() => {});
@@ -25780,6 +25954,8 @@ async function watchEvents(read, tell, signal, answered = () => {}, { bots = fal
         settleGoalHolds(source, goalHeld).catch(() => {});
       if (work)
         noteFullAccessAtWork(source, atWork3).catch(() => {});
+      if (work)
+        atWork3(source).then((sessions) => takeUpWaitingAsks(source, sessions, connection.signal)).catch(() => {});
       for await (const event of serverEvents(response.body)) {
         if (event.type === "session.execution.started")
           freshenBot(source, event.data?.sessionID).catch(() => {});
@@ -25818,6 +25994,11 @@ async function watchEvents(read, tell, signal, answered = () => {}, { bots = fal
           if (event.type === "session.created" || event.type === "session.deleted" || RUN_ENDS.has(event.type) || event.type === "session.metadata.updated" && isArchiving(event))
             tidyWorktrees(connection.signal).catch(() => {});
         }
+        const settled = ANSWERED2.has(event.type) ? event.data?.requestID ?? event.data?.id : undefined;
+        if (typeof settled === "string")
+          settleAskReview(settled);
+        if (RUN_ENDS.has(event.type) && typeof event.data?.sessionID === "string")
+          settleRunReviews(event.data.sessionID);
         if (!notices)
           continue;
         if (ANSWERED2.has(event.type))
@@ -30014,21 +30195,24 @@ async function startSession(given, by, place) {
   } else if (typeof given.folder === "string" && given.folder.trim()) {
     const written = given.folder.trim();
     const full = written.replace(/^~(?=$|\/)/, homeFolder());
+    const oursGiven = [
+      ...readProjects().filter((each) => !each.removed).flatMap((each) => [each.directory, ...each.folders ?? []]),
+      ...readWorktrees().map((each) => each.folder ?? each.root),
+      ...parentFolder ? [parentFolder] : []
+    ];
+    if (path98.isAbsolute(full))
+      await askedAbout([full, ...by ? oursGiven : []]);
     let isFolder = false;
     try {
       isFolder = fs92.statSync(full).isDirectory();
     } catch {}
     if (!path98.isAbsolute(full) || !isFolder)
       return no(400, `${written} isn't a folder on ${HERE}. Give a full path to one.`);
-    const ours = [
-      ...readProjects().filter((each) => !each.removed).flatMap((each) => [each.directory, ...each.folders ?? []]),
-      ...readWorktrees().map((each) => each.folder ?? each.root),
-      ...parentFolder ? [parentFolder] : []
-    ].map(realish);
+    const ours = by ? oursGiven.map(realish) : [];
     const at = by ? fs92.realpathSync(full) : full;
     const bridgeNow = place.bridge?.() ?? null;
     const fullAccess = Boolean(by?.place && approvalOf(by.place.data, { agents: Boolean(bridgeNow && by.place.target.port === bridgeNow.port), bot: Boolean(botOfConversation(by.session) ?? worksFor(by.place.data)) }).effective === "fullAccess");
-    const kept = by && !fullAccess && !ours.includes(at) ? keptFromSessions(at) : null;
+    const kept = by && !fullAccess && !ours.includes(at) ? await keptFromSessions(at) : null;
     if (kept)
       return no(403, `An agent in Auto can't start a session in ${written} on ${HERE}: ${kept}. Ask the user to start it there.`);
     folder = isBotFolder(at) ? CHATS : at;
@@ -35068,6 +35252,10 @@ function alwaysFor2(stops, project) {
   const writes = [...new Set(stops.filter((stop) => stop.kind === "write" && stop.path).map((stop) => stop.path))];
   if (writes.length !== 1 || !stops.every((stop) => stop.kind === "write"))
     return;
+  return alwaysForWrite(writes, project);
+}
+async function alwaysForWrite(writes, project) {
+  await askedAbout([project, writes[0], path114.dirname(writes[0])]);
   const real = (where) => {
     try {
       return fs108.realpathSync(where);
@@ -35086,7 +35274,7 @@ function alwaysFor2(stops, project) {
       return false;
     }
   })();
-  const given = (isFolder ? null : writeRuleWouldBe(path114.dirname(writes[0]))) ?? writeRuleWouldBe(writes[0]);
+  const given = (isFolder ? null : await writeRuleWouldBe(path114.dirname(writes[0]))) ?? await writeRuleWouldBe(writes[0]);
   return given ? { kind: "write", path: given } : undefined;
 }
 function sandboxAskNotice(asked) {
@@ -35118,6 +35306,8 @@ async function askToRun(caller, args, signal) {
     return failed2("Say why the task needs it.");
   if (command.length > 8000)
     return failed2("That command is too long to ask about: put it in a script in your project and ask to run that.");
+  if (caller.folder && macMayAsk(caller.folder))
+    await askedAbout([caller.folder]);
   const project = caller.folder && fs108.existsSync(caller.folder) ? caller.folder : null;
   if (!project)
     return failed2("This conversation's folder isn't there, so nothing can run for it.");
@@ -35131,7 +35321,8 @@ async function askToRun(caller, args, signal) {
     return { text: refusalWords(verdict), isError: false };
   const asks = !full && verdict?.decision !== "allow";
   const stopped = asks && caller.session ? await stopsFor(caller.session, String(args.command)) : [];
-  let always = alwaysFor2(stopped, project);
+  const alwaysNow = alwaysFor2(stopped, project);
+  let always = alwaysNow && await alwaysNow;
   let asking;
   const heard = new AbortController;
   if (asks && !stopped.length && caller.session && process.platform === "darwin")
@@ -35143,7 +35334,7 @@ async function askToRun(caller, args, signal) {
         const found = await stopsFor(caller.session, String(args.command), 3, heard.signal);
         if (heard.signal.aborted || !found.length)
           continue;
-        always = alwaysFor2(found, project);
+        always = await alwaysFor2(found, project);
         if (asking)
           book2.update(asking, { stopped: found, ...always ? { always } : {} });
         return;
@@ -35171,7 +35362,7 @@ async function askToRun(caller, args, signal) {
   let how = "once";
   if (answered.answer === "always" && always) {
     try {
-      addRule({ project, ...always, ...answered.client ? { by: answered.client } : {} });
+      await addRule({ project, ...always, ...answered.client ? { by: answered.client } : {} });
       how = "always";
     } catch {}
   }
@@ -35202,11 +35393,13 @@ function stoppedBySandbox(printed, policy) {
 async function stoppedInAuto(caller, input, printed, calling, signal) {
   const started = Date.now();
   const command = typeof input.command === "string" ? input.command : "";
+  await askedAbout([caller.folder]);
   const project = caller.folder && fs108.existsSync(caller.folder) ? caller.folder : null;
   if (caller.seat || !command.trim() || command.length > 8000 || !project)
     return null;
   const given = typeof input.workdir === "string" ? input.workdir : typeof input.cwd === "string" ? input.cwd : "";
   const folder = given ? path114.resolve(project, given.replace(/^~(?=\/|$)/, os13.homedir())) : project;
+  await askedAbout([folder]);
   if (!fs108.existsSync(folder))
     return null;
   const conversation = caller.root ?? caller.session;
@@ -35329,20 +35522,20 @@ async function* sandboxRoute(context) {
     try {
       const query = new URLSearchParams(request.path.split("?")[1] ?? "");
       forgetGoneBots();
-      const answer = (of) => ({ allowed: listed(allowedFor(of)), ...of ? {} : { owners: addableOwners() } });
+      const answer = async (of) => ({ allowed: await listed(await allowedFor(of)), ...of ? {} : { owners: addableOwners() } });
       if (route === "kuvo/sandbox/allowed" && method === "GET")
-        return yield* json(200, answer(query.get("project") ?? undefined));
+        return yield* json(200, await answer(query.get("project") ?? undefined));
       if (route === "kuvo/sandbox/allowed" && method === "POST") {
         const project = given.project === undefined && given.owner !== undefined ? folderOfOwner(given.owner) : given.project;
-        const rule = addRule({ ...given, project, by: clientName(context) });
-        return yield* json(200, answer(query.has("all") ? undefined : rule.project));
+        const rule = await addRule({ ...given, project, by: clientName(context) });
+        return yield* json(200, await answer(query.has("all") ? undefined : rule.project));
       }
       if (parts.length === 4 && method === "DELETE") {
         const id = idOf5(parts[3]);
-        const rule = allowedFor().find((each) => each.id === id);
+        const rule = (await allowedFor()).find((each) => each.id === id);
         if (!rule || !removeRule(id))
           return yield* json(404, { message: "That isn't in Also Allowed." });
-        return yield* json(200, answer(query.has("all") ? undefined : rule.project));
+        return yield* json(200, await answer(query.has("all") ? undefined : rule.project));
       }
       return yield* json(405, {});
     } catch (error) {
@@ -37444,7 +37637,7 @@ export {
   nameWorktreeBranch,
   namedAgents,
   namesHash,
-  namesIn,
+  namesIn2 as namesIn,
   newKey,
   newPairing,
   newSigningSeed,

@@ -19,7 +19,7 @@ import { accountHome, BOTS, BRIDGE_FILE, CHATS, ENGINE_CONFIG, ENGINE_DATA, ENGI
 import { tellLauncher } from "./allowed";
 import { agentShellScript, agentsNote, launcherScript, pluginScript, type FencePlaces } from "./files";
 import { LANDLOCK_RUNNER, landlockPolicy, ownNamespace, ownNamespaceLater, UNSHARE } from "./landlock";
-import { appTemporary, fencePolicy, realish, sandboxCaches } from "./policy";
+import { appTemporary, fencePolicy, realish, sandboxCaches, whenReadLate } from "./policy";
 import { seatbeltProfile } from "./seatbelt";
 
 export interface FenceState {
@@ -536,6 +536,10 @@ export function sweepWakeFolders(now = Date.now()): void {
  * folders no one used cleared away. `every`: what runs its round every 10 seconds (a test's runs
  * each by hand, and awaits what it set going: the minute's namespace check). */
 export function keepFence(every: (round: () => Promise<void>) => void = round => { setInterval(round, 10_000).unref?.(); }): void {
+  // (A file of yours the walls are read from that waited on macOS, read since: written in at once.)
+  whenReadLate(() => {
+    try { if (fenceWanted() && checked.passed) writeProfiles(); } catch {}
+  });
   try { setUpFence(); } catch {}
   try { tellAgents(); } catch {}
   // Set up, or found it can't run here: the agents bridge starts the coding agents from now, never
