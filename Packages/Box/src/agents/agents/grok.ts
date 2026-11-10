@@ -16,6 +16,7 @@ import { install, maintenance, update, type MaintenanceDefinition } from "../mai
 import { plain, run, which } from "../proc"
 import { commandSignIn } from "../signin"
 import { skillsFolder, skillsFor, turnedOff, upward } from "../skills"
+import { grokSubagents, subagentsFor } from "../subagents"
 import type { Model, Session } from "../wire"
 
 const places = [join(homedir(), ".grok/bin"), join(homedir(), ".local/bin"), "/opt/homebrew/bin", "/usr/local/bin"]
@@ -274,13 +275,14 @@ export class GrokAgent implements Agent {
         restartAfterInterrupt: true,
         program: () => agent.program,
         whole: { homes: (env) => [env.GROK_HOME ?? join(homedir(), ".grok")], state: STATE_IN_HOME, kept: KEPT_IN_HOME, env: { GROK_SANDBOX: "off", GROK_MEMORY: "0" } },
-        async command({ approvesAll, plan, skills, whole }) {
+        async command({ approvesAll, plan, skills, subagents, whole }) {
           const executable = agent.executable()
           if (!executable) throw new Error(`Install Grok's CLI first: ${agent.install}`)
-          // Settings › Skills' skills, as a plugin for this process alone.
+          // Settings › Skills' skills, and your subagents (Settings › Agents), as plugins for this
+          // process alone.
           // Run whole in the box's sandbox: never in a shared leader (one you started yourself runs its
           // commands outside it).
-          const plugin = [...(whole ? ["--no-leader"] : []), ...(skills ? ["--plugin-dir", skills] : [])]
+          const plugin = [...(whole ? ["--no-leader"] : []), ...(skills ? ["--plugin-dir", skills] : []), ...(subagents ? ["--plugin-dir", subagents] : [])]
           const argv = plan
             ? [executable, "--permission-mode", "plan", "agent", ...plugin, "stdio"]
             : approvesAll
@@ -290,6 +292,11 @@ export class GrokAgent implements Agent {
         },
         async skills(directory, hooks) {
           return skillsFolder(await skillsFor(directory, agent.ownSkillFolders(directory), turnedOff(hooks)))
+        },
+        // Named `kuvo:<name>` there, on their own model when it's one of Grok's (its own subagents
+        // keep the conversation's: Grok takes a model for them only in your ~/.grok settings).
+        async subagents(directory) {
+          return grokSubagents(await subagentsFor(directory))
         },
         async selectModel(rpc, sessionId, modelID, setup, variant) {
           agent.saveEfforts(setup)

@@ -25,13 +25,14 @@ import { kuvoTools } from "../kuvotools"
 import { dropRelayed, relayedServers, relayedTools, relayPort } from "../toolrelay"
 import { computerServers } from "../servers"
 import { skillsFolder, skillsFor, turnedOff, upward } from "../skills"
+import { claudeSubagents, subagentRules, subagentsFor, type Subagents } from "../subagents"
 import { onMachine, ownFoldersScript } from "../machine"
 import { fenceAgent, fenceAttachments, fenceCopy, fenceKey, fenceOn, seatBot, fullAccessMark } from "../fence"
 import { addShell, endShell } from "../shells"
 import { instructionsNote, toldOf } from "../told"
 import { pictureData, pictureFile, withPictures } from "../pictures"
 import type { Turn } from "../turn"
-import type { FileDiff, FormField, Model, ModelRef, Session, TokenUsage } from "../wire"
+import type { FileDiff, FormField, Model, ModelRef, PermissionRule, Session, TokenUsage } from "../wire"
 
 const SDK = [{ name: "@anthropic-ai/claude-agent-sdk", version: "0.3.303" }]
 const places = [join(homedir(), ".local/bin"), join(homedir(), ".claude/local"), "/opt/homebrew/bin", "/usr/local/bin"]
@@ -980,7 +981,11 @@ class ClaudeThread implements Thread {
   private commands = new Map<string, string>()
   /** The last of its tasks to end: what began a turn it starts on its own. */
   private lastEnded?: { type: string; description: string; command?: string; status: string; summary?: string }
-  private opened?: { model: string; effort?: string; plan: boolean; append: string; program: number; tools?: string; skills?: string; fence: string }
+  private opened?: { model: string; effort?: string; plan: boolean; append: string; program: number; tools?: string; skills?: string; fence: string; subagents: string }
+  /** Your subagents as it was last given them (their rules hold for their tools). */
+  private subagents?: Subagents
+  /** What a subagent of yours may do, for each of its tools it's asked about: by the tool's call. */
+  private subagentAsks = new Map<string, PermissionRule[]>()
   /** The computer's servers it was last told (their names). */
   private servers?: string
 
@@ -1069,8 +1074,12 @@ class ClaudeThread implements Thread {
     const skills = skillsFolder(await skillsFor(this.session.location.directory, this.agent.ownSkillFolders(this.session.location.directory), turnedOff(hooks)))
     // So does it when the box's sandbox was turned on or off, or its rules changed.
     const fence = fenceKey() + fullAccessMark(this.session.id)
+    // And your subagents (Settings › Agents), or the model they use, changed: it takes them as it starts.
+    this.subagents = await subagentsFor(this.session.location.directory)
+    const subagents = claudeSubagents(this.subagents)
+    const subagentsKey = JSON.stringify(subagents)
     // (What it left going in the background ends with it: this message says so.)
-    if (this.query && (this.opened?.append !== append || this.opened?.program !== this.agent.program || this.opened?.tools !== tools?.key || this.opened?.skills !== skills || this.opened?.fence !== fence)) {
+    if (this.query && (this.opened?.append !== append || this.opened?.program !== this.agent.program || this.opened?.tools !== tools?.key || this.opened?.skills !== skills || this.opened?.fence !== fence || this.opened?.subagents !== subagentsKey)) {
       this.cut.push(...this.wakingWork)
       this.close()
     }
@@ -1080,13 +1089,13 @@ class ClaudeThread implements Thread {
     const servers = relayedServers(this.session.id, this, this.session.location.directory, computer)
     const opening = !this.query
     if (opening) {
-      this.open(sdk, modelID, effort, input.plan, append, hooks, skills)
+      this.open(sdk, modelID, effort, input.plan, append, hooks, skills, subagents)
     } else {
       // The same Claude Code goes on, told what changed.
       if (this.opened?.model !== modelID) await this.query.setModel(modelID === "default" ? undefined : modelID).catch(() => {})
       if (this.opened?.effort !== effort) await this.query.applyFlagSettings({ effortLevel: effort ?? null }).catch(() => {})
       if (this.opened?.plan !== input.plan) await this.query.setPermissionMode(input.plan ? "plan" : "default").catch(() => {})
-      this.opened = { model: modelID, effort, plan: input.plan, append, program: this.agent.program, tools: tools?.key, skills, fence }
+      this.opened = { model: modelID, effort, plan: input.plan, append, program: this.agent.program, tools: tools?.key, skills, fence, subagents: subagentsKey }
     }
     // Kuvo Code's own tools, as the engine's models have them, and those servers: told over its
     // pipe, not on its command line (where any process could read their key).
@@ -1367,7 +1376,7 @@ class ClaudeThread implements Thread {
     for (const { id } of this.backgroundTasks) await this.query?.stopTask?.(id).catch(() => {})
   }
 
-  private open(sdk: any, modelID: string, effort: string | undefined, plan: boolean, append: string, hooks: TurnHooks, skills?: string) {
+  private open(sdk: any, modelID: string, effort: string | undefined, plan: boolean, append: string, hooks: TurnHooks, skills?: string, subagents: ReturnType<typeof claudeSubagents> = { agents: {} }) {
     // (Without it, the SDK's own words would be about a build of its own it doesn't have.)
     if (!this.agent.executable()) throw new Error(`Install Claude Code first: ${this.agent.install}`)
     // Why an earlier one ended is not this one's.
@@ -1393,7 +1402,7 @@ class ClaudeThread implements Thread {
     const ownMemory = named && existsSync(named) ? named : undefined
     this.input = new Queue()
     const tools = fenceOn() ? relayedTools(this.session.id, this) : kuvoTools(this.session.id)
-    this.opened = { model: modelID, effort, plan, append, program: this.agent.program, tools: tools?.key, skills, fence: fenceKey() + fullAccessMark(this.session.id) }
+    this.opened = { model: modelID, effort, plan, append, program: this.agent.program, tools: tools?.key, skills, fence: fenceKey() + fullAccessMark(this.session.id), subagents: JSON.stringify(subagents) }
     this.query = sdk.query({
       prompt: this.input,
       options: {
@@ -1410,11 +1419,14 @@ class ClaudeThread implements Thread {
         hooks: { PreToolUse: [{ hooks: [async (hookInput: any) => this.preToolUse(hookInput)] }] },
         systemPrompt: { type: "preset", preset: "claude_code", ...(append ? { append } : {}) },
         ...(skills ? { plugins: [{ type: "local" as const, path: skills, skipMcpDiscovery: true }] } : {}),
+        // Your subagents, over one of the same name in ~/.claude/agents (as its --agents flag's are).
+        ...(Object.keys(subagents.agents).length ? { agents: subagents.agents } : {}),
         ...(resume ? { resume: id } : { sessionId: id }),
         // A bot's memory in its own folder, once it's there.
         ...(ownMemory ? { settings: { autoMemoryDirectory: ownMemory } as any } : {}),
         // Its commands know their conversation, as the engine's do (kuvo-wake schedules for it).
-        env: { ...this.agent.env(), OPENCODE_SESSION_ID: this.session.id, ...whole?.env },
+        // And the model its subagents use when theirs doesn't say (Settings › Agents), one it runs.
+        env: { ...this.agent.env(), OPENCODE_SESSION_ID: this.session.id, ...(subagents.model ? { CLAUDE_CODE_SUBAGENT_MODEL: subagents.model } : {}), ...whole?.env },
         // Its own sandbox off while the box's is on (yours, or a project's settings, may turn it
         // on): one sandbox can't run inside another on a Mac, and every command would fail.
         ...(whole ? { sandbox: { enabled: false }, spawnClaudeCodeProcess: whole.spawn } : {}),
@@ -2095,7 +2107,14 @@ class ClaudeThread implements Thread {
     await this.ownTaken()
     const hooks = this.active?.hooks ?? this.lastHooks
     if (!hooks) return {}
-    const ask = permissionAsk(String(input.tool_name ?? ""), input.tool_input ?? {})
+    // A subagent of yours goes by what it may do (Settings › Agents), with the session's rules over that.
+    const agentRules = input.agent_id ? subagentRules(this.subagents, input.agent_type) : undefined
+    if (agentRules && typeof input.tool_use_id === "string") {
+      this.subagentAsks.set(input.tool_use_id, agentRules)
+      // (Only those it then asks about are taken back: the last hundred are plenty.)
+      for (const old of [...this.subagentAsks.keys()].slice(0, Math.max(0, this.subagentAsks.size - 100))) this.subagentAsks.delete(old)
+    }
+    const ask = { ...permissionAsk(String(input.tool_name ?? ""), input.tool_input ?? {}), ...(agentRules ? { agentRules } : {}) }
     let verdict = hooks.check(ask, true)
     // In plan mode its edits are its own to weigh: its plan, to its file, goes; any other edit it
     // asks about, and that's refused. Asking first would refuse its plan too.
@@ -2193,8 +2212,10 @@ class ClaudeThread implements Thread {
   /** A tool asked about: allowed, or not, as you answer (or your rules do). */
   private async decide(name: string, input: Record<string, any>, options: any, permission: TurnHooks["permission"]): Promise<any> {
     const toolUseID = options?.toolUseID
+    const agentRules = typeof toolUseID === "string" ? this.subagentAsks.get(toolUseID) : undefined
+    if (typeof toolUseID === "string") this.subagentAsks.delete(toolUseID)
     const ask = permissionAsk(name, input)
-    const decision = await permission({ toolCallID: toolUseID, ...ask, message: options?.title ?? options?.description })
+    const decision = await permission({ toolCallID: toolUseID, ...ask, message: options?.title ?? options?.description, ...(agentRules ? { agentRules } : {}) })
     if (decision === "reject") return { behavior: "deny", message: "The user declined this.", toolUseID }
     const result: any = { behavior: "allow", updatedInput: input, toolUseID }
     if (decision === "always" && Array.isArray(options?.suggestions)) {

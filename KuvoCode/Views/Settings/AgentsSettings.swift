@@ -51,6 +51,8 @@ struct AgentsSettings: View {
                     .foregroundStyle(.secondary)
             }
 
+            SubagentModelSection()
+
             ConfigProblem()
 
             Section {
@@ -82,7 +84,7 @@ struct AgentsSettings: View {
             } header: {
                 Text("Agents")
             } footer: {
-                Text("Plan is what /plan turns on. Your own agents work when you name one in a message, or when the agent hands one part of a task.")
+                Text("Plan is what /plan turns on. Your own agents work when you name one in a message, or when the agent hands one part of a task; Claude Code, Codex, Cursor, Grok and Antigravity get your subagents too.")
                     .foregroundStyle(.secondary)
             }
 
@@ -149,6 +151,21 @@ struct AgentsSettings: View {
         let config = app.config(for: box)
         DispatchQueue.main.async {
             if removal.count == 2, removal.first == "agents" { config.changeAgent(removal[1], nil, to: nil) } else { config.set(nil, at: removal) }
+        }
+    }
+}
+
+/// The one model subagents use on this computer (`subagent_model`, kept by its box): every
+/// agent's that can run it, the engine's and the coding agents' (PROTOCOL.md, `kuvo/config`).
+struct SubagentModelSection: View {
+    var body: some View {
+        Section {
+            ConfigModelPicker(title: "Subagents use", path: ["subagent_model"], defaultTitle: "Same as the conversation", withAgents: true)
+        } header: {
+            Text("Subagents")
+        } footer: {
+            Text("For the parts of a task an agent hands off, in every session here. A subagent with a model of its own keeps it. Claude Code, Codex and the other coding agents take a model only when it's one of theirs.")
+                .foregroundStyle(.secondary)
         }
     }
 }
@@ -310,7 +327,7 @@ private struct AgentEditor: View {
                 }
             }
             ConfigTextField(title: "Description", path: path + ["description"], prompt: builtInDescription ?? "What it's for, like: Finds bugs and explains them, without changing code", multiline: true)
-            ConfigModelPicker(title: "Model", path: path + ["model"], defaultTitle: "The session's model")
+            ConfigModelPicker(title: "Model", path: path + ["model"], defaultTitle: Self.defaultModelTitle(mode))
             ConfigNumberField(title: "Most steps per message", path: path + ["steps"], prompt: "No limit")
             if id != nil {
                 Toggle("Use this agent", isOn: Binding(
@@ -350,6 +367,16 @@ private struct AgentEditor: View {
             // Verbatim: as Markdown, the asterisks would turn part of the sentence into italics.
             Text(verbatim: "For particular commands, files or sites, like letting it run \"npm test *\" while other commands ask first. * matches anything. When rules overlap, the one lower in the list wins.")
                 .foregroundStyle(.secondary)
+        }
+    }
+
+    /// What an agent with no model of its own runs on: the session's as a mode, the one Subagents
+    /// use as a subagent (the session's when that's set so).
+    static func defaultModelTitle(_ mode: String) -> String {
+        switch mode {
+        case "subagent": "The subagents' model"
+        case "all": "The session's or subagents' model"
+        default: "The session's model"
         }
     }
 

@@ -295,3 +295,48 @@ test("a machine applies what it's sent in one write, after a look first that wri
     fs.rmSync(path.join(home, "bin", "mcp-catalog.json"), { force: true });
   }
 });
+
+// The model your subagents use (Settings › Agents, "Subagents use"): the engine doesn't read it from
+// your settings, so the box puts it on each subagent without a model of its own, in the settings
+// file it keeps beside yours (which the engine reads after them, and again as it changes).
+test("the model subagents use goes on the engine's subagents and yours without one, as the settings change", async t => {
+  const { ask, file, folder } = await macBox(t, { settings: JSON.stringify({ agents: {
+    reviewer: { mode: "subagent", description: "Reviews." },
+    writer: { mode: "all", model: "openai/gpt-5" },
+    Research: { mode: "primary" },
+    resting: { mode: "subagent", disabled: true },
+  } }) });
+  const layerFile = path.join(folder, "opencode", "config", "opencode", "opencode.jsonc");
+  const layer = () => {
+    if (!fs.existsSync(layerFile)) return null;
+    const text = fs.readFileSync(layerFile, "utf8");
+    assert.ok(text.startsWith("// Kept by Kuvo Code"), "the box's own file");
+    return JSON.parse(text.split("\n").filter(line => !line.startsWith("//")).join("\n"));
+  };
+  assert.equal(layer(), null, "nothing until it's set");
+
+  const haiku = "anthropic/claude-haiku-4-5";
+  assert.equal((await ask("PATCH", "kuvo/config", { changes: [{ path: ["subagent_model"], value: haiku }] })).status, 200);
+  assert.deepEqual(layer().agents, { general: { model: haiku }, explore: { model: haiku }, reviewer: { model: haiku } },
+    "a subagent with a model of its own keeps it; a mode, and one turned off, aren't subagents");
+  assert.equal(JSON.parse(fs.readFileSync(file, "utf8")).subagent_model, haiku, "kept in your settings");
+
+  // One taken away isn't named there any more (the engine would make it again).
+  await ask("PATCH", "kuvo/config", { changes: [{ path: ["agents", "reviewer"], value: null }] });
+  assert.deepEqual(Object.keys(layer().agents), ["general", "explore"]);
+  // The engine's own, given a model of their own: theirs.
+  await ask("PATCH", "kuvo/config", { changes: [{ path: ["agents", "general", "model"], value: "openai/gpt-5" }] });
+  assert.deepEqual(Object.keys(layer().agents), ["explore"]);
+
+  // A coding agent's model is for its own subagents: the engine can't run it, so its keep the conversation's.
+  await ask("PATCH", "kuvo/config", { changes: [{ path: ["subagent_model"], value: "claude-code/haiku" }] });
+  assert.equal(layer(), null);
+
+  // Set by hand meanwhile: there once a client looks at the settings.
+  fs.writeFileSync(file, JSON.stringify({ subagent_model: haiku }));
+  await ask("GET", "kuvo/config");
+  assert.deepEqual(layer().agents, { general: { model: haiku }, explore: { model: haiku } });
+  // Back to the conversation's.
+  await ask("PATCH", "kuvo/config", { changes: [{ path: ["subagent_model"], value: null }] });
+  assert.equal(layer(), null);
+});
