@@ -1859,7 +1859,7 @@ var cutText = (text, most = LETTER_TEXT) => {
   return words.slice(0, /[\uDC00-\uDFFF]/.test(words[most]) ? most - 1 : most);
 };
 var LETTER_ID = /^[A-Za-z0-9_-]{6,80}$/;
-var composeLetter = (name, session, words, waits) => `[Message from ${name} · ${session}] (${waits ? "They're waiting for your reply: just answer, in your words." : session === "unknown" ? "It can't be answered: who sent it isn't known." : `To answer, use send_message to ${session}.`})
+var composeLetter = (name, session, words, waits, finishHeard = false) => `[Message from ${name} · ${session}] (${waits ? "They're waiting for your reply: just answer, in your words." : session === "unknown" ? "It can't be answered: who sent it isn't known." : finishHeard ? `They get your last reply when you finish: end with your report there, not in a message. Use send_message to ${session} only to ask something or say how it's going.` : `To answer, use send_message to ${session}.`})
 
 ${words}`;
 var pausedNote = (name) => `${name ? `${name} is stopped: the user paused its conversation.` : "That conversation is stopped: the user paused it."} Your message waits there and goes once they resume it; its answer, if it writes one, comes to you as a message.`;
@@ -27097,7 +27097,7 @@ import path96 from "node:path";
 var OUTSIDE = { session: "unknown", place: null, name: "another agent" };
 var ASKS_FIRST = [{ action: "shell", resource: "*", effect: "ask" }];
 var goalNote = "This is part of a goal the user may not be watching: what you ask can wait a while, so carry on with what doesn't depend on it, and report what you couldn't do.";
-var sessionNote = (bot) => `You were started by ${bot}, a bot coordinating this work. When you're done, review your work with reviewer subagents, fix what they find, and end with a short report as your last reply: what you did, what the reviewers found and how you fixed it, and anything left. ${bot} reads that report.`;
+var sessionNote = (bot, heard = true) => `You were started by ${bot}, a bot coordinating this work. When you're done, review your work with reviewer subagents, fix what they find, and end with a short report as your last reply: what you did, what the reviewers found and how you fixed it, and anything left. ${heard ? `${bot} gets that reply when you finish: don't also send it with send_message.` : `${bot} reads that report.`}`;
 var WAKES = ["finished", "asks"];
 function wakesFrom(given, byBot, waits) {
   if (given === undefined || given === null)
@@ -27377,9 +27377,10 @@ async function startSession(given, by, place) {
     linkSession(bot.bot, given.step, session);
   const waits = given.wait === true;
   const id = messageID();
-  const text = by ? composeLetter(by.name, by.session, task, waits) + (bot ? `
+  const heard = wakes.includes("finished");
+  const text = by ? composeLetter(by.name, by.session, task, waits, heard) + (bot ? `
 
-${sessionNote(bot.name)}${goal ? `
+${sessionNote(bot.name, heard)}${goal ? `
 
 ${goalNote}` : ""}` : "") : task;
   try {
