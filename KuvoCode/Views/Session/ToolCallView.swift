@@ -2,6 +2,7 @@ import AppKit
 import ClientDesign
 import ClientSandbox
 import ClientSessions
+import ClientText
 import OpenCodeKit
 import SwiftUI
 
@@ -219,6 +220,13 @@ struct ToolCallView: View {
 
     private func string(_ key: String) -> String? { input?[key]?.string }
 
+    /// A Work Queue tool's call, in words (`WorkQueueWords`): a hand-off names the session by its
+    /// title where this Mac knows it.
+    private func queueSummary(_ name: String) -> String {
+        let item = input?["item"]?.number.flatMap { Int(exactly: $0.rounded()) }.map { "#\($0)" } ?? string("item")
+        let to = string("to").map { AgentMail.shared.name(of: $0) }
+        return WorkQueueWords.summary(name, item: item, title: string("title"), to: to, category: string("category"), undo: input?["undo"]?.bool == true, add: string("add"), isActive: isActive)
+    }
     private func relative(_ path: String?) -> String? {
         guard let path else { return nil }
         // A machine's engine names files as they are there, without the ssh:// prefix.
@@ -367,6 +375,7 @@ struct ToolCallView: View {
         case "vault_items": return isActive ? "Looking up its vault items" : "Looked up its vault items"
         case "vault_ask": return isActive ? "Asking you for something from the vault" : "Asked you for something from the vault"
         case "vault_run": return isActive ? "Running a command with the vault’s values" : "Ran a command with the vault’s values"
+        case let name where name.hasPrefix("queue_"): return queueSummary(String(name))
         case let name where name.hasPrefix("browser_"): return "Used the browser"
         // One this list doesn't know yet: by its own name, never as the browser.
         case let name: return "Used " + name.replacingOccurrences(of: "_", with: " ")
@@ -463,6 +472,7 @@ struct ToolCallView: View {
         case "browser_ask_user": "hand.raised"
         case "list_agents": "person.2"
         case "send_message": "paperplane"
+        case let name where name.hasPrefix("queue_"): WorkQueueWords.symbol
         case "read_conversation": "text.bubble"
         case "schedule_wake_up": "alarm"
         case "watch_for_change": "eye"

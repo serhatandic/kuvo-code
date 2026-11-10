@@ -58,6 +58,21 @@ extension AppModel {
             guard let self else { return ("Kuvo Code isn't ready yet.", true) }
             return await callBoxTool("kuvo/sandbox/tools", name, arguments, caller, unreachable: "This Mac's box can't be reached now. Try again in a moment.", failed: "The sandbox couldn't do that")
         }
+        // The Work Queue's tools (KuvoLink's PROTOCOL.md, "The Work Queue"), and what agents are
+        // told of them, in this Mac's box's own words.
+        BrowserTools.workQueueDefinitions = { [weak self] in
+            if let kept = WorkQueueTools.kept { return kept }
+            guard let self, let answer = try? await box(BoxClient.mac).send("GET", "kuvo/work-queue/tools"), answer.status == 200,
+                  let said = try? JSONSerialization.jsonObject(with: answer.body) as? [String: Any],
+                  let tools = said["tools"] as? [[String: Any]] else { return ([], "") }
+            let kept = (tools, said["instructions"] as? String ?? "")
+            WorkQueueTools.kept = kept
+            return kept
+        }
+        BrowserTools.workQueue = { [weak self] name, arguments, caller in
+            guard let self else { return ("Kuvo Code isn't ready yet.", true) }
+            return await callBoxTool("kuvo/work-queue/tools", name, arguments, caller, unreachable: "This Mac's box can't be reached now. Try again in a moment.", failed: "The Work Queue couldn't do that")
+        }
         BrowserTools.vaultFill = { [weak self] body in
             guard let self, let data = try? JSONSerialization.data(withJSONObject: body),
                   let answer = try? await box(BoxClient.mac).send("POST", "kuvo/vault/fill", body: data) else { return nil }
@@ -112,4 +127,10 @@ enum VaultTools {
 @MainActor
 enum SandboxTools {
     static var definitions: [[String: Any]]?
+}
+
+/// The Work Queue's tools and what agents are told of them, as this Mac's box gave them, once it did.
+@MainActor
+enum WorkQueueTools {
+    static var kept: (tools: [[String: Any]], instructions: String)?
 }

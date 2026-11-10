@@ -19,6 +19,7 @@ import { announce, toldPeers, writeAgents } from "./agents";
 import { takeAgents } from "./directory";
 import { forgetOldMacs, macsOf, mailFor, openMail, takeLegacyPeers } from "./known";
 import { takeSeat } from "./seats";
+import { takeNumbersMail } from "../work-queue/numbers";
 import type { PeerPlaces } from "../engine/client";
 import type { DocsMail } from "../documents/work";
 import type { Delivered } from "../letters/outbox";
@@ -68,6 +69,9 @@ export function peerMail(sender: MailSender, payload: Record<string, unknown>, h
   if (isObject(payload.moving)) takeMoving(sender, payload.moving);
   // Group chats across your computers: to the coding agents' bridge here.
   if (isObject(payload.seat) || isObject(payload.seatPart)) takeSeat(sender, payload, send).catch(() => {});
+  // The Work Queue's numbers: an ask for a block, or the block the primary gave (PROTOCOL.md, "The
+  // Work Queue", "Numbers").
+  if (isObject(payload.workQueue)) takeNumbersMail(sender, payload.workQueue, host);
   if (isObject(payload.delivered) && typeof payload.delivered.id === "string") {
     letterWent(sender, payload.delivered as unknown as Delivered);
     if (payload.delivered.ok === true) rowsWent(sender, payload.delivered.id);

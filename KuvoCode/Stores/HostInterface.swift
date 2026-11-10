@@ -103,6 +103,8 @@ final class HostInterface {
         if (try? await start()) != nil {
             retrying?.cancel()
             retrying = nil
+            // (At a new address: the keeper's told, as after a retry.)
+            if !tellsBox { restarted?() }
             return true
         }
         if tellsBox { Self.forget() }
@@ -124,10 +126,16 @@ final class HostInterface {
     /// It started answering, or tried to, so the record is its own to take away.
     private var tried = false
 
+    /// Told once it answers again, at a new address, after failing by itself while it doesn't tell
+    /// the box where it answers (the open app's, while the keeper runs the box: the keeper is told
+    /// again, or what only the app answers stays out of the box's reach); set by AppModel.
+    var restarted: (() -> Void)?
+
     /// Its listener failed by itself: tried again after a wait that doubles with each failure that
-    /// comes soon after the last one, up to a minute.
-    private func failedByItself() {
-        Self.forget()
+    /// comes soon after the last one, up to a minute. The record in the box's folder goes only when
+    /// it's its own: the keeper's, while the keeper runs the box, stays.
+    func failedByItself() {
+        if tellsBox { Self.forget() }
         if let lastFailure, Date.now.timeIntervalSince(lastFailure) < 5 * 60 {
             failureWait = min(failureWait * 2, Self.longestWait)
         } else {
@@ -150,9 +158,10 @@ final class HostInterface {
                 guard let self, !Task.isCancelled else { return }
                 if (try? await self.start()) != nil {
                     self.retrying = nil
+                    if !self.tellsBox { self.restarted?() }
                     return
                 }
-                Self.forget()
+                if self.tellsBox { Self.forget() }
                 wait = min(wait * 2, Self.longestWait)
             }
         }

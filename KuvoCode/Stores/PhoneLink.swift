@@ -54,8 +54,6 @@ final class PhoneLink {
     @ObservationIgnored var machineName: (String) -> String? = { _ in nil }
     /// The agents bridge (Claude Code, Codex…), for `kuvo/agents/api/…`; set by AppModel.
     @ObservationIgnored var agents: OutsideAgents?
-    /// Whether a group chat or a bot is on its way to another computer; set by AppModel.
-    @ObservationIgnored var isMoving: (String) -> Bool = { Moves.isFrozen($0) }
     /// Starts this Mac's engine over, as Settings › Engine's Restart does; set by AppModel.
     @ObservationIgnored var restartEngine: () -> Void = {}
     /// When the engine running now came up, for `kuvo/info`; set by AppModel.
@@ -771,16 +769,6 @@ final class PhoneLink {
         }
         var routed = request
         routed.path = route
-        // A conversation carried on with the coding agents, as picking one of their models in it does.
-        if let id = Self.sessionID(in: route, then: "agents") {
-            return AsyncThrowingStream { continuation in
-                Task { @MainActor in
-                    let posts = request.method.uppercased() == "POST"
-                    let (status, body) = posts ? await link?.moveToAgents(id, with: request.body) ?? (503, Data()) : (405, Data("{}".utf8))
-                    Self.sendJSON(status, body, to: continuation)
-                }
-            }
-        }
         // Settings › Machines: this Mac's machines. Adding a machine checks it first: the phone
         // going stops that (and nothing else, which would leave a removal half done).
         if route == "kuvo/machines/events", request.method.uppercased() == "GET" { return Self.following { link?.machinesJSON() } }
@@ -966,7 +954,7 @@ final class PhoneLink {
     /// The areas that have moved onto this Mac's box (`BoxProcess`), by their routes: a phone's
     /// requests and the app's own (`BoxClient`) go there.
     nonisolated static let boxRoutes = ["kuvo/projects", "kuvo/worktrees", "kuvo/plugins", "kuvo/folders", "kuvo/programs", "kuvo/providers", "kuvo/wakes", "kuvo/config", "kuvo/mcp/catalog", "kuvo/skills", "kuvo/skill-library", "kuvo/skill-trash", "kuvo/integrations", "kuvo/keys", "kuvo/bots", "kuvo/personalities",
-                                                  "kuvo/phones", "kuvo/link", "kuvo/attention", "kuvo/accounts/ended", "kuvo/accounts/refreshable", "kuvo/accounts/credentials", "kuvo/accounts/found", "kuvo/file", "kuvo/sign-in/return", "kuvo/named", "kuvo/groups", "kuvo/artifacts", "kuvo/search", "kuvo/git", "kuvo/agent-tools", "kuvo/moves", "kuvo/work", "kuvo/vault", "kuvo/approval"]
+                                                  "kuvo/phones", "kuvo/link", "kuvo/attention", "kuvo/accounts/ended", "kuvo/accounts/refreshable", "kuvo/accounts/credentials", "kuvo/accounts/found", "kuvo/file", "kuvo/sign-in/return", "kuvo/named", "kuvo/groups", "kuvo/artifacts", "kuvo/search", "kuvo/git", "kuvo/agent-tools", "kuvo/moves", "kuvo/work", "kuvo/work-queue", "kuvo/vault", "kuvo/approval"]
     /// Where this Mac's box is reached while it runs.
     nonisolated static let box = OSAllocatedUnfairLock<ServerEndpoint?>(initialState: nil)
     /// Connections of its own to this Mac's box, plenty of them: the streams that follow it
@@ -1003,10 +991,10 @@ final class PhoneLink {
     /// `engine.start` and `update`), and the Mac's own. `usage` is added while the usage panel is.
     static let features = [
         "accounts.credentials", "accounts.found", "accounts.refresh", "agents", "artifacts", "asks", "attention", "bots", "bots.edit", "bots.events", "bots.job", "bots.keys", "bots.make", "branch", "btw", "btw.threads", "config", "config.apply", "engine.restart",
-        "file", "folders", "folders.files", "git", "git.merge", "git.pull-request", "git.pull-request.draft", "git.push", "goals", "groups", "groups.delete", "groups.edit", "groups.joinable", "groups.make", "groups.seats", "handoff", "integrations", "keys", "mcp.catalog", "moves", "moves.agents", "moves.check",
+        "file", "folders", "folders.files", "git", "git.changes.count", "git.merge", "git.pull-request", "git.pull-request.draft", "git.push", "goals", "groups", "groups.delete", "groups.edit", "groups.joinable", "groups.make", "groups.seats", "handoff", "integrations", "keys", "mcp.catalog", "moves", "moves.agents", "moves.check",
         "named", "personalities", "phones", "phones.pair", "plugins.search", "programs", "projects", "providers.models", "reviews", "reviews.parts", "reviews.scopes", "search", "sessions.agents", "shell.stop", "sign-in.return", "skills",
         "personalities.events", "skills.trash", "sandbox", "sandbox.check", "sandbox.asks", "vault", "wakes", "wakes.edit", "wakes.events", "worktrees", "worktrees.events", "worktrees.where",
-        "agent-tools", "sessions.start", "letters-read", "work.elsewhere", "queue", "queue.waits", "work", "work.projects", "work.goals", "work.goals.apps", "work.goals.projects", "work.unanswering", "autopilot", "approval", "approval.reviewer", "git.backups", "approval.fullAccess", "approval.held", "approval.default", "approval.seen", "approval.stopped", "limits",
+        "agent-tools", "sessions.start", "letters-read", "work.elsewhere", "queue", "queue.waits", "work", "work.projects", "work.goals", "work.goals.apps", "work.goals.projects", "work.unanswering", "autopilot", "approval", "approval.reviewer", "git.backups", "approval.fullAccess", "approval.held", "approval.default", "approval.seen", "approval.stopped", "limits", "work-queue",
         // The Mac's own.
         "accounts.ended", "claude-code", "hosts", "mac", "machines",
     ]
@@ -1263,58 +1251,12 @@ final class PhoneLink {
         }
     }
 
-    /// Why a bot living on `machine` (nil for this Mac; `place` is its name) can't use `model`, as
-    /// New Bot and Edit Bot offer models there: nil when it can.
-    private static func refusal(of model: ModelRef, on machine: String?, called place: String?, app: AppModel) -> String? {
-        guard ModelScope.on(machine: machine).allows(model.providerID) else { return "That model can’t run on \(place ?? "this Mac"): choose another." }
-        let catalog = machine.flatMap { app.machines.engine($0)?.catalog } ?? app.catalog
-        return catalog.refusal(model, on: place)
-    }
-
-    /// `POST kuvo/sessions/<id>/agents` with `{model}`: a conversation on the engine (here or on a
-    /// machine) carried on with the coding agents on `model` (one of theirs, or Custom Auto), as
-    /// picking it in the conversation does: a session of theirs with all of it, what was waiting
-    /// and its draft; the engine's goes to Archived (a bot's takes the new one). Answers 200
-    /// `{session}`, the new one; 400 for a model that isn't theirs; 404 for no such conversation;
-    /// 409 for one with them already, or while it moves; 422 for a model it can't use where it
-    /// is; 503 while the coding agents aren't running there.
-    func moveToAgents(_ id: String, with body: Data) async -> (Int, Data) {
-        guard let workspace, let app = bots?.app else { return (503, Self.message("Kuvo Code isn’t ready yet. Try again in a moment.")) }
-        guard let session = workspace.session(id) else { return (404, Self.message("That conversation isn’t there any more.")) }
-        if OutsideAgents.isAgentSession(session) { return (409, Self.message("It’s with the coding agents already.")) }
-        if isMoving(id) { return (409, Self.message(Moves.Failure.moving.localizedDescription)) }
-        struct Given: Decodable { var model: ModelRef }
-        let machine = RemoteFolder.machine(of: session.location.directory)
-        guard let model = (try? JSONDecoder().decode(Given.self, from: body))?.model, OutsideAgents.runsWithAgents(model, machine: machine) else {
-            return (400, Self.message("That isn’t a coding agent’s model."))
-        }
-        let place = machine.map { machine in app.machines.list.first { $0.id == machine }?.name ?? machine }
-        if let refusal = Self.refusal(of: model, on: machine, called: place, app: app) { return (422, Self.message(refusal)) }
-        do {
-            guard let moved = try await workspace.moveToAgents(id, model: model, opens: false) else { return (404, Self.message("That conversation isn’t there any more.")) }
-            return (200, (try? JSONEncoder().encode(["session": moved.id])) ?? Data())
-        } catch let failure as OutsideAgents.Failure {
-            return (503, Self.message(failure.localizedDescription))
-        } catch let failure as Moves.Failure {
-            return (409, Self.message(failure.localizedDescription))
-        } catch {
-            return (502, Self.message(error.localizedDescription))
-        }
-    }
-
-    /// `kuvo/sessions/<id>/<then>`'s session.
-    nonisolated private static func sessionID(in path: String, then: String) -> String? {
-        let parts = path.split(separator: "/")
-        guard parts.count == 4, parts[0] == "kuvo", parts[1] == "sessions", parts[3] == then else { return nil }
-        return String(parts[2]).removingPercentEncoding
-    }
-
     /// Whether a route is answered by this Mac's box: an area that's moved there (`boxRoutes`).
     nonisolated static func movedToBox(_ route: String) -> Bool {
         boxRoutes.contains { route == $0 || route.hasPrefix($0 + "/") }
-            // A session started with a task, a session's queue, its approval, its reviewer's decisions and its Autopilot
-            // (not its other routes, `kuvo/sessions/<id>/agents`).
-            || route == "kuvo/sessions" || route.wholeMatch(of: /kuvo\/sessions\/(queues\/events|[^\/]+\/(stop|approval|decisions|autopilot(\/asked)?|queue(\/.+)?))/) != nil
+            // A session started with a task, a session's queue, its approval, its reviewer's decisions, its Autopilot,
+            // and carrying it on with the coding agents.
+            || route == "kuvo/sessions" || route.wholeMatch(of: /kuvo\/sessions\/(queues\/events|[^\/]+\/(stop|approval|decisions|autopilot(\/asked)?|queue(\/.+)?|agents))/) != nil
             // A plan signed out (`kuvo/accounts/<id>/forget`), a provider's models asked of again
             // (`kuvo/accounts/<id>/refresh`), and a command stopped (`kuvo/shell/<id>/stop`): the box's too.
             || Self.oneOf(route, "kuvo/accounts/", "/forget") || Self.oneOf(route, "kuvo/accounts/", "/refresh") || Self.oneOf(route, "kuvo/shell/", "/stop")

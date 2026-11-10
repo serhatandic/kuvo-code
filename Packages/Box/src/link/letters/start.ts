@@ -13,7 +13,7 @@ import { writtenByYou } from "../engine/queue";
 import { messageID } from "../engine/sessions";
 import { BOTS, CHATS, HERE, homeFolder } from "../home";
 import { askedAbout, realish } from "../fence/policy";
-import { changeProjects, PROJECTS_FILE, readProjects } from "../areas/projects";
+import { changeProjects, PROJECT_FOLDERS_ENTRY, PROJECTS_FILE, projectFoldersNote, readProjects } from "../areas/projects";
 import { projectOf as projectOfFolder, readWorktrees } from "../areas/worktree-records";
 import { answerWorktrees, settleNewSession } from "../areas/worktrees";
 import { composeLetter } from "./letter";
@@ -115,11 +115,12 @@ export interface StartPlace {
   signal?: AbortSignal;
 }
 
-/** What a session a bot started is told with its task: its half of the playbook (PROTOCOL.md,
- * "Work"), in the task's text, so it works with any agent. */
 /** What a session a bot starts for its goal is told: no one may be there to answer. */
 export const goalNote = "This is part of a goal the user may not be watching: what you ask can wait a while, so carry on with what doesn't depend on it, and report what you couldn't do.";
-export const sessionNote = (bot: string) => `You were started by ${bot}, a bot coordinating this work. When you're done, review your work with reviewer subagents, fix what they find, and end with a short report as your last reply: what you did, what the reviewers found and how you fixed it, and anything left. ${bot} reads that report.`;
+/** What a session a bot started is told with its task: its half of the playbook (PROTOCOL.md,
+ * "Work"), in the task's text, so it works with any agent. `heard`: its finish is told its bot with
+ * its last reply, so its report isn't sent again as a message (#270). */
+export const sessionNote = (bot: string, heard = true) => `You were started by ${bot}, a bot coordinating this work. When you're done, review your work with reviewer subagents, fix what they find, and end with a short report as your last reply: what you did, what the reviewers found and how you fixed it, and anything left. ${heard ? `${bot} gets that reply when you finish: don't also send it with send_message.` : `${bot} reads that report.`}`;
 
 // What a start's wake names: what its starter hears of it.
 const WAKES = ["finished", "asks"];
@@ -168,9 +169,6 @@ function rulesFor(approval: Approval, parent: Partial<EngineSession> | null, fol
   const own = Array.isArray(parent?.permissions) ? parent.permissions.filter(rule => !isFolderRule(rule) || rule.resource.includes("/bots/bot_")) : [];
   return approvalRules(approval, [...own, ...folderRules(folders)]);
 }
-
-const projectsNote = (primary: string, folders: readonly string[]) =>
-  `This project spans several folders. You work in its primary folder, ${path.basename(primary)} (${primary}). These folders belong to the project too, and you can read, search and change files in them the same way:\n${folders.map(folder => `- ${path.basename(folder)}: ${folder}`).join("\n")}\nWhen the user mentions one of these folders by name, they mean that folder.`;
 
 // The project a folder is (one of its worktrees is its project's), its name and other folders; a
 // folder that's none yet becomes one, as a Mac adds it when a session starts there. Null for chats.
@@ -407,7 +405,7 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
   }
   const address = encodeURIComponent(session);
   if (project?.folders.length) {
-    await call(target, "PUT", `/api/experimental/session/${address}/instructions/entries/kuvo.project-folders`, { value: projectsNote(folder, project.folders) }).catch(() => {});
+    await call(target, "PUT", `/api/experimental/session/${address}/instructions/entries/${PROJECT_FOLDERS_ENTRY}`, { value: projectFoldersNote(folder, project.folders) }).catch(() => {});
   }
   if (autopilot) await tellAutopilot(target, session, true).catch(() => {});
   await settleNewSession(target, session).catch(() => {});
@@ -428,7 +426,8 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
   if (bot && goal && given.step !== undefined && given.step !== null) linkSession(bot.bot, given.step, session);
   const waits = given.wait === true;
   const id = messageID();
-  const text = by ? composeLetter(by.name, by.session, task, waits) + (bot ? `\n\n${sessionNote(bot.name)}${goal ? `\n\n${goalNote}` : ""}` : "") : task;
+  const heard = wakes.includes("finished");
+  const text = by ? composeLetter(by.name, by.session, task, waits, heard) + (bot ? `\n\n${sessionNote(bot.name, heard)}${goal ? `\n\n${goalNote}` : ""}` : "") : task;
   try {
     await asked(target, "POST", `api/session/${address}/prompt`, { id, text, delivery: "steer" });
   } catch (error) {

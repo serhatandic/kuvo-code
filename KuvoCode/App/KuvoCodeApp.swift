@@ -337,6 +337,8 @@ struct AppCommands: Commands {
                 Button("Show Files") { actions?.showFiles() }
                     .keyboardShortcut("f", modifiers: [.command, .option])
                     .disabled(actions?.panelHasProject == false)
+                Button("Show Work Queue") { actions?.showWorkQueue() }
+                    .keyboardShortcut("u", modifiers: [.command, .option])
                 Button("Run") { actions?.run() }
                     .keyboardShortcut("r")
                     .disabled(actions?.hasProject != true)
@@ -427,6 +429,7 @@ struct SessionActions {
     var togglePanel: () -> Void
     var showChanges: () -> Void
     var showFiles: () -> Void
+    var showWorkQueue: () -> Void
     var newTerminal: () -> Void
     /// The project's run command, in a terminal.
     var run: () -> Void

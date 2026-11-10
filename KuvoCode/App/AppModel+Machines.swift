@@ -291,12 +291,26 @@ extension AppModel {
                 // running in the panel.
                 if let carried = carriedTo {
                     utilities.handOver(from: session, to: carried)
+                    // Its tab and what you were writing go to the new one too, whoever moved it (a
+                    // phone, say): once it's listed here, so its tab has it to show.
+                    Task { await self.carriedOn(from: session, to: carried) }
                 } else {
                     utilities.closeTerminals(of: session)
                 }
             }
             // Its wake-ups wait, and come back with it.
             archivedChanged(session)
+        }
+    }
+
+    /// A conversation its box carried on in another (moved to the coding agents, from a phone, say):
+    /// the new one takes its tab, and what you were writing in it, as when you move it here.
+    func carriedOn(from old: String, to new: String) async {
+        if workspace.session(new) == nil { await workspace.refreshAgents() }
+        _ = tabs.swap(from: old, to: new)
+        if Drafts.shared[new].isEmpty, !Drafts.shared[old].isEmpty {
+            Drafts.shared[new] = Drafts.shared[old]
+            Drafts.shared.remove(old)
         }
     }
 
