@@ -9,6 +9,7 @@ import crypto from "node:crypto"
 import fs from "node:fs"
 import path from "node:path"
 
+const vaultAgents = process.env.KUVO_VAULT_AGENTS
 process.env.KUVO_VAULT_AGENTS = "1"
 const watch = fs.watch
 // (A watch that's made, and never tells of anything.)
@@ -22,6 +23,9 @@ const stop = keepSshAgents()
 afterAll(() => {
   stop()
   fs.rmSync(path.join(SSH_FOR, "ses_kept"), { force: true })
+  // (As it was, for the files that run after this one in the same process.)
+  if (vaultAgents === undefined) delete process.env.KUVO_VAULT_AGENTS
+  else process.env.KUVO_VAULT_AGENTS = vaultAgents
 })
 
 test("a conversation the launcher notes gets its agent at once, though the folder's watch says nothing", async () => {

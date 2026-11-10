@@ -29194,6 +29194,10 @@ function keepSshAgents() {
       agent.server.on("connection", () => {
         agent.used = Date.now();
       });
+      agent.server.on("error", () => {
+        if (agents.get(note) === agent)
+          agents.delete(note);
+      });
       agents.set(note, agent);
     }
     for (const note of [...agents.keys()])
@@ -29217,15 +29221,16 @@ function keepSshAgents() {
     watcher = fs97.watch(SSH_FOR, () => look());
     watcher.unref?.();
   } catch {}
-  let noted = 0;
+  let noted = "";
   const quick = setInterval(() => {
-    let changed = 0;
+    let seen;
     try {
-      changed = fs97.statSync(SSH_FOR).mtimeMs;
+      seen = fs97.statSync(SSH_FOR);
     } catch {
       return;
     }
-    if (changed === noted)
+    const changed = `${seen.mtimeMs}:${seen.ctimeMs}:${seen.size}`;
+    if (changed === noted && Date.now() - seen.mtimeMs > 1500)
       return;
     noted = changed;
     look();
