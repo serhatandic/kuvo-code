@@ -702,6 +702,45 @@ describe("Claude Code's subagents in the background", () => {
     expect((await fake.canUse("Read", { file_path: join(root, "a.ts") }, "t1", { agentID: "ag1" })).behavior).toBe("allow")
   })
 
+  test("one sent off in an earlier turn goes on when you stop a later one it spoke in, and is listed once meanwhile", async () => {
+    const id = sessions.create({ model: { providerID: provider, id: "default" }, location: { directory: root } }).id
+    const child = await sendOffByDefault(id, true)
+    fake.out.push({ type: "system", subtype: "background_tasks_changed", tasks: [{ task_id: "ag1", task_type: "local_agent", description: "Review it" }] })
+    sessions.prompt(id, { id: "msg_claude_sub_0104", text: "meanwhile, something else", files: [], delivery: "steer" })
+    await until(() => fake.sent.length === 2)
+    const second = fake.sent[1].uuid
+    fake.out.push({ type: "assistant", message: { id: "m4", content: [{ type: "text", text: "Still reading." }] }, parent_tool_use_id: "call1" })
+    await until(() => texts(child).includes("Still reading."))
+    // The reviewer is one subagent, not a task besides.
+    expect(sessions.background()[id]).toMatchObject({ subagents: [{ id: child }], tasks: [] })
+    fake.onInterrupt = () => fake.result([second], "error_during_execution")
+    await sessions.interrupt(id, false)
+    await until(() => idles(id).length === 2)
+    expect(sessions.active()).toContain(child)
+    expect((await fake.canUse("Read", { file_path: join(root, "a.ts") }, "t1", { agentID: "ag1" })).behavior).toBe("allow")
+    fake.out.push({ type: "assistant", message: { id: "m5", content: [{ type: "text", text: "Done reading." }] }, parent_tool_use_id: "call1" })
+    await until(() => texts(child).includes("Done reading."))
+    fake.out.push({ type: "system", subtype: "task_notification", task_id: "ag1", status: "completed", tool_use_id: "call1", output_file: "", summary: "done" })
+    await until(() => !sessions.active().includes(child))
+    expect(idles(child).at(-1)?.outcome).toBe("succeeded")
+  })
+
+  test("a Claude Code that says only in the launch's result that it went to the background: it goes on after the turn", async () => {
+    const id = sessions.create({ model: { providerID: provider, id: "default" }, location: { directory: root } }).id
+    sessions.prompt(id, { id: "msg_claude_sub_0105", text: "have a reviewer look", files: [], delivery: "steer" })
+    await until(() => fake.sent.length === 1)
+    const [first] = fake.sent.map((message) => message.uuid)
+    fake.out.push({ type: "assistant", message: { id: "m1", content: [{ type: "tool_use", id: "call1", name: "Agent", input: { description: "Review it", prompt: "Review it", subagent_type: "reviewer" } }] }, parent_tool_use_id: null, user_message_uuids: [first] })
+    fake.out.push({ type: "system", subtype: "task_started", task_id: "ag1", task_type: "local_agent", description: "Review it", tool_use_id: "call1" })
+    fake.out.push({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "call1", content: "Async agent launched successfully." }] }, parent_tool_use_id: null, tool_use_result: { status: "async_launched", agentId: "ag1", description: "Review it", prompt: "Review it" } })
+    fake.say("A reviewer is on it.", [first])
+    fake.result([first])
+    await until(() => idles(id).length === 1)
+    const child = sessions.list(root, id)[0].id
+    expect(sessions.active()).toContain(child)
+    expect((await fake.canUse("Read", { file_path: join(root, "a.ts") }, "t1", { agentID: "ag1" })).behavior).toBe("allow")
+  })
+
   test("a call from a subagent the box doesn't know, with no turn under way, is refused", async () => {
     const id = sessions.create({ model: { providerID: provider, id: "default" }, location: { directory: root } }).id
     sessions.prompt(id, { id: "msg_claude_sub_0103", text: "hello", files: [], delivery: "steer" })

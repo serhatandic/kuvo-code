@@ -1147,8 +1147,9 @@ class ClaudeThread implements Thread {
   private turnFor(turn: Turn, hooks: TurnHooks, resolve: (result: RunResult) => void, auto: boolean | undefined, steered: Map<string, string>): Active {
     const active: Active = { turn, hooks, resolve, streamed: new Set(), blockTools: new Map(), calls: new Map(), subagents: new Map(), auto, steered }
     active.resolve = (result) => {
-      // (A turn stopped or failed stops them: the session ends them with it.)
-      if (result.outcome === "succeeded") for (const [callID, lane] of active.subagents) if (lane.background && !lane.turn.isEnded) this.backgroundLanes.set(callID, lane)
+      // Whatever the outcome: one this turn started, stopped or failed with it, the session ends
+      // (and it's forgotten then); one an earlier turn sent off goes on, after a Stop too.
+      for (const [callID, lane] of active.subagents) if (lane.background && !lane.turn.isEnded) this.backgroundLanes.set(callID, lane)
       resolve(result)
     }
     return active
@@ -1236,7 +1237,8 @@ class ClaudeThread implements Thread {
         this.tasks.set(message.task_id, { ...known, type, description: message.description ?? known?.description ?? "", toolUseID: resumed ?? message.tool_use_id ?? known?.toolUseID, backgrounded })
         if (type === "local_agent" && typeof message.tool_use_id === "string" && !resumed) {
           this.rememberSubagent(message.tool_use_id, { agentID: message.task_id })
-          // Its session from the start: the turn may end before it says anything, and it works on.
+          // A subagent's own (the turn's have theirs from their call): its session from the start,
+          // as the turn may end before it says anything.
           if (this.active) this.subagentLane(this.active, message.tool_use_id)
           if (backgrounded) this.toBackground(message.tool_use_id)
         }
@@ -1355,7 +1357,8 @@ class ClaudeThread implements Thread {
     if (!this.query) return []
     return [...this.liveTasks].flatMap((id) => {
       const task = this.tasks.get(id)
-      if (task?.shell || task?.type === "local_bash" || (task?.toolUseID && this.backgroundLanes.has(task.toolUseID))) return []
+      // (A subagent with a session is listed as one, under a turn or after it.)
+      if (task?.shell || task?.type === "local_bash" || (task?.toolUseID && (this.backgroundLanes.has(task.toolUseID) || this.active?.subagents.has(task.toolUseID)))) return []
       return [{ id, since: task?.since ?? Date.now() }]
     })
   }
@@ -1987,6 +1990,8 @@ class ClaudeThread implements Thread {
     // A subagent's task came back: its session's work is done (one sent off in the background
     // goes on, and ends with the turn).
     const subagent = active && lane === active ? active.subagents.get(id) : undefined
+    // Launched in the background, as its result says (a Claude Code that doesn't say so as it starts).
+    if (subagent && structured?.status === "async_launched") this.toBackground(id)
     if (active && subagent && !subagent.background) {
       subagent.run.end(block.is_error ? "failed" : "succeeded", block.is_error ? { type: "agent", message: text || "The subagent failed." } : undefined)
       active.subagents.delete(id)
@@ -2263,6 +2268,8 @@ class ClaudeThread implements Thread {
   /** What it left running ends with it. */
   private leftRunning() {
     for (const task of this.tasks.values()) if (task.shell) endShell(task.shell)
+    // (Its subagents in the background, kept or with the turn under way now.)
+    for (const lane of this.active?.subagents.values() ?? []) if (lane.background) lane.run.end("interrupted")
     for (const lane of this.backgroundLanes.values()) lane.run.end("interrupted")
     this.backgroundLanes.clear()
     this.liveTasks.clear()

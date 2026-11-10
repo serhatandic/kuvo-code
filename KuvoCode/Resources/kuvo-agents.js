@@ -11656,11 +11656,9 @@ ${input.text}` } : input, this.copies());
   turnFor(turn, hooks, resolve, auto, steered) {
     const active = { turn, hooks, resolve, streamed: new Set, blockTools: new Map, calls: new Map, subagents: new Map, auto, steered };
     active.resolve = (result) => {
-      if (result.outcome === "succeeded") {
-        for (const [callID, lane] of active.subagents)
-          if (lane.background && !lane.turn.isEnded)
-            this.backgroundLanes.set(callID, lane);
-      }
+      for (const [callID, lane] of active.subagents)
+        if (lane.background && !lane.turn.isEnded)
+          this.backgroundLanes.set(callID, lane);
       resolve(result);
     };
     return active;
@@ -11855,7 +11853,7 @@ ${input.text}` } : input, this.copies());
       return [];
     return [...this.liveTasks].flatMap((id) => {
       const task = this.tasks.get(id);
-      if (task?.shell || task?.type === "local_bash" || task?.toolUseID && this.backgroundLanes.has(task.toolUseID))
+      if (task?.shell || task?.type === "local_bash" || task?.toolUseID && (this.backgroundLanes.has(task.toolUseID) || this.active?.subagents.has(task.toolUseID)))
         return [];
       return [{ id, since: task?.since ?? Date.now() }];
     });
@@ -12451,6 +12449,8 @@ ${input.text}` } : input, this.copies());
       } catch {}
     }
     const subagent = active && lane === active ? active.subagents.get(id) : undefined;
+    if (subagent && structured?.status === "async_launched")
+      this.toBackground(id);
     if (active && subagent && !subagent.background) {
       subagent.run.end(block.is_error ? "failed" : "succeeded", block.is_error ? { type: "agent", message: text || "The subagent failed." } : undefined);
       active.subagents.delete(id);
@@ -12695,6 +12695,9 @@ ${input.text}` } : input, this.copies());
     for (const task of this.tasks.values())
       if (task.shell)
         endShell(task.shell);
+    for (const lane of this.active?.subagents.values() ?? [])
+      if (lane.background)
+        lane.run.end("interrupted");
     for (const lane of this.backgroundLanes.values())
       lane.run.end("interrupted");
     this.backgroundLanes.clear();
@@ -26477,4 +26480,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents a57716bd5df0fadea0f0654ae0922feb2c2cdc38dc01a90cf090bd0aad7cdfae
+// Built from Packages/Box/src/agents 466b0fbb27e7ccdd52033005d2e3c38e6218f590fcea0bc8a31fdce8cbbf56d2
