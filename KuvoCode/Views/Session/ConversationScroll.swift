@@ -104,18 +104,33 @@ final class ConversationScroller {
         if seesEnd != sees { seesEnd = sees }
     }
 
-    /// `id` opened or closed by you: back to the end once the last you left it for is closed.
-    fileprivate func reading(_ id: String, isOpen: Bool) {
-        if isOpen {
-            guard followsEnd || !heldFor.isEmpty else { return }
-            if followsEnd {
-                // All of what opened in view first: following would have got there in a moment.
-                follow(false)
-                ask(.end(animated: true))
-            }
+    /// `id`, a step you opened as it was under way, has ended, open: what comes in next doesn't
+    /// move it. All of it in view first: following would have got there in a moment.
+    fileprivate func reading(_ id: String) {
+        guard followsEnd || !heldFor.isEmpty else { return }
+        if followsEnd {
+            follow(false)
+            ask(.end(animated: true))
+        }
+        heldFor.insert(id)
+    }
+
+    /// `id` about to be opened or closed by you (and `closes` with it), before it grows or
+    /// shrinks: only it changes, and what's above it stays where it is, as a disclosure row does
+    /// (#416). Opened while following the end (`holds`: a step that's done), following stops
+    /// first, so it opens down past the composer rather than taking the conversation up with it,
+    /// and what comes in next doesn't move it. The last you left the end for closed, it follows
+    /// the end again: as it closes, the end stays over the composer, where it was before it opened.
+    fileprivate func folding(_ id: String, open: Bool, holds: Bool, closes: [String]) {
+        if open {
+            guard holds, followsEnd || !heldFor.isEmpty else { return }
+            if followsEnd { follow(false) }
             heldFor.insert(id)
-        } else if heldFor.remove(id) != nil, heldFor.isEmpty {
-            toEnd(animated: true)
+        } else {
+            let closing = Set(closes + [id])
+            guard !heldFor.isDisjoint(with: closing) else { return }
+            heldFor.subtract(closing)
+            if heldFor.isEmpty { follow(true) }
         }
     }
 
@@ -532,7 +547,8 @@ extension ConversationScroll {
     /// followed, nor what changes above what you read.
     fileprivate func wire() {
         anchor.stopFollowing = { [scroller] in scroller.follow(false) }
-        anchor.reading = { [scroller] id, isOpen in scroller.reading(id, isOpen: isOpen) }
+        anchor.reading = { [scroller] id in scroller.reading(id) }
+        anchor.folding = { [scroller] id, open, holds, closes in scroller.folding(id, open: open, holds: holds, closes: closes) }
         anchor.isFollowingEnd = scroller.followsEnd
         scroller.followChanged = { [weak anchor] in anchor?.isFollowingEnd = $0 }
     }
@@ -731,8 +747,11 @@ final class ScrollAnchor {
     /// Stops keeping the end in view, as scrolling up does: a selection dragged up past the top
     /// scrolls the conversation, which would otherwise go back to the end.
     var stopFollowing: () -> Void = {}
-    /// Steps opened (true) or closed by you, by what their fold is kept by.
-    var reading: ((String, Bool) -> Void)?
+    /// A step you opened as it was under way has ended, open, by what its fold is kept by.
+    var reading: ((String) -> Void)?
+    /// Steps about to be opened (true) or closed by you, whether opening holds (a step that's
+    /// done), and what closes with them: `ConversationScroller.folding`.
+    var folding: ((String, Bool, Bool, [String]) -> Void)?
 
     /// The rows laid out, where they are in the conversation, and those shown now. A row that
     /// goes and comes back where it was (the whole conversation hidden a moment) isn't told its
