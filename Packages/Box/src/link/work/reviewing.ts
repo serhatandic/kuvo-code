@@ -20,7 +20,7 @@ import { approvalOf } from "./approval";
 import { asksIn, callOf } from "./answers";
 import { pauseGoal, REVIEW_PAUSE, runningGoal } from "./goals";
 import { usableModels, type Usable } from "./models";
-import { review, keptFromSessions, type Decision, type ReviewedAction, type ReviewContext, type SmallModel, type Verdict } from "./reviewer";
+import { review, clearPlaces, keptFromSessions, walledForOwn, type Decision, type ReviewedAction, type ReviewContext, type SmallModel, type Verdict } from "./reviewer";
 import { botOfConversation, startedByOf, worksFor } from "./tree";
 import { botHere } from "../bots/here";
 import { readProjects } from "../areas/projects";
@@ -175,7 +175,11 @@ export async function reviewIn(session: string, action: ReviewedAction, signal?:
   const at = found === undefined ? await conversationOf(session) : found;
   if (!at) return null;
   const bot = botOf(at.data);
-  if (!inAuto(at)) return null;
+  if (!inAuto(at)) {
+    // (Out of Auto, the folders it allowed edits in go with it.)
+    try { clearPlaces(at.data.id); } catch {}
+    return null;
+  }
   // (In a bot's, what you wrote in its conversation counts beside its goal; in its work, what you
   // wrote to the bot too, which the work is for.)
   const own = bot && !botOfConversation(at.data.id) ? botHere(bot.id)?.session : undefined;
@@ -331,11 +335,11 @@ const attachedOf = (session: string): string[] => attachmentRoots().map(root => 
  * (their TMPDIR, in Kuvo Code's), the files sent with its messages (and with its parent's, for a
  * subagent's), its project's worktrees (`projectTrees`), and for a bot's conversation or work, the
  * bot's own folder, the projects it made and its running goal's. */
-async function ownFolders(at: Conversation): Promise<string[]> {
+async function ownFolders(at: Conversation, withTrees = true): Promise<string[]> {
   const folder = at.data.location?.directory;
   const folders = typeof folder === "string" ? [folder, commandTemporary(folder)].filter((each): each is string => Boolean(each)) : [];
   folders.push(...[at.data.id, at.data.parentID].filter((each): each is string => typeof each === "string").flatMap(attachedOf));
-  if (typeof folder === "string") folders.push(...await projectTrees(folder));
+  if (typeof folder === "string" && withTrees) folders.push(...await projectTrees(folder));
   const bot = botOfConversation(at.data.id) ?? worksFor(at.data);
   if (!bot) return folders;
   const own = botHere(bot.bot)?.folder;
@@ -363,9 +367,20 @@ async function foundTrees(folder: string): Promise<string[]> {
   const trees = await inTime(projectWorktrees(folder), []);
   if (!trees.length) return [];
   const policy = fencePolicy();
-  const ours = (tree: string) => policy.kuvo.some(wall => tree === wall || tree.startsWith(wall + "/") || wall.startsWith(tree + "/")) || policy.kuvoPatterns.some(pattern => new RegExp(pattern).test(tree + "/"));
+  const flags = process.platform === "darwin" ? "i" : "";
+  // (In one of Kuvo Code's folders named by pattern, or one that holds the folders those are in.)
+  const ours = (tree: string) => policy.kuvo.some(wall => tree === wall || tree.startsWith(wall + "/") || wall.startsWith(tree + "/"))
+    || policy.kuvoPatterns.some(pattern => new RegExp(pattern, flags).test(tree + "/"))
+    || (policy.patternFolders ?? []).some(pattern => holdsMatch(tree, pattern, flags));
   const kept = await Promise.all(trees.map(tree => ours(tree) ? Promise.resolve("Kuvo Code's own") : keptFromSessions(tree, policy)));
   return trees.filter((_, at) => !kept[at]);
+}
+
+/** Whether `tree` is, or holds, a folder `pattern` names (a whole path, a name a part: `^/a/[^/]+/b$`). */
+function holdsMatch(tree: string, pattern: string, flags: string): boolean {
+  const parts = pattern.replace(/^\^/, "").replace(/\$$/, "").replaceAll("[^/]+", "\0").split("/").slice(1).map(part => part.replaceAll("\0", "[^/]+"));
+  const names = tree.split("/").slice(1);
+  return names.length <= parts.length && names.every((name, at) => new RegExp(`^(?:${parts[at]})$`, flags).test(name));
 }
 
 /** Where a conversation works as its own, for its reviewer to judge by: its folder first, then its
@@ -455,6 +470,7 @@ async function answerPermission(source: Target, id: string, sessionID: string, s
   const ownByName = ownReads((file, place) => { const inside = path.relative(place, path.resolve(file)); return inside === "" || (!inside.startsWith("..") && !path.isAbsolute(inside)); });
   // (Else, outside Auto, it's yours as it is: nothing is opened for it, nor waits on macOS.)
   if (!ownByName && !inAuto(at)) {
+    try { clearPlaces(at.data.id); } catch {}
     noteReview(id, sessionID, "yours", call);
     return null;
   }
@@ -472,8 +488,13 @@ async function answerPermission(source: Target, id: string, sessionID: string, s
     return null;
   }
   const reply = (body: Record<string, unknown>) => engineCall(source, "POST", `/api/session/${encodeURIComponent(permission.asker)}/permission/${encodeURIComponent(permission.id)}/reply`, body, signal);
-  const own = await ownFolders(at);
-  if (actions.every(action => action.kind === "file" && own.some(folder => isWithin(action.path, folder)))) {
+  // (In its project's worktrees, but for Kuvo Code's own and what runs later there, judged as
+  // anywhere: a worktree an agent could make up names only where it could work anyway.)
+  const own = await ownFolders(at, false);
+  const trees = typeof folder === "string" ? await projectTrees(folder) : [];
+  const policy = trees.length ? fencePolicy() : null;
+  const ownFile = (file: string) => own.some(each => isWithin(file, each)) || (policy !== null && trees.some(each => isWithin(file, each)) && !walledForOwn(file, policy));
+  if (actions.every(action => action.kind === "file" && ownFile(action.path))) {
     await reply({ decision: "once" });
     noteReview(id, sessionID, "allowed", call);
     return { decision: "allow", reason: "Its own project.", by: "code" };

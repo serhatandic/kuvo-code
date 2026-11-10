@@ -39,12 +39,13 @@ struct ReviewDecisions: Decodable, Equatable {
     var latestFirst: [Decision] { decisions.reversed().filter { $0.by != "you" } }
     var waiting: [Decision] { decisions.filter(\.waiting) }
 
-    /// As Decisions lists them: what's yours to approve first, then the rest, the latest first;
-    /// past `limit` of the rest, how many more there are (what waits on you always shows).
+    /// As Decisions lists them: what's yours to approve first, then the folders it allows edits in
+    /// (yours to revoke), then the rest, the latest first; past `limit` of the rest, how many more
+    /// there are (what waits on you, and those folders, always show).
     func listed(limit: Int?) -> (rows: [Decision], more: Int) {
-        let rest = latestFirst.filter { !$0.waiting }
+        let rest = latestFirst.filter { !$0.waiting && !$0.revocable }
         let shown = limit.map { rest.prefix($0) } ?? rest[...]
-        return (latestFirst.filter(\.waiting) + shown, rest.count - shown.count)
+        return (latestFirst.filter(\.waiting) + latestFirst.filter(\.revocable) + shown, rest.count - shown.count)
     }
 
     /// How many it holds back, and of what it allowed (or you approved after), how many of each kind.

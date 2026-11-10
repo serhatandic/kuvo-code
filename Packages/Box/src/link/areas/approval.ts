@@ -223,6 +223,8 @@ export async function reapplyApprovals(engine: Target | null, bridge: Target | n
         const now = approvalOf(data, { agents, bot }, since, byDefault);
         // (Full Access's list for the sandbox's launcher, as each is now: one from before too.)
         markConversation(data.id, now.effective === "fullAccess");
+        // Out of Auto (the sandbox stopped, its rules changed by a client): the folders it allowed go.
+        if (now.effective !== "auto") try { clearPlaces(data.id); } catch {}
         // (Settings › Permissions changed: any kept with an approval, whose rules don't follow them yet.)
         const remade = settings && now.stored && changeFor(found(target, data, agents), now.approval) !== null;
         // (Ask First and Accept Edits come to themselves anywhere; a bot's from before, to its own.)

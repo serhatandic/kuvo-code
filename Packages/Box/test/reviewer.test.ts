@@ -607,6 +607,21 @@ test("a long test file of the project's own (in its git, in the conversation's f
   expect(ask.shown).toHaveLength(2)
 })
 
+test("a long file of the project's own checked out with other line endings than git keeps it isn't taken for one changed whole", async () => {
+  const repo = join(box, "crlf-tests")
+  mkdirSync(repo, { recursive: true })
+  writeFileSync(join(repo, ".gitattributes"), "*.js text eol=crlf\n")
+  writeFileSync(join(repo, "big.test.js"), "test('a case', () => {})\n".repeat(2000))
+  git(repo, "init", "-q")
+  git(repo, "add", "-A")
+  git(repo, "commit", "-qm", "first")
+  rmSync(join(repo, "big.test.js"))
+  git(repo, "checkout", "--", "big.test.js")
+  expect(readFileSync(join(repo, "big.test.js"), "utf8")).toContain("\r\n")
+  const ask = model(allows)
+  expect(await reviewer.review({ kind: "command", command: "node --test big.test.js", folder: repo }, { ...yours("Fix the tests"), folders: [repo] }, given(ask))).toMatchObject({ decision: "allow", by: "model" })
+})
+
 test("a place is only the very one allowed, worked out again for each change: not a folder in it, a repository inside it, nor room asked for there (#422)", async () => {
   const context = yours("Write the notes")
   const change = (where: string) => ({ kind: "file" as const, path: where, access: "write" as const, folder: project, tool: "write", input: { filePath: where } })
@@ -626,8 +641,10 @@ test("a place is only the very one allowed, worked out again for each change: no
 test.skipIf(process.platform !== "darwin")("on a Mac, your settings and what runs at login are found by any case, as its disk finds them", async () => {
   const ask = model(allows)
   const change = (where: string) => ({ kind: "file" as const, path: where, access: "write" as const, folder: project })
-  expect(await reviewer.review(change(join(homedir(), ".SSH", "id_ed25519")), yours("Fix the build"), given(ask))).toMatchObject({ decision: "refuse", why: "unasked" })
+  // (Folders not there yet, so nothing on the disk gives the case back.)
   expect(await reviewer.review(change(join(homedir(), ".Config", "GIT", "config")), yours("Fix the build"), given(ask))).toMatchObject({ decision: "refuse", why: "unasked" })
-  await reviewer.review(change(join(homedir(), "LIBRARY", "LaunchAgents", "x.plist")), yours("Fix the build"), given(ask))
+  await reviewer.review(change(join(homedir(), ".ZSHRC.kuvo-test")), yours("Fix the build"), given(ask))
   expect(ask.shown.at(-1)).toContain("It sets up something that runs at login or on a schedule")
+  // Kuvo Code's own folders named by pattern, too.
+  expect(await reviewer.review(change(join(homedir(), "Library", "Caches", "RUN.KUVO.CODE.kuvo-test", "x")), yours("Fix the build"), given(ask))).toMatchObject({ decision: "refuse", by: "code", held: false })
 })

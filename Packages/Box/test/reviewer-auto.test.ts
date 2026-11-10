@@ -542,13 +542,16 @@ test("in Auto, a session at work in its project's folder works in the project's 
   sessions.ses_eval.location = { directory: repo }
   // (Any it would ask the model, it refuses.)
   reply = () => '{"decision": "refuse", "reason": "It is outside the kuvo-ai project you are working on."}'
-  const asked = prompts.length
+  let asked = prompts.length
   // Its file tools in one, and a command of it that goes there (`cd …/T2 && …`, asked by its folder).
   expect((await ask("ses_eval", "per_wt1", join(trees, "T3", "Packages", "KuvoLink", "vault.test.js")))?.decision).toBe("allow")
   expect(replies.at(-1)).toEqual({ path: "/permission/per_wt1/reply", body: { decision: "once" } })
   expect((await ask("ses_eval", "per_wt2", null, [join(trees, "T2") + "/*"]))?.decision).toBe("allow")
   expect(prompts.length).toBe(asked)
   expect(reviewer.reviewLog("ses_eval").decisions).toEqual([])
+  // But what runs later outside the sandbox there (its agents' settings) is judged as anywhere.
+  expect((await ask("ses_eval", "per_wt8", join(trees, "T3", ".claude", "settings.json")))?.decision).toBe("refuse")
+  asked += 1
   // A folder made to look like one, its `.git` leading into the project's but never named back by
   // it, is the reviewer's, as any other folder.
   mkdirSync(join(trees, "T9"))
@@ -574,6 +577,17 @@ test("in Auto, a session at work in its project's folder works in the project's 
   expect((await ask("ses_in_tree", "per_wt4", join(repo, "Packages", "KuvoLink", "vault.test.js")))?.decision).toBe("refuse")
   expect((await ask("ses_in_tree", "per_wt5", join(trees, "T2", "notes.md")))?.decision).toBe("refuse")
   expect(prompts.length).toBe(asked + 4)
+})
+
+test("a conversation that's left Auto takes no folder it allowed back with it", async () => {
+  conversation("ses_left", "askFirst", "Fix the build")
+  const file = join(dirname(reviewer.REVIEWS_FOLDER), "reviews", "ses_left.json")
+  mkdirSync(dirname(file), { recursive: true })
+  writeFileSync(file, JSON.stringify({ decisions: [{ id: "rd_p", at: 1, action: "Change /tmp/x", kind: "file", decision: "allowed", reason: "Auto allowed edits in /tmp/x for this session.", by: "model", place: "/tmp/x" }], refusedInRow: 0, refused: 0, places: ["/tmp/x"] }))
+  // (As the sandbox stopped, or a client changed its rules: whatever it asks now isn't Auto's.)
+  await reviewing.reviewIn("ses_left", { kind: "command", command: "echo hi", folder: project })
+  expect(reviewer.reviewLog("ses_left").places ?? []).toEqual([])
+  expect(reviewer.reviewLog("ses_left").decisions[0].revoked).toBeNumber()
 })
 
 test("in Auto, the reviewer judges by where the session works and the task another agent started it with, which never counts as your words", async () => {

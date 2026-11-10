@@ -2,8 +2,11 @@
 // reviewer"): a conversation at work in a project's main folder works in its linked worktrees,
 // wherever they are (`git worktree add /tmp/try`), as in its own folder. Only the ones its
 // repository lists that name it back: each `.git/worktrees/<name>/gitdir` leads to a folder whose
-// own `.git` file leads back there. (Neither can a command in the sandbox write: seatbelt.ts's
-// GIT_GUARDED; and a folder an agent could only make look like one is the reviewer's, as before.)
+// own `.git` file leads back there, `.git/worktrees` and each entry where they're named (no link to
+// another repository's). On a Mac a command in the sandbox can't move or replace those
+// (seatbelt.ts's GIT_GUARDED); on Linux it can, and the agent's own file tools can anywhere: a pair
+// made up so passes only for a folder an agent in Auto could start a session in anyway, never one
+// of Kuvo Code's or what runs later (`reviewing.ts`).
 
 import fs from "node:fs";
 import path from "node:path";
@@ -32,14 +35,21 @@ async function realishLater(where: string): Promise<string> {
   }
 }
 
-/** A small regular file's text (never a FIFO, a device or a link); null for anything else. */
+/** A small regular file's text (never a FIFO, a device or a link: it's opened without waiting and
+ * without following one, and what's opened is what's looked at); null for anything else. */
 async function smallFile(file: string): Promise<string | null> {
+  let handle: fs.promises.FileHandle | undefined;
   try {
-    const kind = await fsp.lstat(file);
+    handle = await fsp.open(file, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK | fs.constants.O_NOFOLLOW);
+    const kind = await handle.stat();
     if (!kind.isFile() || kind.size > MOST_READ) return null;
-    return await fsp.readFile(file, "utf8");
+    const buffer = Buffer.alloc(MOST_READ);
+    const { bytesRead } = await handle.read(buffer, 0, MOST_READ, 0);
+    return buffer.subarray(0, bytesRead).toString("utf8");
   } catch {
     return null;
+  } finally {
+    await handle?.close().catch(() => {});
   }
 }
 
@@ -161,14 +171,16 @@ let looks: Promise<void> = Promise.resolve();
 
 /** The projects' linked worktrees, found again now, after any look under way. */
 export function findLinkedTrees(): Promise<void> {
-  looks = looks.then(lookForTrees, lookForTrees);
+  // (Never waiting long on one: macOS asking you about a project's folder, say.)
+  const look = () => inTime(lookForTrees(), undefined, 30_000);
+  looks = looks.then(look, look);
   return looks;
 }
 
 async function lookForTrees(): Promise<void> {
   try {
     const projects = projectsOf();
-    const own = new Set(await Promise.all(projects.map(realishLater)));
+    const own = new Set(await Promise.all(projects.map(project => inTime(realishLater(project), project))));
     const found: Record<string, string> = {};
     for (const project of projects) {
       for (const tree of await inTime(projectWorktrees(project), [])) if (!own.has(tree)) found[tree] ??= project;

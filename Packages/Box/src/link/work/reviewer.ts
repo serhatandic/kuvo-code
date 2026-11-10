@@ -113,7 +113,7 @@ const exactly = (where: string, wall: string) => where === wall || where.startsW
 const inside = (where: string, wall: string) => exactly(fold(where), fold(wall));
 // (Whether `folder` holds `wall`, below it.)
 const holds = (folder: string, wall: string) => folder === "/" || fold(wall).startsWith(fold(folder) + "/");
-const matching = (where: string, patterns: readonly string[] = []) => patterns.some(each => new RegExp(each).test(where));
+const matching = (where: string, patterns: readonly string[] = []) => patterns.some(each => new RegExp(each, process.platform === "darwin" ? "i" : "").test(where));
 const nameOf = (word: string) => word.split("/").pop() ?? "";
 const homeWord = (text: string) => text.replace(/^(~|\$HOME|\$\{HOME\})(?=\/|$)/, homeFolder());
 
@@ -202,7 +202,7 @@ function attachmentsPlace(at: string): boolean {
  * folder in bots' or the engine's worktrees, or Chats'. */
 function conversationPlace(at: string): boolean {
   const { inside: holders, shared } = conversationPlaces();
-  return holders.some(each => at.startsWith(each + "/")) || shared.some(each => inside(at, each));
+  return holders.some(each => at.startsWith(each + "/")) || shared.some(each => exactly(at, each));
 }
 
 /** Whether deleting `where` would delete your home: it, a folder that holds it, or everything in it. */
@@ -769,7 +769,7 @@ async function gitIn(folder: string, args: string[], ok: readonly number[] = [0]
   if (!run) return null;
   const env = { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_OPTIONAL_LOCKS: "0", GIT_CONFIG_NOSYSTEM: "1", GIT_LITERAL_PATHSPECS: "1" };
   return new Promise(resolve => execFile("git", run, { cwd: folder, env, encoding: "utf8", timeout: 20_000, maxBuffer: 8 * 1024 * 1024 }, (error, out) =>
-    resolve(!error || ok.includes(Number((error as { code?: unknown }).code)) ? String(out ?? "") : null)));
+    resolve(!error || (typeof (error as { code?: unknown }).code === "number" && !error.killed && ok.includes((error as { code: number }).code)) ? String(out ?? "") : null)));
 }
 
 /** A script a command runs that's too long to read whole, as the model reads it where it's the
@@ -782,18 +782,19 @@ async function gitIn(folder: string, args: string[], ok: readonly number[] = [0]
  * imports aren't read either.) */
 async function projectScript(file: string, text: string, folders: readonly string[]): Promise<{ name: string; text: string } | string | null> {
   const at = realish(file);
-  if (!folders.some(folder => inside(at, realish(folder)))) return null;
+  if (!folders.some(folder => exactly(at, realish(folder)))) return null;
   const where = path.dirname(at);
   const name = path.basename(at);
   if (await gitIn(where, ["ls-files", "--error-unmatch", "--", name]) === null) return null;
-  const committed = await gitIn(where, ["show", `HEAD:./${name}`]);
+  // (As it's checked out, line endings and git-lfs's filters applied; else as git keeps it.)
+  const committed = await gitIn(where, ["cat-file", "--filters", `HEAD:./${name}`]) ?? await gitIn(where, ["show", `HEAD:./${name}`]);
   if (committed === null) return null;
   let changed = "";
   if (committed !== text) {
     fs.mkdirSync(FETCHED_FOLDER, { recursive: true, mode: 0o700 });
     const copy = path.join(FETCHED_FOLDER, `${randomBytes(8).toString("hex")}.committed`);
     writePrivate(copy, committed);
-    try { changed = await gitIn(where, ["diff", "--no-index", "--text", "--no-color", "--", copy, at], [0, 1]) ?? ""; }
+    try { changed = await gitIn(where, ["diff", "--no-index", "--text", "--no-textconv", "--no-ext-diff", "--no-color", "--", copy, at], [0, 1]) ?? ""; }
     finally { fs.rmSync(copy, { force: true }); }
     if (!changed) return null;
   }
@@ -1161,12 +1162,20 @@ function holdsRepository(folder: string): boolean {
   }
 }
 
+/** Whether a change the agent's file tools make at `where` is never let through as its own (its
+ * project's, a worktree's): Kuvo Code's own folders, and what runs later outside the sandbox. Each
+ * of those is judged as anywhere. */
+export function walledForOwn(where: string, policy: FencePolicy = fencePolicy()): boolean {
+  const at = realish(where);
+  return inKuvo(at, policy) || runsLater(at, policy);
+}
+
 /** Whether a change to `where` would be run later outside the sandbox: git's hooks and settings and
  * the agents' in a folder, a folder on PATH, tools' settings and caches that run (`readOnly`,
  * `readOnlyPatterns`). */
 function runsLater(where: string, policy: FencePolicy): boolean {
   return RUNS_OUTSIDE.test(where) || [...policy.readOnly, ...pathFolders()].some(wall => inside(where, wall))
-    || (policy.readOnlyPatterns ?? []).some(pattern => new RegExp(pattern).test(where));
+    || matching(where, policy.readOnlyPatterns);
 }
 
 /** A refusal code makes, held back for you to approve: one it couldn't judge, or a pause. */
