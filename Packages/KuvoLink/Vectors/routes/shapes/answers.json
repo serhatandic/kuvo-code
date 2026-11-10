@@ -3061,6 +3061,9 @@
             "literal": "git"
            },
            {
+            "literal": "git.changes.count"
+           },
+           {
             "literal": "git.merge"
            },
            {
@@ -3394,6 +3397,9 @@
            },
            {
             "literal": "git"
+           },
+           {
+            "literal": "git.changes.count"
            },
            {
             "literal": "git.merge"
@@ -4174,6 +4180,36 @@
         "hashes": {
          "map": "string"
         },
+        "uncommitted": "bool"
+       }
+      }
+     ]
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/git/changes/count",
+   "answers": {
+    "200": {
+     "oneOf": [
+      {
+       "object": {
+        "repository": {
+         "literal": false
+        }
+       }
+      },
+      {
+       "object": {
+        "repository": {
+         "literal": true
+        },
+        "root": "string",
+        "against": "string",
+        "files": "number",
+        "additions": "number",
+        "deletions": "number",
+        "untracked": "number",
         "uncommitted": "bool"
        }
       }

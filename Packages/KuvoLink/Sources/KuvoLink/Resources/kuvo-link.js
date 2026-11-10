@@ -2069,6 +2069,7 @@ var FEATURES = [
   "folders",
   "folders.files",
   "git",
+  "git.changes.count",
   "git.merge",
   "git.pull-request",
   "git.pull-request.draft",
@@ -28443,11 +28444,10 @@ var realOr2 = (folder) => {
     return folder;
   }
 };
-async function changesIn(directory, scope, base) {
-  const top = (await text3(directory, ["rev-parse", "--show-toplevel"]))?.trim();
-  if (!top)
-    return { repository: false };
-  const root = top;
+async function scoped(directory, scope, base) {
+  const root = (await text3(directory, ["rev-parse", "--show-toplevel"]))?.trim();
+  if (!root)
+    return null;
   let against = (await git2(root, ["rev-parse", "--verify", "-q", "HEAD"])).ok ? "HEAD" : EMPTY_TREE;
   if (scope === "branch" && base) {
     const fork = (await text3(root, ["merge-base", "HEAD", base]))?.trim();
@@ -28456,18 +28456,30 @@ async function changesIn(directory, scope, base) {
   }
   const relative = path100.relative(realOr2(root), realOr2(directory));
   const limit = relative && !relative.startsWith("..") ? relative.split(path100.sep).join("/") : ".";
-  const args = ["-c", "core.quotepath=off", "-c", "diff.suppressBlankEmpty=false", "diff", "--no-color", "--no-ext-diff", "--no-textconv", "--find-renames", "--src-prefix=a/", "--dst-prefix=b/", "-U100000"];
-  if (scope === "uncommitted" || scope === "branch")
-    args.push(against);
+  const compared = scope === "staged" ? ["--cached", against] : scope === "unstaged" ? [] : [against];
+  return { root, against, limit, compared };
+}
+async function untrackedIn(root, limit, scope) {
   if (scope === "staged")
-    args.push("--cached", against);
-  const patch = await text3(root, [...args, "--", limit]);
+    return [];
+  return (await text3(root, ["-c", "core.quotepath=off", "ls-files", "--others", "--exclude-standard", "-z", "--", limit]) ?? "").split("\x00").filter(Boolean);
+}
+async function uncommittedIn(root, scope) {
+  const status = scope === "branch" ? await text3(root, ["status", "--porcelain", "--untracked-files=normal"]) : "x";
+  return status === null || status.length > 0;
+}
+async function changesIn(directory, scope, base) {
+  const found = await scoped(directory, scope, base);
+  if (!found)
+    return { repository: false };
+  const { root, against, limit, compared } = found;
+  const args = ["-c", "core.quotepath=off", "-c", "diff.suppressBlankEmpty=false", "-c", "diff.submodule=short", "diff", "--no-color", "--no-ext-diff", "--no-textconv", "--find-renames", "--src-prefix=a/", "--dst-prefix=b/", "-U100000"];
+  const patch = await text3(root, [...args, ...compared, "--", limit]);
   if (patch === null)
     return null;
-  let untracked = [];
+  const untracked = await untrackedIn(root, limit, scope);
   const hashes = {};
   if (scope !== "staged") {
-    untracked = (await text3(root, ["-c", "core.quotepath=off", "ls-files", "--others", "--exclude-standard", "-z", "--", limit]) ?? "").split("\x00").filter(Boolean);
     const files = untracked.filter((name) => !name.endsWith("/"));
     const now = BigInt(Date.now()) * 1000000n;
     for (let at = 0;at < files.length; at += 64) {
@@ -28480,8 +28492,41 @@ async function changesIn(directory, scope, base) {
       }));
     }
   }
-  const status = scope === "branch" ? await text3(root, ["status", "--porcelain", "--untracked-files=normal"]) : "x";
-  return { repository: true, root, against, patch, untracked, hashes, uncommitted: status === null || status.length > 0 };
+  return { repository: true, root, against, patch, untracked, hashes, uncommitted: await uncommittedIn(root, scope) };
+}
+async function countIn(directory, scope, base) {
+  const found = await scoped(directory, scope, base);
+  if (!found)
+    return { repository: false };
+  const { root, against, limit, compared } = found;
+  const numbers = await git2(root, ["-c", "core.quotepath=off", "diff", "--no-color", "--no-ext-diff", "--no-textconv", "--find-renames", "--numstat", "-z", ...compared, "--", limit]);
+  if (!numbers.ok)
+    return null;
+  const seen = new Set;
+  let additions = 0;
+  let deletions = 0;
+  const fields = numbers.out.toString("utf8").split("\x00");
+  for (let at = 0;at < fields.length; at++) {
+    const field = fields[at];
+    if (!field)
+      continue;
+    const [added = "", deleted = "", ...rest] = field.split("\t");
+    let name = rest.join("\t");
+    if (!name) {
+      at += 2;
+      name = fields[at] ?? "";
+    }
+    seen.add(name);
+    additions += Number(added) || 0;
+    deletions += Number(deleted) || 0;
+  }
+  if (scope === "staged") {
+    const unmerged = await git2(root, ["-c", "core.quotepath=off", "diff", "--no-ext-diff", "--name-only", "-z", "--diff-filter=U", ...compared, "--", limit]);
+    for (const name of unmerged.out.toString("utf8").split("\x00"))
+      seen.delete(name);
+  }
+  const untracked = (await untrackedIn(root, limit, scope)).filter((name) => !seen.has(name));
+  return { repository: true, root, against, files: seen.size + untracked.length, additions, deletions, untracked: untracked.length, uncommitted: await uncommittedIn(root, scope) };
 }
 function trash(file) {
   const name = path100.basename(file);
@@ -28860,6 +28905,13 @@ async function* changesRoute(context) {
     const found = await changesIn(directory, scope, typeof body.base === "string" && body.base && !body.base.startsWith("-") ? body.base : undefined);
     return yield* found ? json(200, found) : json(500, { message: "git couldn’t read the changes." });
   }
+  if (route === "kuvo/git/changes/count") {
+    const directory = folderAt(body.directory);
+    if (!directory)
+      return yield* json(404, { message: "That folder isn’t there." });
+    const found = await countIn(directory, scope, typeof body.base === "string" && body.base && !body.base.startsWith("-") ? body.base : undefined);
+    return yield* found ? json(200, found) : json(500, { message: "git couldn’t read the changes." });
+  }
   if (route === "kuvo/git/stage" || route === "kuvo/git/unstage" || route === "kuvo/git/discard") {
     const root = folderAt(body.root);
     const name = inRepository(body.path);
@@ -29137,7 +29189,7 @@ import fs95 from "node:fs";
 import path102 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "0.9.210";
+var BRIDGE_VERSION = "0.9.211";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
