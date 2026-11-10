@@ -22,16 +22,17 @@ const write = (file, text) => {
   fs.writeFileSync(file, text);
 };
 
-// A stand-in on a free port: `answer(method, path, body)` gives `[status, value]`; what was asked is kept.
+// A stand-in on a free port: `answer(method, path, body)` gives `[status, value]` (or a promise of
+// it); what was asked is kept.
 async function standIn(answer) {
   const asked = [];
   const server = http.createServer((request, response) => {
     let body = "";
     request.on("data", chunk => { body += chunk; });
-    request.on("end", () => {
+    request.on("end", async () => {
       const given = body ? JSON.parse(body) : undefined;
       asked.push({ method: request.method, url: request.url, body: given });
-      const [status, value] = answer(request.method, request.url, given) ?? [404, { message: "No." }];
+      const [status, value] = (await answer(request.method, request.url, given)) ?? [404, { message: "No." }];
       response.writeHead(status, { "content-type": "application/json" });
       response.end(JSON.stringify(value));
     });
@@ -182,4 +183,162 @@ test("what can't be is said, and nothing moves", async () => {
   write(path.join(home, "wakes", "ses_mine", "paused"), "moving");
   assert.equal((await link.carryToAgents("ses_mine", sonnet, () => engine.at, (await agentsBridge()).at, undefined)).status, 409);
   assert.equal(signedOut.asked.some(each => each.url === "/api/session/import"), false);
+});
+
+test("a move that fails partway leaves no copy with the coding agents, and the conversation as it was, to try again", async () => {
+  const project = path.join(home, "atomic");
+  const session = { id: "ses_atomic", title: "Atomic", agent: "build", location: { directory: project }, metadata: {} };
+  let archiving = false;
+  const engine = await standIn((method, url, body) => {
+    const base = `/api/session/${session.id}`;
+    if (method === "PATCH" && url === base) {
+      if (!archiving) return [500, { message: "The database is locked." }];
+      session.metadata = { ...(session.metadata ?? {}), ...(body?.metadata ?? {}) };
+      return [200, {}];
+    }
+    if (method === "GET" && url === base) return [200, { data: session }];
+    if (method === "GET" && url === "/api/session/active") return [200, { data: {} }];
+    if (method === "GET" && url.startsWith(`${base}/message`)) return [200, { data: [{ id: "msg_1", type: "user", text: "Make it atomic" }], cursor: {} }];
+    if (method === "GET" && url === `${base}/inbox`) return [200, { data: [{ id: "inb_9", type: "user", text: "And test it" }] }];
+    if (["POST", "DELETE"].includes(method)) return [200, {}];
+  });
+  const made = [];
+  const agents = await standIn((method, url, body) => {
+    if (method === "GET" && url === "/api/integration/claude-code") return [200, { data: { name: "Claude Code", metadata: { installed: true }, connections: [{ type: "agent" }] } }];
+    if (method === "POST" && url === "/api/session/import") {
+      const id = `ses_copy${made.length + 1}`;
+      made.push(id);
+      return [200, { data: { id, title: body.title } }];
+    }
+    if (["PUT", "PATCH", "DELETE"].includes(method)) return [200, {}];
+  });
+  const wakes = path.join(home, "wakes", "ses_atomic");
+  write(path.join(wakes, "session"), "ses_atomic");
+
+  const failed = await link.carryToAgents("ses_atomic", sonnet, () => engine.at, agents.at);
+  assert.deepEqual(failed, { status: 502, value: { message: "The database is locked." } });
+  assert.deepEqual(agents.asked.filter(each => each.method === "DELETE").map(each => each.url), ["/api/session/ses_copy1"], "the copy it made goes");
+  assert.equal(engine.asked.some(each => each.method === "DELETE"), false, "what waited still waits there");
+  assert.equal(session.metadata["kuvo.carriedTo"], undefined, "not marked as carried on");
+  assert.equal(fs.readFileSync(path.join(wakes, "session"), "utf8"), "ses_atomic", "its wake-ups stay with it");
+
+  // Tried again once the engine takes it: carried on, once.
+  archiving = true;
+  assert.deepEqual(await link.carryToAgents("ses_atomic", sonnet, () => engine.at, agents.at), { status: 200, value: { session: "ses_copy2" } });
+  assert.equal(session.metadata["kuvo.carriedTo"], "ses_copy2");
+  assert.ok(engine.asked.some(each => each.method === "DELETE" && each.url === "/api/session/ses_atomic/inbox/inb_9"));
+  assert.equal(agents.asked.filter(each => each.method === "DELETE").length, 1, "the one that's kept stays");
+});
+
+test("an import the coding agents fail partway through leaves nothing of it there", async () => {
+  const project = path.join(home, "halfway");
+  const engine = await engineFor({ id: "ses_half", title: "Half", agent: "build", location: { directory: project }, metadata: {} });
+  const there = [{ id: "ses_older", time: { created: 1 }, metadata: { kuvo: { carriedFrom: "ses_half" } } }];
+  const agents = await standIn((method, url) => {
+    if (method === "GET" && url === "/api/integration/claude-code") return [200, { data: { name: "Claude Code", metadata: { installed: true }, connections: [{ type: "agent" }] } }];
+    if (method === "POST" && url === "/api/session/import") {
+      // Made, then it failed to say so.
+      there.unshift({ id: "ses_half_made", time: { created: Date.now() }, metadata: { kuvo: { carriedFrom: "ses_half" } } }, { id: "ses_other", time: { created: Date.now() }, metadata: {} });
+      return [500, { message: "No space left on device." }];
+    }
+    if (method === "GET" && url.startsWith("/api/session?")) return [200, { data: there }];
+    if (method === "DELETE") return [200, {}];
+  });
+  assert.deepEqual(await link.carryToAgents("ses_half", sonnet, () => engine.at, agents.at), { status: 502, value: { message: "No space left on device." } });
+  assert.deepEqual(agents.asked.filter(each => each.method === "DELETE").map(each => each.url), ["/api/session/ses_half_made"], "only what this move made");
+  assert.equal(engine.asked.some(each => each.method === "PATCH" || each.method === "DELETE"), false, "the engine's left as it was");
+});
+
+test("a conversation in a project of several folders is told of them with the coding agents, as one started there is", async () => {
+  const project = path.join(home, "studio");
+  write(path.join(home, "box", "projects.json"), JSON.stringify({ version: 1, projects: [{ directory: project, folders: ["/srv/studio-api"] }] }));
+  const engine = await engineFor({ id: "ses_studio", title: "Studio", agent: "build", location: { directory: project }, metadata: {} });
+  const agents = await agentsBridge({ id: "ses_studio_agent" });
+  assert.equal((await link.carryToAgents("ses_studio", sonnet, () => engine.at, agents.at)).status, 200);
+  const told = agents.asked.find(each => each.method === "PUT" && each.url === "/api/experimental/session/ses_studio_agent/instructions/entries/kuvo.project-folders");
+  assert.match(told?.body?.value ?? "", /primary folder, studio \(.*\/studio\)[\s\S]*- studio-api: \/srv\/studio-api/);
+});
+
+// An engine whose conversation `id` has a message, and one waiting; `patch(body)` answers its
+// archiving (by default, taking it); `extra` answers anything else first.
+async function plainEngine(id, project, { running = false, patch, extra } = {}) {
+  const session = { id, title: "Plain", agent: "build", location: { directory: project }, metadata: {} };
+  let busy = running;
+  const engine = await standIn(async (method, url, body) => {
+    const base = `/api/session/${id}`;
+    const answered = await extra?.(method, url, body, session);
+    if (answered) return answered;
+    if (method === "PATCH" && url === base) {
+      const said = await patch?.(body);
+      if (said) return said;
+      session.metadata = { ...(session.metadata ?? {}), ...(body?.metadata ?? {}) };
+      return [200, {}];
+    }
+    if (method === "GET" && url === base) return [200, { data: session }];
+    if (method === "GET" && url === "/api/session/active") return [200, { data: busy ? { [id]: {} } : {} }];
+    if (method === "POST" && url === `${base}/interrupt`) busy = false;
+    if (method === "GET" && url.startsWith(`${base}/message`)) return [200, { data: [{ id: "msg_1", type: "user", text: "Go on" }], cursor: {} }];
+    if (method === "GET" && url === `${base}/inbox`) return [200, { data: [{ id: "inb_1", type: "user", text: "Then this" }] }];
+    if (["POST", "DELETE"].includes(method)) return [200, {}];
+  });
+  return { engine, session };
+}
+
+test("a client that holds a conversation's wake-ups as it hears it archived, as the move goes, leaves the new one's going", async () => {
+  const wakes = path.join(home, "wakes");
+  write(path.join(wakes, "ses_held", "session"), "ses_held");
+  write(path.join(wakes, "ses_held", "wakes", "1900000000-abc-1d"), "Check the build");
+  // The Mac app heard it archived at once, and held its wake-ups (kuvo/wakes/<id>/pause).
+  const { engine } = await plainEngine("ses_held", path.join(home, "held"), { patch: () => { link.holdArchived("ses_held", true); } });
+  const agents = await agentsBridge({ id: "ses_held_agent" });
+  assert.equal((await link.carryToAgents("ses_held", sonnet, () => engine.at, agents.at)).status, 200);
+  assert.equal(fs.existsSync(path.join(wakes, "ses_held_agent", "paused")), false, "not held in the new one, which isn't archived");
+  assert.equal(link.readWakes(path.join(wakes, "ses_held_agent")).wakes[0].note, "Check the build");
+});
+
+test("a conversation another of the box's processes is carrying on is left to it", async () => {
+  const { engine } = await plainEngine("ses_twice", path.join(home, "twice"));
+  const agents = await agentsBridge({ id: "ses_twice_agent" });
+  // A client's `box route` carrying it now (its process alive).
+  const mark = path.join(home, "run", "carrying", "ses_twice");
+  write(mark, String(process.ppid));
+  assert.deepEqual(await link.carryToAgents("ses_twice", sonnet, () => engine.at, agents.at), { status: 409, value: { message: "It’s being carried on with the coding agents already." } });
+  assert.equal(agents.asked.some(each => each.url === "/api/session/import"), false);
+  // One whose process is gone doesn't count.
+  write(mark, "999999");
+  assert.equal((await link.carryToAgents("ses_twice", sonnet, () => engine.at, agents.at)).status, 200);
+  assert.equal(fs.existsSync(mark), false, "done with");
+});
+
+test("an engine that stops answering as it's archived leaves the new one, and says it may have moved", async () => {
+  let down = false;
+  const { engine } = await plainEngine("ses_unsure", path.join(home, "unsure"), {
+    extra: () => (down ? [503, { message: "Starting." }] : null),
+    patch: () => { down = true; return [503, { message: "Starting." }]; },
+  });
+  const agents = await agentsBridge({ id: "ses_unsure_agent" });
+  const answer = await link.carryToAgents("ses_unsure", sonnet, () => engine.at, agents.at);
+  assert.equal(answer.status, 502);
+  assert.match(answer.value.message, /may be with the coding agents already/);
+  assert.equal(agents.asked.some(each => each.method === "DELETE"), false, "not taken away: the engine's may point at it");
+});
+
+test("a run a failed move stopped goes on as it was: its queue isn't left paused", async () => {
+  const project = path.join(home, "paused");
+  let stand;
+  stand = await plainEngine("ses_running", project, {
+    running: true,
+    // The box's queue holds what waits as the run's stopped (its watcher, as a Stop), meanwhile.
+    extra: async (method, url) => {
+      if (method === "POST" && url === "/api/experimental/session/ses_running/wait") {
+        await link.stopSession(stand.engine.at, "ses_running");
+        return [200, {}];
+      }
+    },
+    patch: () => [500, { message: "The database is locked." }],
+  });
+  const agents = await agentsBridge({ id: "ses_running_agent" });
+  assert.equal(link.queueOf("ses_running").paused, false);
+  assert.equal((await link.carryToAgents("ses_running", sonnet, () => stand.engine.at, agents.at)).status, 502);
+  assert.equal(link.queueOf("ses_running").paused, false, "not left paused");
 });

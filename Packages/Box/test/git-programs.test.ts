@@ -100,6 +100,7 @@ test("Changes reads what changed in it without starting any of them", async () =
   const found = await changes.changesIn(top, "uncommitted")
   expect(JSON.stringify(found)).toContain("a.txt")
   expect((await changes.commitDiff(top)).diff).toContain("+two, longer")
+  expect(await changes.countIn(top, "uncommitted")).toMatchObject({ repository: true, files: 1, additions: 1, deletions: 0 })
   expect(ran()).toEqual([])
 })
 

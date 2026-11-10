@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import OpenCodeKit
 import os
 
 nonisolated private let log = Logger(subsystem: "run.kuvo.code", category: "keeper")
@@ -317,12 +318,10 @@ final class Keeper {
                 if name == "start" {
                     // Started if it isn't running: the engine, by the keeper, or the keeper by launchd.
                     guard let status = try? await KeeperControl.send(.status) else {
-                        let launchctl = Process()
-                        launchctl.executableURL = URL(filePath: "/bin/launchctl")
-                        launchctl.arguments = ["kickstart", "gui/\(getuid())/\(BackgroundWork.label)"]
-                        try launchctl.run()
-                        launchctl.waitUntilExit()
-                        exit(launchctl.terminationStatus)
+                        // Its end from `ChildProcess`, which never misses it.
+                        let result = try await ChildProcess.run(BackgroundWork.launchctl, ["kickstart", "gui/\(getuid())/\(BackgroundWork.label)"],
+                                                                output: .discard, errors: .discard, limit: .seconds(30), cancellable: false)
+                        exit(result.timedOut ? 1 : result.status)
                     }
                     if (status["engine"] as? [String: Any])?["state"] as? String != "ready" { try await KeeperControl.send(.restartEngine) }
                     exit(0)

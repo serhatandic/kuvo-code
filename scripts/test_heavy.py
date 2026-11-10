@@ -11,6 +11,7 @@ import shutil
 import signal
 import subprocess
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -21,7 +22,7 @@ WAITS = 75
 def clean_environment():
     """The environment of the run without what a job of heavy.sh leaves in it (a test run from inside
     one would otherwise see that job's turn and slot)."""
-    return {k: v for k, v in os.environ.items() if k not in ("KUVO_HEAVY_SLOTS", "KUVO_HEAVY_HELD", "KUVO_HEAVY_HOLDING", "KUVO_HEAVY_SLOT", "KUVO_HEAVY_BUILD_SUFFIX", "KUVO_TEST_SIMULATOR", "KUVO_HEAVY_WAIT", "KUVO_HEAVY_LIMIT", "KUVO_HEAVY_MAC_FIRST_FOR")}
+    return {k: v for k, v in os.environ.items() if k not in ("KUVO_HEAVY_SLOTS", "KUVO_HEAVY_HELD", "KUVO_HEAVY_HOLDING", "KUVO_HEAVY_SLOT", "KUVO_HEAVY_BUILD_SUFFIX", "KUVO_TEST_SIMULATOR", "KUVO_HEAVY_WAIT", "KUVO_HEAVY_LIMIT", "KUVO_HEAVY_MAC_FIRST_FOR", "KUVO_HEAVY_MEMORY", "KUVO_HEAVY_MEMORY_WAIT_FOR")}
 
 
 class Held:
@@ -49,7 +50,7 @@ class HeavyTests(unittest.TestCase):
     def setUp(self):
         self.locks = tempfile.mkdtemp()
         # As from the 29th, when the old single lock is over (the day before, test_the_day_before).
-        self.env = dict(clean_environment(), KUVO_HEAVY_DIR=self.locks, KUVO_HEAVY_LOAD="1000", KUVO_HEAVY_OLD_UNTIL="20000101")
+        self.env = dict(clean_environment(), KUVO_HEAVY_DIR=self.locks, KUVO_HEAVY_LOAD="1000", KUVO_HEAVY_MEMORY="0", KUVO_HEAVY_OLD_UNTIL="20000101")
 
     def run_heavy(self, kind, *command, **env):
         result = subprocess.run([HEAVY, kind, *command], env=dict(self.env, KUVO_HEAVY_WAIT="0", **env), capture_output=True, text=True, timeout=30)
@@ -504,6 +505,57 @@ class HeavyTests(unittest.TestCase):
         with open(inner) as f:
             self.assertEqual(f.read().strip(), "0", "it waited for the suite")
 
+    # Memory: KUVO_HEAVY_MEMORY=100 makes it short whatever this Mac has (all of it is never
+    # available: some is always wired); 0, the tests' own, never.
+    def test_a_new_job_waits_while_memory_is_short_and_says_why(self):
+        for kind in ("mac", "mac-build", "phone", "box"):
+            with self.subTest(kind):
+                code, said = self.run_heavy(kind, "true", KUVO_HEAVY_MEMORY="100")
+                self.assertEqual(code, WAITS)
+                self.assertRegex(said, r"The Mac is short of memory \(swapping \d+ MB a second, pressure \S+, \d+% available\)")
+        waiting = subprocess.Popen([HEAVY, "box", "true"], env=dict(self.env, KUVO_HEAVY_MEMORY="100"), stderr=subprocess.PIPE, text=True, start_new_session=True)
+        try:
+            self.assertTrue(select.select([waiting.stderr], [], [], 30)[0], "it said nothing")
+            self.assertIn("Waiting for memory: the Mac is short of it", waiting.stderr.readline())
+            self.assertIsNone(waiting.poll(), "it started")
+        finally:
+            os.killpg(waiting.pid, signal.SIGKILL)
+            waiting.wait(timeout=30)
+            waiting.stderr.close()
+
+    def test_past_its_time_to_wait_for_memory_a_job_goes(self):
+        self.assertEqual(self.run_heavy("box", "true", KUVO_HEAVY_MEMORY="100", KUVO_HEAVY_MEMORY_WAIT_FOR="0")[0], 0)
+
+    def test_the_time_to_wait_for_memory_counts_from_when_any_job_found_it_short(self):
+        """A shortage another job found two hours ago is past the time any job waits for it."""
+        with open(os.path.join(self.locks, f"kuvo-code-heavy-memory-short-{os.getuid()}"), "w") as since:
+            since.write(f"{int(time.time()) - 7200}\n")
+        self.assertEqual(self.run_heavy("box", "true", KUVO_HEAVY_MEMORY="100")[0], 0)
+
+    def test_a_job_started_inside_one_already_running_doesnt_wait_for_memory(self):
+        code, said = self.run_heavy("box", "/bin/sh", "-c", f'KUVO_HEAVY_MEMORY=100 "{HEAVY}" phone true')
+        self.assertEqual((code, said), (0, ""))
+
+    def test_an_app_suite_waiting_for_memory_goes_first_too(self):
+        mac = subprocess.Popen([HEAVY, "mac", "true"], env=dict(self.env, KUVO_HEAVY_MEMORY="100"), stderr=subprocess.PIPE, text=True, start_new_session=True)
+        try:
+            self.assertTrue(select.select([mac.stderr], [], [], 30)[0], "the suite said nothing")
+            self.assertIn("Waiting for memory", mac.stderr.readline())
+            code, said = self.run_heavy("phone", "true")
+            self.assertEqual(code, WAITS)
+            self.assertIn("The Mac app's suite is waiting for the Mac to be less busy, and goes first", said)
+        finally:
+            os.killpg(mac.pid, signal.SIGKILL)
+            mac.wait(timeout=30)
+            mac.stderr.close()
+
+    def test_a_share_of_memory_that_isnt_one_is_refused(self):
+        for given in ("lots", "20%", "1000", "101"):
+            with self.subTest(given):
+                result = subprocess.run([HEAVY, "box", "true"], env=dict(self.env, KUVO_HEAVY_MEMORY=given), capture_output=True, text=True, timeout=30)
+                self.assertEqual(result.returncode, 64)
+                self.assertIn("KUVO_HEAVY_MEMORY is a share of memory in percent", result.stderr)
+
     def test_its_command_runs_with_its_arguments_and_answer(self):
         result = subprocess.run([HEAVY, "box", "/bin/sh", "-c", 'echo "$1"; exit 3', "sh", "a b"], env=self.env, capture_output=True, text=True, timeout=30)
         self.assertEqual((result.returncode, result.stdout), (3, "a b\n"))
@@ -523,7 +575,7 @@ class StoppingTests(unittest.TestCase):
     def setUp(self):
         self.locks = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.locks, ignore_errors=True)
-        self.env = dict(clean_environment(), KUVO_HEAVY_DIR=self.locks, KUVO_HEAVY_LOAD="1000", KUVO_HEAVY_OLD_UNTIL="20000101", KUVO_HEAVY_WAIT="0")
+        self.env = dict(clean_environment(), KUVO_HEAVY_DIR=self.locks, KUVO_HEAVY_LOAD="1000", KUVO_HEAVY_MEMORY="0", KUVO_HEAVY_OLD_UNTIL="20000101", KUVO_HEAVY_WAIT="0")
         self.pids = []
 
     def tearDown(self):

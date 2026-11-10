@@ -1,5 +1,6 @@
 import AppKit
 import ClientDesign
+import ClientSessions
 import SwiftUI
 import Textual
 
@@ -42,7 +43,7 @@ struct ReplyView: NSViewRepresentable {
     private func update(_ view: ReplyPieceView) {
         view.openURL = openURL
         view.cardIsFocused = cardIsFocused
-        let marks = (parser as? FileLinkingParser).flatMap { $0.highlight == nil && $0.mentions.isEmpty && $0.agents.isEmpty ? nil : AnyHashable(ParserMarks(highlight: $0.highlight, mentions: $0.mentions, agents: $0.agents)) }
+        let marks = (parser as? FileLinkingParser).flatMap { $0.highlight == nil && $0.mentions.isEmpty && $0.agents.isEmpty && $0.refs.isEmpty ? nil : AnyHashable(ParserMarks(highlight: $0.highlight, mentions: $0.mentions, agents: $0.agents, refs: $0.refs)) }
         view.show(markdown, document: {
             if let parser = parser as? FileLinkingParser, images == nil { return ReplyDocument.cached(markdown: markdown, parser: parser, style: style, diagrams: diagrams) }
             return ReplyDocument(markdown: markdown, parser: parser, style: style, images: images, diagrams: diagrams)
@@ -62,6 +63,7 @@ private struct ParserMarks: Hashable {
     var highlight: FindHighlight?
     var mentions: [Bot]
     var agents: [MessageMentions.Agent]
+    var refs: [Int: WorkRef]
 }
 
 extension Look.Typeface {

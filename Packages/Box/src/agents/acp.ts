@@ -26,8 +26,8 @@ const outputLimit = 30_000
 const limitWords = /RESOURCE_EXHAUSTED|usage limit (?:reached|exceeded)|quota exceeded|exceeded your (?:current )?quota|rate limit exceeded|too many requests/i
 
 export interface AcpFlavor {
-  /** The command that starts the agent, for this session's approval mode (and its skills folder, from `skills`; `whole`: run whole in the box's sandbox). */
-  command(options: { approvesAll: boolean; plan: boolean; skills?: string; whole?: boolean }): Promise<{
+  /** The command that starts the agent, for this session's approval mode (and its skills and subagents folders, from `skills` and `subagents`; `whole`: run whole in the box's sandbox). */
+  command(options: { approvesAll: boolean; plan: boolean; skills?: string; subagents?: string; whole?: boolean }): Promise<{
     argv: string[]
     env?: Record<string, string | undefined>
     cleanEnv?: boolean
@@ -41,6 +41,11 @@ export interface AcpFlavor {
    * them (see skills.ts), or what stands for them (a different one starts it again).
    */
   skills?(directory: string, hooks: TurnHooks): Promise<string | undefined>
+  /**
+   * Your subagents (Settings › Agents) and the model they use, made ready for the agent as it
+   * starts: a folder of them (subagents.ts), or what stands for them (other ones start it again).
+   */
+  subagents?(directory: string): Promise<string | undefined>
   /**
    * Whether the agent may read and write files through the bridge (it asks first itself). Never
    * while it runs whole in the box's sandbox (`whole`): the bridge reads and writes outside it, so
@@ -230,7 +235,8 @@ export class AcpThread implements Thread {
 
   private async open(input: RunInput, hooks: TurnHooks) {
     const skills = await this.flavor.skills?.(this.session.location.directory, hooks)
-    const mode = { approvesAll: hooks.approvesAll(), plan: input.plan, skills, ...(this.flavor.whole && fenceRules() ? { whole: true } : {}) }
+    const subagents = await this.flavor.subagents?.(this.session.location.directory)
+    const mode = { approvesAll: hooks.approvesAll(), plan: input.plan, skills, ...(subagents ? { subagents } : {}), ...(this.flavor.whole && fenceRules() ? { whole: true } : {}) }
     // Kuvo Code's tools moving (the app started again) starts it again too, to reach them; so do
     // other skills.
     // So does the box's sandbox changing, for one run whole in it (its rules, the folders you let
@@ -248,7 +254,7 @@ export class AcpThread implements Thread {
     if (this.rpc && !this.rpc.isClosed && this.tasks.size) this.cut.push(...this.taskWork())
     this.close()
     const launch = await this.flavor.command(mode)
-    const whole = this.wholeLaunch(launch.argv, launch.env, launch.cleanEnv, skills)
+    const whole = this.wholeLaunch(launch.argv, launch.env, launch.cleanEnv, [skills, subagents])
     this.fenced = Boolean(whole)
     const ended = whole?.ended
     const flavor = this.flavor
@@ -393,10 +399,10 @@ export class AcpThread implements Thread {
 
   /**
    * The agent run whole in the box's sandbox, while it's on and the agent can (`whole`): through
-   * the launcher, in the session's folder, with its own places, the session's skills and attached
-   * files to read, and the relay's port. Undefined to run it as it is.
+   * the launcher, in the session's folder, with its own places, the session's skills, subagents and
+   * attached files to read, and the relay's port. Undefined to run it as it is.
    */
-  private wholeLaunch(argv: string[], env: Record<string, string | undefined> | undefined, cleanEnv: boolean | undefined, skills?: string) {
+  private wholeLaunch(argv: string[], env: Record<string, string | undefined> | undefined, cleanEnv: boolean | undefined, given: (string | undefined)[] = []) {
     const whole = this.flavor.whole
     if (!whole || !fenceRules()) return undefined
     const directory = this.session.location.directory
@@ -406,7 +412,7 @@ export class AcpThread implements Thread {
       homes: whole.homes(started),
       state: whole.state,
       kept: whole.kept,
-      read: [...(skills?.startsWith("/") ? [skills] : []), ...(attached ? [attached] : []), ...(whole.read?.(started) ?? [])],
+      read: [...given.filter((folder): folder is string => Boolean(folder?.startsWith("/"))), ...(attached ? [attached] : []), ...(whole.read?.(started) ?? [])],
       port: relayPort(),
       session: this.session.id,
       bot: seatBot(this.session),

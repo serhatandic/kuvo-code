@@ -217,6 +217,9 @@ struct ConfigModelPicker: View {
     let title: String
     let path: [String]
     var defaultTitle = "Default"
+    /// Your coding agents' accounts' models too (Claude Code's, Codex's…), first, as the composer's
+    /// picker lists them: for a setting those agents read as well.
+    var withAgents = false
     @Environment(AppModel.self) private var app
     @Environment(\.settingsBox) private var box
     @Environment(Catalog.self) private var catalog
@@ -231,10 +234,20 @@ struct ConfigModelPicker: View {
     private var picker: some View {
         Picker(title, selection: config.string(path)) {
             Text(defaultTitle).tag(String?.none)
-            ForEach(catalog.modelsByProvider, id: \.provider) { group in
-                Section(group.provider) {
-                    ForEach(group.models) { model in
-                        Text(model.name).tag(Optional("\(model.providerID)/\(model.id)"))
+            if withAgents {
+                ForEach(catalog.pickerProviders(.all).filter { !$0.models.isEmpty }) { provider in
+                    Section(provider.name) {
+                        ForEach(provider.models) { model in
+                            Text(model.name).tag(Optional("\(model.providerID)/\(model.id)"))
+                        }
+                    }
+                }
+            } else {
+                ForEach(catalog.modelsByProvider, id: \.provider) { group in
+                    Section(group.provider) {
+                        ForEach(group.models) { model in
+                            Text(model.name).tag(Optional("\(model.providerID)/\(model.id)"))
+                        }
                     }
                 }
             }

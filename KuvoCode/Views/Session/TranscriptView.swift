@@ -1023,10 +1023,13 @@ struct UserBubble: View {
         let own = style?(part)
         let names = part.contains(AgentReferences.trigger) || (!folders.isEmpty && part.contains("@"))
         let marks = part.contains("http") || part.contains("www.") || part.contains("[Image ")
-        guard names || marks else { return own }
+        // The Work Queue items it names, as chips once the box says what they are.
+        let refs = part.contains("#") ? app.workQueues.refs(in: part, box: app.utilities.queueBox) : [:]
+        guard names || marks || !refs.isEmpty else { return own }
         var text = own ?? AttributedString(part)
         if names { MessageMentions.apply(to: &text, agents: agents, folders: folders) }
         if marks { MessageMentions.applyLinksAndPictures(to: &text, pictures: attachments.count(where: \.isImage)) }
+        if !refs.isEmpty { WorkItemChipAttachment.mark(&text, refs: refs) }
         return text
     }
 
@@ -1107,8 +1110,13 @@ struct UserBubble: View {
         .opacity(status == nil ? 1 : 0.7)
         .frame(maxWidth: .infinity, alignment: .trailing)
         .padding(.leading, 80)
-        // A named agent opens its conversation; a named file, in the side panel.
+        // A named agent opens its conversation; a named file, in the side panel; a Work Queue
+        // item, in the Work Queue.
         .environment(\.openURL, OpenURLAction { url in
+            if let number = WorkItemRefs.number(in: url) {
+                app.openWorkItem(number)
+                return .handled
+            }
             if let session = MessageMentions.session(in: url) {
                 if app.workspace.session(session) != nil { app.open(.session(session)) }
                 return .handled
@@ -1127,6 +1135,7 @@ private struct MessageText: View {
     var styled: AttributedString?
     @Environment(\.findHighlight) private var highlight
     @Environment(\.messageFont) private var messageFont
+    @Environment(\.colorScheme) private var scheme
     @State private var isExpanded = false
     /// The line limit leaves words out.
     @State private var isLimited = false
@@ -1146,7 +1155,7 @@ private struct MessageText: View {
 
     /// The words, with Find's marks, as AppKit's text draws them.
     private var shown: (text: NSAttributedString, faces: TextFaces) {
-        MessageMentions.attributed(FindText.marked(styled ?? AttributedString(text), highlight), font: messageFont.field)
+        MessageMentions.attributed(FindText.marked(styled ?? AttributedString(text), highlight), font: messageFont.field, dark: scheme == .dark)
     }
 
     var body: some View {
@@ -1383,8 +1392,15 @@ private struct MarkdownPiece: View, Equatable {
     /// With TextKit: a few views a piece, where Textual makes several for every block.
     private var textKit: some View {
         // Its ```mermaid blocks drawn as diagrams, as in a Markdown file's preview.
-        ReplyView(markdown: text, parser: FileLinkingParser(folders: folders, mentions: mentions, agents: agents, highlight: highlight), diagrams: true) { url in
-            // A file opens in the side panel, a named agent its conversation; web links in the browser.
+        // The Work Queue items it names, drawn as their chips once the box says what they are.
+        let refs = text.contains("#") ? app.workQueues.refs(in: text, box: app.utilities.queueBox) : [:]
+        return ReplyView(markdown: text, parser: FileLinkingParser(folders: folders, mentions: mentions, agents: agents, highlight: highlight, refs: refs), diagrams: true) { url in
+            // A file opens in the side panel, a named agent its conversation, a Work Queue item
+            // the Work Queue; web links in the browser.
+            if let number = WorkItemRefs.number(in: url) {
+                app.openWorkItem(number)
+                return true
+            }
             if let session = MessageMentions.session(in: url) {
                 if app.workspace.session(session) != nil { app.open(.session(session)) }
                 return true

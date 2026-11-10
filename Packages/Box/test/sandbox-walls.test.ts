@@ -1,6 +1,6 @@
 import "./safety"
 import { ownPath } from "../../KuvoLink/Tests/Bridge/test-safety.js"
-import { expect, test } from "bun:test"
+import { expect, setDefaultTimeout, test } from "bun:test"
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs"
 import { createServer, type Server } from "node:net"
 import { tmpdir, userInfo } from "node:os"
@@ -14,6 +14,11 @@ import { canFence, realFence } from "./agents/support/fence"
 // (only read on Linux), but for a project inside one.
 
 const mac = process.platform === "darwin"
+
+// Each test starts Bun for the box's policy and runs commands in a real sandbox, waiting on them:
+// 2 to 4 s on a quiet machine, and over Bun's 5 s when it is busy, where Bun then stops the process
+// being waited on and the test sees nothing. So a busy machine gets as long as the work takes.
+setDefaultTimeout(30_000)
 
 /** The box's policy as it'd be for a home folder of the test's own, its own folder in it, run as the
  * box runs it (in a process of its own, with HOME there). */
@@ -374,7 +379,7 @@ test.skipIf(!canFence)("a conversation's repository is never your home, a person
     rmSync(root, { recursive: true, force: true })
   }
   // (Four fenced runs, each starting a sandbox: longer than a test is given unless it says.)
-}, 30_000)
+})
 
 // Another project's git hooks and settings, and its coding agents', run outside the sandbox when you
 // work there. (Linux's sandbox can't keep these: only the conversation's own.) Tools' caches clone

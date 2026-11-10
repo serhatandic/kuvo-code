@@ -16,6 +16,8 @@ The rules for what a message says, the same in both apps. Foundation only: no vi
   a change by the app, so no key is lost.
 - `OutsideFolders`: a folder or file an agent asks to work in outside its project, as people know
   it ("~/notes", not the engine's "/Users/me/notes/*"), and as VoiceOver reads it ("Home, notes").
+- `WorkItemRefs`: `#243` in a message naming a Work Queue item (not in code, a link or a web
+  address, nor another's number like "PR #12"), and the `kuvo-item://243` link its chip carries.
 - `SearchMatches`: where a search's words are in the snippet a result shows, as the box matched
   them, and the snippet with them in bold.
 
@@ -25,6 +27,8 @@ The rules for what a message says, the same in both apps. Foundation only: no vi
 `kuvo/accounts/found` (`Found`), and the rows offered from it, each with the one thing it needs
 (`Offers`). Only the Mac's first launch offers them now: a computer is set up on the Mac before a
 phone pairs with it, so the phone, which had a sheet of its own for this, doesn't use them.
+`AccountNames` is what both apps call each provider's accounts in a word ("Claude", "Copilot"),
+the same in the usage panel and the work bar.
 
 ## ClientSessions
 
@@ -37,10 +41,16 @@ What a client shows of a computer's sessions, the same in both apps. Rules only,
   at the top of their chain), what reading a session reads with it (its finished sub-sessions, all
   the way down), and a read elsewhere taken when it's later.
 - `UnsearchedReason`: why a computer's conversations weren't searched, in the words both apps show.
+- `WorkQueue` and its types (`WorkQueueView`, `WorkItem`, `WorkItemDetail`, `WorkRef`…): the Work
+  Queue as the box states it, and what the panel shows of it: In progress first, then each
+  category; the open count ("24 items"), "Updated 8m ago", whose an item is, what's being done.
 - `ReviewList`: "/review"'s lists over the message field (What to review, a commit or a folder for
   it, Look for), their rows and sizes from what the box measured, and loading those.
 - `ShellRead`: the end of what a background command printed, as Output shows it, and whether it
   has ended (its engine let go of it) or just can't be read now.
+- `WorkWords`: what a bot's work says, as its box tells it (`kuvo/work`): the bar's line, and each
+  session's row (`about`: its model, the account it runs on and its project, then shorter for a
+  narrow row, the account going first).
 
 ## ClientVault
 
@@ -83,6 +93,8 @@ phone's copies of the Mac's design files, a piece at a time.
 - `Metrics`, `Animation.ui`, `.fold`, `readableColumn()`: the shared sizes, the app's spring, how
   folds open and close, and the readable column; `formattedCost` and `compactTokens` for a run's
   cost and tokens.
+- `WorkItemChip`, `WorkItemDot`, `WorkItemMark`: a Work Queue item's chip in a message (its mark,
+  `#243` and its title) and its mark in a category's color, a ring in progress, a check when done.
 - `Spinner`: the app's loader, played by Core Animation on each platform's own view.
 - `FirstLineListItemStyle` (`.firstLine`): a list item's marker on its first line's middle.
 - `ShimmerText`: words that shimmer while something's under way, played by Core Animation.

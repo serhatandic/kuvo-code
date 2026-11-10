@@ -66,11 +66,13 @@ your keychain, serves it from `127.0.0.1`, and points the Kuvo Code in /Applicat
 **Check for Updates…** there to go through the update window, the install, the restart and
 What's New. Ctrl-C stops the server and puts the real feed back.
 
-Pushes to `main`, release tags and release dry runs from `main` run on the maintainer's Mac
-(labels `self-hosted, macOS, ARM64, kuvo-mini`), each job in a fresh macOS VM that's deleted
-after it, with no folders shared and no network to that Mac or its LAN. Pull requests always run
-on GitHub's own runners, so a pull request's code never reaches that Mac, which refuses any other
-job anyway. `scripts/ci-runner/` has the orchestrator, the VM image's build and the setup.
+CI (`.github/workflows/ci.yml`) runs on GitHub's hosted runners, its jobs side by side: the
+generated files and What's New on Linux, the box's and the bridge's tests on macOS and Linux, the
+Swift packages' tests, and the app's. It doesn't build the app itself: only the release workflow
+does, signed, for a tag or a dry run. So run a dry run from `main` (Actions › Release › Run
+workflow) before tagging a release whose build changed. The release's signing job runs in the
+`release` environment (Settings › Environments), which should allow only `main` and `v*` tags and
+hold the signing, notarization and update keys.
 
 A release also carries what remote machines run, for them to update themselves
 with, once the `KUVO_BOX_SIGNING_KEY` secret (an Ed25519 key) is set
@@ -97,19 +99,16 @@ act on those (a window's tracking areas and cursor rectangles once the pointer c
 drawing as Core Animation commits), the test does it itself: `WindowServer.appKitsTurn` and
 `CATransaction.flush()` after `displayIfNeeded()`.
 
-The app, the engine client and the usage tracker have tests:
+Run quick, targeted tests locally while working. Commit the changes to a work branch, then run
+`scripts/ci-branch.sh --wait` to push it over SSH to `origin` as a `ci/` branch and run the full
+CI suites on GitHub. Pass a local branch name to test a different branch. The script prints the run
+URL, job conclusions and failed logs; it never pushes `main` or tags. Only committed changes run.
+CI covers the Mac app, Swift packages, box and bridge; the phone has no CI, so run its tests locally
+through `scripts/heavy.sh phone`. Use `scripts/heavy.sh` for other local builds or tests CI doesn't cover.
 
-```sh
-./scripts/test-app.sh
-cd Packages/OpenCodeKit && swift test
-cd Packages/UsageKit && swift test
-cd Packages/KuvoClient && swift test
-cd Packages/KuvoLink && swift test && node --test Tests/Bridge/*.test.js
-cd Packages/Box && bun install && bun run check && bun test
-```
+Run quick, targeted box and bridge tests with `scripts/test-box.sh [box|bridge|all] [extra test args]`. It queues under the box heavy slot, installs locked dependencies when needed, and summarizes results.
 
-The bridge's tests that run the box itself need a Bun: `bun` on your PATH, or
-`KUVO_TEST_BUN` naming one or an engine (a machine's `~/.kuvo-code/engine/<version>/opencode`,
+The runner uses `~/.bun/bin/bun` by default; set `KUVO_TEST_BUN` to another Bun or an engine (a machine's `~/.kuvo-code/engine/<version>/opencode`,
 which they run as Bun). Run them on a Linux machine too, in a test folder of your own with
 `TMPDIR` inside it, before calling a box change done:
 `scripts/heavy.sh box scripts/test-linux.sh <ssh-host> sandbox.test.js …` does that on a machine
@@ -140,7 +139,7 @@ its home as it ends, and the next run clears what a killed one left.
 `./scripts/test-app.sh` runs one at a time: a run started while another is going
 waits for it, since they share the test copy's settings and temporary folders.
 
-Builds and test runs are heavy, so start them with `scripts/heavy.sh <kind>`, which
+When running heavy builds or tests locally, start them with `scripts/heavy.sh <kind>`, which
 waits for jobs of the same kind (they share build folders) and runs the other
 kinds alongside:
 
@@ -148,7 +147,8 @@ kinds alongside:
 scripts/heavy.sh mac scripts/test-app.sh
 scripts/heavy.sh mac-build sh -c 'xcodebuild … -derivedDataPath "$(getconf DARWIN_USER_CACHE_DIR)KuvoShared-MacBuild$KUVO_HEAVY_BUILD_SUFFIX" …'
 scripts/heavy.sh mac-build sh -c 'cd Packages/KuvoClient && swift test'
-scripts/heavy.sh box sh -c 'cd Packages/Box && bun test'
+scripts/heavy.sh phone <phone-test-command>
+scripts/test-box.sh box <test-filter>
 ```
 
 - `mac`: the Mac app's UI test suite, `scripts/test-app.sh` (`KuvoCodeTests-build`), which drives the
@@ -178,7 +178,11 @@ scripts/heavy.sh box sh -c 'cd Packages/Box && bun test'
 A job also waits while the Mac is busy (its load over the last minute above 40;
 `KUVO_HEAVY_LOAD` sets another). While the Mac app's suite waits there, new jobs of the other
 kinds wait for it to start, 15 minutes at most (`KUVO_HEAVY_MAC_FIRST_FOR`), so the jobs that keep
-starting can't keep it out. Both apps' `scripts/test-app.sh` take their turn
+starting can't keep it out. A new job also waits while the Mac is short of memory: swapping more than
+10 MB a second (`KUVO_HEAVY_SWAP`), its memory pressure at warn or worse, or less than 20% of it
+available as `memory_pressure -Q` says (`KUVO_HEAVY_MEMORY`; `0` turns the memory wait off). It
+waits until two looks in a row find it isn't, 15 minutes at most from when any job found it short
+(`KUVO_HEAVY_MEMORY_WAIT_FOR`): on this Mac memory runs out before CPU does. Both apps' `scripts/test-app.sh` take their turn
 this way themselves. `python3 -m unittest discover -s scripts -p test_heavy.py`
 tries the helper.
 
@@ -241,7 +245,7 @@ own, without SSH.
 Every route a phone uses is answered twice: by this Mac (`PhoneLink`) and by a machine's bridge
 (`kuvo-link.js`). The scenarios in `Packages/KuvoLink/Vectors/routes/*.json` are written once and
 run against both: `RouteContractTests` (in `./scripts/test-app.sh`) drives the Mac's real
-`PhoneLink` and stores, and `node --test Tests/Bridge/contract.test.js` in `Packages/KuvoLink` the
+`PhoneLink` and stores, and `scripts/test-box.sh bridge contract.test.js` the
 bridge's real handler. `Tests/Bridge/contract-mac.test.js` runs the scenarios of the areas that
 have moved onto this Mac's box (`PhoneLink.boxRoutes`) against the bridge's handler as this Mac's
 box, with the app's folders and kit, checking what's expected of a Mac. Only the engine is a
@@ -345,7 +349,7 @@ JavaScript sides check against the same vectors in `Packages/KuvoLink/Vectors`.
 
 Group chats run in each computer's agents bridge (`Packages/Box/src/agents/groups`), this Mac's as a
 machine's: the app shows them and sends what you do in them (`BoxGroups`), and holds none of
-their rules. Their own tests are the bridge's (`bun test` in `Packages/Box`). What the app still reads
+their rules. Their own tests are the bridge's (`scripts/test-box.sh box`). What the app still reads
 the same way as a box (a bot's job from its memory, when a repeat comes back, what a message
 quotes) is held to `Packages/Box/test/agents/box-vectors.json`: after changing one on either side, run
 `./scripts/box-vectors.sh` (it writes the file from the Swift side), then the bridges' tests.

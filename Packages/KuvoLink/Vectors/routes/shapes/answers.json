@@ -3061,6 +3061,9 @@
             "literal": "git"
            },
            {
+            "literal": "git.changes.count"
+           },
+           {
             "literal": "git.merge"
            },
            {
@@ -3272,6 +3275,9 @@
            },
            {
             "literal": "limits"
+           },
+           {
+            "literal": "work-queue"
            },
            {
             "literal": "accounts.ended"
@@ -3393,6 +3399,9 @@
             "literal": "git"
            },
            {
+            "literal": "git.changes.count"
+           },
+           {
             "literal": "git.merge"
            },
            {
@@ -3604,6 +3613,9 @@
            },
            {
             "literal": "limits"
+           },
+           {
+            "literal": "work-queue"
            }
           ]
          }
@@ -4168,6 +4180,36 @@
         "hashes": {
          "map": "string"
         },
+        "uncommitted": "bool"
+       }
+      }
+     ]
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/git/changes/count",
+   "answers": {
+    "200": {
+     "oneOf": [
+      {
+       "object": {
+        "repository": {
+         "literal": false
+        }
+       }
+      },
+      {
+       "object": {
+        "repository": {
+         "literal": true
+        },
+        "root": "string",
+        "against": "string",
+        "files": "number",
+        "additions": "number",
+        "deletions": "number",
+        "untracked": "number",
         "uncommitted": "bool"
        }
       }
@@ -8219,6 +8261,12 @@
           }
          },
          "mode?": "string",
+         "account?": {
+          "object": {
+           "name": "string",
+           "label?": "string"
+          }
+         },
          "state": {
           "oneOf": [
            {
@@ -9743,6 +9791,1276 @@
     "502": {
      "object": {
       "message": "string"
+     }
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/work-queue",
+   "answers": {
+    "200": {
+     "object": {
+      "owner": "string",
+      "categories": {
+       "list": {
+        "object": {
+         "id": "string",
+         "name": "string",
+         "builtIn": "bool"
+        }
+       }
+      },
+      "items": {
+       "list": {
+        "object": {
+         "id": "string",
+         "number?": "number",
+         "wanted?": "number",
+         "owner": "string",
+         "title": "string",
+         "category": "string",
+         "order": "number",
+         "inProgress": "bool",
+         "progress?": {
+          "object": {
+           "value?": "number",
+           "note?": "string"
+          }
+         },
+         "sessions": {
+          "list": {
+           "object": {
+            "session": "string",
+            "title": "string",
+            "working": "bool"
+           }
+          }
+         },
+         "noteCount": "number",
+         "lastNote?": {
+          "object": {
+           "at": "number",
+           "by": {
+            "oneOf": [
+             {
+              "object": {
+               "user": "bool"
+              }
+             },
+             {
+              "object": {
+               "session": "string",
+               "name": "string"
+              }
+             }
+            ]
+           },
+           "text": "string"
+          }
+         },
+         "fileCount": "number",
+         "linkCount": "number",
+         "handedBy?": "string",
+         "source?": {
+          "object": {
+           "kind": "string",
+           "ref": "string",
+           "url?": "string"
+          }
+         },
+         "created": {
+          "object": {
+           "at": "number",
+           "by": {
+            "oneOf": [
+             {
+              "object": {
+               "user": "bool"
+              }
+             },
+             {
+              "object": {
+               "session": "string",
+               "name": "string"
+              }
+             }
+            ]
+           }
+          }
+         },
+         "updated": {
+          "object": {
+           "at": "number",
+           "by": {
+            "oneOf": [
+             {
+              "object": {
+               "user": "bool"
+              }
+             },
+             {
+              "object": {
+               "session": "string",
+               "name": "string"
+              }
+             }
+            ]
+           }
+          }
+         },
+         "doneAt?": "number",
+         "removed?": {
+          "object": {
+           "at": "number",
+           "by": {
+            "oneOf": [
+             {
+              "object": {
+               "user": "bool"
+              }
+             },
+             {
+              "object": {
+               "session": "string",
+               "name": "string"
+              }
+             }
+            ]
+           }
+          }
+         }
+        }
+       }
+      },
+      "owners": {
+       "list": {
+        "object": {
+         "owner": "string",
+         "kind": {
+          "oneOf": [
+           {
+            "literal": "bot"
+           },
+           {
+            "literal": "session"
+           },
+           {
+            "literal": "group"
+           }
+          ]
+         },
+         "title": {
+          "oneOf": [
+           "string",
+           "null"
+          ]
+         },
+         "bot?": {
+          "object": {
+           "id": "string",
+           "name": "string"
+          }
+         },
+         "startedBy?": "string"
+        }
+       }
+      },
+      "removed": {
+       "list": {
+        "object": {
+         "id": "string",
+         "number?": "number",
+         "wanted?": "number",
+         "owner": "string",
+         "title": "string",
+         "category": "string",
+         "order": "number",
+         "inProgress": "bool",
+         "progress?": {
+          "object": {
+           "value?": "number",
+           "note?": "string"
+          }
+         },
+         "sessions": {
+          "list": {
+           "object": {
+            "session": "string",
+            "title": "string",
+            "working": "bool"
+           }
+          }
+         },
+         "noteCount": "number",
+         "lastNote?": {
+          "object": {
+           "at": "number",
+           "by": {
+            "oneOf": [
+             {
+              "object": {
+               "user": "bool"
+              }
+             },
+             {
+              "object": {
+               "session": "string",
+               "name": "string"
+              }
+             }
+            ]
+           },
+           "text": "string"
+          }
+         },
+         "fileCount": "number",
+         "linkCount": "number",
+         "handedBy?": "string",
+         "source?": {
+          "object": {
+           "kind": "string",
+           "ref": "string",
+           "url?": "string"
+          }
+         },
+         "created": {
+          "object": {
+           "at": "number",
+           "by": {
+            "oneOf": [
+             {
+              "object": {
+               "user": "bool"
+              }
+             },
+             {
+              "object": {
+               "session": "string",
+               "name": "string"
+              }
+             }
+            ]
+           }
+          }
+         },
+         "updated": {
+          "object": {
+           "at": "number",
+           "by": {
+            "oneOf": [
+             {
+              "object": {
+               "user": "bool"
+              }
+             },
+             {
+              "object": {
+               "session": "string",
+               "name": "string"
+              }
+             }
+            ]
+           }
+          }
+         },
+         "doneAt?": "number",
+         "removed?": {
+          "object": {
+           "at": "number",
+           "by": {
+            "oneOf": [
+             {
+              "object": {
+               "user": "bool"
+              }
+             },
+             {
+              "object": {
+               "session": "string",
+               "name": "string"
+              }
+             }
+            ]
+           }
+          }
+         }
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/work-queue/events",
+   "answers": {
+    "200": {
+     "object": {
+      "owner": "string",
+      "categories": {
+       "list": {
+        "object": {
+         "id": "string",
+         "name": "string",
+         "builtIn": "bool"
+        }
+       }
+      },
+      "items": {
+       "list": {
+        "object": {
+         "id": "string",
+         "number?": "number",
+         "wanted?": "number",
+         "owner": "string",
+         "title": "string",
+         "category": "string",
+         "order": "number",
+         "inProgress": "bool",
+         "progress?": {
+          "object": {
+           "value?": "number",
+           "note?": "string"
+          }
+         },
+         "sessions": {
+          "list": {
+           "object": {
+            "session": "string",
+            "title": "string",
+            "working": "bool"
+           }
+          }
+         },
+         "noteCount": "number",
+         "lastNote?": {
+          "object": {
+           "at": "number",
+           "by": {
+            "oneOf": [
+             {
+              "object": {
+               "user": "bool"
+              }
+             },
+             {
+              "object": {
+               "session": "string",
+               "name": "string"
+              }
+             }
+            ]
+           },
+           "text": "string"
+          }
+         },
+         "fileCount": "number",
+         "linkCount": "number",
+         "handedBy?": "string",
+         "source?": {
+          "object": {
+           "kind": "string",
+           "ref": "string",
+           "url?": "string"
+          }
+         },
+         "created": {
+          "object": {
+           "at": "number",
+           "by": {
+            "oneOf": [
+             {
+              "object": {
+               "user": "bool"
+              }
+             },
+             {
+              "object": {
+               "session": "string",
+               "name": "string"
+              }
+             }
+            ]
+           }
+          }
+         },
+         "updated": {
+          "object": {
+           "at": "number",
+           "by": {
+            "oneOf": [
+             {
+              "object": {
+               "user": "bool"
+              }
+             },
+             {
+              "object": {
+               "session": "string",
+               "name": "string"
+              }
+             }
+            ]
+           }
+          }
+         },
+         "doneAt?": "number",
+         "removed?": {
+          "object": {
+           "at": "number",
+           "by": {
+            "oneOf": [
+             {
+              "object": {
+               "user": "bool"
+              }
+             },
+             {
+              "object": {
+               "session": "string",
+               "name": "string"
+              }
+             }
+            ]
+           }
+          }
+         }
+        }
+       }
+      },
+      "owners": {
+       "list": {
+        "object": {
+         "owner": "string",
+         "kind": {
+          "oneOf": [
+           {
+            "literal": "bot"
+           },
+           {
+            "literal": "session"
+           },
+           {
+            "literal": "group"
+           }
+          ]
+         },
+         "title": {
+          "oneOf": [
+           "string",
+           "null"
+          ]
+         },
+         "bot?": {
+          "object": {
+           "id": "string",
+           "name": "string"
+          }
+         },
+         "startedBy?": "string"
+        }
+       }
+      },
+      "removed": {
+       "list": {
+        "object": {
+         "id": "string",
+         "number?": "number",
+         "wanted?": "number",
+         "owner": "string",
+         "title": "string",
+         "category": "string",
+         "order": "number",
+         "inProgress": "bool",
+         "progress?": {
+          "object": {
+           "value?": "number",
+           "note?": "string"
+          }
+         },
+         "sessions": {
+          "list": {
+           "object": {
+            "session": "string",
+            "title": "string",
+            "working": "bool"
+           }
+          }
+         },
+         "noteCount": "number",
+         "lastNote?": {
+          "object": {
+           "at": "number",
+           "by": {
+            "oneOf": [
+             {
+              "object": {
+               "user": "bool"
+              }
+             },
+             {
+              "object": {
+               "session": "string",
+               "name": "string"
+              }
+             }
+            ]
+           },
+           "text": "string"
+          }
+         },
+         "fileCount": "number",
+         "linkCount": "number",
+         "handedBy?": "string",
+         "source?": {
+          "object": {
+           "kind": "string",
+           "ref": "string",
+           "url?": "string"
+          }
+         },
+         "created": {
+          "object": {
+           "at": "number",
+           "by": {
+            "oneOf": [
+             {
+              "object": {
+               "user": "bool"
+              }
+             },
+             {
+              "object": {
+               "session": "string",
+               "name": "string"
+              }
+             }
+            ]
+           }
+          }
+         },
+         "updated": {
+          "object": {
+           "at": "number",
+           "by": {
+            "oneOf": [
+             {
+              "object": {
+               "user": "bool"
+              }
+             },
+             {
+              "object": {
+               "session": "string",
+               "name": "string"
+              }
+             }
+            ]
+           }
+          }
+         },
+         "doneAt?": "number",
+         "removed?": {
+          "object": {
+           "at": "number",
+           "by": {
+            "oneOf": [
+             {
+              "object": {
+               "user": "bool"
+              }
+             },
+             {
+              "object": {
+               "session": "string",
+               "name": "string"
+              }
+             }
+            ]
+           }
+          }
+         }
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/work-queue/tools",
+   "answers": {
+    "200": {
+     "object": {
+      "tools": {
+       "list": "any"
+      },
+      "instructions": "string"
+     }
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/work-queue/tools",
+   "answers": {
+    "200": {
+     "object": {
+      "text": "string",
+      "isError": "bool"
+     }
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/work-queue/refs",
+   "answers": {
+    "200": {
+     "object": {
+      "refs": {
+       "map": {
+        "oneOf": [
+         {
+          "object": {
+           "id": "string",
+           "number?": "number",
+           "title": "string",
+           "category": "string",
+           "inProgress": "bool",
+           "owner": "string",
+           "removed?": "bool"
+          }
+         },
+         "null"
+        ]
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/work-queue/categories",
+   "answers": {
+    "200": {
+     "object": {
+      "categories": {
+       "list": {
+        "object": {
+         "id": "string",
+         "name": "string",
+         "builtIn": "bool"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/work-queue/categories",
+   "answers": {
+    "200": {
+     "object": {
+      "categories": {
+       "list": {
+        "object": {
+         "id": "string",
+         "name": "string",
+         "builtIn": "bool"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/work-queue/import",
+   "answers": {
+    "200": {
+     "object": {
+      "added": "number",
+      "byCategory": {
+       "map": "number"
+      },
+      "waiting": "number",
+      "skipped": {
+       "list": "string"
+      },
+      "said": "string"
+     }
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/work-queue/items/:item",
+   "answers": {
+    "200": {
+     "object": {
+      "item": {
+       "object": {
+        "id": "string",
+        "number?": "number",
+        "wanted?": "number",
+        "owner": "string",
+        "title": "string",
+        "category": "string",
+        "order": "number",
+        "inProgress": "bool",
+        "progress?": {
+         "object": {
+          "value?": "number",
+          "note?": "string"
+         }
+        },
+        "sessions": {
+         "list": {
+          "object": {
+           "session": "string",
+           "title": "string",
+           "working": "bool"
+          }
+         }
+        },
+        "noteCount": "number",
+        "lastNote?": {
+         "object": {
+          "at": "number",
+          "by": {
+           "oneOf": [
+            {
+             "object": {
+              "user": "bool"
+             }
+            },
+            {
+             "object": {
+              "session": "string",
+              "name": "string"
+             }
+            }
+           ]
+          },
+          "text": "string"
+         }
+        },
+        "fileCount": "number",
+        "linkCount": "number",
+        "handedBy?": "string",
+        "source?": {
+         "object": {
+          "kind": "string",
+          "ref": "string",
+          "url?": "string"
+         }
+        },
+        "created": {
+         "object": {
+          "at": "number",
+          "by": {
+           "oneOf": [
+            {
+             "object": {
+              "user": "bool"
+             }
+            },
+            {
+             "object": {
+              "session": "string",
+              "name": "string"
+             }
+            }
+           ]
+          }
+         }
+        },
+        "updated": {
+         "object": {
+          "at": "number",
+          "by": {
+           "oneOf": [
+            {
+             "object": {
+              "user": "bool"
+             }
+            },
+            {
+             "object": {
+              "session": "string",
+              "name": "string"
+             }
+            }
+           ]
+          }
+         }
+        },
+        "doneAt?": "number",
+        "removed?": {
+         "object": {
+          "at": "number",
+          "by": {
+           "oneOf": [
+            {
+             "object": {
+              "user": "bool"
+             }
+            },
+            {
+             "object": {
+              "session": "string",
+              "name": "string"
+             }
+            }
+           ]
+          }
+         }
+        },
+        "body": "string",
+        "notes": {
+         "list": {
+          "object": {
+           "at": "number",
+           "by": {
+            "oneOf": [
+             {
+              "object": {
+               "user": "bool"
+              }
+             },
+             {
+              "object": {
+               "session": "string",
+               "name": "string"
+              }
+             }
+            ]
+           },
+           "text": "string"
+          }
+         }
+        },
+        "files": {
+         "list": {
+          "object": {
+           "name": "string",
+           "size": "number",
+           "type": "string",
+           "at": "number"
+          }
+         }
+        },
+        "links": {
+         "list": {
+          "object": {
+           "url": "string",
+           "title?": "string"
+          }
+         }
+        },
+        "handed": {
+         "list": {
+          "object": {
+           "from": "string",
+           "to": "string",
+           "at": "number"
+          }
+         }
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/work-queue/items/:item/files/:name",
+   "answers": {
+    "200": "bytes"
+   }
+  },
+  {
+   "route": "POST kuvo/work-queue/items/:item/move",
+   "answers": {
+    "200": {
+     "object": {
+      "item": {
+       "object": {
+        "id": "string",
+        "number?": "number",
+        "wanted?": "number",
+        "owner": "string",
+        "title": "string",
+        "category": "string",
+        "order": "number",
+        "inProgress": "bool",
+        "progress?": {
+         "object": {
+          "value?": "number",
+          "note?": "string"
+         }
+        },
+        "sessions": {
+         "list": {
+          "object": {
+           "session": "string",
+           "title": "string",
+           "working": "bool"
+          }
+         }
+        },
+        "noteCount": "number",
+        "lastNote?": {
+         "object": {
+          "at": "number",
+          "by": {
+           "oneOf": [
+            {
+             "object": {
+              "user": "bool"
+             }
+            },
+            {
+             "object": {
+              "session": "string",
+              "name": "string"
+             }
+            }
+           ]
+          },
+          "text": "string"
+         }
+        },
+        "fileCount": "number",
+        "linkCount": "number",
+        "handedBy?": "string",
+        "source?": {
+         "object": {
+          "kind": "string",
+          "ref": "string",
+          "url?": "string"
+         }
+        },
+        "created": {
+         "object": {
+          "at": "number",
+          "by": {
+           "oneOf": [
+            {
+             "object": {
+              "user": "bool"
+             }
+            },
+            {
+             "object": {
+              "session": "string",
+              "name": "string"
+             }
+            }
+           ]
+          }
+         }
+        },
+        "updated": {
+         "object": {
+          "at": "number",
+          "by": {
+           "oneOf": [
+            {
+             "object": {
+              "user": "bool"
+             }
+            },
+            {
+             "object": {
+              "session": "string",
+              "name": "string"
+             }
+            }
+           ]
+          }
+         }
+        },
+        "doneAt?": "number",
+        "removed?": {
+         "object": {
+          "at": "number",
+          "by": {
+           "oneOf": [
+            {
+             "object": {
+              "user": "bool"
+             }
+            },
+            {
+             "object": {
+              "session": "string",
+              "name": "string"
+             }
+            }
+           ]
+          }
+         }
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/work-queue/items/:item/restore",
+   "answers": {
+    "200": {
+     "object": {
+      "item": {
+       "object": {
+        "id": "string",
+        "number?": "number",
+        "wanted?": "number",
+        "owner": "string",
+        "title": "string",
+        "category": "string",
+        "order": "number",
+        "inProgress": "bool",
+        "progress?": {
+         "object": {
+          "value?": "number",
+          "note?": "string"
+         }
+        },
+        "sessions": {
+         "list": {
+          "object": {
+           "session": "string",
+           "title": "string",
+           "working": "bool"
+          }
+         }
+        },
+        "noteCount": "number",
+        "lastNote?": {
+         "object": {
+          "at": "number",
+          "by": {
+           "oneOf": [
+            {
+             "object": {
+              "user": "bool"
+             }
+            },
+            {
+             "object": {
+              "session": "string",
+              "name": "string"
+             }
+            }
+           ]
+          },
+          "text": "string"
+         }
+        },
+        "fileCount": "number",
+        "linkCount": "number",
+        "handedBy?": "string",
+        "source?": {
+         "object": {
+          "kind": "string",
+          "ref": "string",
+          "url?": "string"
+         }
+        },
+        "created": {
+         "object": {
+          "at": "number",
+          "by": {
+           "oneOf": [
+            {
+             "object": {
+              "user": "bool"
+             }
+            },
+            {
+             "object": {
+              "session": "string",
+              "name": "string"
+             }
+            }
+           ]
+          }
+         }
+        },
+        "updated": {
+         "object": {
+          "at": "number",
+          "by": {
+           "oneOf": [
+            {
+             "object": {
+              "user": "bool"
+             }
+            },
+            {
+             "object": {
+              "session": "string",
+              "name": "string"
+             }
+            }
+           ]
+          }
+         }
+        },
+        "doneAt?": "number",
+        "removed?": {
+         "object": {
+          "at": "number",
+          "by": {
+           "oneOf": [
+            {
+             "object": {
+              "user": "bool"
+             }
+            },
+            {
+             "object": {
+              "session": "string",
+              "name": "string"
+             }
+            }
+           ]
+          }
+         }
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "DELETE kuvo/work-queue/items/:item",
+   "answers": {
+    "200": {
+     "object": {
+      "item": {
+       "object": {
+        "id": "string",
+        "number?": "number",
+        "wanted?": "number",
+        "owner": "string",
+        "title": "string",
+        "category": "string",
+        "order": "number",
+        "inProgress": "bool",
+        "progress?": {
+         "object": {
+          "value?": "number",
+          "note?": "string"
+         }
+        },
+        "sessions": {
+         "list": {
+          "object": {
+           "session": "string",
+           "title": "string",
+           "working": "bool"
+          }
+         }
+        },
+        "noteCount": "number",
+        "lastNote?": {
+         "object": {
+          "at": "number",
+          "by": {
+           "oneOf": [
+            {
+             "object": {
+              "user": "bool"
+             }
+            },
+            {
+             "object": {
+              "session": "string",
+              "name": "string"
+             }
+            }
+           ]
+          },
+          "text": "string"
+         }
+        },
+        "fileCount": "number",
+        "linkCount": "number",
+        "handedBy?": "string",
+        "source?": {
+         "object": {
+          "kind": "string",
+          "ref": "string",
+          "url?": "string"
+         }
+        },
+        "created": {
+         "object": {
+          "at": "number",
+          "by": {
+           "oneOf": [
+            {
+             "object": {
+              "user": "bool"
+             }
+            },
+            {
+             "object": {
+              "session": "string",
+              "name": "string"
+             }
+            }
+           ]
+          }
+         }
+        },
+        "updated": {
+         "object": {
+          "at": "number",
+          "by": {
+           "oneOf": [
+            {
+             "object": {
+              "user": "bool"
+             }
+            },
+            {
+             "object": {
+              "session": "string",
+              "name": "string"
+             }
+            }
+           ]
+          }
+         }
+        },
+        "doneAt?": "number",
+        "removed?": {
+         "object": {
+          "at": "number",
+          "by": {
+           "oneOf": [
+            {
+             "object": {
+              "user": "bool"
+             }
+            },
+            {
+             "object": {
+              "session": "string",
+              "name": "string"
+             }
+            }
+           ]
+          }
+         }
+        }
+       }
+      }
      }
     }
    }

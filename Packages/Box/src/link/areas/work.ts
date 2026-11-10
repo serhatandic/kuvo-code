@@ -31,6 +31,7 @@ import { readProjects } from "./projects";
 import { HERE } from "../home";
 import { atWorkNow, backgroundFollowers, readBackground } from "../work/background";
 import { botOfConversation, describeWork, ofBot, workSessions } from "../work/tree";
+import { workAccounts } from "../work/accounts";
 import type { BotWork, WorkAnswer } from "../../shared/routes/work";
 import type { AnswerPiece, RouteContext } from "../server/context";
 
@@ -48,16 +49,22 @@ async function botWork(bot: string, context: RouteContext): Promise<BotWork> {
   // A few at a time: each asks the engine what it asks and said.
   const sessions: Awaited<ReturnType<typeof describeWork>>[] = [];
   const shown = work.slice(0, 60);
+  // (The accounts they run on, meanwhile: each provider asked once where it runs.)
+  const asked = workAccounts(shown.map(each => ({ id: each.data.id, target: each.target, provider: each.data.model?.providerID })), signal ?? undefined);
   for (let at = 0; at < shown.length; at += 8) {
     sessions.push(...await Promise.all(shown.slice(at, at + 8).map(each => describeWork(each, working, { replies: true, signal: signal ?? undefined }))));
   }
   const answered: WorkAnswer[] = work.flatMap(each => answersOn(each.data.metadata).map(answer => ({ ...answer, session: each.data.id }))).sort((a, b) => b.at - a.at).slice(0, 100);
+  const accounts = await asked;
   const midnight = startOfDay(Date.now());
   const today = work.filter(each => (each.data.time?.created ?? 0) >= midnight);
   const cost = today.reduce((sum, each) => sum + (typeof each.data.cost === "number" ? each.data.cost : 0), 0);
   return {
     bot,
-    sessions: sessions.map(({ askID: _, ...described }) => described),
+    sessions: sessions.map(({ askID: _, ...described }) => {
+      const account = accounts.get(described.session);
+      return account ? { ...described, account } : described;
+    }),
     answered,
     today: {
       started: today.length,

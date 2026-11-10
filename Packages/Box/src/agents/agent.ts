@@ -7,7 +7,7 @@ import type { LimitsSource } from "./limits"
 import type { InstallResult, Maintenance, UpdateResult } from "./maintenance"
 import type { Deps } from "./deps"
 import type { Turn, Outcome } from "./turn"
-import type { Decision, FormAnswer, FormField, IntegrationMethod, Model, ModelRef, OAuthStatus, Session, StructuredError } from "./wire"
+import type { Decision, FormAnswer, FormField, IntegrationMethod, Model, ModelRef, OAuthStatus, PermissionRule, Session, StructuredError } from "./wire"
 import { run } from "./proc"
 
 /** What every agent gets from the bridge: its folders and the SDK installer. */
@@ -172,6 +172,11 @@ export interface PermissionAsk {
   metadata?: Record<string, unknown>
   /** The agent's own words for it, when it has them. */
   message?: string
+  /**
+   * What a subagent of yours that asks may do (Settings › Agents › What It May Do), in place of
+   * the session's agent's: the session's own rules still go over them, as the engine has it.
+   */
+  agentRules?: PermissionRule[]
   /** The agent settled it itself (it timed out there): it's taken back, refused. */
   signal?: AbortSignal
   /**

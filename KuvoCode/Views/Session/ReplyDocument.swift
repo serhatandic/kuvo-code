@@ -1,5 +1,6 @@
 import AppKit
 import ClientDesign
+import ClientSessions
 import SwiftUI
 import Textual
 
@@ -74,6 +75,8 @@ struct ReplyDocument {
         var style: Style
         var folders: [String]
         var diagrams: Bool
+        /// The Work Queue items it names, as their chips show them.
+        var refs: [Int: WorkRef] = [:]
     }
 
     private static var cache: [CacheKey: ReplyDocument] = [:]
@@ -85,7 +88,7 @@ struct ReplyDocument {
     static func cached(markdown: String, parser: FileLinkingParser, style: Style, diagrams: Bool = false) -> ReplyDocument {
         // With Find's marks, a group chat's faces or named agents, made each time (rarely).
         guard parser.highlight == nil, parser.mentions.isEmpty, parser.agents.isEmpty else { return ReplyDocument(markdown: markdown, parser: parser, style: style, diagrams: diagrams) }
-        let key = CacheKey(markdown: markdown, style: style, folders: parser.folders(), diagrams: diagrams)
+        let key = CacheKey(markdown: markdown, style: style, folders: parser.folders(), diagrams: diagrams, refs: parser.refs)
         if let known = cache[key] { return known }
         // A long one from short parts, each kept: as a reply is written, only its last part is
         // read again with each few words, not all of it (most of what each update cost).
@@ -626,7 +629,19 @@ enum ReplyAttachments {
         let environment = TextEnvironmentValues(font: .system(size: size))
         let bounds = attachment.sizeThatFits(.unspecified, in: environment)
         let offset = attachment.baselineOffset(in: environment)
-        if attachment.base is FileIconAttachment {
+        if let chip = attachment.base as? WorkItemChipAttachment {
+            // At its own size, on the middle of the text's capitals.
+            let image = WorkItemChipAttachment.image(chip, size: size, dark: dark)
+            let font = attributes[.font] as? NSFont ?? .systemFont(ofSize: size)
+            item.image = image
+            item.bounds = CGRect(x: 0, y: ((font.capHeight - image.size.height) / 2).rounded(), width: image.size.width, height: image.size.height)
+            let text = NSMutableAttributedString(attachment: item)
+            var kept = attributes.filter { $0.key != .backgroundColor && $0.key != .replyInlineCode && $0.key != .foregroundColor }
+            kept[.replyPlainText] = chip.description
+            kept[.toolTip] = "\(chip.description) \(chip.title)"
+            text.addAttributes(kept, range: NSRange(location: 0, length: text.length))
+            return text
+        } else if attachment.base is FileIconAttachment {
             item.image = fileIcon(bounds)
         } else if let site = attachment.base as? SiteIconAttachment {
             let cell = SiteIconCell(url: site.url, size: bounds, globe: symbolIcon("globe", bounds), baseline: offset)

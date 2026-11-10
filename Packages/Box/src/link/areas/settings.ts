@@ -12,6 +12,7 @@ import { answerKeys } from "./box-keys";
 import { changeSettings, ownsSettings, readSettings } from "./config";
 import type { Settings } from "./config";
 import { addFromCatalog, mcpCatalog } from "./mcp-catalog";
+import { applyCompatibility } from "../engine/compatibility";
 
 // How long a change to Settings › Permissions waits for the conversations to follow before it
 // answers (ms): one with thousands of them answers, and the rest follow meanwhile.
@@ -20,11 +21,18 @@ const FOLLOW_WAIT = 5_000;
 // Conversations kept with an approval follow Settings › Permissions as they are now at once, rather
 // than at the box's next round (`keepApprovals`).
 async function followSettings({ readEngine, bridge }: RouteContext): Promise<void> {
+  subagentsFollow();
   let engine: Target | null = null;
   try { engine = readEngine(); } catch {}
   let timer: ReturnType<typeof setTimeout> | undefined;
   await Promise.race([followed(engine?.port ? engine : null, bridge()), new Promise(resolve => { timer = setTimeout(resolve, FOLLOW_WAIT); })]);
   clearTimeout(timer);
+}
+
+// The model your subagents use, and which of them use it, where its engine reads them, as its
+// settings are now (one you took away, or gave a model of its own, no longer named there).
+function subagentsFollow(settings?: Settings): void {
+  try { applyCompatibility(undefined, undefined, settings); } catch {}
 }
 
 // Its own settings, and its integrations' keys (PROTOCOL.md, "Settings per box").
@@ -40,6 +48,8 @@ export async function* settingsRoute(context: RouteContext): AsyncGenerator<Answ
   if (route === "kuvo/config") {
     if (method === "GET") {
       const { settings, problem } = readSettings();
+      // (Changed by hand meanwhile: the engine has it as the file says once a client looks.)
+      if (settings) subagentsFollow(settings);
       return yield* (problem ? json(409, { message: `The engine's settings file can't be changed from here: ${problem}`, problem }) : json(200, settings! satisfies Config));
     }
     if (method === "PATCH") {
