@@ -112,6 +112,7 @@ export { docBytes, MOST_DOC, newSigningSeed, ownSign, readDoc, signDoc, signingK
 export { IS_MAC, LINK_FILE } from "./home";
 export { BRIDGE_VERSION } from "./version";
 export { FEATURES } from "../shared/features";
+export { macFeatures } from "../shared/routes/mac";
 export { messageID } from "./engine/sessions";
 export { forgetMovesInMemory, keepMoving, sendMovesWith, takeMoveMail, watchMoves } from "./moves/move";
 export { movesElsewhere } from "./moves/elsewhere";
@@ -175,7 +176,7 @@ export { settleSetup, sharedMachine } from "./setup/settle";
 export { followedSetup, newSetupID, startsFromOthers } from "./setup/record";
 export { setupView } from "./setup/view";
 export { cardNow, SETUP_CARD, writeCard } from "./setup/card";
-export { peerOf, readPeerAgents, takeAgents } from "./peers/directory";
+export { keptFeatures, peerOf, readPeerAgents, takeAgents } from "./peers/directory";
 export { composeLetter } from "./letters/letter";
 export { composeAgents } from "./peers/directory";
 export { nameAgents, namedAgents, namesIn } from "./peers/naming";
@@ -199,13 +200,13 @@ export { peerMail, receiveMail } from "./peers/mail";
 export { pairingLink } from "./phones";
 export { ownRefreshed } from "./server/naming";
 export { FROM_PHONE, fromPhone } from "./server/forward";
-export { stopMacLink } from "./mac/link";
+export { MAC_LINK_FILE, savedMacConfig, stopMacLink } from "./mac/link";
 export { macNoticeHold, macTell } from "./mac/notices";
 export { LETTER_WAIT, macSendOutbox, runMacPeers, stopMacPeers } from "./mac/peers";
 export { setMacPeers } from "./mac/routes";
 export { engineHandler } from "./server/router";
 export { connectOnce, fromRelay, nextTry } from "./relay/connection";
-export { MAC_BOX_ROUTES, macAnswers, macFront, runMacLink } from "./mac/relay";
+export { MAC_APP_ROUTES, macAppAnswers, macFront, runMacLink } from "./mac/relay";
 export { keepKeeper } from "./keeper";
 export { serveBox } from "./server/serve";
 
@@ -662,7 +663,8 @@ async function serve(): Promise<void> {
   keepBridgeAnswering();
   // Its wake-ups and watches, sent while it runs, with the app's window closed too.
   sendWakes();
-  // This Mac's link to your phones and machines, once its app says it's wanted.
+  // This Mac's link to your phones and machines, as its app last said it's wanted (kept in
+  // run/mac-link.json, so it's back on the relay after a restart before the app opens), or once it says so.
   if (IS_MAC) runMacLink().catch(() => {});
   // Its agents and their letters, and its group chats' mail, for your other computers. (Not for
   // the app's route scenarios, `KUVO_TEST_NO_PEERS`, whose fixture tells its bridge who they are.)

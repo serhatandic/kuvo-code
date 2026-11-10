@@ -1,7 +1,7 @@
 // What this box answers, one name per route or group of routes a client might check, as
 // `kuvo/info` says (PROTOCOL.md, "Features"). A name comes with what it names and never changes
-// meaning. A Mac's list (PhoneLink's `features`) has the same but `engine.start`, `update` and `browser`,
-// and the Mac's own routes besides.
+// meaning. A Mac's box's list (`macFeatures`, routes/mac.ts) has the same but a machine's own
+// (`engine.start`, `update` and `browser`), and the Mac's own routes besides.
 
 export const FEATURES = [
   "accounts.credentials", "accounts.ended", "accounts.found", "accounts.refresh", "agents", "artifacts", "asks", "attention", "bots", "bots.edit", "bots.keys", "bots.make", "branch", "btw", "btw.threads", "config", "config.apply",
