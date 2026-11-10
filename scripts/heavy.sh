@@ -1,7 +1,7 @@
 #!/bin/sh
 # Runs a heavy job (a build, a test run) once this Mac has room for it:
 #
-#   scripts/heavy.sh <mac|mac-build|phone|box> <command> [arguments…]
+#   scripts/heavy.sh <mac|mac-build|phone-build|phone|box> <command> [arguments…]
 #
 #   mac        the Mac app's UI test suite, scripts/test-app.sh, which drives the real window and
 #              pointer and so runs alone (it builds in KuvoCodeTests-build). Older scripts also say
@@ -10,9 +10,19 @@
 #   mac-build  what doesn't drive the UI: the Mac's xcodebuild (builds, demo builds), swift build
 #              or test of its packages. Two slots, and it doesn't take mac's lock, so these run
 #              beside the app suite and each other.
-#   phone      anything that builds in KuvoShared-PhoneBuild or KuvoCodeMobileTests-build: the
-#              phone's xcodebuild, its scripts/test-app.sh
+#   phone-build  the phone's builds, and anything else of the phone's that boots no simulator. The
+#              same lane as mac-build, not a lane of its own: it is mac-build under another name
+#              (the same two slots and locks, so a phone build and a Mac build count against each
+#              other, as both are xcodebuild compiles competing for one CPU and memory, and the
+#              same time limit). It never touches a phone simulator slot, so builds don't queue
+#              behind test runs. Build in KuvoShared-PhoneLane$KUVO_HEAVY_BUILD_SUFFIX (-1 or -2),
+#              a folder that neither phone's slots nor mac-build's use: phone's slot 2 builds in
+#              KuvoShared-PhoneBuild-2, so a suffix on that name would collide.
+#   phone      the phone's test runs that boot a simulator: anything that builds in
+#              KuvoShared-PhoneBuild or KuvoCodeMobileTests-build, its scripts/test-app.sh
 #   box        the box's whole suites (bun test, node --test) and runs on a test machine
+#
+# (phone-build is mac-build below: everything said of mac-build holds for it.)
 #
 # Jobs of one kind share their build folders, which two builds at once break, so they run one at a
 # time, each waiting on its kind's lock in this user's own temporary folder (getconf's, not
@@ -73,7 +83,7 @@
 set -eu
 
 usage() {
-    echo "Usage: scripts/heavy.sh <mac|mac-build|phone|box> <command> [arguments…], or --holds <kind>" >&2
+    echo "Usage: scripts/heavy.sh <mac|mac-build|phone-build|phone|box> <command> [arguments…], or --holds <kind>" >&2
     exit 64
 }
 [ $# -ge 2 ] || usage
@@ -84,7 +94,9 @@ if [ "$1" = --holds ]; then
 fi
 kind=$1
 shift
-case "$kind" in mac | mac-build | phone | box) ;; *) usage ;; esac
+case "$kind" in mac | mac-build | phone-build | phone | box) ;; *) usage ;; esac
+# The phone's build lane is the Mac's build lane: one pool of slots for xcodebuild compiles.
+[ "$kind" != phone-build ] || kind=mac-build
 
 DIR="${KUVO_HEAVY_DIR:-$(getconf DARWIN_USER_TEMP_DIR 2>/dev/null || echo /tmp/)}"
 DIR="${DIR%/}"
