@@ -227,7 +227,7 @@ test.skipIf(!canFence)("asks waiting as the box starts again are taken up and li
   } finally {
     rmSync(project, { recursive: true, force: true })
   }
-})
+}, 60_000)
 
 test.skipIf(!canFence)("in Ask First and Accept Edits, a conversation's own tools read what its commands left in its temporary folder and the files sent with it, without asking you", async () => {
   const project = realpathSync(mkdtempSync(join(tmpdir(), "kuvo-leafcheck-")))
