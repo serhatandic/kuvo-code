@@ -25,6 +25,8 @@ const link = join(import.meta.dir, "..", "src", "link")
 async function inBox(sessions: Record<string, string>, steps: string): Promise<{ said: Record<string, unknown>; prompts: string[] }> {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "kuvo-reviewer-own-")))
   const prompts: string[] = []
+  // (Each conversation's approval: Auto, unless it's named another.)
+  const approvals: Record<string, string> = {}
   const calling: Record<string, unknown[]> = {}
   const asking: Record<string, unknown[]> = {}
   const engine = Bun.serve({
@@ -39,8 +41,9 @@ async function inBox(sessions: Record<string, string>, steps: string): Promise<{
         return Response.json({ data: true })
       }
       if (route === "/test/session") {
-        const { id, folder } = body as { id: string; folder: string }
+        const { id, folder, approval } = body as { id: string; folder: string; approval?: string }
         sessions[id] = folder
+        if (approval) approvals[id] = approval
         return Response.json({ data: true })
       }
       if (route === "/api/provider") return Response.json({ data: [{ id: "openai" }] })
@@ -57,9 +60,11 @@ async function inBox(sessions: Record<string, string>, steps: string): Promise<{
       if (rest === "/form") return Response.json({ data: [] })
       if (rest?.startsWith("/permission/")) return Response.json({ data: true })
       if (request.method === "POST") return Response.json({ data: true })
+      const approval = approvals[id] ?? "auto"
       return Response.json({ data: {
         id, title: "LeafCheck", location: { directory: sessions[id] }, model: { providerID: "openai", id: "gpt-6" },
-        permissions: [], metadata: { kuvo: { approval: "auto", applied: "auto" } }, time: { created: Date.now(), updated: Date.now() },
+        permissions: approval === "auto" ? [] : [{ action: "shell", resource: "*", effect: "ask" }], metadata: { kuvo: { approval, applied: approval } },
+        time: { created: Date.now(), updated: Date.now() },
       } })
     },
   })
@@ -95,7 +100,7 @@ async function inBox(sessions: Record<string, string>, steps: string): Promise<{
       const ask = async (session, folder, command) => (await outside.callSandboxTool("sandbox_ask", { command, why: "To build the app." }, { session, root: session, sessionName: "LeafCheck", folder })).text.split("\\n")[0];
       // An agent in Auto starting a session there: why it can't, if it can't.
       const start = async folder => (await starting.startSession({ task: "Build it.", folder }, starting.OUTSIDE, { readEngine: () => engine })).refused?.message ?? null;
-      const conversation = (id, folder) => fetch("http://127.0.0.1:" + engine.port + "/test/session", { method: "POST", body: JSON.stringify({ id, folder }) });
+      const conversation = (id, folder, approval) => fetch("http://127.0.0.1:" + engine.port + "/test/session", { method: "POST", body: JSON.stringify({ id, folder, approval }) });
       fs.mkdirSync(home.BOX_KEYS, { recursive: true });
       fs.writeFileSync(path.join(home.BOX_KEYS, "box.key"), "secret");
       const said = {};
@@ -143,7 +148,10 @@ test.skipIf(!canFence)("in Auto, a conversation reads and writes its own tempora
       said.keysSession = await ask("ses_keys", home.BOX_KEYS, "cat ./box.key");
       // Its commands can't trade their temporary folder for a link into Kuvo Code's folders...
       said.swapped = run('t=\${TMPDIR%/}; cd / && rm -rf "$t" 2>/dev/null; [ -e "$t" ] || ln -s ' + home.BOX_KEYS + ' "$t" && [ -L "$t" ] && echo swapped', ${JSON.stringify(project)}).stdout.trim();
-      said.stillFolder = !fs.lstatSync(tmp).isSymbolicLink();
+      said.movedIn = run('t=\${TMPDIR%/}; cd / && rm -rf "$t"; l=/tmp/kuvo-link-$$; ln -s ' + home.BOX_KEYS + ' "$l" && mv "$l" "$t" 2>/dev/null && echo moved; rm -f "$l"', ${JSON.stringify(project)}).stdout.trim();
+      said.stillFolder = !fs.lstatSync(tmp, { throwIfNoEntry: false })?.isSymbolicLink();
+      // (Though it may take it away, as \`rm -rf $TMPDIR\` does, and make it again as a folder.)
+      said.removed = run('rm -rf "$TMPDIR"; echo "rm $?"; mkdir "$TMPDIR" && echo again', ${JSON.stringify(project)}).stdout.trim();
       // ...and one put there before the sandbox kept them from it isn't theirs: the reviewer doesn't
       // follow it, and the next command gets a folder of its own again.
       fs.rmSync(tmp, { recursive: true, force: true });
@@ -156,7 +164,7 @@ test.skipIf(!canFence)("in Auto, a conversation reads and writes its own tempora
       different: true, othersRead: refused, othersAsk: expect.stringMatching(/^Auto's reviewer refused: It reaches Kuvo Code's own folders/),
       keys: refused, keysAsk: expect.stringMatching(/^Auto's reviewer refused: It reaches Kuvo Code's own folders/),
       keysSession: expect.stringMatching(/^Auto's reviewer refused: It reaches Kuvo Code's own folders/),
-      swapped: "", stillFolder: true, linkedRead: refused, next: "unreadable",
+      swapped: "", movedIn: "", stillFolder: true, removed: "rm 0\nagain", linkedRead: refused, next: "unreadable",
     })
     // Only the command outside the sandbox went to the model.
     expect(prompts.length).toBe(1)
@@ -220,3 +228,57 @@ test.skipIf(!canFence)("asks waiting as the box starts again are taken up and li
     rmSync(project, { recursive: true, force: true })
   }
 })
+
+test.skipIf(!canFence)("in Ask First and Accept Edits, a conversation's own tools read what its commands left in its temporary folder and the files sent with it, without asking you", async () => {
+  const project = realpathSync(mkdtempSync(join(tmpdir(), "kuvo-leafcheck-")))
+  try {
+    const { said, prompts } = await inBox({}, `
+      const project = ${JSON.stringify(project)};
+      await conversation("ses_first", project, "askFirst");
+      await conversation("ses_edits", project, "acceptEdits");
+      const tmp = run('mkdir -p "$TMPDIR/shots" && echo png > "$TMPDIR/shots/frame-01.png" && printf %s "$TMPDIR"', project).stdout.replace(/\\/$/, "");
+      said.first = await read("ses_first", path.join(tmp, "shots", "frame-01.png"));
+      said.edits = await read("ses_edits", path.join(tmp, "shots", "frame-01.png"));
+      // A file you attached to it, kept in Kuvo Code's folders.
+      const attached = path.join(home.K, "attachments", "ses_first", "a1b2c3d4", "plan.pdf");
+      fs.mkdirSync(path.dirname(attached), { recursive: true });
+      fs.writeFileSync(attached, "pdf");
+      said.attached = await read("ses_first", attached);
+      // Anything else still comes to you: writing there, reading elsewhere, another
+      // conversation's files, and a link in its temporary folder that leads out of it.
+      said.writes = await write("ses_first", path.join(tmp, "shots", "notes.md"));
+      said.elsewhere = await read("ses_first", "/etc/hosts");
+      const theirs = path.join(home.K, "attachments", "ses_edits", "e5f6a7b8", "theirs.txt");
+      fs.mkdirSync(path.dirname(theirs), { recursive: true });
+      fs.writeFileSync(theirs, "theirs");
+      said.theirs = await read("ses_first", theirs);
+      fs.symlinkSync(home.BOX_KEYS, path.join(tmp, "keys"));
+      said.linked = await read("ses_first", path.join(tmp, "keys", "box.key"));`)
+    expect(said).toEqual({ first: "allow", edits: "allow", attached: "allow", writes: null, elsewhere: null, theirs: null, linked: null })
+    expect(prompts.length).toBe(0)
+  } finally {
+    rmSync(project, { recursive: true, force: true })
+  }
+}, 60_000)
+
+test.skipIf(!canFence)("in Auto, the files sent with a conversation are its own: a command outside the sandbox that reads them is the model's to judge, another's are refused by code", async () => {
+  const project = realpathSync(mkdtempSync(join(tmpdir(), "kuvo-leafcheck-")))
+  try {
+    const { said, prompts } = await inBox({ ses_shots: project }, `
+      const mine = path.join(home.K, "attachments", "ses_shots", "a1b2c3d4", "logo.png");
+      const theirs = path.join(home.K, "attachments", "ses_other", "e5f6a7b8", "logo.png");
+      for (const file of [mine, theirs]) {
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.writeFileSync(file, "png");
+      }
+      said.mine = await ask("ses_shots", ${JSON.stringify(project)}, "sips -Z 64 " + mine + " --out icon.png");
+      said.theirs = await ask("ses_shots", ${JSON.stringify(project)}, "cp " + theirs + " .");`)
+    expect(said).toEqual({
+      mine: "Ran outside the sandbox · Allowed by Auto's reviewer: Builds the app, as asked.",
+      theirs: expect.stringMatching(/^Auto's reviewer refused: It reaches Kuvo Code's own folders/),
+    })
+    expect(prompts.length).toBe(1)
+  } finally {
+    rmSync(project, { recursive: true, force: true })
+  }
+}, 60_000)
