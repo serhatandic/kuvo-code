@@ -124,6 +124,18 @@ public struct BotWorkReport: Decodable, Sendable, Equatable {
             public let variant: String?
         }
 
+        /// An account: its provider's name ("Claude Code", "GitHub Copilot"), and its own name where
+        /// that tells it apart from the provider's others ("Work").
+        public struct Account: Decodable, Sendable, Equatable {
+            public let name: String
+            public let label: String?
+
+            public init(name: String, label: String? = nil) {
+                self.name = name
+                self.label = label
+            }
+        }
+
         public let session: String
         public let title: String
         public let folder: String
@@ -132,6 +144,9 @@ public struct BotWorkReport: Decodable, Sendable, Equatable {
         public let depth: Int
         public let model: Model?
         public let mode: String?
+        /// The account it runs on, as its box's Settings › Accounts names it: none on Custom Auto,
+        /// or from a box from before it said.
+        public let account: Account?
         /// Where it stands: as its box said when the report was read, and, once a client has
         /// `standing` it, as it knows now.
         public internal(set) var state: State
@@ -329,6 +344,32 @@ public enum WorkWords {
     /// and VoiceOver say `barTitle`.
     public static func chipTitle(atWork: Int, today: Int) -> String {
         atWork > 0 ? "\(atWork) working" : "\(today) today"
+    }
+
+    /// The account a session runs on, in a word or two: its provider as people know the plan
+    /// ("Claude" for Claude Code's, "ChatGPT" for Codex's, "Copilot"), else as its box names it,
+    /// then the account's own name where it has one: "Claude · Athas".
+    public static func account(_ account: BotWorkReport.Item.Account, provider: String?) -> String {
+        let base = provider.map { $0.split(separator: "@", maxSplits: 1).first.map(String.init) ?? $0 }
+        let name = base.flatMap { planNames[$0] } ?? account.name
+        guard let label = account.label?.trimmingCharacters(in: .whitespacesAndNewlines), !label.isEmpty, label != name else { return name }
+        return "\(name) · \(label)"
+    }
+
+    /// The plans people know by another name than their provider's, by provider.
+    static let planNames = ["claude-code": "Claude", "codex-cli": "ChatGPT", "grok-cli": "Grok", "cursor": "Cursor", "antigravity": "Google", "github-copilot": "Copilot"]
+
+    /// What a session's row says of it while it works, in a few words, the longest first: its model
+    /// (`model`, as the client names it), effort and mode, the account it runs on and its project
+    /// ("Opus 5.5 · high · Claude · Athas · Tidepool"); then, for a row too short for that, the
+    /// same without the account (it goes whole, before the project). A row shows the first that
+    /// fits beside the title, which always keeps its room, and cuts the last at its end.
+    public static func about(_ item: BotWorkReport.Item, model: String?) -> [String] {
+        let head = [model, item.model?.variant, item.mode == "plan" ? "Plan" : nil]
+        let account = item.account.map { Self.account($0, provider: item.model?.providerID) }
+        let full = (head + [account, item.project]).compactMap { $0 }.joined(separator: " · ")
+        guard account != nil else { return [full] }
+        return [full, (head + [item.project]).compactMap { $0 }.joined(separator: " · ")]
     }
 
     /// The depth limit, as Edit Bot › Work and the work list both say it: how deep the sessions a

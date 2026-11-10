@@ -16,6 +16,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ### All Changes
 
+- Each row of the bar over a bot's composer that lists its sessions says which account the session runs on, between its model and its project: "Opus 5.5 · high · Claude · Work · Kuvo Code", or "Copilot" for your GitHub Copilot plan. The account's name is the one you gave it in Settings › Accounts, shown where you have more than one with that provider. Where the row is short, the account gives way first, then the project; the session's title always keeps its room. On your iPhone too.
 - A bot's list of its sessions, and the bot's work bar in the app, no longer give a session you or it stopped (or one that failed) the reply it wrote in an earlier turn as its last reply, so the bot doesn't take that earlier answer for how the stopped turn ended. What the session said in the turn that was stopped still shows.
 - A bot that just moved to another computer reaches the sessions it left behind at once. Before, for up to a minute after the move, its list of sessions said the computer it left "isn't answering", and a stop or an answer it gave was only kept for later, though that computer was awake.
 - A message a bot sends right after it moved to another computer, to a conversation on the computer it left, comes from the bot, by its name, and can be answered. Before, for a short while after the move, it read as from "an agent on" the other computer, and its answer couldn't go back.

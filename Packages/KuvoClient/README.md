@@ -41,6 +41,9 @@ What a client shows of a computer's sessions, the same in both apps. Rules only,
   it, Look for), their rows and sizes from what the box measured, and loading those.
 - `ShellRead`: the end of what a background command printed, as Output shows it, and whether it
   has ended (its engine let go of it) or just can't be read now.
+- `WorkWords`: what a bot's work says, as its box tells it (`kuvo/work`): the bar's line, and each
+  session's row (`about`: its model, the account it runs on and its project, then shorter for a
+  narrow row, the account going first).
 
 ## ClientVault
 
