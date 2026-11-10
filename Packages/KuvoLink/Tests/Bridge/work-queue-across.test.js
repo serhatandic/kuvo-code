@@ -346,7 +346,7 @@ test("a machine in a setup numbers from its main computer, whatever a peer says 
   assert.equal(asked[0].to, undefined, "to its main computer itself");
   // It tells your other computers it isn't shared.
   await link.pushQueues(host, link.readLink(), targets, Date.now());
-  assert.equal(mailTo(lab)[0].workQueue.told.shared, undefined);
+  assert.equal(mailTo(lab)[0].workQueue.told.shared, false);
 
   // Two Macs set it up, in no one setup: as before, and it says it's shared.
   fresh({ macs: [mac, later] });
@@ -355,6 +355,8 @@ test("a machine in a setup numbers from its main computer, whatever a peer says 
   // (What it tells is made again at most once a minute.)
   await link.pushQueues(host, link.readLink(), targets, Date.now() + 120_000);
   assert.equal(mailTo(lab)[0].workQueue.told.shared, true);
+  assert.equal(link.followedSetup(link.readLink()), null);
+  assert.deepEqual(link.primaryOf(link.readLink(), file), link.rankedPrimary(link.readLink(), file), "numbering as piece 3 has it");
   sent.length = 0;
 });
 

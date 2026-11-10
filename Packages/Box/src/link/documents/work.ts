@@ -92,9 +92,9 @@ interface Outgoing {
 }
 
 // Whether this box takes `kind` from `origin`: who its boxes are, in a setup only from its main
-// computer, and otherwise (COMPAT(183 no-setup): a box in no setup, an older Mac's machine, a shared
-// one) from its own Macs; phones and personalities from those Macs, its peers, and itself (a copy of
-// its own it lost count of).
+// computer, and otherwise from its own Macs (a box in no setup: an older Mac's machine, a shared one;
+// kept until every box knows setups); phones and personalities from those Macs, its peers, and
+// itself (a copy of its own it lost count of).
 function takesFrom(link: LinkState, origin: string, kind: DocKind): boolean {
   const macs = macsOf(link).map(mac => macSign(link, mac)).filter(Boolean);
   const setup = followedSetup(link);

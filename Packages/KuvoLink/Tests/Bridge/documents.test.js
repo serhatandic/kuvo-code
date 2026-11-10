@@ -226,6 +226,18 @@ test("a machine follows the setup its Mac leads; a lower epoch of it is never ta
   assert.equal(b.state.link.setup.conflict, undefined);
 });
 
+test("a machine its main computer's Mac removes leaves that setup with it, and leads one of its own", () => {
+  const main = mac("MacBook"), b = machine("b"), c = machine("c");
+  setUp(b, main, [main.peers([b, c], leads(main, 1))]);
+  assert.equal(b.state.link.setup.role, "member");
+  link.docsWork(b.state, main.entry, { give: [main.peers([c], { left: [b.entry.key], ...leads(main, 1) })] });
+  assert.deepEqual(b.state.link.macs, []);
+  assert.equal(b.state.link.setup, undefined);
+  assert.deepEqual(names(b), []);
+  link.settleOwnSetup(b.state.link);
+  assert.deepEqual([b.state.link.setup.role, b.state.link.setup.primary], ["primary", b.entry.key]);
+});
+
 test("a machine's Mac sets it up again signing with a new key: it follows that Mac's setup as its new documents say", () => {
   const main = mac("MacBook"), b = machine("b"), c = machine("c");
   setUp(b, main, [main.peers([b], leads(main, 1))]);

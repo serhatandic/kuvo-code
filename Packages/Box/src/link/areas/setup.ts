@@ -2,11 +2,13 @@
 // this box says it, on every box, for every client; and its events, a line now and one as it changes.
 
 import { followed } from "../follow";
+import { RUN } from "../home";
 import { setupView } from "../setup/view";
 import { onLinkWritten, readLink } from "../state";
 import type { AnswerPiece, RouteContext } from "../server/context";
 
-// Those following it here: told as this process writes link.json (what another wrote, within a second).
+// Those following it here: told as this process writes link.json, and as the system says the run
+// folder changed (`setup` and `leave` write link.json in processes of their own).
 const followers = new Set<() => void>();
 onLinkWritten(() => {
   for (const tell of followers) tell();
@@ -18,7 +20,7 @@ export async function* setupRoute(context: RouteContext): AsyncGenerator<AnswerP
   if (method !== "GET" && method !== "HEAD") return yield* json(405, {});
   if (route === "kuvo/setup/events") {
     yield { head: { status: 200, headers: { "content-type": "application/x-ndjson" } } };
-    return yield* followed(() => setupView(readLink()), followers, signal);
+    return yield* followed(() => setupView(readLink()), followers, signal, { folders: [RUN], recursive: false });
   }
   return yield* json(200, setupView(readLink()));
 }

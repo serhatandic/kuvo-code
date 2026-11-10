@@ -8240,7 +8240,20 @@ function ledSetup(doc) {
   const boxes = Array.isArray(doc.body.boxes) ? doc.body.boxes : [];
   return boxes.some((box) => isObject(box) && box.key === setup.primary && box.sign === doc.origin && box.kind === "mac") ? setup : null;
 }
-var followedSetup = (link) => link?.setup && !link.setup.aside ? link.setup : null;
+function followedSetup(link) {
+  const setup = link?.setup;
+  if (!setup || setup.aside)
+    return null;
+  if (setup.role === "primary") {
+    let own = null;
+    try {
+      own = publicOf(Buffer.from(link.key, "base64url")).toString("base64url");
+    } catch {}
+    if (setup.primary !== own)
+      return null;
+  }
+  return setup;
+}
 function setupDoc(link) {
   const setup = followedSetup(link);
   return setup?.role === "member" ? held(link.docs?.[docKey(setup.sign, "peers")]) : null;
@@ -14657,7 +14670,7 @@ var ownerOf2 = (given) => {
 function numberingOf(given) {
   const kind = KIND(given.kind) ?? "machine";
   const primary = isObject(given.primary) && typeof given.primary.key === "string" && KEY.test(given.primary.key) && KIND(given.primary.kind) ? { key: given.primary.key, kind: KIND(given.primary.kind), ...time(given.primary.since) ? { since: time(given.primary.since) } : {} } : undefined;
-  return { kind, ...time(given.since) ? { since: time(given.since) } : {}, ...whole(given.top) ? { top: whole(given.top) } : {}, ...primary ? { primary } : {}, ...given.shared === true ? { shared: true } : {} };
+  return { kind, ...time(given.since) ? { since: time(given.since) } : {}, ...whole(given.top) ? { top: whole(given.top) } : {}, ...primary ? { primary } : {}, ...typeof given.shared === "boolean" ? { shared: given.shared } : {} };
 }
 function toldOf2(given, now = Date.now()) {
   if (!isObject(given) || typeof given.id !== "string" || !/^wqt_[A-Za-z0-9_-]{8,40}$/.test(given.id) || typeof given.at !== "number" || !Array.isArray(given.items))
@@ -15204,7 +15217,7 @@ function writeCard() {
 function leadsNow(link) {
   if (!IS_MAC)
     return !macsOf(link).length;
-  return "self" in rankedPrimary(link) && !peersOf(link).some((peer) => readTold2(peer.key)?.shared);
+  return "self" in rankedPrimary(link) && peersOf(link).every((peer) => readTold2(peer.key)?.shared === false);
 }
 function settleOwnSetup(link) {
   settleSetup(link);
@@ -15214,8 +15227,11 @@ function settleOwnSetup(link) {
     return;
   const leads = leadsNow(link);
   if (!link.setup || link.setup.role !== "primary" || link.setup.primary !== own || link.setup.sign !== sign) {
-    if (!leads)
+    if (!leads) {
+      if (link.setup?.role === "primary")
+        delete link.setup;
       return;
+    }
     link.setup = { id: newSetupID(), epoch: 1, primary: own, sign, role: "primary" };
   }
   if (leads)
@@ -20885,7 +20901,7 @@ function numberingNow(link) {
     const told = primary.via ? readTold2(primary.via.key)?.primary?.since : readTold2(primary.peer.key)?.since;
     named = { key: primary.peer.key, kind: primary.peer.kind, ...told ? { since: told } : {} };
   }
-  return { kind, since, top: topOf(), ...named ? { primary: named } : {}, ...sharedMachine(link) ? { shared: true } : {} };
+  return { kind, since, top: topOf(), ...named ? { primary: named } : {}, shared: sharedMachine(link) };
 }
 var toldItem = (item, working, titles) => {
   const summary = summaryOf(item, working, titles);
@@ -21004,9 +21020,12 @@ function takeTold(sender, given, reply) {
   const link = readLink();
   if (!peersOf(link).some((peer) => peer.key === sender.key))
     return;
+  const before = readTold2(sender.key);
   if (!keepTold(sender.key, told))
     return;
   reply({ had: told.id });
+  if (before?.shared !== told.shared || before?.primary?.key !== told.primary?.key)
+    noteSetupNow(Date.now(), { soon: 0 });
   const primary = primaryOf(link);
   if ("self" in primary)
     movePast(Math.max(told.top ?? 0, ...told.items.map((item) => item.number ?? 0)));
@@ -32495,7 +32514,7 @@ async function* setupRoute(context) {
     return yield* json(405, {});
   if (route === "kuvo/setup/events") {
     yield { head: { status: 200, headers: { "content-type": "application/x-ndjson" } } };
-    return yield* followed(() => setupView(readLink()), followers, signal);
+    return yield* followed(() => setupView(readLink()), followers, signal, { folders: [RUN], recursive: false });
   }
   return yield* json(200, setupView(readLink()));
 }

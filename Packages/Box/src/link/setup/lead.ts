@@ -1,6 +1,6 @@
 // When a box leads a setup of its own (PROTOCOL.md, "Your setup"): this Mac's box, once it numbers
-// on its own and none of its machines is shared with another Mac (so Macs that share a machine stay
-// numbering as before, from the first one set up); a box no Mac set up (one you paired a phone with
+// on its own and each of its machines has said it isn't shared with another Mac (so Macs that share a
+// machine stay numbering as before, from the first one set up); a box no Mac set up (one you paired a phone with
 // by itself, on Linux say). It's made once, at epoch 1, with this box as the main computer, and named
 // in this Mac's peers document, which its machines take. Looked at once a minute, and as the box
 // starts; with what follows it on this box: its card (`card.ts`) and its peers told.
@@ -18,11 +18,12 @@ import { settleSetup } from "./settle";
 import type { LinkState } from "../state";
 
 /** Whether this box leads its setup now: this Mac's box, while it's the first computer you set up as
- * it and its peers know (it numbers from none other) and no machine of it says another Mac shares it;
- * a machine, while no Mac set it up. */
+ * it and its peers know (it numbers from none other) and each machine of it has said no other Mac
+ * shares it (one that hasn't said, an older box, holds it back: nothing changes for it meanwhile); a
+ * machine, while no Mac set it up. */
 export function leadsNow(link: LinkState): boolean {
   if (!IS_MAC) return !macsOf(link).length;
-  return "self" in rankedPrimary(link) && !peersOf(link).some(peer => readTold(peer.key)?.shared);
+  return "self" in rankedPrimary(link) && peersOf(link).every(peer => readTold(peer.key)?.shared === false);
 }
 
 /** This box's setup as it stands now (in place, under link.json's lock): one it leads made, or set
@@ -33,9 +34,13 @@ export function settleOwnSetup(link: LinkState): void {
   const sign = ownSign(link);
   if (!own || !sign || (!IS_MAC && macsOf(link).length)) return;
   const leads = leadsNow(link);
-  // (Keys made anew, its folder kept: a new setup, as it's a new computer to the others.)
+  // (Keys made anew, its folder kept: a new setup, as it's a new computer to the others; the one
+  // it led with its old keys is no longer its own.)
   if (!link.setup || link.setup.role !== "primary" || link.setup.primary !== own || link.setup.sign !== sign) {
-    if (!leads) return;
+    if (!leads) {
+      if (link.setup?.role === "primary") delete link.setup;
+      return;
+    }
     link.setup = { id: newSetupID(), epoch: 1, primary: own, sign, role: "primary" };
   }
   if (leads) delete link.setup.aside;

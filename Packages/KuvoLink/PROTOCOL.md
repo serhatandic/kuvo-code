@@ -163,7 +163,7 @@ each box pairs and removes (`phones`), and each box's view of your personalities
   than the one it has; at the same version, the one whose bytes' hash sorts first, so every box
   keeps the same one. One of its own further on than it knew (it lost count), by a document or a
   digest, moves its count past it, up to 2^52 (one claiming more isn't taken). It takes `peers`
-  only from its setup's main computer, and while it follows no setup (COMPAT(183 no-setup)) from
+  only from its setup's main computer, and while it follows no setup (kept until every box knows setups) from
   its own Macs (those in `macSigns`, given in setup), never at a lower epoch of the setup it keeps
   ("Your setup"); `phones` and
   `personalities` from those Macs, from its peers and from itself. Documents from an origin it no
@@ -220,11 +220,15 @@ setups, and pairing and adding only from the main computer come later: #183.)
   epoch of it is never taken, and followed for nothing else (its main computer stopped naming it,
   or this box is a shared machine).
 - **Who leads one**: this Mac's box, once it numbers on its own (the Work Queue's first computer,
-  "Numbers") and none of its machines says another Mac shares it (`shared` in what it tells of its
-  Work Queue); and a box no Mac set up (one paired with a phone by itself, on Linux say). It's made
-  once, at epoch 1, and looked at once a minute: a Mac that stops leading (a machine of it is
-  shared now, or it numbers through another Mac) sets it aside and its document names it no more;
-  leading again, it names the same one.
+  "Numbers") and each of its machines has said no other Mac shares it (`shared: false` in what it
+  tells of its Work Queue; one that hasn't said, an older box, holds it back, and nothing changes
+  meanwhile); and a box no Mac set up (one paired with a phone by itself, on Linux say). It's made
+  once, at epoch 1, and looked at once a minute and as a machine's word on how it numbers changes:
+  a Mac that stops leading (a machine of it is shared now, or it numbers through another Mac) sets
+  it aside and its document names it no more; leading again, it names the same one. A Mac whose
+  keys were made anew is a new computer to the others: the setup it led with its old keys is no
+  longer its own. (Leading follows its machines' word, as the Work Queue's numbers already do
+  without a setup; a later part of #183 makes it hold against a member's word alone.)
 - **What a box takes it from**: a machine follows the setup its Mac leads, from that Mac's
   document. Then it takes `peers` only from the main computer's signing key (as that Mac's setup
   over SSH last gave it, the trust root), never at a lower epoch of the setup (whoever signed it),
@@ -233,13 +237,13 @@ setups, and pairing and adding only from the main computer come later: #183.)
   {primary, epoch}` (gone with that epoch). A machine with no Mac leads its own; set up by a Mac, it
   gives that up (a setup of no other computer joins its Mac's). A box drops its setup when that Mac
   stops counting there (it removed the box, or wasn't heard from in 30 days), as it drops that
-  Mac's documents. COMPAT(183 no-setup): a box that follows no setup takes `peers` from its own
+  Mac's documents. A box that follows no setup (kept until every box knows setups) takes `peers` from its own
   Macs, as before.
 - **Shared machines**: a machine more than one Mac set up, unless the setup's document names each
   of them as one of its Macs, follows no setup, and tells its peers it's shared (the Work Queue's
   `told`, `shared: true`), so none of those Macs leads one. Macs that share a machine, and the
-  machines numbering with them, number as before, from the first Mac you set up (COMPAT(183
-  first-computer), "Numbers"), until they're joined in one setup.
+  machines numbering with them, number as before, from the first Mac you set up ("Numbers"),
+  until they're joined in one setup.
 - **`GET kuvo/setup`** (and `kuvo/setup/events`, a line now and one at each change), on every box,
   for every client: `{setup, epoch, primary: {key, name, kind}, you: {key, role}, computers: [{key,
   name, kind, role, app}], conflict?, startsFromOthers: {value, default}}`. Facts only, the same on
@@ -251,9 +255,10 @@ setups, and pairing and adding only from the main computer come later: #183.)
 - **The card**: `run/setup-card.json`, beside link.json, nothing secret in it, for what looks at a
   computer from outside its box (the app as it opens, a Mac adding it over SSH): `{setup, epoch,
   role, primary: {key, name, heard}, self: {key, name, kind}, app, computers, items}`. `heard`: when
-  the main computer was last heard from (ms; null on the main computer itself); `computers`, how
+  the main computer was last heard from, as this box counts it (ms, its own time off left out, as
+  for its Macs' 30 days; null on the main computer itself); `computers`, how
   many the setup has; `items`, the Work Queue items here. Written as the box looks at its setup, as
-  documents change it, and by `setup` and `leave`.
+  documents change it, and by `setup` and `leave` (`kuvo/setup/events` follows those too).
 - **Older boxes** read only `boxes`, `moved` and `left`, and keep taking `peers` from their Macs:
   nothing changes for them. A box that knows setups names `setup` in `features`.
 
@@ -3195,9 +3200,10 @@ written; the message's words never change. A chip opens the item.
 
 **Numbers**: one `#n` per item, unique across your computers, handed out by the primary: your
 setup's main computer ("Your setup"), the box itself when it's that; one a box can't write to yet
-(its document not here, or naming no address) is waited for, never passed over. COMPAT(183
-first-computer): a box that follows no setup (Macs that share a machine, and the machines numbering
-with them, or a box beside an older one) takes the first computer you set up. Each box works it out the same way from what it knows: of itself, its peers and
+(its document not here, or naming no address) is waited for, never passed over. A box that
+follows no setup (Macs that share a machine, and the machines numbering with them, or a box beside
+an older one; kept until every box knows setups and those Macs are joined in one) takes the first
+computer you set up. Each box works it out the same way from what it knows: of itself, its peers and
 the primaries they say they number from ("Across your computers", `told`), a Mac comes before a
 machine (a machine is always set up from a Mac), then the one set up first (`since`: when that box
 was set up, the earliest it can tell: its folder's making where the system keeps that, or its oldest
@@ -3254,8 +3260,8 @@ item on its way to another computer (`handing`) goes with the move and is sent f
   items, owners, categories}}}`. `items` are its items as a view gives them (not deleted ones; the
   100 latest Done; 1,500 at most), each with `handedFrom` (who handed it on); `owners` names their
   owners; `categories` its custom ones; `kind`, `since` and `top` how it numbers, `primary` the
-  one it numbers from (itself when it's the primary), and `shared: true` from a machine Macs share
-  outside one setup ("Your setup"). `id` (`wqt_…`) is the same while all that is.
+  one it numbers from (itself when it's the primary), and `shared`, whether it's a machine Macs
+  share outside one setup ("Your setup"; an older box says neither). `id` (`wqt_…`) is the same while all that is.
   It's worked out again when a queue changes and each minute (who's at work changes it), and goes
   to one computer once in 15 s at most, again each minute (sooner after a change you made from a
   client, at the next round 15 s on) until that computer answers `{workQueue: {had: id}}`, nothing

@@ -75,8 +75,9 @@ const sent = [];
 const host = { welcomed: true, send: bytes => sent.push(bytes) };
 const mailTo = to => sent.filter(bytes => k(bytes.subarray(1, 17)) === to.address)
   .map(bytes => JSON.parse(link.openOneWay(link.readFrame(bytes.subarray(17)).body, to.key, link.publicOf(self.key)).payload.toString("utf8")));
-// What lab told of how it numbers, as its Work Queue's mail leaves it here.
-const labTold = numbering => write(path.join(queues, "peers", `${lab.pub}.json`), { id: "wqt_labtoldlabtold", at: 1, heard: 1, kind: "machine", since: 50, items: [], owners: [], categories: [], ...numbering });
+// What lab told of how it numbers, as its Work Queue's mail leaves it here (a box that knows setups
+// says whether it's shared).
+const labTold = numbering => write(path.join(queues, "peers", `${lab.pub}.json`), { id: "wqt_labtoldlabtold", at: 1, heard: 1, kind: "machine", since: 50, items: [], owners: [], categories: [], shared: false, ...numbering });
 
 const handle = link.engineHandler(() => target);
 async function route(method, pathname) {
@@ -132,8 +133,12 @@ test("this Mac numbers through a machine it shares with a Mac set up before it: 
 
 test("this Mac, numbering on its own, leads a setup of its own: its peers document names it, its numbers go on where they were (#41, then #42), and kuvo/setup says it's the main computer", async () => {
   write(numbers, { primary: "self", next: 42, leases: [], since: 1_000 });
+  // lab runs an older box, which doesn't say whether it's shared: nothing changes yet.
+  labTold({ primary: { key: self.pub, kind: "mac", since: 1_000 }, shared: undefined });
+  link.noteSetupNow(Date.now(), { soon: 0 });
+  assert.equal(ownPeers().setup, undefined, "held back by a machine that hasn't said");
+  assert.deepEqual(link.primaryOf(link.readLink(), numbers), { self: true }, "numbering as it was");
   labTold({ primary: { key: self.pub, kind: "mac", since: 1_000 } });
-  assert.equal(ownPeers().setup, undefined, "none before it's looked at");
   link.noteSetupNow(Date.now(), { soon: 0 });
   const named = ownPeers().setup;
   assert.match(named?.id ?? "", /^set_[A-Za-z0-9_-]{22}$/);
@@ -187,4 +192,24 @@ test("a Mac whose numbers go through another Mac, or whose machine another Mac s
   labTold({ primary: { key: self.pub, kind: "mac", since: 1_000 } });
   link.noteSetupNow(Date.now(), { soon: 0 });
   assert.deepEqual(ownPeers().setup, led, "the same setup, at the same epoch");
+});
+
+test("a Mac whose keys were made anew while it doesn't lead lets the setup it led with its old ones go: it numbers as piece 3 says, not as that setup's main computer", () => {
+  write(numbers, { primary: "self", next: 12, leases: [], since: 1_000 });
+  labTold({ primary: { key: self.pub, kind: "mac", since: 1_000 } });
+  link.noteSetupNow(Date.now(), { soon: 0 });
+  assert.equal(link.readLink().setup?.role, "primary");
+  const before = link.macLink.overlay;
+  const fresh = link.newKey();
+  try {
+    link.macLink.overlay = { ...before, key: k(fresh), sign: link.newSigningSeed() };
+    // Its machine now numbers from a Mac set up earlier, through which this one numbers too.
+    labTold({ primary: { key: other.pub, kind: "mac", since: 500 } });
+    assert.equal(link.primaryOf(link.readLink(), numbers).peer?.key, other.pub, "not its old setup's main computer");
+    assert.equal(link.setupView(link.readLink()).setup, null);
+    link.noteSetupNow(Date.now(), { soon: 0 });
+    assert.equal(link.readLink().setup, undefined, "let go");
+  } finally {
+    link.macLink.overlay = before;
+  }
 });

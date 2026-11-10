@@ -1,8 +1,8 @@
 // The Work Queue's numbers (PROTOCOL.md, "The Work Queue", "Numbers"): one #n per item, unique
 // across your computers, handed out by the primary: your setup's main computer (PROTOCOL.md, "Your
-// setup"). A box in no setup (COMPAT(183 first-computer): a machine Macs share that aren't joined in
-// one setup yet, the Macs and machines numbering with it, or one beside an older box) works out the
-// first computer you set up from what it and its peers know, so Macs that set up the same machine
+// setup"). A box in no setup (a machine Macs share that aren't joined in one setup yet, the Macs and
+// machines numbering with it, or one beside an older box; kept until every box knows setups, #183)
+// works out the first computer you set up from what it and its peers know, so Macs that set up the same machine
 // already number from one of them, the one set up first. The primary keeps the one counter; every
 // other box numbers from blocks the primary leased it, so it numbers at once, offline too, and asks
 // for another block by mail before it runs out. An ask has an id, and the primary keeps what it gave
@@ -126,7 +126,7 @@ export function primaryOf(link: LinkState | null | undefined = readLink(), file 
   return peer?.address ? { peer } : { away: true };
 }
 
-/** COMPAT(183 first-computer): for a box in no setup. Goes once every supported box knows setups.
+/** For a box in no setup, kept until every box knows setups and shared groups are joined (#183).
  * The first computer you set up, as far as this box can tell (PROTOCOL.md,
  * "The Work Queue", "Numbers"): of this box, its peers and the primaries they say they number from,
  * a Mac before a machine (a machine is always set up from a Mac), then the one set up first, then by

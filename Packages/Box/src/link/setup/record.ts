@@ -5,6 +5,7 @@
 import crypto from "node:crypto";
 import type { Doc } from "../../shared/documents";
 import { isObject } from "../../shared/json";
+import { publicOf } from "../crypto/keys";
 import { docKey, held } from "../documents/format";
 import { IS_MAC } from "../home";
 import type { LinkState } from "../state";
@@ -54,8 +55,18 @@ export function ledSetup(doc: Doc | null | undefined): SetupWord | null {
   return boxes.some(box => isObject(box) && box.key === setup.primary && box.sign === doc.origin && box.kind === "mac") ? setup : null;
 }
 
-/** The setup this box follows now: its record, unless it's set aside. */
-export const followedSetup = (link: LinkState | null | undefined): SetupRecord | null => (link?.setup && !link.setup.aside ? link.setup : null);
+/** The setup this box follows now: its record, unless it's set aside, or it says this box leads it
+ * and this box's keys aren't the ones it was made with (made anew since: a new computer to the others). */
+export function followedSetup(link: LinkState | null | undefined): SetupRecord | null {
+  const setup = link?.setup;
+  if (!setup || setup.aside) return null;
+  if (setup.role === "primary") {
+    let own: string | null = null;
+    try { own = publicOf(Buffer.from(link!.key!, "base64url")).toString("base64url"); } catch {}
+    if (setup.primary !== own) return null;
+  }
+  return setup;
+}
 
 /** The setup document a member holds (its main computer's peers document), or null. */
 export function setupDoc(link: LinkState | null | undefined): Doc | null {
