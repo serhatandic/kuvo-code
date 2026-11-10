@@ -85,7 +85,7 @@ import Testing
         #expect(notices(rows).isEmpty)
         #expect(!rows.contains { $0.copiedText(folders: []).contains("User requested") || $0.copiedText(folders: []).contains("Background command") })
         let footers = rows.compactMap { if case .turnEnd(_, let stats, _, _) = $0 { stats.changes } else { nil } }
-        #expect(footers == [[], ["claude-sonnet High"]])
+        #expect(footers == [[], ["claude-sonnet · High"]])
     }
 
     /// What shows nothing (a summary partway through, your approval told late) doesn't split the

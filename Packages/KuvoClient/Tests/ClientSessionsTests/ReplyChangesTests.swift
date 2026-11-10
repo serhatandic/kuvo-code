@@ -24,7 +24,7 @@ struct ReplyChangesTests {
         #expect(changes.replied() == [])
         changes.switched(to: sonnet, from: opus, name: "Claude Sonnet")
         changes.switched(toMode: "plan", from: "build")
-        #expect(changes.replied() == ["Plan mode", "Claude Sonnet High"])
+        #expect(changes.replied() == ["Plan mode", "Claude Sonnet · High"])
         #expect(changes.replied() == [])
         // Switched and back before the next reply: nothing changed.
         changes.switched(to: opus, from: sonnet, name: "Claude Opus")
