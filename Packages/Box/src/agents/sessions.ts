@@ -13,11 +13,11 @@ import { readFileSync, realpathSync, statSync } from "node:fs"
 import { homedir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
-import type { Account, Agent, OwnTurn, PermissionAsk, PromptFile, QuestionAsk, RunInput, RunResult, SubagentMessages, SubagentRun, SubagentTask, Thread, TurnHooks } from "./agent"
-import { failure } from "./agent"
+import type { Account, Agent, LostWork, OwnTurn, PermissionAsk, PromptFile, QuestionAsk, RunInput, RunResult, SubagentMessages, SubagentRun, SubagentTask, Thread, TurnHooks } from "./agent"
+import { failure, lostWorkNote } from "./agent"
 import { parseProvider } from "./accounts"
 import { citedIn, plainCitations } from "./agents/codex-citations"
-import { Auto, autoProvider, resetTime, type AutoEntry } from "./auto"
+import { Auto, autoProvider, foldEntries, resetTime, type AutoEntry, type AutoList } from "./auto"
 import { emit } from "./events"
 import { handover, withHandover } from "./handover"
 import { onMachine, ownEnvironment } from "./machine"
@@ -28,7 +28,7 @@ import { runningShells, stopShell } from "./shells"
 import { skillFolders, within } from "./skills"
 import type { Record_, Store } from "./store"
 import { Turn, type Outcome } from "./turn"
-import type { AssistantMessage, Attachment, CompactionMessage, Decision, FormAnswer, FormRequest, Message, ModelRef, PermissionRequest, PermissionRule, Session, ShellMessage, FileDiff, StructuredError } from "./wire"
+import type { AssistantMessage, Attachment, CompactionMessage, Decision, FormAnswer, FormRequest, Message, Model, ModelRef, PermissionRequest, PermissionRule, Session, ShellMessage, FileDiff, StructuredError } from "./wire"
 import { plain } from "./proc"
 import type { Snapshots } from "./snapshots"
 import { AGENTS_TEXT_BYTES } from "../shared/text"
@@ -120,6 +120,26 @@ interface Live {
   models: Map<string, ModelRef>
 }
 
+/**
+ * The box's note to a session that what its agent left running in the background ended unfinished
+ * (`why`): it wakes the session as that work's end would have, and shows as it stopping. It keeps
+ * the work it's about and when (`metadata.kuvo`), to wake it after the bridge starts again, or to
+ * be said again with more.
+ */
+function lostWorkInput(why: string, lost: LostWork[], delivery: Delivery = "steer", restarted = false): Input {
+  const command = lost.find((work) => work.kind === "command")
+  const first = (command ?? lost[0]).what.split("\n")[0]
+  const more = lost.length > 1 ? ` (and ${lost.length - 1} more)` : ""
+  const metadata = { source: command ? "shell" : "agent", state: "error", signal: "SIGTERM", kuvo: { lostWork: Date.now(), work: lost, ...(restarted ? { restarted: true } : {}) } }
+  return { id: newID("msg"), text: lostWorkNote(why, lost), files: [], delivery, synthetic: { description: command ? `${first}${more}` : `Background work stopped: ${first}${more}`, metadata } }
+}
+
+/** A note of the box's in a session's queue that its background work ended unfinished (`lostWorkInput`). */
+function lostWorkOf(input: Input): { at: number; work: LostWork[]; restarted: boolean } | undefined {
+  const kept = input.synthetic?.metadata?.kuvo as { lostWork?: unknown; work?: unknown; restarted?: unknown } | undefined
+  return typeof kept?.lostWork === "number" ? { at: kept.lostWork, work: Array.isArray(kept.work) ? (kept.work as LostWork[]) : [], restarted: kept.restarted === true } : undefined
+}
+
 /** At work: a turn, or the files being kept or put back (the app shows it working, and Undo waits). */
 function isBusy(doing: Doing): boolean {
   return doing.kind !== "idle" && doing.kind !== "deleting"
@@ -154,8 +174,8 @@ const legacyKeys = ["claudeSession", "claudeStarted", "codexThread", "acpSession
 /** What an agent that has your message already is told when it's to go on with it on another of its models. */
 const carryOn = "Carry on with my last message from where you left off: you're on another model now."
 
-/** How long an agent gets to stop when you press Stop, before its conversation is closed; how long a session's agents keep running with nothing to do (the next message starts them again, in the same conversation); how lately a turn the bridge quit in must have last written for what changed since to count as its own; how long your `!` commands get to stop once their session goes, before they're made to. */
-export const timing = { stopGrace: 8_000, idleClose: 15 * 60_000, cutShort: 2 * 60_000, shellGrace: 5_000 }
+/** How long an agent gets to stop when you press Stop, before its conversation is closed; how long a session's agents keep running with nothing to do (the next message starts them again, in the same conversation); how lately a turn the bridge quit in must have last written for what changed since to count as its own; how long your `!` commands get to stop once their session goes, before they're made to; how soon the bridge must be back for background work that ended as it stopped to wake its session (a restart or an update, not a quit for the night). */
+export const timing = { stopGrace: 8_000, idleClose: 15 * 60_000, cutShort: 2 * 60_000, shellGrace: 5_000, lostWorkWake: 10 * 60_000 }
 
 /** In plan mode, what changes files: refused, whatever your rules say. */
 const changes = new Set(["edit", "write", "patch"])
@@ -1453,9 +1473,17 @@ export class Sessions {
     delete record.agent.revertNow
     delete record.agent.revertAt
     delete record.agent.revertFiles
+    // What was lost while the undo waited goes now, as it would have.
+    const lost = this.queue(record).filter((input) => lostWorkOf(input) && input.delivery === "queue")
+    for (const input of lost) {
+      input.delivery = "steer"
+      emit("session.inbox.delivery.changed", { sessionID: id, inboxID: input.id, delivery: "steer" }, directory)
+    }
     this.store.save(id, true)
     emit("session.revert.cleared", { sessionID: id }, directory)
+    if (lost.length) live.go = true
     if (live.doing === reverting) this.free(id, live)
+    else if (lost.length) this.wake(id)
   }
 
   /** Undo and Redo go only while nothing runs. */
@@ -1479,11 +1507,19 @@ export class Sessions {
     delete record.agent.revertAt
     delete record.agent.revertFiles
     // Their own conversations still hold what was undone: let go of (an engine model's hidden
-    // session too), and started over.
+    // session too), and started over. What they left running in the background goes with them,
+    // and with what was lost while the undo waited, it's said once, after this message.
+    const lost = [...live.threads].flatMap(([provider, thread]) => (thread.wakingWork ?? []).map((work) => ({ provider, work })))
     for (const thread of live.threads.values()) thread.close()
+    const name = lost.length ? this.agentName(lost[0].provider) : undefined
     live.threads.clear()
     for (const [provider, slot] of Object.entries(this.slots(record))) void this.agent(provider)?.forgetConversation?.(slot.state).catch(() => {})
     record.agent.threads = {}
+    const queue = this.queue(record)
+    const waiting = queue.filter((input) => lostWorkOf(input))
+    const work = [...waiting.flatMap((input) => lostWorkOf(input)!.work), ...lost.map(({ work }) => work)]
+    for (const input of waiting) this.cancelInput(id, input.id)
+    if (work.length) this.queueLost(id, record, lostWorkInput(`${name ?? this.agentName(record.session.model?.providerID ?? "")} stopped while it had work going in the background (an undo made final starts it over).`, work, "queue"))
     this.store.save(id, true)
     emit("session.revert.committed", { sessionID: id, to: revert.messageID }, record.session.location.directory)
   }
@@ -1739,6 +1775,7 @@ export class Sessions {
     const slot = (this.slots(record)[provider] ??= { state: {} })
     const thread = agent.thread(record.session, slot.state)
     thread.onOwnTurn = (note) => this.ownTurn(id, provider, note)
+    thread.onWorkLost = (lost) => this.workLost(id, provider, lost, `${this.agentName(provider)} stopped between turns: its process was ended from outside Kuvo Code, or crashed.`)
     live.threads.set(provider, thread)
     // Closed again a while after, as after a turn.
     if (live.doing.kind === "idle") this.closeWhenIdle(id, live)
@@ -2162,6 +2199,29 @@ export class Sessions {
   }
 
   /**
+   * What an agent left running in the background ended unfinished with its process (`why`), so it
+   * will never wake it: the session is woken with that instead, as the work's end would have (a
+   * note like that end's, `source` shell, which a session stopped with Stop on its lead's side
+   * doesn't take up). A subagent's session has no process of its own here: its work is its
+   * parent's agent's, whose session hears.
+   */
+  private workLost(id: string, provider: string, lost: LostWork[], why: string) {
+    const record = this.store.get(id)
+    const live = this.live.get(id)
+    if (!record || !live || live.doing.kind === "deleting" || record.session.parentID) return
+    // An undo waits (a turn now would make it final): it waits for your next message, or Redo.
+    if (!record.session.revert) return this.enqueue(id, record, live, lostWorkInput(why, lost))
+    this.queueLost(id, record, lostWorkInput(why, lost, "queue"))
+  }
+
+  /** A note that background work was lost, put in line after what's there, without waking the session. */
+  private queueLost(id: string, record: Record_, input: Input) {
+    this.queue(record).push(input)
+    this.store.save(id, true)
+    emit("session.inbox.enqueued", { sessionID: id, inboxID: input.id, item: { type: "synthetic", payload: { text: input.text, description: input.synthetic!.description, metadata: input.synthetic!.metadata }, delivery: input.delivery } }, record.session.location.directory)
+  }
+
+  /**
    * An agent began a turn of its own (a command it left running ended, and it carries on): a turn
    * here takes it, saying what began it, unless another runs now or an undo waits (it would make
    * the undo final), when it's turned away.
@@ -2256,7 +2316,7 @@ export class Sessions {
       const missed = Boolean(input.adopt && (before.length || late.size))
       if (!hasMessage && late.size && !input.adopt) delete record.agent.lateShells
       const partway = at < 0 ? [] : record.messages.slice(Math.max(at, seenAt) + 1)
-      const handed = handover(before, partway, (message) => this.stepName(message))
+      const handed = handover(before, partway, await this.stepNames([...before, ...partway]))
       const text = withHandover(hasMessage ? carryOn : input.text, handed)
       const files = hasMessage ? [] : input.files
       reached = true
@@ -2291,8 +2351,7 @@ export class Sessions {
     try {
       return await this.runAutoList(id, record, live, run, input, userMessage, heldBefore)
     } finally {
-      record.agent.autoHeld = this.auto
-        .list(input.model.id)
+      record.agent.autoHeld = (await this.autoEntries(input.model.id))
         .filter((entry) => this.auto.isHeld(entry))
         .map((entry) => Auto.modelKey(entry))
       this.store.save(id)
@@ -2320,7 +2379,7 @@ export class Sessions {
         if (last?.limit) return { outcome: "failed", error: { type: "limit", message: `Every model in your Custom Auto list is at a usage limit for now${this.nextReset()}.` } }
         return last ?? { outcome: "failed", error: { type: "limit", message: `Your Custom Auto list has no model to run. Edit it in Settings › Custom Auto.` } }
       }
-      if (!tried.size && heldBefore.has(Auto.modelKey(entry))) turn.notice(`Back on ${this.entryName(entry)}: its limit has reset.`)
+      if (!tried.size && heldBefore.has(Auto.modelKey(entry))) turn.notice(`Back on ${await this.entryName(entry)}: its limit has reset.`)
       tried.add(Auto.modelKey(entry))
       const model: ModelRef = { providerID: entry.providerID, id: entry.modelID, ...(entry.variant ? { variant: entry.variant } : {}) }
       if (note) {
@@ -2334,7 +2393,7 @@ export class Sessions {
           live.subagents.delete(child)
           live.background.delete(child)
         }
-        turn.notice(`${note} Going on with ${this.entryName(entry)}.`)
+        turn.notice(`${note} Going on with ${await this.entryName(entry)}.`)
       }
       earlier = new Set(live.subagents.keys())
       const from = record.messages.length
@@ -2355,19 +2414,19 @@ export class Sessions {
         const account = agent ? await Promise.race([agent.account(true).catch(() => undefined), Bun.sleep(10_000).then(() => undefined)]) : undefined
         if (account && !account.signedIn) emit("integration.updated", { integrationID: entry.providerID })
         const message = last.error?.message?.trim() || "it stopped with an error"
-        note = account && !account.signedIn ? `${this.entryName(entry, true)} needs you to sign in again.` : `${this.entryName(entry)} stopped: ${message.replace(/\.$/, "")}.`
+        note = account && !account.signedIn ? `${await this.entryName(entry, true)} needs you to sign in again.` : `${await this.entryName(entry)} stopped: ${message.replace(/\.$/, "")}.`
         continue
       }
       this.auto.hold(entry, last.limit)
       emit("kuvo.auto.updated", {})
       const whole = last.limit.scope === "provider"
-      note = `${this.entryName(entry, whole)} reached ${whole ? "its usage limit" : "this model's limit"}${last.limit.resetsAt ? ` (it resets at ${resetTime(last.limit.resetsAt)})` : ""}.`
+      note = `${await this.entryName(entry, whole)} reached ${whole ? "its usage limit" : "this model's limit"}${last.limit.resetsAt ? ` (it resets at ${resetTime(last.limit.resetsAt)})` : ""}.`
     }
   }
 
   /** The first entry of the Auto list `list` not at a limit, not tried for this message, and signed in. */
   private async nextEntry(tried: Set<string>, list: string): Promise<AutoEntry | undefined> {
-    for (const entry of this.auto.list(list)) {
+    for (const entry of await this.autoEntries(list)) {
       if (tried.has(Auto.modelKey(entry))) continue
       if (!(await this.whyNot(entry))) return entry
     }
@@ -2400,13 +2459,13 @@ export class Sessions {
     const signIn = new Set<string>()
     const held = new Map<string, number>()
     const gone: string[] = []
-    for (const entry of this.auto.list(list)) {
+    for (const entry of await this.autoEntries(list)) {
       if (tried.has(Auto.modelKey(entry))) continue
       const why = await this.whyNot(entry)
       if (!why) continue
-      if (why.kind === "signedOut") signIn.add(this.entryName(entry, true))
-      else if (why.kind === "held") held.set(this.entryName(entry, why.whole), why.until)
-      else gone.push(this.entryName(entry))
+      if (why.kind === "signedOut") signIn.add(await this.entryName(entry, true))
+      else if (why.kind === "held") held.set(await this.entryName(entry, why.whole), why.until)
+      else gone.push(await this.entryName(entry))
     }
     if (!signIn.size && !held.size && !gone.length) return undefined
     // On a machine, which (by the name you know it by), and that your Mac's sign-ins don't reach it.
@@ -2435,16 +2494,98 @@ export class Sessions {
     return known.length ? `; the first resets at ${resetTime(Math.min(...known))}` : ""
   }
 
-  /** "Claude Code (opus, high)", or the agent alone. */
-  private entryName(entry: AutoEntry, agentOnly = false): string {
+  /** "Claude Code (Opus 5.5, high)", or the agent alone. */
+  private async entryName(entry: AutoEntry, agentOnly = false): Promise<string> {
     const name = this.agent(entry.providerID)?.name ?? entry.providerID
-    return agentOnly ? name : `${name} (${entry.modelID}${entry.variant ? `, ${entry.variant}` : ""})`
+    return agentOnly ? name : `${name} (${await this.modelName(entry.providerID, entry.modelID)}${entry.variant ? `, ${entry.variant}` : ""})`
   }
 
-  /** Who wrote a step, for a handover: the agent and model. */
-  private stepName(message: AssistantMessage): string {
-    const agent = this.agent(message.model.providerID)
-    return `${agent?.name ?? message.model.providerID}, ${message.model.id}`
+  /** Who wrote each step of `messages`, for a handover: the agent and model ("Claude Code, Opus 5.5"). */
+  private async stepNames(messages: Message[]): Promise<(message: AssistantMessage) => string> {
+    const names = new Map<string, string>()
+    for (const message of messages) {
+      if (message.type !== "assistant") continue
+      const key = Auto.modelKey({ providerID: message.model.providerID, modelID: message.model.id })
+      if (names.has(key)) continue
+      const agent = this.agent(message.model.providerID)
+      names.set(key, `${agent?.name ?? message.model.providerID}, ${await this.modelName(message.model.providerID, message.model.id)}`)
+    }
+    return (message) => names.get(Auto.modelKey({ providerID: message.model.providerID, modelID: message.model.id })) ?? `${message.model.providerID}, ${message.model.id}`
+  }
+
+  /** What `providerID`'s agent lists now, as far as it says in a few seconds (none: nothing). */
+  private async listedModels(providerID: string): Promise<Model[]> {
+    const agent = this.agent(providerID)
+    if (!agent) return []
+    return await Promise.race([agent.models().catch(() => [] as Model[]), Bun.sleep(3_000).then(() => [] as Model[])])
+  }
+
+  /** The model `id` names among `models`: by its own id, or one it's known by (Claude Code's `default`). */
+  private static modelIn(models: Model[], id: string): Model | undefined {
+    return models.find((model) => model.id === id) ?? models.find((model) => model.aliases?.includes(id))
+  }
+
+  /** A model's name as its agent lists it ("Opus 5.5" for Claude Code's `default` now), or its id. */
+  private async modelName(providerID: string, id: string): Promise<string> {
+    return Sessions.modelIn(await this.listedModels(providerID), id)?.name ?? id
+  }
+
+  /** Your Auto list `list` (or the first) as the models it names (`foldEntries`): each by its own id, each once. */
+  async autoEntries(list?: string): Promise<AutoEntry[]> {
+    return await this.folded(this.auto.list(list))
+  }
+
+  /** Every Auto list, each as the models it names. */
+  async autoLists(): Promise<AutoList[]> {
+    return await Promise.all(this.auto.all().map(async (list) => ({ ...list, entries: await this.folded(list.entries) })))
+  }
+
+  private async folded(entries: AutoEntry[]): Promise<AutoEntry[]> {
+    const own = await this.ownIDs(entries)
+    return foldEntries(entries, (entry) => own.get(Auto.modelKey(entry)))
+  }
+
+  /**
+   * The model each of `entries` that names one by an alias stands for (by `provider/id`), as its
+   * agent itself listed it: never a guess (Claude Code's usual models, before it has said), and
+   * only of an agent that has aliases, as far as it says in a few seconds.
+   */
+  private async ownIDs(entries: AutoEntry[]): Promise<Map<string, string>> {
+    const keys = [...new Set(entries.map((entry) => Auto.modelKey(entry)))]
+    const own = new Map<string, string>()
+    await Promise.all(
+      keys.map(async (key) => {
+        const entry = entries.find((each) => Auto.modelKey(each) === key)!
+        const agent = this.agent(entry.providerID)
+        if (!agent?.concreteModel) return
+        const id = await Promise.race([agent.concreteModel(entry.modelID).catch(() => undefined), Bun.sleep(3_000).then(() => undefined)])
+        if (id) own.set(key, id)
+      }),
+    )
+    return own
+  }
+
+  /**
+   * Lists you saved as `kuvo/auto` gave them (each as the models it names), each entry kept under
+   * the id it was kept by: one kept as an alias of its model (Claude Code's `default`) goes on
+   * following whichever model that stands for.
+   */
+  async asKept(lists: unknown[]): Promise<unknown[]> {
+    const kept = new Map(this.auto.all().map((list) => [list.id, list.entries]))
+    return await Promise.all(
+      lists.map(async (list) => {
+        const before = list && typeof list === "object" && Array.isArray((list as AutoList).entries) ? kept.get((list as AutoList).id) : undefined
+        if (!before) return list
+        const own = await this.ownIDs(before)
+        const named = before.map((entry) => ({ entry, as: { ...entry, modelID: own.get(Auto.modelKey(entry)) ?? entry.modelID } }))
+        const same = (one: AutoEntry, other: Partial<AutoEntry> | null) => one.providerID === other?.providerID && one.modelID === other?.modelID && (one.variant ?? "") === (other?.variant ?? "")
+        const entries = (list as AutoList).entries.map((given) => {
+          const was = named.find((each) => same(each.as, given))
+          return was && given && typeof given === "object" ? { ...given, modelID: was.entry.modelID } : given
+        })
+        return { ...(list as AutoList), entries }
+      }),
+    )
   }
 
   /**
@@ -2607,6 +2748,9 @@ export class Sessions {
       },
       // Asked in the conversation that started it, while it works.
       permission: (ask) => this.askPermission(id, live, turn, ask, plan),
+      inBackground: () => {
+        if (live.subagents.get(session.id) === turn && !turn.isEnded) live.background.add(session.id)
+      },
       messages: (route) => this.setMessages(session.id, route),
     }
     live.runs.set(session.id, run)
@@ -2657,7 +2801,7 @@ export class Sessions {
     const parts = partsOf(ask)
     if (live.blocks && strictest(live.blocks, ask.action, parts) === "deny") return "deny"
     if (plan && changes.has(ask.action)) return "deny"
-    const rules = [...(live.agentRules ?? engineDefaults), ...(session.permissions ?? [])]
+    const rules = [...(ask.agentRules ?? live.agentRules ?? engineDefaults), ...(session.permissions ?? [])]
     const effect = strictest(rules, ask.action, parts)
     if (effect === "deny") return "deny"
     // Paths outside the project: your rules for working there too.
@@ -2729,7 +2873,7 @@ export class Sessions {
       const folders = outsideFolders(ask, away)
       const refusable = outsideRefusable(ask, away, folders)
       if (live.blocks && strictest(live.blocks, "external_directory", refusable) === "deny") return "reject"
-      const rules = [...(live.agentRules ?? engineDefaults), ...(session.permissions ?? [])]
+      const rules = [...(ask.agentRules ?? live.agentRules ?? engineDefaults), ...(session.permissions ?? [])]
       if (strictest(rules, "external_directory", refusable) === "deny") return "reject"
       const outside = strictest(rules, "external_directory", folders)
       const own = strictest(rules, ask.action, parts) ?? "allow"
@@ -2742,7 +2886,7 @@ export class Sessions {
     // defaults, reading a .env file asks first), with the session's rules over them.
     const matched = ask.weighed
       ? strictest(session.permissions ?? [], ask.action, parts)
-      : strictest([...(live.agentRules ?? engineDefaults), ...(session.permissions ?? [])], ask.action, parts)
+      : strictest([...(ask.agentRules ?? live.agentRules ?? engineDefaults), ...(session.permissions ?? [])], ask.action, parts)
     const effect = ask.weighed ? matched : (matched ?? "allow")
     if (effect === "deny") return "reject"
     // What the agent asked about, not known by its kind and no rule of yours about it, under Ask
@@ -2919,12 +3063,15 @@ export class Sessions {
   }
 
   /** The bridge is stopping: every turn ends as stopped, every agent's conversation closes, and
-   * your `!` commands still running stop. */
+   * your `!` commands still running stop. What an agent left going in the background between turns
+   * ends with it: the session hears so once the bridge is back (`wakeLost`), as that work's end
+   * would have woken it. */
   closeAll() {
     for (const id of [...this.shells.keys()]) this.stopShells(id, true)
     clearInterval(this.pruning)
     this.pruning = undefined
     for (const [id, live] of this.live) {
+      const lost = live.doing.kind === "idle" || onFiles(live.doing) ? [...live.threads].flatMap(([provider, thread]) => (thread.wakingWork ?? []).map((work) => ({ provider, work }))) : []
       live.go = false
       live.own = undefined
       const run = runOf(live.doing)
@@ -2934,8 +3081,39 @@ export class Sessions {
       for (const child of live.subagents.values()) child.finish("interrupted")
       live.subagents.clear()
       for (const thread of live.threads.values()) thread.close()
+      const record = this.store.get(id)
+      if (!lost.length || !record || record.session.parentID) continue
+      const input = lostWorkInput(`Kuvo Code stopped (it quit or restarted), and ${this.agentName(lost[0].provider)} with it.`, lost.map(({ work }) => work), "steer", true)
+      this.queue(record).push(input)
+      this.store.save(id, true)
     }
   }
+
+  /**
+   * As the bridge starts again: each session whose background work ended as it stopped is woken
+   * with that (`closeAll`), if it's back soon (a restart, an update). After longer (a quit for the
+   * night), it isn't woken (not a turn for each such session at once): the note waits for its next
+   * message instead. (While an undo is staged it waits too, for Redo or that message.)
+   */
+  wakeLost(now = Date.now()) {
+    for (const session of this.store.all()) {
+      const record = this.store.get(session.id)
+      if (!record) continue
+      const waiting = this.queue(record).filter((input) => lostWorkOf(input)?.restarted)
+      if (!waiting.length) continue
+      let wakes = false
+      for (const input of waiting) {
+        const kuvo = input.synthetic!.metadata!.kuvo as Record<string, unknown>
+        const soon = now - lostWorkOf(input)!.at < timing.lostWorkWake && !record.session.revert
+        delete kuvo.restarted
+        this.store.save(session.id, true)
+        if (soon) wakes = true
+        else this.setDelivery(session.id, input.id, "queue")
+      }
+      if (wakes) this.wake(session.id)
+    }
+  }
+
 
   /** An account went: its conversations in sessions close (their sessions go on with another
    * model), and a turn its agent is at work on ends as stopped (its agent is gone with it). */

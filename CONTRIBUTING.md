@@ -145,17 +145,44 @@ waits for jobs of the same kind (they share build folders) and runs the other
 kinds alongside:
 
 ```sh
-scripts/heavy.sh mac xcodebuild … -derivedDataPath "$(getconf DARWIN_USER_CACHE_DIR)KuvoShared-MacBuild" …
+scripts/heavy.sh mac scripts/test-app.sh
+scripts/heavy.sh mac-build sh -c 'xcodebuild … -derivedDataPath "$(getconf DARWIN_USER_CACHE_DIR)KuvoShared-MacBuild$KUVO_HEAVY_BUILD_SUFFIX" …'
+scripts/heavy.sh mac-build sh -c 'cd Packages/KuvoClient && swift test'
 scripts/heavy.sh box sh -c 'cd Packages/Box && bun test'
 ```
 
-- `mac`: the Mac app's builds and tests (`KuvoShared-MacBuild`, `KuvoCodeTests-build`), and the
-  packages' `swift build` and `swift test`;
-- `phone`: the iPhone app's (`KuvoShared-PhoneBuild`, `KuvoCodeMobileTests-build`);
+- `mac`: the Mac app's UI test suite, `scripts/test-app.sh` (`KuvoCodeTests-build`), which drives the
+  real window and pointer, so one runs at a time and nothing else of this kind beside it. Older
+  scripts also say `mac` for a plain build, which still works, under the same lock;
+- `mac-build`: what doesn't drive the UI: the Mac's `xcodebuild` (builds, demo builds) and the
+  packages' `swift build` and `swift test`. It has two slots, so two of these run at once, and
+  beside the app suite, since it doesn't take `mac`'s lock. A job takes whichever slot is free first
+  and finds it in `KUVO_HEAVY_SLOT` and `KUVO_HEAVY_BUILD_SUFFIX` (`-1` or `-2`): build in
+  `KuvoShared-MacBuild$KUVO_HEAVY_BUILD_SUFFIX`, never in `KuvoShared-MacBuild` itself (older
+  scripts' `mac` builds there) or `KuvoCodeTests-build` (the app suite's). Give `xcodebuild` a
+  `-clonedSourcePackagesDirPath` in that folder too (`…/KuvoShared-MacBuild$KUVO_HEAVY_BUILD_SUFFIX/SourcePackages`),
+  not the checkout's `build/SourcePackages` (the app suite's) or `build/DerivedData`, which two
+  jobs in one checkout would share. A package's `.build` is its own to each checkout;
+- `phone`: the iPhone app's (`KuvoShared-PhoneBuild`, `KuvoCodeMobileTests-build`). It has two
+  slots, so two phone test runs go at once, each on a simulator of its own: "Kuvo Code Tests" in
+  slot 1 and "Kuvo Code Tests 2" in slot 2, both fixed (the phone's `scripts/test-app.sh` makes each
+  once, on the same runtime and device, and keeps it; nothing makes or deletes one per run). A
+  caller that handles slots sets `KUVO_HEAVY_SLOTS=2` and takes whichever slot is free first (slot 1
+  before slot 2; with both busy it waits for the first to free). Its job finds its slot in
+  `KUVO_TEST_SIMULATOR` (the simulator's name), `KUVO_HEAVY_SLOT` and `KUVO_HEAVY_BUILD_SUFFIX`
+  (`""` or `-2`: put it on a build folder, since two builds in one folder break). Without
+  `KUVO_HEAVY_SLOTS=2` a job only ever takes slot 1, whose lock and simulator are what they always
+  were, so an older script and a new one on slot 1 still exclude each other;
 - `box`: the box's whole suites (`bun test`, `node --test`) and runs on a test machine.
 
 A job also waits while the Mac is busy (its load over the last minute above 40;
-`KUVO_HEAVY_LOAD` sets another). Both apps' `scripts/test-app.sh` take their turn
+`KUVO_HEAVY_LOAD` sets another). While the Mac app's suite waits there, new jobs of the other
+kinds wait for it to start, 15 minutes at most (`KUVO_HEAVY_MAC_FIRST_FOR`), so the jobs that keep
+starting can't keep it out. A new job also waits while the Mac is short of memory: swapping more than
+10 MB a second (`KUVO_HEAVY_SWAP`), its memory pressure at warn or worse, or less than 20% of it
+available as `memory_pressure -Q` says (`KUVO_HEAVY_MEMORY`; `0` turns the memory wait off). It
+waits until two looks in a row find it isn't, 15 minutes at most from when any job found it short
+(`KUVO_HEAVY_MEMORY_WAIT_FOR`): on this Mac memory runs out before CPU does. Both apps' `scripts/test-app.sh` take their turn
 this way themselves. `python3 -m unittest discover -s scripts -p test_heavy.py`
 tries the helper.
 
@@ -167,6 +194,13 @@ the job's group is left behind to clean up. Never stop a process by name or patt
 `kill $(pgrep …)`): a pattern matches other people's apps and other sessions. Stop only a process
 you started, by its PID (`$!`, a pid file) or by a process group you created, never the one you
 were started in. On macOS every option goes before the pattern, in `pgrep` too.
+
+Every job has a time limit, so a hung one can't hold its kind's turn for hours: `mac` and `phone`
+45 minutes, `mac-build` 30, `box` 40, counted while it runs (not while it waits for its turn).
+Past it, its group is stopped (TERM, then KILL), it says what was running, and the helper exits
+124. `KUVO_HEAVY_LIMIT` gives one job another (`90m`, `600s`, `2h`; `0` for none). A job inside
+one of its kind runs within that one's limit (one of another kind has its own too), and one in a
+terminal has none.
 
 `KuvoCodeTests` tries what the app does on its own code, scenario by scenario:
 Discard in Changes on throwaway git repositories, say, checking what's on disk
@@ -667,6 +701,9 @@ Every change starts from an issue and lands on `main` through a pull request.
      which What's New shows once after an update; then run
      `python3 scripts/whats-new.py` and commit `KuvoCode/Resources/whats-new.json`
      (CI checks it, and the release workflow writes it again).
+     (`.gitattributes` merges `CHANGELOG.md` line by line, so branches that
+     each add a line there merge without a conflict; if two edit the same line,
+     both versions stay, so tidy that one by hand.)
 4. **CI must pass**, and a maintainer reviews and approves the pull request.
    It's then squash-merged and the branch is deleted.
 

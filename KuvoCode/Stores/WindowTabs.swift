@@ -133,8 +133,10 @@ final class WindowTabs {
     private(set) var keptSplit: TabKey?
     /// Out of room, the side cards give way in this order: the one opened last stays.
     private(set) var givesWay: [PaneLayout.Pane] = [.split, .changes, .sessions]
-    /// The side panel is wanted.
-    private(set) var showsPanel = false
+    /// The side panel is wanted, in the conversation in view: each has its own (`Utilities.isOpen`).
+    var showsPanel: Bool { app.utilities.isOpen(in: openView) }
+    /// Goes up as the panel's opened or closed (`Utilities.openTurns`), for it to slide.
+    var panelTurns: Int { app.utilities.openTurns }
     /// The sidebar is wanted.
     private(set) var showsSidebar = true
     /// The panel over the conversation, for room.
@@ -275,6 +277,13 @@ final class WindowTabs {
 
     /// What the side panel follows: the conversations in view, the one you work in, its place,
     /// and this Mac's bots in view (a bot's conversation, or a group chat's).
+    /// What says whether the panel is open in the conversation in view (`Utilities.openKey`), as
+    /// the window has it now.
+    private var openView: Utilities.InView {
+        Utilities.InView(session: sessionID, group: groupID.map { TabKey.group($0).text },
+                         draft: sessionID == nil && groupID == nil ? selection?.text : nil, tabPanel: sessionID.map(app.utilities.panelOf))
+    }
+
     var inView: Utilities.InView {
         let groups = app.chats
         let bots = app.bots
@@ -287,7 +296,8 @@ final class WindowTabs {
             place: focusedDirectory.flatMap(RemoteFolder.machine(of:)),
             bots: Set(botsInView.filter { $0.machine == nil }.map(\.id)),
             draft: sessionID == nil && groupID == nil ? selection?.text : nil,
-            panel: (workedBesideID ?? sessionID).map(app.utilities.panelOf)
+            panel: (workedBesideID ?? sessionID).map(app.utilities.panelOf),
+            tabPanel: sessionID.map(app.utilities.panelOf)
         )
     }
 
@@ -669,7 +679,7 @@ final class WindowTabs {
     /// Shows or hides the panel; showing one that's wanted but out of room makes room for it, as
     /// the one opened last.
     func showPanel(_ shows: Bool = true) {
-        showsPanel = shows
+        app.utilities.setOpen(shows, in: openView)
         if shows { keep(.changes) }
     }
 
@@ -820,15 +830,24 @@ final class WindowTabs {
             var beside: String
         }
 
+        /// A conversation's panel, open or closed, by `Utilities.openKey`.
+        struct Panel: Codable, Equatable {
+            var key: String
+            var open: Bool
+        }
+
         var tabs: [TabKey] = []
         var selection: TabKey?
         var pairs: [Pair] = []
+        /// The panel open in the conversation in view; before each had its own, in the window.
         var showsPanel = false
+        /// Each conversation's panel, the one in view last last; empty before each had its own.
+        var panels: [Panel] = []
         /// Nil: kept before the sidebar was kept here (in scene storage of its own).
         var showsSidebar: Bool?
 
-        init(tabs: [TabKey] = [], selection: TabKey? = nil, pairs: [Pair] = [], showsPanel: Bool = false, showsSidebar: Bool? = nil) {
-            (self.tabs, self.selection, self.pairs, self.showsPanel, self.showsSidebar) = (tabs, selection, pairs, showsPanel, showsSidebar)
+        init(tabs: [TabKey] = [], selection: TabKey? = nil, pairs: [Pair] = [], showsPanel: Bool = false, panels: [Panel] = [], showsSidebar: Bool? = nil) {
+            (self.tabs, self.selection, self.pairs, self.showsPanel, self.panels, self.showsSidebar) = (tabs, selection, pairs, showsPanel, panels, showsSidebar)
         }
 
         /// What's missing (kept by a version that had less, or more) is as it starts.
@@ -838,6 +857,7 @@ final class WindowTabs {
             selection = try container.decodeIfPresent(TabKey.self, forKey: .selection)
             pairs = try container.decodeIfPresent([Pair].self, forKey: .pairs) ?? []
             showsPanel = try container.decodeIfPresent(Bool.self, forKey: .showsPanel) ?? false
+            panels = try container.decodeIfPresent([Panel].self, forKey: .panels) ?? []
             showsSidebar = try container.decodeIfPresent(Bool.self, forKey: .showsSidebar)
         }
 
@@ -848,7 +868,8 @@ final class WindowTabs {
 
     /// What the window keeps of them.
     var snapshot: Saved {
-        Saved(tabs: keys, selection: selection, pairs: pairs.sorted { $0.key.text < $1.key.text }.map { Saved.Pair(tab: $0.key, beside: $0.value) }, showsPanel: showsPanel, showsSidebar: showsSidebar)
+        Saved(tabs: keys, selection: selection, pairs: pairs.sorted { $0.key.text < $1.key.text }.map { Saved.Pair(tab: $0.key, beside: $0.value) }, showsPanel: showsPanel,
+              panels: app.utilities.keptPanels.map { Saved.Panel(key: $0.key, open: $0.open) }, showsSidebar: showsSidebar)
     }
 
     /// The same, as JSON.
@@ -900,7 +921,9 @@ final class WindowTabs {
         keys = all
         self.pairs = pairs.merging(self.pairs) { kept, _ in kept }
         if selection == nil { selection = saved.selection.flatMap { keys.contains($0) ? $0 : nil } ?? keys.last }
-        if saved.showsPanel { showsPanel = true }
+        // Each conversation's panel as it was; a version before kept one for the window, which
+        // they all start as.
+        app.utilities.restoreOpen(saved.panels.map { ($0.key, $0.open) }, last: saved.showsPanel, in: openView)
         showsSidebar = saved.showsSidebar ?? older.showsSidebar
     }
 }

@@ -70,6 +70,7 @@ public struct HTTPClient: Sendable {
     /// While the engine is still loading a project it answers 503 ("starting");
     /// those are retried for up to `patience` before giving up.
     public func send<Response: Decodable>(_ request: URLRequest, as type: Response.Type = Response.self, patience: Duration = .seconds(30)) async throws -> Response {
+        let request = Self.waitingForBody(request, idle: session.configuration.timeoutIntervalForRequest)
         let deadline = ContinuousClock.now + patience
         var (data, response) = try await session.data(for: request)
         while (response as? HTTPURLResponse)?.statusCode == 503, ContinuousClock.now < deadline {
@@ -83,6 +84,20 @@ public struct HTTPClient: Sendable {
         } catch {
             throw DecodingFailure(path: request.url?.path ?? "", underlying: error, body: String(decoding: data.prefix(2_000), as: UTF8.self))
         }
+    }
+
+    /// How fast a slow connection sends, in bytes a second (as KuvoLink's `Link.slowUpload`).
+    static let slowUpload = 64 * 1024
+
+    /// `request`, waiting for its answer as long again as its body may take to go on a slow
+    /// connection: nothing can come back before it's all there, and a request waits only so long
+    /// with nothing coming (`timeoutInterval`). A big file shared over a phone's slow connection
+    /// took longer than that (#358).
+    static func waitingForBody(_ request: URLRequest, idle: TimeInterval) -> URLRequest {
+        guard let size = request.httpBody?.count, size >= slowUpload else { return request }
+        var request = request
+        request.timeoutInterval = max(request.timeoutInterval, idle) + TimeInterval(size / slowUpload)
+        return request
     }
 
     /// Opens a streaming response (for `text/event-stream`).

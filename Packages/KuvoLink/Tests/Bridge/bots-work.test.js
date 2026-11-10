@@ -380,6 +380,41 @@ test("a summary doesn't change how a lead reads a session: failed stays failed, 
   assert.doesNotMatch((await tool("list_sessions", {}, "ses_pixel")).text, /finished/);
 });
 
+test("a turn cut short gives as its last reply what it said in that turn, never an earlier turn's reply", async () => {
+  const session = startedAddress(await tool("start_session", { task: "One.", title: "Sign-in", project: "Tidepool" }, "ses_pixel"));
+  busy.delete(session);
+  sessions.get(session).outcome = "interrupted";
+  sessions.get(session).time.idle = Date.now();
+  const said = (text, id) => ({ id, type: "assistant", content: text ? [{ type: "text", text }] : [] });
+  const earlier = [{ id: "msg_i1", type: "idle", outcome: "succeeded" }, said("Previous turn finished.", "msg_s1"), { id: "msg_u1", type: "user" }];
+  // Stopped before it said anything.
+  kept.set(session, [{ id: "msg_i2", type: "idle", outcome: "interrupted" }, said("", "msg_s2"), { id: "msg_u2", type: "user" }, ...earlier]);
+  let listed = (await tool("list_sessions", {}, "ses_pixel")).text;
+  assert.match(listed, /stopped/);
+  assert.doesNotMatch(listed, /Previous turn finished/);
+  // Stopped after it said something in that turn: that's its last reply.
+  kept.set(session, [{ id: "msg_i2", type: "idle", outcome: "interrupted" }, said("", "msg_s3"), said("Halfway through the sign-in.", "msg_s2"), { id: "msg_u2", type: "user" }, ...earlier]);
+  listed = (await tool("list_sessions", {}, "ses_pixel")).text;
+  assert.match(listed, /stopped/);
+  assert.match(listed, /Halfway through the sign-in/);
+  assert.doesNotMatch(listed, /Previous turn finished/);
+  // Stopped, and then summarized: still that turn's.
+  kept.set(session, [{ id: "msg_i3", type: "idle", outcome: "succeeded" }, { id: "msg_c", type: "compaction", status: "completed", reason: "manual" }, { id: "msg_i2", type: "idle", outcome: "interrupted" }, { id: "msg_u2", type: "user" }, ...earlier]);
+  listed = (await tool("list_sessions", {}, "ses_pixel")).text;
+  assert.match(listed, /stopped/);
+  assert.doesNotMatch(listed, /Previous turn finished/);
+  // Failed before it said anything: the same.
+  sessions.get(session).outcome = "failed";
+  kept.set(session, [{ id: "msg_i2", type: "idle", outcome: "failed" }, { id: "msg_u2", type: "user" }, ...earlier]);
+  listed = (await tool("list_sessions", {}, "ses_pixel")).text;
+  assert.match(listed, /failed/);
+  assert.doesNotMatch(listed, /Previous turn finished/);
+  // A turn that finished says what it said last.
+  sessions.get(session).outcome = "succeeded";
+  kept.set(session, earlier);
+  assert.match((await tool("list_sessions", {}, "ses_pixel")).text, /Previous turn finished/);
+});
+
 test("how a lead reads a session past several summaries: what they did isn't how its work went", async () => {
   const session = startedAddress(await tool("start_session", { task: "One.", title: "Sign-in", project: "Tidepool" }, "ses_pixel"));
   busy.delete(session);

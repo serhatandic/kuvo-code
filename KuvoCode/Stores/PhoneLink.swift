@@ -966,7 +966,7 @@ final class PhoneLink {
     /// The areas that have moved onto this Mac's box (`BoxProcess`), by their routes: a phone's
     /// requests and the app's own (`BoxClient`) go there.
     nonisolated static let boxRoutes = ["kuvo/projects", "kuvo/worktrees", "kuvo/plugins", "kuvo/folders", "kuvo/programs", "kuvo/providers", "kuvo/wakes", "kuvo/config", "kuvo/mcp/catalog", "kuvo/skills", "kuvo/skill-library", "kuvo/skill-trash", "kuvo/integrations", "kuvo/keys", "kuvo/bots", "kuvo/personalities",
-                                                  "kuvo/phones", "kuvo/link", "kuvo/attention", "kuvo/accounts/ended", "kuvo/accounts/credentials", "kuvo/accounts/found", "kuvo/file", "kuvo/sign-in/return", "kuvo/named", "kuvo/groups", "kuvo/artifacts", "kuvo/search", "kuvo/git", "kuvo/agent-tools", "kuvo/moves", "kuvo/work", "kuvo/vault", "kuvo/approval"]
+                                                  "kuvo/phones", "kuvo/link", "kuvo/attention", "kuvo/accounts/ended", "kuvo/accounts/refreshable", "kuvo/accounts/credentials", "kuvo/accounts/found", "kuvo/file", "kuvo/sign-in/return", "kuvo/named", "kuvo/groups", "kuvo/artifacts", "kuvo/search", "kuvo/git", "kuvo/agent-tools", "kuvo/moves", "kuvo/work", "kuvo/vault", "kuvo/approval"]
     /// Where this Mac's box is reached while it runs.
     nonisolated static let box = OSAllocatedUnfairLock<ServerEndpoint?>(initialState: nil)
     /// Connections of its own to this Mac's box, plenty of them: the streams that follow it
@@ -1002,7 +1002,7 @@ final class PhoneLink {
     /// (PROTOCOL.md, "Features"): what a machine's bridge has too (its `FEATURES`, but
     /// `engine.start`, `update` and `browser`), and the Mac's own. `usage` is added while the usage panel is.
     static let features = [
-        "accounts.credentials", "accounts.found", "agents", "artifacts", "asks", "attention", "bots", "bots.edit", "bots.events", "bots.job", "bots.keys", "bots.make", "branch", "btw", "btw.threads", "config", "config.apply", "engine.restart",
+        "accounts.credentials", "accounts.found", "accounts.refresh", "agents", "artifacts", "asks", "attention", "bots", "bots.edit", "bots.events", "bots.job", "bots.keys", "bots.make", "branch", "btw", "btw.threads", "config", "config.apply", "engine.restart",
         "file", "folders", "folders.files", "git", "git.merge", "git.pull-request", "git.pull-request.draft", "git.push", "goals", "groups", "groups.delete", "groups.edit", "groups.joinable", "groups.make", "groups.seats", "handoff", "integrations", "keys", "mcp.catalog", "moves", "moves.agents", "moves.check",
         "named", "personalities", "phones", "phones.pair", "plugins.search", "programs", "projects", "providers.models", "reviews", "reviews.parts", "reviews.scopes", "search", "sessions.agents", "shell.stop", "sign-in.return", "skills",
         "personalities.events", "skills.trash", "sandbox", "sandbox.check", "sandbox.asks", "vault", "wakes", "wakes.edit", "wakes.events", "worktrees", "worktrees.events", "worktrees.where",
@@ -1315,9 +1315,9 @@ final class PhoneLink {
             // A session started with a task, a session's queue, its approval, its reviewer's decisions and its Autopilot
             // (not its other routes, `kuvo/sessions/<id>/agents`).
             || route == "kuvo/sessions" || route.wholeMatch(of: /kuvo\/sessions\/(queues\/events|[^\/]+\/(stop|approval|decisions|autopilot(\/asked)?|queue(\/.+)?))/) != nil
-            // A plan signed out (`kuvo/accounts/<id>/forget`), and a command stopped
-            // (`kuvo/shell/<id>/stop`): the box's too.
-            || Self.oneOf(route, "kuvo/accounts/", "/forget") || Self.oneOf(route, "kuvo/shell/", "/stop")
+            // A plan signed out (`kuvo/accounts/<id>/forget`), a provider's models asked of again
+            // (`kuvo/accounts/<id>/refresh`), and a command stopped (`kuvo/shell/<id>/stop`): the box's too.
+            || Self.oneOf(route, "kuvo/accounts/", "/forget") || Self.oneOf(route, "kuvo/accounts/", "/refresh") || Self.oneOf(route, "kuvo/shell/", "/stop")
     }
 
     /// Whether `route` is `<start><one part><end>`.

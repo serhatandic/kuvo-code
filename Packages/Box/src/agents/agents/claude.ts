@@ -9,9 +9,9 @@ import { homedir } from "node:os"
 import { basename, dirname, join, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
 import { providerID, type AgentAccount } from "../accounts"
-import type { Agent, AgentContext, Account, ConversationFiles, ConversationPlace, MessageInput, OwnTurn, RunInput, RunResult, SignInAttempt, SignInOptions, SubagentMessages, SubagentRun, Thread, TurnHooks, PromptFile } from "../agent"
+import type { Agent, AgentContext, Account, ConversationFiles, ConversationPlace, LostWork, MessageInput, OwnTurn, RunInput, RunResult, SignInAttempt, SignInOptions, SubagentMessages, SubagentRun, Thread, TurnHooks, PromptFile } from "../agent"
 import type { Limit } from "../auto"
-import { accountName, ContextWindows, failure, KnownAccount, model, signOutWith, TookTooLong } from "../agent"
+import { accountName, ContextWindows, failure, KnownAccount, lostWorkNote, model, signOutWith, TookTooLong } from "../agent"
 import { fileDiff, fromPatch } from "../diff"
 import { install, installedVersion, maintenance, update, type MaintenanceDefinition } from "../maintenance"
 import { fingerprint, type LimitsSource } from "../limits"
@@ -25,13 +25,14 @@ import { kuvoTools } from "../kuvotools"
 import { dropRelayed, relayedServers, relayedTools, relayPort } from "../toolrelay"
 import { computerServers } from "../servers"
 import { skillsFolder, skillsFor, turnedOff, upward } from "../skills"
+import { claudeSubagents, subagentRules, subagentsFor, type Subagents } from "../subagents"
 import { onMachine, ownFoldersScript } from "../machine"
 import { fenceAgent, fenceAttachments, fenceCopy, fenceKey, fenceOn, seatBot, fullAccessMark } from "../fence"
 import { addShell, endShell } from "../shells"
 import { instructionsNote, toldOf } from "../told"
 import { pictureData, pictureFile, withPictures } from "../pictures"
 import type { Turn } from "../turn"
-import type { FileDiff, FormField, Model, ModelRef, Session, TokenUsage } from "../wire"
+import type { FileDiff, FormField, Model, ModelRef, PermissionRule, Session, TokenUsage } from "../wire"
 
 const SDK = [{ name: "@anthropic-ai/claude-agent-sdk", version: "0.3.303" }]
 const places = [join(homedir(), ".local/bin"), join(homedir(), ".claude/local"), "/opt/homebrew/bin", "/usr/local/bin"]
@@ -973,14 +974,18 @@ class ClaudeThread implements Thread {
   /** Subagents it sent off in the background, at work after the turn that started them: by their call. */
   private backgroundLanes = new Map<string, Lane & { run: SubagentRun; background: boolean }>()
   /** Its background tasks (commands, subagents), by its id: commands are in the bar. */
-  private tasks = new Map<string, { type: string; description: string; toolUseID?: string; shell?: string; outputFile?: string; last?: { output: string; total: number }; since?: number }>()
+  private tasks = new Map<string, { type: string; description: string; toolUseID?: string; shell?: string; outputFile?: string; last?: { output: string; total: number }; since?: number; backgrounded?: boolean }>()
   /** Its live background tasks, as it last listed them. */
   private liveTasks = new Set<string>()
   /** Commands it ran, by their call: what a background one runs. */
   private commands = new Map<string, string>()
   /** The last of its tasks to end: what began a turn it starts on its own. */
   private lastEnded?: { type: string; description: string; command?: string; status: string; summary?: string }
-  private opened?: { model: string; effort?: string; plan: boolean; append: string; program: number; tools?: string; skills?: string; fence: string }
+  private opened?: { model: string; effort?: string; plan: boolean; append: string; program: number; tools?: string; skills?: string; fence: string; subagents: string }
+  /** Your subagents as it was last given them (their rules hold for their tools). */
+  private subagents?: Subagents
+  /** What a subagent of yours may do, for each of its tools it's asked about: by the tool's call. */
+  private subagentAsks = new Map<string, PermissionRule[]>()
   /** The computer's servers it was last told (their names). */
   private servers?: string
 
@@ -1069,20 +1074,28 @@ class ClaudeThread implements Thread {
     const skills = skillsFolder(await skillsFor(this.session.location.directory, this.agent.ownSkillFolders(this.session.location.directory), turnedOff(hooks)))
     // So does it when the box's sandbox was turned on or off, or its rules changed.
     const fence = fenceKey() + fullAccessMark(this.session.id)
-    if (this.query && (this.opened?.append !== append || this.opened?.program !== this.agent.program || this.opened?.tools !== tools?.key || this.opened?.skills !== skills || this.opened?.fence !== fence)) this.close()
+    // And your subagents (Settings › Agents), or the model they use, changed: it takes them as it starts.
+    this.subagents = await subagentsFor(this.session.location.directory)
+    const subagents = claudeSubagents(this.subagents)
+    const subagentsKey = JSON.stringify(subagents)
+    // (What it left going in the background ends with it: this message says so.)
+    if (this.query && (this.opened?.append !== append || this.opened?.program !== this.agent.program || this.opened?.tools !== tools?.key || this.opened?.skills !== skills || this.opened?.fence !== fence || this.opened?.subagents !== subagentsKey)) {
+      this.cut.push(...this.wakingWork)
+      this.close()
+    }
     // The computer's MCP servers (yours, the integrations', a bot's with its own keys), through the
     // relay, which keeps their keys: another set of them is told to the same Claude Code.
     const computer = await computerServers(this.session.location.directory)
     const servers = relayedServers(this.session.id, this, this.session.location.directory, computer)
     const opening = !this.query
     if (opening) {
-      this.open(sdk, modelID, effort, input.plan, append, hooks, skills)
+      this.open(sdk, modelID, effort, input.plan, append, hooks, skills, subagents)
     } else {
       // The same Claude Code goes on, told what changed.
       if (this.opened?.model !== modelID) await this.query.setModel(modelID === "default" ? undefined : modelID).catch(() => {})
       if (this.opened?.effort !== effort) await this.query.applyFlagSettings({ effortLevel: effort ?? null }).catch(() => {})
       if (this.opened?.plan !== input.plan) await this.query.setPermissionMode(input.plan ? "plan" : "default").catch(() => {})
-      this.opened = { model: modelID, effort, plan: input.plan, append, program: this.agent.program, tools: tools?.key, skills, fence }
+      this.opened = { model: modelID, effort, plan: input.plan, append, program: this.agent.program, tools: tools?.key, skills, fence, subagents: subagentsKey }
     }
     // Kuvo Code's own tools, as the engine's models have them, and those servers: told over its
     // pipe, not on its command line (where any process could read their key).
@@ -1107,8 +1120,13 @@ class ClaudeThread implements Thread {
       // A conversation it goes on with keeps the instructions it started with (until it's
       // summarized): what changed in them since is said ahead of the message, once. Not ahead of
       // a command (its /compact, a skill's), which goes as typed: the next message says it.
-      const note = input.compact || input.text.trimStart().startsWith("/") ? undefined : instructionsNote(toldOf(this.state, "claudeTold"), append)
-      const message = userMessage(note ? { ...input, text: `${note}\n\n${input.text}` } : input, this.copies())
+      const command = input.compact || input.text.trimStart().startsWith("/")
+      const note = command ? undefined : instructionsNote(toldOf(this.state, "claudeTold"), append)
+      const lostNote = this.cut.length && !command ? lostWorkNote("Claude Code started again before this message.", this.cut.splice(0)) : undefined
+      // (A command, as typed, has no room for it: the session hears it as a note instead.)
+      if (this.cut.length && command) this.onWorkLost?.(this.cut.splice(0))
+      const ahead = [lostNote, note].filter(Boolean).join("\n\n")
+      const message = userMessage(ahead ? { ...input, text: `${ahead}\n\n${input.text}` } : input, this.copies())
       let active: Active | undefined
       const answered = (result: RunResult) => {
         // (Said once it took the message, not one it never got to.)
@@ -1138,8 +1156,9 @@ class ClaudeThread implements Thread {
   private turnFor(turn: Turn, hooks: TurnHooks, resolve: (result: RunResult) => void, auto: boolean | undefined, steered: Map<string, string>): Active {
     const active: Active = { turn, hooks, resolve, streamed: new Set(), blockTools: new Map(), calls: new Map(), subagents: new Map(), auto, steered }
     active.resolve = (result) => {
-      // (A turn stopped or failed stops them: the session ends them with it.)
-      if (result.outcome === "succeeded") for (const [callID, lane] of active.subagents) if (lane.background && !lane.turn.isEnded) this.backgroundLanes.set(callID, lane)
+      // Whatever the outcome: one this turn started, stopped or failed with it, the session ends
+      // (and it's forgotten then); one an earlier turn sent off goes on, after a Stop too.
+      for (const [callID, lane] of active.subagents) if (lane.background && !lane.turn.isEnded) this.backgroundLanes.set(callID, lane)
       resolve(result)
     }
     return active
@@ -1222,15 +1241,29 @@ class ClaudeThread implements Thread {
         // A subagent picked up again (your message, passed on with SendMessage) keeps its id and
         // its call: what it says comes under the call that started it, in the same session.
         const resumed = type === "local_agent" && known?.toolUseID && message.tool_use_id && message.tool_use_id !== known.toolUseID ? known.toolUseID : undefined
-        this.tasks.set(message.task_id, { ...known, type, description: message.description ?? known?.description ?? "", toolUseID: resumed ?? message.tool_use_id ?? known?.toolUseID })
-        if (type === "local_agent" && typeof message.tool_use_id === "string" && !resumed) this.rememberSubagent(message.tool_use_id, { agentID: message.task_id })
+        // (Whether it runs in the background is Claude Code's to say: its Agent tool's default is.)
+        const backgrounded = typeof message.is_backgrounded === "boolean" ? message.is_backgrounded : known?.backgrounded
+        this.tasks.set(message.task_id, { ...known, type, description: message.description ?? known?.description ?? "", toolUseID: resumed ?? message.tool_use_id ?? known?.toolUseID, backgrounded })
+        if (type === "local_agent" && typeof message.tool_use_id === "string" && !resumed) {
+          this.rememberSubagent(message.tool_use_id, { agentID: message.task_id })
+          // A subagent's own (the turn's have theirs from their call): its session from the start,
+          // as the turn may end before it says anything.
+          if (this.active) this.subagentLane(this.active, message.tool_use_id)
+          if (backgrounded) this.toBackground(message.tool_use_id)
+        }
         if (resumed && this.active) this.resumedLane(this.active, resumed)
         if (message.is_backgrounded && !message.ambient) this.shellFor(message.task_id)
         return
       }
-      case "task_updated":
-        if (message.patch?.is_backgrounded) this.shellFor(message.task_id)
+      case "task_updated": {
+        if (!message.patch?.is_backgrounded) return
+        const task = this.tasks.get(message.task_id)
+        if (task) task.backgrounded = true
+        this.shellFor(message.task_id)
+        // A subagent moved to the background: it works on past the turn.
+        if (task?.type === "local_agent" && task.toolUseID) this.toBackground(task.toolUseID)
         return
+      }
       case "task_notification": {
         const task = this.tasks.get(message.task_id)
         if (task && typeof message.output_file === "string") task.outputFile = message.output_file
@@ -1313,12 +1346,28 @@ class ClaudeThread implements Thread {
     return Boolean(this.query) && this.liveTasks.size > 0
   }
 
+  onWorkLost?: (lost: LostWork[]) => void
+  /** What it had going when it was started again for a message, for that message to say. */
+  private cut: LostWork[] = []
+
+  /** What it left going, each of which tells it as it ends (Claude Code carries on then). */
+  get wakingWork(): LostWork[] {
+    if (!this.query) return []
+    return [...this.liveTasks].map((id) => {
+      const task = this.tasks.get(id)
+      const output = task?.last?.output.trim().slice(-2_000) || undefined
+      if (task?.type === "local_bash") return { kind: "command", what: (task.toolUseID ? this.commands.get(task.toolUseID) : undefined) ?? task.description, output }
+      return { kind: "task", what: task?.description || "A task in the background", output }
+    })
+  }
+
   /** What it keeps going that's neither a command (in the bar) nor a subagent (a session of its own). */
   get backgroundTasks() {
     if (!this.query) return []
     return [...this.liveTasks].flatMap((id) => {
       const task = this.tasks.get(id)
-      if (task?.shell || task?.type === "local_bash" || (task?.toolUseID && this.backgroundLanes.has(task.toolUseID))) return []
+      // (A subagent with a session is listed as one, under a turn or after it.)
+      if (task?.shell || task?.type === "local_bash" || (task?.toolUseID && (this.backgroundLanes.has(task.toolUseID) || this.active?.subagents.has(task.toolUseID)))) return []
       return [{ id, since: task?.since ?? Date.now() }]
     })
   }
@@ -1327,7 +1376,7 @@ class ClaudeThread implements Thread {
     for (const { id } of this.backgroundTasks) await this.query?.stopTask?.(id).catch(() => {})
   }
 
-  private open(sdk: any, modelID: string, effort: string | undefined, plan: boolean, append: string, hooks: TurnHooks, skills?: string) {
+  private open(sdk: any, modelID: string, effort: string | undefined, plan: boolean, append: string, hooks: TurnHooks, skills?: string, subagents: ReturnType<typeof claudeSubagents> = { agents: {} }) {
     // (Without it, the SDK's own words would be about a build of its own it doesn't have.)
     if (!this.agent.executable()) throw new Error(`Install Claude Code first: ${this.agent.install}`)
     // Why an earlier one ended is not this one's.
@@ -1353,7 +1402,7 @@ class ClaudeThread implements Thread {
     const ownMemory = named && existsSync(named) ? named : undefined
     this.input = new Queue()
     const tools = fenceOn() ? relayedTools(this.session.id, this) : kuvoTools(this.session.id)
-    this.opened = { model: modelID, effort, plan, append, program: this.agent.program, tools: tools?.key, skills, fence: fenceKey() + fullAccessMark(this.session.id) }
+    this.opened = { model: modelID, effort, plan, append, program: this.agent.program, tools: tools?.key, skills, fence: fenceKey() + fullAccessMark(this.session.id), subagents: JSON.stringify(subagents) }
     this.query = sdk.query({
       prompt: this.input,
       options: {
@@ -1370,11 +1419,14 @@ class ClaudeThread implements Thread {
         hooks: { PreToolUse: [{ hooks: [async (hookInput: any) => this.preToolUse(hookInput)] }] },
         systemPrompt: { type: "preset", preset: "claude_code", ...(append ? { append } : {}) },
         ...(skills ? { plugins: [{ type: "local" as const, path: skills, skipMcpDiscovery: true }] } : {}),
+        // Your subagents, over one of the same name in ~/.claude/agents (as its --agents flag's are).
+        ...(Object.keys(subagents.agents).length ? { agents: subagents.agents } : {}),
         ...(resume ? { resume: id } : { sessionId: id }),
         // A bot's memory in its own folder, once it's there.
         ...(ownMemory ? { settings: { autoMemoryDirectory: ownMemory } as any } : {}),
         // Its commands know their conversation, as the engine's do (kuvo-wake schedules for it).
-        env: { ...this.agent.env(), OPENCODE_SESSION_ID: this.session.id, ...whole?.env },
+        // And the model its subagents use when theirs doesn't say (Settings › Agents), one it runs.
+        env: { ...this.agent.env(), OPENCODE_SESSION_ID: this.session.id, ...(subagents.model ? { CLAUDE_CODE_SUBAGENT_MODEL: subagents.model } : {}), ...whole?.env },
         // Its own sandbox off while the box's is on (yours, or a project's settings, may turn it
         // on): one sandbox can't run inside another on a Mac, and every command would fail.
         ...(whole ? { sandbox: { enabled: false }, spawnClaudeCodeProcess: whole.spawn } : {}),
@@ -1498,12 +1550,16 @@ class ClaudeThread implements Thread {
       ended = error
     }
     if (this.query === query) {
+      // Ended by itself between turns (killed, or crashed) with work going that would have woken
+      // it as it ended: that went with it, and nothing will (no turn here to fail and say so).
+      const lost = this.active ? [] : this.wakingWork
       this.query = undefined
       this.input = undefined
       this.lastEnd = ended
       // Claude Code stopped (or crashed): what it left running went with it.
       this.leftRunning()
       emit("session.background.updated", { sessionID: this.session.id }, this.session.location.directory)
+      if (lost.length) this.onWorkLost?.(lost)
     }
     // Ended under a turn of this Claude Code (not one started since on a new one).
     const active = this.active
@@ -1841,10 +1897,12 @@ class ClaudeThread implements Thread {
     if (call) {
       const input = call.input
       if (kuvoTool(call.name, input).name !== "subagent") return undefined
-      background = input.run_in_background === true
+      // As Claude Code says it runs (its Agent tool runs one in the background unless told not
+      // to); before it says, as the call asked.
+      const agentID = [...this.tasks].find(([, task]) => task.toolUseID === callID && task.type === "local_agent")?.[0]
+      background = (agentID ? this.tasks.get(agentID)?.backgrounded : undefined) ?? input.run_in_background === true
       run = active.hooks.subagent(callID, { title: String(input.description ?? ""), prompt: typeof input.prompt === "string" ? input.prompt : undefined, agent: input.subagent_type, background, messages: subagentRoute(input.subagent_type) })
       run.stop = () => this.stopSubagent(callID)
-      const agentID = [...this.tasks].find(([, task]) => task.toolUseID === callID && task.type === "local_agent")?.[0]
       this.rememberSubagent(callID, { sessionID: run.sessionID, title: String(input.description ?? ""), ...(typeof input.subagent_type === "string" ? { kind: input.subagent_type } : {}), ...(agentID ? { agentID } : {}) })
     } else if (before) {
       // One sent off in the background in an earlier turn, still at work: its session goes on.
@@ -1944,6 +2002,8 @@ class ClaudeThread implements Thread {
     // A subagent's task came back: its session's work is done (one sent off in the background
     // goes on, and ends with the turn).
     const subagent = active && lane === active ? active.subagents.get(id) : undefined
+    // Launched in the background, as its result says (a Claude Code that doesn't say so as it starts).
+    if (subagent && structured?.status === "async_launched") this.toBackground(id)
     if (active && subagent && !subagent.background) {
       subagent.run.end(block.is_error ? "failed" : "succeeded", block.is_error ? { type: "agent", message: text || "The subagent failed." } : undefined)
       active.subagents.delete(id)
@@ -2047,7 +2107,14 @@ class ClaudeThread implements Thread {
     await this.ownTaken()
     const hooks = this.active?.hooks ?? this.lastHooks
     if (!hooks) return {}
-    const ask = permissionAsk(String(input.tool_name ?? ""), input.tool_input ?? {})
+    // A subagent of yours goes by what it may do (Settings › Agents), with the session's rules over that.
+    const agentRules = input.agent_id ? subagentRules(this.subagents, input.agent_type) : undefined
+    if (agentRules && typeof input.tool_use_id === "string") {
+      this.subagentAsks.set(input.tool_use_id, agentRules)
+      // (Only those it then asks about are taken back: the last hundred are plenty.)
+      for (const old of [...this.subagentAsks.keys()].slice(0, Math.max(0, this.subagentAsks.size - 100))) this.subagentAsks.delete(old)
+    }
+    const ask = { ...permissionAsk(String(input.tool_name ?? ""), input.tool_input ?? {}), ...(agentRules ? { agentRules } : {}) }
     let verdict = hooks.check(ask, true)
     // In plan mode its edits are its own to weigh: its plan, to its file, goes; any other edit it
     // asks about, and that's refused. Asking first would refuse its plan too.
@@ -2119,6 +2186,14 @@ class ClaudeThread implements Thread {
     for (const [taskID, task] of this.tasks) if (task.toolUseID === callID) await this.query?.stopTask?.(taskID).catch(() => {})
   }
 
+  /** A subagent Claude Code runs in the background, as it says: its session goes on past the turn. */
+  private toBackground(callID: string) {
+    const lane = this.active?.subagents.get(callID) ?? this.keptLane(callID)
+    if (!lane || lane.background || lane.run.turn.isEnded) return
+    lane.background = true
+    lane.run.inBackground()
+  }
+
   /** A subagent kept at work in the background, unless the session ended it since (with a turn that failed). */
   private keptLane(callID: string) {
     const lane = this.backgroundLanes.get(callID)
@@ -2137,8 +2212,10 @@ class ClaudeThread implements Thread {
   /** A tool asked about: allowed, or not, as you answer (or your rules do). */
   private async decide(name: string, input: Record<string, any>, options: any, permission: TurnHooks["permission"]): Promise<any> {
     const toolUseID = options?.toolUseID
+    const agentRules = typeof toolUseID === "string" ? this.subagentAsks.get(toolUseID) : undefined
+    if (typeof toolUseID === "string") this.subagentAsks.delete(toolUseID)
     const ask = permissionAsk(name, input)
-    const decision = await permission({ toolCallID: toolUseID, ...ask, message: options?.title ?? options?.description })
+    const decision = await permission({ toolCallID: toolUseID, ...ask, message: options?.title ?? options?.description, ...(agentRules ? { agentRules } : {}) })
     if (decision === "reject") return { behavior: "deny", message: "The user declined this.", toolUseID }
     const result: any = { behavior: "allow", updatedInput: input, toolUseID }
     if (decision === "always" && Array.isArray(options?.suggestions)) {
@@ -2212,6 +2289,8 @@ class ClaudeThread implements Thread {
   /** What it left running ends with it. */
   private leftRunning() {
     for (const task of this.tasks.values()) if (task.shell) endShell(task.shell)
+    // (Its subagents in the background, kept or with the turn under way now.)
+    for (const lane of this.active?.subagents.values() ?? []) if (lane.background) lane.run.end("interrupted")
     for (const lane of this.backgroundLanes.values()) lane.run.end("interrupted")
     this.backgroundLanes.clear()
     this.liveTasks.clear()

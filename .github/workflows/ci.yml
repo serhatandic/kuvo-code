@@ -113,6 +113,9 @@ jobs:
 
       - name: Test the app
         run: ./scripts/test-app.sh
+        env:
+          # (The job's own time limit is what counts here, not heavy.sh's for a run on a busy Mac.)
+          KUVO_HEAVY_LIMIT: "0"
 
       # The same scripts the release workflow runs, signed ad hoc here.
       - name: Build the app

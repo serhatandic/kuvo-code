@@ -35,6 +35,7 @@ import { noteAgentsInside, untilSandboxDecided } from "./fence"
 import { useSavedLoginPath } from "./proc"
 import { setSkillSource } from "./skills"
 import { setServerSource } from "./servers"
+import { setSubagentSource } from "./subagents"
 import { Carrying } from "./carry"
 import { Store } from "./store"
 import { server as requester } from "./groups/api"
@@ -122,6 +123,7 @@ if (machineEngine) link.configure(machineEngine.url, machineEngine.password)
 // The skills Settings › Skills lists, for the agents too (the engine lists them).
 setSkillSource(link, home)
 setServerSource(link)
+setSubagentSource(link, home)
 const engineAgents = new Map<string, EngineAgent>()
 function engineAgent(providerID: string): EngineAgent | undefined {
   if (!link.ready || parseProvider(providerID)) return undefined
@@ -314,6 +316,8 @@ self = requester(`http://127.0.0.1:${server.port}`, password)
 // Once the engine's there (the app says where, a moment after this starts on the Mac): parts under
 // way are followed again, and meetings held.
 void link.whenReady().then(() => {
+  // Sessions whose background work ended as the bridge last stopped hear so now.
+  sessions.wakeLost()
   goals.start()
   sideQuestions.start()
   reviews.resume()

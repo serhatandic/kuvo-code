@@ -95,6 +95,10 @@ export const NAMED = object({
 export const ENDED = object({ providers: list(string) });
 /** This box's sign-ins. */
 export const CREDENTIALS = object({ credentials: list(object({ id: string, integrationID: string, label: string, active: bool })) });
+/** A provider's models asked of again: the folders that get them once their work is done. */
+export const MODELS_REFRESHED = object({ waiting: list(string) });
+/** The providers Refresh Models brings new models to. */
+export const REFRESHABLE = object({ providers: list(string) });
 
 /** What this computer already has that Kuvo Code can use, for the first launch (names only, never a
  * key): the coding agents' programs and their sign-ins; the keys (`key`, brought over with
@@ -121,6 +125,7 @@ export type BrowserStatus = Infer<typeof BROWSER>;
 export type Phones = Infer<typeof PHONES>;
 export type Named = Infer<typeof NAMED>;
 export type Credentials = Infer<typeof CREDENTIALS>;
+export type ModelsRefreshed = Infer<typeof MODELS_REFRESHED>;
 export type Found = Infer<typeof FOUND>;
 
 export const BOX_ROUTES: RouteShape[] = [
@@ -141,6 +146,8 @@ export const BOX_ROUTES: RouteShape[] = [
   { route: "GET kuvo/named", answers: { 200: NAMED } },
   { route: "GET kuvo/accounts/ended", answers: { 200: ENDED } },
   { route: "POST kuvo/accounts/:provider/forget", answers: { 200: NOTHING } },
+  { route: "GET kuvo/accounts/refreshable", answers: { 200: REFRESHABLE } },
+  { route: "POST kuvo/accounts/:provider/refresh", answers: { 200: MODELS_REFRESHED } },
   { route: "GET kuvo/accounts/credentials", answers: { 200: CREDENTIALS } },
   { route: "GET kuvo/accounts/found", answers: { 200: FOUND } },
   { route: "POST kuvo/accounts/found/use", answers: { 200: NOTHING } },

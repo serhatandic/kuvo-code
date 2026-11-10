@@ -1005,7 +1005,7 @@ nonisolated private struct AddedAccount: Decodable, Sendable {
     var providerID: String
 }
 
-nonisolated private extension String {
+nonisolated extension String {
     /// As one part of a path: "claude-code@1f2e" stays readable, anything else is escaped.
     var pathComponentEscaped: String {
         addingPercentEncoding(withAllowedCharacters: CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_.~@"))) ?? self

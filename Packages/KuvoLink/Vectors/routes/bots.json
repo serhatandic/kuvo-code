@@ -122,7 +122,7 @@
         },
         {
           "only": "machine", "why": "A bot on a machine is told it runs there, in your time zone, with the machine's own browser.",
-          "engineGot": { "method": "PUT", "path": "/api/experimental/session/{{madeSession}}/instructions/entries/kuvo.bot", "json": { "value": { "<contains>": "through the browser tools: one on this machine" } } }
+          "engineGot": { "method": "PUT", "path": "/api/experimental/session/{{madeSession}}/instructions/entries/kuvo.bot", "json": { "value": { "<contains>": "You have a web browser: one on this machine" } } }
         }
       ]
     },

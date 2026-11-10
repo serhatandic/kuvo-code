@@ -86,8 +86,8 @@ A pattern matches the user's other apps and other sessions: on 2026-11-07 one `p
 - **Keep tests deterministic.** No sleeps, timeouts or retries, and no device clocks. A flaky test gets fixed, not retried. Each test runs alone, in folders of its own.
 - **Skip low-value tests**: trivial getters, wiring, and edge cases no one would hit. A visual nitpick gets a look before and after, not a UI test.
 - **Running them:**
-  - the app's tests with `scripts/test-app.sh`, mapped by journey in `KuvoCodeTests/SCENARIOS.md` (it queues itself: a run waits for one already going);
-  - each package's own suite (`swift test`);
+  - the app's tests with `scripts/test-app.sh`, mapped by journey in `KuvoCodeTests/SCENARIOS.md` (it queues itself: a run waits for one already going; it is `scripts/heavy.sh mac`, the one lock for what drives the UI);
+  - each package's own suite (`swift test`), and Mac builds, through `scripts/heavy.sh mac-build` (two slots, beside the app suite; `CONTRIBUTING.md` says which build folder);
   - the bridge's, with `node --test` in `Packages/KuvoLink/Tests/Bridge`;
   - the box's code (its link and the coding agents' bridge), with `bun test` in `Packages/Box`.
 

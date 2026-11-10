@@ -1155,9 +1155,9 @@ public final class RemoteServer: @unchecked Sendable {
         fi
         [ -f "$K/keys/settings.json" ] && export OPENCODE_CONFIG="$K/keys/settings.json"
         [ -f "$K/box/opencode.json" ] && export OPENCODE_CONFIG="$K/box/opencode.json"
-        # What some providers need from the engine until opencode handles it, on top of what it
-        # starts with, as its box learned it from the engine (its link's `engine-config`): after a
-        # restart with no Mac there too. A box too old to know it starts as before.
+        # What the engine starts with, as its box gives it (its link's `engine-config`), which also
+        # puts what some providers need from the engine, as the box learned it, beside its
+        # settings: after a restart with no Mac there too. A box too old to know it starts as before.
         if [ -f "$K/bin/kuvo-link.js" ]; then
           c=$(cd "$K" && KUVO_HOME="$K" BUN_BE_BUN=1 BUN_RUNTIME_TRANSPILER_CACHE_PATH=0 "$K/engine/$V/opencode" --config=/dev/null --no-env-file "$K/bin/kuvo-link.js" engine-config 2>/dev/null) && case "$c" in "{"*"}") export OPENCODE_CONFIG_CONTENT="$c" ;; esac
         fi
