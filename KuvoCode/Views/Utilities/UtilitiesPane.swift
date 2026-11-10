@@ -62,7 +62,8 @@ struct UtilitiesPane: View {
                                     select: { utilities.choose(tab.id) },
                                     close: { withAnimation(.ui) { utilities.close(tab.id) } }
                                 )
-                                .frame(minWidth: 120, maxWidth: 190)
+                                // (The Work Queue's says how many items too: "Work Queue · 24 items".)
+                                .frame(minWidth: 120, maxWidth: tab.kind == .workQueue ? 226 : 190)
                                 .id(tab.id)
                                 .contextMenu {
                                     Button("Close Tab") { withAnimation(.ui) { utilities.close(tab.id) } }

@@ -107,7 +107,7 @@ struct WorkItemPage: View {
                 .help("Added \(SentTime.full(item.created.date)) by \(item.created.by.words)")
             }
             if let detail, !detail.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                ReplyView(markdown: detail.body, parser: MathMarkdownParser(), images: pictures) { url in open(url) }
+                ReplyView(markdown: detail.body, parser: parser(detail.body), images: pictures) { url in open(url) }
             } else if detail != nil {
                 Text("No description yet.")
                     .font(.system(size: 13))
@@ -126,7 +126,7 @@ struct WorkItemPage: View {
                                     .font(.system(size: 11, weight: .medium))
                                     .foregroundStyle(.secondary)
                                     .help(SentTime.full(note.date))
-                                ReplyView(markdown: note.text, parser: MathMarkdownParser()) { url in open(url) }
+                                ReplyView(markdown: note.text, parser: parser(note.text)) { url in open(url) }
                             }
                         }
                         if !detail.files.isEmpty { files(detail) }
@@ -254,6 +254,11 @@ struct WorkItemPage: View {
                 .font(.system(size: 12))
             }
         }
+    }
+
+    /// What it says, as a reply is drawn: other items it names (`#212`) as their chips.
+    private func parser(_ text: String) -> FileLinkingParser {
+        FileLinkingParser(folders: { [] }, refs: text.contains("#") ? store.refs(in: text, box: opened.box) : [:])
     }
 
     /// Opens a link from what it says: a chip's item here, a web page in the panel's browser.
