@@ -20,12 +20,13 @@ import { approvalOf } from "./approval";
 import { asksIn, callOf } from "./answers";
 import { pauseGoal, REVIEW_PAUSE, runningGoal } from "./goals";
 import { usableModels, type Usable } from "./models";
-import { review, type Decision, type ReviewedAction, type ReviewContext, type SmallModel, type Verdict } from "./reviewer";
-import { botOfConversation, worksFor } from "./tree";
+import { review, keptFromSessions, type Decision, type ReviewedAction, type ReviewContext, type SmallModel, type Verdict } from "./reviewer";
+import { botOfConversation, startedByOf, worksFor } from "./tree";
 import { botHere } from "../bots/here";
 import { readProjects } from "../areas/projects";
 import { commandTemporary } from "../fence/state";
-import { askedAbout } from "../fence/policy";
+import { askedAbout, fencePolicy } from "../fence/policy";
+import { projectWorktrees } from "./project-trees";
 import type { EngineAnswer } from "../engine/client";
 import type { EngineSession } from "../engine/sessions";
 import type { Target } from "../../shared/records";
@@ -180,10 +181,11 @@ export async function reviewIn(session: string, action: ReviewedAction, signal?:
   const own = bot && !botOfConversation(at.data.id) ? botHere(bot.id)?.session : undefined;
   const ownAt = own && own !== at.data.id ? await conversationOf(own).catch(() => null) : null;
   const said = [...(ownAt ? await yourMessages(ownAt, signal) : []), ...await yourMessages(at, signal)];
-  const context: ReviewContext = { session: at.data.id, said, ...(bot ? { bot } : {}) };
+  const [folders, task] = await Promise.all([workFolders(at), taskOf(at, signal)]);
+  const context: ReviewContext = { session: at.data.id, said, ...(bot ? { bot } : {}), ...(folders.length ? { folders } : {}), ...(task ? { task } : {}) };
   let verdict: Verdict & { paused?: boolean };
   try {
-    verdict = await review(action, context, { model: await reviewModelOf(at, signal), signal, pin, own: ownFolders(at) });
+    verdict = await review(action, context, { model: await reviewModelOf(at, signal), signal, pin, own: await ownFolders(at) });
   } catch (error) {
     // (Only when its log can't be kept, so there's nothing on it to approve.)
     return { decision: "refuse", reason: `Auto's reviewer couldn't review it (${oneLine(String((error as Error)?.message ?? error), 120)}).`, by: "code", held: false, why: "failed", conversation: at };
@@ -219,8 +221,10 @@ export async function tellApproved(session: string, decision: Decision, found?: 
 const READING = new Set(["read", "glob", "grep", "list", "ls", "view", "notebookread"]);
 // Of those, the ones that read one file, as named.
 const OWN_READING = new Set(["read", "view", "notebookread"]);
-// Asks already taken up in this process (an event can come again as the stream reconnects).
-const reviewing = new Set<string>();
+// Asks already taken up in this process, with how each went (an event can come again as the stream
+// reconnects, or while the asks waiting as it did are taken up: it's answered as the first was, so
+// no notice goes to your phones for one the reviewer is deciding).
+const reviewing = new Map<string, Promise<Verdict | null>>();
 
 /** How an ask to work outside a conversation's folder was taken up, as every client hears it
  * (`reviews` on `kuvo/sandbox/asks`): being checked by Auto's reviewer, allowed (by it, or in the
@@ -283,19 +287,20 @@ function noteReview(id: string, session: string, state: AskReview["state"], call
  * Settings › Permissions ask. */
 export async function reviewPermission(source: Target, event: { type?: string; data?: { id?: unknown; sessionID?: unknown; action?: unknown } }, signal?: AbortSignal, found?: Conversation | null): Promise<Verdict | null> {
   const { id, sessionID } = event.data ?? {};
-  if (event.type !== "permission.asked" || typeof id !== "string" || typeof sessionID !== "string" || reviewing.has(id)) return null;
-  reviewing.add(id);
-  if (reviewing.size > 500) reviewing.delete(reviewing.values().next().value!);
+  if (event.type !== "permission.asked" || typeof id !== "string" || typeof sessionID !== "string") return null;
+  const taken = reviewing.get(id);
+  if (taken) return taken;
   // Listed as checked at once, before anything is read, so no client shows it meanwhile.
   if (event.data?.action === "external_directory") noteReview(id, sessionID, "checking");
   // (Taken up again as the event comes again, should this one fail; meanwhile it's yours.)
-  try {
-    return await answerPermission(source, id, sessionID, signal, found);
-  } catch (error) {
+  const answering = answerPermission(source, id, sessionID, signal, found).catch(error => {
     reviewing.delete(id);
     if (askReviews.has(id)) noteReview(id, sessionID, "yours", askReviews.get(id)?.call);
     throw error;
-  }
+  });
+  reviewing.set(id, answering.catch(() => null));
+  if (reviewing.size > 500) reviewing.delete(reviewing.keys().next().value!);
+  return answering;
 }
 
 /** The asks to work outside a folder already waiting as the box (re)connects to an engine or the
@@ -324,17 +329,52 @@ const attachedOf = (session: string): string[] => attachmentRoots().map(root => 
 
 /** The folders a conversation works in as its own: its project's, its commands' temporary folder
  * (their TMPDIR, in Kuvo Code's), the files sent with its messages (and with its parent's, for a
- * subagent's), and for a bot's conversation or work, the bot's own folder, the projects it made and
- * its running goal's. */
-function ownFolders(at: Conversation): string[] {
+ * subagent's), its project's worktrees (`projectTrees`), and for a bot's conversation or work, the
+ * bot's own folder, the projects it made and its running goal's. */
+async function ownFolders(at: Conversation): Promise<string[]> {
   const folder = at.data.location?.directory;
   const folders = typeof folder === "string" ? [folder, commandTemporary(folder)].filter((each): each is string => Boolean(each)) : [];
   folders.push(...[at.data.id, at.data.parentID].filter((each): each is string => typeof each === "string").flatMap(attachedOf));
+  if (typeof folder === "string") folders.push(...await projectTrees(folder));
   const bot = botOfConversation(at.data.id) ?? worksFor(at.data);
   if (!bot) return folders;
   const own = botHere(bot.bot)?.folder;
   const made = readProjects().filter(project => !project.removed && project.madeBy?.bot === bot.bot).map(project => project.directory);
   return [...folders, ...(own ? [own] : []), ...made, ...(runningGoal(bot.bot)?.projects ?? [])];
+}
+
+/** A conversation's project's linked worktrees, wherever they are, where it works in the project's
+ * main folder (`projectWorktrees`): its own, as its folder is. But where an agent in Auto couldn't
+ * start a session either (`keptFromSessions`: your home, a whole personal folder, your secrets, what
+ * runs at login), and Kuvo Code's own (another session's worktree there), each judged as before. */
+async function projectTrees(folder: string): Promise<string[]> {
+  const trees = projectWorktrees(folder);
+  if (!trees.length) return [];
+  const policy = fencePolicy();
+  const ours = (tree: string) => policy.kuvo.some(wall => tree === wall || tree.startsWith(wall + "/") || wall.startsWith(tree + "/")) || policy.kuvoPatterns.some(pattern => new RegExp(pattern).test(tree + "/"));
+  const kept = await Promise.all(trees.map(tree => ours(tree) ? Promise.resolve("Kuvo Code's own") : keptFromSessions(tree, policy)));
+  return trees.filter((_, at) => !kept[at]);
+}
+
+/** Where a conversation works as its own, for its reviewer to judge by: its folder first, then its
+ * project's other folders and worktrees. */
+async function workFolders(at: Conversation): Promise<string[]> {
+  const folder = at.data.location?.directory;
+  if (typeof folder !== "string") return [];
+  const others = readProjects().find(project => project.directory === folder)?.folders ?? [];
+  return [...new Set([folder, ...others, ...await projectTrees(folder)])];
+}
+
+/** The task another agent started a conversation with (its first message, the letter from the one
+ * that started it, `kuvo.startedBy`): that agent's name and words; none for one you started. */
+async function taskOf(at: Conversation, signal?: AbortSignal): Promise<ReviewContext["task"]> {
+  const starter = startedByOf(at.data);
+  if (!starter) return undefined;
+  const page = await call(at.target, "GET", `/api/session/${encodeURIComponent(at.data.id)}/message?limit=5&order=asc`, undefined, signal).catch(() => null);
+  const first = (Array.isArray(page) ? page : []).find(message => isObject(message) && message.type === "user");
+  const text = isObject(first) ? String(first.text ?? "") : "";
+  const head = /^\[Message from (.{1,200}?) · (ses_[A-Za-z0-9_-]+)\][^\n]*\n\n/.exec(text);
+  return head && head[2] === starter ? { from: head[1], text: text.slice(head[0].length) } : undefined;
 }
 
 /** Whether `file` is `folder` or in it, as the disk has them: links followed, as far as they exist. */
@@ -420,7 +460,7 @@ async function answerPermission(source: Target, id: string, sessionID: string, s
     return null;
   }
   const reply = (body: Record<string, unknown>) => engineCall(source, "POST", `/api/session/${encodeURIComponent(permission.asker)}/permission/${encodeURIComponent(permission.id)}/reply`, body, signal);
-  const own = ownFolders(at);
+  const own = await ownFolders(at);
   if (actions.every(action => action.kind === "file" && own.some(folder => isWithin(action.path, folder)))) {
     await reply({ decision: "once" });
     noteReview(id, sessionID, "allowed", call);

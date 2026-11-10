@@ -1,6 +1,7 @@
 import "./safety"
 import { afterAll, beforeAll, expect, test } from "bun:test"
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { spawnSync } from "node:child_process"
 import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
 
@@ -507,4 +508,66 @@ test("in a bot's conversation the model reads what you wrote there beside its go
   await reviewer.review(command("crontab jobs.txt"), { session: "ses_bot_words", said: ["Add a cron job that syncs every hour"], bot: { id: "bot_x", name: "Pixel", goal: "Keep the site fresh" } }, given(ask))
   expect(ask.shown[0]).toContain("Keep the site fresh")
   expect(ask.shown[0]).toContain("Add a cron job that syncs every hour")
+})
+
+test("once the model allows changing files in a folder, the same there goes ahead again without it for the rest of the conversation, starting the refusals in a row over; elsewhere it still judges each (#422)", async () => {
+  const context = yours("Compare the models on three past fixes, each in its own copy")
+  const change = (where: string) => ({ kind: "file" as const, path: where, access: "write" as const, folder: project })
+  const copy = join(box, "eval-copy")
+  mkdirSync(join(copy, "Tests"), { recursive: true })
+  expect(await reviewer.review(change(join(copy, "Tests", "vault.test.js")), context, given(model(allows)))).toMatchObject({ decision: "allow", by: "model" })
+  // From now on it would refuse anything it's asked.
+  const ask = model(refuses)
+  expect(await reviewer.review(change(join(copy, "Tests", "vault.test.js")), context, given(ask))).toMatchObject({ decision: "allow", by: "code" })
+  expect(await reviewer.review(change(join(copy, "Tests", "Bridge", "new.test.js")), context, given(ask))).toMatchObject({ decision: "allow", by: "code" })
+  expect(ask.shown).toHaveLength(0)
+  // Refusals elsewhere, with changes there between them, never pause it: each change there starts
+  // the count over, as the model's allow did.
+  for (const other of ["a", "b", "c"]) {
+    expect(await reviewer.review(change(join(box, `elsewhere-${other}`, "notes.md")), context, given(ask))).toMatchObject({ decision: "refuse", by: "model" })
+    expect(await reviewer.review(change(join(copy, "Tests", `${other}.test.js`)), context, given(ask))).toMatchObject({ decision: "allow", by: "code" })
+  }
+  expect(reviewer.reviewLog(context.session, join(box, "reviews")).paused).toBeUndefined()
+  // git's hooks there are judged on their own, and so is a change in another conversation.
+  expect(await reviewer.review(change(join(copy, ".git", "hooks", "pre-commit")), context, given(ask))).toMatchObject({ decision: "refuse", by: "model" })
+  expect(await reviewer.review(change(join(copy, "Tests", "d.test.js")), yours("Something else"), given(ask))).toMatchObject({ decision: "refuse", by: "model" })
+  // Nor is a change your home allowed whole after one there is.
+  const home = model(allows)
+  await reviewer.review(change(join(homedir(), "kuvo-test-notes.md")), context, given(home))
+  expect(await reviewer.review(change(join(homedir(), "kuvo-test-other.md")), context, given(ask))).toMatchObject({ decision: "refuse", by: "model" })
+})
+
+// A repository of the test's own, as git makes it (none of your settings).
+const GIT_ENV = { ...process.env, GIT_AUTHOR_NAME: "Test", GIT_AUTHOR_EMAIL: "test@example.com", GIT_COMMITTER_NAME: "Test", GIT_COMMITTER_EMAIL: "test@example.com", GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" }
+function git(folder: string, ...args: string[]): string {
+  const ran = spawnSync("git", ["-c", "init.defaultBranch=main", "-c", "core.hooksPath=/dev/null", ...args], { cwd: folder, env: GIT_ENV, encoding: "utf8" })
+  if (ran.status !== 0) throw new Error(`git ${args.join(" ")}: ${ran.stderr}`)
+  return ran.stdout.trim()
+}
+
+test("a long test file of the project's own (in its git, in the conversation's folders) is read in part, with what changed in it, rather than held back for its length; one that isn't still is (#422)", async () => {
+  const repo = join(box, "long-tests")
+  mkdirSync(join(repo, "Tests"), { recursive: true })
+  const long = "import test from 'node:test'\n" + "test('a case', () => {})\n".repeat(2000)
+  writeFileSync(join(repo, "Tests", "sandbox-asks.test.js"), long)
+  git(repo, "init", "-q")
+  git(repo, "add", "-A")
+  git(repo, "commit", "-qm", "first")
+  writeFileSync(join(repo, "Tests", "sandbox-asks.test.js"), long + "test('holds a request open past the timeout', () => {})\n")
+  const run = (file: string) => ({ kind: "command" as const, command: `KUVO_TEST_BUN=$HOME/.bun/bin/bun node --test ${file}`, folder: repo })
+  const context = { ...yours("Fix the reset under load"), folders: [repo] }
+  const ask = model(allows)
+  expect(await reviewer.review(run("Tests/sandbox-asks.test.js"), context, given(ask))).toMatchObject({ decision: "allow", by: "model" })
+  expect(ask.shown[0]).toContain("the project's own file, tracked in its git")
+  expect(ask.shown[0]).toContain("import test from 'node:test'")
+  expect(ask.shown[0]).toContain("+test('holds a request open past the timeout', () => {})")
+  // One it made and never added, or the project's run from a conversation working elsewhere: held
+  // back unread, as before.
+  writeFileSync(join(repo, "Tests", "scratch.test.js"), long)
+  expect(await reviewer.review(run("Tests/scratch.test.js"), context, given(ask))).toMatchObject({ decision: "refuse", held: true, why: "unread", by: "code" })
+  expect(await reviewer.review(run("Tests/sandbox-asks.test.js"), yours("Fix the reset under load"), given(ask))).toMatchObject({ decision: "refuse", held: true, why: "unread", by: "code" })
+  // Changed too much to show what changed: held back too.
+  writeFileSync(join(repo, "Tests", "sandbox-asks.test.js"), "test('another', () => {})\n".repeat(3000))
+  expect(await reviewer.review(run("Tests/sandbox-asks.test.js"), context, given(ask))).toMatchObject({ decision: "refuse", held: true, why: "unread", by: "code" })
+  expect(ask.shown).toHaveLength(1)
 })

@@ -75,7 +75,9 @@ function chunked(folders: string[], most = 700): string[] {
   return out;
 }
 
-const GUARDED = String.raw`(.*/)?(\.git$|\.git/(${GIT_GUARDED})|\.opencode(/|$)|opencode\.jsonc?$|(${AGENTS_GUARDED})$)`;
+/** What's kept from commands inside a folder they write (git's hooks and settings, the engine's and
+ * the coding agents' settings), as a pattern over the path after that folder's `/`. */
+export const GUARDED = String.raw`(.*/)?(\.git$|\.git/(${GIT_GUARDED})|\.opencode(/|$)|opencode\.jsonc?$|(${AGENTS_GUARDED})$)`;
 
 export function seatbeltProfile(policy: FencePolicy, options: SeatbeltOptions): string {
   const mode = options.mode ?? "enforce";
