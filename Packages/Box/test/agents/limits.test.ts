@@ -81,6 +81,15 @@ class Clock {
 
 const route = async (limits: Limits, method = "GET", rest: string[] = []) => ((await (await limitsRoutes(limits, method, rest)).json()) as any).data as { accounts: AccountLimits[]; services: string[] }
 
+/**
+ * Refreshed, as a client's pull does, once the reads are over: the route answers after two seconds
+ * with what's read by then, and a Codex started to read takes longer than that on a busy Mac.
+ */
+const refreshed = async (limits: Limits) => {
+  await limits.refresh()
+  return route(limits)
+}
+
 let anthropic: Anthropic
 let home: string
 let clock: Clock
@@ -433,7 +442,7 @@ describe("Codex", () => {
     })
     codex = new TestCodex(launcher, home)
     const limits = new Limits(() => agentAccounts([codex!]), undefined, clock.now)
-    const { accounts } = await route(limits, "POST", ["refresh"])
+    const { accounts } = await refreshed(limits)
     expect(accounts).toHaveLength(1)
     expect(accounts[0]!.plan).toBe("Pro")
     expect(accounts[0]!.windows.map((each) => [each.id, each.used, each.minutes, each.model, each.resetsAt])).toEqual([
@@ -472,7 +481,7 @@ describe("Codex", () => {
   test("an API key has no plan limits: not listed", async () => {
     codex = new TestCodex(fakeCodex(home, { type: "apiKey" }, {}), home)
     const limits = new Limits(() => agentAccounts([codex!]), undefined, clock.now)
-    expect((await route(limits, "POST", ["refresh"])).accounts).toEqual([])
+    expect((await refreshed(limits)).accounts).toEqual([])
   })
 })
 
@@ -567,7 +576,7 @@ describe("who each account is, the same from every computer", () => {
       }
     })({ home, temporary: home, deps: {} as any }, { id: "a1", label: "Work", home: codexHome })
     try {
-      const agent = (await route(new Limits(() => agentAccounts([codex]), undefined, clock.now), "POST", ["refresh"])).accounts[0]!
+      const agent = (await refreshed(new Limits(() => agentAccounts([codex]), undefined, clock.now))).accounts[0]!
       const engine = (signedIn: string) => {
         const accounts = new EngineAccounts(async () => [{ integrationID: "openai", active: true, value: { type: "oauth", access: access(signedIn), expires: clock.at + 3_600_000, metadata: { accountID: "acct-77" } } }])
         return accounts.refresh().then(() => accounts.accounts()[0]!.limits.identity!())
@@ -597,7 +606,7 @@ describe("who each account is, the same from every computer", () => {
     })({ home, temporary: home, deps: {} as any }, { id: "a1", home: codexHome })
     try {
       const limits = new Limits(() => agentAccounts([codex]), undefined, clock.now)
-      const first = (await route(limits, "POST", ["refresh"])).accounts[0]!
+      const first = (await refreshed(limits)).accounts[0]!
       expect(first.windows.map((each) => each.used)).toEqual([0.7])
       // Signed in as Bob in Terminal; the Codex running reads Ada's sign-in still.
       signIn("bob")
