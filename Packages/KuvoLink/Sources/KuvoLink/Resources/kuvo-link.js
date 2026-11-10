@@ -7626,6 +7626,25 @@ async function keepReadThroughSummary(target, session, signal) {
     return;
   await call(target, "POST", `${route}/view`, { idle: listed.time.idle }, signal).catch(() => {});
 }
+async function keepWorkRead(target, session, signal) {
+  const data = typeof session === "string" ? await call(target, "GET", `/api/session/${encodeURIComponent(session)}`, undefined, signal).catch(() => null) : session;
+  if (!data?.id || data.parentID || !startedByOf(data) || isHiddenRun(data))
+    return;
+  const idle = data.time?.idle;
+  if (idle === undefined || idle <= (data.time?.viewed ?? 0))
+    return;
+  const turn = await latestTurn(data.id, (route, folder) => engineGet(target, route, folder));
+  if (signal?.aborted || answersYou(turnFor(turn.data, turn.whole), data))
+    return;
+  await call(target, "POST", `/api/session/${encodeURIComponent(data.id)}/view`, { idle }, signal).catch(() => {});
+}
+async function settleWorkRead(target, signal) {
+  for (const { data } of await workSessions([target], signal)) {
+    if (signal?.aborted)
+      return;
+    await keepWorkRead(target, data, signal);
+  }
+}
 var tokensOf = (data) => (data.tokens?.input ?? 0) + (data.tokens?.output ?? 0) + (data.tokens?.reasoning ?? 0);
 async function describeWork(listed, working, { replies = false, signal } = {}) {
   const { data } = listed;
@@ -28180,6 +28199,8 @@ async function watchEvents(read, tell, signal, answered = () => {}, { bots = fal
         noteFullAccessAtWork(source, atWork3).catch(() => {});
       if (work)
         atWork3(source).then((sessions) => takeUpWaitingAsks(source, sessions, connection.signal)).catch(() => {});
+      if (work)
+        settleWorkRead(source, connection.signal).catch(() => {});
       for await (const event of serverEvents(response.body)) {
         if (event.type === "session.execution.started")
           freshenBot(source, event.data?.sessionID).catch(() => {});
@@ -28210,6 +28231,8 @@ async function watchEvents(read, tell, signal, answered = () => {}, { bots = fal
           noteSignIn(event, source).catch(() => {}).finally(() => signedIn(event));
         if (work && event.type === "session.execution.succeeded" && typeof event.data?.sessionID === "string")
           keepReadThroughSummary(source, event.data.sessionID, connection.signal).catch(() => {});
+        if (work && RUN_ENDS.has(event.type) && typeof event.data?.sessionID === "string")
+          keepWorkRead(source, event.data.sessionID, connection.signal).catch(() => {});
         if (!bots) {
           if (event.type === "session.created")
             settleNewSession(source, event.data?.sessionID ?? event.data?.info?.id).catch(() => {});
@@ -38639,6 +38662,7 @@ export {
   keepMoving,
   keepReadThroughSummary,
   keepSkillTrashClear,
+  keepWorkRead,
   keptAwake,
   keysNamedHere,
   learnCompatibility,
@@ -38784,6 +38808,7 @@ export {
   settleDueModels,
   settleGoalHolds,
   settleHeld,
+  settleWorkRead,
   showsAll,
   signDoc,
   signInReturn,

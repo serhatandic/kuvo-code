@@ -8,7 +8,8 @@ import { isObject } from "../../shared/json";
 import { cut } from "../../shared/text";
 import { call, engineGet } from "../engine/client";
 import { CHATS } from "../home";
-import { describePermission, projectNameOf } from "../notices/news";
+import { answersYou, describePermission, latestTurn, projectNameOf, turnFor } from "../notices/news";
+import { isHiddenRun } from "../engine/sessions";
 import { lastTurn, lastTurnEnd, summaryAtEnd, summaryRowAtEnd, workOutcome } from "../../shared/summaries";
 import { listBots } from "../bots/list";
 import { asksIn } from "./answers";
@@ -182,6 +183,36 @@ export async function keepReadThroughSummary(target: Target, session: string, si
   if (before === undefined || listed?.time?.idle === undefined || (listed.time.viewed ?? 0) < before) return;
   // (The engine takes which end you saw, and refuses a look that doesn't say.)
   await call(target, "POST", `${route}/view`, { idle: listed.time.idle }, signal).catch(() => {});
+}
+
+/**
+ * READ_RULE: a session another conversation started (a bot's or a lead's, `kuvo.startedBy`) is
+ * that conversation's work, which it hears of itself. A turn of it is unread for you only when it
+ * answers you (NOTIFY_RULE: you wrote in it, or answered what it asked you); any other is read as it
+ * ends, here, so no client shows it new. What it asks you still waits on you. `session`: its id, or
+ * as it's listed.
+ */
+export async function keepWorkRead(target: Target, session: string | Listed["data"], signal?: AbortSignal): Promise<void> {
+  const data = typeof session === "string"
+    ? await call(target, "GET", `/api/session/${encodeURIComponent(session)}`, undefined, signal).catch(() => null) as Listed["data"] | null
+    : session;
+  if (!data?.id || data.parentID || !startedByOf(data) || isHiddenRun(data)) return;
+  const idle = data.time?.idle;
+  if (idle === undefined || idle <= (data.time?.viewed ?? 0)) return;
+  // (Its turn read after its end, so one of yours that ended since is in what's read; one that
+  // can't be read is taken as yours.)
+  const turn = await latestTurn(data.id, (route, folder) => engineGet(target, route, folder));
+  if (signal?.aborted || answersYou(turnFor(turn.data, turn.whole), data)) return;
+  await call(target, "POST", `/api/session/${encodeURIComponent(data.id)}/view`, { idle }, signal).catch(() => {});
+}
+
+/** READ_RULE for what ended while this box wasn't listening: each session of agents' work here
+ * left unread, read unless its last turn answers you. */
+export async function settleWorkRead(target: Target, signal?: AbortSignal): Promise<void> {
+  for (const { data } of await workSessions([target], signal)) {
+    if (signal?.aborted) return;
+    await keepWorkRead(target, data, signal);
+  }
 }
 
 const tokensOf = (data: Listed["data"]) => (data.tokens?.input ?? 0) + (data.tokens?.output ?? 0) + (data.tokens?.reasoning ?? 0);

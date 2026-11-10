@@ -116,7 +116,7 @@ export { movesElsewhere } from "./moves/elsewhere";
 export { applyCompatibility, COMPATIBILITY_FILE, ENGINE_LAYER_FILE, engineConfigContent, learnCompatibility, readCompatibility } from "./engine/compatibility";
 export { MODELS_DUE_FILE, refreshModels, settleDueModels } from "./engine/models";
 export { queueOf, queueWatcher, readQueues, scanQueues, stopSession } from "./engine/queue";
-export { keepReadThroughSummary } from "./work/tree";
+export { keepReadThroughSummary, keepWorkRead, settleWorkRead } from "./work/tree";
 export { letAttachmentsGo } from "./server/attached";
 export { workWatcher } from "./work/wakes";
 export { forgetOldHomes } from "./work/homes";

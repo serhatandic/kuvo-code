@@ -9,7 +9,7 @@ import { nameDueWorktrees, nameWorktreeBranch, settleNewSession, tidyWorktrees }
 import { finishDeletes } from "../bots/edit";
 import { freshenBot, freshenBots } from "../bots/tell";
 import { ANSWERED, GROUP_NEWS, NEWS, RUN_ENDS, groupNotice, noticeFor, settleHeld } from "../notices/news";
-import { keepReadThroughSummary } from "../work/tree";
+import { keepReadThroughSummary, keepWorkRead, settleWorkRead } from "../work/tree";
 import { bridgeTarget, engineGet, peerTargets, readBridgeFile, readEngineFile } from "./client";
 import { applyCompatibility, followSettingsFile, learnCompatibility } from "./compatibility";
 import { modelsDue, settleDueModels, WORK_ENDS } from "./models";
@@ -355,6 +355,9 @@ export async function watchEvents(read: () => Target, tell: (notice: Notice) => 
       // Asks to work outside a folder waiting already (it started again as they came, or their
       // event went by unheard): taken up now, so every client's list of them is whole.
       if (work) atWork(source).then(sessions => takeUpWaitingAsks(source, sessions, connection.signal)).catch(() => {});
+      // Agents' work that ended while it wasn't listening (or before boxes read it so): read, unless
+      // its last turn answers you (READ_RULE).
+      if (work) settleWorkRead(source, connection.signal).catch(() => {});
       for await (const event of serverEvents(response.body)) {
         // The box's own work, Mac connected or not: a session made in one of its worktrees told
         // so; a worktree's branch named after its session (as it's made with a title, or given
@@ -390,6 +393,8 @@ export async function watchEvents(read: () => Target, tell: (notice: Notice) => 
         goalHeld?.(event).catch(() => {});
         if (signIns) noteSignIn(event, source).catch(() => {}).finally(() => signedIn(event));
         if (work && event.type === "session.execution.succeeded" && typeof event.data?.sessionID === "string") keepReadThroughSummary(source, event.data.sessionID, connection.signal).catch(() => {});
+        // An agent's work read as each turn of it ends, unless the turn answers you (READ_RULE).
+        if (work && RUN_ENDS.has(event.type) && typeof event.data?.sessionID === "string") keepWorkRead(source, event.data.sessionID, connection.signal).catch(() => {});
         if (!bots) {
           if (event.type === "session.created") settleNewSession(source, event.data?.sessionID ?? event.data?.info?.id).catch(() => {});
           if (event.type === "session.renamed") nameWorktreeBranch(source, event.data?.sessionID).catch(() => {});
