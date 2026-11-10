@@ -88,8 +88,7 @@ A pattern matches the user's other apps and other sessions: on 2026-11-07 one `p
 - **Running them:**
   - the app's tests with `scripts/test-app.sh`, mapped by journey in `KuvoCodeTests/SCENARIOS.md` (it queues itself: a run waits for one already going; it is `scripts/heavy.sh mac`, the one lock for what drives the UI);
   - each package's own suite (`swift test`), and Mac builds, through `scripts/heavy.sh mac-build` (two slots, beside the app suite; `CONTRIBUTING.md` says which build folder);
-  - the bridge's, with `node --test` in `Packages/KuvoLink/Tests/Bridge`;
-  - the box's code (its link and the coding agents' bridge), with `bun test` in `Packages/Box`.
+  - the box and bridge suites with `scripts/test-box.sh [box|bridge|all] [extra test args]` (it queues itself; sandbox tests need a checkout outside `~/.kuvo-code`).
 
   Never drive the Mac app's window from tests, because it takes over the user's keyboard and mouse.
 
