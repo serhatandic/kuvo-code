@@ -326,9 +326,9 @@ final class WorkQueues {
         }
         startRefreshing()
         let known = refs[box] ?? [:]
-        var found: [Int: WorkRef] = [:]
-        for number in numbers { if let ref = known[String(number)] { found[number] = ref } }
-        return found
+        var named: [Int: WorkRef] = [:]
+        for number in numbers { if let ref = known[String(number)] { named[number] = ref } }
+        return named
     }
 
     /// Every half minute, what the chips asked for lately name now: a chip on screen follows its
