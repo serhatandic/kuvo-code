@@ -121,17 +121,25 @@ final class BackgroundWork {
     /// `over`: one running (but not answering) is stopped and started again. Whether launchd took
     /// it (it has no such agent when the app it was registered from is gone, say).
     @discardableResult
-    func start(over: Bool = false) -> Bool {
+    func start(over: Bool = false) async -> Bool {
         guard register() else { return false }
-        let launchctl = Process()
-        launchctl.executableURL = URL(filePath: "/bin/launchctl")
-        launchctl.arguments = ["kickstart"] + (over ? ["-k"] : []) + ["gui/\(getuid())/\(Self.label)"]
-        launchctl.standardOutput = FileHandle.nullDevice
-        launchctl.standardError = FileHandle.nullDevice
-        guard (try? launchctl.run()) != nil else { return false }
-        launchctl.waitUntilExit()
-        return launchctl.terminationStatus == 0
+        // Its end from `ChildProcess`, which never misses it, and the main thread never waits on it.
+        let result = try? await ChildProcess.run(Self.launchctl, ["kickstart"] + (over ? ["-k"] : []) + ["gui/\(getuid())/\(Self.label)"],
+                                                 output: .discard, errors: .discard, limit: .seconds(30), cancellable: false)
+        return result.map { !$0.timedOut && $0.reason == .exit && $0.status == 0 } ?? false
     }
+
+    /// What asks launchd to start it.
+    nonisolated static var launchctl: String {
+        #if DEBUG
+        if let given = launchctlForTests { return given }
+        #endif
+        return "/bin/launchctl"
+    }
+    #if DEBUG
+    /// Tests: a stand-in for launchctl.
+    nonisolated(unsafe) static var launchctlForTests: String?
+    #endif
 
     /// Stop Background Work: the keeper stops what runs, and itself, until it's started again.
     func stop() async throws {

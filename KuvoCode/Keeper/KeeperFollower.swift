@@ -60,7 +60,7 @@ final class KeeperFollower {
         } catch {
             // One that doesn't answer is started over itself, by launchd.
             guard KeeperRecord.read() != nil else { throw error }
-            BackgroundWork.shared.start(over: true)
+            await BackgroundWork.shared.start(over: true)
         }
     }
     /// How long a keeper asked to start has to record itself before the window says it didn't.
@@ -85,7 +85,10 @@ final class KeeperFollower {
         following = true
         if KeeperRecord.read() == nil {
             askedToStart = .now
-            guard startKeeper() else {
+            let started = await startKeeper()
+            // (Stopped while launchd was asked: nothing more.)
+            guard following else { return false }
+            guard started else {
                 following = false
                 log.error("launchd has no keeper to start: this Mac's box runs in the app")
                 BackgroundWork.shared.didntStart = true
@@ -234,7 +237,9 @@ final class KeeperFollower {
                 // Gone (stopped from elsewhere, or it crashed and launchd hasn't started it yet):
                 // asked to start, and given the time to.
                 askedToStart = .now
-                guard startKeeper() else {
+                let started = await startKeeper()
+                guard following else { return }
+                guard started else {
                     didntStart()
                     return
                 }
@@ -245,12 +250,12 @@ final class KeeperFollower {
 
     /// launchd asked to start the keeper: whether it took it (it has none to start when the app it
     /// was registered from is gone, say).
-    private func startKeeper() -> Bool {
+    private func startKeeper() async -> Bool {
         #if DEBUG
         // A test's keeper, which the test starts, never launchd.
         if ProcessInfo.processInfo.environment["KUVO_KEEPER"] == "follow" { return true }
         #endif
-        return BackgroundWork.shared.start()
+        return await BackgroundWork.shared.start()
     }
 
     /// No keeper, and none will come: macOS has it switched off (or never registered it).
