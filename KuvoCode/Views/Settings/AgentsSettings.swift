@@ -51,14 +51,7 @@ struct AgentsSettings: View {
                     .foregroundStyle(.secondary)
             }
 
-            Section {
-                ConfigModelPicker(title: "Subagents use", path: ["subagent_model"], defaultTitle: "Same as the conversation", withAgents: true)
-            } header: {
-                Text("Subagents")
-            } footer: {
-                Text("For the parts of a task an agent hands off, in every session here. A subagent with a model of its own keeps it. Claude Code, Codex and the other coding agents take a model only when it's one of theirs.")
-                    .foregroundStyle(.secondary)
-            }
+            SubagentModelSection()
 
             ConfigProblem()
 
@@ -158,6 +151,21 @@ struct AgentsSettings: View {
         let config = app.config(for: box)
         DispatchQueue.main.async {
             if removal.count == 2, removal.first == "agents" { config.changeAgent(removal[1], nil, to: nil) } else { config.set(nil, at: removal) }
+        }
+    }
+}
+
+/// The one model subagents use on this computer (`subagent_model`, kept by its box): every
+/// agent's that can run it, the engine's and the coding agents' (PROTOCOL.md, `kuvo/config`).
+struct SubagentModelSection: View {
+    var body: some View {
+        Section {
+            ConfigModelPicker(title: "Subagents use", path: ["subagent_model"], defaultTitle: "Same as the conversation", withAgents: true)
+        } header: {
+            Text("Subagents")
+        } footer: {
+            Text("For the parts of a task an agent hands off, in every session here. A subagent with a model of its own keeps it. Claude Code, Codex and the other coding agents take a model only when it's one of theirs.")
+                .foregroundStyle(.secondary)
         }
     }
 }
