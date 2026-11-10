@@ -21,7 +21,6 @@ final class ClaudeSwapReviewRegressionTests: XCTestCase {
         for defaultUser in [user, "22222222-2222-2222-2222-222222222222"] {
             let suite = "ClaudeSwapReview.\(UUID().uuidString)"
             let defaults = try XCTUnwrap(testDefaults(suiteName: suite))
-            defer { defaults.removePersistentDomain(forName: suite) }
             let files = FakeFiles([
                 home.path + "/.claude.json":
                     #"{"oauthAccount":{"accountUuid":"\#(defaultUser)","emailAddress":"default@example.com"}}"#,

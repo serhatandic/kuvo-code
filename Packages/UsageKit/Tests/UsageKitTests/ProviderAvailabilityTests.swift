@@ -8,7 +8,6 @@ final class ProviderAvailabilityTests: XCTestCase {
     private func makeDefaults() -> UserDefaults {
         let name = "UsageKitTests.ProviderAvailability.\(UUID().uuidString)"
         let defaults = testDefaults(suiteName: name)!
-        defaults.removePersistentDomain(forName: name)
         return defaults
     }
 

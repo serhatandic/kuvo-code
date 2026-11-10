@@ -305,7 +305,6 @@ final class CursorSpendProviderTests: XCTestCase {
     private func isolatedDefaults(_ name: String) -> UserDefaults {
         let suiteName = "OpenUsageTests.CursorSpend.\(name).\(UUID().uuidString)"
         let defaults = testDefaults(suiteName: suiteName)!
-        defaults.removePersistentDomain(forName: suiteName)
         return defaults
     }
 

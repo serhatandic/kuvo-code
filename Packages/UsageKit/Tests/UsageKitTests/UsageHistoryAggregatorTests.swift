@@ -261,7 +261,6 @@ final class UsageHistoryAggregatorTests: XCTestCase {
     func testCloudExportUsesLegacySchemaUntilAnOwnedClaudeAccountCardExists() throws {
         let suiteName = "UsageHistoryAggregatorTests.Export.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(testDefaults(suiteName: suiteName))
-        defer { defaults.removePersistentDomain(forName: suiteName) }
         let personal = Provider(id: "claude", displayName: "Claude", icon: .providerMark("claude"))
         let work = Provider(id: "claude@1234abcd", displayName: "Claude Work", icon: .providerMark("claude"))
         let codex = Provider(id: "codex", displayName: "Codex", icon: .providerMark("codex"))

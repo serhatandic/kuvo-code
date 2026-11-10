@@ -11,7 +11,6 @@ final class ProviderHeaderLayoutTests: XCTestCase {
             let suite = "ProviderHeaderLayoutTests.\(UUID().uuidString)"
             let defaults = try XCTUnwrap(testDefaults(suiteName: suite))
             defaults.set(density.rawValue, forKey: DensitySetting.key)
-            defer { defaults.removePersistentDomain(forName: suite) }
 
             let header = ProviderSectionHeader(
                 provider: CodexProvider.makeProvider(),

@@ -12,8 +12,6 @@ final class WidgetDataStoreAccountCacheTests: XCTestCase {
     private func makeUserDefaults(_ name: String) -> UserDefaults {
         let suiteName = "WidgetDataStoreAccountCacheTests.\(name).\(UUID().uuidString)"
         let defaults = testDefaults(suiteName: suiteName)!
-        defaults.removePersistentDomain(forName: suiteName)
-        addTeardownBlock { defaults.removePersistentDomain(forName: suiteName) }
         return defaults
     }
 

@@ -113,7 +113,6 @@ final class RefreshSettingTests: XCTestCase {
     private func makeDefaults(_ name: String) -> UserDefaults {
         let suiteName = "OpenUsageTests.RefreshSetting.\(name).\(UUID().uuidString)"
         let defaults = testDefaults(suiteName: suiteName)!
-        defaults.removePersistentDomain(forName: suiteName)
         return defaults
     }
 }

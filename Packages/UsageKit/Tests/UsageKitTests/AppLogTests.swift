@@ -99,7 +99,6 @@ final class AppLogTests: XCTestCase {
         )
         let defaultsName = "OpenUsageTests.AppLog.slow.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(testDefaults(suiteName: defaultsName))
-        defer { defaults.removePersistentDomain(forName: defaultsName) }
         var ticks = [100.0, 112.5]
         let store = WidgetDataStore(
             registry: WidgetRegistry(providers: [provider], descriptors: []),

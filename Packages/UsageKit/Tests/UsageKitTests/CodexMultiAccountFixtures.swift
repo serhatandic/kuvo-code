@@ -67,8 +67,6 @@ extension XCTestCase {
     func makeScratchDefaults(_ prefix: String = "CodexMultiAccount") -> UserDefaults {
         let suiteName = "OpenUsageTests.\(prefix).\(UUID().uuidString)"
         let defaults = testDefaults(suiteName: suiteName)!
-        defaults.removePersistentDomain(forName: suiteName)
-        addTeardownBlock { defaults.removePersistentDomain(forName: suiteName) }
         return defaults
     }
 }

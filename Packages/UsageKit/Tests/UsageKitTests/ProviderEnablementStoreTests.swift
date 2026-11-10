@@ -174,7 +174,6 @@ final class ProviderEnablementStoreTests: XCTestCase {
     private func makeDefaults(_ name: String) -> UserDefaults {
         let suiteName = "OpenUsageTests.Enablement.\(name).\(UUID().uuidString)"
         let defaults = testDefaults(suiteName: suiteName)!
-        defaults.removePersistentDomain(forName: suiteName)
         return defaults
     }
 }

@@ -7,7 +7,6 @@ extension ClaudeDesktopAuthStoreTests {
         let fixture = try overlapFixture()
         let suite = "ClaudeOverlap.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(testDefaults(suiteName: suite))
-        defer { defaults.removePersistentDomain(forName: suite) }
         let accounts = ProviderAccountsStore(defaults: defaults)
         let fixtureHome = home
         let observer = DefaultAccountObserver(environment: FakeEnvironment([:]), files: fixture.files,
