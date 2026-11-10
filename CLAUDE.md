@@ -85,11 +85,12 @@ A pattern matches the user's other apps and other sessions: on 2026-11-07 one `p
 - **Reproduce a user's bug the way they saw it where you can**: in a demo copy, or with their logger or steps. A fix to a nearby test is not a fix to their bug. Once the fix completes its review loop it goes to local main, and the user confirms it in their own copy (see "Carry work to main in checkpoints"). Until then, report it as merged and not yet seen by the user, not as fixed.
 - **Keep tests deterministic.** No sleeps, timeouts or retries, and no device clocks. A flaky test gets fixed, not retried. Each test runs alone, in folders of its own.
 - **Skip low-value tests**: trivial getters, wiring, and edge cases no one would hit. A visual nitpick gets a look before and after, not a UI test.
-- **Running them:**
-  - the app's tests with `scripts/test-app.sh`, mapped by journey in `KuvoCodeTests/SCENARIOS.md` (it queues itself: a run waits for one already going; it is `scripts/heavy.sh mac`, the one lock for what drives the UI);
-  - each package's own suite (`swift test`), and Mac builds, through `scripts/heavy.sh mac-build` (two slots, beside the app suite; `CONTRIBUTING.md` says which build folder);
-  - the bridge's, with `node --test` in `Packages/KuvoLink/Tests/Bridge`;
-  - the box's code (its link and the coding agents' bridge), with `bun test` in `Packages/Box`.
+- **Running them:** Run quick, targeted box and bridge tests locally with
+  `scripts/test-box.sh [box|bridge|all] [extra test args]`. For the full Mac app, package, box
+  and bridge suites, commit the work and run `scripts/ci-branch.sh --wait` on GitHub; only
+  committed changes are tested. The helper pushes the work branch to `origin` as a `ci/` branch
+  over SSH. The phone has no CI: run its tests locally through `scripts/heavy.sh phone` (see
+  `CONTRIBUTING.md`).
 
   Never drive the Mac app's window from tests, because it takes over the user's keyboard and mouse.
 
@@ -148,7 +149,7 @@ All paths on the right are in `../kuvo-web`.
 | `KuvoCode/Stores/Machines.swift`, `SessionCopies.swift`, `App/AppModel+Machines.swift`, `Views/MachineForm.swift`, `MachineStatusViews.swift`, `Views/Settings/MachinesSettings.swift`, `Packages/OpenCodeKit/Sources/OpenCodeKit/Engine/RemoteEngine.swift` (remote machines: adding them, their engines over SSH, their projects' files, git and terminals) | `src/content/docs/code/machines.md`, `architecture.md`, `privacy.md`, `troubleshooting.md`, `uninstall.md`; also this repo's `README.md` (How it works) |
 | `KuvoCode/Stores/BrowserAgent.swift`, `BrowserToolServer.swift` (the agent's browser tools) | `src/content/docs/code/browsing.md`, `architecture.md`, `privacy.md` (connections on `127.0.0.1`) |
 | `KuvoCode/Stores/BrowserAsks.swift`, `Views/BrowserAskCard.swift`, `Design/AgentPointer.swift` (sign-in, code and step cards, the agent's pointer) | `src/content/docs/code/browsing.md` (Signing in), `sessions.md` (cards above the composer), `privacy.md` (what's kept of a sign-in), `panel.md` (Passwords) |
-| `KuvoCode/Resources/kuvo-browser.js`, `Stores/MachineBrowser.swift`, `MachineBrowserInstaller.swift`, `Views/Utilities/MachineBrowserPane.swift`, `scripts/browser-runtime.py` (the browser on a machine: its keeper, tools, live view, downloads) | `src/content/docs/code/machines.md`, `browsing.md` (On a machine), `panel.md`, `privacy.md` (what it keeps in `~/.kuvo-code`, Chrome for Testing and Rocky Linux downloads), `uninstall.md`, `shortcuts.md`; this repo's `CONTRIBUTING.md` (The browser on a machine); bump `KEEPER` with every change to its host side |
+| `KuvoCode/Resources/kuvo-browser.js`, `Packages/Box/src/link/browser/`, `Stores/MachineBrowser.swift`, `MachineBrowserInstaller.swift`, `Views/Utilities/MachineBrowserPane.swift`, `scripts/browser-runtime.py` (the browser on a machine: its keeper, tools, live view, the box's own setup of it) | `src/content/docs/code/machines.md`, `browsing.md` (On a machine), `panel.md`, `privacy.md` (what it keeps in `~/.kuvo-code`, Chrome for Testing and Rocky Linux downloads), `uninstall.md`, `shortcuts.md`; this repo's `CONTRIBUTING.md` (The browser on a machine); bump `KEEPER` with every change to its host side |
 | `KuvoCode/Stores/Bots.swift`, `BotTemplates.swift`, `BotGroups.swift`, `Views/BotEditor.swift`, `Packages/OpenCodeKit/Sources/OpenCodeKit/Engine/Wakes.swift`, `Packages/KuvoLink/Sources/KuvoLink/Resources/bot-words.json` (bots, templates, Kuvo Code's own personalities and what a bot is told, which every box reads; wake-ups, pausing, group chats) | `src/content/docs/code/bots.md`, `privacy.md` (the `bots` folders); a template change in `bot-words.json` also goes to kuvo-web's `src/lib/bots.ts`, which copies them |
 | `KuvoCode/Stores/Moves.swift`, `MachineGroups.swift`, `GroupChats.swift`, `Packages/Box/src/agents/groups/*` (Move to Computer for bots, chats and group chats; group chats that live on a machine and run in its agents bridge) | `src/content/docs/code/bots.md`, `machines.md`, `sessions.md` (Move to Computer), `privacy.md`, `uninstall.md`, `architecture.md`; this repo's `README.md` (How it works) and `CONTRIBUTING.md` (`scripts/group-vectors.sh` after changing the group chat rules on either side) |
 | `KuvoCode/Stores/Integrations.swift`, `IntegrationKeys.swift`, `Views/Settings/IntegrationsSettings.swift`, `Packages/OpenCodeKit/Sources/OpenCodeKit/Engine/Launcher.swift` (integrations, their keys, `kuvo-npx`) | `src/content/docs/code/integrations.md`, `privacy.md` (keys, the `integrations` folder, connections), `uninstall.md` (Keychain items), `architecture.md` (third-party pieces), `settings.md` |
@@ -209,7 +210,7 @@ against from this checkout as it does OpenCodeKit: `ClientText`, the rules for w
 (picture names, web links, the site a link is on, a field's own typing), `ClientAccounts`, and
 `ClientDesign`, the look both draw with (surfaces, sizes, the loader, the bots, code colors, math
 and more). Its README says what belongs there.
-A change to it is a change to both apps: run its `swift test`, the Mac app's tests and the phone's.
+A change to it is a change to both apps: run the Mac and package suites in CI and the phone's tests locally.
 
 ## Upstreams stay up to date
 
