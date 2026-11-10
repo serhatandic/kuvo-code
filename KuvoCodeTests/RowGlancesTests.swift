@@ -9,7 +9,7 @@ import Testing
 /// screen, a box at a time, with every row of theirs (Recents and its project) counted, and not at
 /// all while no window can be seen. A row going takes its session out; the last one going stops it.
 @MainActor
-@Suite struct RowGlancesTests {
+@Suite(.timeLimit(.minutes(1))) struct RowGlancesTests {
     /// A box that follows `kuvo/sessions/glance/events` as this Mac's does: each request heard as
     /// it comes, answered with what's set, and told when the client stops following it.
     final class FollowedBox: BoxTransport, @unchecked Sendable {
@@ -77,6 +77,7 @@ import Testing
         #expect(await stopped.next() == both.path)
         glances.show("ses_home", on: "mac", false)
         #expect(await stopped.next() == one.path)
+        glances.stop()
     }
 
     @Test func aMachinesRowsAreFollowedOnTheirOwnAndNothingWhileNoWindowCanBeSeen() async throws {
@@ -98,5 +99,6 @@ import Testing
         NotificationCenter.default.post(name: NSApplication.didChangeOcclusionStateNotification, object: nil)
         let back = [try #require(await asked.next()).path, try #require(await asked.next()).path]
         #expect(Set(back) == [mac.path, lab.path])
+        glances.stop()
     }
 }

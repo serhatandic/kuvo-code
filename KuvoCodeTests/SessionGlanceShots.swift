@@ -186,7 +186,7 @@ struct SessionGlanceShots {
                     let margin = Self.cardMargin * scale
                     let midY = cropHeight - top - row.height / 2
                     let x = (row.maxX + 4) * scale - margin
-                    let y = (midY + 22) * scale + margin - CGFloat(card.height)
+                    let y = (midY + SessionGlanceCard<EmptyView>.firstLine(size: 13)) * scale + margin - CGFloat(card.height)
                     context.draw(card, in: CGRect(x: x, y: y, width: CGFloat(card.width), height: CGFloat(card.height)))
                 }
             }

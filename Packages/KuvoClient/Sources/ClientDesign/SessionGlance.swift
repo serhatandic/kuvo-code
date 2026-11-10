@@ -204,3 +204,63 @@ public enum GlanceAge {
         }
     }
 }
+
+/// What a session's card says, worked out once from what its client knows of it and what its box
+/// says (`SessionGlance`), for the card and for VoiceOver alike, the same in both apps.
+public struct GlanceCardFacts: Equatable, Sendable {
+    public let glance: SessionGlance?
+    public let state: StatusMark.Kind?
+    /// What its age counts from; none while it works.
+    public let since: Date?
+    /// The branch it has of its own: its box's word, else the worktree's it runs in as the client
+    /// knows it (a box from before `sessions.glance`; goes once every box says it).
+    public let branch: String?
+    /// The model's name, and quieter after it, its effort and the account's own name.
+    public let model: String?
+    public let details: String?
+    /// Only where the row doesn't say them.
+    public let folder: String?
+    public let computer: GlanceComputer?
+
+    /// `idle`, `updated`: the session's times (ms). `variant`: its model's effort as the engine says
+    /// it, named in the app's words (`effortName`). `folder`, `computer`: given only where the card
+    /// says them (`SessionGlance.showsFolder`, `showsComputer`).
+    public init(glance: SessionGlance?, state: StatusMark.Kind?, idle: Double?, updated: Double, worktreeBranch: String?,
+                model: String?, variant: String?, effortName: (String) -> String, folder: String? = nil, computer: GlanceComputer? = nil) {
+        self.glance = glance
+        self.state = state
+        since = GlanceAge.since(state, asked: glance?.asked, idle: idle, updated: updated)
+        branch = glance?.branch ?? worktreeBranch
+        self.model = model
+        let effort = variant.flatMap { $0.isEmpty || $0 == "default" ? nil : effortName($0) }
+        details = SessionGlance.details(effort: effort, account: glance?.account)
+        self.folder = folder
+        self.computer = computer
+    }
+
+    /// Its state in a word or two: "Needs you", "Done", "Idle".
+    public var stateWords: String {
+        guard let state else { return "Idle" }
+        return state == .new ? "Done" : state.words
+    }
+
+    /// What VoiceOver says of the card on its row, which it can't reach: each line's name and what it
+    /// says, as the card has them.
+    public func spoken(now: Date = .now) -> [(label: String, value: String)] {
+        var lines: [(label: String, value: String)] = [("State", stateWords + (since.map { ", " + GlanceAge.card($0, now: now) } ?? ""))]
+        if let folder { lines.append(("Project", folder)) }
+        if let computer { lines.append(("Computer", computer.name)) }
+        if let branch {
+            var value = branch
+            if glance?.pull == nil, let additions = glance?.additions, let deletions = glance?.deletions { value += ", \(additions) lines added, \(deletions) removed" }
+            lines.append(("Branch", value))
+        }
+        if model != nil || details != nil { lines.append(("Model", [model, details].compactMap(\.self).joined(separator: ", "))) }
+        if let pull = glance?.pull {
+            var value = pull.spoken
+            if let additions = pull.additions, let deletions = pull.deletions { value += ", \(additions) lines added, \(deletions) removed" }
+            lines.append(("Pull request", value))
+        }
+        return lines
+    }
+}

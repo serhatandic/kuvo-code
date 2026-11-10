@@ -140,82 +140,61 @@ public struct GlanceComputer: Equatable, Sendable {
 public struct SessionGlanceCard<ModelMark: View>: View {
     public typealias Computer = GlanceComputer
 
-    let glance: SessionGlance?
-    let state: StatusMark.Kind?
-    let since: Date?
-    let branch: String?
-    let model: String?
-    let details: String?
-    let folder: String?
-    let computer: Computer?
+    let facts: GlanceCardFacts
     let size: CGFloat
     let now: Date
     let modelMark: ModelMark
 
-    /// `since`: what its age counts from (`GlanceAge.since`), none while it works. `branch`: its own
-    /// (the glance's, else its worktree's). `model`: the model's name; `details`: its effort and the
-    /// account it runs on, quieter after it. `folder`, `computer`: only where the row doesn't say
-    /// them (`SessionGlance.showsFolder`, `showsComputer`). `size`: the text's size (13 on a Mac,
-    /// as its sidebar's text is; a phone's own). `modelMark`: the model's maker's mark.
-    public init(glance: SessionGlance?, state: StatusMark.Kind?, since: Date?, branch: String?, model: String?, details: String?,
-                folder: String? = nil, computer: Computer? = nil, size: CGFloat = 13, now: Date = .now, @ViewBuilder modelMark: () -> ModelMark) {
-        self.glance = glance
-        self.state = state
-        self.since = since
-        self.branch = branch
-        self.model = model
-        self.details = details
-        self.folder = folder
-        self.computer = computer
+    /// `size`: the text's size (13 on a Mac, as its sidebar's text is; a phone's own). `modelMark`:
+    /// the model's maker's mark.
+    public init(_ facts: GlanceCardFacts, size: CGFloat = 13, now: Date = .now, @ViewBuilder modelMark: () -> ModelMark) {
+        self.facts = facts
         self.size = size
         self.now = now
         self.modelMark = modelMark()
     }
 
-    /// Its state in a word or two: "Needs you", "Done", "Idle".
-    static func stateWords(_ state: StatusMark.Kind?) -> String {
-        guard let state else { return "Idle" }
-        return state == .new ? "Done" : state.words
-    }
+    /// Where its first line's middle is, down from its top: for a card laid beside its row.
+    public static func firstLine(size: CGFloat) -> CGFloat { size + size * 0.65 }
 
     public var body: some View {
         VStack(alignment: .leading, spacing: size * 0.62) {
             HStack(spacing: 7) {
                 Group {
-                    if let state {
+                    if let state = facts.state {
                         StatusMark(state, size: size + 1)
                     } else {
                         Circle().strokeBorder(Color.primary.opacity(0.3), lineWidth: 1.4).frame(width: size - 2, height: size - 2)
                     }
                 }
                 .frame(width: size + 3)
-                Text(Self.stateWords(state)).fontWeight(.semibold)
+                Text(facts.stateWords).fontWeight(.semibold)
                 Spacer(minLength: 12)
-                if let since {
+                if let since = facts.since {
                     Text(GlanceAge.card(since, now: now)).foregroundStyle(.secondary).monospacedDigit()
                 }
             }
-            if let folder {
+            if let folder = facts.folder {
                 line { FolderIcon(isOpen: false, size: size + 1) } text: { Text(folder) }
             }
-            if let computer {
+            if let computer = facts.computer {
                 line { Image(systemName: computer.isMachine ? "server.rack" : "laptopcomputer") } text: { Text(computer.name) }
             }
-            if let branch {
+            if let branch = facts.branch {
                 line { Image(systemName: "arrow.triangle.branch") } text: { Text(branch).truncationMode(.middle) } trailing: {
                     // Without a pull request, the branch carries its size.
-                    if glance?.pull == nil, let additions = glance?.additions, let deletions = glance?.deletions { lines(additions, deletions) }
+                    if facts.glance?.pull == nil, let additions = facts.glance?.additions, let deletions = facts.glance?.deletions { lines(additions, deletions) }
                 }
             }
-            if model != nil || details != nil {
+            if facts.model != nil || facts.details != nil {
                 line { modelMark } text: {
                     HStack(spacing: 6) {
-                        if let model { Text(model) }
-                        if let details { Text(details).foregroundStyle(.secondary) }
+                        if let model = facts.model { Text(model) }
+                        if let details = facts.details { Text(details).foregroundStyle(.secondary) }
                     }
                 }
             }
-            if let pull = glance?.pull {
+            if let pull = facts.glance?.pull {
                 line { PullMark(pull, size: size) } text: { Text("#\(pull.number)").monospacedDigit() } trailing: {
                     HStack(spacing: 10) {
                         if pull.isOpen, let checks = pull.checks { ChecksMark(checks, size: size) }

@@ -1040,7 +1040,8 @@ struct SidebarView: View {
                         Image(systemName: "server.rack")
                             .sidebarFont(10)
                             .foregroundStyle(.tertiary)
-                            .help("On \(machine)")
+                            // (Its card names the computer.)
+                            .accessibilityLabel("On \(machine)")
                     }
                     // Its pull request's mark, else its own branch's (its card says which).
                     SessionRowMark(session: session)

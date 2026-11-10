@@ -31,8 +31,9 @@ struct SessionRowMark: View {
     }
 }
 
-/// A session's row: what its box says of it followed while it's on screen, and its card beside it
-/// half a second after the pointer settles on it (at once while another row's is open).
+/// A session's row: what its box says of it followed while it's on screen (on the computer's page
+/// in view), its card beside it half a second after the pointer settles on it (at once while another
+/// row's is open), and what the card says for VoiceOver, which can't reach the card.
 struct SessionGlanceHover: ViewModifier {
     let session: Session
     /// Which row it is, as the sidebar tells them apart (a session shows in Recents and its project).
@@ -47,14 +48,20 @@ struct SessionGlanceHover: ViewModifier {
     @Environment(Workspace.self) private var workspace
     @Environment(AppModel.self) private var app
     @Environment(\.messageFont) private var messageFont
+    @Environment(\.pageInView) private var pageInView
     @State private var anchor = GlanceAnchor()
     @State private var isVisible = false
+    /// Counted as on screen in `RowGlances`.
+    @State private var isCounted = false
 
     private var box: String { SidebarBox(directory: session.location.directory).id }
 
     func body(content: Content) -> some View {
+        let facts = GlanceCardForRow.facts(of: workspace.session(session.id) ?? session, underItsProject: underItsProject, acrossComputers: acrossComputers,
+                                           isUnread: isUnread, folded: folded, workspace: workspace, app: app)
         content
             .background(GlanceAnchorView(anchor: anchor))
+            .modifier(SpokenCard(lines: facts.spoken()))
             .onHover { inside in
                 if inside {
                     let card = GlanceCardForRow(id: session.id, fallback: session, underItsProject: underItsProject, acrossComputers: acrossComputers,
@@ -62,24 +69,45 @@ struct SessionGlanceHover: ViewModifier {
                         .environment(workspace)
                         .environment(app)
                         .environment(\.messageFont, messageFont)
-                    GlanceCardPanel.shared.entered(row, anchor: anchor) { AnyView(card) }
+                    let size = GlanceCardForRow.size(messageFont)
+                    GlanceCardPanel.shared.entered(row, anchor: anchor, firstLine: SessionGlanceCard<EmptyView>.firstLine(size: size)) { AnyView(card) }
                 } else {
                     GlanceCardPanel.shared.left(row)
                 }
             }
             .onScrollVisibilityChange(threshold: 0.01) { visible in
-                guard visible != isVisible else { return }
                 isVisible = visible
-                app.glances.show(session.id, on: box, visible)
+                count(visible && pageInView)
             }
+            .onChange(of: pageInView) { _, inView in count(isVisible && inView) }
             .onDisappear {
                 GlanceCardPanel.shared.left(row)
-                if isVisible {
-                    isVisible = false
-                    app.glances.show(session.id, on: box, false)
-                }
+                count(false)
             }
     }
+
+    private func count(_ shown: Bool) {
+        guard shown != isCounted else { return }
+        isCounted = shown
+        app.glances.show(session.id, on: box, shown)
+    }
+}
+
+/// What a row's card says, for VoiceOver on the row.
+private struct SpokenCard: ViewModifier {
+    let lines: [(label: String, value: String)]
+
+    func body(content: Content) -> some View {
+        lines.reduce(AnyView(content)) { view, line in
+            AnyView(view.accessibilityCustomContent(Text(line.label), Text(line.value)))
+        }
+    }
+}
+
+extension EnvironmentValues {
+    /// Whether the sidebar's page it's on is the one in view (`BoxPager`): the others are drawn
+    /// beside it, out of sight.
+    @Entry var pageInView = true
 }
 
 /// The card for a row: its state as its row's mark has it, how long ago, and what its box says of
@@ -96,25 +124,30 @@ struct GlanceCardForRow: View {
     @Environment(AppModel.self) private var app
     @Environment(\.messageFont) private var messageFont
 
-    var body: some View {
-        let session = workspace.session(id) ?? fallback
-        let glance = app.glances.glances[id]
-        let state = statusMark(of: session, isNew: isUnread, folded: folded, workspace: workspace, app: app)
+    /// The card's text size: the sidebar's, a little smaller.
+    static func size(_ font: MessageFont) -> CGFloat { (13 * font.sidebarScale).rounded() }
+
+    /// What `session`'s card says, from what this Mac knows of it and what its box says.
+    static func facts(of session: Session, underItsProject: Bool, acrossComputers: Bool, isUnread: Bool, folded: [Session],
+                      workspace: Workspace, app: AppModel) -> GlanceCardFacts {
         let directory = session.location.directory
         let place = SidebarBox(directory: directory)
-        let catalog = app.catalog(for: place)
-        let model = session.model.flatMap { catalog.model($0) }
-        let effort = session.model?.variant.flatMap { $0 == ModelRef.defaultVariant ? nil : EffortLevel.title($0) }
-        let isChat = Workspace.isChat(directory)
-        SessionGlanceCard(
-            glance: glance, state: state,
-            since: GlanceAge.since(state, asked: glance?.asked, idle: session.time.idle, updated: session.time.updated),
-            branch: glance?.branch ?? workspace.worktrees[directory]?.branch,
-            model: model?.name ?? session.model?.id, details: SessionGlance.details(effort: effort, account: glance?.account),
-            folder: SessionGlance.showsFolder(underItsProject: underItsProject, isChat: isChat) ? workspace.projectName(directory) : nil,
-            computer: SessionGlance.showsComputer(acrossComputers: acrossComputers) ? .init(name: app.name(of: place), isMachine: place.machine != nil) : nil,
-            size: (13 * messageFont.sidebarScale).rounded()
-        ) {
+        let model = session.model.flatMap { app.catalog(for: place).model($0) }
+        return GlanceCardFacts(
+            glance: app.glances.glances[session.id], state: statusMark(of: session, isNew: isUnread, folded: folded, workspace: workspace, app: app),
+            idle: session.time.idle, updated: session.time.updated, worktreeBranch: workspace.worktrees[directory]?.branch,
+            model: model?.name ?? session.model?.id, variant: session.model?.variant, effortName: EffortLevel.title,
+            folder: SessionGlance.showsFolder(underItsProject: underItsProject, isChat: Workspace.isChat(directory)) ? workspace.projectName(directory) : nil,
+            computer: SessionGlance.showsComputer(acrossComputers: acrossComputers) ? .init(name: app.name(of: place), isMachine: place.machine != nil) : nil)
+    }
+
+    var body: some View {
+        let session = workspace.session(id) ?? fallback
+        let place = SidebarBox(directory: session.location.directory)
+        let model = session.model.flatMap { app.catalog(for: place).model($0) }
+        SessionGlanceCard(Self.facts(of: session, underItsProject: underItsProject, acrossComputers: acrossComputers, isUnread: isUnread, folded: folded,
+                                     workspace: workspace, app: app),
+                          size: Self.size(messageFont)) {
             if let ref = session.model {
                 ProviderLogo(id: model?.makerLogoID ?? ref.providerID, size: (14 * messageFont.sidebarScale).rounded())
             }
@@ -164,6 +197,9 @@ private struct GlanceAnchorView: NSViewRepresentable {
     private(set) var shown: String?
     private var anchor: GlanceAnchor?
     private var opening: Task<Void, Never>?
+    /// The row whose card opens once the pointer settles.
+    private var pending: String?
+    private var firstLine: CGFloat = 21
     private var closing: Task<Void, Never>?
     private var watchers: [any NSObjectProtocol] = []
 
@@ -177,23 +213,29 @@ private struct GlanceAnchorView: NSViewRepresentable {
     }
 
     /// The pointer came onto `row`: its card, at once while another's is open, else once it settles.
-    func entered(_ row: String, anchor: GlanceAnchor, card: @escaping () -> AnyView) {
+    /// `firstLine`: where the card's first line is, down from its top, to lay it level with the row.
+    func entered(_ row: String, anchor: GlanceAnchor, firstLine: CGFloat, card: @escaping () -> AnyView) {
         closing?.cancel()
         opening?.cancel()
         if shown != nil {
-            show(row, anchor: anchor, card: card())
+            show(row, anchor: anchor, firstLine: firstLine, card: card())
             return
         }
+        pending = row
         opening = Task { [weak self] in
             try? await Task.sleep(for: Self.settle)
-            guard !Task.isCancelled else { return }
-            self?.show(row, anchor: anchor, card: card())
+            guard !Task.isCancelled, let self, self.pending == row else { return }
+            self.show(row, anchor: anchor, firstLine: firstLine, card: card())
         }
     }
 
-    /// The pointer left `row`: its card goes, a moment later, unless it came onto another row.
+    /// The pointer left `row`: its card goes, a moment later, unless it came onto another row. (Its
+    /// leaving may be told after another's coming: that one's card still opens.)
     func left(_ row: String) {
-        opening?.cancel()
+        if pending == row {
+            opening?.cancel()
+            pending = nil
+        }
         guard shown == row else { return }
         closing?.cancel()
         closing = Task { [weak self] in
@@ -206,6 +248,7 @@ private struct GlanceAnchorView: NSViewRepresentable {
     func hide() {
         opening?.cancel()
         closing?.cancel()
+        pending = nil
         guard let panel, shown != nil else { return }
         shown = nil
         anchor = nil
@@ -213,8 +256,10 @@ private struct GlanceAnchorView: NSViewRepresentable {
         panel.orderOut(nil)
     }
 
-    private func show(_ row: String, anchor: GlanceAnchor, card: AnyView) {
-        guard let found = anchor.place, found.window.isVisible else { return }
+    private func show(_ row: String, anchor: GlanceAnchor, firstLine: CGFloat, card: AnyView) {
+        pending = nil
+        // Its row gone from the window meanwhile: no card, and none left beside another.
+        guard let found = anchor.place, found.window.isVisible else { return hide() }
         let (frame, window) = (found.frame, found.window)
         let panel = panel ?? makePanel()
         let content = AnyView(GlanceCardChrome(content: card) { [weak self] in self?.place() }.padding(Self.margin))
@@ -226,6 +271,7 @@ private struct GlanceAnchorView: NSViewRepresentable {
         panel.appearance = window.effectiveAppearance
         shown = row
         self.anchor = anchor
+        self.firstLine = firstLine
         if panel.parent !== window {
             panel.parent?.removeChildWindow(panel)
             window.addChildWindow(panel, ordered: .above)
@@ -252,8 +298,8 @@ private struct GlanceAnchorView: NSViewRepresentable {
         guard let panel, let host else { return }
         let size = host.fittingSize
         let margin = Self.margin
-        // The card's first line is about its padding and half a line down from its top.
-        var top = row.midY + 22 + margin
+        // Its first line level with the row's middle.
+        var top = row.midY + firstLine + margin
         var left = row.maxX + 4 - margin
         if let screen = window.screen?.visibleFrame {
             top = min(max(top, screen.minY + size.height), screen.maxY + margin)

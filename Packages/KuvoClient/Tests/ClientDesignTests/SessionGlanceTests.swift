@@ -75,6 +75,23 @@ import Testing
         #expect(SessionGlance.details(effort: nil, account: .init(name: "Claude Code", label: "Work")) == "Work")
     }
 
+    @Test func theCardsFactsAndWhatVoiceOverHearsOfThem() {
+        let glance = SessionGlance(branch: "timer-cycle", pull: .init(number: 42, state: .open, additions: 435, deletions: 4, checks: .init(passed: 12, failed: 0, pending: 2)),
+                                   account: .init(name: "Claude Code", label: "Work"), asked: 1_000_000)
+        let facts = GlanceCardFacts(glance: glance, state: .needsYou, idle: 2_000_000, updated: 3_000_000, worktreeBranch: "old-name",
+                                    model: "Opus 5.5", variant: "xhigh", effortName: { $0 == "xhigh" ? "Extra" : $0 }, folder: "pomodoro")
+        #expect(facts.branch == "timer-cycle")
+        #expect(facts.details == "Extra · Work")
+        #expect(facts.since == Date(timeIntervalSince1970: 1000))
+        let spoken = facts.spoken(now: Date(timeIntervalSince1970: 1120))
+        #expect(spoken.map(\.label) == ["State", "Project", "Branch", "Model", "Pull request"])
+        #expect(spoken[0].value == "Needs you, 2m ago")
+        #expect(spoken[4].value == "Pull request 42, open, 12 of 14 checks passed, 435 lines added, 4 removed")
+        // Its box from before: the worktree's branch; the engine's own "default" effort says none.
+        let older = GlanceCardFacts(glance: nil, state: nil, idle: nil, updated: 3_000_000, worktreeBranch: "kuvo/dark", model: "GPT-5.5", variant: "default", effortName: { $0 })
+        #expect(older.branch == "kuvo/dark" && older.details == nil && older.stateWords == "Idle")
+    }
+
     @Test func aNewerBoxsWordIsLeftOutNotTheRest() throws {
         let glances = try decoded("""
         {"sessions": {
