@@ -41,7 +41,7 @@ import { appNamed, appNameGiven } from "./apps";
 import { folderName, isEmptyFolder, namedPlace, projectPlace, shownPath } from "./projects";
 import { projectsFolder } from "./settings";
 import { stopBotWork } from "./stop";
-import { FINISH_HOLD_LIMIT, readBackground } from "./background";
+import { readBackground } from "./background";
 import { ofBot, workingNow, workSessions } from "./tree";
 import type { Listed } from "./tree";
 import type { Target } from "../../shared/records";
@@ -67,6 +67,8 @@ export const ASK_SETTLES = 2 * 60_000;
 const WRAP_UP = 2 * 3_600_000;
 /** How long to wait for a limit that didn't say when it resets, before trying again. */
 const UNKNOWN_RESET = 30 * 60_000;
+// How long what a goal's sessions left running holds off its nudge (a dev server would stall it).
+const NUDGE_HOLD = 30 * 60_000;
 const DAY = 86_400_000;
 
 /** A goal as it's kept: as it's shown, less what's worked out when it's shown, with what the box
@@ -1305,7 +1307,7 @@ export async function lookAtGoals(tell: (notice: Notice) => boolean, targets: ()
       }, file);
       if (ended) {
         noteWorkChanged(goal.bot);
-        await stopBotWork(goal.bot, targets(), signal).catch(() => 0);
+        await stopBotWork(goal.bot, targets(), signal, { tell: false }).catch(() => 0);
         await followMode(ended, targets, file);
       }
     }
@@ -1343,7 +1345,7 @@ export async function lookAtGoals(tell: (notice: Notice) => boolean, targets: ()
   const turns = running.length ? await workingNow(targets(), signal).catch(() => new Set<string>()) : new Set<string>();
   const left = running.length ? readBackground() : {};
   const working = new Set([...turns, ...Object.keys(left)]);
-  const busy = new Set([...turns, ...Object.keys(left).filter(id => now - left[id]!.since < FINISH_HOLD_LIMIT)]);
+  const busy = new Set([...turns, ...Object.keys(left).filter(id => now - left[id]!.since < NUDGE_HOLD)]);
   const workOf = (goal: KeptGoal) => goalWork(goal, sessions);
   // Awake only while some goal's work is at it: the bot, or one of its sessions.
   keepAwake(running.some(goal => working.has(goal.session) || workOf(goal).some(each => working.has(each.data.id))));

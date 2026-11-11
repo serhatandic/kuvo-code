@@ -1196,14 +1196,16 @@ client shows it from the same routes.
     it may still run, and a client's list of commands still shows it. A goal's Mac stays awake for it
     too, but it holds off a goal's nudge only for 30 minutes, and never hides a turn that failed at a
     limit.
-  - **Telling a lead**: `[Session finished]` waits while any of it runs, and looks again 10 seconds
-    after it ends, since the end wakes its agent. Nothing is sent meanwhile (a lead's `list_sessions`
-    shows the session at work). At 30 minutes it's told anyway as `[Session finished]`, saying what
-    still runs, so a lead isn't left without it when something never ends (a dev server). When it
-    really finishes with something new to say, that's a normal `[Session finished]`; with nothing
-    new, nothing. Boxes before #420 told that at 30 minutes as `[Session still working]`, and
-    clients still read it so (“<title>” still working). A turn someone asked for doesn't wait on what was running before they asked (a dev server):
-    it's told at once as `[Session finished]`, saying what still runs. After that a turn someone asked for is always told. A
+  - **Telling a lead**: `[Session finished]` waits while any of it runs, however long (a build queued
+    for hours), and looks again 10 seconds after it ends, since the end wakes its agent. Nothing is
+    sent meanwhile (a lead's `list_sessions` shows the session at work). An end that wasn't heard
+    (an event lost on a busy box) is found within 10 minutes, and what never ends (a dev server) is
+    told as it stops counting at its 6 hours. A finish never says what still runs. Boxes before #553
+    told one still running at 30 minutes anyway, saying what still ran ("Still running in the
+    background: …"), and boxes before #420 told that as `[Session still working]`; clients still
+    read both: those words are left out of a finish's card, and “still working” shows nothing. A turn someone asked for doesn't wait on what
+    was running before they asked (a dev server): it's told at once as `[Session finished]`. After
+    that a turn someone asked for is always told. A
     turn following the box's own word (what a session it started did, a limit that reset) is too, as
     what comes of it may be the result. A turn that began on its own (what it
     left running ended, its own wake-up) is told only if it has something to say: 200 characters or
@@ -1213,7 +1215,15 @@ client shows it from the same routes.
   - **Stopping**: `stop_session`, Stop on a session someone started, and `stop-all` end its turn,
     what it left running, and its wake-ups and watches, and mark it in `run/work/stopped.json`.
     `stop-all` takes those waiting on a timer of their own too, and holds what waits only where a
-    turn stopped. Until it's set going again, nothing it does is told. What's written to it decides,
+    turn stopped. Stopped by its lead (`stop_session`), its lead hears nothing of it. Stopped by the
+    user (Stop on its row, `POST kuvo/sessions/<id>/stop`, `stop-all`, a goal's Stop), its lead,
+    if it follows its finishes and was still waiting on it (a turn, what it left running, its finish
+    held, a wake-up of its own or a question of its), hears that once, so it never waits on a
+    session that won't finish: `[Session stopped] "<title>" in <place> (address <id>) was stopped by
+    the user. …`, without what it was holding; clients show it as “<title>” stopped by you.
+    `stop-all` drops what its bot was still to hear, then sends one such line for each session it
+    stopped, one message to each lead. A goal whose end came stops its sessions without it.
+    Until it's set going again, nothing it does is told. What's written to it decides,
     read at `session.inbox.delivered` (the turn starts before the message is in its conversation):
     what it left running ending or its agent carrying on by itself (a `synthetic` with
     `metadata.source` `shell`, `subagent` or `agent`), or the box's own word (what a session it
@@ -1224,8 +1234,9 @@ client shows it from the same routes.
     interrupted the same way, and never told of. Stop in your own conversation or in a bot's own ends
     the turn only, and keeps its background commands and wake-ups. So does a goal's Pause, for each
     of its sessions, since it goes on from where it was.
-  - **The box restarting**: what it was holding is in `run/work/told.json` (`waiting`) and looked at
-    again as it starts: told once if it's over, held if it still runs, let go of if it's gone. The
+  - **The box restarting**: what it was holding is in `run/work/told.json` (`waiting`, with `asked`,
+    when the question its turn answered was asked) and looked at again as it starts: told once if
+    it's over, held if it still runs (told as it ends), let go of if it's gone. The
     engine's connection dropping clears that place's list until it's looked at again: its commands
     go with its engine. A client keeps what a box said while its stream drops for a moment, and drops
     it once the box can't be reached.
@@ -2857,8 +2868,9 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   <session>)`, then for `finished` `, after <time>:` and its reply on the lines after (`(It ended
   without a reply.)` for none); for `failed`, `stopped: <why>.` or `stopped with an error[: <why>].`
   and words for the lead; for `asks`, `asks to <what> (ask <id>).` or `asks: <question> (ask <id>).`
-  and words for the lead. Show what it said, never the words for the lead. `still working` shows
-  nothing, old ones included. A goal started or resumed is a word in the next reply's footer; the
+  and words for the lead; for `stopped`, `was stopped by the user.` and words for the lead (show
+  "You stopped it.", with “<title>” stopped by you). Show what it said, never the words for the
+  lead. `still working` shows nothing, old ones included. A goal started or resumed is a word in the next reply's footer; the
   rest show nothing. The same goes for the engine's and the bridge's notes (`synthetic`, `system`):
   they're for the model and show nothing, but what changed (the model or its effort, the mode, a
   summary, the project's folders) is said in a word beside the next reply's time (`ReplyChanges`).

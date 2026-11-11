@@ -1194,7 +1194,7 @@ var GOAL_OPENINGS = [
   ["[Goal resumed] The user resumed the goal you paused.", "Goal resumed"]
 ];
 var ANSWERED = "[The user answered] ";
-var SESSION_NEWS = /^\[Session (finished|still working|failed|asks)\] "([^"\n]*)"/;
+var SESSION_NEWS = /^\[Session (finished|still working|failed|asks|stopped)\] "([^"\n]*)"/;
 function boxNoteOf(text, metadata) {
   const note = isBoxNote(metadata) ? metadata.kuvo.note : null;
   if (note && typeof note.from === "string" && typeof note.line === "string")
@@ -1215,7 +1215,7 @@ function boxNoteOf(text, metadata) {
 `).filter((part) => SESSION_NEWS.test(part)).length;
   if (told !== 1)
     return { from: "Its sessions", line: `${told} updates from its sessions` };
-  const what = news[1] === "finished" ? "finished" : news[1] === "still working" ? "still working" : news[1] === "failed" ? "stopped with an error" : "asks something";
+  const what = news[1] === "finished" ? "finished" : news[1] === "still working" ? "still working" : news[1] === "failed" ? "stopped with an error" : news[1] === "stopped" ? "stopped by you" : "asks something";
   return { from: "Its sessions", line: `“${news[2] || "New Session"}” ${what}` };
 }
 var isBoxWritten = (text, metadata) => boxNoteOf(text, metadata) !== null;
@@ -7933,7 +7933,6 @@ var WORK_BACKGROUND = path35.join(WORK_FOLDER, "background.json");
 var WORK_STOPPED = path35.join(WORK_FOLDER, "stopped.json");
 var LOCK4 = path35.join(WORK_FOLDER, ".background.lock");
 var AT_WORK_LIMIT = 6 * 3600000;
-var FINISH_HOLD_LIMIT = 30 * 60000;
 var RECENT = 3600000;
 var readKept = (file) => {
   try {
@@ -7980,13 +7979,6 @@ async function atWorkNow(targets, signal, file = WORK_BACKGROUND) {
   return working;
 }
 var startedSince = (work, at) => [...work.commands.map((each) => each.started), ...work.subagents.map((each) => each.since), ...work.tasks.map((each) => each.since)].some((started) => started >= at);
-function backgroundWords(work) {
-  const commands = work.commands.slice(0, 3).map((each) => `\`${each.command.split(`
-`)[0].slice(0, 80)}\``);
-  const others = work.subagents.length + work.tasks.length;
-  const parts = [commands.length ? commands.length === 1 ? `the command ${commands[0]}` : `the commands ${commands.join(", ")}` : "", others ? others === 1 ? "a subagent" : `${others} subagents` : ""].filter(Boolean);
-  return parts.join(" and ");
-}
 var emptyKept = () => ({ sessions: {}, folders: [] });
 function write(file, from, change) {
   try {
@@ -8000,7 +7992,7 @@ function write(file, from, change) {
   for (const tell of backgroundFollowers)
     tell();
 }
-function backgroundWatcher(source, from, { file = WORK_BACKGROUND, now = Date.now, schedule = setTimeout, signal } = {}) {
+function backgroundWatcher(source, from, { file = WORK_BACKGROUND, now = Date.now, schedule = setTimeout, signal, ranOut } = {}) {
   const kept = readKept(file)[from] ?? emptyKept();
   let sessions = kept.sessions ?? {};
   const folders = new Set(kept.folders ?? []);
@@ -8080,6 +8072,8 @@ function backgroundWatcher(source, from, { file = WORK_BACKGROUND, now = Date.no
     const timer = schedule(async () => {
       timed = false;
       await look([]);
+      if (!signal?.aborted && !ended)
+        await ranOut?.();
     }, Math.min(...times) - now() + 1000);
     timer?.unref?.();
   };
@@ -8129,9 +8123,10 @@ function backgroundWatcher(source, from, { file = WORK_BACKGROUND, now = Date.no
   return {
     known: (id) => counting(sessions[id], now()),
     of: async (id, folder) => {
-      if (folder && from !== "bridge")
-        folders.add(folder);
-      await look(folder && from !== "bridge" ? [folder] : []);
+      const looked = from === "bridge" ? [] : [...new Set([folder, ...(sessions[id]?.commands ?? []).map((each) => each.folder)].filter((each) => Boolean(each)))];
+      for (const each of looked)
+        folders.add(each);
+      await look(looked);
       return counting(sessions[id], now());
     },
     noted: async (event) => {
@@ -8228,9 +8223,6 @@ async function stopWork(target, session, holds = false) {
   const state = await stopSession(target, session, holds);
   await endBackground(target, session).catch(() => {});
   return state;
-}
-async function stopConversation(target, data) {
-  return startedByOf(data) ? stopWork(target, data.id, true) : stopSession(target, data.id);
 }
 
 // Packages/Box/src/link/work/wakes.ts
@@ -9293,6 +9285,7 @@ var LOCK5 = path41.join(WORK_FOLDER, ".wakes.lock");
 var GATHER = 4000;
 var SETTLE = 1e4;
 var SUBSTANCE = 200;
+var WAITING_LOOK = 10 * 60000;
 var sending = new Set;
 var readWaiting = (file) => {
   try {
@@ -9329,16 +9322,14 @@ function namedOf(session) {
 function notSummarizedLine(session, why) {
   return `[Session not summarized] ${namedOf(session)}: ${why ? cut(why.replace(/\.+$/, ""), 400) : "It couldn't"}. Its conversation and work are as they were.`;
 }
-async function wakeLine(event, session, target, still) {
+async function wakeLine(event, session, target) {
   const named = namedOf(session);
   switch (event.type) {
     case "session.execution.succeeded": {
       const reply = await lastReplyOf({ target, data: session });
       const since = session.time?.created ? `, after ${took(Date.now() - session.time.created)}` : "";
-      const running = still ? `
-(Still running in the background: ${backgroundWords(still)}. It may write again once that ends.)` : "";
       return `[Session finished] ${named}${since}:
-${reply ? cut(reply, 1200) : "(It ended without a reply.)"}${running}`;
+${reply ? cut(reply, 1200) : "(It ended without a reply.)"}`;
     }
     case "session.execution.failed": {
       const error = errorOf(event.data.error) ?? await turnError(target, session.id).catch(() => null);
@@ -9359,17 +9350,37 @@ ${reply ? cut(reply, 1200) : "(It ended without a reply.)"}${running}`;
   }
   return null;
 }
+var stoppedLine = (session) => `${STOPPED_OPENING} ${namedOf(session)} was stopped by the user. Nothing more comes from it unless it's written to again: don't start it or its work again unless the user asks.`;
+var STOPPED_OPENING = "[Session stopped]";
 var wakeText = (lines) => lines.join(`
 
 `);
 function wakeLineShown(lines) {
   if (lines.length !== 1)
     return `${lines.length} updates from its sessions`;
-  const said = /^\[Session (finished|still working|failed|asks)\] "([^"\n]*)"/.exec(lines[0]);
+  const said = /^\[Session (finished|still working|failed|asks|stopped)\] "([^"\n]*)"/.exec(lines[0]);
   if (!said)
     return "News from a session";
-  const what = said[1] === "finished" ? "finished" : said[1] === "still working" ? "still working" : said[1] === "failed" ? "stopped with an error" : "asks something";
+  const what = said[1] === "finished" ? "finished" : said[1] === "still working" ? "still working" : said[1] === "failed" ? "stopped with an error" : said[1] === "stopped" ? "stopped by you" : "asks something";
   return `“${said[2] || "New Session"}” ${what}`;
+}
+var wakeSenders = new Set;
+function tellStarters(told, file = WORK_WAKES) {
+  if (!told.length)
+    return;
+  try {
+    changeWaiting(file, (all) => {
+      for (const { starter, line } of told) {
+        const kept = all[starter] ?? { lines: [], asks: false, since: Date.now() };
+        all[starter] = { ...kept, lines: [...kept.lines, line] };
+      }
+    });
+  } catch {
+    return;
+  }
+  for (const starter of new Set(told.map((each) => each.starter)))
+    for (const send of wakeSenders)
+      send(starter);
 }
 var LATE_AGAIN = 300000;
 var CATCH_UP_AGAIN = 60000;
@@ -9393,6 +9404,10 @@ var readTold = (file) => {
     return null;
   }
 };
+function finishHeld(session, file = WORK_TOLD) {
+  const told = readTold(file);
+  return Boolean(told?.waiting?.[session] || told?.held?.[session]);
+}
 var ENGINE = "engine";
 var OTHERS = ["bridge"];
 var sinceOf = (told, from) => from === ENGINE ? told.since : told.sinces?.[from] ?? told.since;
@@ -9415,6 +9430,7 @@ var changeTold = (file, change, from, until) => {
     });
   } catch {}
 };
+var holds = (still, waited) => Boolean(still) && (typeof waited.asked !== "number" || startedSince(still, waited.asked));
 var hashed = (text) => crypto16.createHash("sha256").update(text).digest("hex").slice(0, 16);
 var messageTime = (message) => isObject(message?.time) && typeof message.time.created === "number" ? message.time.created : null;
 function beganBy(turn) {
@@ -9484,7 +9500,7 @@ function isNews(was, last) {
   return last.text.length >= SUBSTANCE && hashed(last.text) !== was.said;
 }
 function workWatcher(source, targets, { gather = GATHER, schedule = setTimeout, now = Date.now, file = WORK_WAKES, toldFile = WORK_TOLD, bridgeRuns = () => peerPlaces().bridge, signal, from = ENGINE, backgroundFile, stoppedFile } = {}) {
-  const background = backgroundWatcher(source, from, { file: backgroundFile, now, schedule, signal });
+  const background = backgroundWatcher(source, from, { file: backgroundFile, now, schedule, signal, ranOut: () => backgroundEnded() });
   const due = new Set;
   const failures = new Map;
   const putBack = (starter, waiting) => changeWaiting(file, (all) => {
@@ -9514,7 +9530,7 @@ ${starter}`;
       return;
     const tried = waiting.tried && typeof waiting.tried.id === "string" && waiting.tried.lines > 0 && waiting.tried.lines <= waiting.lines.length ? waiting.tried : null;
     const stopped = readStopped(stoppedFile);
-    const unstopped = (lines) => lines.filter((line) => !stopped[/\(address (\S+?)\)/.exec(line)?.[1] ?? ""]);
+    const unstopped = (lines) => lines.filter((line) => line.startsWith(STOPPED_OPENING) || !stopped[/\(address (\S+?)\)/.exec(line)?.[1] ?? ""]);
     const first = unstopped(tried ? waiting.lines.slice(0, tried.lines) : waiting.lines);
     const after = tried ? unstopped(waiting.lines.slice(tried.lines)) : [];
     const again = tried && first.length ? tried : null;
@@ -9572,6 +9588,9 @@ ${starter}`;
   };
   for (const starter of Object.keys(readWaiting(file)))
     soon(starter);
+  const sendSoon = (starter) => soon(starter);
+  wakeSenders.add(sendSoon);
+  signal?.addEventListener("abort", () => wakeSenders.delete(sendSoon), { once: true });
   const sessions = new Map;
   const sessionOf = async (id) => {
     const data = await call(source, "GET", `/api/session/${encodeURIComponent(id)}`);
@@ -9641,16 +9660,11 @@ ${starter}`;
       return reply ? noteTold(session, { reply }) : undefined;
     if (waited !== "answered")
       tell(starter, line, false);
-    if (about.bot) {
-      if (about.working)
-        markLater.set(session, about.bot);
-      else
-        noteOversight(about.bot, session, "finished");
-    }
+    if (about.bot)
+      noteOversight(about.bot, session, "finished");
     noteTold(session, { reply, at, said: about.said, early: about.early, upto: about.upto, unread: !reply });
   };
   const letGoOf = (session) => {
-    deadlines.delete(session);
     if (readTold(toldFile)?.waiting?.[session])
       changeTold(toldFile, (told) => {
         if (told.waiting)
@@ -9668,7 +9682,6 @@ ${starter}`;
     forgetStopped(session, stoppedFile);
     return false;
   };
-  const deadlines = new Set;
   const settling = new Set;
   const lookAgain = (session, after) => {
     const timer = schedule(async () => {
@@ -9680,15 +9693,32 @@ ${starter}`;
     }, after);
     timer?.unref?.();
   };
-  const waitFor = (session, since) => {
-    if (!readTold(toldFile)?.waiting?.[session])
+  const waitFor = (session, since, asked) => {
+    const was = readTold(toldFile)?.waiting?.[session];
+    if (!was || was.asked !== (asked ?? undefined))
       changeTold(toldFile, (told) => {
-        told.waiting = { ...told.waiting, [session]: { from, at: since } };
+        told.waiting = { ...told.waiting, [session]: { from, at: was?.at ?? since, ...asked !== null ? { asked } : {} } };
       }, null, now());
-    if (!deadlines.has(session)) {
-      deadlines.add(session);
-      lookAgain(session, Math.max(0, since + FINISH_HOLD_LIMIT - now()));
-    }
+    lookWhileWaiting(session);
+  };
+  const looking = new Set;
+  const lookWhileWaiting = (session) => {
+    if (looking.has(session) || signal?.aborted)
+      return;
+    looking.add(session);
+    const timer = schedule(async () => {
+      looking.delete(session);
+      const waited = readTold(toldFile)?.waiting?.[session];
+      if (signal?.aborted || !waited || waited.from !== from)
+        return;
+      const data = sessions.get(session);
+      const still = await background.of(session, data?.location?.directory ?? data?.directory).catch(() => null);
+      if (!holds(still, waited))
+        await settle(session).catch(() => {});
+      if (readTold(toldFile)?.waiting?.[session]?.from === from)
+        lookWhileWaiting(session);
+    }, WAITING_LOOK);
+    timer?.unref?.();
   };
   const finish = async (session, starter, known) => {
     const at = now();
@@ -9707,18 +9737,17 @@ ${starter}`;
     const still = await background.of(session.id, folder).catch(() => null);
     const waitedSince = readTold(toldFile)?.waiting?.[session.id]?.at;
     const askedAt = last?.began.kind === "asked" ? last.began.at : null;
-    const working = Boolean(still) && (askedAt === null || startedSince(still, askedAt));
-    if (working && now() - (waitedSince ?? at) < FINISH_HOLD_LIMIT)
-      return waitFor(session.id, waitedSince ?? at);
+    if (holds(still, { asked: askedAt ?? undefined }))
+      return waitFor(session.id, waitedSince ?? at, askedAt);
     const was = readTold(toldFile)?.sessions[session.id] ?? {};
     letGoOf(session.id);
     if (last && !isNews(was, last))
       return noteTold(session.id, { reply: last.id ?? undefined });
-    const line = await wakeLine({ type: "session.execution.succeeded", data: { sessionID: session.id } }, session, source, still);
+    const line = await wakeLine({ type: "session.execution.succeeded", data: { sessionID: session.id } }, session, source);
     if (!line)
       return;
     const seen = Math.max(upto ?? -Infinity, last?.at ?? -Infinity);
-    tellUnlessAnswered(session.id, starter, last?.id ?? undefined, line, at, { said: last ? last.text ? hashed(last.text) : "" : undefined, early: Boolean(still) || waitedSince !== undefined, bot: worksFor(session)?.bot, working, upto: Number.isFinite(seen) ? seen : undefined });
+    tellUnlessAnswered(session.id, starter, last?.id ?? undefined, line, at, { said: last ? last.text ? hashed(last.text) : "" : undefined, early: Boolean(still) || waitedSince !== undefined, bot: worksFor(session)?.bot, upto: Number.isFinite(seen) ? seen : undefined });
   };
   const settle = async (id) => {
     if (signal?.aborted)
@@ -9743,7 +9772,7 @@ ${starter}`;
   const backgroundEnded = async () => {
     const waiting = readTold(toldFile)?.waiting ?? {};
     for (const [id, each] of Object.entries(waiting)) {
-      if (each.from !== from || background.known(id) || settling.has(id))
+      if (each.from !== from || holds(background.known(id), each) || settling.has(id))
         continue;
       settling.add(id);
       lookAgain(id, SETTLE);
@@ -9998,20 +10027,49 @@ ${starter}`;
       noteTold(session.id, { reply, at, turn: last?.turn, failure });
     })().catch(() => {});
   };
-  return Object.assign(watch, { caughtUp, gone: background.gone });
+  return Object.assign(watch, { caughtUp, gone: () => {
+    wakeSenders.delete(sendSoon);
+    background.gone();
+  } });
+}
+
+// Packages/Box/src/link/work/stopping.ts
+async function leadWaitingOn(target, data, atWork = false, signal) {
+  const starter = startedByOf(data);
+  if (!starter || !wakesOf(data).includes("finished") || isArchived(data) || readStopped()[data.id] !== undefined)
+    return null;
+  if (atWork || readBackground()[data.id] || finishHeld(data.id) || hasWakeUps(data.id))
+    return starter;
+  if ((await workingNow([target], signal)).has(data.id))
+    return starter;
+  return await askingNow({ target, data }, signal).catch(() => null) ? starter : null;
+}
+async function stopConversation(target, data) {
+  if (!startedByOf(data))
+    return stopSession(target, data.id);
+  const lead = await leadWaitingOn(target, data).catch(() => null);
+  const state = await stopWork(target, data.id, true);
+  if (lead)
+    tellStarters([{ starter: lead, line: stoppedLine(data) }]);
+  return state;
 }
 
 // Packages/Box/src/link/work/stop.ts
-async function stopBotWork(bot, targets, signal) {
+async function stopBotWork(bot, targets, signal, { tell = true } = {}) {
   const work = ofBot(bot, await workSessions(targets, signal));
   const [working, turns] = await Promise.all([atWorkNow(targets, signal), workingNow(targets, signal)]);
   let stopped = 0;
+  const told = [];
   for (const each of work) {
     const asking = !turns.has(each.data.id) && await askingNow(each, signal);
     if (!working.has(each.data.id) && !hasWakeUps(each.data.id) && !asking)
       continue;
-    if (await stopWork(each.target, each.data.id, turns.has(each.data.id) || Boolean(asking)).then(() => true, () => false))
-      stopped += 1;
+    const lead = await leadWaitingOn(each.target, each.data, true, signal).catch(() => null);
+    if (!await stopWork(each.target, each.data.id, turns.has(each.data.id) || Boolean(asking)).then(() => true, () => false))
+      continue;
+    stopped += 1;
+    if (lead && tell)
+      told.push({ starter: lead, line: stoppedLine(each.data) });
   }
   const own = botHere(bot)?.session;
   if (own) {
@@ -10022,6 +10080,7 @@ async function stopBotWork(bot, targets, signal) {
           break;
     }
   }
+  tellStarters(told);
   noteWorkChanged(bot);
   return stopped;
 }
@@ -10036,6 +10095,7 @@ var SHOWN = 24 * 3600000;
 var ASK_SETTLES = 2 * 60000;
 var WRAP_UP = 2 * 3600000;
 var UNKNOWN_RESET2 = 30 * 60000;
+var NUDGE_HOLD = 30 * 60000;
 var DAY2 = 86400000;
 var goalFollowers = new Set;
 var STATES = ["proposed", "running", "done", "stopped", "declined"];
@@ -11106,7 +11166,7 @@ async function lookAtGoals(tell, targets, { file = GOALS_FILE, here, now = Date.
       }, file);
       if (ended) {
         noteWorkChanged(goal.bot);
-        await stopBotWork(goal.bot, targets(), signal).catch(() => 0);
+        await stopBotWork(goal.bot, targets(), signal, { tell: false }).catch(() => 0);
         await followMode(ended, targets, file);
       }
     }
@@ -11141,7 +11201,7 @@ async function lookAtGoals(tell, targets, { file = GOALS_FILE, here, now = Date.
   const turns = running.length ? await workingNow(targets(), signal).catch(() => new Set) : new Set;
   const left = running.length ? readBackground() : {};
   const working = new Set([...turns, ...Object.keys(left)]);
-  const busy = new Set([...turns, ...Object.keys(left).filter((id) => now - left[id].since < FINISH_HOLD_LIMIT)]);
+  const busy = new Set([...turns, ...Object.keys(left).filter((id) => now - left[id].since < NUDGE_HOLD)]);
   const workOf = (goal) => goalWork(goal, sessions);
   keepAwake(running.some((goal) => working.has(goal.session) || workOf(goal).some((each) => working.has(each.data.id))));
   for (const goal of running) {
@@ -16756,7 +16816,7 @@ function pathPattern(source) {
 }
 var exactly = (where, wall) => where === wall || where.startsWith(wall + "/");
 var inside3 = (where, wall) => exactly(fold(where), fold(wall));
-var holds = (folder, wall) => folder === "/" || fold(wall).startsWith(fold(folder) + "/");
+var holds2 = (folder, wall) => folder === "/" || fold(wall).startsWith(fold(folder) + "/");
 var matching3 = (where, patterns = []) => patterns.some((each) => pathPattern(each).test(fold(where)) || pathPattern(each).test(where));
 var nameOf = (word) => word.split("/").pop() ?? "";
 var homeWord = (text) => text.replace(/^(~|\$HOME|\$\{HOME\})(?=\/|$)/, homeFolder());
@@ -16888,7 +16948,7 @@ function conversationPlace(at) {
 }
 function deletesHome(where, home) {
   const target = where.endsWith("/*") ? where.slice(0, -2) || "/" : where;
-  return fold(target) === fold(home) || holds(target, home);
+  return fold(target) === fold(home) || holds2(target, home);
 }
 async function keptFromSessions(folder, policy = fencePolicy()) {
   await askedAbout([folder]);
@@ -16897,24 +16957,24 @@ async function keptFromSessions(folder, policy = fencePolicy()) {
   const reach = (wall) => `its commands would reach ${wall}`;
   if (homes.some((home) => deletesHome(at, home)))
     return "its commands could delete your home folder";
-  if ((policy.personal ?? []).some((each) => fold(at) === fold(each) || holds(at, each)))
+  if ((policy.personal ?? []).some((each) => fold(at) === fold(each) || holds2(at, each)))
     return "its commands could delete a whole personal folder of yours";
-  if ([...policy.secrets, ...homes.map((home) => home + "/.ssh")].some((each) => inside3(at, each) || holds(at, each)))
+  if ([...policy.secrets, ...homes.map((home) => home + "/.ssh")].some((each) => inside3(at, each) || holds2(at, each)))
     return reach("your secrets");
-  if (policy.kuvo.some((each) => holds(at, each)))
+  if (policy.kuvo.some((each) => holds2(at, each)))
     return reach("Kuvo Code's own folders");
   const walled = policy.kuvo.some((each) => inside3(at, each) && !homes.some((home) => inside3(home, each))) || matching3(at, policy.kuvoPatterns);
   if (walled && !conversationPlace(at))
     return reach("Kuvo Code's own folders");
-  if (homes.some((home) => atLogin(at, home)) || [...homes.flatMap((home) => LOGIN.map((each) => `${home}/${each}`)), ...SYSTEM_LOGIN].some((each) => holds(at, each)))
+  if (homes.some((home) => atLogin(at, home)) || [...homes.flatMap((home) => LOGIN.map((each) => `${home}/${each}`)), ...SYSTEM_LOGIN].some((each) => holds2(at, each)))
     return reach("what runs as you log in");
   if (inHomeKept(at, policy) && !conversationPlace(at))
     return reach("what runs later outside the sandbox (~/Library)");
   return null;
 }
 function inHomeKept(at, policy) {
-  const walls = (policy.homeKept ?? []).filter((wall) => inside3(at, wall) || holds(at, wall));
-  const open = [...policy.writable, ...policy.homeOpen ?? []].filter((each) => walls.some((wall) => holds(wall, each)));
+  const walls = (policy.homeKept ?? []).filter((wall) => inside3(at, wall) || holds2(at, wall));
+  const open = [...policy.writable, ...policy.homeOpen ?? []].filter((each) => walls.some((wall) => holds2(wall, each)));
   return walls.length > 0 && !open.some((each) => exceptedIn(at, each));
 }
 var exceptedIn = (at, folder) => {
@@ -16958,7 +17018,7 @@ function takenAway(program, args, words, at) {
 function hardLine(action, policy = fencePolicy(), own = []) {
   if (action.kind === "file") {
     const where = realish(action.path);
-    return inKuvo(where, policy, own) || action.access === "write" && policy.kuvo.some((wall) => holds(where, wall)) ? KUVO : null;
+    return inKuvo(where, policy, own) || action.access === "write" && policy.kuvo.some((wall) => holds2(where, wall)) ? KUVO : null;
   }
   if (action.kind === "tool")
     return null;
@@ -17792,11 +17852,11 @@ async function keptPlace(action, policy, own) {
   const repository = await inTime(repositoryOf(path63.dirname(file)), null);
   const place = repository?.top ?? path63.dirname(file);
   const home = own[0] ? realish(own[0]) : null;
-  if (home && holds(place, home))
+  if (home && holds2(place, home))
     return;
   if (!repository && holdsRepository(place))
     return;
-  if (inKuvo(place, policy) || [...policy.readOnly, ...policy.homeKept ?? [], ...pathFolders()].some((wall) => inside3(place, wall) || holds(place, wall)))
+  if (inKuvo(place, policy) || [...policy.readOnly, ...policy.homeKept ?? [], ...pathFolders()].some((wall) => inside3(place, wall) || holds2(place, wall)))
     return;
   return await keptFromSessions(place, policy) ? undefined : place;
 }
@@ -17814,7 +17874,7 @@ function walledForOwn(where, policy = fencePolicy(), own = []) {
   return !ours && (inKuvo(at, policy) || inLibrary(at, policy)) || runsLater(at, policy) || atLogin(at, policy.home) || isSecret(at, policy) || ownAt(at, policy.home) !== null || WORKTREE_RECORDS.test(at) || WORKTREE_RECORDS.test(fold(at));
 }
 function inLibrary(at, policy) {
-  if (!(policy.homeKept ?? []).some((wall) => inside3(at, wall) || holds(at, wall)))
+  if (!(policy.homeKept ?? []).some((wall) => inside3(at, wall) || holds2(at, wall)))
     return false;
   return !(policy.homeOpen ?? []).filter((each) => /\/Library\/Mobile Documents$/i.test(each)).some((each) => exceptedIn(at, path63.join(each, "com~apple~CloudDocs")));
 }
@@ -40299,7 +40359,6 @@ export {
   ENGINE_LAYER_FILE,
   FEATURES,
   FILE_LIMIT,
-  FINISH_HOLD_LIMIT,
   FROM_PHONE,
   Frame,
   IKInitiator,
@@ -40332,6 +40391,7 @@ export {
   STEER_AFTER,
   UPDATE_KEYS,
   Unreached,
+  WAITING_LOOK,
   addFromCatalog,
   addMacDefaults,
   addressOf,

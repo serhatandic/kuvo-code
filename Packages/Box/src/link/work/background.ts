@@ -28,18 +28,16 @@ import { isHiddenRun, type EngineSession } from "../engine/sessions";
 import { locked, writePrivate } from "../files";
 import { SESSION_WAKES } from "../home";
 import { noteWorkChanged, WORK_FOLDER } from "./changes";
-import { startedByOf, workingNow, worksFor } from "./tree";
+import { workingNow, worksFor } from "./tree";
 
 export const WORK_BACKGROUND = path.join(WORK_FOLDER, "background.json");
 export const WORK_STOPPED = path.join(WORK_FOLDER, "stopped.json");
 const LOCK = path.join(WORK_FOLDER, ".background.lock");
 
 /** How long a command or subagent that never ends counts as work, from when it started (ms): after
- * that its session no longer shows at work for it, though it may still run (a dev server). */
+ * that its session no longer shows at work for it, though it may still run (a dev server), and a
+ * finish that waited on it is told. */
 export const AT_WORK_LIMIT = 6 * 3_600_000;
-/** How long a lead's word that a session finished waits for what it left running (ms): after that
- * it's told, saying what still runs. */
-export const FINISH_HOLD_LIMIT = 30 * 60_000;
 // As the box starts: the sessions updated this recently have their folders' tools running still.
 const RECENT = 3_600_000;
 
@@ -106,14 +104,6 @@ export async function atWorkNow(targets: Target[], signal?: AbortSignal, file = 
 /** Whether any of `work` started at `at` (ms) or since. */
 export const startedSince = (work: BackgroundWork, at: number) => [...work.commands.map(each => each.started), ...work.subagents.map(each => each.since), ...work.tasks.map(each => each.since)].some(started => started >= at);
 
-/** What's running for `session` in words, for a lead told it finished all the same. */
-export function backgroundWords(work: BackgroundWork): string {
-  const commands = work.commands.slice(0, 3).map(each => `\`${each.command.split("\n")[0]!.slice(0, 80)}\``);
-  const others = work.subagents.length + work.tasks.length;
-  const parts = [commands.length ? (commands.length === 1 ? `the command ${commands[0]}` : `the commands ${commands.join(", ")}`) : "", others ? (others === 1 ? "a subagent" : `${others} subagents`) : ""].filter(Boolean);
-  return parts.join(" and ");
-}
-
 const emptyKept = (): Kept => ({ sessions: {}, folders: [] });
 
 function write(file: string, from: string, change: (kept: Kept) => Kept): void {
@@ -149,7 +139,8 @@ export interface BackgroundWatch {
 }
 
 /** Follows what runs in `source`, the place `from` ("engine" or "bridge"), keeping it as it is. */
-export function backgroundWatcher(source: Target, from: string, { file = WORK_BACKGROUND, now = Date.now, schedule = setTimeout, signal }: { file?: string; now?: () => number; schedule?: (run: () => Promise<void>, ms: number) => unknown; signal?: AbortSignal } = {}): BackgroundWatch {
+/** `ranOut`: told after a look as something stops counting by its time (`AT_WORK_LIMIT`). */
+export function backgroundWatcher(source: Target, from: string, { file = WORK_BACKGROUND, now = Date.now, schedule = setTimeout, signal, ranOut }: { file?: string; now?: () => number; schedule?: (run: () => Promise<void>, ms: number) => unknown; signal?: AbortSignal; ranOut?: () => unknown } = {}): BackgroundWatch {
   const kept = readKept(file)[from] ?? emptyKept();
   let sessions: Record<string, BackgroundWork> = kept.sessions ?? {};
   const folders = new Set(kept.folders ?? []);
@@ -228,6 +219,7 @@ export function backgroundWatcher(source: Target, from: string, { file = WORK_BA
     const timer = schedule(async () => {
       timed = false;
       await look([]);
+      if (!signal?.aborted && !ended) await ranOut?.();
     }, Math.min(...times) - now() + 1000);
     (timer as { unref?: () => void } | undefined)?.unref?.();
   };
@@ -281,8 +273,10 @@ export function backgroundWatcher(source: Target, from: string, { file = WORK_BA
   return {
     known: id => counting(sessions[id], now()),
     of: async (id, folder) => {
-      if (folder && from !== "bridge") folders.add(folder);
-      await look(folder && from !== "bridge" ? [folder] : []);
+      // (Its own folder, and those its commands were found in.)
+      const looked = from === "bridge" ? [] : [...new Set([folder, ...(sessions[id]?.commands ?? []).map(each => each.folder)].filter((each): each is string => Boolean(each)))];
+      for (const each of looked) folders.add(each);
+      await look(looked);
       return counting(sessions[id], now());
     },
     noted: async event => {
@@ -392,9 +386,3 @@ export async function stopWork(target: Target, session: string, holds = false): 
   return state;
 }
 
-/** Stop for any conversation: one someone started goes as `stopWork`; your own conversation stops
- * its turn and keeps what you left running and set to come back (as Stop does in Claude Code and
- * Codex: a command in the background ends from its own row). */
-export async function stopConversation(target: Target, data: Partial<EngineSession> & { id: string }): ReturnType<typeof stopSession> {
-  return startedByOf(data) ? stopWork(target, data.id, true) : stopSession(target, data.id);
-}
