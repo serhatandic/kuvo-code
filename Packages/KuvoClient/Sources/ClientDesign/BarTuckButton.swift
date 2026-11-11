@@ -29,6 +29,8 @@ public struct BarTuckButton: View {
         }
         .buttonStyle(TuckStyle())
         .accessibilityLabel("Fold all bars")
+        // Read ahead of the bars, as it's over them, not after the composer.
+        .accessibilitySortPriority(1)
         .help("Fold all bars into one line")
     }
 }
@@ -69,8 +71,9 @@ private struct TuckStyle: ButtonStyle {
                 .background(Color.primary.opacity(configuration.isPressed ? 0.13 : isHovering ? 0.08 : 0), in: .capsule)
                 .glassEffect(.regular.interactive(), in: .capsule)
                 #if os(iOS)
-                // Drawn at 26 high, 44 to tap.
-                .contentShape(.rect.inset(by: -9))
+                // Drawn at 26 high, 44 to tap: grown upward only, over the conversation, never
+                // further into the card than it's drawn, where the first bar's own buttons are.
+                .contentShape(TapRoom(above: 44 - BarTuckButton.size.height))
                 #else
                 .contentShape(.capsule)
                 .onHover { isHovering = $0 }
@@ -78,5 +81,14 @@ private struct TuckStyle: ButtonStyle {
                 #endif
                 .animation(.easeOut(duration: 0.12), value: isHovering)
         }
+    }
+}
+
+/// Its shape, grown upward by `above`.
+private struct TapRoom: Shape {
+    let above: CGFloat
+
+    func path(in rect: CGRect) -> Path {
+        Path(CGRect(x: rect.minX, y: rect.minY - above, width: rect.width, height: rect.height + above))
     }
 }
