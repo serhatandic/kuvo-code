@@ -3999,7 +3999,9 @@ var quote2 = (text) => `"${text.replace(/\\/g, "\\\\").replace(/"/g, "\\\"")}"`;
 var subpath = (folder) => `(subpath ${quote2(folder)})`;
 var regex = (pattern) => `(regex ${quote2(pattern)})`;
 var param = (name) => `(subpath (param ${quote2(name)}))`;
-var GIT_GUARDED = String.raw`(((modules/.+|worktrees/[^/]+)/)?(hooks(/|$)|config(\.worktree)?$|commondir$|gitdir$)|(modules|worktrees)(/[^/]+)?$)`;
+var GIT_GUARDED = String.raw`((((worktrees/[^/]+/)?modules/.+|worktrees/[^/]+)/)?(hooks(/|$)|config(\.worktree)?$|commondir$|gitdir$)|(modules|worktrees)(/[^/]+)?$|worktrees/[^/]+/modules$)`;
+var MODULE_FOLDERS = String.raw`/(worktrees/[^/]+/)?modules/.+`;
+var MODULE_KEPT = String.raw`/(worktrees/[^/]+/)?modules/.+/(objects/([0-9a-f][0-9a-f]|pack|info|tmp_objdir-[^/]+)|(refs|logs|lfs|rr-cache)(/.+)?|info)$`;
 var AGENTS_GUARDED = String.raw`\.claude/settings(\.local)?\.json|\.mcp\.json|\.codex/(config\.toml|hooks\.json|\.env|rules(/.*)?)|\.cursor/(hooks|mcp)\.json|\.(gemini|grok)/settings\.json|\.grok/(config\.toml|sandbox\.toml|lsp\.json|(hooks|plugins|agents|workflows)(/.*)?)|\.(claude|cursor)/hooks(/.*)?|\.(claude|codex|cursor|gemini|grok)`;
 var WRITE = "file-write* file-write-acl file-write-create file-write-data file-write-finderinfo file-write-flags file-write-mode file-write-owner file-write-setugid file-write-times file-write-unlink file-write-xattr";
 var HOME_WRITES = "file-write* file-write-create file-write-data file-write-flags file-write-mode file-write-times file-write-xattr";
@@ -4098,6 +4100,8 @@ function seatbeltProfile(policy, options) {
   ]), ...(policy.socketPatterns ?? []).map((pattern) => `(require-all ${regex(pattern)} (vnode-type SOCKET))`), ...(policy.socketFolders ?? []).map((folder) => `(require-all ${regex(folder)} (vnode-type DIRECTORY))`));
   deny(WRITE, under("WORK_RE", "/" + GUARDED), under("GIT_RE", "/" + GIT_GUARDED), ...Array.from({ length: MOST_FOLDERS }, (_, at) => under(`ALLOW${at}_RE`, "/" + GUARDED)));
   deny(WRITE, ...homes.map((home) => inHome(home, `"/(.*/)?(" (param "KEPT") ")(/|$)"`)));
+  deny("file-write-create file-write-unlink", `(require-all ${under("GIT_RE", MODULE_FOLDERS)} (vnode-type DIRECTORY))`);
+  allow("file-write-create file-write-unlink", `(require-all ${under("GIT_RE", MODULE_KEPT)} (vnode-type DIRECTORY))`);
   out.push(";; your secrets");
   if (policy.secrets.length)
     deny(`file-read* file-read-data ${WRITE}`, `(require-all (require-any ${policy.secrets.map(subpath).join(" ")}) (require-not ${param("OWN0")}))`);
@@ -16408,7 +16412,12 @@ async function keptFromSessions(folder, policy = fencePolicy()) {
     return reach("Kuvo Code's own folders");
   if (homes.some((home) => atLogin(at, home)) || [...homes.flatMap((home) => LOGIN.map((each) => `${home}/${each}`)), ...SYSTEM_LOGIN].some((each) => holds(at, each)))
     return reach("what runs as you log in");
+  if (inHomeKept(at, policy) && !conversationPlace(at))
+    return reach("what runs later outside the sandbox (~/Library)");
   return null;
+}
+function inHomeKept(at, policy) {
+  return (policy.homeKept ?? []).some((wall) => inside3(at, wall) || holds(at, wall)) && !policy.writable.some((each) => inside3(at, each));
 }
 var KUVO = "It reaches Kuvo Code's own folders, which is never allowed.";
 var WRECKS_HOME = "It deletes your home folder, moves it away or locks you out of it, which is never allowed.";
@@ -17076,7 +17085,8 @@ function reviewLog(session, folder = REVIEWS_FOLDER) {
         refused: Number(kept.refused) || 0,
         ...typeof kept.paused === "number" ? { paused: kept.paused } : {},
         ...typeof kept.seen === "number" ? { seen: kept.seen } : {},
-        ...places.length ? { places } : {}
+        ...places.length ? { places } : {},
+        ...typeof kept.placesTaken === "number" ? { placesTaken: kept.placesTaken } : {}
       };
     }
   } catch {}
@@ -17098,7 +17108,7 @@ var decisionID = () => `rd_${randomBytes(6).toString("hex")}`;
 var latest = (decisions) => decisions.filter((each, at) => at >= decisions.length - KEPT3 || each.place && !each.revoked);
 var OUTAGES = new Set(["noModel", "failed", "unreadable"]);
 var PLACES = 50;
-function keepDecision(session, decision, folder = REVIEWS_FOLDER, place) {
+function keepDecision(session, decision, folder = REVIEWS_FOLDER, place, since) {
   return changeLog(session, folder, (log) => {
     log.decisions = latest([...log.decisions, { id: decisionID(), ...decision }]);
     if (decision.decision === "refused" && !OUTAGES.has(decision.why ?? "")) {
@@ -17106,7 +17116,8 @@ function keepDecision(session, decision, folder = REVIEWS_FOLDER, place) {
       log.refused++;
     } else if (decision.decision === "allowed")
       log.refusedInRow = 0;
-    if (place && decision.decision === "allowed" && !(log.places ?? []).includes(place)) {
+    const taken = since !== undefined && Math.max(log.placesTaken ?? 0, takenWhile.get(session) ?? 0) >= since;
+    if (place && !taken && decision.decision === "allowed" && !(log.places ?? []).includes(place)) {
       const places = [...log.places ?? [], place];
       for (const gone of places.slice(0, -PLACES))
         for (const each of log.decisions)
@@ -17167,10 +17178,18 @@ function revokePlace(session, id, now = Date.now(), folder = REVIEWS_FOLDER) {
       return null;
     given.revoked = now;
     log.places = (log.places ?? []).filter((each) => each !== given.place);
+    log.placesTaken = now;
     return { ...given };
   });
 }
+var underWay = new Map;
+var takenWhile = new Map;
+async function stillPlaced(session, folder, place) {
+  return Boolean(place && reviewLog(session, folder).places?.includes(place));
+}
 function clearPlaces(session, now = Date.now(), folder = REVIEWS_FOLDER) {
+  if (underWay.has(session))
+    takenWhile.set(session, now);
   if (!reviewLog(session, folder).places?.length)
     return;
   changeLog(session, folder, (log) => {
@@ -17178,6 +17197,7 @@ function clearPlaces(session, now = Date.now(), folder = REVIEWS_FOLDER) {
       if (each.place && !each.revoked)
         each.revoked = now;
     log.places = [];
+    log.placesTaken = now;
   });
 }
 function takeApproval(session, key, now, folder) {
@@ -17224,6 +17244,21 @@ function answerWithin(model, prompt, within, signal) {
 async function review(action, context, given) {
   const now = given.now ?? Date.now;
   const folder = given.folder ?? REVIEWS_FOLDER;
+  const started = now();
+  underWay.set(context.session, (underWay.get(context.session) ?? 0) + 1);
+  try {
+    return await reviewed(action, context, given, now, folder, started);
+  } finally {
+    const left = (underWay.get(context.session) ?? 1) - 1;
+    if (left > 0)
+      underWay.set(context.session, left);
+    else {
+      underWay.delete(context.session);
+      takenWhile.delete(context.session);
+    }
+  }
+}
+async function reviewed(action, context, given, now, folder, started) {
   await askedAbout([...namedBy(action), ...given.own ?? []]);
   const { verdict, key } = await judge(action, context, given, now(), folder).catch((error) => ({ verdict: heldBack(`Auto's reviewer couldn't review it (${oneLine(String(error?.message ?? error), 120)}).`, "failed"), key: actionKey(action) }));
   if (verdict.decision === "allow" && verdict.by === "code")
@@ -17241,7 +17276,7 @@ async function review(action, context, given) {
       reason: verdict.reason,
       by: verdict.by,
       ...verdict.decision === "refuse" ? { ...verdict.why ? { why: verdict.why } : {}, ...verdict.held ? { held: true, key } : {} } : {}
-    }, folder, place);
+    }, folder, place, started);
   } catch (error) {
     forgetFetched(verdict.fetched);
     throw error;
@@ -17271,10 +17306,11 @@ function holdsRepository(folder) {
     return error?.code !== "ENOENT";
   }
 }
-function walledForOwn(where, policy = fencePolicy()) {
+function walledForOwn(where, policy = fencePolicy(), own = []) {
   const at = realish(where);
-  return inKuvo(at, policy) || runsLater(at, policy);
+  return inKuvo(at, policy, ownInside(own, policy)) || runsLater(at, policy) || atLogin(at, policy.home) || isSecret(at, policy) || ownAt(at, policy.home) !== null || inHomeKept(at, policy) || WORKTREE_RECORDS.test(at);
 }
+var WORKTREE_RECORDS = new RegExp(String.raw`/\.git/worktrees(/|$)`, process.platform === "darwin" ? "i" : "");
 function runsLater(where, policy) {
   return RUNS_OUTSIDE.test(where) || [...policy.readOnly, ...pathFolders()].some((wall) => inside3(where, wall)) || matching3(where, policy.readOnlyPatterns);
 }
@@ -17359,7 +17395,7 @@ async function judge(action, context, given, now, folder) {
     return done(heldBack(`It changes ${OWN2[own].words}, for every project, which the user didn't ask for. ${OWN2[own].instead}`, "unasked"));
   }
   const persists = persistenceOf(action, policy);
-  if (action.kind === "file" && action.access === "write" && action.tool && action.input && log.places?.length && !own && !persists && !isSecret(realish(action.path), policy) && !runsLater(realish(action.path), policy) && log.places.includes(await keptPlace(action, policy, context.folders ?? given.own ?? []) ?? "")) {
+  if (action.kind === "file" && action.access === "write" && action.tool && action.input && log.places?.length && !own && !persists && !isSecret(realish(action.path), policy) && !runsLater(realish(action.path), policy) && await stillPlaced(context.session, folder, await keptPlace(action, policy, context.folders ?? given.own ?? []))) {
     return done({ decision: "allow", reason: "Auto's reviewer allowed changing files there earlier in this conversation.", by: "code" });
   }
   const environments = environmentsOf(action);
@@ -17739,11 +17775,11 @@ async function projectTrees(folder) {
   const known = treesFound.get(folder);
   if (known && Date.now() - known.at < TREES_FOR)
     return known.trees;
-  const trees = foundTrees(folder);
+  const trees = foundTrees(folder).catch(() => []);
   treesFound.set(folder, { at: Date.now(), trees });
   if (treesFound.size > 100)
     treesFound.delete(treesFound.keys().next().value);
-  return trees.catch(() => []);
+  return trees;
 }
 var treesFound = new Map;
 var TREES_FOR = 5000;
@@ -17779,9 +17815,20 @@ async function taskOf(at, signal) {
   const head = /^\[Message from (.{1,200}?) · (ses_[A-Za-z0-9_-]+)\][^\n]*\n\n/.exec(text);
   return head && head[2] === starter ? { from: head[1], text: text.slice(head[0].length) } : undefined;
 }
-function isWithin(file, folder) {
-  const inside = path62.relative(realPath(folder), realPath(file));
+function within2(file, folder) {
+  const inside = path62.relative(folder, file);
   return inside === "" || !inside.startsWith("..") && !path62.isAbsolute(inside);
+}
+var firstFound = new Map;
+function foundAt(folder) {
+  let found = firstFound.get(folder);
+  if (found === undefined) {
+    found = realPath(folder);
+    if (firstFound.size >= 2000)
+      firstFound.delete(firstFound.keys().next().value);
+    firstFound.set(folder, found);
+  }
+  return found;
 }
 function realPath(file) {
   const rest = [];
@@ -17837,7 +17884,7 @@ async function answerPermission(source, id, sessionID, signal, found) {
     return null;
   }
   await askedAbout([folder, ...actions.flatMap((action) => action.kind === "file" ? [action.path] : [])]);
-  if (ownByName && ownReads(isWithin)) {
+  if (ownByName && ownReads((file, place) => within2(realPath(file), foundAt(place)))) {
     await call(source, "POST", `/api/session/${encodeURIComponent(permission.asker)}/permission/${encodeURIComponent(permission.id)}/reply`, { decision: "once" }, signal);
     noteReview(id, sessionID, "allowed", call2);
     return { decision: "allow", reason: "Its own files.", by: "code" };
@@ -17849,8 +17896,11 @@ async function answerPermission(source, id, sessionID, signal, found) {
   const reply = (body) => call(source, "POST", `/api/session/${encodeURIComponent(permission.asker)}/permission/${encodeURIComponent(permission.id)}/reply`, body, signal);
   const own = await ownFolders(at, false);
   const trees = typeof folder === "string" ? await projectTrees(folder) : [];
-  const policy = trees.length ? fencePolicy() : null;
-  const ownFile = (file) => own.some((each) => isWithin(file, each)) || policy !== null && trees.some((each) => isWithin(file, each)) && !walledForOwn(file, policy);
+  const policy = fencePolicy();
+  const ownFile = (file) => {
+    const real = realPath(file);
+    return (own.some((each) => within2(real, foundAt(each))) || trees.some((each) => within2(real, each))) && !walledForOwn(file, policy, own);
+  };
   if (actions.every((action) => action.kind === "file" && ownFile(action.path))) {
     await reply({ decision: "once" });
     noteReview(id, sessionID, "allowed", call2);
@@ -20476,17 +20526,17 @@ var real2 = (place) => {
     return null;
   }
 };
-var within2 = (file, folder) => file === folder || file.startsWith(folder.endsWith(path72.sep) ? folder : folder + path72.sep);
+var within3 = (file, folder) => file === folder || file.startsWith(folder.endsWith(path72.sep) ? folder : folder + path72.sep);
 function stageFile(given, places, staging) {
   if (!path72.isAbsolute(given))
     refuse(`Give ${given} as a full path.`);
   const file = real2(given) ?? refuse(`There's no file at ${given}.`);
   const own = places.own ? real2(places.own) : null;
   const roots = [own, ...places.others.map(real2), real2(os8.tmpdir()), real2("/tmp")].filter((each) => Boolean(each));
-  const root = roots.find((each) => within2(file, each));
+  const root = roots.find((each) => within3(file, each));
   const boxes = [real2(K), real2(BOTS), IS_MAC ? real2(path72.dirname(path72.resolve(K))) : null].filter((each) => Boolean(each));
-  const ownOK = own !== null && root === own && boxes.some((box) => within2(own, box));
-  if (!root || !ownOK && boxes.some((box) => within2(file, box)))
+  const ownOK = own !== null && root === own && boxes.some((box) => within3(own, box));
+  if (!root || !ownOK && boxes.some((box) => within3(file, box)))
     refuse(`${given} isn't in this conversation's folder, its project or a temporary folder: only files from there are kept with an item.`);
   if (path72.relative(root, file).split(path72.sep).some((part) => part.startsWith(".")))
     refuse(`${given} is hidden (a name starting with a dot): it isn't kept with an item.`);
