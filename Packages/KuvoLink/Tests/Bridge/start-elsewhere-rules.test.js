@@ -96,6 +96,7 @@ async function engine(sessions) {
       const rest = one[2] ?? "";
       if (!rest && request.method === "GET") return reply(session);
       if (!rest && request.method === "PATCH") {
+        if (seen.refusePatch) return reply("Not now.", 500);
         if (given.metadata) session.metadata = { ...(session.metadata ?? {}), ...given.metadata };
         if (given.permissions) session.permissions = given.permissions;
         seen.patched.push({ id, ...given });
@@ -247,6 +248,30 @@ test("the lead's Don't Allows hold here, and keep holding when this computer's r
   const loose = startCall({}, { held: [{ action: "shell", resource: "*", effect: "allow" }] });
   const said = await take(loose);
   assert.deepEqual([said[0].ok, said[0].why], [false, "That isn't a call."]);
+});
+
+test("a start whose marks don't take is told to send its report as a message, its lead not hearing it finish: at once, or once it's finished after a restart", async () => {
+  const unheard = /^\[Message from Foreman on mini · ses_lead\] \(To answer, use send_message to ses_lead\.\)[\s\S]*Foreman reads that report\.$/;
+  eng.seen.refusePatch = true;
+  await take(startCall());
+  assert.match(eng.seen.prompts.at(-1).text, unheard);
+  // Cut short once made, before it was marked: finished after a restart, its marks refused again.
+  eng.seen.refusePatch = false;
+  const whole = startCall();
+  await take(whole);
+  const kept = read(path.join(run, "calls", `${whole.id}.json`));
+  assert.match(kept.making.prompt.unheard, unheard);
+  const id = "cal_unmarked00000001";
+  eng.all.set("ses_unmarked", { id: "ses_unmarked", time: { created: Date.now(), updated: Date.now() }, directory: kept.making.folder, metadata: { kuvo: { call: id, startedBy: "ses_lead" } } });
+  write(path.join(run, "calls", `${id}.json`), { ...structuredClone(kept), id, made: Date.now(), at: Date.now(), done: undefined, session: "ses_unmarked", marked: false, prompted: false, making: { ...kept.making, prompt: { ...kept.making.prompt, id: "msg_unmarked" } } });
+  eng.seen.refusePatch = true;
+  const prompts = eng.seen.prompts.length;
+  await link.resumeStarts(() => {}, Date.now(), { readEngine: () => eng.target, bridge: () => null });
+  eng.seen.refusePatch = false;
+  assert.equal(eng.seen.prompts.length, prompts + 1);
+  assert.equal(eng.seen.prompts.at(-1).to, "ses_unmarked");
+  assert.match(eng.seen.prompts.at(-1).text, unheard);
+  assert.match(read(path.join(run, "calls", `${id}.json`)).making.prompt.text, unheard, "and kept so");
 });
 
 test("a start whose call comes again makes one session, and one answer", async () => {

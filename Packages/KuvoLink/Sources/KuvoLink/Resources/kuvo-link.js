@@ -16396,7 +16396,7 @@ ${goalNote}` : ""}` : "") : task;
     asBefore,
     autopilot,
     kuvo,
-    prompt: { id: messageID(), text },
+    prompt: { id: messageID(), text, ...heard ? { unheard: textFor(false) } : {} },
     folders: [...project?.folders ?? []],
     folder,
     started: {
@@ -16437,8 +16437,6 @@ ${goalNote}` : ""}` : "") : task;
     place.steps?.marked?.();
   if ((by?.place || remote) && bot)
     noteWorkChanged(bot.bot);
-  if (!marked && heard)
-    making.prompt.text = textFor(false);
   if (marked && by?.place && bot && botOfConversation(by.session)?.bot === bot.bot)
     noteOversight(bot.bot, session, "started");
   if (bot && goal && given.step !== undefined && given.step !== null)
@@ -16505,6 +16503,8 @@ async function markMade(making, target, session, signal) {
     await tellAutopilot(target, session, true).catch(() => {});
   await settleNewSession(target, session).catch(() => {});
   const marked = await call(target, "PATCH", `/api/session/${address}`, { metadata: { kuvo: making.kuvo } }).then(() => true, () => false);
+  if (!marked && making.prompt.unheard)
+    making.prompt.text = making.prompt.unheard;
   if (marked && !making.asBefore)
     await settleAgain(target, session, making.agents, signal).catch(() => {});
   await noteFullAccess(session).catch(() => {});
@@ -24320,16 +24320,24 @@ async function callPeer(peer, tool, args, lead, place, { keep, quiet = false, mo
   const id = leaveCall(peer.key, lead.session, call, { wait: true, quiet });
   const { answer, unreachable } = await awaitAnswer(id, peer.key, sent, place, { most, cut: READ_BY_MAIL });
   const left = path86.join(SENDING, `${id}.json`);
-  const had = !fs83.existsSync(left);
+  let opened = null;
+  try {
+    opened = fs83.openSync(left, "r");
+  } catch {}
+  const had = opened === null;
   let went = false;
   try {
-    went = JSON.parse(fs83.readFileSync(left, "utf8")).sentTo === peer.key;
-  } catch {}
-  const dropped = fs83.existsSync(droppedMark(left));
-  if (!answer && isOpenTool(tool)) {
-    fs83.rmSync(left, { force: true });
-    letterTries.delete(id);
+    if (!answer && isOpenTool(tool)) {
+      fs83.rmSync(left, { force: true });
+      letterTries.delete(id);
+    }
+    if (opened !== null)
+      went = JSON.parse(fs83.readFileSync(opened, "utf8")).sentTo === peer.key;
+  } catch {} finally {
+    if (opened !== null)
+      fs83.closeSync(opened);
   }
+  const dropped = fs83.existsSync(droppedMark(left));
   fs83.rmSync(droppedMark(left), { force: true });
   if (answer && "failed" in answer)
     return { failed: answer.failed };

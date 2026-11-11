@@ -133,7 +133,9 @@ export interface Making {
   asBefore: boolean;
   autopilot: boolean;
   kuvo: Record<string, unknown>;
-  prompt: { id: string; text: string };
+  /** Its task's message; `unheard`, its words should its marks not be on, so its starter doesn't
+   * hear it finish (its report goes as a message after all). */
+  prompt: { id: string; text: string; unheard?: string };
   folders: string[];
   folder: string;
   started: Omit<Started, "session">;
@@ -527,7 +529,7 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
   const textFor = (heard: boolean) => by ? composeLetter(from_, by.session, task, waits, heard) + (bot ? `\n\n${sessionNote(bot.name, heard, given.review !== false)}${goal ? `\n\n${goalNote}` : ""}` : "") : task;
   const heard = starter && wakes.includes("finished");
   const text = textFor(heard);
-  const making: Making = { agents, asBefore, autopilot, kuvo, prompt: { id: messageID(), text }, folders: [...(project?.folders ?? [])], folder,
+  const making: Making = { agents, asBefore, autopilot, kuvo, prompt: { id: messageID(), text, ...(heard ? { unheard: textFor(false) } : {}) }, folders: [...(project?.folders ?? [])], folder,
     started: { title, folder, project: project?.name ?? null, ...(picked.length ? { picked: picked.join(" · ") } : {}), ...(got ? { got } : {}), ...(wakes.length ? { wakes } : {}), ...(warning ? { warning } : {}), ...(modelNote ? { model: modelNote } : {}),
       // (Less than its lead's because of this computer: why, for a lead on another.)
       ...(remote && got && effective.held ? { held: heldThere(wanted, applied, agents) } : {}) } };
@@ -555,8 +557,6 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
   const marked = await markMade(making, target, session, place.signal);
   if (marked) place.steps?.marked?.();
   if ((by?.place || remote) && bot) noteWorkChanged(bot.bot);
-  // (Not marked, its finish isn't heard: its report goes as a message after all.)
-  if (!marked && heard) making.prompt.text = textFor(false);
   // Started by the bot itself, for clients to show it looking after its new session: now, before
   // a wait for its answer, so it shows before the session finishes.
   if (marked && by?.place && bot && botOfConversation(by.session)?.bot === bot.bot) noteOversight(bot.bot, session, "started");
@@ -632,6 +632,9 @@ export async function markMade(making: Making, target: Target, session: string, 
   if (making.autopilot) await tellAutopilot(target, session, true).catch(() => {});
   await settleNewSession(target, session).catch(() => {});
   const marked = await call(target, "PATCH", `/api/session/${address}`, { metadata: { kuvo: making.kuvo } }).then(() => true, () => false);
+  // (Not marked, its finish isn't heard: told so, also where it's finished after a restart, as its
+  // journal keeps this.)
+  if (!marked && making.prompt.unheard) making.prompt.text = making.prompt.unheard;
   // (What it comes to may have changed while it was made.)
   if (marked && !making.asBefore) await settleAgain(target, session, making.agents, signal).catch(() => {});
   // In Full Access, its commands outside the sandbox from the first.

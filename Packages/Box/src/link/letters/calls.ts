@@ -277,16 +277,25 @@ export async function callPeer(peer: Peer, tool: CallTool, args: Record<string, 
   // that box (`sentTo`, kept as it went) and may have got there: unless the relay said it dropped
   // that very call (`relay/dropped.ts`), whatever the relay says of that box after.
   const left = path.join(SENDING, `${id}.json`);
-  const had = !fs.existsSync(left);
+  let opened: number | null = null;
+  try { opened = fs.openSync(left, "r"); } catch {}
+  const had = opened === null;
   let went = false;
-  try { went = JSON.parse(fs.readFileSync(left, "utf8")).sentTo === peer.key; } catch {}
-  const dropped = fs.existsSync(droppedMark(left));
-  // A start, or a read of what's there, not answered: never sent again, so it's never done late
-  // (or twice). One that got there is told as a message.
-  if (!answer && isOpenTool(tool)) {
-    fs.rmSync(left, { force: true });
-    letterTries.delete(id);
+  try {
+    // A start, or a read of what's there, not answered: never sent again, so it's never done late
+    // (or twice). One that got there is told as a message. (Taken out before where it went is
+    // read, through the file as it was opened: the link, on a machine a process of its own, sends
+    // only what it found still there once it wrote where it went, so whatever it sends, this reads.)
+    if (!answer && isOpenTool(tool)) {
+      fs.rmSync(left, { force: true });
+      letterTries.delete(id);
+    }
+    if (opened !== null) went = JSON.parse(fs.readFileSync(opened, "utf8")).sentTo === peer.key;
+  } catch {
+  } finally {
+    if (opened !== null) fs.closeSync(opened);
   }
+  const dropped = fs.existsSync(droppedMark(left));
   fs.rmSync(droppedMark(left), { force: true });
   if (answer && "failed" in answer) return { failed: answer.failed };
   if (answer && "note" in answer) return { answer: { text: answer.note, isError: false } };
