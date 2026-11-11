@@ -2881,6 +2881,14 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   conversation's flow, as `generate_image`'s: a picture (by its extension) large, any other
   file as a row that opens it, its caption under it; get its bytes with `kuvo/file` from the
   computer the session runs on.
+- A picture opened from a conversation (yours, or one an agent made, showed or took of a page to
+  show you) opens among every picture of the conversation, in order, across its messages
+  (KuvoClient's `ConversationPictures`): your messages' files that are pictures, then each
+  completed `generate_image`, `kuvo-browser_show_file` of a picture and
+  `kuvo-browser_browser_screenshot` with `"show": true`, in the order of their messages and steps;
+  not a step's own screenshots, nor pictures in a reply's words. A picture in the composer opens
+  after them. Each is known by an id that stays: `<message>#<n>` for a message's nth file,
+  `<step>-<n>` for a step's nth output, `<step>-shown` for a file shown.
 - `kuvo/wakes/<session>`: a session's (or chat's) wake-ups and watches, which its
   agent sets with `kuvo-wake`, as the bar over the Mac's composer shows them: `{"wakes": [{id,
   due, note, every}], "watches": [{letters, every, check, note}], "paused"}` (`due` in seconds

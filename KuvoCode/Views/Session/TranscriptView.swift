@@ -149,6 +149,8 @@ struct TranscriptView: View {
         // What Auto's reviewer did with what its steps asked, beside them.
         .environment(\.askReviews, Sandboxes.shared.reviewMarks(on: Workspace.box(of: model.session.location.directory)))
         .environment(\.conversationSignIn, signIn)
+        // Its pictures, which each of them opens among.
+        .environment(\.conversationPictures, ConversationPictureSet(model: model))
         // Its sign-in, where this conversation runs (a machine signs in on its own).
         .sheet(item: $signingIn) { item in
             ConnectView(integrationID: item.id, onDone: { signingIn = nil }, onCancel: { signingIn = nil })

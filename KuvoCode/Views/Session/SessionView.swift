@@ -640,6 +640,8 @@ struct BottomStack: View {
                     yieldsKeyboard: askHadPlace == model.id,
                     drawsSurface: false
                     )
+                    // Its pictures open after the conversation's.
+                    .environment(\.conversationPictures, ConversationPictureSet(model: model))
                     .transition(.opacity)
                     .onAppear { askHadPlace = nil }
                     }
