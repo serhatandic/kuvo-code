@@ -51,7 +51,7 @@ What people see and touch matters most. Never trade its quality away or let the 
 - **Reproduce a user's bug the way they saw it** where you can (demo copy, their logger or steps). A fix to a nearby test isn't a fix to their bug. Until the user confirms it in their own copy, report it as merged and not yet seen, not as fixed.
 - **Deterministic:** no sleeps, timeouts, retries or device clocks. Fix a flaky test, never retry it. Each test runs alone, in folders of its own.
 - **Skip low-value tests** (trivial getters, wiring, edge cases no one hits). A visual nitpick gets a look before and after, not a UI test.
-- **Running them: locally, through `scripts/heavy.sh` lanes** (`CONTRIBUTING.md`, Tests): the app's suite with `scripts/heavy.sh mac scripts/test-app.sh`, builds and packages' `swift test` in `mac-build`, box and bridge with `scripts/test-box.sh [box|bridge|all] [filter]`, the phone's simulator runs in `phone` and its builds in `phone-build`. While working, run only your area's tests (`ONLY=…`, a test-box filter); run the full suites once, on the final tip. CI is paused: sessions never push and never run `scripts/ci-branch.sh`, which only the lead runs when the user asks.
+- **Running them: locally, through `scripts/heavy.sh` lanes** (`CONTRIBUTING.md`, Tests): the app's suite with `scripts/heavy.sh mac scripts/test-app.sh`, builds and packages' `swift test` in `mac-build`, box and bridge with `scripts/test-box.sh [box|bridge|all] [filter]`, the phone's simulator runs in `phone` and its builds in `phone-build`. While working and at merge, run only your area's tests (`ONLY=…`, a test-box filter), the area including what uses the code you changed. No full suite unless the user asks; the lead asks for one before a release. CI is paused: sessions never push and never run `scripts/ci-branch.sh`, which only the lead runs when the user asks.
 - Never drive the Mac app's window from tests: it takes over the user's keyboard and mouse.
 
 ## Never kill by pattern (strict)
@@ -91,7 +91,7 @@ Ask the user before anything brand-related: icons, logos and marks, favicons, br
 
 ## Upstreams
 
-The engine, OpenUsage, integrations' servers, copied code and packages are kept up to date: at the start of each conversation, check them as `docs/upstreams.md` says, and tell the user what you found. Each update is its own commit.
+The engine, OpenUsage, integrations' servers, copied code and packages are kept up to date: the lead (Kuvo Foreman) checks them every week. Sessions don't check them at their start; update one only when your task needs it, as `docs/upstreams.md` says. Each update is its own commit.
 
 ## How sessions work
 
@@ -114,5 +114,5 @@ On 2026-10-28 GitHub's abuse checks hid the user's account, likely from many ses
 
 - Small, logical commits with plain messages. Never `Co-Authored-By` or any AI attribution.
 - This repo will be open source: check for personal paths, secrets and machine data before committing. The signing team stays in the git-ignored `Config/Signing.local.xcconfig`.
-- **Carry work to main in checkpoints:** a finished piece that passes the full suites on its final tip and its review is merged into local main, not left on a branch; the user takes merged work in batches with `scripts/try-update.sh`. Main needn't be release ready.
+- **Carry work to main in checkpoints:** a finished piece that passes its area's tests (what uses it included) on its final tip and its review is merged into local main, not left on a branch; the user takes merged work in batches with `scripts/try-update.sh`. Main needn't be release ready.
 - **Delete a branch once it's merged**, and its worktree (`git branch -d`); on origin only with a push the user asked for. Never delete an unmerged branch or one someone is still on.

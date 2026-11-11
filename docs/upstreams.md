@@ -1,6 +1,6 @@
 # Upstreams
 
-Kuvo Code is built on other projects, and keeping up with them is part of every task, without being asked. **At the start of each conversation, before the first task, check each upstream below for anything new**, and tell the user what you found. (CLAUDE.md points here.)
+Kuvo Code is built on other projects, and keeps up with them. **The lead (Kuvo Foreman) checks each upstream below every week** and tells the user what it found. Sessions don't check them at their start: they update one only when their task needs it. Either way, this is how to check and update each. (CLAUDE.md points here.)
 
 ## The opencode engine
 
