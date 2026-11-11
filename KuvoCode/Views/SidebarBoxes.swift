@@ -281,11 +281,10 @@ struct BoxNameStrip: View {
         .accessibilityLabel(name.title)
         .accessibilityValue(name.said ?? "")
         .accessibilityAddTraits(name.isOn ? .isSelected : [])
-        .contextMenu {
+        .heldContextMenu {
             // As a mailbox's in Mail: everything new on that computer read (the sidebar's strip).
             if marksNews {
-                Button("Mark All as Read") { app.markAllRead(on: [name.box]) }
-                    .disabled(app.boxesToMarkRead([name.box]).isEmpty)
+                HeldRow.button("Mark All as Read", disabled: app.boxesToMarkRead([name.box]).isEmpty) { app.markAllRead(on: [name.box]) }
             }
         }
     }
