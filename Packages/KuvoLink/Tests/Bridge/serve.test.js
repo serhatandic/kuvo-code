@@ -11,6 +11,7 @@ import os from "node:os";
 import path from "node:path";
 import { once } from "node:events";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
 import { removeAtEnd } from "./at-end.js";
 
 const home = fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-serve-"));
@@ -23,7 +24,7 @@ const auth = password => `Basic ${Buffer.from(`opencode:${password}`).toString("
 
 // Started as the app starts it: it says where it listens, then answers.
 async function started(password = "s3cret") {
-  const child = spawn(process.execPath, [script.pathname, "serve"], { env: { ...process.env, KUVO_HOME: home, OPENCODE_PASSWORD: password }, stdio: ["pipe", "pipe", "pipe"] });
+  const child = spawn(process.execPath, [fileURLToPath(script), "serve"], { env: { ...process.env, KUVO_HOME: home, OPENCODE_PASSWORD: password }, stdio: ["pipe", "pipe", "pipe"] });
   let out = "";
   child.stdout.setEncoding("utf8");
   for await (const chunk of child.stdout) {
@@ -67,7 +68,7 @@ test("it goes when the app does (its stdin closes)", async () => {
 });
 
 test("without a password it doesn't start", async () => {
-  const child = spawn(process.execPath, [script.pathname, "serve"], { env: { ...process.env, KUVO_HOME: home, OPENCODE_PASSWORD: "" }, stdio: "ignore" });
+  const child = spawn(process.execPath, [fileURLToPath(script), "serve"], { env: { ...process.env, KUVO_HOME: home, OPENCODE_PASSWORD: "" }, stdio: "ignore" });
   const [code] = await once(child, "exit");
   assert.equal(code, 2);
 });
