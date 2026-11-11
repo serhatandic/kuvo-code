@@ -44,9 +44,73 @@ import ClientSessions
 
     @Test func theTabCountsOpenItems() {
         #expect(WorkQueue.openCount(Self.view) == 6)
+        #expect(WorkQueue.openWords(6) == "6 open")
+        #expect(WorkQueue.openWords(0) == "Nothing open")
         #expect(WorkQueue.count(24) == "24 items")
         #expect(WorkQueue.count(1) == "1 item")
         #expect(WorkQueue.count(0) == "No items")
+    }
+
+    @Test func allCountsEveryItemDoneTooAndEveryCountAddsUpToIt() {
+        let sections = WorkQueue.sections(Self.view)
+        #expect(WorkQueue.allCount(Self.view) == 7, "Done counts in All")
+        #expect(sections.map(\.items.count).reduce(0, +) == WorkQueue.allCount(Self.view), "In progress and every category add up to All, each item once")
+        #expect(WorkQueue.items(Self.view, .all).count == WorkQueue.allCount(Self.view))
+        #expect(WorkQueue.items(Self.view, .all).last?.name == "#5", "Done is the last group")
+    }
+
+    @Test func aDropLandsBesideItsNeighbourInThatCategory() throws {
+        let sections = WorkQueue.sections(Self.view)
+        let next = try #require(sections.first { $0.category == "next" })
+        let later = try #require(sections.first { $0.category == "later" })
+        let item = { (name: String) in Self.view.items.first { $0.name == name }! }
+        // Next is #2, #6: #6 dropped above #2 goes before it; #2 dropped below #6 goes after it.
+        #expect(WorkQueue.place(of: item("#6"), at: 0, in: next) == .before(item("#2")))
+        #expect(WorkQueue.place(of: item("#2"), at: 2, in: next) == .after(item("#6")))
+        // Dropped where it is: nothing moves.
+        #expect(WorkQueue.place(of: item("#2"), at: 0, in: next) == nil)
+        #expect(WorkQueue.place(of: item("#2"), at: 1, in: next) == nil)
+        // Into another category: beside an item there, which moves it there.
+        #expect(WorkQueue.place(of: item("#2"), at: 1, in: later) == .after(item("#3")))
+        #expect(WorkQueue.place(of: item("#2"), at: 1, in: later)?.category == "later")
+        // Into an empty one: its top. In progress isn't a category: nothing drops there.
+        let empty = WorkQueue.Section(id: "cat_empty", name: "Empty", category: "cat_empty", items: [])
+        #expect(WorkQueue.place(of: item("#2"), at: 0, in: empty) == .top("cat_empty"))
+        #expect(WorkQueue.place(of: item("#2"), at: 0, in: sections[0]) == nil)
+    }
+
+    @Test func anItemsMenuMovesItAmongItsCategorysItems() throws {
+        let item = { (name: String) in Self.view.items.first { $0.name == name }! }
+        // Next (not in progress) is #2, #6.
+        #expect(WorkQueue.menuPlaces(of: item("#2"), in: Self.view) == WorkQueue.MenuPlaces(top: nil, up: nil, down: .after(item("#6"))))
+        #expect(WorkQueue.menuPlaces(of: item("#6"), in: Self.view) == WorkQueue.MenuPlaces(top: .top("next"), up: .before(item("#2")), down: nil))
+        // In progress: only to its category's top, its place among the others there unseen.
+        #expect(WorkQueue.menuPlaces(of: item("#1"), in: Self.view) == WorkQueue.MenuPlaces(top: .top("next"), up: nil, down: nil))
+    }
+
+    @Test func aMovedItemShowsInItsNewPlaceAtOnce() throws {
+        let item = { (name: String) in Self.view.items.first { $0.name == name }! }
+        let next = { (view: WorkQueueView) in WorkQueue.sections(view).first { $0.category == "next" }!.items.map(\.name) }
+        #expect(next(WorkQueue.moving(item("#6"), to: .before(item("#2")), in: Self.view)) == ["#6", "#2"])
+        let moved = WorkQueue.moving(item("#2"), to: .top("later"), in: Self.view)
+        #expect(next(moved) == ["#6"])
+        #expect(WorkQueue.sections(moved).first { $0.category == "later" }!.items.map(\.name) == ["#2", "#3"])
+        #expect(WorkQueue.allCount(moved) == WorkQueue.allCount(Self.view))
+    }
+
+    @Test func itemsOfAComputerThatIsntAnsweringAreSaidToBeAsItLastToldThem() throws {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        let json = """
+        {"owner":"all","categories":[{"id":"next","name":"Next","builtIn":true}],
+         "items":[\(Self.item(1, "Here", "next")),
+                  {"id":"wqi_far","number":2,"owner":"ses_far","title":"Far","category":"next","order":1,"inProgress":false,"sessions":[],"noteCount":0,"fileCount":0,"linkCount":0,"created":{"at":1000,"by":{"user":true}},"updated":{"at":2000,"by":{"user":true}},"computer":{"key":"k","name":"lab","kind":"machine","id":"lab"}}],
+         "owners":[],"removed":[],
+         "computers":[{"key":"k","name":"lab","kind":"machine","id":"lab","at":\((now.timeIntervalSince1970 - 7200) * 1000)},{"key":"j","name":"Studio","kind":"mac","at":1000,"away":5000}]}
+        """
+        var view = try JSONDecoder().decode(WorkQueueView.self, from: Data(json.utf8))
+        #expect(WorkQueue.awayNote(view, now: now) == nil, "Studio isn't answering, but nothing here is on it")
+        view.computers[0].away = 6000
+        #expect(WorkQueue.awayNote(view, now: now) == "lab isn’t answering: its items are as it last told them, 2h ago.")
     }
 
     @Test func updatedSaysHowLongAgo() {
