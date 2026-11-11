@@ -89,16 +89,14 @@ public struct HTTPClient: Sendable {
     /// How fast a slow connection sends, in bytes a second (as KuvoLink's `Link.slowUpload`).
     static let slowUpload = 64 * 1024
 
-    /// `request`, waiting for its answer as long as its session says a request may wait with
-    /// nothing coming (a session made to wait longer than URLRequest's own 60 s: a phone's link, a
-    /// machine's tunnel, which notice a computer that's gone themselves), and as long again as its
-    /// body may take to go on a slow connection: nothing can come back before it's all there. A big
-    /// file shared over a phone's slow connection took longer than that (#358).
+    /// `request`, waiting for its answer as long again as its body may take to go on a slow
+    /// connection: nothing can come back before it's all there, and a request waits only so long
+    /// with nothing coming (`timeoutInterval`). A big file shared over a phone's slow connection
+    /// took longer than that (#358).
     static func waitingForBody(_ request: URLRequest, idle: TimeInterval) -> URLRequest {
-        var request = request
-        request.timeoutInterval = max(request.timeoutInterval, idle)
         guard let size = request.httpBody?.count, size >= slowUpload else { return request }
-        request.timeoutInterval += TimeInterval(size / slowUpload)
+        var request = request
+        request.timeoutInterval = max(request.timeoutInterval, idle) + TimeInterval(size / slowUpload)
         return request
     }
 

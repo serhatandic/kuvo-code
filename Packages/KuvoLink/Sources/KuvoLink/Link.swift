@@ -13,11 +13,8 @@ public enum Link {
     /// gone dead) still takes frames until the relay notices, up to a minute later, and never
     /// answers them. A host that's there answers the check, and the request waits on.
     static let answerWithin: Duration = .seconds(5)
-    /// How long a check may take. A host that has the session answers it as soon as it reads its
-    /// connection, which a computer under a heavy load (its memory swapped out) can take a good
-    /// while to do: it's still there, and its session, with every request and stream on it, stays
-    /// (#443). One that's gone is told by the relay (`gone`), or found out after this.
-    static let checkTimeout: Duration = .seconds(15)
+    /// How long a check may take: a host that has the session answers at once.
+    static let checkTimeout: Duration = .seconds(5)
     /// How fast a slow connection sends, in bytes a second: a check gets a second more for each
     /// of these that may still be on its way ahead of its ping. A frame the relay connection says
     /// it sent has only left for the system's buffers, the network and the relay's (a few MB

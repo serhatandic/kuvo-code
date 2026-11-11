@@ -63,13 +63,13 @@ export function engineGet(engine: Target, route: string, folder?: string): Promi
     .then(response => response.ok ? response.json() : Promise.reject(new Error(`${response.status}`)));
 }
 
-/** `target`'s answer to `method route` (with `body` as JSON), as JSON, or null for an empty one; it throws for a status that isn't ok. `patience`: how long it may take. */
-export async function asked(target: Target, method: string, route: string, body?: unknown, patience = 30_000): Promise<unknown> {
+/** `target`'s answer to `method route` (with `body` as JSON), as JSON, or null for an empty one; it throws for a status that isn't ok. */
+export async function asked(target: Target, method: string, route: string, body?: unknown): Promise<unknown> {
   const response = await fetch(`http://127.0.0.1:${target.port}/${route}`, {
     method,
     headers: { authorization: `Basic ${Buffer.from(`opencode:${target.password}`).toString("base64")}`, ...(body ? { "content-type": "application/json" } : {}) },
     body: body ? JSON.stringify(body) : undefined,
-    signal: AbortSignal.timeout(patience),
+    signal: AbortSignal.timeout(30_000),
   });
   if (!response.ok) throw new Error(`It answered ${response.status}.`);
   const text = await response.text();

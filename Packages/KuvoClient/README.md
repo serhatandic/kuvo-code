@@ -61,9 +61,6 @@ What a client shows of a computer's sessions, the same in both apps. Rules only,
 - `ConversationPictures`: every picture of a conversation, in order, across its messages (yours,
   and those an agent made, showed or took of a page to show you), each by an id that stays: what a
   picture opens among, to go to the one before or after it, in both apps' viewers.
-- `Reach`: when a computer counts as not connected (#443): never for a link that's only slow or
-  down for a moment; only once it's been down through the grace and a check since got no answer.
-  And which failures are only the link's (`isTransient`), read again rather than said.
 - `WorkWords`: what a bot's work says, as its box tells it (`kuvo/work`): the bar's line, and each
   session's row (`about`: its model, the account it runs on and its project, then shorter for a
   narrow row, the account going first).

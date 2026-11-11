@@ -16,11 +16,7 @@ public final class LinkURLProtocol: URLProtocol, @unchecked Sendable {
     public static func configuration(client: LinkClient, hosts: @escaping @Sendable () -> [PairedHost]) -> URLSessionConfiguration {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [LinkURLProtocol.self]
-        // A request waits as long as the host is there and working on it: the link checks on a
-        // host that's quiet itself (`Link.answerWithin`), and fails what's on a session it's lost.
-        // URLSession's own minute called a busy computer's answer still under way "The request
-        // timed out." (#443); this is only a bound for one that never ends.
-        configuration.timeoutIntervalForRequest = 600
+        configuration.timeoutIntervalForRequest = 60
         configuration.httpAdditionalHeaders = [Route.header: Route.register(client: client, hosts: hosts)]
         return configuration
     }

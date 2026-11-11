@@ -22,8 +22,6 @@ const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
 // The engine: each session's inbox and whether it runs; what was asked of it, each time a test
 // waits on it looking again.
 let inboxes, running, asked, prompted, unsure = false, taken = new Set(), waiting = [], latest = {}, pages = {}, viewedAt = 0, looks = 0, whenLooked = null;
-// A busy engine: the next `stalls` reads of a session get no answer until the test ends them.
-let stalls = 0, stalled = [];
 const heard = () => new Promise(resolve => waiting.push(resolve));
 const engine = http.createServer((request, response) => {
   let body = "";
@@ -41,10 +39,6 @@ const engine = http.createServer((request, response) => {
       const then = whenLooked;
       whenLooked = null;
       then?.();
-    }
-    else if (session && !rest && request.method === "GET" && stalls > 0) {
-      stalls--;
-      return stalled.push(response);
     }
     else if (session && !rest && request.method === "GET") answer = inboxes[session] ? { data: { id: session, time: { viewed: viewedAt, idle: 3_000 } } } : null;
     else if (rest === "/view" && request.method === "POST") {
@@ -101,9 +95,6 @@ beforeEach(() => {
   latest = {};
   pages = {};
   whenLooked = null;
-  stalls = 0;
-  for (const response of stalled.splice(0)) response.destroy();
-  link.PLACE_TRIES.splice(0, Infinity, 10_000, 20_000);
   fs.rmSync(path.join(home, "run", "queues.json"), { force: true });
   fs.rmSync(path.join(home, "run", "waiting"), { recursive: true, force: true });
 });
@@ -807,41 +798,4 @@ test("the box's stream connecting again while a coding agents' run kept its file
   b.wait(1500);
   await settle();
   assert.deepEqual(asked, ["ses_1 msg_q1 steer"]);
-});
-
-// #443: a box under heavy load, whose engine runs but answers late.
-test("a message added while the engine is slow to answer goes once it answers, not refused as if the engine weren't running", async () => {
-  inboxes.ses_1 = [];
-  link.PLACE_TRIES.splice(0, Infinity, 100, 2_000);
-  stalls = 1;
-  const added = await ask("POST", "kuvo/sessions/ses_1/queue/add", { id: "msg_q1", text: "After this, the docs." });
-  assert.deepEqual([added.status, added.json.waits], [200, false], JSON.stringify(added.json));
-  assert.deepEqual(prompted.map(each => each.id), ["msg_q1"]);
-});
-
-test("an engine that stays too busy to answer says it's busy, to try again, never that it isn't running", async () => {
-  inboxes.ses_1 = [];
-  link.PLACE_TRIES.splice(0, Infinity, 50, 100);
-  stalls = 2;
-  const added = await ask("POST", "kuvo/sessions/ses_1/queue/add", { id: "msg_q1", text: "After this, the docs." });
-  assert.equal(added.status, 504);
-  assert.equal(added.json.busy, true);
-  assert.doesNotMatch(added.json.message, /isn.t running/);
-  assert.deepEqual(prompted, [], "nothing went: it can be asked again");
-});
-
-test("an engine whose record outlived it (nothing listens there) is said not to be running, at once, not busy", async () => {
-  inboxes.ses_1 = [];
-  const closed = http.createServer();
-  await new Promise(resolve => closed.listen(0, "127.0.0.1", resolve));
-  const port = closed.address().port;
-  await new Promise(resolve => closed.close(resolve));
-  const was = target.port;
-  target.port = port;
-  try {
-    const added = await ask("POST", "kuvo/sessions/ses_1/queue/add", { id: "msg_q1", text: "After this, the docs." });
-    assert.deepEqual([added.status, added.json.message, added.json.busy], [503, "The engine isn't running.", undefined]);
-  } finally {
-    target.port = was;
-  }
 });

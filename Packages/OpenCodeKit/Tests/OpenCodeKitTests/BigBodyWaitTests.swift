@@ -15,13 +15,6 @@ import Testing
         #expect(try await WaitSeen.waited(body: Data(count: 1_000)) == 60)
     }
 
-    // A session made to wait longer with nothing coming (a phone's link, a machine's tunnel, which
-    // notice a computer that's gone themselves): its requests wait that long, not URLRequest's own
-    // minute, so a busy computer's answer isn't "The request timed out." while it's worked on (#443).
-    @Test func aRequestWaitsAsLongAsItsSessionSays() async throws {
-        #expect(try await WaitSeen.waited(body: Data(count: 1_000), idle: 600) == 600)
-    }
-
     @Test func aLongerWaitAskedForIsKept() throws {
         var request = URLRequest(url: URL(string: "http://engine.invalid/api/x")!)
         request.timeoutInterval = 15 * 60
@@ -37,11 +30,11 @@ private final class WaitSeen: URLProtocol, @unchecked Sendable {
 
     /// How long a prompt with `body` waits for its answer, sent as the link's sessions send it
     /// (waiting a minute with nothing coming).
-    static func waited(body: Data, idle: TimeInterval = 60) async throws -> TimeInterval? {
+    static func waited(body: Data) async throws -> TimeInterval? {
         let host = "engine-\(UUID().uuidString.lowercased()).invalid"
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [WaitSeen.self]
-        configuration.timeoutIntervalForRequest = idle
+        configuration.timeoutIntervalForRequest = 60
         let client = HTTPClient(endpoint: ServerEndpoint(url: URL(string: "http://\(host)")!, password: nil), session: URLSession(configuration: configuration))
         var request = try client.request("POST", "api/session/ses_1/prompt", body: Empty?.none)
         request.httpBody = body

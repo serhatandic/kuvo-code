@@ -681,8 +681,6 @@ struct MainView: View {
             if Workspace.isChat(directory) {
                 MoveToProjectButton(sessionID: id)
             }
-            // Its feed down for now: a quiet mark only, not an outage (that's the bar over the
-            // composer, once KuvoClient's `Reach` says it's out of reach).
             if !(machine?.isLive ?? app.isLive) {
                 Image(systemName: "bolt.horizontal.circle")
                     .foregroundStyle(.orange)
