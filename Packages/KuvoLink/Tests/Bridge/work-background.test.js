@@ -213,6 +213,9 @@ beforeEach(() => {
   state = fresh();
   fs.rmSync(path.join(home, "run", "work"), { recursive: true, force: true });
   fs.rmSync(path.join(home, "wakes"), { recursive: true, force: true });
+  // (A Stop All holds the bot's queue while it has what it's to hear of it.)
+  fs.rmSync(path.join(home, "run", "queues.json"), { force: true });
+  fs.rmSync(path.join(home, "run", "waiting"), { recursive: true, force: true });
 });
 
 test("a session waiting on its own command isn't finished: told once, when it's over, with no reply after it", async () => {
@@ -1317,11 +1320,20 @@ test("Stop All: each lead hears which of its sessions you stopped in one message
   await time.pass(11 * SECONDS);
   await time.pass(5 * SECONDS);
   await time.pass(3_600 * SECONDS);
-  const sent = state.prompts.filter(each => each.to === "ses_pixel");
-  assert.equal(sent.length, 1, "one message");
+  // Not now: the bot was stopped too. It waits in the bot's queue, as one message, for your next
+  // message to it or Resume.
+  assert.deepEqual(leadLines(), [], "nothing sets the bot going");
+  const queue = link.queueOf("ses_pixel");
+  assert.equal(queue.paused, true);
+  assert.equal(queue.waiting.length, 1, "one message");
+  const text = JSON.parse(fs.readFileSync(path.join(home, "run", "waiting", `${queue.waiting[0].id}.json`), "utf8")).text;
+  const lines = text.split("\n\n");
+  assert.deepEqual(lines.map(line => /^\[Session stopped\] "([^"]+)"/.exec(line)?.[1]).sort(), ["Docs", "Tests"], "only that they were stopped, nothing it held");
+  assert.equal(queue.waiting[0].from, "Its sessions");
+  // You write to it: it goes.
+  assert.equal((await route("POST", "kuvo/sessions/ses_pixel/queue/resume")).status, 200);
   assert.deepEqual(stoppedLines().map(line => /^\[Session stopped\] "([^"]+)"/.exec(line)[1]).sort(), ["Docs", "Tests"]);
-  assert.deepEqual(finished(), [], "and nothing it held");
-  assert.equal(sent[0].metadata?.kuvo?.note?.line, "2 updates from its sessions");
+  assert.deepEqual(finished(), []);
 });
 
 test("a coding agent's process dying with its task: the bridge wakes the session, which finishes, and its lead hears once", async () => {
@@ -1396,9 +1408,15 @@ function process_(listens) {
     ? "const s = require('net').createServer().listen(0, '127.0.0.1', () => console.log(s.address().port)); setInterval(() => {}, 1000);"
     : "process.stdin.once('data', () => { const s = require('net').createServer().listen(0, '127.0.0.1', () => console.log(s.address().port)); }); setInterval(() => {}, 1000);";
   const child = spawn(process.execPath, ["-e", code], { detached: true, stdio: ["pipe", "pipe", "ignore"] });
-  atEnd(() => { try { process.kill(-child.pid, "SIGKILL"); } catch {} });
+  const exited = new Promise(resolve => child.once("exit", resolve));
+  // (Its group, by its own id: nothing else of this run's.)
+  const end = () => {
+    try { process.kill(-child.pid, "SIGKILL"); } catch {}
+    return exited;
+  };
+  atEnd(end);
   const port = new Promise(resolve => child.stdout.once("data", chunk => resolve(Number(String(chunk).trim()))));
-  return { pid: child.pid, port, listen: () => child.stdin.write("go\n"), end: () => { try { process.kill(-child.pid, "SIGKILL"); } catch {} } };
+  return { pid: child.pid, port, listen: () => child.stdin.write("go\n"), end };
 }
 
 test("a dev server it started, listening on a port, doesn't hold its finish: told at once, naming it and its port", async () => {
@@ -1416,7 +1434,7 @@ test("a dev server it started, listening on a port, doesn't hold its finish: tol
   assert.match(finished()[0], /The dev server is up\./);
   assert.match(finished()[0], new RegExp(`\\(Still serving: \`npm run dev\` on :${port}\\.\\)$`));
   assert.doesNotMatch(finished()[0], /Still running in the background/);
-  server.end();
+  await server.end();
 });
 
 test("a command listening on nothing holds its finish; once it listens, it's a service, and the finish is told", async () => {
@@ -1437,5 +1455,5 @@ test("a command listening on nothing holds its finish; once it listens, it's a s
   assert.equal(leadLines().length, 1);
   assert.match(finished()[0], /The preview is starting\./);
   assert.match(finished()[0], new RegExp(`Still serving: \`npm run preview\` on :${port}`));
-  job.end();
+  await job.end();
 });
