@@ -104,10 +104,11 @@ final class ConversationScroller {
         if seesEnd != sees { seesEnd = sees }
     }
 
-    /// `id`, a step that's done, about to be opened by you: while following the end, following
-    /// stops before it grows, so it opens down past the composer, moving nothing above it, as a
-    /// disclosure row does (#416); followed, the conversation went up by all it grew at once, as
-    /// the fold was still opening. What comes in next doesn't move it either.
+    /// `id`, a step that's done or an agents' message card, about to be opened by you: while
+    /// following the end, following stops before it grows, so it opens down past the composer,
+    /// moving nothing above it, as a disclosure row does (#416); followed, the conversation went
+    /// up by all it grew at once, as the fold was still opening. What comes in next doesn't move
+    /// it either.
     fileprivate func opening(_ id: String) {
         guard followsEnd || !heldFor.isEmpty else { return }
         if followsEnd { follow(false) }
@@ -746,7 +747,7 @@ final class ScrollAnchor {
     var stopFollowing: () -> Void = {}
     /// Steps opened (true) or closed by you, by what their fold is kept by.
     var reading: ((String, Bool) -> Void)?
-    /// A step that's done about to be opened by you, before it grows.
+    /// A step that's done, or an agents' message card, about to be opened by you, before it grows.
     var opening: ((String) -> Void)?
 
     /// The rows laid out, where they are in the conversation, and those shown now. A row that

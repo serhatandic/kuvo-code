@@ -19,7 +19,20 @@ public enum Metrics {
 
 extension Animation {
     /// The app's default motion: quick, with a little give.
-    public static let ui: Animation = {
+    public static var ui: Animation {
+        #if DEBUG
+        if let held = uiForTests { return held }
+        #endif
+        return standardUI
+    }
+
+    #if DEBUG
+    /// Tests: the app's motion in place of `ui` (one held at a point of its way, to look at a
+    /// frame of it).
+    nonisolated(unsafe) public static var uiForTests: Animation?
+    #endif
+
+    private static let standardUI: Animation = {
         #if DEBUG
         // KUVO_DEMO_SLOW=<times>: slower, to look at a transition frame by frame.
         if let slow = ProcessInfo.processInfo.environment["KUVO_DEMO_SLOW"].flatMap(Double.init) {
