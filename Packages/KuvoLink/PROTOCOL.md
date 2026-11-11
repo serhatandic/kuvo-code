@@ -3229,7 +3229,11 @@ custom one only another computer has (before Parked), for its items there.
 **Who sees what**: an owner's view is its own items, those of the sessions it oversees (started by
 it, or by those, put away ones too), and those it handed on, each living once in its owner's queue,
 on any of your computers: those on another, as it last told them (its `rows` say which sessions
-there are under the owner, "Work").
+there are under the owner, "Work"). A session's view also shows the items linked to it that are
+someone else's (what it's working on, a lead's item say), unless they're deleted. That's seeing
+only: its agent's tools still change, show and list only what's in its view without those, as
+before (a linked item is its owner's to change). A client shows them first, as "Working on"
+(`item.owner` isn't the view's `owner`, and the item's `sessions` include it).
 
 - `GET kuvo/work-queue?owner=<ses_…|grp_…>` → `{owner, categories, items, owners, removed,
   computers}`: `items` in the categories' order, then this box's first and each other computer's

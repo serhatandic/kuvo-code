@@ -245,6 +245,46 @@ test("a lead sees the queues of the sessions it oversees; handing an item moves 
   assert.match(away.text, /There's no session ses_elsewhere on this machine/);
 });
 
+test("a session sees the items linked to it that are someone else's, and can't change them", async () => {
+  await tool("queue_add", { title: "Build the sign-in" }, "ses_lead");
+  await tool("queue_add", { title: "Its own" }, "ses_other");
+  // The lead links a session it didn't start to its item (as a bot links the session it put on it).
+  assert.equal((await tool("queue_update", { item: 1, sessions: ["ses_other"] }, "ses_lead")).isError, false);
+
+  // Its panel lists it, saying whose it is, with its own.
+  const worker = await view("ses_other");
+  assert.deepEqual(worker.items.map(item => [item.title, item.owner]).sort(), [["Build the sign-in", "ses_lead"], ["Its own", "ses_other"]]);
+  assert.equal(worker.owners.find(each => each.owner === "ses_lead")?.title, "Lead");
+  assert.deepEqual(worker.items.find(item => item.number === 1).sessions, [{ session: "ses_other", title: "Release notes", working: false }]);
+  active = new Set(["ses_other"]);
+  assert.equal((await view("ses_other")).items.find(item => item.number === 1).inProgress, true, "In progress while it works on it");
+  // A session it isn't linked to doesn't see it.
+  assert.equal((await view("ses_wide")).items.length, 0);
+
+  // Seeing only: its agent can't change it, read it or list it, as before.
+  const update = await tool("queue_update", { item: 1, title: "Mine now", category: "later" }, "ses_other");
+  assert.equal(update.isError, true);
+  assert.match(update.text, /isn't in your Work Queue, nor in a session's you oversee/);
+  assert.equal((await tool("queue_remove", { item: 1 }, "ses_other")).isError, true);
+  assert.equal((await tool("queue_show", { item: 1 }, "ses_other")).isError, true);
+  assert.doesNotMatch((await tool("queue_list", {}, "ses_other")).text, /Build the sign-in/);
+  const lead = (await view("ses_lead")).items.find(item => item.number === 1);
+  assert.equal(lead.title, "Build the sign-in");
+  assert.equal(lead.category, "next");
+
+  // Unlinked, it's gone from the worker's view.
+  await tool("queue_update", { item: 1, unlink: ["ses_other"] }, "ses_lead");
+  assert.deepEqual((await view("ses_other")).items.map(item => item.title), ["Its own"]);
+  // Deleted by its owner, too, and it isn't among the worker's deleted ones.
+  await tool("queue_update", { item: 1, sessions: ["ses_other"] }, "ses_lead");
+  assert.equal((await view("ses_other")).items.length, 2);
+  assert.equal((await route("DELETE", "kuvo/work-queue/items/1")).status, 200);
+  const after = await view("ses_other");
+  assert.deepEqual(after.items.map(item => item.title), ["Its own"]);
+  assert.deepEqual(after.removed, []);
+  assert.equal((await view("ses_lead")).removed.length, 1);
+});
+
 test("you delete an item and bring it back; an agent's delete an agent may undo, yours only you", async () => {
   await tool("queue_add", { title: "Old idea", working: true }, "ses_lead");
   const deleted = await route("DELETE", "kuvo/work-queue/items/1");

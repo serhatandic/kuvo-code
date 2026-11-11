@@ -227,6 +227,19 @@ test("what your other computers told shows in the All view and a lead's view, wi
   assert.equal((await view("all")).items.some(item => item.number === 600), false);
 });
 
+test("an item on another computer linked to a session here shows in that session's view, and its agent can't change it", async () => {
+  // Lab's lead put ses_child (here) on its item: lab tells it with ses_child among its sessions.
+  receive(lab, { workQueue: telling([told(700, "ses_far", { sessions: [{ session: "ses_child", title: "Sign-in", working: false }] }), told(701, "ses_far")]) });
+  sent.length = 0;
+  const worker = await view("ses_child");
+  assert.deepEqual(worker.items.map(item => item.number), [700]);
+  assert.equal(worker.items[0].computer.name, "lab");
+  assert.equal(worker.owners.find(each => each.owner === "ses_far")?.title, "Far away");
+  // Seeing only: not in what its tools list or change.
+  assert.doesNotMatch((await tool("queue_list", {}, "ses_child")).text, /#700/);
+  assert.equal((await tool("queue_update", { item: 700, note: "Hi" }, "ses_child")).isError, true);
+});
+
 test("this box tells your other computers its queue as it changes: again until it's had, then not until it changes; too big for one mail, in parts", async () => {
   write(path.join(queues, "numbers.json"), { primary: mac.pub, leases: [[100, 149]] });
   await tool("queue_add", { title: "Fix the login page" }, "ses_child");

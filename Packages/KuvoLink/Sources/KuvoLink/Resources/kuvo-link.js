@@ -21421,6 +21421,7 @@ async function factsOf(targets, signal) {
 }
 var overseenBy = (owner, all) => new Set(owner.startsWith("ses_") ? under(owner, all).map((each) => each.data.id) : []);
 var inView = (owner, item, overseen) => item.owner === owner || overseen.has(item.owner) || item.handedBy === owner || Boolean(item.handed?.some((each) => each.from === owner));
+var linkedTo = (owner, item) => !item.removed && item.sessions.some((each) => each.session === owner);
 var inProgress = (item, working) => !item.removed && item.category !== "done" && item.sessions.some((each) => working.has(each.session));
 function refOf(given) {
   if (typeof given === "number" && Number.isInteger(given) && given > 0 && given < 1e6)
@@ -22369,7 +22370,7 @@ async function takeWorkQueueMail(sender, given, host, places) {
   if (isObject(whole.hand))
     await handArrived(sender, whole.hand, reply, places).catch(() => {});
 }
-function itemsElsewhere(owner, link = readLink(), here, deleted, { asTold = false } = {}) {
+function itemsElsewhere(owner, link = readLink(), here, deleted, { asTold = false, linked = false } = {}) {
   if (!here || !deleted) {
     const all = allItems();
     here ??= new Set(all.filter((item) => !item.removed).map((item) => item.id));
@@ -22400,7 +22401,7 @@ function itemsElsewhere(owner, link = readLink(), here, deleted, { asTold = fals
       if (!custom.has(each.id))
         custom.set(each.id, each.name);
   }
-  const items = [...best.values()].map((each) => each.item).filter((item) => !overseen || item.owner === owner || overseen.has(item.owner) || item.handedBy === owner || item.handedFrom?.includes(owner));
+  const items = [...best.values()].map((each) => each.item).filter((item) => !overseen || item.owner === owner || overseen.has(item.owner) || item.handedBy === owner || item.handedFrom?.includes(owner) || linked && linkedTo(owner, item));
   const named = new Set(items.flatMap((item) => [item.owner, ...item.handedBy ? [item.handedBy] : []]));
   return { items, owners: [...owners.values()].filter((each) => named.has(each.owner)), categories: [...custom].map(([id, name]) => ({ id, name })), computers };
 }
@@ -38499,10 +38500,10 @@ async function viewOf(owner, targets, facts, signal, cache, wait = GITHUB_WAIT) 
   const known = facts ?? await factsOf(targets, signal);
   const overseen = owner === ALL ? new Set : overseenBy(owner, known.all);
   const here = allItems();
-  const all = here.filter((item) => owner === ALL || inView(owner, item, overseen));
-  await readSeen([...all, ...itemsElsewhere(owner, readLink(), undefined, undefined, { asTold: true }).items], wait);
+  const all = here.filter((item) => owner === ALL || inView(owner, item, overseen) || linkedTo(owner, item));
+  await readSeen([...all, ...itemsElsewhere(owner, readLink(), undefined, undefined, { asTold: true, linked: true }).items], wait);
   const { owners, titles } = await ownersOf(owner, all, known, targets, cache);
-  const elsewhere = itemsElsewhere(owner, readLink(), new Set(here.filter((item) => !item.removed).map((item) => item.id)), new Set(here.filter((item) => item.removed).map((item) => item.id)));
+  const elsewhere = itemsElsewhere(owner, readLink(), new Set(here.filter((item) => !item.removed).map((item) => item.id)), new Set(here.filter((item) => item.removed).map((item) => item.id)), { linked: true });
   const named = new Set(owners.map((each) => each.owner));
   const own = categories();
   const others = elsewhere.categories.filter((each) => !own.some((mine) => mine.id === each.id)).map((each) => ({ ...each, builtIn: false }));
