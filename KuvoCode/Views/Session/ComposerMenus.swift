@@ -37,6 +37,17 @@ enum ToolApproval: String, CaseIterable, Codable {
     var detail: String { ApprovalWords.detail(rawValue) }
     var symbol: String { ApprovalWords.symbol(rawValue) }
 
+    /// ⇧Tab's mode in an empty composer (KuvoClient's ApprovalCycle): the next the menu offers,
+    /// passing over one its box says can't be had and Full Access while it isn't known to be
+    /// confirmed on its computer (its box not read yet, too).
+    func next(shown: ApprovalShown?) -> ToolApproval? {
+        ApprovalCycle.next(after: rawValue) { name in
+            guard let mode = ToolApproval(rawValue: name) else { return false }
+            guard let option = shown?.option(mode) else { return mode != .fullAccess }
+            return option.unavailable == nil
+        }.flatMap(ToolApproval.init(rawValue:))
+    }
+
     /// A conversation's, as it's kept with it; one from before (or a box that doesn't keep them)
     /// as its rules say: asking before commands is Ask First, nothing asking is Auto, until its
     /// box says (`SessionModel.approvalShown`).

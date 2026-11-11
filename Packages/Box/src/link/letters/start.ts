@@ -15,7 +15,7 @@ import { BOTS, CHATS, HERE, homeFolder, IS_MAC } from "../home";
 import { macLink, readLink } from "../state";
 import { plainName } from "../../shared/text";
 import { askedAbout, realish } from "../fence/policy";
-import { changeProjects, PROJECT_FOLDERS_ENTRY, PROJECTS_FILE, projectFoldersNote, readProjects } from "../areas/projects";
+import { changeProjects, filedUnder, PROJECT_FOLDERS_ENTRY, PROJECTS_FILE, projectFoldersNote, readProjects } from "../areas/projects";
 import { projectOf as projectOfFolder, readWorktrees } from "../areas/worktree-records";
 import { answerWorktrees, settleNewSession } from "../areas/worktrees";
 import { composeLetter } from "./letter";
@@ -266,6 +266,26 @@ function projectOf(folder: string): { name: string; folders: readonly string[] }
   return { name: known?.name ?? path.basename(directory), folders: directory !== folder ? [] : (known?.folders ?? []) };
 }
 
+// The project a folder is, or is another folder of, kept by another name for the same place (a
+// link: an agent's folder is named by where it really is); null for none.
+async function keptAs(folder: string): Promise<string | null> {
+  const projects = readProjects().filter(each => !each.removed);
+  if (projects.some(each => each.directory === folder)) return null;
+  await askedAbout(projects.flatMap(each => [each.directory, ...each.folders]));
+  const at = realish(folder);
+  return projects.find(each => realish(each.directory) === at)?.directory
+    ?? projects.find(each => each.folders.some(other => realish(other) === at))?.directory ?? null;
+}
+
+// A project's name here, by its folder.
+const projectName = (directory: string): string => readProjects().find(each => each.directory === directory)?.name ?? path.basename(directory);
+
+// The folder a session was made in and the project it's filed under there (`kuvo.filed`), if any.
+function filedOf(session: Partial<EngineSession> | null | undefined): { folder: string; project: string } | null {
+  const filed = session?.metadata?.kuvo?.filed;
+  return isObject(filed) && typeof filed.folder === "string" && typeof filed.project === "string" ? { folder: filed.folder, project: filed.project } : null;
+}
+
 // The project `named` names here (its name, or its folder), or null.
 function findProject(named: string): { directory: string; name: string } | null {
   const written = named.trim().replace(/^~(?=$|\/)/, homeFolder());
@@ -500,7 +520,17 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
   const got = applied !== (requested ?? wanted) && lowerOf(applied, requested ?? wanted) === applied ? applied : undefined;
   // (A worktree made elsewhere is its project's, as the projects' worktrees are found now.)
   if (folder !== CHATS) await inTime(findLinkedTrees(), undefined, 3_000);
-  const project = named && realish(folder) !== realish(named.directory) ? { name: named.name, folders: [] as readonly string[] } : projectOf(named?.directory ?? folder);
+  // The project it's filed under: the one named; else its folder's (a worktree's, or a project's
+  // other folder's); else, in its starter's folder, the one its starter is filed under there. One
+  // filed under another folder than its own carries it from the first (`kuvo.filed`), so every
+  // client shows it there from its first listing: one may hear of the session from its engine
+  // before `kuvo/projects` says whose a new worktree is, and that never names a subfolder.
+  const startersFiled = filedOf(parent);
+  const mapped = folder === CHATS ? null : filedUnder(folder);
+  const its = mapped === null || mapped !== folder || named ? mapped : await keptAs(folder) ?? folder;
+  const under = its === null ? null : named?.directory ?? (its !== folder ? its : startersFiled?.folder === folder ? startersFiled.project : folder);
+  const filed = under && under !== folder ? { folder, project: under } : null;
+  const project = !under ? null : realish(under) !== realish(folder) ? { name: projectName(under), folders: [] as readonly string[] } : projectOf(under);
   const title = typeof given.title === "string" && given.title.trim() ? given.title.trim() : null;
   // (A lead's Don't Allows from its own computer: kept with it, so they hold here however its rules are made again.)
   const brought = remote ? remote.held.filter(holdsBack) : [];
@@ -518,12 +548,12 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
     ...(remote ? { call: remote.call, lead: { box: remote.computer, key: remote.key, name: by!.name }, ...(brought.length ? { held: brought } : {}) } : {}) };
   // (Kept with it as it's made, so the box never takes it for one a client made without saying.)
   const starter = Boolean(by?.place || remote);
-  const marks = { ...(starter ? { startedBy: by!.session } : {}), ...(asBefore ? {} : { approval: kept, applied }), ...(autopilot ? { autopilot: true } : {}), ...marksOfLine };
+  const marks = { ...(starter ? { startedBy: by!.session } : {}), ...(asBefore ? {} : { approval: kept, applied }), ...(autopilot ? { autopilot: true } : {}), ...(filed ? { filed } : {}), ...marksOfLine };
   const waits = given.wait === true && !remote;
   const wakes = wakesFrom(given.wait === true && remote ? given.wake ?? "both" : given.wake, remote ? remote.own : Boolean(ownBot), waits);
   // What its starter hears of it, only once it's marked so: none for an agent outside any
   // conversation here, or for a mark the engine didn't take (it's told to write to it instead).
-  const kuvo = { ...(starter ? { startedBy: by!.session, ...(bot ? { by: bot, depth } : {}), ...(wakes.length ? { wake: wakes } : {}) } : {}), ...(asBefore ? {} : { approval: kept, applied }), ...(autopilot ? { autopilot: true } : {}), ...marksOfLine };
+  const kuvo = { ...(starter ? { startedBy: by!.session, ...(bot ? { by: bot, depth } : {}), ...(wakes.length ? { wake: wakes } : {}) } : {}), ...(asBefore ? {} : { approval: kept, applied }), ...(autopilot ? { autopilot: true } : {}), ...(filed ? { filed } : {}), ...marksOfLine };
   const from_ = remote ? `${by!.name} on ${remote.computer}` : by?.name ?? "";
   // (Its finish heard by its starter with its last reply: its report isn't sent again as a message.)
   const textFor = (heard: boolean) => by ? composeLetter(from_, by.session, task, waits, heard) + (bot ? `\n\n${sessionNote(bot.name, heard, given.review !== false)}${goal ? `\n\n${goalNote}` : ""}` : "") : task;

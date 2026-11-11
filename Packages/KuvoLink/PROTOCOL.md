@@ -445,7 +445,7 @@ connection.
     moment the relay says nothing's connected at its address (`unreachable`, after something was
     sent there), until any mail from it comes. A file, so a machine's tools, answered by a process of
     their own, read it too. A dead connection can take the relay about a minute to notice.
-- **Starts** (bridge 0.9.212, to a peer whose `features` say `work.elsewhere.start`): calls that
+- **Starts** (to a peer whose `features` say `work.elsewhere.start`): calls that
   start work, or read what there is to start it with: `start_session`, `list_models` and
   `list_projects` ("Work", Across your computers). The receiving box takes them only while you let
   your other computers start work there (`kuvo/approval`'s `otherComputers`: off on the Mac with the
@@ -916,7 +916,9 @@ its own, which a `SIGTERM` stops waiting.
     where the sandbox doesn't run, "Approval"), with Settings › Permissions, the task as the user's
     own first message.
   - Either way its project's other folders are allowed to it and named in its instructions, one in
-    a worktree is told so, and a folder that's no project yet becomes one.
+    a worktree is told so, one filed under another folder than its own (a worktree, a project's
+    other folder) carries that project from the first (`kuvo.filed`, "Projects"), and a folder
+    that's no project yet, nor one of a project's, becomes one.
   - 400 `{message}` (no task, not a folder here), 403 (a group chat's seat), 404 (`startedBy`
     isn't a conversation here), 409 `{message, reason}` (Full Access from a client where it can't
     be had: `fullAccessOff`), 429 (too many lately), 502 `{message, session?}` (not made, or
@@ -1139,7 +1141,7 @@ client shows it from the same routes.
     seconds, what it last told, "as of" then, and that it isn't answering. A stop, a compact or an
     answer for a computer that isn't answering is kept and done when it's back (an allow for a day),
     and the tool says so; how it went comes to the lead as a message.
-  - **Starting work there** (bridge 0.9.212): `start_session`, `list_models` and `list_projects` take
+  - **Starting work there**: `start_session`, `list_models` and `list_projects` take
     `computer`, another of your computers by the name `list_agents` shows (a Mac also as "the
     Mac" when there's one; this box's own name, "here" or none: here). Two of one name are refused,
     asking which. A start there is checked on the lead's box first as a start here is (a group
@@ -2016,6 +2018,24 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   telling). Follow it: set `time.viewed` to `idle` when it's later, and clear what was shown for
   it (a notification). A group chat is read with `POST kuvo/groups/<id>/viewed`, and its `unread`
   changes in `kuvo/groups/events` (below).
+  **An agent's work is read for you** (READ_RULE, `work/tree.ts`): a session another conversation
+  started and leads (`metadata.kuvo.startedBy`, not a subagent's, and its starter hears when it
+  finishes: a bot's work, `kuvo.by`, or `kuvo.wake` naming `finished`) is that conversation's work.
+  So as each of its turns ends, its box reads it (`POST …/view`, as above), unless what ended since
+  it was last read holds news for you, as its notifications are: a turn that answers you
+  (NOTIFY_RULE: you wrote in it, or answered what it asked you), a turn that failed, or a
+  `notify_user` its agent sent; and never while it asks you something (a permission or a question,
+  its subagents' too), which still waits on you. As the box finds its engine or coding agents'
+  bridge, it does the same for those left unread meanwhile. No client decides it: each follows
+  `session.viewed`, so such a session shows nothing new on any client (its row, its project, its
+  computer) unless it has news for you, and its lead's row is where its work shows.
+  **Mark All as Read** is the box's too: `POST kuvo/sessions/read` reads every conversation on the
+  box left unread (on the engine and the coding agents' bridge, subagents' too, archived ones
+  left as they are) up to where each ended, as `POST …/view` does one, and every group chat with
+  something new up to now; it answers `{"read"}`, how many. Each client hears of each as above
+  (`session.viewed`, `kuvo/groups/events`). What waits on your answer isn't read away: an ask
+  still waits on you. A client that marks all read on every computer (the phone's Inbox) asks
+  each box once.
 - **A message while a command runs**: yours is read at once. A message sent to steer
   (`delivery: "steer"`) waits for the agent's next step, and an agent waiting on a command or a
   subagent it started in the foreground takes none until that ends. So for your own message, each
@@ -2041,7 +2061,8 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   with the Mac closed too.
 - `kuvo/info`: what the host is and runs: `kind` (`mac` or `machine`), `name`, `engine` (its
   version), a Mac's `app` and a machine's `bridge` version (to show, never to compare: check
-  `features`), `features` (below), whether its coding agents' bridge is up (`agents`), and
+  `features`; after bridge 0.9.211, `bridge` is a hash of the link as built, which changes with
+  every change, rather than a number), `features` (below), whether its coding agents' bridge is up (`agents`), and
   `started`, when the engine running now came up, in seconds since 1970 (null while none runs): a
   restart changes it, so a phone tells the new engine from the old. Both name the folder of chats
   (`chats`: conversations of no project, made if it isn't there yet, so a phone can start the first
@@ -3767,73 +3788,78 @@ Mac, its app for its keys), and on a
 machine `409` for `config`, `config.apply`, `keys`, `mcp.catalog` and `integrations` until a Mac has made its
 settings its own. A name comes with what it names and never changes meaning; one the client
 doesn't know, it ignores. Both boxes are held to their lists by
-the route scenarios (`Vectors/routes/routing.json`). A Mac's list is its box's (`macFeatures`, from #191
+the route scenario `Vectors/routes/features.json`, which `scripts/route-shapes.sh` writes from the
+box's lists (`FEATURES` in `Packages/Box/src/shared/features.ts`, `MAC_FEATURES` and
+`MACHINE_FEATURES` in `shared/routes/mac.ts`). A Mac's list is its box's (`macFeatures`, from #191
 step 2; the app gave it before): every box's but a machine's own, and the Mac's own, the same
 with its app closed, when what needs the app answers `503 {"message"}`.
+A note of when a name came in names the bridge's version up to 0.9.211; after that, the bridge's
+version is a hash, and a name is its own mark.
+
+One row a name, in order, so branches that each add one merge cleanly.
 
 | Name | What it answers |
 | --- | --- |
 | `accounts.credentials` | `kuvo/accounts/credentials` |
+| `accounts.ended` | `kuvo/accounts/ended` and `POST kuvo/accounts/<provider>/forget` (a machine from 0.9.61) |
 | `accounts.found` | `kuvo/accounts/found`, `…/found/use` |
 | `accounts.refresh` | `GET kuvo/accounts/refreshable` and `POST kuvo/accounts/<provider>/refresh` (Refresh Models) |
+| `agent-tools` | `POST kuvo/agent-tools`: the agents' tools, answered by the box (bridge 0.9.100) |
 | `agents` | `kuvo/agents/api/…`: the coding agents (`agents` in `kuvo/info` says whether their bridge is up now) |
+| `approval` | `kuvo/approval` and `kuvo/sessions/<id>/approval` ("Approval", bridge 0.9.180) |
+| `approval.default` | A new conversation's approval where its client doesn't say: Auto the first time on a computer, then the last one picked there (`kuvo/approval`'s `default`, bridge 0.9.185); one a client made with `kuvo.approval` alone gets that ("Approval") |
+| `approval.fullAccess` | Full Access as it is since bridge 0.9.184: its commands run outside the sandbox, nothing asks or is reviewed, `kuvo/approval`'s `fullAccess` is whether you confirmed it on this computer (asked the first time it's picked), and Tell Auto is gone ("Approval") |
+| `approval.held` | Auto never leaves a call waiting on you (bridge 0.9.185): what its reviewer refuses or can't judge is held back, and `POST kuvo/sessions/<id>/decisions` `{approve: id}` approves one once; a sandbox ask in Auto never comes to you, so it has no `review` ("Auto's reviewer") |
+| `approval.otherComputers` | `kuvo/approval`'s `otherComputers`, and `PATCH {otherComputers}` ("Approval") |
+| `approval.reviewer` | Auto's reviewer: `kuvo/sessions/<id>/decisions` and a sandbox ask's `review` ("Approval", "Auto's reviewer", bridge 0.9.181) |
+| `approval.seen` | `seen` in `kuvo/sessions/<id>/decisions`, and `POST` `{seen: true}` as you open them: what's held back since is news on every client ("Auto's reviewer", bridge 0.9.187) |
+| `approval.stopped` | In Auto, a command the sandbox stops goes to Auto's reviewer by itself, with no `sandbox_ask`: allowed, it runs outside the sandbox and the agent gets that output; each lands in Decisions ("Asks", "Stopped commands", bridge 0.9.190) |
 | `asks` | `kuvo/asks`, `…/events`, and answering one |
 | `attention` | `kuvo/attention` |
+| `autopilot` | `kuvo/sessions/<id>/autopilot`, `autopilot` in `POST kuvo/sessions`: a conversation on Autopilot, its questions with a recommendation going ahead ("Autopilot"; bridge 0.9.200); a goal's `mode` and `decided`, `mode` on start and change, `{action: decided}` ("Work", Goals, Interactive or Autopilot) |
 | `bots` | `kuvo/bots` |
+| `bots.edit` | `PATCH` and `DELETE kuvo/bots/<id>` |
 | `bots.events` | `kuvo/bots/events` |
 | `bots.job` | a bot's job as its box's record: `jobDetails` in `kuvo/bots`, `job` in `PATCH kuvo/bots/<id>` |
-| `bots.make` | `kuvo/bots/templates` and `POST kuvo/bots` |
-| `bots.edit` | `PATCH` and `DELETE kuvo/bots/<id>` |
 | `bots.keys` | `kuvo/bots/<id>/keys…` |
+| `bots.make` | `kuvo/bots/templates` and `POST kuvo/bots` |
+| `branch` | `kuvo/agents/api/kuvo/branch/<session>`: Branch from here, marked |
+| `browser` | a machine only: `kuvo/browser`, its browser set up by the box itself ("The browser on a machine") |
+| `btw` | `kuvo/agents/api/kuvo/btw…`: side questions ("Side questions, handoffs and reviews") |
+| `btw.threads` | a side question's `thread`, follow-ups and a thread's removal (bridge 0.9.98) |
+| `claude-code` | a Mac only: `kuvo/claude-code` |
 | `config` | `kuvo/config` |
 | `config.apply` | `POST kuvo/config/apply` |
-| `keys` | `kuvo/keys…` |
-| `mcp.catalog` | `kuvo/mcp/catalog…` |
 | `engine.restart` | `POST kuvo/engine/restart` |
+| `engine.start` | a machine only: `POST kuvo/engine/start` |
 | `file` | `kuvo/file` |
 | `folders` | `kuvo/folders` |
 | `folders.files` | `kuvo/folders?files=1`: a folder's files too, and `reason` on a refusal |
 | `git` | `kuvo/git/…`: Changes (bridge 0.9.94) |
+| `git.backups` | `kuvo/git/backups…`: branch backups, and taking one back (bridge 0.9.182) |
 | `git.changes.count` | `POST kuvo/git/changes/count`: how much changed, without the diff (bridge 0.9.211) |
 | `git.merge` | `POST kuvo/git/merge`: Merge into… (bridge 0.9.143) |
 | `git.pull-request` | `POST kuvo/git/pull-request`: Create Pull Request (bridge 0.9.143) |
 | `git.pull-request.draft` | `POST kuvo/git/pull-request/draft`: Create Pull Request's confirmation (bridge 0.9.179) |
-| `git.backups` | `kuvo/git/backups…`: branch backups, and taking one back (bridge 0.9.182) |
 | `git.push` | `POST kuvo/git/push`, and a commit's `committed` when only its push failed (bridge 0.9.143) |
 | `goals` | `kuvo/agents/api/kuvo/goals…`: goals ("Goals") |
-| `btw` | `kuvo/agents/api/kuvo/btw…`: side questions ("Side questions, handoffs and reviews") |
-| `btw.threads` | a side question's `thread`, follow-ups and a thread's removal (bridge 0.9.98) |
-| `handoff` | `kuvo/agents/api/kuvo/handoff…`: handoffs |
-| `branch` | `kuvo/agents/api/kuvo/branch/<session>`: Branch from here, marked |
-| `reviews` | `kuvo/agents/api/kuvo/reviews…`: reviews with fresh eyes |
-| `reviews.scopes` | a review's `scope`, `measure`, `choices` and `stop` (bridge 0.9.97); without it a box reads the changes not committed yet whatever the scope |
-| `reviews.parts` | a review's `parts`, each on the engine read in a `session` a client can open (bridge 0.9.102) |
 | `groups` | `kuvo/groups`, `…/events`, one chat's events, and writing, stopping, keep going, viewed, undo and start |
-| `groups.make` | `POST kuvo/groups` |
-| `groups.edit` | `PATCH kuvo/groups/<id>` |
 | `groups.delete` | `DELETE kuvo/groups/<id>` |
+| `groups.edit` | `PATCH kuvo/groups/<id>` |
+| `groups.joinable` | `kuvo/groups/joinable` |
+| `groups.make` | `POST kuvo/groups` |
+| `groups.seats` | its bots take turns in chats on other computers ("Peers", group chats) |
+| `handoff` | `kuvo/agents/api/kuvo/handoff…`: handoffs |
+| `hosts` | a Mac only: `kuvo/hosts…` (with its app closed its box still lists them, and `DELETE` says the app must be open) |
 | `integrations` | `kuvo/integrations…` |
-| `named` | `kuvo/named` |
-| `moves` | `kuvo/moves`, `…/places`, `…/events`: Move to Computer, done by the boxes (bridge 0.9.108) |
-| `agent-tools` | `POST kuvo/agent-tools`: the agents' tools, answered by the box (bridge 0.9.100) |
-| `sessions.start` | `POST kuvo/sessions`: a session started with a task (bridge 0.9.100) |
+| `keys` | `kuvo/keys…` |
 | `letters-read` | (in a peer's agents' mail) it takes a letter with `read` (bridge 0.9.100) |
-| `work.elsewhere` | (in a peer's agents' mail) it takes a lead's `call` and tells `rows` ("Peers"; bridge 0.9.204) |
-| `work.elsewhere.start` | (in a peer's agents' mail) it takes starts, reads of its models and projects, and a bot's `stop_work` from your other computers, while its switch lets them ("Peers", Starts; bridge 0.9.212) |
-| `approval.otherComputers` | `kuvo/approval`'s `otherComputers`, and `PATCH {otherComputers}` ("Approval"; bridge 0.9.212) |
-| `work-queue` | `kuvo/work-queue…` and the `queue_…` tools ("The Work Queue") |
-| `setup` | `kuvo/setup`, `…/events`: your setup and its main computer ("Your setup") |
-| `work-queue.elsewhere` | (in a peer's agents' mail) it tells and takes the Work Queue across your computers: `told`, `had`, `part`, `hand`, `handed`, and numbers' asks through a peer ("The Work Queue", Across your computers); also `POST kuvo/work-queue/refs`, `computer` and `computers` in its views, and 409 for an item elsewhere |
-| `queue` | `kuvo/sessions/<id>/queue…`, `…/stop` and `kuvo/sessions/queues/events`: the box carries the queue (bridge 0.9.100) |
-| `queue.waits` | A Stop holds the conversation: what arrives waits on the box (`waiting`), `…/queue/add` and `DELETE …/queue/<item>` (bridge 0.9.128) |
-| `work` | a bot's work ("Work"): `kuvo/work`, `…/events`, `kuvo/bots/<id>/stop-all`, `start_session`'s and `kuvo/sessions`' new fields, the work tools, `limits` in `kuvo/bots` (bridge 0.9.106) |
-| `work.goals` | a bot's goal ("Work", Goals): `kuvo/work/goals…`, and its tools (bridge 0.9.122) |
-| `work.goals.apps` | `app` on a goal's steps and what waits, and `GET kuvo/work/apps/icon` ("Work", Goals, Apps; bridge 0.9.196) |
-| `work.goals.projects` | `{action: projects}` on a proposed goal ("Work", Goals, Its projects; bridge 0.9.196) |
-| `autopilot` | `kuvo/sessions/<id>/autopilot`, `autopilot` in `POST kuvo/sessions`: a conversation on Autopilot, its questions with a recommendation going ahead ("Autopilot"; bridge 0.9.200); a goal's `mode` and `decided`, `mode` on start and change, `{action: decided}` ("Work", Goals, Interactive or Autopilot) |
-| `work.projects` | a bot's projects ("Work", Projects): `make_project`, `list_projects`, `kuvo/work/asks`, `…/events`, `POST kuvo/work/asks/<id>`, `kuvo/work/settings`, `POST kuvo/projects/new`, `madeBy` on projects, `allowed` in `kuvo/bots` (bridge 0.9.107) |
-| `work.unanswering` | `GET kuvo/work/unanswering`: models that can't answer now ("Work", Models that can't answer; bridge 0.9.198) |
-| `search` | `kuvo/search` |
+| `limits` | `kuvo/agents/api/kuvo/limits…` and `plan_limits`: each account's plan limits ("Plan limits") |
+| `mac` | a Mac only: `kuvo/mac` |
+| `machines` | a Mac only: `kuvo/machines…` (with its app closed its box still lists them, and the rest says the app must be open) |
+| `mcp.catalog` | `kuvo/mcp/catalog…` |
+| `moves` | `kuvo/moves`, `…/places`, `…/events`: Move to Computer, done by the boxes (bridge 0.9.108) |
+| `named` | `kuvo/named` |
 | `personalities` | `kuvo/personalities…` |
 | `personalities.events` | `kuvo/personalities/events` |
 | `phones` | `kuvo/phones` and `POST kuvo/phones/remove` |
@@ -3841,40 +3867,41 @@ with its app closed, when what needs the app answers `503 {"message"}`.
 | `plugins.search` | `kuvo/plugins/search` |
 | `programs` | `kuvo/programs` |
 | `providers.models` | `POST kuvo/providers/models` |
+| `queue` | `kuvo/sessions/<id>/queue…`, `…/stop` and `kuvo/sessions/queues/events`: the box carries the queue (bridge 0.9.100) |
+| `queue.waits` | A Stop holds the conversation: what arrives waits on the box (`waiting`), `…/queue/add` and `DELETE …/queue/<item>` (bridge 0.9.128) |
+| `reviews` | `kuvo/agents/api/kuvo/reviews…`: reviews with fresh eyes |
+| `reviews.parts` | a review's `parts`, each on the engine read in a `session` a client can open (bridge 0.9.102) |
+| `reviews.scopes` | a review's `scope`, `measure`, `choices` and `stop` (bridge 0.9.97); without it a box reads the changes not committed yet whatever the scope |
+| `sandbox` | `kuvo/sandbox` ("Sandbox", bridge 0.9.118) |
+| `sandbox.asks` | `kuvo/sandbox/asks…`, `kuvo/sandbox/allowed…` and `kuvo/sandbox/tools` ("Sandbox", "Asks", bridge 0.9.118) |
+| `sandbox.check` | `reason`, `action` and the rest in `kuvo/sandbox`, and `POST kuvo/sandbox/check` |
+| `sandbox.reviews.whole` | `reviews` on `kuvo/sandbox/asks` lists every ask to work outside a conversation's folder, so a client shows one only once it's listed `yours` ("Sandbox") |
+| `search` | `kuvo/search` |
 | `sessions.agents` | `POST kuvo/sessions/<id>/agents` |
 | `sessions.glance` | `kuvo/sessions/glance`, `…/events`, and `session` in `POST kuvo/git/pull-request` ("A session at a glance") |
+| `sessions.start` | `POST kuvo/sessions`: a session started with a task (bridge 0.9.100) |
+| `setup` | `kuvo/setup`, `…/events`: your setup and its main computer ("Your setup") |
 | `shell.stop` | `POST kuvo/shell/<id>/stop` |
 | `sign-in.return` | `POST kuvo/sign-in/return` |
 | `skills` | `kuvo/skills…` and `kuvo/skill-library…` |
 | `skills.trash` | `kuvo/skill-trash…`: Recently Deleted, and restoring from it |
-| `sandbox` | `kuvo/sandbox` ("Sandbox", bridge 0.9.118) |
-| `sandbox.check` | `reason`, `action` and the rest in `kuvo/sandbox`, and `POST kuvo/sandbox/check` |
-| `sandbox.asks` | `kuvo/sandbox/asks…`, `kuvo/sandbox/allowed…` and `kuvo/sandbox/tools` ("Sandbox", "Asks", bridge 0.9.118) |
-| `sandbox.reviews.whole` | `reviews` on `kuvo/sandbox/asks` lists every ask to work outside a conversation's folder, so a client shows one only once it's listed `yours` ("Sandbox") |
-| `approval` | `kuvo/approval` and `kuvo/sessions/<id>/approval` ("Approval", bridge 0.9.180) |
-| `approval.reviewer` | Auto's reviewer: `kuvo/sessions/<id>/decisions` and a sandbox ask's `review` ("Approval", "Auto's reviewer", bridge 0.9.181) |
-| `approval.fullAccess` | Full Access as it is since bridge 0.9.184: its commands run outside the sandbox, nothing asks or is reviewed, `kuvo/approval`'s `fullAccess` is whether you confirmed it on this computer (asked the first time it's picked), and Tell Auto is gone ("Approval") |
-| `approval.held` | Auto never leaves a call waiting on you (bridge 0.9.185): what its reviewer refuses or can't judge is held back, and `POST kuvo/sessions/<id>/decisions` `{approve: id}` approves one once; a sandbox ask in Auto never comes to you, so it has no `review` ("Auto's reviewer") |
-| `approval.default` | A new conversation's approval where its client doesn't say: Auto the first time on a computer, then the last one picked there (`kuvo/approval`'s `default`, bridge 0.9.185); one a client made with `kuvo.approval` alone gets that ("Approval") |
-| `approval.seen` | `seen` in `kuvo/sessions/<id>/decisions`, and `POST` `{seen: true}` as you open them: what's held back since is news on every client ("Auto's reviewer", bridge 0.9.187) |
-| `approval.stopped` | In Auto, a command the sandbox stops goes to Auto's reviewer by itself, with no `sandbox_ask`: allowed, it runs outside the sandbox and the agent gets that output; each lands in Decisions ("Asks", "Stopped commands", bridge 0.9.190) |
+| `update` | a machine only: `kuvo/update` |
+| `usage` | a Mac only for now: `kuvo/usage…`, from its app while it's open (`404` without the usage panel, `503` with the app closed), spend and what the box doesn't state of a plan yet (a machine's box can't do this yet, on Linux or a Mac). Before #191 step 2 a Mac named it only while its usage panel was there |
 | `wakes` | `kuvo/wakes`, a session's, and cancelling one or sending it now |
 | `wakes.edit` | adding one (`POST kuvo/wakes/<session>`) and pausing them |
 | `wakes.events` | `kuvo/wakes/events`, and making a watch (`POST kuvo/wakes/<session>/watch`) |
+| `work` | a bot's work ("Work"): `kuvo/work`, `…/events`, `kuvo/bots/<id>/stop-all`, `start_session`'s and `kuvo/sessions`' new fields, the work tools, `limits` in `kuvo/bots` (bridge 0.9.106) |
+| `work-queue` | `kuvo/work-queue…` and the `queue_…` tools ("The Work Queue") |
+| `work-queue.elsewhere` | (in a peer's agents' mail) it tells and takes the Work Queue across your computers: `told`, `had`, `part`, `hand`, `handed`, and numbers' asks through a peer ("The Work Queue", Across your computers); also `POST kuvo/work-queue/refs`, `computer` and `computers` in its views, and 409 for an item elsewhere |
+| `work.elsewhere` | (in a peer's agents' mail) it takes a lead's `call` and tells `rows` ("Peers"; bridge 0.9.204) |
+| `work.elsewhere.start` | (in a peer's agents' mail) it takes starts, reads of its models and projects, and a bot's `stop_work` from your other computers, while its switch lets them ("Peers", Starts) |
+| `work.goals` | a bot's goal ("Work", Goals): `kuvo/work/goals…`, and its tools (bridge 0.9.122) |
+| `work.goals.apps` | `app` on a goal's steps and what waits, and `GET kuvo/work/apps/icon` ("Work", Goals, Apps; bridge 0.9.196) |
+| `work.goals.projects` | `{action: projects}` on a proposed goal ("Work", Goals, Its projects; bridge 0.9.196) |
+| `work.projects` | a bot's projects ("Work", Projects): `make_project`, `list_projects`, `kuvo/work/asks`, `…/events`, `POST kuvo/work/asks/<id>`, `kuvo/work/settings`, `POST kuvo/projects/new`, `madeBy` on projects, `allowed` in `kuvo/bots` (bridge 0.9.107) |
+| `work.unanswering` | `GET kuvo/work/unanswering`: models that can't answer now ("Work", Models that can't answer; bridge 0.9.198) |
 | `worktrees` | `kuvo/worktrees…` |
 | `worktrees.where` | `kuvo/worktrees/where` |
-| `engine.start` | a machine only: `POST kuvo/engine/start` |
-| `groups.joinable` | `kuvo/groups/joinable` |
-| `groups.seats` | its bots take turns in chats on other computers ("Peers", group chats) |
-| `update` | a machine only: `kuvo/update` |
-| `browser` | a machine only: `kuvo/browser`, its browser set up by the box itself ("The browser on a machine") |
-| `accounts.ended` | `kuvo/accounts/ended` and `POST kuvo/accounts/<provider>/forget` (a machine from 0.9.61) |
-| `claude-code` | a Mac only: `kuvo/claude-code` |
-| `hosts` | a Mac only: `kuvo/hosts…` (with its app closed its box still lists them, and `DELETE` says the app must be open) |
-| `mac` | a Mac only: `kuvo/mac` |
-| `machines` | a Mac only: `kuvo/machines…` (with its app closed its box still lists them, and the rest says the app must be open) |
-| `usage` | a Mac only for now: `kuvo/usage…`, from its app while it's open (`404` without the usage panel, `503` with the app closed), spend and what the box doesn't state of a plan yet (a machine's box can't do this yet, on Linux or a Mac). Before #191 step 2 a Mac named it only while its usage panel was there |
-| `limits` | `kuvo/agents/api/kuvo/limits…` and `plan_limits`: each account's plan limits ("Plan limits") |
 
 Here "a Mac" is the box the app runs (`KUVO_BOX=mac`), and "a machine" any box in `~/.kuvo-code`,
 on Linux or on a Mac.
@@ -4208,14 +4235,24 @@ while a box is away goes there when it's back.
   project of its own; #422). A client files a session whose folder is
   here under that project, never as a project of its own; the events line changes with them. A box
   from before doesn't say: a client goes by `kuvo/worktrees` then.
+  Each project's other folders are here too, under it (not one that's a project of its own, nor a
+  removed project's), and a worktree of one of them is its too, so a session started there shows
+  under the project (#311).
+  A session filed under another folder than its own carries it in its metadata from when it's made,
+  `kuvo.filed` `{folder, project}` (as the box names them): one a box's `kuvo/sessions` starts in a
+  worktree, in a project's other folder or a folder in one, or in the folder its starter is filed
+  from; and one a client makes in a worktree it just made with `POST kuvo/worktrees` (it gives it
+  itself). A client may hear of the session from its engine before this list names a new worktree,
+  and the list never names a subfolder: one whose folder the list doesn't name, still running in the
+  folder its `kuvo.filed` names, is filed under that project (#311).
 - `PUT kuvo/projects?directory=<folder>` with any of `{name, folders, run, terminal, removed}`
   adds the project or changes what's given (an empty string is none), and brings a removed one
   back unless `removed` is true (a client's copy of one it removed, with its settings):
   `200 {project}`; 400 for a folder that isn't a whole path. The folder is kept as it's named,
   as its sessions run there (a link isn't followed), and whether it's there now or not (a drive
   that's away).
-- `DELETE kuvo/projects?directory=<folder>` is Remove Project: every session of it, its worktrees'
-  too (removed ones included, and the folders an optional body `{folders}` names: those a client
+- `DELETE kuvo/projects?directory=<folder>` is Remove Project: every session of it, its worktrees' and
+  other folders' too, and those filed under it from elsewhere (`kuvo.filed`) (removed worktrees included, and the folders an optional body `{folders}` names: those a client
   shows under it that the box doesn't know, worktrees removed before it kept them), archived on
   the engine and the coding agents' bridge, older ones included, then it's marked `removed`.
   `200 {archived}`; `409 {message, archived, kept}` when some couldn't be archived (it stays
@@ -4728,7 +4765,7 @@ rules. Plan mode stays the conversation's agent (`plan`), beside it.
   isn't one of them, 409 `{message, reason}` for Full Access where it can't be picked
   (`fullAccessOff`), 502 where the engine didn't take it.
 - `GET kuvo/approval`: this computer's `{fullAccess, default, auto: {engine, agents}, otherComputers?}`
-  (`otherComputers`, bridge 0.9.212: whether your other computers may start work here, "Peers",
+  (`otherComputers`: whether your other computers may start work here, "Peers",
   Starts; `PATCH {otherComputers}` sets it alone): whether you
   confirmed Full Access here (`box/approval.json`), the one a new conversation starts with
   (`default`: what a client's composer shows), and whether Auto runs for each (`{held?}`, as
@@ -4736,6 +4773,11 @@ rules. Plan mode stays the conversation's agent (`plan`), beside it.
   menu: it isn't a setting), then sends `PATCH kuvo/approval` `{fullAccess: true}` before `PUT`ting
   the conversation's; 400 without a boolean `fullAccess` or `otherComputers`. A change brings what had it or was held
   from it to what it can be at once.
+- A client's ⇧Tab in an empty composer goes to the next mode in the menu's order (`askFirst`,
+  `acceptEdits`, `auto`, `fullAccess`, then round again), as picking it would: KuvoClient's
+  `ApprovalCycle`. It passes over an option the box says is `unavailable` (so Full Access until
+  it's confirmed here, which only the menu asks), as Claude Code's Shift+Tab passes over Bypass
+  Permissions until it's allowed.
 - The box looks every 2 seconds at what each comes to, and makes the rules of those kept with Auto
   or Full Access again when the sandbox starts or stops, the switch changes, or the engine or the
   bridge starts again, each read again just before it's written. As Settings › Permissions change

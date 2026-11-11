@@ -8,7 +8,9 @@ import { isObject } from "../../shared/json";
 import { cut } from "../../shared/text";
 import { call, engineGet } from "../engine/client";
 import { CHATS } from "../home";
-import { describePermission, projectNameOf } from "../notices/news";
+import { answersYou, describePermission, projectNameOf, turnFor } from "../notices/news";
+import { readTold } from "../notices/told";
+import { isHiddenRun } from "../engine/sessions";
 import { lastTurn, lastTurnEnd, summaryAtEnd, summaryRowAtEnd, workOutcome } from "../../shared/summaries";
 import { listBots } from "../bots/list";
 import { asksIn } from "./answers";
@@ -197,6 +199,91 @@ export async function keepReadThroughSummary(target: Target, session: string, si
   await call(target, "POST", `${route}/view`, { idle: listed.time.idle }, signal).catch(() => {});
 }
 
+/**
+ * READ_RULE: a session another conversation started and leads (a bot's work, or one whose starter
+ * hears when it finishes: `kuvo.by`, `kuvo.wake`) is that conversation's work, which it hears of
+ * itself. So once its turns since you last read it hold nothing that's news to you, they're read,
+ * here, and no client shows it new. News to you, as its notification is: a turn that answers you
+ * (NOTIFY_RULE: you wrote in it, or answered what it asked you), a turn that failed, and what its
+ * agent sent you with notify_user since. While it asks you something, it's left as it is (what
+ * it asks still waits on you, with its notification). `session`: its id, or as it's listed.
+ */
+export async function keepWorkRead(target: Target, session: string | Listed["data"], signal?: AbortSignal): Promise<void> {
+  const data = typeof session === "string"
+    ? await call(target, "GET", `/api/session/${encodeURIComponent(session)}`, undefined, signal).catch(() => null) as Listed["data"] | null
+    : session;
+  if (!data?.id || data.parentID || !startedByOf(data) || isHiddenRun(data)) return;
+  if (!worksFor(data) && !wakesOf(data).includes("finished")) return;
+  const idle = data.time?.idle;
+  const viewed = data.time?.viewed ?? 0;
+  if (idle === undefined || idle <= viewed) return;
+  // Held for news to you at this read: nothing to judge again until it's read.
+  if (heldForYou.get(data.id) === viewed) return;
+  // (Read after its end, so a turn that ended since is in what's judged, and stays unread here.
+  // Past SINCE_PAGES only what's in reach is judged: a session you never opened, long, still clears.)
+  const { rows, whole } = await turnsSince(target, data.id, viewed, signal);
+  if (signal?.aborted || rows === null) return;
+  let judged = 0;
+  for (const [index, row] of rows.entries()) {
+    if (row.type !== "idle" || (row.time?.created ?? Infinity) <= viewed) continue;
+    judged++;
+    // (A summary that failed ends as one that succeeded: its own row says so.)
+    const failed = row.outcome === "failed" || summaryAtEnd(rows.slice(index)) === "failed";
+    // (A turn nothing began, a summary, say, answers no one.)
+    const end = rows.findIndex((each, at) => at > index && each.type === "idle");
+    const began = rows.slice(index + 1, end < 0 ? undefined : end).some(each => each.type === "user" || each.type === "synthetic");
+    if (failed || (began && answersYou(turnFor(rows.slice(index), whole), data))) {
+      holdForYou(data.id, viewed);
+      return;
+    }
+  }
+  // (Nothing that ended since was found to judge: left as it is.)
+  if (!judged) return;
+  // (Looked at last, just before it's read: one sent meanwhile isn't cleared with it.)
+  if (readTold().some(told => told.by === "agent" && told.notice.data?.session === data.id && told.at > viewed)) return;
+  const { permissions, questions, whole: allAsks } = await asksIn(target, data.id, signal);
+  if (signal?.aborted || permissions.length || questions.length || !allAsks) return;
+  await call(target, "POST", `/api/session/${encodeURIComponent(data.id)}/view`, { idle }, signal).catch(() => {});
+}
+
+// The sessions of agents' work left unread for news to you, by the read they were judged at, so
+// each turn end after doesn't read them back again (a few hundred at most, the oldest let go).
+const heldForYou = new Map<string, number>();
+function holdForYou(session: string, viewed: number): void {
+  heldForYou.delete(session);
+  heldForYou.set(session, viewed);
+  if (heldForYou.size > 500) heldForYou.delete(heldForYou.keys().next().value!);
+}
+
+// How far back a session's messages are read for the turns that ended since it was read.
+const SINCE_PAGES = 20;
+
+/** A session's messages, newest first, back to the end of a turn from before `viewed` (or its
+ * first): `whole` once that's in them; null when they can't be read. */
+async function turnsSince(target: Target, session: string, viewed: number, signal?: AbortSignal): Promise<{ rows: { type?: string; outcome?: string; time?: { created?: number } }[] | null; whole: boolean }> {
+  const rows: { type?: string; outcome?: string; time?: { created?: number } }[] = [];
+  let query = "limit=50&order=desc";
+  for (let pages = 0; pages < SINCE_PAGES && !signal?.aborted; pages++) {
+    const page = await engineGet(target, `api/session/${encodeURIComponent(session)}/message?${query}`).catch(() => null) as { data?: unknown; cursor?: { next?: string; previous?: string } | null } | null;
+    if (!page || !Array.isArray(page.data)) return { rows: null, whole: false };
+    const read = page.data.filter((row): row is (typeof rows)[number] => isObject(row) && typeof row.type === "string");
+    rows.push(...read);
+    const next = page.cursor?.next ?? page.cursor?.previous;
+    if (!read.length || !next || read.some(row => row.type === "idle" && (row.time?.created ?? Infinity) <= viewed)) return { rows, whole: true };
+    query = `limit=100&cursor=${encodeURIComponent(next)}`;
+  }
+  return { rows, whole: false };
+}
+
+/** READ_RULE for what ended while this box wasn't listening: each session of agents' work here
+ * left unread, read unless what came since is news to you. */
+export async function settleWorkRead(target: Target, signal?: AbortSignal): Promise<void> {
+  for (const { data } of await workSessions([target], signal)) {
+    if (signal?.aborted) return;
+    await keepWorkRead(target, data, signal);
+  }
+}
+
 const tokensOf = (data: Listed["data"]) => (data.tokens?.input ?? 0) + (data.tokens?.output ?? 0) + (data.tokens?.reasoning ?? 0);
 
 /** A session of a bot's work as clients show it: where it stands now (`working`, what each asks:
@@ -216,7 +303,7 @@ export async function describeWork(listed: Listed, working: Set<string>, { repli
   const reply = !replies || state === "working" ? null
     : state === "stopped" || state === "failed" ? replyIn(lastTurn(page))
     : read ? replyIn(page) : await lastReplyOf(listed, signal);
-  const project = folder === CHATS ? undefined : projectNameOf(folder);
+  const project = folder === CHATS ? undefined : projectNameOf(folder, data);
   return {
     session: data.id,
     title: data.title || "New Session",

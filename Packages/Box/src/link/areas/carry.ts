@@ -170,7 +170,8 @@ export async function carryToAgents(id: string, model: unknown, readEngine: () =
     // `letAttachmentsGo`); a bot's as its too; in the mode it was in, its rules made for it. As
     // it's made, so nothing takes it for a new conversation of yours.
     const kuvo = bot ? session.metadata?.kuvo ?? { bot: bot.described.id } : {};
-    const { approval, applied, autopilot, held, lead, line, call: startedCall, startedBy, wake, by, depth, limits } = session.metadata?.kuvo ?? {};
+    // (Filed under the project it was, in the same folder.)
+    const { approval, applied, autopilot, filed, held, lead, line, call: startedCall, startedBy, wake, by, depth, limits } = session.metadata?.kuvo ?? {};
     // (One a lead on another computer started keeps what came with it: that lead's Don't Allows,
     // which its rules are made with each time; who started it and where from, its line and its
     // bot's, so its lead's list, Stop All and news still reach it, and its bot's limits count it;
@@ -179,7 +180,7 @@ export async function carryToAgents(id: string, model: unknown, readEngine: () =
       lead, ...(Array.isArray(held) && held.length ? { held } : {}), ...(Array.isArray(line) ? { line } : {}), ...(typeof startedCall === "string" ? { call: startedCall } : {}),
       ...(typeof startedBy === "string" ? { startedBy } : {}), ...(Array.isArray(wake) ? { wake } : {}), ...(isObject(by) ? { by } : {}), ...(typeof depth === "number" ? { depth } : {}), ...(isObject(limits) ? { limits } : {}),
     } : {};
-    const marks = { kuvo: { ...(approval ? { approval } : {}), ...(applied ? { applied } : {}), ...(autopilot === true ? { autopilot } : {}), ...fromAfar, ...kuvo, carriedFrom: id } };
+    const marks = { kuvo: { ...(approval ? { approval } : {}), ...(applied ? { applied } : {}), ...(autopilot === true ? { autopilot } : {}), ...(filed ? { filed } : {}), ...fromAfar, ...kuvo, carriedFrom: id } };
     let imported: Fields<"id"> | null = null;
     try {
       imported = await call(agents, "POST", "/api/session/import", {
