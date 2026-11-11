@@ -43,13 +43,14 @@ here.
 - **The host's plan limits, one row per account** (`Embedding/HostLimits.swift`): Kuvo Code's boxes
   read each account's limits with their own sign-ins, and the Bars view draws a bar for each
   account however many boxes have it (named "Claude · Work"; the host names them) in place of the
-  panel's own row for that provider, when this Mac's box has a row for it (the others follow); their detail draws
+  panel's own row for that provider, when this Mac's box has a row for it (the others follow), or,
+  for Claude, whose own row then has no limits, when any box has one; their detail draws
   the same way, the provider's spend and trend under the first. The panel then doesn't read
   Claude's limits or sign-ins itself (Anthropic would only count it against the same hold): its own
   Claude reading takes this Mac's own Claude login's limits from the host, as of when, for the menu
   bar, the cards, notices and the host's readers. Anthropic's reset grants and extra usage aren't
-  shown meanwhile (the box doesn't read them yet). `kuvo/usage` leaves out what this Mac's box
-  states rows for.
+  shown meanwhile (the box doesn't read them yet). `kuvo/usage` marks the rows whose place the
+  boxes' rows take (`covers`), without their limits.
 - **Plan limits for the host** (`Embedding/PlanLimits.swift`): the latest limits of one provider,
   read from what the panel already has, for Kuvo Code to show beside a session.
 - **A card of the host's** (`Embedding/HostCard.swift`): shown at the foot of the dashboard, above

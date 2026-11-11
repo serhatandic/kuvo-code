@@ -13,9 +13,10 @@ import { categoryNamed } from "./categories";
 import { takeNumber, type Primary } from "./numbers";
 import {
   FILES, filesOf, matching, MOST_BODY, MOST_FILE, MOST_FILES, MOST_ITEMS, MOST_LINKS, MOST_NOTE, MOST_NOTES, MOST_TITLE, newItemID, noteHanded, placeBeside, placeIn, Refusal,
-  type Book, type Item, type KeptFile, type Who,
+  type Book, type Item, type KeptFile, type Source, type Who,
 } from "./store";
 import { nameOf, refOf } from "./view";
+import { doneOnGitHub, seenOf } from "./github";
 import { frozen } from "../moves/records";
 
 /** A session is linked to this many items at most: linking one more drops its oldest link. */
@@ -201,14 +202,17 @@ export function applyFileOps(acting: Acting): void {
   for (const op of acting.fileOps.splice(0)) op();
 }
 
-const openIn = (book: Book, owner: string) => book.queue(owner).items.filter(item => !item.removed && item.category !== "done").length;
+// (An issue or a pull request closed on GitHub is Done, whatever category it's kept in.)
+const openIn = (book: Book, owner: string) => book.queue(owner).items.filter(item => !item.removed && item.category !== "done" && !(item.source && doneOnGitHub(seenOf(item.source)?.value?.state))).length;
 
-/** A new item in `owner`'s queue: numbered now if there's a number to give, else once one comes. */
-export function addItem(book: Book, owner: string, fields: Fields, acting: Acting, primary: Primary): Item {
+/** A new item in `owner`'s queue: numbered now if there's a number to give, else once one comes;
+ * an outside source's (`source`, an issue or a pull request) never. */
+export function addItem(book: Book, owner: string, fields: Fields, acting: Acting, primary: Primary, source?: Source): Item {
   const title = plainName(text(fields.title ?? "", MOST_TITLE * 4, "The title")).slice(0, MOST_TITLE);
   if (!title) refuse("Say what it is (title), in a line.");
   if (openIn(book, owner) >= MOST_ITEMS) refuse(`Your queue has ${MOST_ITEMS} open items already: mark some done or remove them first.`);
   const category = fields.category === undefined ? "next" : categoryFor(fields.category);
+  if (source && category === "done") refuseDone(source.ref);
   const { now, who } = acting;
   const item: Item = {
     id: newItemID(),
@@ -224,6 +228,7 @@ export function addItem(book: Book, owner: string, fields: Fields, acting: Actin
     created: { at: now, by: who },
     updated: { at: now, by: who },
     ...(category === "done" ? { doneAt: now } : {}),
+    ...(source ? { source } : {}),
   };
   book.queue(owner).items.push(item);
   // (Its details as a change makes them, so the same checks hold.)
@@ -234,6 +239,9 @@ export function addItem(book: Book, owner: string, fields: Fields, acting: Actin
   if (number !== null) item.number = number;
   return item;
 }
+
+// Done asked of an issue or a pull request: GitHub's to say.
+const refuseDone = (name: string): never => refuse(`${name} is Done once it's closed on GitHub (or, a pull request, merged): close it there, or let the pull request that fixes it close it.`);
 
 /** `item` changed as `fields` say. */
 export function changeItem(book: Book, item: Item, fields: Fields, acting: Acting): void {
@@ -246,6 +254,9 @@ export function changeItem(book: Book, item: Item, fields: Fields, acting: Actin
   if (fields.body !== undefined) item.body = text(fields.body, MOST_BODY, "The description (body)");
   if (fields.category !== undefined) {
     const category = categoryFor(fields.category);
+    // (An issue's or a pull request's Done is GitHub's: never set, nor left, here.)
+    if (item.source && category === "done") refuseDone(nameOf(item));
+    if (item.source && doneOnGitHub(seenOf(item.source)?.value?.state)) refuse(`${nameOf(item)} is closed on GitHub, so it's Done: it's back in its place once it's reopened there.`);
     if (category !== item.category) {
       item.category = category;
       item.order = placeIn(book.items(), category, { top: fields.top === true });
@@ -317,6 +328,22 @@ export function changeItem(book: Book, item: Item, fields: Fields, acting: Actin
       fs.mkdirSync(filesOf(item.id), { recursive: true, mode: 0o700 });
       fs.renameSync(each.staged, path.join(filesOf(item.id), name));
     });
+  }
+  item.updated = { at: now, by: who };
+}
+
+/** `item` made the outside source's item `source` is (an issue or a pull request): named by it from
+ * now on (its number kept, never shown again, so it still finds it), with its title and
+ * description; what the item said before is kept as a note. */
+export function linkSource(item: Item, source: Source, title: string, body: string, { who, now }: Acting): void {
+  if (item.source) refuse(`${nameOf(item)} is ${item.source.ref} already: one item is one issue or pull request.`);
+  if (item.category === "done") refuse(`${nameOf(item)} is Done: move it out of Done first (category), or add the issue as an item of its own (queue_add with issue).`);
+  const before = item.body.trim();
+  item.source = source;
+  item.title = plainName(title).slice(0, MOST_TITLE) || item.title;
+  if (body.trim()) {
+    item.body = body.slice(0, MOST_BODY);
+    if (before) item.notes = [...item.notes, { at: now, by: who, text: `What it said before it was ${source.ref}:\n\n${before}`.slice(0, MOST_NOTE) }].slice(-MOST_NOTES);
   }
   item.updated = { at: now, by: who };
 }

@@ -111,6 +111,9 @@ phone's copies of the Mac's design files, a piece at a time.
 - `Spinner`: the app's loader, played by Core Animation on each platform's own view.
 - `ChoiceRowLabel`: a numbered choice (a question's, a permission's answer): its number in a small
   square, its words and what it means; each app puts it in its own button.
+- `ComposerRow`: the row under a composer's field, its words' font and its icons' (the paperclip,
+  the mode's, the chips' chevrons and ✕, the mic, Send and Stop): one size and weight, the words',
+  on their baseline.
 - `FirstLineListItemStyle` (`.firstLine`): a list item's marker on its first line's middle.
 - `ShimmerText`: words that shimmer while something's under way, played by Core Animation.
 - `BotAvatar`, `BotLook`, `BotMood`, `GroupAvatar`, `MachineBadge`: the bots' looks, still and

@@ -6,7 +6,7 @@ import Testing
 
 /// Pictures of the Work Queue (#243): the panel narrow (its tab "Work Queue · 24 items", In
 /// progress, Next numbered, the rest as counts) and expanded (filter chips, the list, an item
-/// open), and a reply naming items, drawn as their chips; light and dark. Only with
+/// open), the empty panel, and a reply naming items, drawn as their chips; light and dark. Only with
 /// KUVO_SHOTS_OUT, the folder they go in (`scripts/test-app.sh` with
 /// ONLY=KuvoCodeTests/WorkQueueShots). The queue is a stand-in for what a box tells.
 @MainActor
@@ -32,10 +32,24 @@ struct WorkQueueShots {
         return item
     }
 
+    /// An item that's a GitHub issue or pull request, as the box tells it (#393).
+    private static func github(_ item: [String: Any], number: Int, pull: Bool = false, state: String = "open", keptIn: String? = nil) -> [String: Any] {
+        var item = item
+        item["source"] = ["kind": pull ? "github-pr" : "github", "ref": "gh:kuvo/kuvo-ai#\(number)", "url": "https://github.com/kuvo/kuvo-ai/\(pull ? "pull" : "issues")/\(number)", "name": "kuvo-ai#\(number)"]
+        item["seen"] = ["state": state, "at": now]
+        item["closesOn"] = "github"
+        if state == "closed" || state == "not_planned" { item["struck"] = true }
+        if let keptIn { item["keptIn"] = keptIn }
+        item.removeValue(forKey: "number")
+        return item
+    }
+
     static let items: [[String: Any]] = [
         item(243, "Work Queue: the panel and chat chips", "next", order: 1, working: true, note: "Drawing the two-pane view and the chips in replies", value: 0.6, ago: 8),
         item(212, "Box limits for every computer", "later", order: 5, working: true, note: "Checking the limits on the Linux machine", ago: 3, owner: "ses_child"),
+        github(item(712, "Upload retries drop the file name", "next", order: 1.5, working: true, note: "Writing the failing test first", ago: 1), number: 12),
         item(244, "A side panel for the phone", "next", order: 2),
+        github(item(714, "Crash when a project folder is renamed", "next", order: 2.5), number: 14),
         item(191, "Bot moves to a machine with its memory", "next", order: 3),
         item(305, "Moved-away conversations say where they went", "next", order: 4),
         item(181, "Sessions started elsewhere show their computer", "next", order: 5),
@@ -45,6 +59,8 @@ struct WorkQueueShots {
     ] + (0..<9).map { item(400 + $0, "Later idea \($0 + 1)", "later", order: Double($0)) }
       + (0..<6).map { item(500 + $0, "Parked idea \($0 + 1)", "parked", order: Double($0)) }
       + (0..<4).map { item(600 + $0, "Shipped \($0 + 1)", "done", order: Double($0)) }
+      + [github(item(709, "Session restore on launch", "done", order: 9), number: 9, state: "completed", keptIn: "next"),
+         github(item(757, "Keep the name on retry", "done", order: 10), number: 57, pull: true, state: "closed", keptIn: "later")]
 
     static var view: WorkQueueView {
         let json: [String: Any] = [
@@ -53,6 +69,15 @@ struct WorkQueueShots {
             "items": items,
             "owners": [["owner": "ses_lead", "kind": "session", "title": "Work Queue panel"], ["owner": "ses_child", "kind": "session", "title": "Box limits", "startedBy": "ses_lead"]],
             "removed": [],
+        ]
+        return try! JSONDecoder().decode(WorkQueueView.self, from: JSONSerialization.data(withJSONObject: json))
+    }
+
+    static var emptyView: WorkQueueView {
+        let json: [String: Any] = [
+            "owner": "ses_lead",
+            "categories": [["id": "next", "name": "Next", "builtIn": true], ["id": "later", "name": "Later", "builtIn": true], ["id": "parked", "name": "Parked", "builtIn": true], ["id": "done", "name": "Done", "builtIn": true]],
+            "items": [], "owners": [["owner": "ses_lead", "kind": "session", "title": "Work Queue panel"]], "removed": [],
         ]
         return try! JSONDecoder().decode(WorkQueueView.self, from: JSONSerialization.data(withJSONObject: json))
     }
@@ -82,16 +107,17 @@ struct WorkQueueShots {
             let look = dark ? "dark" : "light"
             try await panel(width: 380, height: 640, dark: dark, open: false).write(to: URL(fileURLWithPath: out).appending(path: "collapsed-\(look).png"))
             try await panel(width: 760, height: 640, dark: dark, open: true).write(to: URL(fileURLWithPath: out).appending(path: "expanded-\(look).png"))
+            try await panel(width: 380, height: 640, dark: dark, open: false, empty: true).write(to: URL(fileURLWithPath: out).appending(path: "empty-\(look).png"))
             try await chips(dark: dark).write(to: URL(fileURLWithPath: out).appending(path: "chip-in-chat-\(look).png"))
         }
     }
 
-    private func panel(width: CGFloat, height: CGFloat, dark: Bool, open: Bool) async throws -> Data {
+    private func panel(width: CGFloat, height: CGFloat, dark: Bool, open: Bool, empty: Bool = false) async throws -> Data {
         let app = AppModel()
         app.workQueues.app = app
         app.utilities.inView.session = "ses_lead"
         let key = WorkQueues.Key(box: BoxClient.mac, owner: "ses_lead")
-        app.workQueues.standIn(Self.view, for: key, details: [Self.detail])
+        app.workQueues.standIn(empty ? Self.emptyView : Self.view, for: key, details: [Self.detail])
         app.utilities.showWorkQueue()
         if open { app.workQueues.opened[app.utilities.panelKey] = WorkQueues.Opened(box: BoxClient.mac, id: Self.detail.item.id, number: 243) }
         let pane = UtilitiesPane(utilities: app.utilities, directory: nil, model: nil, environment: [:], isExpanded: PaneSwitch(isOn: { open }, set: { _ in }))
@@ -102,13 +128,15 @@ struct WorkQueueShots {
 
     private func chips(dark: Bool) async throws -> Data {
         let app = AppModel()
-        let refs = [243: WorkRef(id: "wqi_1", number: 243, title: "Work Queue: the panel and chat chips", category: "next", inProgress: true, owner: "ses_lead"),
-                    244: WorkRef(id: "wqi_2", number: 244, title: "A side panel for the phone", category: "next", inProgress: false, owner: "ses_lead"),
-                    212: WorkRef(id: "wqi_3", number: 212, title: "Box limits for every computer", category: "done", inProgress: false, owner: "ses_lead")]
-        let reply = "Picked up #243 now; #244 waits on it, and #212 is merged. PR #12 and `#243` stay as written."
+        let refs = ["243": WorkRef(id: "wqi_1", number: 243, title: "Work Queue: the panel and chat chips", category: "next", inProgress: true, owner: "ses_lead"),
+                    "244": WorkRef(id: "wqi_2", number: 244, title: "A side panel for the phone", category: "next", inProgress: false, owner: "ses_lead"),
+                    "212": WorkRef(id: "wqi_3", number: 212, title: "Box limits for every computer", category: "done", inProgress: false, owner: "ses_lead"),
+                    "gh:kuvo/kuvo-ai#12": WorkRef(id: "wqi_4", number: nil, source: WorkSource(kind: "github", ref: "gh:kuvo/kuvo-ai#12", name: "kuvo-ai#12"), seen: WorkSeen(state: "open", at: 1), title: "Upload retries drop the file name", category: "next", inProgress: true, owner: "ses_lead"),
+                    "gh:kuvo/kuvo-ai#57": WorkRef(id: "wqi_5", number: nil, source: WorkSource(kind: "github-pr", ref: "gh:kuvo/kuvo-ai#57", name: "kuvo-ai#57"), seen: WorkSeen(state: "closed", at: 1), struck: true, title: "Keep the name on retry", category: "done", inProgress: false, owner: "ses_lead")]
+        let reply = "Picked up #243 now; #244 waits on it, and #212 is merged. gh:kuvo/kuvo-ai#12 is next; gh:kuvo/kuvo-ai#57 was closed. PR #12 and `#243` stay as written."
         let view = ReplyView(markdown: reply, parser: FileLinkingParser(folders: { [] }, refs: refs))
             .padding(16)
-        return try await picture(view.environment(app), width: 560, height: 110, dark: dark) { true }
+        return try await picture(view.environment(app), width: 560, height: 150, dark: dark) { true }
     }
 
     private func picture(_ content: some View, width: CGFloat, height: CGFloat, dark: Bool, ready: @escaping () -> Bool) async throws -> Data {
