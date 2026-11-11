@@ -324,12 +324,12 @@ final class Catalog {
         return isUnavailable(ref) ? nil : shownModel(ref) ?? defaultModel
     }
 
-    /// A coding agent's model missing from its list while its account is signed in (one its
-    /// program dropped after an update, say): it's sent, and the agent says for itself whether it
-    /// can run it, as `refusal` lets it go.
+    /// A coding agent's model missing from its list while its account is signed in and its program
+    /// installed (one it dropped after an update, say): it's sent, and the agent says for itself
+    /// whether it can run it, as `refusal` lets it go.
     private func goesToItsAgent(_ ref: ModelRef?) -> Bool {
         guard let ref, OutsideAgents.isAgent(ref.providerID), isUnavailable(ref) else { return false }
-        return integrations.contains { $0.id == ref.providerID && $0.isConnected }
+        return integrations.contains { $0.id == ref.providerID && $0.isConnected && $0.metadata?["installed"]?.bool != false }
     }
 
     /// The same, for a chip that offers `scope`'s models: none for one outside them.
