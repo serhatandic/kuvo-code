@@ -11052,6 +11052,33 @@ function heardWindows(info) {
     return [];
   return [{ id: shape.id, used, minutes: shape.minutes, ...resetsAt ? { resetsAt } : {}, ...shape.model ? { model: shape.model } : {} }];
 }
+var CLOSE_TO_LIMIT = 0.9;
+function limitWarning(info) {
+  const limit = warnedLimit(info?.rateLimitType);
+  const stated = [info?.utilization, info?.unifiedWindows?.[info?.rateLimitType]?.utilization].find((value) => typeof value === "number" && Number.isFinite(value));
+  if (stated !== undefined) {
+    const percent = stated < 1 ? Math.min(Math.round(Math.max(stated, 0) * 100), 99) : 100;
+    if (percent === 100)
+      return { text: `You've used all of ${limit}.`, close: true };
+    const close = percent >= CLOSE_TO_LIMIT * 100;
+    return { text: close ? `You're close to ${limit}: ${percent}% used.` : `You've used ${percent}% of ${limit}.`, close };
+  }
+  const passed = typeof info?.surpassedThreshold === "number" ? info.surpassedThreshold : NaN;
+  if (!(passed > 0))
+    return { text: `Claude Code warned about ${limit}.`, close: false };
+  const close = passed >= CLOSE_TO_LIMIT;
+  return { text: close ? `You're close to ${limit}.` : `You've used over ${Math.round(passed * 100)}% of ${limit}.`, close };
+}
+function warnedLimit(type) {
+  if (type === "five_hour")
+    return "your 5-hour Claude limit";
+  if (type === "overage")
+    return "your Claude extra usage limit";
+  const shape = typeof type === "string" ? HEARD[type] : undefined;
+  if (shape?.minutes === 10080)
+    return shape.model ? `your weekly ${shape.model} limit` : "your weekly Claude limit";
+  return "your Claude usage limit";
+}
 var HEARD = {
   five_hour: { id: "five_hour", minutes: 300 },
   seven_day: { id: "seven_day", minutes: 10080 },
@@ -12548,8 +12575,8 @@ ${input.text}` } : input, this.copies());
         if (!active || lane !== active)
           return;
         if (info.status === "allowed_warning") {
-          const used = typeof info.utilization === "number" ? ` (${Math.round(info.utilization * 100)}% used)` : "";
-          this.noticeOnce(`warn:${info.rateLimitType}:${info.surpassedThreshold ?? ""}`, turn, `You're close to ${limitWords2(info.rateLimitType).replace(/^You've reached /, "").replace(/\.$/, "")}${used}.`);
+          const warning = limitWarning(info);
+          this.noticeOnce(`warn:${info.rateLimitType}:${info.surpassedThreshold ?? ""}:${warning.close ? "close" : ""}`, turn, warning.text);
           return;
         }
         if (info.status !== "rejected" || info.overageInUse || info.isUsingOverage)
@@ -13314,6 +13341,8 @@ function limitWords2(type) {
   switch (type) {
     case "five_hour":
       return "You've reached your Claude usage limit for the next few hours.";
+    case "seven_day":
+      return "You've reached your weekly Claude limit.";
     case "seven_day_opus":
       return "You've reached this week's Opus limit on your Claude plan.";
     case "seven_day_sonnet":
@@ -27402,4 +27431,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 9beea9172bee818c04f6216ea2891d5868885fe5e78d36b7b3ab05fd4ff4adb4
+// Built from Packages/Box/src/agents cf80edc39d48c568161f211217dc2d61f9e1313b85251e3609c66c3cd2805d98

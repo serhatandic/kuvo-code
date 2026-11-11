@@ -163,6 +163,27 @@ describe("Claude on a Mac", () => {
     expect(heardWindows({ status: "rejected", rateLimitType: "five_hour" })[0]!.used).toBe(1)
     expect(heardWindows({ status: "allowed" })).toEqual([])
   })
+
+  test("Claude Code's warning of a limit says how much of which one is used, and close only from 90% (#257)", async () => {
+    const { limitWarning } = await import("../../src/agents/agents/claude-limits")
+    const said = (info: any) => limitWarning({ status: "allowed_warning", ...info }).text
+    expect(said({ rateLimitType: "seven_day", utilization: 0.25, surpassedThreshold: 0.25 })).toBe("You've used 25% of your weekly Claude limit.")
+    expect(limitWarning({ rateLimitType: "seven_day", utilization: 0.25 }).close).toBe(false)
+    expect(said({ rateLimitType: "seven_day_opus", utilization: 0.756 })).toBe("You've used 76% of your weekly Opus limit.")
+    expect(said({ rateLimitType: "five_hour", utilization: 0.9 })).toBe("You're close to your 5-hour Claude limit: 90% used.")
+    expect(limitWarning({ rateLimitType: "five_hour", utilization: 0.9 }).close).toBe(true)
+    expect(said({ rateLimitType: "seven_day_sonnet", utilization: 0.996 })).toBe("You're close to your weekly Sonnet limit: 99% used.")
+    expect(said({ rateLimitType: "overage", utilization: 0.95 })).toBe("You're close to your Claude extra usage limit: 95% used.")
+    // All of it, or past it in Claude Code's grace: not "close".
+    expect(said({ rateLimitType: "seven_day", utilization: 1.05 })).toBe("You've used all of your weekly Claude limit.")
+    // The figure from the window's own, where only that says it.
+    expect(said({ rateLimitType: "seven_day", unifiedWindows: { seven_day: { utilization: 0.5 } } })).toBe("You've used 50% of your weekly Claude limit.")
+    // No figure: the threshold it passed, else only that it warned.
+    expect(said({ rateLimitType: "seven_day", surpassedThreshold: 0.5 })).toBe("You've used over 50% of your weekly Claude limit.")
+    expect(said({ rateLimitType: "five_hour", surpassedThreshold: 0.9 })).toBe("You're close to your 5-hour Claude limit.")
+    expect(said({ rateLimitType: "overage", utilization: null })).toBe("Claude Code warned about your Claude extra usage limit.")
+    expect(said({})).toBe("Claude Code warned about your Claude usage limit.")
+  })
 })
 
 describe("Claude on Linux", () => {
