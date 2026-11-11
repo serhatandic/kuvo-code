@@ -1142,6 +1142,13 @@ class HeavyTests(unittest.TestCase):
         none = ("", "", "")
         self.assertEqual(self.cache_seen([HEAVY, "box"])[0], none)
         self.assertEqual(self.cache_seen([HEAVY, "mac-build"], KUVO_XCODE_CACHE="0")[0], none)
+        # Off unless asked for (#562: Xcode 27.2's build service crashes replaying a cached warning),
+        # and a job handed the settings by an older heavy.sh drops them.
+        for kind in ("mac", "mac-build", "phone-build", "phone"):
+            self.assertEqual(self.cache_seen([HEAVY, kind], KUVO_XCODE_CACHE="")[0], none, kind)
+        settings = str(Path(HEAVY).with_name("xcode-cache.xcconfig"))
+        self.assertEqual(self.cache_seen([HEAVY, "mac-build"], KUVO_XCODE_CACHE="", XCODE_XCCONFIG_FILE=settings, KUVO_XCODE_CAS_PATH="/x")[0], none)
+        self.assertEqual(self.cache_seen([HEAVY, "mac-build"], KUVO_XCODE_CACHE="yes")[0], none)
         self.assertEqual(self.cache_seen([HEAVY, "mac-build"], CI="true")[0], none)
         own = os.path.join(self.locks, "own.xcconfig")
         Path(own).write_text("A = B\n")
