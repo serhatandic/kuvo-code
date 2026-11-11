@@ -250,10 +250,18 @@ export async function keptFromSessions(folder: string, policy: FencePolicy = fen
  * logs). */
 function inHomeKept(at: string, policy: FencePolicy): boolean {
   const walls = (policy.homeKept ?? []).filter(wall => inside(at, wall) || holds(at, wall));
-  // (Only what's open again inside those walls, as the sandbox has it.)
+  // (Only what's open again inside those walls, as the sandbox has it; matched as the disk matches
+  // names, never by a wider fold: an exception never widens.)
   const open = [...policy.writable, ...(policy.homeOpen ?? [])].filter(each => walls.some(wall => holds(wall, each)));
-  return walls.length > 0 && !open.some(each => inside(at, each));
+  return walls.length > 0 && !open.some(each => exceptedIn(at, each));
 }
+
+/** Whether `at` is `folder` or in it, as a Mac's disk matches names (composed, by letters' simple
+ * case), never wider: for exceptions to a wall. */
+const exceptedIn = (at: string, folder: string) => {
+  const lowered = (where: string) => (process.platform === "darwin" ? where.normalize("NFC").toLowerCase() : where);
+  return exactly(lowered(at), lowered(folder));
+};
 
 const KUVO = "It reaches Kuvo Code's own folders, which is never allowed.";
 const WRECKS_HOME = "It deletes your home folder, moves it away or locks you out of it, which is never allowed.";
@@ -1229,10 +1237,13 @@ export function walledForOwn(where: string, policy: FencePolicy = fencePolicy(),
 
 /** Whether `at` is in what's kept whole from commands in your home (`homeKept`: ~/Library on a
  * Mac), as the agent's own file tools are kept from it: all of it, the parts the sandbox opens to
- * commands too (its caches, logs, Xcode's `Developer`), but iCloud Drive's projects. */
+ * commands too (its caches, logs, Xcode's `Developer`, other apps' iCloud folders), but iCloud
+ * Drive's own (`Mobile Documents/com~apple~CloudDocs`). */
 function inLibrary(at: string, policy: FencePolicy): boolean {
   if (!(policy.homeKept ?? []).some(wall => inside(at, wall) || holds(at, wall))) return false;
-  return !(policy.homeOpen ?? []).filter(each => /\/Library\/Mobile Documents$/i.test(each)).some(each => inside(at, each));
+  // (iCloud Drive itself, not other apps' folders beside it.)
+  return !(policy.homeOpen ?? []).filter(each => /\/Library\/Mobile Documents$/i.test(each))
+    .some(each => exceptedIn(at, path.join(each, "com~apple~CloudDocs")));
 }
 
 // (Which worktrees a repository has, and where each one's repository is: what Auto counts as a

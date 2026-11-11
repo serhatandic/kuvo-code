@@ -448,13 +448,15 @@ const PATH_KEY = /path|file|dir|folder|destination|save_?as|^(dest|dst|src|sourc
 // Codex's changes), besides those that only read and those that run a command (by their folders).
 const WRITING = new Set(["write", "edit", "multiedit", "patch", "apply_patch", "applypatch", "notebookedit"]);
 
-/** Whether `raw` names what it looks like it names, on any disk: composed (NFC), and folding by
- * case to what it folds to lower-case (a Mac's disk takes `ſ` for `s`, the Kelvin sign for `k`). */
+/** Whether a name is what it looks like, on any disk: composed (NFC), and folding by case to what it
+ * folds to lower-case (a Mac's disk takes `ſ` for `s`, the Kelvin sign for `k`). */
 const plainName = (raw: string) => raw === raw.normalize("NFC") && raw.toUpperCase().toLowerCase() === raw.toLowerCase();
 
 // What no path of its own has in it: control characters and the line and paragraph separators a
 // reader might split on and the engine doesn't (`\r`, U+2028…).
-const UNPLAIN = /[\x00-\x1f\x7f\u0085\u2028\u2029\\]/;
+// (And those a disk may skip as it compares names, as HFS+ does: a joiner in `opencode.j\u200dson`
+// would be `opencode.json` there; a direction mark would make it read otherwise.)
+const UNPLAIN = /[\x00-\x1f\x7f\u0085\u2028\u2029\\]|\p{Default_Ignorable_Code_Point}/u;
 
 /** Where `file` really is, where it's reached plainly from the folder whose real path is `folder`:
  * one of the folders it's named through leads to `folder` itself, and below that no part of it is
@@ -470,6 +472,8 @@ function plainlyIn(file: string, folder: string, asFolder: boolean | null = fals
     let real: string;
     try { real = fs.realpathSync(named); } catch { return null; }
     if (real !== folder) continue;
+    // (Below the place, each name as it looks: the place's own the box found itself.)
+    if (!parts.slice(top).every(plainName)) return null;
     for (let at = top; at < parts.length; at++) {
       let kind: fs.Stats;
       try { kind = fs.lstatSync(parts.slice(0, at + 1).join("/")); }
@@ -605,7 +609,7 @@ async function answerPermission(source: Target, id: string, sessionID: string, s
   // that's other than it looks once composed or cased as a Mac's disk does, `opencode.jſon`.)
   const known = !seen || [WRITING, READING, RUNNING].some(each => each.has(seen.tool.toLowerCase()));
   const ownChanges = known && !unread && !renames && resources.length > 0 && permission.resources.every(each => each.startsWith("/"))
-    && changes.every(each => !each.raw.split("/").includes("..") && !UNPLAIN.test(each.raw) && plainName(each.raw) && plainly(each))
+    && changes.every(each => !each.raw.split("/").includes("..") && !UNPLAIN.test(each.raw) && plainly(each))
     && actions.every(action => action.kind === "file");
   if (ownChanges) {
     await reply({ decision: "once" });

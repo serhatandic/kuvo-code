@@ -671,6 +671,8 @@ test("a place taken back while a review is under way isn't stored again by it (#
 test.skipIf(process.platform !== "darwin")("an agent in Auto never starts a session in ~/Library, nor takes one of its folders for its own, but for the caches commands write there", async () => {
   expect(await reviewer.keptFromSessions(join(homedir(), "Library", "Preferences", "kuvo-test"), policy ??= fencePolicy())).toMatch(/~\/Library/)
   expect(await reviewer.keptFromSessions(join(homedir(), "Library", "Developer", "kuvo-test"), policy)).toBeNull()
+  // (Matched as the disk matches names, never wider: a dotless ı isn't an i there.)
+  expect(await reviewer.keptFromSessions(join(homedir(), "Library", "Mob\u0131le Documents", "com~apple~CloudDocs", "kuvo-test"), policy)).toMatch(/~\/Library/)
   // iCloud Drive, which commands write, is a place for projects like any.
   expect(await reviewer.keptFromSessions(join(homedir(), "Library", "Mobile Documents", "com~apple~CloudDocs", "kuvo-test"), policy)).toBeNull()
 })
