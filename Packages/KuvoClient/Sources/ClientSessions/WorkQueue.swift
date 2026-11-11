@@ -577,9 +577,6 @@ public enum WorkQueue {
         return note
     }
 
-    /// What's being done now (the rows' word until they're redrawn): the agent's note.
-    public static func currentWork(_ item: WorkItem) -> String? { progressNote(item) }
-
     /// The category an item is kept in, by name.
     public static func categoryName(_ id: String, in categories: [WorkCategory]) -> String {
         categories.first { $0.id == id }?.name ?? id.capitalized

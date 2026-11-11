@@ -5,8 +5,9 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 /// The panel's Work Queue: the conversation's items (a lead's with those of the sessions it
-/// oversees), or every item. Narrow, one column: In progress with what's being done, Next numbered,
-/// the other categories as counts that open; an item opens over the list. Wide (as the expanded
+/// oversees; a session's with what it works on that's someone else's, under Working on), or every
+/// item. Narrow, one column: In progress with what's being done, Next in its order, the other
+/// categories as counts that open; an item opens over the list. Wide (as the expanded
 /// panel is), two panes: filter chips over the list, the item open beside it. You reorder (drag,
 /// or Move Up and Down), move between categories, delete and bring back; agents write what items
 /// say, through their tools.
@@ -330,7 +331,7 @@ struct WorkQueuePanel: View {
                             .onDrop(of: [.plainText], delegate: dropping(on: section, index: nil))
                     }
                     ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
-                        row(item, view: view, ordinal: category == "next" ? index + 1 : nil, wide: wide, in: section, at: index, isLast: index == items.count - 1)
+                        row(item, view: view, wide: wide, in: section, at: index, isLast: index == items.count - 1)
                     }
                 } else {
                     overview(view, wide: wide)
@@ -347,11 +348,11 @@ struct WorkQueuePanel: View {
         let sections = WorkQueue.sections(view)
         if let workingOn = sections.first(where: { $0.id == WorkQueue.workingOnID }) {
             sectionHeader(workingOn.name, count: workingOn.items.count, section: workingOn)
-            ForEach(workingOn.items) { item in row(item, view: view, ordinal: nil, wide: wide, in: workingOn, at: 0, isLast: false) }
+            ForEach(workingOn.items) { item in row(item, view: view, wide: wide, in: workingOn, at: 0, isLast: false) }
         }
         if let working = sections.first(where: { $0.id == WorkQueue.inProgressID }), !working.items.isEmpty {
             sectionHeader(working.name, count: working.items.count, section: working)
-            ForEach(working.items) { item in row(item, view: view, ordinal: nil, wide: wide, in: working, at: 0, isLast: false) }
+            ForEach(working.items) { item in row(item, view: view, wide: wide, in: working, at: 0, isLast: false) }
         }
         if let next = sections.first(where: { $0.category == "next" }) {
             let shows = unfolded.contains("next") || isSearching ? next.items.count : Self.nextShown
@@ -365,7 +366,7 @@ struct WorkQueuePanel: View {
             }
             let shown = Array(next.items.prefix(shows))
             ForEach(Array(shown.enumerated()), id: \.element.id) { index, item in
-                row(item, view: view, ordinal: index + 1, wide: wide, in: next, at: index, isLast: index == shown.count - 1)
+                row(item, view: view, wide: wide, in: next, at: index, isLast: index == shown.count - 1)
             }
             if next.items.count > Self.nextShown {
                 Button {
@@ -388,7 +389,7 @@ struct WorkQueuePanel: View {
         ForEach(sections.filter { $0.category != nil && $0.category != "next" && (!$0.items.isEmpty || !$0.id.hasPrefix("cat_")) }) { section in
             folded(section.name, count: section.items.count, id: section.id, section: section, symbol: Self.symbol(of: section.id), wide: wide) {
                 ForEach(Array(section.items.enumerated()), id: \.element.id) { index, item in
-                    row(item, view: view, ordinal: nil, wide: wide, in: section, at: index, isLast: index == section.items.count - 1)
+                    row(item, view: view, wide: wide, in: section, at: index, isLast: index == section.items.count - 1)
                 }
             }
         }
@@ -499,11 +500,12 @@ struct WorkQueuePanel: View {
     /// the row it's over (by which half), into that row's category. (In progress hides which
     /// category an item is kept in: dropping there would move it to one you can't see, so nothing
     /// drops on it; nor on Working on, a lead's items.)
-    private func row(_ item: WorkItem, view: WorkQueueView, ordinal: Int?, wide: Bool, in section: WorkQueue.Section?, at index: Int, isLast: Bool) -> some View {
+    private func row(_ item: WorkItem, view: WorkQueueView, wide: Bool, in section: WorkQueue.Section?, at index: Int, isLast: Bool) -> some View {
         let target = dropTarget
         let id = section?.id ?? ""
-        return WorkItemRow(item: item, ownerName: WorkQueue.ownerName(of: item, in: view), ordinal: ordinal, isSelected: wide && opened?.matches(item) == true,
-                           openSession: item.sessions.first(where: \.working).map { linked in { app.open(.session(linked.session), from: app.tabs.messageTarget) } }) {
+        let session = WorkQueue.sessionToOpen(item).flatMap { app.workspace.session($0.session) == nil ? nil : $0.session }
+        return WorkItemRow(item: item, view: view, isSelected: wide && opened?.matches(item) == true,
+                           openSession: session.map { id in { app.open(.session(id), from: app.tabs.messageTarget) } }) {
             store.opened[panel] = WorkQueues.Opened(box: box, id: item.id, number: item.number)
         }
         .padding(.horizontal, 6)
@@ -514,8 +516,19 @@ struct WorkQueuePanel: View {
         .draggable(item.written ?? item.title)
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { rowHeights[item.id] = $0 }
         .onDrop(of: [.plainText], delegate: dropping(on: section, index: index, item: item.id))
-        .contextMenu { menu(item, view: view) }
+        .contextMenu {
+            // The session first, as #417 opens it: in this conversation's place, or a tab of its own.
+            if let session {
+                Button("Open Session") { app.open(.session(session), from: app.tabs.messageTarget) }
+                Button("Open Session in New Tab") { app.open(.session(session), from: app.tabs.messageTarget, newTab: true) }
+                Divider()
+            }
+            menu(item, view: view)
+        }
         .accessibilityActions {
+            if let session {
+                Button("Open Session") { app.open(.session(session), from: app.tabs.messageTarget) }
+            }
             ForEach(WorkQueue.moveTargets(for: item, in: view.categories)) { category in
                 Button("Move to \(category.name)") { Task { await store.move(item, to: .category(category.id), on: box) } }
             }
@@ -667,108 +680,6 @@ struct PanelNotice: View {
         .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.primary.opacity(0.1)))
         .shadow(color: .black.opacity(0.12), radius: 8, y: 2)
         .transition(.move(edge: .bottom).combined(with: .opacity))
-    }
-}
-
-/// An item in the list. In progress: a working ring, its title, what's being done, then its
-/// number and when it was last updated, and ↗ to its agent's session. Next's are numbered in
-/// their order. Each says whose it is when it isn't the view's own owner's.
-struct WorkItemRow: View {
-    let item: WorkItem
-    /// Whose it is, when it isn't the view's own owner's.
-    let ownerName: String?
-    let ordinal: Int?
-    var isSelected = false
-    /// Opens the session at work on it.
-    var openSession: (() -> Void)?
-    let open: () -> Void
-
-    var body: some View {
-        let working = WorkQueue.isInProgress(item)
-        HStack(alignment: .firstTextBaseline, spacing: 0) {
-            Button(action: open) {
-                HStack(alignment: .firstTextBaseline, spacing: 10) {
-                    if let ordinal {
-                        Text("\(ordinal)")
-                            .font(.system(size: 12).monospacedDigit())
-                            .foregroundStyle(.secondary)
-                            .frame(minWidth: 12, alignment: .leading)
-                    } else if working {
-                        Spinner(size: 12)
-                            .alignmentGuide(.firstTextBaseline) { $0.height * 0.82 }
-                    }
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(item.title)
-                            .font(.system(size: 13.5, weight: working ? .medium : .regular))
-                            .lineLimit(2)
-                            .strikethrough(item.isDone, color: .secondary)
-                            .foregroundStyle(item.isDone ? .secondary : .primary)
-                        if working, let now = WorkQueue.currentWork(item) {
-                            Text(now)
-                                .font(.system(size: 12))
-                                .foregroundStyle(.secondary)
-                                .lineLimit(2)
-                        }
-                        if working, let value = item.progress?.value {
-                            ProgressLine("Progress", fraction: value, layout: .bar)
-                                .frame(maxWidth: 160)
-                                .padding(.vertical, 2)
-                        }
-                        HStack(spacing: 4) {
-                            // An issue's or a pull request's mark, before its name.
-                            if let brand = item.brand { BrandMarkView(brand, size: 11) }
-                            Text(footer(working: working))
-                                .lineLimit(1)
-                        }
-                        .font(.system(size: 11.5).monospacedDigit())
-                        .foregroundStyle(.secondary)
-                    }
-                    Spacer(minLength: 0)
-                }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 7)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .contentShape(.rect)
-            }
-            .buttonStyle(ListRowButtonStyle(isSelected: isSelected))
-            .accessibilityElement(children: .combine)
-            .accessibilityLabel(spoken(working: working))
-            if working, let openSession {
-                Button(action: openSession) {
-                    Label("Open Agent Session", systemImage: "arrow.up.right")
-                }
-                .buttonStyle(IconButtonStyle())
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(.secondary)
-                .help("Open the session at work on it")
-            }
-        }
-    }
-
-    /// What VoiceOver reads for the row.
-    private func spoken(working: Bool) -> String {
-        var parts: [String] = []
-        if let ordinal { parts.append("\(ordinal).") }
-        parts.append(item.spokenName)
-        parts.append(item.title)
-        if working { parts.append("in progress") }
-        if let now = WorkQueue.currentWork(item) { parts.append(now) }
-        if working { parts.append(WorkQueue.updated(item.updated.date)) }
-        if let ownerName { parts.append("in \(ownerName)") }
-        if let computer = WorkQueue.computerName(of: item) { parts.append("on \(computer)") }
-        return parts.filter { !$0.isEmpty }.joined(separator: ", ")
-    }
-
-    /// "#181 · Updated 8m ago · in Sign-in · on lab" ("app#12 · …" for an issue, after GitHub's
-    /// mark): the number, when it's in progress how fresh
-    /// it is, whose it is when it isn't the view's own, and the computer it's on when that's another.
-    private func footer(working: Bool) -> String {
-        var parts = [item.name]
-        if working { parts.append(WorkQueue.updated(item.updated.date)) }
-        if let ownerName { parts.append("in \(ownerName)") }
-        if let computer = WorkQueue.computerName(of: item) { parts.append("on \(computer)") }
-        if let handing = item.handing { parts.append("handing to \(handing.name.isEmpty ? "another computer" : handing.name)") }
-        return parts.joined(separator: " · ")
     }
 }
 

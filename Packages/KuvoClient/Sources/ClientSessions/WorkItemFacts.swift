@@ -124,6 +124,13 @@ public extension WorkQueue {
         session.title.isEmpty ? "Untitled session" : session.title
     }
 
+    /// The session a row's Open Session opens: the one at work, else the first linked; nil for an
+    /// item no session is linked to, or one that's deleted.
+    static func sessionToOpen(_ item: WorkItem) -> WorkItemSession? {
+        guard item.removed == nil else { return nil }
+        return item.sessions.first(where: \.working) ?? item.sessions.first
+    }
+
     // MARK: Activity
 
     /// One line of an item's activity: who did what, when, and a note's words.
@@ -187,6 +194,17 @@ public extension WorkQueue {
         if let computer = computerName(of: item) { parts.append("on \(computer)") }
         if let handing = item.handing { parts.append("handing to \(handing.name.isEmpty ? "another computer" : handing.name)") }
         return parts
+    }
+
+    /// What VoiceOver reads for a row: "Work item 551, Fix the sign-in, in progress, Writing the
+    /// tests, Kuvo Foreman, on lab, updated 12m ago".
+    static func spokenRow(_ item: WorkItem, in view: WorkQueueView, now: Date = .now, calendar: Calendar = .current, locale: Locale = .current) -> String {
+        var parts = [item.spokenName, item.title]
+        if item.isDone { parts.append("done") } else if isInProgress(item) { parts.append("in progress") }
+        if isInProgress(item), let note = progressNote(item) { parts.append(note) }
+        parts += eyebrow(of: item, in: view)
+        parts.append(updated(item.updated.date, now: now, calendar: calendar, locale: locale).lowercased())
+        return parts.filter { !$0.isEmpty }.joined(separator: ", ")
     }
 
     /// A row's time, short: "now", "8m", "3h", "2d", then "Oct 25".

@@ -202,3 +202,118 @@ struct WorkActivityMark: View {
             .foregroundStyle(style)
     }
 }
+
+/// An item in the list, with no columns: an eyebrow (its mark, which turns while a session works on
+/// it, its number, whose it is and the computer it's on when they aren't the view's own, and when
+/// it last changed), its title on up to two lines, and while it's in progress what the agent said
+/// it's doing, with how far. Under the pointer, Open Session takes the time's place on a row with
+/// a session.
+struct WorkItemRow: View {
+    let item: WorkItem
+    let view: WorkQueueView
+    var isSelected = false
+    /// Opens its session (the one at work, else the one linked), where this Mac has it.
+    var openSession: (() -> Void)?
+    /// Shown as under the pointer, for a picture of it.
+    var hovered = false
+    let open: () -> Void
+    @State private var isHovering = false
+
+    var body: some View {
+        let working = WorkQueue.isInProgress(item)
+        let mark = WorkItemMark(category: item.category, inProgress: working, removed: item.removed != nil)
+        let showsOpen = (isHovering || hovered) && openSession != nil
+        Button(action: open) {
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    WorkItemStatusMark(mark, size: 10)
+                    HStack(spacing: 4) {
+                        // An issue's or a pull request's mark, before its name.
+                        if let brand = item.brand { BrandMarkView(brand, size: 11) }
+                        Text(item.name)
+                            .font(.system(size: 11.5, weight: .semibold).monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
+                    ForEach(WorkQueue.eyebrow(of: item, in: view), id: \.self) { part in
+                        Text("· \(part)")
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(.tertiary)
+                            .lineLimit(1)
+                    }
+                    Spacer(minLength: 6)
+                    Text(WorkQueue.shortAgo(item.updated.date))
+                        .font(.system(size: 11).monospacedDigit())
+                        .foregroundStyle(.tertiary)
+                        .opacity(showsOpen ? 0 : 1)
+                }
+                .frame(height: 18)
+                Text(item.title)
+                    .font(.system(size: 13.5, weight: working ? .medium : .regular))
+                    .lineLimit(2)
+                    .strikethrough(item.isDone || item.isStruck, color: .secondary)
+                    .foregroundStyle(item.isDone ? .secondary : .primary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                if working, WorkQueue.progressNote(item) != nil || item.progress?.value != nil {
+                    HStack(spacing: 8) {
+                        if let note = WorkQueue.progressNote(item) {
+                            Text(note)
+                                .font(.system(size: 12))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                        if let value = item.progress?.value {
+                            ProgressLine("Progress", fraction: value, layout: .bar)
+                                .frame(width: 48)
+                        }
+                    }
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 7)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(.rect)
+        }
+        .buttonStyle(ListRowButtonStyle(isSelected: isSelected))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(WorkQueue.spokenRow(item, in: view))
+        .overlay(alignment: .topTrailing) {
+            if showsOpen, let openSession {
+                Button("Open Session", action: openSession)
+                    .buttonStyle(RowOpenSessionButtonStyle())
+                    .padding(.top, 6)
+                    .padding(.trailing, 6)
+                    .help("Open the session on it (⌘-click: in a new tab)")
+                    .accessibilityHidden(true)
+                    .transition(.opacity)
+            }
+        }
+        .onHover { hovering in withAnimation(.easeOut(duration: 0.12)) { isHovering = hovering } }
+    }
+}
+
+/// The row's Open Session, over its time while the pointer is on it: a small tinted capsule in In
+/// progress blue, no icon.
+struct RowOpenSessionButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        Shown(configuration: configuration)
+    }
+
+    private struct Shown: View {
+        let configuration: ButtonStyleConfiguration
+        @State private var isHovering = false
+
+        var body: some View {
+            let blue = WorkItemMark.inProgress.color
+            configuration.label
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(blue)
+                .padding(.horizontal, 8)
+                .frame(height: 19)
+                .background(Capsule().fill(blue.opacity(configuration.isPressed ? 0.26 : isHovering ? 0.2 : 0.14)))
+                .fixedSize()
+                .contentShape(Capsule())
+                .onHover { isHovering = $0 }
+                .clickablePointer()
+        }
+    }
+}

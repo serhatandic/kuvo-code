@@ -127,10 +127,10 @@ import ClientSessions
         #expect(WorkQueue.ownerName(of: items.first { $0.number == 3 }!, in: Self.view) == "Sign-in")
     }
 
-    @Test func currentWorkIsTheAgentsNoteElseWhoIsAtWork() {
+    @Test func whatsBeingDoneIsTheAgentsNoteOnly() {
         let items = Self.view.items
-        #expect(WorkQueue.currentWork(items[0]) == "Wiring the endpoint")
-        #expect(WorkQueue.currentWork(items[1]) == nil)
+        #expect(WorkQueue.progressNote(items[0]) == "Wiring the endpoint")
+        #expect(WorkQueue.progressNote(items[1]) == nil, "never “Sign-in is at work on it”")
     }
 
     // MARK: A session's view, and one item
@@ -212,6 +212,16 @@ import ClientSessions
         let lines = WorkQueue.activity(of: detail, in: view)
         #expect(lines.map { "\($0.whoWords) \($0.what)" } == ["Kuvo Foreman added the item", "You left a note", "Kuvo Foreman handed it to Sign-in", "Sign-in left a note", "Sign-in marked it done"])
         #expect(lines[1].text == "Use the new endpoint.")
+    }
+
+    @Test func aRowOpensTheSessionAtWorkElseTheOneLinkedAndSaysItAll() {
+        let (atWork, idle, own) = (Self.sessionView.items[0], Self.sessionView.items[1], Self.sessionView.items[2])
+        #expect(WorkQueue.sessionToOpen(atWork)?.session == "ses_worker")
+        #expect(WorkQueue.sessionToOpen(idle)?.session == "ses_worker", "linked, not at work: it still opens")
+        #expect(WorkQueue.sessionToOpen(own)?.session == "ses_child")
+        let now = Date(timeIntervalSince1970: 3)
+        #expect(WorkQueue.spokenRow(atWork, in: Self.sessionView, now: now) == "Work item 551, All includes Done, in progress, Box tests pass, Kuvo Foreman, updated just now")
+        #expect(WorkQueue.spokenRow(idle, in: Self.sessionView, now: now) == "Work item 552, Rows and page, Kuvo Foreman, updated just now")
     }
 
     @Test func aRowsTimeIsShort() {
