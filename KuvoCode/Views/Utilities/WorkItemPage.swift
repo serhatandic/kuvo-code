@@ -184,6 +184,7 @@ struct WorkItemPage: View {
                 .buttonStyle(TextButtonStyle(outset: true, dimsAtRest: false))
                 .disabled(!known)
                 .help(known ? "Open the session working on it" : "That session isn’t on this Mac’s list.")
+                .opensInNewTab(known ? .session(session.session) : nil)
             }
         }
     }

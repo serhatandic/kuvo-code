@@ -220,6 +220,44 @@ import Testing
         #expect(tabs.back(of: .session("ses_bot")) == nil)
     }
 
+    /// ⌘-click on an Open (or its menu's Open in New Tab) opens the conversation in a tab of its
+    /// own next to the one in view, with no way back, the one it was opened from staying in its
+    /// tab; a plain click opens it in place. View › Back (⌘[) is there while the tab in view has a
+    /// way back and nothing covers it.
+    @Test func commandClickOpensANewTabAndBackIsInTheMenuWhileThereIsOne() async {
+        defer { done() }
+        await sessions(["ses_bot", "ses_work"])
+        func click(_ flags: NSEvent.ModifierFlags) -> NSEvent? {
+            NSEvent.mouseEvent(with: .leftMouseUp, location: .zero, modifierFlags: flags, timestamp: 0, windowNumber: 0, context: nil, eventNumber: 0, clickCount: 1, pressure: 0)
+        }
+        #expect(AppModel.wantsNewTab(click(.command)))
+        #expect(!AppModel.wantsNewTab(click([])))
+        #expect(!AppModel.wantsNewTab(click(.option)))
+        #expect(!AppModel.wantsNewTab(nil))
+
+        tabs.open(.session("ses_bot"))
+        #expect(!tabs.canGoBack)
+        app.open(.session("ses_work"), from: .session("ses_bot"), newTab: true)
+        #expect(keys == ["ses_bot", "ses_work"], "a tab of its own, next to the bot's")
+        #expect(tabs.selection == .session("ses_work"))
+        #expect(tabs.back(of: .session("ses_work")) == nil)
+        #expect(!tabs.canGoBack)
+
+        tabs.pick(.session("ses_bot"))
+        app.open(.session("ses_work"), from: .session("ses_bot"), newTab: false)
+        #expect(keys == ["ses_work"], "a plain click: in the bot's place")
+        #expect(tabs.canGoBack)
+        tabs.openBotEditor(bot: nil)
+        #expect(!tabs.canGoBack, "not under an editor")
+        tabs.botEditor = nil
+        app.showsSettings = true
+        #expect(!tabs.canGoBack, "nor under Settings")
+        app.showsSettings = false
+        tabs.goBack()
+        #expect(tabs.selection == .session("ses_bot"))
+        #expect(!tabs.canGoBack)
+    }
+
     /// A conversation deleted while one of its subagents shows in its tab (its own subagent's
     /// too): the tab goes with it, rather than showing a subagent of a conversation that's gone.
     @Test func deletingAConversationClosesItsSubagentsTab() async throws {

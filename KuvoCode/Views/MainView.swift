@@ -975,6 +975,8 @@ struct MainView: View {
             panelHasProject: utilities.hasProject,
             canStop: model?.isRunning == true,
             canReopenTab: tabs.canReopenTab,
+            canGoBack: tabs.canGoBack,
+            goBack: tabs.goBack,
             newSession: { tabs.newSession(in: nil) },
             newTerminalTab: { tabs.openTerminalTab(command: nil) },
             openFolder: openFolder,

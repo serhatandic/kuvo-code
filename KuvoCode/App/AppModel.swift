@@ -285,13 +285,22 @@ final class AppModel {
     }
 
     /// A conversation opened from inside `origin`, the one a view is in (`conversationTab`): in its
-    /// place, with the way back to it (`WindowTabs.go`). From no conversation, as from outside.
-    func open(_ key: TabKey, from origin: TabKey?) {
+    /// place, with the way back to it (`WindowTabs.go`). With ⌘ held (`newTab`), or its menu's
+    /// Open in New Tab, in a tab of its own next to the one in view instead, as in Safari and the
+    /// Finder. From no conversation, as from outside.
+    func open(_ key: TabKey, from origin: TabKey?, newTab: Bool = AppModel.wantsNewTab(NSApp.currentEvent)) {
         guard origin != nil else {
             showWindow()
             return openFresh(key)
         }
+        guard !newTab else { return openFresh(key) }
         tabs.go(to: key, from: origin)
+    }
+
+    /// The click (or key) that opens something asks for a tab of its own: ⌘ is held.
+    static func wantsNewTab(_ event: NSEvent?) -> Bool {
+        guard let event, [.leftMouseUp, .leftMouseDown, .keyDown].contains(event.type) else { return false }
+        return event.modifierFlags.contains(.command)
     }
 
     /// From outside the conversations (a notification, the menu bar): no way back.

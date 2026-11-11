@@ -370,6 +370,13 @@ final class WindowTabs {
         return .session(parent)
     }
 
+    /// The tab in view has a way back, and nothing covers it (Settings, an editor): View › Back
+    /// (⌘[) can take it.
+    var canGoBack: Bool {
+        guard !app.showsSettings, botEditor == nil, groupEditor == nil, let selection else { return false }
+        return back(of: selection) != nil
+    }
+
     /// Back, in the tab in view: one step, to where `back` says, with the way back from there.
     func goBack() {
         guard let current = selection, let to = back(of: current) else { return }

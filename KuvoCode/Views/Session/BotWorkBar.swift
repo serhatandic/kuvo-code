@@ -165,6 +165,7 @@ private struct BotWorkRow: View {
             .fixedSize()
             .help("Open its conversation, to watch it and talk to it")
             .accessibilityLabel("Open \(item.title)")
+            .opensInNewTab(.session(item.session))
             .opacity(showsActions ? 1 : 0)
             Button("Stop", systemImage: "stop.circle") { stop() }
                 .buttonStyle(TextButtonStyle())
@@ -276,6 +277,7 @@ struct BotWorkList: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .opensInNewTab(.session(item.session))
                 .clickablePointer()
                 .help("Open this session")
             }

@@ -94,6 +94,7 @@ struct ToolCallView: View {
                     }
                     .buttonStyle(TextButtonStyle(outset: true))
                     .help("Open this session")
+                    .opensInNewTab(.session(started))
                 } else {
                     header.foregroundStyle(.secondary)
                 }

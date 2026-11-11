@@ -31,7 +31,7 @@ struct BackLink: View {
             .truncationMode(.tail)
         }
         .buttonStyle(TextButtonStyle(outset: true))
-        .help(help ?? "Back to \(to)")
+        .help((help ?? "Back to \(to)") + " (⌘[)")
         .accessibilityLabel("Back to \(to)")
     }
 }
@@ -51,6 +51,28 @@ struct BackBar: View {
         .padding(.vertical, 8)
         .overlay(alignment: .bottom) { Divider().opacity(0.5) }
         .preference(key: CardTopIsFixed.self, value: true)
+    }
+}
+
+extension View {
+    /// Its right-click menu's Open in New Tab: `key` in a tab of its own next to the one in view,
+    /// as a ⌘-click on it opens it, rather than in this conversation's place.
+    func opensInNewTab(_ key: TabKey?) -> some View {
+        modifier(OpenInNewTab(key: key))
+    }
+}
+
+private struct OpenInNewTab: ViewModifier {
+    let key: TabKey?
+    @Environment(AppModel.self) private var app
+    @Environment(\.conversationTab) private var here
+
+    func body(content: Content) -> some View {
+        content.contextMenu {
+            if let key {
+                Button("Open in New Tab") { app.open(key, from: here, newTab: true) }
+            }
+        }
     }
 }
 

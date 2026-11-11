@@ -124,6 +124,7 @@ private struct SubagentsBarRow: View {
             // Whole, in a narrow conversation too: the step gives way first.
             .fixedSize()
             .help("Open its conversation, to watch it and talk to it")
+            .opensInNewTab(.session(subagent.id))
             // A coding agent's subagent stops with the conversation it works for.
             if !(model.map { OutsideAgents.isAgentSession($0.session) } ?? false) {
                 Button("Stop") { model?.stop() }

@@ -2050,6 +2050,7 @@ private struct AgentSentRow: View {
         } accessory: {
             if let session = address?.session, app.workspace.session(session) != nil {
                 Button("Open") { app.open(.session(session), from: here) }
+                    .opensInNewTab(.session(session))
                     .buttonStyle(TextButtonStyle(outset: true))
                     .help("Open \(name)'s conversation")
             }
@@ -2225,6 +2226,7 @@ private struct AgentMessageRow: View {
             }
             if app.workspace.session(session) != nil {
                 Button("Open") { app.open(.session(session), from: here) }
+                    .opensInNewTab(.session(session))
                     .buttonStyle(TextButtonStyle(outset: true))
                     .help("Open \(from)'s conversation")
             }
@@ -2261,6 +2263,7 @@ private struct GroupWorkRow: View {
                 .foregroundStyle(.tertiary)
             if app.chats.group(chatID) != nil {
                 Button("Open") { app.open(.group(chatID), from: here) }
+                    .opensInNewTab(.group(chatID))
                     .buttonStyle(TextButtonStyle(outset: true))
                     .help("Open \(chat)")
             }
