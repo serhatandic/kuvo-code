@@ -959,7 +959,7 @@ final class MachineEngine {
             let delay = self?.awayDelay ?? Reach.grace
             let away = await Reach.isAway(grace: delay, isBack: {
                 guard let self else { return true }
-                return isLive || state != .ready || connections != connection
+                return self.isLive || self.state != .ready || self.connections != connection
             }, check: {
                 // Only the engine's own answer counts: a tunnel whose far end is gone still takes
                 // the connection and then fails it, and an engine started again behind it with
