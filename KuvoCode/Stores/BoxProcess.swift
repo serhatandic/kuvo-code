@@ -78,9 +78,17 @@ final class BoxProcess {
     /// it isn't any more (checked again here when the box's own check is over a minute old: the
     /// engine restarts under a box that keeps running).
     func engineConfig(engine: URL, content: String?, environment: [String: String], timeout: TimeInterval = 10) async -> String? {
-        guard !refused, let script = Self.script else { return content }
+        // (A refused box said why as its start was refused.)
+        guard !refused else { return content }
+        guard let script = Self.script else {
+            log.error("This Mac's box added nothing to the engine's settings: its script is missing from the app")
+            return content
+        }
         if checksRuntime, checkedAt.map({ -$0.timeIntervalSinceNow > 60 }) ?? true {
-            guard await Task.detached(operation: { BoxIntegrity.trouble(engine: engine) }).value == nil else { return content }
+            if let trouble = await Task.detached(operation: { BoxIntegrity.trouble(engine: engine) }).value {
+                log.error("This Mac's box added nothing to the engine's settings: \(trouble, privacy: .public)")
+                return content
+            }
             checkedAt = Date()
         }
         let home = Self.home
@@ -101,12 +109,15 @@ final class BoxProcess {
         do {
             result = try await ChildProcess.run(engine.path, ["run", "--config=/dev/null", "--no-env-file", script.path, "engine-config"],
                                                 environment: env, directory: home, errors: .discard, limit: .seconds(timeout))
+        } catch is CancellationError {
+            // The engine's start was called off: nothing went wrong.
+            return content
         } catch {
             log.error("This Mac's box couldn't add to the engine's settings: \(error.localizedDescription, privacy: .public)")
             return content
         }
         guard result.succeeded, let text = String(data: result.output, encoding: .utf8), text.hasPrefix("{"), text.hasSuffix("}") else {
-            let why = result.timedOut ? "no answer within \(timeout) seconds" : result.succeeded ? "its answer isn't settings"
+            let why = result.timedOut ? "no answer within \(timeout.formatted()) seconds" : result.succeeded ? "its answer isn't settings"
                 : result.reason == .uncaughtSignal ? "it was stopped by signal \(result.status)" : "it ended with status \(result.status)"
             log.error("This Mac's box added nothing to the engine's settings: \(why, privacy: .public)")
             return content
