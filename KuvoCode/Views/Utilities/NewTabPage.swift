@@ -39,6 +39,9 @@ struct NewTabPage: View {
                                     replace { utilities.showFiles() }
                                 }
                             }
+                            ToolCard(title: "Work Queue", symbol: "checklist", shortcut: "⌥⌘U") {
+                                replace { utilities.showWorkQueue() }
+                            }
                             ToolCard(title: "Customize…", symbol: "slider.horizontal.3", shortcut: nil) {
                                 app.openSettings(.panel)
                             }
@@ -58,10 +61,10 @@ struct NewTabPage: View {
                                     SiteTile(site: site, icon: utilities.history.icon(for: site)) {
                                         open(site.url.absoluteString)
                                     }
-                                    .contextMenu {
-                                        Button("Open in New Tab") { openInNewTab(site.url.absoluteString) }
-                                        Divider()
-                                        Button("Remove from Suggested") { withAnimation(.ui) { utilities.history.remove(site) } }
+                                    .heldContextMenu {
+                                        HeldRow.button("Open in New Tab") { openInNewTab(site.url.absoluteString) }
+                                        HeldRow.divider
+                                        HeldRow.button("Remove from Suggested") { withAnimation(.ui) { utilities.history.remove(site) } }
                                     }
                                 }
                             }

@@ -1,6 +1,6 @@
 import "./safety"
 import { ownPath } from "../../KuvoLink/Tests/Bridge/test-safety.js"
-import { expect, test } from "bun:test"
+import { expect, setDefaultTimeout, test } from "bun:test"
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs"
 import { createServer, type Server } from "node:net"
 import { tmpdir, userInfo } from "node:os"
@@ -14,6 +14,11 @@ import { canFence, realFence } from "./agents/support/fence"
 // (only read on Linux), but for a project inside one.
 
 const mac = process.platform === "darwin"
+
+// Each test starts Bun for the box's policy and runs commands in a real sandbox, waiting on them:
+// 2 to 4 s on a quiet machine, and over Bun's 5 s when it is busy, where Bun then stops the process
+// being waited on and the test sees nothing. So a busy machine gets as long as the work takes.
+setDefaultTimeout(30_000)
 
 /** The box's policy as it'd be for a home folder of the test's own, its own folder in it, run as the
  * box runs it (in a process of its own, with HOME there). */
@@ -374,7 +379,7 @@ test.skipIf(!canFence)("a conversation's repository is never your home, a person
     rmSync(root, { recursive: true, force: true })
   }
   // (Four fenced runs, each starting a sandbox: longer than a test is given unless it says.)
-}, 30_000)
+})
 
 // Another project's git hooks and settings, and its coding agents', run outside the sandbox when you
 // work there. (Linux's sandbox can't keep these: only the conversation's own.) Tools' caches clone
@@ -396,6 +401,63 @@ test.skipIf(!canFence || !mac)("on a Mac, a command never writes another project
     ].join("\n"))
     expect(outcomes(out)).toEqual({ "another project's hook": "refused", "another project's git settings": "refused", "another project's agent settings": "refused", "another project's files": "allowed",
       "a package checkout in Xcode's cache": "allowed" })
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+// Which worktrees a repository has, and its submodules, are named in `.git/worktrees` and
+// `.git/modules`: moved away or traded for a link, another repository's would pass for its own (Auto
+// counts a project's worktrees as its own, #422), and a worktree's `commondir` could name a copy
+// whose settings run a program as you run git there. On a Mac, neither folder is made, moved or
+// removed by a command; what's in them is git's to write as ever.
+test.skipIf(!canFence || !mac)("on a Mac, a command never moves or replaces its repository's worktrees and modules folders", () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "kuvo-sandbox-walls-trees-")))
+  try {
+    const { home, run } = walled(root)
+    const project = join(home, "app")
+    files(home, { "app/.git/HEAD": "ref: refs/heads/main\n", "app/.git/worktrees/try/HEAD": "x\n", "app/.git/modules/lib/HEAD": "x\n", "other/.git/worktrees/theirs/HEAD": "x\n" })
+    mkdirSync(join(project, ".git", "objects"), { recursive: true })
+    const out = run(project, [
+      tries("moves its worktrees folder", `mv ${project}/.git/worktrees ${project}/.git/wt`),
+      tries("links another's in its place", `rm -rf ${project}/.git/worktrees; ln -s ${home}/other/.git/worktrees ${project}/.git/worktrees`),
+      tries("moves its modules folder", `mv ${project}/.git/modules ${project}/.git/mods`),
+      tries("writes in a worktree's own folder", `echo x > ${project}/.git/worktrees/try/HEAD`),
+    ].join("\n"), { KUVO_FENCE_GIT: join(project, ".git") })
+    expect(outcomes(out)).toEqual({ "moves its worktrees folder": "refused", "links another's in its place": "refused", "moves its modules folder": "refused", "writes in a worktree's own folder": "allowed" })
+    expect(existsSync(join(project, ".git", "worktrees", "try", "HEAD"))).toBe(true)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+// A submodule's repository is any folder below `.git/modules` (by a name with slashes, or one's own
+// `modules`), and a linked worktree's submodules are below its own folder in `.git/worktrees`: none
+// is moved out, nor another moved in with hooks and settings of its own, nor its settings written;
+// what git keeps in each as it fetches and tidies up still comes and goes.
+test.skipIf(!canFence || !mac)("on a Mac, a command never moves a submodule's repository in or out, however it's named, and git still fetches into one", () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "kuvo-sandbox-walls-modules-")))
+  try {
+    const { home, run } = walled(root)
+    const project = join(home, "app")
+    const git = join(project, ".git")
+    files(home, { "app/.git/HEAD": "ref: refs/heads/main\n", "app/.git/modules/vendor/lib/HEAD": "x\n", "app/.git/modules/vendor/lib/objects/info/packs": "\n",
+      "app/.git/modules/a/modules/b/HEAD": "x\n", "app/.git/worktrees/wt/modules/x/config": "[core]\n", "app/fake/hooks/post-checkout": "#!/bin/sh\n" })
+    mkdirSync(join(git, "objects"), { recursive: true })
+    mkdirSync(join(git, "modules", "vendor", "lib", "refs", "heads"), { recursive: true })
+    const out = run(project, [
+      tries("moves a module named with a slash out", `mv ${git}/modules/vendor/lib ${project}/lib-out`),
+      tries("moves a nested module out", `mv ${git}/modules/a/modules/b ${project}/b-out`),
+      tries("moves a folder in as a module", `mv ${project}/fake ${git}/modules/vendor/evil`),
+      tries("moves a folder in at a name git keeps in one", `mv ${project}/fake ${git}/modules/vendor/refs`),
+      tries("writes a worktree's module settings", `echo '[core] fsmonitor = evil' >> ${git}/worktrees/wt/modules/x/config`),
+      tries("fetches objects into a module", `mkdir ${git}/modules/vendor/lib/objects/ab && echo x > ${git}/modules/vendor/lib/objects/ab/cd && rm -r ${git}/modules/vendor/lib/objects/ab`),
+      tries("keeps a module's branch", `mkdir -p ${git}/modules/vendor/lib/refs/heads/feature && echo 0 > ${git}/modules/vendor/lib/refs/heads/feature/x && rm -r ${git}/modules/vendor/lib/refs/heads/feature`),
+    ].join("\n"), { KUVO_FENCE_GIT: git })
+    expect(outcomes(out)).toEqual({ "moves a module named with a slash out": "refused", "moves a nested module out": "refused", "moves a folder in as a module": "refused", "moves a folder in at a name git keeps in one": "refused",
+      "writes a worktree's module settings": "refused", "fetches objects into a module": "allowed", "keeps a module's branch": "allowed" })
+    expect(existsSync(join(git, "modules", "vendor", "evil"))).toBe(false)
+    expect(existsSync(join(git, "modules", "vendor", "refs"))).toBe(false)
   } finally {
     rmSync(root, { recursive: true, force: true })
   }

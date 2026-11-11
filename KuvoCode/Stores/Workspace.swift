@@ -1676,10 +1676,11 @@ final class Workspace {
         return session
     }
 
-    /// An engine session you picked a coding agent's model (or Auto) in: it carries on with the
-    /// agents, in a session of theirs with its conversation (their first agent is handed all of
-    /// it), opened in its place; the engine's goes to Archived, its draft comes along. `opens`:
-    /// with no tab of it, the new one opens (not when a phone moved it). Nil: it isn't there.
+    /// An engine session you picked a coding agent's model (or Auto) in: its box carries it on with
+    /// the agents, in a session of theirs with its conversation (their first agent is handed all of
+    /// it), as a phone's pick does (`carryToAgents`); the new one opens in its place, the engine's
+    /// goes to Archived, its draft comes along. `opens`: with no tab of it, the new one opens. Nil:
+    /// it isn't there.
     @discardableResult
     func moveToAgents(_ id: String, model: ModelRef, opens: Bool = true) async throws -> Session? {
         // Moving to another computer: it goes to the coding agents once it's there.
@@ -1695,16 +1696,17 @@ final class Workspace {
         guard let moved = try await carryToAgents(id, model: model) else { return nil }
         Analytics.shared.track("session_moved_to_agents", Analytics.model(provider: model.providerID, model: model.id))
         // Its tab (or its place beside one) takes the new one, before the old one goes.
-        let swapped = tabs?.swap(from: id, to: moved.id) == true
+        let swapped = tabs?.swap(from: id, to: moved) == true
         // What you wrote goes with it, all of it to the last moment, and isn't also left behind.
-        Drafts.shared[moved.id] = Drafts.shared[id]
+        Drafts.shared[moved] = Drafts.shared[id]
         Drafts.shared.remove(id)
         // One something else keeps (a bot's conversation): it takes the new session, in its place.
         let kept = await onMovedToAgents?(id, moved) == true
         // With no tab of it, it opens as any session does; a bot's that wasn't open stays so.
-        if !swapped, !kept, opens { tabs?.open(.session(moved.id)) }
-        if !kept { await setArchived(id, true, carriedTo: moved.id) }
-        return moved
+        if !swapped, !kept, opens { tabs?.open(.session(moved)) }
+        // Archived by its box, as it's shown here from now on.
+        if !kept, let api = api(forSession: id), let archived = try? await api.session(id) { upsert(archived) }
+        return session(moved)
     }
 
     /// A bot's conversation carried on with the coding agents by its box (the new one), nil for one
@@ -1713,7 +1715,7 @@ final class Workspace {
 
     /// Told when a conversation moved to the coding agents (from, to): true when something else
     /// keeps it, which then takes it over; the app sets it.
-    @ObservationIgnored var onMovedToAgents: ((_ from: String, _ to: Session) async -> Bool)?
+    @ObservationIgnored var onMovedToAgents: ((_ from: String, _ to: String) async -> Bool)?
 
     /// Sessions known to be the agents bridge's before it has told of them (a bot's conversation,
     /// a seat in a group chat): asked there from the start.
@@ -1724,75 +1726,25 @@ final class Workspace {
         bridgeSessions.formUnion(ids)
     }
 
-    /// An engine session's conversation carried on with the agents (see `moveToAgents`), in a
-    /// new session of theirs, with what was waiting; nothing archived or opened (`moveToAgents`
-    /// brings its draft).
-    func carryToAgents(_ id: String, model: ModelRef) async throws -> Session? {
-        guard let session = session(id), let engine = api(forSession: id) else { return nil }
+    /// An engine session's conversation carried on with the coding agents by its box
+    /// (`POST kuvo/sessions/<id>/agents`, PROTOCOL.md), here or on a machine, as a phone's pick has it
+    /// carried: the whole conversation and what was waiting, its wake-ups and Autopilot, and the
+    /// engine's archived, or nothing at all when it can't (its box says why). The new session's id
+    /// (listed here once its bridge says, at once where it can be read); nil: it isn't there.
+    func carryToAgents(_ id: String, model: ModelRef) async throws -> String? {
+        guard let session = session(id) else { return nil }
+        let directory = session.location.directory
+        let escaped = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed.subtracting(CharacterSet(charactersIn: "/"))) ?? id
+        let given = try JSONSerialization.jsonObject(with: JSONEncoder().encode(model))
+        struct Carried: Decodable { var session: String }
+        let carried: Carried = try await onBox(Self.box(of: directory), "POST", "kuvo/sessions/\(escaped)/agents", ["model": given])
         // (On a machine, its own bridge, beside its engine.)
-        let place = agents(forFolder: session.location.directory)
-        guard let bridge = place?.api else { throw OutsideAgents.Failure.notRunning(place?.failure) }
-        // What waits stays waiting (it comes along), rather than starting as the run ends; if the
-        // session can't move after all, it goes on as before.
-        let wasPaused = models[id]?.isQueuePaused ?? true
-        var moving = true
-        defer { if moving, !wasPaused { models[id]?.resumeQueue() } }
-        await models[id]?.holdQueue()
-        // Not partway through a turn.
-        if running.contains(id) {
-            _ = try? await engine.interrupt(session: id)
-            try? await engine.wait(session: id)
+        if let bridge = agents(forFolder: directory)?.api, let moved = try? await bridge.session(carried.session) {
+            upsert(moved)
+        } else {
+            await refreshAgents()
         }
-        // Its whole conversation, page by page (a great many messages at most).
-        var page = try await engine.messages(session: id, limit: 200)
-        var messages = page.data
-        while page.data.count >= 200, messages.count < 20_000, let cursor = page.cursor?.next ?? page.cursor?.previous {
-            page = try await engine.messages(session: id, limit: 200, before: cursor)
-            if page.data.isEmpty { break }
-            messages = page.data + messages
-        }
-        // An undo waiting to be kept: the conversation as it is now, without what it took back
-        // (its files are back already, and its message is in your composer).
-        let current = (try? await engine.session(id)) ?? session
-        if let revert = current.revert, let cut = messages.firstIndex(where: { $0.id == revert.messageID }) {
-            messages = Array(messages[..<cut])
-        }
-        // What you'd sent that was waiting comes along, still waiting (nothing starts there).
-        let waiting = ((try? await engine.inbox(session: id)) ?? []).filter { $0.type == "user" && $0.text != nil }
-        let carried = waiting.map { OpenCodeAPI.WaitingPrompt(id: Identifier.message(), text: $0.text ?? "", files: Self.promptFiles(in: $0.payload)) }
-        let moved = try await bridge.importSession(directory: session.location.directory, title: session.title, agent: session.agent, model: model,
-                                                   permissions: current.permissions, messages: messages, waiting: carried)
-        moving = false
-        // Marked as carried on from this one, whose files its words show: they stay while it does.
-        var metadata = moved.metadata?.object ?? [:]
-        var kuvo = metadata["kuvo"]?.object ?? [:]
-        kuvo["carriedFrom"] = .string(id)
-        metadata["kuvo"] = .object(kuvo)
-        try? await bridge.setMetadata(session: moved.id, .object(metadata))
-        for item in waiting { try? await engine.cancelInbox(session: id, item: item.id) }
-        // As its bridge knows them: a machine's folders are plain paths there.
-        let extra = extraFolders(session.location.directory).map(bridge.enginePath)
-        if !extra.isEmpty {
-            try? await bridge.setInstruction(session: moved.id, key: ProjectFolders.instructionKey, text: ProjectFolders.instructions(primary: bridge.enginePath(session.location.directory), folders: extra))
-        }
-        if let tree = worktrees[session.location.directory] {
-            try? await bridge.setInstruction(session: moved.id, key: Self.worktreeInstructionKey, text: Self.instructions(for: tree))
-        }
-        upsert(moved)
-        await WakeUps.carry(from: session, to: moved)
-        // On Autopilot, it stays so there, its agent told by its box (which brings its calls along).
-        if AutopilotShown.isOn(current) { await self.model(for: moved.id)?.switchAutopilot(true) }
-        return moved
-    }
-
-    /// A waiting message's files as they were sent: on this Mac, or with it (`data:`).
-    private static func promptFiles(in payload: JSONValue) -> [OpenCodeAPI.PromptFile] {
-        (payload["files"]?.array ?? []).compactMap { file in
-            let name = file["name"]?.string
-            if let uri = file["source"]?["uri"]?.string ?? file["uri"]?.string { return .init(uri: uri, name: name) }
-            guard let data = file["data"]?.string else { return nil }
-            return .init(uri: "data:\(file["mime"]?.string ?? "application/octet-stream");base64,\(data)", name: name)
-        }
+        return carried.session
     }
 
     /// A session was deleted: its panel goes with it. The app sets it.
@@ -2458,7 +2410,8 @@ final class Workspace {
         for directory in Set(here.map(\.session.location.directory)) { await readShellJobs(in: directory) }
         for model in models.values {
             if !RemoteFolder.isRemote(model.session.location.directory) { await model.load() }
-            for request in model.permissions { asking[request.id] = request.sessionID }
+            // (Not what Auto's reviewer checks: told once its box leaves it for you.)
+            for request in model.permissions where tellsOnceYours(request) { asking[request.id] = request.sessionID }
             for form in model.forms { note(form, in: model) }
         }
         for (request, session) in before where asking[request] == nil {
@@ -2995,19 +2948,20 @@ final class Workspace {
     private func settled(_ request: String) {
         asking[request] = nil
         awaitingReview[request] = nil
-        Sandboxes.shared.settled(request)
         if notifying.contains(request) { settledWhileNotifying.insert(request) }
         Notifier.shared.clear(request: request)
     }
 
-    /// Whether a permission is yours now; one its box's reviewer may take up is kept until its
-    /// box says (`Sandboxes.awaitReview`), and told then, if it's yours.
+    /// Whether a permission is yours now; one its box's reviewer takes up is kept until its box
+    /// lists it as yours (`Sandboxes.onYours`), and told then.
     private func tellsOnceYours(_ request: PermissionRequest) -> Bool {
-        let box = sessionMachines[request.sessionID] ?? session(request.sessionID).map { Self.box(of: $0.location.directory) } ?? BoxClient.mac
-        guard !Sandboxes.shared.isYours(request, on: box) else { return true }
+        guard !Sandboxes.shared.isYours(request, on: box(of: request)) else { return true }
         awaitingReview[request.id] = request
-        Sandboxes.shared.awaitReview(request, on: box)
         return false
+    }
+
+    private func box(of request: PermissionRequest) -> String {
+        sessionMachines[request.sessionID] ?? session(request.sessionID).map { Self.box(of: $0.location.directory) } ?? BoxClient.mac
     }
 
     /// A permission that's yours: waiting on you, and told.
@@ -3016,10 +2970,14 @@ final class Workspace {
         notifyAsk(request.sessionID, body: Self.describe(request, home: askHome(request.sessionID)), request: request.id, isPermission: true, answerable: Self.showsAll(request), always: alwaysWords(request))
     }
 
-    /// One kept for its box's word turned out to be yours.
-    func reviewLeftForYou(_ id: String) {
-        guard let request = awaitingReview.removeValue(forKey: id) else { return }
-        tellYours(request)
+    /// One kept for its box's word turned out to be yours (nil: each kept, looked at again).
+    func reviewLeftForYou(_ id: String?) {
+        let ids = id.map { [$0] } ?? Array(awaitingReview.keys)
+        for id in ids {
+            guard let request = awaitingReview[id], Sandboxes.shared.isYours(request, on: box(of: request)) else { continue }
+            awaitingReview[id] = nil
+            tellYours(request)
+        }
     }
 
     /// A question in a conversation on Autopilot counts and tells you only if its box says it waits

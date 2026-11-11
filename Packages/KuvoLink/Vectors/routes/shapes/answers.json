@@ -531,7 +531,9 @@
          },
          "held?": "bool",
          "approved?": "number",
-         "used?": "number"
+         "used?": "number",
+         "place?": "string",
+         "revoked?": "number"
         }
        }
       },
@@ -653,7 +655,9 @@
          },
          "held?": "bool",
          "approved?": "number",
-         "used?": "number"
+         "used?": "number",
+         "place?": "string",
+         "revoked?": "number"
         }
        }
       },
@@ -2161,6 +2165,7 @@
          },
          "host": "string",
          "machine?": "string",
+         "box?": "string",
          "session?": "string",
          "asker?": "string",
          "username?": "bool",
@@ -3063,6 +3068,9 @@
             "literal": "git"
            },
            {
+            "literal": "git.changes.count"
+           },
+           {
             "literal": "git.merge"
            },
            {
@@ -3157,6 +3165,9 @@
            },
            {
             "literal": "sessions.agents"
+           },
+           {
+            "literal": "sessions.glance"
            },
            {
             "literal": "shell.stop"
@@ -3255,6 +3266,9 @@
             "literal": "sandbox.asks"
            },
            {
+            "literal": "sandbox.reviews.whole"
+           },
+           {
             "literal": "approval"
            },
            {
@@ -3280,6 +3294,18 @@
            },
            {
             "literal": "limits"
+           },
+           {
+            "literal": "work-queue"
+           },
+           {
+            "literal": "work-queue.elsewhere"
+           },
+           {
+            "literal": "browser"
+           },
+           {
+            "literal": "setup"
            },
            {
             "literal": "accounts.ended"
@@ -3401,6 +3427,9 @@
             "literal": "git"
            },
            {
+            "literal": "git.changes.count"
+           },
+           {
             "literal": "git.merge"
            },
            {
@@ -3495,6 +3524,9 @@
            },
            {
             "literal": "sessions.agents"
+           },
+           {
+            "literal": "sessions.glance"
            },
            {
             "literal": "shell.stop"
@@ -3593,6 +3625,9 @@
             "literal": "sandbox.asks"
            },
            {
+            "literal": "sandbox.reviews.whole"
+           },
+           {
             "literal": "approval"
            },
            {
@@ -3618,6 +3653,18 @@
            },
            {
             "literal": "limits"
+           },
+           {
+            "literal": "work-queue"
+           },
+           {
+            "literal": "work-queue.elsewhere"
+           },
+           {
+            "literal": "browser"
+           },
+           {
+            "literal": "setup"
            }
           ]
          }
@@ -3855,6 +3902,128 @@
    }
   },
   {
+   "route": "GET kuvo/browser",
+   "answers": {
+    "200": {
+     "object": {
+      "state": {
+       "oneOf": [
+        {
+         "literal": "missing"
+        },
+        {
+         "literal": "checking"
+        },
+        {
+         "literal": "downloading"
+        },
+        {
+         "literal": "installing"
+        },
+        {
+         "literal": "ready"
+        },
+        {
+         "literal": "failed"
+        }
+       ]
+      },
+      "chromium": {
+       "oneOf": [
+        "string",
+        "null"
+       ]
+      },
+      "installed": {
+       "oneOf": [
+        "string",
+        "null"
+       ]
+      },
+      "progress": {
+       "oneOf": [
+        "number",
+        "null"
+       ]
+      },
+      "message": {
+       "oneOf": [
+        "string",
+        "null"
+       ]
+      },
+      "retryAt": {
+       "oneOf": [
+        "number",
+        "null"
+       ]
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/browser",
+   "answers": {
+    "202": {
+     "object": {
+      "state": {
+       "oneOf": [
+        {
+         "literal": "missing"
+        },
+        {
+         "literal": "checking"
+        },
+        {
+         "literal": "downloading"
+        },
+        {
+         "literal": "installing"
+        },
+        {
+         "literal": "ready"
+        },
+        {
+         "literal": "failed"
+        }
+       ]
+      },
+      "chromium": {
+       "oneOf": [
+        "string",
+        "null"
+       ]
+      },
+      "installed": {
+       "oneOf": [
+        "string",
+        "null"
+       ]
+      },
+      "progress": {
+       "oneOf": [
+        "number",
+        "null"
+       ]
+      },
+      "message": {
+       "oneOf": [
+        "string",
+        "null"
+       ]
+      },
+      "retryAt": {
+       "oneOf": [
+        "number",
+        "null"
+       ]
+      }
+     }
+    }
+   }
+  },
+  {
    "route": "GET kuvo/file",
    "answers": {
     "200": "bytes"
@@ -3909,6 +4078,268 @@
    "answers": {
     "200": {
      "object": {}
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/setup",
+   "answers": {
+    "200": {
+     "object": {
+      "setup": {
+       "oneOf": [
+        "string",
+        "null"
+       ]
+      },
+      "epoch": {
+       "oneOf": [
+        "number",
+        "null"
+       ]
+      },
+      "primary": {
+       "oneOf": [
+        {
+         "object": {
+          "key": "string",
+          "name": "string",
+          "kind": {
+           "oneOf": [
+            {
+             "literal": "mac"
+            },
+            {
+             "literal": "machine"
+            }
+           ]
+          }
+         }
+        },
+        "null"
+       ]
+      },
+      "you": {
+       "object": {
+        "key": {
+         "oneOf": [
+          "string",
+          "null"
+         ]
+        },
+        "role": {
+         "oneOf": [
+          {
+           "oneOf": [
+            {
+             "literal": "primary"
+            },
+            {
+             "literal": "member"
+            }
+           ]
+          },
+          "null"
+         ]
+        }
+       }
+      },
+      "computers": {
+       "list": {
+        "object": {
+         "key": "string",
+         "name": "string",
+         "kind": {
+          "oneOf": [
+           {
+            "literal": "mac"
+           },
+           {
+            "literal": "machine"
+           }
+          ]
+         },
+         "role": {
+          "oneOf": [
+           {
+            "literal": "primary"
+           },
+           {
+            "literal": "member"
+           }
+          ]
+         },
+         "app": "bool"
+        }
+       }
+      },
+      "conflict?": {
+       "object": {
+        "primary": "string",
+        "epoch": "number"
+       }
+      },
+      "startsFromOthers": {
+       "object": {
+        "value": {
+         "oneOf": [
+          {
+           "oneOf": [
+            {
+             "literal": "on"
+            },
+            {
+             "literal": "off"
+            }
+           ]
+          },
+          "null"
+         ]
+        },
+        "default": {
+         "oneOf": [
+          {
+           "literal": "on"
+          },
+          {
+           "literal": "off"
+          }
+         ]
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/setup/events",
+   "answers": {
+    "200": {
+     "object": {
+      "setup": {
+       "oneOf": [
+        "string",
+        "null"
+       ]
+      },
+      "epoch": {
+       "oneOf": [
+        "number",
+        "null"
+       ]
+      },
+      "primary": {
+       "oneOf": [
+        {
+         "object": {
+          "key": "string",
+          "name": "string",
+          "kind": {
+           "oneOf": [
+            {
+             "literal": "mac"
+            },
+            {
+             "literal": "machine"
+            }
+           ]
+          }
+         }
+        },
+        "null"
+       ]
+      },
+      "you": {
+       "object": {
+        "key": {
+         "oneOf": [
+          "string",
+          "null"
+         ]
+        },
+        "role": {
+         "oneOf": [
+          {
+           "oneOf": [
+            {
+             "literal": "primary"
+            },
+            {
+             "literal": "member"
+            }
+           ]
+          },
+          "null"
+         ]
+        }
+       }
+      },
+      "computers": {
+       "list": {
+        "object": {
+         "key": "string",
+         "name": "string",
+         "kind": {
+          "oneOf": [
+           {
+            "literal": "mac"
+           },
+           {
+            "literal": "machine"
+           }
+          ]
+         },
+         "role": {
+          "oneOf": [
+           {
+            "literal": "primary"
+           },
+           {
+            "literal": "member"
+           }
+          ]
+         },
+         "app": "bool"
+        }
+       }
+      },
+      "conflict?": {
+       "object": {
+        "primary": "string",
+        "epoch": "number"
+       }
+      },
+      "startsFromOthers": {
+       "object": {
+        "value": {
+         "oneOf": [
+          {
+           "oneOf": [
+            {
+             "literal": "on"
+            },
+            {
+             "literal": "off"
+            }
+           ]
+          },
+          "null"
+         ]
+        },
+        "default": {
+         "oneOf": [
+          {
+           "literal": "on"
+          },
+          {
+           "literal": "off"
+          }
+         ]
+        }
+       }
+      }
+     }
     }
    }
   },
@@ -4182,6 +4613,36 @@
         "hashes": {
          "map": "string"
         },
+        "uncommitted": "bool"
+       }
+      }
+     ]
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/git/changes/count",
+   "answers": {
+    "200": {
+     "oneOf": [
+      {
+       "object": {
+        "repository": {
+         "literal": false
+        }
+       }
+      },
+      {
+       "object": {
+        "repository": {
+         "literal": true
+        },
+        "root": "string",
+        "against": "string",
+        "files": "number",
+        "additions": "number",
+        "deletions": "number",
+        "untracked": "number",
         "uncommitted": "bool"
        }
       }
@@ -6930,6 +7391,138 @@
    }
   },
   {
+   "route": "GET kuvo/sessions/glance",
+   "answers": {
+    "200": {
+     "object": {
+      "sessions": {
+       "map": {
+        "object": {
+         "branch?": "string",
+         "additions?": "number",
+         "deletions?": "number",
+         "pull?": {
+          "object": {
+           "number": "number",
+           "url": "string",
+           "state?": {
+            "oneOf": [
+             {
+              "literal": "open"
+             },
+             {
+              "literal": "draft"
+             },
+             {
+              "literal": "merged"
+             },
+             {
+              "literal": "closed"
+             }
+            ]
+           },
+           "additions?": "number",
+           "deletions?": "number",
+           "checks?": {
+            "object": {
+             "passed": "number",
+             "failed": "number",
+             "pending": "number"
+            }
+           }
+          }
+         },
+         "account?": {
+          "object": {
+           "name": "string",
+           "label?": "string"
+          }
+         },
+         "asked?": "number"
+        }
+       }
+      }
+     }
+    },
+    "400": {
+     "object": {
+      "message": "string"
+     }
+    },
+    "503": {
+     "object": {
+      "message": "string"
+     }
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/sessions/glance/events",
+   "answers": {
+    "200": {
+     "object": {
+      "sessions": {
+       "map": {
+        "object": {
+         "branch?": "string",
+         "additions?": "number",
+         "deletions?": "number",
+         "pull?": {
+          "object": {
+           "number": "number",
+           "url": "string",
+           "state?": {
+            "oneOf": [
+             {
+              "literal": "open"
+             },
+             {
+              "literal": "draft"
+             },
+             {
+              "literal": "merged"
+             },
+             {
+              "literal": "closed"
+             }
+            ]
+           },
+           "additions?": "number",
+           "deletions?": "number",
+           "checks?": {
+            "object": {
+             "passed": "number",
+             "failed": "number",
+             "pending": "number"
+            }
+           }
+          }
+         },
+         "account?": {
+          "object": {
+           "name": "string",
+           "label?": "string"
+          }
+         },
+         "asked?": "number"
+        }
+       }
+      }
+     }
+    },
+    "400": {
+     "object": {
+      "message": "string"
+     }
+    },
+    "503": {
+     "object": {
+      "message": "string"
+     }
+    }
+   }
+  },
+  {
    "route": "GET kuvo/sessions/:id/queue",
    "answers": {
     "200": {
@@ -8233,6 +8826,12 @@
           }
          },
          "mode?": "string",
+         "account?": {
+          "object": {
+           "name": "string",
+           "label?": "string"
+          }
+         },
          "state": {
           "oneOf": [
            {
@@ -9757,6 +10356,1880 @@
     "502": {
      "object": {
       "message": "string"
+     }
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/work-queue",
+   "answers": {
+    "200": {
+     "object": {
+      "owner": "string",
+      "categories": {
+       "list": {
+        "object": {
+         "id": "string",
+         "name": "string",
+         "builtIn": "bool"
+        }
+       }
+      },
+      "items": {
+       "list": {
+        "object": {
+         "id": "string",
+         "number?": "number",
+         "wanted?": "number",
+         "owner": "string",
+         "title": "string",
+         "category": "string",
+         "order": "number",
+         "inProgress": "bool",
+         "progress?": {
+          "object": {
+           "value?": "number",
+           "note?": "string"
+          }
+         },
+         "sessions": {
+          "list": {
+           "object": {
+            "session": "string",
+            "title": "string",
+            "working": "bool"
+           }
+          }
+         },
+         "noteCount": "number",
+         "lastNote?": {
+          "object": {
+           "at": "number",
+           "by": {
+            "oneOf": [
+             {
+              "object": {
+               "user": "bool"
+              }
+             },
+             {
+              "object": {
+               "session": "string",
+               "name": "string"
+              }
+             },
+             {
+              "map": "any"
+             }
+            ]
+           },
+           "text": "string"
+          }
+         },
+         "fileCount": "number",
+         "linkCount": "number",
+         "handedBy?": "string",
+         "source?": {
+          "object": {
+           "kind": "string",
+           "ref": "string",
+           "url?": "string",
+           "host?": "string",
+           "id?": "string",
+           "name?": "string"
+          }
+         },
+         "seen?": {
+          "object": {
+           "state": "string",
+           "at": "number",
+           "checked?": "number",
+           "gone?": "bool"
+          }
+         },
+         "keptIn?": "string",
+         "struck?": "bool",
+         "closesOn?": "string",
+         "handing?": {
+          "object": {
+           "to": "string",
+           "name": "string"
+          }
+         },
+         "computer?": {
+          "object": {
+           "key": "string",
+           "name": "string",
+           "kind": {
+            "oneOf": [
+             {
+              "literal": "mac"
+             },
+             {
+              "literal": "machine"
+             }
+            ]
+           },
+           "id?": "string"
+          }
+         },
+         "created": {
+          "object": {
+           "at": "number",
+           "by": {
+            "oneOf": [
+             {
+              "object": {
+               "user": "bool"
+              }
+             },
+             {
+              "object": {
+               "session": "string",
+               "name": "string"
+              }
+             },
+             {
+              "map": "any"
+             }
+            ]
+           }
+          }
+         },
+         "updated": {
+          "object": {
+           "at": "number",
+           "by": {
+            "oneOf": [
+             {
+              "object": {
+               "user": "bool"
+              }
+             },
+             {
+              "object": {
+               "session": "string",
+               "name": "string"
+              }
+             },
+             {
+              "map": "any"
+             }
+            ]
+           }
+          }
+         },
+         "doneAt?": "number",
+         "removed?": {
+          "object": {
+           "at": "number",
+           "by": {
+            "oneOf": [
+             {
+              "object": {
+               "user": "bool"
+              }
+             },
+             {
+              "object": {
+               "session": "string",
+               "name": "string"
+              }
+             },
+             {
+              "map": "any"
+             }
+            ]
+           }
+          }
+         }
+        }
+       }
+      },
+      "owners": {
+       "list": {
+        "object": {
+         "owner": "string",
+         "kind": {
+          "oneOf": [
+           {
+            "literal": "bot"
+           },
+           {
+            "literal": "session"
+           },
+           {
+            "literal": "group"
+           }
+          ]
+         },
+         "title": {
+          "oneOf": [
+           "string",
+           "null"
+          ]
+         },
+         "bot?": {
+          "object": {
+           "id": "string",
+           "name": "string"
+          }
+         },
+         "startedBy?": "string"
+        }
+       }
+      },
+      "removed": {
+       "list": {
+        "object": {
+         "id": "string",
+         "number?": "number",
+         "wanted?": "number",
+         "owner": "string",
+         "title": "string",
+         "category": "string",
+         "order": "number",
+         "inProgress": "bool",
+         "progress?": {
+          "object": {
+           "value?": "number",
+           "note?": "string"
+          }
+         },
+         "sessions": {
+          "list": {
+           "object": {
+            "session": "string",
+            "title": "string",
+            "working": "bool"
+           }
+          }
+         },
+         "noteCount": "number",
+         "lastNote?": {
+          "object": {
+           "at": "number",
+           "by": {
+            "oneOf": [
+             {
+              "object": {
+               "user": "bool"
+              }
+             },
+             {
+              "object": {
+               "session": "string",
+               "name": "string"
+              }
+             },
+             {
+              "map": "any"
+             }
+            ]
+           },
+           "text": "string"
+          }
+         },
+         "fileCount": "number",
+         "linkCount": "number",
+         "handedBy?": "string",
+         "source?": {
+          "object": {
+           "kind": "string",
+           "ref": "string",
+           "url?": "string",
+           "host?": "string",
+           "id?": "string",
+           "name?": "string"
+          }
+         },
+         "seen?": {
+          "object": {
+           "state": "string",
+           "at": "number",
+           "checked?": "number",
+           "gone?": "bool"
+          }
+         },
+         "keptIn?": "string",
+         "struck?": "bool",
+         "closesOn?": "string",
+         "handing?": {
+          "object": {
+           "to": "string",
+           "name": "string"
+          }
+         },
+         "computer?": {
+          "object": {
+           "key": "string",
+           "name": "string",
+           "kind": {
+            "oneOf": [
+             {
+              "literal": "mac"
+             },
+             {
+              "literal": "machine"
+             }
+            ]
+           },
+           "id?": "string"
+          }
+         },
+         "created": {
+          "object": {
+           "at": "number",
+           "by": {
+            "oneOf": [
+             {
+              "object": {
+               "user": "bool"
+              }
+             },
+             {
+              "object": {
+               "session": "string",
+               "name": "string"
+              }
+             },
+             {
+              "map": "any"
+             }
+            ]
+           }
+          }
+         },
+         "updated": {
+          "object": {
+           "at": "number",
+           "by": {
+            "oneOf": [
+             {
+              "object": {
+               "user": "bool"
+              }
+             },
+             {
+              "object": {
+               "session": "string",
+               "name": "string"
+              }
+             },
+             {
+              "map": "any"
+             }
+            ]
+           }
+          }
+         },
+         "doneAt?": "number",
+         "removed?": {
+          "object": {
+           "at": "number",
+           "by": {
+            "oneOf": [
+             {
+              "object": {
+               "user": "bool"
+              }
+             },
+             {
+              "object": {
+               "session": "string",
+               "name": "string"
+              }
+             },
+             {
+              "map": "any"
+             }
+            ]
+           }
+          }
+         }
+        }
+       }
+      },
+      "computers": {
+       "list": {
+        "object": {
+         "key": "string",
+         "name": "string",
+         "kind": {
+          "oneOf": [
+           {
+            "literal": "mac"
+           },
+           {
+            "literal": "machine"
+           }
+          ]
+         },
+         "id?": "string",
+         "at": "number"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/work-queue/events",
+   "answers": {
+    "200": {
+     "object": {
+      "owner": "string",
+      "categories": {
+       "list": {
+        "object": {
+         "id": "string",
+         "name": "string",
+         "builtIn": "bool"
+        }
+       }
+      },
+      "items": {
+       "list": {
+        "object": {
+         "id": "string",
+         "number?": "number",
+         "wanted?": "number",
+         "owner": "string",
+         "title": "string",
+         "category": "string",
+         "order": "number",
+         "inProgress": "bool",
+         "progress?": {
+          "object": {
+           "value?": "number",
+           "note?": "string"
+          }
+         },
+         "sessions": {
+          "list": {
+           "object": {
+            "session": "string",
+            "title": "string",
+            "working": "bool"
+           }
+          }
+         },
+         "noteCount": "number",
+         "lastNote?": {
+          "object": {
+           "at": "number",
+           "by": {
+            "oneOf": [
+             {
+              "object": {
+               "user": "bool"
+              }
+             },
+             {
+              "object": {
+               "session": "string",
+               "name": "string"
+              }
+             },
+             {
+              "map": "any"
+             }
+            ]
+           },
+           "text": "string"
+          }
+         },
+         "fileCount": "number",
+         "linkCount": "number",
+         "handedBy?": "string",
+         "source?": {
+          "object": {
+           "kind": "string",
+           "ref": "string",
+           "url?": "string",
+           "host?": "string",
+           "id?": "string",
+           "name?": "string"
+          }
+         },
+         "seen?": {
+          "object": {
+           "state": "string",
+           "at": "number",
+           "checked?": "number",
+           "gone?": "bool"
+          }
+         },
+         "keptIn?": "string",
+         "struck?": "bool",
+         "closesOn?": "string",
+         "handing?": {
+          "object": {
+           "to": "string",
+           "name": "string"
+          }
+         },
+         "computer?": {
+          "object": {
+           "key": "string",
+           "name": "string",
+           "kind": {
+            "oneOf": [
+             {
+              "literal": "mac"
+             },
+             {
+              "literal": "machine"
+             }
+            ]
+           },
+           "id?": "string"
+          }
+         },
+         "created": {
+          "object": {
+           "at": "number",
+           "by": {
+            "oneOf": [
+             {
+              "object": {
+               "user": "bool"
+              }
+             },
+             {
+              "object": {
+               "session": "string",
+               "name": "string"
+              }
+             },
+             {
+              "map": "any"
+             }
+            ]
+           }
+          }
+         },
+         "updated": {
+          "object": {
+           "at": "number",
+           "by": {
+            "oneOf": [
+             {
+              "object": {
+               "user": "bool"
+              }
+             },
+             {
+              "object": {
+               "session": "string",
+               "name": "string"
+              }
+             },
+             {
+              "map": "any"
+             }
+            ]
+           }
+          }
+         },
+         "doneAt?": "number",
+         "removed?": {
+          "object": {
+           "at": "number",
+           "by": {
+            "oneOf": [
+             {
+              "object": {
+               "user": "bool"
+              }
+             },
+             {
+              "object": {
+               "session": "string",
+               "name": "string"
+              }
+             },
+             {
+              "map": "any"
+             }
+            ]
+           }
+          }
+         }
+        }
+       }
+      },
+      "owners": {
+       "list": {
+        "object": {
+         "owner": "string",
+         "kind": {
+          "oneOf": [
+           {
+            "literal": "bot"
+           },
+           {
+            "literal": "session"
+           },
+           {
+            "literal": "group"
+           }
+          ]
+         },
+         "title": {
+          "oneOf": [
+           "string",
+           "null"
+          ]
+         },
+         "bot?": {
+          "object": {
+           "id": "string",
+           "name": "string"
+          }
+         },
+         "startedBy?": "string"
+        }
+       }
+      },
+      "removed": {
+       "list": {
+        "object": {
+         "id": "string",
+         "number?": "number",
+         "wanted?": "number",
+         "owner": "string",
+         "title": "string",
+         "category": "string",
+         "order": "number",
+         "inProgress": "bool",
+         "progress?": {
+          "object": {
+           "value?": "number",
+           "note?": "string"
+          }
+         },
+         "sessions": {
+          "list": {
+           "object": {
+            "session": "string",
+            "title": "string",
+            "working": "bool"
+           }
+          }
+         },
+         "noteCount": "number",
+         "lastNote?": {
+          "object": {
+           "at": "number",
+           "by": {
+            "oneOf": [
+             {
+              "object": {
+               "user": "bool"
+              }
+             },
+             {
+              "object": {
+               "session": "string",
+               "name": "string"
+              }
+             },
+             {
+              "map": "any"
+             }
+            ]
+           },
+           "text": "string"
+          }
+         },
+         "fileCount": "number",
+         "linkCount": "number",
+         "handedBy?": "string",
+         "source?": {
+          "object": {
+           "kind": "string",
+           "ref": "string",
+           "url?": "string",
+           "host?": "string",
+           "id?": "string",
+           "name?": "string"
+          }
+         },
+         "seen?": {
+          "object": {
+           "state": "string",
+           "at": "number",
+           "checked?": "number",
+           "gone?": "bool"
+          }
+         },
+         "keptIn?": "string",
+         "struck?": "bool",
+         "closesOn?": "string",
+         "handing?": {
+          "object": {
+           "to": "string",
+           "name": "string"
+          }
+         },
+         "computer?": {
+          "object": {
+           "key": "string",
+           "name": "string",
+           "kind": {
+            "oneOf": [
+             {
+              "literal": "mac"
+             },
+             {
+              "literal": "machine"
+             }
+            ]
+           },
+           "id?": "string"
+          }
+         },
+         "created": {
+          "object": {
+           "at": "number",
+           "by": {
+            "oneOf": [
+             {
+              "object": {
+               "user": "bool"
+              }
+             },
+             {
+              "object": {
+               "session": "string",
+               "name": "string"
+              }
+             },
+             {
+              "map": "any"
+             }
+            ]
+           }
+          }
+         },
+         "updated": {
+          "object": {
+           "at": "number",
+           "by": {
+            "oneOf": [
+             {
+              "object": {
+               "user": "bool"
+              }
+             },
+             {
+              "object": {
+               "session": "string",
+               "name": "string"
+              }
+             },
+             {
+              "map": "any"
+             }
+            ]
+           }
+          }
+         },
+         "doneAt?": "number",
+         "removed?": {
+          "object": {
+           "at": "number",
+           "by": {
+            "oneOf": [
+             {
+              "object": {
+               "user": "bool"
+              }
+             },
+             {
+              "object": {
+               "session": "string",
+               "name": "string"
+              }
+             },
+             {
+              "map": "any"
+             }
+            ]
+           }
+          }
+         }
+        }
+       }
+      },
+      "computers": {
+       "list": {
+        "object": {
+         "key": "string",
+         "name": "string",
+         "kind": {
+          "oneOf": [
+           {
+            "literal": "mac"
+           },
+           {
+            "literal": "machine"
+           }
+          ]
+         },
+         "id?": "string",
+         "at": "number"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/work-queue/tools",
+   "answers": {
+    "200": {
+     "object": {
+      "tools": {
+       "list": "any"
+      },
+      "instructions": "string"
+     }
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/work-queue/tools",
+   "answers": {
+    "200": {
+     "object": {
+      "text": "string",
+      "isError": "bool"
+     }
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/work-queue/refs",
+   "answers": {
+    "200": {
+     "object": {
+      "refs": {
+       "map": {
+        "oneOf": [
+         {
+          "object": {
+           "id": "string",
+           "number?": "number",
+           "source?": {
+            "object": {
+             "kind": "string",
+             "ref": "string",
+             "url?": "string",
+             "host?": "string",
+             "id?": "string",
+             "name?": "string"
+            }
+           },
+           "seen?": {
+            "object": {
+             "state": "string",
+             "at": "number",
+             "checked?": "number",
+             "gone?": "bool"
+            }
+           },
+           "struck?": "bool",
+           "closesOn?": "string",
+           "title": "string",
+           "category": "string",
+           "inProgress": "bool",
+           "owner": "string",
+           "removed?": "bool",
+           "computer?": {
+            "object": {
+             "key": "string",
+             "name": "string",
+             "kind": {
+              "oneOf": [
+               {
+                "literal": "mac"
+               },
+               {
+                "literal": "machine"
+               }
+              ]
+             },
+             "id?": "string"
+            }
+           }
+          }
+         },
+         "null"
+        ]
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/work-queue/refs",
+   "answers": {
+    "200": {
+     "object": {
+      "refs": {
+       "map": {
+        "oneOf": [
+         {
+          "object": {
+           "id": "string",
+           "number?": "number",
+           "source?": {
+            "object": {
+             "kind": "string",
+             "ref": "string",
+             "url?": "string",
+             "host?": "string",
+             "id?": "string",
+             "name?": "string"
+            }
+           },
+           "seen?": {
+            "object": {
+             "state": "string",
+             "at": "number",
+             "checked?": "number",
+             "gone?": "bool"
+            }
+           },
+           "struck?": "bool",
+           "closesOn?": "string",
+           "title": "string",
+           "category": "string",
+           "inProgress": "bool",
+           "owner": "string",
+           "removed?": "bool",
+           "computer?": {
+            "object": {
+             "key": "string",
+             "name": "string",
+             "kind": {
+              "oneOf": [
+               {
+                "literal": "mac"
+               },
+               {
+                "literal": "machine"
+               }
+              ]
+             },
+             "id?": "string"
+            }
+           }
+          }
+         },
+         "null"
+        ]
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/work-queue/categories",
+   "answers": {
+    "200": {
+     "object": {
+      "categories": {
+       "list": {
+        "object": {
+         "id": "string",
+         "name": "string",
+         "builtIn": "bool"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/work-queue/categories",
+   "answers": {
+    "200": {
+     "object": {
+      "categories": {
+       "list": {
+        "object": {
+         "id": "string",
+         "name": "string",
+         "builtIn": "bool"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/work-queue/import",
+   "answers": {
+    "200": {
+     "object": {
+      "added": "number",
+      "byCategory": {
+       "map": "number"
+      },
+      "waiting": "number",
+      "skipped": {
+       "list": "string"
+      },
+      "said": "string"
+     }
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/work-queue/items/:item",
+   "answers": {
+    "200": {
+     "object": {
+      "item": {
+       "object": {
+        "id": "string",
+        "number?": "number",
+        "wanted?": "number",
+        "owner": "string",
+        "title": "string",
+        "category": "string",
+        "order": "number",
+        "inProgress": "bool",
+        "progress?": {
+         "object": {
+          "value?": "number",
+          "note?": "string"
+         }
+        },
+        "sessions": {
+         "list": {
+          "object": {
+           "session": "string",
+           "title": "string",
+           "working": "bool"
+          }
+         }
+        },
+        "noteCount": "number",
+        "lastNote?": {
+         "object": {
+          "at": "number",
+          "by": {
+           "oneOf": [
+            {
+             "object": {
+              "user": "bool"
+             }
+            },
+            {
+             "object": {
+              "session": "string",
+              "name": "string"
+             }
+            },
+            {
+             "map": "any"
+            }
+           ]
+          },
+          "text": "string"
+         }
+        },
+        "fileCount": "number",
+        "linkCount": "number",
+        "handedBy?": "string",
+        "source?": {
+         "object": {
+          "kind": "string",
+          "ref": "string",
+          "url?": "string",
+          "host?": "string",
+          "id?": "string",
+          "name?": "string"
+         }
+        },
+        "seen?": {
+         "object": {
+          "state": "string",
+          "at": "number",
+          "checked?": "number",
+          "gone?": "bool"
+         }
+        },
+        "keptIn?": "string",
+        "struck?": "bool",
+        "closesOn?": "string",
+        "handing?": {
+         "object": {
+          "to": "string",
+          "name": "string"
+         }
+        },
+        "computer?": {
+         "object": {
+          "key": "string",
+          "name": "string",
+          "kind": {
+           "oneOf": [
+            {
+             "literal": "mac"
+            },
+            {
+             "literal": "machine"
+            }
+           ]
+          },
+          "id?": "string"
+         }
+        },
+        "created": {
+         "object": {
+          "at": "number",
+          "by": {
+           "oneOf": [
+            {
+             "object": {
+              "user": "bool"
+             }
+            },
+            {
+             "object": {
+              "session": "string",
+              "name": "string"
+             }
+            },
+            {
+             "map": "any"
+            }
+           ]
+          }
+         }
+        },
+        "updated": {
+         "object": {
+          "at": "number",
+          "by": {
+           "oneOf": [
+            {
+             "object": {
+              "user": "bool"
+             }
+            },
+            {
+             "object": {
+              "session": "string",
+              "name": "string"
+             }
+            },
+            {
+             "map": "any"
+            }
+           ]
+          }
+         }
+        },
+        "doneAt?": "number",
+        "removed?": {
+         "object": {
+          "at": "number",
+          "by": {
+           "oneOf": [
+            {
+             "object": {
+              "user": "bool"
+             }
+            },
+            {
+             "object": {
+              "session": "string",
+              "name": "string"
+             }
+            },
+            {
+             "map": "any"
+            }
+           ]
+          }
+         }
+        },
+        "body": "string",
+        "notes": {
+         "list": {
+          "object": {
+           "at": "number",
+           "by": {
+            "oneOf": [
+             {
+              "object": {
+               "user": "bool"
+              }
+             },
+             {
+              "object": {
+               "session": "string",
+               "name": "string"
+              }
+             },
+             {
+              "map": "any"
+             }
+            ]
+           },
+           "text": "string"
+          }
+         }
+        },
+        "files": {
+         "list": {
+          "object": {
+           "name": "string",
+           "size": "number",
+           "type": "string",
+           "at": "number"
+          }
+         }
+        },
+        "links": {
+         "list": {
+          "object": {
+           "url": "string",
+           "title?": "string",
+           "kind?": "string",
+           "ref?": "string"
+          }
+         }
+        },
+        "handed": {
+         "list": {
+          "object": {
+           "from": "string",
+           "to": "string",
+           "at": "number"
+          }
+         }
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/work-queue/items/:item/files/:name",
+   "answers": {
+    "200": "bytes"
+   }
+  },
+  {
+   "route": "POST kuvo/work-queue/items/:item/move",
+   "answers": {
+    "200": {
+     "object": {
+      "item": {
+       "object": {
+        "id": "string",
+        "number?": "number",
+        "wanted?": "number",
+        "owner": "string",
+        "title": "string",
+        "category": "string",
+        "order": "number",
+        "inProgress": "bool",
+        "progress?": {
+         "object": {
+          "value?": "number",
+          "note?": "string"
+         }
+        },
+        "sessions": {
+         "list": {
+          "object": {
+           "session": "string",
+           "title": "string",
+           "working": "bool"
+          }
+         }
+        },
+        "noteCount": "number",
+        "lastNote?": {
+         "object": {
+          "at": "number",
+          "by": {
+           "oneOf": [
+            {
+             "object": {
+              "user": "bool"
+             }
+            },
+            {
+             "object": {
+              "session": "string",
+              "name": "string"
+             }
+            },
+            {
+             "map": "any"
+            }
+           ]
+          },
+          "text": "string"
+         }
+        },
+        "fileCount": "number",
+        "linkCount": "number",
+        "handedBy?": "string",
+        "source?": {
+         "object": {
+          "kind": "string",
+          "ref": "string",
+          "url?": "string",
+          "host?": "string",
+          "id?": "string",
+          "name?": "string"
+         }
+        },
+        "seen?": {
+         "object": {
+          "state": "string",
+          "at": "number",
+          "checked?": "number",
+          "gone?": "bool"
+         }
+        },
+        "keptIn?": "string",
+        "struck?": "bool",
+        "closesOn?": "string",
+        "handing?": {
+         "object": {
+          "to": "string",
+          "name": "string"
+         }
+        },
+        "computer?": {
+         "object": {
+          "key": "string",
+          "name": "string",
+          "kind": {
+           "oneOf": [
+            {
+             "literal": "mac"
+            },
+            {
+             "literal": "machine"
+            }
+           ]
+          },
+          "id?": "string"
+         }
+        },
+        "created": {
+         "object": {
+          "at": "number",
+          "by": {
+           "oneOf": [
+            {
+             "object": {
+              "user": "bool"
+             }
+            },
+            {
+             "object": {
+              "session": "string",
+              "name": "string"
+             }
+            },
+            {
+             "map": "any"
+            }
+           ]
+          }
+         }
+        },
+        "updated": {
+         "object": {
+          "at": "number",
+          "by": {
+           "oneOf": [
+            {
+             "object": {
+              "user": "bool"
+             }
+            },
+            {
+             "object": {
+              "session": "string",
+              "name": "string"
+             }
+            },
+            {
+             "map": "any"
+            }
+           ]
+          }
+         }
+        },
+        "doneAt?": "number",
+        "removed?": {
+         "object": {
+          "at": "number",
+          "by": {
+           "oneOf": [
+            {
+             "object": {
+              "user": "bool"
+             }
+            },
+            {
+             "object": {
+              "session": "string",
+              "name": "string"
+             }
+            },
+            {
+             "map": "any"
+            }
+           ]
+          }
+         }
+        }
+       }
+      }
+     }
+    },
+    "409": {
+     "object": {
+      "message": "string",
+      "computer": {
+       "object": {
+        "key": "string",
+        "name": "string",
+        "kind": {
+         "oneOf": [
+          {
+           "literal": "mac"
+          },
+          {
+           "literal": "machine"
+          }
+         ]
+        },
+        "id?": "string"
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/work-queue/items/:item/restore",
+   "answers": {
+    "200": {
+     "object": {
+      "item": {
+       "object": {
+        "id": "string",
+        "number?": "number",
+        "wanted?": "number",
+        "owner": "string",
+        "title": "string",
+        "category": "string",
+        "order": "number",
+        "inProgress": "bool",
+        "progress?": {
+         "object": {
+          "value?": "number",
+          "note?": "string"
+         }
+        },
+        "sessions": {
+         "list": {
+          "object": {
+           "session": "string",
+           "title": "string",
+           "working": "bool"
+          }
+         }
+        },
+        "noteCount": "number",
+        "lastNote?": {
+         "object": {
+          "at": "number",
+          "by": {
+           "oneOf": [
+            {
+             "object": {
+              "user": "bool"
+             }
+            },
+            {
+             "object": {
+              "session": "string",
+              "name": "string"
+             }
+            },
+            {
+             "map": "any"
+            }
+           ]
+          },
+          "text": "string"
+         }
+        },
+        "fileCount": "number",
+        "linkCount": "number",
+        "handedBy?": "string",
+        "source?": {
+         "object": {
+          "kind": "string",
+          "ref": "string",
+          "url?": "string",
+          "host?": "string",
+          "id?": "string",
+          "name?": "string"
+         }
+        },
+        "seen?": {
+         "object": {
+          "state": "string",
+          "at": "number",
+          "checked?": "number",
+          "gone?": "bool"
+         }
+        },
+        "keptIn?": "string",
+        "struck?": "bool",
+        "closesOn?": "string",
+        "handing?": {
+         "object": {
+          "to": "string",
+          "name": "string"
+         }
+        },
+        "computer?": {
+         "object": {
+          "key": "string",
+          "name": "string",
+          "kind": {
+           "oneOf": [
+            {
+             "literal": "mac"
+            },
+            {
+             "literal": "machine"
+            }
+           ]
+          },
+          "id?": "string"
+         }
+        },
+        "created": {
+         "object": {
+          "at": "number",
+          "by": {
+           "oneOf": [
+            {
+             "object": {
+              "user": "bool"
+             }
+            },
+            {
+             "object": {
+              "session": "string",
+              "name": "string"
+             }
+            },
+            {
+             "map": "any"
+            }
+           ]
+          }
+         }
+        },
+        "updated": {
+         "object": {
+          "at": "number",
+          "by": {
+           "oneOf": [
+            {
+             "object": {
+              "user": "bool"
+             }
+            },
+            {
+             "object": {
+              "session": "string",
+              "name": "string"
+             }
+            },
+            {
+             "map": "any"
+            }
+           ]
+          }
+         }
+        },
+        "doneAt?": "number",
+        "removed?": {
+         "object": {
+          "at": "number",
+          "by": {
+           "oneOf": [
+            {
+             "object": {
+              "user": "bool"
+             }
+            },
+            {
+             "object": {
+              "session": "string",
+              "name": "string"
+             }
+            },
+            {
+             "map": "any"
+            }
+           ]
+          }
+         }
+        }
+       }
+      }
+     }
+    },
+    "409": {
+     "object": {
+      "message": "string",
+      "computer": {
+       "object": {
+        "key": "string",
+        "name": "string",
+        "kind": {
+         "oneOf": [
+          {
+           "literal": "mac"
+          },
+          {
+           "literal": "machine"
+          }
+         ]
+        },
+        "id?": "string"
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "DELETE kuvo/work-queue/items/:item",
+   "answers": {
+    "200": {
+     "object": {
+      "item": {
+       "object": {
+        "id": "string",
+        "number?": "number",
+        "wanted?": "number",
+        "owner": "string",
+        "title": "string",
+        "category": "string",
+        "order": "number",
+        "inProgress": "bool",
+        "progress?": {
+         "object": {
+          "value?": "number",
+          "note?": "string"
+         }
+        },
+        "sessions": {
+         "list": {
+          "object": {
+           "session": "string",
+           "title": "string",
+           "working": "bool"
+          }
+         }
+        },
+        "noteCount": "number",
+        "lastNote?": {
+         "object": {
+          "at": "number",
+          "by": {
+           "oneOf": [
+            {
+             "object": {
+              "user": "bool"
+             }
+            },
+            {
+             "object": {
+              "session": "string",
+              "name": "string"
+             }
+            },
+            {
+             "map": "any"
+            }
+           ]
+          },
+          "text": "string"
+         }
+        },
+        "fileCount": "number",
+        "linkCount": "number",
+        "handedBy?": "string",
+        "source?": {
+         "object": {
+          "kind": "string",
+          "ref": "string",
+          "url?": "string",
+          "host?": "string",
+          "id?": "string",
+          "name?": "string"
+         }
+        },
+        "seen?": {
+         "object": {
+          "state": "string",
+          "at": "number",
+          "checked?": "number",
+          "gone?": "bool"
+         }
+        },
+        "keptIn?": "string",
+        "struck?": "bool",
+        "closesOn?": "string",
+        "handing?": {
+         "object": {
+          "to": "string",
+          "name": "string"
+         }
+        },
+        "computer?": {
+         "object": {
+          "key": "string",
+          "name": "string",
+          "kind": {
+           "oneOf": [
+            {
+             "literal": "mac"
+            },
+            {
+             "literal": "machine"
+            }
+           ]
+          },
+          "id?": "string"
+         }
+        },
+        "created": {
+         "object": {
+          "at": "number",
+          "by": {
+           "oneOf": [
+            {
+             "object": {
+              "user": "bool"
+             }
+            },
+            {
+             "object": {
+              "session": "string",
+              "name": "string"
+             }
+            },
+            {
+             "map": "any"
+            }
+           ]
+          }
+         }
+        },
+        "updated": {
+         "object": {
+          "at": "number",
+          "by": {
+           "oneOf": [
+            {
+             "object": {
+              "user": "bool"
+             }
+            },
+            {
+             "object": {
+              "session": "string",
+              "name": "string"
+             }
+            },
+            {
+             "map": "any"
+            }
+           ]
+          }
+         }
+        },
+        "doneAt?": "number",
+        "removed?": {
+         "object": {
+          "at": "number",
+          "by": {
+           "oneOf": [
+            {
+             "object": {
+              "user": "bool"
+             }
+            },
+            {
+             "object": {
+              "session": "string",
+              "name": "string"
+             }
+            },
+            {
+             "map": "any"
+            }
+           ]
+          }
+         }
+        }
+       }
+      }
+     }
+    },
+    "409": {
+     "object": {
+      "message": "string",
+      "computer": {
+       "object": {
+        "key": "string",
+        "name": "string",
+        "kind": {
+         "oneOf": [
+          {
+           "literal": "mac"
+          },
+          {
+           "literal": "machine"
+          }
+         ]
+        },
+        "id?": "string"
+       }
+      }
      }
     }
    }

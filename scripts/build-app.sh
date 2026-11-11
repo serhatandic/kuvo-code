@@ -22,6 +22,11 @@ APP="build/Kuvo Code.app"
 FEED_URL="${FEED_URL:-https://github.com/serhatandic/kuvo-code/releases/latest/download/appcast.xml}"
 UPDATE_PUBLIC_KEY="uG/YbzL4kf+DAYCiTTfK8ztEOBo96hkEAuKk9rw9BE4="
 
+# With Xcode's compilation cache, one for every checkout (scripts/xcode-cache.sh; not on CI): what
+# another worktree's build compiled isn't compiled again.
+. scripts/xcode-cache.sh
+xcode_cache scripts
+
 # Built unsigned-for-distribution (ad hoc) here and signed below, inside out, so
 # every nested executable gets the same identity, the hardened runtime and a
 # secure timestamp, which notarization requires.

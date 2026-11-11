@@ -58,8 +58,8 @@ const appHost = http.createServer((request, response) => {
         return;
       }
       // A real answer says so, whatever its status (a session that's gone is a real 404).
-      if (given.path === "kuvo/gone") return response.writeHead(404, { "content-type": "application/json", "x-kuvo-answer": "1" }).end(JSON.stringify({ message: "Gone." }));
-      if (given.path === "kuvo/cut") {
+      if (given.path === "kuvo/mac/gone") return response.writeHead(404, { "content-type": "application/json", "x-kuvo-answer": "1" }).end(JSON.stringify({ message: "Gone." }));
+      if (given.path === "kuvo/mac/cut") {
         // An answer cut off halfway (the app quit as it answered).
         response.writeHead(200, { "content-type": "application/json", "x-kuvo-answer": "1" });
         response.write('{"half":');
@@ -255,7 +255,7 @@ test("a phone pairs with Settings › Phone's link, and the Mac's box answers it
   assert.equal((await it.request("GET", "kuvo/sign-in/return")).status, 405);
   assert.equal((await it.request("GET", "kuvo/accounts/credentials")).status, 503, "no engine here to list them");
   assert.equal((await it.request("POST", "kuvo/shell/sh_1/stop")).status, 503, "no engine here to stop it in");
-  // Search, and a project's Changes, as the app sends them here itself (PhoneLink's `boxRoutes`).
+  // Search, and a project's Changes, as the app sends them here itself.
   await it.request("GET", "kuvo/search?q=readme");
   await it.request("GET", `kuvo/git/status?directory=${encodeURIComponent(support)}`);
   // And the engine's API and the coding agents', which it passes on itself (none run in this test).
@@ -297,16 +297,104 @@ test("a phone pairs with Settings › Phone's link, and the Mac's box answers it
   assert.deepEqual(listed.json.phones.map(each => each.key), [it.public]);
 });
 
-test("every area the app sends to this Mac's box, the box answers a phone itself, not through the app (but the link's own routes, the app's alone)", () => {
+test("one list says what the app answers: the app answers those alone and hands its box the rest, and the box answers everything else a phone asks", () => {
   const swift = fs.readFileSync(new URL("../../../../KuvoCode/Stores/PhoneLink.swift", import.meta.url), "utf8");
-  const listed = swift.match(/static let boxRoutes = \[([^\]]*)\]/)[1].match(/"[^"]+"/g).map(JSON.parse);
-  assert.ok(listed.length > 20);
-  assert.deepEqual(listed.filter(route => route !== "kuvo/link" && !link.macAnswers(`${route}/x`)), []);
-  assert.equal(link.macAnswers("kuvo/link/config"), false);
-  // A session's own routes the app moved there too, not its others.
-  assert.ok(link.macAnswers("kuvo/sessions/ses_1/approval"));
-  assert.ok(link.macAnswers("kuvo/sessions/ses_1/queue"));
-  assert.equal(link.macAnswers("kuvo/sessions/ses_1/agents"), false);
+  // The app's own areas, as it keeps them, are the box's list.
+  const appRoutes = swift.match(/static let appRoutes = \[([^\]]*)\]/)[1].match(/"[^"]+"/g).map(JSON.parse);
+  assert.deepEqual([...appRoutes].sort(), [...link.MAC_APP_ROUTES].sort());
+  // Every route the app answers itself (in what it answers a phone's request with) is on it: a
+  // route of the app's own that the box doesn't hand it would never reach it.
+  const code = (from, to) => swift.slice(swift.indexOf(from), swift.indexOf(to, swift.indexOf(from))).split("\n").filter(line => !line.trim().startsWith("//")).join("\n");
+  const answered = [...code("static func respond(to request: LinkRequest", "// MARK: This Mac's box's link").matchAll(/"(kuvo\/[^"\\]+)"/g),
+    ...code("private func answer(_ request: LinkRequest)", "static func message(").matchAll(/"(kuvo\/[^"\\]+)"/g)].map(match => match[1]);
+  assert.ok(answered.length >= 10, JSON.stringify(answered));
+  assert.deepEqual(answered.filter(route => !link.macAppAnswers(route.endsWith("/") ? `${route}x` : route)), []);
+  // And nothing more: everything else is the box's, the link's own and a session's among them.
+  for (const route of ["kuvo/info", "kuvo/link/config", "kuvo/projects", "kuvo/sessions/ses_1/agents", "kuvo/sessions/ses_1/autopilot", "kuvo/personalities", "kuvo/update", "kuvo/sessions/ses_1/branch", "kuvo/machinesx"]) {
+    assert.equal(link.macAppAnswers(route), false, route);
+  }
+});
+
+test("a phone moving a conversation to the coding agents, or reading its Autopilot, is answered by this Mac's box, whether the app answers or not", async () => {
+  const { it } = await paired();
+  const asked = app.asked.length;
+  const codex = { model: { id: "gpt-5.5", providerID: "codex-cli" } };
+  for (const away of [false, true]) {
+    app.away = away;
+    try {
+      // (No engine runs in this test: the box says so, as a machine's does.)
+      const moved = await it.request("POST", "kuvo/sessions/ses_older/agents", codex);
+      assert.deepEqual([moved.status, JSON.parse(moved.body).message], [503, "The engine isn’t running."], away ? "the app away" : "the app there");
+      const autopilot = await it.request("GET", "kuvo/sessions/ses_older/autopilot");
+      assert.deepEqual([autopilot.status, JSON.parse(autopilot.body).message], [503, "The engine isn't running."]);
+    } finally {
+      app.away = false;
+    }
+  }
+  assert.equal(app.asked.length, asked, "none went to the app");
+});
+
+test("a phone asking what this Mac is hears it from its box, the app away too: a Mac, its name and version, and the box's own list of what it answers", async () => {
+  const { it } = await paired();
+  const asked = app.asked.length;
+  for (const away of [false, true]) {
+    app.away = away;
+    try {
+      const info = await it.request("GET", "kuvo/info");
+      assert.equal(info.status, 200, away ? "the app away" : "the app there");
+      const said = JSON.parse(info.body);
+      assert.deepEqual([said.kind, said.name, said.app, said.agents, said.started], ["mac", "Studio Mac", "0.9.0", false, null]);
+      assert.equal(typeof said.engine, "string");
+      assert.equal(typeof said.chats, "string");
+      assert.equal(typeof said.integrations, "object");
+      assert.equal(said.running, undefined, "a machine's alone");
+      assert.deepEqual(said.features, link.macFeatures());
+      for (const feature of ["machines", "hosts", "mac", "claude-code", "usage", "accounts.ended", "autopilot", "sessions.agents", "work.elsewhere"]) assert.ok(said.features.includes(feature), feature);
+      for (const feature of ["update", "engine.start"]) assert.ok(!said.features.includes(feature), `${feature} is a machine's`);
+      // A route no box has is the box's to say so, as a machine's does.
+      const none = await it.request("GET", "kuvo/nothing-here");
+      assert.deepEqual([none.status, JSON.parse(none.body)], [404, {}]);
+    } finally {
+      app.away = false;
+    }
+  }
+  assert.equal(app.asked.length, asked, "none went to the app");
+});
+
+test("what the app last said of the link is kept, never its keys: the box takes it again as it starts, with whether there are machines from their list", async () => {
+  await ready({ phones: false, machines: true, name: "Kept Mac" });
+  assert.deepEqual(JSON.parse(fs.readFileSync(link.MAC_LINK_FILE, "utf8")), { phones: false, relay: relay.url, name: "Kept Mac", app: "0.9.0" });
+  assert.equal((fs.statSync(link.MAC_LINK_FILE).mode & 0o777).toString(8), "600");
+  // Whether there are machines, as their list says now: machines removed since don't bring it back.
+  const list = path.join(process.env.KUVO_HOME, "machines.json");
+  const machines = () => link.savedMacConfig().machines;
+  try {
+    assert.deepEqual(link.savedMacConfig(), { phones: false, machines: false, relay: relay.url, name: "Kept Mac", app: "0.9.0" }, "no list: none");
+    fs.writeFileSync(list, JSON.stringify([{ destination: "lab" }]));
+    assert.equal(machines(), true);
+    fs.writeFileSync(list, "{ not json");
+    assert.equal(machines(), true, "a list that won't read counts, as the app counts it");
+    fs.writeFileSync(list, "[]");
+    assert.equal(machines(), false, "the last one removed");
+  } finally {
+    fs.rmSync(list, { force: true });
+  }
+  // What isn't what it keeps is nothing.
+  const other = path.join(support, "mac-link-other.json");
+  for (const kept of ["{ not json", "{}", JSON.stringify({ phones: true, relay: "https://example.com" }), JSON.stringify({ phones: "yes", relay: relay.url })]) {
+    fs.writeFileSync(other, kept);
+    assert.equal(link.savedMacConfig(other), null, kept);
+  }
+  // An older app also says what it answers: taken, and left, as the box says that itself.
+  assert.equal((await config({ machines: false, features: ["mac"] })).status, 200);
+  assert.deepEqual(JSON.parse(fs.readFileSync(link.MAC_LINK_FILE, "utf8")), { phones: true, relay: relay.url, name: "Studio Mac", app: "0.9.0" }, "the latest word kept");
+});
+
+test("what this Mac's box says it answers holds what its peers check, and a peer keeps it whole", () => {
+  const features = link.macFeatures();
+  for (const checked of ["moves", "moves.agents", "moves.check", "letters-read", "groups.seats", "work.elsewhere"]) assert.ok(features.includes(checked), checked);
+  assert.equal(new Set(features).size, features.length);
+  assert.deepEqual(link.keptFeatures(features), features);
 });
 
 test("a phone asking for a pairing link leaves Settings › Phone's as it is: each lets in once", async () => {
@@ -370,12 +458,12 @@ test("what the app doesn't answer is a 503 at once, and a stream from the app en
 
 test("the app's own answer reaches the phone as it is, a 404 too; an answer cut off ends as cut off, not as whole", async () => {
   const { it } = await paired();
-  const gone = await it.request("GET", "kuvo/gone");
+  const gone = await it.request("GET", "kuvo/mac/gone");
   assert.equal(gone.status, 404);
   assert.deepEqual(JSON.parse(gone.body), { message: "Gone." });
   const usage = await it.request("GET", "kuvo/usage");
   assert.equal(usage.pieces[0].head.h["cache-control"], "no-store");
-  it.send("GET", "kuvo/cut", 9);
+  it.send("GET", "kuvo/mac/cut", 9);
   const pieces = [];
   for (let piece = await it.piece(); piece; piece = await it.piece()) {
     pieces.push(piece);
@@ -416,6 +504,13 @@ test("the app's own notices go out on the box's connection", async () => {
 
 test("the app removes a phone as the Mac; the link's routes are the app's alone", async () => {
   const { it } = await paired();
+  // A paired phone over the relay never reads or changes them.
+  const before = fs.readFileSync(link.MAC_LINK_FILE, "utf8");
+  for (const [method, p, body] of [["GET", "kuvo/link/status"], ["GET", "kuvo/link/phones"], ["GET", "kuvo/link/config"], ["PUT", "kuvo/link/config", { phones: false, machines: false, relay: "https://example.com" }]]) {
+    assert.equal((await it.request(method, p, body)).status, 403, `${method} ${p}`);
+  }
+  assert.equal(fs.readFileSync(link.MAC_LINK_FILE, "utf8"), before, "what's kept is as it was");
+  assert.equal((await ask("GET", "kuvo/link/status")).json.state, "connected");
   assert.ok((await ask("GET", "kuvo/link/phones")).json.phones.some(each => each.key === it.public));
   assert.equal((await ask("POST", "kuvo/phones/remove", { phones: [{ key: it.public }] })).status, 200);
   assert.ok(!(await ask("GET", "kuvo/link/phones")).json.phones.some(each => each.key === it.public));

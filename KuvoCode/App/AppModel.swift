@@ -63,6 +63,9 @@ final class AppModel {
     let bots = Bots()
     /// Bots' and sessions' wake-ups and watches.
     let wakeUps = WakeUps()
+    /// What sessions' rows on screen show beyond the sessions: their pull requests, branches and
+    /// accounts, as their boxes say.
+    let glances = RowGlances()
     /// The sessions bots run, as their boxes tell it.
     let botWork = BotWork()
     /// What bots ask you before they do it (making a project), on every box.
@@ -71,6 +74,7 @@ final class AppModel {
     /// What each box told you lately, shown as this Mac's notifications.
     let boxNotices = BoxNotices()
     let botOversight = BotOversight()
+    let workQueues = WorkQueues()
     /// Voice input, for whichever composer listens.
     let dictation = Dictation()
     // COMPAT(0.7 mac-group-chats): `GroupMigration.run` before the box's group chats start. Goes 3 months after 0.8.0.
@@ -191,8 +195,8 @@ final class AppModel {
 
     /// A conversation carried on with the coding agents (`Workspace.moveToAgents`): its panel goes
     /// with it, its terminals, pages and files as they were. (A bot's is carried by its box.)
-    func movedToAgents(from old: String, to new: Session) async -> Bool {
-        utilities.handOver(from: old, to: new.id)
+    func movedToAgents(from old: String, to new: String) async -> Bool {
+        utilities.handOver(from: old, to: new)
         return false
     }
 
@@ -271,6 +275,42 @@ final class AppModel {
 
     /// Shows the main window, with `request` open in it.
     func open(_ request: Request) {
+        showWindow()
+        switch request {
+        case .folder(let path): tabs.newSession(in: workspace.addFolder(path))
+        case .session(let id): openFresh(TabKey(id))
+        case .newSession: tabs.newSession(in: nil)
+        case .bot(let recipe): tabs.openBotEditor(bot: nil, recipe: recipe)
+        }
+    }
+
+    /// A conversation opened from inside `origin`, the one a view is in (`conversationTab`): in its
+    /// place, with the way back to it (`WindowTabs.go`). With ⌘ held (`newTab`), or its menu's
+    /// Open in New Tab, in a tab of its own next to the one in view instead, as in Safari and the
+    /// Finder. From no conversation, as from outside.
+    func open(_ key: TabKey, from origin: TabKey?, newTab: Bool = AppModel.wantsNewTab(NSApp.currentEvent)) {
+        guard origin != nil else {
+            showWindow()
+            return openFresh(key)
+        }
+        guard !newTab else { return openFresh(key) }
+        tabs.go(to: key, from: origin)
+    }
+
+    /// The click (or key) that opens something asks for a tab of its own: ⌘ is held.
+    static func wantsNewTab(_ event: NSEvent?) -> Bool {
+        guard let event, [.leftMouseUp, .leftMouseDown, .keyDown].contains(event.type) else { return false }
+        return event.modifierFlags.contains(.command)
+    }
+
+    /// From outside the conversations (a notification, the menu bar): no way back.
+    private func openFresh(_ key: TabKey) {
+        tabs.open(key)
+        tabs.startFresh(key)
+    }
+
+    /// The main window in front, unless a demo copy keeps to the background.
+    private func showWindow() {
         #if DEBUG
         // A demo copy launched with KUVO_DEMO_BACKGROUND stays behind, so it never takes the keyboard
         // (opening the window activates the app too).
@@ -281,12 +321,6 @@ final class AppModel {
         if !background {
             openMainWindow?()
             NSApp.activate()
-        }
-        switch request {
-        case .folder(let path): tabs.newSession(in: workspace.addFolder(path))
-        case .session(let id): tabs.open(TabKey(id))
-        case .newSession: tabs.newSession(in: nil)
-        case .bot(let recipe): tabs.openBotEditor(bot: nil, recipe: recipe)
         }
     }
 
@@ -326,6 +360,7 @@ final class AppModel {
         workspace.machineAgents = { [weak self] machine in self?.machines.engine(machine)?.agents }
         bots.app = self
         wakeUps.app = self
+        glances.boxes = { [weak self] id in self?.box(id) }
         botWork.app = self
         botAsks.app = self
         botAsks.onChange = { [weak self] sessions in self?.workspace.askingForWork = sessions }
@@ -333,6 +368,7 @@ final class AppModel {
         Sandboxes.shared.onYours = { [weak self] id in self?.workspace.reviewLeftForYou(id) }
         goalPlans.app = self
         botOversight.app = self
+        workQueues.app = self
         boxNotices.app = self
         workspace.boxTellsNews = { [weak self] box in self?.boxNotices.tells(box) ?? false }
         boxGroups.boxTellsNews = { [weak self] box in self?.boxNotices.tells(box) ?? false }
@@ -387,8 +423,6 @@ final class AppModel {
         // This Mac's link is its box's: the app tells it what's wanted, and answers what it asks.
         phoneLink.box = { [weak self] in self?.box(BoxClient.mac) }
         host.phoneLink = phoneLink
-        phoneLink.isMoving = { [weak self] id in self?.moves.underWay[id] != nil || Moves.isFrozen(id) }
-        phoneLink.engineStarted = { [weak self] in self?.engineStarted }
         phoneLink.restartEngine = { [weak self] in Task { await self?.restart() } }
     }
 
@@ -419,8 +453,6 @@ final class AppModel {
 
     /// The engine this Mac runs (KUVO_OPENCODE_BINARY's, or the one installed), once it has started.
     private(set) var engineBinary: URL?
-    /// When the engine running now came up, for a phone to tell it from the one before a restart.
-    @ObservationIgnored private(set) var engineStarted: Date?
 
     /// A macOS prompt is on screen, like "would like to access files in your Desktop folder":
     /// those come from UserNotificationCenter, whose windows show only while it asks.
@@ -530,7 +562,6 @@ final class AppModel {
             // What this Mac's box and your machines say is moving, from now on.
             Task { await moves.reloadAll() }
             usage.api = api
-            engineStarted = .now
             engine = .ready
             #if DEBUG
             E2E.note(endpoint)
@@ -648,6 +679,8 @@ final class AppModel {
             follower.onGone = { [weak self] in self?.keeperGone() }
             follower.onMakingWay = { [weak self] makingWay in self?.keeperMakesWay = makingWay }
             host.tellsBox = false
+            // Answering again at a new address (its listener failed by itself): the keeper is told.
+            host.restarted = { [weak self] in Task { await self?.tellKeeper() } }
             // The keeper keeps this Mac awake while agents work, so the app holds nothing besides.
             Awake.shared.keeper = { (try? await KeeperControl.send(.status))?["awake"] as? Bool ?? false }
             keeperBox = follower

@@ -21,6 +21,8 @@ final class Utilities {
         case browser
         /// A page of a machine's browser; nil for a new tab that hasn't gone anywhere yet.
         case machinePage(String, String?)
+        /// The Work Queue: the conversation's own items (and its sessions'), or every item.
+        case workQueue
     }
 
     struct Tab: Identifiable, Hashable {
@@ -74,7 +76,8 @@ final class Utilities {
     private(set) var browsers: [UUID: BrowserSession] = [:]
     /// Sites the browser visits, for the new tab page.
     let history = BrowserHistory()
-    /// Goes up when something (the agent's browsing) needs the panel in view.
+    /// Goes up when something (the agent's browsing) needs the panel in view: it's open in the
+    /// conversation in view by then (`setOpen`), and the window makes room for it.
     private(set) var revealRequest = 0
     /// Puts text in the composer of the session in view, for Add to Message on a selection
     /// in a file or a terminal. The window sets it.
@@ -110,6 +113,9 @@ final class Utilities {
         /// It's part of what's in view so the panel hears when that changes, with the session
         /// still in view: its box has just listed it as a bot's, say.
         var panel: String?
+        /// Whose panel the tab's session has, which says whether the panel is open (`openKey`):
+        /// a split's two halves share the tab's, whichever you work in.
+        var tabPanel: String?
     }
 
     var inView = InView() {
@@ -150,6 +156,7 @@ final class Utilities {
     /// were is kept, and the panel shows the one you had here, and what its agent showed you
     /// meanwhile. A bot's tab left behind goes out of view: the one beside it takes its place.
     private func inViewChanged(from old: InView) {
+        openChanged(from: old)
         let oldPanel = panelKey(of: old)
         let movedPlace = inView.place != old.place
         if movedPlace || oldPanel != panelKey {
@@ -184,6 +191,116 @@ final class Utilities {
     @ObservationIgnored private var chosen: [String: UUID] = [:]
 
     private func chosenKey(_ panel: String, _ place: String?) -> String { panel + "|" + (place ?? "") }
+
+    // MARK: Open or closed
+
+    /// Whether each conversation's panel is open (by `openKey`), the one in view last last. Kept
+    /// with the window's tabs for the next launch (`WindowTabs.Saved`), the latest `keptOpen`. A
+    /// draft's stays when its tab closes, as its tabs do, for when it's opened again.
+    private(set) var openPanels: [String: Bool] = [:]
+    private(set) var openOrder: [String] = []
+    /// Whether the panel of the conversation in view is open; one that's never been in view
+    /// starts as the one before it was. With none in view, the one you were in last.
+    private(set) var lastOpen = false
+    static let keptOpen = 300
+    /// Goes up each time the panel's opened or closed, not as you switch conversations: the
+    /// window slides it then, and shows it as it is in the one you switch to at once.
+    private(set) var openTurns = 0
+
+    /// The conversation the panel is open or closed for: the group chat in view, else the tab's
+    /// session (a bot's by its ID, a subagent's by the session that started it; a split's two
+    /// halves by the tab's, so clicking between them leaves the panel as it is), else the
+    /// window's tab in view (a new session's draft, a terminal); "" for none.
+    func openKey(of view: InView) -> String {
+        view.group ?? view.tabPanel ?? view.session.map(panelOf) ?? view.draft ?? ""
+    }
+
+    /// The panel is open in the conversation in `view`: the window's own, which can be ahead of
+    /// the panel's (a tab opened just now). One the panel hasn't been in starts as the one it's
+    /// in; the one it's in, found just now to be another's (a bot's), stays as it is on screen.
+    func isOpen(in view: InView) -> Bool {
+        let key = openKey(of: view), current = openKey(of: inView)
+        if key != current, isRenamed(from: inView, to: view) { return openPanels[current] ?? lastOpen }
+        return openPanels[key] ?? lastOpen
+    }
+
+    /// The same conversation under another name: the tab's session found to be another's (a
+    /// bot's, the session that started it).
+    private func isRenamed(from old: InView, to new: InView) -> Bool {
+        old.group == nil && new.group == nil && old.session != nil && old.session == new.session && panelOf(openKey(of: old)) == openKey(of: new)
+    }
+
+    /// Opens or closes the panel, for the conversation in view only: the window's own `view`, if
+    /// given, which can be ahead of the panel's (a tab opened just now).
+    func setOpen(_ open: Bool, in view: InView? = nil) {
+        let key = openKey(of: view ?? inView)
+        record(open, for: key)
+        if key.isEmpty || key == openKey(of: inView) { lastOpen = open }
+        openTurns += 1
+    }
+
+    /// Opens the panel of the conversation in view, for what needs it there.
+    private func requestReveal() {
+        setOpen(true)
+        revealRequest += 1
+    }
+
+    private func record(_ open: Bool, for key: String) {
+        guard !key.isEmpty else { return }
+        openPanels[key] = open
+        openOrder.removeAll { $0 == key }
+        openOrder.append(key)
+        guard openOrder.count > Self.keptOpen else { return }
+        for gone in openOrder.prefix(openOrder.count - Self.keptOpen) { openPanels[gone] = nil }
+        openOrder.removeFirst(openOrder.count - Self.keptOpen)
+    }
+
+    private func forget(_ key: String) {
+        openPanels[key] = nil
+        openOrder.removeAll { $0 == key }
+    }
+
+    /// Another conversation in view: its panel as you left it there, or, never in view before,
+    /// as it was in the one you were in. The same conversation under another name (found to be a
+    /// bot's) stays as it is on screen.
+    private func openChanged(from old: InView) {
+        let from = openKey(of: old), to = openKey(of: inView)
+        guard from != to, !to.isEmpty else { return }
+        let renamed = isRenamed(from: old, to: inView)
+        if renamed { forget(from) }
+        let open = renamed ? lastOpen : openPanels[to] ?? lastOpen
+        record(open, for: to)
+        lastOpen = open
+    }
+
+    /// A conversation's open or closed under another name, unless it has its own there.
+    private func moveOpen(from: String, to: String) {
+        guard let open = openPanels[from] else { return }
+        forget(from)
+        if openPanels[to] == nil { record(open, for: to) }
+    }
+
+    /// Puts back what the window kept (the latest last) and whether the panel of the conversation
+    /// in view then was open, which one not kept (a version before kept only that) starts as.
+    /// Opened already this launch, it stays open. `view` is the window's, restored.
+    func restoreOpen(_ kept: [(key: String, open: Bool)], last: Bool, in view: InView) {
+        let opened = openOrder.filter { openPanels[$0] == true }
+        openPanels = [:]
+        openOrder = []
+        for panel in kept { record(panel.open, for: panel.key) }
+        for key in opened { record(true, for: key) }
+        if last { lastOpen = true }
+        let key = openKey(of: view)
+        guard !key.isEmpty else { return }
+        let open = openPanels[key] ?? lastOpen
+        record(open, for: key)
+        lastOpen = open
+    }
+
+    /// What `restoreOpen` takes back, the latest last.
+    var keptPanels: [(key: String, open: Bool)] {
+        openOrder.compactMap { key in openPanels[key].map { (key, $0) } }
+    }
 
     /// The tabs in the strip: every tool's, and the browser tabs of the place in view.
     var visibleTabs: [Tab] { tabs.filter(isVisible) }
@@ -246,6 +363,30 @@ final class Utilities {
             add(Tab(kind: .changes, owner: panelKey), at: tabs.firstIndex { isVisible($0) } ?? 0)
         }
     }
+
+    /// Shows the Work Queue tab, opening it if it isn't open: beside Changes, Files and Terminal.
+    func showWorkQueue() {
+        Analytics.shared.track("panel_opened", ["tool": "work-queue"])
+        if let tab = visibleTabs.first(where: { $0.kind == .workQueue }) {
+            selection = tab.id
+        } else {
+            add(Tab(kind: .workQueue, owner: panelKey))
+        }
+    }
+
+    /// Whose Work Queue the panel in view shows: the group chat's (`grp_…`), else the session you
+    /// work in's conversation (a subagent's is the session that started it); nil for a panel
+    /// that's no conversation's (a new session's draft, a terminal).
+    var queueOwner: String? {
+        if let group = inView.group { return BotGroups.groupID(fromTab: group) ?? group }
+        guard let session = workingSession else { return nil }
+        let shown = shownIn(session)
+        return shown.hasPrefix("ses_") ? shown : session
+    }
+
+    /// The box the panel's Work Queue is on: the machine the session you work in runs on, else
+    /// this Mac's.
+    var queueBox: String { place ?? BoxClient.mac }
 
     func newTerminal(in directory: String?, environment: [String: String]) {
         Analytics.shared.track("panel_opened", ["tool": "terminal"])
@@ -351,7 +492,7 @@ final class Utilities {
         }
         // Only where the panel in view shows it: not another conversation's, on a tab that has
         // nothing to do with the page.
-        if let shown = tabs.last(where: { $0.owner == bot }), isVisible(shown) { revealRequest += 1 }
+        if let shown = tabs.last(where: { $0.owner == bot }), isVisible(shown) { requestReveal() }
     }
 
     /// Where Open sent a bot's tab, for before its page has loaded.
@@ -445,7 +586,7 @@ final class Utilities {
         if visibleTabs.isEmpty { startOver() }
         if place == machine, isVisible(tab), session.map(isInView) ?? true {
             selection = tab.id
-            if PanelSettings.isOn(PanelSettings.revealsForAgent) { revealRequest += 1 }
+            if PanelSettings.isOn(PanelSettings.revealsForAgent) { requestReveal() }
         } else {
             chosen[chosenKey(tab.owner, machine)] = tab.id
         }
@@ -466,7 +607,7 @@ final class Utilities {
         }
         pendingReveal = nil
         selection = tab.id
-        if PanelSettings.isOn(PanelSettings.revealsForAgent) { revealRequest += 1 }
+        if PanelSettings.isOn(PanelSettings.revealsForAgent) { requestReveal() }
     }
 
     /// An agent on a machine that started browsing before its page had a tab here.
@@ -487,7 +628,7 @@ final class Utilities {
         } else if let browser = inView.bots.lazy.compactMap(botBrowser).first ?? activeBrowser, let id = id(of: browser) {
             selection = id
         }
-        revealRequest += 1
+        requestReveal()
     }
 
     /// Closes a machine's tabs: the machine was removed or disconnected.
@@ -555,13 +696,13 @@ final class Utilities {
     /// Opens a file in a tab and brings the panel into view: you asked to see it.
     func revealFile(_ url: URL) {
         open(url)
-        revealRequest += 1
+        requestReveal()
     }
 
     /// Shows the Changes tab and brings the panel into view: you asked to see it.
     func revealChanges() {
         showChanges()
-        revealRequest += 1
+        requestReveal()
     }
 
     /// Where the file tree should open down to (and show): what an agent showed you, until the
@@ -605,12 +746,18 @@ final class Utilities {
             add(fileTab(url))
         }
         treeReveal = url
-        revealRequest += 1
+        requestReveal()
     }
 
-    /// What was kept for the panel now in view, unless it's gone since.
+    /// What was kept for the panel now in view, unless it's gone since: kept under a session's own
+    /// name too, before it was known to be another's (a bot's, the session that started it).
     private func showKept() {
-        guard let shown = kept.removeValue(forKey: panelKey) else { return }
+        let key = panelKey
+        let renamed = kept.keys.filter { $0 != key && panelOf($0) == key }
+        for name in renamed {
+            if let shown = kept.removeValue(forKey: name), kept[key] == nil { kept[key] = shown }
+        }
+        guard let shown = kept.removeValue(forKey: key) else { return }
         if shown.url.isFileURL, !FileManager.default.fileExists(atPath: shown.url.path) { return }
         show(shown.url, isFolder: shown.isFolder)
     }
@@ -618,7 +765,7 @@ final class Utilities {
     /// Opens `url` in a file tab and brings the panel into view: you asked to see it.
     func show(_ url: URL) {
         open(url)
-        revealRequest += 1
+        requestReveal()
     }
 
     /// Brings the panel into view, on `browser`'s tab if given.
@@ -629,7 +776,7 @@ final class Utilities {
             guard let tab = tabs.first(where: { $0.id == id }), isVisible(tab), !holdsSelection || id == selection else { return }
             selection = id
         }
-        if PanelSettings.isOn(PanelSettings.revealsForAgent) { revealRequest += 1 }
+        if PanelSettings.isOn(PanelSettings.revealsForAgent) { requestReveal() }
     }
 
     /// The tab `browser` is in, while it's open.
@@ -802,6 +949,7 @@ final class Utilities {
         for index in tabs.indices where tabs[index].owner == draft { tabs[index].owner = panel }
         if let tab = chosen.removeValue(forKey: chosenKey(draft, place)) { chosen[chosenKey(panel, place)] = tab }
         moveRuns(from: draft, to: panel)
+        moveOpen(from: draft, to: panel)
     }
 
     /// A conversation that carries on in another (moved to the coding agents): its panel's tabs,
@@ -814,11 +962,11 @@ final class Utilities {
         if let picked = picks.removeValue(forKey: old) { picks[new] = picked }
     }
 
-    /// A panel under another name: its tabs, the one you'd chosen there, its run terminals and
-    /// what an agent showed you meanwhile.
+    /// A panel under another name: its tabs, the one you'd chosen there, its run terminals, what
+    /// an agent showed you meanwhile, and whether it's open (unless it has its own there).
     private func movePanel(from: String, to: String) {
-        // A panel has one Changes tab and one file tree.
-        for tab in tabs where tab.owner == from && (tab.kind == .changes || tab.kind == .file(nil)) && tabs.contains(where: { $0.owner == to && $0.kind == tab.kind }) {
+        // A panel has one Changes tab, one file tree and one Work Queue.
+        for tab in tabs where tab.owner == from && (tab.kind == .changes || tab.kind == .file(nil) || tab.kind == .workQueue) && tabs.contains(where: { $0.owner == to && $0.kind == tab.kind }) {
             remove(tab.id, refills: false)
         }
         for index in tabs.indices where tabs[index].owner == from { tabs[index].owner = to }
@@ -828,6 +976,7 @@ final class Utilities {
         }
         moveRuns(from: from, to: to)
         if let file = kept.removeValue(forKey: from) { kept[to] = file }
+        moveOpen(from: from, to: to)
     }
 
     /// A panel's run terminals go with its tabs, so Run again restarts the same one.
@@ -846,6 +995,7 @@ final class Utilities {
         chosen = chosen.filter { !$0.key.hasPrefix(owner + "|") }
         runs = runs.filter { !$0.key.hasPrefix(owner + "|") }
         kept[owner] = nil
+        if !refills { forget(owner) }
         if refills, visibleTabs.isEmpty { startOver() }
     }
 

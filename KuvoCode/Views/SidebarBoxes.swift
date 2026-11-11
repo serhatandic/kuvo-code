@@ -55,6 +55,8 @@ struct BoxNameStrip: View {
     /// Whether names carry their computer's news (the sidebar's), or only how it's connected
     /// (Settings').
     var marksNews = true
+    /// The pages under it, which way round they go to a box as near either way.
+    var motion: BoxPagerMotion?
     @Environment(AppModel.self) private var app
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.messageFont) private var messageFont
@@ -161,12 +163,20 @@ struct BoxNameStrip: View {
         count > 0 ? ((place % count) + count) % count : 0
     }
 
-    /// The line moved on to `box`, the shorter way round, a step at a time.
+    /// How many steps from `place` to `target`, among `count`: the shorter way round, or `way`
+    /// (1 on, -1 back) when it's as far either way.
+    static func steps(from place: Int, to target: Int, count: Int, way: Int) -> Int {
+        guard count > 0 else { return 0 }
+        let ahead = wrapped(target - place, count)
+        if ahead * 2 == count { return way < 0 ? ahead - count : ahead }
+        return ahead > count / 2 ? ahead - count : ahead
+    }
+
+    /// The line moved on to `box`, the shorter way round, a step at a time: the way the pages go.
     private func slide(to box: SidebarBox) {
         let count = boxes.count
         guard count > 0, let target = boxes.firstIndex(of: box) else { return }
-        var steps = Self.wrapped(target - position, count)
-        if steps > count / 2 { steps -= count }
+        let steps = Self.steps(from: position, to: target, count: count, way: motion?.way ?? 1)
         guard steps != 0 else { return }
         withAnimation(reduceMotion ? nil : .spring(response: 0.38, dampingFraction: 0.9)) { position += steps }
     }
@@ -227,6 +237,7 @@ struct BoxNameStrip: View {
 
     private func pick(_ box: SidebarBox) {
         guard box != selected else { return }
+        motion?.way = 1
         withAnimation(reduceMotion ? nil : .spring(response: 0.38, dampingFraction: 0.9)) { selected = box }
     }
 
@@ -473,12 +484,17 @@ enum SidebarSwipe {
     var offset: CGFloat = 0
     /// A page's width, for how far that is in pages.
     var width: CGFloat = 0
+    /// The way the last swipe went (1 on, -1 back), or 1 once a name is picked: which way round
+    /// the pages and the name strip both go to a box as near one way as the other (with two, the
+    /// other one), together, whatever picked it (a tab on another box goes the last swipe's way).
+    var way = 1
 }
 
 /// Pages side by side, one in view, that follow two fingers sideways on the trackpad as Arc's
 /// and Dia's spaces do: the pages slide with them and, as they lift, go on to the next box (or
-/// spring back); past the last comes the first again, and before the first the last. A box
-/// picked otherwise (the name strip, a tab on another box) slides in too.
+/// spring back); past the last comes the first again, and before the first the last, one more
+/// step the same way (#446), as on the phone. A box picked otherwise (the name strip, a tab on
+/// another box) slides in too, the shorter way round.
 struct BoxPager<Page: View>: View {
     let boxes: [SidebarBox]
     @Binding var selected: SidebarBox
@@ -486,21 +502,30 @@ struct BoxPager<Page: View>: View {
     @ViewBuilder let page: (SidebarBox) -> Page
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    /// Wrapped around (the last to the first): the pages come in faded rather than sliding past
-    /// every one between.
+    /// With Reduce Motion, the page swiped to comes in faded rather than sliding.
     @State private var wrapFade = 1.0
     @AppStorage(SidebarSwipe.reversesKey) private var reverses = false
     /// The room it's given, for how far a swipe has to go: read from what the sidebar offers, never
     /// from the pages, so their size can't feed back into it.
     @State private var width: CGFloat = 0
+    /// Where the pages stand: the place of the one in view, counted on past the last (a box's place
+    /// is this modulo how many there are), as the name strip's line is. Each page lies at the place
+    /// nearest it, so the next one is always beside the one in view, the first after the last too,
+    /// and going on to it is one step: never a slide back past every page between.
+    @State private var position = 0
+    /// Which side a page lies on when it's as near one way as the other (with two boxes, the other
+    /// one): ahead while a swipe pulls it in from there or after a step back, else behind.
+    @State private var aheadOnTies = false
+    @State private var change = Change()
 
     private var index: Int { boxes.firstIndex(of: selected) ?? 0 }
 
     var body: some View {
         GeometryReader { proxy in
-            BoxTrack(motion: motion, index: index, width: proxy.size.width) {
-                HStack(alignment: .top, spacing: 0) {
-                    ForEach(boxes) { box in
+            BoxTrack(motion: motion, position: position, width: proxy.size.width) {
+                ZStack(alignment: .topLeading) {
+                    ForEach(Array(boxes.enumerated()), id: \.element) { place, box in
+                        let at = self.place(of: place)
                         page(box)
                             .frame(width: proxy.size.width, height: proxy.size.height, alignment: .top)
                             // Clipped out of sight, a page beside still takes clicks where it lies
@@ -508,6 +533,12 @@ struct BoxPager<Page: View>: View {
                             // there for VoiceOver and the keyboard.
                             .allowsHitTesting(box == selected)
                             .accessibilityHidden(box != selected)
+                            // Its rows count as on screen only while it's in view.
+                            .environment(\.pageInView, box == selected)
+                            // A page moving round to the other side does so out of sight, at once:
+                            // only the track slides.
+                            .offset(x: CGFloat(at) * proxy.size.width)
+                            .animation(nil, value: at)
                     }
                 }
             }
@@ -522,60 +553,119 @@ struct BoxPager<Page: View>: View {
                 TrackpadSwipe(onDrag: drag, onEnd: settle)
             }
         }
-        .animation(reduceMotion ? nil : .spring(response: 0.38, dampingFraction: 0.9), value: index)
+        // The motion the box in view changed with (the name strip's), for the pages to go with it.
+        .transaction(value: index) { [change] transaction in
+            change.animation = transaction.animation
+            change.isStill = transaction.disablesAnimations
+        }
+        // Where it starts, and again when computers come or go: in place, at once.
+        .onAppear { stand() }
+        .onChange(of: boxes) { stand() }
+        .onChange(of: selected) { go(to: index) }
+        // A row's card goes with its page.
+        .onChange(of: index) { GlanceCardPanel.shared.hide() }
     }
 
-    /// Fingers moved `dx` sideways: the pages follow (or go the other way, set so), with give past
-    /// the first and the last, where no page lies beside (let go far enough, the line wraps round).
+    private static var slide: Animation { .spring(response: 0.38, dampingFraction: 0.9) }
+
+    private func stand() {
+        var still = Transaction(animation: nil)
+        still.disablesAnimations = true
+        withTransaction(still) { position = index }
+    }
+
+    /// The motion the box in view last changed with, if any: written as SwiftUI applies the
+    /// change, read once it has.
+    private nonisolated final class Change: @unchecked Sendable {
+        var animation: Animation?
+        /// Changed with motion turned off on purpose: the pages go at once too.
+        var isStill = false
+    }
+
+    /// The place page `place` lies at: of those it's at round the line, the nearest the one in view.
+    /// (Steps taken faster than the pages slide, with two or three computers, can need a page in
+    /// two places at once: it moves round at the latest step, and a sliver at the edge shows
+    /// nothing for a moment.)
+    private func place(of place: Int) -> Int {
+        let count = boxes.count
+        guard count > 0 else { return 0 }
+        let ahead = BoxNameStrip.wrapped(place - position, count), behind = count - ahead
+        if ahead == 0 { return position }
+        if ahead == behind { return aheadOnTies ? position + ahead : position - behind }
+        return ahead < behind ? position + ahead : position - behind
+    }
+
+    /// The box in view changed (`target`): the pages go on to it the shorter way round, a step at a
+    /// time, so the first after the last is one step on.
+    private func go(to target: Int) {
+        let count = boxes.count
+        guard count > 0 else { return }
+        let steps = BoxNameStrip.steps(from: position, to: target, count: count, way: motion.way)
+        guard steps != 0 else { return }
+        // As the change went (the name strip's spring), or else the pages' own slide (a tab on
+        // another box); with Reduce Motion, or motion turned off, at once.
+        withAnimation(reduceMotion || change.isStill ? nil : change.animation ?? Self.slide) {
+            position += steps
+            aheadOnTies = steps < 0
+        }
+    }
+
+    /// Fingers moved `dx` sideways: the pages follow (or go the other way, set so), the next box
+    /// beside the last and the one before beside the first.
     private func drag(_ moved: CGFloat) {
+        GlanceCardPanel.shared.hide()
         let dx = reverses ? -moved : moved
-        let pulled = motion.offset + dx
-        let pastEnd = (pulled > 0 && index == 0) || (pulled < 0 && index == boxes.count - 1)
-        motion.offset = pastEnd ? motion.offset + dx * 0.3 : pulled
+        motion.offset += dx
+        // The page it pulls in, from the side it comes.
+        let ahead = motion.offset < 0
+        if motion.offset != 0, aheadOnTies != ahead { aheadOnTies = ahead }
     }
 
     /// Fingers lifted, moving at `velocity` points a step: on to the next box when pulled far
-    /// enough or flicked, else back. Past the last, the first; before the first, the last, faded
-    /// in rather than slid past every page between.
+    /// enough or flicked, else back. Past the last, the first; before the first, the last: a step
+    /// like any other.
     private func settle(_ speed: CGFloat) {
         let velocity = reverses ? -speed : speed
-        // Past an end the pages give, so less pull goes there.
-        let pastEnd = (motion.offset > 0 && index == 0) || (motion.offset < 0 && index == boxes.count - 1)
-        let threshold = pastEnd ? max(width * 0.22 * 0.3, 24) : max(width * 0.22, 40)
+        let threshold = max(width * 0.22, 40)
         var step = 0
         if motion.offset < -threshold || velocity < -6 { step = 1 }
         if motion.offset > threshold || velocity > 6 { step = -1 }
-        let target = (index + step + boxes.count) % boxes.count
-        // Round the end: forward to the first, or back to the last (so with two, the other side).
-        let wraps = (step == 1 && target < index) || (step == -1 && target > index)
-        if wraps || reduceMotion {
+        let target = BoxNameStrip.wrapped(index + step, boxes.count)
+        if step != 0 { motion.way = step }
+        if reduceMotion, step != 0 {
             var quiet = Transaction()
             quiet.disablesAnimations = true
             withTransaction(quiet) {
                 motion.offset = 0
+                position += step
+                aheadOnTies = step < 0
                 selected = boxes[target]
                 wrapFade = 0.35
             }
             withAnimation(.easeOut(duration: 0.22)) { wrapFade = 1 }
             return
         }
-        withAnimation(.spring(response: 0.38, dampingFraction: 0.9)) {
+        withAnimation(reduceMotion ? nil : Self.slide) {
             motion.offset = 0
-            selected = boxes[target]
+            if step != 0 {
+                position += step
+                aheadOnTies = step < 0
+                selected = boxes[target]
+            }
         }
     }
 }
 
-/// The pages' track: rests on `index`, pulled by the motion's offset. Only this reads the offset.
+/// The pages' track: rests on `position`, pulled by the motion's offset. Only this reads the offset.
 private struct BoxTrack<Content: View>: View {
     let motion: BoxPagerMotion
-    let index: Int
+    let position: Int
     let width: CGFloat
     @ViewBuilder let content: Content
 
     var body: some View {
         content
-            .offset(x: -CGFloat(index) * width + motion.offset)
+            .offset(x: -CGFloat(position) * width + motion.offset)
     }
 }
 

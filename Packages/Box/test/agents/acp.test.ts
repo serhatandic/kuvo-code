@@ -3,7 +3,7 @@
 
 import "../safety"
 import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test"
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { execFileSync } from "node:child_process"
 import { createHash } from "node:crypto"
 import { tmpdir } from "node:os"
@@ -15,11 +15,12 @@ import { GrokAgent } from "../../src/agents/agents/grok"
 import { Auto } from "../../src/agents/auto"
 import { subscribe } from "../../src/agents/events"
 import type { Roster } from "../../src/agents/roster"
-import { Sessions } from "../../src/agents/sessions"
+import { Sessions, timing } from "../../src/agents/sessions"
 import { Store } from "../../src/agents/store"
 import { setToolServer } from "../../src/agents/kuvotools"
 import { canFence, realFence } from "./support/fence"
 import { computerServers, KEYS, SERVER_COMMAND } from "./support/servers"
+import { subagentEngine } from "./support/subagents"
 import { forgetServers } from "../../src/agents/servers"
 import { noteAgentsInside } from "../../src/agents/fence"
 import type { PermissionRule } from "../../src/agents/wire"
@@ -65,6 +66,8 @@ interface Script {
    */
   readsItsFolder?: boolean
   fails?: string
+  /** What it says again as a session is loaded, before it answers (Grok's replay of what it said before). */
+  replays?: [string, any][]
 }
 
 /**
@@ -85,14 +88,20 @@ function fakeAcp(updates: [string, any][], later: [string, any][] = [], request?
     `const { appendFileSync, readFileSync } = require("node:fs")
 // (Signing in, the sandbox keeps it out of the test's folder, where it writes this down.)
 const log = (entry) => { try { appendFileSync(${JSON.stringify(log)}, JSON.stringify(entry) + "\\n") } catch {} }
-log({ argv: process.argv.slice(2) })
+log({ argv: process.argv.slice(2), pid: process.pid })
+// (Stopped as an agent's process is, said with when.)
+const exit = () => { log({ exited: Date.now() }); process.exit(0) }
+process.on("SIGTERM", exit)
+process.stdin.on("end", exit)
 let buffer = ""
 const send = (message) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...message }) + "\\n")
-const update = (sessionId, value) => send({ method: "session/update", params: { sessionId, update: value } })
+// One of an agent's own (Grok's _x.ai/session/update) when it says which: { method, update }.
+const update = (sessionId, value) => send(value?.method ? { method: value.method, params: { sessionId, update: value.update } } : { method: "session/update", params: { sessionId, update: value } })
 const prompts = ${JSON.stringify(prompts)}
 const setup = ${JSON.stringify({ sessionId: "s1", ...script.setup })}
 const refuses = ${JSON.stringify(script.refuses ?? [])}
 const later = ${JSON.stringify(later)}
+const replays = ${JSON.stringify(script.replays ?? [])}
 const tries = ${JSON.stringify(script.tries ?? null)}
 const fails = ${JSON.stringify(script.fails ?? "Traceback (most recent call last):\nPermissionError: [Errno 1] Operation not permitted")}
 if (${JSON.stringify(Boolean(script.readsItsFolder || script.fails))}) {
@@ -170,6 +179,7 @@ process.stdin.on("data", (chunk) => {
     else if (message.method === "initialize") send({ id: message.id, result: { protocolVersion: 1, authMethods: [], agentCapabilities: { loadSession: true, mcpCapabilities: { http: true } } } })
     else if (message.method === "session/new" || message.method === "session/load") {
       servers = message.params?.mcpServers ?? []
+      if (message.method === "session/load") for (const [sessionId, value] of replays) update(sessionId, value)
       send({ id: message.id, result: setup })
     } else if (message.method === "session/prompt" && tries) {
       // (What it tries is all that prompt does.)
@@ -188,7 +198,7 @@ process.stdin.on("data", (chunk) => {
       for (const [sessionId, value] of turn.updates) update(sessionId, value)
       if (turn.requests.length) ask()
       else end()
-      if (later.length) setTimeout(() => { for (const [sessionId, value] of later) update(sessionId, value) }, 300)
+      if (later.length) setTimeout(() => { log({ later: Date.now() }); for (const [sessionId, value] of later) update(sessionId, value) }, 300)
     } else if (message.method === "session/cancel") {
       stopped = true
       send({ id: prompt, result: { stopReason: "cancelled" } })
@@ -669,6 +679,95 @@ describe("What ACP agents ask", () => {
   })
 })
 
+// MARK: Your subagents
+
+describe("Your subagents (Settings › Agents), in Grok and Antigravity", () => {
+  test("Grok is given them as a plugin of its own, each on a model Grok runs, and started again when they change", async () => {
+    const engine = subagentEngine(root)
+    engine.agents.push({ id: "scout", name: "scout", mode: "subagent", description: "Looks: around.", system: "You scout.", model: { providerID: "grok-cli", id: "grok-4.6" }, permissions: [] })
+    engine.model = "anthropic/claude-haiku-4-5"
+    await engine.serve()
+    try {
+      const grok = new TestGrok(program(fakeAcp([said("Done.")]), join(root, "grok")), root)
+      const id = await run(grok)
+      const given = launches()[0]
+      const folder = given[given.lastIndexOf("--plugin-dir") + 1]
+      expect(given.filter((arg) => arg === "--plugin-dir")).toHaveLength(1)
+      expect(JSON.parse(readFileSync(join(folder, ".claude-plugin", "plugin.json"), "utf8")).name).toBe("kuvo")
+      expect(readdirSync(join(folder, "agents")).sort()).toEqual(["keyword-research.md", "reviewer.md", "scout.md"])
+      expect(readFileSync(join(folder, "agents", "scout.md"), "utf8")).toBe('---\nname: "scout"\ndescription: "Looks: around."\nmodel: "grok-4.6"\n---\n\nYou scout.\n')
+      // Another maker's model (its own, or the one subagents use): the conversation's.
+      expect(readFileSync(join(folder, "agents", "reviewer.md"), "utf8")).toBe('---\nname: "reviewer"\ndescription: "Reviews a finished change."\n---\n\nYou review. You never edit.\n')
+      expect(folder.startsWith(root)).toBe(true)
+      // The model subagents use changed to one of Grok's: the next message starts it again, with it.
+      engine.model = "grok-cli/grok-4.6-fast"
+      send(id)
+      await settled(id, 2)
+      const again = launches()[1]
+      expect(again).toBeDefined()
+      expect(readFileSync(join(again[again.lastIndexOf("--plugin-dir") + 1], "agents", "reviewer.md"), "utf8")).toContain('model: "grok-4.6-fast"')
+    } finally {
+      engine.stop()
+    }
+  })
+
+  test("Antigravity is given them as custom agents in its home's folder for them, on Flash or Pro as their model says; one taken away goes, and nothing else there is touched", async () => {
+    const engine = subagentEngine(root)
+    engine.model = "antigravity/gemini-3-flash"
+    await engine.serve()
+    const agent = new TestAntigravity(fakeAcp([said("Done.")]), root)
+    const folder = join((agent as any).profile, "config", "agents")
+    mkdirSync(folder, { recursive: true })
+    writeFileSync(join(folder, "mine.md"), "yours")
+    try {
+      await run(agent)
+      expect(readdirSync(folder).sort()).toEqual([".kuvo-code", "keyword-research.md", "mine.md", "reviewer.md"])
+      expect(readFileSync(join(folder, "reviewer.md"), "utf8")).toBe('---\nname: "reviewer"\ndescription: "Reviews a finished change."\nsubagent: true\nmainAgent: false\nmodel: "flash"\n---\n\nYou review. You never edit.\n')
+      expect(readFileSync(join(folder, "keyword-research.md"), "utf8")).not.toContain("model:")
+      engine.agents.splice(engine.agents.findIndex((each) => each.id === "Keyword Research"), 1)
+      root = mkdtempSync(join(base, "case-"))
+      await run(new TestAntigravity(fakeAcp([said("Done.")]), dirname(dirname(dirname(dirname(folder))))))
+    } finally {
+      engine.stop()
+    }
+    expect(readdirSync(folder).sort()).toEqual([".kuvo-code", "mine.md", "reviewer.md"])
+    expect(readFileSync(join(folder, "mine.md"), "utf8")).toBe("yours")
+  })
+
+  test("what Antigravity put in its agents folder itself (it writes its home, in the sandbox) never makes the bridge remove or write anything outside it", async () => {
+    const engine = subagentEngine(root)
+    await engine.serve()
+    const agent = new TestAntigravity(fakeAcp([said("Done.")]), root)
+    const profile = (agent as any).profile as string
+    const folder = join(profile, "config", "agents")
+    mkdirSync(folder, { recursive: true })
+    const outside = join(root, "outside")
+    mkdirSync(outside)
+    writeFileSync(join(outside, "keep.txt"), "mine")
+    writeFileSync(join(outside, "target.txt"), "mine")
+    // A record naming a file elsewhere, and an agent's file that's a link to one.
+    writeFileSync(join(folder, ".kuvo-code"), JSON.stringify({ "../../../../outside/keep.txt": "x", "gone.md": "x" }))
+    symlinkSync(join(outside, "target.txt"), join(folder, "reviewer.md"))
+    try {
+      await run(agent)
+      expect(readFileSync(join(outside, "keep.txt"), "utf8")).toBe("mine")
+      expect(readFileSync(join(outside, "target.txt"), "utf8")).toBe("mine")
+      expect(lstatSync(join(folder, "reviewer.md")).isSymbolicLink()).toBe(false)
+      expect(readFileSync(join(folder, "reviewer.md"), "utf8")).toContain('name: "reviewer"')
+      // Its whole agents folder a link elsewhere: nothing's written there, and the session still starts.
+      rmSync(folder, { recursive: true })
+      symlinkSync(outside, folder)
+      engine.agents.push({ id: "extra", name: "extra", mode: "subagent", description: "More.", system: "", permissions: [] })
+      root = mkdtempSync(join(base, "case-"))
+      const id = await run(new TestAntigravity(fakeAcp([said("Done.")]), dirname(dirname(dirname(dirname(folder))))))
+      expect(readdirSync(outside).sort()).toEqual(["keep.txt", "target.txt"])
+      expect(ended(id)).toMatchObject({ type: "idle", outcome: "succeeded" })
+    } finally {
+      engine.stop()
+    }
+  })
+})
+
 // MARK: Stop
 
 describe("Stopping an ACP agent", () => {
@@ -707,6 +806,51 @@ describe("Stopping an ACP agent", () => {
 })
 
 // MARK: Its reply and steps
+
+/** Grok's list of what it keeps going in the background: `tasks` as `[id, command, status]`. */
+const backgroundTasks = (tasks: [string, string, string][], outputFile?: string): [string, any] => ["s1", { method: "_x.ai/session/update", update: { sessionUpdate: "background_tasks", tasks: tasks.map(([task_id, command, status]) => ({ task_id, command, description: `Run ${command}`, kind: "bash", status, started_at: "2026-11-10T00:00:00Z", output_file: outputFile })) } }]
+
+describe("Grok's background work after its turn (#262)", () => {
+  test("it keeps Grok running past its idle close, shown as still at work; once it ends, Grok is let go", async () => {
+    const idleClose = timing.idleClose
+    timing.idleClose = 50
+    try {
+      const grok = new TestGrok(program(fakeAcp([backgroundTasks([["b1", "npm test", "running"]]), said("Waiting for the tests.")], [backgroundTasks([["b1", "npm test", "completed"]])]), join(root, "grok")), root)
+      const id = await run(grok)
+      expect(sessions.background()[id]?.tasks.map((task) => task.id)).toEqual(["b1"])
+      // Let go of only after it ended (its idle close came round several times before that).
+      await until(() => received().some((message) => message.exited))
+      const later = received().find((message) => message.later).later
+      expect(received().find((message) => message.exited).exited).toBeGreaterThanOrEqual(later)
+      expect(sessions.background()[id]).toBeUndefined()
+    } finally {
+      timing.idleClose = idleClose
+    }
+  })
+
+  test("Grok killed from outside meanwhile: the session is woken, told the command stopped unfinished and where its output is", async () => {
+    const output = join(root, "b1.log")
+    writeFileSync(output, "PASS one.test\n")
+    // (Loaded again, it says again what it said before, its list of what ran then too.)
+    const grok = new TestGrok(program(fakeAcp([backgroundTasks([["b1", "npm test", "running"]], output), said("Waiting for the tests.")], [], undefined, { next: [said("Running them again.")], replays: [backgroundTasks([["b1", "npm test", "running"]], output)] }), join(root, "grok")), root)
+    const id = await run(grok)
+    // (Killed by its PID, as the stray pkill of 2026-11-07 did to Claude Code.)
+    process.kill(received().find((message) => message.pid).pid, "SIGTERM")
+    await settled(id, 2)
+    const told = prompts()[1].params.prompt[0].text as string
+    expect(told).toContain("Grok stopped between turns")
+    expect(told).toContain("`npm test`")
+    // (Where its output went, for it to read: not read for it by the bridge, outside its sandbox.)
+    expect(told).toContain(output)
+    expect(told).not.toContain("PASS one.test")
+    const notice = sessions.messages(id).find((message) => message.type === "synthetic") as any
+    expect(notice).toMatchObject({ description: "npm test", metadata: { source: "shell", state: "error", signal: "SIGTERM" } })
+    expect(words(id)).toContain("Running them again.")
+    // What the load said again of before isn't taken for work going now.
+    expect(received().some((message) => message.method === "session/load")).toBe(true)
+    expect(sessions.background()[id]).toBeUndefined()
+  })
+})
 
 describe("An ACP agent's reply", () => {
   test("its thinking, its words, a command with its output as it comes and its result, and what it says after: in steps, as the engine's", async () => {

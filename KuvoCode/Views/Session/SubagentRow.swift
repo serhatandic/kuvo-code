@@ -13,6 +13,8 @@ struct SubagentRow: View {
     var scope = ""
     @Environment(Workspace.self) private var workspace
     @Environment(AppModel.self) private var app
+    /// The conversation this is in, where what it opens comes back to.
+    @Environment(\.conversationTab) private var here
     @Environment(Catalog.self) private var catalog
     @State private var model: SessionModel?
     @Environment(\.scrollAnchor) private var scrollAnchor
@@ -57,18 +59,19 @@ struct SubagentRow: View {
             // The whole row opens to its steps, the chevron at its end saying so; its conversation
             // opens from under them, or from its menu.
             Button {
-                // Closing it closes the steps you opened in it.
+                // Closing it closes the steps you opened in it. At work, it's kept in view as it
+                // grows, as a step under way is.
                 let inside = isExpanded ? session.map { CardFolds.shared.kept(under: $0 + "#") } ?? [] : []
-                CardFolds.shared.toggle(key, open: !isExpanded, in: scrollAnchor, closes: inside)
+                CardFolds.shared.toggle(key, open: !isExpanded, in: scrollAnchor, holds: !isWorking, closes: inside)
             } label: {
                 header
             }
             .buttonStyle(TextButtonStyle(outset: true))
             .disabled(session == nil)
             .help(isExpanded ? "Hide its steps" : "Show its steps")
-            .contextMenu {
+            .heldContextMenu {
                 if let session {
-                    Button("Open Conversation") { app.tabs.openInPlace(session) }
+                    HeldRow.button("Open Conversation") { app.open(.session(session), from: here) }
                 }
             }
 
@@ -86,7 +89,7 @@ struct SubagentRow: View {
                 VStack(alignment: .leading, spacing: 8) {
                     SubagentSteps(id: session, task: input?["prompt"]?.string, directory: directory)
                         .environment(\.autopilotCallsShownAbove, !decided.isEmpty)
-                    Button("Open Conversation") { app.tabs.openInPlace(session) }
+                    Button("Open Conversation") { app.open(.session(session), from: here) }
                         .buttonStyle(TextButtonStyle(outset: true))
                         .font(.callout)
                         .help("Open its conversation here: watch it, talk to it, stop it or give it another model")

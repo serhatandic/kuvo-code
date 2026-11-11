@@ -48,8 +48,20 @@ const param = (name: string) => `(subpath (param ${quote(name)}))`;
 // scripts, but not the rest of their folders, like rules and commands, which run nothing) or change
 // what the engine does (its settings, its plugins). A folder moved or linked into place is checked
 // only by its own name, never by what's in it, so the folders that hold those (`.git`, a submodule's
-// or a worktree's repository, the agents' folders) can't be made, moved or removed, only written in.
-const GIT_GUARDED = String.raw`(((modules/.+|worktrees/[^/]+)/)?(hooks(/|$)|config(\.worktree)?$|commondir$|gitdir$)|(modules|worktrees)/[^/]+$)`;
+// or a worktree's repository, and the folders that hold those, `modules` and `worktrees`, and the
+// agents' folders) can't be made, moved or removed, only written in.
+const GIT_GUARDED = String.raw`((((worktrees/[^/]+/)?modules/.+|worktrees/[^/]+)/)?(hooks(/|$)|config(\.worktree)?$|commondir$|gitdir$)|(modules|worktrees)(/[^/]+)?$|worktrees/[^/]+/modules$)`;
+// A submodule's repository is any folder below `modules` (`vendor/lib`, one's own `modules/b`), so
+// none of those folders is made, moved or removed by a command: one moved in would bring its own
+// hooks and settings. But for what git keeps in each as it fetches and tidies up (its objects, refs,
+// logs), whose folders come and go.
+const MODULE_FOLDERS = String.raw`/(worktrees/[^/]+/)?modules/.+`;
+// (Only below folders git made as it cloned, none of which can be made: nothing is moved in at a
+// name that could be a submodule's of its own. So in the sandbox a submodule doesn't get its first
+// `logs`, `lfs` or `rr-cache`, nor what a rebase, `git am` or a cherry-pick of several keep in it
+// (`rebase-merge`, `rebase-apply`, `sequencer`), nor a nested submodule set up: those run outside
+// it, with sandbox_ask.)
+const MODULE_KEPT = String.raw`/(worktrees/[^/]+/)?modules/.+/(objects|refs|logs|lfs|rr-cache)/.+$`;
 const AGENTS_GUARDED = String.raw`\.claude/settings(\.local)?\.json|\.mcp\.json|\.codex/(config\.toml|hooks\.json|\.env|rules(/.*)?)|\.cursor/(hooks|mcp)\.json|\.(gemini|grok)/settings\.json|\.grok/(config\.toml|sandbox\.toml|lsp\.json|(hooks|plugins|agents|workflows)(/.*)?)|\.(claude|cursor)/hooks(/.*)?|\.(claude|codex|cursor|gemini|grok)`;
 /** Every kind of write, by name, and `file-write*`. A rule on a kind by its name is checked before any
  * on `file-write*`, whatever their order, so the profile names them all wherever it carves one out of
@@ -75,7 +87,9 @@ function chunked(folders: string[], most = 700): string[] {
   return out;
 }
 
-const GUARDED = String.raw`(.*/)?(\.git$|\.git/(${GIT_GUARDED})|\.opencode(/|$)|opencode\.jsonc?$|(${AGENTS_GUARDED})$)`;
+/** What's kept from commands inside a folder they write (git's hooks and settings, the engine's and
+ * the coding agents' settings), as a pattern over the path after that folder's `/`. */
+export const GUARDED = String.raw`(.*/)?(\.git$|\.git/(${GIT_GUARDED})|\.opencode(/|$)|opencode\.jsonc?$|(${AGENTS_GUARDED})$)`;
 
 export function seatbeltProfile(policy: FencePolicy, options: SeatbeltOptions): string {
   const mode = options.mode ?? "enforce";
@@ -180,9 +194,12 @@ export function seatbeltProfile(policy: FencePolicy, options: SeatbeltOptions): 
 
   out.push(";; what runs outside the sandbox, or changes the engine");
   // The conversation's folder and its repository's, themselves: never removed or made again, so
-  // never traded for a link to somewhere else (another bot's folder) the next command would work in;
-  // nor its temporary folder, which in Kuvo Code's would lead the next command into them (its keys).
-  deny("file-write-unlink file-write-create", `(literal (param "WORK"))`, `(literal (param "GIT"))`, `(literal (param "TMP"))`);
+  // never traded for a link to somewhere else (another bot's folder) the next command would work in.
+  deny("file-write-unlink file-write-create", `(literal (param "WORK"))`, `(literal (param "GIT"))`);
+  // Nor its temporary folder, which in Kuvo Code's would lead the next command into them (its keys):
+  // removed (`rm -rf $TMPDIR`) it may be, but made again only as a folder, never a link or a file in
+  // its place (nor one moved there).
+  deny("file-write-create", `(require-all (literal (param "TMP")) (require-not (vnode-type DIRECTORY)))`);
   // Nor any folder that holds what's kept from commands (a secret in a cache they write, what runs
   // later, Kuvo Code's own): moved away or cloned whole (clonefile, checked only for the folder),
   // what's in it would be read or changed by its new name; nor one that isn't there yet traded for a
@@ -209,6 +226,8 @@ export function seatbeltProfile(policy: FencePolicy, options: SeatbeltOptions): 
   deny(WRITE, under("WORK_RE", "/" + GUARDED), under("GIT_RE", "/" + GIT_GUARDED),
     ...Array.from({ length: MOST_FOLDERS }, (_, at) => under(`ALLOW${at}_RE`, "/" + GUARDED)));
   deny(WRITE, ...homes.map(home => inHome(home, `"/(.*/)?(" (param "KEPT") ")(/|$)"`)));
+  deny("file-write-create file-write-unlink", `(require-all ${under("GIT_RE", MODULE_FOLDERS)} (vnode-type DIRECTORY))`);
+  allow("file-write-create file-write-unlink", `(require-all ${under("GIT_RE", MODULE_KEPT)} (vnode-type DIRECTORY))`);
 
   out.push(";; your secrets");
   // Never read, nor moved, named again or replaced: one in a folder commands write (cargo's sign-in

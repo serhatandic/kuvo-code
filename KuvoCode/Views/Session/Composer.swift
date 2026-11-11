@@ -227,7 +227,7 @@ struct Composer: View {
             if !files.isEmpty {
                 AttachmentStrip(files: files) { file in
                     ComposerAttachment(url: file, route: Attachments.route(file, for: currentModel, onMachine: RemoteFolder.machine(of: folders.first ?? "") != nil),
-                                       number: imageFiles.firstIndex(of: file).map { $0 + 1 }) { detach(file) }
+                                       number: imageFiles.firstIndex(of: file).map { $0 + 1 }, pictures: imageFiles) { detach(file) }
                 }
             }
 
@@ -257,6 +257,7 @@ struct Composer: View {
                     marks: !isShell,
                     images: imageFiles.count,
                     token: token,
+                    refs: isShell || !text.contains("#") || text.utf16.count > 20_000 ? [:] : app.workQueues.refs(in: text, box: app.utilities.queueBox, typing: true),
                     example: example,
                     onKey: key,
                     onFocus: { focused in
@@ -332,15 +333,16 @@ struct Composer: View {
                     VoiceComposerRow(voice: voice, cancel: { app.dictation.cancel(); focusAtEnd() }, done: { app.dictation.finish() }, openSettings: { Self.openPrivacySettings(for: voice.phase) })
                         .transition(.opacity)
                 } else {
-                    HStack(spacing: 4) {
+                    HStack(alignment: ComposerRow.alignment, spacing: 4) {
                         if isShell {
                             ShellModeLabel(folder: folders.first)
                                 .transition(.opacity)
                         } else {
                             Group {
                                 Button(action: chooseFiles) {
+                                    // The row's one size and weight (ComposerRow), as every icon in it.
                                     Image(systemName: "paperclip")
-                                        .font(.system(size: 14, weight: .medium))
+                                        .font(ComposerRow.icon)
                                         .frame(width: 30, height: 28)
                                         .hoverHighlight(in: Capsule(), mutesInk: true)
                                 }
@@ -676,9 +678,8 @@ struct Composer: View {
             sendHelp: isOffline ? "Send once the connection is back" : asksSide && sideQuestionAnswering ? "Send once the side question is answered" : isShell ? "Run the Command (Return)" : isRunning ? "Send: the agent reads it at its next step (Return). ⌘Return queues it for after this run." : "Send (Return)",
             stopHelp: "Stop (⌘.)", send: send, stop: onStop
         ) {
-            Button("Send", action: send)
-            Button("Queue for After This Run", action: queue)
-                .disabled(!isRunning && !hasQueue)
+            HeldRow.button("Send", action: send)
+            HeldRow.button("Queue for After This Run", disabled: !isRunning && !hasQueue, action: queue)
         }
     }
 
@@ -1023,14 +1024,14 @@ struct Composer: View {
 
 /// A composer's round button, a session's or a group chat's: Send, or Stop while it works and
 /// nothing's written, the one turning into the other. `menu`, on a right-click of Send.
-struct SendStopButton<Menu: View>: View {
+struct SendStopButton: View {
     let stops: Bool
     let canSend: Bool
     let sendHelp: String
     let stopHelp: String
     let send: () -> Void
     let stop: () -> Void
-    @ViewBuilder var menu: Menu
+    @HeldRows var menu: () -> [HeldRow]
     @Namespace private var glass
 
     var body: some View {
@@ -1038,7 +1039,7 @@ struct SendStopButton<Menu: View>: View {
             if stops && !canSend {
                 Button(action: stop) {
                     Image(systemName: "stop.fill")
-                        .font(.system(size: 12, weight: .bold))
+                        .font(ComposerRow.icon)
                 }
                 .buttonStyle(ActionButtonStyle(isAccent: false))
                 .glassEffect(.regular, in: .circle)
@@ -1049,7 +1050,7 @@ struct SendStopButton<Menu: View>: View {
             } else {
                 Button(action: send) {
                     Image(systemName: "arrow.up")
-                        .font(.system(size: 13, weight: .bold))
+                        .font(ComposerRow.icon)
                 }
                 .buttonStyle(ActionButtonStyle())
                 .glassEffect(.regular, in: .circle)
@@ -1058,7 +1059,7 @@ struct SendStopButton<Menu: View>: View {
                 .help(sendHelp)
                 .accessibilityLabel("Send")
                 .accessibilityIdentifier("send")
-                .contextMenu { menu }
+                .heldContextMenu(menu)
             }
         }
         .animation(.ui, value: stops && !canSend)
@@ -1066,9 +1067,9 @@ struct SendStopButton<Menu: View>: View {
     }
 }
 
-extension SendStopButton where Menu == EmptyView {
+extension SendStopButton {
     init(stops: Bool, canSend: Bool, sendHelp: String, stopHelp: String, send: @escaping () -> Void, stop: @escaping () -> Void) {
-        self.init(stops: stops, canSend: canSend, sendHelp: sendHelp, stopHelp: stopHelp, send: send, stop: stop) { EmptyView() }
+        self.init(stops: stops, canSend: canSend, sendHelp: sendHelp, stopHelp: stopHelp, send: send, stop: stop) {}
     }
 }
 

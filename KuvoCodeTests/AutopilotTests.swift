@@ -138,43 +138,6 @@ import Testing
         }
     }
 
-    /// A conversation on Autopilot you pick a coding agent's model in, carried by this Mac: it stays
-    /// on Autopilot there, its new agent told, by its box.
-    @Test func aConversationCarriedOnWithACodingAgentStaysOnAutopilot() async throws {
-        let machine = try await lab()
-        defer { done(machine) }
-        let bridge = StubEngine(port: 48_028, alongside: true)
-        let agents = OutsideAgents()
-        defer { agents.disconnect() }
-        let workspace = Workspace()
-        workspace.api = engine.api
-        workspace.agents = agents
-        workspace.boxes = { _ in machine.client }
-        agents.connect(bridge.api.client.endpoint, folderPrefix: "")
-        let away = StubEngine.session("ses_away", directory: "/tmp/kuvo-tests-autopilot-carry", extra: ["metadata": ["kuvo": ["autopilot": true]]])
-        // (`lab` answers this route with no conversations.)
-        engine.on("GET", "/api/session", json: ["data": [away]])
-        engine.conversation("ses_away", [])
-        engine.on("GET", "/api/session/ses_away", json: ["data": away])
-        engine.on("GET", "/api/session/ses_away/inbox", json: ["data": []])
-        engine.on("PATCH", "/api/session/ses_away", json: [:])
-        let carried = StubEngine.session("ses_carried", directory: "/tmp/kuvo-tests-autopilot-carry")
-        bridge.on("POST", "/api/session/import", json: ["data": carried])
-        bridge.list([carried])
-        bridge.on("PATCH", "/api/session/ses_carried", json: [:])
-        // (The box finds it on its engine here, which is told as its bridge would be.)
-        engine.on("GET", "/api/session/ses_carried", json: ["data": carried])
-        engine.on("PATCH", "/api/session/ses_carried", json: ["data": carried])
-        engine.on("PUT", "/api/experimental/session/ses_carried/instructions/entries/kuvo.autopilot", json: ["data": [:]])
-        await workspace.refresh()
-
-        let moved = try await workspace.carryToAgents("ses_away", model: ModelRef(id: "sonnet", providerID: "claude-code"))
-        #expect(moved?.id == "ses_carried")
-
-        #expect(engine.requests("PUT", "/api/experimental/session/ses_carried/instructions/entries/kuvo.autopilot").count == 1)
-        #expect(workspace.model(for: "ses_carried")?.isAutopilot == true)
-    }
-
     /// Whether a computer offers Autopilot (a goal's card, a new conversation) is what its box says:
     /// not until it has, none on one from before it, and this Mac's always.
     @Test func aComputerOffersAutopilotOnlyWhereItsBoxHasIt() async throws {
@@ -378,7 +341,7 @@ import Testing
         func heard(_ id: String) async throws { try await until { !workspace.notifying.contains(id) } }
 
         // This Mac's box answers it, as it does a conversation's Autopilot.
-        #expect(PhoneLink.movedToBox("kuvo/sessions/ses_a/autopilot/asked"))
+        #expect(!PhoneLink.appAnswers("kuvo/sessions/ses_a/autopilot/asked"))
 
         // Not waiting, as its box says: not counted, marked or not.
         try ask("frm_marked_goes", marked: true)

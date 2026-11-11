@@ -69,6 +69,25 @@ struct BotWorkTests {
         #expect(older.asks.isEmpty && older.projects.isEmpty)
     }
 
+    /// Each row of the work bar says which account a session runs on, beside its model and before
+    /// its project, as its box names it: the plan people know, then the name you gave the account.
+    @Test func aSessionsRowSaysWhichAccountItRunsOnAndDropsItBeforeTheProject() throws {
+        let item = { (provider: String, account: String) throws -> BotWorkReport.Item in
+            let json = #"{"bot": "bot_pixel", "sessions": [{"session": "ses_1", "title": "Review #181 part 3 before merge (security)", "folder": "/p", "project": "Kuvo Code", "startedBy": "ses_pixel", "depth": 1, "model": {"id": "claude-opus-5-5", "providerID": "\#(provider)", "variant": "high"}, \#(account) "state": "working", "started": 1, "tokens": 0}], "answered": [], "today": {"started": 1, "working": 1, "tokens": 0}, "limits": null}"#
+            return try #require(try JSONDecoder().decode(BotWorkReport.self, from: Data(json.utf8)).sessions.first)
+        }
+        // A coding agent's account you named, its own sign-in, the engine's Copilot plan, and a
+        // provider by its own name; each as the usage panel names it.
+        #expect(WorkWords.about(try item("claude-code@acc1", #""account": {"name": "Claude Code", "label": "Athas"},"#), model: "Opus 5.5")
+            == ["Opus 5.5 · high · Claude · Athas · Kuvo Code", "Opus 5.5 · high · Kuvo Code"])
+        #expect(WorkWords.about(try item("claude-code", #""account": {"name": "Claude Code"},"#), model: "Opus 5.5").first == "Opus 5.5 · high · Claude · Kuvo Code")
+        #expect(WorkWords.about(try item("codex-cli@work", #""account": {"name": "Codex", "label": "Work"},"#), model: "GPT-5.5").first == "GPT-5.5 · high · Codex · Work · Kuvo Code")
+        #expect(WorkWords.about(try item("github-copilot", #""account": {"name": "GitHub Copilot"},"#), model: "Opus 5.5").first == "Opus 5.5 · high · Copilot · Kuvo Code")
+        #expect(WorkWords.about(try item("anthropic", #""account": {"name": "Anthropic"},"#), model: "Opus 5.5").first == "Opus 5.5 · high · Anthropic · Kuvo Code")
+        // Custom Auto, or a box from before it said: as before.
+        #expect(WorkWords.about(try item("auto", ""), model: "Auto") == ["Auto · high · Kuvo Code"])
+    }
+
     @Test func whatABotMayDoWithoutAskingReadsEvenWhenANewerBoxNamesMore() throws {
         let allowed = try JSONDecoder().decode(WorkActions.self, from: Data(#"["makeProject", "buyDomain"]"#.utf8))
         #expect(allowed.actions == [.makeProject])

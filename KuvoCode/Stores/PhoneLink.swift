@@ -54,12 +54,8 @@ final class PhoneLink {
     @ObservationIgnored var machineName: (String) -> String? = { _ in nil }
     /// The agents bridge (Claude Code, Codex…), for `kuvo/agents/api/…`; set by AppModel.
     @ObservationIgnored var agents: OutsideAgents?
-    /// Whether a group chat or a bot is on its way to another computer; set by AppModel.
-    @ObservationIgnored var isMoving: (String) -> Bool = { Moves.isFrozen($0) }
     /// Starts this Mac's engine over, as Settings › Engine's Restart does; set by AppModel.
     @ObservationIgnored var restartEngine: () -> Void = {}
-    /// When the engine running now came up, for `kuvo/info`; set by AppModel.
-    @ObservationIgnored var engineStarted: () -> Date? = { nil }
 
     struct MachineHost: Codable, Hashable {
         var name: String
@@ -119,7 +115,16 @@ final class PhoneLink {
 
     /// This Mac's key and relay secret, from the Keychain, made the first time the link is on
     /// (with it off, Kuvo Code keeps nothing for it).
-    @ObservationIgnored private lazy var identity: (key: LinkKey, secret: RelaySecret) = Self.loadIdentity()
+    private var identity: (key: LinkKey, secret: RelaySecret) {
+        get {
+            if let keptIdentity { return keptIdentity }
+            let read = tookIdentity(Self.readIdentity(in: service, asking: true))
+            keptIdentity = read
+            return read
+        }
+        set { keptIdentity = newValue }
+    }
+    @ObservationIgnored private var keptIdentity: (key: LinkKey, secret: RelaySecret)?
     private var key: LinkKey { identity.key }
     private var secret: RelaySecret { identity.secret }
     /// This Mac's box, which holds the relay connection (`BoxProcess`); set by AppModel.
@@ -134,54 +139,123 @@ final class PhoneLink {
     /// Where the phones and machines are kept: phone-link.json (a test's own, for a test).
     private let savedFile: URL
 
-    /// `file`, `identity` and `signing`: a test's own, kept apart from the app's file and Keychain
-    /// (one giving an identity and no signing key gets a new one).
-    init(file: URL? = nil, identity: (key: LinkKey, secret: RelaySecret)? = nil, signing: Documents.SigningKey? = nil) {
+    /// Where its keys are in the Keychain (`keychainService`, a test's own).
+    private let service: String
+
+    /// `file`, `identity`, `signing` and `keychain`: a test's own, kept apart from the app's file
+    /// and Keychain (one giving an identity and no signing key gets a new one).
+    init(file: URL? = nil, identity: (key: LinkKey, secret: RelaySecret)? = nil, signing: Documents.SigningKey? = nil, keychain: String = PhoneLink.keychainService) {
         savedFile = file ?? AppInfo.supportDirectory.appending(path: "phone-link.json")
+        service = keychain
         let saved = (try? JSONDecoder().decode(Saved.self, from: Data(contentsOf: savedFile))) ?? Saved()
         // Only what names a phone (an earlier build kept anything a document named).
         toRemove = saved.toRemove.filter { PairedPhones.fits($0, macs: []) }
         paired = Self.without(toRemove, PairedPhones(phones: saved.phones, removed: saved.removed))
         machineHosts = saved.machines
         if let identity {
-            self.identity = identity
-            self.signing = signing ?? Documents.SigningKey()
+            keptIdentity = identity
+            keptSigning = signing ?? Documents.SigningKey()
         }
     }
 
-    /// The Keychain wouldn't give out this Mac's key or secret this launch.
-    private static var unreadable = false
+    /// The Keychain wouldn't give out this Mac's keys: none is given out, and none made in their
+    /// place. While it was only locked (the keeper starting this Mac's box at login, before your
+    /// Keychain was unlocked), they're read again `readAgainAfter` later (a minute) and every so
+    /// often after, when its box asks for them (`boxIdentity`, every half a minute), never asking
+    /// you to unlock it. A prompt you said no to (`saidNo`) isn't shown again until the next launch.
+    @ObservationIgnored private var unreadable = false
+    @ObservationIgnored private var saidNo = false
+    @ObservationIgnored private var readAgainAt: Date?
+    @ObservationIgnored var readAgainAfter: TimeInterval = 60
 
     /// This Mac's own key and secret, as your phones and machines know them (not a stand-in).
     private var hasIdentity: Bool {
         _ = identity
-        return !Self.unreadable
+        return !unreadable
     }
 
     /// The key this Mac signs its documents with (PROTOCOL.md, "Documents"), from the Keychain beside
     /// the others, made the first time.
-    @ObservationIgnored private lazy var signing: Documents.SigningKey = Self.kept("sign", read: { try? Documents.SigningKey(rawRepresentation: $0) },
-                                                                              make: Documents.SigningKey.init, bytes: \.rawRepresentation)
+    private var signing: Documents.SigningKey {
+        get {
+            if let keptSigning { return keptSigning }
+            let read = tookSigning(Self.readSigning(in: service, asking: true))
+            keptSigning = read
+            return read
+        }
+        set { keptSigning = newValue }
+    }
+    @ObservationIgnored private var keptSigning: Documents.SigningKey?
 
-    private static func loadIdentity() -> (key: LinkKey, secret: RelaySecret) {
-        (kept("key", read: { try? LinkKey(rawRepresentation: $0) }, make: LinkKey.init, bytes: \.rawRepresentation),
-         kept("secret", read: RelaySecret.init(bytes:), make: RelaySecret.init, bytes: \.bytes))
+    /// One of this Mac's keys as the Keychain gave it: there, none yet, or refused (why).
+    nonisolated private enum Read<T: Sendable>: Sendable {
+        case found(T)
+        case missing
+        case refused(OSStatus)
+
+        /// Why the Keychain refused it, if it did.
+        var refusal: OSStatus? {
+            if case .refused(let status) = self { return status }
+            return nil
+        }
     }
 
-    /// One of them from the Keychain, made the first time. One the Keychain won't give out (you
-    /// said no when it asked) isn't replaced, and the link stays off (`unreadable`): your phones
-    /// and other computers would take a stand-in for another Mac. It's tried again next launch.
-    private static func kept<T>(_ account: String, read: (Data) -> T?, make: () -> T, bytes: (T) -> Data) -> T {
+    nonisolated private static func readIdentity(in service: String, asking: Bool) -> (key: Read<LinkKey>, secret: Read<RelaySecret>) {
+        let key = read("key", in: service, asking: asking) { try? LinkKey(rawRepresentation: $0) }
+        // (Not asked twice: refused once, it would be again.)
+        if case .refused(let status) = key { return (key, .refused(status)) }
+        return (key, read("secret", in: service, asking: asking, RelaySecret.init(bytes:)))
+    }
+
+    nonisolated private static func readSigning(in service: String, asking: Bool) -> Read<Documents.SigningKey> {
+        read("sign", in: service, asking: asking) { try? Documents.SigningKey(rawRepresentation: $0) }
+    }
+
+    /// One of them from the Keychain, read alone (never made here: `took`). `asking`: whether macOS
+    /// may ask you first; without, a locked Keychain refuses at once (`Keychain.copyWithoutAsking`).
+    nonisolated private static func read<T: Sendable>(_ account: String, in service: String, asking: Bool, _ parse: (Data) -> T?) -> Read<T> {
         do {
-            if let data = try keychain(account), let value = read(data) { return value }
+            guard let data = try keychain(account, in: service, asking: asking) else { return .missing }
+            // One that doesn't read as a key is made again.
+            return parse(data).map { .found($0) } ?? .missing
         } catch {
             Logger(subsystem: "run.kuvo.code", category: "phone").error("Couldn’t read the phone link’s \(account, privacy: .public) from the Keychain: \(error.localizedDescription, privacy: .public)")
-            unreadable = true
-            return make()
+            return .refused(OSStatus((error as NSError).code))
         }
-        let value = make()
-        setKeychain(bytes(value), for: account)
-        return value
+    }
+
+    private func tookIdentity(_ read: (key: Read<LinkKey>, secret: Read<RelaySecret>)) -> (key: LinkKey, secret: RelaySecret) {
+        (took(read.key, "key", make: LinkKey.init, bytes: \.rawRepresentation) { try? LinkKey(rawRepresentation: $0) },
+         took(read.secret, "secret", make: RelaySecret.init, bytes: \.bytes, RelaySecret.init(bytes:)))
+    }
+
+    private func tookSigning(_ read: Read<Documents.SigningKey>) -> Documents.SigningKey {
+        took(read, "sign", make: Documents.SigningKey.init, bytes: \.rawRepresentation) { try? Documents.SigningKey(rawRepresentation: $0) }
+    }
+
+    /// What was read, or the first time, one made and kept: on the main actor alone, so this Mac
+    /// never makes two. One the Keychain won't give out (you said no when it asked, or it's locked)
+    /// isn't replaced, and the link stays off (`unreadable`): your phones and other computers would
+    /// take a stand-in for another Mac.
+    private func took<T: Sendable>(_ read: Read<T>, _ account: String, make: () -> T, bytes: (T) -> Data, _ parse: (Data) -> T?) -> T {
+        switch read {
+        case .found(let value):
+            return value
+        case .refused(let status):
+            unreadable = true
+            // Locked (or it couldn't ask): read again later. You said no: not this launch.
+            if status != errSecInteractionNotAllowed { saidNo = true }
+            if readAgainAt == nil { readAgainAt = .now }
+            return make()
+        case .missing:
+            let value = make()
+            // Added only where there's none: one made meanwhile (the keeper's, or the app's) is kept.
+            if Self.addKeychain(bytes(value), for: account, in: service) == errSecDuplicateItem {
+                if case .found(let kept) = Self.read(account, in: service, asking: true, parse) { return kept }
+                Self.setKeychain(bytes(value), for: account, in: service)
+            }
+            return value
+        }
     }
 
     /// This Mac's name, as Sharing settings has it.
@@ -210,6 +284,11 @@ final class PhoneLink {
         self.endpoint = endpoint
         guard running == nil else { return }
         running = Task { [weak self] in await self?.follow() }
+        // The phone link turned on or off meanwhile: the box is told, and keeps it for after a
+        // restart (run/mac-link.json).
+        enabledWatch = UserDefaults.standard.observe(\.phoneLink, options: [.new]) { [weak self] _, _ in
+            Task { @MainActor in self?.tellLinkConfig() }
+        }
         #if DEBUG
         showRemovalForDemo()
         #endif
@@ -245,14 +324,16 @@ final class PhoneLink {
     func stop() {
         running?.cancel()
         running = nil
+        enabledWatch = nil
     }
+
+    @ObservationIgnored private var enabledWatch: NSKeyValueObservation?
 
     /// What this Mac's box is told of its link: whether the phone link is on, whether there are
     /// machines to meet, the relay, and how it's named to your phones.
     private var linkConfig: Data {
-        // (What it answers, for its agents' mail to your other computers: `features`.)
         let config: [String: Any] = ["phones": Self.isEnabled, "machines": hasMachines(), "relay": relay.absoluteString,
-                                     "name": Self.computerName, "app": AppInfo.version, "features": Self.features]
+                                     "name": Self.computerName, "app": AppInfo.version]
         return (try? JSONSerialization.data(withJSONObject: config)) ?? Data()
     }
 
@@ -339,12 +420,16 @@ final class PhoneLink {
     /// (and they each other); with the last gone (and no phone link), it stops. The others hear who
     /// their peers are now.
     func machinesChanged() {
-        if let client = box() {
-            let config = linkConfig
-            Task { _ = try? await client.send("PUT", "kuvo/link/config", body: config) }
-        }
+        tellLinkConfig()
         syncMachines()
         peersChanged()
+    }
+
+    /// Tells this Mac's box what's wanted of its link now.
+    private func tellLinkConfig() {
+        guard let client = box() else { return }
+        let config = linkConfig
+        Task { _ = try? await client.send("PUT", "kuvo/link/config", body: config) }
     }
 
     /// Shows a pairing link (as a QR code) for a phone to scan, made by this Mac's box: one of its
@@ -537,11 +622,13 @@ final class PhoneLink {
                 var macID = MachineEngine.macID
                 /// This Mac's name, for saying who else uses the machine.
                 var macName = PhoneLink.computerName
+                /// This Mac's keys before, made anew since, as its box names them: the machine lets them go.
+                var replaces: [String]?
             }
             let settings = folder.appending(path: "setup.json")
             // This Mac's keys and documents, as its box keeps them (a box starting, or not told
             // its settings yet, a moment later).
-            struct Given: Decodable { var mac: String; var macSign: String; var docs: [Documents.Envelope] }
+            struct Given: Decodable { var mac: String; var macSign: String; var docs: [Documents.Envelope]; var replaces: [String]? }
             // (Not up, or not told its settings yet, as it starts: it sets your machines up once it
             // is, `follow`. Said, when you asked.)
             let starting = "This Mac’s background service isn’t running yet, so it couldn’t be set up. Try again in a moment."
@@ -559,7 +646,7 @@ final class PhoneLink {
                 return
             }
             try JSONEncoder().encode(Setup(relay: relay.absoluteString, name: machine.name, mac: given.mac, macSign: given.macSign,
-                                           docs: given.docs, id: machine.id)).write(to: settings)
+                                           docs: given.docs, id: machine.id, replaces: given.replaces)).write(to: settings)
             let output = try await machine.connection.run(RemoteEngineInstaller.script("""
                 KUVO_HOME="$K" BUN_BE_BUN=1 BUN_RUNTIME_TRANSPILER_CACHE_PATH=0 "$E" --config=/dev/null --no-env-file "$K/bin/\(Bridge.fileName)" setup
                 """), input: settings)
@@ -654,8 +741,8 @@ final class PhoneLink {
     #if DEBUG
     /// A test's machine, as if it was set up for your computers: its box's key, and its bridge
     /// talking to them itself.
-    func standIn(machine: String, key: String) {
-        machineHosts[machine] = MachineHost(name: machine, address: "", key: key, peers: true)
+    func standIn(machine: String, key: String, address: String = "") {
+        machineHosts[machine] = MachineHost(name: machine, address: address, key: key, peers: true)
     }
     #endif
 
@@ -732,8 +819,8 @@ final class PhoneLink {
         // Which route answers, by its path alone: a query string never changes it (as on a machine).
         // Those that read the query get the request whole; the rest, its route.
         let route = request.path.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init) ?? request.path
-        // An area that's moved onto this Mac's box: answered there, as a machine's box answers it.
-        if Self.movedToBox(route) {
+        // All but this Mac's own areas are its box's: answered there, as a machine's box answers them.
+        if !Self.appAnswers(route) {
             guard let box = Self.box.withLock({ $0 }) else { return Self.boxUnavailable() }
             let base = box.url.absoluteString.hasSuffix("/") ? box.url : URL(string: box.url.absoluteString + "/")!
             // The app's own requests (no phone asking) say so: they aren't a phone using the box.
@@ -771,16 +858,6 @@ final class PhoneLink {
         }
         var routed = request
         routed.path = route
-        // A conversation carried on with the coding agents, as picking one of their models in it does.
-        if let id = Self.sessionID(in: route, then: "agents") {
-            return AsyncThrowingStream { continuation in
-                Task { @MainActor in
-                    let posts = request.method.uppercased() == "POST"
-                    let (status, body) = posts ? await link?.moveToAgents(id, with: request.body) ?? (503, Data()) : (405, Data("{}".utf8))
-                    Self.sendJSON(status, body, to: continuation)
-                }
-            }
-        }
         // Settings › Machines: this Mac's machines. Adding a machine checks it first: the phone
         // going stops that (and nothing else, which would leave a removal half done).
         if route == "kuvo/machines/events", request.method.uppercased() == "GET" { return Self.following { link?.machinesJSON() } }
@@ -841,18 +918,60 @@ final class PhoneLink {
     /// This Mac's keys, for its box's link (asked through the host interface): its link key, relay
     /// secret and signing key, as your phones and machines know this Mac. None while the link isn't
     /// wanted (nothing's made for it then), or the Keychain won't give them out.
-    func boxIdentity() -> [String: String]? {
-        guard relayWanted, hasIdentity else { return nil }
-        // Read before the check: one the Keychain won't give out isn't stood in for.
-        let sign = signing.rawRepresentation.base64URL
-        guard !Self.unreadable else { return nil }
-        return ["key": key.rawRepresentation.base64URL, "secret": secret.bytes.base64URL, "sign": sign]
+    /// Read off the main actor, never asking you to unlock your Keychain (the keeper has no window,
+    /// and a prompt would hold up everything it answers meanwhile).
+    func boxIdentity() async -> [String: String]? {
+        guard relayWanted else { return nil }
+        await readForBox()
+        // One the Keychain won't give out isn't stood in for.
+        guard !unreadable, let keptIdentity, let keptSigning else { return nil }
+        return ["key": keptIdentity.key.rawRepresentation.base64URL, "secret": keptIdentity.secret.bytes.base64URL, "sign": keptSigning.rawRepresentation.base64URL]
+    }
+
+    @ObservationIgnored private var readingForBox: Task<Void, Never>?
+
+    /// This Mac's keys, those not read yet, or all of them again once a minute at most while the
+    /// Keychain was locked: what it gives then is this Mac's own (one it never gave is never stood
+    /// in for). One read at a time; any made, on the main actor (`took`).
+    private func readForBox() async {
+        if let readingForBox { return await readingForBox.value }
+        let again = unreadable
+        if again {
+            guard !saidNo, readAgainAt.map({ Date.now.timeIntervalSince($0) >= readAgainAfter }) ?? true else { return }
+        } else {
+            guard keptIdentity == nil || keptSigning == nil else { return }
+        }
+        let service = service
+        let identity = again || keptIdentity == nil, signing = again || keptSigning == nil
+        let task = Task {
+            let read = await Task.detached {
+                (identity ? Self.readIdentity(in: service, asking: false) : nil, signing ? Self.readSigning(in: service, asking: false) : nil)
+            }.value
+            let refusals = [read.0?.key.refusal, read.0?.secret.refusal, read.1?.refusal].compactMap { $0 }
+            if again {
+                readAgainAt = .now
+                if let refusal = refusals.first {
+                    if refusal != errSecInteractionNotAllowed { saidNo = true }
+                    return
+                }
+                unreadable = false
+                readAgainAt = nil
+            }
+            if let identity = read.0, again || keptIdentity == nil { keptIdentity = tookIdentity(identity) }
+            if let signing = read.1, again || keptSigning == nil { keptSigning = tookSigning(signing) }
+        }
+        readingForBox = task
+        await task.value
+        readingForBox = nil
     }
 
     /// That it's this Mac asking a machine it set up for its vault's key (PROTOCOL.md, "Vault"):
     /// its link key, the time, and its signing key's signature of both and the machine's id here.
     func vaultProof(machine: String) -> [String: Any]? {
         guard hasIdentity else { return nil }
+        // Read before the check: one the Keychain won't give out isn't signed with.
+        let signing = signing
+        guard !unreadable else { return nil }
         let at = Int(Date().timeIntervalSince1970 * 1000)
         // Once only: the machine takes each nonce once.
         let nonce = Data((0..<18).map { _ in UInt8.random(in: 0...255) }).base64URL
@@ -865,6 +984,8 @@ final class PhoneLink {
     /// \0<METHOD>\0<path>\0<sha256 of the body, hex>`, base64url JSON (`x-kuvo-vault-proof`).
     func vaultRequestProof(machine: String, method: String, path: String, body: Data) -> String? {
         guard hasIdentity else { return nil }
+        let signing = signing
+        guard !unreadable else { return nil }
         let at = Int(Date().timeIntervalSince1970 * 1000)
         let nonce = Data((0..<18).map { _ in UInt8.random(in: 0...255) }).base64URL
         let hash = SHA256.hash(data: body).map { String(format: "%02x", $0) }.joined()
@@ -873,8 +994,8 @@ final class PhoneLink {
         return json.base64URL
     }
 
-    /// What a phone asks of this Mac that its box hands the app (the Mac's own routes, and those
-    /// that haven't moved to the box yet), answered as it was: `phone`, the phone's key.
+    /// What a phone asks of this Mac that its box hands the app (the Mac's own routes, its
+    /// `MAC_APP_ROUTES`; an older box's anything else goes back to it), answered: `phone`, the phone's key.
     func answerForBox(_ request: LinkRequest, phone: Data?) -> AsyncThrowingStream<LinkResponsePart, Error> {
         // The engine not up yet (the app's starting): its routes say so, as a machine's do.
         guard let endpoint else {
@@ -963,10 +1084,10 @@ final class PhoneLink {
         _ = done.wait(timeout: .now() + 2)
     }
 
-    /// The areas that have moved onto this Mac's box (`BoxProcess`), by their routes: a phone's
-    /// requests and the app's own (`BoxClient`) go there.
-    nonisolated static let boxRoutes = ["kuvo/projects", "kuvo/worktrees", "kuvo/plugins", "kuvo/folders", "kuvo/programs", "kuvo/providers", "kuvo/wakes", "kuvo/config", "kuvo/mcp/catalog", "kuvo/skills", "kuvo/skill-library", "kuvo/skill-trash", "kuvo/integrations", "kuvo/keys", "kuvo/bots", "kuvo/personalities",
-                                                  "kuvo/phones", "kuvo/link", "kuvo/attention", "kuvo/accounts/ended", "kuvo/accounts/refreshable", "kuvo/accounts/credentials", "kuvo/accounts/found", "kuvo/file", "kuvo/sign-in/return", "kuvo/named", "kuvo/groups", "kuvo/artifacts", "kuvo/search", "kuvo/git", "kuvo/agent-tools", "kuvo/moves", "kuvo/work", "kuvo/vault", "kuvo/approval"]
+    /// This Mac's own areas, which the app answers itself: what its box hands it of a phone's
+    /// (the box's `MAC_APP_ROUTES`, the one list of them, which a test holds this to). Everything
+    /// else, a phone's or the app's own (`BoxClient`), is its box's (`BoxProcess`).
+    nonisolated static let appRoutes = ["kuvo/machines", "kuvo/hosts", "kuvo/usage", "kuvo/asks", "kuvo/mac", "kuvo/claude-code", "kuvo/engine"]
     /// Where this Mac's box is reached while it runs.
     nonisolated static let box = OSAllocatedUnfairLock<ServerEndpoint?>(initialState: nil)
     /// Connections of its own to this Mac's box, plenty of them: the streams that follow it
@@ -998,34 +1119,8 @@ final class PhoneLink {
     /// machine's link checks them.
     nonisolated private static let groupRoute = #"\Akuvo/groups(?:/(?:events|joinable|grp_[a-z0-9]+(?:/(?:events|stop|keep-going|viewed|undo|start))?))?\z"#
 
-    /// What this Mac answers, one name per route or group of routes a client might check
-    /// (PROTOCOL.md, "Features"): what a machine's bridge has too (its `FEATURES`, but
-    /// `engine.start` and `update`), and the Mac's own. `usage` is added while the usage panel is.
-    static let features = [
-        "accounts.credentials", "accounts.found", "accounts.refresh", "agents", "artifacts", "asks", "attention", "bots", "bots.edit", "bots.events", "bots.job", "bots.keys", "bots.make", "branch", "btw", "btw.threads", "config", "config.apply", "engine.restart",
-        "file", "folders", "folders.files", "git", "git.merge", "git.pull-request", "git.pull-request.draft", "git.push", "goals", "groups", "groups.delete", "groups.edit", "groups.joinable", "groups.make", "groups.seats", "handoff", "integrations", "keys", "mcp.catalog", "moves", "moves.agents", "moves.check",
-        "named", "personalities", "phones", "phones.pair", "plugins.search", "programs", "projects", "providers.models", "reviews", "reviews.parts", "reviews.scopes", "search", "sessions.agents", "shell.stop", "sign-in.return", "skills",
-        "personalities.events", "skills.trash", "sandbox", "sandbox.check", "sandbox.asks", "vault", "wakes", "wakes.edit", "wakes.events", "worktrees", "worktrees.events", "worktrees.where",
-        "agent-tools", "sessions.start", "letters-read", "work.elsewhere", "work.elsewhere.start", "approval.otherComputers", "queue", "queue.waits", "work", "work.projects", "work.goals", "work.goals.apps", "work.goals.projects", "work.unanswering", "autopilot", "approval", "approval.reviewer", "git.backups", "approval.fullAccess", "approval.held", "approval.default", "approval.seen", "approval.stopped", "limits",
-        // The Mac's own.
-        "accounts.ended", "claude-code", "hosts", "mac", "machines",
-    ]
-
-    /// Kuvo's own routes, beside the engine's.
+    /// This Mac's own routes that answer at once (`appRoutes`).
     private func answer(_ request: LinkRequest) -> (Int, Data) {
-        /// `chats`: the folder of conversations of no project, which the phone lists as Chats.
-        /// `agents`: the outside agents' bridge is up, at `kuvo/agents/api/…`.
-        struct Info: Encodable {
-            var kind = "mac"; var name: String; var app: String; var engine: String; var chats: String
-            var agents = false
-            /// When the engine running now came up, in seconds since 1970: a restart changes it
-            /// (null while none runs).
-            @SentAsNull var started: Double? = nil
-            /// Integrations' names by their MCP server's, for what a server asks.
-            var integrations = Dictionary(uniqueKeysWithValues: Integrations.all.map { ($0.id, $0.title) })
-            /// What this Mac answers (PROTOCOL.md, "Features"), which a client checks rather than versions.
-            var features: [String]
-        }
         struct Hosts: Encodable {
             /// `machine`: its id, as bots name theirs. `anotherMac`: its engine is another Mac's,
             /// which gives it its settings, so this Mac's (`kuvo/config`) don't reach it (as it
@@ -1043,12 +1138,6 @@ final class PhoneLink {
             return (405, Data("{}".utf8))
         }
         switch request.path {
-        case "kuvo/info":
-            var info = Info(name: Self.computerName, app: AppInfo.version, engine: OpenCodeEngine.version, chats: Workspace.chatsFolder,
-                            features: (Self.features + (usageJSON() == nil ? [] : ["usage"])).sorted())
-            info.agents = agents?.api != nil
-            info.started = engineStarted()?.timeIntervalSince1970
-            return (200, (try? encoder.encode(info)) ?? Data())
         case "kuvo/hosts":
             let machines = bots?.app?.machines
             let hosts = machineHosts.sorted { $0.value.name < $1.value.name }.map { id, host in
@@ -1081,7 +1170,7 @@ final class PhoneLink {
             return (405, Data("{}".utf8))
         case "kuvo/engine/restart" where request.method.uppercased() == "POST":
             // Answered first: the restart takes the link down with the engine, and the phone sees
-            // this Mac come back (`kuvo/info` answers again).
+            // this Mac come back (its box's `kuvo/info` says when it started).
             let restart = restartEngine
             Task { @MainActor in
                 try? await Task.sleep(for: .seconds(1))
@@ -1116,6 +1205,9 @@ final class PhoneLink {
                 var host: String
                 /// The machine whose browser it is, by name; none for this Mac's.
                 var machine: String?
+                /// That machine's box, by its link address (as `kuvo/hosts` gives it), when your
+                /// phones can reach it: the ask is its own, and its answer goes there too.
+                var box: String?
                 var session: String?
                 var asker: String?
                 var username: Bool?
@@ -1131,7 +1223,8 @@ final class PhoneLink {
             var asks: [Ask]
         }
         let asks = (browserAsks?.asks ?? []).map { ask in
-            var listed = Listed.Ask(id: ask.id, kind: "", host: ask.host, machine: ask.machine.map { machineName($0) ?? $0 }, session: ask.session, asker: ask.asker)
+            let box = ask.machine.flatMap { machineHosts[$0]?.address }.flatMap { $0.isEmpty ? nil : $0 }
+            var listed = Listed.Ask(id: ask.id, kind: "", host: ask.host, machine: ask.machine.map { machineName($0) ?? $0 }, box: box, session: ask.session, asker: ask.asker)
             if ask.passkey { listed.passkey = true }
             switch ask.kind {
             case .signIn(let username, let password):
@@ -1263,67 +1356,9 @@ final class PhoneLink {
         }
     }
 
-    /// Why a bot living on `machine` (nil for this Mac; `place` is its name) can't use `model`, as
-    /// New Bot and Edit Bot offer models there: nil when it can.
-    private static func refusal(of model: ModelRef, on machine: String?, called place: String?, app: AppModel) -> String? {
-        guard ModelScope.on(machine: machine).allows(model.providerID) else { return "That model can’t run on \(place ?? "this Mac"): choose another." }
-        let catalog = machine.flatMap { app.machines.engine($0)?.catalog } ?? app.catalog
-        return catalog.refusal(model, on: place)
-    }
-
-    /// `POST kuvo/sessions/<id>/agents` with `{model}`: a conversation on the engine (here or on a
-    /// machine) carried on with the coding agents on `model` (one of theirs, or Custom Auto), as
-    /// picking it in the conversation does: a session of theirs with all of it, what was waiting
-    /// and its draft; the engine's goes to Archived (a bot's takes the new one). Answers 200
-    /// `{session}`, the new one; 400 for a model that isn't theirs; 404 for no such conversation;
-    /// 409 for one with them already, or while it moves; 422 for a model it can't use where it
-    /// is; 503 while the coding agents aren't running there.
-    func moveToAgents(_ id: String, with body: Data) async -> (Int, Data) {
-        guard let workspace, let app = bots?.app else { return (503, Self.message("Kuvo Code isn’t ready yet. Try again in a moment.")) }
-        guard let session = workspace.session(id) else { return (404, Self.message("That conversation isn’t there any more.")) }
-        if OutsideAgents.isAgentSession(session) { return (409, Self.message("It’s with the coding agents already.")) }
-        if isMoving(id) { return (409, Self.message(Moves.Failure.moving.localizedDescription)) }
-        struct Given: Decodable { var model: ModelRef }
-        let machine = RemoteFolder.machine(of: session.location.directory)
-        guard let model = (try? JSONDecoder().decode(Given.self, from: body))?.model, OutsideAgents.runsWithAgents(model, machine: machine) else {
-            return (400, Self.message("That isn’t a coding agent’s model."))
-        }
-        let place = machine.map { machine in app.machines.list.first { $0.id == machine }?.name ?? machine }
-        if let refusal = Self.refusal(of: model, on: machine, called: place, app: app) { return (422, Self.message(refusal)) }
-        do {
-            guard let moved = try await workspace.moveToAgents(id, model: model, opens: false) else { return (404, Self.message("That conversation isn’t there any more.")) }
-            return (200, (try? JSONEncoder().encode(["session": moved.id])) ?? Data())
-        } catch let failure as OutsideAgents.Failure {
-            return (503, Self.message(failure.localizedDescription))
-        } catch let failure as Moves.Failure {
-            return (409, Self.message(failure.localizedDescription))
-        } catch {
-            return (502, Self.message(error.localizedDescription))
-        }
-    }
-
-    /// `kuvo/sessions/<id>/<then>`'s session.
-    nonisolated private static func sessionID(in path: String, then: String) -> String? {
-        let parts = path.split(separator: "/")
-        guard parts.count == 4, parts[0] == "kuvo", parts[1] == "sessions", parts[3] == then else { return nil }
-        return String(parts[2]).removingPercentEncoding
-    }
-
-    /// Whether a route is answered by this Mac's box: an area that's moved there (`boxRoutes`).
-    nonisolated static func movedToBox(_ route: String) -> Bool {
-        boxRoutes.contains { route == $0 || route.hasPrefix($0 + "/") }
-            // A session started with a task, a session's queue, its approval, its reviewer's decisions and its Autopilot
-            // (not its other routes, `kuvo/sessions/<id>/agents`).
-            || route == "kuvo/sessions" || route.wholeMatch(of: /kuvo\/sessions\/(queues\/events|[^\/]+\/(stop|approval|decisions|autopilot(\/asked)?|queue(\/.+)?))/) != nil
-            // A plan signed out (`kuvo/accounts/<id>/forget`), a provider's models asked of again
-            // (`kuvo/accounts/<id>/refresh`), and a command stopped (`kuvo/shell/<id>/stop`): the box's too.
-            || Self.oneOf(route, "kuvo/accounts/", "/forget") || Self.oneOf(route, "kuvo/accounts/", "/refresh") || Self.oneOf(route, "kuvo/shell/", "/stop")
-    }
-
-    /// Whether `route` is `<start><one part><end>`.
-    nonisolated private static func oneOf(_ route: String, _ start: String, _ end: String) -> Bool {
-        route.hasPrefix(start) && route.hasSuffix(end) && route.count > start.count + end.count
-            && !route.dropFirst(start.count).dropLast(end.count).contains("/")
+    /// Whether a route is this Mac's own, which the app answers itself (`appRoutes`).
+    nonisolated static func appAnswers(_ route: String) -> Bool {
+        appRoutes.contains { route == $0 || route.hasPrefix($0 + "/") }
     }
 
     /// A response that doesn't end: `current()` now, as a line of JSON, and again each time it
@@ -1389,10 +1424,9 @@ final class PhoneLink {
     // MARK: Keychain
 
     static var keychainService: String { (Bundle.main.bundleIdentifier ?? "run.kuvo.code") + ".phone-link" }
-    private static var service: String { keychainService }
 
     /// The item, or nil when there's none; throws when the Keychain can't be read.
-    private static func keychain(_ account: String) throws -> Data? {
+    nonisolated private static func keychain(_ account: String, in service: String, asking: Bool) throws -> Data? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -1400,7 +1434,7 @@ final class PhoneLink {
             kSecReturnData as String: true,
         ]
         var result: CFTypeRef?
-        let status = Keychain.copyMatching(query, &result)
+        let status = asking ? Keychain.copyMatching(query, &result) : Keychain.copyWithoutAsking(query, &result)
         switch status {
         case errSecSuccess: return result as? Data
         case errSecItemNotFound: return nil
@@ -1408,17 +1442,31 @@ final class PhoneLink {
         }
     }
 
-    private static func setKeychain(_ data: Data, for account: String) {
+    nonisolated private static func setKeychain(_ data: Data, for account: String, in service: String) {
         let base: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
         ]
         if Keychain.update(base, [kSecValueData as String: data]) != errSecItemNotFound { return }
-        var item = base
-        item[kSecValueData as String] = data
-        item[kSecAttrLabel as String] = "Kuvo Code phone link"
-        item[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
-        Keychain.add(item)
+        addKeychain(data, for: account, in: service)
     }
+
+    /// One added where there's none (`errSecDuplicateItem` where there is).
+    @discardableResult
+    nonisolated private static func addKeychain(_ data: Data, for account: String, in service: String) -> OSStatus {
+        Keychain.add([
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+            kSecValueData as String: data,
+            kSecAttrLabel as String: "Kuvo Code phone link",
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock,
+        ])
+    }
+}
+
+extension UserDefaults {
+    /// `phoneLink` (`PhoneLink.isEnabled`), for following a change to it.
+    @objc dynamic var phoneLink: Bool { bool(forKey: "phoneLink") }
 }

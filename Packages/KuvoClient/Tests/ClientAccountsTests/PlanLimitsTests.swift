@@ -73,7 +73,7 @@ struct PlanLimitsTests {
         let listed = UsageListing.items(panel: panel, covers: \.covers, accounts: limits.accounts).map { item -> String in
             switch item {
             case .panel(let entry): "panel:\(entry.id)"
-            case .account(let account, let below): account.title + (below.map { " +\($0.id)" } ?? "")
+            case .account(let row, let below): row.account.title + (below.map { " +\($0.id)" } ?? "")
             }
         }
         // The box's Copilot comes after: the panel's own Copilot isn't one it covers here.
@@ -109,6 +109,25 @@ struct PlanLimitsTests {
         #expect(rows[0].sources.map(\.box) == ["mac", "hetzner", "mini"])
     }
 
+    @Test func everyComputersAccountsAreListedOnceWhereTheFirstMacsPanelSaysTheyGo() throws {
+        // The phone's list: the first Mac's panel places them; its machine has the same Claude, and
+        // one of its own the panel doesn't cover.
+        let panel = [Entry(id: "cursor"), Entry(id: "claude", covers: "claude")]
+        let listed = UsageListing.items(panel: panel, covers: \.covers, boxes: [
+            .init(key: "mac", name: nil, accounts: try box(claude("a1b2c3d4e5f60718", used: 0.40, read: 1_794_160_000))),
+            .init(key: "hetzner", name: "hetzner", accounts: try box([
+                claude("a1b2c3d4e5f60718", used: 0.53, read: 1_794_164_000),
+                claude("bbbbbbbbbbbbbbbb", used: 0.9, read: 1_794_161_000, provider: "claude-code@1f2e3d4c", label: "Athas"),
+            ].joined(separator: ","))),
+        ]).map { item -> String in
+            switch item {
+            case .panel(let entry): "panel:\(entry.id)"
+            case .account(let row, let below): row.account.title + (below.map { " +\($0.id)" } ?? "") + " on " + row.sources.map(\.box).joined(separator: ",")
+            }
+        }
+        #expect(listed == ["panel:cursor", "Claude +claude on mac,hetzner", "Claude · Athas on hetzner"])
+    }
+
     @Test func twoAccountsOfOneProviderStayTwoRowsByTheirOwnNames() throws {
         let rows = UsageListing.accounts([
             .init(key: "mac", name: nil, accounts: try box(claude("aaaaaaaaaaaaaaaa", used: 0.4, read: 1_794_160_000))),
@@ -122,8 +141,9 @@ struct PlanLimitsTests {
     }
 
     @Test func aBoxThatDoesntSayWhoAnAccountIsStillShowsIt() throws {
-        // An older box (no identity), and a Mac's Claude token, which can't say: each its box's own
-        // row, named for where it's from only where two would have one name.
+        // An older box (no identity), and a Mac's Claude token before Claude Code has run with it,
+        // which can't say yet: each its box's own row, named for where it's from only where two
+        // would have one name.
         let rows = UsageListing.accounts([
             .init(key: "mac", name: nil, accounts: try box(claude(nil, used: 0.4, read: 1_794_160_000))),
             .init(key: "hetzner", name: "hetzner", accounts: try box(claude("aaaaaaaaaaaaaaaa", used: 0.5, read: 1_794_161_000))),
@@ -160,10 +180,11 @@ struct PlanLimitsTests {
           {"id": "GPT-5.3-Codex-Spark.primary", "used": 0.07, "minutes": 300, "model": "GPT-5.3-Codex-Spark", "read": 1794162000000, "source": "usage"}]}
         """#)
         let listed = UsageListing.items(panel: [Entry](), covers: \.covers, accounts: accounts)
-        guard listed.count == 1, case .account(let account, _) = listed[0] else {
+        guard listed.count == 1, case .account(let row, _) = listed[0] else {
             Issue.record("two rows for one account: \(listed.count)")
             return
         }
+        let account = row.account
         #expect(account.title == "Codex")
         #expect(account.plan == "Pro")
         #expect(account.windows.map(\.title) == ["Session", "GPT-5.3-Codex-Spark", "Weekly"])
@@ -194,5 +215,13 @@ struct PlanLimitsTests {
         }
         let one = UsageListing.accounts([.init(key: "mac", name: nil, accounts: try box([spark("GPT-5.3-Codex-Spark", 1), spark("gpt-5.3-codex-spark", 2)].joined(separator: ",")))])
         #expect(one.map { $0.account.windows.count } == [1])
+
+        // Two accounts of one name on a machine, listed by a client that isn't on it (the phone with
+        // only that machine): named for it once, never twice.
+        let away = UsageListing.accounts([
+            .init(key: "hetzner", name: "hetzner", accounts: try box([claude(nil, used: 0.4, read: 1_794_160_000),
+                                                                       claude(nil, used: 0.5, read: 1_794_160_000, provider: "claude-code@1f2e3d4c")].joined(separator: ","))),
+        ])
+        #expect(away.map(\.account.title) == ["Claude · hetzner", "Claude · hetzner"])
     }
 }

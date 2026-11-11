@@ -19,6 +19,7 @@ import { announce, toldPeers, writeAgents } from "./agents";
 import { takeAgents } from "./directory";
 import { forgetOldMacs, macsOf, mailFor, openMail, takeLegacyPeers } from "./known";
 import { takeSeat } from "./seats";
+import { queuesBack, takeWorkQueueMail, tellQueuesAgain } from "../work-queue/across";
 import type { PeerPlaces } from "../engine/client";
 import type { DocsMail } from "../documents/work";
 import type { Delivered } from "../letters/outbox";
@@ -48,6 +49,7 @@ export function peerMail(sender: MailSender, payload: Record<string, unknown>, h
   // told again now.
   if (payload.ask === "agents") {
     toldPeers.delete(sender.key);
+    tellQueuesAgain(sender.key);
     tellMovingAgain();
     // One answer at a time, and once in a while from each (an ask again soon after is the same).
     const now = Date.now();
@@ -68,6 +70,9 @@ export function peerMail(sender: MailSender, payload: Record<string, unknown>, h
   if (isObject(payload.moving)) takeMoving(sender, payload.moving);
   // Group chats across your computers: to the coding agents' bridge here.
   if (isObject(payload.seat) || isObject(payload.seatPart)) takeSeat(sender, payload, send).catch(() => {});
+  // The Work Queue across your computers: what each tells of its queue, numbers' asks and blocks,
+  // and items handed between them (PROTOCOL.md, "The Work Queue", "Across your computers").
+  if (isObject(payload.workQueue)) takeWorkQueueMail(sender, payload.workQueue, host, places).catch(() => {});
   if (isObject(payload.delivered) && typeof payload.delivered.id === "string") {
     letterWent(sender, payload.delivered as unknown as Delivered);
     if (payload.delivered.ok === true) rowsWent(sender, payload.delivered.id);
@@ -92,6 +97,7 @@ export function receiveMail(
   if (noteHeard(sender.key)) {
     callsBack(sender.key);
     rowsBack();
+    queuesBack(sender.key);
   }
   if (macsOf(link).includes(sender.key)) heardFromMac(sender.key, payload);
   const attention = macsOf(link).includes(sender.key) ? attentionGiven(payload.attention) : null;

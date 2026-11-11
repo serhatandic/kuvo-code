@@ -41,6 +41,11 @@ const ownRuntime = (() => {
   try { fs.linkSync(fs.realpathSync(process.execPath), linked); } catch { fs.copyFileSync(process.execPath, linked); fs.chmodSync(linked, 0o755); }
   return linked;
 })();
+// The link's script, for the commands that run it: a copy in this file's folder, as a machine has
+// its own in its box's folder. The checkout's may be in Kuvo Code's own folders (an agent's worktree
+// is, in `~/.kuvo-code`), which the sandbox hides from commands. (One file, all it needs inside it.)
+const ownScript = path.join(root, "kuvo-link.js");
+fs.copyFileSync(script, ownScript);
 // kuvo-wake, as Wakes.swift has it and BoxFiles puts it in every box's bin.
 const swift = fs.readFileSync(new URL("../../../OpenCodeKit/Sources/OpenCodeKit/Engine/Wakes.swift", import.meta.url), "utf8");
 const opening = 'public static let script = #"""\n';
@@ -264,8 +269,8 @@ test("on, a command writes in its own project, git works there, and Kuvo Code's 
       ["run its runtime", `${runtime} -e 'process.exit(0)'`],
       ["read the box's sockets' key", `cat ${JSON.stringify(keyFile)}`],
       ["reach the vault's socket", `${runtime} -e '${straight}'`],
-      ["read the link's script", `cat ${JSON.stringify(script)}`],
-      ["reach the vault through the box", `out=$(echo '${fill}' | KUVO_HOME=${JSON.stringify(box.home)} ${runtime} ${JSON.stringify(script)} box route 2>/dev/null); case $out in *'"status":503'*) false ;; *) true ;; esac`],
+      ["read the link's script", `cat ${JSON.stringify(ownScript)}`],
+      ["reach the vault through the box", `out=$(echo '${fill}' | KUVO_HOME=${JSON.stringify(box.home)} ${runtime} ${JSON.stringify(ownScript)} box route 2>/dev/null); case $out in *'"status":503'*) false ;; *) true ;; esac`],
       ["write in its project", "echo ok > made.txt"],
       ["git in its project", "git add made.txt && git -c user.name=t -c user.email=t@t commit -qm made"],
       ["its temporary files", `echo ok > "$TMPDIR/scratch"`],
@@ -281,10 +286,9 @@ test("on, a command writes in its own project, git works there, and Kuvo Code's 
     assert.equal(seen["run its runtime"], "allowed", ran.out);
     assert.equal(seen["read the box's sockets' key"], "refused", ran.out);
     assert.equal(seen["reach the vault's socket"], "refused", ran.out);
-    // (`box route` below is that script. A checkout inside Kuvo Code's own folders, as an agent's worktree
-    // is, is hidden from commands too: the route then can't start, and its failure looks like a refusal's
-    // opposite, an answer that isn't a 503.)
-    assert.equal(seen["read the link's script"], "allowed", `The sandbox hides this checkout's ${script} from commands, so the vault route can't be tried: run this test from a checkout outside Kuvo Code's folders (not under run.kuvo.code or ~/.kuvo-code).\n${ran.out}`);
+    // (`box route` below is that script: hidden, the route couldn't start, and its failure would look
+    // like a refusal's opposite, an answer that isn't a 503.)
+    assert.equal(seen["read the link's script"], "allowed", ran.out);
     assert.equal(seen["reach the vault through the box"], "refused", ran.out);
     assert.equal(seen["read the box's files"], "refused", ran.out);
     // (Linux shows a hidden folder's names, never what's in its files.)
@@ -761,6 +765,12 @@ test("a link a command makes doesn't take the engine's own file tools out of the
       // (The engine trims a line of any spaces, and splits lines only at \n.)
       ["patch a new file, after a no-break space", "patch", { patchText: "*** Begin Patch\n\u00a0*** Add File: keys/new\n+x\n*** End Patch" }, input => patchedFile(input.patchText)],
       ["patch a new file, by a name with a line separator", "patch", { patchText: "*** Begin Patch\n*** Add File: ok\u2028keys/new\n+x\n*** End Patch" }, input => patchedFile(input.patchText)],
+      // (The image tool writes the picture it makes where its path says.)
+      ["make a picture where a link leads out", "experimental_image_generate", { path: "profile", prompt: "a cat" }, input => input.path],
+      // (The engine takes a \\ for a / as it weighs a rule for a folder outside: never one, in a
+      // folder beside the project, or one you allowed.)
+      ["write beside the project by a backslash", "write", { path: `${project}\\x`, content: "x" }, input => input.path],
+      ["patch beside the project by a backslash", "patch", { patchText: `*** Begin Patch\n*** Add File: ${project}\\x\n+x\n*** End Patch` }, input => patchedFile(input.patchText)],
       ["read what's in the project", "read", { path: "notes.md" }, input => input.path],
     ]) {
       const called = await engineCalls(box, project, tool, input);
@@ -781,6 +791,9 @@ test("a link a command makes doesn't take the engine's own file tools out of the
       "write through a link that goes up from another": "asks",
       "patch a new file, after a no-break space": "asks",
       "patch a new file, by a name with a line separator": "asks",
+      "make a picture where a link leads out": "asks",
+      "write beside the project by a backslash": "refused",
+      "patch beside the project by a backslash": "refused",
       "read what's in the project": "goes",
     });
     // A link that stays in the project stays as written.
@@ -1460,7 +1473,7 @@ test("a command reaches its own conversation's SSH agent from the sandbox (the v
   const other = path.join(root, "ssh-other");
   fs.mkdirSync(project);
   fs.mkdirSync(other);
-  const agents = sshAgentsOf(box.home);
+  const agents = sshAgentsOf(box.home, !linux);
   // On macOS, one of the app's SSH connections to your machines, beside the agents (a stand-in).
   const connection = linux ? null : path.join(path.dirname(agents), `sandbox-test-${process.pid}.sock`);
   const listening = connection && net.createServer(socket => socket.end());

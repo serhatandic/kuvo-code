@@ -1,5 +1,6 @@
 import AppKit
 import ClientDesign
+import ClientSessions
 import ClientText
 import Foundation
 import SwiftUI
@@ -102,6 +103,8 @@ struct FileLinkingParser: MarkupParser {
     /// In a group chat, the bots and sessions a message names with "&" (see `MessageMentions`).
     var agents: [MessageMentions.Agent] = []
     var highlight: FindHighlight?
+    /// What the Work Queue items it names are (`#243`): drawn as their chips.
+    var refs: [String: WorkRef] = [:]
 
     func attributedString(for input: String) throws -> AttributedString {
         #if DEBUG
@@ -128,6 +131,7 @@ struct FileLinkingParser: MarkupParser {
             text.replaceSubrange(range, with: name)
         }
         SiteIconAttachment.mark(&text)
+        WorkItemChipAttachment.apply(to: &text, refs: refs)
         if let highlight { FindText.mark(&text, highlight, inCode: true) }
         return text
     }

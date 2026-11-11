@@ -66,8 +66,7 @@ final class ProviderLinksTests: XCTestCase {
     func testInstalledProvidersRespectQuickLinkCap() {
         let allowed = Set(["Status", "Dashboard", "API Keys", "Usage", "Activity", "Credits"])
         let suiteName = "ProviderLinksTests.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suiteName)!
-        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let defaults = testDefaults(suiteName: suiteName)!
         let providers = ProviderCatalog.make(defaults: defaults)
         for runtime in providers {
             let links = runtime.provider.visibleLinks

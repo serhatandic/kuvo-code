@@ -150,6 +150,10 @@ function phoneFor(host, hostKey) {
       if (frame.kind !== link.Frame.transport) return { closed: true };
       return link.decodeMessage(transport.open(frame.body));
     },
+    // The phone ends its session (it gave up waiting, say).
+    close() {
+      return host.receive(address, link.frame(link.Frame.close, session));
+    },
     // A whole response: its head, and its body up to the message marked end.
     async response() {
       const first = await this.receive();
@@ -294,7 +298,9 @@ test("files a phone sends with a message are kept on the box, where the agent op
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
   t.after(() => { server.closeAllConnections(); server.close(); });
   const hostKey = link.newKey();
-  const handle = link.engineHandler(() => ({ pid: process.pid, port: server.address().port, password: "s3cret", version: "2.0.32" }));
+  const target = () => ({ pid: process.pid, port: server.address().port, password: "s3cret", version: "2.0.32" });
+  const agents = await runningAs("kuvo-agents", t);
+  const handle = link.engineHandler(target, {}, () => ({ ...target(), pid: agents }));
   const host = new link.LinkHost({ key: hostKey, hello: { v: 1, kind: "machine", name: "m", app: "0" }, authorize: () => true, handle });
   const phone = phoneFor(host, hostKey);
   await phone.open({});
@@ -310,6 +316,15 @@ test("files a phone sends with a message are kept on the box, where the agent op
     assert.equal((await phone.response()).head.s, 200);
     return prompted[session];
   };
+  const video = Buffer.alloc(7_727_609, 42);
+  phone.send({ t: "req", id: id++, m: "POST", p: `kuvo/agents/api/session/ses_video/prompt`, h: { "Content-Type": "application/json" } }, Buffer.from(JSON.stringify({ id: "msg_video", text: "See this", files: [{ name: "video.mp4", uri: `data:video/mp4;base64,${video.toString("base64")}` }] })));
+  assert.equal((await phone.response()).head.s, 200);
+  assert.ok(prompted.ses_video.text.startsWith("See this\n\n<attached-files>"));
+  assert.equal(prompted.ses_video.id, "msg_video");
+  assert.equal(prompted.ses_video.files, undefined);
+  const videoPath = prompted.ses_video.text.split("\n").find(line => line.endsWith("/video.mp4"));
+  assert.ok(videoPath.startsWith(path.join(home, "attachments", "ses_video") + path.sep));
+  assert.deepEqual(fs.readFileSync(videoPath), video);
   // Where the note at the message's end says each file is, under its heading.
   const listed = (text, heading) => {
     const lines = text.split("\n");
@@ -358,6 +373,51 @@ test("files a phone sends with a message are kept on the box, where the agent op
   const both = listed(eyes.text, "The attached files are on disk here (what's in them is in this message already):");
   assert.deepEqual(both.map(file => path.basename(file)), ["note.pdf", "dot.png"]);
   assert.deepEqual(fs.readFileSync(both[0]), pdf);
+});
+
+test("a message that arrived whole reaches its conversation though the phone that sent it gave up waiting (#358)", { timeout: 30_000 }, async t => {
+  // The coding agents' bridge, saying which model a conversation is on only once the phone's gone
+  // (it's slow to while it asks every agent), keeping what each message brought.
+  let phoneGone;
+  const gone = new Promise(resolve => { phoneGone = resolve; });
+  let promptedWith;
+  const prompted = new Promise(resolve => { promptedWith = resolve; });
+  const server = http.createServer((request, response) => {
+    let body = "";
+    request.on("data", chunk => { body += chunk; });
+    request.on("end", async () => {
+      response.writeHead(200, { "content-type": "application/json" });
+      const session = /^\/api\/session\/([^/?]+)$/.exec(request.url)?.[1];
+      if (session) {
+        await gone;
+        return response.end(JSON.stringify({ data: { id: session, model: { id: "opus", providerID: "claude-code", capabilities: { input: ["text", "image"] } } } }));
+      }
+      promptedWith({ session: /^\/api\/session\/([^/]+)\/prompt/.exec(request.url)?.[1], prompt: JSON.parse(body) });
+      response.end("{}");
+    });
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  const hostKey = link.newKey();
+  const target = () => ({ pid: process.pid, port: server.address().port, password: "s3cret", version: "2.0.32" });
+  const agents = await runningAs("kuvo-agents", t);
+  const handle = link.engineHandler(target, {}, () => ({ ...target(), pid: agents }));
+  const host = new link.LinkHost({ key: hostKey, hello: { v: 1, kind: "machine", name: "m", app: "0" }, authorize: () => true, handle });
+  const phone = phoneFor(host, hostKey);
+  await phone.open({});
+  // A video and a few words, the whole of it here; then the phone, which waited too long for it
+  // to get here, ends its session.
+  const video = Buffer.alloc(7_727_609, 42);
+  phone.send({ t: "req", id: 1, m: "POST", p: "kuvo/agents/api/session/ses_shared/prompt", h: { "Content-Type": "application/json" } }, Buffer.from(JSON.stringify({ id: "msg_shared", text: "when I scroll the models it keeps resetting", files: [{ name: "video.mp4", uri: `data:video/mp4;base64,${video.toString("base64")}` }] })));
+  await phone.close();
+  phoneGone();
+  // The message reaches the conversation, the video where the agent opens it.
+  const { session, prompt } = await prompted;
+  assert.equal(session, "ses_shared");
+  assert.equal(prompt.id, "msg_shared");
+  assert.ok(prompt.text.startsWith("when I scroll the models it keeps resetting\n\n<attached-files>"));
+  const videoPath = prompt.text.split("\n").find(line => line.endsWith("/video.mp4"));
+  assert.deepEqual(fs.readFileSync(videoPath), video);
 });
 
 test("a Mac's files for a machine take the phone's path: kept on the machine's box, and only what the model reads goes as a file, with no word of a phone", async t => {
@@ -1309,13 +1369,13 @@ test("each feature kuvo/info names is a route the machine answers, and one it do
     "accounts.credentials": ["GET", "kuvo/accounts/credentials"], "accounts.ended": ["GET", "kuvo/accounts/ended"], "accounts.found": ["GET", "kuvo/accounts/found"], "accounts.refresh": ["GET", "kuvo/accounts/refreshable"], agents: ["GET", "kuvo/agents/api/session"], artifacts: ["GET", "kuvo/artifacts?bot=bot_none"], asks: ["GET", "kuvo/asks"], attention: ["GET", "kuvo/attention"],
     bots: ["GET", "kuvo/bots"], "bots.events": ["GET", "kuvo/bots/events"], "bots.job": ["GET", "kuvo/bots"], "bots.edit": ["DELETE", "kuvo/bots/bot_none"], "bots.keys": ["GET", "kuvo/bots/bot_none/keys"],
     "bots.make": ["GET", "kuvo/bots/templates"], config: ["GET", "kuvo/config"], "config.apply": ["GET", "kuvo/config/apply"], "engine.restart": ["GET", "kuvo/engine/restart"],
-    "engine.start": ["GET", "kuvo/engine/start"], file: ["GET", "kuvo/file"], git: ["POST", "kuvo/git/changes"], "git.merge": ["POST", "kuvo/git/merge"], "git.pull-request": ["POST", "kuvo/git/pull-request"], "git.pull-request.draft": ["POST", "kuvo/git/pull-request/draft"], "git.push": ["POST", "kuvo/git/push"], goals: ["GET", "kuvo/agents/api/kuvo/goals"], btw: ["GET", "kuvo/agents/api/kuvo/btw"], "btw.threads": ["GET", "kuvo/agents/api/kuvo/btw"], handoff: ["POST", "kuvo/agents/api/kuvo/handoff/ses_none"], branch: ["POST", "kuvo/agents/api/kuvo/branch/ses_none"], reviews: ["GET", "kuvo/agents/api/kuvo/reviews"], "reviews.scopes": ["GET", "kuvo/agents/api/kuvo/reviews"], "reviews.parts": ["GET", "kuvo/agents/api/kuvo/reviews"], groups: ["GET", "kuvo/groups"],
+    "engine.start": ["GET", "kuvo/engine/start"], file: ["GET", "kuvo/file"], git: ["POST", "kuvo/git/changes"], "git.changes.count": ["POST", "kuvo/git/changes/count"], "git.merge": ["POST", "kuvo/git/merge"], "git.pull-request": ["POST", "kuvo/git/pull-request"], "git.pull-request.draft": ["POST", "kuvo/git/pull-request/draft"], "git.push": ["POST", "kuvo/git/push"], goals: ["GET", "kuvo/agents/api/kuvo/goals"], btw: ["GET", "kuvo/agents/api/kuvo/btw"], "btw.threads": ["GET", "kuvo/agents/api/kuvo/btw"], handoff: ["POST", "kuvo/agents/api/kuvo/handoff/ses_none"], branch: ["POST", "kuvo/agents/api/kuvo/branch/ses_none"], reviews: ["GET", "kuvo/agents/api/kuvo/reviews"], "reviews.scopes": ["GET", "kuvo/agents/api/kuvo/reviews"], "reviews.parts": ["GET", "kuvo/agents/api/kuvo/reviews"], groups: ["GET", "kuvo/groups"],
     "groups.delete": ["DELETE", "kuvo/groups/grp_none"], "groups.edit": ["PATCH", "kuvo/groups/grp_none"], "groups.joinable": ["GET", "kuvo/groups/joinable"], "groups.make": ["POST", "kuvo/groups"],
     // Its turns for chats on other computers, which kuvo/groups/joinable shows from theirs.
     "groups.seats": ["GET", "kuvo/groups/joinable"],
     integrations: ["GET", "kuvo/integrations"], keys: ["GET", "kuvo/keys"], "mcp.catalog": ["GET", "kuvo/mcp/catalog"], moves: ["GET", "kuvo/moves"], named: ["GET", "kuvo/named"], search: ["GET", "kuvo/search?q=none"],
     personalities: ["GET", "kuvo/personalities"], "personalities.events": ["POST", "kuvo/personalities/events"], phones: ["GET", "kuvo/phones"], "phones.pair": ["DELETE", "kuvo/phones/pair"], projects: ["GET", "kuvo/projects"],
-    "sessions.agents": ["GET", "kuvo/sessions/ses_none/agents"], "shell.stop": ["POST", "kuvo/shell/sh_none/stop"],
+    "sessions.agents": ["GET", "kuvo/sessions/ses_none/agents"], "sessions.glance": ["POST", "kuvo/sessions/glance"], "shell.stop": ["POST", "kuvo/shell/sh_none/stop"],
     "sign-in.return": ["GET", "kuvo/sign-in/return"], skills: ["GET", "kuvo/skills"], "skills.trash": ["GET", "kuvo/skill-trash"], update: ["GET", "kuvo/update"], wakes: ["GET", "kuvo/wakes"],
     "wakes.edit": ["POST", "kuvo/wakes/ses_none/pause"], "wakes.events": ["POST", "kuvo/wakes/events"], worktrees: ["GET", "kuvo/worktrees"], "worktrees.events": ["POST", "kuvo/worktrees/events"], "worktrees.where": ["POST", "kuvo/worktrees/where"], folders: ["DELETE", "kuvo/folders"], "folders.files": ["GET", "kuvo/folders?files=1"], "plugins.search": ["POST", "kuvo/plugins/search"], programs: ["POST", "kuvo/programs"], "providers.models": ["GET", "kuvo/providers/models"],
     // What a side question's and a review's routes take besides, on the coding agents' bridge.
@@ -1326,6 +1386,8 @@ test("each feature kuvo/info names is a route the machine answers, and one it do
     // (And a lead's call for the sessions it started here: list, stop, summarize, answer.)
     "work.elsewhere": ["POST", "kuvo/agent-tools"], "work.elsewhere.start": ["POST", "kuvo/agent-tools"], "approval.otherComputers": ["GET", "kuvo/approval"], queue: ["GET", "kuvo/sessions/ses_none/queue"], "queue.waits": ["POST", "kuvo/sessions/ses_none/queue/add"], work: ["GET", "kuvo/work"], "work.projects": ["GET", "kuvo/work/settings"], "work.goals": ["GET", "kuvo/work/goals"], "work.goals.apps": ["GET", "kuvo/work/apps/icon?app=com.example.none"], "work.goals.projects": ["POST", "kuvo/work/goals/goal_none"], autopilot: ["GET", "kuvo/sessions/ses_none/autopilot"], "work.unanswering": ["GET", "kuvo/work/unanswering"],
     vault: ["GET", "kuvo/vault/tools"], sandbox: ["GET", "kuvo/sandbox"], "sandbox.check": ["POST", "kuvo/sandbox/check"], "sandbox.asks": ["GET", "kuvo/sandbox/allowed"],
+    // (Its asks' `reviews` list every ask Auto's reviewer may take up: what kuvo/sandbox/asks says.)
+    "sandbox.reviews.whole": ["GET", "kuvo/sandbox/asks"],
     approval: ["GET", "kuvo/approval"],
     "approval.reviewer": ["GET", "kuvo/sessions/ses_none/decisions"],
     // (Full Access outside the sandbox, confirmed per computer: what kuvo/approval says.)
@@ -1338,6 +1400,12 @@ test("each feature kuvo/info names is a route the machine answers, and one it do
     "approval.stopped": ["POST", "kuvo/sandbox/stopped"],
     // (Each account's plan limits, on the coding agents' bridge.)
     limits: ["GET", "kuvo/agents/api/kuvo/limits"],
+    // (Its browser, set up by the box itself.)
+    browser: ["GET", "kuvo/browser"],
+    "work-queue": ["GET", "kuvo/work-queue/categories"],
+    "work-queue.elsewhere": ["POST", "kuvo/work-queue/refs"],
+    // (Your setup, and who's its main computer.)
+    setup: ["GET", "kuvo/setup"],
     "git.backups": ["GET", "kuvo/git/backups?folder=/"],
     // (Moves with a coding agent's own conversation, and the check before one holds anything: what
     // kuvo/moves takes besides, and a box asks of another in its mail.)

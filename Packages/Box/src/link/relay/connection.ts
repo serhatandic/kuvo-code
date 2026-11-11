@@ -1,6 +1,7 @@
 // The relay connection: one at a time, served until it ends.
 
 import { addressOf, EMPTY } from "../crypto/keys";
+import { notePushed } from "../notices/push";
 import { noteUnreachable } from "../peers/reach";
 import { connectionEnded, connectionStarted, fenceBack, noteDropped } from "./dropped";
 import { readRelay, relayHello, relaySend } from "./frames";
@@ -10,8 +11,9 @@ import type { LinkHost } from "./host";
 // What the relay sends once it's welcomed this connection, for `host`: something for it, or a phone
 // gone (unreachable, or its connection went or was replaced), whose sessions end with nothing more
 // sent; another of your computers unreachable is noted for its tools to say so (`peers/reach.ts`),
-// and whether a call to it got there (`dropped.ts`).
-// What this connection sends itself, to check it's alive, is only that, or a call's fence.
+// and whether a call to it got there (`dropped.ts`); how a push to a phone went, kept
+// (`notices/push.ts`). What this connection sends itself, to check it's alive, is only that, or a
+// call's fence.
 export function fromRelay(host: Pick<LinkHost, "receive" | "forget">, message: RelayMessage, self: Buffer): void {
   if (message.address.equals(self)) {
     if (message.kind === "deliver") fenceBack(message.payload);
@@ -24,6 +26,7 @@ export function fromRelay(host: Pick<LinkHost, "receive" | "forget">, message: R
     noteDropped(message.address);
     noteUnreachable(message.address);
   }
+  if (message.kind === "pushed") notePushed(message.address, message.status);
 }
 
 // After a relay connection, how many tries in a row haven't held, and how long to wait before the

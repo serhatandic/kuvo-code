@@ -136,7 +136,7 @@ public struct LimitsAccount: Decodable, Hashable, Sendable, Identifiable {
     /// Its row's name: "Claude", "Claude · Work" for one you added, "Copilot" for the engine's.
     public var title: String {
         if let name { return name }
-        let base = agent.map { Self.agentNames[$0] ?? $0.capitalized } ?? Self.serviceNames[service] ?? service.capitalized
+        let base = agent.map { AccountNames.agents[$0] ?? $0.capitalized } ?? AccountNames.services[service] ?? service.capitalized
         guard let label = label?.trimmingCharacters(in: .whitespacesAndNewlines), !label.isEmpty else { return base }
         return "\(base) · \(label)"
     }
@@ -152,10 +152,6 @@ public struct LimitsAccount: Decodable, Hashable, Sendable, Identifiable {
         "openrouter": "#6467F2", "antigravity": "#4285F4", "copilot": "#A855F7", "zai": "#2D2D2D", "ollama": "#6E6E73",
     ]
 
-    /// The coding agents, as the usage panel names their rows.
-    static let agentNames = ["claude": "Claude", "codex": "Codex", "grok": "Grok", "cursor": "Cursor", "antigravity": "Antigravity"]
-    /// The engine's sign-ins, by what they're the limits of.
-    static let serviceNames = ["codex": "ChatGPT", "grok": "SuperGrok", "copilot": "Copilot", "openrouter": "OpenRouter", "zai": "Z.ai", "ollama": "Ollama", "opencode": "OpenCode Go"]
 
     /// Its windows still current: one that started over since it was read is left out (what's used
     /// now isn't known).
@@ -279,14 +275,22 @@ extension Date {
 public enum UsageListing {
     public enum Item<Panel> {
         case panel(Panel)
-        /// A box's row, with the panel's entry whose other lines go under it.
-        case account(LimitsAccount, below: Panel?)
+        /// An account's row (its id, its boxes and its limits as one), with the panel's entry whose
+        /// other lines go under it.
+        case account(Account, below: Panel?)
     }
 
     /// `accounts`: one box's, as it states them (an account it has twice, a coding agent's and the
     /// engine's sign-in to it, is one row).
     public static func items<Panel>(panel: [Panel], covers: (Panel) -> String?, accounts: [LimitsAccount]) -> [Item<Panel>] {
-        let accounts = Self.accounts([Box(key: "", name: nil, accounts: accounts)]).map(\.account)
+        items(panel: panel, covers: covers, boxes: [Box(key: "", name: nil, accounts: accounts)])
+    }
+
+    /// Every box's accounts, one row per account across them (`accounts(_:)`), placed where the
+    /// panel (the client's own computer's, or the first Mac's) says each service goes, as the Mac's
+    /// menu bar lists this Mac's and its machines'.
+    public static func items<Panel>(panel: [Panel], covers: (Panel) -> String?, boxes: [Box]) -> [Item<Panel>] {
+        let listed = Self.accounts(boxes)
         var items: [Item<Panel>] = []
         var placed = Set<String>()
         for entry in panel {
@@ -294,7 +298,7 @@ public enum UsageListing {
                 items.append(.panel(entry))
                 continue
             }
-            let rows = accounts.filter { $0.service == service && !placed.contains($0.provider) }
+            let rows = listed.filter { $0.account.service == service && !placed.contains($0.id) }
             // (Not read from the box yet: what the panel has, as it is.)
             guard !rows.isEmpty else {
                 items.append(.panel(entry))
@@ -302,10 +306,10 @@ public enum UsageListing {
             }
             for (index, row) in rows.enumerated() {
                 items.append(.account(row, below: index == 0 ? entry : nil))
-                placed.insert(row.provider)
+                placed.insert(row.id)
             }
         }
-        for row in accounts where !placed.contains(row.provider) { items.append(.account(row, below: nil)) }
+        for row in listed where !placed.contains(row.id) { items.append(.account(row, below: nil)) }
         return items
     }
 }
@@ -387,7 +391,7 @@ extension UsageListing {
             if let boxes = elsewhere(index) { names[index] += " · \(boxes)" }
         }
         clash = alike()
-        for index in listed.indices where clash.contains(names[index]) {
+        for index in listed.indices where clash.contains(names[index]) && !mine(index).isEmpty {
             if let boxes = elsewhere(index) { names[index] += " · \(boxes)" }
         }
         for index in listed.indices where names[index] != listed[index].account.title { listed[index].account.name = names[index] }

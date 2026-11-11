@@ -4,6 +4,7 @@
 
 import "../safety"
 import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test"
+import { createHash } from "node:crypto"
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -80,6 +81,15 @@ class Clock {
 }
 
 const route = async (limits: Limits, method = "GET", rest: string[] = []) => ((await (await limitsRoutes(limits, method, rest)).json()) as any).data as { accounts: AccountLimits[]; services: string[] }
+
+/**
+ * Refreshed, as a client's pull does, once the reads are over: the route answers after two seconds
+ * with what's read by then, and a Codex started to read takes longer than that on a busy Mac.
+ */
+const refreshed = async (limits: Limits) => {
+  await limits.refresh()
+  return route(limits)
+}
 
 let anthropic: Anthropic
 let home: string
@@ -370,7 +380,7 @@ describe("Claude on Linux", () => {
     credentials(join(process.env.HOME!, ".claude"), { accessToken: "token-yours", scopes: ["user:profile"] })
     anthropic.answers.set("token-yours", usage(1, 1))
     const limits = new Limits(() => agentAccounts([new TestClaude(home)]), undefined, clock.now)
-    const { accounts, services } = await route(limits, "POST", ["refresh"])
+    const { accounts, services } = await refreshed(limits)
     expect(accounts).toEqual([])
     expect(services).toEqual(["claude"])
     expect(anthropic.reads).toHaveLength(0)
@@ -433,7 +443,7 @@ describe("Codex", () => {
     })
     codex = new TestCodex(launcher, home)
     const limits = new Limits(() => agentAccounts([codex!]), undefined, clock.now)
-    const { accounts } = await route(limits, "POST", ["refresh"])
+    const { accounts } = await refreshed(limits)
     expect(accounts).toHaveLength(1)
     expect(accounts[0]!.plan).toBe("Pro")
     expect(accounts[0]!.windows.map((each) => [each.id, each.used, each.minutes, each.model, each.resetsAt])).toEqual([
@@ -472,7 +482,7 @@ describe("Codex", () => {
   test("an API key has no plan limits: not listed", async () => {
     codex = new TestCodex(fakeCodex(home, { type: "apiKey" }, {}), home)
     const limits = new Limits(() => agentAccounts([codex!]), undefined, clock.now)
-    expect((await route(limits, "POST", ["refresh"])).accounts).toEqual([])
+    expect((await refreshed(limits)).accounts).toEqual([])
   })
 })
 
@@ -514,17 +524,143 @@ describe("who each account is, the same from every computer", () => {
     for (const secret of ["6f1e0c4a", "6F1E0C4A", "org-1", "org-2", "ada@example.com", "token-1"]) expect(said).not.toContain(secret)
   })
 
-  test("a Mac's Claude token says nothing of who it's for: no identity, and the row is as before", async () => {
+  /**
+   * What Claude Code keeps in its settings folder as it runs with a token (`claude setup-token`'s, as
+   * a Mac's Kuvo Code runs it): Anthropic's signed record of the policies of the account the token is
+   * for (`aud` its organization, `sub` the account), and its note of which sign-in fetched it.
+   */
+  function policyRecord(folder: string, token: string, account: string, organization: string, options: { plan?: string; kind?: "token" | "org"; signed?: string } = {}) {
+    mkdirSync(folder, { recursive: true })
+    const sha256 = (text: string) => createHash("sha256").update(text).digest("hex")
+    const body = `sha256:${sha256(`policies of ${account}`)}`
+    // A sign-in Claude Code keeps itself (yours in Terminal) is stamped as its organization's.
+    const principal = options.kind === "org" ? `org:${organization}` : `token:${sha256(token).slice(0, 32)}`
+    writeFileSync(join(folder, "policy-limits.json"), "{}")
+    writeFileSync(join(folder, "policy-limits.json.stamp.json"), JSON.stringify({ v: 1, identity: sha256(principal), kind: options.kind ?? "token", sha: body, confirmed_at: clock.at, hipaa_seen: [] }))
+    const part = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url")
+    const claims = { v: 1, typ: "policy-limits", aud: organization, sub: account, ws: "5e0c0000-0000-4000-8000-0000000000ff", plan: options.plan ?? "consumer", iat: clock.at / 1000, exp: clock.at / 1000 + 86_400, sha: options.signed ?? body }
+    writeFileSync(join(folder, "policy-limits.json.signature.json"), JSON.stringify({ jws: `${part({ alg: "ES256", typ: "cc-signed-cache+jws", kid: "k1", x5c: ["MIIB"] })}.${part(claims)}.c2lnbmF0dXJl`, receivedAt: clock.at }))
+  }
+
+  test("one Claude account on three computers, a Mac's by Kuvo Code's token among them, is one identity; a second account there is another", async () => {
+    // hetzner (Linux): Claude Code's own sign-in. mini-local (a Mac as a machine) and this Mac: Kuvo
+    // Code's tokens, which say nothing of who they're for, and Claude Code's record as it ran with each.
+    const account = "6F1E0C4A-0000-4000-8000-000000000001"
+    const organization = "0A1B2C3D-0000-4000-8000-0000000000aa"
+    const hetzner = join(home, "hetzner")
+    signedInAs(join(hetzner, "claude", "home"), "token-linux", account, organization)
+    anthropic.answers.set("token-linux", usage(29, 70))
+    ClaudeAgent.keychain = false
+    const linux = new Limits(() => agentAccounts([new TestClaude(hetzner, { id: "default", home: join(hetzner, "claude", "home") })]), undefined, clock.now)
+    await linux.tick()
+
     ClaudeAgent.keychain = true
-    const { heardWindows } = await import("../../src/agents/agents/claude-limits")
-    signIn(home, "default", "token-own")
-    const own = new TestClaude(home)
+    const mini = join(home, "mini-local")
+    signIn(mini, "default", "token-mini")
+    signIn(mini, "57eea190", "token-athas")
+    policyRecord(join(mini, "claude", "home"), "token-mini", account.toLowerCase(), organization.toLowerCase())
+    policyRecord(join(mini, "claude", "accounts", "57eea190"), "token-athas", "6f1e0c4a-0000-4000-8000-000000000002", "0a1b2c3d-0000-4000-8000-0000000000bb", { plan: "team" })
+    const own = new TestClaude(mini, { id: "default", home: join(mini, "claude", "home") })
+    const athas = new TestClaude(mini, { id: "57eea190", label: "Athas", home: join(mini, "claude", "accounts", "57eea190") })
+    const machine = new Limits(() => agentAccounts([own, athas]), undefined, clock.now)
+    await machine.tick()
+    // (A Mac's Claude rows are what its turns hear.)
+    own.limits.heard!({ id: "five_hour", used: 0.3, minutes: 300 })
+    athas.limits.heard!({ id: "five_hour", used: 0.31, minutes: 300 })
+
+    // This Mac's own box: its default account's settings are yours (`~/.claude`), Kuvo Code's token in its folder.
+    const mac = join(home, "mac")
+    const yours = join(mac, "your-claude")
+    signIn(mac, "default", "token-mac")
+    policyRecord(yours, "token-mac", account.toLowerCase(), organization.toLowerCase())
+    const before = process.env.CLAUDE_CONFIG_DIR
+    process.env.CLAUDE_CONFIG_DIR = yours
+    try {
+      const macClaude = new TestClaude(mac)
+      const macLimits = new Limits(() => agentAccounts([macClaude]), undefined, clock.now)
+      await macLimits.tick()
+      macClaude.limits.heard!({ id: "five_hour", used: 0.3, minutes: 300 })
+
+      const [linuxRow] = (await route(linux)).accounts
+      const [miniRow, athasRow] = (await route(machine)).accounts
+      const [macRow] = (await route(macLimits)).accounts
+      expect(linuxRow!.identity).toMatch(/^[0-9a-f]{16}$/)
+      expect(miniRow!.identity).toBe(linuxRow!.identity!)
+      expect(macRow!.identity).toBe(linuxRow!.identity!)
+      expect(athasRow!.label).toBe("Athas")
+      expect(athasRow!.identity).toMatch(/^[0-9a-f]{16}$/)
+      expect(athasRow!.identity).not.toBe(linuxRow!.identity!)
+      // Nothing of the account, its organization or the token leaves the box.
+      const said = JSON.stringify([await route(machine), await route(macLimits)])
+      for (const secret of ["6f1e0c4a", "0a1b2c3d", "token-"]) expect(said).not.toContain(secret)
+    } finally {
+      if (before === undefined) delete process.env.CLAUDE_CONFIG_DIR
+      else process.env.CLAUDE_CONFIG_DIR = before
+    }
+  })
+
+  test("a Mac's record that isn't for Kuvo Code's token (yours in Terminal, another's signature) says nothing of who it is", async () => {
+    ClaudeAgent.keychain = true
+    const folder = join(home, "claude", "home")
+    signIn(home, "default", "token-kuvo")
+    // Your own Claude Code in Terminal ran last in the folder, signed in as someone else.
+    policyRecord(folder, "token-yours", "00000000-0000-4000-8000-00000000000a", "00000000-0000-4000-8000-0000000000aa", { kind: "org" })
+    const own = new TestClaude(home, { id: "default", home: folder })
     const limits = new Limits(() => agentAccounts([own]), undefined, clock.now)
     await limits.tick()
-    for (const window of heardWindows({ rateLimitType: "five_hour", utilization: 0.3, status: "allowed" })) own.limits.heard!(window)
+    own.limits.heard!({ id: "five_hour", used: 0.3, minutes: 300 })
     const [account] = (await route(limits)).accounts
     expect(account!.windows.map((each) => each.used)).toEqual([0.3])
     expect(account!.identity).toBeUndefined()
+    // Stamped for Kuvo Code's token, but the signature beside it is of another record.
+    policyRecord(folder, "token-kuvo", "00000000-0000-4000-8000-00000000000b", "00000000-0000-4000-8000-0000000000bb", { signed: "sha256:another" })
+    clock.pass(60_000)
+    await limits.tick()
+    expect((await route(limits)).accounts[0]!.identity).toBeUndefined()
+    // Claude Code runs with Kuvo Code's token: now it says.
+    policyRecord(folder, "token-kuvo", "00000000-0000-4000-8000-00000000000b", "00000000-0000-4000-8000-0000000000bb")
+    clock.pass(60_000)
+    await limits.tick()
+    const known = (await route(limits)).accounts[0]!
+    expect(known.identity).toMatch(/^[0-9a-f]{16}$/)
+    // Your Terminal's runs again, writing its own over it: who it is, and its numbers, stay.
+    policyRecord(folder, "token-yours", "00000000-0000-4000-8000-00000000000a", "00000000-0000-4000-8000-0000000000aa", { kind: "org" })
+    clock.pass(60_000)
+    await limits.tick()
+    const after = (await route(limits)).accounts[0]!
+    expect([after.identity, after.windows.map((each) => each.used), after.problem]).toEqual([known.identity, [0.3], undefined])
+  })
+
+  test("a Mac's Claude signed in to another account: what's told after is that account's, never the one before's", async () => {
+    ClaudeAgent.keychain = true
+    const folder = join(home, "claude", "home")
+    const file = join(home, "limits.json")
+    signIn(home, "default", "token-ada")
+    policyRecord(folder, "token-ada", "00000000-0000-4000-8000-00000000000a", "00000000-0000-4000-8000-0000000000aa")
+    const own = new TestClaude(home, { id: "default", home: folder })
+    const limits = new Limits(() => agentAccounts([own]), file, clock.now)
+    await limits.tick()
+    own.limits.heard!({ id: "five_hour", used: 0.3, minutes: 300 })
+    const ada = (await route(limits)).accounts[0]!
+    expect(ada.identity).toMatch(/^[0-9a-f]{16}$/)
+
+    // Signed in as Bob: Claude Code hasn't run with his token yet, and his first turn is heard.
+    signIn(home, "default", "token-bob")
+    own.limits.heard!({ id: "five_hour", used: 0.9, minutes: 300 })
+    const heard = (await route(limits)).accounts[0]!
+    expect([heard.identity, heard.windows.map((each) => each.used), heard.problem]).toEqual([undefined, [0.9], undefined])
+    // Claude Code's record for his token: his, with what his turn told, and nothing more to say.
+    policyRecord(folder, "token-bob", "00000000-0000-4000-8000-00000000000b", "00000000-0000-4000-8000-0000000000bb")
+    clock.pass(60_000)
+    await limits.tick()
+    own.limits.heard!({ id: "five_hour", used: 0.91, minutes: 300 })
+    const bob = (await route(limits)).accounts[0]!
+    expect(bob.identity).toMatch(/^[0-9a-f]{16}$/)
+    expect(bob.identity).not.toBe(ada.identity!)
+    expect([bob.windows.map((each) => each.used), bob.problem]).toEqual([[0.91], undefined])
+    // Through a restart too.
+    const restarted = new Limits(() => agentAccounts([new TestClaude(home, { id: "default", home: folder })]), file, clock.now)
+    expect((await route(restarted)).accounts[0]!.identity).toBe(bob.identity!)
   })
 
   test("signed in to another account since, what was kept of the one before isn't shown as this one's", async () => {
@@ -567,7 +703,7 @@ describe("who each account is, the same from every computer", () => {
       }
     })({ home, temporary: home, deps: {} as any }, { id: "a1", label: "Work", home: codexHome })
     try {
-      const agent = (await route(new Limits(() => agentAccounts([codex]), undefined, clock.now), "POST", ["refresh"])).accounts[0]!
+      const agent = (await refreshed(new Limits(() => agentAccounts([codex]), undefined, clock.now))).accounts[0]!
       const engine = (signedIn: string) => {
         const accounts = new EngineAccounts(async () => [{ integrationID: "openai", active: true, value: { type: "oauth", access: access(signedIn), expires: clock.at + 3_600_000, metadata: { accountID: "acct-77" } } }])
         return accounts.refresh().then(() => accounts.accounts()[0]!.limits.identity!())
@@ -597,7 +733,7 @@ describe("who each account is, the same from every computer", () => {
     })({ home, temporary: home, deps: {} as any }, { id: "a1", home: codexHome })
     try {
       const limits = new Limits(() => agentAccounts([codex]), undefined, clock.now)
-      const first = (await route(limits, "POST", ["refresh"])).accounts[0]!
+      const first = (await refreshed(limits)).accounts[0]!
       expect(first.windows.map((each) => each.used)).toEqual([0.7])
       // Signed in as Bob in Terminal; the Codex running reads Ada's sign-in still.
       signIn("bob")

@@ -5,19 +5,19 @@ import Testing
 @testable import KuvoCode
 @testable import UsageKit
 
-/// Pictures of the usage panel's bars for the accounts of the 0.8.0-beta.11 report (#336): this Mac
-/// and three machines, the same Claude, Codex and Grok accounts signed in on several of them, and a
-/// second Claude login ("Athas"). Each box is a stand-in answering `api/kuvo/limits`; the rows are
-/// what `BoxPlanLimits` makes of them, drawn with the panel's own bars (`ProviderBar`), light and
-/// dark. Only with KUVO_SHOTS_OUT, the folder they go in (`scripts/test-app.sh` with
-/// ONLY=KuvoCodeTests/UsageRowsShots); KUVO_SHOTS_PREFIX names them ("after" by default).
+/// Pictures of the usage panel's bars for the accounts of the 0.8.0-beta.12 report (#441): this Mac
+/// and two machines, one Claude account signed in on hetzner (Linux) and on mini-local (a Mac, by
+/// Kuvo Code's token), a second Claude account there ("Athas", a team's), and Codex and Grok on
+/// this Mac and mini-local. Each box is a stand-in answering `api/kuvo/limits`; the rows are what
+/// `BoxPlanLimits` makes of them, placed among the panel's own bars as the Bars view places them
+/// (`HostLimits.entries`) and drawn with its bars (`ProviderBar`), light and dark. Only with
+/// KUVO_SHOTS_OUT, the folder they go in (`scripts/test-app.sh` with
+/// ONLY=KuvoCodeTests/UsageRowsShots); KUVO_SHOTS_PREFIX names them ("after" by default; "before"
+/// states mini-local's Claude as a box from before it said who a Mac's token is for).
 @MainActor
 @Suite(.serialized, .enabled(if: ProcessInfo.processInfo.environment["KUVO_SHOTS_OUT"] != nil), .timeLimit(.minutes(5)))
 struct UsageRowsShots {
-    private static let boxes = [
-        ("", "http://127.0.0.1:47971"), ("hetzner", "http://127.0.0.1:47972"),
-        ("lokum-tailscale", "http://127.0.0.1:47973"), ("mini-local", "http://127.0.0.1:47974"),
-    ]
+    private static let boxes = [("", "http://127.0.0.1:47971"), ("hetzner", "http://127.0.0.1:47972"), ("mini-local", "http://127.0.0.1:47974")]
 
     private static func account(_ provider: String, _ service: String, agent: String? = nil, label: String? = nil, identity: String? = nil,
                                 plan: String? = nil, used: Double, week: Double, minutesAgo: Double) -> [String: Any] {
@@ -34,28 +34,30 @@ struct UsageRowsShots {
         return account
     }
 
-    /// What each box states, as in the report: one Claude account on this Mac (whose token can't say
-    /// who it's for) and on hetzner, one Codex account everywhere, one Grok account on two.
-    private static let said: [String: [[String: Any]]] = [
-        "": [
-            account("claude-code", "claude", agent: "claude", plan: "Max 20x", used: 0.53, week: 0.31, minutesAgo: 4),
-            account("codex-cli", "codex", agent: "codex", identity: "c0dec0dec0dec0de", plan: "Pro", used: 0.85, week: 0.44, minutesAgo: 6),
-            account("grok-cli", "grok", agent: "grok", identity: "a1a1a1a1a1a1a1a1", used: 0.97, week: 0.97, minutesAgo: 8),
-        ],
-        "hetzner": [
-            account("claude-code", "claude", agent: "claude", identity: "c1a0dec1a0dec1a0", plan: "Max 20x", used: 0.53, week: 0.31, minutesAgo: 2),
-            account("claude-code@a7", "claude", agent: "claude", label: "Athas", identity: "a7a7a7a7a7a7a7a7", plan: "Pro", used: 0.12, week: 0.4, minutesAgo: 3),
-            account("codex-cli", "codex", agent: "codex", identity: "c0dec0dec0dec0de", plan: "Pro", used: 0.85, week: 0.44, minutesAgo: 1),
-        ],
-        "lokum-tailscale": [
-            account("codex-cli", "codex", agent: "codex", identity: "c0dec0dec0dec0de", plan: "Pro", used: 0.85, week: 0.44, minutesAgo: 5),
-        ],
-        "mini-local": [
-            account("codex-cli", "codex", agent: "codex", identity: "c0dec0dec0dec0de", plan: "Pro", used: 0.85, week: 0.44, minutesAgo: 7),
-            account("grok-cli", "grok", agent: "grok", identity: "a1a1a1a1a1a1a1a1", used: 0.97, week: 0.97, minutesAgo: 9),
-            account("opencode-go", "opencode", identity: "0c0c0c0c0c0c0c0c", plan: "Go", used: 0.6, week: 0.4, minutesAgo: 9),
-        ],
-    ]
+    /// What each box states, as in the report: this Mac has had no Claude turn (the panel's own
+    /// Claude bar is its spend); mini-local's Claude is hetzner's account, which before #441 a Mac's
+    /// box couldn't say.
+    private static func said(before: Bool) -> [String: [[String: Any]]] {
+        [
+            "": [
+                account("codex-cli", "codex", agent: "codex", identity: "c0dec0dec0dec0de", plan: "Plus", used: 0, week: 0.27, minutesAgo: 4),
+                account("grok-cli", "grok", agent: "grok", identity: "a1a1a1a1a1a1a1a1", used: 0.01, week: 0.99, minutesAgo: 6),
+            ],
+            "hetzner": [
+                account("claude-code", "claude", agent: "claude", identity: "c1a0dec1a0dec1a0", plan: "Max 20x", used: 0.12, week: 0.29, minutesAgo: 2),
+            ],
+            "mini-local": [
+                account("claude-code", "claude", agent: "claude", identity: before ? nil : "c1a0dec1a0dec1a0", used: 0.12, week: 0.30, minutesAgo: 1),
+                account("claude-code@57eea190", "claude", agent: "claude", label: "Athas", identity: "a7a7a7a7a7a7a7a7", used: 0.12, week: 0.31, minutesAgo: 3),
+                account("codex-cli", "codex", agent: "codex", identity: "c0dec0dec0dec0de", plan: "Plus", used: 0, week: 0.27, minutesAgo: 7),
+                account("grok-cli", "grok", agent: "grok", identity: "a1a1a1a1a1a1a1a1", used: 0.01, week: 0.99, minutesAgo: 9),
+            ],
+        ]
+    }
+
+    /// The panel's own providers, in its order: Claude's bar only its spend (covered, and this Mac
+    /// has no row of it), Codex's and Grok's taken by this Mac's rows.
+    private static let panel = ["claude", "codex", "grok"]
 
     init() {
         StubWeb.start(hosts: ["127.0.0.1"])
@@ -66,38 +68,44 @@ struct UsageRowsShots {
         let prefix = ProcessInfo.processInfo.environment["KUVO_SHOTS_PREFIX"] ?? "after"
         try FileManager.default.createDirectory(atPath: out, withIntermediateDirectories: true)
         defer { StubWeb.stop(); HostLimits.shared.update(rows: [], covered: []); UserDefaults.standard.removeObject(forKey: "usage.boxServices") }
+        let said = Self.said(before: prefix == "before")
         for (name, url) in Self.boxes {
-            try StubWeb.answer(url + "/api/kuvo/limits", json: ["data": ["services": ["claude", "codex", "grok", "opencode"], "accounts": Self.said[name] ?? []]])
+            try StubWeb.answer(url + "/api/kuvo/limits", json: ["data": ["services": ["claude", "codex", "grok"], "accounts": said[name] ?? []]])
         }
         let planLimits = BoxPlanLimits()
         for (name, url) in Self.boxes {
             planLimits.connected(name.isEmpty ? nil : name, api: OpenCodeAPI(endpoint: ServerEndpoint(url: URL(string: url)!, password: "test")))
         }
-        // Every box's answer in: a row each before (#336), one per account after.
-        try await until { HostLimits.shared.rows.count == (prefix == "before" ? 10 : 6) }
+        // Every box's answer in: mini-local's Claude a row of its own before, hetzner's account after.
+        try await until { HostLimits.shared.rows.count == (prefix == "before" ? 5 : 4) }
         for dark in [false, true] {
             let png = try picture(dark: dark)
             try png.write(to: URL(fileURLWithPath: out).appending(path: "\(prefix)-mac-\(dark ? "dark" : "light").png"))
         }
     }
 
-    /// The bars as the panel lists them: by provider, in the panel's order, each its rows.
+    /// The bars as the panel lists them (`HostLimits.entries`): its own, and the host's rows where they go.
     private func picture(dark: Bool) throws -> Data {
         let suite = "UsageRowsShots.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let store = WidgetDataStore(registry: WidgetRegistry(providers: [], descriptors: []), providers: [], defaults: defaults)
-        let order = ["claude", "codex", "grok", "opencode"]
-        let rows = HostLimits.shared.rows.enumerated().sorted { a, b in
-            let (x, y) = (order.firstIndex(of: a.element.providerID) ?? 9, order.firstIndex(of: b.element.providerID) ?? 9)
-            return x != y ? x < y : a.offset < b.offset
-        }.map(\.element)
+        let groups = Self.panel.map { id in
+            ProviderGroup(provider: Provider(id: id, displayName: id.capitalized, icon: .providerMark(id)), alwaysShownWidgets: [], expandedWidgets: [])
+        }
+        let entries = HostLimits.shared.entries(groups: groups) { _ in false }
         let view = VStack(alignment: .leading, spacing: 5) {
-            ForEach(rows) { row in
-                let provider = HostLimits.provider(for: row.providerID)
-                let meters = HostLimitData.rows(row, store: store).filter(\.isBounded)
-                ProviderBar(provider: Provider(id: provider.id, displayName: row.name, icon: provider.icon, links: provider.links),
-                            reading: meters.min { $0.remainingFraction < $1.remainingFraction }, notice: row.notice, isExpanded: false)
+            ForEach(entries) { entry in
+                switch entry {
+                case .group(let group):
+                    // The panel's own Claude bar: what this Mac's logs say it spent (no limits of its own).
+                    ProviderBar(provider: group.provider, reading: WidgetData(title: "Last 30 Days", icon: group.provider.icon, kind: .dollars, used: 2_512, limit: nil),
+                                notice: nil, isExpanded: false)
+                case .host(let row, let provider, _):
+                    let meters = HostLimitData.rows(row, store: store).filter(\.isBounded)
+                    ProviderBar(provider: Provider(id: provider.id, displayName: row.name, icon: provider.icon, links: provider.links),
+                                reading: meters.min { $0.remainingFraction < $1.remainingFraction }, notice: row.notice, isExpanded: false)
+                }
             }
         }
         .padding(14)

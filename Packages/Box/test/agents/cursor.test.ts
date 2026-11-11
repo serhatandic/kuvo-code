@@ -17,6 +17,7 @@ import { Store } from "../../src/agents/store"
 import { noTokens, type Message, type PermissionRule, type Session } from "../../src/agents/wire"
 import { canFence, realFence } from "./support/fence"
 import { callServer, computerServers, KEYS } from "./support/servers"
+import { subagentEngine } from "./support/subagents"
 import { forgetServers } from "../../src/agents/servers"
 
 /** Cursor's SDK as far as the bridge uses it: each agent's options as it was made (`made`) or
@@ -165,6 +166,32 @@ describe("Cursor", () => {
     await thread.prepare?.(input, hooks(state))
     expect(sdk.made.length).toBe(2)
     expect(sdk.made.at(-1)?.mcpServers?.["kuvo-browser"]?.url).toBe("http://127.0.0.1:47001/mcp")
+  })
+})
+
+describe("Your subagents (Settings › Agents), in Cursor", () => {
+  test("its agent gets them, each on its own model or the one subagents use when it's one of Cursor's, else the conversation's; changed, it starts again with them", async () => {
+    const sdk = fakeSDK()
+    const { sessions: opened, id, home } = cursorSession(sdk)
+    const engine = subagentEngine(home)
+    engine.agents.push({ id: "fixer", name: "fixer", mode: "subagent", description: "Fixes it.", system: "You fix.", model: { providerID: "cursor", id: "composer-1" }, permissions: [] })
+    engine.model = "cursor/composer-2"
+    await engine.serve()
+    try {
+      await send(opened, id)
+      expect(sdk.made.at(-1)?.agents).toEqual({
+        // The model subagents use, where it has none of its own; one of another maker's, the conversation's.
+        reviewer: { description: "Reviews a finished change.", prompt: "You review. You never edit.", model: { id: "composer-2" } },
+        "Keyword Research": { description: "Finds keywords.", prompt: "You research keywords.", model: "inherit" },
+        fixer: { description: "Fixes it.", prompt: "You fix.", model: { id: "composer-1" } },
+      })
+    } finally {
+      engine.stop()
+    }
+    // Gone (the engine has none now): the next message starts its agent again without them.
+    await send(opened, id)
+    expect(sdk.made.length).toBe(2)
+    expect(sdk.made.at(-1)?.agents).toBeUndefined()
   })
 })
 

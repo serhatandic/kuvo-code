@@ -6,9 +6,10 @@ nonisolated private let log = Logger(subsystem: "run.kuvo.code", category: "keep
 
 /// Kuvo Code's own tools that this Mac's box answers without the app, for the keeper while the app
 /// isn't open (`KeeperTools`): agents writing to each other and running their sessions, wake-ups,
-/// a bot's job, the vault, and showing a file or a widget in the conversation. A machine's box
-/// answers the same calls in its `kuvo-browser.js mcp` (`mail`, `wake`, `setJob`, its vault
-/// calls), and this does what it does, so bots on this Mac keep doing them with the app closed.
+/// a bot's job, the vault, the sandbox's way out, and showing a file or a widget in the
+/// conversation. A machine's box answers the same calls in its `kuvo-browser.js mcp` (`mail`,
+/// `wake`, `setJob`, its vault and sandbox calls), and this does what it does, so bots on this Mac
+/// keep doing them with the app closed.
 /// The box, its engine and the coding agents' bridge are found by their records in `run`
 /// (`serve.json`, `engine.json`, `bridge.json`), as a machine's are.
 @MainActor
@@ -35,7 +36,7 @@ final class KeeperBoxTools {
     /// Whether this answers `name`, rather than the open app.
     static func answers(_ name: String) -> Bool {
         BrowserTools.mailTools.contains(name) || BrowserTools.wakeTools.contains(name) || name == BrowserTools.setJob
-            || BrowserTools.isVault(name) || shownTools.contains(name)
+            || BrowserTools.isVault(name) || BrowserTools.isSandbox(name) || shownTools.contains(name)
     }
 
     /// A call from `caller`'s conversation (the engine's session, or the coding agent's the bridge
@@ -47,6 +48,8 @@ final class KeeperBoxTools {
         let answer: Answer
         if BrowserTools.isVault(name) {
             answer = await vault(name, arguments, caller)
+        } else if BrowserTools.isSandbox(name) {
+            answer = await sandbox(name, arguments, caller)
         } else if name == BrowserTools.setJob {
             answer = await setJob(arguments, caller)
         } else if BrowserTools.wakeTools.contains(name) {
@@ -96,6 +99,30 @@ final class KeeperBoxTools {
         let said = (try? JSONSerialization.jsonObject(with: answer.data)) as? [String: Any]
         guard answer.status == 200, let text = said?["text"] as? String else {
             return (said?["message"] as? String ?? "The vault couldn't do that (\(answer.status)).", true)
+        }
+        return (text, said?["isError"] as? Bool ?? false)
+    }
+
+    // MARK: The sandbox
+
+    /// The sandbox's tools as the box lists them (`GET kuvo/sandbox/tools`): none without a box, or
+    /// while commands here aren't in the sandbox.
+    func sandboxDefinitions() async -> [[String: Any]] {
+        guard let answer = try? await box("GET", "kuvo/sandbox/tools", timeout: 15), answer.status == 200 else { return [] }
+        return (try? JSONSerialization.jsonObject(with: answer.data) as? [String: Any])?["tools"] as? [[String: Any]] ?? []
+    }
+
+    /// sandbox_ask: the box asks you, and runs the command you allow (`POST kuvo/sandbox/tools`),
+    /// as it does for the open app's tools. It waits for you.
+    private func sandbox(_ name: String, _ arguments: [String: Any], _ caller: String?) async -> Answer {
+        var body: [String: Any] = ["name": name, "arguments": arguments]
+        if let caller { body["session"] = caller }
+        guard let answer = try? await box("POST", "kuvo/sandbox/tools", body: body, timeout: TimeInterval(BrowserTools.executionTimeout) / 1000) else {
+            return ("This Mac's box can't be reached now. Try again in a moment.", true)
+        }
+        let said = (try? JSONSerialization.jsonObject(with: answer.data)) as? [String: Any]
+        guard answer.status == 200, let text = said?["text"] as? String else {
+            return (said?["message"] as? String ?? "The sandbox couldn't do that (\(answer.status)).", true)
         }
         return (text, said?["isError"] as? Bool ?? false)
     }
@@ -265,7 +292,19 @@ final class KeeperBoxTools {
             request.httpBody = try JSONSerialization.data(withJSONObject: body)
         }
         do {
-            let (data, response) = try await session.data(for: request)
+            // (A total, not only a wait between bytes: the box says it's still working on a request
+            // it holds every 20 seconds, which a request's own timeout counts as activity.)
+            let session = self.session, sent = request
+            let (data, response) = try await withThrowingTaskGroup(of: (Data, URLResponse).self) { group in
+                group.addTask { try await session.data(for: sent) }
+                group.addTask {
+                    try await Task.sleep(for: .seconds(timeout))
+                    throw URLError(.timedOut)
+                }
+                defer { group.cancelAll() }
+                guard let first = try await group.next() else { throw URLError(.unknown) }
+                return first
+            }
             return ((response as? HTTPURLResponse)?.statusCode ?? 502, data)
         } catch {
             log.info("This Mac's box didn't answer \(method, privacy: .public) \(path, privacy: .public): \(error.localizedDescription, privacy: .public)")

@@ -46,6 +46,13 @@ export async function usableModels(engine: Target | null, bridge: Target | null,
   return models;
 }
 
+/** The model `ref` names among `models`: by its own id, or else one it's known by (a session on
+ * Claude Code's `default` runs on the model that stands for now). */
+export const modelNamed = (ref: { providerID: string; id: string } | null | undefined, models: Usable[]): Usable | undefined => {
+  const ofProvider = ref ? models.filter(model => model.providerID === ref.providerID) : [];
+  return ofProvider.find(model => model.id === ref?.id) ?? ofProvider.find(model => model.aliases.includes(ref?.id ?? ""));
+};
+
 /** The list, for an agent to read: those that can't answer now (`held`) apart, at its end. */
 export function describeModels(all: Usable[], held: Unanswering[] = unansweringNow(), where = HERE): string {
   // Not one its provider is retiring, as the engine's own picker leaves it out.

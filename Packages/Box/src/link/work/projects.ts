@@ -12,6 +12,7 @@ import { firstCommit, gitIn } from "../git";
 import { homeFolder } from "../home";
 import { projectsFolder } from "./settings";
 import type { Project } from "../../shared/routes/projects";
+import { noteFolderFound } from "./found-folders";
 
 /** Who made a project, kept with it: a bot by its id and name, and when (ms since 1970). */
 export interface MadeBy {
@@ -139,6 +140,8 @@ export async function makeProject(given: NewProject, madeBy: MadeBy | null, root
     if (given.git !== false) kind = gitIn(folder, ["init", "--quiet", "--initial-branch=main"]) !== null || gitIn(folder, ["init", "--quiet"]) !== null ? "git" : "noGit";
   }
   if (kind === "git" || kind === "cloned") firstCommit(folder);
+  // (Where it is now is where it is, as its maker's own: `found-folders.ts`.)
+  await noteFolderFound(folder).catch(() => {});
   let project!: Project;
   changeProjects(projects => {
     const before = projects.find(each => each.directory === folder);

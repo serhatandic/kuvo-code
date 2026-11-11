@@ -39,6 +39,8 @@ struct YourMessage: View {
     /// agent, which changes files itself.
     @Environment(\.undoesChanges) private var undoesChanges
     @Environment(AppModel.self) private var app
+    /// The conversation this is in, where what it opens comes back to.
+    @Environment(\.conversationTab) private var here
     @State private var hovering = false
     @State private var confirmsUndo = false
 
@@ -114,22 +116,19 @@ struct YourMessage: View {
         }
         .contentShape(.rect)
         .onHover { hovering = $0 }
-        .contextMenu {
-            Button("Copy") {
+        .heldContextMenu {
+            HeldRow.button("Copy", disabled: text.isEmpty) {
                 Clipboard.copy(text)
             }
-            .disabled(text.isEmpty)
-            ForEach(openable, id: \.session) { reference in
-                Button("Open \(reference.name)") { app.open(.session(reference.session)) }
+            for reference in openable {
+                HeldRow.button("Open \(reference.name)") { app.open(.session(reference.session), from: here) }
             }
-            Divider()
+            HeldRow.divider
             if let fork {
-                Button("New Session From Here", action: fork)
-                    .disabled(isOffline)
+                HeldRow.button("New Session From Here", disabled: isOffline, action: fork)
             }
             if undoesChanges {
-                Button("Undo From Here…") { confirmsUndo = true }
-                    .disabled(isOffline)
+                HeldRow.button("Undo From Here…", disabled: isOffline) { confirmsUndo = true }
             }
         }
         // With VoiceOver: the message, read as one, with what shows under the pointer and in its
@@ -140,7 +139,7 @@ struct YourMessage: View {
         .accessibilityActions {
             if !text.isEmpty { Button("Copy") { Clipboard.copy(text) } }
             ForEach(openable, id: \.session) { reference in
-                Button("Open \(reference.name)") { app.open(.session(reference.session)) }
+                Button("Open \(reference.name)") { app.open(.session(reference.session), from: here) }
             }
             if let fork, !isOffline { Button("New Session From Here", action: fork) }
             if !isOffline, undoesChanges { Button("Undo From Here…") { confirmsUndo = true } }

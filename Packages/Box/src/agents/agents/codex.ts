@@ -26,6 +26,7 @@ import { chatGPTIdentity, LimitsProblem, type LimitReading, type LimitsSource, t
 import { RPC, RPCError } from "../rpc"
 import { CodexCitations, plainCitations, type Said } from "./codex-citations"
 import { engineSkills, skillsFolder, skillsFor, skillsRoot, turnedOff, upward, within } from "../skills"
+import { codexSubagents, subagentsFor, subagentsRoot } from "../subagents"
 import { instructionsNote, toldOf } from "../told"
 import type { Turn } from "../turn"
 import type { FileDiff, FormField, Model, ModelRef, OAuthStatus, Session } from "../wire"
@@ -385,11 +386,14 @@ export class CodexAgent implements Agent {
 
   /**
    * Its own places, as it runs whole in the box's sandbox: its home (an added account's, and your
-   * Codex's, which it links to), and the skills it's given (only read).
+   * Codex's, which it links to), and the skills and subagents it's given (only read).
    */
   private fenced(directory: string, sessionID?: string, bot?: string) {
     const skills = skillsRoot()
     if (skills) mkdirSync(skills, { recursive: true, mode: 0o700 })
+    // And the files of your subagents' instructions (only read).
+    const subagents = subagentsRoot()
+    if (subagents) mkdirSync(subagents, { recursive: true, mode: 0o700 })
     const homes = [this.home, ...(this.instance.home && !onMachine ? [this.yourCodex] : [])]
     // The files you attach in the session, copied where only the box writes (`fenceCopy`).
     const attached = sessionID ? fenceAttachments(directory) : undefined
@@ -397,7 +401,7 @@ export class CodexAgent implements Agent {
       homes,
       state: STATE_IN_HOME,
       kept: KEPT_IN_HOME,
-      read: [...(skills ? [skills] : []), ...(attached ? [attached] : [])],
+      read: [...(skills ? [skills] : []), ...(subagents ? [subagents] : []), ...(attached ? [attached] : [])],
       port: relayPort(),
       session: sessionID,
       bot,
@@ -847,7 +851,7 @@ interface Lane {
   /** Items whose words came as deltas (their completion doesn't add them again). */
   streamed: Set<string>
   /** File changes, by item, for their approval and their result. */
-  changes: Map<string, { path: string; kind: string; diff: string }[]>
+  changes: Map<string, { path: string; kind: string; diff: string; movedTo?: string }[]>
   /** A command's output so far, by item. */
   output: Map<string, string>
   /** A tool ran since the last words: the next words start a new step. */
@@ -886,7 +890,7 @@ interface SubagentLane extends Lane {
  * What Codex's models are told of asking you. They list request_user_input outside Plan too, where it
  * refuses them ("unavailable in Default mode"), and a model that reached for it said it couldn't ask.
  */
-const ASKING_WORDS = "Outside Plan mode, ask the user with request_user_input_async: request_user_input refuses there, which doesn't mean you can't ask. It returns at once, and the answer comes as a new user message, which also ends a sleep you're in."
+export const ASKING_WORDS = "Outside Plan mode, ask the user with request_user_input_async: request_user_input refuses there, which doesn't mean you can't ask. It returns at once, and the answer comes as a new user message, which also ends a sleep you're in."
 
 /** What Codex asks you with its request_user_input_async. */
 type AskedQuestion = { title: string; options?: string[] | null }
@@ -894,7 +898,10 @@ type AskedQuestion = { title: string; options?: string[] | null }
 /** `typed`: what you sent meanwhile, which answers this card (null: it answered another of those open, and covers this one). */
 type AskedCard = { abort: AbortController; typed?: MessageInput | null }
 /** An answer in the turn under way that Codex may yet sleep past: one it's `heard` and worked on from isn't what it's sleeping on. */
-type Answered = { text: string; heard?: boolean }
+type Answered = { text: string; files?: PromptFile[]; heard?: boolean }
+/** How often the commands it left running in background terminals are listed again while any runs. */
+export const codexTiming = { terminals: 30_000 }
+
 /** What it does that's more than asking and thinking. */
 const WORK_ITEMS = new Set(["commandExecution", "fileChange", "mcpToolCall", "dynamicToolCall", "webSearch", "imageGeneration", "imageView", "collabAgentToolCall"])
 /** Trying again to reach a sleep that turned it down: after this long, then twice that, up to the last. */
@@ -960,6 +967,7 @@ class CodexThread implements Thread {
   /** The computer's servers it was loaded with (their names). */
   private serversKey?: string
   private skillsKey?: string
+  private subagentsKey?: string
   /** The agents it spawned, by their thread: their sessions, across turns, kept with the conversation. */
   private get spawnedSessions(): Record<string, KnownSpawn> {
     const known = this.state.codexSubagents
@@ -1078,12 +1086,15 @@ class CodexThread implements Thread {
     // relay, which keeps their keys.
     const computer = await computerServers(directory)
     const servers = relayedServers(this.session.id, this.agent, directory, computer)
+    // Your subagents (Settings › Agents), as its roles, and the model its subagents use.
+    const subagents = codexSubagents(await subagentsFor(directory))
     // Loaded again when Kuvo Code's tools moved (the app started again), to reach them, or the
-    // skills or the servers changed.
-    if (this.nativeID && this.loaded && instructions === this.instructions && tools?.key === this.toolsKey && skillsKey === this.skillsKey && computer.key === this.serversKey) return rpc
+    // skills, the servers or the subagents changed.
+    if (this.nativeID && this.loaded && instructions === this.instructions && tools?.key === this.toolsKey && skillsKey === this.skillsKey && computer.key === this.serversKey && subagents.key === this.subagentsKey) return rpc
     this.toolsKey = tools?.key
     this.serversKey = computer.key
     this.skillsKey = skillsKey
+    this.subagentsKey = subagents.key
     this.instructions = instructions
     // Kuvo Code's own tools, as the engine's models have them (a setting for this thread alone).
     const timeout = tools ? { tool_timeout_sec: Math.ceil(tools.timeout / 1000) } : {}
@@ -1099,8 +1110,10 @@ class CodexThread implements Thread {
       // (A command's server can take a while to start the first time, fetching its package.)
       ...Object.fromEntries(servers.map((each) => [`mcp_servers.${each.name}`, { url: each.url, http_headers: each.headers, tool_timeout_sec: Math.ceil(each.timeout / 1000), startup_timeout_sec: 120 }])),
       ...(turnedOffHere.length ? { "skills.config": [...this.agent.ownSkillSettings(), ...turnedOffHere] } : {}),
+      ...subagents.config,
     }
     const common = { cwd: this.session.location.directory, model: input.model.id, developerInstructions: instructions, config }
+    const withoutSubagents = Object.fromEntries(Object.entries(config).filter(([key]) => !(key in subagents.config)))
     if (this.nativeID) {
       try {
         await rpc.request("thread/resume", { threadId: this.nativeID, excludeTurns: true, ...common }, 60_000)
@@ -1113,10 +1126,27 @@ class CodexThread implements Thread {
           this.loaded = true
           return rpc
         }
+        // Your subagents turned away (a Codex older than its roles' settings): the same thread
+        // without them, rather than a new one.
+        if (Object.keys(subagents.config).length && error instanceof RPCError) {
+          const without = await rpc.request("thread/resume", { threadId: this.nativeID, excludeTurns: true, ...common, config: withoutSubagents }, 60_000).then(() => true, () => false)
+          if (without) {
+            console.error(`Codex turned your subagents away, so this conversation goes on without them: ${error.message}`)
+            this.loaded = true
+            return rpc
+          }
+        }
         // Gone (deleted, or another Codex's): a new thread, without what came before.
       }
     }
-    const started: any = await rpc.request("thread/start", common, 60_000)
+    let started: any
+    try {
+      started = await rpc.request("thread/start", common, 60_000)
+    } catch (error) {
+      if (!Object.keys(subagents.config).length || !(error instanceof RPCError)) throw error
+      console.error(`Codex turned your subagents away, so this conversation starts without them: ${error.message}`)
+      started = await rpc.request("thread/start", { ...common, config: withoutSubagents }, 60_000)
+    }
     if (this.nativeID && this.nativeID !== started.thread.id) this.startedOver = true
     this.nativeID = started.thread.id
     this.state.codexThread = this.nativeID
@@ -1131,11 +1161,73 @@ class CodexThread implements Thread {
     return this.inTurn
   }
 
-  /** Agents it spawned are still at work after the turn: it's kept open for them. */
+  /** Agents it spawned are still at work after the turn, or commands it left running: it's kept open for them. */
   get keepsWorking(): boolean {
     // (One the session ended, with the turn that started it, isn't.)
     for (const [threadID, lane] of this.backgroundLanes) if (lane.ended || lane.run.turn.isEnded) this.backgroundLanes.delete(threadID)
-    return this.backgroundLanes.size > 0
+    return this.backgroundLanes.size > 0 || this.liveTerminals.length > 0
+  }
+
+  /**
+   * Commands it left running in background terminals, as its app-server last listed them, with
+   * when each was first seen. They go with that app-server, which closing it would stop: Codex
+   * doesn't say when one ends (nor is it told: it looks at them itself), so they're listed again
+   * every while, until none is left.
+   */
+  private terminals: { id: string; command: string; since: number }[] = []
+  private terminalsRead?: ReturnType<typeof setTimeout>
+  /** Lists that failed in a row. */
+  private listFailures = 0
+
+  private get liveTerminals() {
+    return this.server && !this.server.isClosed ? this.terminals : []
+  }
+
+  get backgroundTasks() {
+    return this.liveTerminals.map((terminal) => ({ id: terminal.id, since: terminal.since }))
+  }
+
+  async stopBackgroundTasks() {
+    const server = this.server
+    if (!this.liveTerminals.length || !server || !this.nativeID) return
+    await server.request("thread/backgroundTerminals/clean", { threadId: this.nativeID }, 30_000).catch(() => {})
+    await this.readTerminals()
+  }
+
+  /** Lists its background terminals again; while any runs, again in a while. */
+  private async readTerminals() {
+    clearTimeout(this.terminalsRead)
+    const server = this.server
+    const threadID = this.nativeID
+    // (Those it listed before, while it can't say now: a list that failed isn't an empty one.)
+    let listed: { id: string; command: string }[] | undefined = []
+    if (server && !server.isClosed && threadID) {
+      try {
+        listed = []
+        const seen = new Set<string>()
+        let cursor: string | undefined
+        do {
+          const answer: any = await server.request("thread/backgroundTerminals/list", { threadId: threadID, ...(cursor ? { cursor } : {}) }, 30_000)
+          for (const terminal of Array.isArray(answer?.data) ? answer.data : []) if (typeof terminal?.processId === "string") listed.push({ id: terminal.processId, command: String(terminal.command ?? "") })
+          cursor = typeof answer?.nextCursor === "string" && answer.nextCursor && !seen.has(answer.nextCursor) ? answer.nextCursor : undefined
+          if (cursor) seen.add(cursor)
+        } while (cursor && seen.size < 20)
+        this.listFailures = 0
+      } catch {
+        // (Given up on after a few in a row: one that never answers can't keep it open for ever.)
+        listed = server.isClosed || ++this.listFailures >= 5 ? [] : undefined
+      }
+    }
+    // (Its app-server since replaced, or a turn under way, which reads them again as it ends.)
+    if (server !== this.server || this.inTurn) return
+    if (!listed) {
+      if (this.terminals.length) this.terminalsRead = setTimeout(() => void this.readTerminals(), codexTiming.terminals)
+      return
+    }
+    const before = this.terminals
+    this.terminals = listed.map((terminal) => ({ ...terminal, since: before.find((known) => known.id === terminal.id)?.since ?? Date.now() }))
+    if (before.length !== this.terminals.length || this.terminals.some((terminal) => !before.some((known) => known.id === terminal.id))) emit("session.background.updated", { sessionID: this.session.id }, this.session.location.directory)
+    if (this.terminals.length) this.terminalsRead = setTimeout(() => void this.readTerminals(), codexTiming.terminals)
   }
 
   /** Your message, into the turn under way (Codex's turn/steer). */
@@ -1235,6 +1327,8 @@ class CodexThread implements Thread {
       while (this.asking.size) await Promise.all(this.asking)
       this.answers = []
       this.inTurn = false
+      // What it left running, now the turn's over.
+      void this.readTerminals()
     }
   }
 
@@ -1307,13 +1401,18 @@ class CodexThread implements Thread {
     const files = answer?.files ?? []
     if (active?.turnID && this.nativeID) {
       // (Noted first: a sleep can start before Codex says it took this. One under way, this ends.)
-      const noted: Answered | undefined = this.sleep ? undefined : { text }
+      const noted: Answered | undefined = this.sleep ? undefined : { text, files }
       if (noted) this.answered.push(noted)
       if (await this.steerIn(active, { text, files })) return
       // (Turned down with a sleep starting: telling it again as that started is seeing to it.)
       if (noted && !this.answered.includes(noted)) return
       this.answered = this.answered.filter((each) => each !== noted)
-      if (await this.steerIntoSleep(active, { text, files })) return
+      // Into the sleep it's in, and then into one that started while that was tried: as a sleep
+      // starts it's told only what's kept by then, so kept below at once once there's no sleep left.
+      for (let tried: AbortController | undefined; this.sleep && this.sleep !== tried && this.active === active; ) {
+        tried = this.sleep
+        if (await this.steerIntoSleep(active, { text, files })) return
+      }
     }
     if (answer) this.answers.push(answer)
   }
@@ -1447,7 +1546,17 @@ class CodexThread implements Thread {
       if (said.length && !stopped) {
         const words = { text: `Your question has its answer, so there's nothing to wait for on it:\n\n${said.map((each) => each.text).join("\n\n")}`, files: [] }
         this.keep(this.steerIn(active, words).then(async (took) => {
-          if (!took && !await this.steerIntoSleep(active, words)) this.answered.push(...said)
+          if (took) return
+          // Into this sleep, and then into one that started while that was tried (as in steerAnswer).
+          for (let tried: AbortController | undefined; this.sleep && this.sleep !== tried && this.active === active; ) {
+            tried = this.sleep
+            if (await this.steerIntoSleep(active, words)) return
+          }
+          // None left to tell, in the same breath: what it heard waits for the next sleep, and what
+          // it never took (turned down as this sleep started) goes in as it goes on, or starts its
+          // next turn, rather than wait on a sleep that may never come.
+          this.answered.push(...said.filter((each) => each.heard))
+          this.answers.push(...said.filter((each) => !each.heard).map((each) => ({ text: each.text, files: each.files ?? [] })))
         }))
       }
     } else if (item?.type === "userMessage") {
@@ -1889,7 +1998,7 @@ class CodexThread implements Thread {
         active.toolsSinceText = true
         const changes = codexChanges(item.changes)
         active.changes.set(item.id, changes)
-        turn.toolStart(item.id, "patch", { files: changes.map((change) => change.path) })
+        turn.toolStart(item.id, "patch", { files: changes.flatMap((change) => [change.path, ...(change.movedTo ? [change.movedTo] : [])]) })
         return
       }
       case "functionCallOutput":
@@ -2120,7 +2229,8 @@ class CodexThread implements Thread {
         const decision = await hooks.permission({
           toolCallID: params.itemId,
           action: "edit",
-          resources: changes.length ? changes.map((change) => change.path) : [params.grantRoot ?? "*"],
+          // (A rename's new name too: it's written there.)
+          resources: changes.length ? changes.flatMap((change) => [change.path, ...(change.movedTo ? [change.movedTo] : [])]) : [params.grantRoot ?? "*"],
           metadata: files.length ? { files } : undefined,
           message: params.reason ?? undefined,
         })
@@ -2138,7 +2248,8 @@ class CodexThread implements Thread {
         return { decision: decision === "reject" ? "denied" : "approved" }
       }
       case "applyPatchApproval": {
-        const paths = Object.keys(params.fileChanges ?? {})
+        // (Each file, and a rename's new name: it's written there.)
+        const paths = Object.entries((params.fileChanges ?? {}) as Record<string, any>).flatMap(([file, change]) => [file, ...[change?.move_path, change?.update?.move_path].filter((each): each is string => typeof each === "string")])
         const decision = await hooks.permission({ toolCallID: params.callId, action: "edit", resources: paths.length ? paths : ["*"], message: params.reason ?? undefined })
         return { decision: decision === "reject" ? "denied" : "approved" }
       }
@@ -2244,6 +2355,9 @@ class CodexThread implements Thread {
   close() {
     for (const lane of this.backgroundLanes.values()) this.endSubagent(lane, "interrupted")
     this.backgroundLanes.clear()
+    clearTimeout(this.terminalsRead)
+    if (this.terminals.length) emit("session.background.updated", { sessionID: this.session.id }, this.session.location.directory)
+    this.terminals = []
     // Let go of in the app-server it's in (one of its own stops with it).
     const server = this.server
     if (this.nativeID && this.loaded && server && !server.isClosed && !this.agent.isFenced(server)) void server.request("thread/unsubscribe", { threadId: this.nativeID }).catch(() => {})

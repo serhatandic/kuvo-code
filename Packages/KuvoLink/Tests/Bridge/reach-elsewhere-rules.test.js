@@ -42,7 +42,7 @@ const read = file => { try { return JSON.parse(fs.readFileSync(file, "utf8")); }
 
 // An engine with these sessions: what each was sent, interrupted, and how each ask was answered.
 async function engine(sessions) {
-  const seen = { prompts: [], interrupted: [], replied: [], asks: new Map() };
+  const seen = { prompts: [], interrupted: [], replied: [], asks: new Map(), messages: new Map() };
   const all = new Map(Object.entries(sessions).map(([id, each]) => [id, { id, time: { created: 1, updated: 1 }, directory: "/work", ...each }]));
   const server = http.createServer((request, response) => {
     let text = "";
@@ -78,7 +78,7 @@ async function engine(sessions) {
         seen.replied.push({ session: id, ask: decodeURIComponent(answered[1]), ...given });
         return reply({});
       }
-      if (rest === "/message") return reply([]);
+      if (rest === "/message") return reply(seen.messages.get(id) ?? []);
       reply({});
     });
   });
@@ -193,6 +193,61 @@ test("what a box refuses, and from whom", async () => {
   const nowhere = await take(callOf("stop_session", { session: "ses_nowhere" }));
   assert.deepEqual([nowhere[0].ok, nowhere[0].why], [false, "There's no session ses_nowhere on this computer."]);
   assert.equal(eng.seen.interrupted.length, 0);
+});
+
+test("a lead that moved from here is reached from where it went as soon as it's switched to there, while its original here is still being let go", async () => {
+  // The bot moved from this box to mini: its original's still here as it's let go (`finishing`).
+  eng.all.set("ses_lead", { id: "ses_lead", title: "Foreman", time: { created: 1, updated: 1 }, directory: "/work" });
+  const move = stage => write(path.join(run, "moves", "mov_test0000000001.json"), { id: "mov_test0000000001", kind: "bot", thing: by.bot, name: "Foreman", from: here.pub, to: mini.pub, peer: mini.pub, role: "from", stage, step: stage === "finishing" ? "done" : "switch", sessions: ["ses_lead"], wasPaused: false, tries: 0, started: Date.now() });
+  move("finishing");
+  const list = callOf("list_sessions");
+  assert.deepEqual(await take(list), [{ id: list.id, ok: true }]);
+  assert.deepEqual(JSON.parse(answerOf(list).text).rows.map(row => row.session).sort(), ["ses_billing", "ses_left"]);
+  const stop = callOf("stop_session", { session: "ses_left" });
+  assert.deepEqual(await take(stop), [{ id: stop.id, ok: true }]);
+  assert.deepEqual(eng.seen.interrupted, ["ses_left"]);
+  // Asked to switch, not heard back yet: its copy there runs only once it's switched, so a call from it there says it is.
+  move("switching");
+  const switching = callOf("list_sessions");
+  assert.deepEqual(await take(switching), [{ id: switching.id, ok: true }]);
+  // From any other box, it's still moving: not now.
+  const elsewhere = callOf("list_sessions");
+  const [fromThird] = await take(elsewhere, third.peer);
+  assert.deepEqual([fromThird.ok, fromThird.retry], [false, true]);
+  // Still on its way (its copy there held): not now, from there either.
+  move("copying");
+  const early = callOf("list_sessions");
+  const [copying] = await take(early);
+  assert.deepEqual([copying.ok, copying.retry], [false, true]);
+});
+
+test("a message from a lead that moved from here is from it, by its name and with a way back, as soon as it's switched to there, while its original here is still being let go", async () => {
+  eng.all.set("ses_lead", { id: "ses_lead", title: "Foreman", time: { created: 1, updated: 1 }, directory: "/work" });
+  const move = stage => write(path.join(run, "moves", "mov_test0000000002.json"), { id: "mov_test0000000002", kind: "bot", thing: by.bot, name: "Foreman", from: here.pub, to: mini.pub, peer: mini.pub, role: "from", stage, step: stage === "finishing" ? "done" : stage === "switching" ? "switch" : "parts", sessions: ["ses_lead"], wasPaused: false, tries: 0, started: Date.now() });
+  const letter = { from: "ses_lead", to: "ses_user", text: "How's it going?", wait: false };
+  const answers = [];
+  const send = async (sender, told, extra = {}) => {
+    const said = [];
+    await link.takeLetter(sender, { ...letter, id: "ltr_" + crypto.randomBytes(6).toString("hex"), at: Date.now(), ...extra }, { send: (_to, message) => said.push(message.delivered), answer: each => answers.push(each), targets: [eng.target], peers: [mini.peer, third.peer], told, moved: new Map(), wait: 1 });
+    assert.equal(said[0].ok, true, said[0].why);
+    return eng.seen.prompts.at(-1).text;
+  };
+  const listed = { [mini.pub]: { at: 1, kind: "machine", list: [{ session: "ses_lead", name: "Foreman", kind: "bot", id: by.bot }] } };
+  const fromLead = link.composeLetter("Foreman", "ses_lead", "How's it going?", false);
+  const fromSomeone = box => link.composeLetter(`an agent on ${box}`, "unknown", "How's it going?", false);
+  move("finishing");
+  assert.equal(await send(mini.peer, listed), fromLead, "as the box it went to lists it");
+  assert.equal(await send(mini.peer, {}), fromLead, "before that box has listed it: by the name it moved with");
+  assert.equal(await send(third.peer, {}), fromSomeone("third"), "from any other box, it isn't");
+  // Waiting for an answer: it goes back to it, on the box it went to.
+  eng.seen.messages.set("ses_user", [{ id: "msg_zzzzzzzzzzzz", type: "assistant", content: [{ type: "text", text: "Going well." }] }]);
+  assert.equal(await send(mini.peer, {}, { wait: true }), link.composeLetter("Foreman", "ses_lead", "How's it going?", true));
+  assert.deepEqual(answers.map(each => [each.to, each.peer, each.text]), [["ses_lead", mini.pub, "Going well."]]);
+  move("switching");
+  assert.equal(await send(mini.peer, {}), fromLead);
+  // Its copy there held until it's switched to: what comes from there isn't from it yet.
+  move("copying");
+  assert.equal(await send(mini.peer, listed), fromSomeone("mini"));
 });
 
 test("an allow goes only as far as the lead could go itself, never past this box's Don't Allow rules, and one kept over a day isn't given", async () => {

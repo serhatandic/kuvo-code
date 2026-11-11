@@ -349,8 +349,7 @@ final class StaleWhileRevalidateTests: XCTestCase {
 
     private func makeUserDefaults(_ name: String) -> UserDefaults {
         let suiteName = "OpenUsageTests.StaleWhileRevalidate.\(name).\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suiteName)!
-        defaults.removePersistentDomain(forName: suiteName)
+        let defaults = testDefaults(suiteName: suiteName)!
         return defaults
     }
 }

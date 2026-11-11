@@ -1,0 +1,7 @@
+# Releases and betas
+
+CLAUDE.md points here. How tags, betas and their build versions work is in `CONTRIBUTING.md` (Development setup); how changelog lines, "New" marks and Highlights work is in `CONTRIBUTING.md` (Workflow). This page adds what sessions must do.
+
+- **Releases come only from the pipeline**: pushing an annotated `vX.Y.Z` tag on `main` runs `.github/workflows/release.yml`, which builds, signs with a Developer ID, notarizes and publishes `KuvoCode.dmg` and the update feed. Don't build or publish a release by hand. `Actions › Release › Run workflow` is a dry run that checks signing without publishing. Tags come only on the user's word.
+- **The user tries every update first**, the way people will get it, before any release or beta tag: `scripts/try-update.sh` (the user, 2026-10-31: "I want to test new updates beforehand just like this from now on"). Run it in the background, tell the user to choose **Check for Updates…** in the copy in /Applications, and stop it once they've updated, so the real feed comes back.
+- **Betas are manual**: an annotated `vX.Y.Z-beta.N` tag on `main` goes through the same pipeline as a prerelease, with the changelog's Unreleased notes as they are (don't rename the heading); who is offered it: `CONTRIBUTING.md`, Development setup. The update feed keeps the newest release and any newer beta (`scripts/merge-appcast.py`). Sparkle ignores anything after a dash, which is why the build version is `X.Y.ZbN`.

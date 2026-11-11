@@ -61,13 +61,15 @@ import Testing
         #expect(asks.asks.count == 2)
     }
 
-    /// From a phone: the cards listed (the site, the machine by its name, what the page asks for),
+    /// From a phone: the cards listed (the site, the machine by its name and its box, whose ask it
+    /// is and where a phone's answer goes when this Mac can't take it; what the page asks for),
     /// each answered as on the Mac, once; an answer that isn't the card's, or a card that's gone,
     /// says so.
     @Test func aPhoneAnswersThem() async throws {
         let link = PhoneLink()
         link.browserAsks = asks
         link.machineName = { $0 == "box" ? "Build Box" : nil }
+        link.standIn(machine: "box", key: "box-key", address: "box-link-address")
         func phone(_ path: String, _ body: [String: String]? = nil) async throws -> (status: Int, json: [String: Any]?) {
             let request = LinkRequest(method: body == nil ? "GET" : "POST", path: path, headers: ["content-type": "application/json"],
                                       body: try body.map { try JSONSerialization.data(withJSONObject: $0) } ?? Data())
@@ -86,7 +88,9 @@ import Testing
         let listed = try #require(try await phone("kuvo/asks").json?["asks"] as? [[String: Any]])
         let card = try #require(listed.first { $0["id"] as? String == signIn })
         #expect(card["kind"] as? String == "signIn" && card["host"] as? String == "github.com" && card["machine"] as? String == "Build Box")
+        #expect(card["box"] as? String == "box-link-address")
         #expect(card["username"] as? Bool == true && card["password"] as? Bool == true)
+        #expect(listed.first { $0["id"] as? String == code }?["box"] == nil, "this Mac's own")
         #expect(listed.first { $0["id"] as? String == code }?["prompt"] as? String == "Enter the 6-digit code")
 
         #expect(try await phone("kuvo/asks/\(signIn)", ["answer": "code", "code": "1"]).status == 400, "not what the card asks")

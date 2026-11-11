@@ -1,0 +1,448 @@
+import ClientDesign
+import ClientSessions
+import ClientText
+import Foundation
+import KuvoLink
+import Observation
+import SwiftUI
+
+/// The Work Queue as each box keeps it (`kuvo/work-queue`, PROTOCOL.md "The Work Queue"): a
+/// conversation's view (its own items, and those of the sessions it oversees) or every item, as it
+/// changes; one item whole; what `#n` refs in messages name, for their chips; and what you do to
+/// the queue (reorder, move to a category, delete, bring back). The box keeps and works out all of
+/// it: this only reads what it says and sends what you do.
+@MainActor @Observable
+final class WorkQueues {
+    @ObservationIgnored weak var app: AppModel?
+    /// A box's client (a test's own); the app's otherwise.
+    @ObservationIgnored var boxes: ((String) -> BoxClient)?
+
+    /// A view: whose (a conversation's address, a group chat's id, or `all`) on which box.
+    struct Key: Hashable {
+        var box: String
+        var owner: String
+    }
+
+    /// Each view followed, as the box last told it.
+    private(set) var views: [Key: WorkQueueView] = [:]
+    /// A view the box couldn't give, and why, in its words.
+    private(set) var failures: [Key: String] = [:]
+    /// Boxes that have no Work Queue yet (an older version).
+    private(set) var older: Set<String> = []
+    /// Items whole, by box and id, as last read.
+    private(set) var details: [String: WorkItemDetail] = [:]
+    /// What each ref names, by box and by the ref as it was asked ("243", `gh:owner/repo#12`):
+    /// known ones only (one the box doesn't know stays plain text).
+    private(set) var refs: [String: [String: WorkRef]] = [:]
+    /// The last item you deleted, for Undo, until you do something else.
+    private(set) var undoable: (box: String, item: WorkItem)?
+    /// What a box said when it refused something you did there.
+    var refusal: (box: String, text: String)?
+    /// An item that couldn't be read for another reason than not being there (its box away), and why.
+    private(set) var loadFailures: [String: String] = [:]
+
+    /// The panel's own state, by the conversation whose panel it is: the scope, the filter, the
+    /// item open, and one a chip asked to open.
+    var scopes: [String: Scope] = [:]
+    var filters: [String: WorkQueue.Filter] = [:]
+    var opened: [String: Opened] = [:]
+
+    enum Scope: Hashable { case own, all }
+
+    /// An item open in the panel, by its id (from a list), its number or the issue it is (from a
+    /// chip: `gh:owner/repo#12`).
+    struct Opened: Hashable {
+        var box: String
+        var id: String?
+        var number: Int?
+        var source: String?
+
+        func matches(_ item: WorkItem) -> Bool {
+            if let id { return item.id == id }
+            if let source { return item.source?.ref.lowercased() == source.lowercased() }
+            return number != nil && item.number == number
+        }
+
+        /// How it's asked of the box: its id, its number, or the issue it is.
+        var name: String { id ?? number.map(String.init) ?? source ?? "" }
+    }
+
+    @ObservationIgnored private var asked: [String: [String: Date]] = [:]
+    @ObservationIgnored private var following: [Key: UUID] = [:]
+
+    private func client(_ box: String) -> BoxClient? {
+        #if DEBUG
+        if isStandIn { return nil }
+        #endif
+        return boxes?(box) ?? app?.box(box)
+    }
+
+    #if DEBUG
+    /// Shows `view` (and `details`) as a box told them, with no box asked: for pictures of the panel.
+    @ObservationIgnored var isStandIn = false
+
+    func standIn(_ view: WorkQueueView, for key: Key, details: [WorkItemDetail] = []) {
+        isStandIn = true
+        take(view, for: key)
+        for detail in details { self.details[key.box + "|" + detail.item.id] = detail }
+    }
+    #endif
+
+    // MARK: Views
+
+    /// A view as it changes, until the task following it ends: this Mac's box tells each change as
+    /// it's made; a machine's is asked again every few seconds.
+    func follow(_ key: Key) async {
+        let me = UUID()
+        following[key] = me
+        defer { if following[key] == me { following[key] = nil } }
+        while !Task.isCancelled {
+            #if DEBUG
+            if isStandIn { return }
+            #endif
+            var wait: Duration = key.box == BoxClient.mac ? .seconds(2) : .seconds(4)
+            if let client = client(key.box) {
+                do {
+                    for try await line in client.follow("kuvo/work-queue/events?owner=\(query(key.owner))") {
+                        guard following[key] == me, let view = try? JSONDecoder().decode(WorkQueueView.self, from: line) else { continue }
+                        take(view, for: key)
+                    }
+                } catch let refusal as BoxRefusal {
+                    if refusal.status == 404 || refusal.status == 403 {
+                        older.insert(key.box)
+                        wait = .seconds(300)
+                    } else {
+                        failures[key] = refusal.message
+                    }
+                } catch {
+                    if views[key] == nil { failures[key] = error.localizedDescription }
+                }
+            }
+            try? await Task.sleep(for: wait)
+        }
+    }
+
+    /// Reads a view once more now (after you change something on a box that doesn't stream).
+    func read(_ key: Key) async {
+        guard let client = client(key.box) else { return }
+        if let view = try? await client.value(WorkQueueView.self, "GET", "kuvo/work-queue?owner=\(query(key.owner))") {
+            take(view, for: key)
+        }
+    }
+
+    private func take(_ view: WorkQueueView, for key: Key) {
+        if views[key] != view { views[key] = view }
+        failures[key] = nil
+        older.remove(key.box)
+        // What a view says of its items is what their chips show.
+        var known = refs[key.box] ?? [:]
+        for item in view.items + view.removed {
+            let ref = WorkRef(item)
+            // (By its number, and an issue's by its ref too: either names it in a message.)
+            for key in [item.number.map(String.init), item.source?.ref].compactMap({ $0 }) where known[key] != ref { known[key] = ref }
+        }
+        if refs[key.box] != known { refs[key.box] = known }
+    }
+
+    // MARK: One item
+
+    /// An item whole (by its id, or its number), read now: one the box says is on another of your
+    /// computers is read whole there (it keeps its description, notes and files).
+    @discardableResult
+    func load(box: String, item: String) async -> WorkItemDetail? {
+        guard let client = client(box) else { return details[box + "|" + item] ?? details[box + "|#" + item] }
+        do {
+            // (An issue's ref has a "/", which no path may carry: it's asked by the id its chip knows.)
+            let asked = refs[box]?[item]?.id ?? item
+            var detail = try await client.value(DetailAnswer.self, "GET", "kuvo/work-queue/items/\(path(asked))").item
+            if let computer = detail.item.computer, let there = self.box(of: detail.item, in: box), there != box,
+               let whole = try? await self.client(there)?.value(DetailAnswer.self, "GET", "kuvo/work-queue/items/\(path(detail.item.id))").item {
+                detail = whole
+                detail.item.computer = computer
+            }
+            details[box + "|" + detail.item.id] = detail
+            if let number = detail.item.number { details[box + "|#\(number)"] = detail }
+            if let source = detail.item.source { details[box + "|" + source.ref.lowercased()] = detail }
+            loadFailures[box + "|" + item] = nil
+            return detail
+        } catch let refused as BoxRefusal where refused.status == 404 {
+            loadFailures[box + "|" + item] = nil
+        } catch {
+            loadFailures[box + "|" + item] = (error as? BoxRefusal)?.message ?? error.localizedDescription
+        }
+        return nil
+    }
+
+    /// Why item `item` (an id or a number) couldn't be read just now, other than not being there.
+    func loadFailure(box: String, item: String) -> String? { loadFailures[box + "|" + item] }
+
+    func detail(box: String, id: String?, number: Int?, source: String? = nil) -> WorkItemDetail? {
+        if let id, let found = details[box + "|" + id] { return found }
+        if let number { return details[box + "|#\(number)"] }
+        if let source { return details[box + "|" + source.lowercased()] }
+        return nil
+    }
+
+    /// A file kept with an item: its bytes (`box`: the one it's kept on, `box(of:in:)`).
+    func file(box: String, item: String, name: String) async -> Data? {
+        guard let client = client(box) else { return nil }
+        guard let answer = try? await client.send("GET", "kuvo/work-queue/items/\(path(item))/files/\(path(name))"), answer.status == 200 else { return nil }
+        return answer.body
+    }
+
+    private struct DetailAnswer: Decodable { var item: WorkItemDetail }
+    private struct ItemAnswer: Decodable { var item: WorkItem }
+
+    // MARK: Where an item is
+
+    /// Who this Mac and its machines are to your other computers: this Mac's key, and each
+    /// machine's, by its id here. A test's own; this Mac's link's otherwise.
+    @ObservationIgnored var computers: (() -> (mac: String?, machines: [String: String]))?
+
+    private var known: (mac: String?, machines: [String: String]) {
+        if let computers { return computers() }
+        guard let link = app?.phoneLink else { return (nil, [:]) }
+        return (link.macKey, link.machineHosts.mapValues(\.key))
+    }
+
+    /// The box an item is kept on: the one the view is from, or the computer it says it's on, by
+    /// its key: this Mac's own box, or one of your machines by its id on this Mac. Nil for one on
+    /// another Mac (or a machine only another Mac set up): it's changed from there.
+    func box(of item: WorkItem, in box: String) -> String? {
+        guard let computer = item.computer else { return box }
+        let known = known
+        if computer.kind == "mac" { return computer.key == known.mac ? BoxClient.mac : nil }
+        if let id = known.machines.first(where: { $0.value == computer.key })?.key { return id }
+        // (A machine this Mac has, whose key it doesn't know yet: by the id the box gave, unless
+        // that's another of this Mac's machines.)
+        guard let id = computer.id, known.machines[id] == nil else { return nil }
+        return id
+    }
+
+    /// What's said of an item on a computer this Mac doesn't reach.
+    private func elsewhere(_ item: WorkItem) -> String {
+        guard let computer = item.computer else { return "" }
+        return computer.kind == "mac"
+            ? "That item is on \(computer.name), another Mac: change it there."
+            : "That item is on \(computer.name), a computer this Mac doesn’t reach. Change it from a Mac or iPhone that reaches it."
+    }
+
+    /// What you do to an item, sent to the box it's kept on; refused, saying where it is, when this
+    /// Mac doesn't reach that one.
+    @discardableResult
+    private func act<T: Decodable>(_ type: T.Type, _ method: String, _ path: String, body: (any Encodable)? = nil, on item: WorkItem, shownOn box: String) async -> T? {
+        guard let there = self.box(of: item, in: box) else {
+            refusal = (box, elsewhere(item))
+            return nil
+        }
+        return await act(type, method, path, body: body, on: there, shownOn: box)
+    }
+
+    // MARK: What you do
+
+    enum Place {
+        case top(String)
+        case before(WorkItem)
+        case after(WorkItem)
+        case category(String)
+    }
+
+    /// Moves an item: to the top of a category, before or after another (in that one's category),
+    /// or to the end of a category.
+    func move(_ item: WorkItem, to place: Place, on box: String) async {
+        struct Move: Encodable {
+            var category: String?
+            var before: String?
+            var after: String?
+            var top: Bool?
+        }
+        let body: Move = switch place {
+        case .top(let category): Move(category: category, top: true)
+        case .before(let other): Move(category: other.category, before: other.id)
+        case .after(let other): Move(category: other.category, after: other.id)
+        case .category(let category): Move(category: category)
+        }
+        undoable = nil
+        await act(ItemAnswer.self, "POST", "kuvo/work-queue/items/\(path(item.id))/move", body: body, on: item, shownOn: box)
+        if item.computer != nil { await readAll(box) }
+    }
+
+    /// Deletes an item: Undo brings it back, as does Recently Deleted for 30 days.
+    func delete(_ item: WorkItem, on box: String) async {
+        if let answer = await act(ItemAnswer.self, "DELETE", "kuvo/work-queue/items/\(path(item.id))", on: item, shownOn: box) {
+            // (Undo goes where it was deleted.)
+            var deleted = answer.item
+            deleted.computer = item.computer
+            undoable = (box, deleted)
+        }
+        if item.computer != nil { await readAll(box) }
+    }
+
+    /// The views from `box` read again now: one told of an item on another computer you changed
+    /// there shows it once that computer tells it again.
+    private func readAll(_ box: String) async {
+        for key in views.keys where key.box == box { await read(key) }
+    }
+
+    /// Brings back a deleted item, into the category it was in.
+    func restore(_ item: WorkItem, on box: String) async {
+        if undoable?.item.id == item.id { undoable = nil }
+        await act(ItemAnswer.self, "POST", "kuvo/work-queue/items/\(path(item.id))/restore", on: item, shownOn: box)
+        if item.computer != nil { await readAll(box) }
+    }
+
+    /// Adds a category of your own (after Later, or after `after`), renames or removes one: the
+    /// box refuses to remove one that has items, saying how many.
+    func addCategory(_ name: String, on box: String) async {
+        struct Add: Encodable { var add: String }
+        await act(CategoriesAnswer.self, "POST", "kuvo/work-queue/categories", body: Add(add: name), on: box)
+    }
+
+    func renameCategory(_ id: String, to name: String, on box: String) async {
+        struct Rename: Encodable { var rename: String; var to: String }
+        await act(CategoriesAnswer.self, "POST", "kuvo/work-queue/categories", body: Rename(rename: id, to: name), on: box)
+    }
+
+    func removeCategory(_ id: String, on box: String) async {
+        struct Remove: Encodable { var remove: String }
+        await act(CategoriesAnswer.self, "POST", "kuvo/work-queue/categories", body: Remove(remove: id), on: box)
+    }
+
+    private struct CategoriesAnswer: Decodable { var categories: [WorkCategory] }
+
+    func undo() async {
+        guard let undoable else { return }
+        await restore(undoable.item, on: undoable.box)
+    }
+
+    func dismissUndo() { undoable = nil }
+
+    /// What you do, sent as you: to a machine's box with this Mac's proof for that request alone
+    /// (as its vault takes one), since anything on that computer could ask its box otherwise.
+    @discardableResult
+    private func act<T: Decodable>(_ type: T.Type, _ method: String, _ path: String, body: (any Encodable)? = nil, on box: String, shownOn: String? = nil) async -> T? {
+        guard let client = client(box) else {
+            // (An item on a computer this Mac doesn't reach, one another Mac set up.)
+            if let shownOn, shownOn != box { refusal = (shownOn, "That item is on a computer this Mac can’t reach. Change it from a Mac or iPhone that reaches it.") }
+            return nil
+        }
+        do {
+            let sent = try body.map { try JSONEncoder().encode($0) }
+            var headers: [String: String] = [:]
+            if box != BoxClient.mac {
+                guard let proof = proof(box, method, path, sent ?? Data()) else { throw BoxRefusal(status: 503, message: "This Mac can’t prove it’s yours to that machine right now. Try again in a moment.") }
+                headers["x-kuvo-vault-proof"] = proof
+            }
+            let (status, data) = try await client.send(method, path, body: sent, headers: headers)
+            guard (200..<300).contains(status) else { throw BoxRefusal(status: status, data: data) }
+            let answer = try JSONDecoder().decode(T.self, from: data)
+            refusal = nil
+            // A box that doesn't stream shows the change once it's asked again.
+            if box != BoxClient.mac { for key in views.keys where key.box == box { await read(key) } }
+            return answer
+        } catch let refused as BoxRefusal {
+            refusal = (shownOn ?? box, refused.message)
+        } catch {
+            refusal = (shownOn ?? box, error.localizedDescription)
+        }
+        return nil
+    }
+
+    /// This Mac's proof for one request to a machine (the vault's, `PhoneLink.vaultRequestProof`).
+    @ObservationIgnored var proof: (_ machine: String, _ method: String, _ path: String, _ body: Data) -> String? = { machine, method, path, body in
+        Vaults.shared.requestProof(machine, method, path, body)
+    }
+
+    // MARK: Chips
+
+    /// What the refs in `text` name on `box` (by the ref as asked: "243", `gh:owner/repo#12`), as
+    /// far as it's known now; the ones not known yet are asked (once a minute at most each), and
+    /// their chips come when the box answers.
+    func refs(in text: String, box: String, typing: Bool = false) -> [String: WorkRef] {
+        var found = WorkItemRefs.findRefs(in: text)
+        // One being typed at the end of a draft isn't asked for until it's whole ("#2" of "#243").
+        if typing, let last = found.last, last.range.upperBound == text.endIndex { found.removeLast() }
+        guard !found.isEmpty else { return [:] }
+        let keys = Set(found.map(\.ref))
+        let now = Date()
+        // Known ones too, a minute on: a chip shows where its item stands now, not when it came.
+        let wanted = keys.filter { asked[box]?[$0].map { now.timeIntervalSince($0) > refreshAfter } ?? true }
+        if !wanted.isEmpty {
+            for key in wanted { asked[box, default: [:]][key] = now }
+            Task { await lookUp(Array(wanted), on: box) }
+        }
+        startRefreshing()
+        let known = refs[box] ?? [:]
+        var named: [String: WorkRef] = [:]
+        for key in keys { if let ref = known[key] { named[key] = ref } }
+        return named
+    }
+
+    /// Every half minute, what the chips asked for lately name now: a chip on screen follows its
+    /// item (in progress, then done) without anything else on screen changing.
+    private func startRefreshing() {
+        guard refreshing == nil else { return }
+        refreshing = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(30))
+                guard let self else { return }
+                let now = Date()
+                for (box, keys) in asked {
+                    let recent = keys.filter { now.timeIntervalSince($0.value) < 600 }.map(\.key)
+                    if !recent.isEmpty { await lookUp(recent, on: box) }
+                }
+            }
+        }
+    }
+
+    @ObservationIgnored private var refreshing: Task<Void, Never>?
+    /// How long before a chip's item is asked about again when it's drawn (a test's own).
+    @ObservationIgnored var refreshAfter: TimeInterval = 60
+
+    /// Asks the box what `keys` name ("243", `gh:owner/repo#12`), in a list (a box that doesn't
+    /// know one says null).
+    func lookUp(_ keys: [String], on box: String) async {
+        guard let client = client(box), !keys.isEmpty else { return }
+        struct Asked: Encodable { var refs: [String] }
+        guard let answer = try? await client.value(WorkRefs.self, "POST", "kuvo/work-queue/refs", body: Asked(refs: Array(keys.prefix(200)))) else { return }
+        var known = refs[box] ?? [:]
+        for (key, ref) in answer.refs { known[key] = ref }
+        if refs[box] != known { refs[box] = known }
+    }
+
+    /// The view the panel of the conversation in view shows: its own queue, or All.
+    func key(for utilities: Utilities) -> Key {
+        let owner = utilities.queueOwner
+        let scope: Scope = owner == nil ? .all : scopes[utilities.panelKey] ?? .own
+        return Key(box: utilities.queueBox, owner: scope == .all ? WorkQueueView.all : owner ?? WorkQueueView.all)
+    }
+
+    // MARK: Opening
+
+    /// Opens the item `ref` names ("243", `gh:owner/repo#12`) in the panel of the conversation in
+    /// view: from a chip. It's read by that, so one from another conversation's queue opens too.
+    func open(ref: String, on box: String, panel: String) {
+        opened[panel] = Int(ref).map { Opened(box: box, number: $0) } ?? Opened(box: box, source: ref)
+    }
+
+    private func query(_ value: String) -> String {
+        value.addingPercentEncoding(withAllowedCharacters: .alphanumerics.union(CharacterSet(charactersIn: "_-"))) ?? value
+    }
+
+    private func path(_ value: String) -> String {
+        value.addingPercentEncoding(withAllowedCharacters: .alphanumerics.union(CharacterSet(charactersIn: "_-."))) ?? value
+    }
+}
+
+extension AppModel {
+    /// Opens the Work Queue item `ref` names (a chip clicked: "243", `gh:owner/repo#12`) in the
+    /// panel of the conversation in view.
+    func openWorkItem(_ ref: String) {
+        workQueues.open(ref: ref, on: utilities.queueBox, panel: utilities.panelKey)
+        withAnimation(.ui) {
+            utilities.showWorkQueue()
+            tabs.showPanel()
+            showsSettings = false
+        }
+    }
+}

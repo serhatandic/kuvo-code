@@ -84,6 +84,8 @@ struct TextFaces: Equatable {
         /// The character it's drawn over.
         var at: Int
         var image: NSImage
+        /// Drawn at its own width (a chip), rather than `size` across.
+        var width: CGFloat?
     }
 
     var all: [Face] = []
@@ -102,6 +104,20 @@ struct TextFaces: Equatable {
         storage.addAttributes([.foregroundColor: NSColor.clear, .kern: size + 1 - width], range: NSRange(location: span.location, length: 1))
         all.append(Face(at: span.location, image: image))
         unspoken.insert(span.location)
+    }
+
+    /// A Work Queue item's chip drawn over `span` (its "#243"): the first character makes room for
+    /// the whole picture and the others go out of sight, though VoiceOver still reads them and
+    /// copying keeps them.
+    mutating func addChip(_ image: NSImage, over span: NSRange, in storage: NSMutableAttributedString, font: NSFont) {
+        guard span.length > 0, span.upperBound <= storage.length else { return }
+        let string = storage.string as NSString
+        for offset in 0..<span.length {
+            let at = NSRange(location: span.location + offset, length: 1)
+            let width = string.substring(with: at).size(withAttributes: [.font: font]).width
+            storage.addAttributes([.foregroundColor: NSColor.clear, .kern: offset == 0 ? image.size.width + 3 - width : -width], range: at)
+        }
+        all.append(Face(at: span.location, image: image, width: image.size.width))
     }
 
     /// Leaves `span` of `storage`, in `font`, out of sight and out of what VoiceOver reads, its
@@ -161,8 +177,9 @@ struct TextFaces: Equatable {
             let rect = layout.boundingRect(forGlyphRange: glyphs, in: container).offsetBy(dx: origin.x, dy: origin.y)
             guard rect.width > 0 else { continue }
             // As wide as its room, as tall as its shape makes it (a symbol isn't square).
-            let height = face.image.size.width > 0 ? size * face.image.size.height / face.image.size.width : size
-            face.image.draw(in: NSRect(x: rect.minX, y: rect.midY - height / 2, width: size, height: height), from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
+            let width = face.width ?? size
+            let height = face.image.size.width > 0 ? width * face.image.size.height / face.image.size.width : size
+            face.image.draw(in: NSRect(x: rect.minX + (face.width == nil ? 0 : 1), y: rect.midY - height / 2, width: width, height: height), from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
         }
     }
 
@@ -408,12 +425,7 @@ final class SelectableTextView: PointerAwareTextView {
     override func menu(for event: NSEvent) -> NSMenu? {
         let point = convert(event.locationInWindow, from: nil)
         guard link(at: point) == nil, !selectedRanges.contains(where: { NSLocationInRange(character(at: point), $0.rangeValue) }) else { return super.menu(for: event) }
-        var view = superview
-        while let around = view {
-            if let menu = around.menu(for: event), !menu.items.isEmpty { return menu }
-            view = around.superview
-        }
-        return super.menu(for: event)
+        return HeldMenus.shared.menu(for: event, from: self)?.menu ?? super.menu(for: event)
     }
 
     // The keyboard goes to the conversation with its selection, never to one of its texts.

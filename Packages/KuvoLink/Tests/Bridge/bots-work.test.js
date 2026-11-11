@@ -86,6 +86,15 @@ function resetEngine() {
   held = [];
 }
 resetEngine();
+let integrationsAskedFresh = 0;
+const engineAccounts = {
+  anthropic: { id: "anthropic", name: "Anthropic", metadata: {}, connections: [{ type: "credential", id: "crd_work", label: "Work", method: "key" }, { type: "credential", id: "crd_home", label: "Personal", method: "key" }] },
+  deepseek: { id: "deepseek", name: "DeepSeek", metadata: {}, connections: [{ type: "credential", id: "crd_ds", label: "API key", method: "key" }] },
+};
+const bridgeAccounts = {
+  "claude-code": { id: "claude-code", name: "Claude Code", metadata: { source: "agent", accountID: "default" }, connections: [{ type: "agent", label: "ada@example.com · Max plan", method: "oauth" }] },
+  "claude-code@acc0001": { id: "claude-code@acc0001", name: "Claude Code", metadata: { source: "agent", accountID: "acc0001", accountLabel: "Athas" }, connections: [{ type: "agent", label: "athas@example.com", method: "oauth" }] },
+};
 // An ask names the tool call it's for, as the engine's do.
 const withSource = ask => ({ ...ask, source: ask.source ?? { type: "tool", messageID: `msg_${ask.id}`, id: `call_${ask.id}` } });
 // The coding agents' bridge answers as the engine does, for the sessions on it (`bridge`).
@@ -191,6 +200,13 @@ const standIn = onBridge => (request, response) => {
       return reply({});
     }
     if (request.url.includes("/instructions/entries/")) return reply({});
+    // An account as Settings › Accounts lists it: the engine's plans with their sign-ins (the one in
+    // use first), the coding agents' accounts with the names you gave them.
+    if (url.pathname.startsWith("/api/integration") && request.method === "GET") {
+      // (Asked of each agent's program again, the bridge's `fresh` and one account's: what a read of a bot's work never needs.)
+      if (url.pathname !== "/api/integration" || url.searchParams.has("fresh")) integrationsAskedFresh += 1;
+      else return reply({ location: { directory: home }, data: Object.values(onBridge ? bridgeAccounts : engineAccounts) });
+    }
     reply({ message: "Not here." }, 404);
   });
 };
@@ -380,6 +396,41 @@ test("a summary doesn't change how a lead reads a session: failed stays failed, 
   assert.doesNotMatch((await tool("list_sessions", {}, "ses_pixel")).text, /finished/);
 });
 
+test("a turn cut short gives as its last reply what it said in that turn, never an earlier turn's reply", async () => {
+  const session = startedAddress(await tool("start_session", { task: "One.", title: "Sign-in", project: "Tidepool" }, "ses_pixel"));
+  busy.delete(session);
+  sessions.get(session).outcome = "interrupted";
+  sessions.get(session).time.idle = Date.now();
+  const said = (text, id) => ({ id, type: "assistant", content: text ? [{ type: "text", text }] : [] });
+  const earlier = [{ id: "msg_i1", type: "idle", outcome: "succeeded" }, said("Previous turn finished.", "msg_s1"), { id: "msg_u1", type: "user" }];
+  // Stopped before it said anything.
+  kept.set(session, [{ id: "msg_i2", type: "idle", outcome: "interrupted" }, said("", "msg_s2"), { id: "msg_u2", type: "user" }, ...earlier]);
+  let listed = (await tool("list_sessions", {}, "ses_pixel")).text;
+  assert.match(listed, /stopped/);
+  assert.doesNotMatch(listed, /Previous turn finished/);
+  // Stopped after it said something in that turn: that's its last reply.
+  kept.set(session, [{ id: "msg_i2", type: "idle", outcome: "interrupted" }, said("", "msg_s3"), said("Halfway through the sign-in.", "msg_s2"), { id: "msg_u2", type: "user" }, ...earlier]);
+  listed = (await tool("list_sessions", {}, "ses_pixel")).text;
+  assert.match(listed, /stopped/);
+  assert.match(listed, /Halfway through the sign-in/);
+  assert.doesNotMatch(listed, /Previous turn finished/);
+  // Stopped, and then summarized: still that turn's.
+  kept.set(session, [{ id: "msg_i3", type: "idle", outcome: "succeeded" }, { id: "msg_c", type: "compaction", status: "completed", reason: "manual" }, { id: "msg_i2", type: "idle", outcome: "interrupted" }, { id: "msg_u2", type: "user" }, ...earlier]);
+  listed = (await tool("list_sessions", {}, "ses_pixel")).text;
+  assert.match(listed, /stopped/);
+  assert.doesNotMatch(listed, /Previous turn finished/);
+  // Failed before it said anything: the same.
+  sessions.get(session).outcome = "failed";
+  kept.set(session, [{ id: "msg_i2", type: "idle", outcome: "failed" }, { id: "msg_u2", type: "user" }, ...earlier]);
+  listed = (await tool("list_sessions", {}, "ses_pixel")).text;
+  assert.match(listed, /failed/);
+  assert.doesNotMatch(listed, /Previous turn finished/);
+  // A turn that finished says what it said last.
+  sessions.get(session).outcome = "succeeded";
+  kept.set(session, earlier);
+  assert.match((await tool("list_sessions", {}, "ses_pixel")).text, /Previous turn finished/);
+});
+
 test("how a lead reads a session past several summaries: what they did isn't how its work went", async () => {
   const session = startedAddress(await tool("start_session", { task: "One.", title: "Sign-in", project: "Tidepool" }, "ses_pixel"));
   busy.delete(session);
@@ -546,16 +597,53 @@ test("a client sees a bot's work: its sessions, the answers it gave and today's 
   assert.deepEqual(work.body.limits, { atOnce: 3 });
 });
 
+test("a client sees which account each of a bot's sessions runs on, as Settings › Accounts names it: its provider, and the name you gave a coding agent's account", async t => {
+  write(path.join(home, "run", "bridge.json"), JSON.stringify({ port: bridge.address().port, password: "b", pid: await runningAs("kuvo-agents", t) }));
+  t.after(() => fs.rmSync(path.join(home, "run", "bridge.json"), { force: true }));
+  const start = async (title, model, onBridge = false) => {
+    const session = startedAddress(await tool("start_session", { task: "Go.", title, project: "Tidepool" }, "ses_pixel"));
+    Object.assign(sessions.get(session), { model, ...(onBridge ? { bridge: true } : {}) });
+    return title;
+  };
+  // The engine's plan with two sign-ins: by its name alone (they have no names of yours).
+  await start("On the work key", { providerID: "anthropic", id: "claude-opus-5-5" });
+  // One sign-in: the plan says which.
+  await start("On DeepSeek", { providerID: "deepseek", id: "deepseek-v4" });
+  // A coding agent's own sign-in, and one you added and named.
+  await start("On Claude Code", { providerID: "claude-code", id: "opus" }, true);
+  await start("On Athas", { providerID: "claude-code@acc0001", id: "opus" }, true);
+  // Custom Auto picks an account each turn; a provider where it runs can't say: none.
+  await start("On Auto", { providerID: "auto", id: "auto" });
+  await start("On a gone plan", { providerID: "gone", id: "x" });
+  integrationsAskedFresh = 0;
+  const work = await route("GET", "kuvo/work?bot=bot_pixel00001");
+  assert.equal(work.status, 200);
+  assert.deepEqual(Object.fromEntries(work.body.sessions.map(each => [each.title, each.account ?? null])), {
+    "On the work key": { name: "Anthropic" },
+    "On DeepSeek": { name: "DeepSeek" },
+    "On Claude Code": { name: "Claude Code" },
+    "On Athas": { name: "Claude Code", label: "Athas" },
+    "On Auto": null,
+    "On a gone plan": null,
+  });
+  assert.equal(integrationsAskedFresh, 0, "each agent's sign-in isn't checked again for a read of the work");
+});
+
 test("a client stops all of a bot's work at once", async () => {
   const one = startedAddress(await tool("start_session", { task: "One.", project: "Tidepool" }, "ses_pixel"));
   const two = startedAddress(await tool("start_session", { task: "Two.", project: "Tidepool" }, "ses_pixel"));
   active = new Set([one, two, "ses_pixel"]);
+  // (Ids are given again from test to test, and an earlier one stopped one of these: new now.)
+  fs.rmSync(path.join(home, "run", "work", "stopped.json"), { force: true });
   // What it was still to hear of them.
   write(path.join(home, "run", "work", "wakes.json"), JSON.stringify({ ses_pixel: { lines: ["[Session finished] \"One\""], asks: false, since: 1 } }));
   const stopped = await route("POST", "kuvo/bots/bot_pixel00001/stop-all");
   assert.deepEqual(stopped, { status: 200, body: { stopped: 2 } });
   assert.deepEqual(interrupted.sort(), [one, two, "ses_pixel"].sort(), "the bot's own turn stops too: it would only start them again");
-  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(home, "run", "work", "wakes.json"), "utf8")), {}, "and it isn't woken with what they did");
+  // (#553: only that you stopped them, so it doesn't wait on them.)
+  const waiting = JSON.parse(fs.readFileSync(path.join(home, "run", "work", "wakes.json"), "utf8"));
+  assert.deepEqual(Object.keys(waiting), ["ses_pixel"]);
+  assert.deepEqual(waiting.ses_pixel.lines.map(line => /^\[Session stopped\] "[^"]*" in Tidepool \(address (\S+)\) was stopped by the user\./.exec(line)?.[1]).sort(), [one, two].sort(), "and it isn't woken with what they did, only that you stopped them");
 });
 
 test("what a bot may allow is what its own conversation could do without asking: anything its rules let through, and nothing where it would ask", async () => {
