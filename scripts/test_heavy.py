@@ -106,6 +106,19 @@ class HeavyTests(unittest.TestCase):
         result = subprocess.run([HEAVY, kind, *command], env=dict(self.env, KUVO_HEAVY_WAIT="0", **env), capture_output=True, text=True, timeout=30)
         return result.returncode, result.stderr
 
+    def test_a_job_has_the_callers_stderr_and_nothing_more(self):
+        # heavy.sh forks the job with stderr going nowhere, so a word from job control can't reach
+        # it (bash's "child setpgid … Operation not permitted", under load), and gives the job its
+        # own back as it starts: what the job says, the caller sees, and the fd that kept it isn't
+        # handed on.
+        code, said = self.run_heavy("box", "/bin/sh", "-c", 'echo said >&2; if { true >&9; } 2>/dev/null; then echo "fd 9 open" >&2; fi; exit 3')
+        self.assertEqual((code, said), (3, "said\n"))
+        result = subprocess.run([HEAVY, "box", "/bin/sh", "-c", "echo out"], env=dict(self.env, KUVO_HEAVY_WAIT="0"), stderr=subprocess.DEVNULL, stdout=subprocess.PIPE, text=True, timeout=30)
+        self.assertEqual((result.returncode, result.stdout), (0, "out\n"))
+        # A stderr that's closed doesn't stop it either.
+        result = subprocess.run(["/bin/sh", "-c", f'"{HEAVY}" box /bin/sh -c "echo out" 2>&-'], env=dict(self.env, KUVO_HEAVY_WAIT="0"), capture_output=True, text=True, timeout=30)
+        self.assertEqual((result.returncode, result.stdout), (0, "out\n"))
+
     def test_kinds_run_together_and_one_kind_queues(self):
         mac = Held([HEAVY, "mac"], self.env)
         try:
@@ -1115,10 +1128,14 @@ class HeavyTests(unittest.TestCase):
         for kind in ("mac", "mac-build", "phone-build", "phone"):
             self.assertEqual(self.cache_seen([HEAVY, kind], store)[0], (self.SETTINGS, store, "20G"), kind)
         self.assertEqual(self.cache_seen([HEAVY, "mac-build"], store, KUVO_XCODE_CACHE_SIZE="5G")[0], (self.SETTINGS, store, "5G"))
+        # On unless asked not to: KUVO_XCODE_CACHE unset or empty.
+        self.assertEqual(self.cache_seen([HEAVY, "mac-build"], store, KUVO_XCODE_CACHE="")[0], (self.SETTINGS, store, "20G"))
         # A folder that isn't there yet is made.
         self.assertEqual(self.cache_seen([HEAVY, "mac-build"], os.path.join(store, "new"))[0][1], os.path.join(store, "new"))
         settings = Path(self.SETTINGS).read_text()
-        for line in ("COMPILATION_CACHE_ENABLE_CACHING = YES", "COMPILATION_CACHE_CAS_PATH = $(KUVO_XCODE_CAS_PATH:default=", "COMPILATION_CACHE_LIMIT_SIZE = $(KUVO_XCODE_CACHE_SIZE:default=20G)", "SWIFT_ENABLE_PREFIX_MAPPING = YES", "SWIFT_ENABLE_PROJECT_PREFIX_MAPPING = YES", "CLANG_ENABLE_PREFIX_MAPPING = YES", "CLANG_ENABLE_PROJECT_PREFIX_MAPPING = YES", "COMPILER_WORKING_DIRECTORY = $(PROJECT_DIR)"):
+        for line in ("COMPILATION_CACHE_ENABLE_CACHING = YES", "COMPILATION_CACHE_CAS_PATH = $(KUVO_XCODE_CAS_PATH:default=", "COMPILATION_CACHE_LIMIT_SIZE = $(KUVO_XCODE_CACHE_SIZE:default=20G)", "SWIFT_ENABLE_PREFIX_MAPPING = YES", "SWIFT_ENABLE_PROJECT_PREFIX_MAPPING = YES", "CLANG_ENABLE_PREFIX_MAPPING = YES", "CLANG_ENABLE_PROJECT_PREFIX_MAPPING = YES", "COMPILER_WORKING_DIRECTORY = $(PROJECT_DIR)",
+                     # A checkout under /tmp or /var by its /private/… path too (#562).
+                     "SWIFT_OTHER_PREFIX_MAPPINGS = /private/tmp=/^tmp /private/var=/^var", "CLANG_OTHER_PREFIX_MAPPINGS = /private/tmp=/^tmp /private/var=/^var"):
             self.assertIn(line, settings)
 
     @unittest.skipUnless(sys.platform == "darwin", "Xcode's lanes build only on a Mac")
@@ -1142,13 +1159,6 @@ class HeavyTests(unittest.TestCase):
         none = ("", "", "")
         self.assertEqual(self.cache_seen([HEAVY, "box"])[0], none)
         self.assertEqual(self.cache_seen([HEAVY, "mac-build"], KUVO_XCODE_CACHE="0")[0], none)
-        # Off unless asked for (#562: Xcode 27.2's build service crashes replaying a cached warning),
-        # and a job handed the settings by an older heavy.sh drops them.
-        for kind in ("mac", "mac-build", "phone-build", "phone"):
-            self.assertEqual(self.cache_seen([HEAVY, kind], KUVO_XCODE_CACHE="")[0], none, kind)
-        settings = str(Path(HEAVY).with_name("xcode-cache.xcconfig"))
-        self.assertEqual(self.cache_seen([HEAVY, "mac-build"], KUVO_XCODE_CACHE="", XCODE_XCCONFIG_FILE=settings, KUVO_XCODE_CAS_PATH="/x")[0], none)
-        self.assertEqual(self.cache_seen([HEAVY, "mac-build"], KUVO_XCODE_CACHE="yes")[0], none)
         self.assertEqual(self.cache_seen([HEAVY, "mac-build"], CI="true")[0], none)
         own = os.path.join(self.locks, "own.xcconfig")
         Path(own).write_text("A = B\n")

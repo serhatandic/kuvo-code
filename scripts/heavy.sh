@@ -100,12 +100,11 @@
 # simulator test run and swift test). Linux: `nice -n 15 ionice -c3` (just `nice -n 15` without
 # ionice). A job on an idle Mac runs as fast as ever; on a busy one it gives way.
 #
-# With KUVO_XCODE_CACHE=1, jobs of the Xcode lanes (mac, mac-build, phone-build, phone) build with
-# Xcode's compilation cache, one for every checkout's builds (scripts/xcode-cache.sh, beside this copy): content-addressed, so
+# Jobs of the Xcode lanes (mac, mac-build, phone-build, phone) build with Xcode's compilation cache,
+# one for every checkout's builds (scripts/xcode-cache.sh, beside this copy): content-addressed, so
 # a build in a new worktree replays what an earlier build of the same code compiled, wherever it was,
 # and never what another branch's code made. Their xcodebuild gets it through XCODE_XCCONFIG_FILE
-# (unless the caller has one). Off by default: with Xcode 27.2 a cache hit that replays a Swift
-# warning crashes Xcode's build service (#562, scripts/xcode-cache.sh).
+# (unless the caller has one); KUVO_XCODE_CACHE=0 builds without it.
 #
 # Every job has a time limit, so one that hangs can't hold its kind's turn for hours: past it, the
 # job is stopped (its process group, as below: TERM, then KILL), it says what was running, and
@@ -345,8 +344,8 @@ if [ -n "$holds" ]; then
     exit
 fi
 
-# With KUVO_XCODE_CACHE=1, the Xcode lanes' jobs build with Xcode's compilation cache, one for every
-# checkout (scripts/xcode-cache.sh and its xcconfig, beside this copy: XCODE_XCCONFIG_FILE, unless the caller
+# The Xcode lanes' jobs build with Xcode's compilation cache, one for every checkout
+# (scripts/xcode-cache.sh and its xcconfig, beside this copy: XCODE_XCCONFIG_FILE, unless the caller
 # has one), so a build in a new worktree replays what another worktree's build compiled instead of
 # compiling it all again. Not the box's: it runs no xcodebuild.
 case "$kind" in
@@ -866,11 +865,18 @@ trap 'stopped TERM 143' TERM
 # (The command as it was given, for what over_time says.)
 command_line=$*
 trap 'over_time "$command_line"' USR1
+# With job control (set -m) both this shell and the child it forks put the child in its group, and
+# on a busy Mac the child's try now and then fails though the group is already its own: bash then
+# says "child setpgid (N to N): Operation not permitted" on the stderr it forked with, which is the
+# job's (#562: a test that expects a quiet job failed under load). The two children are forked with
+# stderr going nowhere, and the job gets the real one back (kept as fd 9) as it starts. (`command`,
+# so a stderr that's closed doesn't end this shell.)
+command exec 9>&2 2>/dev/null || exec 9>/dev/null 2>/dev/null
 set -m
 if [ -n "${old_way:-}" ]; then
-    lockf -k "$OLD" $LOW "$@" &
+    lockf -k "$OLD" $LOW "$@" 2>&9 9>&- &
 else
-    $LOW "$@" &
+    $LOW "$@" 2>&9 9>&- &
 fi
 group=$!
 # `lockf` doesn't pass a signal on to its command, and lets go of the lock as it ends: this helper
@@ -898,9 +904,10 @@ me=$$
         waits=$((waits + 1))
     done
     end_group TERM
-) >/dev/null 2>&1 &
+) >/dev/null 2>&1 9>&- &
 watch=$!
 set +m
+exec 2>&9 9>&-
 [ -z "$early" ] || stopped ${early}
 status=0
 wait "$group" || status=$?
