@@ -525,8 +525,8 @@ struct Composer: View {
     }
 
     /// The field's keys: the "&", "/" and "@" lists' first while one is open; then Return sends
-    /// (Shift- or Option-Return starts a new line, ⌘Return queues), Escape stops, and ↑ and ↓ go
-    /// through what was sent before.
+    /// (Shift- or Option-Return starts a new line, ⌘Return queues), Escape stops, ↑ and ↓ go
+    /// through what was sent before, and ⇧Tab in an empty field goes to the next mode.
     private func key(_ key: MessageField.Key) -> Bool {
         // Listening (here, or in the voice field): Return is Done, Escape is Cancel, and nothing
         // else goes to the field.
@@ -556,6 +556,12 @@ struct Composer: View {
             }
             return answerKey(key)
         case .tab:
+            // ⇧Tab in an empty field: the next mode, as picked from the Mode menu (as Claude Code's
+            // Shift+Tab); with words in it, back to the control before, as in any field.
+            if key.modifiers == .shift, text.isEmpty, showsMode, !isOffline, let next = approval.next(shown: approvalShown) {
+                onSelectApproval(next)
+                return true
+            }
             if let commandMatches {
                 switch commandMatches[min(commandIndex, commandMatches.count - 1)] {
                 case .keyword(let keyword): text = keyword.typed + " "

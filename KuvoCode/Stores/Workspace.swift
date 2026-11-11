@@ -267,13 +267,32 @@ final class Workspace {
         boxWorktreeProjects[directory] ?? worktrees[directory]?.project ?? removedWorktrees[directory] ?? directory
     }
 
+    /// The project a session is filed under: its folder's, else the one its box filed it under as
+    /// it was made (`SessionProject`: a new worktree its box hasn't listed here yet, a subfolder).
     func projectDirectory(of session: Session) -> String {
-        projectDirectory(session.location.directory)
+        let directory = session.location.directory, box = Self.box(of: directory)
+        // (The mark names folders as its box does.)
+        let project = SessionProject.project(of: session, folder: Self.onBox(directory)) { folder in
+            let here = Self.here(folder, on: box), project = projectDirectory(here)
+            return project == here ? nil : Self.onBox(project)
+        }
+        return project == Self.onBox(directory) ? directory : Self.here(project, on: box)
+    }
+
+    /// A worktree of a project's (one of its other folders, which you can open as a project of its
+    /// own, isn't).
+    private func isWorktree(_ directory: String) -> Bool {
+        let project = projectDirectory(directory)
+        return project != directory && settings[project]?.folders.contains(directory) != true
     }
 
     /// The project's other folders, for a folder sessions run in.
     func extraFolders(_ directory: String) -> [String] {
-        settings[projectDirectory(directory)]?.folders ?? []
+        // Its project's own folder's or one of its worktrees'; one in one of the other folders, or
+        // a worktree of one, works there alone, as its box starts it.
+        let project = worktrees[directory]?.project ?? removedWorktrees[directory] ?? projectDirectory(directory)
+        guard let folders = settings[project]?.folders, !folders.contains(directory) else { return [] }
+        return folders
     }
 
     /// Bots' sessions: each bot's conversation, shown with the bot rather than in its project.
@@ -369,7 +388,7 @@ final class Workspace {
     /// Projects with their sessions, most recently active first.
     var projects: [Project] {
         // What they're made of, read here so views showing them are updated as it changes.
-        _ = (sessions.count, folders.count, settings.count, worktrees.count, removedWorktrees.count, botSessions.count, machines.count, deleting.count)
+        _ = (sessions.count, folders.count, settings.count, worktrees.count, removedWorktrees.count, boxWorktreeProjects.count, botSessions.count, machines.count, deleting.count)
         if let madeProjects { return madeProjects }
         let projects = makeProjects()
         madeProjects = projects
@@ -777,7 +796,7 @@ final class Workspace {
         let directory = folderPath(directory)
         // Chats aren't a project, nor is a bot's own folder, nor a project's worktree (a session
         // started in one stays its project's).
-        guard !folders.contains(directory), !Self.isChat(directory), !Self.isBotFolder(directory), projectDirectory(directory) == directory else { return directory }
+        guard !folders.contains(directory), !Self.isChat(directory), !Self.isBotFolder(directory), !isWorktree(directory) else { return directory }
         Analytics.shared.track("project_added", ["projects": folders.count + 1])
         folders.insert(directory, at: 0)
         UserDefaults.standard.set(folders, forKey: "projectFolders")
@@ -866,6 +885,13 @@ final class Workspace {
         return settings[directory]?.name ?? (directory as NSString).lastPathComponent
     }
 
+    /// The name of the project a session is filed under.
+    func projectName(of session: Session) -> String {
+        if Self.isChat(session.location.directory) { return "Chats" }
+        let directory = projectDirectory(of: session)
+        return settings[directory]?.name ?? (directory as NSString).lastPathComponent
+    }
+
     /// Adds a project, or updates one, and gives its open sessions the new folders.
     @discardableResult
     func saveProject(_ directory: String, settings project: ProjectSettings) -> String {
@@ -949,7 +975,11 @@ final class Workspace {
         let here = approvalsHere[Self.box(of: directory)]
         let starting = here.map { $0.shown(approval ?? $0.default, agents: isAgents).effective } ?? .askFirst
         let rules = ProjectFolders.permissions(starting.provisionalRules(settings: EngineConfig.rules(on: RemoteFolder.machine(of: directory))), folders: extra)
-        let metadata: JSONValue? = approval.map { .object(["kuvo": .object(["approval": .string($0.rawValue)])]) }
+        // (One in a worktree carries its project, for every client to file it there from the first.)
+        var kuvo: [String: JSONValue] = [:]
+        if let approval { kuvo["approval"] = .string(approval.rawValue) }
+        if worktree { kuvo["filed"] = SessionProject.mark(folder: Self.onBox(folder), project: Self.onBox(directory)) }
+        let metadata: JSONValue? = kuvo.isEmpty ? nil : .object(["kuvo": .object(kuvo)])
         let session: Session
         do {
             session = try await api.createSession(directory: folder, agent: agent, model: model, permissions: rules.isEmpty ? nil : rules, metadata: metadata)
@@ -2674,7 +2704,7 @@ final class Workspace {
                     Notifier.shared.notify(
                         session: id,
                         title: botName?(id) ?? session.title ?? "New Session",
-                        subtitle: botName?(id) == nil ? projectName(session.location.directory) : nil,
+                        subtitle: botName?(id) == nil ? projectName(of: session) : nil,
                         body: summaryFailed ? "Couldn't summarize the conversation." : failed ? "Stopped with an error." : reply ?? "Finished.",
                         replies: true,
                         push: .init(failed || summaryFailed ? .failed : isBot ? .report : .finished, machine: machine)
@@ -3008,7 +3038,7 @@ final class Workspace {
             // Buttons only when the notification hides none of what they'd answer.
             let shown = Notifier.showsAll(body) && (question?.choices.allSatisfy { Notifier.showsAll($0.label) } ?? true)
             Notifier.shared.notify(session: session?.id ?? id, title: session.flatMap { botName?($0.id) } ?? session?.title ?? AppInfo.name,
-                                   subtitle: session.flatMap { botName?($0.id) == nil ? projectName($0.location.directory) : nil }, body: body,
+                                   subtitle: session.flatMap { botName?($0.id) == nil ? projectName(of: $0) : nil }, body: body,
                                    permission: isPermission && answerable && shown ? (session: id, request: request) : nil, always: always,
                                    question: shown ? question : nil,
                                    push: .init(isPermission ? .permission : .question, request: (session: id, id: request),
@@ -3105,6 +3135,16 @@ final class Workspace {
             var session = session
             session.time.viewed = here
             return session
+        }
+    }
+
+    /// Mark All as Read on each of `boxes` ("mac", or a machine's id): its box reads everything new
+    /// there (`POST kuvo/sessions/read`, KuvoLink's PROTOCOL.md "What's been read"), once a box, and
+    /// each read comes back as `session.viewed`, as one made elsewhere does. What asks you stays.
+    func markAllRead(on boxes: [String]) async {
+        let clients = boxes.compactMap { self.boxes?($0) }
+        await withTaskGroup(of: Void.self) { group in
+            for client in clients { group.addTask { _ = try? await client.send("POST", "kuvo/sessions/read") } }
         }
     }
 

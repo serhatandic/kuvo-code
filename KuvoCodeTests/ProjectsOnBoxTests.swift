@@ -255,6 +255,70 @@ import Testing
         #expect(!workspace.projects.contains { $0.directory == tree }, "the worktree isn't a project of its own")
     }
 
+    /// A session an agent starts in a new worktree (start_session with worktree) shows under its
+    /// project from its first listing, though this Mac hears of it from its engine before its box's
+    /// projects say whose the worktree is: it carries its project as it's made (#311). One moved
+    /// out of that worktree since goes by where it is now.
+    @Test func aSessionStartedInANewWorktreeShowsUnderItsProjectBeforeItsBoxListsTheWorktree() async throws {
+        defer { done() }
+        let tree = work.appending(path: "trees/proud-eagle-2").path
+        let made = ["kuvo": ["startedBy": "ses_lead", "filed": ["folder": tree, "project": shop]]]
+        engine.list([
+            StubEngine.session("ses_shop", directory: shop, created: 10),
+            StubEngine.session("ses_tree", title: "#440 composer icons", directory: tree, created: 20, extra: ["metadata": made]),
+            StubEngine.session("ses_moved", directory: blog, created: 5, extra: ["metadata": ["kuvo": ["filed": ["folder": tree, "project": shop]]]]),
+        ])
+        let workspace = workspace()
+        await workspace.refresh()
+        #expect(workspace.projects.first { $0.directory == shop }?.sessions.map(\.id) == ["ses_tree", "ses_shop"])
+        #expect(!workspace.projects.contains { $0.directory == tree }, "never a project named after the worktree")
+        #expect(workspace.projects.first { $0.directory == blog }?.sessions.map(\.id) == ["ses_moved"], "moved out of it since: where it is now")
+
+        // Its box's word, when it comes, leaves it where it is.
+        try FileManager.default.createDirectory(at: BoxProcess.home.appending(path: "box"), withIntermediateDirectories: true)
+        let records = ["worktrees": [["project": shop, "root": tree, "folder": tree, "branch": "kuvo/440-composer-icons"]]]
+        try JSONSerialization.data(withJSONObject: records).write(to: BoxProcess.home.appending(path: "box/worktrees.json"))
+        await workspace.loadProjects(on: BoxClient.mac)
+        #expect(workspace.projects.first { $0.directory == shop }?.sessions.map(\.id) == ["ses_tree", "ses_shop"])
+    }
+
+    /// A session an agent started in one of a project's other folders (start_session with the
+    /// project and that folder) shows under the project, as its box files it, those started before
+    /// it said so too; the folder isn't a project of its own (#311).
+    @Test func aSessionInAProjectsOtherFolderShowsUnderTheProject() async throws {
+        defer { done() }
+        try FileManager.default.createDirectory(at: BoxProcess.home.appending(path: "box"), withIntermediateDirectories: true)
+        let projects = ["version": 1, "projects": [["directory": shop, "name": "Kuvo Code", "folders": [blog]]]] as [String: Any]
+        try JSONSerialization.data(withJSONObject: projects).write(to: BoxProcess.home.appending(path: "box/projects.json"))
+        engine.list([StubEngine.session("ses_shop", directory: shop, created: 10), StubEngine.session("ses_web", title: "kuvo-web: Vercel Web Analytics", directory: blog, created: 20)])
+        let workspace = workspace()
+        await workspace.refresh()
+        await workspace.loadProjects(on: BoxClient.mac)
+        #expect(workspace.projects.first { $0.directory == shop }?.sessions.map(\.id) == ["ses_web", "ses_shop"])
+        #expect(!workspace.projects.contains { $0.directory == blog }, "the other folder isn't a project of its own")
+        #expect(try await onBox(workspace).map(\.directory) == [shop], "nor does its box keep one")
+    }
+
+    /// The sidebar is told when its box's word on a worktree changes where a session is filed, by
+    /// itself (a machine's worktree, or one made with `git worktree add`, which this Mac keeps no
+    /// record of), rather than showing the worktree as a project until something else changes.
+    @Test func theSidebarRedrawsWhenItsBoxFilesAWorktreeUnderItsProject() async throws {
+        defer { done() }
+        let tree = work.appending(path: "trees/swift-wolf").path
+        engine.list([StubEngine.session("ses_shop", directory: shop, created: 20), StubEngine.session("ses_tree", directory: tree, created: 10)])
+        let workspace = workspace()
+        await workspace.refresh()
+        await workspace.loadProjects(on: BoxClient.mac)
+        let told = OSAllocatedUnfairLock(initialState: false)
+        withObservationTracking { _ = workspace.projects } onChange: { told.withLock { $0 = true } }
+        try FileManager.default.createDirectory(at: BoxProcess.home.appending(path: "box"), withIntermediateDirectories: true)
+        let records = ["worktrees": [["project": shop, "root": tree, "folder": tree, "branch": "kuvo/swift-wolf"]]]
+        try JSONSerialization.data(withJSONObject: records).write(to: BoxProcess.home.appending(path: "box/worktrees.json"))
+        await workspace.loadProjects(on: BoxClient.mac)
+        #expect(told.withLock { $0 }, "a view showing the projects is told")
+        #expect(workspace.projects.first { $0.directory == shop }?.sessions.map(\.id) == ["ses_shop", "ses_tree"])
+    }
+
     /// Worktrees this Mac kept before its box kept them go to the box, so Remove Project there
     /// archives their sessions too.
     @Test func removeProjectReachesWorktreesKeptHereBefore() async throws {

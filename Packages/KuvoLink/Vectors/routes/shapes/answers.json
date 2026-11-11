@@ -7602,6 +7602,21 @@
    }
   },
   {
+   "route": "POST kuvo/sessions/read",
+   "answers": {
+    "200": {
+     "object": {
+      "read": "number"
+     }
+    },
+    "503": {
+     "object": {
+      "message": "string"
+     }
+    }
+   }
+  },
+  {
    "route": "GET kuvo/sessions/glance/events",
    "answers": {
     "200": {

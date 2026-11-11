@@ -911,7 +911,9 @@ its own, which a `SIGTERM` stops waiting.
     where the sandbox doesn't run, "Approval"), with Settings › Permissions, the task as the user's
     own first message.
   - Either way its project's other folders are allowed to it and named in its instructions, one in
-    a worktree is told so, and a folder that's no project yet becomes one.
+    a worktree is told so, one filed under another folder than its own (a worktree, a project's
+    other folder) carries that project from the first (`kuvo.filed`, "Projects"), and a folder
+    that's no project yet, nor one of a project's, becomes one.
   - 400 `{message}` (no task, not a folder here), 403 (a group chat's seat), 404 (`startedBy`
     isn't a conversation here), 409 `{message, reason}` (Full Access from a client where it can't
     be had: `fullAccessOff`), 429 (too many lately), 502 `{message, session?}` (not made, or
@@ -2000,6 +2002,24 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   telling). Follow it: set `time.viewed` to `idle` when it's later, and clear what was shown for
   it (a notification). A group chat is read with `POST kuvo/groups/<id>/viewed`, and its `unread`
   changes in `kuvo/groups/events` (below).
+  **An agent's work is read for you** (READ_RULE, `work/tree.ts`): a session another conversation
+  started and leads (`metadata.kuvo.startedBy`, not a subagent's, and its starter hears when it
+  finishes: a bot's work, `kuvo.by`, or `kuvo.wake` naming `finished`) is that conversation's work.
+  So as each of its turns ends, its box reads it (`POST …/view`, as above), unless what ended since
+  it was last read holds news for you, as its notifications are: a turn that answers you
+  (NOTIFY_RULE: you wrote in it, or answered what it asked you), a turn that failed, or a
+  `notify_user` its agent sent; and never while it asks you something (a permission or a question,
+  its subagents' too), which still waits on you. As the box finds its engine or coding agents'
+  bridge, it does the same for those left unread meanwhile. No client decides it: each follows
+  `session.viewed`, so such a session shows nothing new on any client (its row, its project, its
+  computer) unless it has news for you, and its lead's row is where its work shows.
+  **Mark All as Read** is the box's too: `POST kuvo/sessions/read` reads every conversation on the
+  box left unread (on the engine and the coding agents' bridge, subagents' too, archived ones
+  left as they are) up to where each ended, as `POST …/view` does one, and every group chat with
+  something new up to now; it answers `{"read"}`, how many. Each client hears of each as above
+  (`session.viewed`, `kuvo/groups/events`). What waits on your answer isn't read away: an ask
+  still waits on you. A client that marks all read on every computer (the phone's Inbox) asks
+  each box once.
 - **A message while a command runs**: yours is read at once. A message sent to steer
   (`delivery: "steer"`) waits for the agent's next step, and an agent waiting on a command or a
   subagent it started in the foreground takes none until that ends. So for your own message, each
@@ -4190,14 +4210,24 @@ while a box is away goes there when it's back.
   project of its own; #422). A client files a session whose folder is
   here under that project, never as a project of its own; the events line changes with them. A box
   from before doesn't say: a client goes by `kuvo/worktrees` then.
+  Each project's other folders are here too, under it (not one that's a project of its own, nor a
+  removed project's), and a worktree of one of them is its too, so a session started there shows
+  under the project (#311).
+  A session filed under another folder than its own carries it in its metadata from when it's made,
+  `kuvo.filed` `{folder, project}` (as the box names them): one a box's `kuvo/sessions` starts in a
+  worktree, in a project's other folder or a folder in one, or in the folder its starter is filed
+  from; and one a client makes in a worktree it just made with `POST kuvo/worktrees` (it gives it
+  itself). A client may hear of the session from its engine before this list names a new worktree,
+  and the list never names a subfolder: one whose folder the list doesn't name, still running in the
+  folder its `kuvo.filed` names, is filed under that project (#311).
 - `PUT kuvo/projects?directory=<folder>` with any of `{name, folders, run, terminal, removed}`
   adds the project or changes what's given (an empty string is none), and brings a removed one
   back unless `removed` is true (a client's copy of one it removed, with its settings):
   `200 {project}`; 400 for a folder that isn't a whole path. The folder is kept as it's named,
   as its sessions run there (a link isn't followed), and whether it's there now or not (a drive
   that's away).
-- `DELETE kuvo/projects?directory=<folder>` is Remove Project: every session of it, its worktrees'
-  too (removed ones included, and the folders an optional body `{folders}` names: those a client
+- `DELETE kuvo/projects?directory=<folder>` is Remove Project: every session of it, its worktrees' and
+  other folders' too, and those filed under it from elsewhere (`kuvo.filed`) (removed worktrees included, and the folders an optional body `{folders}` names: those a client
   shows under it that the box doesn't know, worktrees removed before it kept them), archived on
   the engine and the coding agents' bridge, older ones included, then it's marked `removed`.
   `200 {archived}`; `409 {message, archived, kept}` when some couldn't be archived (it stays
@@ -4716,6 +4746,11 @@ rules. Plan mode stays the conversation's agent (`plan`), beside it.
   menu: it isn't a setting), then sends `PATCH kuvo/approval` `{fullAccess: true}` before `PUT`ting
   the conversation's; 400 without a boolean `fullAccess`. A change brings what had it or was held
   from it to what it can be at once.
+- A client's ⇧Tab in an empty composer goes to the next mode in the menu's order (`askFirst`,
+  `acceptEdits`, `auto`, `fullAccess`, then round again), as picking it would: KuvoClient's
+  `ApprovalCycle`. It passes over an option the box says is `unavailable` (so Full Access until
+  it's confirmed here, which only the menu asks), as Claude Code's Shift+Tab passes over Bypass
+  Permissions until it's allowed.
 - The box looks every 2 seconds at what each comes to, and makes the rules of those kept with Auto
   or Full Access again when the sandbox starts or stops, the switch changes, or the engine or the
   bridge starts again, each read again just before it's written. As Settings › Permissions change

@@ -12,6 +12,11 @@ import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { atEnd, removeAtEnd } from "./at-end.js";
+import { keepsIdle } from "./keeps-idle.js";
+
+// A cap on a test that follows the engine and makes, saves and removes worktrees with real git: each
+// git takes a second or more on a busy computer, so ten seconds failed under load; a hang still fails.
+const SLOW_STEPS = 60_000;
 
 const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-worktrees-")));
 process.env.KUVO_HOME = path.join(home, ".kuvo-code");
@@ -88,6 +93,7 @@ const engine = http.createServer((request, response) => {
     send({}, 404);
   });
 });
+keepsIdle(engine);
 await new Promise(resolve => engine.listen(0, "127.0.0.1", resolve));
 const atEngine = { port: engine.address().port, password: "pw" };
 removeAtEnd(home);
@@ -157,6 +163,7 @@ test("not removed while a coding agent works there, nor while who works there ca
     response.writeHead(404);
     response.end();
   });
+  keepsIdle(bridge);
   await new Promise(resolve => bridge.listen(0, "127.0.0.1", resolve));
   const atBridge = { port: bridge.address().port, password: "pw" };
   try {
@@ -318,6 +325,7 @@ test("a Claude Code session's title names the branch, and an engine session in t
       response.end();
     });
   });
+  keepsIdle(bridge);
   await new Promise(resolve => bridge.listen(0, "127.0.0.1", resolve));
   // The box's engine, as its record says.
   const engineFile = path.join(process.env.KUVO_HOME, "run", "engine.json");
@@ -399,7 +407,7 @@ test("a Mac reading the machine's worktrees as their session gets its title find
   assert.equal((await ask("POST", "kuvo/worktrees/remove", { path: made.root, forget: true })).status, 200);
 });
 
-test("a session started in a worktree with its title given (by an agent, a bot) names its branch as the box hears of it, Mac closed, and is told that name", { timeout: 10_000 }, async t => {
+test("a session started in a worktree with its title given (by an agent, a bot) names its branch as the box hears of it, Mac closed, and is told that name", { timeout: SLOW_STEPS }, async t => {
   const made = (await ask("POST", "kuvo/worktrees", { project, branchPrefix: "kuvo/" })).value;
   told.length = 0;
   const heard = new Promise(resolve => { onTold = resolve; });
@@ -426,7 +434,7 @@ test("a session started in a worktree with its title given (by an agent, a bot) 
   assert.equal((await ask("POST", "kuvo/worktrees/remove", { path: made.root, forget: true })).status, 200);
 });
 
-test("a session titled while the box wasn't listening (it was restarting) has its branch named once the box follows its engine again", { timeout: 10_000 }, async t => {
+test("a session titled while the box wasn't listening (it was restarting) has its branch named once the box follows its engine again", { timeout: SLOW_STEPS }, async t => {
   const made = (await ask("POST", "kuvo/worktrees", { project, branchPrefix: "kuvo/" })).value;
   sessions.push({ id: "ses_missed", title: "Tidy the footer", location: { directory: made.folder } });
   told.length = 0;
@@ -531,7 +539,7 @@ test("one a phone asks for starts with the prefix a Mac last gave, and a Mac's o
   await ask("POST", "kuvo/worktrees", { project, branchPrefix: "kuvo/" }).then(made => ask("POST", "kuvo/worktrees/remove", { path: made.value.root, forget: true }));
 });
 
-test("one made and removed at once: a follower is told of both, in order", { timeout: 10_000 }, async () => {
+test("one made and removed at once: a follower is told of both, in order", { timeout: SLOW_STEPS }, async () => {
   const handle = link.engineHandler(() => atEngine, { name: "box" }, () => null);
   const abort = new AbortController();
   const seen = [];
@@ -682,7 +690,7 @@ test("one removed in Settings comes back on its branch while its session is here
   await tidy();
 });
 
-test("a session archived from anywhere, Mac closed: the box hears it and its worktree goes, and a follower is told", { timeout: 10_000 }, async t => {
+test("a session archived from anywhere, Mac closed: the box hears it and its worktree goes, and a follower is told", { timeout: SLOW_STEPS }, async t => {
   const made = (await ask("POST", "kuvo/worktrees", { project, branchPrefix: "kuvo/" })).value;
   const session = { id: "ses_heard", title: "Heard", location: { directory: made.folder } };
   sessions.push(session);
