@@ -18930,7 +18930,7 @@ async function* approvalRoute(context) {
 var OUTSIDE = { session: "unknown", place: null, name: "another agent" };
 var ASKS_FIRST = [{ action: "shell", resource: "*", effect: "ask" }];
 var goalNote = "This is part of a goal the user may not be watching: what you ask can wait a while, so carry on with what doesn't depend on it, and report what you couldn't do.";
-var sessionNote = (bot, heard = true) => `You were started by ${bot}, a bot coordinating this work. When you're done, review your work with reviewer subagents, fix what they find, and end with a short report as your last reply: what you did, what the reviewers found and how you fixed it, and anything left. ${heard ? `${bot} gets that reply when you finish: don't also send it with send_message.` : `${bot} reads that report.`}`;
+var sessionNote = (bot, heard = true, review = true) => `You were started by ${bot}, a bot coordinating this work. When you're done, ${review ? "review your work with reviewer subagents, fix what they find, and end with a short report as your last reply: what you did, what the reviewers found and how you fixed it, and anything left" : "end with a short report as your last reply: what you did, and anything left"}. ${heard ? `${bot} gets that reply when you finish: don't also send it with send_message.` : `${bot} reads that report.`}`;
 var WAKES = ["finished", "asks"];
 function wakesFrom(given, byBot, waits) {
   if (given === undefined || given === null)
@@ -19235,7 +19235,7 @@ async function startSession(given, by, place) {
   const heard = wakes.includes("finished");
   const text = by ? composeLetter(by.name, by.session, task, waits, heard) + (bot ? `
 
-${sessionNote(bot.name, heard)}${goal ? `
+${sessionNote(bot.name, heard, given.review !== false)}${goal ? `
 
 ${goalNote}` : ""}` : "") : task;
   try {
