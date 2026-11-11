@@ -292,7 +292,19 @@ final class KeeperBoxTools {
             request.httpBody = try JSONSerialization.data(withJSONObject: body)
         }
         do {
-            let (data, response) = try await session.data(for: request)
+            // (A total, not only a wait between bytes: the box says it's still working on a request
+            // it holds every 20 seconds, which a request's own timeout counts as activity.)
+            let session = self.session, sent = request
+            let (data, response) = try await withThrowingTaskGroup(of: (Data, URLResponse).self) { group in
+                group.addTask { try await session.data(for: sent) }
+                group.addTask {
+                    try await Task.sleep(for: .seconds(timeout))
+                    throw URLError(.timedOut)
+                }
+                defer { group.cancelAll() }
+                guard let first = try await group.next() else { throw URLError(.unknown) }
+                return first
+            }
             return ((response as? HTTPURLResponse)?.statusCode ?? 502, data)
         } catch {
             log.info("This Mac's box didn't answer \(method, privacy: .public) \(path, privacy: .public): \(error.localizedDescription, privacy: .public)")

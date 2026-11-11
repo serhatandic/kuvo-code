@@ -71,6 +71,13 @@ function savedMachines(kept = keptHosts()): { destination: string; otherAddresse
   }
 }
 
+/** Whether this Mac has machines its link meets, as its list says (the app's word for it, read by
+ * the box itself): one that can't be read counts, as the app counts it. */
+export function anyMachines(): boolean {
+  const saved = savedMachines();
+  return saved === null || saved.length > 0;
+}
+
 /** `kuvo/machines` as this box says it without the app: null when its list can't be read. */
 export function machinesWithoutApp(now = Date.now()): MacMachines | null {
   const saved = savedMachines();

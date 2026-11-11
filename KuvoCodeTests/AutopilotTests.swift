@@ -341,7 +341,7 @@ import Testing
         func heard(_ id: String) async throws { try await until { !workspace.notifying.contains(id) } }
 
         // This Mac's box answers it, as it does a conversation's Autopilot.
-        #expect(PhoneLink.movedToBox("kuvo/sessions/ses_a/autopilot/asked"))
+        #expect(!PhoneLink.appAnswers("kuvo/sessions/ses_a/autopilot/asked"))
 
         // Not waiting, as its box says: not counted, marked or not.
         try ask("frm_marked_goes", marked: true)

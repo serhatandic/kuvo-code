@@ -72,20 +72,18 @@ export interface LinkState {
   untold?: Peer[];
 }
 
-// This Mac's box's link (`runMacLink`): what its app said (`kuvo/link/config`), its keys from the
-// app once it has them (with the relay and name, `overlay`, never written), how it stands, and who
-// follows that and its phones.
+// This Mac's box's link (`runMacLink`): what its app said (`kuvo/link/config`, or as the box kept
+// it, mac/link.ts), its keys from the app once it has them (with the relay and name, `overlay`,
+// never written in link.json), how it stands, and who follows that and its phones.
 const MAC_OVERLAY = ["key", "secret", "sign", "relay", "name"];
 /** What this Mac's app says of its box's link (`kuvo/link/config`): whether the phone link is on
- * and there are machines to meet, the relay, this Mac's name, its app's version, and what it
- * answers (`features`). */
+ * and there are machines to meet, the relay, this Mac's name and its app's version. */
 export interface MacLinkConfig {
   phones: boolean;
   machines: boolean;
   relay: string;
   name: string;
   app: string;
-  features?: string[];
 }
 
 export const macLink: {
