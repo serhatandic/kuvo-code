@@ -110,8 +110,9 @@ import Testing
         #expect(marks(in: drawn) == find.places.count)
     }
 
-    /// What the box told a bot (its goal started) shows as the line of what happened, not your
-    /// bubble, and Find and a copy don't read the words only the bot got.
+    /// What the box told a bot (its goal started) is no bubble of yours, nor a pill: nothing shows of
+    /// it in the conversation (the next reply's footer says the goal started), and Find and a copy
+    /// don't read the words only the bot got.
     @Test func whatTheBoxToldTheBotIsALineNotYours() throws {
         let json: [String: Any] = ["id": "msg_1", "type": "user", "time": ["created": 1],
                                    "text": "[Goal started] The user approved the plan. Work through it now: 1. Read 2. Write\nSpend nothing.",
@@ -119,12 +120,9 @@ import Testing
         guard case .user(let message) = try JSONDecoder().decode(Message.self, from: JSONSerialization.data(withJSONObject: json)) else {
             Issue.record("not a user message"); return
         }
-        guard case .notice(_, _, let line) = Row.message(message) else { Issue.record("drawn as yours"); return }
-        #expect(line == "Goal started")
-        #expect(Row.message(message).findParts.isEmpty)
+        #expect(Row.messages(message).isEmpty)
         let waiting = Transcript.Pending(id: "msg_2", text: "[Not now] The user didn't start this goal. Don't start its work.", delivery: .queue, isLocal: false)
-        guard case .notice(_, _, let said) = Row.waiting(waiting) else { Issue.record("drawn as yours"); return }
-        #expect(said == "You said not now")
+        #expect(Row.waiting(waiting).isEmpty)
     }
 
     /// A bot's reply naming an agent with "&" draws a face in the "&"'s place, and a group chat's

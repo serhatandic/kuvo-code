@@ -410,6 +410,49 @@ import Testing
         #expect(!isOffTheEnd)
         #expect(stack?.scrollAnchor?.isFollowingEnd == true, "still following")
     }
+
+    /// Scrolled up to its top, what you send takes you to its end once: in every frame drawn its
+    /// end comes nearer, never further, and it stays there, following it (the phone's #403).
+    @Test func sendingFromTheTopGoesToTheEndOnce() async throws {
+        defer { done() }
+        try await conversation(turns: 30)
+        model.apply(try engine.event("session.execution.succeeded", session: id))
+        try await until { laidOut && !model.isRunning }
+        await settled()
+        try await yourScroll(by: 200_000)
+        try await until { laidOut && isOffTheEnd && origin < 1 - (scroll?.contentInsets.top ?? 0) }
+        await settled()
+
+        // How far the end is below what shows, as each pass of the main run loop left it.
+        final class Gaps { var all: [Int] = [] }
+        let gaps = Gaps()
+        let gap = { [weak scroll, weak clip] () -> Int? in
+            guard let scroll, let clip, let height = clip.documentView?.frame.height else { return nil }
+            return Int((height + scroll.contentInsets.bottom - clip.bounds.maxY).rounded())
+        }
+        gaps.all = gap().map { [$0] } ?? []
+        let observer = CFRunLoopObserverCreateWithHandler(kCFAllocatorDefault, CFRunLoopActivity.beforeWaiting.rawValue, true, 0) { _, _ in
+            MainActor.assumeIsolated { if let now = gap(), gaps.all.last != now { gaps.all.append(now) } }
+        }
+        CFRunLoopAddObserver(CFRunLoopGetMain(), observer, .commonModes)
+        defer { CFRunLoopRemoveObserver(CFRunLoopGetMain(), observer, .commonModes) }
+        model.draftText = "Looks good.\nOne more thing:\nkeep the toggle."
+        model.submitDraft(for: nil, queue: false, commands: [])
+        try await until { laidOut && atTheEnd && !isOffTheEnd }
+        await settled()
+        await settled()
+        CFRunLoopRemoveObserver(CFRunLoopGetMain(), observer, .commonModes)
+
+        var nearest = gaps.all.first ?? 0
+        var back: [String] = []
+        for gap in gaps.all {
+            if gap > nearest + 24 { back.append("\(gap) after \(nearest)") }
+            nearest = min(nearest, gap)
+        }
+        #expect(back.isEmpty, "on the way to the end it went back up: \(back), of \(gaps.all)")
+        #expect(atTheEnd, "it didn't stay at the end: \(gaps.all)")
+        #expect(stack?.scrollAnchor?.isFollowingEnd == true, "it doesn't follow the end")
+    }
 }
 
 /// A row above what you read growing by itself (a picture or a diagram drawn at last), after a

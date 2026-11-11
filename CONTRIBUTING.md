@@ -147,7 +147,8 @@ kinds alongside:
 scripts/heavy.sh mac scripts/test-app.sh
 scripts/heavy.sh mac-build sh -c 'xcodebuild … -derivedDataPath "$(getconf DARWIN_USER_CACHE_DIR)KuvoShared-MacBuild$KUVO_HEAVY_BUILD_SUFFIX" …'
 scripts/heavy.sh mac-build sh -c 'cd Packages/KuvoClient && swift test'
-scripts/heavy.sh phone <phone-test-command>
+scripts/heavy.sh phone-build <phone-build-command>   # the phone's `scripts/build-app.sh` does this
+scripts/heavy.sh phone <phone-test-command>          # only a run that boots a simulator
 scripts/test-box.sh box <test-filter>
 ```
 
@@ -163,7 +164,17 @@ scripts/test-box.sh box <test-filter>
   `-clonedSourcePackagesDirPath` in that folder too (`…/KuvoShared-MacBuild$KUVO_HEAVY_BUILD_SUFFIX/SourcePackages`),
   not the checkout's `build/SourcePackages` (the app suite's) or `build/DerivedData`, which two
   jobs in one checkout would share. A package's `.build` is its own to each checkout;
-- `phone`: the iPhone app's (`KuvoShared-PhoneBuild`, `KuvoCodeMobileTests-build`). It has two
+- `phone-build`: the iPhone app's builds, and anything of the phone's that boots no simulator. It is
+  `mac-build`'s lane under another name (the same two slots, locks and 30-minute time limit, which
+  `KUVO_HEAVY_LIMIT=60m` raises), not one of its own: a phone build and a Mac build are both `xcodebuild` compiles that compete for the same CPU and
+  memory, so they count against each other, and neither waits for a simulator. Take the slot's
+  folder from `KUVO_HEAVY_SLOT` and `KUVO_HEAVY_BUILD_SUFFIX` (`-1` or `-2`) and build in
+  `KuvoShared-PhoneLane$KUVO_HEAVY_BUILD_SUFFIX`, a folder of its own (not `KuvoShared-PhoneBuild-2`,
+  which phone's slot 2 builds in). The phone's `scripts/build-app.sh` does all of it. A build never
+  takes a `phone` slot: those are for test runs, which each need a simulator, and a build that held
+  one only made the test runs queue behind it;
+- `phone`: **only the phone's test runs that boot a simulator** (`KuvoShared-PhoneBuild`,
+  `KuvoCodeMobileTests-build`; the phone's `scripts/test-app.sh`). It has two
   slots, so two phone test runs go at once, each on a simulator of its own: "Kuvo Code Tests" in
   slot 1 and "Kuvo Code Tests 2" in slot 2, both fixed (the phone's `scripts/test-app.sh` makes each
   once, on the same runtime and device, and keeps it; nothing makes or deletes one per run). A
@@ -175,16 +186,24 @@ scripts/test-box.sh box <test-filter>
   were, so an older script and a new one on slot 1 still exclude each other;
 - `box`: the box's whole suites (`bun test`, `node --test`) and runs on a test machine.
 
-A job also waits while the Mac is busy (its load over the last minute above 40;
-`KUVO_HEAVY_LOAD` sets another). While the Mac app's suite waits there, new jobs of the other
-kinds wait for it to start, 15 minutes at most (`KUVO_HEAVY_MAC_FIRST_FOR`), so the jobs that keep
-starting can't keep it out. A new job also waits while the Mac is short of memory: swapping more than
-10 MB a second (`KUVO_HEAVY_SWAP`), its memory pressure at warn or worse, or less than 20% of it
-available as `memory_pressure -Q` says (`KUVO_HEAVY_MEMORY`; `0` turns the memory wait off). It
-waits until two looks in a row find it isn't, 15 minutes at most from when any job found it short
-(`KUVO_HEAVY_MEMORY_WAIT_FOR`): on this Mac memory runs out before CPU does. Both apps' `scripts/test-app.sh` take their turn
+Before it joins its lane's line, a new job waits while the Mac is thrashing: swapping more than 10 MB
+a second (`KUVO_HEAVY_SWAP`) or its memory pressure critical, two minutes at most from when any job
+found it so (`KUVO_HEAVY_MEMORY_WAIT_FOR`; `KUVO_HEAVY_MEMORY=0` turns the memory wait off). It waits
+for a busy Mac (`KUVO_HEAVY_LOAD`, its load over the last minute) or for a share of memory available
+(`KUVO_HEAVY_MEMORY=20`, in percent) only when you set those: background priority (below) keeps the
+Mac usable, and on the Mini, with a dozen sessions, the load stayed over 40 and less than 20% of
+memory was available all day, so jobs only waited. While the Mac app's suite waits there, new jobs of
+the other kinds wait for it to start, two minutes at most (`KUVO_HEAVY_MAC_FIRST_FOR`). None of
+these waits happens while a job holds its lane's lock, so a job waiting for room never holds up
+the jobs in line behind it. Both apps' `scripts/test-app.sh` take their turn
 this way themselves. `python3 -m unittest discover -s scripts -p test_heavy.py`
 tries the helper.
+
+Jobs never starve the box (the Kuvo Code box on this Mac, which the phone talks to): every job runs
+at background priority, its children too: `taskpolicy -b` on macOS (low CPU and I/O priority; it works
+with `xcodebuild` builds and tests, simulator runs and `swift test`), `nice -n 15 ionice -c3` on Linux. On
+an idle Mac a job runs as fast as ever; on a busy one it gives way and is slower, which the time
+limit allows for (`KUVO_HEAVY_LIMIT`).
 
 A job's command runs in a process group of its own, which ends with it: when the command is over,
 and when the helper is stopped, whatever the command started that stays in that group is stopped too
@@ -196,9 +215,13 @@ you started, by its PID (`$!`, a pid file) or by a process group you created, ne
 were started in. On macOS every option goes before the pattern, in `pgrep` too.
 
 Every job has a time limit, so a hung one can't hold its kind's turn for hours: `mac` and `phone`
-45 minutes, `mac-build` 30, `box` 40, counted while it runs (not while it waits for its turn).
-Past it, its group is stopped (TERM, then KILL), it says what was running, and the helper exits
-124. `KUVO_HEAVY_LIMIT` gives one job another (`90m`, `600s`, `2h`; `0` for none). A job inside
+45 minutes, `mac-build` 30, `box` 40, counted from when its command starts (not while it waits in
+line for its slot, however long, nor for room on the Mac). Past it, its group is stopped (TERM, then
+KILL), it says what was running, and the helper exits 124. Jobs waiting for a lane wait in line,
+first come first served; `KUVO_HEAVY_PRIORITY=high` puts one before the normal ones waiting (it
+never stops a job running), and `KUVO_HEAVY_WAIT=0` answers without waiting for one (75: it
+would wait). Older copies of the helper don't queue, and can take a slot before those in line.
+`KUVO_HEAVY_LIMIT` gives one job another (`90m`, `600s`, `2h`; `0` for none). A job inside
 one of its kind runs within that one's limit (one of another kind has its own too), and one in a
 terminal has none.
 
@@ -246,8 +269,8 @@ Every route a phone uses is answered twice: by this Mac (`PhoneLink`) and by a m
 (`kuvo-link.js`). The scenarios in `Packages/KuvoLink/Vectors/routes/*.json` are written once and
 run against both: `RouteContractTests` (in `./scripts/test-app.sh`) drives the Mac's real
 `PhoneLink` and stores, and `scripts/test-box.sh bridge contract.test.js` the
-bridge's real handler. `Tests/Bridge/contract-mac.test.js` runs the scenarios of the areas that
-have moved onto this Mac's box (`PhoneLink.boxRoutes`) against the bridge's handler as this Mac's
+bridge's real handler. `Tests/Bridge/contract-mac.test.js` runs scenarios this Mac's box answers
+(all but the app's own routes, `PhoneLink.appRoutes`) against the bridge's handler as this Mac's
 box, with the app's folders and kit, checking what's expected of a Mac. Only the engine is a
 stand-in, the same small one on each. To add one:
 

@@ -1375,7 +1375,7 @@ test("each feature kuvo/info names is a route the machine answers, and one it do
     "groups.seats": ["GET", "kuvo/groups/joinable"],
     integrations: ["GET", "kuvo/integrations"], keys: ["GET", "kuvo/keys"], "mcp.catalog": ["GET", "kuvo/mcp/catalog"], moves: ["GET", "kuvo/moves"], named: ["GET", "kuvo/named"], search: ["GET", "kuvo/search?q=none"],
     personalities: ["GET", "kuvo/personalities"], "personalities.events": ["POST", "kuvo/personalities/events"], phones: ["GET", "kuvo/phones"], "phones.pair": ["DELETE", "kuvo/phones/pair"], projects: ["GET", "kuvo/projects"],
-    "sessions.agents": ["GET", "kuvo/sessions/ses_none/agents"], "shell.stop": ["POST", "kuvo/shell/sh_none/stop"],
+    "sessions.agents": ["GET", "kuvo/sessions/ses_none/agents"], "sessions.glance": ["POST", "kuvo/sessions/glance"], "shell.stop": ["POST", "kuvo/shell/sh_none/stop"],
     "sign-in.return": ["GET", "kuvo/sign-in/return"], skills: ["GET", "kuvo/skills"], "skills.trash": ["GET", "kuvo/skill-trash"], update: ["GET", "kuvo/update"], wakes: ["GET", "kuvo/wakes"],
     "wakes.edit": ["POST", "kuvo/wakes/ses_none/pause"], "wakes.events": ["POST", "kuvo/wakes/events"], worktrees: ["GET", "kuvo/worktrees"], "worktrees.events": ["POST", "kuvo/worktrees/events"], "worktrees.where": ["POST", "kuvo/worktrees/where"], folders: ["DELETE", "kuvo/folders"], "folders.files": ["GET", "kuvo/folders?files=1"], "plugins.search": ["POST", "kuvo/plugins/search"], programs: ["POST", "kuvo/programs"], "providers.models": ["GET", "kuvo/providers/models"],
     // What a side question's and a review's routes take besides, on the coding agents' bridge.
@@ -1404,6 +1404,8 @@ test("each feature kuvo/info names is a route the machine answers, and one it do
     browser: ["GET", "kuvo/browser"],
     "work-queue": ["GET", "kuvo/work-queue/categories"],
     "work-queue.elsewhere": ["POST", "kuvo/work-queue/refs"],
+    // (Your setup, and who's its main computer.)
+    setup: ["GET", "kuvo/setup"],
     "git.backups": ["GET", "kuvo/git/backups?folder=/"],
     // (Moves with a coding agent's own conversation, and the check before one holds anything: what
     // kuvo/moves takes besides, and a box asks of another in its mail.)

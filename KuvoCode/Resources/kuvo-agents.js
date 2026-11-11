@@ -15086,7 +15086,7 @@ ${said.map((each) => each.text).join(`
         active.toolsSinceText = true;
         const changes = codexChanges(item.changes);
         active.changes.set(item.id, changes);
-        turn.toolStart(item.id, "patch", { files: changes.map((change) => change.path) });
+        turn.toolStart(item.id, "patch", { files: changes.flatMap((change) => [change.path, ...change.movedTo ? [change.movedTo] : []]) });
         return;
       }
       case "functionCallOutput":
@@ -15340,7 +15340,7 @@ From memory: ${cited.join("; ")}`);
         const decision = await hooks.permission({
           toolCallID: params.itemId,
           action: "edit",
-          resources: changes.length ? changes.map((change) => change.path) : [params.grantRoot ?? "*"],
+          resources: changes.length ? changes.flatMap((change) => [change.path, ...change.movedTo ? [change.movedTo] : []]) : [params.grantRoot ?? "*"],
           metadata: files.length ? { files } : undefined,
           message: params.reason ?? undefined
         });
@@ -15358,7 +15358,7 @@ From memory: ${cited.join("; ")}`);
         return { decision: decision === "reject" ? "denied" : "approved" };
       }
       case "applyPatchApproval": {
-        const paths = Object.keys(params.fileChanges ?? {});
+        const paths = Object.entries(params.fileChanges ?? {}).flatMap(([file, change]) => [file, ...[change?.move_path, change?.update?.move_path].filter((each) => typeof each === "string")]);
         const decision = await hooks.permission({ toolCallID: params.callId, action: "edit", resources: paths.length ? paths : ["*"], message: params.reason ?? undefined });
         return { decision: decision === "reject" ? "denied" : "approved" };
       }
@@ -17425,6 +17425,8 @@ ${text}` : text;
 var noTokens = () => ({ input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } });
 
 // Packages/Box/src/agents/turn.ts
+var NOTICE = { kuvo: { notice: true } };
+
 class Turn {
   store;
   sessionID;
@@ -17705,8 +17707,8 @@ class Turn {
     this.endBlock();
     if (this.step)
       this.endStep();
-    const event = emit("session.synthetic", { sessionID: this.sessionID, text }, this.directory);
-    this.messages.push({ type: "synthetic", id: messageID(event.id), time: { created: event.created }, text });
+    const event = emit("session.synthetic", { sessionID: this.sessionID, text, metadata: NOTICE }, this.directory);
+    this.messages.push({ type: "synthetic", id: messageID(event.id), time: { created: event.created }, text, metadata: NOTICE });
     this.save();
   }
   compacting() {
@@ -19248,8 +19250,8 @@ ${others.join(`
     const record = this.store.get(id);
     if (!record)
       return;
-    const event = emit("session.synthetic", { sessionID: id, text }, record.session.location.directory);
-    record.messages.push({ type: "synthetic", id: messageID(event.id), time: { created: event.created }, text });
+    const event = emit("session.synthetic", { sessionID: id, text, metadata: NOTICE }, record.session.location.directory);
+    record.messages.push({ type: "synthetic", id: messageID(event.id), time: { created: event.created }, text, metadata: NOTICE });
     this.store.save(id, true);
   }
   threadOf(id, live, record, provider) {
@@ -20215,6 +20217,8 @@ ${live.agentPrompt}` : ""
         return "deny";
       if (strictest(rules, "external_directory", refusable) === "deny")
         return "deny";
+      if (away.some((each) => each.includes("\\")))
+        return "ask";
       const outside = strictest(rules, "external_directory", folders);
       if (outside === "ask" && !this.allowedOutside(live, folders))
         return "ask";
@@ -20277,7 +20281,7 @@ ${live.agentPrompt}` : ""
       const rules = [...ask.agentRules ?? live.agentRules ?? engineDefaults, ...session.permissions ?? []];
       if (strictest(rules, "external_directory", refusable) === "deny")
         return "reject";
-      const outside = strictest(rules, "external_directory", folders);
+      const outside = away.some((each) => each.includes("\\")) ? "ask" : strictest(rules, "external_directory", folders);
       const own = strictest(rules, ask.action, parts) ?? "allow";
       if (outside === "ask" && own !== "deny" && (own === "allow" || this.allowedBefore(live, ask)) && !this.allowedOutside(live, folders)) {
         return this.askPermission(id, live, turn, { ...outsideAsk(ask, away), metadata: ask.metadata, message: ask.message, sandboxed: ask.sandboxed }, plan);
@@ -26897,4 +26901,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 0d20a07d6cb44fe34d5378f0ebc04a19f403acfe39e1b1f42217f4ce7e0aa05d
+// Built from Packages/Box/src/agents 35f8a59654d7e160a17b19eb08fcc736aa9d0182b1e2a5a2dada65417371d3c1

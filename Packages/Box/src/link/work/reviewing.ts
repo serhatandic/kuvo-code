@@ -20,12 +20,15 @@ import { approvalOf } from "./approval";
 import { asksIn, callOf } from "./answers";
 import { pauseGoal, REVIEW_PAUSE, runningGoal } from "./goals";
 import { usableModels, type Usable } from "./models";
-import { review, type Decision, type ReviewedAction, type ReviewContext, type SmallModel, type Verdict } from "./reviewer";
-import { botOfConversation, worksFor } from "./tree";
+import { review, clearPlaces, keptFromSessions, walledForOwn, type Decision, type ReviewedAction, type ReviewContext, type SmallModel, type Verdict } from "./reviewer";
+import { botOfConversation, startedByOf, worksFor } from "./tree";
 import { botHere } from "../bots/here";
 import { readProjects } from "../areas/projects";
 import { commandTemporary } from "../fence/state";
-import { askedAbout } from "../fence/policy";
+import { askedAbout, fencePolicy } from "../fence/policy";
+import { inTime, projectWorktrees } from "./project-trees";
+import { foundAt } from "./found-folders";
+export { noteFolderFound } from "./found-folders";
 import type { EngineAnswer } from "../engine/client";
 import type { EngineSession } from "../engine/sessions";
 import type { Target } from "../../shared/records";
@@ -174,16 +177,21 @@ export async function reviewIn(session: string, action: ReviewedAction, signal?:
   const at = found === undefined ? await conversationOf(session) : found;
   if (!at) return null;
   const bot = botOf(at.data);
-  if (!inAuto(at)) return null;
+  if (!inAuto(at)) {
+    // (Out of Auto, the folders it allowed edits in go with it.)
+    try { clearPlaces(at.data.id); } catch {}
+    return null;
+  }
   // (In a bot's, what you wrote in its conversation counts beside its goal; in its work, what you
   // wrote to the bot too, which the work is for.)
   const own = bot && !botOfConversation(at.data.id) ? botHere(bot.id)?.session : undefined;
   const ownAt = own && own !== at.data.id ? await conversationOf(own).catch(() => null) : null;
   const said = [...(ownAt ? await yourMessages(ownAt, signal) : []), ...await yourMessages(at, signal)];
-  const context: ReviewContext = { session: at.data.id, said, ...(bot ? { bot } : {}) };
+  const [folders, task] = await Promise.all([workFolders(at), taskOf(at, signal)]);
+  const context: ReviewContext = { session: at.data.id, said, ...(bot ? { bot } : {}), ...(folders.length ? { folders } : {}), ...(task ? { task } : {}) };
   let verdict: Verdict & { paused?: boolean };
   try {
-    verdict = await review(action, context, { model: await reviewModelOf(at, signal), signal, pin, own: ownFolders(at) });
+    verdict = await review(action, context, { model: await reviewModelOf(at, signal), signal, pin, own: await ownFolders(at) });
   } catch (error) {
     // (Only when its log can't be kept, so there's nothing on it to approve.)
     return { decision: "refuse", reason: `Auto's reviewer couldn't review it (${oneLine(String((error as Error)?.message ?? error), 120)}).`, by: "code", held: false, why: "failed", conversation: at };
@@ -219,8 +227,10 @@ export async function tellApproved(session: string, decision: Decision, found?: 
 const READING = new Set(["read", "glob", "grep", "list", "ls", "view", "notebookread"]);
 // Of those, the ones that read one file, as named.
 const OWN_READING = new Set(["read", "view", "notebookread"]);
-// Asks already taken up in this process (an event can come again as the stream reconnects).
-const reviewing = new Set<string>();
+// Asks already taken up in this process, with how each went (an event can come again as the stream
+// reconnects, or while the asks waiting as it did are taken up: it's answered as the first was, so
+// no notice goes to your phones for one the reviewer is deciding).
+const reviewing = new Map<string, Promise<Verdict | null>>();
 
 /** How an ask to work outside a conversation's folder was taken up, as every client hears it
  * (`reviews` on `kuvo/sandbox/asks`): being checked by Auto's reviewer, allowed (by it, or in the
@@ -283,19 +293,20 @@ function noteReview(id: string, session: string, state: AskReview["state"], call
  * Settings › Permissions ask. */
 export async function reviewPermission(source: Target, event: { type?: string; data?: { id?: unknown; sessionID?: unknown; action?: unknown } }, signal?: AbortSignal, found?: Conversation | null): Promise<Verdict | null> {
   const { id, sessionID } = event.data ?? {};
-  if (event.type !== "permission.asked" || typeof id !== "string" || typeof sessionID !== "string" || reviewing.has(id)) return null;
-  reviewing.add(id);
-  if (reviewing.size > 500) reviewing.delete(reviewing.values().next().value!);
+  if (event.type !== "permission.asked" || typeof id !== "string" || typeof sessionID !== "string") return null;
+  const taken = reviewing.get(id);
+  if (taken) return taken;
   // Listed as checked at once, before anything is read, so no client shows it meanwhile.
   if (event.data?.action === "external_directory") noteReview(id, sessionID, "checking");
   // (Taken up again as the event comes again, should this one fail; meanwhile it's yours.)
-  try {
-    return await answerPermission(source, id, sessionID, signal, found);
-  } catch (error) {
+  const answering = answerPermission(source, id, sessionID, signal, found).catch(error => {
     reviewing.delete(id);
     if (askReviews.has(id)) noteReview(id, sessionID, "yours", askReviews.get(id)?.call);
     throw error;
-  }
+  });
+  reviewing.set(id, answering.catch(() => null));
+  if (reviewing.size > 500) reviewing.delete(reviewing.keys().next().value!);
+  return answering;
 }
 
 /** The asks to work outside a folder already waiting as the box (re)connects to an engine or the
@@ -324,12 +335,13 @@ const attachedOf = (session: string): string[] => attachmentRoots().map(root => 
 
 /** The folders a conversation works in as its own: its project's, its commands' temporary folder
  * (their TMPDIR, in Kuvo Code's), the files sent with its messages (and with its parent's, for a
- * subagent's), and for a bot's conversation or work, the bot's own folder, the projects it made and
- * its running goal's. */
-function ownFolders(at: Conversation): string[] {
+ * subagent's), its project's worktrees (`projectTrees`), and for a bot's conversation or work, the
+ * bot's own folder, the projects it made and its running goal's. */
+async function ownFolders(at: Conversation, withTrees = true): Promise<string[]> {
   const folder = at.data.location?.directory;
   const folders = typeof folder === "string" ? [folder, commandTemporary(folder)].filter((each): each is string => Boolean(each)) : [];
   folders.push(...[at.data.id, at.data.parentID].filter((each): each is string => typeof each === "string").flatMap(attachedOf));
+  if (typeof folder === "string" && withTrees) folders.push(...await projectTrees(folder));
   const bot = botOfConversation(at.data.id) ?? worksFor(at.data);
   if (!bot) return folders;
   const own = botHere(bot.bot)?.folder;
@@ -337,11 +349,157 @@ function ownFolders(at: Conversation): string[] {
   return [...folders, ...(own ? [own] : []), ...made, ...(runningGoal(bot.bot)?.projects ?? [])];
 }
 
-/** Whether `file` is `folder` or in it, as the disk has them: links followed, as far as they exist. */
-function isWithin(file: string, folder: string): boolean {
-  const inside = path.relative(realPath(folder), realPath(file));
+/** A conversation's project's linked worktrees, wherever they are, where it works in the project's
+ * main folder (`projectWorktrees`), by their real paths as found: its own, as its folder is. But
+ * where an agent in Auto couldn't start a session either (`keptFromSessions`: your home, a whole
+ * personal folder, your secrets, what runs at login, ~/Library), and Kuvo Code's own (another
+ * session's worktree there), each judged as before. */
+async function projectTrees(folder: string): Promise<string[]> {
+  // (Worked out once for the asks of a moment: an ask is looked at several times as it's judged.)
+  const known = treesFound.get(folder);
+  if (known && Date.now() - known.at < TREES_FOR) return known.trees;
+  const trees = foundTrees(folder).catch(() => [] as string[]);
+  treesFound.set(folder, { at: Date.now(), trees });
+  if (treesFound.size > 100) treesFound.delete(treesFound.keys().next().value!);
+  return trees;
+}
+const treesFound = new Map<string, { at: number; trees: Promise<string[]> }>();
+const TREES_FOR = 5_000;
+
+async function foundTrees(folder: string): Promise<string[]> {
+  const trees = await inTime(projectWorktrees(folder), []);
+  if (!trees.length) return [];
+  const policy = fencePolicy();
+  const flags = process.platform === "darwin" ? "i" : "";
+  // (In one of Kuvo Code's folders named by pattern, or one that holds the folders those are in.)
+  const ours = (tree: string) => policy.kuvo.some(wall => tree === wall || tree.startsWith(wall + "/") || wall.startsWith(tree + "/"))
+    || policy.kuvoPatterns.some(pattern => new RegExp(pattern, flags).test(tree + "/"))
+    || (policy.patternFolders ?? []).some(pattern => holdsMatch(tree, pattern, flags));
+  const kept = await Promise.all(trees.map(tree => ours(tree) ? Promise.resolve("Kuvo Code's own") : keptFromSessions(tree, policy)));
+  return trees.filter((_, at) => !kept[at]);
+}
+
+/** Whether `tree` is, or holds, a folder `pattern` names (a whole path, a name a part: `^/a/[^/]+/b$`). */
+function holdsMatch(tree: string, pattern: string, flags: string): boolean {
+  const parts = pattern.replace(/^\^/, "").replace(/\$$/, "").replaceAll("[^/]+", "\0").split("/").slice(1).map(part => part.replaceAll("\0", "[^/]+"));
+  const names = tree.split("/").slice(1);
+  return names.length <= parts.length && names.every((name, at) => new RegExp(`^(?:${parts[at]})$`, flags).test(name));
+}
+
+/** Where a conversation works as its own, for its reviewer to judge by: its folder first, then its
+ * project's other folders and worktrees. */
+async function workFolders(at: Conversation): Promise<string[]> {
+  const folder = at.data.location?.directory;
+  if (typeof folder !== "string") return [];
+  const others = readProjects().find(project => project.directory === folder)?.folders ?? [];
+  return [...new Set([folder, ...others, ...await projectTrees(folder)])];
+}
+
+/** The task another agent started a conversation with (its first message, the letter from the one
+ * that started it, `kuvo.startedBy`): that agent's name and words; none for one you started. */
+async function taskOf(at: Conversation, signal?: AbortSignal): Promise<ReviewContext["task"]> {
+  const starter = startedByOf(at.data);
+  if (!starter) return undefined;
+  const page = await call(at.target, "GET", `/api/session/${encodeURIComponent(at.data.id)}/message?limit=5&order=asc`, undefined, signal).catch(() => null);
+  const first = (Array.isArray(page) ? page : []).find(message => isObject(message) && message.type === "user");
+  const text = isObject(first) ? String(first.text ?? "") : "";
+  const head = /^\[Message from (.{1,200}?) · (ses_[A-Za-z0-9_-]+)\][^\n]*\n\n/.exec(text);
+  return head && head[2] === starter ? { from: head[1], text: text.slice(head[0].length) } : undefined;
+}
+
+// The tools that run a command (asked about the folders it names, its writes the sandbox's).
+const RUNNING = new Set(["bash", "shell", "command", "exec", "local_shell", "terminal"]);
+
+/** What a tool call changes, each by its path as given (`raw`) and as the engine takes it (from the
+ * conversation's `folder`; `~` your home): every value of an argument that's a path, however deep
+ * in it (a key the engine doesn't write to today might be one tomorrow), as a file or a folder; and
+ * a patch tool's headers, read as the engine reads them (each line without its last \r, trimmed).
+ * A tool that runs a command, nothing here (its folders, from the ask). */
+function changedBy(seen: { tool: string; input: Record<string, unknown> }, folder: string): { raw: string; path: string; folder: boolean | null }[] | null {
+  const tool = seen.tool.toLowerCase();
+  if (RUNNING.has(tool)) return null;
+  const named: { raw: string; folder: boolean | null }[] = [];
+  const walk = (value: unknown, key: string, depth: number) => {
+    // (Deeper than looked into: something no path of its own has, so it's never one.)
+    if (depth > 6) { named.push({ raw: "\0", folder: false }); return; }
+    if (typeof value === "string") {
+      if (PATH_KEY.test(key)) named.push({ raw: value, folder: null });
+      // A patch tool's text: the files its headers name.
+      if (PATCHING.has(tool) && /^patch(text)?$/i.test(key)) {
+        for (const line of value.split("\n").map(each => each.replace(/\r$/, "").trim())) {
+          const header = /^\*\*\* (?:Add File|Update File|Delete File|Move to): (.*)$/s.exec(line);
+          const each = header?.[1]?.trim();
+          if (each) named.push({ raw: each, folder: false });
+        }
+      }
+    } else if (Array.isArray(value)) for (const each of value) walk(each, key, depth + 1);
+    else if (isObject(value)) for (const [inner, each] of Object.entries(value)) walk(each, PATH_KEY.test(inner) || !PATH_KEY.test(key) ? inner : key, depth + 1);
+  };
+  for (const [key, value] of Object.entries(seen.input)) walk(value, key, 0);
+  return named.map(({ raw, folder: asFolder }) => ({ raw, path: path.resolve(folder, raw.replace(/^~(?=\/|$)/, homeFolder())), folder: asFolder }));
+}
+
+// The tools that patch, and the arguments that name a place, by their keys (`filePath`, `files`,
+// `destination`, `move_path`, `outputDir`, `cwd`…).
+const PATCHING = new Set(["patch", "apply_patch", "applypatch"]);
+const PATH_KEY = /path|file|dir|folder|destination|save_?as|^(dest|dst|src|source|from|to|target|output|out|location|cwd|workdir|movedto|root|uri|url|name)$/i;
+// The tools whose changes may be its own by code: the engine's and the coding agents' that write
+// files (the engine's write, edit and patch; Claude Code's Write, Edit, MultiEdit and NotebookEdit;
+// Codex's changes), besides those that only read and those that run a command (by their folders).
+const WRITING = new Set(["write", "edit", "multiedit", "patch", "apply_patch", "applypatch", "notebookedit"]);
+
+/** Whether a name is what it looks like, on any disk: composed (NFC), and folding by case to what it
+ * folds to lower-case (a Mac's disk takes `ſ` for `s`, the Kelvin sign for `k`). */
+const plainName = (raw: string) => raw === raw.normalize("NFC") && raw.toUpperCase().toLowerCase() === raw.toLowerCase();
+
+// What no path of its own has in it: control characters and the line and paragraph separators a
+// reader might split on and the engine doesn't (`\r`, U+2028…).
+// (And those a disk may skip as it compares names, as HFS+ does: a joiner in `opencode.j\u200dson`
+// would be `opencode.json` there; a direction mark would make it read otherwise.)
+const UNPLAIN = /[\x00-\x1f\x7f\u0085\u2028\u2029\\]|\p{Default_Ignorable_Code_Point}/u;
+
+/** Where `file` really is, where it's reached plainly from the folder whose real path is `folder`:
+ * one of the folders it's named through leads to `folder` itself, and below that no part of it is
+ * a link, each folder a folder, and the file, where it's there, a file with no other name (a hard
+ * link to one elsewhere would be written there too; so a package manager's hard-linked files are
+ * the reviewer's), or with `asFolder` a folder (`null`: either, as it is). What isn't there yet is made where it's named. Null otherwise: a link anywhere below, one that leads nowhere yet, `..` in it. (Checked as
+ * it's asked: what a command changes between the answer and the write isn't.) */
+function plainlyIn(file: string, folder: string, asFolder: boolean | null = false): string | null {
+  if (!path.isAbsolute(file) || file.split("/").includes("..")) return null;
+  const parts = path.resolve(file).split("/");
+  for (let top = 1; top <= parts.length; top++) {
+    const named = parts.slice(0, top).join("/") || "/";
+    let real: string;
+    try { real = fs.realpathSync(named); } catch { return null; }
+    if (real !== folder) continue;
+    // (Below the place, each name as it looks: the place's own the box found itself.)
+    if (!parts.slice(top).every(plainName)) return null;
+    for (let at = top; at < parts.length; at++) {
+      let kind: fs.Stats;
+      try { kind = fs.lstatSync(parts.slice(0, at + 1).join("/")); }
+      catch (error) {
+        // (Not there yet: made where it's named. Anything else that can't be looked at isn't plain.)
+        if ((error as NodeJS.ErrnoException)?.code === "ENOENT") break;
+        return null;
+      }
+      if (kind.isSymbolicLink()) return null;
+      const last = at === parts.length - 1;
+      // (The last a folder for a folder asked about; a file for a file; either, as it is, for one
+      // the ask leaves open.)
+      const asDirectory = !last || asFolder === true || (asFolder === null && kind.isDirectory());
+      if (asDirectory ? !kind.isDirectory() : !kind.isFile() || kind.nlink !== 1) return null;
+    }
+    return path.join(folder, ...parts.slice(top));
+  }
+  return null;
+}
+
+/** Whether the real path `file` is the real path `folder` or in it. */
+function within(file: string, folder: string): boolean {
+  const inside = path.relative(folder, file);
   return inside === "" || (!inside.startsWith("..") && !path.isAbsolute(inside));
 }
+
 
 function realPath(file: string): string {
   const rest: string[] = [];
@@ -403,12 +561,13 @@ async function answerPermission(source: Target, id: string, sessionID: string, s
   const ownByName = ownReads((file, place) => { const inside = path.relative(place, path.resolve(file)); return inside === "" || (!inside.startsWith("..") && !path.isAbsolute(inside)); });
   // (Else, outside Auto, it's yours as it is: nothing is opened for it, nor waits on macOS.)
   if (!ownByName && !inAuto(at)) {
+    try { clearPlaces(at.data.id); } catch {}
     noteReview(id, sessionID, "yours", call);
     return null;
   }
   // (Each path macOS may ask about, asked off the box's thread first: a project on your Desktop.)
   await askedAbout([folder, ...actions.flatMap(action => action.kind === "file" ? [action.path] : [])]);
-  if (ownByName && ownReads(isWithin)) {
+  if (ownByName && ownReads((file, place) => within(realPath(file), foundAt(place)))) {
     await engineCall(source, "POST", `/api/session/${encodeURIComponent(permission.asker)}/permission/${encodeURIComponent(permission.id)}/reply`, { decision: "once" }, signal);
     noteReview(id, sessionID, "allowed", call);
     return { decision: "allow", reason: "Its own files.", by: "code" };
@@ -420,8 +579,39 @@ async function answerPermission(source: Target, id: string, sessionID: string, s
     return null;
   }
   const reply = (body: Record<string, unknown>) => engineCall(source, "POST", `/api/session/${encodeURIComponent(permission.asker)}/permission/${encodeURIComponent(permission.id)}/reply`, body, signal);
-  const own = ownFolders(at);
-  if (actions.every(action => action.kind === "file" && own.some(folder => isWithin(action.path, folder)))) {
+  // Its own folders and its project's worktrees, each by where it was found (a worktree as found, its
+  // own folders as first seen), a file in one allowed only as reached plainly (`plainlyIn`: no link
+  // on the way down, nor `..`, a file of one name only), and never what's walled from its own
+  // wherever it is (`walledForOwn`). Anything else is the reviewer's.
+  const own = await ownFolders(at, false);
+  await askedAbout(own);
+  const trees = typeof folder === "string" ? await projectTrees(folder) : [];
+  const policy = fencePolicy();
+  const places = [...own.map(foundAt), ...trees];
+  // What it changes, all of it its own, reached plainly (`plainlyIn`): every resource the engine
+  // asks about (the authority: its own reading of the call; `…/*` a folder, else a file, or a folder
+  // where one is), the file it says it asks about, and every file the tool call names (its
+  // arguments, a patch's headers). None that climbs (`..`) or has a character no path of its own
+  // has; never on nothing named, nor `*`.
+  const resolve = (raw: string) => path.resolve(folder, raw.replace(/^~(?=\/|$)/, homeFolder()));
+  const resources = permission.resources.map(raw => ({ raw, path: resolve(raw.replace(/\/\*$/, "") || "/"), folder: raw.endsWith("/*") ? true : null }));
+  const changes = [...resources, ...(permission.filepath ? [{ raw: permission.filepath, path: resolve(permission.filepath), folder: false as boolean | null }] : []),
+    ...(seen ? changedBy(seen, folder) ?? [] : [])];
+  // (A call the ask names that couldn't be read, or the image tool, which writes by another name
+  // than the one it's given: never its own by code.)
+  const unread = Boolean(permission.call) && !seen;
+  const renames = seen?.tool.toLowerCase() === "experimental_image_generate";
+  const plainly = (change: { path: string; folder: boolean | null }) => places.some(place => {
+    const real = plainlyIn(change.path, place, change.folder);
+    return real !== null && !walledForOwn(real, policy, own);
+  });
+  // (Only a tool known to write, read or run a command; only resources named from `/`; never a name
+  // that's other than it looks once composed or cased as a Mac's disk does, `opencode.jſon`.)
+  const known = !seen || [WRITING, READING, RUNNING].some(each => each.has(seen.tool.toLowerCase()));
+  const ownChanges = known && !unread && !renames && resources.length > 0 && permission.resources.every(each => each.startsWith("/"))
+    && changes.every(each => !each.raw.split("/").includes("..") && !UNPLAIN.test(each.raw) && plainly(each))
+    && actions.every(action => action.kind === "file");
+  if (ownChanges) {
     await reply({ decision: "once" });
     noteReview(id, sessionID, "allowed", call);
     return { decision: "allow", reason: "Its own project.", by: "code" };

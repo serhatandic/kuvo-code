@@ -14,6 +14,7 @@ import { IS_MAC, LINK_FILE, RUN } from "./home";
 import type { NoticeHold } from "./notices/hold";
 import type { Peer } from "./peers/known";
 import type { LinkHost } from "./relay/host";
+import type { SetupRecord } from "./setup/record";
 
 /** A phone this box lets in (PROTOCOL.md, "Paired phones"). */
 export interface Phone {
@@ -70,22 +71,28 @@ export interface LinkState {
   macMoved?: unknown;
   /** Machines this Mac removed that haven't heard it yet (they hear it once it's back on the relay). */
   untold?: Peer[];
+  /** The setup it's in, and its role there (PROTOCOL.md, "Your setup"). */
+  setup?: SetupRecord;
+  /** This Mac's static key as its box last had it, and the ones before (made anew since): a machine
+   * this Mac sets up again lets those go (`replaces` in setup). */
+  keyNow?: string;
+  keysBefore?: string[];
+  /** The #181 switch, as you set it (none: it follows the role, `startsFromOthers`). */
+  startsFromOthers?: "on" | "off";
 }
 
-// This Mac's box's link (`runMacLink`): what its app said (`kuvo/link/config`), its keys from the
-// app once it has them (with the relay and name, `overlay`, never written), how it stands, and who
-// follows that and its phones.
+// This Mac's box's link (`runMacLink`): what its app said (`kuvo/link/config`, or as the box kept
+// it, mac/link.ts), its keys from the app once it has them (with the relay and name, `overlay`,
+// never written in link.json), how it stands, and who follows that and its phones.
 const MAC_OVERLAY = ["key", "secret", "sign", "relay", "name"];
 /** What this Mac's app says of its box's link (`kuvo/link/config`): whether the phone link is on
- * and there are machines to meet, the relay, this Mac's name, its app's version, and what it
- * answers (`features`). */
+ * and there are machines to meet, the relay, this Mac's name and its app's version. */
 export interface MacLinkConfig {
   phones: boolean;
   machines: boolean;
   relay: string;
   name: string;
   app: string;
-  features?: string[];
 }
 
 export const macLink: {

@@ -43,9 +43,16 @@ struct BarStrip: View {
         .clickablePointer()
         .help("Show the bars")
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Bars: " + items.map(\.words).joined(separator: ", "))
-        .accessibilityValue(marked.isEmpty ? "" : "New: " + items.filter { marked.contains($0.bar) }.map(\.words).joined(separator: ", "))
+        .accessibilityLabel(spoken)
+        .accessibilityValue(spokenNews)
         .accessibilityAddTraits(.isButton)
+        .accessibilityAction { show() }
+    }
+
+    // (Apart from the body, which is long enough for the compiler as it is.)
+    private var spoken: String { "Bars: " + items.map(\.words).joined(separator: ", ") }
+    private var spokenNews: String {
+        marked.isEmpty ? "" : "New: " + items.filter { marked.contains($0.bar) }.map(\.words).joined(separator: ", ")
     }
 
     private func line(words: Bool) -> some View {

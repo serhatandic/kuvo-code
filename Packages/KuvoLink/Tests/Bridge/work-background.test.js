@@ -91,16 +91,30 @@ const engine = http.createServer((request, response) => {
     const one = url.match(/^\/api\/session\/([^/?]+)(\/[^?]*)?/);
     const id = one && decodeURIComponent(one[1]);
     if (one && !one[2] && state.unreachable) return reply({ message: "Busy." }, 500);
-    if (one && !one[2]) return state.sessions[id] ? reply({ data: state.sessions[id] }) : reply({ message: "No such session." }, 404);
+    if (one && !one[2]) {
+      // (As the engine's, it last changed as it last wrote.)
+      const each = state.sessions[id];
+      if (!each) return reply({ message: "No such session." }, 404);
+      const wrote = Math.max(0, ...(state.messages[id] ?? []).map(message => message.time?.created ?? 0));
+      return reply({ data: { ...each, time: { ...each.time, updated: Math.max(each.time?.updated ?? 0, wrote) } } });
+    }
     if (one?.[2] === "/message") {
-      const asks = new URL(url, "http://engine").searchParams;
-      const limit = Number(asks.get("limit") ?? 100);
-      const offset = Number(asks.get("cursor") ?? 0);
-      const all = state.messages[id] ?? [];
-      return reply({ data: all.slice(offset, offset + limit), cursor: offset + limit < all.length ? { next: String(offset + limit) } : null });
+      const answer = () => {
+        const asks = new URL(url, "http://engine").searchParams;
+        const limit = Number(asks.get("limit") ?? 100);
+        const offset = Number(asks.get("cursor") ?? 0);
+        const all = state.messages[id] ?? [];
+        reply({ data: all.slice(offset, offset + limit), cursor: offset + limit < all.length ? { next: String(offset + limit) } : null });
+      };
+      if (state.reads?.session === id) return state.reads.hold(answer, () => reply({ message: "Timed out." }, 500));
+      return answer();
     }
     if (one?.[2] === "/prompt") {
-      state.prompts.push({ to: id, ...JSON.parse(body) });
+      // (Sent again under the same id, as a retry is, it's taken once.)
+      const prompt = { to: id, ...JSON.parse(body) };
+      if (!state.prompts.some(each => each.to === id && each.id === prompt.id)) state.prompts.push(prompt);
+      // Taken, but its answer lost on the way back (the engine slow to answer, the box's wait over).
+      if (state.lostAnswers > 0) return (state.lostAnswers -= 1, reply({ message: "Timed out." }, 500));
       return reply({});
     }
     if (one?.[2] === "/interrupt") {
@@ -138,6 +152,22 @@ const notice = (text = "Going on with another account.", session = "ses_tests") 
 const boxWord = (text = '[Session finished] "Part" in tidepool (address ses_part)\n\nDone.', session = "ses_tests") => state.messages[session].unshift({ id: `msg_${state.counter + 1}`, type: "user", text, time: { created: at() } });
 const wokenUp = (session = "ses_tests") => state.messages[session].unshift({ id: `msg_${state.counter + 1}`, type: "user", text: "[Wake-up] Look again.", time: { created: at() } });
 const long = text => `${text} ${"It went on to say a good deal more about what it found and what it changed. ".repeat(4)}`;
+// The engine slow to read a session's messages (a box under heavy load): each read waits, answered
+// (`pass`) or timed out (`fail`) as the test says, until `stop`; or, from `failAll`, every one times out.
+function holdReads(session = "ses_tests") {
+  const held = [];
+  let arrived = () => {};
+  let failing = false;
+  state.reads = { session, hold: (pass, fail) => { if (failing) return fail(); held.push({ pass, fail }); arrived(); } };
+  return {
+    next: async () => {
+      while (!held.length) await new Promise(resolve => { arrived = resolve; });
+      return held.shift();
+    },
+    stop: () => { state.reads = null; },
+    failAll: () => { failing = true; for (const each of held.splice(0)) each.fail(); },
+  };
+}
 
 // The watcher's clock: its time, and what it would run later, run when the test says, when it's due.
 function clock(start = Date.now() + 60 * 1000) {
@@ -160,7 +190,10 @@ function clock(start = Date.now() + 60 * 1000) {
 }
 const SECONDS = 1000;
 const watcher = time => link.workWatcher(source, () => [source], { schedule: time.schedule, now: time.now });
-const finished = () => state.prompts.filter(each => each.to === "ses_pixel").flatMap(each => each.text.split("\n\n").filter(line => line.startsWith("[Session finished]") || line.startsWith("[Session still working]")));
+const leadLines = () => state.prompts.filter(each => each.to === "ses_pixel").flatMap(each => each.text.split("\n\n").filter(line => line.startsWith("[Session ")));
+const finished = () => leadLines().filter(line => line.startsWith("[Session finished]"));
+// (#420: a lead is never told "still working": a session at work shows so in its list.)
+const stillWorking = () => leadLines().filter(line => line.startsWith("[Session still working]"));
 const atWork = async () => [...await link.atWorkNow([source])];
 const handle = link.engineHandler(() => source, { name: "test" }, () => null);
 async function route(method, where) {
@@ -185,7 +218,7 @@ test("a session waiting on its own command isn't finished: told once, when it's 
   said("Started the tests; they'll take a while.");
   await watch(ended());
   await time.pass(10 * SECONDS);
-  assert.deepEqual(finished(), [], "nothing while its command runs");
+  assert.deepEqual(leadLines(), [], "nothing at all while its command runs: not 'still working' either");
   assert.deepEqual(await atWork(), ["ses_tests"], "and it counts as at work");
   // It ends with nothing more to say.
   await watch(exited("sh_1"));
@@ -434,7 +467,7 @@ test("an archived session tells nothing and begins nothing on its own", async ()
   assert.deepEqual(state.interrupted, ["ses_tests"]);
 });
 
-test("a command that never ends: the lead hears at the limit, saying what still runs, then what it says after that; it stops counting as at work later", async () => {
+test("a command that never ends: the lead hears at the limit, as finished, saying what still runs, then what it says after that; it stops counting as at work later", async () => {
   const time = clock();
   const watch = watcher(time);
   await watch.caughtUp;
@@ -447,8 +480,9 @@ test("a command that never ends: the lead hears at the limit, saying what still 
   await time.pass(61 * SECONDS);
   await time.pass(5 * SECONDS);
   assert.equal(finished().length, 1, "at the limit it's told");
-  assert.match(finished()[0], /^\[Session still working\] "Tests"/, "not finished: its command runs");
+  assert.match(finished()[0], /^\[Session finished\] "Tests"/, "a dev server doesn't keep its lead waiting for good");
   assert.match(finished()[0], /Still running in the background: the command `npm run dev`/);
+  assert.deepEqual(stillWorking(), [], "never told 'still working'");
   assert.deepEqual(await atWork(), ["ses_tests"], "it does still run");
   assert.equal(link.AT_WORK_LIMIT > link.FINISH_HOLD_LIMIT, true);
   // Long after, it's gone quiet: it doesn't show at work for ever.
@@ -467,7 +501,8 @@ test("told at the limit, what it says when the command does end is told, however
   await time.pass(link.FINISH_HOLD_LIMIT + 1);
   await time.pass(5 * SECONDS);
   assert.equal(finished().length, 1);
-  assert.match(finished()[0], /^\[Session still working\] "Tests"/);
+  assert.match(finished()[0], /^\[Session finished\] "Tests"/);
+  assert.match(finished()[0], /Still running in the background/);
   await watch(exited("sh_1"));
   ownWord();
   said("All pass.");
@@ -477,6 +512,7 @@ test("told at the limit, what it says when the command does end is told, however
   assert.match(finished()[1], /^\[Session finished\] "Tests"/, "really finished now");
   assert.match(finished()[1], /All pass\./);
   assert.doesNotMatch(finished()[1], /Still running/);
+  assert.deepEqual(stillWorking(), []);
 });
 
 test("the engine gone with its commands: a new connection finds none, and the lead is told once", async () => {
@@ -802,11 +838,11 @@ test("not reachable at its limit: looked at again, so a command that never ends 
   await time.pass(61 * SECONDS);
   await time.pass(5 * SECONDS);
   assert.equal(finished().length, 1);
-  assert.match(finished()[0], /^\[Session still working\] "Tests"/);
+  assert.match(finished()[0], /^\[Session finished\] "Tests"/);
   assert.match(finished()[0], /Still running in the background/);
 });
 
-test("told still working at the limit, a command that ends with nothing new said tells the lead nothing more, and its bot still sees it finish", async () => {
+test("told at the limit, a command that ends with nothing new said tells the lead nothing more, and its bot still sees it finish", async () => {
   const time = clock();
   const watch = watcher(time);
   await watch.caughtUp;
@@ -817,8 +853,8 @@ test("told still working at the limit, a command that ends with nothing new said
   await watch(ended());
   await time.pass(link.FINISH_HOLD_LIMIT + 1);
   await time.pass(5 * SECONDS);
-  assert.match(finished()[0], /^\[Session still working\]/);
-  assert.equal(await marks(), 0, "not finished, so not shown finishing");
+  assert.match(finished()[0], /^\[Session finished\]/);
+  assert.equal(await marks(), 0, "its command runs, so not shown finishing yet");
   // Its command ends; the agent is woken and has nothing to add.
   await watch(exited("sh_1"));
   ownWord();
@@ -1044,3 +1080,115 @@ test("on Autopilot: a question that goes ahead isn't told up, what it ends with 
   assert.match(finished()[1], /Light it is/);
 });
 
+// #549: on a box under heavy load, one finish woke its lead five times. Its session's turn ended
+// while its reviewers ran (held), their results began a turn of its own, and as that ended the
+// engine took longer than the box waits to read its messages. Meanwhile any other session's work
+// ending looked again at every finish still held, so the same finish was looked at more than once
+// at a time; and one told while its reply couldn't be read noted no reply, so the next took it
+// for news.
+// (Its turn ends while its reviewer runs; the reviewer's result begins a turn of its own, which
+// writes the report and is about to end.)
+async function reviewedThenReported(watch, time) {
+  asked();
+  state.active.add("ses_helper");
+  said("Sent reviewers off.");
+  await watch(ended());
+  await time.pass(15 * SECONDS);
+  assert.deepEqual(finished(), [], "held while its reviewer runs");
+  state.active.delete("ses_helper");
+  await watch({ type: "session.execution.succeeded", data: { sessionID: "ses_helper" } });
+  state.messages.ses_tests.unshift({ id: `msg_${state.counter + 1}`, type: "synthetic", text: "<subagent state=\"completed\">All checked.</subagent>", metadata: { source: "subagent", childID: "ses_helper" }, time: { created: at() } });
+  state.active.add("ses_tests");
+  await watch(started());
+  await time.pass(11 * SECONDS);
+  said(long("The import file is written and checked."));
+  state.active.delete("ses_tests");
+}
+test("a finish looked at again while the engine is slow to read it wakes its lead once; new work after it, again", async () => {
+  const time = clock();
+  const watch = watcher(time);
+  await watch.caughtUp;
+  await reviewedThenReported(watch, time);
+  // The engine slow: the box reads its messages as its turn ends, and its reply in time out.
+  const reads = holdReads();
+  const ending = watch(ended());
+  (await reads.next()).pass();
+  const slow = await reads.next();
+  reads.stop();
+  // Meanwhile another session's command ends: a finish still held is looked at again.
+  await watch(exited("sh_elsewhere", otherFolder));
+  const lookingAgain = time.pass(11 * SECONDS);
+  slow.fail();
+  await ending;
+  await lookingAgain;
+  await time.pass(5 * SECONDS);
+  await time.pass(60 * SECONDS);
+  assert.equal(finished().length, 1, "its lead woken once");
+  assert.match(finished()[0], /The import file is written/);
+  // Told something new, it finishes again: told again.
+  asked("Also check #444.");
+  said(long("#444 appears nowhere."));
+  await watch(ended());
+  await time.pass(5 * SECONDS);
+  assert.equal(finished().length, 2);
+  assert.match(finished()[1], /#444 appears nowhere/);
+});
+
+test("a finish heard twice while the engine can't read it at all wakes its lead once", async () => {
+  const time = clock();
+  const watch = watcher(time);
+  await watch.caughtUp;
+  await reviewedThenReported(watch, time);
+  const reads = holdReads();
+  const ending = watch(ended());
+  (await reads.next()).pass();
+  const slow = await reads.next();
+  // Looked at again meanwhile, and none of its reads answered in time.
+  await watch(exited("sh_elsewhere", otherFolder));
+  const lookingAgain = time.pass(11 * SECONDS);
+  reads.failAll();
+  slow.fail();
+  await ending;
+  await lookingAgain;
+  await time.pass(5 * SECONDS);
+  await time.pass(60 * SECONDS);
+  assert.equal(finished().length, 1, "its lead woken once");
+  // Told something new, it finishes again, its reply still unread in time: told again.
+  asked("Also check #444.");
+  said(long("#444 appears nowhere."));
+  await watch(ended());
+  await time.pass(5 * SECONDS);
+  reads.stop();
+  assert.equal(finished().length, 2);
+});
+
+test("a finish whose delivery took but whose answer was lost is sent again under its own id: its lead hears it once", async () => {
+  const time = clock();
+  const watch = watcher(time);
+  await watch.caughtUp;
+  asked();
+  said("Tests pass.");
+  state.lostAnswers = 1;
+  await watch(ended());
+  await time.pass(5 * SECONDS);
+  await time.pass(10 * SECONDS);
+  await time.pass(20 * SECONDS);
+  assert.equal(finished().length, 1, "once, though the box sent it again");
+  assert.equal(state.lostAnswers, 0);
+  // What came meanwhile isn't lost to that: it goes on its own.
+  state.sessions.ses_docs = work("ses_docs", "Docs");
+  state.messages.ses_docs = [];
+  asked("Write the docs.", "ses_docs");
+  said("Docs written.", "ses_docs");
+  asked("Run them again.");
+  said("Tests pass again.");
+  state.lostAnswers = 1;
+  await watch(ended());
+  await time.pass(5 * SECONDS);
+  await watch(ended("ses_docs"));
+  await time.pass(10 * SECONDS);
+  await time.pass(20 * SECONDS);
+  await time.pass(40 * SECONDS);
+  assert.deepEqual(finished().map(line => /^\[Session finished\] "([^"]+)"/.exec(line)[1]), ["Tests", "Tests", "Docs"]);
+  assert.match(finished()[1], /Tests pass again/);
+});

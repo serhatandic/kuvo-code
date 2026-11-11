@@ -12,8 +12,8 @@ private let log = Logger(subsystem: "run.kuvo.code", category: "box")
 /// folder and goes when the app does. It finds the engine and the agents bridge as a machine's
 /// box does, by their records in `box/run`, which this writes as they start and stop.
 ///
-/// Areas move onto it one at a time: PhoneLink forwards a moved area's routes here
-/// (`PhoneLink.boxRoutes`), and the app's own stores reach them through `BoxClient`.
+/// It answers every route but this Mac's own (`PhoneLink.appRoutes`): PhoneLink forwards the rest
+/// here, and the app's own stores reach them through `BoxClient`.
 @MainActor @Observable
 final class BoxProcess {
     /// Where the box keeps what it has: its `KUVO_HOME`.
@@ -91,6 +91,9 @@ final class BoxProcess {
         env["BUN_RUNTIME_TRANSPILER_CACHE_PATH"] = "0"
         env["KUVO_HOME"] = home.path
         env["OPENCODE_CONFIG_CONTENT"] = content
+        // Its folder is made first: before the box's first start there is none, and a program can't
+        // start in a folder that isn't there (the settings would go unasked, with no word of why).
+        try? FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
         // In its folder, as the box starts. Its end from `ChildProcess`, which never misses it, nor
         // waits on something it left running that holds its output open.
         guard let result = try? await ChildProcess.run(engine.path, ["run", "--config=/dev/null", "--no-env-file", script.path, "engine-config"],
@@ -177,6 +180,13 @@ final class BoxProcess {
         env["KUVO_HOME"] = Self.home.path
         // A Mac's box: its bots are this Mac's own, made with the kit the app gives it.
         env["KUVO_BOX"] = "mac"
+        // What it says of this Mac with the app closed too (`kuvo/info`): the app's version, and
+        // the engine's it brings.
+        env["KUVO_APP_VERSION"] = AppInfo.version
+        env["KUVO_ENGINE_VERSION"] = OpenCodeEngine.version
+        // This Mac's chats, where a session a bot starts from its own folder goes, and which a phone
+        // lists as Chats.
+        env["KUVO_CHATS"] = Workspace.chatsFolder
         // The engine's settings folder, where it reads its settings and the skills you add (a machine's box finds its
         // engine's in its own folder): this Mac's settings and skills stay where they've always been. And
         // where the engine reads the keys you keep in the Keychain, which its settings name.

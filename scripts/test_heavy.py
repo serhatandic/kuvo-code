@@ -1,15 +1,19 @@
 """scripts/heavy.sh: jobs of different kinds run together, two of one kind queue (two phone jobs that
 handle slots run at once, each with a simulator of its own, and two mac-build jobs, each with a build
-folder of its own, beside the app suite's mac), a job started the
-old way (under the one lock for every kind) holds up every kind, and a busy Mac holds a job back.
+folder of its own, beside the app suite's mac; the phone's builds, phone-build, take mac-build's slots), a job started the
+old way (under the one lock for every kind) holds up every kind, a busy Mac holds a job back, and jobs
+waiting for a lane go in line, high-priority ones first, however many come at once.
 Each test has locks of its own (KUVO_HEAVY_DIR), and asks with KUVO_HEAVY_WAIT=0, which says what a
 job would wait for instead of waiting."""
+import atexit
 import os
+import pty
 import select
 import shlex
 import shutil
 import signal
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -22,7 +26,45 @@ WAITS = 75
 def clean_environment():
     """The environment of the run without what a job of heavy.sh leaves in it (a test run from inside
     one would otherwise see that job's turn and slot)."""
-    return {k: v for k, v in os.environ.items() if k not in ("KUVO_HEAVY_SLOTS", "KUVO_HEAVY_HELD", "KUVO_HEAVY_HOLDING", "KUVO_HEAVY_SLOT", "KUVO_HEAVY_BUILD_SUFFIX", "KUVO_TEST_SIMULATOR", "KUVO_HEAVY_WAIT", "KUVO_HEAVY_LIMIT", "KUVO_HEAVY_MAC_FIRST_FOR", "KUVO_HEAVY_MEMORY", "KUVO_HEAVY_MEMORY_WAIT_FOR")}
+    return {k: v for k, v in os.environ.items() if k not in ("KUVO_HEAVY_SLOTS", "KUVO_HEAVY_HELD", "KUVO_HEAVY_HOLDING", "KUVO_HEAVY_SLOT", "KUVO_HEAVY_BUILD_SUFFIX", "KUVO_TEST_SIMULATOR", "KUVO_HEAVY_WAIT", "KUVO_HEAVY_LIMIT", "KUVO_HEAVY_MAC_FIRST_FOR", "KUVO_HEAVY_MEMORY", "KUVO_HEAVY_MEMORY_WAIT_FOR", "KUVO_HEAVY_PRIORITY")}
+
+
+# Prints what the priority of the process it runs in is: on macOS 1 for the background policy
+# (`taskpolicy -b`: getpriority's PRIO_DARWIN_PROCESS), 0 for the default; elsewhere its nice value.
+PRIORITY_PROBE = """import os, sys
+if sys.platform == "darwin":
+    import ctypes
+    print(ctypes.CDLL(None).getpriority(4, 0))
+else:
+    print(os.getpriority(os.PRIO_PROCESS, 0))
+"""
+PROBE = ["/bin/sh", "-c", 'exec "$0" -S -c "$1"', sys.executable, PRIORITY_PROBE]  # in a child of the job's shell
+
+
+def is_low(printed):
+    """Whether what the probe printed is background priority."""
+    value = int(printed.strip().splitlines()[-1])
+    return value == 1 if sys.platform == "darwin" else value >= 15
+
+
+_STAND_IN = None
+
+
+def without_background_priority(env):
+    """`env` with a `taskpolicy` first on PATH that runs the command as it is (and, with FAKE_POLICY_LOG
+    set, writes the option it was given there). Jobs run at background priority, which on a Mac under
+    heavy load can take minutes for what a test starts in a second: the tests that aren't about the
+    policy run the helper's jobs as they are, and the tests of it look at what `taskpolicy` is asked,
+    and, once, at the real policy."""
+    global _STAND_IN
+    if _STAND_IN is None:
+        _STAND_IN = tempfile.mkdtemp()
+        atexit.register(shutil.rmtree, _STAND_IN, ignore_errors=True)
+        path = os.path.join(_STAND_IN, "taskpolicy")
+        with open(path, "w") as f:
+            f.write('#!/bin/sh\n[ -z "${FAKE_POLICY_LOG-}" ] || echo "$1" >> "$FAKE_POLICY_LOG"\n[ "$1" = -b ] && shift\nexec "$@"\n')
+        os.chmod(path, 0o755)
+    return dict(env, PATH=_STAND_IN + os.pathsep + env["PATH"])
 
 
 class Held:
@@ -50,7 +92,7 @@ class HeavyTests(unittest.TestCase):
     def setUp(self):
         self.locks = tempfile.mkdtemp()
         # As from the 29th, when the old single lock is over (the day before, test_the_day_before).
-        self.env = dict(clean_environment(), KUVO_HEAVY_DIR=self.locks, KUVO_HEAVY_LOAD="1000", KUVO_HEAVY_MEMORY="0", KUVO_HEAVY_OLD_UNTIL="20000101")
+        self.env = without_background_priority(dict(clean_environment(), KUVO_HEAVY_DIR=self.locks, KUVO_HEAVY_LOAD="1000", KUVO_HEAVY_MEMORY="0", KUVO_HEAVY_OLD_UNTIL="20000101"))
 
     def run_heavy(self, kind, *command, **env):
         result = subprocess.run([HEAVY, kind, *command], env=dict(self.env, KUVO_HEAVY_WAIT="0", **env), capture_output=True, text=True, timeout=30)
@@ -78,6 +120,239 @@ class HeavyTests(unittest.TestCase):
             first.let_go()
         out, _ = second.communicate(timeout=30)
         self.assertEqual((second.returncode, out), (7, "ran\n"))
+
+    def queued(self, kind, command, **env):
+        """A job that waits in line: started, once it says it waits. Stopped with its session at the
+        end of the test if it's still there."""
+        job = subprocess.Popen([HEAVY, kind, *command], env=dict(self.env, **env), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
+        def stop():
+            if job.poll() is None:
+                os.killpg(job.pid, signal.SIGKILL)
+            job.wait(timeout=30)
+            job.stdout.close()
+            job.stderr.close()
+        self.addCleanup(stop)
+        self.said_waiting(job, kind)
+        return job
+
+    def said_waiting(self, job, kind):
+        self.assertTrue(select.select([job.stderr], [], [], 30)[0], "it said nothing")
+        self.assertIn(f"Waiting for another {kind} job", job.stderr.readline())
+
+    def queue(self, kind="box"):
+        folder = os.path.join(self.locks, f"kuvo-code-heavy-{kind}-{os.getuid()}.queue")
+        os.makedirs(folder, exist_ok=True)
+        return folder
+
+    def test_a_high_priority_job_goes_before_the_normal_ones_waiting_and_each_priority_keeps_its_order(self):
+        first = Held([HEAVY, "box"], self.env)
+        output = os.path.join(self.locks, "order")
+        jobs = []
+        try:
+            for name, priority in (("normal1", "normal"), ("high1", "high"), ("normal2", "normal"), ("high2", "high")):
+                jobs.append(self.queued("box", ["/bin/sh", "-c", f"echo {name} >> '{output}'"], KUVO_HEAVY_PRIORITY=priority))
+        finally:
+            first.let_go()
+        for job in jobs:
+            self.assertEqual(job.wait(timeout=30), 0)
+        with open(output) as f:
+            self.assertEqual(f.read().splitlines(), ["high1", "high2", "normal1", "normal2"])
+
+    def test_a_high_priority_job_never_stops_one_running(self):
+        first = Held([HEAVY, "box"], self.env)
+        try:
+            high = self.queued("box", ["true"], KUVO_HEAVY_PRIORITY="high")
+            self.assertIsNone(first.process.poll(), "the running job was stopped")
+            self.assertIsNone(high.poll(), "it ran beside the running job")
+        finally:
+            first.let_go()
+        self.assertEqual(first.process.returncode, 0)
+        self.assertEqual(high.wait(timeout=30), 0)
+
+    def test_a_priority_that_isnt_one_is_refused(self):
+        code, said = self.run_heavy("box", "true", KUVO_HEAVY_PRIORITY="urgent")
+        self.assertEqual(code, 64)
+        self.assertIn("KUVO_HEAVY_PRIORITY is high or normal", said)
+
+    def test_jobs_that_come_at_once_while_the_lane_is_held_go_in_turn_high_ones_first(self):
+        """Many jobs arriving together: each waits in line, none slips in beside another, and the
+        high ones go first, whatever order they came in."""
+        first = Held([HEAVY, "box"], self.env)
+        output = os.path.join(self.locks, "order")
+        script = f'echo "start $1" >> "{output}"; sleep 0.2; echo "end $1" >> "{output}"'
+        names = [("normal", f"n{i}") for i in range(6)] + [("high", f"h{i}") for i in range(2)]
+        jobs = []
+        try:
+            for priority, name in names:  # all started before any says it waits
+                job = subprocess.Popen([HEAVY, "box", "/bin/sh", "-c", script, "sh", name], env=dict(self.env, KUVO_HEAVY_PRIORITY=priority), stdin=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, start_new_session=True)
+                self.addCleanup(lambda job=job: (job.poll() is None and os.killpg(job.pid, signal.SIGKILL), job.wait(timeout=30), job.stderr.close()))
+                jobs.append(job)
+            for job in jobs:
+                self.said_waiting(job, "box")
+        finally:
+            first.let_go()
+        for job in jobs:
+            self.assertEqual(job.wait(timeout=60), 0)
+        with open(output) as f:
+            lines = f.read().splitlines()
+        ran = [line.split()[1] for line in lines[::2]]
+        self.assertEqual(lines, [f"{what} {name}" for name in ran for what in ("start", "end")], "two ran at once")
+        self.assertEqual(sorted(ran[:2]), ["h0", "h1"])
+        self.assertEqual(sorted(ran[2:]), [f"n{i}" for i in range(6)])
+
+    def at_once(self, kind, count, command, **env):
+        """`count` jobs told not to wait, started together. Their answers, each within 15 seconds."""
+        jobs = [subprocess.Popen([HEAVY, kind, *command], env=dict(self.env, KUVO_HEAVY_WAIT="0", **env), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True) for _ in range(count)]
+        for job in jobs:
+            self.addCleanup(lambda job=job: (job.poll() is None and os.killpg(job.pid, signal.SIGKILL), job.wait(timeout=30), job.stdout.close(), job.stderr.close()))
+        return jobs
+
+    def test_jobs_told_not_to_wait_that_come_at_once_never_wait_and_take_each_slot_once(self):
+        """The race between looking at a slot and taking it: of many jobs that find a slot free at
+        the same moment, one gets it, and the others say so at once (none waits for it, nor runs
+        after it). The winners hold their slots until every other has answered."""
+        for kind, slots, env in (("box", 1, {}), ("phone", 2, {"KUVO_HEAVY_SLOTS": "2"}), ("mac-build", 2, {})):
+            for attempt in range(3):
+                with self.subTest(kind=kind, attempt=attempt):
+                    done = os.path.join(self.locks, f"done-{kind}-{attempt}")
+                    # (box has one slot, and no KUVO_HEAVY_SLOT.)
+                    hold = f'echo "${{KUVO_HEAVY_SLOT:-1}}"; while [ ! -f "{done}" ]; do sleep 0.05; done'
+                    jobs = self.at_once(kind, 10, ["/bin/sh", "-c", hold], **env)
+                    winners, answers = [], []
+                    try:
+                        deadline = time.monotonic() + 15
+                        for job in jobs:
+                            ready = select.select([job.stdout], [], [], max(0, deadline - time.monotonic()))[0]
+                            self.assertTrue(ready, "a job neither ran nor said it would wait")
+                            line = job.stdout.readline()
+                            if line:
+                                winners.append((job, line.strip()))
+                            else:
+                                answers.append(job.wait(timeout=15))
+                        self.assertEqual(answers, [WAITS] * (10 - slots))
+                        self.assertEqual(sorted(slot for _, slot in winners), [str(n + 1) for n in range(slots)])
+                    finally:
+                        with open(done, "w"):
+                            pass
+                    for job, _ in winners:
+                        self.assertEqual(job.wait(timeout=30), 0)
+
+    def test_told_not_to_wait_it_never_waits_while_others_wait_in_line(self):
+        first = Held([HEAVY, "box"], self.env)
+        try:
+            self.queued("box", ["true"])
+            self.queued("box", ["true"], KUVO_HEAVY_PRIORITY="high")
+            for priority in ("normal", "high"):
+                with self.subTest(priority):
+                    started = time.monotonic()
+                    code, said = self.run_heavy("box", "true", KUVO_HEAVY_PRIORITY=priority)
+                    self.assertEqual(code, WAITS)
+                    self.assertIn("Another box job is running", said)
+                    self.assertLess(time.monotonic() - started, 5)
+        finally:
+            first.let_go()
+
+    def in_line(self, name, seen=None, kind="box"):
+        """An entry in the lane's queue, as a job waiting in line has (seen: when it last looked)."""
+        path = os.path.join(self.queue(kind), name)
+        with open(path, "w") as f:
+            f.write(f"{int(time.time()) if seen is None else seen}\n")
+        return path
+
+    def test_with_its_slot_free_a_job_told_not_to_wait_still_keeps_its_place_in_line(self):
+        """A job in line that hasn't taken the free slot yet (it looks once a second; here, one that
+        never looks) is before a normal job told not to wait, which says so, and after a high one,
+        which goes. One whose process is gone holds no one up."""
+        waiting = self.in_line(f"1-000000000000-{os.getpid()}-1")
+        code, said = self.run_heavy("box", "true")
+        self.assertEqual(code, WAITS)
+        self.assertIn("Another box job is waiting for its turn ahead of this one", said)
+        self.assertEqual(self.run_heavy("box", "true", KUVO_HEAVY_PRIORITY="high")[0], 0)
+        gone = subprocess.Popen(["true"])
+        gone.wait()
+        os.rename(waiting, os.path.join(self.queue(), f"0-000000000000-{gone.pid}-1"))
+        self.assertEqual(self.run_heavy("box", "true"), (0, ""))
+        self.assertEqual(sorted(name for name in os.listdir(self.queue()) if name[0] in "01"), [], "it left an entry in line")
+
+    def test_a_job_that_hasnt_looked_for_a_while_holds_no_one_up(self):
+        """Stopped, or its pid now another process's (here, this test's): it leaves the line."""
+        self.in_line(f"0-000000000000-{os.getpid()}-1", seen=int(time.time()) - 120)
+        self.assertEqual(self.run_heavy("box", "true"), (0, ""))
+        # One that never said when (cut short as it did) neither.
+        open(os.path.join(self.queue(), f"0-000000000001-{os.getpid()}-1"), "w").close()
+        self.assertEqual(self.run_heavy("box", "true"), (0, ""))
+
+    def test_a_new_job_goes_after_those_in_line_whatever_became_of_the_last_number(self):
+        self.in_line(f"1-000000000005-{os.getpid()}-1")
+        open(os.path.join(self.queue(), "sequence"), "w").close()  # cut short as it was written
+        code, said = self.run_heavy("box", "true")
+        self.assertEqual(code, WAITS)
+        self.assertIn("waiting for its turn ahead of this one", said)
+
+    def test_a_job_in_a_sandbox_that_cant_signal_others_keeps_them_in_line(self):
+        """Some sandboxes refuse to signal a process outside them: it still runs, and its job stays
+        in line before this one."""
+        if not shutil.which("sandbox-exec"):
+            self.skipTest("no sandbox-exec")
+        other = subprocess.Popen(["sleep", "60"])
+        self.addCleanup(lambda: (other.kill(), other.wait()))
+        self.in_line(f"1-000000000000-{other.pid}-1")
+        profile = "(version 1)(allow default)(deny signal)(allow signal (target same-sandbox))"
+        result = subprocess.run(["sandbox-exec", "-p", profile, HEAVY, "box", "true"], env=dict(self.env, KUVO_HEAVY_WAIT="0"), capture_output=True, text=True, timeout=30)
+        if "Operation not permitted" in result.stderr and "sandbox" in result.stderr:
+            self.skipTest("sandbox-exec isn't allowed here")
+        self.assertEqual(result.returncode, WAITS, result.stderr)
+        self.assertIn("waiting for its turn ahead of this one", result.stderr)
+
+    def test_the_time_limit_counts_from_when_the_job_gets_its_slot(self):
+        """It waits in line longer than its limit and isn't stopped for it: its limit starts when it
+        starts, and then it is stopped on time."""
+        first = Held([HEAVY, "box"], self.env)
+        try:
+            job = self.queued("box", ["sleep", "30"], KUVO_HEAVY_LIMIT="3s")
+            time.sleep(4)
+            self.assertIsNone(job.poll(), "it was stopped while it waited")
+        finally:
+            first.let_go()
+        started = time.monotonic()
+        self.assertEqual(job.wait(timeout=30), 124)
+        self.assertGreater(time.monotonic() - started, 2.5, "its limit counted while it waited")
+        self.assertIn("ran past its time limit (3s)", job.stderr.read())
+
+    def test_two_phone_jobs_waiting_in_line_take_both_slots_at_once(self):
+        env = self.phone_slots()
+        one, two = Held([HEAVY, "phone"], env), Held([HEAVY, "phone"], env)
+        seen = os.path.join(self.locks, "seen")
+        # Each says its slot and runs until both have: only together do both finish.
+        meet = f'echo "$KUVO_HEAVY_SLOT" >> "{seen}"; n=0; while [ "$(wc -l < "{seen}")" -lt 2 ]; do n=$((n + 1)); [ $n -lt 300 ] || exit 3; sleep 0.05; done'
+        try:
+            jobs = [self.queued("phone", ["/bin/sh", "-c", meet], KUVO_HEAVY_SLOTS="2") for _ in range(2)]
+        finally:
+            two.let_go()
+            one.let_go()
+        self.assertEqual([job.wait(timeout=30) for job in jobs], [0, 0])
+        with open(seen) as f:
+            self.assertEqual(sorted(f.read().split()), ["1", "2"])
+
+    def test_a_phone_job_waiting_for_slot_one_doesnt_hold_up_one_behind_it_that_takes_slot_two(self):
+        env = self.phone_slots()
+        one, two = Held([HEAVY, "phone"], env), Held([HEAVY, "phone"], env)
+        say = ["/bin/sh", "-c", 'echo "$KUVO_TEST_SIMULATOR"']
+        try:
+            only_one = self.queued("phone", say)  # a caller that doesn't handle slots: slot 1 only
+            either = self.queued("phone", say, KUVO_HEAVY_SLOTS="2")
+            two.let_go()
+            out, _ = either.communicate(timeout=30)
+            self.assertEqual((either.returncode, out), (0, "Kuvo Code Tests 2\n"))
+            self.assertIsNone(only_one.poll(), "it took slot 2")
+            # Slot 2 free, while one waits for slot 1: a job told not to wait that may take either
+            # goes, one that may take only slot 1 says it would wait.
+            self.assertEqual(self.run_heavy("phone", "true", KUVO_HEAVY_SLOTS="2")[0], 0)
+            self.assertEqual(self.run_heavy("phone", "true")[0], WAITS)
+        finally:
+            one.let_go()
+        self.assertEqual(only_one.wait(timeout=30), 0)
+        self.assertEqual(only_one.stdout.read(), "Kuvo Code Tests\n")
 
     def test_a_job_inside_its_kinds_job_runs_at_once(self):
         nested = f'KUVO_HEAVY_WAIT=0 "{HEAVY}" mac true'
@@ -291,6 +566,53 @@ class HeavyTests(unittest.TestCase):
         finally:
             build.let_go()
 
+    def test_a_phone_build_does_not_wait_on_held_phone_slots_and_takes_a_build_lane_slot(self):
+        env = self.phone_slots()
+        one, two = Held([HEAVY, "phone"], env), Held([HEAVY, "phone"], env)
+        try:
+            self.assertEqual((one.seen, two.seen), ("Kuvo Code Tests|1|", "Kuvo Code Tests 2|2|-2"))
+            # Both phone slots are held, and another phone test run would wait.
+            self.assertEqual(self.run_heavy("phone", "true", KUVO_HEAVY_SLOTS="2")[0], WAITS)
+            self.assertEqual(self.run_heavy("phone-build", "true")[0], 0)
+            # It's in the build lane's slot, with no simulator, and a suffix that isn't the phone's.
+            build = Held([HEAVY, "phone-build"], self.env)
+            try:
+                self.assertEqual(build.seen, "|1|-1")
+            finally:
+                build.let_go()
+        finally:
+            two.let_go()
+            one.let_go()
+
+    def test_a_phone_build_waits_on_a_full_build_lane_and_shares_it_with_mac_builds(self):
+        first, second = Held([HEAVY, "phone-build"], self.env), Held([HEAVY, "mac-build"], self.env)
+        try:
+            self.assertEqual((first.seen, second.seen), ("|1|-1", "|2|-2"))
+            for kind in ("phone-build", "mac-build"):
+                code, said = self.run_heavy(kind, "true")
+                self.assertEqual(code, WAITS)
+                self.assertIn("Another mac-build job is running", said)
+            # The phone's test runs and the app suite aren't held up by the full lane.
+            self.assertEqual(self.run_heavy("phone", "true")[0], 0)
+            self.assertEqual(self.run_heavy("mac", "true")[0], 0)
+        finally:
+            second.let_go()
+            first.let_go()
+        self.assertEqual(self.run_heavy("phone-build", "true")[0], 0)
+
+    def test_a_phone_build_runs_beside_the_app_suite_and_one_inside_a_build_job_runs_at_once(self):
+        suite = Held([HEAVY, "mac"], self.env)
+        try:
+            self.assertEqual(self.run_heavy("phone-build", "true")[0], 0)
+        finally:
+            suite.let_go()
+        nested = f'KUVO_HEAVY_WAIT=0 "{HEAVY}" phone-build /bin/sh -c \'echo "$KUVO_HEAVY_SLOT$KUVO_HEAVY_BUILD_SUFFIX"\''
+        result = subprocess.run([HEAVY, "phone-build", "/bin/sh", "-c", nested], env=self.env, capture_output=True, text=True, timeout=30)
+        self.assertEqual((result.returncode, result.stdout), (0, "1-1\n"))
+        self.assertEqual(subprocess.run([HEAVY, "--holds", "phone-build", "true"], env=self.env).returncode, 1)
+        held = f'"{HEAVY}" --holds phone-build'
+        self.assertEqual(subprocess.run([HEAVY, "mac-build", "/bin/sh", "-c", held], env=self.env).returncode, 0)
+
     def test_a_job_that_still_says_mac_for_a_build_does_not_block_mac_build_and_still_excludes_mac(self):
         """What an older script does, under the one mac lock as before: no mac-build slot is theirs."""
         old = Held(["lockf", "-k", self.lock("mac")], self.env)
@@ -395,7 +717,7 @@ class HeavyTests(unittest.TestCase):
         with open(stand_in, "w") as f:
             f.write("#!/bin/sh\nexit 1\n")
         os.chmod(stand_in, 0o755)
-        return dict(self.env, PATH=folder + os.pathsep + os.environ["PATH"])
+        return dict(self.env, PATH=folder + os.pathsep + self.env["PATH"])
 
     def test_without_ps_a_job_runs_and_still_knows_it_holds_its_turn(self):
         env = self.refused_ps()
@@ -428,6 +750,108 @@ class HeavyTests(unittest.TestCase):
         self.assertEqual(code, WAITS)
         self.assertIn("The Mac is busy", said)
         self.assertEqual(self.run_heavy("box", "true", KUVO_HEAVY_LOAD="1000")[0], 0)
+
+    def test_unless_asked_a_job_waits_for_neither_the_load_nor_a_share_of_memory(self):
+        """Background priority keeps the Mac usable: by default only thrashing holds a job back (a
+        swap rate it can't reach here, and pressure that isn't critical)."""
+        level = subprocess.run(["sysctl", "-n", "kern.memorystatus_vm_pressure_level"], capture_output=True, text=True).stdout.strip()
+        if level == "4":
+            self.skipTest("this Mac's memory pressure is critical")
+        env = {k: v for k, v in self.env.items() if k not in ("KUVO_HEAVY_LOAD", "KUVO_HEAVY_MEMORY")}
+        result = subprocess.run([HEAVY, "box", "true"], env=dict(env, KUVO_HEAVY_WAIT="0", KUVO_HEAVY_SWAP="999999"), capture_output=True, text=True, timeout=30)
+        self.assertEqual((result.returncode, result.stderr), (0, ""))
+
+    def test_a_job_waiting_for_room_holds_up_no_one_in_its_lane(self):
+        """It waits before it takes its turn: another job of its kind gets the lane meanwhile."""
+        waiting = subprocess.Popen([HEAVY, "box", "true"], env=dict(self.env, KUVO_HEAVY_LOAD="-1"), stderr=subprocess.PIPE, text=True, start_new_session=True)
+        try:
+            self.assertTrue(select.select([waiting.stderr], [], [], 30)[0], "it said nothing")
+            self.assertIn("Waiting while the Mac is busy", waiting.stderr.readline())
+            self.assertFalse(subprocess.run(["lockf", "-ks", "-t", "0", self.lock("box"), "true"]).returncode, "it holds the box lane's lock")
+            self.assertEqual(self.run_heavy("box", "true"), (0, ""))
+            self.assertIsNone(waiting.poll(), "it started")
+        finally:
+            os.killpg(waiting.pid, signal.SIGKILL)
+            waiting.wait(timeout=30)
+            waiting.stderr.close()
+
+    def test_the_app_suite_holds_other_jobs_back_for_two_minutes_at_most_unless_told(self):
+        marker = os.path.join(self.locks, f"kuvo-code-heavy-mac-first-{os.getuid()}")
+        env = {k: v for k, v in self.env.items() if k != "KUVO_HEAVY_MAC_FIRST_FOR"}
+        for ago, waits in ((60, True), (150, False)):
+            with self.subTest(ago=ago):
+                with open(marker, "w") as f:
+                    f.write(f"{os.getpid()} {int(time.time()) - ago}\n")
+                result = subprocess.run([HEAVY, "box", "true"], env=dict(env, KUVO_HEAVY_WAIT="0"), capture_output=True, text=True, timeout=30)
+                self.assertEqual(result.returncode, WAITS if waits else 0, result.stderr)
+
+    def test_a_job_is_started_under_background_priority_in_every_way_it_starts(self):
+        """Whatever way a job starts, its command is run by `taskpolicy -b` (macOS): a stand-in logs what
+        it's asked. (Elsewhere, nice and ionice, which the test of the real policy sees.)"""
+        if sys.platform != "darwin":
+            self.skipTest("taskpolicy is macOS's")
+        log = os.path.join(self.locks, "policy")
+        env = dict(self.env, FAKE_POLICY_LOG=log, KUVO_HEAVY_WAIT="0")
+        def policies(*command, **more):
+            if os.path.exists(log):
+                os.remove(log)
+            result = subprocess.run(command, env=dict(env, **more), capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL, start_new_session=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            with open(log) as f:
+                return f.read().split()
+        with self.subTest("a job"):
+            self.assertEqual(policies(HEAVY, "box", "true"), ["-b"])
+        with self.subTest("each kind"):
+            for kind in ("mac", "mac-build", "phone-build", "phone"):
+                self.assertEqual(policies(HEAVY, kind, "true"), ["-b"], kind)
+        with self.subTest("inside another job"):
+            self.assertEqual(policies(HEAVY, "box", HEAVY, "box", "true"), ["-b", "-b"])
+            self.assertEqual(policies(HEAVY, "box", HEAVY, "phone", "true"), ["-b", "-b"])
+        with self.subTest("the old way (the single lock)"):
+            self.assertEqual(policies(HEAVY, "box", "true", KUVO_HEAVY_OLD_UNTIL="20991231"), ["-b"])
+        with self.subTest("under a lock of an older script"):
+            self.assertEqual(policies("lockf", "-k", self.old_lock("box"), HEAVY, "box", "true"), ["-b"])
+        with self.subTest("in a terminal"):
+            if os.path.exists(log):
+                os.remove(log)
+            pid, fd = pty.fork()
+            if pid == 0:
+                try:
+                    os.execve(HEAVY, [HEAVY, "box", "true"], env)
+                finally:
+                    os._exit(127)
+            try:
+                while select.select([fd], [], [], 60)[0]:
+                    try:
+                        if not os.read(fd, 4096):
+                            break
+                    except OSError:  # the terminal's end: the job is over
+                        break
+                _, status = os.waitpid(pid, 0)
+            finally:
+                os.close(fd)
+            self.assertEqual(os.waitstatus_to_exitcode(status), 0)
+            with open(log) as f:
+                self.assertEqual(f.read().split(), ["-b"])
+
+    def test_a_job_runs_at_background_priority_for_real(self):
+        """The policy the job's own children see (the real `taskpolicy`, or nice), not a process started
+        by hand, which is at the default. A background job gets almost no CPU on a Mac that's very
+        busy: if it hasn't run in two minutes, the test can't say."""
+        baseline = subprocess.run(PROBE, capture_output=True, text=True, timeout=120).stdout
+        if is_low(baseline):  # run under heavy.sh itself, say
+            self.skipTest("this test run is at background priority already")
+        env = dict(self.env, PATH=os.environ["PATH"], KUVO_HEAVY_WAIT="0")
+        try:
+            result = subprocess.run([HEAVY, "box", *PROBE], env=env, capture_output=True, text=True, timeout=120, stdin=subprocess.DEVNULL, start_new_session=True)
+        except subprocess.TimeoutExpired:
+            self.skipTest("the Mac is too busy for a job at background priority to run")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(is_low(result.stdout), result.stdout)
+
+    def test_a_job_that_fails_keeps_its_answer_under_the_lower_priority(self):
+        result = subprocess.run([HEAVY, "box", "/bin/sh", "-c", 'echo "$1"; exit 3', "sh", "a b"], env=self.env, capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL, start_new_session=True)
+        self.assertEqual((result.returncode, result.stdout), (3, "a b\n"))
 
     def waiting_mac(self, **env):
         """A Mac app suite that has its turn and waits for the Mac to be less busy (to it, the Mac is
@@ -575,7 +999,7 @@ class StoppingTests(unittest.TestCase):
     def setUp(self):
         self.locks = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.locks, ignore_errors=True)
-        self.env = dict(clean_environment(), KUVO_HEAVY_DIR=self.locks, KUVO_HEAVY_LOAD="1000", KUVO_HEAVY_MEMORY="0", KUVO_HEAVY_OLD_UNTIL="20000101", KUVO_HEAVY_WAIT="0")
+        self.env = without_background_priority(dict(clean_environment(), KUVO_HEAVY_DIR=self.locks, KUVO_HEAVY_LOAD="1000", KUVO_HEAVY_MEMORY="0", KUVO_HEAVY_OLD_UNTIL="20000101", KUVO_HEAVY_WAIT="0"))
         self.pids = []
 
     def tearDown(self):

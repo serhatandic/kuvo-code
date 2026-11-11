@@ -136,6 +136,7 @@ struct SidebarView: View {
                 }
                 .scrollIndicators(.never)
                 .fadingScrollEdges()
+                .onScrollPhaseChange { _, phase in if phase != .idle { GlanceCardPanel.shared.hide() } }
             } else {
                 BoxPager(boxes: boxes, selected: boxBinding, motion: boxMotion) { box in
                     ScrollView {
@@ -149,6 +150,8 @@ struct SidebarView: View {
                     }
                     .scrollIndicators(.never)
                     .fadingScrollEdges()
+                    // A row's card goes as the list moves under it.
+                    .onScrollPhaseChange { _, phase in if phase != .idle { GlanceCardPanel.shared.hide() } }
                 }
             }
 
@@ -960,7 +963,7 @@ struct SidebarView: View {
                                   isEditing: renaming == RenameTarget(id: session.id, place: place),
                                   branches: branches, folded: folded, branchInset: branchInset, isUnfolded: isUnfolded(session.id), isSearching: !search.isEmpty,
                                   isUnread: session.isUnread || workspace.hasNewSubSessions(session.id),
-                                  origin: branchInset == nil ? "" : Self.origin(of: session, in: workspace))
+                                  origin: branchInset == nil ? "" : Self.origin(of: session, in: workspace), acrossComputers: !search.isEmpty && boxes.count > 1)
         return StillRow(look: look) { sessionRowContent(look) }.equatable()
     }
 
@@ -983,11 +986,14 @@ struct SidebarView: View {
         let isUnread: Bool
         /// Where a branch came from, for VoiceOver (from the list too).
         let origin: String
+        /// More than one computer, which search results span.
+        var acrossComputers = false
     }
 
     private func sessionRowContent(_ look: SessionRowLook) -> some View {
         let session = look.session, place = look.place, branches = look.branches, folded = look.folded
         return SidebarRow(isSelected: look.isHighlighted, indented: place == .project, branchInset: look.branchInset, isEditing: look.isEditing, action: {
+            GlanceCardPanel.shared.hide()
             pickedIn[session.id] = place
             selection = session.id
             // Its mark was one under it: shown, so that one's row has it.
@@ -1034,14 +1040,11 @@ struct SidebarView: View {
                         Image(systemName: "server.rack")
                             .sidebarFont(10)
                             .foregroundStyle(.tertiary)
-                            .help("On \(machine)")
+                            // (Its card names the computer.)
+                            .accessibilityLabel("On \(machine)")
                     }
-                    if let tree = workspace.worktrees[session.location.directory] {
-                        Image(systemName: "arrow.triangle.branch")
-                            .sidebarFont(11)
-                            .foregroundStyle(.tertiary)
-                            .help("Works in a worktree, on \(tree.branch)")
-                    }
+                    // Its pull request's mark, else its own branch's (its card says which).
+                    SessionRowMark(session: session)
                     if branches > 0 {
                         BranchesToggle(count: branches, isUnfolded: look.isUnfolded) { toggleBranches(of: session.id) }
                     }
@@ -1053,6 +1056,8 @@ struct SidebarView: View {
         }
         .contextMenu { menu(for: session, in: place) }
         .modifier(BranchesAction(count: branches, isUnfolded: look.isUnfolded) { toggleBranches(of: session.id) })
+        .modifier(SessionGlanceHover(session: session, row: "\(place)/\(session.id)", underItsProject: place == .project && !look.isSearching,
+                                     acrossComputers: look.isSearching && look.acrossComputers, isUnread: look.isUnread, folded: folded))
         .accessibilityHint(look.origin)
     }
 

@@ -8,6 +8,7 @@ import { accountsRoute, credentialsRoute } from "../areas/accounts";
 import { agentToolsRoute, startRoute } from "../areas/agent-tools";
 import { foundRoute } from "../areas/found";
 import { searchRoute } from "../areas/search";
+import { setupRoute } from "../areas/setup";
 import { changesRoute } from "../areas/changes";
 import { askAnswerRoute, asksRoute } from "../areas/asks";
 import { appNoticeRoute, attentionRoute } from "../areas/attention";
@@ -26,6 +27,7 @@ import { noticesRoute } from "../areas/notices";
 import { personalitiesDocumentRoute, personalityEventsRoute, personalityRoute } from "../areas/personalities";
 import { pairingRoute, phonesRemoveRoute, phonesRoute } from "../areas/phones";
 import { QUEUE_ROUTE, queueRoute } from "../areas/queue";
+import { GLANCE_ROUTE, glanceRoute } from "../areas/glance";
 import { WORK_QUEUE_ROUTE, workQueueRoute } from "../areas/work-queue";
 import { pluginSearchRoute } from "../areas/plugins";
 import { programsRoute } from "../areas/programs";
@@ -80,6 +82,7 @@ const ROUTES: (Route | Route<RegExpMatchArray>)[] = [
   { when: route => route === "kuvo/providers/models", answer: providerModelsRoute },
   { when: (route, request) => /^kuvo\/(skills|skill-library|skill-trash)(\/|\?|$)/.test(request.path), answer: skillsRoute },
   { when: (route, request) => /^kuvo\/(config|mcp\/catalog|keys)(\/|\?|$)/.test(request.path), answer: settingsRoute },
+  { when: route => route === "kuvo/setup" || route === "kuvo/setup/events", answer: setupRoute },
   { when: route => route === "kuvo/phones", answer: phonesRoute },
   { when: route => route === "kuvo/phones/remove", answer: phonesRemoveRoute },
   { when: route => route === "kuvo/phones/pair", answer: pairingRoute },
@@ -93,6 +96,8 @@ const ROUTES: (Route | Route<RegExpMatchArray>)[] = [
   { when: route => route === "kuvo/approval" || SESSION_APPROVAL_ROUTE.test(route) || SESSION_DECISIONS_ROUTE.test(route), answer: approvalRoute },
   { when: route => SESSION_AUTOPILOT_ROUTE.test(route), answer: autopilotRoute },
   { when: route => route.match(QUEUE_ROUTE), answer: queueRoute },
+  // A session at a glance: its row's and card's (PROTOCOL.md, "A session at a glance").
+  { when: route => route.match(GLANCE_ROUTE), answer: glanceRoute },
   // The Work Queue (PROTOCOL.md, "The Work Queue"), before a bot's work, whose routes it starts like.
   { when: route => route.match(WORK_QUEUE_ROUTE), answer: workQueueRoute },
   { when: route => route === "kuvo/search", answer: searchRoute },

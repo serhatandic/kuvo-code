@@ -131,6 +131,33 @@ import Testing
         #expect(later.decisions?.waiting.count == 1)
     }
 
+    /// A folder Auto allowed edits in for the session (#422) is listed, counted as the one edit that
+    /// allowed it, and Revoke takes it back on the box: each change there is judged again.
+    @Test func aFolderAutoAllowsEditsInIsListedAndRevokeTakesItBack() async throws {
+        let machine = try await lab()
+        defer { done(machine) }
+        let reviews = machine.folder.appending(path: "box/reviews")
+        try FileManager.default.createDirectory(at: reviews, withIntermediateDirectories: true)
+        let now = Date.now.timeIntervalSince1970 * 1000
+        let edit: [String: Any] = ["id": "d1", "at": now, "action": "Change /tmp/eval/T2/vault.test.js", "kind": "file", "decision": "allowed", "reason": "Part of the evaluation.", "by": "model"]
+        let place: [String: Any] = ["id": "d2", "at": now, "action": "Change /tmp/eval/T2", "kind": "file", "decision": "allowed", "reason": "Auto allowed edits in /tmp/eval/T2 for this session.", "by": "model", "place": "/tmp/eval/T2"]
+        let file = reviews.appending(path: "ses_one.json")
+        try JSONSerialization.data(withJSONObject: ["decisions": [edit, place], "refusedInRow": 0, "refused": 0, "places": ["/tmp/eval/T2"]]).write(to: file)
+
+        let model = try conversation(on: machine)
+        model.readDecisions()
+        try await until { model.decisions != nil }
+        #expect(model.decisions?.counts == .init(edits: 1))
+        let allowed = try #require(model.decisions?.decisions.first { $0.place != nil })
+        #expect(allowed.revocable)
+
+        model.revokePlace(allowed)
+        try await until { model.decisions?.decisions.first { $0.key == "d2" }?.revoked != nil }
+        #expect(model.decisions?.decisions.first { $0.key == "d2" }?.revocable == false)
+        let kept = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+        #expect((kept["places"] as? [String]) == [])
+    }
+
     /// A long night's work reads at a glance: how many it held back and of each kind it allowed,
     /// what waits on you first however old, then the latest, the rest folded into "…N more".
     @Test func decisionsListWhatWaitsOnYouFirstAndCountTheRest() throws {

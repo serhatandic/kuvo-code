@@ -38,7 +38,10 @@ import Testing
         let folder = FileManager.default.temporaryDirectory.appending(path: "kuvo-engine-config-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let left = folder.appending(path: "left")
+        // Before the box's first start its folder isn't there; the settings are asked all the same.
+        try? FileManager.default.removeItem(at: BoxProcess.home)
         defer {
+            try? FileManager.default.removeItem(at: BoxProcess.home)
             if let pid = (try? String(contentsOf: left, encoding: .utf8)).flatMap({ Int32($0.trimmingCharacters(in: .whitespacesAndNewlines)) }) { kill(pid, SIGKILL) }
             try? FileManager.default.removeItem(at: folder)
         }
@@ -132,14 +135,19 @@ import Testing
 
         BoxProcess.engineChanged(ServerEndpoint(url: URL(string: "http://127.0.0.1:47970")!, password: "pw"), version: "2.0.32", pid: getpid())
         let running = try await info(endpoint)
+        #expect(running["kind"] as? String == "mac")
         #expect(running["engine"] as? String == "2.0.32")
-        #expect(running["chats"] as? String == BoxProcess.home.appending(path: "chats").path, "its folders are in the app's own")
+        #expect(running["started"] is Double)
+        #expect(running["chats"] as? String == Workspace.chatsFolder, "the Mac's chats, where the app keeps them")
         // Its record is yours alone.
         let record = BoxProcess.run.appending(path: "engine.json").path
         #expect((try FileManager.default.attributesOfItem(atPath: record)[.posixPermissions] as? Int) == 0o600)
 
         BoxProcess.engineChanged(nil, version: nil, pid: nil)
-        #expect(try await info(endpoint)["engine"] is NSNull, "stopped, it's gone")
+        // Stopped: it says the engine it brings, and that none runs.
+        let stopped = try await info(endpoint)
+        #expect(stopped["engine"] as? String == OpenCodeEngine.version)
+        #expect(stopped["started"] is NSNull)
 
         box.stop()
         #expect(PhoneLink.box.withLock { $0 } == nil)
