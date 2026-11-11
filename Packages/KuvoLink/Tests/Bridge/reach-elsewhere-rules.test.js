@@ -180,8 +180,9 @@ test("what a box refuses, and from whom", async () => {
   assert.match(answerOf(notTheirs).note.words, /isn't yours to stop: ask the user/);
   assert.equal(eng.seen.interrupted.length, 0);
 
-  // Nothing a call can't reach: starting work, making a project, the vault, a sandbox ask.
-  for (const tool of ["start_session", "make_project", "vault_ask", "sandbox_ask", "send_message"]) {
+  // Nothing a call can't reach: making a project, the vault, a sandbox ask, a message. (Starting
+  // work is a call of its own, start-elsewhere-rules.test.js.)
+  for (const tool of ["make_project", "vault_ask", "sandbox_ask", "send_message"]) {
     const refused = await take(callOf(tool, { task: "Anything." }));
     assert.deepEqual([refused[0].ok, refused[0].why], [false, "That isn't something another computer can do here."], tool);
   }

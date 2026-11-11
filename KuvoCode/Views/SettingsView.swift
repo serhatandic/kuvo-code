@@ -399,7 +399,7 @@ private struct SettingsSidebar: View {
                 // At its fixed size, as Settings' rows are: the window's sidebar follows Text size.
                 .environment(\.messageFont, MessageFont())
             if boxes.count > 1, search.isEmpty {
-                BoxNameStrip(boxes: boxes, selected: shownBinding, marksNews: false)
+                BoxNameStrip(boxes: boxes, selected: shownBinding, marksNews: false, motion: boxMotion)
                     .padding(.top, 6)
             }
             if !search.isEmpty {
@@ -526,10 +526,10 @@ private struct SettingsSidebar: View {
         }
         .buttonStyle(.plain)
         .clickablePointer()
-        .contextMenu {
+        .heldContextMenu {
             // Without the tab bar, one page at a time.
             if showsTabBar {
-                Button("Open in New Tab") { openInNewTab(page, box) }
+                HeldRow.button("Open in New Tab") { openInNewTab(page, box) }
             }
         }
         .id(page)

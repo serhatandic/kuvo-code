@@ -254,12 +254,10 @@ nonisolated enum Attachments {
 
     // MARK: The note
 
-    private static let includedHeading = "The attached files are on disk here (what's in them is in this message already):"
-    private static let pathsHeading = "Open these attached files with your tools if you need them:"
-    private static let unsentHeading = "These attached files stayed on the user's Mac (they couldn't be read, or copied to this machine):"
-    private static let note = MessageBlock(start: "<attached-files>", end: "</attached-files>", headings: [includedHeading, pathsHeading, unsentHeading])
-    /// How a file that stayed on the Mac used to be listed, on its path's line.
-    private static let unsentSuffix = " (on the user's Mac: it couldn't be copied to this machine)"
+    private static let includedHeading = AttachedFilesNote.includedHeading
+    private static let pathsHeading = AttachedFilesNote.pathsHeading
+    private static let unsentHeading = AttachedFilesNote.unsentHeading
+    private static let note = AttachedFilesNote.block
 
     /// The message text with the note: where the files sent with it are, the files sent as
     /// paths, and those that couldn't be sent.
@@ -274,19 +272,9 @@ nonisolated enum Attachments {
     }
 
     /// A message's text without the note that ends it, and the paths of the files it sent as
-    /// paths or couldn't send (the others are the message's own files).
+    /// paths or couldn't send (the others are the message's own files): KuvoClient's, as the phone reads it.
     static func split(_ text: String) -> (text: String, paths: [String]) {
-        guard let (before, lines) = note.split(text) else { return (text, []) }
-        var heading = ""
-        var paths: [String] = []
-        for line in lines.map(String.init) {
-            if note.headings.contains(line) {
-                heading = line
-            } else if line.hasPrefix("/"), heading != includedHeading {
-                paths.append(line.hasSuffix(unsentSuffix) ? String(line.dropLast(unsentSuffix.count)) : line)
-            }
-        }
-        return (before.trimmingCharacters(in: .whitespacesAndNewlines), paths)
+        AttachedFilesNote.split(text)
     }
 
     /// The paths a message's note names that aren't among its own `files`: a message on its way

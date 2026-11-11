@@ -11,9 +11,11 @@ import { isObject } from "../../shared/json";
 import { asked, call, engineGet } from "../engine/client";
 import { writtenByYou } from "../engine/queue";
 import { messageID } from "../engine/sessions";
-import { BOTS, CHATS, HERE, homeFolder } from "../home";
+import { BOTS, CHATS, HERE, homeFolder, IS_MAC } from "../home";
+import { macLink, readLink } from "../state";
+import { plainName } from "../../shared/text";
 import { askedAbout, realish } from "../fence/policy";
-import { changeProjects, PROJECT_FOLDERS_ENTRY, PROJECTS_FILE, projectFoldersNote, readProjects } from "../areas/projects";
+import { changeProjects, filedUnder, PROJECT_FOLDERS_ENTRY, PROJECTS_FILE, projectFoldersNote, readProjects } from "../areas/projects";
 import { projectOf as projectOfFolder, readWorktrees } from "../areas/worktree-records";
 import { answerWorktrees, settleNewSession } from "../areas/worktrees";
 import { composeLetter } from "./letter";
@@ -21,21 +23,24 @@ import { allowed, noteStarting, startedAs, startsBefore, takeBack } from "./limi
 import { answerTo } from "./take";
 import { noteWorkChanged } from "../work/changes";
 import { noteOversight } from "../work/oversight";
-import { botLimits, pastLimit } from "../work/limits";
-import { modelNamed, pickModel, usableModels } from "../work/models";
+import { botLimits, limitsFrom, pastLimit } from "../work/limits";
+import { describeModels, modelNamed, pickModel, usableModels } from "../work/models";
 import { failedOn, holdOf, holdWords, turnError, unansweringNow } from "../work/unanswering";
-import { approvalOf, approvalRules, defaultApproval, effectiveApproval, isApproval, lowerOf, rememberApproval, unavailable } from "../work/approval";
+import { approvalOf, approvalRules, defaultApproval, effectiveApproval, isApproval, lowerOf, otherComputersAllowed, rememberApproval, unavailable } from "../work/approval";
+import { holdsBack } from "../bots/tell";
+import { rowsOfLeads } from "../work/elsewhere";
 import { settleAgain } from "../areas/approval";
 import { noteFullAccess } from "../work/full";
 import { keptFromSessions } from "../work/reviewer";
+import { botHere } from "../bots/here";
 import { findLinkedTrees, inProjectWorktree, inTime } from "../work/project-trees";
 import type { Approval } from "../work/approval";
 import { linkSession, pauseGoal, runningGoal } from "../work/goals";
 import { nextMidnight, startOfDay } from "../work/clock";
 import { atWorkNow } from "../work/background";
-import { botOfConversation, depthOf, isArchived, ofBot, workSessions, worksFor } from "../work/tree";
+import { botOfConversation, depthOf, isArchived, lineOf, ofBot, workSessions, worksFor } from "../work/tree";
 import { isAutopilot, tellAutopilot } from "../work/autopilot";
-import type { WorksFor } from "../../shared/routes/work";
+import type { WorkLimits, WorksFor } from "../../shared/routes/work";
 import type { Target } from "../../shared/records";
 import type { KitRule } from "../bots/kit";
 import type { EngineSession } from "../engine/sessions";
@@ -74,6 +79,66 @@ export interface Starter {
   session: string;
   place: SessionPlace | null;
   name: string;
+  /** A lead on another of your computers, as its call carries it: then `place` is null. */
+  remote?: RemoteLead;
+}
+
+/** A lead on another of your computers starting a session here (PROTOCOL.md, "Peers", `call`,
+ * `as.start`), as its own computer knows it, never from the agent's words: its approval as it comes
+ * to there now and the Don't Allows it goes by there (`held`, kept with the session so they hold
+ * here too), its mode and model, whether it's on Autopilot, the bot its work is for (`works`;
+ * `own`, the lead is that bot), the new session's depth and line (`line`: its lead's own, then the
+ * lead), and the limits you set for that bot. `call`: the call's id, marked on the session so it's
+ * made once; `computer` and `key`: the lead's computer, as this one names it. */
+export interface RemoteLead {
+  call: string;
+  computer: string;
+  key: string;
+  approval: Approval;
+  held: KitRule[];
+  agent: "plan" | "build" | null;
+  model: { providerID: string; id: string; variant?: string } | null;
+  autopilot: boolean;
+  works: WorksFor | null;
+  own: boolean;
+  depth: number;
+  line: string[];
+  limits: WorkLimits | null;
+}
+
+/** What a session's start keeps of itself as it goes, so it can be finished from the step it got
+ * to (a call's journal, `start-call.ts`): the worktree made for it, once it's made; what it's made
+ * with, before it's made; then that it's made, marked and told its task. */
+export interface StartSteps {
+  tree?: (tree: MadeTree) => void;
+  making?: (making: Making) => void;
+  made?: (session: string) => void;
+  marked?: () => void;
+  prompted?: () => void;
+}
+
+/** A worktree made for a start: its folder, what removes it again (`root`), its branch. */
+export interface MadeTree {
+  folder: string;
+  root: string | null;
+  branch?: string;
+}
+
+/** A session about to be made, as it's to be finished: its marks once it's made (`kuvo`), what
+ * it's told (`prompt`), whether it's on the coding agents' bridge (else the engine: never the
+ * address of either, which changes each time it starts, nor its password) and on Autopilot, its
+ * project's other folders, and what the start says of it. */
+export interface Making {
+  agents: boolean;
+  asBefore: boolean;
+  autopilot: boolean;
+  kuvo: Record<string, unknown>;
+  /** Its task's message; `unheard`, its words should its marks not be on, so its starter doesn't
+   * hear it finish (its report goes as a message after all). */
+  prompt: { id: string; text: string; unheard?: string };
+  folders: string[];
+  folder: string;
+  started: Omit<Started, "session">;
 }
 
 /** An agent's call from no conversation this box has: counted together, its task from "another
@@ -98,6 +163,11 @@ export interface Started {
   warning?: string;
   /** Waited for, its turn failed before it answered: why. */
   stopped?: string;
+  /** Started for a lead on another computer on a model of this one's, as its own has no account
+   * here: said to its agent. */
+  model?: string;
+  /** For a lead on another computer, why it got less than asked (`got`): this computer's. */
+  held?: string;
 }
 
 /** Why one wasn't started (a 502 was, but its task didn't reach it: `session`). */
@@ -116,6 +186,9 @@ export interface StartPlace {
   bridge?: () => Target | null;
   step?: number;
   signal?: AbortSignal;
+  steps?: StartSteps;
+  /** The worktree a start cut short made already: it goes on in that one, not a second. */
+  tree?: MadeTree;
 }
 
 /** What a session a bot starts for its goal is told: no one may be there to answer. */
@@ -147,6 +220,11 @@ function approvalGiven(given: unknown): Approval | null | undefined {
   return isApproval(given) ? given : undefined;
 }
 
+/** What this box calls itself to your other computers: a machine by its name, this Mac by its own. */
+export const ownName = (): string => plainName(IS_MAC ? macLink.config?.name : readLink()?.name) || (IS_MAC ? "the Mac" : "a machine");
+/** Why a call that starts work isn't taken here: its switch is off. */
+export const takesNoWork = (): string => `${ownName()} doesn't take work from your other computers. Ask the user to allow it in Settings › Permissions on ${ownName()}.`;
+
 const SEAT = "Not from a group chat: talk it through here; the work is handed out after the wrap-up.";
 export const seatRefusal = (): StartRefusal => ({ status: 403, message: SEAT });
 
@@ -169,9 +247,9 @@ const isFolderRule = (rule: KitRule) => rule.action === "external_directory" && 
 // Its rules: made for its approval with Settings › Permissions as they are now (where they're this
 // box's own; else the starting conversation's Don't Allows), its project's folders after (a bot's
 // own folder stays allowed).
-function rulesFor(approval: Approval, parent: Partial<EngineSession> | null, folders: readonly string[]): KitRule[] {
+function rulesFor(approval: Approval, parent: Partial<EngineSession> | null, folders: readonly string[], held: readonly KitRule[] = []): KitRule[] {
   const own = Array.isArray(parent?.permissions) ? parent.permissions.filter(rule => !isFolderRule(rule) || rule.resource.includes("/bots/bot_")) : [];
-  return approvalRules(approval, [...own, ...folderRules(folders)]);
+  return approvalRules(approval, [...own, ...folderRules(folders)], held);
 }
 
 // The project a folder is (one of its worktrees is its project's), its name and other folders; a
@@ -186,6 +264,26 @@ function projectOf(folder: string): { name: string; folders: readonly string[] }
     try { changeProjects(projects => (projects.some(each => each.directory === directory) ? projects : [{ directory, folders: [] }, ...projects])); } catch {}
   }
   return { name: known?.name ?? path.basename(directory), folders: directory !== folder ? [] : (known?.folders ?? []) };
+}
+
+// The project a folder is, or is another folder of, kept by another name for the same place (a
+// link: an agent's folder is named by where it really is); null for none.
+async function keptAs(folder: string): Promise<string | null> {
+  const projects = readProjects().filter(each => !each.removed);
+  if (projects.some(each => each.directory === folder)) return null;
+  await askedAbout(projects.flatMap(each => [each.directory, ...each.folders]));
+  const at = realish(folder);
+  return projects.find(each => realish(each.directory) === at)?.directory
+    ?? projects.find(each => each.folders.some(other => realish(other) === at))?.directory ?? null;
+}
+
+// A project's name here, by its folder.
+const projectName = (directory: string): string => readProjects().find(each => each.directory === directory)?.name ?? path.basename(directory);
+
+// The folder a session was made in and the project it's filed under there (`kuvo.filed`), if any.
+function filedOf(session: Partial<EngineSession> | null | undefined): { folder: string; project: string } | null {
+  const filed = session?.metadata?.kuvo?.filed;
+  return isObject(filed) && typeof filed.folder === "string" && typeof filed.project === "string" ? { folder: filed.folder, project: filed.project } : null;
 }
 
 // The project `named` names here (its name, or its folder), or null.
@@ -234,7 +332,9 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
   if (!task) return no(400, "Say what it's to do (task).");
   if (by?.place?.data.metadata?.kuvo?.seat) return { refused: seatRefusal() };
   if (given.computer !== undefined && given.computer !== null && given.computer !== "" && given.computer !== "here") return no(400, `Starting work on another computer isn't here yet: start it on ${HERE}, or ask the user to start it there.`);
-  const parent = by ? by.place?.data ?? { permissions: ASKS_FIRST } : null;
+  const remote = by?.remote ?? null;
+  // (A lead on another computer: what its own computer says of it, with no folder here.)
+  const parent: Partial<EngineSession> | null = remote ? { permissions: remote.held, ...(remote.agent ? { agent: remote.agent } : {}), ...(remote.model ? { model: remote.model } : {}) } as Partial<EngineSession> : by ? by.place?.data ?? { permissions: ASKS_FIRST } : null;
   const parentFolder = parent?.location?.directory ?? parent?.directory;
   let folder = parentFolder ? (isBotFolder(parentFolder) ? CHATS : parentFolder) : null;
   let projectDirectory: string | null = null;
@@ -271,14 +371,15 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
       // (An agent's by where it really is as it's checked: a link swapped in after is never followed.)
       const at = by ? fs.realpathSync(full) : full;
       const bridgeNow = place.bridge?.() ?? null;
-      const fullAccess = Boolean(by?.place && approvalOf(by.place.data, { agents: Boolean(bridgeNow && by.place.target.port === bridgeNow.port), bot: Boolean(botOfConversation(by.session) ?? worksFor(by.place.data)) }).effective === "fullAccess");
+      const fullAccess = remote ? effectiveApproval(remote.approval).approval === "fullAccess"
+        : Boolean(by?.place && approvalOf(by.place.data, { agents: Boolean(bridgeNow && by.place.target.port === bridgeNow.port), bot: Boolean(botOfConversation(by.session) ?? worksFor(by.place.data)) }).effective === "fullAccess");
       const kept = by && !fullAccess && !ours.includes(at) ? await keptFromSessions(at) : null;
       if (kept) return no(403, `An agent in Auto can't start a session in ${written} on ${HERE}: ${kept}. Ask the user to start it there.`);
       if (named && !await inProject(at, named.directory)) return no(400, `${written} isn't in ${named.name} on ${HERE}: give a folder in it or in one of its worktrees, or leave out project.`);
       folder = isBotFolder(at) ? CHATS : at;
     }
   }
-  if (!folder) return no(400, "Give the folder it works in (folder), as a full path.");
+  if (!folder) return no(400, remote ? `Say where it works on ${HERE}: one of its projects (project, from list_projects with this computer), a folder there (folder, a full path), or chat.` : "Give the folder it works in (folder), as a full path.");
   if (given.mode !== undefined && given.mode !== null && given.mode !== "build" && given.mode !== "plan") return no(400, "mode is build or plan.");
   const requested = approvalGiven(given.approval);
   if (requested === undefined) return no(400, "approval is askFirst, acceptEdits, auto or fullAccess.");
@@ -287,8 +388,8 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
   if (given.mode === "build" && parent?.agent === "plan") return no(400, "This conversation is in Plan mode, so the sessions it starts plan too. Start it in plan mode, or ask the user to switch to Build.");
   // The bot this is work for: the conversation itself, or the bot its own starter works for.
   const ownBot = by?.place ? botOfConversation(by.session) : null;
-  const bot: WorksFor | null = ownBot ?? (by?.place ? worksFor(by.place.data) : null);
-  const depth = ownBot ? 1 : depthOf(by?.place?.data) + 1;
+  const bot: WorksFor | null = remote ? remote.works : ownBot ?? (by?.place ? worksFor(by.place.data) : null);
+  const depth = remote ? remote.depth : ownBot ? 1 : depthOf(by?.place?.data) + 1;
   // Full Access from a client where it can't be had says why, rather than starting it with less.
   const notFull = !by && requested === "fullAccess" ? unavailable("fullAccess") : null;
   if (notFull) return { refused: { status: 409, message: notFull.why, reason: notFull.reason as "fullAccessOff" } };
@@ -320,45 +421,38 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
     target = choice.model.target;
     picked = [choice.model.name, ...(choice.variant ? [choice.variant] : [])];
   }
+  let modelNote: string | undefined;
+  if (remote && !picked.length) {
+    // A lead on another computer: on its own model where there's an account for it here, else on
+    // this computer's default; none at all, it can't start here.
+    // (An engine that doesn't answer isn't one with no accounts.)
+    const answering = engine ? await call(engine, "GET", "/api/provider", undefined, place.signal).then(() => true, () => false) : false;
+    if (!answering && !bridge) return no(503, `The engine on ${HERE} isn't running.`);
+    const models = (await usableModels(engine, bridge, place.signal)).filter(each => !each.retiring);
+    if (!models.length) return no(400, describeModels([]));
+    const own = modelNamed(model, models);
+    if (own) {
+      target = own.target;
+      free = own.free;
+    } else {
+      if (model) modelNote = `It runs on the default model there: yours (${model.providerID}/${model.id}) has no account on that computer.`;
+      model = null;
+      target = engine;
+    }
+  }
   if (given.mode === "plan") picked.push("Plan");
   if (!target) return no(503, `The engine on ${HERE} isn't running.`);
   // The limits you set for its bot, if any. This start is noted before they're looked at, so ones
   // asked for at once each count those before them that the engine doesn't show yet.
-  const limits = bot ? botLimits(bot.bot) : null;
-  const noted = bot && limits ? noteStarting(bot.bot) : null;
-  const went = (session: string | null, prompted = false) => { if (bot && noted) startedAs(bot.bot, noted.token, session, prompted); };
-  if (bot && limits && noted) {
-    const targets = [engine, bridge].filter((each): each is Target => Boolean(each));
-    const work = ofBot(bot.bot, await workSessions(targets, place.signal, { archived: true }));
-    const working = await atWorkNow(targets, place.signal);
-    const midnight = startOfDay(Date.now());
-    const today = work.filter(each => (each.data.time?.created ?? 0) >= midnight);
-    const tokens = today.reduce((sum, each) => sum + (each.data.tokens?.input ?? 0) + (each.data.tokens?.output ?? 0) + (each.data.tokens?.reasoning ?? 0), 0);
-    const workIDs = new Set(work.map(each => each.data.id));
-    const todayIDs = new Set(today.map(each => each.data.id));
-    // One the engine shows as the bot's, given its task, is working or not as the engine says.
-    const earlier = startsBefore(bot.bot, noted.before);
-    const past = pastLimit(limits, {
-      depth,
-      // (One put away doesn't take a place for what it left running.)
-      working: work.filter(each => working.has(each.data.id) && !isArchived(each.data)).length + earlier.filter(each => !each.session || !each.prompted || !workIDs.has(each.session)).length,
-      started: todayIDs.size + earlier.filter(each => !each.session || !todayIDs.has(each.session)).length,
-      tokens,
-    });
-    if (past) went(null);
-    // A day's limit, during a goal: new sessions wait for midnight, when the bot is woken.
-    if (past?.daily && goal) {
-      pauseGoal(bot.bot, { why: "your daily limit", until: nextMidnight(Date.now()) });
-      return no(429, `${past.words} New sessions for your goal wait for it to reset at midnight, and you're woken then: carry on meanwhile with what doesn't start a session.`);
-    }
-    if (past) {
-      return no(429, past.daily ? `${past.words} Ask the user to raise it (Edit Bot › Work), or go on tomorrow.` : past.words);
-    }
-  }
+  // (Where the bot isn't, those its lead's computer said, or marked on the conversation starting it.)
+  const limits = bot ? botLimits(bot.bot) ?? (remote ? remote.limits : limitsFrom(parent?.metadata?.kuvo?.limits)) : null;
+  const limited = bot && limits ? await heldByLimits(bot, limits, depth, Boolean(goal), [engine, bridge].filter((each): each is Target => Boolean(each)), place.signal) : null;
+  if (limited && "refused" in limited) return { refused: limited.refused };
+  const went = limited?.went ?? (() => {});
   // A few at a time: an agent shouldn't fill the window with sessions unattended. A bot's work is
   // its to size, with only a net against a runaway.
   const kind = bot ? "botSessions" : "sessions";
-  const key = by ? (bot ? `bot:${bot.bot}` : by.place ? by.session : "outside") : null;
+  const key = by ? (bot ? `bot:${bot.bot}` : by.place || remote ? by.session : "outside") : null;
   const counted = key ? allowed(kind, key) : null;
   if (key && counted === null) {
     went(null);
@@ -371,6 +465,9 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
   // In a worktree of its project's, on a branch of its own (taken away again should the session not
   // start).
   let madeTree: string | null = null;
+  const removeTree = async () => {
+    if (madeTree) await answerWorktrees("POST", "kuvo/worktrees/remove", { path: madeTree, discard: true }, engine, place.signal).catch(() => {});
+  };
   // (A worktree of its own is made from the project: one given a folder too would leave that.)
   if (given.worktree === true && named && folder && realish(folder) !== realish(named.directory)) {
     giveBack();
@@ -382,15 +479,24 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
       giveBack();
       return no(400, "A chat has no worktree: give a project.");
     }
-    const made = await answerWorktrees("POST", "kuvo/worktrees", { project }, engine, place.signal).catch((error: unknown) => ({ status: 502, value: { message: String((error as Error | null)?.message ?? error) } }));
-    const tree = made.value as { folder?: unknown; branch?: unknown; message?: unknown };
-    if (made.status !== 200 || typeof tree.folder !== "string") {
-      giveBack();
-      return no(made.status === 409 ? 400 : 502, `Couldn't make a worktree of ${path.basename(project)}: ${String(tree.message ?? "it failed")}`);
+    // (One a start cut short made: that one, still there.)
+    const before = place.tree && fs.existsSync(place.tree.folder) ? place.tree : null;
+    if (before) {
+      folder = before.folder;
+      madeTree = before.root;
+      if (before.branch) picked.push(`worktree ${before.branch}`);
+    } else {
+      const made = await answerWorktrees("POST", "kuvo/worktrees", { project }, engine, place.signal).catch((error: unknown) => ({ status: 502, value: { message: String((error as Error | null)?.message ?? error) } }));
+      const tree = made.value as { folder?: unknown; branch?: unknown; message?: unknown };
+      if (made.status !== 200 || typeof tree.folder !== "string") {
+        giveBack();
+        return no(made.status === 409 ? 400 : 502, `Couldn't make a worktree of ${path.basename(project)}: ${String(tree.message ?? "it failed")}`);
+      }
+      folder = tree.folder;
+      madeTree = typeof (tree as { root?: unknown }).root === "string" ? (tree as { root: string }).root : null;
+      if (typeof tree.branch === "string") picked.push(`worktree ${tree.branch}`);
+      place.steps?.tree?.({ folder, root: madeTree, ...(typeof tree.branch === "string" ? { branch: tree.branch } : {}) });
     }
-    folder = tree.folder;
-    madeTree = typeof (tree as { root?: unknown }).root === "string" ? (tree as { root: string }).root : null;
-    if (typeof tree.branch === "string") picked.push(`worktree ${tree.branch}`);
   }
   // Its approval: the one asked for, never above the starter's (an agent outside any conversation
   // here asks first); from a client, this computer's default unless it says (and what it says is
@@ -398,72 +504,104 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
   // what that comes to here now: never Full Access without its switch, nor Auto without the sandbox.
   const agents = Boolean(bridge && target.port === bridge.port);
   const from = by?.place ? approvalOf(by.place.data, { agents: Boolean(bridge && by.place.target.port === bridge.port), bot: Boolean(bot) }) : null;
-  const starters: Approval | null = by ? from?.approval ?? "askFirst" : null;
+  // (A lead on another computer: its approval as it comes to there now, never more.)
+  const starters: Approval | null = remote ? remote.approval : by ? from?.approval ?? "askFirst" : null;
   const wanted: Approval = starters ? lowerOf(requested ?? starters, starters) : requested ?? defaultApproval();
   // Taking the approval of a conversation from before, it runs as that one does, and is one from
   // before too: nothing kept, so the box never makes its rules again. (Never a bot's: its work is
   // kept with its own.)
   const asBefore = Boolean(from && !from.stored && wanted === starters && !bot);
-  const applied = asBefore ? wanted : effectiveApproval(wanted, { agents }).approval;
+  const effective = effectiveApproval(wanted, { agents });
+  const applied = asBefore ? wanted : effective.approval;
+  // (Kept, for a lead on another computer, as no more than this computer gives it now: Full Access
+  // only where it's confirmed here, so it never rises to that later, when Full Access is confirmed
+  // here for something else. Auto stays Auto, asking while the sandbox isn't running, as here.)
+  const kept: Approval = remote && wanted === "fullAccess" && unavailable("fullAccess") ? "auto" : wanted;
   const got = applied !== (requested ?? wanted) && lowerOf(applied, requested ?? wanted) === applied ? applied : undefined;
   // (A worktree made elsewhere is its project's, as the projects' worktrees are found now.)
   if (folder !== CHATS) await inTime(findLinkedTrees(), undefined, 3_000);
-  const project = named && realish(folder) !== realish(named.directory) ? { name: named.name, folders: [] as readonly string[] } : projectOf(named?.directory ?? folder);
+  // The project it's filed under: the one named; else its folder's (a worktree's, or a project's
+  // other folder's); else, in its starter's folder, the one its starter is filed under there. One
+  // filed under another folder than its own carries it from the first (`kuvo.filed`), so every
+  // client shows it there from its first listing: one may hear of the session from its engine
+  // before `kuvo/projects` says whose a new worktree is, and that never names a subfolder.
+  const startersFiled = filedOf(parent);
+  const mapped = folder === CHATS ? null : filedUnder(folder);
+  const its = mapped === null || mapped !== folder || named ? mapped : await keptAs(folder) ?? folder;
+  const under = its === null ? null : named?.directory ?? (its !== folder ? its : startersFiled?.folder === folder ? startersFiled.project : folder);
+  const filed = under && under !== folder ? { folder, project: under } : null;
+  const project = !under ? null : realish(under) !== realish(folder) ? { name: projectName(under), folders: [] as readonly string[] } : projectOf(under);
   const title = typeof given.title === "string" && given.title.trim() ? given.title.trim() : null;
-  const rules = rulesFor(applied, parent, project?.folders ?? []);
+  // (A lead's Don't Allows from its own computer: kept with it, so they hold here however its rules are made again.)
+  const brought = remote ? remote.held.filter(holdsBack) : [];
+  const rules = rulesFor(applied, parent, project?.folders ?? [], brought);
   // Its mode: the one asked for, else the conversation's (one that plans starts sessions that plan).
   const agent = given.mode === "plan" || given.mode === "build" ? given.mode : parent?.agent ?? null;
   // On Autopilot where its starter is, or where a client asked. An agent's word isn't enough: one
   // the box can't place starts it asking.
-  const autopilot = by ? Boolean(by.place && isAutopilot(by.place.data)) : given.autopilot === true;
+  const autopilot = remote ? remote.autopilot : by ? Boolean(by.place && isAutopilot(by.place.data)) : given.autopilot === true;
+  // Its line (the conversations above it, its starter's first: so it's found under a lead whose
+  // line crosses computers), and where the bot isn't, the limits it goes by.
+  const line = remote ? remote.line : by?.place ? [...lineOf(by.place.data), by.session].slice(-20) : null;
+  // (Only where it says more than who started it: one above is `startedBy` itself.)
+  const marksOfLine = { ...(line && line.length > 1 ? { line } : {}), ...(bot && limits ? { limits } : {}),
+    ...(remote ? { call: remote.call, lead: { box: remote.computer, key: remote.key, name: by!.name }, ...(brought.length ? { held: brought } : {}) } : {}) };
   // (Kept with it as it's made, so the box never takes it for one a client made without saying.)
-  const marks = { ...(by?.place ? { startedBy: by.session } : {}), ...(asBefore ? {} : { approval: wanted, applied }), ...(autopilot ? { autopilot: true } : {}) };
+  const starter = Boolean(by?.place || remote);
+  const marks = { ...(starter ? { startedBy: by!.session } : {}), ...(asBefore ? {} : { approval: kept, applied }), ...(autopilot ? { autopilot: true } : {}), ...(filed ? { filed } : {}), ...marksOfLine };
+  const waits = given.wait === true && !remote;
+  const wakes = wakesFrom(given.wait === true && remote ? given.wake ?? "both" : given.wake, remote ? remote.own : Boolean(ownBot), waits);
+  // What its starter hears of it, only once it's marked so: none for an agent outside any
+  // conversation here, or for a mark the engine didn't take (it's told to write to it instead).
+  const kuvo = { ...(starter ? { startedBy: by!.session, ...(bot ? { by: bot, depth } : {}), ...(wakes.length ? { wake: wakes } : {}) } : {}), ...(asBefore ? {} : { approval: kept, applied }), ...(autopilot ? { autopilot: true } : {}), ...(filed ? { filed } : {}), ...marksOfLine };
+  const from_ = remote ? `${by!.name} on ${remote.computer}` : by?.name ?? "";
+  // (Its finish heard by its starter with its last reply: its report isn't sent again as a message.)
+  const textFor = (heard: boolean) => by ? composeLetter(from_, by.session, task, waits, heard) + (bot ? `\n\n${sessionNote(bot.name, heard, given.review !== false)}${goal ? `\n\n${goalNote}` : ""}` : "") : task;
+  const heard = starter && wakes.includes("finished");
+  const text = textFor(heard);
+  const making: Making = { agents, asBefore, autopilot, kuvo, prompt: { id: messageID(), text, ...(heard ? { unheard: textFor(false) } : {}) }, folders: [...(project?.folders ?? [])], folder,
+    started: { title, folder, project: project?.name ?? null, ...(picked.length ? { picked: picked.join(" · ") } : {}), ...(got ? { got } : {}), ...(wakes.length ? { wakes } : {}), ...(warning ? { warning } : {}), ...(modelNote ? { model: modelNote } : {}),
+      // (Less than its lead's because of this computer: why, for a lead on another.)
+      ...(remote && got && effective.held ? { held: heldThere(wanted, applied, agents) } : {}) } };
+  // (Switched off while it was got ready: not made. A worktree made for it goes again.)
+  if (remote && !otherComputersAllowed()) {
+    giveBack();
+    await removeTree();
+    return no(403, takesNoWork());
+  }
+  place.steps?.making?.(making);
   let session: string;
   try {
     const made = await call(target, "POST", "/api/session", { location: { directory: folder }, ...(title ? { title } : {}), ...(agent ? { agent } : {}), ...(model ? { model } : {}), permissions: rules, metadata: { kuvo: marks } }, place.signal);
     if (!isObject(made) || typeof made.id !== "string" || !made.id) throw new Error("No session was made.");
     session = made.id;
     went(session);
+    place.steps?.made?.(session);
     // (What a client picked is the next one's here.)
     if (!by && requested) rememberApproval(requested);
   } catch (error) {
     giveBack();
-    if (madeTree) await answerWorktrees("POST", "kuvo/worktrees/remove", { path: madeTree, discard: true }, engine, place.signal).catch(() => {});
+    await removeTree();
     return no(502, `Couldn't start a session in ${folder}: ${String((error as Error | null)?.message ?? error)}`);
   }
-  const address = encodeURIComponent(session);
-  if (project?.folders.length) {
-    await call(target, "PUT", `/api/experimental/session/${address}/instructions/entries/${PROJECT_FOLDERS_ENTRY}`, { value: projectFoldersNote(folder, project.folders) }).catch(() => {});
-  }
-  if (autopilot) await tellAutopilot(target, session, true).catch(() => {});
-  await settleNewSession(target, session).catch(() => {});
-  let wakes = wakesFrom(given.wake, Boolean(ownBot), given.wait === true);
-  // What its starter hears of it, only once it's marked so: none for an agent outside any
-  // conversation here, or for a mark the engine didn't take (it's told to write to it instead).
-  const kuvo = { ...(by?.place ? { startedBy: by.session, ...(bot ? { by: bot, depth } : {}), ...(wakes.length ? { wake: wakes } : {}) } : {}), ...(asBefore ? {} : { approval: wanted, applied }), ...(autopilot ? { autopilot: true } : {}) };
-  const marked = await call(target, "PATCH", `/api/session/${address}`, { metadata: { kuvo } }).then(() => true, () => false);
-  // (What it comes to may have changed while it was made.)
-  if (marked && !asBefore) await settleAgain(target, session, agents, place.signal).catch(() => {});
-  // In Full Access, its commands outside the sandbox from the first.
-  await noteFullAccess(session).catch(() => {});
-  if (by?.place && bot) noteWorkChanged(bot.bot);
+  const marked = await markMade(making, target, session, place.signal);
+  if (marked) place.steps?.marked?.();
+  if ((by?.place || remote) && bot) noteWorkChanged(bot.bot);
   // Started by the bot itself, for clients to show it looking after its new session: now, before
   // a wait for its answer, so it shows before the session finishes.
   if (marked && by?.place && bot && botOfConversation(by.session)?.bot === bot.bot) noteOversight(bot.bot, session, "started");
-  if (!marked || !by?.place) wakes = [];
   if (bot && goal && given.step !== undefined && given.step !== null) linkSession(bot.bot, given.step, session);
-  const waits = given.wait === true;
-  const id = messageID();
-  const heard = wakes.includes("finished");
-  const text = by ? composeLetter(by.name, by.session, task, waits, heard) + (bot ? `\n\n${sessionNote(bot.name, heard, given.review !== false)}${goal ? `\n\n${goalNote}` : ""}` : "") : task;
+  const id = making.prompt.id;
   try {
-    await asked(target, "POST", `api/session/${address}/prompt`, { id, text, delivery: "steer" });
+    await promptMade(making, target, session);
   } catch (error) {
     went(session, true);
-    return no(502, `Started a session (${session}), but the task didn't reach it: ${String((error as Error | null)?.message ?? error)}`, session);
+    return no(502, `Started a session (address ${session}), but the task didn't reach it: ${String((error as Error | null)?.message ?? error)}`, session);
   }
+  place.steps?.prompted?.();
   went(session, true);
-  const started: Started = { session, title, folder, project: project?.name ?? null, ...(picked.length ? { picked: picked.join(" · ") } : {}), ...(got ? { got } : {}), ...(wakes.length ? { wakes } : {}), ...(warning ? { warning } : {}) };
+  const started: Started = { session, ...making.started, ...(!marked || !starter ? { wakes: undefined } : {}) };
+  if (!started.wakes) delete started.wakes;
   if (!waits) return { started };
   // A new session: anything it says is its answer; a turn that failed before it said anything, why.
   const answer = await answerTo(target, session, id, { wait: place.step, signal: place.signal, by: by?.place ? by.session : null, fresh: true });
@@ -471,6 +609,88 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
   const held = error && model ? await failedOn(target, { ...model, free }, error).catch(() => null) : null;
   const stopped = held ? `${holdWords(held)}.` : error ? error.message || "The engine gave no reason." : undefined;
   return { started: { ...started, answer, ...(stopped ? { stopped, warning: undefined } : {}) } };
+}
+
+/** The limits you set for `bot` (`limits`), looked at for a new session at `depth`: why it can't
+ * start, or how its start went is kept (`went`), so starts asked for at once each count those
+ * before them that the engine doesn't show yet. Its sessions here and, as they last told, on your
+ * other computers. A day's limit during a goal pauses the goal till midnight. */
+export async function heldByLimits(bot: WorksFor, limits: WorkLimits, depth: number, goal: boolean, targets: Target[], signal?: AbortSignal): Promise<{ refused: StartRefusal } | { went: (session: string | null, prompted?: boolean) => void }> {
+  const noted = noteStarting(bot.bot);
+  const went = (session: string | null, prompted = false) => startedAs(bot.bot, noted.token, session, prompted);
+  const work = ofBot(bot.bot, await workSessions(targets, signal, { archived: true }));
+  const working = await atWorkNow(targets, signal);
+  const midnight = startOfDay(Date.now());
+  const today = work.filter(each => (each.data.time?.created ?? 0) >= midnight);
+  const workIDs = new Set(work.map(each => each.data.id));
+  const todayIDs = new Set(today.map(each => each.data.id));
+  // (One carried on with the coding agents is one start: the copy left counts only where the one it
+  // was carried to isn't counted as the bot's.)
+  const startedToday = today.filter(each => { const to = each.data.metadata?.["kuvo.carriedTo"]; return typeof to !== "string" || !workIDs.has(to); }).length;
+  // Its sessions on your other computers too, as those last told this one.
+  const far = elsewhereOf(bot.bot, workIDs).filter(row => !workIDs.has(row.session));
+  const farToday = far.filter(row => row.started >= midnight);
+  const tokens = today.reduce((sum, each) => sum + (each.data.tokens?.input ?? 0) + (each.data.tokens?.output ?? 0) + (each.data.tokens?.reasoning ?? 0), 0) + farToday.reduce((sum, row) => sum + row.tokens, 0);
+  // One the engine shows as the bot's, given its task, is working or not as the engine says.
+  const earlier = startsBefore(bot.bot, noted.before);
+  const known = (session: string, ids: Set<string>, rows: { session: string }[]) => ids.has(session) || rows.some(row => row.session === session);
+  const past = pastLimit(limits, {
+    depth,
+    // (One put away doesn't take a place for what it left running.)
+    working: work.filter(each => working.has(each.data.id) && !isArchived(each.data)).length + far.filter(row => row.state === "working" || row.state === "asking").length + earlier.filter(each => !each.session || !each.prompted || !known(each.session, workIDs, far)).length,
+    started: startedToday + farToday.length + earlier.filter(each => !each.session || !known(each.session, todayIDs, farToday)).length,
+    tokens,
+  });
+  if (!past) return { went };
+  went(null);
+  // A day's limit, during a goal: new sessions wait for midnight, when the bot is woken.
+  if (past.daily && goal) {
+    pauseGoal(bot.bot, { why: "your daily limit", until: nextMidnight(Date.now()) });
+    return { refused: { status: 429, message: `${past.words} New sessions for your goal wait for it to reset at midnight, and you're woken then: carry on meanwhile with what doesn't start a session.` } };
+  }
+  return { refused: { status: 429, message: past.daily ? `${past.words} Ask the user to raise it (Edit Bot › Work), or go on tomorrow.` : past.words } };
+}
+
+/** A session just made on `target`, finished as it's to be (each step can be taken again): its
+ * project's other folders and Autopilot told it, its worktree's branch named, its marks put on, its
+ * rules made for what its approval comes to now, and Full Access noted. Whether its marks are on. */
+export async function markMade(making: Making, target: Target, session: string, signal?: AbortSignal): Promise<boolean> {
+  const address = encodeURIComponent(session);
+  if (making.folders.length) {
+    await call(target, "PUT", `/api/experimental/session/${address}/instructions/entries/${PROJECT_FOLDERS_ENTRY}`, { value: projectFoldersNote(making.folder, making.folders) }).catch(() => {});
+  }
+  if (making.autopilot) await tellAutopilot(target, session, true).catch(() => {});
+  await settleNewSession(target, session).catch(() => {});
+  const marked = await call(target, "PATCH", `/api/session/${address}`, { metadata: { kuvo: making.kuvo } }).then(() => true, () => false);
+  // (Not marked, its finish isn't heard: told so, also where it's finished after a restart, as its
+  // journal keeps this.)
+  if (!marked && making.prompt.unheard) making.prompt.text = making.prompt.unheard;
+  // (What it comes to may have changed while it was made.)
+  if (marked && !making.asBefore) await settleAgain(target, session, making.agents, signal).catch(() => {});
+  // In Full Access, its commands outside the sandbox from the first.
+  await noteFullAccess(session).catch(() => {});
+  return marked;
+}
+
+/** A session just made on `target`, given its task (it throws where that didn't reach it). */
+export async function promptMade(making: Making, target: Target, session: string): Promise<void> {
+  await asked(target, "POST", `api/session/${encodeURIComponent(session)}/prompt`, { id: making.prompt.id, text: making.prompt.text, delivery: "steer" });
+}
+
+// The rows your other computers last told of `bot`'s work: of its own conversation, and of its
+// sessions here (whose own sessions are there).
+function elsewhereOf(bot: string, here: Set<string>) {
+  const own = botHere(bot)?.session;
+  return rowsOfLeads(new Set([...(own ? [own] : []), ...here]));
+}
+
+// Why a lead on another computer got less than `wanted` here (`applied`), in words for that lead:
+// Full Access not confirmed here, Auto's sandbox not running here, or both.
+function heldThere(wanted: Approval, applied: Approval, agents: boolean): string {
+  const why: string[] = [];
+  if (wanted === "fullAccess" && unavailable("fullAccess")) why.push("Full Access hasn't been allowed on that computer yet: only the user can allow it, by picking Full Access once in a session there.");
+  if ((wanted === "fullAccess" || wanted === "auto") && applied === "askFirst" && unavailable("auto", { agents })) why.push("Auto needs the sandbox, which isn't running on that computer.");
+  return why.join(" ");
 }
 
 // What a session started with less than it was asked for does on its own.
@@ -484,11 +704,11 @@ const GOT: Record<Approval, string> = {
 /** How a start went, in the words the tool gives its agent. */
 export function startedWords(outcome: { started: Started } | { refused: StartRefusal }, waits: boolean): { text: string; isError: boolean } {
   if ("refused" in outcome) return { text: outcome.refused.message, isError: true };
-  const { session, title, project, answer, picked, got, wakes = [], warning, stopped } = outcome.started;
+  const { session, title, project, answer, picked, got, wakes = [], warning, stopped, model, held } = outcome.started;
   const name = title ? `"${title}"` : "a new session";
   const where = project ? ` in ${project}` : "";
   const what = picked ? `: ${picked}.` : ".";
-  const asks = got ? ` ${GOT[got]}` : "";
+  const asks = (model ? ` ${model}` : "") + (got ? ` ${GOT[got]}${held ? ` ${held}` : ""}` : "");
   const hears = wakes.length ? ` You'll be woken when it ${wakes.length === 2 ? "finishes or asks for something" : wakes[0] === "finished" ? "finishes" : "asks for something"}, so don't check on it.` : "";
   const warned = warning ? ` ${warning}` : "";
   if (!waits) return { text: `Started ${name}${where} (address ${session})${what}${asks} It's on it now.${hears || " Write to it with send_message; it can write back to you the same way."}${warned}`, isError: false };

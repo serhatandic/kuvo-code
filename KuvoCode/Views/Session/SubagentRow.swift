@@ -59,18 +59,19 @@ struct SubagentRow: View {
             // The whole row opens to its steps, the chevron at its end saying so; its conversation
             // opens from under them, or from its menu.
             Button {
-                // Closing it closes the steps you opened in it.
+                // Closing it closes the steps you opened in it. At work, it's kept in view as it
+                // grows, as a step under way is.
                 let inside = isExpanded ? session.map { CardFolds.shared.kept(under: $0 + "#") } ?? [] : []
-                CardFolds.shared.toggle(key, open: !isExpanded, in: scrollAnchor, closes: inside)
+                CardFolds.shared.toggle(key, open: !isExpanded, in: scrollAnchor, holds: !isWorking, closes: inside)
             } label: {
                 header
             }
             .buttonStyle(TextButtonStyle(outset: true))
             .disabled(session == nil)
             .help(isExpanded ? "Hide its steps" : "Show its steps")
-            .contextMenu {
+            .heldContextMenu {
                 if let session {
-                    Button("Open Conversation") { app.open(.session(session), from: here) }
+                    HeldRow.button("Open Conversation") { app.open(.session(session), from: here) }
                 }
             }
 

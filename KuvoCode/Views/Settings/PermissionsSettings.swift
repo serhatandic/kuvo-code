@@ -11,6 +11,12 @@ struct PermissionsSettings: View {
     @State private var saved: [Saved] = []
     /// A rule's folder being chosen on a machine: what to do with it.
     @State private var choosingFolder: ((_ path: String, _ home: String) -> Void)?
+    /// Whether your other computers may start work here: how its read went since it last connected,
+    /// and why the last change didn't go through.
+    @State private var otherComputers = OtherComputersSettings.Reading.reading
+    @State private var otherComputersFailure: String?
+    /// Reads of it asked for again (Try Again), so its read starts over.
+    @State private var otherComputersAttempt = 0
 
     /// An approval saved with Always, and the engine that keeps it: this Mac's, or a machine's.
     struct Saved: Identifiable {
@@ -46,7 +52,13 @@ struct PermissionsSettings: View {
 
     var body: some View {
         ScrollingSettingsForm {
-            SandboxSettings()
+            // The sandbox's line, then whether your other computers may start work here, then
+            // the folders its commands may write in besides their own.
+            SandboxSettings(part: .notice)
+
+            OtherComputersSettings(reading: otherComputers, failure: $otherComputersFailure) { otherComputersAttempt += 1 }
+
+            SandboxSettings(part: .allowed)
 
             Section {
                 ActionChoices(path: Self.path)
@@ -124,6 +136,8 @@ struct PermissionsSettings: View {
         }
         // Again once its engine answers (a machine's, connecting as the page opened).
         .task(id: app.isReady(box)) { if app.isReady(box) { await loadSaved() } }
+        // Whether your other computers may start work here, as its box says now.
+        .task(id: "\(app.isReady(box)) \(otherComputersAttempt)") { await readOtherComputers() }
         // Its sandbox, as it changes while the page is open.
         .task(id: box) { await Sandboxes.shared.watchState(box.machine ?? BoxClient.mac) }
         // A machine's folder for a rule, from its own folders.
@@ -143,6 +157,23 @@ struct PermissionsSettings: View {
         ("provider.use", "Provider"),
         ("integration.use", "MCP server, skill or plugin"),
     ]
+
+    /// Whether your other computers may start work here, as its box says now: read each time it
+    /// connects (and on Try Again), nothing from before shown meanwhile, an old change's failure
+    /// gone with it.
+    private func readOtherComputers() async {
+        otherComputers = .reading
+        otherComputersFailure = nil
+        guard app.isReady(box) else { return }
+        do {
+            try await workspace.readApprovalHere(onBox: box.machine ?? BoxClient.mac)
+            otherComputers = .read
+        } catch {
+            // (Not when the page went away meanwhile; no way to it is its not being connected.)
+            guard !Task.isCancelled else { return }
+            otherComputers = .failed(error is CancellationError ? "\(app.name(of: box)) isn’t connected." : error.localizedDescription)
+        }
+    }
 
     /// This computer's engine's approvals: Always in a session saves it in the engine of the
     /// computer it's on.

@@ -24,6 +24,7 @@ import { composeLetter, cutText, LETTER_ID, LETTER_LIFE, LETTER_MEMORY, letterTr
 import { deliverNote, noteOf } from "./note";
 import { answerTo } from "./take";
 import { forgetOldHomes, homesOf, learnHomes, noteHomes } from "../work/homes";
+import { resumeStarts } from "./start-call";
 import type { Target } from "../../shared/records";
 import type { PutAwayable } from "../peers/directory";
 import type { Peer } from "../peers/known";
@@ -32,7 +33,7 @@ import type { BridgeAsk, SeatLetter } from "../peers/seats";
 import type { LinkHost } from "../relay/host";
 import type { LinkState } from "../state";
 import type { OutboxCall } from "./calls";
-import { callLife, callRefused, sendCall } from "./calls";
+import { answerResumed, callLife, callRefused, sendCall } from "./calls";
 
 /** A letter as it goes by mail (`{"letter": …}`): its id, from and for which conversations, its
  * words, whether its sender waits for the answer, when it was left (ms), and the letter it answers. */
@@ -432,6 +433,8 @@ export function sendOutbox(host: Pick<LinkHost, "send">, link: LinkState | null 
   const moved = movedOf(link);
   learnHomes(link, now);
   telling.push(forgetOldHomes(now).catch(() => {}));
+  // Starts from your other computers cut short as this box went down: finished, and their leads told.
+  telling.push(resumeStarts(answerResumed, now).catch(() => {}));
   const homes = homesOf(link);
   const removed = removedBoxes(link);
   // COMPAT(beta.1 outbox): letters an older Kuvo Code left in `run/outbox` for a Mac to collect over SSH (its tools', and those its link handed over without the relay), taken on here. Goes 3 months after 0.8.0.
@@ -459,6 +462,8 @@ export function sendOutbox(host: Pick<LinkHost, "send">, link: LinkState | null 
   // Oldest first, as they were left.
   const waiting: { name: string; letter: InSending | null }[] = [];
   for (const name of listOf(SENDING)) {
+    // (A call's mark that the relay dropped it, left by a tool that's gone: `relay/dropped.ts`.)
+    if (name.endsWith(".dropped") && !fs.existsSync(path.join(SENDING, `${name.slice(0, -8)}.json`))) fs.rmSync(path.join(SENDING, name), { force: true });
     if (!name.endsWith(".json")) continue;
     try { waiting.push({ name, letter: JSON.parse(fs.readFileSync(path.join(SENDING, name), "utf8")) }); } catch {}
   }

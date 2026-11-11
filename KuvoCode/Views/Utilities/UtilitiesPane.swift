@@ -65,12 +65,11 @@ struct UtilitiesPane: View {
                                 // (The Work Queue's says how many items too: "Work Queue · 24 items".)
                                 .frame(minWidth: 120, maxWidth: tab.kind == .workQueue ? 226 : 190)
                                 .id(tab.id)
-                                .contextMenu {
-                                    Button("Close Tab") { withAnimation(.ui) { utilities.close(tab.id) } }
-                                    Button("Close Other Tabs") {
+                                .heldContextMenu {
+                                    HeldRow.button("Close Tab") { withAnimation(.ui) { utilities.close(tab.id) } }
+                                    HeldRow.button("Close Other Tabs", disabled: utilities.visibleTabs.count < 2) {
                                         withAnimation(.ui) { for other in utilities.visibleTabs where other.id != tab.id { utilities.close(other.id) } }
                                     }
-                                    .disabled(utilities.visibleTabs.count < 2)
                                 }
                             }
                         }

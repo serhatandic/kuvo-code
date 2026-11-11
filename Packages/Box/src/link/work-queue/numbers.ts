@@ -186,7 +186,7 @@ export const LOST_FOR = 3 * 86_400_000;
  * that one through this one hears of it no more once this box numbers from another. Heard from
  * again, it's back, and the earliest again: a box moves back to it, and it moves past what was
  * numbered meanwhile (`top`). */
-function goneOf(link: LinkState | null | undefined, now: number): Set<string> {
+export function goneOf(link: LinkState | null | undefined, now = Date.now()): Set<string> {
   const gone = new Set<string>();
   const reach = readReach();
   const checked = readReach(PEER_CHECKED);

@@ -107,6 +107,10 @@ struct Composer: View {
     var prompt: String?
     /// Its own card; off in the card it shares with the bars and the queue over it (the session's).
     var drawsSurface = true
+    /// How tall a list over the field can be before it scrolls inside, and how tall it is as
+    /// shown: the card's room is shared out from them (`ComposerListRoom`).
+    var listRoom: CGFloat = .infinity
+    var listHeight: Binding<CGFloat> = .constant(0)
 
     @Environment(Catalog.self) private var catalog
     @Environment(Workspace.self) private var workspace
@@ -179,6 +183,14 @@ struct Composer: View {
         return !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || answered || !files.isEmpty || (commentCount > 0 && !asksSide)
     }
 
+    /// What Send and Return do (`ComposerSend`): with no model chosen, the chip asks for one and
+    /// Return opens its picker, what's written kept.
+    private var sendAction: ComposerSend {
+        ComposerSend(ready: canSend, text: text, hasModel: !showsModel || catalog.chipModel(model, in: modelScope) != nil)
+    }
+    /// Opens the model picker when it changes (Return with no model chosen).
+    @State private var pickModelRequest = 0
+
     /// "!" first: the message is a command to run in the project's folder, not words for the agent.
     private var isShell: Bool { text.hasPrefix("!") }
     /// What's sent goes to the side thread: its tag shows (a command runs as typed instead).
@@ -187,23 +199,18 @@ struct Composer: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            if let commandMatches {
-                SlashList(items: commandMatches, selected: min(commandIndex, commandMatches.count - 1), project: folders.first.flatMap { Workspace.isChat($0) ? nil : workspace.projectName($0) }) { pick($0) }
-            } else if customLoop, typedKeyword?.keyword == .loop {
-                CustomLoopRow(use: { pickLoop(.preset($0)) }, cancel: {
-                    customLoop = false
-                    focusAtEnd()
-                })
-            } else if let loopChoices {
-                LoopList(choices: loopChoices, selected: min(loopIndex, loopChoices.count - 1)) { pickLoop($0) }
-            } else if let reviewerChoices {
-                ReviewerList(choices: reviewerChoices, selected: min(reviewerIndex, reviewerChoices.count - 1)) { pickReviewer($0) }
-            } else if let reviewList {
-                ReviewChoiceList(list: reviewList, selected: min(reviewerIndex, reviewList.rows.count - 1)) { pickReview($0) }
-            } else if let mention {
-                MentionList(files: mention.matches, selected: min(mentionIndex, max(mention.matches.count - 1, 0))) { insertMention($0) }
-            } else if let named = agents.matches(in: text, excluding: session) {
-                AgentReferenceList(agents: named, selected: min(agents.selected, named.count - 1)) { agents.insert($0, into: $text) }
+            // What "/", "@" and "&" offer, and what a keyword asks next: as tall as the room over
+            // the field leaves, scrolling inside past that, the chosen row in view (#299).
+            if let list = openList {
+                if case .customLoop = list {
+                    // A short form, not a list: in full, its buttons' glass unclipped.
+                    listView(list, selected: 0)
+                } else {
+                    let selected = selectedRow(in: list)
+                    ComposerListScroll(room: listRoom, height: listHeight, chosen: ComposerListChoice(list: list.name, row: selected)) {
+                        listView(list, selected: selected ?? 0)
+                    }
+                }
             }
             if let sideQuestion, asksSide {
                 SideQuestionTag(close: sideQuestion)
@@ -369,7 +376,7 @@ struct Composer: View {
                                         .layoutPriority(-1)
                                 }
                                 if showsModel {
-                                    ModelChip(selection: model, onSelect: onSelectModel, scope: modelScope, inUse: modelInUse, openRequest: modelMenuRequest)
+                                    ModelChip(selection: model, onSelect: onSelectModel, scope: modelScope, inUse: modelInUse, openRequest: modelMenuRequest + pickModelRequest)
                                         .disabled(isOffline)
                                 }
                                 if let worktree {
@@ -525,8 +532,8 @@ struct Composer: View {
     }
 
     /// The field's keys: the "&", "/" and "@" lists' first while one is open; then Return sends
-    /// (Shift- or Option-Return starts a new line, ⌘Return queues), Escape stops, and ↑ and ↓ go
-    /// through what was sent before.
+    /// (Shift- or Option-Return starts a new line, ⌘Return queues), Escape stops, ↑ and ↓ go
+    /// through what was sent before, and ⇧Tab in an empty field goes to the next mode.
     private func key(_ key: MessageField.Key) -> Bool {
         // Listening (here, or in the voice field): Return is Done, Escape is Cancel, and nothing
         // else goes to the field.
@@ -556,6 +563,12 @@ struct Composer: View {
             }
             return answerKey(key)
         case .tab:
+            // ⇧Tab in an empty field: the next mode, as picked from the Mode menu (as Claude Code's
+            // Shift+Tab); with words in it, back to the control before, as in any field.
+            if key.modifiers == .shift, text.isEmpty, showsMode, !isOffline, let next = approval.next(shown: approvalShown) {
+                onSelectApproval(next)
+                return true
+            }
             if let commandMatches {
                 switch commandMatches[min(commandIndex, commandMatches.count - 1)] {
                 case .keyword(let keyword): text = keyword.typed + " "
@@ -674,13 +687,12 @@ struct Composer: View {
 
     private var actionButton: some View {
         SendStopButton(
-            stops: isRunning, canSend: canSend,
-            sendHelp: isOffline ? "Send once the connection is back" : asksSide && sideQuestionAnswering ? "Send once the side question is answered" : isShell ? "Run the Command (Return)" : isRunning ? "Send: the agent reads it at its next step (Return). ⌘Return queues it for after this run." : "Send (Return)",
-            stopHelp: "Stop (⌘.)", send: send, stop: onStop
+            stops: isRunning, canSend: sendAction.sends,
+            sendHelp: isOffline ? "Send once the connection is back" : asksSide && sideQuestionAnswering ? "Send once the side question is answered" : sendAction == .chooseModel ? "Choose a model to send it (Return opens the list)" : isShell ? "Run the Command (Return)" : isRunning ? "Send: the agent reads it at its next step (Return). ⌘Return queues it for after this run." : "Send (Return)",
+            stopHelp: "Stop (⌘.)", send: send, stop: onStop, waits: sendAction == .chooseModel
         ) {
-            Button("Send", action: send)
-            Button("Queue for After This Run", action: queue)
-                .disabled(!isRunning && !hasQueue)
+            HeldRow.button("Send", action: send)
+            HeldRow.button("Queue for After This Run", disabled: !isRunning && !hasQueue, action: queue)
         }
     }
 
@@ -689,6 +701,8 @@ struct Composer: View {
             if isOffline, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { Analytics.shared.firstMessageBlocked("engine_offline") }
             return
         }
+        // No model chosen: the picker, rather than a message that would only fail.
+        guard sendAction.sends else { return chooseModel() }
         // A keyword used: its "New" goes.
         if let (keyword, _) = Keyword.parse(text) { app.newMarks.use("keyword/" + keyword.rawValue) }
         onSend()
@@ -697,7 +711,83 @@ struct Composer: View {
     private func queue() {
         guard let onQueue else { return send() }
         guard canSend else { return }
+        guard sendAction.sends else { return chooseModel() }
         onQueue()
+    }
+
+    /// The list open over the field, one at a time: what "/" offers, what a keyword asks next,
+    /// the files "@" names, or who "&" names.
+    private enum OpenList {
+        case commands([SlashItem])
+        case customLoop
+        case loop([LoopChoice])
+        case reviewers([ReviewerChoice])
+        case review(ReviewList)
+        case mentions([ProjectFiles.File])
+        case agents([AgentMail.Agent])
+
+        /// Which list it is: another one shows its chosen row afresh.
+        var name: String {
+            switch self {
+            case .commands: "commands"
+            case .customLoop: "custom-loop"
+            case .loop: "loop"
+            case .reviewers: "reviewers"
+            case .review(let list): "review." + list.title
+            case .mentions: "mentions"
+            case .agents: "agents"
+            }
+        }
+    }
+
+    private var openList: OpenList? {
+        if let commandMatches { return .commands(commandMatches) }
+        if customLoop, typedKeyword?.keyword == .loop { return .customLoop }
+        if let loopChoices { return .loop(loopChoices) }
+        if let reviewerChoices { return .reviewers(reviewerChoices) }
+        if let reviewList { return .review(reviewList) }
+        if let mention { return .mentions(mention.matches) }
+        if let named = agents.matches(in: text, excluding: session) { return .agents(named) }
+        return nil
+    }
+
+    /// The row ↑ and ↓ have chosen in `list`; nil where it has no rows to choose.
+    private func selectedRow(in list: OpenList) -> Int? {
+        switch list {
+        case .commands(let items): min(commandIndex, items.count - 1)
+        case .customLoop: nil
+        case .loop(let choices): min(loopIndex, choices.count - 1)
+        case .reviewers(let choices): min(reviewerIndex, choices.count - 1)
+        case .review(let list): min(reviewerIndex, list.rows.count - 1)
+        case .mentions(let files): min(mentionIndex, max(files.count - 1, 0))
+        case .agents(let named): min(agents.selected, named.count - 1)
+        }
+    }
+
+    @ViewBuilder private func listView(_ list: OpenList, selected: Int) -> some View {
+        switch list {
+        case .commands(let items):
+            SlashList(items: items, selected: selected, project: folders.first.flatMap { Workspace.isChat($0) ? nil : workspace.projectName($0) }) { pick($0) }
+        case .customLoop:
+            CustomLoopRow(use: { pickLoop(.preset($0)) }, cancel: {
+                customLoop = false
+                focusAtEnd()
+            })
+        case .loop(let choices):
+            LoopList(choices: choices, selected: selected) { pickLoop($0) }
+        case .reviewers(let choices):
+            ReviewerList(choices: choices, selected: selected) { pickReviewer($0) }
+        case .review(let list):
+            ReviewChoiceList(list: list, selected: selected) { pickReview($0) }
+        case .mentions(let files):
+            MentionList(files: files, selected: selected) { insertMention($0) }
+        case .agents(let named):
+            AgentReferenceList(agents: named, selected: selected) { agents.insert($0, into: $text) }
+        }
+    }
+
+    private func chooseModel() {
+        pickModelRequest += 1
     }
 
     /// The keywords and commands matching the "/" that starts the message, while its list is
@@ -1025,19 +1115,22 @@ struct Composer: View {
 
 /// A composer's round button, a session's or a group chat's: Send, or Stop while it works and
 /// nothing's written, the one turning into the other. `menu`, on a right-click of Send.
-struct SendStopButton<Menu: View>: View {
+struct SendStopButton: View {
     let stops: Bool
     let canSend: Bool
     let sendHelp: String
     let stopHelp: String
     let send: () -> Void
     let stop: () -> Void
-    @ViewBuilder var menu: Menu
+    /// What's written waits for something (a model chosen): Send stays, dimmed, rather than
+    /// turning into Stop under the pointer.
+    var waits = false
+    @HeldRows var menu: () -> [HeldRow]
     @Namespace private var glass
 
     var body: some View {
         GlassEffectContainer {
-            if stops && !canSend {
+            if stops && !canSend && !waits {
                 Button(action: stop) {
                     Image(systemName: "stop.fill")
                         .font(ComposerRow.icon)
@@ -1060,17 +1153,17 @@ struct SendStopButton<Menu: View>: View {
                 .help(sendHelp)
                 .accessibilityLabel("Send")
                 .accessibilityIdentifier("send")
-                .contextMenu { menu }
+                .heldContextMenu(menu)
             }
         }
-        .animation(.ui, value: stops && !canSend)
+        .animation(.ui, value: stops && !canSend && !waits)
         .animation(.easeOut(duration: 0.15), value: canSend)
     }
 }
 
-extension SendStopButton where Menu == EmptyView {
+extension SendStopButton {
     init(stops: Bool, canSend: Bool, sendHelp: String, stopHelp: String, send: @escaping () -> Void, stop: @escaping () -> Void) {
-        self.init(stops: stops, canSend: canSend, sendHelp: sendHelp, stopHelp: stopHelp, send: send, stop: stop) { EmptyView() }
+        self.init(stops: stops, canSend: canSend, sendHelp: sendHelp, stopHelp: stopHelp, send: send, stop: stop) {}
     }
 }
 
@@ -1190,6 +1283,47 @@ struct ActionButtonStyle: ButtonStyle {
     }
 }
 
+/// Which list is over the message field, and the row chosen in it (nil: none to choose).
+struct ComposerListChoice: Equatable {
+    /// Another list shows its chosen row afresh.
+    let list: String
+    let row: Int?
+}
+
+/// A list over the message field, kept to `room`: past that it scrolls inside, and the chosen row
+/// (each row is `.id(index)`) comes into view as ↑ and ↓ move it, the list's top with its first.
+/// Its height as shown goes to `height`, for the card to share its room out (`ComposerListRoom`).
+struct ComposerListScroll<Content: View>: View {
+    let room: CGFloat
+    let height: Binding<CGFloat>
+    let chosen: ComposerListChoice
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    Color.clear.frame(height: 0).id("top")
+                    content
+                }
+                // Room inside the scroll view, which clips, for the rows' highlights reaching past
+                // the column's edge; the rows stay where they were.
+                .padding(.leading, 8)
+            }
+            .scrollBounceBehavior(.basedOnSize)
+            .frame(maxHeight: room)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.leading, -8)
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height.wrappedValue = $0 }
+            .onDisappear { height.wrappedValue = 0 }
+            .onChange(of: chosen, initial: true) { _, chosen in
+                guard let row = chosen.row else { return }
+                if row == 0 { proxy.scrollTo("top", anchor: .top) } else { proxy.scrollTo(row) }
+            }
+        }
+    }
+}
+
 /// The files an "@" matches, above the message field: the chosen one highlighted, any
 /// one a click away.
 private struct MentionList: View {
@@ -1222,6 +1356,9 @@ private struct MentionList: View {
                     .frame(height: 28)
                 }
                 .buttonStyle(ListRowButtonStyle(isSelected: index == selected))
+                .accessibilityAddTraits(index == selected ? .isSelected : [])
+                // Known by its place, for the list to scroll it into view (`ComposerListScroll`).
+                .id(index)
             }
         }
         .padding(.leading, -8)

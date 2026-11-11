@@ -530,6 +530,45 @@ final class AppModel {
             // As this Mac's box gives its engine (`MacBoxRunner`): the terminals you open get the same.
             if AppInfo.neverPrompts { shell["OPENCODE_DISABLE_CLAUDE_CODE_SKILLS"] = "1" }
             shellEnvironment = shell
+            // A box already on this Mac (one you set up as a machine): the app attaches to it in
+            // place, and starts, claims and registers nothing of its own, so there's never a second.
+            // (One that couldn't tell, with a box here, starts nothing: its own would be a second, for good.)
+            if Self.attachesInPlace, keeperBox == nil, !ownBoxStarted {
+                attached = nil
+                BackgroundWork.heldBack = nil
+                let outcome = await Here.gate(engine: binary, script: BoxProcess.script, appBox: BoxProcess.home, engineData: engineFolders.dataDirectory,
+                                              home: Self.hereHome, checked: Self.engineOverride == nil)
+                guard launch == self.launch else { return }
+                switch outcome {
+                case .attach(var here):
+                    attached = here
+                    BackgroundWork.heldBack = "This Mac’s box is the one already here, which starts on its own."
+                    // Stopped (its keeper ended: only a login or a restart starts it again by
+                    // itself): started again in place, by launchd where its agent is there.
+                    if here.runs == .stopped, let binary, let script = BoxProcess.script,
+                       let now = await Here.started(engine: binary, script: script, appBox: BoxProcess.home,
+                                                    engineData: engineFolders.dataDirectory, home: Self.hereHome),
+                       now.use == .attach {
+                        here = now
+                    }
+                    guard launch == self.launch else { return }
+                    attached = here
+                    // One that won't start is said so, to try again, rather than waited on.
+                    guard here.runs == .running else {
+                        throw MachineFailure(message: "The box already on this Mac didn’t start. Try again in a moment.")
+                    }
+                    // Running, it's told the app is here, for good.
+                    await Here.sayAttached(home: Self.hereHome)
+                    return
+                case .unknown(let why):
+                    let couldnt = "Kuvo Code couldn’t check the box already on this Mac, so it didn’t start one of its own."
+                    BackgroundWork.heldBack = couldnt
+                    throw MachineFailure(message: why ?? couldnt)
+                case .own:
+                    break
+                }
+            }
+            guard launch == self.launch else { return }
             followAgents()
             let endpoint = try await boxEngine()
             guard launch == self.launch else { return }
@@ -664,6 +703,19 @@ final class AppModel {
     }
     /// The own box was started this launch (restarting it is starting its engine over).
     @ObservationIgnored private var ownBoxStarted = false
+
+    /// The box already on this Mac that the app attached to in place as it opened (`Here`), rather
+    /// than starting one of its own: a Mac you set up as a machine, your Mac mini say.
+    private(set) var attached: Here?
+    /// Whether the app attaches to a box already on this Mac (#183): on with the screen that says
+    /// so, which the window shows instead of starting (with a state of its own, not `.starting`,
+    /// which it stays in meanwhile); the tests' until then.
+    nonisolated(unsafe) static var attachesInPlace = false
+    /// The home folder `here` looks in: a folder of the tests' own while they run, which they set.
+    nonisolated(unsafe) static var hereHome = defaultHereHome
+    nonisolated static var defaultHereHome: URL {
+        AppInfo.isHostingTests ? AppInfo.testRoot.appending(path: "here-home") : FileManager.default.homeDirectoryForCurrentUser
+    }
 
     /// This Mac's engine once it's up: the keeper's (started, or made way for after an update, as
     /// needed), or the app's own. What becomes of it later comes to `boxEngineChanged`.

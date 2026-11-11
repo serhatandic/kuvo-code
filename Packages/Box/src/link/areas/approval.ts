@@ -10,7 +10,7 @@ import path from "node:path";
 import { isObject, parsed } from "../../shared/json";
 import { BOX } from "../home";
 import { bridgeTarget, call, engineGet, readEngineFile } from "../engine/client";
-import { allowFullAccess, APPROVALS, approvalOf, approvalRules, approvalsSince, defaultApproval, effectiveApproval, fullAccessAllowed, isApproval, madeBefore, rememberApproval, unavailable } from "../work/approval";
+import { allowFullAccess, allowOtherComputers, APPROVALS, approvalOf, approvalRules, approvalsSince, defaultApproval, effectiveApproval, fullAccessAllowed, heldOf, isApproval, madeBefore, otherComputersAllowed, rememberApproval, unavailable } from "../work/approval";
 import { resumeReviewedSession } from "../work/goals";
 import { sandboxOn } from "../work/sandbox";
 import { approveHeld, clearFetched, clearPlaces, resumeReviews, reviewLog, revokePlace, seeHeld, shownReviews } from "../work/reviewer";
@@ -79,7 +79,7 @@ function shown(at: Found): SessionApproval {
 function changeFor(at: Found, wanted: Approval): { permissions: KitRule[]; metadata: Record<string, unknown> } | null {
   const current = (at.data.permissions ?? []) as KitRule[];
   const { approval } = effectiveApproval(wanted, { agents: at.agents });
-  const permissions = approvalRules(approval, current);
+  const permissions = approvalRules(approval, current, heldOf(at.data));
   const metadata = at.data.metadata ?? {};
   const kuvo = isObject(metadata.kuvo) ? metadata.kuvo : {};
   if (JSON.stringify(permissions) === JSON.stringify(current) && kuvo.approval === wanted && kuvo.applied === approval) return null;
@@ -197,7 +197,7 @@ export function approvalHere(): ApprovalHere {
     const not = unavailable("auto", { agents });
     return not ? { held: not } : {};
   };
-  return { fullAccess: fullAccessAllowed(), default: defaultApproval(), auto: { engine: auto(false), agents: auto(true) } };
+  return { fullAccess: fullAccessAllowed(), default: defaultApproval(), auto: { engine: auto(false), agents: auto(true) }, otherComputers: otherComputersAllowed() };
 }
 
 /** Each conversation kept with an approval that comes to something else now (the sandbox started
@@ -332,7 +332,13 @@ export async function* approvalRoute(context: RouteContext): AsyncGenerator<Answ
   if (route === "kuvo/approval") {
     if (method === "GET") return yield* json(200, approvalHere());
     if (method !== "PATCH") return yield* json(405, { message: "Read it with GET, or change it with PATCH." });
-    if (typeof given.fullAccess !== "boolean") return yield* json(400, { message: "Say whether you confirmed Full Access on this computer (fullAccess, true or false)." });
+    // Whether your other computers may start work here: only that, when it's all that's said.
+    if (typeof given.otherComputers === "boolean" && given.fullAccess === undefined) {
+      allowOtherComputers(given.otherComputers);
+      return yield* json(200, approvalHere());
+    }
+    if (typeof given.fullAccess !== "boolean") return yield* json(400, { message: "Say whether you confirmed Full Access on this computer (fullAccess, true or false), or whether your other computers may start work here (otherComputers, true or false)." });
+    if (typeof given.otherComputers === "boolean") allowOtherComputers(given.otherComputers);
     allowFullAccess(given.fullAccess);
     // What had it, or was held from it, comes to what it can be now at once, rather than at the
     // box's next look.

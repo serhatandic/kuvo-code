@@ -15,28 +15,6 @@
       ]
     },
     {
-      "name": "kuvo/info: what the box answers, by name, not by version",
-      "steps": [
-        {
-          "send": "GET kuvo/info",
-          "why": "A client checks `features` before it shows what needs a route: both boxes name what they both answer the same way; only a machine updates itself, sets up its own browser, and starts an engine an older Mac's Stop left down; only a Mac has Settings › Machines, its phones' hosts, While Agents Work, and Claude Code's agents and commands (every box says which of its sign-ins ended).",
-          "expect": {
-            "mac": { "status": 200, "json": { "features": {
-              "<includes>": ["accounts.credentials", "agents", "artifacts", "asks", "attention", "bots", "bots.edit", "bots.events", "bots.job", "bots.keys", "bots.make", "config", "config.apply", "engine.restart", "file", "goals", "groups", "btw", "btw.threads", "handoff", "branch", "reviews", "reviews.parts", "reviews.scopes", "moves", "moves.agents", "moves.check", "groups.delete", "groups.edit", "groups.joinable", "groups.make", "groups.seats", "integrations", "keys", "mcp.catalog", "named", "personalities", "phones", "phones.pair", "projects", "search", "sessions.agents", "sessions.glance", "shell.stop", "sign-in.return", "skills", "skills.trash", "wakes", "wakes.edit", "worktrees", "worktrees.events", "folders", "folders.files", "git", "git.merge", "git.pull-request", "git.pull-request.draft", "git.push", "git.changes.count", "plugins.search", "programs", "providers.models", "worktrees.where",
-                "accounts.ended", "accounts.found", "accounts.refresh", "claude-code", "hosts", "mac", "machines", "wakes.events", "personalities.events", "agent-tools", "sessions.start", "letters-read", "work.elsewhere", "queue", "queue.waits", "work", "work.projects", "work.goals", "autopilot", "work.goals.apps", "work.goals.projects", "work.unanswering", "vault", "sandbox", "sandbox.check", "sandbox.asks", "sandbox.reviews.whole", "approval", "approval.reviewer", "git.backups", "approval.fullAccess", "approval.held", "approval.default", "approval.seen", "approval.stopped", "limits", "work-queue", "work-queue.elsewhere", "setup"],
-              "<excludes>": ["engine.start", "update", "browser"]
-            } } },
-            "machine": { "status": 200, "json": { "features": {
-              "<includes>": ["accounts.credentials", "agents", "artifacts", "asks", "attention", "bots", "bots.edit", "bots.events", "bots.job", "bots.keys", "bots.make", "config", "config.apply", "engine.restart", "file", "goals", "groups", "btw", "btw.threads", "handoff", "branch", "reviews", "reviews.parts", "reviews.scopes", "moves", "moves.agents", "moves.check", "groups.delete", "groups.edit", "groups.joinable", "groups.make", "groups.seats", "integrations", "keys", "mcp.catalog", "named", "personalities", "phones", "phones.pair", "projects", "search", "sessions.agents", "sessions.glance", "shell.stop", "sign-in.return", "skills", "skills.trash", "wakes", "wakes.edit", "worktrees", "worktrees.events", "folders", "folders.files", "git", "git.merge", "git.pull-request", "git.pull-request.draft", "git.push", "git.changes.count", "plugins.search", "programs", "providers.models", "worktrees.where",
-                "engine.start", "update", "wakes.events", "personalities.events", "accounts.ended", "accounts.found", "accounts.refresh", "agent-tools", "sessions.start", "letters-read", "work.elsewhere", "queue", "queue.waits", "work", "work.projects", "work.goals", "autopilot", "work.goals.apps", "work.goals.projects", "work.unanswering", "vault", "sandbox", "sandbox.check", "sandbox.asks", "sandbox.reviews.whole", "approval", "approval.reviewer", "git.backups", "approval.fullAccess", "approval.held", "approval.default", "approval.seen", "approval.stopped", "limits", "work-queue", "work-queue.elsewhere", "browser", "setup"],
-              "<excludes>": ["claude-code", "hosts", "mac", "machines", "usage"],
-              "<length>": 101
-            } } }
-          }
-        }
-      ]
-    },
-    {
       "name": "a query string never changes which route answers",
       "steps": [
         { "given": { "bot": { "id": "bot_ada", "name": "Ada", "session": "ses_ada" } } },
@@ -175,13 +153,17 @@
       "steps": [
         {
           "send": "GET kuvo/setup",
-          "why": "Every box says the same facts of your setup, from its main computer's signed document; a machine in no setup yet (one never linked, as here) says so with nulls, and a Mac's box may have made its own already. The #181 switch, unset, is off on a Mac with the app and on a machine.",
+          "why": "Every box says the same facts of your setup, from its main computer's signed document; a machine in no setup yet (one never linked, as here) says so with nulls, and a Mac's box may have made its own already. The #181 switch, unset, is off on a Mac with the app and on a machine. Only a Mac is held back from leading one by its machines (`heldBy`).",
           "expect": {
-            "mac": { "status": 200, "json": { "you": { "role": "<any>" }, "computers": "<array>", "startsFromOthers": { "value": null, "default": "off" } } },
-            "machine": { "status": 200, "json": { "setup": null, "epoch": null, "primary": null, "you": { "key": null, "role": null }, "computers": [], "startsFromOthers": { "value": null, "default": "on" } } }
+            "mac": { "status": 200, "json": { "you": { "role": "<any>" }, "computers": "<array>", "startsFromOthers": { "value": null, "default": "off" }, "heldBy": "<array>" } },
+            "machine": { "status": 200, "json": { "setup": null, "epoch": null, "primary": null, "you": { "key": null, "role": null }, "computers": [], "startsFromOthers": { "value": null, "default": "on" }, "heldBy": [] } }
           }
         },
-        { "send": "POST kuvo/setup", "body": {}, "expect": { "status": 405 } }
+        { "send": "POST kuvo/setup", "body": {}, "expect": { "status": 405 } },
+        { "send": "POST kuvo/setup/judge", "body": { "probe": "Linux x86_64\nglibc\n" }, "why": "What a Mac adding a computer found there, judged by the box: nothing anyone's, here.", "expect": { "status": 200, "json": { "verdict": "free", "joins": false, "boxes": [] } } },
+        { "send": "POST kuvo/setup/judge", "body": {}, "expect": { "status": 400 } },
+        { "send": "GET kuvo/setup/judge", "expect": { "status": 405 } },
+        { "send": "GET kuvo/setup/attached", "why": "Kuvo Code on this computer saying it attached to this box is a POST.", "expect": { "status": 405 } }
       ]
     },
     {

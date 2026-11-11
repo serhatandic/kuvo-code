@@ -66,6 +66,7 @@ import { pushRows } from "./work/elsewhere";
 import { pushNumbers } from "./work-queue/numbers";
 import { noteSetupNow } from "./setup/lead";
 import { writeCard } from "./setup/card";
+import { hereNow } from "./setup/judge";
 import { pushQueues } from "./work-queue/across";
 import { handUpkeepSoon } from "./work-queue/hand";
 import { clearStaging } from "./work-queue/ops";
@@ -122,15 +123,17 @@ export { movesElsewhere } from "./moves/elsewhere";
 export { applyCompatibility, COMPATIBILITY_FILE, ENGINE_LAYER_FILE, engineConfigContent, learnCompatibility, readCompatibility } from "./engine/compatibility";
 export { MODELS_DUE_FILE, refreshModels, settleDueModels } from "./engine/models";
 export { queueOf, queueWatcher, readQueues, scanQueues, stopSession } from "./engine/queue";
-export { keepReadThroughSummary } from "./work/tree";
+export { PLACE_TRIES } from "./letters/letter";
+export { keepReadThroughSummary, keepWorkRead, settleWorkRead, under } from "./work/tree";
+export { readAllOn, readGroups } from "./areas/read-all";
 export { glances, Unreached } from "./areas/glance";
 export { askedSince, forgetAsks, forgetAsksOn, noteAskEvent } from "./glance/asked";
 export { checksOf, pullOf, queryFor, readPulls } from "./glance/github";
 export { linkPull, pullCatcher, readPullLinks } from "./glance/pulls";
 export { letAttachmentsGo } from "./server/attached";
-export { workWatcher } from "./work/wakes";
+export { FIRST_LOOK, WAITING_LOOK, workWatcher } from "./work/wakes";
 export { forgetOldHomes } from "./work/homes";
-export { AT_WORK_LIMIT, FINISH_HOLD_LIMIT, atWorkNow, noteStopped, readBackground, readStopped, stopWork } from "./work/background";
+export { AT_WORK_LIMIT, atWorkNow, noteStopped, readBackground, readStopped, stopWork } from "./work/background";
 export { goalFollowers, goalHolds, settleGoalHolds, lookAtGoals, periodOf, periodEnd, pauseGoal, REVIEW_PAUSE } from "./work/goals";
 export { keptAwake, letGo } from "./work/awake";
 export { macLink, readLink, updateLink, writeLink } from "./state";
@@ -182,6 +185,7 @@ export { leadsNow, noteSetupNow, settleOwnSetup } from "./setup/lead";
 export { settleSetup, sharedMachine } from "./setup/settle";
 export { followedSetup, newSetupID, startsFromOthers } from "./setup/record";
 export { setupView } from "./setup/view";
+export { foundOf, hereNow, judgeComputer, judgeHere, oursNow } from "./setup/judge";
 export { cardNow, SETUP_CARD, writeCard } from "./setup/card";
 export { keptFeatures, peerOf, readPeerAgents, takeAgents } from "./peers/directory";
 export { composeLetter } from "./letters/letter";
@@ -191,7 +195,12 @@ export { bridgeAsk, bridgeClock, carrySeat, seatPayloads, seatPeers, takeSeat, t
 export { announce, ownAgents, refreshOwn, writeAgents } from "./peers/agents";
 export { answered, deliverLeftAnswers, letterMail, letterWent, sendOutbox } from "./letters/outbox";
 export { takeLetter } from "./letters/take";
-export { callAs, callsBack, takeCall } from "./letters/calls";
+export { answerResumed, callAs, callsBack, sendCall, takeCall } from "./letters/calls";
+export { computerOf, resumeStarts, stopBotWorkElsewhere } from "./letters/start-call";
+export { agentTool } from "./letters/tools";
+export { stopBotWork } from "./work/stop";
+export { allowOtherComputers, approvalOf, otherComputersAllowed } from "./work/approval";
+export { reapplyApprovals } from "./areas/approval";
 export { pushRows, takeRows } from "./work/elsewhere";
 export { askToSend, blockArrived, BLOCK as QUEUE_BLOCK, CLAIM_REACH as QUEUE_CLAIM_REACH, claimNumbers, giveBlock, LOW as QUEUE_LOW, notePrimaryNow, primaryOf, pushNumbers, rankedPrimary, readNumbers, reclaimWaiting, takeBlock, takeNumber, takeNumbersMail } from "./work-queue/numbers";
 export { forgetPushed as forgetQueuesTold, itemsElsewhere, pushQueues, takeWorkQueueMail, tellingNow as queueTellingNow, tellQueuesAgain } from "./work-queue/across";
@@ -907,6 +916,18 @@ if (main) {
   else if (mode === "box") await box(argument);
   else if (mode === "serve") await serve();
   else if (mode === "leave") leave(argument);
+  // Kuvo Code as it opens on a Mac, before it starts a box (PROTOCOL.md, "Your setup", "Already in a
+  // setup?"): whether it uses its own box, or the one already on this Mac, in place. `here <root>`,
+  // root the machines' folder's name in the home folder (`.kuvo-code`, or a test's own), with
+  // KUVO_HOME the app's own box's folder: both said, never guessed.
+  else if (mode === "here") {
+    try {
+      console.log(JSON.stringify(hereNow(argument)));
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : String(error));
+      process.exit(2);
+    }
+  }
   // A machine's start scripts' (`kuvo-launch`): what its engine starts with, its OPENCODE_CONFIG_CONTENT
   // with the sandbox's note, and what some providers need beside its settings, as this box last
   // learned it (PROTOCOL.md, "Settings per box").
@@ -973,7 +994,7 @@ if (main) {
     console.log(ok ? "ok" : "failed");
     process.exit(ok ? 0 : 1);
   } else {
-    console.error("Usage: kuvo-link.js run | serve | setup | pair [relay] | box <command> | leave <mac> | engine-config | login-path | update [--now] | browser install|start|status | selftest");
+    console.error("Usage: kuvo-link.js run | serve | setup | pair [relay] | box <command> | leave <mac> | here <root> | engine-config | login-path | update [--now] | browser install|start|status | selftest");
     process.exit(2);
   }
 }

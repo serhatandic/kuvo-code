@@ -37,6 +37,17 @@ enum ToolApproval: String, CaseIterable, Codable {
     var detail: String { ApprovalWords.detail(rawValue) }
     var symbol: String { ApprovalWords.symbol(rawValue) }
 
+    /// ⇧Tab's mode in an empty composer (KuvoClient's ApprovalCycle): the next the menu offers,
+    /// passing over one its box says can't be had and Full Access while it isn't known to be
+    /// confirmed on its computer (its box not read yet, too).
+    func next(shown: ApprovalShown?) -> ToolApproval? {
+        ApprovalCycle.next(after: rawValue) { name in
+            guard let mode = ToolApproval(rawValue: name) else { return false }
+            guard let option = shown?.option(mode) else { return mode != .fullAccess }
+            return option.unavailable == nil
+        }.flatMap(ToolApproval.init(rawValue:))
+    }
+
     /// A conversation's, as it's kept with it; one from before (or a box that doesn't keep them)
     /// as its rules say: asking before commands is Ask First, nothing asking is Auto, until its
     /// box says (`SessionModel.approvalShown`).
@@ -134,6 +145,8 @@ struct ApprovalHere: Decodable, Equatable {
     var fullAccess: Bool
     var `default`: ToolApproval
     var auto: Auto
+    /// Whether your other computers may start work on this one; nil from a box before it.
+    var otherComputers: Bool?
 
     /// As a new conversation's composer shows it (no conversation yet to read one of).
     func shown(_ approval: ToolApproval, agents: Bool) -> ApprovalShown {
@@ -391,7 +404,7 @@ struct ModelChip<Label: View>: View {
     /// The model picked can't be used now: the chip asks for another rather than show the
     /// default as if it were in use.
     private var isUnavailable: Bool { catalog.isUnavailable(selection) || selection.map { !scope.allows($0.providerID) } == true }
-    private var current: Model? { selection.map { !scope.allows($0.providerID) } == true ? nil : catalog.chipModel(selection) }
+    private var current: Model? { catalog.chipModel(selection, in: scope) }
     private var variant: String? { current.flatMap { model in selection.map({ catalog.isSameModel(model.ref, $0) }) == true ? selection?.variant : nil } }
 
     var body: some View {
@@ -403,7 +416,7 @@ struct ModelChip<Label: View>: View {
         }
         .modelChipStyle(popUp: popUp)
         .clickablePointer()
-        .help(catalog.needsSignIn(selection) ? catalog.unavailable(selection!, on: catalog.machine.map { app.name(of: .machine($0)) }) : isUnavailable ? "\(catalog.model(selection)?.name ?? selection?.id ?? "") isn't available now: choose another model" : "Model and effort")
+        .help(catalog.needsSignIn(selection) ? catalog.unavailable(selection!, on: catalog.machine.map { app.name(of: .machine($0)) }) : isUnavailable && current == nil ? "\(catalog.model(selection)?.name ?? selection?.id ?? "") isn't available now: choose another model" : "Model and effort")
         .background(ScreenRoomReader(room: anchor))
         .closesWhenKept($isOpen)
         .popover(isPresented: $isOpen, arrowEdge: placement.below ? .bottom : .top) {

@@ -104,7 +104,20 @@ final class ConversationScroller {
         if seesEnd != sees { seesEnd = sees }
     }
 
+    /// `id`, a step that's done or an agents' message card, about to be opened by you: while
+    /// following the end, following stops before it grows, so it opens down past the composer,
+    /// moving nothing above it, as a disclosure row does (#416); followed, the conversation went
+    /// up by all it grew at once, as the fold was still opening. What comes in next doesn't move
+    /// it either.
+    fileprivate func opening(_ id: String) {
+        guard followsEnd || !heldFor.isEmpty else { return }
+        if followsEnd { follow(false) }
+        heldFor.insert(id)
+    }
+
     /// `id` opened or closed by you: back to the end once the last you left it for is closed.
+    /// (One you open as it's done is held as it opens: `opening`. One opened as it was under way
+    /// is held once it has ended, all of it in view first.)
     fileprivate func reading(_ id: String, isOpen: Bool) {
         if isOpen {
             guard followsEnd || !heldFor.isEmpty else { return }
@@ -533,6 +546,7 @@ extension ConversationScroll {
     fileprivate func wire() {
         anchor.stopFollowing = { [scroller] in scroller.follow(false) }
         anchor.reading = { [scroller] id, isOpen in scroller.reading(id, isOpen: isOpen) }
+        anchor.opening = { [scroller] id in scroller.opening(id) }
         anchor.isFollowingEnd = scroller.followsEnd
         scroller.followChanged = { [weak anchor] in anchor?.isFollowingEnd = $0 }
     }
@@ -733,6 +747,8 @@ final class ScrollAnchor {
     var stopFollowing: () -> Void = {}
     /// Steps opened (true) or closed by you, by what their fold is kept by.
     var reading: ((String, Bool) -> Void)?
+    /// A step that's done, or an agents' message card, about to be opened by you, before it grows.
+    var opening: ((String) -> Void)?
 
     /// The rows laid out, where they are in the conversation, and those shown now. A row that
     /// goes and comes back where it was (the whole conversation hidden a moment) isn't told its

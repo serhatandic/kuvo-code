@@ -80,19 +80,19 @@ struct WorkQueuePanel: View {
     }
 
     /// Rename and Remove for a category of your own (the built-in ones stay as they are).
-    @ViewBuilder private func categoryMenu(_ id: String?, count: Int, adds: Bool = true) -> some View {
+    @HeldRows private func categoryMenu(_ id: String?, count: Int, adds: Bool = true) -> [HeldRow] {
         if let id, let category = view?.categories.first(where: { $0.id == id }), !category.builtIn {
-            Button("Rename “\(category.name)”…") {
+            HeldRow.button("Rename “\(category.name)”…") {
                 name = category.name
                 naming = .some(category)
             }
-            Button("Remove “\(category.name)”", role: .destructive) { Task { await store.removeCategory(category.id, on: box) } }
-                .disabled(count > 0)
-                .help(count > 0 ? "Move its items out first." : "")
-            if adds { Divider() }
+            HeldRow.button("Remove “\(category.name)”", role: .destructive, disabled: count > 0, help: count > 0 ? "Move its items out first." : nil) {
+                Task { await store.removeCategory(category.id, on: box) }
+            }
+            if adds { HeldRow.divider }
         }
         if adds {
-            Button("New Category…") {
+            HeldRow.button("New Category…") {
                 name = ""
                 naming = .some(nil)
             }
@@ -200,7 +200,7 @@ struct WorkQueuePanel: View {
                 .buttonStyle(IconButtonStyle())
                 .help("Find an item by its title or number")
                 Menu {
-                    categoryMenu(nil, count: 0)
+                    HeldMenuContent(rows: categoryMenu(nil, count: 0))
                 } label: {
                     Image(systemName: "ellipsis")
                 }
@@ -293,7 +293,7 @@ struct WorkQueuePanel: View {
         }
         .buttonStyle(FilledButtonStyle(shape: Capsule(), rest: 0))
         .accessibilityAddTraits(isOn ? .isSelected : [])
-        .contextMenu {
+        .heldContextMenu {
             if case .category(let id) = filter, id != Self.deleted { categoryMenu(id, count: count) }
         }
     }
@@ -447,7 +447,7 @@ struct WorkQueuePanel: View {
         .padding(.bottom, 3)
         .contentShape(.rect)
         .onDrop(of: [.plainText], delegate: dropping(on: section, index: nil))
-        .contextMenu { if category != nil { categoryMenu(category, count: count) } }
+        .heldContextMenu { if category != nil { categoryMenu(category, count: count) } }
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isHeader)
     }
@@ -492,7 +492,7 @@ struct WorkQueuePanel: View {
             .background(dropFill(isTarget))
             .padding(.horizontal, 6)
             .onDrop(of: [.plainText], delegate: dropping(on: section, index: nil))
-            .contextMenu { if category != nil { categoryMenu(category, count: count) } }
+            .heldContextMenu { if category != nil { categoryMenu(category, count: count) } }
             .accessibilityValue(wide ? "\(count) items" : "\(count) items, \(isOpen ? "open" : "closed")")
             if isOpen { rows() }
         }
@@ -518,14 +518,14 @@ struct WorkQueuePanel: View {
         .draggable(item.written ?? item.title)
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { rowHeights[item.id] = $0 }
         .onDrop(of: [.plainText], delegate: dropping(on: section, index: index, item: item.id))
-        .contextMenu {
+        .heldContextMenu {
             // The session first, as #417 opens it: in this conversation's place, or a tab of its own.
             if let session {
-                Button("Open Session") { app.open(.session(session), from: app.tabs.messageTarget) }
-                Button("Open Session in New Tab") { app.open(.session(session), from: app.tabs.messageTarget, newTab: true) }
-                Divider()
+                HeldRow.button("Open Session") { app.open(.session(session), from: app.tabs.messageTarget) }
+                HeldRow.button("Open Session in New Tab") { app.open(.session(session), from: app.tabs.messageTarget, newTab: true) }
+                HeldRow.divider
             }
-            menu(item, view: view)
+            WorkItemMenu.rows(item, view: view, box: box, app: app)
         }
         .accessibilityActions {
             if let session {
@@ -564,10 +564,6 @@ struct WorkQueuePanel: View {
         }
         .padding(.horizontal, 14)
         .frame(minHeight: 30)
-    }
-
-    @ViewBuilder private func menu(_ item: WorkItem, view: WorkQueueView) -> some View {
-        WorkItemMenu(item: item, view: view, box: box)
     }
 
     // MARK: Dragging
@@ -631,25 +627,26 @@ struct WorkItemMenu: View {
     @Environment(AppModel.self) private var app
 
     var body: some View {
+        HeldMenuContent(rows: Self.rows(item, view: view, box: box, app: app))
+    }
+
+    @HeldRows static func rows(_ item: WorkItem, view: WorkQueueView, box: String, app: AppModel) -> [HeldRow] {
         let store = app.workQueues
         // (Its order is among the items on its own computer: KuvoClient's rule, the phone's too.)
         let places = WorkQueue.menuPlaces(of: item, in: view)
         // (An issue closed on GitHub stays Done until it's reopened there: only Delete.)
         if WorkQueue.canMove(item) {
-            Menu("Move To") {
-                ForEach(WorkQueue.moveTargets(for: item, in: view.categories)) { category in
-                    Button(category.name) { Task { await store.move(item, to: .category(category.id), on: box) } }
+            HeldRow.submenu("Move To") {
+                for category in WorkQueue.moveTargets(for: item, in: view.categories) {
+                    HeldRow.button(category.name) { Task { await store.move(item, to: .category(category.id), on: box) } }
                 }
             }
-            Button("Move to Top") { if let top = places.top { Task { await store.move(item, to: top, on: box) } } }
-                .disabled(places.top == nil)
-            Button("Move Up") { if let up = places.up { Task { await store.move(item, to: up, on: box) } } }
-                .disabled(places.up == nil)
-            Button("Move Down") { if let down = places.down { Task { await store.move(item, to: down, on: box) } } }
-                .disabled(places.down == nil)
-            Divider()
+            HeldRow.button("Move to Top", disabled: places.top == nil) { if let top = places.top { Task { await store.move(item, to: top, on: box) } } }
+            HeldRow.button("Move Up", disabled: places.up == nil) { if let up = places.up { Task { await store.move(item, to: up, on: box) } } }
+            HeldRow.button("Move Down", disabled: places.down == nil) { if let down = places.down { Task { await store.move(item, to: down, on: box) } } }
+            HeldRow.divider
         }
-        Button("Delete", role: .destructive) { Task { await store.delete(item, on: box) } }
+        HeldRow.button("Delete", role: .destructive) { Task { await store.delete(item, on: box) } }
     }
 }
 

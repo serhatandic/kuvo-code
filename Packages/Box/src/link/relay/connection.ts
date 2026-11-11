@@ -3,20 +3,29 @@
 import { addressOf, EMPTY } from "../crypto/keys";
 import { notePushed } from "../notices/push";
 import { noteUnreachable } from "../peers/reach";
+import { connectionEnded, connectionStarted, fenceBack, noteDropped } from "./dropped";
 import { readRelay, relayHello, relaySend } from "./frames";
 import type { RelayMessage } from "./frames";
 import type { LinkHost } from "./host";
 
 // What the relay sends once it's welcomed this connection, for `host`: something for it, or a phone
 // gone (unreachable, or its connection went or was replaced), whose sessions end with nothing more
-// sent; another of your computers unreachable is noted for its tools to say so (`peers/reach.ts`);
-// how a push to a phone went, kept (`notices/push.ts`). What this connection sends itself, to check
-// it's alive, is only that.
+// sent; another of your computers unreachable is noted for its tools to say so (`peers/reach.ts`),
+// and whether a call to it got there (`dropped.ts`); how a push to a phone went, kept
+// (`notices/push.ts`). What this connection sends itself, to check it's alive, is only that, or a
+// call's fence.
 export function fromRelay(host: Pick<LinkHost, "receive" | "forget">, message: RelayMessage, self: Buffer): void {
-  if (message.address.equals(self)) return;
+  if (message.address.equals(self)) {
+    if (message.kind === "deliver") fenceBack(message.payload);
+    return;
+  }
   if (message.kind === "deliver") host.receive(message.address, message.payload);
   if (message.kind === "unreachable" || message.kind === "gone") host.forget(message.address);
-  if (message.kind === "unreachable") noteUnreachable(message.address);
+  if (message.kind === "unreachable") {
+    // (First, so a tool that sees it unreachable sees too whether its call got there.)
+    noteDropped(message.address);
+    noteUnreachable(message.address);
+  }
   if (message.kind === "pushed") notePushed(message.address, message.status);
 }
 
@@ -50,6 +59,7 @@ export function connectOnce(relay: string, secret: Buffer, host: LinkHost, onWel
     const finish = () => {
       if (finished) return;
       finished = true;
+      connectionEnded();
       clearInterval(check);
       clearTimeout(opening);
       try { socket.close(); } catch {}
@@ -70,6 +80,8 @@ export function connectOnce(relay: string, secret: Buffer, host: LinkHost, onWel
       if (!welcomed) {
         if (message.kind !== "welcome" || !message.address.equals(self)) return socket.close();
         welcomed = true;
+        // (What was made before it, between connections, isn't answered on it.)
+        connectionStarted(self);
         // Whether it went out (a connection that's closing takes nothing).
         host.send = (bytes: Buffer) => {
           if (socket.readyState !== 1) return false;

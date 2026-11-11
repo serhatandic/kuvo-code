@@ -378,12 +378,7 @@ final class ReplyTextView: PointerAwareTextView, NSTextViewDelegate {
     override func menu(for event: NSEvent) -> NSMenu? {
         let point = convert(event.locationInWindow, from: nil)
         guard link(at: point) == nil, !selectedRanges.contains(where: { NSLocationInRange(character(at: point), $0.rangeValue) }) else { return super.menu(for: event) }
-        var view = superview
-        while let around = view {
-            if let menu = around.menu(for: event), !menu.items.isEmpty { return menu }
-            view = around.superview
-        }
-        return super.menu(for: event)
+        return HeldMenus.shared.menu(for: event, from: self)?.menu ?? super.menu(for: event)
     }
 
     // The keyboard goes to the conversation with its selection, never to one of its texts: two

@@ -5,8 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { outsideShown } from "../../shared/text";
 import { boxNoteOf, wakeMarkOf } from "../../shared/queues";
-import { readProjects } from "../areas/projects";
-import { projectOf } from "../areas/worktree-records";
+import { filedUnder, readProjects } from "../areas/projects";
 import { engineGet } from "../engine/client";
 import { summaryAtEnd } from "../../shared/summaries";
 import { isHiddenRun } from "../engine/sessions";
@@ -16,7 +15,7 @@ import { IS_MAC, K } from "../home";
 import { masked, showsAll } from "./mask";
 import { oneSentence, plain, reasonLine } from "./sentence";
 import { writtenByYou } from "../engine/queue";
-import type { Fields } from "../../shared/json";
+import { isObject, type Fields } from "../../shared/json";
 import type { Target } from "../../shared/records";
 import type { EngineAnswer, UncheckedAnswer } from "../engine/client";
 import type { EngineSession } from "../engine/sessions";
@@ -242,11 +241,15 @@ export function answersYou(began: TurnBegan, session: EngineSession): boolean {
 // This box's chats, conversations of no project: a machine's in its folder, a Mac's beside its box.
 const chatsFolder = (): string => (IS_MAC ? path.join(path.dirname(K), "Chats") : path.join(K, "chats"));
 
-// A project's name, as the Mac shows it: its own, or its folder's; a worktree's is its project's.
-export function projectNameOf(directory: string | undefined): string | undefined {
+// A project's name, as every client shows it: its own, or its folder's; a worktree's or another
+// folder's is its project's, and so is that of a session filed under it from there (`kuvo.filed`,
+// `session`'s, while it's in that folder).
+export function projectNameOf(directory: string | undefined, session?: Partial<EngineSession> | null): string | undefined {
   if (!directory) return undefined;
   if (directory === chatsFolder()) return "Chats";
-  const project = projectOf(directory);
+  const under = filedUnder(directory);
+  const mark = session?.metadata?.kuvo?.filed;
+  const project = under === directory && isObject(mark) && mark.folder === directory && typeof mark.project === "string" ? mark.project : under;
   return readProjects().find(each => each.directory === project)?.name || path.basename(project) || undefined;
 }
 
@@ -279,7 +282,7 @@ export async function noticeFor(event: EngineEvent, get: EngineAsk): Promise<Not
     const bot = isBot(shown);
     return {
       title: shown.title || untitled,
-      subtitle: bot ? undefined : projectNameOf(shown.location?.directory ?? ""),
+      subtitle: bot ? undefined : projectNameOf(shown.location?.directory ?? "", shown),
       body,
       category,
       thread: shown.id,

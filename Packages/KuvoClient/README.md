@@ -30,7 +30,12 @@ The rules for what a message says, the same in both apps. Foundation only: no vi
 (`Offers`). Only the Mac's first launch offers them now: a computer is set up on the Mac before a
 phone pairs with it, so the phone, which had a sheet of its own for this, doesn't use them.
 `AccountNames` is what both apps call each provider's accounts in a word ("Claude", "Copilot"),
-the same in the usage panel and the work bar.
+the same in the usage panel and the work bar. `EngineProviders` is which of the engine's
+integrations Accounts lists as providers: no web search services, and not the engine's own
+"Claude Agent" (Claude comes through Claude Code, with the coding agents) unless it was added.
+`PlanSignIns` is what a conversation on the engine's own OpenAI or xAI model says when the engine
+can't run it: a ChatGPT or SuperGrok plan signs in through Codex or Grok, so it needs a key, or a
+model under that agent.
 
 ## ClientSessions
 
@@ -50,7 +55,7 @@ What a client shows of a computer's sessions, the same in both apps. Rules only,
   it, Look for), their rows and sizes from what the box measured, and loading those.
 - `BoxNote` and `ReplyChanges`: what the box and the engine write to an agent in its conversation,
   as both apps show it, with no pills. A lead's sessions' news is a message from each session
-  (`BoxNote.shown`, `SessionNews`: finished, failed or asks; one still working shows nothing).
+  (`BoxNote.shown`, `SessionNews`: finished, failed, asks or stopped by you; one still working shows nothing).
   What changed since the reply before (the model or its effort, the mode, a summary, the project's
   folders, a goal started) is a word in the next reply's footer (`ReplyChanges`). Notes written for
   the model show nothing.
@@ -58,9 +63,18 @@ What a client shows of a computer's sessions, the same in both apps. Rules only,
   has ended (its engine let go of it) or just can't be read now.
 - `AskPlace`: which of the asks waiting takes the composer's place, and "2 of 3" over it: the one
   in view stays while others come, and once it's answered the next after it shows.
+- `ConversationPictures`: every picture of a conversation, in order, across its messages (yours,
+  and those an agent made, showed or took of a page to show you), each by an id that stays: what a
+  picture opens among, to go to the one before or after it, in both apps' viewers.
+- `Reach`: when a computer counts as not connected (#443): never for a link that's only slow or
+  down for a moment; only once it's been down through the grace and a check since got no answer.
+  And which failures are only the link's (`isTransient`), read again rather than said.
 - `WorkWords`: what a bot's work says, as its box tells it (`kuvo/work`): the bar's line, and each
   session's row (`about`: its model, the account it runs on and its project, then shorter for a
   narrow row, the account going first).
+- `ComposerSend`: what a composer's Send and Return do with what's written: it goes; or, with no
+  model chosen (the chip says "Choose a Model"), Send is off and Return opens the model picker,
+  the message kept; a "!" command, and showing, pausing or taking away a goal, go without one.
 
 ## ClientVault
 
@@ -111,6 +125,8 @@ phone's copies of the Mac's design files, a piece at a time.
 - `ComposerRow`: the row under a composer's field, its words' font and its icons' (the paperclip,
   the mode's, the chips' chevrons and ✕, the mic, Send and Stop): one size and weight, the words',
   on their baseline.
+- `ComposerListRoom`: how tall a list over a composer's field ("/", "@", "&") can be before it
+  scrolls inside: the card's room less the field and its chips and what the bars keep at least.
 - `FirstLineListItemStyle` (`.firstLine`): a list item's marker on its first line's middle.
 - `ShimmerText`: words that shimmer while something's under way, played by Core Animation.
 - `BotAvatar`, `BotLook`, `BotMood`, `GroupAvatar`, `MachineBadge`: the bots' looks, still and
@@ -122,6 +138,8 @@ phone's copies of the Mac's design files, a piece at a time.
 - `FolderIcon`: a project's folder, open or closed.
 - `Flow`: views in rows that wrap when the room runs out, against the leading or trailing edge
   (a sent message's pictures, chips in a row).
+- `TitleWithTail`: a row's title with a short note at its end ("from Mini"); the title always
+  wins, and the note goes where the row can't hold it and about twelve characters of the title.
 - `FileKind`: what kind a file is by its name (code, text, data, a picture…) and its symbol, where an
   app shows a file without its own icon.
 - `BrandMark`, `BrandMarkView`: the marks of providers, coding agents, integrations and MCP servers,

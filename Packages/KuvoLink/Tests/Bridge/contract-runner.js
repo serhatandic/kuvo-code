@@ -20,6 +20,7 @@ import { test } from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { NO_BUN, testBun } from "./bun-for-tests.js";
 import { atEnd } from "./at-end.js";
+import { keepsIdle } from "./keeps-idle.js";
 
 const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
 // The box's folder, and the app's folders for its bots and sessions' wake-ups beside it on a Mac
@@ -122,6 +123,7 @@ const server = http.createServer((request, response) => {
     send({}, request.method === "GET" ? 404 : 200);
   });
 });
+keepsIdle(server);
 await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
 atEnd(() => { server.closeAllConnections(); server.close(); });
 const readEngine = () => ({ port: server.address().port, password: "engine", version: "0.0.0" });

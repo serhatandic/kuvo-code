@@ -149,6 +149,8 @@ struct TranscriptView: View {
         // What Auto's reviewer did with what its steps asked, beside them.
         .environment(\.askReviews, Sandboxes.shared.reviewMarks(on: Workspace.box(of: model.session.location.directory)))
         .environment(\.conversationSignIn, signIn)
+        // Its pictures, which each of them opens among.
+        .environment(\.conversationPictures, ConversationPictureSet(model: model))
         // Its sign-in, where this conversation runs (a machine signs in on its own).
         .sheet(item: $signingIn) { item in
             ConnectView(integrationID: item.id, onDone: { signingIn = nil }, onCancel: { signingIn = nil })
@@ -402,8 +404,9 @@ struct TranscriptView: View {
         // message queued during a run is older than that run's later steps.
         let boundary = model.session.revert?.messageID
         let all = model.transcript.messages
-        let cut = boundary.map { boundary in all.firstIndex { $0.id == boundary } ?? all.firstIndex { $0.id >= boundary } ?? all.count }
-        let messages = cut.map { Array(all[..<$0]) } ?? all
+        let messages = ShownMessages.before(undo: boundary, in: all)
+        // Where the undone part starts, if anything's undone.
+        let cut = boundary.map { _ in messages.count }
         // The model each turn runs on, for one that fails before any reply says it: the last switch's;
         // before any, the one the first switch left (wherever it is), or the session's. Not a reply's:
         // Auto's are the model it picked for that turn.
@@ -919,7 +922,7 @@ private struct RowView: View, Equatable {
         case .user(let message):
             let written = CommandMessages.shared.text(of: message)
             let (text, comments, paths, references) = SentMessage.split(written)
-            let stored = (message.files ?? []).enumerated().map { AttachmentItem.stored($1, id: "\(message.id)#\($0)") }
+            let stored = (message.files ?? []).enumerated().map { AttachmentItem.stored($1, id: ConversationPictures.id(message: message.id, file: $0)) }
             YourMessage(text: text, references: references, folders: folders(), attachments: stored + Attachments.paths(paths, besides: (message.files ?? []).compactMap(\.fileURL)).map(AttachmentItem.path), comments: comments,
                         widget: SentMessage.widget(of: written), keyword: SentMessage.keyword(of: written), sent: Date(timeIntervalSince1970: message.time.created / 1000),
                         fromPhone: FromPhone.isFromPhone(written),
@@ -933,7 +936,7 @@ private struct RowView: View, Equatable {
             UserBubble(text: text, references: references, folders: folders(), attachments: item.files.map(AttachmentItem.local) + item.inlineFiles.enumerated().map { AttachmentItem.stored($1, id: "\(item.id)#\(item.files.count + $0)") }
                            + Attachments.paths(paths, besides: item.files).map(AttachmentItem.path), comments: comments,
                        widget: SentMessage.widget(of: item.text), keyword: SentMessage.keyword(of: item.text), status: item.isLocal ? "Sending" : item.delivery == .queue ? "Queued" : "Sending")
-                .contextMenu { Button("Cancel", role: .destructive) { cancel(item) }.disabled(isOffline) }
+                .heldContextMenu { HeldRow.button("Cancel", role: .destructive, disabled: isOffline) { cancel(item) } }
         case .assistant(let message, let showsError):
             AssistantStepView(message: message, directory: directory, folders: folders, showsError: showsError)
         case .more(let message, _):
@@ -1605,7 +1608,7 @@ private struct TurnEndView: View {
                         if let signIn, let account = actions?.signIn {
                             let again = kind == .signIn(ended: true) ? "Sign In Again" : "Sign In"
                             Button(machine.map { "\(again) on \($0)" } ?? again) { signIn.open(account.providerID) }
-                                .help("Sign in to \(catalog.signInName(account.providerID))\(machine.map { " on \($0): its sign-ins are its own" } ?? "")")
+                                .help(catalog.signInHelp(account.providerID, on: machine))
                             if actions?.switchModel == true, let switchModel {
                                 Button("Switch Model", action: switchModel)
                                     .help("Choose another model for this conversation")
@@ -1882,9 +1885,9 @@ private struct TurnRow: ViewModifier {
 
     func body(content: Content) -> some View {
         if let words = row.words {
-            content.contextMenu {
-                Button("Copy Reply") { Clipboard.copy(said(words)) }
-                if let reply { Button("Reply") { reply(said(words)) } }
+            content.heldContextMenu {
+                HeldRow.button("Copy Reply") { Clipboard.copy(said(words)) }
+                if let reply { HeldRow.button("Reply") { reply(said(words)) } }
             }
         } else {
             content
@@ -2035,6 +2038,8 @@ private struct AgentSentRow: View {
                 .frame(width: 16)
             Text("To \(Text(name).fontWeight(.semibold).foregroundStyle(.primary))")
                 .foregroundStyle(.secondary)
+                // Whole, where the header cuts it short.
+                .help("To \(name)")
             if case .running = call.state, input?["wait"]?.bool == true {
                 StepActivity(symbol: nil, running: true, size: 12)
                 Text("Waiting for its answer")
@@ -2082,24 +2087,30 @@ final class CardFolds {
     private var choices: [String: Bool] = [:]
 
     func isOpen(_ id: String, otherwise open: Bool) -> Bool { choices[id] ?? open }
+    /// Opened by you, rather than shown open from the start.
+    func isOpenedByYou(_ id: String) -> Bool { choices[id] == true }
     func set(_ id: String, open: Bool) { choices[id] = open }
     func forget(_ id: String) { choices[id] = nil }
     /// What was opened or closed among those kept under this, closed with what they're in.
     func kept(under prefix: String) -> [String] { choices.keys.filter { $0.hasPrefix(prefix) } }
 
-    /// Steps you opened or closed, in their conversation: opened, once they have, the end is no
-    /// longer followed, so what comes in next doesn't move what you read (`holds` false: a step
-    /// under way, kept in view until it ends); closing what you opened goes back to it (see
-    /// `ConversationScroller.reading`). `closes`: what goes with it.
-    func toggle(_ id: String, open: Bool, in anchor: ScrollAnchor?, holds: Bool = true, closes: [String] = []) {
+    /// Steps and the agents' message cards you opened or closed, in their conversation: opened,
+    /// the end is no longer followed from before it grows, so it opens down past the composer,
+    /// moving nothing above it (#416), and what comes in next doesn't move what you read (`holds`
+    /// false: a step under way, kept in view until it ends); closing what you opened goes back to
+    /// the end once it has (see `ConversationScroller.reading`). `closes`: what goes with it;
+    /// `then`: once it has opened or closed.
+    func toggle(_ id: String, open: Bool, in anchor: ScrollAnchor?, holds: Bool = true, closes: [String] = [], then: @escaping () -> Void = {}) {
+        if open, holds { anchor?.opening?(id) }
         withAnimation(.ui) {
             set(id, open: open)
             closes.forEach(forget)
         } completion: { [weak anchor] in
+            then()
             // Not if you've changed your mind since. (What's closed with others is forgotten.)
             guard self.isOpen(id, otherwise: closes.contains(id) ? false : !open) == open else { return }
             for closed in closes { anchor?.reading?(closed, false) }
-            if !open || holds { anchor?.reading?(id, open) }
+            if !open { anchor?.reading?(id, false) }
         }
     }
 }
@@ -2119,6 +2130,11 @@ private struct FoldingCard<Header: View, Accessory: View, Content: View>: View {
     @ViewBuilder var accessory: Accessory
     @ViewBuilder var content: Content
     @State private var isHoveringHeader = false
+    /// Folded by you, its words still on their way out.
+    @State private var isFolding = false
+    /// How many times it's been opened or folded here.
+    @State private var folding = 0
+    @Environment(\.scrollAnchor) private var scrollAnchor
 
     private static var radius: CGFloat { 10 }
     private static var padding: CGSize { CGSize(width: 10, height: 9) }
@@ -2141,26 +2157,39 @@ private struct FoldingCard<Header: View, Accessory: View, Content: View>: View {
     var body: some View {
         let folds = CardFolds.shared
         let open = folds.isOpen(id, otherwise: startsOpen)
+        // Not while its words are still folding away: the two never show at once.
+        let showsLine = !open && !isFolding
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Button {
-                    withAnimation(.ui) { folds.set(id, open: !open) }
+                    // Only the latest change says when the words have gone (opened and folded
+                    // again at once, the first ending says nothing).
+                    folding += 1
+                    let change = folding
+                    isFolding = open
+                    // Its words open under it, where it is, moving nothing above it.
+                    folds.toggle(id, open: !open, in: scrollAnchor) {
+                        guard change == folding, open else { return }
+                        withAnimation(.easeOut(duration: 0.15)) { isFolding = false }
+                    }
                 } label: {
-                    // Centered, not on the first baseline: the first line leaving as it opens would
-                    // slide up out of line with the header while it fades. (Two lines of it keep to the
-                    // header's line.)
-                    HStack(alignment: summaryLines > 1 ? .firstTextBaseline : .center, spacing: 8) {
-                        header
+                    // The same open or folded, so nothing in it moves or is laid out anew as the
+                    // words open and fold under it: the line it folds to only shows or doesn't.
+                    FoldingCardHeader(holdsLine: !open && !firstLine.isEmpty) {
+                        HStack(spacing: 8) { header }
+                            .lineLimit(1)
                         Image(systemName: "chevron.right")
                             .font(.caption2.weight(.semibold))
                             .foregroundStyle(.secondary)
                             .rotationEffect(.degrees(open ? 90 : 0))
-                        if !open, !firstLine.isEmpty {
-                            Text(firstLine)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(summaryLines)
-                                .truncationMode(.tail)
-                        }
+                        Text(firstLine)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(summaryLines)
+                            .truncationMode(.tail)
+                            .opacity(showsLine ? 1 : 0)
+                            // Gone at once as the words start to show; back as they've gone.
+                            .animation(showsLine ? .easeOut(duration: 0.15) : nil, value: showsLine)
+                            .accessibilityHidden(!showsLine)
                     }
                     // A fill under the pointer that reaches past the words without moving them,
                     // as far as the card's padding allows less `Self.chipInset` on every side, so
@@ -2192,7 +2221,76 @@ private struct FoldingCard<Header: View, Accessory: View, Content: View>: View {
         .padding(.vertical, Self.padding.height)
         .recessedWell(RoundedRectangle(cornerRadius: Self.radius))
         .padding(.horizontal, -Self.padding.width)
+        .foldOpen(folds.isOpenedByYou(id))
         .help(help)
+    }
+}
+
+/// A folding card's header, on one line: what it is (its icon, from or to whom), the chevron, and
+/// the line it folds to, laid out the same whether that shows or not. Short of room, what it is
+/// takes its share of the line (up to `share`, more where the folded line needs less) and the
+/// folded line the rest, each cut short with "…": a long name never leaves the folded line no
+/// room, nor wraps. The chevron sits on the middle of the first line, the folded line on its
+/// baseline. Open, the folded line takes no height (one of two lines leaves no gap over the
+/// words).
+private struct FoldingCardHeader: Layout {
+    var holdsLine: Bool
+    var spacing: CGFloat = 8
+    static let share: CGFloat = 0.4
+
+    private func widths(_ proposal: ProposedViewSize, _ subviews: Subviews) -> [CGFloat] {
+        let ideal = subviews.map { $0.sizeThatFits(.unspecified).width }
+        guard subviews.count == 3, let width = proposal.width, width.isFinite else { return ideal }
+        let room = max(0, width - ideal[1] - spacing * 2)
+        guard ideal[0] + ideal[2] > room else { return ideal }
+        let header = min(ideal[0], max(room * Self.share, room - ideal[2]))
+        return [header, ideal[1], room - header]
+    }
+
+    /// Each one's size at its width, where it goes (from the top left), and the header's baseline.
+    private func places(_ proposal: ProposedViewSize, _ subviews: Subviews) -> (size: CGSize, frames: [CGRect], baseline: CGFloat?) {
+        let widths = widths(proposal, subviews)
+        let sizes = subviews.indices.map { subviews[$0].dimensions(in: ProposedViewSize(width: widths[$0], height: nil)) }
+        guard subviews.count == 3 else {
+            var x: CGFloat = 0, frames: [CGRect] = []
+            for size in sizes {
+                frames.append(CGRect(x: x, y: 0, width: size.width, height: size.height))
+                x += size.width + spacing
+            }
+            return (CGSize(width: max(0, x - spacing), height: sizes.map(\.height).max() ?? 0), frames, nil)
+        }
+        let (header, chevron, line) = (sizes[0], sizes[1], sizes[2])
+        // On the header's first baseline; the chevron on the middle of the header's line.
+        let baseline = max(header[VerticalAlignment.firstTextBaseline], line[VerticalAlignment.firstTextBaseline])
+        let headerTop = baseline - header[VerticalAlignment.firstTextBaseline]
+        let lineTop = baseline - line[VerticalAlignment.firstTextBaseline]
+        let chevronTop = headerTop + (header.height - chevron.height) / 2
+        let frames = [
+            CGRect(x: 0, y: headerTop, width: header.width, height: header.height),
+            CGRect(x: header.width + spacing, y: chevronTop, width: chevron.width, height: chevron.height),
+            CGRect(x: header.width + chevron.width + spacing * 2, y: lineTop, width: line.width, height: line.height),
+        ]
+        let shown = holdsLine ? frames : Array(frames.prefix(2))
+        let width = header.width + chevron.width + spacing + (line.width > 0 ? spacing + line.width : 0)
+        return (CGSize(width: width, height: shown.map(\.maxY).max() ?? 0), frames, baseline)
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        places(proposal, subviews).size
+    }
+
+    /// The header's baseline, for what's beside it (the time, Open).
+    func explicitAlignment(of guide: VerticalAlignment, in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGFloat? {
+        guard guide == .firstTextBaseline, let baseline = places(proposal, subviews).baseline else { return nil }
+        return bounds.minY + baseline
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let frames = places(proposal, subviews).frames
+        for (subview, frame) in zip(subviews, frames) {
+            subview.place(at: CGPoint(x: bounds.minX + frame.minX, y: bounds.minY + frame.minY), anchor: .topLeading,
+                          proposal: ProposedViewSize(width: frame.width, height: nil))
+        }
     }
 }
 
@@ -2218,6 +2316,7 @@ private struct AgentMessageRow: View {
                 .frame(width: 16)
             Text("From \(Text(from).fontWeight(.semibold).foregroundStyle(.primary))\(status.map { " · \($0)" } ?? "")")
                 .foregroundStyle(.secondary)
+                .help("From \(from)\(status.map { " · \($0)" } ?? "")")
         } accessory: {
             if let at {
                 Text(Date(timeIntervalSince1970: at / 1000), format: .dateTime.hour().minute())
@@ -2257,6 +2356,7 @@ private struct GroupWorkRow: View {
                 .frame(width: 16)
             Text("Work from \(Text(chat).fontWeight(.semibold).foregroundStyle(.primary))")
                 .foregroundStyle(.secondary)
+                .help("Work from \(chat)")
         } accessory: {
             Text(Date(timeIntervalSince1970: at / 1000), format: .dateTime.hour().minute())
                 .font(.caption)

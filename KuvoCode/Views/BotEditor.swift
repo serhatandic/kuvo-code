@@ -885,10 +885,10 @@ private struct PersonalityPicker: View {
                         Tile(symbol: personality.symbol, name: personality.name, isOn: selection == personality.id) {
                             selection = personality.id
                         }
-                        .contextMenu {
+                        .heldContextMenu {
                             if personality.isCustom {
-                                Button("Edit…") { edit(personality) }
-                                Button("Delete", role: .destructive) { delete(personality) }
+                                HeldRow.button("Edit…") { edit(personality) }
+                                HeldRow.button("Delete", role: .destructive) { delete(personality) }
                             }
                         }
                     }
