@@ -7,7 +7,8 @@ import fs from "node:fs";
 import { isObject } from "../../shared/json";
 import { plainName } from "../../shared/text";
 import { categoryNamed } from "./categories";
-import { claimNumbers, MOST_NUMBER, numberWaiting, type Primary } from "./numbers";
+import { claimNumbers, inRanges, MOST_NUMBER, numberWaiting, rangesOf, readNumbers, type Primary } from "./numbers";
+import { readTold, toldKeys } from "./told";
 import { MOST_BODY, MOST_TITLE, newItemID, placeIn, type Book, type Item, type Who } from "./store";
 
 /** An item to import: its number, title, body and category id. */
@@ -18,9 +19,15 @@ export interface ImportOutcome {
   added: number;
   byCategory: Record<string, number>;
   skipped: string[];
+  /** Numbers skipped as in the queue already (or imported before). */
+  already: number[];
   waiting: number;
-  /** Those whose number was another item's here already, with the one they have now. */
+  /** Those whose number was another item's or was refused, with the one they have now. */
   renumbered: string[];
+  /** Those imported before and renumbered, given their own number back now, and those that wait
+   * for the primary to give it. */
+  restored: string[];
+  restoring: string[];
 }
 
 const MOST_SKIPPED_SAID = 40;
@@ -151,32 +158,71 @@ export function givenItems(given: unknown): { items: Imported[]; skipped: string
   return { items, skipped };
 }
 
-/** `items` put in `owner`'s queue with their numbers claimed. One here already under its number
- * and title was imported before, and is skipped; a number this box gave something else gets a new
- * one (with a note); on the primary, so does one it can't grant. */
+/** `items` put in `owner`'s queue, each keeping its own number wherever no other item has it: the
+ * numbers are claimed from the primary (granted at once on the primary itself). One here already
+ * under its number and title (or waiting for that number) was imported before, and is skipped. One
+ * an import before renumbered (`importedAs`) under the same title asks for its own number back,
+ * where no other item has it (an item that's itself on its way back to its own doesn't count): this
+ * is how a backlog imported again repairs what went wrong. One whose number is another item's, here
+ * or on another of your computers, gets a new one (with a note), as does one the primary refuses. */
 export function importItems(book: Book, owner: string, items: Imported[], who: Who, primary: Primary, now = Date.now()): ImportOutcome {
-  const have = new Map(book.items().flatMap(item => [item.number, item.wanted].filter((n): n is number => n !== undefined).map(n => [n, item.title] as const)));
-  // Imported before under a number that was another item's: the same again is skipped.
-  const before = new Set(book.items().flatMap(item => (item.importedAs !== undefined ? [`${item.importedAs}\0${item.title.toLowerCase()}`] : [])));
-  const outcome: ImportOutcome = { added: 0, byCategory: {}, skipped: [], waiting: 0, renumbered: [] };
+  const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
+  // Who holds each number here: the item numbered so, or one waiting for it (an import's, or one
+  // asking for its own back).
+  const holders = new Map<number, Item[]>();
+  const hold = (n: number, item: Item) => holders.set(n, [...(holders.get(n) ?? []), item]);
+  for (const item of book.items()) {
+    if (item.number !== undefined) hold(item.number, item);
+    if (item.wanted !== undefined) hold(item.wanted, item);
+  }
+  const elsewhere = numbersElsewhere();
+  // (Numbers this box gave items that are gone from it: moved to another computer, or deleted.)
+  const used = readNumbers().used ?? [];
+  const gone = (n: number, here: Item[]) => !here.length && inRanges(used, n);
+  const outcome: ImportOutcome = { added: 0, byCategory: {}, skipped: [], already: [], waiting: 0, renumbered: [], restored: [], restoring: [] };
   const made: Item[] = [];
   const fresh: { from: number; item: Item }[] = [];
+  const back: { from: number; item: Item }[] = [];
   for (const each of items) {
-    const taken = have.get(each.number);
-    if ((taken !== undefined && taken.toLowerCase() === each.title.toLowerCase()) || before.has(`${each.number}\0${each.title.toLowerCase()}`)) {
-      outcome.skipped.push(`#${each.number} (already in the Work Queue here)`);
+    const here = holders.get(each.number) ?? [];
+    // Imported before and renumbered: the same again isn't made twice.
+    const earlier = book.items().find(item => item.importedAs === each.number && same(item.title, each.title));
+    if (here.some(item => same(item.title, each.title)) || (earlier && (earlier.removed || earlier.number === undefined || earlier.wanted !== undefined))) {
+      outcome.already.push(each.number);
       continue;
     }
-    if (taken === undefined) have.set(each.number, each.title);
+    if (earlier?.stays) {
+      outcome.skipped.push(`#${each.number} (imported before as #${earlier.number}; its own number couldn't be given back)`);
+      continue;
+    }
+    const far = elsewhere.get(each.number);
+    if (far !== undefined && same(far, each.title)) {
+      outcome.skipped.push(`#${each.number} (already in the Work Queue on another of your computers)`);
+      continue;
+    }
+    // Its own number asked for again.
+    if (earlier) {
+      // (An item holding it that's on its way back to its own lets it go.)
+      const kept = here.filter(item => !(item.number === each.number && item.wanted !== undefined && item.wanted !== each.number));
+      if (kept.length || far !== undefined || gone(each.number, here)) {
+        outcome.skipped.push(`#${each.number} (imported before as #${earlier.number}; #${each.number} is another item's${kept.length ? " here" : far !== undefined ? " on another of your computers" : ", one no longer here"})`);
+        continue;
+      }
+      earlier.wanted = each.number;
+      hold(each.number, earlier);
+      back.push({ from: earlier.number!, item: earlier });
+      continue;
+    }
+    const taken = here.length > 0 || far !== undefined || gone(each.number, here);
     const item: Item = {
       id: newItemID(),
       owner,
-      ...(taken === undefined ? { wanted: each.number } : { importedAs: each.number }),
+      ...(taken ? { importedAs: each.number } : { wanted: each.number }),
       title: each.title,
       body: each.body,
       category: each.category,
       order: placeIn(book.items(), each.category),
-      notes: taken === undefined ? [] : [{ at: now, by: { user: true }, text: `Imported as #${each.number}, a number already given to another item here, so it has a new one.` }],
+      notes: taken ? [{ at: now, by: { user: true }, text: `Imported as #${each.number}, a number already given to another item${here.length ? " here" : far !== undefined ? " on another of your computers" : ", one no longer here"}, so it has a new one.` }] : [],
       files: [],
       links: [],
       sessions: [],
@@ -185,27 +231,53 @@ export function importItems(book: Book, owner: string, items: Imported[], who: W
       ...(each.category === "done" ? { doneAt: now } : {}),
     };
     book.queue(owner).items.push(item);
-    if (taken === undefined) made.push(item);
-    else fresh.push({ from: each.number, item });
+    if (taken) fresh.push({ from: each.number, item });
+    else {
+      hold(each.number, item);
+      made.push(item);
+    }
     outcome.added++;
     outcome.byCategory[each.category] = (outcome.byCategory[each.category] ?? 0) + 1;
   }
-  const { granted } = claimNumbers(primary, made.map(item => item.wanted!));
-  numberWaiting(book, primary, granted, { now });
+  const restores = back.map(({ item }) => item.wanted!);
+  const claimed = [...made.map(item => item.wanted!), ...restores];
+  const { granted } = claimNumbers(primary, claimed, { restores });
+  numberWaiting(book, primary, granted ? { granted, claimed: rangesOf(claimed) } : null, { now });
   outcome.waiting = made.filter(item => item.number === undefined).length;
-  outcome.renumbered = fresh.map(({ from, item }) => (item.number !== undefined ? `#${from} is #${item.number}` : `#${from} waits for a new number`));
+  // Those the primary refused at once (on the primary itself), and those whose number another had.
+  const refused = made.filter(item => item.importedAs !== undefined).map(item => ({ from: item.importedAs!, item }));
+  outcome.renumbered = [...fresh, ...refused].sort((a, b) => a.from - b.from).map(({ from, item }) => (item.number !== undefined ? `#${from} is #${item.number}` : `#${from} waits for a new number`));
+  for (const { from, item } of back) {
+    if (item.wanted !== undefined) outcome.restoring.push(`#${from} (for #${item.wanted}${item.backGranted ? ", given: once the item that has it moves to its own" : ""})`);
+    else if (item.importedAs === undefined) outcome.restored.push(`#${from} is #${item.number} again`);
+    else outcome.renumbered.push(`#${item.importedAs} stays #${item.number}`);
+  }
   outcome.skipped = outcome.skipped.slice(0, MOST_SKIPPED_SAID);
   return outcome;
 }
+
+// The numbers your other computers told this one their items have, with their titles.
+function numbersElsewhere(): Map<number, string> {
+  const found = new Map<number, string>();
+  for (const key of toldKeys()) for (const item of readTold(key)?.items ?? []) if (item.number !== undefined && !item.source) found.set(item.number, item.title);
+  return found;
+}
+
+/** Numbers as runs, in words: `#1–150, #201–300`. */
+const runsWords = (numbers: number[]) => rangesOf(numbers).map(([from, to]) => (from === to ? `#${from}` : `#${from}–${to}`)).join(", ");
 
 /** An import's outcome, in words. */
 export function importWords(outcome: ImportOutcome, skipped: string[], names: (id: string) => string): string {
   const parts = Object.entries(outcome.byCategory).map(([category, count]) => `${count} in ${names(category)}`);
   const all = [...skipped, ...outcome.skipped];
+  const left = all.length + outcome.already.length;
+  const said = [...(outcome.already.length ? [`${runsWords(outcome.already)} (already in the Work Queue here)`] : []), ...all.slice(0, MOST_SKIPPED_SAID)];
   return [
-    outcome.added ? `Imported ${outcome.added} item${outcome.added === 1 ? "" : "s"} with their numbers: ${parts.join(", ")}.` : "Nothing was imported.",
+    outcome.added ? `Imported ${outcome.added} item${outcome.added === 1 ? "" : "s"} with their numbers: ${parts.join(", ")}.` : outcome.restored.length || outcome.restoring.length ? "" : "Nothing was imported.",
     outcome.waiting ? `${outcome.waiting} wait${outcome.waiting === 1 ? "s" : ""} for the primary computer to grant ${outcome.waiting === 1 ? "its number" : "their numbers"}; until then ${outcome.waiting === 1 ? "it shows" : "they show"} as new.` : "",
-    outcome.renumbered.length ? `Imported with a new number, theirs being another item's here already: ${outcome.renumbered.join(", ")}.` : "",
-    all.length ? `Left out (${all.length}): ${all.slice(0, MOST_SKIPPED_SAID).join("; ")}${all.length > MOST_SKIPPED_SAID ? "; …" : ""}.` : "",
+    outcome.renumbered.length ? `Renumbered, as their own number is another item's or couldn't be kept (each has a note saying why): ${outcome.renumbered.join(", ")}.` : "",
+    outcome.restored.length ? `Given their own numbers back, as imported before: ${outcome.restored.join(", ")}.` : "",
+    outcome.restoring.length ? `${outcome.restoring.length} item${outcome.restoring.length === 1 ? "" : "s"} imported before ask${outcome.restoring.length === 1 ? "s" : ""} for ${outcome.restoring.length === 1 ? "its" : "their"} own number back, keeping the one ${outcome.restoring.length === 1 ? "it has" : "they have"} until then: ${outcome.restoring.join(", ")}.` : "",
+    left ? `Left out (${left}): ${said.join("; ")}${all.length > MOST_SKIPPED_SAID ? "; …" : ""}.` : "",
   ].filter(Boolean).join(" ");
 }
