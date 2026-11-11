@@ -211,7 +211,8 @@ Every job has a time limit, so a hung one can't hold its kind's turn for hours: 
 line for its slot, however long, nor for a busy Mac). Past it, its group is stopped (TERM, then
 KILL), it says what was running, and the helper exits 124. Jobs waiting for a lane wait in line,
 first come first served; `KUVO_HEAVY_PRIORITY=high` puts one before the normal ones waiting (it
-never stops a job running), and `KUVO_HEAVY_WAIT=0` answers at once (75: it would wait).
+never stops a job running), and `KUVO_HEAVY_WAIT=0` answers without waiting for one (75: it
+would wait). Older copies of the helper don't queue, and can take a slot before those in line.
 `KUVO_HEAVY_LIMIT` gives one job another (`90m`, `600s`, `2h`; `0` for none). A job inside
 one of its kind runs within that one's limit (one of another kind has its own too), and one in a
 terminal has none.

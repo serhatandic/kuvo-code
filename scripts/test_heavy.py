@@ -211,22 +211,54 @@ class HeavyTests(unittest.TestCase):
         finally:
             first.let_go()
 
+    def in_line(self, name, seen=None, kind="box"):
+        """An entry in the lane's queue, as a job waiting in line has (seen: when it last looked)."""
+        path = os.path.join(self.queue(kind), name)
+        with open(path, "w") as f:
+            f.write(f"{int(time.time()) if seen is None else seen}\n")
+        return path
+
     def test_with_its_slot_free_a_job_told_not_to_wait_still_keeps_its_place_in_line(self):
         """A job in line that hasn't taken the free slot yet (it looks once a second; here, one that
         never looks) is before a normal job told not to wait, which says so, and after a high one,
         which goes. One whose process is gone holds no one up."""
-        queue = self.queue("box")
-        waiting = os.path.join(queue, f"1-000000000000-{os.getpid()}-1")
-        open(waiting, "w").close()
+        waiting = self.in_line(f"1-000000000000-{os.getpid()}-1")
         code, said = self.run_heavy("box", "true")
         self.assertEqual(code, WAITS)
         self.assertIn("Another box job is waiting for its turn ahead of this one", said)
         self.assertEqual(self.run_heavy("box", "true", KUVO_HEAVY_PRIORITY="high")[0], 0)
         gone = subprocess.Popen(["true"])
         gone.wait()
-        os.rename(waiting, os.path.join(queue, f"0-000000000000-{gone.pid}-1"))
+        os.rename(waiting, os.path.join(self.queue(), f"0-000000000000-{gone.pid}-1"))
         self.assertEqual(self.run_heavy("box", "true"), (0, ""))
-        self.assertEqual(sorted(name for name in os.listdir(queue) if name[0] in "01"), [], "it left an entry in line")
+        self.assertEqual(sorted(name for name in os.listdir(self.queue()) if name[0] in "01"), [], "it left an entry in line")
+
+    def test_a_job_that_hasnt_looked_for_a_while_holds_no_one_up(self):
+        """Stopped, or its pid now another process's (here, this test's): it leaves the line."""
+        self.in_line(f"0-000000000000-{os.getpid()}-1", seen=int(time.time()) - 120)
+        self.assertEqual(self.run_heavy("box", "true"), (0, ""))
+
+    def test_a_new_job_goes_after_those_in_line_whatever_became_of_the_last_number(self):
+        self.in_line(f"1-000000000005-{os.getpid()}-1")
+        open(os.path.join(self.queue(), "sequence"), "w").close()  # cut short as it was written
+        code, said = self.run_heavy("box", "true")
+        self.assertEqual(code, WAITS)
+        self.assertIn("waiting for its turn ahead of this one", said)
+
+    def test_a_job_in_a_sandbox_that_cant_signal_others_keeps_them_in_line(self):
+        """Some sandboxes refuse to signal a process outside them: it still runs, and its job stays
+        in line before this one."""
+        if not shutil.which("sandbox-exec"):
+            self.skipTest("no sandbox-exec")
+        other = subprocess.Popen(["sleep", "60"])
+        self.addCleanup(lambda: (other.kill(), other.wait()))
+        self.in_line(f"1-000000000000-{other.pid}-1")
+        profile = "(version 1)(allow default)(deny signal)(allow signal (target same-sandbox))"
+        result = subprocess.run(["sandbox-exec", "-p", profile, HEAVY, "box", "true"], env=dict(self.env, KUVO_HEAVY_WAIT="0"), capture_output=True, text=True, timeout=30)
+        if "Operation not permitted" in result.stderr and "sandbox" in result.stderr:
+            self.skipTest("sandbox-exec isn't allowed here")
+        self.assertEqual(result.returncode, WAITS, result.stderr)
+        self.assertIn("waiting for its turn ahead of this one", result.stderr)
 
     def test_the_time_limit_counts_from_when_the_job_gets_its_slot(self):
         """It waits in line longer than its limit and isn't stopped for it: its limit starts when it

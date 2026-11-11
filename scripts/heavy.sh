@@ -54,9 +54,10 @@
 #
 # For phone, slot 2 is only for a caller that handles slots (KUVO_HEAVY_SLOTS=2): an older caller would take it
 # and still build in slot 1's folder and drive slot 1's simulator, beside whoever holds slot 1.
-# With it, a job takes whichever slot is free first, slot 1 before slot 2, and when both are busy it
-# waits for whichever frees first (looking once a second). One that waits for slot 1 only never
-# holds up a job behind it that may take slot 2.
+# With it, a job takes whichever slot is free first, slot 1 before slot 2 (unless a job behind it
+# waits for slot 1 only: then slot 2, and slot 1 is that one's), and when both are busy it waits for
+# whichever frees first (looking once a second). One that waits for slot 1 only never holds up a job
+# behind it that may take slot 2.
 #
 #   KUVO_HEAVY_SLOTS=2  phone jobs may take either slot (1, the default, only slot 1)
 #
@@ -65,8 +66,10 @@
 # high ones that came before it). It never stops or holds up a job already running: it only gets the
 # next free slot. Whoever looks at the queue or changes it does so under its guard lock, one at a
 # time, and a slot given to a job is its claim until its `lockf` holds it, so no job that came later
-# slips in between (nor waits, told not to). A job that's gone (killed, even) leaves the line. Older
-# copies of this helper don't queue: they take a slot's lock when they find it free, as before.
+# slips in between (nor waits, told not to). A job that's gone (killed, even), or hasn't looked for
+# 30 seconds (stopped), leaves the line. Older copies of this helper (another checkout's) don't
+# queue: they wait on a slot's lock, as before, and take it the moment it frees, before the jobs in
+# line, which look once a second. The order holds among these.
 #
 # A job inside one that holds its kind's lock already (a test run its caller started with this
 # helper, in either slot) runs at once. So does one under the single lock every heavy job took before
@@ -78,7 +81,8 @@
 #
 #   KUVO_HEAVY_PRIORITY=high  go before the normal jobs waiting in line (normal, the default)
 #   KUVO_HEAVY_WAIT=0   don't wait: say what it would wait for (a job running, or one in line before
-#                       it with a slot free), and exit 75, at once
+#                       it with a slot free), and exit 75, without waiting for a job (for the
+#                       queue's guard, two seconds at most)
 #   KUVO_HEAVY_DIR      where the locks are (for the helper's own tests)
 #
 # Every job has a time limit, so one that hangs can't hold its kind's turn for hours: past it, the
@@ -252,37 +256,75 @@ esac
 
 # The lane's queue: a folder of its own (the phone's builds share mac-build's, as its slots).
 #   <priority>-<number>-<pid>-<slots>  a job in line: 0 high, 1 normal; its number, in the order
-#                     jobs came; its process; the slots it may take (2: either, 1: slot 1 only)
+#                     jobs came; its process; the slots it may take (2: either, 1: slot 1 only).
+#                     It holds when the job last looked (each look, about once a second).
 #   sequence          the last number given
-#   claim-1, claim-2  the process a slot was just given to, until its `lockf` holds the slot
+#   claim-1, claim-2  the process a slot was just given to and when, until its `lockf` holds it
 #   guard             the lock whoever reads or changes the queue holds, for milliseconds
 QUEUE="$DIR/kuvo-code-heavy-$kind-$(id -u).queue"
 # Whose turn it is, run under the guard ($1 the queue, $2 and $3 the slots' locks, $4 this job's
 # entry or "new", $5 its priority, $6 its pid, $7 the slots it may take, $8 0 when it doesn't wait).
-# A new job gets its entry; entries and claims of processes that are gone are dropped. A slot is free
-# when its lock isn't held and no one has a claim on it. The free slots go to the jobs in line in
-# order, each to the first that may take it; a job that may take either takes slot 1, or slot 2
-# when both are free and one that may take only slot 1 waits behind it. Prints "slot <n>" when one
-# is this job's (its claim written, its entry gone), else "wait <entry>", or, told not to wait,
-# "busy" (no slot it may take is free) or "ahead" (one is, for another job in line before it).
+# A slot already given to this job (its last look was cut short) is its own still; a new job gets
+# its entry (or finds the one it had). A job's look keeps its place; one that's gone, or hasn't
+# looked for 30 seconds (stopped, or its pid now another process's), leaves the line, and comes back
+# with its number when it looks again. A process is gone only when there's no such process: a
+# sandbox may refuse to signal one that runs. A slot is free when its lock isn't held and no one has
+# a claim on it (one older than 30 seconds, on a lock no one holds, is none). The free slots go to the
+# jobs in line in order, each to the first that may take it; a job that may take either takes slot
+# 1, or slot 2 when both are free and one that may take only slot 1 waits behind it. Prints "slot
+# <n>" when one is this job's (its claim written, its entry gone), else "wait <entry>", or, told not
+# to wait, "busy" (no slot it may take is free) or "ahead" (one is, for a job in line before it).
 # shellcheck disable=SC2016 # (its own script: it expands its own arguments)
 TURN='
 queue=$1 lock1=$2 lock2=$3 ticket=$4 priority=$5 me=$6 slots=$7 waits=$8
 export LC_ALL=C
 cd "$queue" || exit 1
-if [ "$ticket" = new ]; then
-    n=0
-    [ ! -f sequence ] || read -r n < sequence || n=0
-    n=$((n + 1))
-    echo "$n" > sequence
-    ticket=$(printf "%s-%012d-%s-%s" "$priority" "$n" "$me" "$slots")
-fi
-[ -f "$ticket" ] || : > "$ticket"
+now=$(date +%s)
+gone() {
+    ! kill -0 "$1" 2>/dev/null && case "$(kill -0 "$1" 2>&1)" in *"No such process"*) true ;; *) false ;; esac
+}
+number() {
+    num=$1
+    case "$num" in "" | *[!0-9]*) num=0 ;; esac
+    while [ "${num#0}" != "$num" ]; do num=${num#0}; done
+    num=${num:-0}
+}
+for n in 1 2; do
+    owner=
+    [ ! -f "claim-$n" ] || read -r owner since < "claim-$n" || true
+    if [ "$owner" = "$me" ]; then
+        rm -f "$ticket"
+        echo "slot $n"
+        exit 0
+    fi
+done
+last=0
+[ ! -f sequence ] || read -r last < sequence || true
+number "$last"
+last=$num
 for entry in [01]-*; do
     [ -f "$entry" ] || continue
-    owner=${entry#*-*-}
-    kill -0 "${owner%-*}" 2>/dev/null || rm -f "$entry"
+    rest=${entry#?-}
+    owner=${rest#*-}
+    owner=${owner%-*}
+    seen=
+    read -r seen < "$entry" || true
+    number "$seen"
+    seen=$num
+    if [ "$ticket" = new ] && [ "$owner" = "$me" ]; then
+        ticket=$entry
+    elif gone "$owner" || { [ "$seen" -gt 0 ] && [ $((now - seen)) -gt 30 ]; }; then
+        rm -f "$entry"
+    fi
+    number "${rest%%-*}"
+    [ "$num" -le "$last" ] || last=$num
 done
+if [ "$ticket" = new ]; then
+    last=$((last + 1))
+    echo "$last" > "sequence.$me" && mv -f "sequence.$me" sequence
+    ticket=$(printf "%s-%012d-%s-%s" "$priority" "$last" "$me" "$slots")
+fi
+echo "$now" > "$ticket"
 free=
 for n in 1 2; do
     lock=$lock1
@@ -290,8 +332,14 @@ for n in 1 2; do
     [ -n "$lock" ] || continue
     if [ -f "claim-$n" ]; then
         owner=
-        read -r owner < "claim-$n" || true
-        if [ -n "$owner" ] && kill -0 "$owner" 2>/dev/null; then continue; fi
+        since=
+        read -r owner since < "claim-$n" || true
+        number "$since"
+        since=$num
+        if [ -n "$owner" ] && ! gone "$owner"; then
+            [ $((now - since)) -gt 30 ] || continue
+            lockf -ks -t 0 "$lock" true || continue
+        fi
         rm -f "claim-$n"
     fi
     if lockf -ks -t 0 "$lock" true; then free=$free$n; fi
@@ -323,7 +371,7 @@ for entry in [01]-*; do
     fi
 done
 if [ -n "$mine" ]; then
-    echo "$me" > "claim-$mine"
+    echo "$me $now" > "claim-$mine"
     rm -f "$ticket"
     echo "slot $mine"
 elif [ "$waits" = 0 ]; then
@@ -350,7 +398,7 @@ if [ -n "$TAKEN" ]; then
     # (Nothing else claims a slot whose lock is held, so this reads and removes it safely.)
     claim="$QUEUE/claim-1"
     [ "$TAKEN" = "$LOCK" ] || claim="$QUEUE/claim-2"
-    if [ -f "$claim" ] && read -r owner < "$claim" 2>/dev/null && [ "$owner" = "$PPID" ]; then
+    if [ -f "$claim" ] && read -r owner since < "$claim" 2>/dev/null && [ "$owner" = "$PPID" ]; then
         rm -f "$claim"
     fi
     unset KUVO_HEAVY_HOLDING
@@ -387,14 +435,16 @@ else
     trap 'rm -f "$QUEUE/$ticket"; exit 130' INT
     trap 'rm -f "$QUEUE/$ticket"; exit 143' TERM
     said=
+    failed=0
     while :; do
-        mkdir -p "$QUEUE"
+        mkdir -p "$QUEUE" 2>/dev/null || true
         # Told not to wait, it doesn't wait for the guard either, past a moment (its holders only
-        # look at files).
+        # look at files, for milliseconds; lockf says 75 when its time is up).
+        looked=0
         if [ "$WAITS" = 0 ]; then
-            turn=$(lockf -k -t 2 "$QUEUE/guard" /bin/sh -c "$TURN" sh "$QUEUE" "$LOCK" "$LOCK2" "$ticket" "$PRIORITY" "$$" "$SLOTS" 0) || turn=
+            turn=$(lockf -k -t 2 "$QUEUE/guard" /bin/sh -c "$TURN" sh "$QUEUE" "$LOCK" "$LOCK2" "$ticket" "$PRIORITY" "$$" "$SLOTS" 0) || looked=$?
         else
-            turn=$(lockf -k "$QUEUE/guard" /bin/sh -c "$TURN" sh "$QUEUE" "$LOCK" "$LOCK2" "$ticket" "$PRIORITY" "$$" "$SLOTS" 1) || turn=
+            turn=$(lockf -k "$QUEUE/guard" /bin/sh -c "$TURN" sh "$QUEUE" "$LOCK" "$LOCK2" "$ticket" "$PRIORITY" "$$" "$SLOTS" 1) || looked=$?
         fi
         case "$turn" in
             "slot "*)
@@ -414,8 +464,14 @@ else
                 cannot_wait "Another $kind job is running."
                 ;;
             ahead) cannot_wait "Another $kind job is waiting for its turn ahead of this one." ;;
-            *) [ "$WAITS" = 0 ] && cannot_wait "Another $kind job is taking its turn (its queue is busy)." ;;
+            *)
+                [ "$WAITS" = 0 ] && [ "$looked" = 75 ] && cannot_wait "Another $kind job is taking its turn (its queue is busy)."
+                [ "$WAITS" = 0 ] && cannot_wait "heavy.sh can't read the $kind queue ($QUEUE)."
+                failed=$((failed + 1))
+                [ "$failed" != 10 ] || echo "heavy.sh: can't read the $kind queue ($QUEUE); still trying…" >&2
+                ;;
         esac
+        [ "$turn" = "" ] || failed=0
         [ -n "$said" ] || echo "Waiting for another $kind job to finish…" >&2
         said=1
         sleep 1
