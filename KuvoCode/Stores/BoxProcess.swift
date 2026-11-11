@@ -78,7 +78,7 @@ final class BoxProcess {
     /// it isn't any more (checked again here when the box's own check is over a minute old: the
     /// engine restarts under a box that keeps running).
     func engineConfig(engine: URL, content: String?, environment: [String: String], timeout: TimeInterval = 10) async -> String? {
-        // (A refused box said why as its start was refused.)
+        // (A refused box says why where the app shows its failure.)
         guard !refused else { return content }
         guard let script = Self.script else {
             log.error("This Mac's box added nothing to the engine's settings: its script is missing from the app")
@@ -117,7 +117,7 @@ final class BoxProcess {
             return content
         }
         guard result.succeeded, let text = String(data: result.output, encoding: .utf8), text.hasPrefix("{"), text.hasSuffix("}") else {
-            let why = result.timedOut ? "no answer within \(timeout.formatted()) seconds" : result.succeeded ? "its answer isn't settings"
+            let why = result.timedOut ? "no answer within \(String(format: "%g", timeout)) seconds" : result.succeeded ? "its answer isn't settings"
                 : result.reason == .uncaughtSignal ? "it was stopped by signal \(result.status)" : "it ended with status \(result.status)"
             log.error("This Mac's box added nothing to the engine's settings: \(why, privacy: .public)")
             return content
