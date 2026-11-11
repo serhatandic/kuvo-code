@@ -1103,7 +1103,7 @@ the same for every client and with none connected, and keeps them in `run/queues
   now; 404 for no such session here, 503 with no engine (none recorded, or nothing listening where
   it's recorded), 502 when the engine refused. 504
   (`{message, busy: true}`) when the engine runs but didn't answer in time (a busy computer: it's
-  asked twice, 10 s then 20 s, before that; bridge 0.9.212): it isn't down, nothing was done, and
+  asked twice, 10 s then 20 s, before that; #443): it isn't down, nothing was done, and
   a client says so in those words (#443). `queue/add` waits up to two minutes for the engine to
   take the message. A run that
   fails pauses the queue again while anything waits on the box; a conversation deleted takes its
