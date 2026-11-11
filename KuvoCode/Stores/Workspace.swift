@@ -267,13 +267,20 @@ final class Workspace {
         boxWorktreeProjects[directory] ?? worktrees[directory]?.project ?? removedWorktrees[directory] ?? directory
     }
 
+    /// The project a session is filed under: its folder's, else the one its box filed it under as
+    /// it was made (`SessionProject`: a new worktree its box hasn't listed here yet, a subfolder).
     func projectDirectory(of session: Session) -> String {
-        projectDirectory(session.location.directory)
+        let directory = session.location.directory
+        let project = projectDirectory(directory)
+        guard project == directory, let made = SessionProject.filed(session, folder: Self.onBox(directory)) else { return project }
+        return Self.here(made, on: Self.box(of: directory))
     }
 
     /// The project's other folders, for a folder sessions run in.
     func extraFolders(_ directory: String) -> [String] {
-        settings[projectDirectory(directory)]?.folders ?? []
+        // (One in one of those folders works there alone, as its box starts it.)
+        guard let folders = settings[projectDirectory(directory)]?.folders, !folders.contains(directory) else { return [] }
+        return folders
     }
 
     /// Bots' sessions: each bot's conversation, shown with the bot rather than in its project.
@@ -369,7 +376,7 @@ final class Workspace {
     /// Projects with their sessions, most recently active first.
     var projects: [Project] {
         // What they're made of, read here so views showing them are updated as it changes.
-        _ = (sessions.count, folders.count, settings.count, worktrees.count, removedWorktrees.count, botSessions.count, machines.count, deleting.count)
+        _ = (sessions.count, folders.count, settings.count, worktrees.count, removedWorktrees.count, boxWorktreeProjects.count, botSessions.count, machines.count, deleting.count)
         if let madeProjects { return madeProjects }
         let projects = makeProjects()
         madeProjects = projects
@@ -866,6 +873,13 @@ final class Workspace {
         return settings[directory]?.name ?? (directory as NSString).lastPathComponent
     }
 
+    /// The name of the project a session is filed under.
+    func projectName(of session: Session) -> String {
+        if Self.isChat(session.location.directory) { return "Chats" }
+        let directory = projectDirectory(of: session)
+        return settings[directory]?.name ?? (directory as NSString).lastPathComponent
+    }
+
     /// Adds a project, or updates one, and gives its open sessions the new folders.
     @discardableResult
     func saveProject(_ directory: String, settings project: ProjectSettings) -> String {
@@ -949,7 +963,11 @@ final class Workspace {
         let here = approvalsHere[Self.box(of: directory)]
         let starting = here.map { $0.shown(approval ?? $0.default, agents: isAgents).effective } ?? .askFirst
         let rules = ProjectFolders.permissions(starting.provisionalRules(settings: EngineConfig.rules(on: RemoteFolder.machine(of: directory))), folders: extra)
-        let metadata: JSONValue? = approval.map { .object(["kuvo": .object(["approval": .string($0.rawValue)])]) }
+        // (One in a worktree carries its project, for every client to file it there from the first.)
+        var kuvo: [String: JSONValue] = [:]
+        if let approval { kuvo["approval"] = .string(approval.rawValue) }
+        if worktree { kuvo["filed"] = SessionProject.mark(folder: Self.onBox(folder), project: Self.onBox(directory)) }
+        let metadata: JSONValue? = kuvo.isEmpty ? nil : .object(["kuvo": .object(kuvo)])
         let session: Session
         do {
             session = try await api.createSession(directory: folder, agent: agent, model: model, permissions: rules.isEmpty ? nil : rules, metadata: metadata)

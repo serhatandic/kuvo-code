@@ -991,7 +991,7 @@ struct MainView: View {
     /// Every session and chat not put away, the latest first, with its project.
     private var paletteSessions: [PaletteItem] {
         (workspace.projects.flatMap(\.sessions) + workspace.chats).sorted { $0.time.updated > $1.time.updated }.map { session in
-            PaletteItem(id: "session:" + session.id, kind: .session, title: session.title ?? "New Session", detail: workspace.projectName(session.location.directory),
+            PaletteItem(id: "session:" + session.id, kind: .session, title: session.title ?? "New Session", detail: workspace.projectName(of: session),
                         symbol: workspace.worktrees[session.location.directory] == nil ? "bubble.left" : "arrow.triangle.branch") { tabs.open(.session(session.id)) }
         }
     }

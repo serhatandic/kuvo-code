@@ -135,7 +135,7 @@ struct GlanceCardForRow: View {
             glance: app.glances.glances[session.id], state: statusMark(of: session, isNew: isUnread, folded: folded, workspace: workspace, app: app),
             idle: session.time.idle, updated: session.time.updated, worktreeBranch: workspace.worktrees[directory]?.branch,
             model: model?.name ?? session.model?.id, variant: session.model?.variant, effortName: EffortLevel.title,
-            folder: SessionGlance.showsFolder(underItsProject: underItsProject, isChat: Workspace.isChat(directory)) ? workspace.projectName(directory) : nil,
+            folder: SessionGlance.showsFolder(underItsProject: underItsProject, isChat: Workspace.isChat(directory)) ? workspace.projectName(of: session) : nil,
             computer: SessionGlance.showsComputer(acrossComputers: acrossComputers) ? .init(name: app.name(of: place), isMachine: place.machine != nil) : nil)
     }
 

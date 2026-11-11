@@ -12580,6 +12580,20 @@ function changeProjects(change, file = PROJECTS_FILE, lock = PROJECTS_LOCK) {
     tell();
   return projects;
 }
+function filedProjects(projects = readProjects()) {
+  const own = new Set(projects.filter((each) => !each.removed).map((each) => each.directory));
+  const filed = {};
+  for (const project of projects) {
+    if (project.removed)
+      continue;
+    for (const folder of project.folders)
+      if (!own.has(folder) && !(folder in filed))
+        filed[folder] = project.directory;
+  }
+  const trees = Object.entries(worktreeProjects()).map(([folder, project]) => [folder, filed[project] ?? project]);
+  return { ...filed, ...Object.fromEntries(trees) };
+}
+var filedUnder = (folder) => filedProjects()[folder] ?? folder;
 function keptProject(directory, given, before = {}) {
   const project = { ...before, directory, folders: before.folders ?? [] };
   if (given.removed === true)
@@ -12611,8 +12625,8 @@ async function atWork(target, signal) {
     return null;
   }
 }
-async function archiveProject(directory, also, readEngine, readBridge, signal) {
-  const trees = Object.entries(worktreeProjects()).filter(([, project]) => project === directory).map(([folder]) => folder);
+async function archiveProject(directory, also, readEngine, readBridge, signal, file = PROJECTS_FILE) {
+  const trees = Object.entries(filedProjects(readProjects(file))).filter(([, project]) => project === directory).map(([folder]) => folder);
   const folders = [...new Set([directory, ...trees, ...also])];
   const targets = [];
   try {
@@ -12674,7 +12688,10 @@ async function* answerProjects(request, readEngine = readEngineFile, readBridge 
   const json = (status, value) => [{ head: { status, headers: { "content-type": "application/json" } } }, { body: Buffer.from(JSON.stringify(value)) }];
   const [route, query = ""] = request.path.split("?");
   const method = request.method.toUpperCase();
-  const listed = () => ({ projects: readProjects(file), worktrees: worktreeProjects() });
+  const listed = () => {
+    const projects = readProjects(file);
+    return { projects, worktrees: filedProjects(projects) };
+  };
   if (route === "kuvo/projects/events") {
     if (method !== "GET")
       return yield* json(405, {});
@@ -12703,7 +12720,7 @@ async function* answerProjects(request, readEngine = readEngineFile, readBridge 
   if (method === "DELETE") {
     const body = parsed(request.body);
     const also = isObject(body) && Array.isArray(body.folders) ? body.folders.filter((folder) => typeof folder === "string" && path47.isAbsolute(folder)) : [];
-    const { archived, kept } = await archiveProject(given, also, readEngine, readBridge, signal);
+    const { archived, kept } = await archiveProject(given, also, readEngine, readBridge, signal, file);
     if (kept === null)
       return yield* json(503, { message: "Its sessions can’t be archived now: the engine isn’t running. Try again in a moment." });
     if (kept > 0)
@@ -18799,6 +18816,11 @@ function projectOf3(folder) {
   }
   return { name: known?.name ?? path67.basename(directory), folders: directory !== folder ? [] : known?.folders ?? [] };
 }
+var projectName = (directory) => readProjects().find((each) => each.directory === directory)?.name ?? path67.basename(directory);
+function filedOf(session) {
+  const filed = session?.metadata?.kuvo?.filed;
+  return isObject(filed) && typeof filed.folder === "string" && typeof filed.project === "string" ? { folder: filed.folder, project: filed.project } : null;
+}
 function findProject(named) {
   const written = named.trim().replace(/^~(?=$|\/)/, homeFolder());
   const projects = readProjects().filter((each) => !each.removed);
@@ -19003,12 +19025,15 @@ async function startSession(given, by, place) {
   const got = applied !== (requested ?? wanted) && lowerOf(applied, requested ?? wanted) === applied ? applied : undefined;
   if (folder !== CHATS)
     await inTime(findLinkedTrees(), undefined, 3000);
-  const project = named && realish(folder) !== realish(named.directory) ? { name: named.name, folders: [] } : projectOf3(named?.directory ?? folder);
+  const startersFiled = filedOf(parent);
+  const under = folder === CHATS ? null : named?.directory ?? (filedUnder(folder) !== folder ? filedUnder(folder) : startersFiled?.folder === folder ? startersFiled.project : folder);
+  const filed = under && under !== folder ? { folder, project: under } : null;
+  const project = !under ? null : realish(under) !== realish(folder) ? { name: projectName(under), folders: [] } : projectOf3(under);
   const title = typeof given.title === "string" && given.title.trim() ? given.title.trim() : null;
   const rules = rulesFor(applied, parent, project?.folders ?? []);
   const agent = given.mode === "plan" || given.mode === "build" ? given.mode : parent?.agent ?? null;
   const autopilot = by ? Boolean(by.place && isAutopilot(by.place.data)) : given.autopilot === true;
-  const marks = { ...by?.place ? { startedBy: by.session } : {}, ...asBefore ? {} : { approval: wanted, applied }, ...autopilot ? { autopilot: true } : {} };
+  const marks = { ...by?.place ? { startedBy: by.session } : {}, ...asBefore ? {} : { approval: wanted, applied }, ...autopilot ? { autopilot: true } : {}, ...filed ? { filed } : {} };
   let session;
   try {
     const made = await call(target, "POST", "/api/session", { location: { directory: folder }, ...title ? { title } : {}, ...agent ? { agent } : {}, ...model ? { model } : {}, permissions: rules, metadata: { kuvo: marks } }, place.signal);
@@ -19032,7 +19057,7 @@ async function startSession(given, by, place) {
     await tellAutopilot(target, session, true).catch(() => {});
   await settleNewSession(target, session).catch(() => {});
   let wakes = wakesFrom(given.wake, Boolean(ownBot), given.wait === true);
-  const kuvo = { ...by?.place ? { startedBy: by.session, ...bot ? { by: bot, depth } : {}, ...wakes.length ? { wake: wakes } : {} } : {}, ...asBefore ? {} : { approval: wanted, applied }, ...autopilot ? { autopilot: true } : {} };
+  const kuvo = { ...by?.place ? { startedBy: by.session, ...bot ? { by: bot, depth } : {}, ...wakes.length ? { wake: wakes } : {} } : {}, ...asBefore ? {} : { approval: wanted, applied }, ...autopilot ? { autopilot: true } : {}, ...filed ? { filed } : {} };
   const marked = await call(target, "PATCH", `/api/session/${address}`, { metadata: { kuvo } }).then(() => true, () => false);
   if (marked && !asBefore)
     await settleAgain(target, session, agents, place.signal).catch(() => {});

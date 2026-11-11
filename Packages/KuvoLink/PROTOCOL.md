@@ -841,7 +841,9 @@ its own, which a `SIGTERM` stops waiting.
     where the sandbox doesn't run, "Approval"), with Settings › Permissions, the task as the user's
     own first message.
   - Either way its project's other folders are allowed to it and named in its instructions, one in
-    a worktree is told so, and a folder that's no project yet becomes one.
+    a worktree is told so, one filed under another folder than its own (a worktree, a project's
+    other folder) carries that project from the first (`kuvo.filed`, "Projects"), and a folder
+    that's no project yet, nor one of a project's, becomes one.
   - 400 `{message}` (no task, not a folder here), 403 (a group chat's seat), 404 (`startedBy`
     isn't a conversation here), 409 `{message, reason}` (Full Access from a client where it can't
     be had: `fullAccessOff`), 429 (too many lately), 502 `{message, session?}` (not made, or
@@ -3992,14 +3994,24 @@ while a box is away goes there when it's back.
   project of its own; #422). A client files a session whose folder is
   here under that project, never as a project of its own; the events line changes with them. A box
   from before doesn't say: a client goes by `kuvo/worktrees` then.
+  Each project's other folders are here too, under it (not one that's a project of its own, nor a
+  removed project's), and a worktree of one of them is its too, so a session started there shows
+  under the project (#311).
+  A session filed under another folder than its own carries it in its metadata from when it's made,
+  `kuvo.filed` `{folder, project}` (as the box names them): one a box's `kuvo/sessions` starts in a
+  worktree, in a project's other folder or a folder in one, or in the folder its starter is filed
+  from; and one a client makes in a worktree it just made with `POST kuvo/worktrees` (it gives it
+  itself). A client may hear of the session from its engine before this list names a new worktree,
+  and the list never names a subfolder: one whose folder the list doesn't name, still running in the
+  folder its `kuvo.filed` names, is filed under that project (#311).
 - `PUT kuvo/projects?directory=<folder>` with any of `{name, folders, run, terminal, removed}`
   adds the project or changes what's given (an empty string is none), and brings a removed one
   back unless `removed` is true (a client's copy of one it removed, with its settings):
   `200 {project}`; 400 for a folder that isn't a whole path. The folder is kept as it's named,
   as its sessions run there (a link isn't followed), and whether it's there now or not (a drive
   that's away).
-- `DELETE kuvo/projects?directory=<folder>` is Remove Project: every session of it, its worktrees'
-  too (removed ones included, and the folders an optional body `{folders}` names: those a client
+- `DELETE kuvo/projects?directory=<folder>` is Remove Project: every session of it, its worktrees' and
+  other folders' too (removed worktrees included, and the folders an optional body `{folders}` names: those a client
   shows under it that the box doesn't know, worktrees removed before it kept them), archived on
   the engine and the coding agents' bridge, older ones included, then it's marked `removed`.
   `200 {archived}`; `409 {message, archived, kept}` when some couldn't be archived (it stays
