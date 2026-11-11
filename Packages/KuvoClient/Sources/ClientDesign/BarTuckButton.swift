@@ -10,15 +10,15 @@ public struct BarTuckButton: View {
 
     #if os(iOS)
     /// As drawn; a finger's 44 to tap (`TuckStyle`).
-    static let size = CGSize(width: 44, height: 26)
+    nonisolated static let size = CGSize(width: 44, height: 26)
     /// How far it stands over the card's top edge: the rest is over the card.
-    static let above: CGFloat = 17
+    nonisolated static let above: CGFloat = 17
     /// From the card's right edge: centered over the bars' chevrons.
-    static let trailing: CGFloat = 4
+    nonisolated static let trailing: CGFloat = 4
     #else
-    static let size = CGSize(width: 32, height: 18)
-    static let above: CGFloat = 12
-    static let trailing: CGFloat = 4
+    nonisolated static let size = CGSize(width: 32, height: 18)
+    nonisolated static let above: CGFloat = 12
+    nonisolated static let trailing: CGFloat = 4
     #endif
 
     public var body: some View {
