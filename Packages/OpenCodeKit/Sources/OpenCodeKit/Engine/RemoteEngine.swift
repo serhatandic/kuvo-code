@@ -690,6 +690,8 @@ public final class RemoteServer: @unchecked Sendable {
         let text = try await connection.run("""
             K="$HOME/\(RemoteEngineInstaller.root)"; R="\(run)"
             \(RemoteProcess.check)
+            # A Mac that has it among its machines: no longer off (a removal before, cut short), if it was.
+            rm -f "$R/off"
             [ -f "$K/bin/kuvo-start" ] && sh "$K/bin/kuvo-start" box >/dev/null 2>&1
             pid=$(sed -n 's/^{"pid":\\([0-9]*\\),.*/\\1/p' "$R/engine.json" 2>/dev/null)
             if kuvo_runs "$pid" opencode; then

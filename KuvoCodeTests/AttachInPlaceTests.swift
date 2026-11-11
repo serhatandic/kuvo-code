@@ -179,13 +179,15 @@ import Testing
     /// under Kuvo Code's own permissions); by its own script where there's none.
     @Test func aStoppedBoxIsStartedByLaunchdWhereItCanBe() throws {
         defer { try? FileManager.default.removeItem(at: folder) }
-        let own = Here.startCommand(home: home, root: ".kuvo-code", user: 501)
+        let own = Here.startCommand(home: home, root: ".kuvo-code", user: 501, real: true)
         #expect(own.path == "/bin/sh" && own.arguments == [home.appending(path: ".kuvo-code/bin/kuvo-start").path])
         let agent = home.appending(path: "Library/LaunchAgents/\(RemoteServer.launchAgent).plist")
         try FileManager.default.createDirectory(at: agent.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data().write(to: agent)
-        let launchd = Here.startCommand(home: home, root: ".kuvo-code", user: 501)
+        let launchd = Here.startCommand(home: home, root: ".kuvo-code", user: 501, real: true)
         #expect(launchd.path == "/bin/launchctl" && launchd.arguments == ["kickstart", "gui/501/run.kuvo.code.machine"])
+        // A test's home is never the account's, whose agent launchd would start.
+        #expect(Here.startCommand(home: home, root: ".kuvo-code", user: 501).path == "/bin/sh")
     }
 
     /// MacBook removed this Mac as a machine (its way to start and keys went, its card stayed): no box
