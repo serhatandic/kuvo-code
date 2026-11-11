@@ -32,7 +32,7 @@
 # KUVO_HEAVY_SWAP MB a second (10 unless set) or its memory pressure critical, for
 # KUVO_HEAVY_MEMORY_WAIT_FOR (2 minutes) at most (below; KUVO_HEAVY_MEMORY=0 for never). It waits
 # for a busy Mac (its load over the last minute above KUVO_HEAVY_LOAD) or for less than
-# KUVO_HEAVY_MEMORY% of memory available only when those are set: background priority (below) is
+# KUVO_HEAVY_MEMORY% of memory available only when those are set: low priority (below) is
 # what keeps the Mac usable, and on the Mini, with a dozen sessions, both were true all day, so jobs
 # only waited. While the Mac app's suite (mac) waits there, new phone, mac-build and box jobs wait
 # for it to start, for 2 minutes at most (KUVO_HEAVY_MAC_FIRST_FOR). None of these waits happens
@@ -89,11 +89,22 @@
 #   KUVO_HEAVY_DIR      where the locks are (for the helper's own tests)
 #
 # Jobs never starve the box (the Kuvo Code box on this Mac, which the user's phone talks to): every
-# job runs at background priority, its children too (a job inside another gets it too). macOS:
-# `taskpolicy -b`, background QoS: low CPU and I/O priority, which the box's own processes, at
-# default priority, win over (tried with xcodebuild builds and tests, a simulator test run and swift
-# test: all work). Linux: `nice -n 15 ionice -c3` (just `nice -n 15` without ionice). A job on an
-# idle Mac runs as fast as ever; on a busy one it gives way.
+# job runs at low priority, its children too (a job inside another gets it too). macOS:
+# `taskpolicy -c utility nice -n 20`, utility QoS at the lowest nice: below the box's own processes,
+# at default priority, which win over it, but on every core. Not background QoS (`taskpolicy -b`,
+# as before #557): on Apple silicon that runs only on the efficiency cores, with its I/O throttled,
+# and a cold build of the package UsageKit took 87 s under it against 49 s at utility and nice 20 on an idle Mini
+# (six of its twelve cores efficiency ones), while a stand-in for the box (six CPU-bound processes
+# at default priority) took 3.6 s alone, 3.5 s beside the background build, 4.4 s beside the utility
+# one at nice 20 and 7 s beside one at utility alone (tried with xcodebuild builds and tests, a
+# simulator test run and swift test). Linux: `nice -n 15 ionice -c3` (just `nice -n 15` without
+# ionice). A job on an idle Mac runs as fast as ever; on a busy one it gives way.
+#
+# Jobs of the Xcode lanes (mac, mac-build, phone-build, phone) build with Xcode's compilation cache,
+# one for every checkout's builds (scripts/xcode-cache.sh, beside this copy): content-addressed, so
+# a build in a new worktree replays what an earlier build of the same code compiled, wherever it was,
+# and never what another branch's code made. Their xcodebuild gets it through XCODE_XCCONFIG_FILE
+# (unless the caller has one); KUVO_XCODE_CACHE=0 builds without it.
 #
 # Every job has a time limit, so one that hangs can't hold its kind's turn for hours: past it, the
 # job is stopped (its process group, as below: TERM, then KILL), it says what was running, and
@@ -247,13 +258,14 @@ MAX_LOAD="${KUVO_HEAVY_LOAD:-}"
 WAITS="${KUVO_HEAVY_WAIT:-1}"
 case "$kind" in mac | phone) DEFAULT_LIMIT=45m ;; mac-build) DEFAULT_LIMIT=90m ;; box) DEFAULT_LIMIT=40m ;; esac
 
-# What every job runs under, so it never takes the CPU or the disk from the box: background priority
-# (a prefix: `$LOW "$@"`; its children keep it). macOS: `taskpolicy -b`, background QoS: low CPU and
-# I/O priority (`nice` alone leaves the I/O alone). Linux: nice and ionice.
+# What every job runs under, so it never takes the CPU or the disk from the box: low priority (a
+# prefix: `$LOW "$@"`; its children keep it). macOS: utility QoS (lower CPU and I/O priority than
+# the box's default, on every core: `nice` alone leaves the I/O alone) at nice 20. Linux: nice and
+# ionice.
 LOW=
 case "$(uname -s 2>/dev/null)" in
     Darwin)
-        if command -v taskpolicy >/dev/null 2>&1; then LOW="taskpolicy -b"; else LOW="nice -n 15"; fi
+        if command -v taskpolicy >/dev/null 2>&1; then LOW="taskpolicy -c utility nice -n 20"; else LOW="nice -n 15"; fi
         ;;
     *)
         # (ionice can be refused, in a container: then nice alone.)
@@ -331,6 +343,16 @@ if [ -n "$holds" ]; then
     holds_any
     exit
 fi
+
+# The Xcode lanes' jobs build with Xcode's compilation cache, one for every checkout
+# (scripts/xcode-cache.sh and its xcconfig, beside this copy: XCODE_XCCONFIG_FILE, unless the caller
+# has one), so a build in a new worktree replays what another worktree's build compiled instead of
+# compiling it all again. Not the box's: it runs no xcodebuild.
+case "$kind" in
+    mac | mac-build | phone)
+        if [ -f "$(dirname "$0")/xcode-cache.sh" ] && . "$(dirname "$0")/xcode-cache.sh"; then xcode_cache "$(dirname "$0")"; fi
+        ;;
+esac
 
 # A time like 90m, 600s or 2h (plain: minutes), in seconds; $2 names the variable it came from.
 # (Its number in base 10, whatever zeros lead it, and at most six digits.)

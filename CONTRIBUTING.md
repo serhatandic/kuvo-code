@@ -198,11 +198,27 @@ scripts/test-box.sh box <test-filter>
   were, so an older script and a new one on slot 1 still exclude each other;
 - `box`: the box's whole suites (`bun test`, `node --test`) and runs on a test machine.
 
+Every job of the Xcode lanes (`mac`, `mac-build`, `phone-build`, `phone`) builds with Xcode's
+compilation cache, one for all checkouts (`scripts/xcode-cache.sh`): a content-addressed store in
+`$(getconf DARWIN_USER_CACHE_DIR)KuvoCompilationCache`, keyed by what goes into each compile and not
+by where the checkout or build folder is, so a build in a new worktree replays what an earlier build
+of the same code compiled instead of compiling the app and its packages again. Code that differs gets
+its own key, so branches never mix. heavy.sh hands `scripts/xcode-cache.xcconfig` to `xcodebuild`
+through `XCODE_XCCONFIG_FILE`; nothing changes in your command (settings on it still win), and both
+apps' `scripts/test-app.sh` and `scripts/build-app.sh` get it too. Xcode prunes the store to 20 GB
+(`KUVO_XCODE_CACHE_SIZE`) after a build, but only once no build has it open, so on a busy Mac it can
+grow past that for a while (heavy.sh says so at twice the size); to clear it, delete the folder while
+no Xcode build runs. `KUVO_XCODE_CACHE=0` builds without it (so does CI), and a caller with an
+`XCODE_XCCONFIG_FILE` of its own keeps that one instead. `swift build` and `swift test` don't use it.
+The compiler sees the sources as `/^src/…` (the project's folder), so `#filePath` is that too, and so
+are the places a failed test names: what `xcodebuild` builds finds its files through its bundle, never
+`#filePath` (the app's `scripts/test-app.sh` checks).
+
 Before it joins its lane's line, a new job waits while the Mac is thrashing: swapping more than 10 MB
 a second (`KUVO_HEAVY_SWAP`) or its memory pressure critical, two minutes at most from when any job
 found it so (`KUVO_HEAVY_MEMORY_WAIT_FOR`; `KUVO_HEAVY_MEMORY=0` turns the memory wait off). It waits
 for a busy Mac (`KUVO_HEAVY_LOAD`, its load over the last minute) or for a share of memory available
-(`KUVO_HEAVY_MEMORY=20`, in percent) only when you set those: background priority (below) keeps the
+(`KUVO_HEAVY_MEMORY=20`, in percent) only when you set those: low priority (below) keeps the
 Mac usable, and on the Mini, with a dozen sessions, the load stayed over 40 and less than 20% of
 memory was available all day, so jobs only waited. While the Mac app's suite waits there, new jobs of
 the other kinds wait for it to start, two minutes at most (`KUVO_HEAVY_MAC_FIRST_FOR`). None of
@@ -212,8 +228,11 @@ this way themselves. `python3 -m unittest discover -s scripts -p test_heavy.py`
 tries the helper.
 
 Jobs never starve the box (the Kuvo Code box on this Mac, which the phone talks to): every job runs
-at background priority, its children too: `taskpolicy -b` on macOS (low CPU and I/O priority; it works
-with `xcodebuild` builds and tests, simulator runs and `swift test`), `nice -n 15 ionice -c3` on Linux. On
+at low priority, its children too: `taskpolicy -c utility nice -n 20` on macOS (utility QoS at the
+lowest nice: lower CPU and I/O priority than the box's, but on every core; it works with `xcodebuild`
+builds and tests, simulator runs and `swift test`), `nice -n 15 ionice -c3` on Linux. Not background
+QoS (`taskpolicy -b`), which on Apple silicon runs only on the efficiency cores with its I/O
+throttled: a cold build took nearly twice as long under it. On
 an idle Mac a job runs as fast as ever; on a busy one it gives way and is slower, which the time
 limit allows for (`KUVO_HEAVY_LIMIT`).
 
