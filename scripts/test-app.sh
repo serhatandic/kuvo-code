@@ -3,12 +3,31 @@
 # the app that starts nothing (no window, engine or menu bar item) and keeps everything in the
 # temporary folder.
 #   ONLY   suites or tests to run alone, separated by spaces, e.g. KuvoCodeTests/ChangesDiscardTests
+#   --from-batch   runs them from the newest batch (scripts/batch-build.sh: main, built once at
+#          04:00 and 16:00 for every session's runs) without building anything: ONLY is a must, and
+#          a name the batch hasn't (merged after it was built) is refused before it waits in line.
+#          It says which batch it tested. The same test copy, settings and checks as a run that builds.
 #
 # The test copy is built outside the checkout: a copy of the app loading its code from Desktop or
 # Documents would wait on a privacy prompt nobody can answer while tests run. It has a bundle ID
 # of its own, so it never shares the app's settings or keychain items.
 set -eu
+CALLER=$PWD
 cd "$(dirname "$0")/.."
+
+# --from-batch, as given; --batch <folder> <pid>, as it runs: the batch it opened for that run.
+FROM_BATCH=
+BATCH=
+BATCH_RUN=
+case "${1:-}" in
+    "") ;;
+    --from-batch) [ $# -eq 1 ] && FROM_BATCH=1 ;;
+    --batch) [ $# -eq 3 ] && BATCH=$2 && BATCH_RUN=$3 ;;
+esac
+if [ $# -gt 0 ] && [ -z "$FROM_BATCH$BATCH" ]; then
+    echo "Usage: [ONLY=…] scripts/test-app.sh [--from-batch]" >&2
+    exit 64
+fi
 
 check_console() {
     user=$(id -un)
@@ -21,6 +40,24 @@ check_console() {
 }
 check_console "$(stat -f %Su /dev/console 2>/dev/null || true)"
 
+# From a batch: the newest, kept open for this run (this process, which lives until the run is
+# over: heavy.sh and lockf take its place), and only if it has every test asked for.
+if [ -n "$FROM_BATCH" ]; then
+    if [ -z "${ONLY:-}" ]; then
+        echo "scripts/test-app.sh --from-batch runs only what ONLY names (ONLY=KuvoCodeTests/WindowTabsTests …)." >&2
+        exit 64
+    fi
+    BATCH=$(/bin/sh scripts/batch.sh open mac $$)
+    # shellcheck disable=SC2086 # (ONLY's names, one by one)
+    if ! /bin/sh scripts/batch.sh check "$BATCH" kuvo-ai $ONLY; then
+        /bin/sh scripts/batch.sh close "$BATCH" $$
+        exit 1
+    fi
+    /bin/sh scripts/batch.sh behind "$BATCH" kuvo-ai "$CALLER" || true
+    echo "Testing from the $(/bin/sh scripts/batch.sh describe "$BATCH")." >&2
+    set -- --batch "$BATCH" $$
+fi
+
 # A heavy job of the Mac's (scripts/heavy.sh, kind mac: the one app suite that drives the UI, which
 # runs alone; builds and package tests are mac-build and run beside it). It waits for a busy Mac,
 # unless whoever started it took that turn already.
@@ -32,7 +69,7 @@ if [ -z "$HEAVY" ]; then
     [ -n "$HEAVY" ] && [ -f "$HEAVY" ] || HEAVY=scripts/heavy.sh
 fi
 if ! /bin/sh "$HEAVY" --holds mac; then
-    exec /bin/sh "$HEAVY" mac /bin/sh "$PWD/scripts/test-app.sh"
+    exec /bin/sh "$HEAVY" mac /bin/sh "$PWD/scripts/test-app.sh" "$@"
 fi
 
 # One run at a time, whoever starts it: every run shares the test copy's settings and caches in
@@ -42,13 +79,18 @@ fi
 LOCK="$(getconf DARWIN_USER_TEMP_DIR 2>/dev/null || echo /tmp/)kuvo-code-tests-$(id -u).lock"
 if [ "${KUVO_TESTS_LOCK:-}" != "$LOCK" ]; then
     lockf -ks -t 0 "$LOCK" true || echo "Waiting for another run of the app's tests to finish…" >&2
-    KUVO_TESTS_LOCK="$LOCK" exec lockf -ks "$LOCK" /bin/sh "$PWD/scripts/test-app.sh"
+    KUVO_TESTS_LOCK="$LOCK" exec lockf -ks "$LOCK" /bin/sh "$PWD/scripts/test-app.sh" "$@"
 fi
 # And it is held: one that only says so in the environment can't get in.
 if lockf -ks -t 0 "$LOCK" true; then
     echo "scripts/test-app.sh runs only while it holds $LOCK." >&2
     exit 1
 fi
+
+# The checks of the sources below look at the batch's, from a batch.
+SOURCES=.
+[ -z "$BATCH" ] || SOURCES="$BATCH/src/kuvo-ai"
+cd "$SOURCES"
 
 # The app reaches the Keychain only through `Keychain` (KuvoCode/Stores/Keychain.swift), which is
 # one in memory for the tests: a test reaching the real one would wait on macOS asking whether
@@ -65,6 +107,7 @@ if grep -rn '#filePath' --include='*.swift' KuvoCode KuvoCodeTests | grep -v '= 
     echo "The app and its tests find their files through their bundles, never #filePath: built with the compilation cache, it's /^src/…, no file on this Mac." >&2
     exit 1
 fi
+cd - >/dev/null
 
 TEMP="${TMPDIR:-/tmp}"
 # Built in this user's cache folder, kept from run to run: macOS clears files the temporary folder
@@ -72,13 +115,27 @@ TEMP="${TMPDIR:-/tmp}"
 CACHE="$(getconf DARWIN_USER_CACHE_DIR 2>/dev/null || echo "$TEMP/")"
 BUILD="${CACHE%/}/KuvoCodeTests-build"
 BUNDLE=run.kuvo.code.tests
-# Xcode's compilation cache, one for every checkout (scripts/xcode-cache.sh; heavy.sh turns it on
-# already, this for a heavy.sh from before it): what another worktree compiled isn't compiled again.
-. scripts/xcode-cache.sh
-xcode_cache scripts
-set -- -project KuvoCode.xcodeproj -scheme KuvoCode -destination "platform=macOS,arch=$(uname -m)" \
-    -derivedDataPath "$BUILD" -clonedSourcePackagesDirPath build/SourcePackages \
-    APP_BUNDLE_ID=$BUNDLE CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM=
+if [ -n "$BATCH" ]; then
+    # From the batch's build, as it was built (scripts/batch-build.sh: these settings): its log and
+    # results in a folder of their own, beside KuvoCodeTests-build.
+    BUILD="${CACHE%/}/KuvoCodeTests-batch"
+    XCTESTRUN=$(sed -n 's/^xctestrun=//p' "$BATCH/stamp")
+    PRODUCTS=$(dirname "$XCTESTRUN")
+    if [ "$(plutil -extract KuvoCodeTests.TestHostBundleIdentifier raw -o - "$XCTESTRUN" 2>/dev/null)" != "$BUNDLE" ]; then
+        echo "The batch's tests aren't hosted by the test copy ($BUNDLE): $XCTESTRUN" >&2
+        exit 1
+    fi
+    set -- test-without-building -xctestrun "$XCTESTRUN" -destination "platform=macOS,arch=$(uname -m)" -derivedDataPath "$BUILD"
+else
+    PRODUCTS="$BUILD/Build/Products"
+    # Xcode's compilation cache, one for every checkout (scripts/xcode-cache.sh; heavy.sh turns it on
+    # already, this for a heavy.sh from before it): what another worktree compiled isn't compiled again.
+    . scripts/xcode-cache.sh
+    xcode_cache scripts
+    set -- test -project KuvoCode.xcodeproj -scheme KuvoCode -destination "platform=macOS,arch=$(uname -m)" \
+        -derivedDataPath "$BUILD" -clonedSourcePackagesDirPath build/SourcePackages \
+        APP_BUNDLE_ID=$BUNDLE CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM=
+fi
 for only in ${ONLY:-}; do set -- "$@" -only-testing:"$only"; done
 
 # The Bun that runs the agents bridge the app ships, for the tests that run it for real: a `bun` on
@@ -94,6 +151,13 @@ export TEST_RUNNER_KUVO_TEST_BUN="${KUVO_TEST_BUN:-}"
 # Never the real app's bundle ID, folders or engine, nor a Bun in the Desktop or Documents.
 real_app_guard "scripts/test-app.sh" "$BUNDLE" "$KUVO_TEST_BUN"
 desktop_guard "scripts/test-app.sh" "$KUVO_TEST_BUN"
+# (And a batch there: the test copy would wait on the same prompt.)
+case "$(printf '%s' "$PRODUCTS" | tr '[:upper:]' '[:lower:]')" in
+    "$(printf '%s' "$HOME" | tr '[:upper:]' '[:lower:]')"/desktop/* | "$(printf '%s' "$HOME" | tr '[:upper:]' '[:lower:]')"/documents/*)
+        echo "scripts/test-app.sh: refusing to start, because the test copy at $PRODUCTS is in your Desktop or Documents folder." >&2
+        exit 1
+        ;;
+esac
 
 # What the test copy keeps under its own bundle ID (settings, caches, website data): gone before
 # a run, so each starts clean, and after it.
@@ -112,7 +176,7 @@ clean() {
 clean
 
 # Snapshot only the test executable, never the installed app. The lock excludes other runs.
-HOST="$BUILD/Build/Products/Debug/Kuvo Code.app/Contents/MacOS/Kuvo Code"
+HOST="$PRODUCTS/Debug/Kuvo Code.app/Contents/MacOS/Kuvo Code"
 host_pids() {
     ps -axo pid=,comm= | awk -v host="$HOST" 'index($0, host) && substr($0, index($0, host)) == host { print $1 }'
 }
@@ -155,6 +219,7 @@ cleanup_run() {
     kill "$caffeinate_pid" 2>/dev/null || true
     wait "$caffeinate_pid" 2>/dev/null || true
     clean
+    [ -z "$BATCH" ] || /bin/sh scripts/batch.sh close "$BATCH" "$BATCH_RUN"
     exit "$result"
 }
 trap cleanup_run EXIT
@@ -173,7 +238,7 @@ account_state() {
 mkdir -p "$BUILD"
 status=0
 account_before=$(account_state)
-xcodebuild test "$@" > "$BUILD/test.log" 2>&1 &
+xcodebuild "$@" > "$BUILD/test.log" 2>&1 &
 xcode_pid=$!
 wait "$xcode_pid" || status=$?
 xcode_pid=
@@ -183,6 +248,14 @@ if [ "$(account_state)" != "$account_before" ]; then
     status=1
 fi
 grep -aE '(✔|✘|􀢄|􁁛).*(Test|Suite)|issue|error:|\*\* TEST' "$BUILD/test.log" | grep -v 'warning:\|\[Connection\]' || true
+if [ -n "$BATCH" ]; then
+    # A name that matches nothing runs nothing, which xcodebuild counts as passing.
+    if [ $status -eq 0 ] && ! grep -qaE 'Test run with [1-9]|Executed [1-9]' "$BUILD/test.log"; then
+        echo "No tests ran for $ONLY." >&2
+        status=1
+    fi
+    echo "Tested the $(/bin/sh scripts/batch.sh describe "$BATCH")."
+fi
 if [ $status -ne 0 ]; then echo "The whole log: $BUILD/test.log" >&2; fi
 finished=1
 exit $status
