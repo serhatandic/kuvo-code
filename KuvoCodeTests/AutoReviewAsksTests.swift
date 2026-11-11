@@ -122,6 +122,35 @@ import Testing
         #expect(workspace.asking["per_d2"] == id, "and told")
     }
 
+    /// Stopped while Auto checked what it asked: the engine lets that ask go with the run, with no
+    /// word of it, and its box drops it from its list. It's gone, so it never turns into yours
+    /// later, as when its box isn't heard for a moment (a machine's read that fails): no "needs
+    /// you" left on the session's row in its bot's bar, with nothing in the session to answer
+    /// (#425).
+    @Test func anAskStoppedWhileCheckedIsGoneWithItsRun() async throws {
+        let workspace = workspace
+        Sandboxes.shared.onYours = { workspace.reviewLeftForYou($0) }
+        defer {
+            Sandboxes.shared.forget(box)
+            Sandboxes.shared.onYours = nil
+            engine.stop()
+        }
+        let model = try await open()
+        Sandboxes.shared.setLive(true, box)
+        workspace.handle(try engine.event("permission.asked", outside("per_s1")))
+        Sandboxes.shared.take(reviews: [review("per_s1", .checking)], from: box)
+        #expect(!workspace.needsAttention(id), "being checked")
+        // You stop it: the run ends, and its box lists the ask no more.
+        workspace.handle(try engine.event("session.execution.interrupted", session: id, ["reason": "user"]))
+        Sandboxes.shared.take(reviews: [], from: box)
+        #expect(model.permissions.isEmpty)
+        #expect(!workspace.needsAttention(id))
+        // Its box not heard for a moment: nothing of that ask comes back.
+        Sandboxes.shared.setLive(false, box)
+        #expect(!workspace.needsAttention(id), "an ask gone with its run isn't yours later")
+        #expect(workspace.asking["per_s1"] == nil, "nor told")
+    }
+
     /// A command isn't the reviewer's to take up, and a box whose word isn't whole (from before
     /// `sandbox.reviews.whole`) has one it hasn't listed yours at once.
     @Test func whatTheReviewerNeverTakesUpIsYoursAtOnce() async throws {

@@ -2663,6 +2663,7 @@ final class Workspace {
             if machine != nil { Attachments.forget(session: id) }
             models[id] = nil
             asking = asking.filter { $0.value != id }
+            awaitingReview = awaitingReview.filter { $0.value.sessionID != id }
             // Deleted while it worked: it isn't working any more (nor keeping the Mac awake).
             if running.contains(id) { running.remove(id) }
             shellJobs[id] = nil
@@ -2896,6 +2897,8 @@ final class Workspace {
             // bridge says itself). Its permissions are named `per_…`.
             guard let ended = event.sessionID, !isBridgeSession(ended) else { return }
             for (request, session) in asking where session == ended && request.hasPrefix("per_") { settled(request) }
+            // And one Auto's reviewer was checking: gone too, never yours later (#425).
+            for (request, permission) in awaitingReview where permission.sessionID == ended && request.hasPrefix("per_") { settled(request) }
         default:
             break
         }
