@@ -543,6 +543,13 @@ final class AppModel {
                 case .attach(let here):
                     attached = here
                     BackgroundWork.heldBack = "This Mac’s box is the one already here, which starts on its own."
+                    if let binary, let script = BoxProcess.script { await Here.sayAttached(engine: binary, script: script, home: Self.hereHome) }
+                    guard launch == self.launch else { return }
+                    // (Its keeper starts it at login, and again as it stops: one that isn't running now
+                    // is said so, to try again, rather than waited on.)
+                    guard here.runs == .running else {
+                        throw MachineFailure(message: "The box already on this Mac isn’t running. Try again in a moment.")
+                    }
                     return
                 case .unknown(let why):
                     let couldnt = "Kuvo Code couldn’t check the box already on this Mac, so it didn’t start one of its own."
@@ -695,8 +702,11 @@ final class AppModel {
     /// so, which the window shows instead of starting (with a state of its own, not `.starting`,
     /// which it stays in meanwhile); the tests' until then.
     nonisolated(unsafe) static var attachesInPlace = false
-    /// The home folder `here` looks in (the tests' own).
-    nonisolated(unsafe) static var hereHome = FileManager.default.homeDirectoryForCurrentUser
+    /// The home folder `here` looks in: a folder of the tests' own while they run, which they set.
+    nonisolated(unsafe) static var hereHome = defaultHereHome
+    nonisolated static var defaultHereHome: URL {
+        AppInfo.isHostingTests ? AppInfo.testRoot.appending(path: "here-home") : FileManager.default.homeDirectoryForCurrentUser
+    }
 
     /// This Mac's engine once it's up: the keeper's (started, or made way for after an update, as
     /// needed), or the app's own. What becomes of it later comes to `boxEngineChanged`.

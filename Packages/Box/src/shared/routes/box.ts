@@ -112,8 +112,8 @@ const JUDGED_BOX = object({
   role: nullable(words("primary", "member")),
   primary: nullable(object({ key: string, name: string, heard: nullable(number) })),
   macs: list(object({ key: string, name: string })),
-  computers: number,
-  items: number,
+  computers: nullable(number),
+  items: nullable(number),
 });
 
 /** What's on a computer, judged (PROTOCOL.md, "Your setup", "Already in a setup?"): one verdict,
@@ -129,6 +129,7 @@ export const HERE = object({
   verdict: words("self", "free", "ours", "older", "elsewhere", "main", "two"),
   use: words("own", "attach"),
   opens: words("main", "window"),
+  runs: nullable(words("running", "stopped", "gone")),
   box: nullable(JUDGED_BOX),
   own: nullable(JUDGED_BOX),
 });
@@ -193,6 +194,7 @@ export const BOX_ROUTES: RouteShape[] = [
   { route: "GET kuvo/setup", answers: { 200: SETUP } },
   { route: "GET kuvo/setup/events", answers: { 200: SETUP } },
   { route: "POST kuvo/setup/judge", answers: { 200: JUDGED } },
+  { route: "POST kuvo/setup/attached", answers: { 200: NOTHING } },
   { route: "GET kuvo/attention", answers: { 200: ATTENTION } },
   { route: "POST kuvo/attention", answers: { 200: object({ for: number }) } },
   { route: "POST kuvo/attention/notice", answers: { 200: NOTHING } },

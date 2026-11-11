@@ -321,11 +321,14 @@ public struct RemoteEngineInstaller: Sendable {
     /// "Already in a setup?"): each box there, Kuvo Code's own in a Mac's app folder too (once a box
     /// ran there, even one from before cards; only for the real `~/.kuvo-code`: a test's or a demo
     /// copy's own folder is a box of its own), by its card, and for an older box with none, a few
-    /// fields of its link.json, never its keys. Only
+    /// fields of its link.json, never its keys; and each of Kuvo Code's app folders there. Only
     /// `sed`, so a machine still needs nothing but `sh` and `tar`. The box judges what it printed
-    /// (`POST kuvo/setup/judge`): `box machine|app <folder>`, `card <json>`, `link …`.
+    /// (`POST kuvo/setup/judge`): `box machine|app <folder>`, `card <json>`, `link …`, `app <folder>`.
     static var foundProbe: String {
         let apps = root == ".kuvo-code" ? #" "$HOME/Library/Application Support"/run.kuvo.code*/box"# : ""
+        // And each Kuvo Code app's folder, whether or not a box of its own ran there (one attached to
+        // `~/.kuvo-code` in place, or just installed): `app <folder>`.
+        let appFolders = root == ".kuvo-code" ? ##"for a in "$HOME/Library/Application Support"/run.kuvo.code*; do [ -d "$a" ] && echo "app ${a#"$HOME"/}"; done"## : ""
         return #"""
             for b in "$HOME/\#(root)"\#(apps); do
               [ -f "$b/run/link.json" ] || [ -f "$b/run/setup-card.json" ] || [ -f "$b/run/serve.json" ] || [ -f "$b/run/keeper.json" ] || continue
@@ -337,6 +340,7 @@ public struct RemoteEngineInstaller: Sendable {
                 -e '/^  "macNames": {$/,/^  }/s/^    "\([A-Za-z0-9_-]*\)": \(".*"\),\{0,1\}$/link name \1 \2/p' \
                 -e 's/^  "phones": \[\],\{0,1\}$/link phones none/p' -e 's/^  "phones": \[$/link phones some/p' "$b/run/link.json"
             done
+            \#(appFolders)
             true
             """#
     }
@@ -344,7 +348,7 @@ public struct RemoteEngineInstaller: Sendable {
     /// What `probe` found already on the computer, as it printed it, for its box to judge
     /// (`foundProbe`).
     static func found(in answer: String) -> String {
-        answer.split(separator: "\n").filter { line in ["box ", "card ", "link "].contains { line.hasPrefix($0) } }.joined(separator: "\n")
+        answer.split(separator: "\n").filter { line in ["box ", "card ", "link ", "app "].contains { line.hasPrefix($0) } }.joined(separator: "\n")
     }
 
     /// What a machine's answer to `probe` means.
@@ -369,7 +373,7 @@ public struct RemoteEngineInstaller: Sendable {
         let rest = lines.dropFirst(2)
         if let computer = rest.first(where: { $0.hasPrefix("computer ") }), Self.isThisAccount(computer) { throw RemoteEngineError.thisMac }
         let found = Self.found(in: answer)
-        let said = rest.filter { line in !["computer ", "macos ", "box ", "card ", "link "].contains { line.hasPrefix($0) } }
+        let said = rest.filter { line in !["computer ", "macos ", "box ", "card ", "link ", "app "].contains { line.hasPrefix($0) } }
         return (release, said.contains { $0.hasSuffix(OpenCodeEngine.version) }, found)
     }
 

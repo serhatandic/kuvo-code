@@ -30,8 +30,13 @@ nonisolated struct Here: Decodable, Equatable, Sendable {
         let primary: Primary?
     }
 
+    /// Whether the box in the machines' folder runs: its keeper running now, stopped (it has its way
+    /// to start), or gone (its Mac removed it: no box any more, which the app doesn't attach to).
+    enum Runs: String, Decodable, Sendable { case running, stopped, gone }
+
     let verdict: String
     let use: Use
+    let runs: Runs?
     /// The box in the machines' folder, if there is one.
     let box: Box?
 
@@ -53,27 +58,23 @@ nonisolated struct Here: Decodable, Equatable, Sendable {
         hostingTests || bundleID.lowercased() == AppInfo.realBundleID || given != ".kuvo-code" ? given : nil
     }
 
-    /// The box's `OWN_BOX_RAN` (`judge.ts`), as it is there (a test holds them the same).
-    static let ownBoxFiles = ["setup-card.json", "link.json", "serve.json", "keeper.json"]
-
-    /// What `here` counts as the app's own box having run (`judge.ts`, `OWN_BOX_RAN`, and its engine's
-    /// database), for a start that can't ask it: one whose own box ran keeps it, whatever is beside
-    /// it, as the box would say. (An update whose engine isn't downloaded yet, say.)
-    static func ownBoxRan(appBox: URL, engineData: URL) -> Bool {
-        let manager = FileManager.default
-        let kept = (try? manager.contentsOfDirectory(atPath: engineData.path)) ?? []
-        return ownBoxFiles.contains { manager.fileExists(atPath: appBox.appending(path: "run").appending(path: $0).path) }
-            || kept.contains { $0.hasPrefix("opencode") && $0.hasSuffix(".db") }
+    /// Whether this app's own box ran here, as only the app knows it: the record it or its keeper
+    /// writes as it starts one (`serve.json`, `keeper.json`). For a start that can't ask the box: one
+    /// whose own box ran keeps it (an update whose engine isn't downloaded yet, say).
+    static func ownBoxRan(appBox: URL) -> Bool {
+        ["serve.json", "keeper.json"].contains { FileManager.default.fileExists(atPath: appBox.appending(path: "run").appending(path: $0).path) }
     }
 
     /// Whether this start uses its own box (in `appBox`, its engine's data in `engineData`): asked of
     /// the box with `engine` (the engine's Bun, checked first when `checked`) running the app's own
-    /// `script`, twice before it gives up. With no box in the machines' folder there's nothing to ask
-    /// (the box would say its own). One that can't ask keeps its own box where that ran, else starts
-    /// nothing with a box here.
+    /// `script`, twice before it gives up. One that can't ask keeps its own box where that ran, or
+    /// with no box in the machines' folder starts as it always has; else it starts nothing.
     static func gate(engine: URL?, script: URL?, appBox: URL, engineData: URL, home: URL, checked: Bool) async -> Outcome {
-        guard let root, FileManager.default.fileExists(atPath: home.appending(path: root).appending(path: "run").path) else { return .own }
-        func cantAsk(_ why: String?) -> Outcome { Self.ownBoxRan(appBox: appBox, engineData: engineData) ? .own : .unknown(why) }
+        guard let root else { return .own }
+        func cantAsk(_ why: String?) -> Outcome {
+            let there = FileManager.default.fileExists(atPath: home.appending(path: root).appending(path: "run").path)
+            return Self.ownBoxRan(appBox: appBox) || !there ? .own : .unknown(why)
+        }
         guard let engine, let script else {
             log.error("here wasn't asked: no engine yet")
             return cantAsk(nil)
@@ -88,6 +89,29 @@ nonisolated struct Here: Decodable, Equatable, Sendable {
             }
         }
         return cantAsk(nil)
+    }
+
+    /// Tells the box in the machines' folder that the app attached to it in place (`POST
+    /// kuvo/setup/attached`, by its CLI, `box route`, as the app runs `here`): its card says Kuvo Code
+    /// is on this Mac from then on, so a Mac adding it never has it join another setup unasked.
+    static func sayAttached(engine: URL, script: URL, home: URL) async {
+        guard let root else { return }
+        let box = home.appending(path: root)
+        let env = ["HOME": home.path, "PATH": "/usr/bin:/bin", "BUN_BE_BUN": "1", "BUN_RUNTIME_TRANSPILER_CACHE_PATH": "0", "KUVO_HOME": box.path,
+                   "TMPDIR": FileManager.default.temporaryDirectory.path]
+        let request = Data(#"{"method":"POST","path":"kuvo/setup/attached"}"#.utf8)
+        let input = FileManager.default.temporaryDirectory.appending(path: "kuvo-attached-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: input) }
+        do {
+            try request.write(to: input)
+            let result = try await ChildProcess.run(engine.path, ["run", "--config=/dev/null", "--no-env-file", script.path, "box", "route"],
+                                                    environment: env, directory: box, input: .file(input), limit: .seconds(20))
+            if !result.succeeded || !result.outputText.contains(#""status":200"#) {
+                log.error("The box here wasn't told the app attached: \(result.outputText.suffix(200), privacy: .public) \(result.errorText.suffix(200), privacy: .public)")
+            }
+        } catch {
+            log.error("The box here wasn't told the app attached: \(error.localizedDescription, privacy: .public)")
+        }
     }
 
     /// What the box CLI says here: the app's own script, run as the box runs it (`engine`, the

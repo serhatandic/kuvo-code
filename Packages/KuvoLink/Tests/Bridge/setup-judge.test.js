@@ -13,7 +13,7 @@
 // Run with `node --test Packages/KuvoLink/Tests/Bridge/setup-judge.test.js`.
 import "./test-safety.js";
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -103,12 +103,24 @@ test("each verdict, as a Mac adding a computer hears it: nothing there, one of o
   const alone = await verdict(one({ setup: otherSetup, epoch: 1, role: "primary", primary: { key: mini.pub, name: "vps", heard: null }, computers: 1, items: 0 }));
   assert.deepEqual([alone.verdict, alone.joins], ["main", true], "a lone box leading an empty setup of its own");
   assert.equal(member.joins, false, "a member of another setup is moved, never joined without asking");
+  // Kuvo Code on that computer, though no box of its own ran there (attached in place to its box, or
+  // just installed): asked, as its app would open as a window from then on.
+  const withApp = await verdict(one({ setup: otherSetup, epoch: 1, role: "primary", primary: { key: mini.pub, name: "Mini", heard: null }, computers: 1, items: 0 }) + "\napp Library/Application Support/run.kuvo.code");
+  assert.deepEqual([withApp.verdict, withApp.joins], ["main", false]);
+  // A box Kuvo Code attached to in place says so on its card.
+  const attached = await verdict(one({ setup: otherSetup, epoch: 1, role: "primary", primary: { key: mini.pub, name: "Mini", heard: null }, app: true, computers: 1, items: 0 }));
+  assert.deepEqual([attached.verdict, attached.joins], ["main", false]);
+  // A card that doesn't say how big its setup is (an older or broken one): asked, never taken for empty.
+  const unsaid = await verdict(one({ setup: otherSetup, epoch: 1, role: "primary", primary: { key: mini.pub, name: "Mini", heard: null }, computers: undefined, items: "lots" }));
+  assert.deepEqual([unsaid.verdict, unsaid.joins, unsaid.boxes[0].computers, unsaid.boxes[0].items], ["main", false, null, null]);
 
   assert.equal((await verdict(one({ macs: [{ key: imac.pub, name: "iMac" }, { key: box("mac", "Air").pub, name: "Air" }] }))).verdict, "elsewhere", "a machine other Macs share, in no setup: theirs");
   assert.equal((await verdict(one({ macs: [{ key: imac.pub, name: "iMac" }, { key: self.pub, name: "Studio" }] }))).verdict, "ours", "one this Mac shares with iMac: ours already");
   assert.equal((await verdict(one({}))).verdict, "free", "a box no Mac set up, leading nothing (its Mac let it go)");
   assert.equal((await verdict(one({ setup: otherSetup, role: "member", primary: { key: imac.pub, name: "iMac", heard: 1 }, self: { key: lab.pub, name: "lab", kind: "machine" } }))).verdict, "elsewhere",
     "lab, still among this Mac's machines, but a member of iMac's setup now: not one to set up again as ours");
+  assert.equal((await verdict(one({ setup: "set_" + "e".repeat(22), role: "member", primary: { key: self.pub, name: "Studio", heard: 1 }, self: { key: lab.pub, name: "lab", kind: "machine" } }))).verdict, "ours",
+    "lab, in the setup this Mac led before it made its setup anew: ours, not someone else's");
 
   assert.equal((await judge(undefined)).status, 400);
 });
@@ -148,12 +160,15 @@ test("the probe's lines are what a box's link.json says: a box writes it as the 
 
 // Kuvo Code opening on a Mac, in a home of the test's own: its own box in its app folder, and the
 // one in ~/.kuvo-code.
-function here(setUp, { root = ".kuvo-code", own = true } = {}) {
+// Its ~/.kuvo-code box, where the test made one, has its way to start (`bin/kuvo-start`) unless it
+// was removed (`startable: false`).
+function here(setUp, { root = ".kuvo-code", own = true, startable = true } = {}) {
   const mac = fs.mkdtempSync(path.join(support, "mac-"));
   const appBox = path.join(mac, "Library", "Application Support", "run.kuvo.code", "box");
   // The app's own engine's data folder, as the app gives it (its database there once it kept sessions).
   const engineData = path.join(mac, "Library", "Application Support", "run.kuvo.code", "opencode", "data", "opencode");
-  setUp({ machine: path.join(mac, ".kuvo-code", "run"), app: path.join(appBox, "run"), appBox, engineData });
+  setUp({ machine: path.join(mac, ".kuvo-code", "run"), app: path.join(appBox, "run"), appBox, engineData, mac });
+  if (startable && fs.existsSync(path.join(mac, ".kuvo-code", "run")) && !fs.existsSync(path.join(mac, ".kuvo-code", "bin", "kuvo-start"))) write(path.join(mac, ".kuvo-code", "bin", "kuvo-start"), "#!/bin/sh\n");
   const result = spawnSync(process.execPath, [script, "here", ...(root ? [root] : [])], { env: { PATH: process.env.PATH, HOME: mac, TMPDIR: support, ...(own ? { KUVO_HOME: appBox, KUVO_ENGINE_DATA: engineData } : {}) }, encoding: "utf8" });
   if (result.status === 2) return { refused: result.stderr };
   assert.equal(result.status, 0, result.stderr);
@@ -174,6 +189,14 @@ test("Kuvo Code opening on your Mac mini, which MacBook set up: it attaches to t
   // An older box there, with no card: still the box it uses.
   const older = here(({ machine }) => write(path.join(machine, "link.json"), JSON.stringify({ mac: macbook.pub, macs: [macbook.pub], macNames: { [macbook.pub]: "MacBook" }, phones: [] }, null, 2))).said;
   assert.deepEqual([older.verdict, older.use, older.opens, older.box.primary.name], ["older", "attach", "window", "MacBook"]);
+  assert.equal(said.runs, "stopped", "its way to start there, its keeper not running now");
+  // Removed by MacBook: its way to start and its keys went, its link.json and card stayed. It's no
+  // box any more: the app starts its own, as with none.
+  const removed = here(({ machine }) => {
+    write(path.join(machine, "setup-card.json"), card({ setup: otherSetup, role: "member", primary: { key: macbook.pub, name: "MacBook", heard: 1 } }));
+    write(path.join(machine, "link.json"), JSON.stringify({ mac: macbook.pub, macs: [macbook.pub] }, null, 2));
+  }, { startable: false }).said;
+  assert.deepEqual([removed.use, removed.runs, removed.opens], ["own", "gone", "main"]);
   // One no one's member (its Mac let it go): used in place all the same.
   const lone = here(({ machine }) => write(path.join(machine, "setup-card.json"), card({}))).said;
   assert.deepEqual([lone.verdict, lone.use, lone.opens], ["free", "attach", "main"], "the main computer of its own setup");
@@ -233,4 +256,40 @@ test("here is told where the app's own box is and which folder is the machines',
   assert.match(noRoot.refused ?? "", /KUVO_HOME/);
   const noHome = here(({ machine }) => write(path.join(machine, "setup-card.json"), card({})), { own: false });
   assert.match(noHome.refused ?? "", /KUVO_HOME/, "never taken for an app with no box of its own");
+});
+
+test("here says whether the box there runs: its keeper running now, the box it attaches to", () => {
+  const macbook = box("mac", "MacBook");
+  let keeper;
+  try {
+    const { said } = here(({ machine, mac }) => {
+      write(path.join(machine, "setup-card.json"), card({ setup: otherSetup, role: "member", primary: { key: macbook.pub, name: "MacBook", heard: 1 } }));
+      // Its keeper, as kuvo-start runs it (`sh …/bin/kuvo-start`), and its record.
+      const start = path.join(mac, ".kuvo-code", "bin", "kuvo-start");
+      write(start, "#!/bin/sh\nwhile :; do sleep 1; done\n");
+      keeper = spawn("sh", [start], { stdio: "ignore" });
+      write(path.join(machine, "box.pid"), String(keeper.pid));
+    });
+    assert.deepEqual([said.use, said.runs], ["attach", "running"]);
+  } finally {
+    keeper?.kill();
+  }
+});
+
+test("Kuvo Code attached to a box in place says so to it (box route, as the app runs it there): its card says the app is there from then on; a phone can't say it", async () => {
+  const machine = fs.mkdtempSync(path.join(support, "attached-"));
+  const route = request => spawnSync(process.execPath, [script, "box", "route"], {
+    input: JSON.stringify(request), cwd: machine, encoding: "utf8",
+    env: { PATH: process.env.PATH, HOME: support, TMPDIR: support, KUVO_HOME: machine },
+  });
+  const said = route({ method: "POST", path: "kuvo/setup/attached" });
+  assert.equal(said.status, 0, said.stderr);
+  assert.equal(JSON.parse(said.stdout.trim().split("\n").pop()).status, 200);
+  const written = JSON.parse(fs.readFileSync(path.join(machine, "run", "setup-card.json"), "utf8"));
+  assert.deepEqual([written.app, written.self.kind], [true, "machine"], "a machine's box, with the app attached");
+  assert.equal(JSON.parse(route({ method: "GET", path: "kuvo/setup/attached" }).stdout.trim().split("\n").pop()).status, 405);
+
+  const pieces = [];
+  for await (const piece of handle({ method: "POST", path: "kuvo/setup/attached", headers: {}, body: Buffer.from("{}") }, undefined)) pieces.push(piece);
+  assert.equal(pieces.find(each => each.head).head.status, 403, "from a phone");
 });

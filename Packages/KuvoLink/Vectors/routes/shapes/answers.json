@@ -4461,12 +4461,30 @@
            }
           }
          },
-         "computers": "number",
-         "items": "number"
+         "computers": {
+          "oneOf": [
+           "number",
+           "null"
+          ]
+         },
+         "items": {
+          "oneOf": [
+           "number",
+           "null"
+          ]
+         }
         }
        }
       }
      }
+    }
+   }
+  },
+  {
+   "route": "POST kuvo/setup/attached",
+   "answers": {
+    "200": {
+     "object": {}
     }
    }
   },

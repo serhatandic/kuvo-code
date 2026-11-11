@@ -82,7 +82,7 @@ const ROUTES: (Route | Route<RegExpMatchArray>)[] = [
   { when: route => route === "kuvo/providers/models", answer: providerModelsRoute },
   { when: (route, request) => /^kuvo\/(skills|skill-library|skill-trash)(\/|\?|$)/.test(request.path), answer: skillsRoute },
   { when: (route, request) => /^kuvo\/(config|mcp\/catalog|keys)(\/|\?|$)/.test(request.path), answer: settingsRoute },
-  { when: route => route === "kuvo/setup" || route === "kuvo/setup/events" || route === "kuvo/setup/judge", answer: setupRoute },
+  { when: route => route === "kuvo/setup" || route === "kuvo/setup/events" || route === "kuvo/setup/judge" || route === "kuvo/setup/attached", answer: setupRoute },
   { when: route => route === "kuvo/phones", answer: phonesRoute },
   { when: route => route === "kuvo/phones/remove", answer: phonesRemoveRoute },
   { when: route => route === "kuvo/phones/pair", answer: pairingRoute },

@@ -10,6 +10,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { isObject } from "../../shared/json";
+import { processRuns } from "../../shared/platform";
 import { plainName } from "../../shared/text";
 import { homeFolder } from "../home";
 import { KEY, macsOf, ownKey, peersOf } from "../peers/known";
@@ -31,8 +32,10 @@ export interface FoundCard {
   primary: { key: string; name: string; heard: number | null } | null;
   self: { key: string | null; name: string; kind: "mac" | "machine" | null };
   app: boolean;
-  computers: number;
-  items: number;
+  /** How many computers its setup has and how many work items are here: null where the card
+   * doesn't say (an older or broken one), which is never taken for none. */
+  computers: number | null;
+  items: number | null;
   macs?: { key: string; name: string }[];
 }
 
@@ -66,7 +69,7 @@ export interface Ours {
 const MOST_BOXES = 8;
 const words = (value: unknown, most = 100) => plainName(value).slice(0, most);
 const key = (value: unknown): string | null => (typeof value === "string" && KEY.test(value) ? value : null);
-const count = (value: unknown) => (typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : 0);
+const count = (value: unknown) => (typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : null);
 const time = (value: unknown) => (typeof value === "number" && Number.isFinite(value) && value > 0 ? value : null);
 const SETUP_ID = /^set_[A-Za-z0-9_-]{22}$/;
 
@@ -153,6 +156,9 @@ export function judgeBox(found: FoundBox, ours: Ours): Exclude<Verdict, "two"> {
     if (ours.key && card.self.key === ours.key) return "self";
     const macs = card.macs?.map(each => each.key) ?? found.link?.macs ?? [];
     if (card.setup && card.setup === ours.setup) return "ours";
+    // A setup this box leads, by its key, that it made anew since (the same keys): the machine
+    // hasn't taken the new one yet.
+    if (card.setup && ours.key && card.primary?.key === ours.key) return "ours";
     // In another setup now, whoever set it up before (a machine of ours that forgot us, say).
     if (card.setup && card.role === "member") return "elsewhere";
     if (card.setup && card.role === "primary") return "main";
@@ -190,20 +196,21 @@ function judgedOf(found: FoundBox, verdict: JudgedBox["verdict"]): JudgedBox {
     role: card?.role ?? null,
     primary,
     macs,
-    computers: card?.computers ?? 0,
-    items: card?.items ?? 0,
+    computers: card ? card.computers : null,
+    items: card ? card.items : null,
   };
 }
 
-/** What's on a computer, judged as one verdict (`judgeComputer(found, ours)`): `self` where this very
- * box is among them; `free` with nothing anyone's; the one verdict of the one box that's someone's;
- * `ours` when each box there is; `two` for boxes of more than one setup on one computer (an app's,
- * and a `~/.kuvo-code` another Mac set up). It `joins` with nothing to ask when it's another setup's
- * main computer that's no Mac's own app (a lone machine: a Mac's app would open as a window from
- * then on, which you choose) and whose setup is empty: no other computer in it and no work (as its
- * card says: a lie there skips a question at most, as the join brings what's there in all the
- * same). */
-export function judgeComputer(found: readonly FoundBox[], ours: Ours): Judged {
+/** What's on a computer, judged as one verdict (`judgeComputer(found, ours, apps)`): `self` where this
+ * very box is among them; `free` with nothing anyone's; the one verdict of the one box that's
+ * someone's; `ours` when each box there is; `two` for boxes of more than one setup on one computer
+ * (an app's, and a `~/.kuvo-code` another Mac set up). It `joins` with nothing to ask only when it's
+ * another setup's main computer with no Kuvo Code app on it (none runs its box, none attached to it,
+ * and no app's folder found there: `apps`, a Mac's app would open as a window from then on, which
+ * you choose) whose setup is empty: its card says no other computer is in it and no work is there
+ * (one that doesn't say is asked; a lie there skips a question at most, as the join brings what's
+ * there in all the same). */
+export function judgeComputer(found: readonly FoundBox[], ours: Ours, apps = 0): Judged {
   const boxes = found.slice(0, MOST_BOXES).map(each => judgedOf(each, judgeBox(each, ours)));
   const someones = boxes.filter(each => each.verdict !== "free");
   const verdict: Verdict = boxes.some(each => each.verdict === "self") ? "self"
@@ -211,8 +218,16 @@ export function judgeComputer(found: readonly FoundBox[], ours: Ours): Judged {
     : someones.length === 1 ? someones[0].verdict
     : someones.every(each => each.verdict === "ours") ? "ours"
     : "two";
-  const joins = verdict === "main" && !someones[0].app && someones[0].computers <= 1 && someones[0].items === 0;
+  const main = someones[0];
+  const empty = main?.computers != null && main.computers <= 1 && main.items === 0;
+  const joins = verdict === "main" && !apps && !found.some(each => each.app || each.card?.app) && empty;
   return { verdict, joins, boxes };
+}
+
+/** How many Kuvo Code apps' folders a probe found on a computer (`app <folder>` lines): an app that
+ * ran there, whether or not a box of its own did. */
+export function appsOf(lines: readonly string[]): number {
+  return lines.slice(0, 2000).filter(line => /^app .{1,500}$/.test(line)).length;
 }
 
 /** A box's folder as `here` finds it: its card and link.json's few fields, or null with neither. */
@@ -235,24 +250,38 @@ const shownFolder = (folder: string, home: string) => (folder.startsWith(`${home
  * this computer would judge it, and what it says of its setup. */
 export type Here = Infer<typeof HERE>;
 
+/** Whether the box in `~/<root>` can run (`machine`, its folder): `running` (its keeper, `run/box.pid`,
+ * runs now), `stopped` (it has its way to start, `bin/kuvo-start`, which its keeper and the start
+ * at boot run), or `gone` (neither: the Mac that set it up removed it, which takes its way to
+ * start and its keys, leaving its link.json and card). */
+export function runsAt(machine: string): "running" | "stopped" | "gone" {
+  let keeper: number | null = null;
+  try { keeper = Number(fs.readFileSync(path.join(machine, "run", "box.pid"), "utf8")); } catch {}
+  if (keeper && processRuns(keeper, "kuvo-start")) return "running";
+  return fs.existsSync(path.join(machine, "bin", "kuvo-start")) ? "stopped" : "gone";
+}
+
 /** `here` worked out from the app's own box (`own`, in its folder: null while it has none) and the
- * box in this Mac's `~/.kuvo-code` (`machine`, null for none). An app that has a box of its own
- * keeps it (it works now, and goes on working: two boxes on one computer are settled by a join or a
- * move, `two`); one that has none attaches to the box that's here. It opens as a `window` where the
- * box it uses is a member of a setup (an old main computer after a handover, a Mac that joined, a
- * Mac mini another Mac set up, or one that can't say yet: never its main computer by itself), else
- * as its setup's `main` computer (a box no one else set up leads its own setup). */
-export function judgeHere(own: FoundBox | null, machine: FoundBox | null): Here {
+ * box in this Mac's `~/.kuvo-code` (`machine`, null for none; `runs`, as `runsAt` says it). An app
+ * that has a box of its own keeps it (it works now, and goes on working: two boxes on one computer
+ * are settled by a join or a move, `two`); one that has none attaches to the box that's here, where
+ * that box can run (one that's `gone`, its Mac having removed it, is no box: the app's own starts,
+ * as with none). It opens as a `window` where the box it uses is a member of a setup (an old main
+ * computer after a handover, a Mac that joined, a Mac mini another Mac set up, or one that can't say
+ * yet: never its main computer by itself), else as its setup's `main` computer (a box no one else
+ * set up leads its own setup). */
+export function judgeHere(own: FoundBox | null, machine: FoundBox | null, runs: "running" | "stopped" | "gone" | null = machine ? "running" : null): Here {
   const ownCard = own?.card;
   const ours: Ours = { key: ownCard?.self.key ?? null, setup: ownCard?.setup ?? null, keys: new Set(ownCard?.self.key ? [ownCard.self.key] : []) };
   const judgedOwn = own ? judgedOf(own, "self") : null;
   const ownOpens = ownCard?.role === "member" ? "window" : "main";
-  if (!machine) return { verdict: "free", use: "own", opens: ownOpens, box: null, own: judgedOwn };
+  if (!machine) return { verdict: "free", use: "own", opens: ownOpens, runs: null, box: null, own: judgedOwn };
   const verdict = judgeBox(machine, ours);
   const box = judgedOf(machine, verdict);
-  if (own) return { verdict: verdict === "ours" || verdict === "free" ? verdict : "two", use: "own", opens: ownOpens, box, own: judgedOwn };
+  if (own) return { verdict: verdict === "ours" || verdict === "free" ? verdict : "two", use: "own", opens: ownOpens, runs, box, own: judgedOwn };
+  if (runs === "gone") return { verdict: "free", use: "own", opens: "main", runs, box, own: null };
   const member = box.role === "member" || verdict === "elsewhere" || verdict === "older";
-  return { verdict, use: "attach", opens: member ? "window" : "main", box, own: null };
+  return { verdict, use: "attach", opens: member ? "window" : "main", runs, box, own: null };
 }
 
 /** What says a box of the app's own ran in its folder: what the box writes itself (its card, its
@@ -279,5 +308,11 @@ export function hereNow(root: string, appBox: string | undefined = process.env.K
   if (!root || !appBox || path.resolve(appBox) === path.resolve(machine)) throw new Error("kuvo-link.js here needs KUVO_HOME, the app's own box's folder, and the machines' folder's name: here <root>.");
   const ownRan = engineKept(engineData) || OWN_BOX_RAN.some(file => fs.existsSync(path.join(appBox, "run", file)));
   const own = ownRan ? foundAt(appBox, true, home) ?? { folder: shownFolder(appBox, home), app: true } : null;
-  return judgeHere(own, foundAt(machine, false, home));
+  const there = foundAt(machine, false, home);
+  return judgeHere(own, there, there ? runsAt(machine) : null);
 }
+
+/** Where a box records that Kuvo Code on its Mac attached to it in place (`POST kuvo/setup/attached`):
+ * its card says the app is there from then on (`card.ts`), so a Mac adding this computer never has
+ * it join another setup without asking. */
+export const ATTACHED_FILE = "app-attached.json";

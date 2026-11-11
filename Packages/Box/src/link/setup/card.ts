@@ -7,6 +7,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { writePrivate } from "../files";
 import { IS_MAC, RUN } from "../home";
+import { ATTACHED_FILE } from "./judge";
 import { macsOf, ownKey } from "../peers/known";
 import { readPeerAgents } from "../peers/directory";
 import { readLink } from "../state";
@@ -16,7 +17,8 @@ import { setupView } from "./view";
 export const SETUP_CARD = path.join(RUN, "setup-card.json");
 
 /** What the card says: the setup and its epoch, this box's role, its main computer (when it was last
- * heard from, ms; null on the main computer itself), this box, whether Kuvo Code's app runs it, how
+ * heard from, ms; null on the main computer itself), this box, whether Kuvo Code's app runs it (or
+ * attached to it in place), how
  * many computers the setup has, how many Work Queue items are here, the machines holding this Mac
  * back from leading one (`heldBy`), and the Macs that set this box up, by name (a machine's: none on
  * a Mac), for a box in no setup to be judged by (`judge.ts`). */
@@ -34,7 +36,8 @@ export function cardNow(): Record<string, unknown> {
     role: view.you.role,
     primary: primary ? { key: primary.key, name: primary.name, heard } : null,
     self: { key: own, name: String(link?.name ?? ""), kind: IS_MAC ? "mac" : "machine" },
-    app: IS_MAC,
+    // (Or Kuvo Code on this Mac attached to it in place: `POST kuvo/setup/attached`.)
+    app: IS_MAC || fs.existsSync(path.join(RUN, ATTACHED_FILE)),
     computers: view.computers.length,
     items,
     heldBy: view.heldBy,

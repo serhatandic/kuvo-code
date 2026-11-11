@@ -184,7 +184,8 @@
         { "send": "POST kuvo/setup", "body": {}, "expect": { "status": 405 } },
         { "send": "POST kuvo/setup/judge", "body": { "probe": "Linux x86_64\nglibc\n" }, "why": "What a Mac adding a computer found there, judged by the box: nothing anyone's, here.", "expect": { "status": 200, "json": { "verdict": "free", "joins": false, "boxes": [] } } },
         { "send": "POST kuvo/setup/judge", "body": {}, "expect": { "status": 400 } },
-        { "send": "GET kuvo/setup/judge", "expect": { "status": 405 } }
+        { "send": "GET kuvo/setup/judge", "expect": { "status": 405 } },
+        { "send": "GET kuvo/setup/attached", "why": "Kuvo Code on this computer saying it attached to this box is a POST.", "expect": { "status": 405 } }
       ]
     },
     {

@@ -1,5 +1,5 @@
 {
- "about": "What the Add Machine probe (RemoteEngineInstaller.foundProbe, OpenCodeKit) prints for the boxes already on a computer, and what's in their folders then (from the home folder): an older ~/.kuvo-code two Macs set up, with no card (its link.json as a box writes it), and Kuvo Code's own box in its app folder, with its card. OpenCodeKit's tests run the probe on these files and expect these lines; the bridge's tests check a box writes link.json this way, and judge these lines (setup-judge.test.js). Nothing secret is printed.",
+ "about": "What the Add Machine probe (RemoteEngineInstaller.foundProbe, OpenCodeKit) prints for the boxes already on a computer, and what's in their folders then (from the home folder): an older ~/.kuvo-code two Macs set up, with no card (its link.json as a box writes it), and Kuvo Code's own box in its app folder, with its card (and that app's folder, `app`). OpenCodeKit's tests run the probe on these files and expect these lines; the bridge's tests check a box writes link.json this way, and judge these lines (setup-judge.test.js). Nothing secret is printed.",
  "link": {
   "relay": "wss://relay.kuvo.run",
   "secret": "SECRET-NEVER-PRINTED",
@@ -49,6 +49,7 @@
   "link name 2g2quksVaWHASatLhbbQvLoociALfe20qnf5IIxgFEQ \"Studio \\\"Office\\\"\"",
   "link phones some",
   "box app Library/Application Support/run.kuvo.code/box",
-  "card {\"setup\":\"set_AAAAAAAAAAAAAAAAAAAAAA\",\"epoch\":2,\"role\":\"primary\",\"primary\":{\"key\":\"2g2quksVaWHASatLhbbQvLoociALfe20qnf5IIxgFEQ\",\"name\":\"Studio\",\"heard\":null},\"self\":{\"key\":\"2g2quksVaWHASatLhbbQvLoociALfe20qnf5IIxgFEQ\",\"name\":\"Studio\",\"kind\":\"mac\"},\"app\":true,\"computers\":3,\"items\":37,\"heldBy\":[],\"macs\":[]}"
+  "card {\"setup\":\"set_AAAAAAAAAAAAAAAAAAAAAA\",\"epoch\":2,\"role\":\"primary\",\"primary\":{\"key\":\"2g2quksVaWHASatLhbbQvLoociALfe20qnf5IIxgFEQ\",\"name\":\"Studio\",\"heard\":null},\"self\":{\"key\":\"2g2quksVaWHASatLhbbQvLoociALfe20qnf5IIxgFEQ\",\"name\":\"Studio\",\"kind\":\"mac\"},\"app\":true,\"computers\":3,\"items\":37,\"heldBy\":[],\"macs\":[]}",
+  "app Library/Application Support/run.kuvo.code"
  ]
 }
