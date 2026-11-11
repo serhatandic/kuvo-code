@@ -1261,7 +1261,7 @@ struct ActionButtonStyle: ButtonStyle {
 }
 
 /// Which list is over the message field, and the row chosen in it (nil: none to choose).
-private struct ComposerListChoice: Equatable {
+struct ComposerListChoice: Equatable {
     /// Another list shows its chosen row afresh.
     let list: String
     let row: Int?
@@ -1270,7 +1270,7 @@ private struct ComposerListChoice: Equatable {
 /// A list over the message field, kept to `room`: past that it scrolls inside, and the chosen row
 /// (each row is `.id(index)`) comes into view as ↑ and ↓ move it, the list's top with its first.
 /// Its height as shown goes to `height`, for the card to share its room out (`ComposerListRoom`).
-private struct ComposerListScroll<Content: View>: View {
+struct ComposerListScroll<Content: View>: View {
     let room: CGFloat
     let height: Binding<CGFloat>
     let chosen: ComposerListChoice

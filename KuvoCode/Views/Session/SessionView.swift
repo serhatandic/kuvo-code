@@ -934,6 +934,16 @@ struct DraftSessionView: View {
     private var draftKey: String { SidebarView.draftTag(directory) }
     @State private var failure: String?
     @LastModel private var lastModel
+    /// The page's height, and the title's, the composer's and what's under it, as shown: the
+    /// list over the composer's field has what they leave (`ComposerListRoom`), past which it scrolls.
+    @State private var pageHeight: CGFloat = .infinity
+    @State private var titleHeight: CGFloat = 0
+    @State private var composerHeight: CGFloat = 0
+    @State private var belowHeight: CGFloat = 0
+    @State private var listShown: CGFloat = 0
+    private var listRoom: CGFloat {
+        ComposerListRoom.height(room: pageHeight - titleHeight - belowHeight, card: composerHeight, list: listShown, bars: 0, barsKept: 0)
+    }
 
     /// The model picked last, when you can use it on this engine (a machine may not have every
     /// account), or its default.
@@ -947,6 +957,7 @@ struct DraftSessionView: View {
             Text(Workspace.isChat(directory) ? "What's on your mind?" : "What should we work on?")
                 .font(.system(size: 30, weight: .semibold))
                 .padding(.bottom, 28)
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { titleHeight = $0 }
 
             Composer(
                 text: Binding(get: { Drafts.shared[draftKey].text }, set: { Drafts.shared[draftKey].text = $0 }),
@@ -985,26 +996,33 @@ struct DraftSessionView: View {
                 attempts: attempts,
                 onSelectAttempts: { attempts = $0 },
                 onSend: send,
-                onStop: {}
+                onStop: {},
+                listRoom: listRoom,
+                listHeight: $listShown
             )
             .padding(.horizontal, Metrics.gutter)
             .readableColumn()
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { composerHeight = $0 }
 
-            if isCreating, isRepository, worktree {
-                Text(attempts > 1 ? "Setting up \(attempts) worktrees…" : "Setting up a worktree…")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .padding(.top, 12)
+            VStack(spacing: 0) {
+                if isCreating, isRepository, worktree {
+                    Text(attempts > 1 ? "Setting up \(attempts) worktrees…" : "Setting up a worktree…")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .padding(.top, 12)
+                }
+                if let failure {
+                    ErrorCard(message: failure)
+                        .padding(.horizontal, Metrics.gutter)
+                        .padding(.top, 12)
+                        .readableColumn()
+                }
             }
-            if let failure {
-                ErrorCard(message: failure)
-                    .padding(.horizontal, Metrics.gutter)
-                    .padding(.top, 12)
-                    .readableColumn()
-            }
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { belowHeight = $0 }
             Spacer()
             Spacer()
         }
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { pageHeight = $0 }
         .task(id: directory) { await catalog.loadCommands(in: directory) }
         .task(id: directory) { await workspace.readApprovalHere(for: directory) }
         .onAppear { Analytics.shared.onboardingStep("composer") }
