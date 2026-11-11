@@ -2,10 +2,12 @@
 // its own features, its machines, the machines your phones reach directly, and the usage panel's
 // numbers. (Its other own routes, `kuvo/mac` and `kuvo/claude-code`, have no scenario asking them yet.)
 
+import { FEATURES, type Feature } from "../features";
 import { any, bool, type Infer, list, literal, NOTHING, object, type RouteShape, string } from "../shape";
 
-/** What only a Mac answers, besides what every box does (`FEATURES`): `usage` while it has the
- * usage panel (PROTOCOL.md, "Features"). One a line, in order, as `FEATURES` are. */
+/** What only a Mac answers, besides what every box does (`FEATURES`): its usage panel's numbers
+ * among them, which its app gives while it's open (PROTOCOL.md, "Features"). One a line, in order,
+ * as `FEATURES` are. */
 export const MAC_FEATURES = [
   "accounts.ended",
   "claude-code",
@@ -15,8 +17,17 @@ export const MAC_FEATURES = [
   "usage",
 ] as const;
 
-/** Of those, what a Mac answers only at times: `usage` while it has the usage panel. */
-export const MAC_FEATURES_AT_TIMES = ["usage"] as const satisfies readonly (typeof MAC_FEATURES)[number][];
+/** What only a machine answers: it updates itself, starts an engine an older Mac's Stop left down,
+ * and sets up its own browser (a Mac's is the app's). One a line, in order. */
+export const MACHINE_FEATURES = [
+  "browser",
+  "engine.start",
+  "update",
+] as const satisfies readonly Feature[];
+
+/** What a Mac's box answers, as its `kuvo/info` and its agents' mail say: every box's but a
+ * machine's own, in their order, then the Mac's own. The box's list alone: its app keeps none. */
+export const macFeatures = (): string[] => [...new Set([...FEATURES.filter(feature => !(MACHINE_FEATURES as readonly string[]).includes(feature)), ...MAC_FEATURES])];
 
 /** Your machines' bridges, which phones reach directly with the Mac closed: each by its id
  * (`machine`), where it is on the relay, whether another Mac gives it its settings (`anotherMac`),

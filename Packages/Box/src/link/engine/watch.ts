@@ -9,19 +9,21 @@ import { nameDueWorktrees, nameWorktreeBranch, settleNewSession, tidyWorktrees }
 import { finishDeletes } from "../bots/edit";
 import { freshenBot, freshenBots } from "../bots/tell";
 import { ANSWERED, GROUP_NEWS, NEWS, RUN_ENDS, groupNotice, noticeFor, settleHeld } from "../notices/news";
-import { keepReadThroughSummary } from "../work/tree";
+import { keepReadThroughSummary, keepWorkRead, settleWorkRead } from "../work/tree";
 import { bridgeTarget, engineGet, peerTargets, readBridgeFile, readEngineFile } from "./client";
 import { applyCompatibility, followSettingsFile, learnCompatibility } from "./compatibility";
 import { modelsDue, settleDueModels, WORK_ENDS } from "./models";
 import { goalHolds, settleGoalHolds } from "../work/goals";
 import { workWatcher } from "../work/wakes";
-import { reviewPermission } from "../work/reviewing";
+import { reviewPermission, settleAskReview, settleRunReviews, takeUpWaitingAsks } from "../work/reviewing";
 import { forgetReviews } from "../work/reviewer";
 import { forgetDecided } from "../work/autopilot";
 import { backUpSession } from "../work/backups";
 import { markConversation, noteFullAccess, noteFullAccessAtWork } from "../work/full";
-import { queueWatcher, scanQueues, type ScanFound } from "./queue";
+import { queueWatcher, scanQueues, writtenByYou, type ScanFound } from "./queue";
 import { adoptConversation } from "../areas/approval";
+import { followAsks, forgetAsksOn, noteAskEvent } from "../glance/asked";
+import { pullCatcher } from "../glance/pulls";
 import type { Target } from "../../shared/records";
 import type { SignInEvent } from "../areas/accounts";
 import type { NoticeHold } from "../notices/hold";
@@ -32,8 +34,8 @@ import type { SessionNotes } from "./sessions";
 
 /** An engine event `steering` follows, for its session: a tool call that started, was called or
  * ended (its `id`, its tool's `name`, and with its `input`, whether it runs in the background); a
- * message queued, sent now, put back, delivered or cancelled (its `inboxID`, what it is, and how
- * it's sent); a run that ended. */
+ * message queued, sent now, put back, delivered or cancelled (its `inboxID`, what it is and says,
+ * and how it's sent); a run that ended. */
 export interface SteeringEvent {
   type: string;
   data?: {
@@ -42,7 +44,7 @@ export interface SteeringEvent {
     name?: string;
     input?: { background?: unknown };
     inboxID?: string;
-    item?: { type?: string; delivery?: string };
+    item?: { type?: string; delivery?: string; payload?: { text?: unknown; metadata?: unknown } };
     delivery?: string;
   };
 }
@@ -136,13 +138,15 @@ async function* serverEvents(body: AsyncIterable<Uint8Array>): AsyncGenerator<Bo
   }
 }
 
-// A message that reaches an agent while it waits on a command or a subagent it started in the
-// foreground is read at once, as it would be at the agent's next step, rather than when the command
-// ends: what it waits on goes on in the background, and the agent is told when it ends (the engine's
-// own Ctrl+B in its terminal). Only messages sent to steer (yours, or another agent's letter), never
-// one queued for after the turn, a wake-up or the engine's own notes; and only once what it waits
-// on has run for `after` ms, so a quick command simply ends first. While one still waits behind it
-// (the call was asking you something first, say), it's tried again every `after` ms.
+// A message of yours that reaches an agent while it waits on a command or a subagent it started in
+// the foreground is read at once, as it would be at the agent's next step, rather than when the
+// command ends: what it waits on goes on in the background, and the agent is told when it ends (the
+// engine's own Ctrl+B in its terminal). Only your own messages sent to steer, never one queued for
+// after the turn, a wake-up or the engine's own notes, and never another agent's letter or the box's
+// news (a session that asks or finished): those are read as the command ends, as any message sent to
+// steer is, so a lead's word doesn't cut short the tests its session waits on. And only once what it
+// waits on has run for `after` ms, so a quick command simply ends first. While one still waits
+// behind it (the call was asking you something first, say), it's tried again every `after` ms.
 // `background(session)` does it; each event from the engine goes to what this returns.
 export const STEER_AFTER = 3000;
 // How often a box reads its engine's models again, at most, while the engine's at work.
@@ -153,7 +157,7 @@ const LEARN_EVERY = 600_000;
 const LEARN_NOW = new Set(["credential.updated", "credential.switched", "integration.updated", "model.updated"]);
 export function steering(background: (session: string) => unknown, { after = STEER_AFTER, now = Date.now, schedule = setTimeout, cancel = clearTimeout, signal }: SteeringOptions = {}): (event: SteeringEvent) => void {
   const sessions = new Map<string, SteeredSession>(); // session → { names: call → tool, blocking: call → when it started, steers: messages waiting for its next step }
-  const users = new Set<string>(); // messages sent as a message (steered or queued) that wait
+  const users = new Set<string>(); // your own messages (steered or queued) that wait
   const timers = new Map<string, ReturnType<typeof setTimeout>>();
   const of = (session: string): SteeredSession => {
     if (!sessions.has(session)) sessions.set(session, { names: new Map(), blocking: new Map(), steers: new Set() });
@@ -207,7 +211,7 @@ export function steering(background: (session: string) => unknown, { after = STE
         sessions.get(session)?.blocking.delete(data.id!);
         break;
       case "session.inbox.enqueued":
-        if (data.item?.type !== "user") break;
+        if (data.item?.type !== "user" || !writtenByYou(data.item.payload?.text, data.item.payload?.metadata)) break;
         users.add(data.inboxID!);
         if (data.item.delivery === "steer") steer(session, data.inboxID!);
         break;
@@ -248,6 +252,10 @@ function backgroundTools(engine: Target, session: string): Promise<Response> {
 // and `attachmentsLooked`, each time it's looked at what deleted sessions left.
 export function watchBox({ tell = () => true, hold = null, bots = false, notices = !bots, signal, signedIn, learned, attachmentsLooked }: WatchBoxOptions = {}): void {
   const answered = (id: string | undefined) => hold?.resolve(id);
+  // What waits on you that the box asks itself, and what Auto's reviewer takes up, for the rows'
+  // "since" (glance/asked.ts).
+  const stopAsks = followAsks();
+  signal?.addEventListener("abort", stopAsks, { once: true });
   watchEvents(readEngineFile, tell, signal, answered, { bots, notices, signIns: true, hold, signedIn, steers: true, learns: true, learned, queues: true, work: "engine", attachmentsLooked });
   watchEvents(readBridgeFile, tell, signal, answered, { bots, notices, queues: true, work: "bridge", goals: true, attachmentsLooked });
 }
@@ -326,12 +334,16 @@ export async function watchEvents(read: () => Target, tell: (notice: Notice) => 
       workGone = followWork?.gone ?? null;
       // A goal paused or resumed (the agents' bridge says so): its conversation held or let go.
       const goalHeld = goals ? goalHolds(peerTargets) : null;
+      // A pull request a session made itself with `gh`, kept as its own (glance/pulls.ts).
+      const catchPull = pullCatcher(() => source);
       const response = await fetch(`http://127.0.0.1:${source.port}/api/event`, {
         headers: { authorization: `Basic ${Buffer.from(`opencode:${source.password}`).toString("base64")}`, accept: "text/event-stream" },
         signal,
       });
       if (!response.ok || !response.body) throw new Error(`${response.status}`);
       attempt = 0;
+      // When what it asks came: what it asked meanwhile went by unheard (glance/asked.ts).
+      forgetAsksOn(work || String(source.port));
       // What was answered while its events couldn't be heard (it restarted, the stream dropped).
       if (notices && hold) settleHeld(source, hold).catch(() => {});
       // Found it (it started, or this did): its bots told what they are now, before their next turn,
@@ -352,6 +364,12 @@ export async function watchEvents(read: () => Target, tell: (notice: Notice) => 
       if (goalHeld) settleGoalHolds(source, goalHeld).catch(() => {});
       // Full Access's list for the sandbox's launcher, for those at work now (one changed meanwhile).
       if (work) noteFullAccessAtWork(source, atWork).catch(() => {});
+      // Asks to work outside a folder waiting already (it started again as they came, or their
+      // event went by unheard): taken up now, so every client's list of them is whole.
+      if (work) atWork(source).then(sessions => takeUpWaitingAsks(source, sessions, connection.signal)).catch(() => {});
+      // Agents' work that ended while it wasn't listening (or before boxes read it so): read, unless
+      // what came since you read it is news to you, or it asks you (READ_RULE).
+      if (work) settleWorkRead(source, connection.signal).catch(() => {});
       for await (const event of serverEvents(response.body)) {
         // The box's own work, Mac connected or not: a session made in one of its worktrees told
         // so; a worktree's branch named after its session (as it's made with a title, or given
@@ -374,6 +392,8 @@ export async function watchEvents(read: () => Target, tell: (notice: Notice) => 
           forgetDecided(event.data.sessionID);
         }
         learn(source, LEARN_NOW.has(event.type));
+        noteAskEvent(event, work || String(source.port));
+        catchPull(event);
         // Your settings changed by hand meanwhile: the model your subagents use follows them.
         if (learns && (event.type === "session.execution.started" || event.type === "config.updated")) followSettingsFile();
         // Folders a refresh of the models left at work, closed once their work is done.
@@ -387,6 +407,9 @@ export async function watchEvents(read: () => Target, tell: (notice: Notice) => 
         goalHeld?.(event).catch(() => {});
         if (signIns) noteSignIn(event, source).catch(() => {}).finally(() => signedIn(event));
         if (work && event.type === "session.execution.succeeded" && typeof event.data?.sessionID === "string") keepReadThroughSummary(source, event.data.sessionID, connection.signal).catch(() => {});
+        // An agent's work read as each turn of it ends, unless what came since you read it is news to
+        // you, or it asks you (READ_RULE).
+        if (work && RUN_ENDS.has(event.type) && typeof event.data?.sessionID === "string") keepWorkRead(source, event.data.sessionID, connection.signal).catch(() => {});
         if (!bots) {
           if (event.type === "session.created") settleNewSession(source, event.data?.sessionID ?? event.data?.info?.id).catch(() => {});
           if (event.type === "session.renamed") nameWorktreeBranch(source, event.data?.sessionID).catch(() => {});
@@ -394,6 +417,11 @@ export async function watchEvents(read: () => Target, tell: (notice: Notice) => 
           // One made there marks it as used, so deleting it before anything else happens takes it too.
           if (event.type === "session.created" || event.type === "session.deleted" || RUN_ENDS.has(event.type) || (event.type === "session.metadata.updated" && isArchiving(event))) tidyWorktrees(connection.signal).catch(() => {});
         }
+        // An ask answered: off the list of what waits (on every source, the bridge's too).
+        const settled = ANSWERED.has(event.type) ? event.data?.requestID ?? event.data?.id : undefined;
+        if (typeof settled === "string") settleAskReview(settled);
+        // A run's end takes what it asked with it, with no word of each.
+        if (RUN_ENDS.has(event.type) && typeof event.data?.sessionID === "string") settleRunReviews(event.data.sessionID);
         if (!notices) continue;
         if (ANSWERED.has(event.type)) answered(event.data?.requestID ?? event.data?.id);
         // A run's end: what it asked the engine let go with it, without a word (stopped, say). Looked

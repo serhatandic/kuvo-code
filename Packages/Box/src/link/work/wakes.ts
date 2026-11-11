@@ -28,7 +28,7 @@ import { settleAsk } from "./goals";
 import { awaitedBy } from "./awaited";
 import { tellLateAnswers } from "./asks";
 import { errorOf, failedOn, followUnanswering, holdWords, turnError } from "./unanswering";
-import { backgroundWatcher, backgroundWords, forgetStopped, FINISH_HOLD_LIMIT, readStopped, startedSince, type BackgroundEvent, type BackgroundWork } from "./background";
+import { awaited, backgroundWatcher, forgetStopped, readStopped, servicesWords, startedSince, type BackgroundEvent, type BackgroundWork } from "./background";
 import { summaryRowOf, isArchived, lastReplyOf, placeWords, startedByOf, wakesOf, workSessions, worksFor, type Listed } from "./tree";
 import { projectNameOf } from "../notices/news";
 import type { Target } from "../../shared/records";
@@ -49,13 +49,27 @@ export const SETTLE = 10_000;
 /** What a turn nobody asked for must say, once a session's finish was told, to be told too (its
  * length in characters): a timer's "nothing new yet" isn't news. */
 export const SUBSTANCE = 200;
+/** How often a finish that waits on what its session left running looks whether that's over, in
+ * case its end wasn't heard (ms). */
+export const WAITING_LOOK = 10 * 60_000;
+/** The first of those looks, sooner: a server just started may not listen yet, and once it does,
+ * it's a service, which a finish doesn't wait on (ms). */
+export const FIRST_LOOK = 60_000;
+
+// The conversations being written to now, by wakes file: one message at a time to each, from
+// whichever watcher (each connection to the engine makes one), so what one puts back, to go again
+// as it was, is never overtaken.
+const sending = new Set<string>();
 
 /** What waits to be told a conversation: its lines, whether one is an ask (sent to be read at its
- * next step, not after its turn), and since when (ms). */
+ * next step, not after its turn), and since when (ms). `tried`: its first lines went once already
+ * under this id, and the answer was lost (the engine slow, say), so they may have arrived: they go
+ * again alone under the same id, which a conversation takes once. */
 interface Waiting {
   lines: string[];
   asks: boolean;
   since: number;
+  tried?: { id: string; lines: number; asks: boolean };
 }
 
 /** An event the work watcher reads: a run that ended, a permission or a question asked, an ask
@@ -102,7 +116,7 @@ const took = (ms: number) => {
 /** A session as a line to its lead names it. */
 function namedOf(session: Partial<EngineSession> & { id: string }): string {
   const folder = session.location?.directory ?? session.directory ?? "";
-  return `"${session.title || "New Session"}" ${placeWords({ project: projectNameOf(folder), folder })} (address ${session.id})`;
+  return `"${session.title || "New Session"}" ${placeWords({ project: projectNameOf(folder, session), folder })} (address ${session.id})`;
 }
 
 /** What a conversation is told of a summary it asked of a session that failed. */
@@ -111,16 +125,15 @@ function notSummarizedLine(session: Partial<EngineSession> & { id: string }, why
 }
 
 /** What a conversation is told of one of its sessions, as a line, or null for nothing. */
-export async function wakeLine(event: WorkEvent, session: Partial<EngineSession> & { id: string }, target: Target, still?: BackgroundWork | null, working = false): Promise<string | null> {
+export async function wakeLine(event: WorkEvent, session: Partial<EngineSession> & { id: string }, target: Target, serving: string[] = []): Promise<string | null> {
   const named = namedOf(session);
   switch (event.type) {
     case "session.execution.succeeded": {
       const reply = await lastReplyOf({ target, data: session as never });
       const since = session.time?.created ? `, after ${took(Date.now() - session.time.created)}` : "";
-      const running = still ? `\n(Still running in the background: ${backgroundWords(still)}. It may write again once that ends.)` : "";
-      // Its turn ended, but what it left running goes on and the lead is told anyway (the hold ran
-      // out): nothing is finished, and the line says so.
-      return `[Session ${working ? "still working" : "finished"}] ${named}${since}:\n${reply ? cut(reply, 1200) : "(It ended without a reply.)"}${running}`;
+      // (A service it left up, a dev server, which its finish didn't wait on.)
+      const services = serving.length ? `\n(Still serving: ${serving.join(", ")}.)` : "";
+      return `[Session finished] ${named}${since}:\n${reply ? cut(reply, 1200) : "(It ended without a reply.)"}${services}`;
     }
     case "session.execution.failed": {
       // Why, in its engine's words; one at its account or its limit fails the same way again there.
@@ -143,17 +156,46 @@ export async function wakeLine(event: WorkEvent, session: Partial<EngineSession>
   return null;
 }
 
+/** What a lead is told of one of its sessions that the user stopped: only that, so it doesn't wait
+ * on a session that won't finish now. */
+export const stoppedLine = (session: Partial<EngineSession> & { id: string }) => `${STOPPED_OPENING} ${namedOf(session)} was stopped by the user. Nothing more comes from it unless it's written to again: don't start it or its work again unless the user asks.`;
+const STOPPED_OPENING = "[Session stopped]";
+
 /** What goes to a conversation, from the lines gathered for it. */
 export const wakeText = (lines: string[]) => lines.join("\n\n");
 
 /** What a conversation shows for the lines told it (`wakeLine`'s), in place of them: "“Sign-in”
- * finished" (or "still working"), or how many there are. */
+ * finished", or how many there are. ("still working" is what boxes before #420 told a lead whose
+ * session's turn ended while what it left running went on: still read, from a line kept.) */
 export function wakeLineShown(lines: string[]): string {
   if (lines.length !== 1) return `${lines.length} updates from its sessions`;
-  const said = /^\[Session (finished|still working|failed|asks)\] "([^"\n]*)"/.exec(lines[0]!);
+  const said = /^\[Session (finished|still working|failed|asks|stopped)\] "([^"\n]*)"/.exec(lines[0]!);
   if (!said) return "News from a session";
-  const what = said[1] === "finished" ? "finished" : said[1] === "still working" ? "still working" : said[1] === "failed" ? "stopped with an error" : "asks something";
+  const what = said[1] === "finished" ? "finished" : said[1] === "still working" ? "still working" : said[1] === "failed" ? "stopped with an error" : said[1] === "stopped" ? "stopped by you" : "asks something";
   return `“${said[2] || "New Session"}” ${what}`;
+}
+
+// Each watcher here sending what waits for a conversation: told when a line's added from outside it.
+const wakeSenders = new Set<(starter: string) => void>();
+
+/** Whether something of `session`'s waits to be told `starter` (gathered, not sent yet). */
+export const toBeTold = (starter: string, session: string, file = WORK_WAKES): boolean => (readWaiting(file)[starter]?.lines ?? []).some(line => line.includes(`(address ${session})`));
+
+/** Lines for conversations from outside a watcher (a stop), each kept until it's sent with what
+ * else waits for it, as one message; one waiting already isn't added again. */
+export function tellStarters(told: { starter: string; line: string }[], file = WORK_WAKES): void {
+  if (!told.length) return;
+  try {
+    changeWaiting(file, all => {
+      for (const { starter, line } of told) {
+        const kept = all[starter] ?? { lines: [], asks: false, since: Date.now() };
+        if (!kept.lines.includes(line)) all[starter] = { ...kept, lines: [...kept.lines, line] };
+      }
+    });
+  } catch {
+    return;
+  }
+  for (const starter of new Set(told.map(each => each.starter))) for (const send of wakeSenders) send(starter);
 }
 
 // How often answers given late that couldn't be told yet are tried again.
@@ -184,12 +226,15 @@ interface Told {
    * message as a failed turn was told (one that failed before it replied ends with no reply).
    * `said`: what its reply told said, as a hash, and `early`: it was told while what it left running
    * ran or had only just ended, so what it says of that next is told too. `failure`: why its last
-   * failed turn told failed. */
-  sessions: Record<string, { reply?: string; asks?: string[]; at?: number; turn?: string; said?: string; early?: boolean; failure?: string }>;
+   * failed turn told failed. `upto`: when it had last changed as its finish was last told (as its
+   * engine's clock says), and `unread`: its reply couldn't be read then (the engine slow), though
+   * what it had written by then was told. */
+  sessions: Record<string, { reply?: string; asks?: string[]; at?: number; turn?: string; said?: string; early?: boolean; failure?: string; upto?: number; unread?: boolean }>;
   unread?: Record<string, number>;
   held?: Record<string, { from: string; at: number }>;
-  /** Those whose finish waits for what they left running: the place they run, and since when. */
-  waiting?: Record<string, { from: string; at: number }>;
+  /** Those whose finish waits for what they left running: the place they run, since when, and when
+   * the question its turn answered was asked (what ran before that doesn't hold it). */
+  waiting?: Record<string, { from: string; at: number; asked?: number }>;
 }
 const readTold = (file: string): Told | null => {
   try {
@@ -200,12 +245,18 @@ const readTold = (file: string): Told | null => {
     const unread = numbers(kept.unread);
     const places = (value: unknown) => Object.fromEntries(Object.entries(isObject(value) ? value : {}).filter(([, each]) => isObject(each) && typeof each.from === "string" && typeof each.at === "number")) as Record<string, { from: string; at: number }>;
     const held = places(kept.held);
-    const waiting = places(kept.waiting);
+    const waiting = places(kept.waiting) as NonNullable<Told["waiting"]>;
     return { since: kept.since, ...(Object.keys(sinces).length ? { sinces } : {}), sessions: isObject(kept.sessions) ? kept.sessions as Told["sessions"] : {}, ...(Object.keys(unread).length ? { unread } : {}), ...(Object.keys(held).length ? { held } : {}), ...(Object.keys(waiting).length ? { waiting } : {}) };
   } catch {
     return null;
   }
 };
+/** Whether `session`'s finish is held now, its lead not told yet: waiting on what it left running,
+ * or on its lead's own wait. */
+export function finishHeld(session: string, file = WORK_TOLD): boolean {
+  const told = readTold(file);
+  return Boolean(told?.waiting?.[session] || told?.held?.[session]);
+}
 // Where the box's own engine's sessions are heard of (`WorkWatch.from`), and its other places.
 const ENGINE = "engine";
 const OTHERS = ["bridge"];
@@ -231,6 +282,14 @@ const changeTold = (file: string, change: (told: Told) => void, from: string | n
       writePrivate(file, JSON.stringify(told));
     });
   } catch {}
+};
+
+// Whether what a session left running holds its finish: any of it but its services, or, for a turn
+// that answered a question, only what began since that was asked (a build from before isn't its work).
+// (A service it left up, listening on a port, never holds it: it may run for good.)
+const holds = (still: BackgroundWork | null | undefined, waited: { asked?: number }): boolean => {
+  const work = awaited(still);
+  return Boolean(work) && (typeof waited.asked !== "number" || startedSince(work!, waited.asked));
 };
 
 // What said it, as a hash: whether a reply says the same again, whitespace aside.
@@ -314,9 +373,11 @@ async function lastReply(target: Target, session: string): Promise<LastReply> {
 // Whether a finished turn is news to whoever started the session. The first it hears of it always is,
 // and so is what it says of what it left running, once told before that was over (a timer of its own
 // isn't that). After that a turn someone asked for is, and one that began on its own is only with
-// something to say: not nothing, not the same again, not a line or two.
+// something to say: not nothing, not the same again, not a line or two. Told last while its reply
+// couldn't be read (the engine slow), a reply it had written by then was told then.
 function isNews(was: Told["sessions"][string], last: LastReply): boolean {
   if (last.id && last.id === was.reply) return false;
+  if (was.unread && was.upto !== undefined && last.at !== null && last.at <= was.upto) return false;
   if ((!was.at && !was.reply) || (was.early && last.began.kind !== "timer")) return true;
   if (last.began.kind === "asked" || last.began.kind === "word") return true;
   return last.text.length >= SUBSTANCE && hashed(last.text) !== was.said;
@@ -347,36 +408,63 @@ export interface WorkWatch {
  * each one that ends or asks, told to whoever started it (as its `kuvo.wake` says), close ones as
  * one message; each, a change to its bot's work. `targets()`: where conversations here run. */
 export function workWatcher(source: Target, targets: () => Target[], { gather = GATHER, schedule = setTimeout, now = Date.now, file = WORK_WAKES, toldFile = WORK_TOLD, bridgeRuns = () => peerPlaces().bridge, signal, from = ENGINE, backgroundFile, stoppedFile }: WorkWatch = {}): ((event: WorkEvent) => Promise<void>) & { caughtUp: Promise<void>; gone: () => void } {
-  const background = backgroundWatcher(source, from, { file: backgroundFile, now, schedule, signal });
+  // (What runs stopping counting at its limit is looked at as an end is.)
+  const background = backgroundWatcher(source, from, { file: backgroundFile, now, schedule, signal, ranOut: () => backgroundEnded() });
   const due = new Set<string>();
   // How many tries in a row each has failed, for the wait before the next.
   const failures = new Map<string, number>();
   const putBack = (starter: string, waiting: Waiting) => changeWaiting(file, all => {
     const now = all[starter];
-    all[starter] = { lines: [...waiting.lines, ...(now?.lines ?? [])], asks: waiting.asks || Boolean(now?.asks), since: waiting.since };
+    all[starter] = { lines: [...waiting.lines, ...(now?.lines ?? [])], asks: waiting.asks || Boolean(now?.asks), since: waiting.since, ...(waiting.tried ? { tried: waiting.tried } : {}) };
   });
   const send = async (starter: string) => {
     due.delete(starter);
+    // (One at a time to each, whichever watcher sends it: what one puts back goes first.)
+    const key = `${file}\n${starter}`;
+    if (sending.has(key)) return soon(starter);
+    sending.add(key);
+    try {
+      await sendNow(starter);
+    } finally {
+      sending.delete(key);
+    }
+  };
+  const sendNow = async (starter: string) => {
     const waiting = changeWaiting(file, all => {
       const one = all[starter];
       delete all[starter];
       return one;
     });
-    // One stopped since it was gathered: nothing to tell of it.
+    if (!waiting) return;
+    // What went once already, its answer lost: again alone, under the same id (taken once if it
+    // arrived), and what came after it next. One stopped since it was gathered: nothing to tell of it.
+    const tried = waiting.tried && typeof waiting.tried.id === "string" && waiting.tried.lines > 0 && waiting.tried.lines <= waiting.lines.length ? waiting.tried : null;
     const stopped = readStopped(stoppedFile);
-    if (waiting) waiting.lines = waiting.lines.filter(line => !stopped[/\(address (\S+?)\)/.exec(line)?.[1] ?? ""]);
-    if (!waiting?.lines.length) return;
+    // (What says it was stopped goes all the same.)
+    const unstopped = (lines: string[]) => lines.filter(line => line.startsWith(STOPPED_OPENING) || !stopped[/\(address (\S+?)\)/.exec(line)?.[1] ?? ""]);
+    const first = unstopped(tried ? waiting.lines.slice(0, tried.lines) : waiting.lines);
+    const after = tried ? unstopped(waiting.lines.slice(tried.lines)) : [];
+    const again = tried && first.length ? tried : null;
+    const lines = again ? first : [...first, ...after];
+    const rest = again ? after : [];
+    if (!lines.length) return;
+    const isAsk = (line: string) => line.startsWith("[Session asks]");
+    const asks = again ? again.asks : tried ? lines.some(isAsk) : waiting.asks;
+    const restAsks = rest.some(isAsk);
+    const whole = [...lines, ...rest];
+    const id = again?.id ?? messageID();
     // Gone for sure: nothing to tell. Not to be reached now (the engine starting again, the coding
     // agents' bridge not running, whose it may be, or moving to or from another computer, when a
     // turn here would be left behind): kept, as long as a note would be, and tried again a little
     // later each time. Living on another computer now, however long ago it left: told there, as a
     // letter.
     const place = frozen().has(starter) ? undefined : await placeOfSession(starter, targets()).catch(() => undefined);
-    const line = wakeLineShown(waiting.lines);
-    const delivery = waiting.asks ? "steer" : "queue";
-    const about = [...new Set(waiting.lines.map(each => /\(address (\S+?)\)/.exec(each)?.[1]).filter((each): each is string => Boolean(each)))];
-    if (place === null && tellMovedAway(starter, wakeText(waiting.lines), { from: "Its sessions", words: line, line, delivery, about }, now())) return void failures.delete(starter);
+    const line = wakeLineShown(lines);
+    const delivery = asks ? "steer" : "queue";
+    const about = [...new Set(whole.map(each => /\(address (\S+?)\)/.exec(each)?.[1]).filter((each): each is string => Boolean(each)))];
+    if (place === null && tellMovedAway(starter, wakeText(whole), { from: "Its sessions", words: wakeLineShown(whole), line: wakeLineShown(whole), delivery: asks || restAsks ? "steer" : "queue", about }, now())) return void failures.delete(starter);
     if (place === null && (bridgeRuns() || now() - waiting.since > NOTE_MEMORY)) return;
+    let posted = false;
     try {
       if (!place) throw new Error("Not reached.");
       // Archived (from any app): kept until it's brought back, as its own wake-ups and goal wait,
@@ -386,22 +474,37 @@ export function workWatcher(source: Target, targets: () => Target[], { gather = 
         throw new Error("Archived.");
       }
       // Stopped by the user: it waits there with the queue, as theirs does.
-      await sendInto(place.target, starter, { id: messageID(), text: wakeText(waiting.lines), delivery, metadata: boxNote("Its sessions", line) }, { from: "Its sessions", words: line });
+      posted = true;
+      await sendInto(place.target, starter, { id, text: wakeText(lines), delivery, metadata: boxNote("Its sessions", line) }, { from: "Its sessions", words: line });
       failures.delete(starter);
     } catch {
-      putBack(starter, waiting);
+      // (Sent, its answer lost, it may have arrived: kept with its id, to go again as it was.)
+      putBack(starter, { lines: whole, asks: asks || restAsks, since: waiting.since, ...(posted || again ? { tried: { id, lines: lines.length, asks } } : {}) });
       const tries = (failures.get(starter) ?? 0) + 1;
       failures.set(starter, tries);
       soon(starter, Math.min(300_000, gather * 2 ** tries));
+      return;
     }
+    if (!rest.length) return;
+    // (Ahead of what came meanwhile.)
+    changeWaiting(file, all => {
+      const now = all[starter];
+      all[starter] = { lines: [...rest, ...(now?.lines ?? [])], asks: restAsks || Boolean(now?.asks), since: waiting.since };
+    });
+    soon(starter);
   };
   const soon = (starter: string, after = gather) => {
     if (due.has(starter)) return;
     due.add(starter);
     schedule(() => send(starter).catch(() => {}), after);
   };
-  // What a box left waiting as it stopped: sent now.
+  // What a box left waiting as it stopped: sent now; and what's added from outside, as it is.
   for (const starter of Object.keys(readWaiting(file))) soon(starter);
+  const sendSoon = (starter: string) => soon(starter);
+  // Its source gone (`gone`): its own looks at what it waits on stop with it, as what it knew went.
+  let over = false;
+  wakeSenders.add(sendSoon);
+  signal?.addEventListener("abort", () => wakeSenders.delete(sendSoon), { once: true });
   const sessions = new Map<string, Partial<EngineSession> & { id: string }>();
   const sessionOf = async (id: string) => {
     const data = await call(source, "GET", `/api/session/${encodeURIComponent(id)}`) as (Partial<EngineSession> & { id: string }) | null;
@@ -412,7 +515,7 @@ export function workWatcher(source: Target, targets: () => Target[], { gather = 
   const tell = (starter: string, line: string, asks: boolean) => {
     changeWaiting(file, all => {
       const kept = all[starter] ?? { lines: [], asks: false, since: now() };
-      all[starter] = { lines: [...kept.lines, line], asks: kept.asks || asks, since: kept.since };
+      all[starter] = { ...kept, lines: [...kept.lines, line], asks: kept.asks || asks };
     });
     soon(starter);
   };
@@ -422,13 +525,16 @@ export function workWatcher(source: Target, targets: () => Target[], { gather = 
   let caught = false;
   // The finishes it holds now.
   const holding = new Set<string>();
-  const noteTold = (session: string, note: { reply?: string | null; ask?: string; at?: number; turn?: string | null; said?: string; early?: boolean; failure?: string }) => changeTold(toldFile, told => {
+  const noteTold = (session: string, note: { reply?: string | null; ask?: string; at?: number; turn?: string | null; said?: string; early?: boolean; failure?: string; upto?: number; unread?: boolean }) => changeTold(toldFile, told => {
     const its = told.sessions[session] ?? {};
     if (note.reply) {
       its.reply = note.reply;
+      delete its.unread;
       if (told.held) delete told.held[session];
       if (told.held && !Object.keys(told.held).length) delete told.held;
     }
+    if (note.upto !== undefined) its.upto = note.upto;
+    if (note.unread) its.unread = true;
     if (note.at) its.at = note.at;
     if (note.turn) its.turn = note.turn;
     if (note.said !== undefined) its.said = note.said;
@@ -446,7 +552,7 @@ export function workWatcher(source: Target, targets: () => Target[], { gather = 
   // it ended with this reply, which came to it in the tool, or another watch (the engine's stream
   // connected again meanwhile) has dealt with it. Noted as held meanwhile, so a box started again
   // looks at it then. `at`: when its reply was read.
-  const tellUnlessAnswered = (session: string, starter: string, reply: string | undefined, line: string, at: number, about: { said: string; early: boolean; bot?: string; working?: boolean }, holds = false) => {
+  const tellUnlessAnswered = (session: string, starter: string, reply: string | undefined, line: string, at: number, about: { said?: string; early: boolean; bot?: string; upto?: number }, holds = false) => {
     const waited = awaitedBy(session, starter, reply);
     if (waited === "waits") {
       holding.add(session);
@@ -456,16 +562,19 @@ export function workWatcher(source: Target, targets: () => Target[], { gather = 
       return;
     }
     holding.delete(session);
-    if (reply && readTold(toldFile)?.sessions[session]?.reply === reply) return noteTold(session, { reply });
+    const told = readTold(toldFile)?.sessions[session];
+    if (reply && told?.reply === reply) return noteTold(session, { reply });
+    // Told meanwhile by another look at the same finish (one is heard of in more than one way, and
+    // on a busy computer a look takes minutes), where this one or that couldn't read its reply: that
+    // one had seen all this one has, so it's been told.
+    if ((!reply || told?.unread) && about.upto !== undefined && told?.upto !== undefined && about.upto <= told.upto) return reply ? noteTold(session, { reply }) : undefined;
     if (waited !== "answered") tell(starter, line, false);
     // One of a bot's sessions done: for clients to show it seeing that, once, as it's told.
-    // (One still working isn't finished: its bot sees that once what it left running ends.)
-    if (about.bot) { if (about.working) markLater.set(session, about.bot); else noteOversight(about.bot, session, "finished"); }
-    noteTold(session, { reply, at, said: about.said, early: about.early });
+    if (about.bot) noteOversight(about.bot, session, "finished");
+    noteTold(session, { reply, at, said: about.said, early: about.early, upto: about.upto, unread: !reply });
   };
   // A finish waiting for what its session left running, no longer.
   const letGoOf = (session: string) => {
-    deadlines.delete(session);
     if (readTold(toldFile)?.waiting?.[session]) changeTold(toldFile, told => {
       if (told.waiting) delete told.waiting[session];
       if (told.waiting && !Object.keys(told.waiting).length) delete told.waiting;
@@ -481,8 +590,6 @@ export function workWatcher(source: Target, targets: () => Target[], { gather = 
     forgetStopped(session, stoppedFile);
     return false;
   };
-  // Each looked at again at its deadline, once a connection (a look finding it past it tells it).
-  const deadlines = new Set<string>();
   const settling = new Set<string>();
   const lookAgain = (session: string, after: number) => {
     const timer = schedule(async () => {
@@ -492,41 +599,64 @@ export function workWatcher(source: Target, targets: () => Target[], { gather = 
     }, after);
     (timer as { unref?: () => void } | undefined)?.unref?.();
   };
-  const waitFor = (session: string, since: number) => {
-    if (!readTold(toldFile)?.waiting?.[session]) changeTold(toldFile, told => { told.waiting = { ...told.waiting, [session]: { from, at: since } }; }, null, now());
-    if (!deadlines.has(session)) {
-      deadlines.add(session);
-      lookAgain(session, Math.max(0, since + FINISH_HOLD_LIMIT - now()));
-    }
+  // Held: told nothing until what it left running is over (heard as it ends, as it stops counting at
+  // its limit, or found every little while, in case its end wasn't heard), however long that takes.
+  // `asked`: when the question its turn answered was asked, as what ran before that doesn't hold it.
+  const waitFor = (session: string, since: number, asked: number | null) => {
+    const was = readTold(toldFile)?.waiting?.[session];
+    if (!was || was.asked !== (asked ?? undefined)) changeTold(toldFile, told => { told.waiting = { ...told.waiting, [session]: { from, at: was?.at ?? since, ...(asked !== null ? { asked } : {}) } }; }, null, now());
+    lookWhileWaiting(session, was ? WAITING_LOOK : FIRST_LOOK);
+  };
+  const looking = new Set<string>();
+  const lookWhileWaiting = (session: string, after = WAITING_LOOK) => {
+    if (looking.has(session) || signal?.aborted || over) return;
+    looking.add(session);
+    const timer = schedule(async () => {
+      looking.delete(session);
+      const waited = readTold(toldFile)?.waiting?.[session];
+      if (signal?.aborted || over || !waited || waited.from !== from) return;
+      const data = sessions.get(session);
+      const still = await background.of(session, data?.location?.directory ?? data?.directory).catch(() => null);
+      if (!holds(still, waited)) await settle(session).catch(() => {});
+      if (readTold(toldFile)?.waiting?.[session]?.from === from) lookWhileWaiting(session);
+    }, after);
+    (timer as { unref?: () => void } | undefined)?.unref?.();
   };
   // A turn of a session that started by someone's asking ended well. Told to who started it, if it's
-  // news (`isNews`) and nothing it left running still goes on; while that does, held, looked at as it
-  // ends, and at the limit told anyway, saying what still runs. `known`: its last reply, if it's read.
+  // news (`isNews`) and nothing it left running still goes on; while that does, held, and looked at
+  // as it ends. `known`: its last reply, if it's read.
   const finish = async (session: Partial<EngineSession> & { id: string }, starter: string, known?: LastReply) => {
     const at = now();
+    // (As its engine says it last changed, before its reply is read: what it wrote by then.)
+    const upto = typeof session.time?.updated === "number" ? session.time.updated : undefined;
     const last = known ?? await lastReply(source, session.id).catch(() => null);
     if (isArchived(session) || staysStopped(session.id, last)) {
       letGoOf(session.id);
       return noteTold(session.id, { reply: last?.id ?? undefined });
+    }
+    // Its reply unread (the engine slow), and at work again by now: told as that turn ends, so what
+    // that turn writes meanwhile isn't taken as told here.
+    if (!last) {
+      const active = await call(source, "GET", "/api/session/active", undefined, signal).catch(() => null);
+      if ((Array.isArray(active) ? active : isObject(active) ? Object.keys(active) : []).includes(session.id)) return;
     }
     const folder = session.location?.directory ?? session.directory;
     const still = await background.of(session.id, folder).catch(() => null);
     const waitedSince = readTold(toldFile)?.waiting?.[session.id]?.at;
     // (Someone's question isn't held up by what was running before they asked: a dev server.)
     const askedAt = last?.began.kind === "asked" ? last.began.at : null;
-    const working = Boolean(still) && (askedAt === null || startedSince(still!, askedAt));
-    if (working && now() - (waitedSince ?? at) < FINISH_HOLD_LIMIT) return waitFor(session.id, waitedSince ?? at);
+    if (holds(still, { asked: askedAt ?? undefined })) return waitFor(session.id, waitedSince ?? at, askedAt);
     const was = readTold(toldFile)?.sessions[session.id] ?? {};
     letGoOf(session.id);
     if (last && !isNews(was, last)) return noteTold(session.id, { reply: last.id ?? undefined });
-    // Told while what it left running goes on (the hold ran out): still working, not finished.
-    const line = await wakeLine({ type: "session.execution.succeeded", data: { sessionID: session.id } }, session, source, still, working);
+    const line = await wakeLine({ type: "session.execution.succeeded", data: { sessionID: session.id } }, session, source, servicesWords(still));
     if (!line) return;
-    tellUnlessAnswered(session.id, starter, last?.id ?? undefined, line, at, { said: last?.text ? hashed(last.text) : "", early: Boolean(still) || waitedSince !== undefined, bot: worksFor(session)?.bot, working });
+    const seen = Math.max(upto ?? -Infinity, last?.at ?? -Infinity);
+    tellUnlessAnswered(session.id, starter, last?.id ?? undefined, line, at, { said: last ? (last.text ? hashed(last.text) : "") : undefined, early: Boolean(still) || waitedSince !== undefined, bot: worksFor(session)?.bot, upto: Number.isFinite(seen) ? seen : undefined });
   };
   // One whose finish waits, looked at now: gone, at work again (its end comes back here), or as above.
   const settle = async (id: string) => {
-    if (signal?.aborted) return;
+    if (signal?.aborted || over) return;
     const waited = readTold(toldFile)?.waiting?.[id];
     if (!waited || waited.from !== from) return;
     // (Gone, or moved away: nothing to wait for. Not reached now: looked at again.)
@@ -544,12 +674,12 @@ export function workWatcher(source: Target, targets: () => Target[], { gather = 
   const backgroundEnded = async () => {
     const waiting = readTold(toldFile)?.waiting ?? {};
     for (const [id, each] of Object.entries(waiting)) {
-      if (each.from !== from || background.known(id) || settling.has(id)) continue;
+      if (each.from !== from || holds(background.known(id), each) || settling.has(id)) continue;
       settling.add(id);
       lookAgain(id, SETTLE);
     }
     for (const [id, bot] of markLater) {
-      if (background.known(id)) continue;
+      if (awaited(background.known(id))) continue;
       markLater.delete(id);
       if (!readStopped(stoppedFile)[id]) noteOversight(bot, id, "finished");
     }
@@ -755,7 +885,7 @@ export function workWatcher(source: Target, targets: () => Target[], { gather = 
         // Quiet to its starter, but still its bot's to see, once it's really done.
         const folder = session.location?.directory ?? session.directory;
         if (!bot || isArchived(session) || readStopped(stoppedFile)[session.id]) return;
-        if (await background.of(session.id, folder).catch(() => null)) markLater.set(session.id, bot);
+        if (awaited(await background.of(session.id, folder).catch(() => null))) markLater.set(session.id, bot);
         else noteOversight(bot, session.id, "finished");
         return;
       }
@@ -788,5 +918,5 @@ export function workWatcher(source: Target, targets: () => Target[], { gather = 
       noteTold(session.id, { reply, at, turn: last?.turn, failure });
     })().catch(() => {});
   };
-  return Object.assign(watch, { caughtUp, gone: background.gone });
+  return Object.assign(watch, { caughtUp, gone: () => { over = true; wakeSenders.delete(sendSoon); background.gone(); } });
 }

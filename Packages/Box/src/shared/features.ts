@@ -1,8 +1,9 @@
 // What this box answers, one name per route or group of routes a client might check, as
 // `kuvo/info` says (PROTOCOL.md, "Features"). A name comes with what it names and never changes
-// meaning. This Mac's box answers them all but `MACHINE_FEATURES`, and the Mac's own besides
-// (`MAC_FEATURES`); scripts/route-shapes.sh writes the Mac app's copy (KuvoCode/Stores/BoxFeatures.swift)
-// and the scenario both boxes are held to (Vectors/routes/features.json) from these.
+// meaning. A Mac's box's list (`macFeatures`, routes/mac.ts) has the same but a machine's own
+// (`MACHINE_FEATURES`: `browser`, `engine.start` and `update`), and the Mac's own routes besides
+// (`MAC_FEATURES`). scripts/route-shapes.sh writes the scenario both boxes are held to
+// (Vectors/routes/features.json) from these.
 //
 // One name a line, in order (as `LC_ALL=C sort` has them), so branches that each add one merge
 // without a conflict: git merges this file by union (.gitattributes), keeping the lines both added.
@@ -34,6 +35,7 @@ export const FEATURES = [
   "bots.keys",
   "bots.make",
   "branch",
+  "browser",
   "btw",
   "btw.threads",
   "config",
@@ -83,9 +85,12 @@ export const FEATURES = [
   "sandbox",
   "sandbox.asks",
   "sandbox.check",
+  "sandbox.reviews.whole",
   "search",
   "sessions.agents",
+  "sessions.glance",
   "sessions.start",
+  "setup",
   "shell.stop",
   "sign-in.return",
   "skills",
@@ -97,6 +102,7 @@ export const FEATURES = [
   "wakes.events",
   "work",
   "work-queue",
+  "work-queue.elsewhere",
   "work.elsewhere",
   "work.goals",
   "work.goals.apps",
@@ -110,14 +116,3 @@ export const FEATURES = [
 
 /** One of them. */
 export type Feature = (typeof FEATURES)[number];
-
-/** Those only a machine's box answers: it updates itself, and starts an engine an older Mac's Stop
- * left down. Every other name, this Mac claims too (`BoxFeatures.swift`): a name for a route this
- * Mac's box doesn't answer (link/mac/relay.ts's `MAC_BOX_ROUTES`, or the app's) goes here. */
-export const MACHINE_FEATURES = [
-  "engine.start",
-  "update",
-] as const satisfies readonly Feature[];
-
-/** What this Mac's box answers of them: all but a machine's own. */
-export const MAC_BOX_FEATURES: readonly Feature[] = FEATURES.filter(name => !(MACHINE_FEATURES as readonly string[]).includes(name));

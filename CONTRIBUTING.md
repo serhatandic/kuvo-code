@@ -64,7 +64,10 @@ Before tagging one, try its update the way people will get it:
 It builds this checkout as that version, signed with your Developer ID and the update key from
 your keychain, serves it from `127.0.0.1`, and points the Kuvo Code in /Applications at it. Choose
 **Check for Updates…** there to go through the update window, the install, the restart and
-What's New. Ctrl-C stops the server and puts the real feed back.
+What's New. Ctrl-C stops the server and puts the real feed back, and so does any other way it ends,
+even killed outright: `scripts/feed-guard.py` watches it from outside its process group and tree,
+and each run first clears a `127.0.0.1` feed an earlier one left
+(`python3 -m unittest discover -s Tests/Guard -p test_try_update.py` checks each way).
 
 CI (`.github/workflows/ci.yml`) runs on GitHub's hosted runners, its jobs side by side: the
 generated files and What's New on Linux, the box's and the bridge's tests on macOS and Linux, the
@@ -99,19 +102,18 @@ act on those (a window's tracking areas and cursor rectangles once the pointer c
 drawing as Core Animation commits), the test does it itself: `WindowServer.appKitsTurn` and
 `CATransaction.flush()` after `displayIfNeeded()`.
 
-The app, the engine client and the usage tracker have tests:
+Run tests locally through `scripts/heavy.sh`'s lanes (below): only your area's tests, including
+what uses the code you changed, while working and at merge. No full suite unless the user asks;
+the lead asks for one before a release. The phone has no CI; run its tests locally through
+`scripts/heavy.sh phone`. While pushes and CI are paused, only the lead session runs
+`scripts/ci-branch.sh --wait`, and only when the user asks: it pushes a work branch over SSH to `origin` as
+a `ci/` branch and runs the full CI suites on GitHub (pass a local branch name to test a different
+one). It prints the run URL, job conclusions and failed logs; it never pushes `main` or tags. Only
+committed changes run.
 
-```sh
-./scripts/test-app.sh
-cd Packages/OpenCodeKit && swift test
-cd Packages/UsageKit && swift test
-cd Packages/KuvoClient && swift test
-cd Packages/KuvoLink && swift test && node --test Tests/Bridge/*.test.js
-cd Packages/Box && bun install && bun run check && bun test
-```
+Run quick, targeted box and bridge tests with `scripts/test-box.sh [box|bridge|all] [extra test args]`. It queues under the box heavy slot, installs locked dependencies when needed, and summarizes results.
 
-The bridge's tests that run the box itself need a Bun: `bun` on your PATH, or
-`KUVO_TEST_BUN` naming one or an engine (a machine's `~/.kuvo-code/engine/<version>/opencode`,
+The runner uses `~/.bun/bin/bun` by default; set `KUVO_TEST_BUN` to another Bun or an engine (a machine's `~/.kuvo-code/engine/<version>/opencode`,
 which they run as Bun). Run them on a Linux machine too, in a test folder of your own with
 `TMPDIR` inside it, before calling a box change done:
 `scripts/heavy.sh box scripts/test-linux.sh <ssh-host> sandbox.test.js …` does that on a machine
@@ -142,7 +144,60 @@ its home as it ends, and the next run clears what a killed one left.
 `./scripts/test-app.sh` runs one at a time: a run started while another is going
 waits for it, since they share the test copy's settings and temporary folders.
 
-Builds and test runs are heavy, so start them with `scripts/heavy.sh <kind>`, which
+#### Batches: one build of main for every session's runs
+
+The app's UI suite runs one job at a time, and a run that builds the app from its own worktree
+first spends about 8 minutes compiling, so with a dozen sessions they queued for most of an hour.
+Instead, main is built once, twice a day, and sessions take turns running their classes on that
+build without compiling anything: at 04:00 and 16:00, the lead runs
+`scripts/batch-build.sh` (`mac`, `phone` or `all`, the default), which exports main's files (each
+checkout's `main`, or `KUVO_BATCH_MAC_REF` and `KUVO_BATCH_PHONE_REF`; the phone's with kuvo-ai's
+beside it) into a new folder, `$(getconf DARWIN_USER_CACHE_DIR)KuvoBatch/<mac|phone>/<when>-<commit>`,
+and builds it from nothing with `xcodebuild build-for-testing` as the tests' own copy (the settings
+and bundle IDs below), in a slot of heavy.sh's build lane (`mac-build`, `phone-build`). Its `stamp` says which commits, when, and
+where its `.xctestrun` is. The newest two batches are kept; an older one is deleted by the next
+build once no run has it open. One build of a platform's batches runs at a time: a second says so
+and stops.
+
+Then each session, its work merged to main before the build, runs its classes from it:
+
+```sh
+ONLY="KuvoCodeTests/WindowTabsTests KuvoCodeTests/WorkQueueTests" ~/Projects/kuvo-ai/scripts/test-app.sh --from-batch
+ONLY="KuvoCodeMobileTests/PairingTests" ~/Projects/kuvo-code-ios/scripts/test-app.sh --from-batch
+```
+
+It takes the newest batch, refuses at once (before it waits in line) a class or test the batch
+hasn't, merged after the build, and notes when your HEAD isn't in it. While a batch is being built
+it waits for that build and tests the new batch; when the newest build failed (or stopped), it
+refuses, naming the commit and the first error, rather than test an older batch. Call it directly,
+never inside `scripts/heavy.sh`: it takes its turn itself, after any wait for a build, so it holds
+no slot while it waits. Then it waits for its turn in
+`mac` (or a `phone` slot) and runs `xcodebuild test-without-building` with the batch's `.xctestrun`:
+the same test copy, clean settings, `KUVO_TEST_BUN`, account check and guards as a run that builds.
+It prints the stamp of the batch it tested. Problems found go to fixes merged to main, which the next batch
+checks. `scripts/test-app.sh` without `--from-batch` still builds from your worktree, for an urgent
+run only.
+
+Between batches, `scripts/batch-build.sh --compile-only [mac|phone|all]` checks that main still
+compiles, the apps and their tests, after each merge: in one folder kept from check to check
+(`KuvoBatch/compile`), whose files are brought to main's one by one (only those that changed are
+written again), so it compiles only what changed, in minutes. A batch, a compile check and test
+runs each take the lane slot heavy.sh gives them, and build in folders of their own, under locks
+of their own. `cd scripts && python3 -m unittest test_batch` tries them.
+
+One copy of `scripts/heavy.sh` runs every job: `~/Projects/kuvo-ai/scripts/heavy.sh`, the canonical
+one (`KUVO_HEAVY_CANONICAL` names another). Any other copy, a worktree's or an older checkout's, hands
+the job to it at once with the same arguments and environment, and both apps' `scripts/test-app.sh`
+and the phone's `scripts/build-app.sh` call it directly (`KUVO_HEAVY_SH` for another). So a fix to
+how jobs take turns reaches every caller once it's on that checkout, and a stale copy can't jam a
+lane. To try a change to the helper itself, run your copy with `KUVO_HEAVY_CANONICAL=` (empty), as
+its tests do. A copy from before this hands nothing on: it runs as it did until its jobs end.
+`scripts/heavy.sh status` prints a line for each lane: who holds each slot, for how long, whether its
+command runs, and how many wait in line, the longest for how long. Nothing waits under a lane's lock
+in this copy; a holder that hasn't run its command for 2 minutes (an older copy waiting for room
+under the lock) is named in `status` and by every job waiting for that slot.
+
+When running heavy builds or tests locally, start them with `scripts/heavy.sh <kind>`, which
 waits for jobs of the same kind (they share build folders) and runs the other
 kinds alongside:
 
@@ -150,7 +205,9 @@ kinds alongside:
 scripts/heavy.sh mac scripts/test-app.sh
 scripts/heavy.sh mac-build sh -c 'xcodebuild … -derivedDataPath "$(getconf DARWIN_USER_CACHE_DIR)KuvoShared-MacBuild$KUVO_HEAVY_BUILD_SUFFIX" …'
 scripts/heavy.sh mac-build sh -c 'cd Packages/KuvoClient && swift test'
-scripts/heavy.sh box sh -c 'cd Packages/Box && bun test'
+scripts/heavy.sh phone-build <phone-build-command>   # the phone's `scripts/build-app.sh` does this
+scripts/heavy.sh phone <phone-test-command>          # only a run that boots a simulator
+scripts/test-box.sh box <test-filter>
 ```
 
 - `mac`: the Mac app's UI test suite, `scripts/test-app.sh` (`KuvoCodeTests-build`), which drives the
@@ -165,7 +222,17 @@ scripts/heavy.sh box sh -c 'cd Packages/Box && bun test'
   `-clonedSourcePackagesDirPath` in that folder too (`…/KuvoShared-MacBuild$KUVO_HEAVY_BUILD_SUFFIX/SourcePackages`),
   not the checkout's `build/SourcePackages` (the app suite's) or `build/DerivedData`, which two
   jobs in one checkout would share. A package's `.build` is its own to each checkout;
-- `phone`: the iPhone app's (`KuvoShared-PhoneBuild`, `KuvoCodeMobileTests-build`). It has two
+- `phone-build`: the iPhone app's builds, and anything of the phone's that boots no simulator. It is
+  `mac-build`'s lane under another name (the same two slots, locks and 90-minute time limit, which
+  `KUVO_HEAVY_LIMIT=60m` raises), not one of its own: a phone build and a Mac build are both `xcodebuild` compiles that compete for the same CPU and
+  memory, so they count against each other, and neither waits for a simulator. Take the slot's
+  folder from `KUVO_HEAVY_SLOT` and `KUVO_HEAVY_BUILD_SUFFIX` (`-1` or `-2`) and build in
+  `KuvoShared-PhoneLane$KUVO_HEAVY_BUILD_SUFFIX`, a folder of its own (not `KuvoShared-PhoneBuild-2`,
+  which phone's slot 2 builds in). The phone's `scripts/build-app.sh` does all of it. A build never
+  takes a `phone` slot: those are for test runs, which each need a simulator, and a build that held
+  one only made the test runs queue behind it;
+- `phone`: **only the phone's test runs that boot a simulator** (`KuvoShared-PhoneBuild`,
+  `KuvoCodeMobileTests-build`; the phone's `scripts/test-app.sh`). It has two
   slots, so two phone test runs go at once, each on a simulator of its own: "Kuvo Code Tests" in
   slot 1 and "Kuvo Code Tests 2" in slot 2, both fixed (the phone's `scripts/test-app.sh` makes each
   once, on the same runtime and device, and keeps it; nothing makes or deletes one per run). A
@@ -177,16 +244,45 @@ scripts/heavy.sh box sh -c 'cd Packages/Box && bun test'
   were, so an older script and a new one on slot 1 still exclude each other;
 - `box`: the box's whole suites (`bun test`, `node --test`) and runs on a test machine.
 
-A job also waits while the Mac is busy (its load over the last minute above 40;
-`KUVO_HEAVY_LOAD` sets another). While the Mac app's suite waits there, new jobs of the other
-kinds wait for it to start, 15 minutes at most (`KUVO_HEAVY_MAC_FIRST_FOR`), so the jobs that keep
-starting can't keep it out. A new job also waits while the Mac is short of memory: swapping more than
-10 MB a second (`KUVO_HEAVY_SWAP`), its memory pressure at warn or worse, or less than 20% of it
-available as `memory_pressure -Q` says (`KUVO_HEAVY_MEMORY`; `0` turns the memory wait off). It
-waits until two looks in a row find it isn't, 15 minutes at most from when any job found it short
-(`KUVO_HEAVY_MEMORY_WAIT_FOR`): on this Mac memory runs out before CPU does. Both apps' `scripts/test-app.sh` take their turn
+With `KUVO_XCODE_CACHE=1`, every job of the Xcode lanes (`mac`, `mac-build`, `phone-build`, `phone`)
+builds with Xcode's compilation cache, one for all checkouts (`scripts/xcode-cache.sh`): a content-addressed store in
+`$(getconf DARWIN_USER_CACHE_DIR)KuvoCompilationCache`, keyed by what goes into each compile and not
+by where the checkout or build folder is, so a build in a new worktree replays what an earlier build
+of the same code compiled instead of compiling the app and its packages again. Code that differs gets
+its own key, so branches never mix. heavy.sh hands `scripts/xcode-cache.xcconfig` to `xcodebuild`
+through `XCODE_XCCONFIG_FILE`; nothing changes in your command (settings on it still win), and both
+apps' `scripts/test-app.sh` and `scripts/build-app.sh` get it too. Xcode prunes the store to 20 GB
+(`KUVO_XCODE_CACHE_SIZE`) after a build, but only once no build has it open, so on a busy Mac it can
+grow past that for a while (heavy.sh says so at twice the size); to clear it, delete the folder while
+no Xcode build runs. It's off unless `KUVO_XCODE_CACHE=1` (and always on CI): with Xcode 27.2, a
+cache hit on a Swift compile whose stored output has warnings crashes Xcode's build service as it
+replays them ("The Xcode build system has crashed", #562). A caller with an `XCODE_XCCONFIG_FILE` of
+its own keeps that one instead. `swift build` and `swift test` don't use it.
+The compiler sees the sources as `/^src/…` (the project's folder), so `#filePath` is that too, and so
+are the places a failed test names: what `xcodebuild` builds finds its files through its bundle, never
+`#filePath` (the app's `scripts/test-app.sh` checks).
+
+Before it joins its lane's line, a new job waits while the Mac is thrashing: swapping more than 10 MB
+a second (`KUVO_HEAVY_SWAP`) or its memory pressure critical, two minutes at most from when any job
+found it so (`KUVO_HEAVY_MEMORY_WAIT_FOR`; `KUVO_HEAVY_MEMORY=0` turns the memory wait off). It waits
+for a busy Mac (`KUVO_HEAVY_LOAD`, its load over the last minute) or for a share of memory available
+(`KUVO_HEAVY_MEMORY=20`, in percent) only when you set those: low priority (below) keeps the
+Mac usable, and on the Mini, with a dozen sessions, the load stayed over 40 and less than 20% of
+memory was available all day, so jobs only waited. While the Mac app's suite waits there, new jobs of
+the other kinds wait for it to start, two minutes at most (`KUVO_HEAVY_MAC_FIRST_FOR`). None of
+these waits happens while a job holds its lane's lock, so a job waiting for room never holds up
+the jobs in line behind it. Both apps' `scripts/test-app.sh` take their turn
 this way themselves. `python3 -m unittest discover -s scripts -p test_heavy.py`
 tries the helper.
+
+Jobs never starve the box (the Kuvo Code box on this Mac, which the phone talks to): every job runs
+at low priority, its children too: `taskpolicy -c utility nice -n 20` on macOS (utility QoS at the
+lowest nice: lower CPU and I/O priority than the box's, but on every core; it works with `xcodebuild`
+builds and tests, simulator runs and `swift test`), `nice -n 15 ionice -c3` on Linux. Not background
+QoS (`taskpolicy -b`), which on Apple silicon runs only on the efficiency cores with its I/O
+throttled: a cold build took nearly twice as long under it. On
+an idle Mac a job runs as fast as ever; on a busy one it gives way and is slower, which the time
+limit allows for (`KUVO_HEAVY_LIMIT`).
 
 A job's command runs in a process group of its own, which ends with it: when the command is over,
 and when the helper is stopped, whatever the command started that stays in that group is stopped too
@@ -198,9 +294,13 @@ you started, by its PID (`$!`, a pid file) or by a process group you created, ne
 were started in. On macOS every option goes before the pattern, in `pgrep` too.
 
 Every job has a time limit, so a hung one can't hold its kind's turn for hours: `mac` and `phone`
-45 minutes, `mac-build` 30, `box` 40, counted while it runs (not while it waits for its turn).
-Past it, its group is stopped (TERM, then KILL), it says what was running, and the helper exits
-124. `KUVO_HEAVY_LIMIT` gives one job another (`90m`, `600s`, `2h`; `0` for none). A job inside
+45 minutes, `mac-build` 30, `box` 40, counted from when its command starts (not while it waits in
+line for its slot, however long, nor for room on the Mac). Past it, its group is stopped (TERM, then
+KILL), it says what was running, and the helper exits 124. Jobs waiting for a lane wait in line,
+first come first served; `KUVO_HEAVY_PRIORITY=high` puts one before the normal ones waiting (it
+never stops a job running), and `KUVO_HEAVY_WAIT=0` answers without waiting for one (75: it
+would wait). Older copies of the helper don't queue, and can take a slot before those in line.
+`KUVO_HEAVY_LIMIT` gives one job another (`90m`, `600s`, `2h`; `0` for none). A job inside
 one of its kind runs within that one's limit (one of another kind has its own too), and one in a
 terminal has none.
 
@@ -247,9 +347,9 @@ own, without SSH.
 Every route a phone uses is answered twice: by this Mac (`PhoneLink`) and by a machine's bridge
 (`kuvo-link.js`). The scenarios in `Packages/KuvoLink/Vectors/routes/*.json` are written once and
 run against both: `RouteContractTests` (in `./scripts/test-app.sh`) drives the Mac's real
-`PhoneLink` and stores, and `node --test Tests/Bridge/contract.test.js` in `Packages/KuvoLink` the
-bridge's real handler. `Tests/Bridge/contract-mac.test.js` runs the scenarios of the areas that
-have moved onto this Mac's box (`PhoneLink.boxRoutes`) against the bridge's handler as this Mac's
+`PhoneLink` and stores, and `scripts/test-box.sh bridge contract.test.js` the
+bridge's real handler. `Tests/Bridge/contract-mac.test.js` runs scenarios this Mac's box answers
+(all but the app's own routes, `PhoneLink.appRoutes`) against the bridge's handler as this Mac's
 box, with the app's folders and kit, checking what's expected of a Mac. Only the engine is a
 stand-in, the same small one on each. To add one:
 
@@ -276,8 +376,8 @@ stand-in, the same small one on each. To add one:
   file an area, with each field an answer can have (one ending in `?` may be left out) and its
   type, which the box's code takes its types from too. A new route, or a new field in an answer,
   goes there first; `./scripts/route-shapes.sh` writes `routes/shapes/answers.json` for both
-  runners, and `routes/features.json` from the box's lists of what it answers (CI checks both are
-  current: never edit them), and both hold an answer to a shape by
+  runners, and `routes/features.json` from the box's lists of what it answers (the box's suite,
+  `test/route-shapes.test.ts`, and CI check both are current: never edit them), and both hold an answer to a shape by
   `routes/shapes/cases.json`. A field that can be null is sent as `null`, never left out (this
   Mac's encoder leaves a nil out, so its fields that can be null are `@SentAsNull`), and a refusal
   is JSON, `{}` at least.
@@ -316,9 +416,15 @@ README says how.
 
 A machine's browser is Chrome for Testing, the full browser run in Chrome's own headless mode
 (the separate headless shell is one sites take for a bot), with its libraries and fonts, in
-`~/.kuvo-code/browser` there (`scripts/browser-runtime.py` lists what it brings; on a Mac machine,
-Chrome for Testing as it comes, pinned in `browser-runtime-mac.json`, with a `chrome` launcher, as
-it won't run through a link). One script,
+`~/.kuvo-code/browser` there. The machine's box sets it up itself, with or without a Mac
+(`Packages/Box/src/link/browser`, PROTOCOL.md's "The browser on a machine"): the build pinned in
+`linux.json` and `mac.json` there (`scripts/browser-runtime.py` writes them; on a Mac machine,
+Chrome for Testing as it comes, with a `chrome` launcher, as it won't run through a link),
+downloaded only from Google's Chrome for Testing and Rocky Linux over HTTPS, each file checked
+against its size and SHA-256 before it's unpacked (by the box itself: no `unzip`, `xz` or `rpm`
+on the machine). The Mac only shows how it goes (`kuvo/browser`). Its tests serve stand-ins
+(`Tests/Bridge/browser-source-stand-in.js`): never the real sources, never a real `~/.kuvo-code`.
+One script,
 `KuvoCode/Resources/kuvo-browser.js`, runs with the engine's own runtime in three ways:
 
 - **host**, the keeper: it starts Chromium, holds it over a pipe, and serves the DevTools
@@ -330,6 +436,9 @@ it won't run through a link). One script,
   start runs the new one.
 - **mcp**, the agent's browser tools for the machine's engine, talking to the keeper.
 - **connect**, the Mac's live view of the pages, over SSH, also through the keeper.
+
+The first two, finding no browser, have the box set it up and wait for it (`kuvo-link.js browser
+install`); a browser that doesn't start because its build isn't whole is set up again once.
 
 What agents ask you for there also goes to `run/browser-asks.json`, for the machine's phone link,
 which answers it for a phone with the Mac closed (`Kuvo.answer` on the keeper's socket).
@@ -352,7 +461,7 @@ JavaScript sides check against the same vectors in `Packages/KuvoLink/Vectors`.
 
 Group chats run in each computer's agents bridge (`Packages/Box/src/agents/groups`), this Mac's as a
 machine's: the app shows them and sends what you do in them (`BoxGroups`), and holds none of
-their rules. Their own tests are the bridge's (`bun test` in `Packages/Box`). What the app still reads
+their rules. Their own tests are the bridge's (`scripts/test-box.sh box`). What the app still reads
 the same way as a box (a bot's job from its memory, when a repeat comes back, what a message
 quotes) is held to `Packages/Box/test/agents/box-vectors.json`: after changing one on either side, run
 `./scripts/box-vectors.sh` (it writes the file from the Swift side), then the bridges' tests.
@@ -713,31 +822,31 @@ and the lists they add to merge line by line:
   change (a machine's `setup` replaces a running bridge whose version isn't its own), and nothing
   compares it: clients check `features`. A note of when something came in (PROTOCOL.md) names its
   feature, not a bridge version.
-- **What a box answers** (`FEATURES` in `Packages/Box/src/shared/features.ts`, `MAC_FEATURES` in
-  `shared/routes/mac.ts`): add a name on a line of its own, in order (`LC_ALL=C sort`). Names
-  two branches add in different places merge cleanly; git merges `features.ts` (and
-  `BoxFeatures.swift`) by union (`.gitattributes`), so two names added side by side both stay
-  too, though maybe out of order: the box's tests (`test/features.test.ts`) fail on a list out
-  of order or a name twice, so put them in order. Change nothing else in `features.ts` in a
-  branch that adds a name, and don't remove a name next to one another branch adds (union keeps
-  it; the bridge's tests check every name has its route). A name this Mac's box doesn't answer
-  (its route isn't in `MAC_BOX_ROUTES`, `link/mac/relay.ts`, nor the app's) goes in
-  `MACHINE_FEATURES` too: every other name, this Mac claims.
+- **What a box answers** (`FEATURES` in `Packages/Box/src/shared/features.ts`; `MAC_FEATURES`
+  and `MACHINE_FEATURES` in `shared/routes/mac.ts`): add a name on a line of its own, in order
+  (`LC_ALL=C sort`). Names two branches add in different places merge cleanly; git merges
+  `features.ts` by union (`.gitattributes`), so two names added side by side both stay too,
+  though maybe out of order: the box's tests (`test/features.test.ts`) and `route-shapes.sh`
+  refuse a list out of order or a name twice, so put them in order. Change nothing else in
+  `features.ts` in a branch that adds a name, and don't remove a name next to one another branch
+  adds (union keeps it; the bridge's tests check every name has its route). A name for what only
+  a machine answers goes in `MACHINE_FEATURES` too, and one only a Mac answers in `MAC_FEATURES`
+  instead: this Mac's box claims every other name (`macFeatures`).
 - **Other lists a feature adds to** are one entry a line, in order, so they merge the same way
   (without union): the bridge's test of each name's route (`routes` in
-  `Tests/Bridge/bridge.test.js`, whose order it checks), `MAC_BOX_ROUTES`, PhoneLink's
-  `boxRoutes`, and PROTOCOL.md's table of names ("Features").
+  `Tests/Bridge/bridge.test.js`, whose order it checks), `MAC_FEATURES`, `MACHINE_FEATURES`, and
+  PROTOCOL.md's table of names ("Features").
 - **A branch from before these were one a line** (#396) merges main into itself first, where the
   old lines conflict as they always did, and puts its names back one a line, in order. Merged the
   other way, into main, `features.ts`'s union takes its old line whole beside the new ones: it
-  still builds, with names twice, and only the tests catch it.
-- **What's written from those**: `./scripts/route-shapes.sh` writes `routes/shapes/answers.json`,
-  `routes/features.json` (each box's `kuvo/info` features, which both route runners check) and
-  the Mac app's `KuvoCode/Stores/BoxFeatures.swift`; `./scripts/build-box.sh` and
-  `./scripts/build-agents.sh` write `kuvo-link.js` and `kuvo-agents.js`. Never edit them. After a
-  merge, run the three scripts again and commit what they write: that settles a conflict in
-  one (take either side first: names added side by side conflict in the JSON, and the bundles
-  always do), and CI's `--check` fails on one that isn't what its sources write.
+  still builds, with names twice, and only the tests and `route-shapes.sh` catch it.
+- **What's written from those**: `./scripts/route-shapes.sh` writes `routes/shapes/answers.json`
+  and `routes/features.json` (each box's `kuvo/info` features, which both route runners check);
+  `./scripts/build-box.sh` and `./scripts/build-agents.sh` write `kuvo-link.js` and
+  `kuvo-agents.js`. Never edit them. After a merge, run the three scripts again and commit what
+  they write: that settles a conflict in one (take either side first: names added side by side
+  conflict in the JSON, and the bundles always do), and the `--check` of each (CI's, and the box's
+  suite for the route shapes) fails on one that isn't what its sources write.
 - **`CHANGELOG.md`**: add lines; it's merged by union too.
 
 ## Pull requests

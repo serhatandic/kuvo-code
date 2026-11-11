@@ -1,5 +1,6 @@
 import AppKit
 import ClientDesign
+import OpenCodeKit
 import Quartz
 import SwiftUI
 import UniformTypeIdentifiers
@@ -399,8 +400,8 @@ private struct FileTreeView: View {
                 rows
             }
         }
-        .contextMenu {
-            Button("Reload") { tree.reload() }
+        .heldContextMenu {
+            HeldRow.button("Reload") { tree.reload() }
         }
     }
 
@@ -558,11 +559,11 @@ private struct TreeRow: View {
         }
         .buttonStyle(.plain)
         .clickablePointer()
-        .contextMenu {
+        .heldContextMenu {
             if entry.url.isFileURL {
-                Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([entry.url]) }
+                HeldRow.button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([entry.url]) }
             }
-            Button("Copy Path") { copyPath(entry.url) }
+            HeldRow.button("Copy Path") { copyPath(entry.url) }
         }
     }
 }
@@ -622,6 +623,11 @@ struct FileViewer: View {
     @Environment(\.isPanelShown) private var isShown
     @State private var content: Content?
     @State private var showsSource = false
+    @State private var pictureScale: CGFloat = 1
+    @State private var pictureFitScale: CGFloat = 1
+    /// The conversation's pictures that are files, in its order: a picture here that's one of them
+    /// turns to the one before or after it, as the viewer does.
+    @State private var pictureFiles: [String] = []
 
     enum Content {
         case text(String)
@@ -670,13 +676,9 @@ struct FileViewer: View {
                                 app.utilities.addToMessage?("@\(mention):\(range)")
                             }
                         case .image(let image):
-                            ScrollView([.horizontal, .vertical]) {
-                                Image(nsImage: image)
-                                    .resizable()
-                                    .aspectRatio(contentMode: .fit)
-                                    .frame(maxWidth: image.size.width, maxHeight: image.size.height)
-                                    .padding(20)
-                            }
+                            PictureCanvas(image: image, scale: $pictureScale, fitScale: $pictureFitScale, name: url.lastPathComponent, turns: pictureTurns)
+                                .padding(20)
+                                .id(url)
                         case .unavailable(let why):
                             ContentUnavailableView("No Preview", systemImage: "doc", description: Text(why))
                         case .preview where !url.isFileURL:
@@ -693,11 +695,15 @@ struct FileViewer: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            // A picture swiped to the next doesn't slide out over the tree.
+            .clipped()
         }
         .task(id: "\(url.absoluteString)\n\(app.utilities.fileShown)\n\(isShown)") {
             // The panel hidden, it's read again as it shows.
             guard isShown else { return }
+            pictureScale = 1
             content = await Self.load(url, from: RemoteFolder.parse(url).map { app.box($0.machine) })
+            if case .image? = content { pictureFiles = conversationPictureFiles() }
             // Changed on disk (by the agent, say): shown again as it is. A machine's file is read
             // again when it's shown again, which reading it each time would cost a round trip for.
             guard url.isFileURL else { return }
@@ -711,6 +717,48 @@ struct FileViewer: View {
                 }
             }
         }
+    }
+
+    /// The picture before or after this one among the conversation's, opened here in its place.
+    private var pictureTurns: PictureCanvas.Turns? {
+        let files = pictureFiles
+        guard let at = files.firstIndex(of: Self.pictureKey(url)) else { return nil }
+        let utilities = app.utilities
+        return PictureCanvas.Turns(canTurn: { files.indices.contains(at + $0) }) { direction in
+            guard files.indices.contains(at + direction), let next = URL(string: files[at + direction]) else { return }
+            utilities.open(next)
+        }
+    }
+
+    /// The pictures of the conversation you work in that are files, here or on its machine.
+    private func conversationPictureFiles() -> [String] {
+        let inView = app.utilities.inView
+        let set: ConversationPictureSet
+        if let group = inView.group.flatMap(BotGroups.groupID(fromTab:)) {
+            set = ConversationPictureSet(group: group, groups: app.chats, bots: app.bots)
+        } else if let session = inView.worksBeside ?? inView.session, let model = app.workspace.model(for: session) {
+            set = ConversationPictureSet(model: model)
+        } else {
+            return []
+        }
+        // A file shown again (changed since) is the same file here: each once, where it came first.
+        var seen = Set<String>()
+        return set.items.compactMap { item -> String? in
+            guard item.isImage else { return nil }
+            switch item {
+            case .local(let url): return Self.pictureKey(url)
+            case .path(let path): return Self.pictureKey(URL(filePath: path))
+            case .stored(let file, _):
+                guard case .uri(let uri)? = file.source, !uri.hasPrefix("data:"), let url = URL(string: uri) else { return nil }
+                return Self.pictureKey(url)
+            }
+        }
+        .filter { seen.insert($0).inserted }
+    }
+
+    /// A file's address, the same however it was written.
+    private static func pictureKey(_ url: URL) -> String {
+        (url.isFileURL ? url.standardizedFileURL : url).absoluteString
     }
 
     /// The file a Markdown file's link names (`link`, in `file`, in the project folder `root`):

@@ -126,10 +126,12 @@ side panel and the usage menu.
   new port and token each launch. They read a page the way
   [browser-use](https://github.com/browser-use/browser-use) does, as numbered
   interactive elements, and every step happens in the browser you see.
-- **On a machine, the browser** is Chrome for Testing, run headless,
-  sent from the Mac to `~/.kuvo-code/browser`, on Linux with every library and
-  font it needs (Enterprise Linux 8 builds, pinned with their checksums by
-  `scripts/browser-runtime.py`), so nothing is installed on the system. A
+- **On a machine, the browser** is Chrome for Testing, run headless, which the
+  machine's box downloads itself from Google into `~/.kuvo-code/browser`, on
+  Linux with every library and font it needs (Enterprise Linux 8 builds from
+  Rocky Linux), each file pinned with its checksum by
+  `scripts/browser-runtime.py` and checked before it's unpacked, so nothing is
+  installed on the system and no Mac has to send it. A
   helper the engine's own runtime runs (`kuvo-browser.js`) keeps it going,
   drives it over a pipe rather than a port, gives the engine the same tools,
   and streams the page to the panel over SSH.

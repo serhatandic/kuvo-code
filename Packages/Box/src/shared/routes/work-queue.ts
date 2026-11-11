@@ -4,10 +4,21 @@
 
 import { any, bool, BYTES, list, map, nullable, number, object, oneOf, type RouteShape, string, words } from "../shape";
 
-const WHO = oneOf(object({ user: bool }), object({ session: string, name: string }));
+// (You, an agent, or another shape kept as it came: an outside tracker's change, later.)
+const WHO = oneOf(object({ user: bool }), object({ session: string, name: string }), map(any));
 const STAMP = object({ at: number, by: WHO });
 const NOTE = object({ at: number, by: WHO, text: string });
 const PROGRESS = object({ "value?": number, "note?": string });
+
+/** An outside source's item (an issue or a pull request), named by its ref, never numbered; `name`
+ * is what a client shows (`kuvo-ai#12`). */
+const SOURCE = object({ kind: string, ref: string, "url?": string, "host?": string, "id?": string, "name?": string });
+/** Where its issue or pull request stands on GitHub, as last read, and since when: open, draft,
+ * completed, not_planned, merged or closed (a newer box may say more); `gone` when it couldn't be
+ * read since; `checked`, when another computer last asked GitHub of it. */
+const SEEN = object({ state: string, at: number, "checked?": number, "gone?": bool });
+/** Another of your computers, the one an item is on. */
+const COMPUTER = object({ key: string, name: string, kind: words("mac", "machine"), "id?": string });
 
 export const QUEUE_CATEGORY = object({ id: string, name: string, builtIn: bool });
 
@@ -28,7 +39,13 @@ export const QUEUE_ITEM = object({
   fileCount: number,
   linkCount: number,
   "handedBy?": string,
-  "source?": object({ kind: string, ref: string, "url?": string }),
+  "source?": SOURCE,
+  "seen?": SEEN,
+  "keptIn?": string,
+  "struck?": bool,
+  "closesOn?": string,
+  "handing?": object({ to: string, name: string }),
+  "computer?": COMPUTER,
   created: STAMP,
   updated: STAMP,
   "doneAt?": number,
@@ -41,7 +58,7 @@ export const QUEUE_ITEM_WHOLE = object({
   body: string,
   notes: list(NOTE),
   files: list(object({ name: string, size: number, type: string, at: number })),
-  links: list(object({ url: string, "title?": string })),
+  links: list(object({ url: string, "title?": string, "kind?": string, "ref?": string })),
   handed: list(object({ from: string, to: string, at: number })),
 });
 
@@ -49,9 +66,13 @@ export const QUEUE_ITEM_WHOLE = object({
 export const QUEUE_OWNER = object({ owner: string, kind: words("bot", "session", "group"), title: nullable(string), "bot?": object({ id: string, name: string }), "startedBy?": string });
 
 /** An owner's view. */
-export const QUEUE_VIEW = object({ owner: string, categories: list(QUEUE_CATEGORY), items: list(QUEUE_ITEM), owners: list(QUEUE_OWNER), removed: list(QUEUE_ITEM) });
+export const QUEUE_VIEW = object({ owner: string, categories: list(QUEUE_CATEGORY), items: list(QUEUE_ITEM), owners: list(QUEUE_OWNER), removed: list(QUEUE_ITEM),
+  computers: list(object({ ...COMPUTER.object, at: number })) });
 
-const REF = nullable(object({ id: string, "number?": number, title: string, category: string, inProgress: bool, owner: string, "removed?": bool }));
+const REF = nullable(object({ id: string, "number?": number, "source?": SOURCE, "seen?": SEEN, "struck?": bool, "closesOn?": string, title: string, category: string, inProgress: bool, owner: string, "removed?": bool, "computer?": COMPUTER }));
+
+// An item on another of your computers: changed there.
+const ON_ANOTHER = object({ message: string, computer: COMPUTER });
 
 export const WORK_QUEUE_ROUTES: RouteShape[] = [
   { route: "GET kuvo/work-queue", answers: { 200: QUEUE_VIEW } },
@@ -59,14 +80,15 @@ export const WORK_QUEUE_ROUTES: RouteShape[] = [
   { route: "GET kuvo/work-queue/tools", answers: { 200: object({ tools: list(any), instructions: string }) } },
   { route: "POST kuvo/work-queue/tools", answers: { 200: object({ text: string, isError: bool }) } },
   { route: "GET kuvo/work-queue/refs", answers: { 200: object({ refs: map(REF) }) } },
+  { route: "POST kuvo/work-queue/refs", answers: { 200: object({ refs: map(REF) }) } },
   { route: "GET kuvo/work-queue/categories", answers: { 200: object({ categories: list(QUEUE_CATEGORY) }) } },
   { route: "POST kuvo/work-queue/categories", answers: { 200: object({ categories: list(QUEUE_CATEGORY) }) } },
   { route: "POST kuvo/work-queue/import", answers: { 200: object({ added: number, byCategory: map(number), waiting: number, skipped: list(string), said: string }) } },
   { route: "GET kuvo/work-queue/items/:item", answers: { 200: object({ item: QUEUE_ITEM_WHOLE }) } },
   { route: "GET kuvo/work-queue/items/:item/files/:name", answers: { 200: BYTES } },
-  { route: "POST kuvo/work-queue/items/:item/move", answers: { 200: object({ item: QUEUE_ITEM }) } },
-  { route: "POST kuvo/work-queue/items/:item/restore", answers: { 200: object({ item: QUEUE_ITEM }) } },
-  { route: "DELETE kuvo/work-queue/items/:item", answers: { 200: object({ item: QUEUE_ITEM }) } },
+  { route: "POST kuvo/work-queue/items/:item/move", answers: { 200: object({ item: QUEUE_ITEM }), 409: ON_ANOTHER } },
+  { route: "POST kuvo/work-queue/items/:item/restore", answers: { 200: object({ item: QUEUE_ITEM }), 409: ON_ANOTHER } },
+  { route: "DELETE kuvo/work-queue/items/:item", answers: { 200: object({ item: QUEUE_ITEM }), 409: ON_ANOTHER } },
 ];
 
 

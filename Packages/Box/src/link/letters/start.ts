@@ -12,8 +12,8 @@ import { asked, call, engineGet } from "../engine/client";
 import { writtenByYou } from "../engine/queue";
 import { messageID } from "../engine/sessions";
 import { BOTS, CHATS, HERE, homeFolder } from "../home";
-import { realish } from "../fence/policy";
-import { changeProjects, PROJECT_FOLDERS_ENTRY, PROJECTS_FILE, projectFoldersNote, readProjects } from "../areas/projects";
+import { askedAbout, realish } from "../fence/policy";
+import { changeProjects, filedUnder, PROJECT_FOLDERS_ENTRY, PROJECTS_FILE, projectFoldersNote, readProjects } from "../areas/projects";
 import { projectOf as projectOfFolder, readWorktrees } from "../areas/worktree-records";
 import { answerWorktrees, settleNewSession } from "../areas/worktrees";
 import { composeLetter } from "./letter";
@@ -28,6 +28,7 @@ import { approvalOf, approvalRules, defaultApproval, effectiveApproval, isApprov
 import { settleAgain } from "../areas/approval";
 import { noteFullAccess } from "../work/full";
 import { keptFromSessions } from "../work/reviewer";
+import { findLinkedTrees, inProjectWorktree, inTime } from "../work/project-trees";
 import type { Approval } from "../work/approval";
 import { linkSession, pauseGoal, runningGoal } from "../work/goals";
 import { nextMidnight, startOfDay } from "../work/clock";
@@ -42,9 +43,9 @@ import type { SessionPlace } from "./letter";
 
 /** What a session's start is given: its task, and what's optional: where (a folder, a project by
  * name or folder, a chat), in a worktree, on which model and effort, in which mode, with which
- * approval, on Autopilot (a client's start; a conversation's starts take its own), and what its
- * starter hears of it (`wake`). (Unknown fields are ignored, so a newer
- * client can ask an older box.) */
+ * approval, on Autopilot (a client's start; a conversation's starts take its own), what its
+ * starter hears of it (`wake`), and whether a bot's is told to review its work (`review`).
+ * (Unknown fields are ignored, so a newer client can ask an older box.) */
 export interface StartGiven {
   task?: unknown;
   title?: unknown;
@@ -60,6 +61,8 @@ export interface StartGiven {
   wake?: unknown;
   /** The goal's step it works on (its number or id), for that step's track. */
   step?: unknown;
+  /** false: a bot's session isn't told to review its work with reviewer subagents, only to report. */
+  review?: unknown;
   computer?: unknown;
   wait?: unknown;
 }
@@ -119,8 +122,9 @@ export interface StartPlace {
 export const goalNote = "This is part of a goal the user may not be watching: what you ask can wait a while, so carry on with what doesn't depend on it, and report what you couldn't do.";
 /** What a session a bot started is told with its task: its half of the playbook (PROTOCOL.md,
  * "Work"), in the task's text, so it works with any agent. `heard`: its finish is told its bot with
- * its last reply, so its report isn't sent again as a message (#270). */
-export const sessionNote = (bot: string, heard = true) => `You were started by ${bot}, a bot coordinating this work. When you're done, review your work with reviewer subagents, fix what they find, and end with a short report as your last reply: what you did, what the reviewers found and how you fixed it, and anything left. ${heard ? `${bot} gets that reply when you finish: don't also send it with send_message.` : `${bot} reads that report.`}`;
+ * its last reply, so its report isn't sent again as a message (#270). `review`: false for a task its
+ * bot says needs no review, which is told only to report (#554). */
+export const sessionNote = (bot: string, heard = true, review = true) => `You were started by ${bot}, a bot coordinating this work. When you're done, ${review ? "review your work with reviewer subagents, fix what they find, and end with a short report as your last reply: what you did, what the reviewers found and how you fixed it, and anything left" : "end with a short report as your last reply: what you did, and anything left"}. ${heard ? `${bot} gets that reply when you finish: don't also send it with send_message.` : `${bot} reads that report.`}`;
 
 // What a start's wake names: what its starter hears of it.
 const WAKES = ["finished", "asks"];
@@ -184,6 +188,26 @@ function projectOf(folder: string): { name: string; folders: readonly string[] }
   return { name: known?.name ?? path.basename(directory), folders: directory !== folder ? [] : (known?.folders ?? []) };
 }
 
+// The project a folder is, or is another folder of, kept by another name for the same place (a
+// link: an agent's folder is named by where it really is); null for none.
+async function keptAs(folder: string): Promise<string | null> {
+  const projects = readProjects().filter(each => !each.removed);
+  if (projects.some(each => each.directory === folder)) return null;
+  await askedAbout(projects.flatMap(each => [each.directory, ...each.folders]));
+  const at = realish(folder);
+  return projects.find(each => realish(each.directory) === at)?.directory
+    ?? projects.find(each => each.folders.some(other => realish(other) === at))?.directory ?? null;
+}
+
+// A project's name here, by its folder.
+const projectName = (directory: string): string => readProjects().find(each => each.directory === directory)?.name ?? path.basename(directory);
+
+// The folder a session was made in and the project it's filed under there (`kuvo.filed`), if any.
+function filedOf(session: Partial<EngineSession> | null | undefined): { folder: string; project: string } | null {
+  const filed = session?.metadata?.kuvo?.filed;
+  return isObject(filed) && typeof filed.folder === "string" && typeof filed.project === "string" ? { folder: filed.folder, project: filed.project } : null;
+}
+
 // The project `named` names here (its name, or its folder), or null.
 function findProject(named: string): { directory: string; name: string } | null {
   const written = named.trim().replace(/^~(?=$|\/)/, homeFolder());
@@ -192,6 +216,16 @@ function findProject(named: string): { directory: string; name: string } | null 
   return found ? { directory: found.directory, name: found.name ?? path.basename(found.directory) } : null;
 }
 const projectNames = () => readProjects().filter(each => !each.removed).map(each => each.name ?? path.basename(each.directory)).slice(0, 12);
+
+// Whether `folder` is in the project at `directory`: in its folder or its other folders, or in one
+// of its worktrees, wherever that is (by where each really is).
+async function inProject(folder: string, directory: string): Promise<boolean> {
+  await askedAbout([folder, directory]);
+  const at = realish(folder);
+  const others = readProjects().find(each => each.directory === directory)?.folders ?? [];
+  await askedAbout(others);
+  return [directory, ...others].map(realish).some(each => at === each || at.startsWith(each + "/")) || inTime(inProjectWorktree(at, directory), false);
+}
 
 /** A new session with `given`'s task, from the conversation `by` (null: from a client). A bot's
  * (and its sessions') are its work: marked so, held to the limits you set for it, if any, with a
@@ -224,33 +258,45 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
   const parentFolder = parent?.location?.directory ?? parent?.directory;
   let folder = parentFolder ? (isBotFolder(parentFolder) ? CHATS : parentFolder) : null;
   let projectDirectory: string | null = null;
+  // The project named, where one is: a folder given with it is one in it (or in one of its
+  // worktrees, wherever that is), which the session works in, as the project's.
+  let named: { directory: string; name: string } | null = null;
   if (given.chat === true) {
     folder = CHATS;
-  } else if (typeof given.project === "string" && given.project.trim()) {
-    const found = findProject(given.project);
-    if (!found) {
-      const names = projectNames();
-      return no(400, `There's no project called ${given.project.trim()} on ${HERE}.${names.length ? ` Its projects: ${names.join(", ")}.` : ""}`);
+  } else {
+    if (typeof given.project === "string" && given.project.trim()) {
+      named = findProject(given.project);
+      if (!named) {
+        const names = projectNames();
+        return no(400, `There's no project called ${given.project.trim()} on ${HERE}.${names.length ? ` Its projects: ${names.join(", ")}.` : ""}`);
+      }
+      folder = projectDirectory = named.directory;
     }
-    folder = projectDirectory = found.directory;
-  } else if (typeof given.folder === "string" && given.folder.trim()) {
-    const written = given.folder.trim();
-    const full = written.replace(/^~(?=$|\/)/, homeFolder());
-    let isFolder = false;
-    try { isFolder = fs.statSync(full).isDirectory(); } catch {}
-    if (!path.isAbsolute(full) || !isFolder) return no(400, `${written} isn't a folder on ${HERE}. Give a full path to one.`);
-    // (Its commands would write it whole, in the sandbox: an agent in Auto never starts one where
-    // that's real damage, its own conversation's folder and your projects aside; one in Full
-    // Access, anywhere, as its own commands go.)
-    const ours = [...readProjects().filter(each => !each.removed).flatMap(each => [each.directory, ...(each.folders ?? [])]),
-      ...readWorktrees().map(each => each.folder ?? each.root), ...(parentFolder ? [parentFolder] : [])].map(realish);
-    // (An agent's by where it really is as it's checked: a link swapped in after is never followed.)
-    const at = by ? fs.realpathSync(full) : full;
-    const bridgeNow = place.bridge?.() ?? null;
-    const fullAccess = Boolean(by?.place && approvalOf(by.place.data, { agents: Boolean(bridgeNow && by.place.target.port === bridgeNow.port), bot: Boolean(botOfConversation(by.session) ?? worksFor(by.place.data)) }).effective === "fullAccess");
-    const kept = by && !fullAccess && !ours.includes(at) ? keptFromSessions(at) : null;
-    if (kept) return no(403, `An agent in Auto can't start a session in ${written} on ${HERE}: ${kept}. Ask the user to start it there.`);
-    folder = isBotFolder(at) ? CHATS : at;
+    if (typeof given.folder === "string" && given.folder.trim()) {
+      const written = given.folder.trim();
+      const full = written.replace(/^~(?=$|\/)/, homeFolder());
+      // (Each folder it's checked by that macOS may ask about, asked off the box's thread first: a
+      // project on your Desktop holds whoever opens it until you answer, and the box answers no one
+      // meanwhile.)
+      const oursGiven = [...readProjects().filter(each => !each.removed).flatMap(each => [each.directory, ...(each.folders ?? [])]),
+        ...readWorktrees().map(each => each.folder ?? each.root), ...(parentFolder ? [parentFolder] : [])];
+      if (path.isAbsolute(full)) await askedAbout([full, ...(by ? oursGiven : [])]);
+      let isFolder = false;
+      try { isFolder = fs.statSync(full).isDirectory(); } catch {}
+      if (!path.isAbsolute(full) || !isFolder) return no(400, `${written} isn't a folder on ${HERE}. Give a full path to one.`);
+      // (Its commands would write it whole, in the sandbox: an agent in Auto never starts one where
+      // that's real damage, its own conversation's folder and your projects aside; one in Full
+      // Access, anywhere, as its own commands go.)
+      const ours = by ? oursGiven.map(realish) : [];
+      // (An agent's by where it really is as it's checked: a link swapped in after is never followed.)
+      const at = by ? fs.realpathSync(full) : full;
+      const bridgeNow = place.bridge?.() ?? null;
+      const fullAccess = Boolean(by?.place && approvalOf(by.place.data, { agents: Boolean(bridgeNow && by.place.target.port === bridgeNow.port), bot: Boolean(botOfConversation(by.session) ?? worksFor(by.place.data)) }).effective === "fullAccess");
+      const kept = by && !fullAccess && !ours.includes(at) ? await keptFromSessions(at) : null;
+      if (kept) return no(403, `An agent in Auto can't start a session in ${written} on ${HERE}: ${kept}. Ask the user to start it there.`);
+      if (named && !await inProject(at, named.directory)) return no(400, `${written} isn't in ${named.name} on ${HERE}: give a folder in it or in one of its worktrees, or leave out project.`);
+      folder = isBotFolder(at) ? CHATS : at;
+    }
   }
   if (!folder) return no(400, "Give the folder it works in (folder), as a full path.");
   if (given.mode !== undefined && given.mode !== null && given.mode !== "build" && given.mode !== "plan") return no(400, "mode is build or plan.");
@@ -345,6 +391,11 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
   // In a worktree of its project's, on a branch of its own (taken away again should the session not
   // start).
   let madeTree: string | null = null;
+  // (A worktree of its own is made from the project: one given a folder too would leave that.)
+  if (given.worktree === true && named && folder && realish(folder) !== realish(named.directory)) {
+    giveBack();
+    return no(400, "Give a folder or worktree: true, not both: a new worktree is made from the project.");
+  }
   if (given.worktree === true) {
     const project = projectDirectory ?? (folder !== CHATS ? projectOfFolder(folder) : null);
     if (!project) {
@@ -375,7 +426,19 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
   const asBefore = Boolean(from && !from.stored && wanted === starters && !bot);
   const applied = asBefore ? wanted : effectiveApproval(wanted, { agents }).approval;
   const got = applied !== (requested ?? wanted) && lowerOf(applied, requested ?? wanted) === applied ? applied : undefined;
-  const project = projectOf(folder);
+  // (A worktree made elsewhere is its project's, as the projects' worktrees are found now.)
+  if (folder !== CHATS) await inTime(findLinkedTrees(), undefined, 3_000);
+  // The project it's filed under: the one named; else its folder's (a worktree's, or a project's
+  // other folder's); else, in its starter's folder, the one its starter is filed under there. One
+  // filed under another folder than its own carries it from the first (`kuvo.filed`), so every
+  // client shows it there from its first listing: one may hear of the session from its engine
+  // before `kuvo/projects` says whose a new worktree is, and that never names a subfolder.
+  const startersFiled = filedOf(parent);
+  const mapped = folder === CHATS ? null : filedUnder(folder);
+  const its = mapped === null || mapped !== folder || named ? mapped : await keptAs(folder) ?? folder;
+  const under = its === null ? null : named?.directory ?? (its !== folder ? its : startersFiled?.folder === folder ? startersFiled.project : folder);
+  const filed = under && under !== folder ? { folder, project: under } : null;
+  const project = !under ? null : realish(under) !== realish(folder) ? { name: projectName(under), folders: [] as readonly string[] } : projectOf(under);
   const title = typeof given.title === "string" && given.title.trim() ? given.title.trim() : null;
   const rules = rulesFor(applied, parent, project?.folders ?? []);
   // Its mode: the one asked for, else the conversation's (one that plans starts sessions that plan).
@@ -384,7 +447,7 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
   // the box can't place starts it asking.
   const autopilot = by ? Boolean(by.place && isAutopilot(by.place.data)) : given.autopilot === true;
   // (Kept with it as it's made, so the box never takes it for one a client made without saying.)
-  const marks = { ...(by?.place ? { startedBy: by.session } : {}), ...(asBefore ? {} : { approval: wanted, applied }), ...(autopilot ? { autopilot: true } : {}) };
+  const marks = { ...(by?.place ? { startedBy: by.session } : {}), ...(asBefore ? {} : { approval: wanted, applied }), ...(autopilot ? { autopilot: true } : {}), ...(filed ? { filed } : {}) };
   let session: string;
   try {
     const made = await call(target, "POST", "/api/session", { location: { directory: folder }, ...(title ? { title } : {}), ...(agent ? { agent } : {}), ...(model ? { model } : {}), permissions: rules, metadata: { kuvo: marks } }, place.signal);
@@ -407,7 +470,7 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
   let wakes = wakesFrom(given.wake, Boolean(ownBot), given.wait === true);
   // What its starter hears of it, only once it's marked so: none for an agent outside any
   // conversation here, or for a mark the engine didn't take (it's told to write to it instead).
-  const kuvo = { ...(by?.place ? { startedBy: by.session, ...(bot ? { by: bot, depth } : {}), ...(wakes.length ? { wake: wakes } : {}) } : {}), ...(asBefore ? {} : { approval: wanted, applied }), ...(autopilot ? { autopilot: true } : {}) };
+  const kuvo = { ...(by?.place ? { startedBy: by.session, ...(bot ? { by: bot, depth } : {}), ...(wakes.length ? { wake: wakes } : {}) } : {}), ...(asBefore ? {} : { approval: wanted, applied }), ...(autopilot ? { autopilot: true } : {}), ...(filed ? { filed } : {}) };
   const marked = await call(target, "PATCH", `/api/session/${address}`, { metadata: { kuvo } }).then(() => true, () => false);
   // (What it comes to may have changed while it was made.)
   if (marked && !asBefore) await settleAgain(target, session, agents, place.signal).catch(() => {});
@@ -422,7 +485,7 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
   const waits = given.wait === true;
   const id = messageID();
   const heard = wakes.includes("finished");
-  const text = by ? composeLetter(by.name, by.session, task, waits, heard) + (bot ? `\n\n${sessionNote(bot.name, heard)}${goal ? `\n\n${goalNote}` : ""}` : "") : task;
+  const text = by ? composeLetter(by.name, by.session, task, waits, heard) + (bot ? `\n\n${sessionNote(bot.name, heard, given.review !== false)}${goal ? `\n\n${goalNote}` : ""}` : "") : task;
   try {
     await asked(target, "POST", `api/session/${address}/prompt`, { id, text, delivery: "steer" });
   } catch (error) {

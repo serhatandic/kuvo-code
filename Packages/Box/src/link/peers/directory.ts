@@ -55,10 +55,8 @@ export const keptAgent = ({ session, name, kind, project, about, machine, id, lo
   ...(kind === "bot" && keptLook(look) ? { look: keptLook(look) } : {}),
   ...(typeof project === "string" && project ? { project: project.slice(0, 200) } : {}), ...(typeof about === "string" && about ? { about: about.slice(0, 500) } : {}),
   ...(typeof machine === "string" && machine ? { machine: machine.slice(0, 200) } : {}) });
-// What a peer says it answers (`features`, as kuvo/info's), kept with its agents. (Before the lists
-// were in order a box kept 80, which is why a box's mail gives what those check first:
-// `mailedFeatures`.)
-export const keptFeatures = (features: unknown): string[] => (Array.isArray(features) ? features.filter((each): each is string => typeof each === "string" && each.length <= 60).slice(0, 400) : []);
+// What a peer says it answers (`features`, as kuvo/info's), kept with its agents.
+export const keptFeatures = (features: unknown): string[] => (Array.isArray(features) ? features.filter((each): each is string => typeof each === "string" && each.length <= 60).slice(0, 300) : []);
 
 // The conversations a peer says it moved away, and where each lives now (PROTOCOL.md, "Peers").
 const keptMoved = (moved: unknown[]): NonNullable<ToldAgents["moved"]> => moved.filter((each): each is { session: string; key: string; at: number } => isObject(each)

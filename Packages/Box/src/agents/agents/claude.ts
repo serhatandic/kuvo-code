@@ -413,10 +413,19 @@ export class ClaudeAgent implements Agent {
    * Its plan's limits (claude-limits.ts), with Kuvo Code's own sign-in only: never yours in
    * Terminal. On Linux they're read from Anthropic, whose limit on reads is the computer's, so one
    * turned away holds every Claude account here (`bucket`); on a Mac its token can't read them, so
-   * only what its turns hear tells them.
+   * only what its turns hear tells them, and who it's for is as Anthropic told Claude Code running
+   * with it.
    */
   readonly limits: LimitsSource = ClaudeAgent.keychain
-    ? { every: CLAUDE_LIMITS_EVERY }
+    ? {
+        every: CLAUDE_LIMITS_EVERY,
+        // (Signed in to another account since, what its turns told goes: limits.ts, `switched`.)
+        signIn: () => fingerprint(this.token()),
+        identity: () => {
+          const token = this.token()
+          return token ? claudeIdentity(this.configHome, token) : undefined
+        },
+      }
     : {
         every: CLAUDE_LIMITS_EVERY,
         bucket: "anthropic",

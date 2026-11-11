@@ -187,6 +187,9 @@ export const CHATS = process.env.KUVO_CHATS || path.join(K, "chats");
 // they go with their session here too (`letAttachmentsGo`).
 export const MAC_ATTACHMENTS = process.env.KUVO_MAC_ATTACHMENTS || null;
 
+/** Where sessions' files are kept, a folder each: this box's, and on this Mac's box, the Mac app's. */
+export const attachmentRoots = (): string[] => [path.join(K, "attachments"), ...(MAC_ATTACHMENTS ? [MAC_ATTACHMENTS] : [])];
+
 // This Mac's box (BoxProcess says so as it starts it, `KUVO_BOX=mac`): its bots are the Mac's own,
 // made with the kit its app gives it and told they run on this Mac; it names no machine, keeps no
 // notes for a Mac to take in, and goes by the Mac's own clock. Its settings are the app's engine's,
@@ -194,6 +197,10 @@ export const MAC_ATTACHMENTS = process.env.KUVO_MAC_ATTACHMENTS || null;
 // start; its keys are in the Mac's Keychain, which the engine reads from the files the app writes
 // them to (KUVO_KEYS); and the servers that use a Mac's own apps run here.
 export const IS_MAC = process.env.KUVO_BOX === "mac";
+// The versions of this Mac's app and of the engine it brings, as the app that started it says
+// (BoxProcess: KUVO_APP_VERSION, KUVO_ENGINE_VERSION), for what it says of itself with the app closed.
+export const MAC_APP_VERSION = process.env.KUVO_APP_VERSION || null;
+export const MAC_ENGINE_VERSION = process.env.KUVO_ENGINE_VERSION || null;
 // This box's computer, as what it says names it.
 export const HERE = IS_MAC ? "this Mac" : "this machine";
 // Where its engine's settings are: this Mac's app's engine's (a machine's are in `box`).

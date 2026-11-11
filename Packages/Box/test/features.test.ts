@@ -2,10 +2,8 @@ import "./safety"
 import { expect, test } from "bun:test"
 import { readFileSync } from "node:fs"
 import { join } from "node:path"
-import { FEATURES, MAC_BOX_FEATURES, MACHINE_FEATURES } from "../src/shared/features"
-import { MAC_FEATURES, MAC_FEATURES_AT_TIMES } from "../src/shared/routes/mac"
-import { keptFeatures } from "../src/link/peers/directory"
-import { mailedFeatures } from "../src/link/peers/agents"
+import { FEATURES } from "../src/shared/features"
+import { MAC_FEATURES, MACHINE_FEATURES, macFeatures } from "../src/shared/routes/mac"
 
 // The lists of what a box answers are kept one name a line, in order, so branches that each add a
 // name merge without a conflict (features.ts by union: .gitattributes). A list out of order, or a
@@ -13,9 +11,10 @@ import { mailedFeatures } from "../src/link/peers/agents"
 
 const inOrder = <T extends string>(names: readonly T[]): T[] => [...new Set(names)].sort()
 
-test("every box's names and the Mac's own are each in order, each name once", () => {
+test("every box's names, the Mac's own and a machine's own are each in order, each name once", () => {
   expect([...FEATURES]).toEqual(inOrder(FEATURES))
   expect([...MAC_FEATURES]).toEqual(inOrder(MAC_FEATURES))
+  expect([...MACHINE_FEATURES]).toEqual(inOrder(MACHINE_FEATURES))
 })
 
 test("features.ts has one name a line, so what two branches add merges line by line", () => {
@@ -26,21 +25,10 @@ test("features.ts has one name a line, so what two branches add merges line by l
   expect(lines.map(line => JSON.parse(line.trim().slice(0, -1)))).toEqual([...FEATURES])
 })
 
-test("a machine's own names and the Mac's at times are among the names they answer", () => {
+test("a Mac's box names every box's but a machine's own, and the Mac's own, each once", () => {
   for (const name of MACHINE_FEATURES) expect(FEATURES).toContain(name)
-  for (const name of MAC_FEATURES_AT_TIMES) expect(MAC_FEATURES).toContain(name)
-  expect([...MAC_BOX_FEATURES, ...MACHINE_FEATURES].sort()).toEqual([...FEATURES])
-})
-
-test("a peer from before the lists were in order still finds what it checks among the first 80 a box's mail gives", () => {
-  // As many as this Mac answers, and more to come.
-  const many = inOrder([...FEATURES, ...MAC_FEATURES, ...Array.from({ length: 60 }, (_, index) => `zz.later-${index}`)])
-  expect(many.length).toBeGreaterThan(80)
-  const mailed = mailedFeatures(many)
-  expect(inOrder(mailed)).toEqual(many)
-  // What such a box kept of it, and checks.
-  const older = mailed.slice(0, 80)
-  for (const name of ["groups.seats", "letters-read", "moves", "moves.agents", "moves.check", "work.elsewhere"]) expect(older).toContain(name)
-  // A box now keeps them all.
-  expect(keptFeatures(mailed)).toEqual(mailed)
+  const mac = macFeatures()
+  expect(inOrder(mac)).toEqual(inOrder([...FEATURES.filter(name => !(MACHINE_FEATURES as readonly string[]).includes(name)), ...MAC_FEATURES]))
+  expect(new Set(mac).size).toBe(mac.length)
+  for (const name of MACHINE_FEATURES) expect(mac).not.toContain(name)
 })

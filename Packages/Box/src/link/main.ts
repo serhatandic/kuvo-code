@@ -33,6 +33,9 @@ import { setBoxKey } from "./areas/box-keys";
 import { addMacDefaults, changeSettings, ownsSettings, readSettings } from "./areas/config";
 import { engineConnect } from "./areas/engine";
 import { answerOnce, reconnectEverywhere, upgradeBeforeEngine, upgradeIntegrations } from "./areas/integrations";
+import { readApart } from "./github/graphql";
+import "./work-queue/github";
+import "./glance/github";
 import { keepSkillTrashClear } from "./areas/skills";
 import { sendWakes } from "./areas/wakes";
 import { finishDeletes, forgetLeftKeys } from "./bots/edit";
@@ -52,6 +55,7 @@ import { keepEngineDefaults } from "./engine/defaults";
 import { watchBox } from "./engine/watch";
 import { watchMoves } from "./moves/move";
 import { writePrivate } from "./files";
+import { browserStatus, installBrowser, startBrowserInstall } from "./browser/install";
 import { BRIDGE_FILE, IS_MAC, K, NEEDED_FILE, OWN_RUNTIME, PID_FILE, REAL_BOX, RUN, scriptIs, socketKey, takeVaultSecrets, VERSION_FILE } from "./home";
 import { isBridge, keepKeeper, needed, noLongerNeeded, runningBridge, startBridge } from "./keeper";
 import { noteRelay } from "./letters/leave";
@@ -60,6 +64,10 @@ import { SENDING } from "./letters/letter";
 import { watchFolders } from "./follow";
 import { pushRows } from "./work/elsewhere";
 import { pushNumbers } from "./work-queue/numbers";
+import { noteSetupNow } from "./setup/lead";
+import { writeCard } from "./setup/card";
+import { pushQueues } from "./work-queue/across";
+import { handUpkeepSoon } from "./work-queue/hand";
 import { clearStaging } from "./work-queue/ops";
 import { macLinkCheck } from "./mac/link";
 import { macNoticeHold, macTell } from "./mac/notices";
@@ -107,17 +115,23 @@ export { docBytes, MOST_DOC, newSigningSeed, ownSign, readDoc, signDoc, signingK
 export { IS_MAC, LINK_FILE } from "./home";
 export { BRIDGE_VERSION } from "./version";
 export { FEATURES } from "../shared/features";
+export { macFeatures } from "../shared/routes/mac";
 export { messageID } from "./engine/sessions";
 export { forgetMovesInMemory, keepMoving, sendMovesWith, takeMoveMail, watchMoves } from "./moves/move";
 export { movesElsewhere } from "./moves/elsewhere";
 export { applyCompatibility, COMPATIBILITY_FILE, ENGINE_LAYER_FILE, engineConfigContent, learnCompatibility, readCompatibility } from "./engine/compatibility";
 export { MODELS_DUE_FILE, refreshModels, settleDueModels } from "./engine/models";
 export { queueOf, queueWatcher, readQueues, scanQueues, stopSession } from "./engine/queue";
-export { keepReadThroughSummary } from "./work/tree";
+export { keepReadThroughSummary, keepWorkRead, settleWorkRead } from "./work/tree";
+export { readAllOn, readGroups } from "./areas/read-all";
+export { glances, Unreached } from "./areas/glance";
+export { askedSince, forgetAsks, forgetAsksOn, noteAskEvent } from "./glance/asked";
+export { checksOf, pullOf, queryFor, readPulls } from "./glance/github";
+export { linkPull, pullCatcher, readPullLinks } from "./glance/pulls";
 export { letAttachmentsGo } from "./server/attached";
-export { workWatcher } from "./work/wakes";
+export { FIRST_LOOK, WAITING_LOOK, workWatcher } from "./work/wakes";
 export { forgetOldHomes } from "./work/homes";
-export { AT_WORK_LIMIT, FINISH_HOLD_LIMIT, atWorkNow, noteStopped, readBackground, readStopped, stopWork } from "./work/background";
+export { AT_WORK_LIMIT, atWorkNow, noteStopped, readBackground, readStopped, stopWork } from "./work/background";
 export { goalFollowers, goalHolds, settleGoalHolds, lookAtGoals, periodOf, periodEnd, pauseGoal, REVIEW_PAUSE } from "./work/goals";
 export { keptAwake, letGo } from "./work/awake";
 export { macLink, readLink, updateLink, writeLink } from "./state";
@@ -164,8 +178,13 @@ export { forgetOldMacs, leaveMac, macsOf, mailFor, movedOf, noteOnline, openMail
 export { noteDocsChanged } from "./documents/changed";
 export { authorizePhone, confirmPhone, foldPhones, newPairing, pairPhone, removeAsMac, removePhones } from "./phones";
 export { noLongerNeeded } from "./keeper";
-export { changedWork, digestOf, docMails, docsWork, greetWork, ownDoc, takeDoc } from "./documents/work";
-export { peerOf, readPeerAgents, takeAgents } from "./peers/directory";
+export { changedWork, digestOf, docMails, docsWork, greetWork, macPeersBody, ownDoc, takeDoc } from "./documents/work";
+export { leadsNow, noteSetupNow, settleOwnSetup } from "./setup/lead";
+export { settleSetup, sharedMachine } from "./setup/settle";
+export { followedSetup, newSetupID, startsFromOthers } from "./setup/record";
+export { setupView } from "./setup/view";
+export { cardNow, SETUP_CARD, writeCard } from "./setup/card";
+export { keptFeatures, peerOf, readPeerAgents, takeAgents } from "./peers/directory";
 export { composeLetter } from "./letters/letter";
 export { composeAgents } from "./peers/directory";
 export { nameAgents, namedAgents, namesIn } from "./peers/naming";
@@ -175,7 +194,10 @@ export { answered, deliverLeftAnswers, letterMail, letterWent, sendOutbox } from
 export { takeLetter } from "./letters/take";
 export { callAs, callsBack, takeCall } from "./letters/calls";
 export { pushRows, takeRows } from "./work/elsewhere";
-export { askToSend, blockArrived, BLOCK as QUEUE_BLOCK, CLAIM_REACH as QUEUE_CLAIM_REACH, claimNumbers, giveBlock, LOW as QUEUE_LOW, primaryOf, readNumbers, reclaimWaiting, takeBlock, takeNumber } from "./work-queue/numbers";
+export { askToSend, blockArrived, BLOCK as QUEUE_BLOCK, CLAIM_REACH as QUEUE_CLAIM_REACH, claimNumbers, giveBlock, LOW as QUEUE_LOW, notePrimaryNow, primaryOf, pushNumbers, rankedPrimary, readNumbers, reclaimWaiting, takeBlock, takeNumber, takeNumbersMail } from "./work-queue/numbers";
+export { forgetPushed as forgetQueuesTold, itemsElsewhere, pushQueues, takeWorkQueueMail, tellingNow as queueTellingNow, tellQueuesAgain } from "./work-queue/across";
+export { handUpkeep } from "./work-queue/hand";
+export { mailsFor as queueMailsFor, takePart as takeQueuePart } from "./work-queue/parts";
 export { parseBacklog } from "./work-queue/import";
 export { carryWorkQueue, forgetWorkQueues, packWorkQueues, placeWorkQueues } from "./work-queue/moves";
 export { readReach } from "./peers/reach";
@@ -186,13 +208,13 @@ export { peerMail, receiveMail } from "./peers/mail";
 export { pairingLink } from "./phones";
 export { ownRefreshed } from "./server/naming";
 export { FROM_PHONE, fromPhone } from "./server/forward";
-export { stopMacLink } from "./mac/link";
+export { MAC_LINK_FILE, savedMacConfig, stopMacLink } from "./mac/link";
 export { macNoticeHold, macTell } from "./mac/notices";
 export { LETTER_WAIT, macSendOutbox, runMacPeers, stopMacPeers } from "./mac/peers";
 export { setMacPeers } from "./mac/routes";
 export { engineHandler } from "./server/router";
 export { connectOnce, fromRelay, nextTry } from "./relay/connection";
-export { MAC_BOX_ROUTES, macAnswers, macFront, runMacLink } from "./mac/relay";
+export { MAC_APP_ROUTES, macAppAnswers, macFront, runMacLink } from "./mac/relay";
 export { keepKeeper } from "./keeper";
 export { serveBox } from "./server/serve";
 
@@ -399,8 +421,13 @@ async function run(): Promise<void> {
     deliverLeftAnswers().catch(() => {});
     // The rows of sessions here whose lead lives on another computer, told to it as they change.
     if (current?.welcomed) pushRows(current, readLink(), peerTargets()).catch(() => {});
-    // The Work Queue's ask for more numbers, to the primary, while one is under way.
+    // The Work Queue's ask for more numbers, to the primary, while one is under way; and this box's
+    // queue told to your other computers as it changes, with what it's handing to theirs.
+    // Your setup, as this box leads it or follows it (once a minute), before its numbers go by it.
+    noteSetupNow();
     try { pushNumbers(current); } catch {}
+    if (current?.welcomed) pushQueues(current, readLink(), peerTargets()).catch(() => {});
+    else try { handUpkeepSoon(readLink()); } catch {}
   }, 3_000);
 
   let attempt = 0;
@@ -525,6 +552,9 @@ async function box(command: string): Promise<void> {
       const text = (!type || type.startsWith("text/") || type.includes("json")) && isUTF8(body);
       return say(text ? { status, body: body.toString("utf8") } : { status, bodyBase64: body.toString("base64"), type });
     }
+    case "github-read":
+      // A read of GitHub that was due as `route` answered, made here, outliving it.
+      return void await readApart(process.argv[4], await input()).catch(() => {});
     case "reconnect": {
       // An integration's server connected again everywhere, a moment after `route` changed its
       // keys, once the engine has read them.
@@ -644,7 +674,8 @@ async function serve(): Promise<void> {
   keepBridgeAnswering();
   // Its wake-ups and watches, sent while it runs, with the app's window closed too.
   sendWakes();
-  // This Mac's link to your phones and machines, once its app says it's wanted.
+  // This Mac's link to your phones and machines, as its app last said it's wanted (kept in
+  // run/mac-link.json, so it's back on the relay after a restart before the app opens), or once it says so.
   if (IS_MAC) runMacLink().catch(() => {});
   // Its agents and their letters, and its group chats' mail, for your other computers. (Not for
   // the app's route scenarios, `KUVO_TEST_NO_PEERS`, whose fixture tells its bridge who they are.)
@@ -698,6 +729,8 @@ interface SetupInput {
   peersAt?: number;
   at?: number;
   moved?: unknown[];
+  /** The Mac's keys before (made anew since), which it no longer is: let go here. */
+  replaces?: unknown;
 }
 
 // What the Mac sends: the relay, this machine's name, and the phones you've paired with the Mac,
@@ -720,6 +753,9 @@ async function setup(): Promise<void> {
   const old = readLink();
   const before = readPersonalities();
   let link = null as LinkState | null, work = null as ReturnType<typeof docsWork> | null, library = before;
+  // The Mac's keys before, made anew since (over SSH, so this box knows they were that Mac's).
+  const replaced = mac && Array.isArray(input.replaces) ? input.replaces.filter((key): key is string => typeof key === "string" && KEY.test(key) && key !== mac).slice(0, 8) : [];
+  let formerMacs: string[] = [];
   updateLink(current => {
     const next = current ?? { secret: crypto.randomBytes(32).toString("base64url"), key: newKey().toString("base64url"), phones: [] };
     next.sign ??= newSigningSeed();
@@ -738,6 +774,9 @@ async function setup(): Promise<void> {
         // A Mac that signs none yet (0.8.0-beta.1): its peers as it lists them.
         takeLegacyPeers(next, mac, input.peers, typeof input.peersAt === "number" ? input.peersAt : (typeof input.at === "number" ? input.at : 0), input.moved);
       }
+      // That Mac under its keys before: no Mac of this box's any more (never two of one Mac).
+      formerMacs = replaced.filter(key => macsOf(next).includes(key));
+      for (const key of formerMacs) leaveMac(next, key);
     }
     if (typeof input.id === "string") next.id = input.id.slice(0, 200);
     // COMPAT(0.7 visits): a Mac that doesn't say it `tolerates` newer boxes holds updates back. Goes 3 months after 0.8.0.
@@ -757,8 +796,12 @@ async function setup(): Promise<void> {
     return next;
   });
   if (work && library !== before) await takePersonalities(library).catch(() => {});
-  // The running bridge tells your other computers what changed.
+  // (What those keys' agents were, told here, goes with them.)
+  const after = link ?? readLink();
+  if (after) for (const key of formerMacs) forgetMacsAgents(key, after);
+  // The running bridge tells your other computers what changed; its setup card says what it's in now.
   noteDocsChanged();
+  try { writeCard(); } catch {}
   // None paired any more (each removed for good, as one at a time would be): no bridge.
   if (!link) {
     if (running) process.kill(running, "SIGTERM");
@@ -819,6 +862,7 @@ export function leave(mac: unknown): boolean {
   if (!link) return false;
   forgetMacsAgents(mac, link);
   noteDocsChanged();
+  try { writeCard(); } catch {}
   return true;
 }
 
@@ -907,12 +951,30 @@ if (main) {
     }
     console.log(JSON.stringify(outcome));
   }
+  // The browser agents use here (PROTOCOL.md, "The browser on a machine"): `browser install [--now]
+  // [--repair]` sets it up, as the keeper starts it (one at a time); `browser start [--now]
+  // [--repair]` has it set up in a process of its own, as a browser tool does, and says how it
+  // stands then; `browser status` says how it stands.
+  else if (mode === "browser") {
+    const args = process.argv.slice(3);
+    if (argument === "install") {
+      const outcome = await installBrowser({ now: args.includes("--now"), repair: args.includes("--repair") });
+      console.log(JSON.stringify({ outcome, ...browserStatus() }));
+    } else if (argument === "start") {
+      console.log(JSON.stringify(startBrowserInstall({ now: args.includes("--now"), repair: args.includes("--repair") })));
+    } else if (argument === "status") {
+      console.log(JSON.stringify(browserStatus()));
+    } else {
+      console.error("Usage: kuvo-link.js browser install|start [--now] [--repair] | status");
+      process.exit(2);
+    }
+  }
   else if (mode === "selftest") {
     const ok = selftest();
     console.log(ok ? "ok" : "failed");
     process.exit(ok ? 0 : 1);
   } else {
-    console.error("Usage: kuvo-link.js run | serve | setup | pair [relay] | box <command> | leave <mac> | engine-config | login-path | update [--now] | selftest");
+    console.error("Usage: kuvo-link.js run | serve | setup | pair [relay] | box <command> | leave <mac> | engine-config | login-path | update [--now] | browser install|start|status | selftest");
     process.exit(2);
   }
 }

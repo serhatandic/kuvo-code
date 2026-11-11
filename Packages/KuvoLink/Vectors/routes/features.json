@@ -1,12 +1,12 @@
 {
- "about": "What each box answers, by name (scripts/route-shapes.sh writes it from Packages/Box/src/shared/features.ts and routes/mac.ts; never edit it): a machine every name in FEATURES, in order, and nothing else; a Mac all of them but a machine's own (MACHINE_FEATURES), and its own (MAC_FEATURES), `usage` only while it has the usage panel.",
+ "about": "What each box answers, by name (scripts/route-shapes.sh writes it from Packages/Box/src/shared/features.ts and routes/mac.ts; never edit it): a machine every name in FEATURES, in order, and nothing else; a Mac all of them but a machine's own (MACHINE_FEATURES), and its own (MAC_FEATURES).",
  "scenarios": [
   {
    "name": "kuvo/info: what the box answers, by name, not by version",
    "steps": [
     {
      "send": "GET kuvo/info",
-     "why": "A client checks `features` before it shows what needs a route: both boxes name what they both answer the same way; only a machine updates itself and starts an engine an older Mac's Stop left down; only a Mac has Settings › Machines, its phones' hosts, While Agents Work, and Claude Code's agents and commands (every box says which of its sign-ins ended).",
+     "why": "A client checks `features` before it shows what needs a route: both boxes name what they both answer the same way; only a machine updates itself, sets up its own browser, and starts an engine an older Mac's Stop left down; only a Mac has Settings › Machines, its phones' hosts, While Agents Work, and Claude Code's agents and commands (every box says which of its sign-ins ended).",
      "expect": {
       "mac": {
        "status": 200,
@@ -89,19 +89,24 @@
           "sandbox",
           "sandbox.asks",
           "sandbox.check",
+          "sandbox.reviews.whole",
           "search",
           "sessions.agents",
+          "sessions.glance",
           "sessions.start",
+          "setup",
           "shell.stop",
           "sign-in.return",
           "skills",
           "skills.trash",
+          "usage",
           "vault",
           "wakes",
           "wakes.edit",
           "wakes.events",
           "work",
           "work-queue",
+          "work-queue.elsewhere",
           "work.elsewhere",
           "work.goals",
           "work.goals.apps",
@@ -113,6 +118,7 @@
           "worktrees.where"
          ],
          "<excludes>": [
+          "browser",
           "engine.start",
           "update"
          ]
@@ -147,6 +153,7 @@
          "bots.keys",
          "bots.make",
          "branch",
+         "browser",
          "btw",
          "btw.threads",
          "config",
@@ -196,9 +203,12 @@
          "sandbox",
          "sandbox.asks",
          "sandbox.check",
+         "sandbox.reviews.whole",
          "search",
          "sessions.agents",
+         "sessions.glance",
          "sessions.start",
+         "setup",
          "shell.stop",
          "sign-in.return",
          "skills",
@@ -210,6 +220,7 @@
          "wakes.events",
          "work",
          "work-queue",
+         "work-queue.elsewhere",
          "work.elsewhere",
          "work.goals",
          "work.goals.apps",

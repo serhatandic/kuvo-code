@@ -194,3 +194,79 @@ import Testing
     tuck.bars(from: [], to: ["review"])
     #expect(!tuck.isOn(among: ["review"]))
 }
+
+@Test func writingTucksAndFinishingRestoresTheCard() {
+    var tuck = BarTuck<String>()
+    let bars = ["work", "wakes"]
+    tuck.writing(focused: true, hasText: false)
+    #expect(tuck.isOn(among: bars))
+    tuck.writing(focused: false, hasText: true)
+    #expect(tuck.isOn(among: bars), "a draft keeps it tucked after leaving the field")
+    tuck.writing(focused: false, hasText: false)
+    #expect(!tuck.isOn(among: bars))
+    tuck.hide()
+    tuck.writing(focused: true, hasText: true)
+    tuck.sent()
+    #expect(tuck.isOn(among: bars), "a manually tucked card stays tucked")
+}
+
+@Test func openingWhileWritingLastsUntilDone() {
+    var tuck = BarTuck<String>()
+    tuck.writing(focused: true, hasText: false)
+    tuck.show()
+    tuck.writing(focused: true, hasText: true)
+    tuck.changed("work")
+    #expect(!tuck.isOn(among: ["work"]))
+    tuck.writing(focused: false, hasText: false)
+    tuck.writing(focused: true, hasText: false)
+    #expect(tuck.isOn(among: ["work"]))
+}
+
+@Test func sendingRestoresEvenWhenTheComposerKeepsFocus() {
+    var tuck = BarTuck<String>()
+    tuck.writing(focused: true, hasText: true)
+    tuck.sent()
+    tuck.writing(focused: true, hasText: false)
+    #expect(!tuck.isOn(among: ["work"]))
+    tuck.writing(focused: true, hasText: true)
+    #expect(tuck.isOn(among: ["work"]))
+}
+
+@Test func typingDoesNotChangeIndividualBarFolds() {
+    var folds = BarFoldsTests.BarFolds()
+    let bars: [BarFoldsTests.ComposerBar] = [.goal, .wakes]
+    var own = false
+    folds.set(.goal, hidden: true, among: bars, own: &own)
+    let left = folds
+    var tuck = BarTuck<BarFoldsTests.ComposerBar>()
+    tuck.writing(focused: true, hasText: true)
+    tuck.sent()
+    #expect(folds == left)
+    #expect(folds.isHidden(.goal, among: bars, asking: false, own: own))
+    #expect(!folds.isHidden(.wakes, among: bars, asking: false, own: false))
+    #expect(!tuck.isOn(among: bars))
+}
+
+@Test func newsWhileWritingIsMarkedAndOpenWhenTheCardComesBack() {
+    var folds = BarFoldsTests.BarFolds()
+    let bars: [BarFoldsTests.ComposerBar] = [.goal, .review, .wakes]
+    folds.changed(.goal)
+    var tuck = BarTuck<BarFoldsTests.ComposerBar>()
+    tuck.writing(focused: false, hasText: true)
+    for bar in folds.news(from: [.review: false], to: [.review: true]) { tuck.changed(bar) }
+    #expect(tuck.marked == [.review])
+    tuck.sent()
+    tuck.writing(focused: false, hasText: false)
+    #expect(!tuck.isOn(among: bars))
+    #expect(tuck.marked.isEmpty)
+    #expect(!folds.isHidden(.review, among: bars, asking: false, own: false))
+    #expect(folds.isHidden(.goal, among: bars, asking: false, own: false))
+}
+
+@Test func barsArrivingWhileWritingTuckWithoutAnExplicitOpening() {
+    var tuck = BarTuck<String>()
+    tuck.writing(focused: true, hasText: false)
+    tuck.bars(from: ["work"], to: [])
+    tuck.bars(from: [], to: ["wakes"])
+    #expect(tuck.isOn(among: ["wakes"]))
+}

@@ -100,18 +100,42 @@ public struct BarFolds<Bar: Hashable>: Equatable {
 }
 
 /// The bars in the card over the composer tucked into one line (the Mac's and the phone's
-/// `BarStrip`), as you left them in a conversation: nothing brings them back by itself. What came
-/// or changed meanwhile is `marked`, until you bring them back. Once none are left, the next ones
-/// show.
+/// `BarStrip`). A manual fold stays until opened; writing temporarily tucks them, preserving
+/// the manual choice. What came or changed meanwhile is `marked` until they show again.
+/// Once none are left, the manual fold resets.
 public struct BarTuck<Bar: Hashable>: Equatable {
     public init() {}
 
     private var hidden = false
+    public private(set) var isWriting = false
+    private var openedWhileWriting = false
+    private var sentWithFocus = false
+
+    /// A draft, or a keyboard that takes the room (the phone's, up for the composer), tucks the
+    /// card for a while without changing any bar's fold. (The Mac's field has the keyboard
+    /// whenever a conversation shows: there, writing is what's in it.)
+    public mutating func writing(focused: Bool, hasText: Bool) {
+        if !focused || hasText { sentWithFocus = false }
+        let active = hasText || (focused && !sentWithFocus)
+        if active != isWriting { openedWhileWriting = false }
+        isWriting = active
+        if !isWriting && !hidden { marked = [] }
+    }
+
+    /// Sending ends this writing interval even where the field keeps the keyboard.
+    public mutating func sent() {
+        isWriting = false
+        openedWhileWriting = false
+        sentWithFocus = true
+        if !hidden { marked = [] }
+    }
+
+    private var isHidden: Bool { hidden || (isWriting && !openedWhileWriting) }
     /// What came, or changed in a way you'd want to see, since they were tucked.
     public private(set) var marked: Set<Bar> = []
 
     /// Whether they're tucked, among `bars` (none: nothing to tuck).
-    public func isOn(among bars: [Bar]) -> Bool { hidden && !bars.isEmpty }
+    public func isOn(among bars: [Bar]) -> Bool { isHidden && !bars.isEmpty }
 
     public mutating func hide() {
         hidden = true
@@ -120,19 +144,24 @@ public struct BarTuck<Bar: Hashable>: Equatable {
 
     public mutating func show() {
         hidden = false
+        openedWhileWriting = isWriting
         marked = []
     }
 
     /// The bars went from `old` to `new`: while tucked, those that came are marked; none left,
     /// it's over.
     public mutating func bars(from old: [Bar], to new: [Bar]) {
-        if new.isEmpty { return show() }
-        guard hidden else { return }
+        if new.isEmpty {
+            hidden = false
+            marked = []
+            return
+        }
+        guard isHidden else { return }
         marked.formUnion(new.filter { !old.contains($0) })
     }
 
     /// Something changed in `bar` that you'd want to see: marked, while tucked.
     public mutating func changed(_ bar: Bar) {
-        if hidden { marked.insert(bar) }
+        if isHidden { marked.insert(bar) }
     }
 }

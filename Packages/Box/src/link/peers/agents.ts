@@ -6,6 +6,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { FEATURES } from "../../shared/features";
+import { macFeatures } from "../../shared/routes/mac";
 import { processRuns as runs } from "../../shared/platform";
 import { boxProjects } from "../areas/projects";
 import { readKit } from "../bots/kit";
@@ -15,7 +16,7 @@ import { readBridgeFile } from "../engine/client";
 import { locked, textOf, writePrivate } from "../files";
 import { IS_MAC, K } from "../home";
 import { awaySessions, movedAway } from "../moves/records";
-import { macLink, readLink } from "../state";
+import { readLink } from "../state";
 import { AGENTS_FILE, composeAgents, fitsAgent, isPutAway, keptAgent, MAC_AGENTS_FILE, PEER_AGENTS_FILE, PEER_LOCK, readPeerAgents } from "./directory";
 import { mailFor, movedOf, peersOf } from "./known";
 import { tellSeatPeers } from "./seats";
@@ -129,20 +130,8 @@ export async function refreshOwn(readEngine: () => Target, link: LinkState | nul
   return ownList;
 }
 
-// What this box answers, as its agents' mail says (`kuvo/info`'s features): on a Mac, its app's
-// list, as the app gives it (`kuvo/link/config`).
-const ownFeatures = (): readonly string[] => (IS_MAC && Array.isArray(macLink.config?.features) ? macLink.config.features : FEATURES);
-
-// The names a box from before the lists were in order checks of its peers (moves, calls, letters
-// and group chats' seats). Such a box keeps only the first 80 names a peer's mail gives
-// (`keptFeatures`), and in order there are more before some of these: so they go first. Boxes now
-// keep many more, so a name added later needn't be here. This goes once no box from bridge 0.9.211
-// or before is left: three months after the release that brings it.
-const CHECKED_BY_OLDER_PEERS = ["groups.seats", "letters-read", "moves", "moves.agents", "moves.check", "work.elsewhere"];
-
-/** `features` as this box's mail gives them: those older boxes check of a peer first. */
-export const mailedFeatures = (features: readonly string[]): string[] =>
-  [...CHECKED_BY_OLDER_PEERS.filter(name => features.includes(name)), ...features.filter(name => !CHECKED_BY_OLDER_PEERS.includes(name))];
+// What this box answers, as its agents' mail says (`kuvo/info`'s features).
+const ownFeatures = (): readonly string[] => (IS_MAC ? macFeatures() : FEATURES);
 
 // Tells each peer this box's agents: when they change, and every ten minutes, with a digest of
 // its documents to each that takes them, so one that missed what was given gets it then (PROTOCOL.md,
@@ -167,7 +156,7 @@ export async function announce(host: Pick<LinkHost, "send">, readEngine: () => T
     let bytes: Buffer | null = null, sent: ListedAgent[] = [];
     for (const count of [ownList.length, Math.floor(ownList.length / 2), Math.floor(ownList.length / 4)]) {
       sent = ownList.slice(0, count);
-      bytes = mailFor(peer, { agents: { at: now, list: sent, features: mailedFeatures(ownFeatures()), moved }, ...docs, at: now, ...(ask ? { ask: "agents" } : {}) }, link);
+      bytes = mailFor(peer, { agents: { at: now, list: sent, features: ownFeatures(), moved }, ...docs, at: now, ...(ask ? { ask: "agents" } : {}) }, link);
       if (bytes) break;
     }
     if (!bytes) continue;

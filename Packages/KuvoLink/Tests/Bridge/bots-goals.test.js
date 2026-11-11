@@ -939,6 +939,22 @@ test("what a goal's session left running holds off a nudge only for a while", as
   assert.equal(nudges().length, 1);
 });
 
+test("a goal's session whose finish waits on its build, however long, is at work: no nudge until its lead hears", async () => {
+  await startedGoal();
+  await tool("start_session", { task: "Build the apps.", project: "Driftwood", step: 1 });
+  const site = made[0].id;
+  const now = Date.now();
+  await look(now);
+  // (#553: its finish is held on the build, which nobody's been told of yet.)
+  leftRunning(site, now);
+  fs.writeFileSync(path.join(home, "run", "work", "told.json"), JSON.stringify({ since: now, sessions: {}, waiting: { [site]: { from: "engine", at: now } } }));
+  await look(now + 42 * 60_000);
+  await look(now + 90 * 60_000);
+  forgetLeftRunning();
+  fs.rmSync(path.join(home, "run", "work", "told.json"), { force: true });
+  assert.equal(nudges().length, 0);
+});
+
 test("a turn that failed at a limit pauses the goal, with what its session left running still up", async () => {
   await startedGoal();
   await tool("start_session", { task: "Build the site.", project: "Driftwood", step: 1 });

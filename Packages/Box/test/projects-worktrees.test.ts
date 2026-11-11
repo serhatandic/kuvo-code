@@ -50,3 +50,52 @@ test("a worktree made after a client began following is filed under its project 
   stop.abort()
   await lines.return(undefined)
 })
+
+test("a project's git worktree made elsewhere (`git worktree add /tmp/try`) is filed under it too, but one that's a project of its own isn't (#422)", async () => {
+  const { mkdtempSync, realpathSync } = await import("node:fs")
+  const { tmpdir } = await import("node:os")
+  const { spawnSync } = await import("node:child_process")
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "kuvo-linked-")))
+  const git = (folder: string, ...args: string[]) => {
+    const ran = spawnSync("git", ["-c", "init.defaultBranch=main", "-c", "core.hooksPath=/dev/null", ...args], { cwd: folder, encoding: "utf8",
+      env: { ...process.env, GIT_AUTHOR_NAME: "Test", GIT_AUTHOR_EMAIL: "t@example.com", GIT_COMMITTER_NAME: "Test", GIT_COMMITTER_EMAIL: "t@example.com", GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" } })
+    if (ran.status !== 0) throw new Error(ran.stderr)
+  }
+  try {
+    const repo = join(root, "kuvo-ai")
+    mkdirSync(repo)
+    writeFileSync(join(repo, "README.md"), "hi\n")
+    git(repo, "init", "-q")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "first")
+    git(repo, "worktree", "add", "-q", "-b", "eval/t2", join(root, "eval-ds", "T2"))
+    git(repo, "worktree", "add", "-q", "-b", "mine", join(root, "kuvo-ai-mine"))
+    mkdirSync(join(home, "box"), { recursive: true })
+    writeFileSync(join(home, "box", "worktrees.json"), JSON.stringify({ worktrees: [] }))
+    writeFileSync(join(home, "box", "projects.json"), JSON.stringify({ projects: [{ directory: repo, folders: [] }, { directory: join(root, "kuvo-ai-mine"), folders: [] }] }))
+    // (Found off the box's thread, as a client following hears it.)
+    const { findLinkedTrees } = await import("../src/link/work/project-trees")
+    await import("../src/link/areas/projects")
+    await findLinkedTrees()
+    const [answer] = await Array.fromAsync(ask("kuvo/projects"))
+    expect(answer.worktrees).toEqual({ [join(root, "eval-ds", "T2")]: repo })
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("a project's other folders are filed under it, and so is a worktree of one, but not one that's a project of its own or a removed project's (#311)", async () => {
+  const web = "/work/kuvo-web", admin = "/work/kuvo-admin", site = "/work/site", webTree = "/trees/web-otter"
+  mkdirSync(join(home, "box"), { recursive: true })
+  writeFileSync(join(home, "box", "worktrees.json"), JSON.stringify({ worktrees: [{ project: web, root: webTree, folder: webTree, branch: "kuvo/web-otter" }] }))
+  writeFileSync(join(home, "box", "projects.json"), JSON.stringify({ projects: [
+    { directory: shop, name: "Kuvo Code", folders: [web, admin, site] },
+    { directory: site, folders: [] },
+    { directory: "/work/old", folders: ["/work/legacy"], removed: true },
+  ] }))
+  const [answer] = await Array.fromAsync(ask("kuvo/projects"))
+  // (Those of the test before, made with git, may still be listed.)
+  expect(answer.worktrees).toMatchObject({ [web]: shop, [admin]: shop, [webTree]: shop })
+  expect(answer.worktrees[site]).toBeUndefined()
+  expect(answer.worktrees["/work/legacy"]).toBeUndefined()
+})

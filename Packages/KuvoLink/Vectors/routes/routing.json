@@ -130,9 +130,36 @@
       ]
     },
     {
+      "name": "a session at a glance: those named that the box has, and none named refused",
+      "steps": [
+        { "given": { "session": { "id": "ses_plan", "title": "Plan the launch", "directory": "{{work}}" } } },
+        {
+          "send": "GET kuvo/sessions/glance?sessions=ses_plan,ses_nowhere",
+          "why": "A row's and its card's facts, by session: one in the project's own folder with no pull request has no branch or pull request of its own, and one the box doesn't have is left out.",
+          "expect": { "status": 200, "json": { "sessions": { "ses_plan": { "branch": "<absent>", "pull": "<absent>" }, "ses_nowhere": "<absent>" } } }
+        },
+        { "send": "GET kuvo/sessions/glance", "expect": { "status": 400, "json": { "message": "<string>" } } },
+        { "send": "POST kuvo/sessions/glance?sessions=ses_plan", "expect": { "status": 405 } }
+      ]
+    },
+    {
       "name": "stopping a command no agent left running",
       "steps": [
         { "send": "POST kuvo/shell/sh_nothing/stop", "body": {}, "expect": { "status": 404 } }
+      ]
+    },
+    {
+      "name": "kuvo/setup: who's in your setup, and which is its main computer",
+      "steps": [
+        {
+          "send": "GET kuvo/setup",
+          "why": "Every box says the same facts of your setup, from its main computer's signed document; a machine in no setup yet (one never linked, as here) says so with nulls, and a Mac's box may have made its own already. The #181 switch, unset, is off on a Mac with the app and on a machine.",
+          "expect": {
+            "mac": { "status": 200, "json": { "you": { "role": "<any>" }, "computers": "<array>", "startsFromOthers": { "value": null, "default": "off" } } },
+            "machine": { "status": 200, "json": { "setup": null, "epoch": null, "primary": null, "you": { "key": null, "role": null }, "computers": [], "startsFromOthers": { "value": null, "default": "on" } } }
+          }
+        },
+        { "send": "POST kuvo/setup", "body": {}, "expect": { "status": 405 } }
       ]
     },
     {
@@ -156,6 +183,16 @@
         { "send": "POST kuvo/update", "body": {}, "expect": { "status": 400, "json": { "message": "<string>" } } },
         { "send": "POST kuvo/engine/start", "expect": { "status": 409, "json": { "message": "<string>" } } },
         { "send": "GET kuvo/engine/start", "expect": { "status": 405 } }
+      ]
+    },
+    {
+      "name": "a machine sets up its own browser",
+      "only": "machine",
+      "why": "Only a machine's box sets up the browser its agents use (kuvo/browser); a Mac's agents browse in its app's panel. A test's folder downloads nothing.",
+      "steps": [
+        { "send": "GET kuvo/browser", "expect": { "status": 200, "json": { "state": "missing", "installed": null, "progress": null } } },
+        { "send": "POST kuvo/browser", "body": {}, "expect": { "status": 202, "json": { "state": "missing", "installed": null } } },
+        { "send": "PUT kuvo/browser", "body": {}, "expect": { "status": 405 } }
       ]
     },
     {

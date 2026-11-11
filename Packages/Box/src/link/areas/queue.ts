@@ -12,7 +12,7 @@ import { targetsOf } from "../letters/tools";
 import { asked } from "../engine/client";
 import { dropWaiting, holdQueue, inboxFor, keepWaitingBefore, queueFollowers, queueOf, readQueues, resumeQueue, sendNow, showsQueue, shownQueue } from "../engine/queue";
 import { forgetStopped } from "../work/background";
-import { stopConversation } from "../work/background";
+import { stopConversation } from "../work/stopping";
 import { messageID } from "../engine/sessions";
 import { attachedIn } from "../server/attached";
 import { fromPhone, modelInput } from "../server/forward";

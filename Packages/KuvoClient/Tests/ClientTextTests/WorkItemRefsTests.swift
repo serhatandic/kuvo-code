@@ -41,4 +41,34 @@ import ClientText
         #expect(WorkItemRefs.number(in: URL(string: "kuvo-agent://243")!) == nil)
         #expect(WorkItemRefs.number(in: URL(string: "https://243")!) == nil)
     }
+
+    @Test(arguments: [
+        ("Picked up gh:kuvo-test/app#12 after #3.", ["gh:kuvo-test/app#12", "3"]),
+        ("(gh:a/b.c#1) and gh:my-org/my_repo#20, x gh:o/r#5", ["gh:a/b.c#1", "gh:my-org/my_repo#20", "gh:o/r#5"]),
+        ("`gh:o/r#1` and [gh:o/r#2](https://x.y) and https://github.com/o/r/issues/3", []),
+        ("agh:o/r#1 gh:o/r#2x gh:o/r#", []),
+        ("gh:o/r-#12 and #3", ["gh:o/r-#12", "3"]),
+        ("gh:ada_kuvo/app#7", ["gh:ada_kuvo/app#7"]),
+    ])
+    func issuesAndPullRequestsAreFoundByTheirRefs(text: String, refs: [String]) {
+        #expect(WorkItemRefs.findRefs(in: text).map(\.ref) == refs)
+        #expect(WorkItemRefs.findRefs(in: text).map { String(text[$0.range]) } == refs.map { $0.hasPrefix("gh:") ? $0 : "#" + $0 })
+    }
+
+    @Test func aChipOfAnIssueLinksToIt() {
+        let link = WorkItemRefs.link(ref: "gh:kuvo-test/app#12")
+        #expect(WorkItemRefs.ref(in: link) == "gh:kuvo-test/app#12")
+        #expect(WorkItemRefs.number(in: link) == nil)
+        #expect(WorkItemRefs.ref(in: WorkItemRefs.link(ref: "243")) == "243")
+        #expect(WorkItemRefs.link(ref: "243").absoluteString == "kuvo-item://243")
+        #expect(WorkItemRefs.refs(in: "gh:o/r#1 #2 gh:o/r#1") == ["gh:o/r#1", "2"])
+    }
+
+    @Test func aToolCallOnAnIssueNamesItAsItsChipDoes() {
+        #expect(WorkQueueWords.summary("queue_add", item: nil, title: nil, to: nil, category: nil, undo: false, add: nil, isActive: false, issue: "gh:kuvo-test/app#12") == "Added app#12 to the Work Queue")
+        #expect(WorkQueueWords.summary("queue_update", item: "#182", title: nil, to: nil, category: nil, undo: false, add: nil, isActive: true, issue: "https://github.com/kuvo-test/app/pull/57") == "Linking #182 to app#57")
+        #expect(WorkQueueWords.summary("queue_update", item: "gh:kuvo-test/app#12", title: nil, to: nil, category: nil, undo: false, add: nil, isActive: false) == "Updated app#12")
+        #expect(WorkQueueWords.shownRef("#12") == nil)
+    }
 }
+

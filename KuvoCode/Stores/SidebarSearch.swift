@@ -21,7 +21,7 @@ enum SidebarSearch {
     static func byName(_ query: String, in workspace: Workspace, bots: Bots) -> [Found] {
         let query = query.trimmingCharacters(in: .whitespaces)
         let sessions = workspace.sessions.filter { session in
-            workspace.projectName(session.location.directory).localizedStandardContains(query)
+            workspace.projectName(of: session).localizedStandardContains(query)
                 || (session.title ?? "New Session").localizedStandardContains(query)
         }
         let named = bots.list.filter { bot in bot.name.localizedStandardContains(query) && !sessions.contains { $0.id == bot.sessionID } }

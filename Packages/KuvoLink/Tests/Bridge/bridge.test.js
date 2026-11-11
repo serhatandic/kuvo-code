@@ -1395,6 +1395,8 @@ test("each feature kuvo/info names is a route the machine answers, and one it do
     "bots.keys": ["GET", "kuvo/bots/bot_none/keys"],
     "bots.make": ["GET", "kuvo/bots/templates"],
     branch: ["POST", "kuvo/agents/api/kuvo/branch/ses_none"],
+    // (Its browser, set up by the box itself.)
+    browser: ["GET", "kuvo/browser"],
     btw: ["GET", "kuvo/agents/api/kuvo/btw"],
     // (What a side question's routes take besides, on the coding agents' bridge.)
     "btw.threads": ["GET", "kuvo/agents/api/kuvo/btw"],
@@ -1451,9 +1453,14 @@ test("each feature kuvo/info names is a route the machine answers, and one it do
     sandbox: ["GET", "kuvo/sandbox"],
     "sandbox.asks": ["GET", "kuvo/sandbox/allowed"],
     "sandbox.check": ["POST", "kuvo/sandbox/check"],
+    // (Its asks' `reviews` list every ask Auto's reviewer may take up: what kuvo/sandbox/asks says.)
+    "sandbox.reviews.whole": ["GET", "kuvo/sandbox/asks"],
     search: ["GET", "kuvo/search?q=none"],
     "sessions.agents": ["GET", "kuvo/sessions/ses_none/agents"],
+    "sessions.glance": ["POST", "kuvo/sessions/glance"],
     "sessions.start": ["POST", "kuvo/sessions"],
+    // (Your setup, and who's its main computer.)
+    setup: ["GET", "kuvo/setup"],
     "shell.stop": ["POST", "kuvo/shell/sh_none/stop"],
     "sign-in.return": ["GET", "kuvo/sign-in/return"],
     skills: ["GET", "kuvo/skills"],
@@ -1465,6 +1472,7 @@ test("each feature kuvo/info names is a route the machine answers, and one it do
     "wakes.events": ["POST", "kuvo/wakes/events"],
     work: ["GET", "kuvo/work"],
     "work-queue": ["GET", "kuvo/work-queue/categories"],
+    "work-queue.elsewhere": ["POST", "kuvo/work-queue/refs"],
     // (A lead's call for the sessions it started here (list, stop, summarize, answer), on the agents' tools.)
     "work.elsewhere": ["POST", "kuvo/agent-tools"],
     "work.goals": ["GET", "kuvo/work/goals"],

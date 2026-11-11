@@ -15,6 +15,7 @@ import type { AnswerPiece, LinkRequest } from "../server/context";
 import { holdArchived } from "./wakes";
 import { stopIfWaiting } from "../work/answers";
 import { worktreeFollowers, worktreeProjects } from "./worktree-records";
+import { linkedFollowers, linkedTreesOf } from "../work/project-trees";
 
 export const PROJECTS_FILE = path.join(K, "box", "projects.json");
 const PROJECTS_LOCK = PROJECTS_FILE + ".lock";
@@ -68,6 +69,24 @@ export function changeProjects(change: (projects: Project[]) => Project[], file 
   return projects;
 }
 
+/** The project each folder sessions run in is filed under, as every client files them
+ * (`worktrees` in `kuvo/projects`): a worktree's, as `worktreeProjects` has them, and each
+ * project's other folders, its own (not one that's a project of its own: its sessions are its). */
+export function filedProjects(projects: Project[] = readProjects()): Record<string, string> {
+  const own = new Set(projects.filter(each => !each.removed).map(each => each.directory));
+  const filed: Record<string, string> = {};
+  for (const project of projects) {
+    if (project.removed) continue;
+    for (const folder of project.folders) if (!own.has(folder) && !(folder in filed)) filed[folder] = project.directory;
+  }
+  // (A worktree of a project's other folder's repository is that project's too.)
+  const trees = Object.entries(worktreeProjects()).map(([folder, project]) => [folder, filed[project] ?? project]);
+  return { ...filed, ...Object.fromEntries(trees) };
+}
+
+/** The project a folder sessions run in is filed under: a worktree's, another folder's, or its own. */
+export const filedUnder = (folder: string): string => filedProjects()[folder] ?? folder;
+
 /** A project as it's kept: its name only when it's not the folder's, a command only when there
  * is one, its other folders without its own. */
 function keptProject(directory: string, given: Record<string, unknown>, before: Partial<Project> = {}): Project {
@@ -99,13 +118,15 @@ async function atWork(target: Target, signal: AbortSignal | undefined): Promise<
   }
 }
 
-/** Every session of the project, its worktrees' too (those removed since included, whose sessions
- * clients still show under it, and `also`, folders a client shows under it that this box doesn't
- * know: worktrees removed before it kept them), archived, on the engine and the coding agents'
- * bridge, page after page; how many weren't. None while the engine doesn't answer (`kept` null):
+/** Every session of the project, its worktrees' and other folders' too (worktrees removed since
+ * included, whose sessions clients still show under it, and `also`, folders a client shows under
+ * it that this box doesn't know: worktrees removed before it kept them), and those filed under it
+ * from another folder (`kuvo.filed`, a subfolder's say), archived, on the engine and the coding
+ * agents' bridge, page after page; how many weren't. None while the engine doesn't answer (`kept` null):
  * its sessions are most of them, and the project would come back with them. */
-async function archiveProject(directory: string, also: string[], readEngine: () => EngineRecord, readBridge: () => BridgeRecord, signal: AbortSignal | undefined): Promise<{ archived: number; kept: number | null }> {
-  const trees = Object.entries(worktreeProjects()).filter(([, project]) => project === directory).map(([folder]) => folder);
+async function archiveProject(directory: string, also: string[], readEngine: () => EngineRecord, readBridge: () => BridgeRecord, signal: AbortSignal | undefined, file = PROJECTS_FILE): Promise<{ archived: number; kept: number | null }> {
+  const filed = filedProjects(readProjects(file));
+  const trees = Object.entries(filed).filter(([, project]) => project === directory).map(([folder]) => folder);
   const folders = [...new Set([directory, ...trees, ...also])];
   const targets: Target[] = [];
   try { targets.push(readEngine()); } catch { return { archived: 0, kept: null }; }
@@ -117,8 +138,9 @@ async function archiveProject(directory: string, also: string[], readEngine: () 
   } catch {}
   let archived = 0, kept = 0;
   for (const target of targets) {
-    for (const folder of folders) {
-      let query: string | null = `limit=100&order=desc&parentID=null&directory=${encodeURIComponent(folder)}`;
+    // Each folder's, then those filed under it from elsewhere, found among all of them.
+    for (const folder of [...folders, null]) {
+      let query: string | null = `limit=100&order=desc&parentID=null${folder === null ? "" : `&directory=${encodeURIComponent(folder)}`}`;
       for (let page = 0; page < 1000 && query; page++) {
         // The page whole (`call` keeps only its data), for its cursor.
         let listed: SessionPage | undefined;
@@ -131,7 +153,7 @@ async function archiveProject(directory: string, also: string[], readEngine: () 
           break;
         }
         const sessions = Array.isArray(listed?.data) ? listed.data : [];
-        const archiving = sessions.filter(session => session?.location?.directory === folder && !session.time?.archived && session.metadata?.["kuvo.archived"] !== true);
+        const archiving = sessions.filter(session => (folder === null ? filedElsewhere(session, directory, filed) : session?.location?.directory === folder) && !session.time?.archived && session.metadata?.["kuvo.archived"] !== true);
         // Only one at work can wait on you (what it asks holds its turn, its subagents' too), so
         // only those are looked at; every one when that can't be read.
         const working = await atWork(target, signal);
@@ -160,13 +182,25 @@ async function archiveProject(directory: string, also: string[], readEngine: () 
   return { archived, kept };
 }
 
+/** Whether `session` is filed under the project at `directory` by its own mark (`kuvo.filed`,
+ * while it's still in the folder that names), as every client files one whose folder isn't the
+ * project's own nor in `filed`. */
+function filedElsewhere(session: EngineSession | undefined, directory: string, filed: Record<string, string>): boolean {
+  const mark = session?.metadata?.kuvo?.filed;
+  const at = session?.location?.directory;
+  return isObject(mark) && mark.project === directory && typeof at === "string" && mark.folder === at && at !== directory && !(at in filed);
+}
+
 /** `kuvo/projects`: the box's projects, read and changed by any client, as Settings and the
  * sidebar change them on a Mac. A folder is kept as the client names it. */
 export async function* answerProjects(request: LinkRequest, readEngine: () => EngineRecord = readEngineFile, readBridge: () => BridgeRecord = readBridgeFile, signal?: AbortSignal, file = PROJECTS_FILE, lock = PROJECTS_LOCK): AsyncGenerator<AnswerPiece> {
   const json = (status: number, value: unknown): AnswerPiece[] => [{ head: { status, headers: { "content-type": "application/json" } } }, { body: Buffer.from(JSON.stringify(value)) }];
   const [route, query = ""] = request.path.split("?");
   const method = request.method.toUpperCase();
-  const listed = (): Projects => ({ projects: readProjects(file), worktrees: worktreeProjects() });
+  const listed = (): Projects => {
+    const projects = readProjects(file);
+    return { projects, worktrees: filedProjects(projects) };
+  };
   if (route === "kuvo/projects/events") {
     if (method !== "GET") return yield* json(405, {});
     yield { head: { status: 200, headers: { "content-type": "application/x-ndjson" } } };
@@ -192,7 +226,7 @@ export async function* answerProjects(request: LinkRequest, readEngine: () => En
   if (method === "DELETE") {
     const body = parsed(request.body);
     const also = isObject(body) && Array.isArray(body.folders) ? body.folders.filter((folder): folder is string => typeof folder === "string" && path.isAbsolute(folder)) : [];
-    const { archived, kept } = await archiveProject(given, also, readEngine, readBridge, signal);
+    const { archived, kept } = await archiveProject(given, also, readEngine, readBridge, signal, file);
     if (kept === null) return yield* json(503, { message: "Its sessions can’t be archived now: the engine isn’t running. Try again in a moment." });
     if (kept > 0) return yield* json(409, { message: `${kept === 1 ? "One of its sessions" : `${kept} of its sessions`} couldn’t be archived, so it stays with them. Try again in a moment.`, archived, kept } satisfies { message: string; archived: number; kept: number });
     changeProjects(projects => {
@@ -208,3 +242,6 @@ export async function* answerProjects(request: LinkRequest, readEngine: () => En
 // list says which project each belongs to.
 const projectFollowers: Set<() => void> = new Set();
 worktreeFollowers.add(() => { for (const tell of projectFollowers) tell(); });
+// Each project's git worktrees made elsewhere are filed under it too (`worktreeProjects`).
+linkedTreesOf(() => readProjects().filter(project => !project.removed).map(project => project.directory));
+linkedFollowers.add(() => { for (const tell of projectFollowers) tell(); });

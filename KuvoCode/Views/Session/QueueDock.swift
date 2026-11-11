@@ -208,12 +208,12 @@ struct QueueRow: View {
         .padding(.leading, 6)
         .contentShape(.rect)
         .onTapGesture(count: 2) { if canEdit { model.edit(item) } }
-        .contextMenu {
-            if isQueued, isRunning, !isOnBox { Button("Steer") { model.steer(item) } }
-            Button("Send Now") { model.sendNow(item) }
-            if canEdit { Button("Edit") { model.edit(item) } }
-            Divider()
-            Button("Remove", role: .destructive) { remove() }
+        .heldContextMenu {
+            if isQueued, isRunning, !isOnBox { HeldRow.button("Steer") { model.steer(item) } }
+            HeldRow.button("Send Now") { model.sendNow(item) }
+            if canEdit { HeldRow.button("Edit") { model.edit(item) } }
+            HeldRow.divider
+            HeldRow.button("Remove", role: .destructive) { remove() }
         }
         .disabled(item.isLocal)
     }

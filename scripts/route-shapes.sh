@@ -2,10 +2,10 @@
 # Writes what's kept from Packages/Box/src/shared, so it's held by hand in one place only
 # (scripts/route-shapes.ts says how): Packages/KuvoLink/Vectors/routes/shapes/answers.json, every
 # route's answers, as the contract suite holds both boxes to them (contract-runner.js and
-# KuvoCodeTests/RouteContractTests.swift read it); Packages/KuvoLink/Vectors/routes/features.json,
-# the scenario that holds each box's `kuvo/info` to its features; and KuvoCode/Stores/BoxFeatures.swift,
-# the Mac app's list of them. Run it after changing a shape or a feature, and commit the result.
-# `--check` says whether the files are what the sources write, as CI checks.
+# KuvoCodeTests/RouteContractTests.swift read it); and Packages/KuvoLink/Vectors/routes/features.json,
+# the scenario that holds each box's `kuvo/info` to its features. Run it after changing a shape or a
+# feature, and commit the result. `--check` says whether the files are what the sources write, as
+# CI checks. Either refuses a list of features out of order or with a name twice.
 #   BUN   the Bun to run with (as scripts/build-box.sh finds it)
 set -eu
 cd "$(dirname "$0")/.."

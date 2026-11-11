@@ -65,11 +65,14 @@ import Testing
         #expect(!rows.contains { if case .notice = $0 { true } else { false } })
     }
 
-    @Test func aNoticeThatShowsStillSplitsThem() async throws {
+    /// A background command ending is the engine's word to the model: it shows nothing (#406), so
+    /// the steps around it stay one line.
+    @Test func aBackgroundCommandEndingLeavesOneLine() async throws {
         defer { engine.stop() }
         let ended: [String: Any] = ["id": "msg_03", "type": "synthetic", "time": ["created": 3], "text": "npm run dev exited with code 0",
                                     "metadata": ["source": "shell"]]
         let rows = try await rows(between: ended)
-        #expect(stepLines(rows) == 2)
+        #expect(stepLines(rows) == 1)
+        #expect(!rows.contains { if case .notice = $0 { true } else { false } })
     }
 }

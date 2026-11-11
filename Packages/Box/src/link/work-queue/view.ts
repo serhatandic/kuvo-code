@@ -9,8 +9,10 @@ import { atWorkNow } from "../work/background";
 import { startedByOf, under, workSessions, worksFor } from "../work/tree";
 import type { Listed } from "../work/tree";
 import type { Target } from "../../shared/records";
-import type { Item, KeptFile, Link, Note, Who } from "./store";
+import type { Item, ItemRef, KeptFile, Link, Note, Source, Who } from "./store";
 import { ITEM_ID } from "./store";
+import { issueAt, sourceKey } from "./sources";
+import { seenOf, withSeen, type Seen } from "./github";
 
 /** What the box knows of the sessions here, for a view: every one an agent started (put away
  * ones too, so a lead still sees their items), and those at work now. */
@@ -35,14 +37,17 @@ export const inView = (owner: string, item: Item, overseen: Set<string>): boolea
 export const inProgress = (item: Item, working: Set<string>): boolean =>
   !item.removed && item.category !== "done" && item.sessions.some(each => working.has(each.session));
 
-/** An item named in a tool's words or a route: `#243`, `243`, or its id. */
-export function refOf(given: unknown): { id: string } | { number: number } | null {
+/** An item named in a tool's words or a route: `#243`, `243`, its id, or the GitHub issue or pull
+ * request it is (`gh:owner/repo#12`, or its page). */
+export function refOf(given: unknown): ItemRef | null {
   if (typeof given === "number" && Number.isInteger(given) && given > 0 && given < 1_000_000) return { number: given };
   if (typeof given !== "string") return null;
   const text = given.trim();
   if (ITEM_ID.test(text)) return { id: text };
   const number = text.match(/^#?(\d{1,6})$/);
-  return number ? { number: Number(number[1]) } : null;
+  if (number) return { number: Number(number[1]) };
+  const at = issueAt(text);
+  return at ? { source: sourceKey(at) } : null;
 }
 
 /** A session as a view names it: its title, and whether it's at work. */
@@ -99,12 +104,28 @@ export interface ItemSummary {
   fileCount: number;
   linkCount: number;
   handedBy?: string;
-  source?: { kind: string; ref: string; url?: string };
+  source?: Source;
+  /** Where its issue or pull request stands on GitHub, as last read (`github.ts`), and since when. */
+  seen?: Seen;
+  /** The category it's kept in, while GitHub's word makes it Done (`category` "done"). */
+  keptIn?: string;
+  /** Its title struck through: closed on GitHub without being done (not planned, or unmerged). */
+  struck?: boolean;
+  /** Where it's made Done (an issue's: "github"), never by a move here. */
+  closesOn?: string;
+  /** On its way to a conversation on another computer. */
+  handing?: { to: string; name: string };
+  /** The computer it's on, when that isn't the one asked: as that computer last told it. */
+  computer?: Computer;
   created: { at: number; by: Who };
   updated: { at: number; by: Who };
   doneAt?: number;
   removed?: { at: number; by: Who };
 }
+
+/** Another of your computers, as the Work Queue names it: its key, its name, what it is, and its id
+ * on this Mac (a machine's), for a client to reach it. */
+export interface Computer { key: string; name: string; kind: "mac" | "machine"; id?: string }
 
 /** An item whole, as `kuvo/work-queue/items/:item` and queue_show give it. */
 export interface ItemWhole extends ItemSummary {
@@ -116,7 +137,7 @@ export interface ItemWhole extends ItemSummary {
 }
 
 export function summaryOf(item: Item, working: Set<string>, titles: Map<string, { title: string }>): ItemSummary {
-  return {
+  return withSeen({
     id: item.id,
     ...(item.number !== undefined ? { number: item.number } : {}),
     ...(item.wanted !== undefined ? { wanted: item.wanted } : {}),
@@ -133,11 +154,12 @@ export function summaryOf(item: Item, working: Set<string>, titles: Map<string, 
     linkCount: item.links.length,
     ...(item.handedBy ? { handedBy: item.handedBy } : {}),
     ...(item.source ? { source: item.source } : {}),
+    ...(item.handing ? { handing: { to: item.handing.to, name: item.handing.name } } : {}),
     created: item.created,
     updated: item.updated,
     ...(item.doneAt !== undefined ? { doneAt: item.doneAt } : {}),
     ...(item.removed ? { removed: item.removed } : {}),
-  };
+  });
 }
 
 export function wholeOf(item: Item, working: Set<string>, titles: Map<string, { title: string }>): ItemWhole {
@@ -174,6 +196,8 @@ export function agoWords(at: number, now = Date.now()): string {
   return `${Math.round(hours / 24)}d ago`;
 }
 
-/** An item as tools name it: `#243 "Title"`, or `"Title" (new, no number yet)`. */
-export const nameOf = (item: Pick<Item, "number" | "title" | "wanted" | "id">): string =>
-  item.number !== undefined ? `#${item.number} "${item.title}"` : `"${item.title}" (${item.id}, no number yet${item.wanted ? `: asked for #${item.wanted}` : ""})`;
+/** An item as tools name it: an outside source's by its ref (`gh:owner/repo#12 "Title"`, its
+ * number never shown again), `#243 "Title"`, or `"Title" (new, no number yet)`. (An issue's
+ * title is GitHub's, as last read.) */
+export const nameOf = (item: Pick<Item, "number" | "title" | "wanted" | "id"> & { source?: Source }): string =>
+  item.source ? `${item.source.ref} "${seenOf(item.source)?.value?.title ?? item.title}"` : item.number !== undefined ? `#${item.number} "${item.title}"` : `"${item.title}" (${item.id}, no number yet${item.wanted ? `: asked for #${item.wanted}` : ""})`;

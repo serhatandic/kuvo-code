@@ -33,6 +33,8 @@ const summaryUntilStopped: [string, any] = ["(its summary works until stopped)",
 const tries = "(tries)"
 /** In a turn's events: Codex sleeps, for hours, until new input comes for the turn (one that came before the sleep doesn't count, as with the real one). */
 const sleepsUntilTold: [string, any] = ["(sleeps until told)", {}]
+/** In a turn's events: Codex sleeps (or goes on with the sleep it started as it turned one down) until it turns down something steered, then, a moment later, its sleep ends and another starts in the same breath, until told. */
+const sleepsAgainOnceRefused: [string, any] = ["(sleeps, and again once it turns one down)", {}]
 /** In a turn's events: Codex works until something's steered into its turn. */
 const untilTold: [string, any] = ["(works until told)", {}]
 /** In a turn's events: Codex turns down what's steered from here on, as a turn on its way out does. */
@@ -72,6 +74,7 @@ let refusing = false
 let refusingNext = false
 let refusingAsItSleeps = false
 let sleptInBreath
+let refusedOne
 let turning = false
 let endsAsTold = false
 let summaryWorks = false
@@ -121,6 +124,20 @@ async function turn() {
       sleptInBreath = undefined
       await new Promise((resolve) => (asleep = resolve))
       send({ method: "item/completed", params: inTurn({ item: sleep }) })
+      continue
+    }
+    if (method === ${JSON.stringify(sleepsAgainOnceRefused[0])}) {
+      // (Or the one it said had started in the same breath it turned something down.)
+      const first = sleptInBreath ?? { type: "sleep", id: "sleep" + ++sleeps, durationMs: 43200000 }
+      if (!sleptInBreath) send({ method: "item/started", params: inTurn({ item: first }) })
+      sleptInBreath = undefined
+      await new Promise((resolve) => (refusedOne = resolve))
+      // (A moment later: what it turned down has been heard by then.)
+      await new Promise((resolve) => setTimeout(resolve, 100))
+      const next = { type: "sleep", id: "sleep" + ++sleeps, durationMs: 43200000 }
+      process.stdout.write(JSON.stringify({ method: "item/completed", params: inTurn({ item: first }) }) + "\\n" + JSON.stringify({ method: "item/started", params: inTurn({ item: next }) }) + "\\n")
+      await new Promise((resolve) => (asleep = resolve))
+      send({ method: "item/completed", params: inTurn({ item: next }) })
       continue
     }
     if (method === ${JSON.stringify(tries)}) {
@@ -215,8 +232,11 @@ process.stdin.on("data", (chunk) => {
       }
       const refused = !turning || refusing || refusingNext
       refusingNext = false
-      if (refused) send({ id: message.id, error: { code: -32600, message: "no active turn to steer" } })
-      else {
+      if (refused) {
+        send({ id: message.id, error: { code: -32600, message: "no active turn to steer" } })
+        refusedOne?.()
+        refusedOne = undefined
+      } else {
         send({ id: message.id, result: { turnId: "u1" } })
         // (As the real one does, as it takes it.)
         send({ method: "item/started", params: inTurn({ item: { type: "userMessage", id: "steer" + steers, content: message.params.input } }) })
@@ -719,7 +739,7 @@ describe("What Codex asks you", () => {
       { path: sum, kind: { type: "update", move_path: null }, diff: "@@ -1 +1 @@\n-  return a - b\n+  return a + b\n" },
       { path: added, kind: { type: "add" }, diff: "expect(sum(1, 2)).toBe(3)\n" },
     ]
-    const removal = [{ path: old, kind: { type: "delete" }, diff: "export {}\n" }]
+    const removal = [{ path: old, kind: { type: "delete" }, diff: "export {}\n" }, { path: join(root, "src/moved.ts"), kind: { type: "update", move_path: "/elsewhere/LaunchAgents/x.plist" }, diff: "@@ -1 +1 @@\n-a\n+b\n" }]
     const id = start(
       [
         ["item/started", { item: { type: "fileChange", id: "p1", status: "inProgress", changes: edit } }],
@@ -748,7 +768,8 @@ describe("What Codex asks you", () => {
     sessions.replyPermission(id, first.id, "once")
     await until(() => sessions.permissions(id).some((ask) => ask.id !== first.id))
     const [second] = sessions.permissions(id)
-    expect(second).toMatchObject({ action: "edit", resources: [old], metadata: { files: [{ file: old, additions: 0, deletions: 1, status: "deleted" }] } })
+    // (A rename's new name is asked about too: it's written there.)
+    expect(second).toMatchObject({ action: "edit", resources: [old, join(root, "src/moved.ts"), "/elsewhere/LaunchAgents/x.plist"], metadata: { files: [{ file: old, additions: 0, deletions: 1, status: "deleted" }, {}] } })
     sessions.replyPermission(id, second.id, "reject")
     await until(() => ended(id))
     expect(answers()).toEqual([{ decision: "accept" }, { decision: "decline" }])
@@ -960,6 +981,29 @@ describe("A question Codex asks (request_user_input_async)", () => {
     await until(() => ended(id))
     expect(steered().every((text) => text.includes("Turkish"))).toBe(true)
     expect(steered().length).toBeGreaterThanOrEqual(2)
+    expect(starts()).toEqual(["go"])
+    expect(said(id)).toContain("Writing it in Turkish.")
+  })
+
+  test("an answer turned down as its sleep gives way to another goes into the new one, and ends it", async () => {
+    const id = start([refusesNextSteer, ...asking, sleepsAgainOnceRefused, ...answered])
+    await cardUpAsleep(id)
+    sessions.replyForm(id, sessions.forms(id)[0].id, { [sessions.forms(id)[0].fields[0].key]: "Turkish" })
+    await until(() => ended(id))
+    expect(steered()).toEqual(["Turkish", "Turkish"])
+    expect(starts()).toEqual(["go"])
+    expect(said(id)).toContain("Writing it in Turkish.")
+  })
+
+  test("turned down as a sleep starts, and told again as that sleep gives way to another: the new one is told, and ends", async () => {
+    const id = start([refusesAsItSleeps, ...asking, untilTold, refusesNextSteer, sleepsAgainOnceRefused, ...answered])
+    await until(() => sessions.forms(id).length === 1)
+    sessions.replyForm(id, sessions.forms(id)[0].id, { [sessions.forms(id)[0].fields[0].key]: "Turkish" })
+    await until(() => ended(id))
+    expect(steered()).toHaveLength(3)
+    expect(steered()[0]).toBe("Turkish")
+    expect(steered()[1]).toContain("Turkish")
+    expect(steered()[2]).toBe(steered()[1])
     expect(starts()).toEqual(["go"])
     expect(said(id)).toContain("Writing it in Turkish.")
   })

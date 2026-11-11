@@ -7,4 +7,3 @@ CHANGELOG.md merge=union
 # running scripts/route-shapes.sh again. A union that leaves a list out of order, or a name
 # twice, fails the box's tests (test/features.test.ts) and `route-shapes.sh --check`.
 Packages/Box/src/shared/features.ts merge=union
-KuvoCode/Stores/BoxFeatures.swift merge=union

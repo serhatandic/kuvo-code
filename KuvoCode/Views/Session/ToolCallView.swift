@@ -15,6 +15,8 @@ struct ToolCallView: View {
     /// What your opening it is kept by, as its view may not last (see `CardFolds`).
     var foldKey: String? = nil
     @Environment(AppModel.self) private var app
+    /// The conversation this is in, where what it opens comes back to.
+    @Environment(\.conversationTab) private var here
     /// Open by itself rather than by you: a subagent at work.
     @State private var opened = false
     @Environment(\.scrollAnchor) private var scrollAnchor
@@ -86,25 +88,26 @@ struct ToolCallView: View {
                 } else if let started = startedSession {
                     // A session the agent started: a click opens it.
                     Button {
-                        app.tabs.open(.session(started))
+                        app.open(.session(started), from: here)
                     } label: {
                         header
                     }
                     .buttonStyle(TextButtonStyle(outset: true))
                     .help("Open this session")
+                    .opensInNewTab(.session(started))
                 } else {
                     header.foregroundStyle(.secondary)
                 }
             }
-            .contextMenu {
+            .heldContextMenu {
                 if let file, !file.isFileURL {
-                    Button("Open in Panel") { app.utilities.show(file) }
+                    HeldRow.button("Open in Panel") { app.utilities.show(file) }
                 } else if let file, FileManager.default.fileExists(atPath: file.path) {
-                    Button("Open in Panel") { app.utilities.show(file) }
-                    Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([file]) }
+                    HeldRow.button("Open in Panel") { app.utilities.show(file) }
+                    HeldRow.button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([file]) }
                 }
                 if let file {
-                    Button("Copy Path") { Clipboard.copy(file.path) }
+                    HeldRow.button("Copy Path") { Clipboard.copy(file.path) }
                 }
             }
 
@@ -225,7 +228,7 @@ struct ToolCallView: View {
     private func queueSummary(_ name: String) -> String {
         let item = input?["item"]?.number.flatMap { Int(exactly: $0.rounded()) }.map { "#\($0)" } ?? string("item")
         let to = string("to").map { AgentMail.shared.name(of: $0) }
-        return WorkQueueWords.summary(name, item: item, title: string("title"), to: to, category: string("category"), undo: input?["undo"]?.bool == true, add: string("add"), isActive: isActive)
+        return WorkQueueWords.summary(name, item: item, title: string("title"), to: to, category: string("category"), undo: input?["undo"]?.bool == true, add: string("add"), isActive: isActive, issue: string("issue"))
     }
     private func relative(_ path: String?) -> String? {
         guard let path else { return nil }
@@ -829,7 +832,8 @@ struct WorkAnswerLine: View {
                 .lineLimit(2)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .help("\(answer.verdict) at \(answer.date.formatted(date: .omitted, time: .shortened)), not by you: \(answer.reason)")
+        .help(answer.isYours ? "\(answer.verdict) at \(answer.date.formatted(date: .omitted, time: .shortened)), after Auto's reviewer held it back"
+              : "\(answer.verdict) at \(answer.date.formatted(date: .omitted, time: .shortened)), not by you: \(answer.reason)")
         .accessibilityElement(children: .combine)
     }
 }

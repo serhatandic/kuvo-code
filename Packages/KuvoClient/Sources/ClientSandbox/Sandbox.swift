@@ -257,25 +257,32 @@ public struct AskReview: Codable, Equatable, Sendable {
         self.at = at
     }
 
-    /// How long an ask its box would review waits for word of it before it's yours anyway (a box
-    /// that started again as it asked has no word of it).
-    public static let wait: Duration = .seconds(5)
+    /// The feature of a box that lists every ask its reviewer may take up, from the moment it
+    /// hears it (PROTOCOL.md, "Sandbox"): its word is the whole of it.
+    public static let listsAllFeature = "sandbox.reviews.whole"
 
-    /// Whether an ask is yours to answer: one the box left for you, or one it doesn't take up
-    /// (only asks to work outside the folder are, by a box that tells it); one it may take up but
-    /// hasn't said of yet, only once it's waited `wait` (`overdue`).
-    public static func isYours(action: String, review: AskReview?, boxTells: Bool, overdue: Bool) -> Bool {
+    /// Whether an ask is yours to answer, as its box says: one it left for you, or one it doesn't
+    /// take up (only asks to work outside the folder are). One it may take up and hasn't listed is
+    /// yours only from a box that doesn't list them all (`listsAll`, from before
+    /// `sandbox.reviews.whole`), or while its box isn't heard (`heard`: its link down or starting
+    /// again, so nothing would list it); what the box last said of one stands meanwhile (a phone
+    /// back from the background doesn't tell you again of one being checked). A client waits for
+    /// nothing of its own.
+    public static func isYours(action: String, review: AskReview?, listsAll: Bool, heard: Bool = true) -> Bool {
         if let review { return review.state == .yours }
-        return !boxTells || action != "external_directory" || overdue
+        if !heard { return true }
+        // (`!listsAll`, a box from before `sandbox.reviews.whole`: goes once no box before it is
+        // supported.)
+        return action != "external_directory" || !listsAll
     }
 
     /// The step's mark: what Auto did with what it asked.
     public var mark: String? {
         switch state {
         case .checking: "Auto is checking…"
-        case .allowed: "Auto allowed"
+        case .allowed: "Allowed by Auto-review"
         case .heldBack: "Held back"
-        case .refused: "Auto refused"
+        case .refused: "Not allowed by Auto-review"
         case .yours: nil
         }
     }

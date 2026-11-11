@@ -13,6 +13,7 @@ import path from "node:path";
 import { isObject } from "../../shared/json";
 import { listOf, locked, textOf, writePrivate } from "../files";
 import { RUN } from "../home";
+import { sourceKeyOf } from "./sources";
 
 export const WORK_QUEUE = path.join(RUN, "work-queue");
 const QUEUES = path.join(WORK_QUEUE, "queues");
@@ -21,6 +22,9 @@ const LOCK = path.join(WORK_QUEUE, ".lock");
 
 /** An owner's key: a conversation's address, or a group chat's id. */
 export const OWNER = /^(?:ses_[A-Za-z0-9]{1,60}|grp_[a-z0-9]{1,60})$/;
+/** A queue file's owner as a newer box may name one (another kind than this box knows): its queue is
+ * kept as it is, and goes along, never skipped or written over. */
+export const KEPT_OWNER = /^[a-z]{2,10}_[A-Za-z0-9_-]{1,80}$/;
 export const ITEM_ID = /^wqi_[A-Za-z0-9_-]{20}$/;
 const SESSION = /^ses_[A-Za-z0-9]{1,60}$/;
 
@@ -36,14 +40,38 @@ export const MOST_FILES = 50;
 export const MOST_LINKS = 50;
 const MOST_HANDED = 20;
 
-/** Who did something: you, from a client, or an agent (its conversation and name). */
-export type Who = { user: true } | { session: string; name: string };
+/** Who did something: you, from a client, an agent (its conversation and name), or someone this box
+ * doesn't know the shape of (an outside tracker's change, `{source, name?}`, from a newer box), kept
+ * as it was. */
+export type Who = { user: true } | { session: string; name: string } | OtherWho;
+export interface OtherWho { [key: string]: unknown; name?: string; source?: string }
+
+/** Who, in words: "the user", an agent's name, or another's (a tracker's change). */
+export const whoWords = (who: Who): string => {
+  const given = who as Record<string, unknown>;
+  if (given.user === true) return "the user";
+  if (typeof given.name === "string" && given.name) return given.name;
+  return typeof given.source === "string" && given.source ? given.source : "someone else";
+};
+/** Whether it was you. */
+export const byUser = (who: Who): boolean => (who as Record<string, unknown>).user === true;
 
 export interface Note { at: number; by: Who; text: string }
 export interface KeptFile { name: string; size: number; type: string; at: number }
-export interface Link { url: string; title?: string }
-export interface Linked { session: string; since: number }
+/** An outside link; `kind` (`pr`, `mr`, `issue`, `doc`) and `ref` kept for outside sources later. */
+export interface Link { url: string; title?: string; kind?: string; ref?: string }
+/** A session linked to an item; `box` where it runs, when that's another computer (kept as given). */
+export interface Linked { session: string; since: number; box?: string }
 export interface Handed { from: string; to: string; at: number }
+/** An outside source's item (an issue or a pull request, `sources.ts`): never numbered, named by
+ * `ref`; `id` is the source's own, `name` what a client shows (a summary's only, never kept). */
+export interface Source { kind: string; ref: string; url?: string; host?: string; id?: string; name?: string }
+
+/** An item named in a tool's words or a route: by its id, its number, or its source's key. */
+export type ItemRef = { id: string } | { number: number } | { source: string };
+/** An item on its way to a conversation on another computer (`hand.ts`): it stays here, unchanged,
+ * until that computer has it. */
+export interface Handing { id: string; to: string; key: string; name: string; at: number; by: Who; sent?: number; missing?: number }
 
 /** One item, as it's kept. */
 export interface Item {
@@ -66,7 +94,14 @@ export interface Item {
   wanted?: number;
   /** The number it was imported with, where that was another item's, and it has a new one. */
   importedAs?: number;
-  source?: { kind: string; ref: string; url?: string };
+  /** Its own number (`wanted`, beside `number`) granted back, waiting for the item that has it to
+   * move to its own. */
+  backGranted?: true;
+  /** Its own number asked back and not given: it keeps the one it has, and isn't asked again. */
+  stays?: true;
+  source?: Source;
+  /** On its way to a conversation on another computer. */
+  handing?: Handing;
   created: { at: number; by: Who };
   updated: { at: number; by: Who };
   doneAt?: number;
@@ -86,17 +121,27 @@ const fileOf = (owner: string) => path.join(QUEUES, `${owner}.json`);
 
 export const newItemID = () => `wqi_${crypto.randomBytes(15).toString("base64url")}`;
 
-const whoOf = (given: unknown): Who | null => {
+// Who, as it was kept: you, an agent, or any other shape (an outside tracker's, a newer box's) kept
+// as it is, small values only, so a box that doesn't know it never turns it into you or drops it.
+export const whoOf = (given: unknown): Who | null => {
   if (!isObject(given)) return null;
   if (given.user === true) return { user: true };
-  return typeof given.session === "string" && typeof given.name === "string" ? { session: given.session, name: given.name } : null;
+  if (typeof given.session === "string" && typeof given.name === "string") return { session: given.session, name: given.name };
+  const kept = Object.fromEntries(Object.entries(given).filter(([key, value]) => key.length <= 40 && (typeof value === "string" ? value.length <= 200 : typeof value === "number" || typeof value === "boolean")).slice(0, 10));
+  return Object.keys(kept).length ? kept as Who : null;
 };
 
 /** A file's name as an item keeps it: a name of its own, never a path. */
 export const FILE_NAME = /^(?!\.\.?$)[^/\\\0]{1,200}$/;
 
 // What this box knows of an item: every other field a newer box wrote is kept as it was.
-const KNOWN = new Set(["id", "number", "owner", "title", "body", "category", "order", "progress", "notes", "files", "links", "sessions", "handed", "handedBy", "wanted", "importedAs", "source", "created", "updated", "doneAt", "removed"]);
+const KNOWN = new Set(["id", "number", "owner", "title", "body", "category", "order", "progress", "notes", "files", "links", "sessions", "handed", "handedBy", "wanted", "importedAs", "backGranted", "stays", "source", "handing", "created", "updated", "doneAt", "removed"]);
+
+const handingOf = (given: unknown): Handing | null => {
+  if (!isObject(given) || typeof given.id !== "string" || !/^wqh_[A-Za-z0-9_-]{8,40}$/.test(given.id) || typeof given.to !== "string" || !OWNER.test(given.to)
+    || typeof given.key !== "string" || typeof given.at !== "number") return null;
+  return { id: given.id, to: given.to, key: given.key, name: typeof given.name === "string" ? given.name : "", at: given.at, by: whoOf(given.by) ?? { user: true }, ...(typeof given.sent === "number" ? { sent: given.sent } : {}), ...(typeof given.missing === "number" ? { missing: given.missing } : {}) };
+};
 
 /** An item as it was read (or as a move brought it), checked: null for one that isn't. Fields this
  * box doesn't know (a newer box's) are kept as they are, so writing it here doesn't drop them. */
@@ -124,7 +169,10 @@ export function itemOf(given: unknown, owner: string): Item | null {
     ...(typeof given.handedBy === "string" && OWNER.test(given.handedBy) ? { handedBy: given.handedBy } : {}),
     ...(typeof given.wanted === "number" && Number.isInteger(given.wanted) && given.wanted > 0 ? { wanted: given.wanted } : {}),
     ...(typeof given.importedAs === "number" && Number.isInteger(given.importedAs) && given.importedAs > 0 ? { importedAs: given.importedAs } : {}),
-    ...(isObject(given.source) && typeof given.source.kind === "string" && typeof given.source.ref === "string" ? { source: given.source as Item["source"] } : {}),
+    ...(given.backGranted === true ? { backGranted: true as const } : {}),
+    ...(given.stays === true ? { stays: true as const } : {}),
+    ...(isObject(given.source) && typeof given.source.kind === "string" && typeof given.source.ref === "string" ? { source: given.source as unknown as Source } : {}),
+    ...(handingOf(given.handing) ? { handing: handingOf(given.handing)! } : {}),
     created,
     updated,
     ...(typeof given.doneAt === "number" ? { doneAt: given.doneAt } : {}),
@@ -207,13 +255,30 @@ const readQueueOrNone = (owner: string): Queue => {
   }
 };
 
-/** The owners with a queue here. */
+/** The owners with a queue here. (A queue of a kind a newer box keeps, of an owner this box doesn't
+ * know, isn't one: it's read only when a move carries it, `readKeptQueue`, and never changed here
+ * otherwise.) */
 export function owners(): string[] {
   return listOf(QUEUES).filter(name => name.endsWith(".json")).map(name => name.slice(0, -5)).filter(owner => OWNER.test(owner));
 }
 
 /** Every queue here. */
 export const readAll = (): Queue[] => onceEach(owners().map(readQueueOrNone));
+
+/** A queue of a kind a newer box keeps (`KEPT_OWNER`, not `OWNER`), as a move carries it: only when
+ * every item in it reads as one here, else null (left as it is, and where it is). */
+export function readKeptQueue(owner: string): Queue | null {
+  if (!KEPT_OWNER.test(owner) || OWNER.test(owner)) return null;
+  let kept: unknown;
+  try {
+    kept = JSON.parse(fs.readFileSync(fileOf(owner), "utf8"));
+  } catch {
+    return null;
+  }
+  if (!isObject(kept) || !Array.isArray(kept.items)) return null;
+  const items = kept.items.map(each => itemOf(each, owner));
+  return items.every(each => each !== null) ? { owner, items: items as Item[] } : null;
+}
 
 /** An item two queues hold (a hand-off or a move cut off between its two writes) kept once: in the
  * queue it went to last (the newer change), the queues changed in place. */
@@ -254,23 +319,31 @@ export class Book {
     return queue;
   }
 
-  /** An owner's queue (made when it has none). */
+  /** An owner's queue (made when it has none). One of a kind a newer box keeps is read now, only
+   * here (a move's), and only when it reads whole (`readKeptQueue`); one that doesn't is refused,
+   * left as it is. */
   queue(owner: string): Queue {
+    if (!OWNER.test(owner) && !this.queues.has(owner)) {
+      const kept = fs.existsSync(fileOf(owner)) ? readKeptQueue(owner) : { owner, items: [] };
+      if (!kept) throw new Refusal(`${owner}'s Work Queue was kept by a newer Kuvo Code, in a way this one can't read: it's left as it is.`);
+      this.queues.set(owner, kept);
+      this.before.set(owner, JSON.stringify(kept.items));
+    }
     return this.load(owner);
   }
 
-  /** Every item, of every owner. */
+  /** Every item, of every owner (not those of a kind a newer box keeps, left as they are). */
   items(): Item[] {
-    return [...this.queues.values()].flatMap(queue => queue.items);
+    return [...this.queues.values()].filter(queue => OWNER.test(queue.owner)).flatMap(queue => queue.items);
   }
 
-  /** The item with this id or number (the first, where two computers gave one number twice). */
-  find(ref: { id?: string; number?: number }): Item | null {
+  /** The item `ref` names (the first, where two computers gave one number twice). */
+  find(ref: ItemRef): Item | null {
     return this.findAll(ref)[0] ?? null;
   }
 
-  /** Every item with this id or number. */
-  findAll(ref: { id?: string; number?: number }): Item[] {
+  /** Every item `ref` names. */
+  findAll(ref: ItemRef): Item[] {
     return matching(this.items(), ref);
   }
 
@@ -346,8 +419,12 @@ export function noteQueuesChanged(): void {
   for (const tell of queueFollowers) tell();
 }
 
-/** The items `ref` names, by id or number. */
-export const matching = (items: Item[], ref: { id?: string; number?: number }): Item[] => items.filter(item => (ref.id ? item.id === ref.id : item.number === ref.number));
+/** The items `ref` names, by id, number, or source (a linked item's old number names it too). */
+export const matching = <T extends Pick<Item, "id" | "number" | "source">>(items: T[], ref: ItemRef): T[] => items.filter(item => refNames(ref, item));
+
+/** Whether `ref` names `item`. */
+export const refNames = (ref: ItemRef, item: Pick<Item, "id" | "number" | "source">): boolean =>
+  "id" in ref ? item.id === ref.id : "number" in ref ? item.number === ref.number : Boolean(item.source) && sourceKeyOf(item.source!) === ref.source;
 
 /** The folder an item's files are kept in. */
 export const filesOf = (item: string) => path.join(FILES, item);

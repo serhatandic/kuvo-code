@@ -301,7 +301,7 @@ before(async () => {
   write(path.join(lab.home, "run", "engine.json"), engines[1]);
   await startBridge(mac);
   await startBridge(lab);
-  assert.notEqual((await ask("PUT", "kuvo/link/config", { phones: false, machines: true, relay: relay.url, name: "Studio Mac", app: "0.9.0", features: ["mac", "moves", "moves.agents"] })).json?.state, "failed");
+  assert.notEqual((await ask("PUT", "kuvo/link/config", { phones: false, machines: true, relay: relay.url, name: "Studio Mac", app: "0.9.0" })).json?.state, "failed");
   const setup = await ask("GET", "kuvo/link/setup");
   assert.equal(setup.status, 200);
   const result = spawnSync(process.execPath, [script, "setup"], {

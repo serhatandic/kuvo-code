@@ -22,8 +22,8 @@ struct WorkItemPage: View {
 
     private var store: WorkQueues { app.workQueues }
 
-    /// How it's asked for: by its id, else its number.
-    private var name: String { opened.id ?? opened.number.map(String.init) ?? "" }
+    /// How it's asked for: by its id, else its number, else the issue it is.
+    private var name: String { opened.name }
 
     /// The item as the list has it now (it moves as it changes), else as it was read.
     private var item: WorkItem? {
@@ -31,7 +31,12 @@ struct WorkItemPage: View {
     }
 
     private var detail: WorkItemDetail? {
-        store.detail(box: opened.box, id: opened.id, number: opened.number)
+        store.detail(box: opened.box, id: opened.id, number: opened.number, source: opened.source)
+    }
+
+    /// The box the item is kept on: the panel's, or the computer it says it's on.
+    private var keptOn: String {
+        (view.items.first(where: opened.matches) ?? detail?.item).flatMap { store.box(of: $0, in: opened.box) } ?? opened.box
     }
 
     var body: some View {
@@ -85,12 +90,29 @@ struct WorkItemPage: View {
         VStack(alignment: .leading, spacing: 14) {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 8) {
-                    Text(item.name)
-                        .font(.system(size: 13).monospacedDigit())
+                    if let source = item.source, let url = source.url.flatMap(URL.init(string:)), url.absoluteString.hasPrefix("https://github.com/") {
+                        // An issue's or a pull request's name opens it on GitHub, in the panel's browser.
+                        Button { utilities.newBrowser(url.absoluteString) } label: {
+                            HStack(spacing: 4) {
+                                if let brand = item.brand { BrandMarkView(brand, size: 13) }
+                                Text(item.name).monospacedDigit()
+                            }
+                            .font(.system(size: 13))
+                        }
+                        .buttonStyle(TextButtonStyle(outset: true))
+                        .help("Open \(source.ref) on GitHub")
+                        .accessibilityLabel(item.spokenName)
+                    } else {
+                        HStack(spacing: 4) {
+                            if let brand = item.brand { BrandMarkView(brand, size: 13) }
+                            Text(item.name).monospacedDigit()
+                        }
+                        .font(.system(size: 13))
                         .foregroundStyle(.secondary)
+                    }
                     status(item)
                     Spacer(minLength: 0)
-                    if item.removed == nil {
+                    if item.removed == nil, WorkQueue.canMove(item) {
                         Menu {
                             WorkItemMenu(item: item, view: view, box: opened.box)
                         } label: {
@@ -102,6 +124,19 @@ struct WorkItemPage: View {
                         .fixedSize()
                         .help("Move or delete it")
                         .accessibilityLabel("Move or Delete")
+                    } else if item.removed == nil {
+                        // (Done on GitHub: it stays so until it's reopened there; deleting is still yours.)
+                        Menu {
+                            Button("Delete", role: .destructive) { Task { await store.delete(item, on: opened.box) } }
+                        } label: {
+                            Image(systemName: "ellipsis")
+                        }
+                        .menuStyle(.button)
+                        .menuIndicator(.hidden)
+                        .buttonStyle(IconButtonStyle())
+                        .fixedSize()
+                        .help("Delete it")
+                        .accessibilityLabel("Delete")
                     } else {
                         Button("Restore") { Task { await store.restore(item, on: opened.box) } }
                             .buttonStyle(ChipButtonStyle(tinted: true))
@@ -110,18 +145,21 @@ struct WorkItemPage: View {
                 }
                 Text(item.title)
                     .font(.system(size: 20, weight: .semibold))
+                    .strikethrough(item.isStruck, color: .secondary)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
                 HStack(spacing: 4) {
                     Text("\(WorkQueue.updated(item.updated.date)) by \(item.updated.by.words)")
                     if let owner = WorkQueue.ownerName(of: item, in: view) { Text("· in \(owner)") }
+                    if let computer = WorkQueue.computerName(of: item) { Text("· on \(computer)") }
+                    if let handing = item.handing { Text("· handing to \(handing.name.isEmpty ? "another computer" : handing.name)") }
                 }
                 .font(.system(size: 11.5))
                 .foregroundStyle(.secondary)
                 .help("Added \(SentTime.full(item.created.date)) by \(item.created.by.words)")
             }
             if let detail, !detail.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                ReplyView(markdown: detail.body, parser: parser(detail.body), images: pictures) { url in open(url) }
+                ReplyView(markdown: detail.body, parser: parser(detail.body, fromSource: item.source != nil), images: pictures) { url in open(url) }
             } else if detail != nil {
                 Text("No description yet.")
                     .font(.system(size: 13))
@@ -166,7 +204,7 @@ struct WorkItemPage: View {
             }
             ForEach(item.sessions, id: \.session) { session in
                 let known = app.workspace.session(session.session) != nil
-                Button { app.open(.session(session.session)) } label: {
+                Button { app.open(.session(session.session), from: app.tabs.messageTarget) } label: {
                     HStack(spacing: 5) {
                         Image(systemName: "bubble.left")
                         Text(item.sessions.count > 1 ? "Open \(session.title.isEmpty ? "agent session" : session.title)" : "Open agent session")
@@ -177,6 +215,7 @@ struct WorkItemPage: View {
                 .buttonStyle(TextButtonStyle(outset: true, dimsAtRest: false))
                 .disabled(!known)
                 .help(known ? "Open the session working on it" : "That session isn’t on this Mac’s list.")
+                .opensInNewTab(known ? .session(session.session) : nil)
             }
         }
     }
@@ -195,7 +234,9 @@ struct WorkItemPage: View {
             .padding(.horizontal, 9)
             .frame(height: 22)
             .background(Capsule().fill(mark.color.opacity(0.14)))
-            .help(mark == .inProgress ? "A session is at work on it. It’s kept in \(category)." : mark == .removed ? "Kept for 30 days: Restore brings it back." : "")
+            .help(mark == .inProgress ? "A session is at work on it. It’s kept in \(category)."
+                : mark == .removed ? "Kept for 30 days: Restore brings it back."
+                : item.keptIn.map { "\(item.seen?.state == "merged" ? "Merged" : "Closed") on GitHub. If it’s reopened there, it’s back in \(WorkQueue.categoryName($0, in: view.categories))." } ?? "")
     }
 
     /// What's being done now, how far along, and who's on it.
@@ -274,15 +315,18 @@ struct WorkItemPage: View {
         }
     }
 
-    /// What it says, as a reply is drawn: other items it names (`#212`) as their chips.
-    private func parser(_ text: String) -> FileLinkingParser {
-        FileLinkingParser(folders: { [] }, refs: text.contains("#") ? store.refs(in: text, box: opened.box) : [:])
+    /// What it says, as a reply is drawn: other items it names (`#212`) as their chips. An issue's
+    /// own description is GitHub's, where a bare `#45` is that repository's: only its `gh:` refs.
+    private func parser(_ text: String, fromSource: Bool = false) -> FileLinkingParser {
+        var refs = text.contains("#") ? store.refs(in: text, box: opened.box) : [:]
+        if fromSource { refs = refs.filter { Int($0.key) == nil } }
+        return FileLinkingParser(folders: { [] }, refs: refs)
     }
 
     /// Opens a link from what it says: a chip's item here, a web page in the panel's browser.
     private func open(_ url: URL) -> Bool {
-        if let number = WorkItemRefs.number(in: url) {
-            store.open(number, on: opened.box, panel: utilities.panelKey)
+        if let ref = WorkItemRefs.ref(in: url) {
+            store.open(ref: ref, on: opened.box, panel: utilities.panelKey)
             return true
         }
         guard ["http", "https"].contains(url.scheme?.lowercased() ?? "") else { return false }
@@ -301,7 +345,7 @@ struct WorkItemPage: View {
         guard !wanted.isEmpty else { return nil }
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         for file in wanted {
-            if let data = await store.file(box: opened.box, item: detail.item.id, name: file.name) {
+            if let data = await store.file(box: keptOn, item: detail.item.id, name: file.name) {
                 try? data.write(to: folder.appending(path: file.name))
             }
         }
@@ -314,7 +358,7 @@ struct WorkItemPage: View {
     private func openFile(_ file: WorkItemDetail.File, of item: WorkItem) {
         guard Self.isPlainName(file.name) else { return }
         Task {
-            guard let data = await store.file(box: opened.box, item: item.id, name: file.name) else { return }
+            guard let data = await store.file(box: keptOn, item: item.id, name: file.name) else { return }
             try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
             let url = folder.appending(path: file.name)
             guard (try? data.write(to: url)) != nil else { return }

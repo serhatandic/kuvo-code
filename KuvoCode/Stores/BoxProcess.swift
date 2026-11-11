@@ -12,8 +12,8 @@ private let log = Logger(subsystem: "run.kuvo.code", category: "box")
 /// folder and goes when the app does. It finds the engine and the agents bridge as a machine's
 /// box does, by their records in `box/run`, which this writes as they start and stop.
 ///
-/// Areas move onto it one at a time: PhoneLink forwards a moved area's routes here
-/// (`PhoneLink.boxRoutes`), and the app's own stores reach them through `BoxClient`.
+/// It answers every route but this Mac's own (`PhoneLink.appRoutes`): PhoneLink forwards the rest
+/// here, and the app's own stores reach them through `BoxClient`.
 @MainActor @Observable
 final class BoxProcess {
     /// Where the box keeps what it has: its `KUVO_HOME`.
@@ -73,8 +73,8 @@ final class BoxProcess {
     /// `content` (what the engine starts with in `OPENCODE_CONFIG_CONTENT`) with what some providers
     /// need from the engine on top, as this Mac's box last learned it from its engine (nothing before
     /// it has; `kuvo-link.js engine-config`, as a machine's start adds it); as it
-    /// is when that can't be run, or doesn't answer within `timeout` seconds (the engine's start never
-    /// waits on it longer), or the box's start was refused (what it would run isn't what it was), or
+    /// is when that can't be run, or doesn't answer within `timeout` seconds (it's stopped then, and
+    /// the engine's start waits only for that), or the box's start was refused (what it would run isn't what it was), or
     /// it isn't any more (checked again here when the box's own check is over a minute old: the
     /// engine restarts under a box that keeps running).
     func engineConfig(engine: URL, content: String?, environment: [String: String], timeout: TimeInterval = 10) async -> String? {
@@ -91,27 +91,16 @@ final class BoxProcess {
         env["BUN_RUNTIME_TRANSPILER_CACHE_PATH"] = "0"
         env["KUVO_HOME"] = home.path
         env["OPENCODE_CONFIG_CONTENT"] = content
-        let given = env
-        return await Task.detached {
-            let process = Process()
-            process.executableURL = engine
-            process.arguments = ["run", "--config=/dev/null", "--no-env-file", script.path, "engine-config"]
-            process.environment = given
-            // In its folder, as the box starts.
-            process.currentDirectoryURL = home
-            let output = Pipe()
-            process.standardOutput = output
-            process.standardError = FileHandle.nullDevice
-            process.standardInput = FileHandle.nullDevice
-            do { try process.run() } catch { return content }
-            let late = DispatchWorkItem { if process.isRunning { kill(process.processIdentifier, SIGKILL) } }
-            DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: late)
-            let data = output.fileHandleForReading.readDataToEndOfFile()
-            process.waitUntilExit()
-            late.cancel()
-            guard process.terminationStatus == 0, let text = String(data: data, encoding: .utf8), text.hasPrefix("{"), text.hasSuffix("}") else { return content }
-            return text
-        }.value
+        // Its folder is made first: before the box's first start there is none, and a program can't
+        // start in a folder that isn't there (the settings would go unasked, with no word of why).
+        try? FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        // In its folder, as the box starts. Its end from `ChildProcess`, which never misses it, nor
+        // waits on something it left running that holds its output open.
+        guard let result = try? await ChildProcess.run(engine.path, ["run", "--config=/dev/null", "--no-env-file", script.path, "engine-config"],
+                                                       environment: env, directory: home, errors: .discard, limit: .seconds(timeout)),
+              !result.timedOut, result.reason == .exit, result.status == 0,
+              let text = String(data: result.output, encoding: .utf8), text.hasPrefix("{"), text.hasSuffix("}") else { return content }
+        return text
     }
 
     /// Whether what it runs with is checked for opencode's signature before each start (the
@@ -191,6 +180,13 @@ final class BoxProcess {
         env["KUVO_HOME"] = Self.home.path
         // A Mac's box: its bots are this Mac's own, made with the kit the app gives it.
         env["KUVO_BOX"] = "mac"
+        // What it says of this Mac with the app closed too (`kuvo/info`): the app's version, and
+        // the engine's it brings.
+        env["KUVO_APP_VERSION"] = AppInfo.version
+        env["KUVO_ENGINE_VERSION"] = OpenCodeEngine.version
+        // This Mac's chats, where a session a bot starts from its own folder goes, and which a phone
+        // lists as Chats.
+        env["KUVO_CHATS"] = Workspace.chatsFolder
         // The engine's settings folder, where it reads its settings and the skills you add (a machine's box finds its
         // engine's in its own folder): this Mac's settings and skills stay where they've always been. And
         // where the engine reads the keys you keep in the Keychain, which its settings name.

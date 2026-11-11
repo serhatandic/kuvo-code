@@ -3,10 +3,11 @@
 // phones' sessions, paired and pairing as on a machine, answered here. Its keys stay in your
 // Keychain: the app gives them as the link starts (`link/identity`), and they're kept in memory
 // only; without them the link stays off and says why, and never makes keys of its own. Its app says
-// whether it's wanted (`kuvo/link/config`: the phone link on, machines to meet). Your other
-// computers' mail is taken here, as a machine takes it: documents, agents, letters, group chats'.
-// What a phone asks of the Mac's own routes goes to the app through the host (`link/route`), and
-// this box answers what it can of its machines while the app isn't there (`machines`).
+// whether it's wanted (`kuvo/link/config`: the phone link on, machines to meet), which it keeps for
+// when it starts again before the app opens. Your other computers' mail is taken here, as a machine
+// takes it: documents, agents, letters, group chats'. What a phone asks it answers itself, but the
+// Mac's own routes (`MAC_APP_ROUTES`), which go to the app through the host (`link/route`); of
+// those it answers what it can of its machines while the app isn't there (`machines`).
 
 import os from "node:os";
 import { engineConnect } from "../areas/engine";
@@ -17,69 +18,24 @@ import { peerMail, receiveMail } from "../peers/mail";
 import { authorizePhone, confirmPhone } from "../phones";
 import { connectOnce, nextTry } from "../relay/connection";
 import { LinkHost } from "../relay/host";
-import { AGENTS } from "../server/forward";
 import { engineHandler } from "../server/router";
 import { macLink, readLink } from "../state";
-import { QUEUE_ROUTE } from "../areas/queue";
-import { SESSION_APPROVAL_ROUTE, SESSION_DECISIONS_ROUTE } from "../areas/approval";
-import { SESSION_AUTOPILOT_ROUTE } from "../areas/autopilot";
-import { CARRY_ROUTE } from "../areas/carry";
 import { appAnswer, passedOn } from "./app-route";
-import { macKeys, macLinkCheck, macLinkWait, macNeeded, setLinkStatus, tellUntold } from "./link";
+import { macKeys, macLinkCheck, macLinkWait, macNeeded, savedMacConfig, setLinkStatus, tellUntold } from "./link";
 import { isMachinesRoute, machinesRoute } from "./machines";
 import type { AppTiming } from "./machines";
 import type { EngineRecord } from "../../shared/records";
 import type { AnswerPiece, Asker, LinkHandler, LinkRequest } from "../server/context";
 import type { LinkState } from "../state";
 
-// What this Mac's box answers a phone itself: the areas that have moved onto it (PhoneLink's
-// `boxRoutes`, all but the link's own, `kuvo/link`, which are the app's alone), and its phones.
-// The rest the app answers, through the host.
-export const MAC_BOX_ROUTES = [
-  "kuvo/accounts/credentials",
-  "kuvo/accounts/ended",
-  "kuvo/accounts/found",
-  "kuvo/accounts/refreshable",
-  "kuvo/agent-tools",
-  "kuvo/approval",
-  "kuvo/artifacts",
-  "kuvo/attention",
-  "kuvo/bots",
-  "kuvo/config",
-  "kuvo/file",
-  "kuvo/folders",
-  "kuvo/git",
-  "kuvo/groups",
-  "kuvo/integrations",
-  "kuvo/keys",
-  "kuvo/mcp/catalog",
-  "kuvo/moves",
-  "kuvo/named",
-  "kuvo/personalities",
-  "kuvo/phones",
-  "kuvo/plugins",
-  "kuvo/programs",
-  "kuvo/projects",
-  "kuvo/providers",
-  "kuvo/sandbox",
-  "kuvo/search",
-  "kuvo/sign-in/return",
-  "kuvo/skill-library",
-  "kuvo/skill-trash",
-  "kuvo/skills",
-  "kuvo/vault",
-  "kuvo/wakes",
-  "kuvo/work",
-  "kuvo/work-queue",
-  "kuvo/worktrees",
-];
-// (A plan signed out from a phone, `kuvo/accounts/<id>/forget`, its models asked of again (`…/refresh`), a command stopped,
-// `kuvo/shell/<id>/stop`, a session started with a task, a session's queue, its approval, its Autopilot, and carrying
-// it on with the coding agents: the box's too.)
-const macAnswersAlso = (route: string): boolean => /^kuvo\/accounts\/[^/]+\/(forget|refresh)$/.test(route) || /^kuvo\/shell\/[^/]+\/stop$/.test(route)
-  || route === "kuvo/sessions" || QUEUE_ROUTE.test(route) || SESSION_APPROVAL_ROUTE.test(route) || SESSION_DECISIONS_ROUTE.test(route)
-  || SESSION_AUTOPILOT_ROUTE.test(route) || CARRY_ROUTE.test(route);
-export const macAnswers = (route: string): boolean => MAC_BOX_ROUTES.some(area => route === area || route.startsWith(`${area}/`)) || macAnswersAlso(route);
+// What only this Mac's app answers a phone, by area: its machines (which this box answers in part
+// with the app closed: machines.ts), the machines your phones reach directly, its usage panel's
+// numbers, what its panel's browser asks you, its macOS services (`kuvo/mac`), Claude Code's
+// agents and commands it reads from ~/.claude, and its engine's restart. The one list of them: the
+// app keeps none, and hands its own requests for anything else to this box. Everything else a phone
+// asks this box answers itself, as a machine's does, with the app open or closed.
+export const MAC_APP_ROUTES = ["kuvo/machines", "kuvo/hosts", "kuvo/usage", "kuvo/asks", "kuvo/mac", "kuvo/claude-code", "kuvo/engine"];
+export const macAppAnswers = (route: string): boolean => MAC_APP_ROUTES.some(area => route === area || route.startsWith(`${area}/`));
 
 const APP_NOT_ANSWERING = "Kuvo Code on this Mac isn't answering. Try again in a moment.";
 
@@ -92,15 +48,15 @@ async function* toApp(request: LinkRequest, phone: Asker | undefined, signal?: A
   yield { body: Buffer.from(JSON.stringify({ message: APP_NOT_ANSWERING })) };
 }
 
-// A phone's request on this Mac: the box's own areas here, the rest from the app.
+// A phone's request on this Mac: the app's own areas from the app (its machines answered here too
+// while it isn't there), everything else here (from #191 step 2; before, the box answered only the
+// areas that had moved onto it, and the app the rest).
 export function macFront(handle: LinkHandler = engineHandler(readEngineFile, { name: os.hostname() }), timing?: AppTiming): LinkHandler {
   return async function* (request: LinkRequest, phone: Asker | undefined, signal?: AbortSignal): AsyncGenerator<AnswerPiece> {
     const route = String(request.path ?? "").split("?")[0];
-    // (The engine's API and the coding agents', as a machine's bridge passes them on, who a message
-    // names with "&" told: bridge 0.9.64.)
-    if (macAnswers(route) || /^api(\/|$)/.test(route) || route.startsWith(AGENTS)) return yield* handle(request, phone, signal);
     if (isMachinesRoute(route)) return yield* machinesRoute(request, phone, signal, route, timing);
-    yield* toApp(request, phone, signal);
+    if (macAppAnswers(route)) return yield* toApp(request, phone, signal);
+    yield* handle(request, phone, signal);
   };
 }
 
@@ -110,6 +66,8 @@ export function macFront(handle: LinkHandler = engineHandler(readEngineFile, { n
 export async function runMacLink(): Promise<void> {
   let attempt = 0;
   macLink.stopped = false;
+  // As its app last said, until it says again: the link comes back after a restart, the app closed.
+  macLink.config ??= savedMacConfig();
   while (!macLink.stopped) {
     try {
       const config = macLink.config;

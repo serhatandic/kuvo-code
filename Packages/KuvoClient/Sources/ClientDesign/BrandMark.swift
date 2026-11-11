@@ -13,6 +13,18 @@ import UIKit
 /// ("claude", "cursor"), the coding agents' ("claude-code") and Kuvo Code's integrations' and MCP
 /// servers' ("slack", "cloudflare-docs").
 public enum BrandMark {
+    /// The mark of who made a model (its family, or its id), so a Claude model served through
+    /// Copilot still shows Anthropic's; else its provider's.
+    public static func maker(of model: String, provider: String) -> String {
+        let family = model.lowercased()
+        let prefixes: [(String, String)] = [
+            ("claude", "anthropic"), ("gpt", "openai"), ("o1", "openai"), ("o3", "openai"), ("o4", "openai"), ("codex", "openai"),
+            ("gemini", "google"), ("gemma", "google"), ("grok", "xai"), ("kimi", "moonshotai"), ("deepseek", "deepseek"),
+            ("mistral", "mistral"), ("codestral", "mistral"), ("devstral", "mistral"), ("llama", "meta"), ("glm", "zhipuai"), ("minimax", "minimax"),
+        ]
+        return prefixes.first { family.hasPrefix($0.0) }?.1 ?? provider
+    }
+
     /// Whether the app comes with a mark for `id`.
     public static func has(_ id: String) -> Bool { assetName(id) != nil }
 

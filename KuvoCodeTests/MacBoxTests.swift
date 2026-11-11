@@ -32,6 +32,34 @@ import Testing
         #expect(given == content)
     }
 
+    /// One that answers and ends, but leaves something running that holds its output open (a
+    /// helper it started), is heard as it ends: the engine's start never waits on what it left.
+    @Test(.timeLimit(.minutes(1))) func anEngineConfigThatLeavesSomethingRunningIsHeardAsItEnds() async throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "kuvo-engine-config-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let left = folder.appending(path: "left")
+        // Before the box's first start its folder isn't there; the settings are asked all the same.
+        try? FileManager.default.removeItem(at: BoxProcess.home)
+        defer {
+            try? FileManager.default.removeItem(at: BoxProcess.home)
+            if let pid = (try? String(contentsOf: left, encoding: .utf8)).flatMap({ Int32($0.trimmingCharacters(in: .whitespacesAndNewlines)) }) { kill(pid, SIGKILL) }
+            try? FileManager.default.removeItem(at: folder)
+        }
+        let engine = folder.appending(path: "opencode")
+        try """
+            #!/bin/sh
+            /bin/sleep 90 &
+            echo $! >'\(left.path)'
+            printf '%s' '{"model":"theirs"}'
+            exit 0
+            """.write(to: engine, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: engine.path)
+        let started = ContinuousClock.now
+        let given = await BoxProcess().engineConfig(engine: engine, content: #"{"model":"mine"}"#, environment: [:], timeout: 30)
+        #expect(given == #"{"model":"theirs"}"#)
+        #expect(ContinuousClock.now - started < .seconds(10))
+    }
+
     /// A `.env` in the box's folder (which an agent's command can write) sets nothing for it: the
     /// engine's Bun would load one before the box's code runs, and with it the vault's key, or
     /// the tests' stand-ins. The engine here is a stand-in that loads it as Bun does.
@@ -107,14 +135,19 @@ import Testing
 
         BoxProcess.engineChanged(ServerEndpoint(url: URL(string: "http://127.0.0.1:47970")!, password: "pw"), version: "2.0.32", pid: getpid())
         let running = try await info(endpoint)
+        #expect(running["kind"] as? String == "mac")
         #expect(running["engine"] as? String == "2.0.32")
-        #expect(running["chats"] as? String == BoxProcess.home.appending(path: "chats").path, "its folders are in the app's own")
+        #expect(running["started"] is Double)
+        #expect(running["chats"] as? String == Workspace.chatsFolder, "the Mac's chats, where the app keeps them")
         // Its record is yours alone.
         let record = BoxProcess.run.appending(path: "engine.json").path
         #expect((try FileManager.default.attributesOfItem(atPath: record)[.posixPermissions] as? Int) == 0o600)
 
         BoxProcess.engineChanged(nil, version: nil, pid: nil)
-        #expect(try await info(endpoint)["engine"] is NSNull, "stopped, it's gone")
+        // Stopped: it says the engine it brings, and that none runs.
+        let stopped = try await info(endpoint)
+        #expect(stopped["engine"] as? String == OpenCodeEngine.version)
+        #expect(stopped["started"] is NSNull)
 
         box.stop()
         #expect(PhoneLink.box.withLock { $0 } == nil)
