@@ -64,7 +64,10 @@ Before tagging one, try its update the way people will get it:
 It builds this checkout as that version, signed with your Developer ID and the update key from
 your keychain, serves it from `127.0.0.1`, and points the Kuvo Code in /Applications at it. Choose
 **Check for Updates…** there to go through the update window, the install, the restart and
-What's New. Ctrl-C stops the server and puts the real feed back.
+What's New. Ctrl-C stops the server and puts the real feed back, and so does any other way it ends,
+even killed outright: `scripts/feed-guard.py` watches it from outside its process group and tree,
+and each run first clears a `127.0.0.1` feed an earlier one left
+(`python3 -m unittest discover -s Tests/Guard -p test_try_update.py` checks each way).
 
 CI (`.github/workflows/ci.yml`) runs on GitHub's hosted runners, its jobs side by side: the
 generated files and What's New on Linux, the box's and the bridge's tests on macOS and Linux, the
