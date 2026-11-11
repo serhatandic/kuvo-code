@@ -64,6 +64,10 @@ TEMP="${TMPDIR:-/tmp}"
 CACHE="$(getconf DARWIN_USER_CACHE_DIR 2>/dev/null || echo "$TEMP/")"
 BUILD="${CACHE%/}/KuvoCodeTests-build"
 BUNDLE=run.kuvo.code.tests
+# Xcode's compilation cache, one for every checkout (scripts/xcode-cache.sh; heavy.sh turns it on
+# already, this for a heavy.sh from before it): what another worktree compiled isn't compiled again.
+. scripts/xcode-cache.sh
+xcode_cache
 set -- -project KuvoCode.xcodeproj -scheme KuvoCode -destination "platform=macOS,arch=$(uname -m)" \
     -derivedDataPath "$BUILD" -clonedSourcePackagesDirPath build/SourcePackages \
     APP_BUNDLE_ID=$BUNDLE CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM=

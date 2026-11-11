@@ -95,6 +95,12 @@
 # test: all work). Linux: `nice -n 15 ionice -c3` (just `nice -n 15` without ionice). A job on an
 # idle Mac runs as fast as ever; on a busy one it gives way.
 #
+# Jobs of the Xcode lanes (mac, mac-build, phone-build, phone) build with Xcode's compilation cache,
+# one for every checkout's builds (scripts/xcode-cache.sh, beside this copy): content-addressed, so
+# a build in a new worktree replays what an earlier build of the same code compiled, wherever it was,
+# and never what another branch's code made. Their xcodebuild gets it through XCODE_XCCONFIG_FILE
+# (unless the caller has one); KUVO_XCODE_CACHE=0 builds without it.
+#
 # Every job has a time limit, so one that hangs can't hold its kind's turn for hours: past it, the
 # job is stopped (its process group, as below: TERM, then KILL), it says what was running, and
 # heavy.sh exits 124. The clock starts when the command does: not while it waits in line for its
@@ -331,6 +337,16 @@ if [ -n "$holds" ]; then
     holds_any
     exit
 fi
+
+# The Xcode lanes' jobs build with Xcode's compilation cache, one for every checkout
+# (scripts/xcode-cache.sh, beside this copy: XCODE_XCCONFIG_FILE, unless the caller has one), so a
+# build in a new worktree replays what another worktree's build compiled instead of compiling it all
+# again. Not the box's: it runs no xcodebuild.
+case "$kind" in
+    mac | mac-build | phone)
+        if [ -f "$(dirname "$0")/xcode-cache.sh" ] && . "$(dirname "$0")/xcode-cache.sh"; then xcode_cache; fi
+        ;;
+esac
 
 # A time like 90m, 600s or 2h (plain: minutes), in seconds; $2 names the variable it came from.
 # (Its number in base 10, whatever zeros lead it, and at most six digits.)

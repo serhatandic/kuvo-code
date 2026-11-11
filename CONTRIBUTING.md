@@ -198,6 +198,16 @@ scripts/test-box.sh box <test-filter>
   were, so an older script and a new one on slot 1 still exclude each other;
 - `box`: the box's whole suites (`bun test`, `node --test`) and runs on a test machine.
 
+Every job of the Xcode lanes (`mac`, `mac-build`, `phone-build`, `phone`) builds with Xcode's
+compilation cache, one for all checkouts (`scripts/xcode-cache.sh`): a content-addressed store in
+`$(getconf DARWIN_USER_CACHE_DIR)KuvoCompilationCache`, keyed by what goes into each compile and not
+by where the checkout or build folder is, so a build in a new worktree replays what an earlier build
+of the same code compiled instead of compiling the app and its packages again. Code that differs gets
+its own key, so branches never mix. heavy.sh hands it to `xcodebuild` through `XCODE_XCCONFIG_FILE`;
+nothing changes in your command (settings on it still win). Xcode keeps the store under 20 GB
+(`KUVO_XCODE_CACHE_SIZE`); `KUVO_XCODE_CACHE=0` builds without it, and a caller with an
+`XCODE_XCCONFIG_FILE` of its own keeps that one instead. `swift build` and `swift test` don't use it.
+
 Before it joins its lane's line, a new job waits while the Mac is thrashing: swapping more than 10 MB
 a second (`KUVO_HEAVY_SWAP`) or its memory pressure critical, two minutes at most from when any job
 found it so (`KUVO_HEAVY_MEMORY_WAIT_FOR`; `KUVO_HEAVY_MEMORY=0` turns the memory wait off). It waits
