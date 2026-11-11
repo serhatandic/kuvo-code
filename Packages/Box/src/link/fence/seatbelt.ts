@@ -56,7 +56,12 @@ const GIT_GUARDED = String.raw`((((worktrees/[^/]+/)?modules/.+|worktrees/[^/]+)
 // hooks and settings. But for what git keeps in each as it fetches and tidies up (its objects, refs,
 // logs), whose folders come and go.
 const MODULE_FOLDERS = String.raw`/(worktrees/[^/]+/)?modules/.+`;
-const MODULE_KEPT = String.raw`/(worktrees/[^/]+/)?modules/.+/(objects/([0-9a-f][0-9a-f]|pack|info|tmp_objdir-[^/]+)|(refs|logs|lfs|rr-cache)(/.+)?|info)$`;
+// (Only below folders git made as it cloned, none of which can be made: nothing is moved in at a
+// name that could be a submodule's of its own. So in the sandbox a submodule doesn't get its first
+// `logs`, `lfs` or `rr-cache`, nor what a rebase, `git am` or a cherry-pick of several keep in it
+// (`rebase-merge`, `rebase-apply`, `sequencer`), nor a nested submodule set up: those run outside
+// it, with sandbox_ask.)
+const MODULE_KEPT = String.raw`/(worktrees/[^/]+/)?modules/.+/(objects|refs|logs|lfs|rr-cache)/.+$`;
 const AGENTS_GUARDED = String.raw`\.claude/settings(\.local)?\.json|\.mcp\.json|\.codex/(config\.toml|hooks\.json|\.env|rules(/.*)?)|\.cursor/(hooks|mcp)\.json|\.(gemini|grok)/settings\.json|\.grok/(config\.toml|sandbox\.toml|lsp\.json|(hooks|plugins|agents|workflows)(/.*)?)|\.(claude|cursor)/hooks(/.*)?|\.(claude|codex|cursor|gemini|grok)`;
 /** Every kind of write, by name, and `file-write*`. A rule on a kind by its name is checked before any
  * on `file-write*`, whatever their order, so the profile names them all wherever it carves one out of

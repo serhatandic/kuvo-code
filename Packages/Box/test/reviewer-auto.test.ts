@@ -652,4 +652,13 @@ test("in Auto, a folder of its own traded for a link to elsewhere takes nothing 
   symlinkSync(elsewhere, own)
   expect((await ask("ses_own_swap", "per_s5", join(own, "theirs.md")))?.decision).toBe("refuse")
   expect(prompts.length).toBe(asked + 3)
+  // Traded before it first asked: as the box saw it made.
+  const early = join(box, "own-early")
+  mkdirSync(early)
+  conversation("ses_early_swap", "auto", "Fix the build")
+  sessions.ses_early_swap.location = { directory: early }
+  await reviewing.noteFolderFound(early)
+  renameSync(early, early + ".r")
+  symlinkSync(elsewhere, early)
+  expect((await ask("ses_early_swap", "per_s6", join(early, "theirs.md")))?.decision).toBe("refuse")
 })

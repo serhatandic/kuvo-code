@@ -10,9 +10,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { isObject } from "../../shared/json";
+import { writePrivate } from "../files";
 import { oneLine } from "../../shared/text";
 import { bridgeTarget, call, call as engineCall, engineGet, readEngineFile } from "../engine/client";
-import { attachmentRoots, homeFolder } from "../home";
+import { attachmentRoots, BOX, homeFolder } from "../home";
 import { sendInto, stopSession, writtenByYou } from "../engine/queue";
 import { boxNote } from "../../shared/queues";
 import { messageID } from "../engine/sessions";
@@ -411,17 +412,44 @@ function within(file: string, folder: string): boolean {
   return inside === "" || (!inside.startsWith("..") && !path.isAbsolute(inside));
 }
 
-// Where each of a conversation's own folders was first found to be, here: one traded for a link to
-// elsewhere since (by a command in it) doesn't take its files with it.
-const firstFound = new Map<string, string>();
+// Where each of a conversation's own folders was first found to be: as the box first sees a
+// conversation (`noteFolderFound`), else as it first looks there, kept in the box's folder across
+// restarts. One traded for a link to elsewhere since (by a command in it) doesn't take its files
+// with it.
+const FOUND_FILE = path.join(BOX, "found-folders.json");
+const MOST_FOUND = 2000;
+let firstFound: Map<string, string> | null = null;
+function foundFolders(): Map<string, string> {
+  if (firstFound) return firstFound;
+  firstFound = new Map();
+  try {
+    const kept = JSON.parse(fs.readFileSync(FOUND_FILE, "utf8"));
+    if (isObject(kept)) for (const [folder, real] of Object.entries(kept)) if (typeof real === "string" && path.isAbsolute(real)) firstFound.set(folder, real);
+  } catch {}
+  return firstFound;
+}
+function keepFound(folder: string, real: string): void {
+  const found = foundFolders();
+  if (found.get(folder) === real) return;
+  found.delete(folder);
+  found.set(folder, real);
+  while (found.size > MOST_FOUND) found.delete(found.keys().next().value!);
+  try { writePrivate(FOUND_FILE, JSON.stringify(Object.fromEntries(found))); } catch {}
+}
 function foundAt(folder: string): string {
-  let found = firstFound.get(folder);
-  if (found === undefined) {
-    found = realPath(folder);
-    if (firstFound.size >= 2000) firstFound.delete(firstFound.keys().next().value!);
-    firstFound.set(folder, found);
-  }
-  return found;
+  const known = foundFolders().get(folder);
+  if (known !== undefined) return known;
+  const real = realPath(folder);
+  keepFound(folder, real);
+  return real;
+}
+
+/** A conversation's folder as the box first sees it (as it's made, or adopted): where it really is
+ * then is where its own is, whatever it's traded for later. */
+export async function noteFolderFound(folder: unknown): Promise<void> {
+  if (typeof folder !== "string" || !path.isAbsolute(folder) || foundFolders().has(folder)) return;
+  await askedAbout([folder]);
+  keepFound(folder, realPath(folder));
 }
 
 function realPath(file: string): string {

@@ -668,4 +668,34 @@ test("a place taken back while a review is under way isn't stored again by it (#
 test.skipIf(process.platform !== "darwin")("an agent in Auto never starts a session in ~/Library, nor takes one of its folders for its own, but for the caches commands write there", async () => {
   expect(await reviewer.keptFromSessions(join(homedir(), "Library", "Preferences", "kuvo-test"), policy ??= fencePolicy())).toMatch(/~\/Library/)
   expect(await reviewer.keptFromSessions(join(homedir(), "Library", "Developer", "kuvo-test"), policy)).toBeNull()
+  // iCloud Drive, which commands write, is a place for projects like any.
+  expect(await reviewer.keptFromSessions(join(homedir(), "Library", "Mobile Documents", "com~apple~CloudDocs", "kuvo-test"), policy)).toBeNull()
+})
+
+test("what's a conversation's own in Kuvo Code's folders stays its own where those are in ~/Library, as a Mac app keeps them: a bot's memory", async () => {
+  const { BOTS } = await import("../src/link/home")
+  const bot = join(BOTS, "bot_keeper")
+  const base = policy ??= fencePolicy()
+  // (As this Mac's app keeps them: Kuvo Code's folders in what's kept whole in your home.)
+  const asOnAMac = { ...base, homeKept: [...(base.homeKept ?? []), realpathSync(join(BOTS, "..", ".."))] }
+  mkdirSync(join(bot, "workspace"), { recursive: true })
+  expect(reviewer.walledForOwn(join(bot, "MEMORY.md"), asOnAMac, [join(bot, "workspace"), bot])).toBe(false)
+  // Another bot's isn't.
+  expect(reviewer.walledForOwn(join(BOTS, "bot_other", "MEMORY.md"), asOnAMac, [join(bot, "workspace"), bot])).toBe(true)
+})
+
+test("a place you revoke while another review is under way isn't stored by it either", async () => {
+  const context = yours("Write the notes")
+  const reviews = join(box, "reviews")
+  const first = join(box, "notes-revoke-a"), second = join(box, "notes-revoke-b")
+  for (const each of [first, second]) mkdirSync(each, { recursive: true })
+  const change = (where: string) => ({ kind: "file" as const, path: where, access: "write" as const, folder: project, tool: "write", input: { filePath: where } })
+  await reviewer.review(change(join(first, "a.md")), context, given(model(allows)))
+  const kept = reviewer.reviewLog(context.session, reviews).decisions.find(each => each.place)!
+  const slow = Object.assign(async () => {
+    reviewer.revokePlace(context.session, kept.id!, Date.now(), reviews)
+    return allows
+  }, { shown: [] as string[] })
+  await reviewer.review(change(join(second, "b.md")), context, given(slow as never))
+  expect(reviewer.reviewLog(context.session, reviews).places ?? []).toEqual([])
 })

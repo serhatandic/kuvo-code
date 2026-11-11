@@ -240,9 +240,10 @@ export async function keptFromSessions(folder: string, policy: FencePolicy = fen
 }
 
 /** Whether `at` is in what's kept whole from commands in your home (`homeKept`: ~/Library on a
- * Mac), but for the caches in it they write. */
+ * Mac), but for the caches in it they write and what's open in it again (`homeOpen`: iCloud Drive,
+ * logs). */
 function inHomeKept(at: string, policy: FencePolicy): boolean {
-  return (policy.homeKept ?? []).some(wall => inside(at, wall) || holds(at, wall)) && !policy.writable.some(each => inside(at, each));
+  return (policy.homeKept ?? []).some(wall => inside(at, wall) || holds(at, wall)) && ![...policy.writable, ...(policy.homeOpen ?? [])].some(each => inside(at, each));
 }
 
 const KUVO = "It reaches Kuvo Code's own folders, which is never allowed.";
@@ -1209,8 +1210,10 @@ function holdsRepository(folder: string): boolean {
  * those is judged as anywhere. */
 export function walledForOwn(where: string, policy: FencePolicy = fencePolicy(), own: readonly string[] = []): boolean {
   const at = realish(where);
-  return inKuvo(at, policy, ownInside(own, policy)) || runsLater(at, policy) || atLogin(at, policy.home) || isSecret(at, policy)
-    || ownAt(at, policy.home) !== null || inHomeKept(at, policy) || WORKTREE_RECORDS.test(at);
+  // (What's the conversation's own in Kuvo Code's folders, in ~/Library on a Mac, is its own there.)
+  const ours = ownInside(own, policy).some(folder => exactly(at, folder));
+  return (!ours && (inKuvo(at, policy) || inHomeKept(at, policy))) || runsLater(at, policy) || atLogin(at, policy.home) || isSecret(at, policy)
+    || ownAt(at, policy.home) !== null || WORKTREE_RECORDS.test(at);
 }
 
 // (Which worktrees a repository has, and where each one's repository is: what Auto counts as a

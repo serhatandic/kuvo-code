@@ -449,13 +449,15 @@ test.skipIf(!canFence || !mac)("on a Mac, a command never moves a submodule's re
       tries("moves a module named with a slash out", `mv ${git}/modules/vendor/lib ${project}/lib-out`),
       tries("moves a nested module out", `mv ${git}/modules/a/modules/b ${project}/b-out`),
       tries("moves a folder in as a module", `mv ${project}/fake ${git}/modules/vendor/evil`),
+      tries("moves a folder in at a name git keeps in one", `mv ${project}/fake ${git}/modules/vendor/refs`),
       tries("writes a worktree's module settings", `echo '[core] fsmonitor = evil' >> ${git}/worktrees/wt/modules/x/config`),
       tries("fetches objects into a module", `mkdir ${git}/modules/vendor/lib/objects/ab && echo x > ${git}/modules/vendor/lib/objects/ab/cd && rm -r ${git}/modules/vendor/lib/objects/ab`),
       tries("keeps a module's branch", `mkdir -p ${git}/modules/vendor/lib/refs/heads/feature && echo 0 > ${git}/modules/vendor/lib/refs/heads/feature/x && rm -r ${git}/modules/vendor/lib/refs/heads/feature`),
     ].join("\n"), { KUVO_FENCE_GIT: git })
-    expect(outcomes(out)).toEqual({ "moves a module named with a slash out": "refused", "moves a nested module out": "refused", "moves a folder in as a module": "refused",
+    expect(outcomes(out)).toEqual({ "moves a module named with a slash out": "refused", "moves a nested module out": "refused", "moves a folder in as a module": "refused", "moves a folder in at a name git keeps in one": "refused",
       "writes a worktree's module settings": "refused", "fetches objects into a module": "allowed", "keeps a module's branch": "allowed" })
     expect(existsSync(join(git, "modules", "vendor", "evil"))).toBe(false)
+    expect(existsSync(join(git, "modules", "vendor", "refs"))).toBe(false)
   } finally {
     rmSync(root, { recursive: true, force: true })
   }

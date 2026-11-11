@@ -14,7 +14,7 @@ import { allowFullAccess, APPROVALS, approvalOf, approvalRules, approvalsSince, 
 import { resumeReviewedSession } from "../work/goals";
 import { sandboxOn } from "../work/sandbox";
 import { approveHeld, clearFetched, clearPlaces, resumeReviews, reviewLog, revokePlace, seeHeld, shownReviews } from "../work/reviewer";
-import { tellApproved } from "../work/reviewing";
+import { noteFolderFound, tellApproved } from "../work/reviewing";
 import { markConversation } from "../work/full";
 import { botOfConversation, worksFor } from "../work/tree";
 import { listBots } from "../bots/list";
@@ -126,6 +126,8 @@ export async function adoptConversation(target: Target, id: unknown, agents: boo
   if (typeof id !== "string" || !id) return;
   const data = (await engineGet(target, `api/session/${encodeURIComponent(id)}`).catch(() => null) as EngineAnswer<EngineSession> | null)?.data;
   if (!data?.id) return;
+  // (Where its folder is now is where its own is: `reviewing.ts`.)
+  await noteFolderFound(data.location?.directory).catch(() => {});
   const at = found(target, data, agents);
   const now = approvalOf(at.data, { agents, bot: at.bot });
   if (!now.pending) return;
