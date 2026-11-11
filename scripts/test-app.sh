@@ -58,6 +58,14 @@ if grep -rnE '\bSec(Item(CopyMatching|Add|Update|Delete)|Keychain[A-Za-z]*)\(' -
     exit 1
 fi
 
+# Built with Xcode's compilation cache (scripts/xcode-cache.sh), the compiler sees the sources as
+# /^src/…, and so does #filePath: a test finds its files through its bundle, never #filePath, which
+# names no file on this Mac. (As where an issue was recorded, `file: … = #filePath`, it's only said.)
+if grep -rn '#filePath' --include='*.swift' KuvoCode KuvoCodeTests | grep -v '= #filePath'; then
+    echo "The app and its tests find their files through their bundles, never #filePath: built with the compilation cache, it's /^src/…, no file on this Mac." >&2
+    exit 1
+fi
+
 TEMP="${TMPDIR:-/tmp}"
 # Built in this user's cache folder, kept from run to run: macOS clears files the temporary folder
 # hasn't used for a few days, which left builds there missing parts of their packages.
@@ -67,7 +75,7 @@ BUNDLE=run.kuvo.code.tests
 # Xcode's compilation cache, one for every checkout (scripts/xcode-cache.sh; heavy.sh turns it on
 # already, this for a heavy.sh from before it): what another worktree compiled isn't compiled again.
 . scripts/xcode-cache.sh
-xcode_cache
+xcode_cache scripts
 set -- -project KuvoCode.xcodeproj -scheme KuvoCode -destination "platform=macOS,arch=$(uname -m)" \
     -derivedDataPath "$BUILD" -clonedSourcePackagesDirPath build/SourcePackages \
     APP_BUNDLE_ID=$BUNDLE CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM=

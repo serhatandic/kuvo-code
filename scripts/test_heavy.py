@@ -27,7 +27,7 @@ def clean_environment():
     """The environment of the run without what a job of heavy.sh leaves in it (a test run from inside
     one would otherwise see that job's turn and slot)."""
     # (And this copy runs, not the canonical one: KUVO_HEAVY_CANONICAL empty.)
-    return dict({k: v for k, v in os.environ.items() if k not in ("KUVO_HEAVY_SLOTS", "KUVO_HEAVY_HELD", "KUVO_HEAVY_HOLDING", "KUVO_HEAVY_SLOT", "KUVO_HEAVY_BUILD_SUFFIX", "KUVO_TEST_SIMULATOR", "KUVO_HEAVY_WAIT", "KUVO_HEAVY_LIMIT", "KUVO_HEAVY_MAC_FIRST_FOR", "KUVO_HEAVY_MEMORY", "KUVO_HEAVY_MEMORY_WAIT_FOR", "KUVO_HEAVY_PRIORITY", "KUVO_HEAVY_HANDED", "KUVO_HEAVY_STUCK_AFTER", "XCODE_XCCONFIG_FILE", "KUVO_XCODE_CACHE", "KUVO_XCODE_CACHE_SIZE", "KUVO_XCODE_CACHE_DIR")}, KUVO_HEAVY_CANONICAL="")
+    return dict({k: v for k, v in os.environ.items() if k not in ("KUVO_HEAVY_SLOTS", "KUVO_HEAVY_HELD", "KUVO_HEAVY_HOLDING", "KUVO_HEAVY_SLOT", "KUVO_HEAVY_BUILD_SUFFIX", "KUVO_TEST_SIMULATOR", "KUVO_HEAVY_WAIT", "KUVO_HEAVY_LIMIT", "KUVO_HEAVY_MAC_FIRST_FOR", "KUVO_HEAVY_MEMORY", "KUVO_HEAVY_MEMORY_WAIT_FOR", "KUVO_HEAVY_PRIORITY", "KUVO_HEAVY_HANDED", "KUVO_HEAVY_STUCK_AFTER", "XCODE_XCCONFIG_FILE", "KUVO_XCODE_CACHE", "KUVO_XCODE_CACHE_SIZE", "KUVO_XCODE_CACHE_DIR", "KUVO_XCODE_CAS_PATH", "CI")}, KUVO_HEAVY_CANONICAL="")
 
 
 # Prints what the priority of the process it runs in is: its nice value (macOS's jobs run at utility
@@ -60,7 +60,7 @@ _STAND_IN = None
 
 def without_background_priority(env):
     """`env` with a `taskpolicy` first on PATH that runs the command as it is (and, with FAKE_POLICY_LOG
-    set, writes the option it was given there). Jobs run at background priority, which on a Mac under
+    set, writes the option it was given there). Jobs run at low priority, which on a Mac under
     heavy load can take minutes for what a test starts in a second: the tests that aren't about the
     policy run the helper's jobs as they are, and the tests of it look at what `taskpolicy` is asked,
     and, once, at the real policy."""
@@ -100,7 +100,7 @@ class HeavyTests(unittest.TestCase):
     def setUp(self):
         self.locks = tempfile.mkdtemp()
         # As from the 29th, when the old single lock is over (the day before, test_the_day_before).
-        self.env = without_background_priority(dict(clean_environment(), KUVO_HEAVY_DIR=self.locks, KUVO_HEAVY_LOAD="1000", KUVO_HEAVY_MEMORY="0", KUVO_HEAVY_OLD_UNTIL="20000101"))
+        self.env = without_background_priority(dict(clean_environment(), KUVO_HEAVY_DIR=self.locks, KUVO_HEAVY_LOAD="1000", KUVO_HEAVY_MEMORY="0", KUVO_HEAVY_OLD_UNTIL="20000101", KUVO_XCODE_CACHE="0"))
 
     def run_heavy(self, kind, *command, **env):
         result = subprocess.run([HEAVY, kind, *command], env=dict(self.env, KUVO_HEAVY_WAIT="0", **env), capture_output=True, text=True, timeout=30)
@@ -849,12 +849,12 @@ class HeavyTests(unittest.TestCase):
         hasn't run in two minutes, the test can't say."""
         baseline = subprocess.run(PROBE, capture_output=True, text=True, timeout=120).stdout
         if is_low(baseline):  # run under heavy.sh itself, say
-            self.skipTest("this test run is at background priority already")
+            self.skipTest("this test run is at low priority already")
         env = dict(self.env, PATH=os.environ["PATH"], KUVO_HEAVY_WAIT="0")
         try:
             result = subprocess.run([HEAVY, "box", *PROBE], env=env, capture_output=True, text=True, timeout=120, stdin=subprocess.DEVNULL, start_new_session=True)
         except subprocess.TimeoutExpired:
-            self.skipTest("the Mac is too busy for a job at background priority to run")
+            self.skipTest("the Mac is too busy for a job at low priority to run")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(is_low(result.stdout), result.stdout)
         self.assertFalse(is_background(result.stdout), result.stdout)
@@ -1094,37 +1094,92 @@ class HeavyTests(unittest.TestCase):
         self.assertEqual(result.returncode, 64)
         self.assertIn("Usage", result.stderr)
 
-    def xcconfig_seen(self, kind, **env):
-        """The XCODE_XCCONFIG_FILE a job of `kind` gets, and what that file says (or None)."""
-        store = tempfile.mkdtemp()
-        self.addCleanup(shutil.rmtree, store, ignore_errors=True)
-        result = subprocess.run([HEAVY, kind, "/bin/sh", "-c", 'printf "%s" "${XCODE_XCCONFIG_FILE-}"'], env=dict(self.env, KUVO_XCODE_CACHE_DIR=store, **env), capture_output=True, text=True, timeout=30)
+    SEEN = 'printf "%s|%s|%s" "${XCODE_XCCONFIG_FILE-}" "${KUVO_XCODE_CAS_PATH-}" "${KUVO_XCODE_CACHE_SIZE-}"'
+
+    def cache_seen(self, command, store=None, **env):
+        """What a job of `command` (heavy.sh and its arguments, before the job's own) sees of the
+        compilation cache: its settings file, the store's folder and its size ("" for each it lacks)."""
+        if store is None:
+            store = tempfile.mkdtemp()
+            self.addCleanup(shutil.rmtree, store, ignore_errors=True)
+        result = subprocess.run([*command, "/bin/sh", "-c", self.SEEN], env=dict(self.env, **dict(dict(KUVO_XCODE_CACHE="1", KUVO_XCODE_CACHE_DIR=store), **env)), capture_output=True, text=True, timeout=30)
         self.assertEqual(result.returncode, 0, result.stderr)
-        path = result.stdout
-        settings = Path(path).read_text() if path and Path(path).is_file() else None
-        return path, settings, store
+        return tuple(result.stdout.split("|")), result.stderr
+
+    SETTINGS = str(Path(HEAVY).with_name("xcode-cache.xcconfig"))
 
     @unittest.skipUnless(sys.platform == "darwin", "Xcode's lanes build only on a Mac")
     def test_jobs_of_the_xcode_lanes_build_with_the_shared_compilation_cache(self):
+        store = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, store, ignore_errors=True)
         for kind in ("mac", "mac-build", "phone-build", "phone"):
-            path, settings, store = self.xcconfig_seen(kind)
-            self.assertTrue(path.startswith(store + "/"), (kind, path))
-            self.assertIn("COMPILATION_CACHE_ENABLE_CACHING = YES", settings)
-            self.assertIn(f"COMPILATION_CACHE_CAS_PATH = {store}\n", settings)
-            self.assertIn("COMPILATION_CACHE_LIMIT_SIZE = 20G", settings)
-            for mapping in ("SWIFT_ENABLE_PREFIX_MAPPING", "SWIFT_ENABLE_PROJECT_PREFIX_MAPPING", "CLANG_ENABLE_PREFIX_MAPPING", "CLANG_ENABLE_PROJECT_PREFIX_MAPPING"):
-                self.assertIn(f"{mapping} = YES", settings)
-            self.assertIn("COMPILER_WORKING_DIRECTORY = $(PROJECT_DIR)\n", settings)
-        self.assertIn("COMPILATION_CACHE_LIMIT_SIZE = 5G", self.xcconfig_seen("mac-build", KUVO_XCODE_CACHE_SIZE="5G")[1])
+            self.assertEqual(self.cache_seen([HEAVY, kind], store)[0], (self.SETTINGS, store, "20G"), kind)
+        self.assertEqual(self.cache_seen([HEAVY, "mac-build"], store, KUVO_XCODE_CACHE_SIZE="5G")[0], (self.SETTINGS, store, "5G"))
+        # A folder that isn't there yet is made.
+        self.assertEqual(self.cache_seen([HEAVY, "mac-build"], os.path.join(store, "new"))[0][1], os.path.join(store, "new"))
+        settings = Path(self.SETTINGS).read_text()
+        for line in ("COMPILATION_CACHE_ENABLE_CACHING = YES", "COMPILATION_CACHE_CAS_PATH = $(KUVO_XCODE_CAS_PATH:default=", "COMPILATION_CACHE_LIMIT_SIZE = $(KUVO_XCODE_CACHE_SIZE:default=20G)", "SWIFT_ENABLE_PREFIX_MAPPING = YES", "SWIFT_ENABLE_PROJECT_PREFIX_MAPPING = YES", "CLANG_ENABLE_PREFIX_MAPPING = YES", "CLANG_ENABLE_PROJECT_PREFIX_MAPPING = YES", "COMPILER_WORKING_DIRECTORY = $(PROJECT_DIR)"):
+            self.assertIn(line, settings)
+
+    @unittest.skipUnless(sys.platform == "darwin", "Xcode's lanes build only on a Mac")
+    def test_a_job_gets_the_canonical_copys_cache_and_one_inside_a_job_keeps_it(self):
+        # Handed on from another copy: the canonical one's settings, beside it.
+        canonical = self.script(Path(HEAVY).read_text())
+        Path(canonical).with_name("xcode-cache.sh").write_text(Path(HEAVY).with_name("xcode-cache.sh").read_text())
+        Path(canonical).with_name("xcode-cache.xcconfig").write_text(Path(self.SETTINGS).read_text())
+        seen = self.cache_seen([HEAVY, "mac-build"], KUVO_HEAVY_CANONICAL=canonical)[0]
+        self.assertEqual(seen[0], str(Path(canonical).with_name("xcode-cache.xcconfig")))
+        # Inside a job: the same, and none at all when it says KUVO_XCODE_CACHE=0.
+        store = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, store, ignore_errors=True)
+        inner = f'"{HEAVY}" mac-build /bin/sh -c \'{self.SEEN}\''
+        result = subprocess.run([HEAVY, "mac-build", "/bin/sh", "-c", inner], env=dict(self.env, KUVO_XCODE_CACHE="1", KUVO_XCODE_CACHE_DIR=store), capture_output=True, text=True, timeout=30)
+        self.assertEqual(tuple(result.stdout.split("|")), (self.SETTINGS, store, "20G"), result.stderr)
+        result = subprocess.run([HEAVY, "mac-build", "/bin/sh", "-c", "KUVO_XCODE_CACHE=0 " + inner], env=dict(self.env, KUVO_XCODE_CACHE="1", KUVO_XCODE_CACHE_DIR=store), capture_output=True, text=True, timeout=30)
+        self.assertEqual(tuple(result.stdout.split("|")), ("", "", ""), result.stderr)
 
     def test_a_job_that_isnt_xcodes_or_asks_not_to_or_has_its_own_settings_gets_no_cache(self):
-        self.assertEqual(self.xcconfig_seen("box")[:2], ("", None))
-        self.assertEqual(self.xcconfig_seen("mac-build", KUVO_XCODE_CACHE="0")[:2], ("", None))
+        none = ("", "", "")
+        self.assertEqual(self.cache_seen([HEAVY, "box"])[0], none)
+        self.assertEqual(self.cache_seen([HEAVY, "mac-build"], KUVO_XCODE_CACHE="0")[0], none)
+        self.assertEqual(self.cache_seen([HEAVY, "mac-build"], CI="true")[0], none)
         own = os.path.join(self.locks, "own.xcconfig")
         Path(own).write_text("A = B\n")
-        self.assertEqual(self.xcconfig_seen("mac-build", XCODE_XCCONFIG_FILE=own)[:2], (own, "A = B\n"))
-        path, settings, _ = self.xcconfig_seen("mac-build", KUVO_XCODE_CACHE_SIZE="lots")
-        self.assertEqual((path, settings), ("", None))
+        self.assertEqual(self.cache_seen([HEAVY, "mac-build"], XCODE_XCCONFIG_FILE=own)[0], (own, "", ""))
+        for size in ("lots", "0", "20", "0G", "1234567G", "20GB", "5P"):
+            with self.subTest(size=size):
+                seen, said = self.cache_seen([HEAVY, "mac-build"], KUVO_XCODE_CACHE_SIZE=size)
+                self.assertEqual(seen[:2], ("", ""))
+                if sys.platform == "darwin":
+                    self.assertIn("KUVO_XCODE_CACHE_SIZE is a size like 20G", said)
+
+    @unittest.skipUnless(sys.platform == "darwin", "Xcode's lanes build only on a Mac")
+    def test_without_its_settings_or_a_folder_it_can_write_a_job_builds_without_the_cache(self):
+        # A copy of heavy.sh alone (no xcode-cache.sh beside it), as some of these tests make.
+        alone = self.script(Path(HEAVY).read_text())
+        self.assertEqual(self.cache_seen([alone, "mac-build"], KUVO_HEAVY_CANONICAL="")[0], ("", "", ""))
+        # Its settings file gone.
+        partial = self.script(Path(HEAVY).read_text())
+        Path(partial).with_name("xcode-cache.sh").write_text(Path(HEAVY).with_name("xcode-cache.sh").read_text())
+        self.assertEqual(self.cache_seen([partial, "mac-build"], KUVO_HEAVY_CANONICAL="")[0], ("", "", ""))
+        # A folder it can't write.
+        locked = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, locked, ignore_errors=True)
+        os.chmod(locked, 0o500)
+        self.addCleanup(os.chmod, locked, 0o700)
+        self.assertEqual(self.cache_seen([HEAVY, "mac-build"], os.path.join(locked, "store"))[0], ("", "", ""))
+        self.assertEqual(self.cache_seen([HEAVY, "mac-build"], locked)[0], ("", "", ""))
+
+    @unittest.skipUnless(sys.platform == "darwin", "Xcode's lanes build only on a Mac")
+    def test_a_cache_twice_its_size_says_so(self):
+        store = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, store, ignore_errors=True)
+        with open(os.path.join(store, "data"), "wb") as f:
+            f.write(os.urandom(300 * 1024))
+        seen, said = self.cache_seen([HEAVY, "mac-build"], store, KUVO_XCODE_CACHE_SIZE="100K")
+        self.assertEqual(seen, (self.SETTINGS, store, "100K"))
+        self.assertIn("over twice its 100K", said)
+        self.assertNotIn("over twice", self.cache_seen([HEAVY, "mac-build"], store, KUVO_XCODE_CACHE_SIZE="1M")[1])
 
 
 class StoppingTests(unittest.TestCase):
@@ -1136,7 +1191,7 @@ class StoppingTests(unittest.TestCase):
     def setUp(self):
         self.locks = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.locks, ignore_errors=True)
-        self.env = without_background_priority(dict(clean_environment(), KUVO_HEAVY_DIR=self.locks, KUVO_HEAVY_LOAD="1000", KUVO_HEAVY_MEMORY="0", KUVO_HEAVY_OLD_UNTIL="20000101", KUVO_HEAVY_WAIT="0"))
+        self.env = without_background_priority(dict(clean_environment(), KUVO_HEAVY_DIR=self.locks, KUVO_HEAVY_LOAD="1000", KUVO_HEAVY_MEMORY="0", KUVO_HEAVY_OLD_UNTIL="20000101", KUVO_HEAVY_WAIT="0", KUVO_XCODE_CACHE="0"))
         self.pids = []
 
     def tearDown(self):

@@ -93,7 +93,7 @@
 # `taskpolicy -c utility nice -n 20`, utility QoS at the lowest nice: below the box's own processes,
 # at default priority, which win over it, but on every core. Not background QoS (`taskpolicy -b`,
 # as before #557): on Apple silicon that runs only on the efficiency cores, with its I/O throttled,
-# and a cold build of the package UsageKit took 87 s under it against 48 s at utility on an idle Mini
+# and a cold build of the package UsageKit took 87 s under it against 49 s at utility and nice 20 on an idle Mini
 # (six of its twelve cores efficiency ones), while a stand-in for the box (six CPU-bound processes
 # at default priority) took 3.6 s alone, 3.5 s beside the background build, 4.4 s beside the utility
 # one at nice 20 and 7 s beside one at utility alone (tried with xcodebuild builds and tests, a
@@ -345,12 +345,12 @@ if [ -n "$holds" ]; then
 fi
 
 # The Xcode lanes' jobs build with Xcode's compilation cache, one for every checkout
-# (scripts/xcode-cache.sh, beside this copy: XCODE_XCCONFIG_FILE, unless the caller has one), so a
-# build in a new worktree replays what another worktree's build compiled instead of compiling it all
-# again. Not the box's: it runs no xcodebuild.
+# (scripts/xcode-cache.sh and its xcconfig, beside this copy: XCODE_XCCONFIG_FILE, unless the caller
+# has one), so a build in a new worktree replays what another worktree's build compiled instead of
+# compiling it all again. Not the box's: it runs no xcodebuild.
 case "$kind" in
     mac | mac-build | phone)
-        if [ -f "$(dirname "$0")/xcode-cache.sh" ] && . "$(dirname "$0")/xcode-cache.sh"; then xcode_cache; fi
+        if [ -f "$(dirname "$0")/xcode-cache.sh" ] && . "$(dirname "$0")/xcode-cache.sh"; then xcode_cache "$(dirname "$0")"; fi
         ;;
 esac
 
