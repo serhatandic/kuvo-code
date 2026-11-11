@@ -254,10 +254,18 @@ import UniformTypeIdentifiers
         return described(menu)
     }
 
+    /// `lines` with the rows that open these submenus dimmed: SwiftUI left a disabled `Menu`'s row
+    /// as it was (opening onto disabled rows); a held one's is dimmed and doesn't open.
+    private func dimming(_ submenus: [String], in lines: [String]) -> [String] {
+        lines.map { line in
+            submenus.contains { line.hasPrefix($0 + " | ") } ? line.replacingOccurrences(of: "enabled true", with: "enabled false") : line
+        }
+    }
+
     @Test(arguments: [false, true])
     func heldRowsMakeTheMenuSwiftUIsContextMenuMade(disabled: Bool) throws {
         let icon = NSWorkspace.shared.icon(for: .folder)
-        let swiftUIs = try swiftUIsMenu(icon, disabled: disabled)
+        let swiftUIs = dimming(disabled ? ["Move To", "Move to Computer"] : ["Move to Computer"], in: try swiftUIsMenu(icon, disabled: disabled))
         let shown = Shown(Text("Row").frame(width: 300, height: 300).heldContextMenu { heldRows(icon) }.disabled(disabled))
         defer { shown.close() }
         let held = described(try #require(try shown.rightClick(at: NSPoint(x: 150, y: 150))))
@@ -274,6 +282,189 @@ import UniformTypeIdentifiers
         before.update()
         after.update()
         #expect(described(after) == described(before))
+    }
+
+    // MARK: What a menu shows
+
+    private func rows(@HeldRows _ rows: () -> [HeldRow]) -> [HeldRow] { rows() }
+
+    /// Rows that don't show now (read as a menu reads what's true when it opens).
+    private let showsNow = false
+
+    @Test func aLineOnlyGoesBetweenRows() throws {
+        // At either end, and two together.
+        #expect(titles(HeldRow.menu(rows {
+            HeldRow.divider
+            HeldRow.button("Pin") {}
+            HeldRow.divider
+            HeldRow.divider
+            HeldRow.button("Copy as Markdown") {}
+            HeldRow.divider
+        })) == ["Pin", "—", "Copy as Markdown"])
+        // Around rows that don't show now (a project's menu on a machine, a session that's archived).
+        #expect(titles(HeldRow.menu(rows {
+            HeldRow.button("New Session") {}
+            if showsNow { HeldRow.button("Connect") {} }
+            HeldRow.divider
+            if showsNow { HeldRow.button("Show in Finder") {} }
+            HeldRow.divider
+            HeldRow.button("Remove Project…") {}
+            HeldRow.divider
+            if showsNow { HeldRow.button("Refresh Models") {} }
+        })) == ["New Session", "—", "Remove Project…"])
+        // A section after a divider: one line before its title.
+        #expect(titles(HeldRow.menu(rows {
+            HeldRow.button("Rename") {}
+            HeldRow.divider
+            HeldRow.section("Places") { HeldRow.button("lab") {} }
+            HeldRow.divider
+        })) == ["Rename", "—", "Places", "lab"])
+        // In a submenu, made as it opens.
+        let menu = HeldRow.menu(rows {
+            HeldRow.submenu("Move To") {
+                HeldRow.divider
+                HeldRow.button("Later") {}
+                HeldRow.divider
+                HeldRow.divider
+                HeldRow.button("Parked") {}
+                HeldRow.divider
+            }
+        })
+        let submenu = try #require(menu.items.first?.submenu)
+        open(submenu)
+        #expect(titles(submenu) == ["Later", "—", "Parked"])
+
+        // Nothing but lines: no menu.
+        let view = Text("Row").frame(width: 300, height: 300).heldContextMenu {
+            HeldRow.divider
+            if showsNow { HeldRow.button("Copy") {} }
+            HeldRow.divider
+        }
+        let window = Shown(view)
+        defer { window.close() }
+        #expect(try window.rightClick(at: NSPoint(x: 150, y: 150)) == nil)
+    }
+
+    @Test func aDisabledSubmenuIsDimmedAndAnEmptyOneLeftOut() throws {
+        let none: [String] = []
+        let menu = HeldRow.menu(rows {
+            HeldRow.submenu("Move to Computer", disabled: true) { HeldRow.button("lab") {} }
+            HeldRow.submenu("Move to Project") {
+                for project in none { HeldRow.button(project) {} }
+            }
+            HeldRow.button("Archive") {}
+        })
+        #expect(titles(menu) == ["Move to Computer", "Archive"])
+        #expect(menu.items.first?.isEnabled == false, "dimmed, and so it doesn't open")
+    }
+
+    @Test func anEmptyTooltipIsNone() {
+        let menu = HeldRow.menu([.button("Remove “Later”", help: "") {}, .button("Remove “Ideas”", help: "Move its items out first.") {}])
+        #expect(menu.items.map(\.toolTip) == [nil, "Move its items out first."])
+    }
+
+    @Test func aRowWithAnIconAndASymbolShowsTheIconInEitherMenu() {
+        let icon = NSWorkspace.shared.icon(for: .folder)
+        let row = HeldRow.button("Finder", image: "folder", icon: icon) {}
+        let appKit = HeldRow.menu([row])
+        let swiftUI = NSHostingMenu(rootView: HeldMenuContent(rows: [row]))
+        swiftUI.update()
+        #expect(appKit.items.first?.image === icon)
+        #expect(swiftUI.items.first?.image?.isTemplate == false, "the icon, not the symbol (a template)")
+        #expect(swiftUI.items.first?.image?.size == icon.size)
+    }
+
+    // MARK: What's in front
+
+    @Test func aMarkedViewUnderSomethingDrawnOverItHasNoMenuThere() throws {
+        // Not in a list that scrolls: a card over the row, as the title bar's tabs, the Send
+        // button or a header are over what's under them; and a marked card over a marked row.
+        let view = VStack(spacing: 0) {
+            ZStack(alignment: .trailing) {
+                Text("Row").frame(width: 300, height: 50).heldContextMenu { HeldRow.button("Row") {} }
+                Text("Card").frame(width: 80, height: 50).background(.background)
+            }
+            ZStack(alignment: .trailing) {
+                Text("Row").frame(width: 300, height: 50).heldContextMenu { HeldRow.button("Row") {} }
+                Text("Send").frame(width: 80, height: 50).background(.background).heldContextMenu { HeldRow.button("Send") {} }
+            }
+            Spacer()
+        }
+        let shown = Shown(view)
+        defer { shown.close() }
+        #expect(titles(try shown.rightClick(at: NSPoint(x: 50, y: 275))) == ["Row"])
+        #expect(try shown.rightClick(at: NSPoint(x: 260, y: 275)) == nil, "the card's")
+        #expect(titles(try shown.rightClick(at: NSPoint(x: 50, y: 225))) == ["Row"])
+        #expect(titles(try shown.rightClick(at: NSPoint(x: 260, y: 225))) == ["Send"])
+    }
+
+    @Test func aRowInAHostingViewOfItsOwnOpensItsMenu() throws {
+        // As the conversation's rows are: each in a hosting view of its own, in an AppKit list.
+        let row = NSHostingView(rootView: Text("Reply").frame(width: 300, height: 60).heldContextMenu { HeldRow.button("Copy Reply") {} })
+        row.frame = NSRect(x: 0, y: 0, width: 300, height: 60)
+        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 300, height: 300))
+        let list = NSView(frame: NSRect(x: 0, y: 0, width: 300, height: 300))
+        list.addSubview(row)
+        scroll.documentView = list
+        let window = NSWindow(contentRect: NSRect(x: -20_000, y: -20_000, width: 300, height: 300), styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let content = NSView(frame: NSRect(x: 0, y: 0, width: 300, height: 300))
+        content.addSubview(scroll)
+        window.contentView = content
+        content.layoutSubtreeIfNeeded()
+        defer {
+            window.contentView = nil
+            window.close()
+        }
+        let frame = row.convert(row.bounds, to: nil)
+        let event = try #require(NSEvent.mouseEvent(with: .rightMouseDown, location: NSPoint(x: frame.midX, y: frame.midY), modifierFlags: [], timestamp: 0,
+                                                    windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
+        #expect(titles(HeldMenus.shared.menu(for: event)?.menu) == ["Copy Reply"])
+    }
+
+    /// A view of someone else's that does its own thing with a right-click (a terminal, a web
+    /// page), drawn in a marked view.
+    final class Canvas: NSView {}
+
+    private struct Hosted<Kind: NSView>: NSViewRepresentable {
+        let make: () -> Kind
+        func makeNSView(context: Context) -> Kind { make() }
+        func updateNSView(_ view: Kind, context: Context) {}
+    }
+
+    @Test func aViewOfItsOwnInAMarkedViewKeepsItsClicks() throws {
+        let view = HStack(spacing: 0) {
+            Text("Panel").frame(width: 75, height: 50)
+            Hosted { Canvas() }.frame(width: 75, height: 50)
+            Hosted { () -> NSPopUpButton in
+                let button = NSPopUpButton(frame: .zero, pullsDown: false)
+                button.addItems(withTitles: ["Chromium", "Safari"])
+                return button
+            }
+            .frame(width: 75, height: 30)
+            Hosted { NSTextField(string: "https://kuvo.run") }.frame(width: 75, height: 24)
+        }
+        .frame(width: 300, height: 50)
+        .heldContextMenu { HeldRow.button("Close Tab") {} }
+        .frame(maxHeight: .infinity, alignment: .top)
+        let shown = Shown(view)
+        defer { shown.close() }
+        // Asked as a click there would ask, without sending it on to what keeps it.
+        func menu(on view: NSView?, control: Bool = false) throws -> NSMenu? {
+            let view = try #require(view)
+            let frame = view.convert(view.bounds, to: nil)
+            let event = try #require(NSEvent.mouseEvent(with: control ? .leftMouseDown : .rightMouseDown, location: NSPoint(x: frame.midX, y: frame.midY),
+                                                        modifierFlags: control ? .control : [], timestamp: 0, windowNumber: shown.window.windowNumber,
+                                                        context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
+            return HeldMenus.shared.menu(for: event)?.menu
+        }
+        let views = all(in: shown.host)
+        #expect(titles(try shown.rightClick(at: NSPoint(x: 37, y: 275))) == ["Close Tab"], "on the marked view itself")
+        #expect(try menu(on: views.first { $0 is Canvas }) == nil)
+        #expect(try menu(on: views.first { $0 is Canvas }, control: true) == nil)
+        #expect(try menu(on: views.first { $0 is NSPopUpButton }) == nil, "its own menu")
+        #expect(try menu(on: views.first { $0 is NSPopUpButton }, control: true) == nil)
+        #expect(try menu(on: views.first { type(of: $0) == NSTextField.self }, control: true) == nil, "a Control-click is the field's")
     }
 
     // MARK: VoiceOver
@@ -303,5 +494,34 @@ import UniformTypeIdentifiers
         #expect(titles(caught) == ["Unarchive", "Delete…"])
         let plain = try #require(elements.first { $0.label == "Plain" })
         #expect(plain.object.accessibilityPerformShowMenu?() != true, "only what has a menu offers it")
+    }
+
+    @Test func everyElementInAMarkedViewOffersShowMenu() async throws {
+        AXElement.reading(true)
+        defer { AXElement.reading(false) }
+        // A row of several elements, as a work item's (its title, its number, who's on it).
+        let shown = Shown(HStack {
+            Text("Write the tests").accessibilityLabel("Write the tests")
+            Text("#243").accessibilityLabel("#243")
+        }
+        .heldContextMenu { HeldRow.button("Move to Top") {} })
+        defer { shown.close() }
+        shown.window.orderBack(nil)
+        shown.host.layoutSubtreeIfNeeded()
+        var caught: [NSMenu] = []
+        let present = HeldMenus.shared.present
+        HeldMenus.shared.present = { menu, _, _ in
+            caught.append(menu)
+            TestPulse.beat()
+        }
+        defer { HeldMenus.shared.present = present }
+
+        let elements = AXElement.all(in: shown.host)
+        for label in ["Write the tests", "#243"] {
+            let element = try #require(elements.first { $0.label == label }, "among \(elements.compactMap(\.label))")
+            #expect(element.object.accessibilityPerformShowMenu?() == true, "\(label)")
+        }
+        try await until { caught.count == 2 }
+        #expect(caught.map { titles($0) } == [["Move to Top"], ["Move to Top"]])
     }
 }

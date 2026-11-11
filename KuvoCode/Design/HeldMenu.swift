@@ -15,8 +15,8 @@ import SwiftUI
 // is decided then), and nothing reaches a menu that's open. A submenu's rows are made as it opens.
 // `.heldContextMenu { … }` only marks where a view is; one watcher catches right-clicks (and
 // Control-clicks) at the window, before the view under them sees them, and opens the menu of the
-// innermost marked view there. So it also works in the title bar, where SwiftUI's `.contextMenu`
-// never fires: the window's toolbar takes those clicks. VoiceOver's Show Menu (VO-Shift-M) opens it,
+// innermost marked view there, where nothing is drawn over it. So it also works in the title bar,
+// where SwiftUI's `.contextMenu` never fires: the window's toolbar takes those clicks. VoiceOver's Show Menu (VO-Shift-M) opens it,
 // as it did SwiftUI's. `HeldMenuGuardTests` keeps SwiftUI's `.contextMenu` out of the app; SwiftUI's
 // `Menu` buttons keep their items while they're open, and stay.
 
@@ -52,11 +52,11 @@ struct HeldRow {
     static func button(_ title: String, subtitle: String? = nil, image: String? = nil, icon: NSImage? = nil, checked: Bool = false,
                        role: ButtonRole? = nil, disabled: Bool = false, help: String? = nil, action: @escaping () -> Void) -> HeldRow {
         HeldRow(kind: .action(action), title: title, subtitle: subtitle, symbol: image, icon: icon, checked: checked,
-                destructive: role == .destructive, disabled: disabled, help: help)
+                destructive: role == .destructive, disabled: disabled, help: help?.isEmpty == true ? nil : help)
     }
 
-    /// A menu of its own, opening from this row, its rows made as it opens. Disabled, as a disabled
-    /// SwiftUI `Menu`: the row still opens it, with every row in it disabled.
+    /// A menu of its own, opening from this row, its rows made as it opens. Disabled, its row is
+    /// dimmed and doesn't open; with no rows, it's left out.
     static func submenu(_ title: String, image: String? = nil, disabled: Bool = false, @HeldRows _ rows: @escaping () -> [HeldRow]) -> HeldRow {
         HeldRow(kind: .submenu(rows), title: title, symbol: image, disabled: disabled)
     }
@@ -94,24 +94,34 @@ extension HeldRow {
         return menu
     }
 
-    /// The items of `rows`, as SwiftUI made a menu's: a section has a line before and after it,
-    /// where there are rows there.
+    /// The items of `rows`, as SwiftUI made a menu's: a section has a line before and after it. A
+    /// line only goes between rows: none at either end, nor two together (where the rows between
+    /// them don't show now).
     static func items(_ rows: [HeldRow], disabled: Bool) -> [NSMenuItem] {
+        var tidy: [NSMenuItem] = []
+        for item in made(rows, disabled: disabled) where !item.isSeparatorItem || tidy.last.map({ !$0.isSeparatorItem }) == true {
+            tidy.append(item)
+        }
+        if tidy.last?.isSeparatorItem == true { tidy.removeLast() }
+        return tidy
+    }
+
+    private static func made(_ rows: [HeldRow], disabled: Bool) -> [NSMenuItem] {
         var items: [NSMenuItem] = []
-        for (index, row) in rows.enumerated() {
+        for row in rows {
             if case .section(let inside) = row.kind {
-                if index > 0 { items.append(.separator()) }
+                items.append(.separator())
                 if !row.title.isEmpty { items.append(.sectionHeader(title: row.title)) }
-                items += Self.items(inside, disabled: disabled || row.disabled)
-                if index < rows.count - 1 { items.append(.separator()) }
-            } else {
-                items.append(row.item(disabled: disabled))
+                items += made(inside, disabled: disabled || row.disabled)
+                items.append(.separator())
+            } else if let item = row.item(disabled: disabled) {
+                items.append(item)
             }
         }
         return items
     }
 
-    private func item(disabled inherited: Bool) -> NSMenuItem {
+    private func item(disabled inherited: Bool) -> NSMenuItem? {
         let disabled = inherited || self.disabled
         switch kind {
         case .action(let action):
@@ -122,8 +132,11 @@ extension HeldRow {
             item.toolTip = help
             return item
         case .submenu(let rows):
+            // Nothing to show in it now: no row for it. (Its rows are made again as it opens.)
+            guard !Self.items(rows(), disabled: disabled).isEmpty else { return nil }
             let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
             item.image = image
+            item.isEnabled = !disabled
             let submenu = NSMenu(title: title)
             submenu.autoenablesItems = false
             let filler = SubmenuFiller(rows: rows, disabled: disabled)
@@ -233,10 +246,10 @@ struct HeldMenuContent: View {
     }
 
     @ViewBuilder private func label(_ row: HeldRow) -> some View {
-        if let symbol = row.symbol {
-            Label { title(row) } icon: { Image(systemName: symbol) }
-        } else if let icon = row.icon {
+        if let icon = row.icon {
             Label { title(row) } icon: { Image(nsImage: icon) }
+        } else if let symbol = row.symbol {
+            Label { title(row) } icon: { Image(systemName: symbol) }
         } else {
             title(row)
         }
@@ -274,8 +287,13 @@ private struct HeldContextMenu: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .background(HeldMenuMarker(rows: rows, isEnabled: isEnabled, place: place).allowsHitTesting(false).accessibilityHidden(true))
-            // As SwiftUI gave a view with a `.contextMenu` (each element in it, where it has several).
+            // Over what it marks, taking clicks only while a right-click asks what's in front
+            // (`HeldMenus.frontmost`).
+            .overlay(HeldMenuMarker(rows: rows, isEnabled: isEnabled, place: place)
+                .allowsHitTesting(HeldMenus.shared.probe.isOn)
+                .accessibilityHidden(true))
+            // As SwiftUI gave a view with a `.contextMenu`: each element in it offers Show Menu
+            // (applied to a stack, it reaches every element in it, as a probe of macOS 27 found).
             .accessibilityAction(.showMenu) { place.view?.showForAccessibility() }
     }
 }
@@ -299,7 +317,7 @@ private struct HeldMenuMarker: NSViewRepresentable {
     }
 }
 
-/// Marks a view with a held menu, behind it, its size.
+/// Marks a view with a held menu, over it, its size.
 final class HeldMenuView: NSView {
     fileprivate var rows: (() -> [HeldRow])?
     fileprivate var isEnabled = true
@@ -309,13 +327,16 @@ final class HeldMenuView: NSView {
         if window != nil { HeldMenus.shared.add(self) }
     }
 
-    // Never what a click lands on: what it marks is.
-    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    // Never what a click lands on, what it marks is; but for what's in front, while a right-click asks.
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        HeldMenus.shared.probe.isOn ? super.hitTest(point) : nil
+    }
 
-    /// Its menu, made now; nil when it has no rows.
+    /// Its menu, made now; nil when it has nothing to show.
     func makeMenu() -> NSMenu? {
         guard let rows = rows?(), !rows.isEmpty else { return nil }
-        return HeldRow.menu(rows, disabled: !isEnabled)
+        let menu = HeldRow.menu(rows, disabled: !isEnabled)
+        return menu.items.isEmpty ? nil : menu
     }
 
     fileprivate func showForAccessibility() {
@@ -325,11 +346,16 @@ final class HeldMenuView: NSView {
     }
 
     /// Whether a right-click on `hit` is on what this marks (or what's inside it), not on something
-    /// over it. `passedOn`: `hit` passes its right-click on (a message's words, see `menu(for:from:)`).
-    fileprivate func isReached(by event: NSEvent, on hit: NSView, passedOn: Bool) -> Bool {
+    /// over it. `front`: the marked view frontmost there. `passedOn`: `hit` passes its right-click
+    /// on (a message's words, see `menu(for:from:)`), so it's in front.
+    fileprivate func isReached(by event: NSEvent, on hit: NSView, front: HeldMenuView?, passedOn: Bool) -> Bool {
         guard let common = hit.ancestorShared(with: self) else { return false }
-        // Something under the click with a right-click of its own (a text's words, a web page): theirs.
         if !passedOn {
+            // Drawn over by something that isn't marked (a card, a button), or by another marked
+            // view that isn't around this one: not this one's. (The marker of a view around it is
+            // in front of it, over all it holds.)
+            guard let front, front === self || front.convert(front.bounds, to: nil).contains(convert(bounds, to: nil)) else { return false }
+            // Something under the click with a right-click of its own (a text's words, a web page): theirs.
             var view: NSView? = hit
             while let on = view, on !== common {
                 if on.takesRightClick(event) { return false }
@@ -354,6 +380,12 @@ final class HeldMenus {
 
     private let views = NSHashTable<HeldMenuView>.weakObjects()
     private var monitor: Any?
+    /// On while a right-click asks what's in front; the markers take clicks only then.
+    let probe = Probe()
+
+    @Observable final class Probe {
+        var isOn = false
+    }
 
     /// Opens a menu that's been made: at the click, for the marked view; without one (VoiceOver),
     /// over the view's middle. Tests take it here instead.
@@ -389,22 +421,49 @@ final class HeldMenus {
             .map { (view: $0, frame: $0.convert($0.bounds, to: nil)) }
             .filter { $0.frame.contains(point) }
             .sorted { $0.frame.width * $0.frame.height < $1.frame.width * $1.frame.height }
-        for (marked, _) in candidates where marked.isReached(by: event, on: hit, passedOn: view != nil) {
+        guard !candidates.isEmpty else { return nil }
+        let front = view == nil ? frontmost(at: point, in: frame) : nil
+        for (marked, _) in candidates where marked.isReached(by: event, on: hit, front: front, passedOn: view != nil) {
             if let menu = marked.makeMenu() { return (menu: menu, view: marked) }
         }
         return nil
     }
+
+    /// The marked view frontmost at `point`, as SwiftUI finds what a click there reaches: for this
+    /// moment the markers, each over what it marks, take clicks, laid out so and back at once. Nil
+    /// where something that isn't marked is in front (a card over a row, the Send button).
+    private func frontmost(at point: NSPoint, in frame: NSView) -> HeldMenuView? {
+        probe.isOn = true
+        frame.layoutSubtreeIfNeeded()
+        let hit = frame.hitTest(point)
+        probe.isOn = false
+        frame.layoutSubtreeIfNeeded()
+        return hit as? HeldMenuView
+    }
 }
 
 private extension NSView {
-    /// Whether a right-click here stays here: a text's, a web page's, one with a menu of its own.
-    /// SwiftUI's own views and controls without a menu pass it on to what they're in.
+    /// Whether a right-click (or a Control-click) here stays here: a text's, a terminal's, a web
+    /// page's, a control's Control-click, one with a menu of its own. SwiftUI's own views, a
+    /// control's right-click it has no menu for, and AppKit's and the app's views that do nothing
+    /// with one pass it on to what they're in, as they always did.
     func takesRightClick(_ event: NSEvent) -> Bool {
+        if self is HeldMenuView { return false }
         if self is NSTextView { return true }
-        if Bundle(for: type(of: self)) == NSView.swiftUI { return false }
+        // (A SwiftUI picker's pop-up button too.)
         if menu != nil { return true }
+        let bundle = Bundle(for: type(of: self))
+        if bundle == NSView.swiftUI { return false }
+        if gestureRecognizers.contains(where: { $0.takesRightClicks }) { return true }
+        if self is NSControl {
+            // A Control-click is the control's (a pop-up button opens, a field takes it).
+            guard event.type == .rightMouseDown else { return true }
+            return overrides(#selector(menu(for:))) && menu(for: event) != nil
+        }
         if overrides(#selector(menu(for:))), menu(for: event) != nil { return true }
-        return !(self is NSControl) && overrides(#selector(rightMouseDown(with:)))
+        if overrides(#selector(rightMouseDown(with:))) { return true }
+        // Anyone else's (a web page's views): theirs, however they take it.
+        return bundle != .main && bundle != NSView.appKit
     }
 
     func overrides(_ selector: Selector) -> Bool {
@@ -412,4 +471,13 @@ private extension NSView {
     }
 
     static let swiftUI = Bundle(for: NSHostingView<EmptyView>.self)
+    static let appKit = Bundle(for: NSView.self)
+}
+
+private extension NSGestureRecognizer {
+    /// Whether it takes the secondary button's clicks.
+    var takesRightClicks: Bool {
+        let mask = (self as? NSClickGestureRecognizer)?.buttonMask ?? (self as? NSPressGestureRecognizer)?.buttonMask ?? 0
+        return mask & 0x2 != 0
+    }
 }

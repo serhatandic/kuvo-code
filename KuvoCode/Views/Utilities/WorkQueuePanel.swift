@@ -82,7 +82,7 @@ struct WorkQueuePanel: View {
                 name = category.name
                 naming = .some(category)
             }
-            HeldRow.button("Remove “\(category.name)”", role: .destructive, disabled: count > 0, help: count > 0 ? "Move its items out first." : "") {
+            HeldRow.button("Remove “\(category.name)”", role: .destructive, disabled: count > 0, help: count > 0 ? "Move its items out first." : nil) {
                 Task { await store.removeCategory(category.id, on: box) }
             }
             if adds { HeldRow.divider }
