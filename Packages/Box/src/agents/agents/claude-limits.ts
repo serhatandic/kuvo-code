@@ -245,33 +245,35 @@ export function heardWindows(info: any): Omit<LimitWindow, "read" | "source">[] 
   return [{ id: shape.id, used, minutes: shape.minutes, ...(resetsAt ? { resetsAt } : {}), ...(shape.model ? { model: shape.model } : {}) }]
 }
 
-/** How much of a limit is gone before a warning calls it close: the last tenth, as the Mac's usage panel's "close to limit" is. */
+/** How much of a limit is gone before a warning calls it close: 90%, where the Mac's usage panel turns a bar red. */
 export const CLOSE_TO_LIMIT = 0.9
 
 /**
  * What a turn says when Claude Code warns of a limit (`allowed_warning`): how much of which one is
- * used. Claude Code warns early in a window too (a quarter of the week gone in its first day), so
- * it's "close" only once nearly all of it is.
+ * used, and whether that's close. Claude Code warns early in a window too (a quarter of the week
+ * gone in its first day), so it's "close" only once nearly all of it is.
  */
-export function limitWarning(info: any): string {
+export function limitWarning(info: any): { text: string; close: boolean } {
   const limit = warnedLimit(info?.rateLimitType)
   const stated = [info?.utilization, info?.unifiedWindows?.[info?.rateLimitType]?.utilization].find((value) => typeof value === "number" && Number.isFinite(value))
   if (stated !== undefined) {
-    const used = Math.min(Math.max(stated, 0), 1)
     // (Never all of it till it is: 99.6% is 99%.)
-    const percent = used < 1 ? Math.min(Math.round(used * 100), 99) : 100
-    return percent >= CLOSE_TO_LIMIT * 100 ? `You're close to ${limit}: ${percent}% used.` : `You've used ${percent}% of ${limit}.`
+    const percent = stated < 1 ? Math.min(Math.round(Math.max(stated, 0) * 100), 99) : 100
+    if (percent === 100) return { text: `You've used all of ${limit}.`, close: true }
+    const close = percent >= CLOSE_TO_LIMIT * 100
+    return { text: close ? `You're close to ${limit}: ${percent}% used.` : `You've used ${percent}% of ${limit}.`, close }
   }
   // No figure: the threshold it passed, at least.
   const passed = typeof info?.surpassedThreshold === "number" ? info.surpassedThreshold : NaN
-  if (!(passed > 0)) return `Claude Code warned about ${limit}.`
-  return passed >= CLOSE_TO_LIMIT ? `You're close to ${limit}.` : `You've used over ${Math.round(passed * 100)}% of ${limit}.`
+  if (!(passed > 0)) return { text: `Claude Code warned about ${limit}.`, close: false }
+  const close = passed >= CLOSE_TO_LIMIT
+  return { text: close ? `You're close to ${limit}.` : `You've used over ${Math.round(passed * 100)}% of ${limit}.`, close }
 }
 
 /** The limit Claude Code warns of, by its name for it. */
 function warnedLimit(type: unknown): string {
   if (type === "five_hour") return "your 5-hour Claude limit"
-  if (type === "overage") return "your Claude extra usage"
+  if (type === "overage") return "your Claude extra usage limit"
   const shape = typeof type === "string" ? HEARD[type] : undefined
   if (shape?.minutes === 10_080) return shape.model ? `your weekly ${shape.model} limit` : "your weekly Claude limit"
   return "your Claude usage limit"

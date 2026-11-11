@@ -11036,20 +11036,23 @@ function limitWarning(info) {
   const limit = warnedLimit(info?.rateLimitType);
   const stated = [info?.utilization, info?.unifiedWindows?.[info?.rateLimitType]?.utilization].find((value) => typeof value === "number" && Number.isFinite(value));
   if (stated !== undefined) {
-    const used = Math.min(Math.max(stated, 0), 1);
-    const percent = used < 1 ? Math.min(Math.round(used * 100), 99) : 100;
-    return percent >= CLOSE_TO_LIMIT * 100 ? `You're close to ${limit}: ${percent}% used.` : `You've used ${percent}% of ${limit}.`;
+    const percent = stated < 1 ? Math.min(Math.round(Math.max(stated, 0) * 100), 99) : 100;
+    if (percent === 100)
+      return { text: `You've used all of ${limit}.`, close: true };
+    const close = percent >= CLOSE_TO_LIMIT * 100;
+    return { text: close ? `You're close to ${limit}: ${percent}% used.` : `You've used ${percent}% of ${limit}.`, close };
   }
   const passed = typeof info?.surpassedThreshold === "number" ? info.surpassedThreshold : NaN;
   if (!(passed > 0))
-    return `Claude Code warned about ${limit}.`;
-  return passed >= CLOSE_TO_LIMIT ? `You're close to ${limit}.` : `You've used over ${Math.round(passed * 100)}% of ${limit}.`;
+    return { text: `Claude Code warned about ${limit}.`, close: false };
+  const close = passed >= CLOSE_TO_LIMIT;
+  return { text: close ? `You're close to ${limit}.` : `You've used over ${Math.round(passed * 100)}% of ${limit}.`, close };
 }
 function warnedLimit(type) {
   if (type === "five_hour")
     return "your 5-hour Claude limit";
   if (type === "overage")
-    return "your Claude extra usage";
+    return "your Claude extra usage limit";
   const shape = typeof type === "string" ? HEARD[type] : undefined;
   if (shape?.minutes === 10080)
     return shape.model ? `your weekly ${shape.model} limit` : "your weekly Claude limit";
@@ -12551,7 +12554,8 @@ ${input.text}` } : input, this.copies());
         if (!active || lane !== active)
           return;
         if (info.status === "allowed_warning") {
-          this.noticeOnce(`warn:${info.rateLimitType}:${info.surpassedThreshold ?? ""}`, turn, limitWarning(info));
+          const warning = limitWarning(info);
+          this.noticeOnce(`warn:${info.rateLimitType}:${info.surpassedThreshold ?? ""}:${warning.close ? "close" : ""}`, turn, warning.text);
           return;
         }
         if (info.status !== "rejected" || info.overageInUse || info.isUsingOverage)
@@ -13316,6 +13320,8 @@ function limitWords2(type) {
   switch (type) {
     case "five_hour":
       return "You've reached your Claude usage limit for the next few hours.";
+    case "seven_day":
+      return "You've reached your weekly Claude limit.";
     case "seven_day_opus":
       return "You've reached this week's Opus limit on your Claude plan.";
     case "seven_day_sonnet":
@@ -26987,4 +26993,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents f9dd58d52361adc6a2535efb5913f1ffba2b5e5da3d26cd40554a913b3b923d2
+// Built from Packages/Box/src/agents 3149b44ab6b185940d80e1ecfa80ccf21945048e604e39c57c107d4412a11675

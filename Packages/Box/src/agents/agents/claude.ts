@@ -1727,9 +1727,10 @@ class ClaudeThread implements Thread {
         // Where the plan stands, for its limits (limits.ts), whichever turn heard it.
         for (const window of heardWindows(info)) this.agent.limits.heard?.(window)
         if (!active || lane !== active) return
-        // A limit being used up: said once per threshold it passes, so the stop doesn't come out of nowhere.
+        // A limit being used up: said once per threshold it passes, and again once it's close, so the stop doesn't come out of nowhere.
         if (info.status === "allowed_warning") {
-          this.noticeOnce(`warn:${info.rateLimitType}:${info.surpassedThreshold ?? ""}`, turn, limitWarning(info))
+          const warning = limitWarning(info)
+          this.noticeOnce(`warn:${info.rateLimitType}:${info.surpassedThreshold ?? ""}:${warning.close ? "close" : ""}`, turn, warning.text)
           return
         }
         // Over the plan's limit, unless extra usage you pay for carries on.
@@ -2506,6 +2507,8 @@ function limitWords(type: string | undefined): string {
   switch (type) {
     case "five_hour":
       return "You've reached your Claude usage limit for the next few hours."
+    case "seven_day":
+      return "You've reached your weekly Claude limit."
     case "seven_day_opus":
       return "You've reached this week's Opus limit on your Claude plan."
     case "seven_day_sonnet":
