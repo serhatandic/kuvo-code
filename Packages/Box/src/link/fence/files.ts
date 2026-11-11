@@ -375,8 +375,9 @@ function lookalike(where) {
 // a start-up script), they'd go there as if it were the folder's. So a path in the folder that a
 // link leads out of it is given as where it really is, which the engine's rules for a folder
 // outside the project then apply to (Settings › Permissions, a bot's own).
-// (And the image tool's, which writes the picture it makes where its \`path\` says.)
-const PATHS = { read: "path", write: "path", edit: "path", glob: "path", grep: "path", image: "path" }
+// (And the image tool's, which writes the picture it makes where its \`path\` says, by the name of
+// the format it made.)
+const PATHS = { read: "path", write: "path", edit: "path", glob: "path", grep: "path", experimental_image_generate: "path" }
 // A patch's lines that name a file, as the engine reads them: each line (without a last \\r) with
 // the spaces around it trimmed.
 const PATCHED = ["*** Add File: ", "*** Update File: ", "*** Delete File: ", "*** Move to: "]

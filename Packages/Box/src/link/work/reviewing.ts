@@ -411,33 +411,41 @@ async function taskOf(at: Conversation, signal?: AbortSignal): Promise<ReviewCon
 const RUNNING = new Set(["bash", "shell", "command", "exec", "local_shell", "terminal"]);
 
 /** What a tool call changes, each by its path as given (`raw`) and as the engine takes it (from the
- * conversation's `folder`; `~` your home): every file it names in an argument that's a path (any of
- * its arguments: a key the engine doesn't write to today might be one tomorrow), and a patch's
- * headers, read as the engine reads them (each line trimmed); a tool that runs a command, nothing
- * here (its folders, from the ask). */
-function changedBy(seen: { tool: string; input: Record<string, unknown> }, folder: string): { raw: string; path: string; folder: boolean }[] | null {
+ * conversation's `folder`; `~` your home): every value of an argument that's a path, however deep
+ * in it (a key the engine doesn't write to today might be one tomorrow), as a file or a folder; and
+ * a patch tool's headers, read as the engine reads them (each line without its last \r, trimmed).
+ * A tool that runs a command, nothing here (its folders, from the ask). */
+function changedBy(seen: { tool: string; input: Record<string, unknown> }, folder: string): { raw: string; path: string; folder: boolean | null }[] | null {
   const tool = seen.tool.toLowerCase();
   if (RUNNING.has(tool)) return null;
-  const named: string[] = [];
-  for (const [key, value] of Object.entries(seen.input)) {
-    if (typeof value !== "string") continue;
-    // (A patch: its headers, as the engine finds them, each line trimmed.)
-    if (/\*\*\* (Begin Patch|Add File:|Update File:|Delete File:|Move to:)/.test(value) || (/patch|diff/i.test(key) && /^\s*(\+\+\+|---) /m.test(value))) {
-      for (const line of value.split("\n").map(each => each.replace(/\r$/, "").trim())) {
-        const header = /^\*\*\* (?:Add File|Update File|Delete File|Move to): (.*)$/s.exec(line) ?? /^(?:\+\+\+|---) (?:[ab]\/)?(.*)$/s.exec(line);
-        const each = header?.[1]?.trim();
-        if (each && each !== "/dev/null") named.push(each);
+  const named: { raw: string; folder: boolean | null }[] = [];
+  const walk = (value: unknown, key: string, depth: number) => {
+    if (depth > 6) return;
+    if (typeof value === "string") {
+      if (PATH_KEY.test(key)) named.push({ raw: value, folder: null });
+      // A patch tool's text: the files its headers name.
+      if (PATCHING.has(tool) && /^patch(text)?$/i.test(key)) {
+        for (const line of value.split("\n").map(each => each.replace(/\r$/, "").trim())) {
+          const header = /^\*\*\* (?:Add File|Update File|Delete File|Move to): (.*)$/s.exec(line);
+          const each = header?.[1]?.trim();
+          if (each) named.push({ raw: each, folder: false });
+        }
       }
-      continue;
-    }
-    if (/(^|_)(file|path|dir|folder|directory|destination|dest|target|output|to)s?$/i.test(key) || /path|file/i.test(key)) named.push(value);
-  }
-  return named.map(raw => ({ raw, path: path.resolve(folder, raw.replace(/^~(?=\/|$)/, homeFolder())), folder: false }));
+    } else if (Array.isArray(value)) for (const each of value) walk(each, key, depth + 1);
+    else if (isObject(value)) for (const [inner, each] of Object.entries(value)) walk(each, PATH_KEY.test(inner) || !PATH_KEY.test(key) ? inner : key, depth + 1);
+  };
+  for (const [key, value] of Object.entries(seen.input)) walk(value, key, 0);
+  return named.map(({ raw, folder: asFolder }) => ({ raw, path: path.resolve(folder, raw.replace(/^~(?=\/|$)/, homeFolder())), folder: asFolder }));
 }
+
+// The tools that patch, and the arguments that name a place, by their keys (`filePath`, `files`,
+// `destination`, `move_path`, `outputDir`, `cwd`…).
+const PATCHING = new Set(["patch", "apply_patch", "applypatch"]);
+const PATH_KEY = /path|file|dir|folder|destination|^(dest|dst|src|source|from|to|target|output|location|cwd|workdir|movedto|root)$/i;
 
 // What no path of its own has in it: control characters and the line and paragraph separators a
 // reader might split on and the engine doesn't (`\r`, U+2028…).
-const UNPLAIN = /[\x00-\x1f\x7f\u0085\u2028\u2029]/;
+const UNPLAIN = /[\x00-\x1f\x7f\u0085\u2028\u2029\\]/;
 
 /** Where `file` really is, where it's reached plainly from the folder whose real path is `folder`:
  * one of the folders it's named through leads to `folder` itself, and below that no part of it is
@@ -576,11 +584,15 @@ async function answerPermission(source: Target, id: string, sessionID: string, s
   const resources = permission.resources.map(raw => ({ raw, path: resolve(raw.replace(/\/\*$/, "") || "/"), folder: raw.endsWith("/*") ? true : null }));
   const changes = [...resources, ...(permission.filepath ? [{ raw: permission.filepath, path: resolve(permission.filepath), folder: false as boolean | null }] : []),
     ...(seen ? changedBy(seen, folder) ?? [] : [])];
+  // (A call the ask names that couldn't be read, or the image tool, which writes by another name
+  // than the one it's given: never its own by code.)
+  const unread = Boolean(permission.call) && !seen;
+  const renames = seen?.tool.toLowerCase() === "experimental_image_generate";
   const plainly = (change: { path: string; folder: boolean | null }) => places.some(place => {
     const real = plainlyIn(change.path, place, change.folder);
     return real !== null && !walledForOwn(real, policy, own);
   });
-  const ownChanges = resources.length > 0 && !permission.resources.includes("*")
+  const ownChanges = !unread && !renames && resources.length > 0 && !permission.resources.includes("*")
     && changes.every(each => !each.raw.split("/").includes("..") && !UNPLAIN.test(each.raw) && plainly(each))
     && actions.every(action => action.kind === "file");
   if (ownChanges) {

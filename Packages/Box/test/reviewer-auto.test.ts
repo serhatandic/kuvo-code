@@ -692,6 +692,17 @@ test("in Auto, a file of its own is only one reached plainly: a folder of its ow
     expect((await reviewing.reviewPermission({ port: engine.port, password: "pw" } as never, { type: "permission.asked", data: { id: "per_x5", sessionID: "ses_swap", action: "external_directory" } }))?.decision).toBe("refuse")
     expect((await askWith("per_x4", "copy", { path: join(trees, "L", "ok1.txt"), destination: evil }, [join(trees, "L") + "/*"]))?.decision).toBe("refuse")
     expect((await askWith("per_x6", "room", {}, ["*"]))?.decision).toBe("refuse")
+    // A path made to look like a patch, a place named deep in its arguments, a call that couldn't
+    // be read, and the image tool, which writes by another name than it's given.
+    symlinkSync(evil, join(trees, "L", "x *** Begin Patch"))
+    expect((await askWith("per_x7", "write", { filePath: join(trees, "L", "x *** Begin Patch"), content: "x" }, [join(trees, "L") + "/*"]))?.decision).toBe("refuse")
+    expect((await askWith("per_x8", "patch", { files: [join(trees, "L", "ok3.txt"), { movedTo: evil }] }, [join(trees, "L") + "/*"]))?.decision).toBe("refuse")
+    calling.ses_swap = []
+    asking.ses_swap = [{ id: "per_x9", action: "external_directory", resources: [join(trees, "L") + "/*"], source: { id: "call_gone", messageID: "msg_1" } }]
+    expect((await reviewing.reviewPermission({ port: engine.port, password: "pw" } as never, { type: "permission.asked", data: { id: "per_x9", sessionID: "ses_swap", action: "external_directory" } }))?.decision).toBe("refuse")
+    expect((await askWith("per_x10", "experimental_image_generate", { path: join(trees, "L", "pic.webp"), prompt: "a cat" }, [join(trees, "L") + "/*"]))?.decision).toBe("refuse")
+    // But a file whose text only mentions a patch is its own as any.
+    expect((await askWith("per_x11", "write", { filePath: join(trees, "L", "notes.md"), content: "*** Add File: /elsewhere/x\n" }, [join(trees, "L") + "/*"]))?.decision).toBe("allow")
     // The worktree itself traded for a link to where what runs later is kept.
     renameSync(join(trees, "T"), join(trees, "T.r"))
     symlinkSync(later, join(trees, "T"))

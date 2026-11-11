@@ -1998,7 +1998,7 @@ class CodexThread implements Thread {
         active.toolsSinceText = true
         const changes = codexChanges(item.changes)
         active.changes.set(item.id, changes)
-        turn.toolStart(item.id, "patch", { files: changes.map((change) => change.path) })
+        turn.toolStart(item.id, "patch", { files: changes.flatMap((change) => [change.path, ...(change.movedTo ? [change.movedTo] : [])]) })
         return
       }
       case "functionCallOutput":
@@ -2229,7 +2229,8 @@ class CodexThread implements Thread {
         const decision = await hooks.permission({
           toolCallID: params.itemId,
           action: "edit",
-          resources: changes.length ? changes.map((change) => change.path) : [params.grantRoot ?? "*"],
+          // (A rename's new name too: it's written there.)
+          resources: changes.length ? changes.flatMap((change) => [change.path, ...(change.movedTo ? [change.movedTo] : [])]) : [params.grantRoot ?? "*"],
           metadata: files.length ? { files } : undefined,
           message: params.reason ?? undefined,
         })
@@ -2247,7 +2248,8 @@ class CodexThread implements Thread {
         return { decision: decision === "reject" ? "denied" : "approved" }
       }
       case "applyPatchApproval": {
-        const paths = Object.keys(params.fileChanges ?? {})
+        // (Each file, and a rename's new name: it's written there.)
+        const paths = Object.entries((params.fileChanges ?? {}) as Record<string, any>).flatMap(([file, change]) => [file, ...[change?.move_path, change?.update?.move_path].filter((each): each is string => typeof each === "string")])
         const decision = await hooks.permission({ toolCallID: params.callId, action: "edit", resources: paths.length ? paths : ["*"], message: params.reason ?? undefined })
         return { decision: decision === "reject" ? "denied" : "approved" }
       }
