@@ -681,12 +681,12 @@ var peerTargets = () => peerPlaces().targets;
 function engineGet(engine, route, folder) {
   return fetch(`http://127.0.0.1:${engine.port}/${route}`, { headers: { authorization: `Basic ${Buffer.from(`opencode:${engine.password}`).toString("base64")}`, ...folder ? { "x-opencode-directory": encodeURIComponent(folder) } : {} }, signal: AbortSignal.timeout(1e4) }).then((response) => response.ok ? response.json() : Promise.reject(new Error(`${response.status}`)));
 }
-async function asked(target, method, route, body) {
+async function asked(target, method, route, body, patience = 30000) {
   const response = await fetch(`http://127.0.0.1:${target.port}/${route}`, {
     method,
     headers: { authorization: `Basic ${Buffer.from(`opencode:${target.password}`).toString("base64")}`, ...body ? { "content-type": "application/json" } : {} },
     body: body ? JSON.stringify(body) : undefined,
-    signal: AbortSignal.timeout(30000)
+    signal: AbortSignal.timeout(patience)
   });
   if (!response.ok)
     throw new Error(`It answered ${response.status}.`);
@@ -35269,7 +35269,7 @@ async function* add({ request, bridge, readEngine, json, signal }, target, sessi
   const before = typeof given.before === "string" && /^[A-Za-z0-9_]{1,100}$/.test(given.before) ? given.before : undefined;
   if (await keepWaitingBefore(target, session, message, { from, words }, before))
     return yield* json(200, { ...shownQueue(queueOf(session)), waits: true });
-  await asked(target, "POST", `api/session/${encodeURIComponent(session)}/prompt`, message);
+  await asked(target, "POST", `api/session/${encodeURIComponent(session)}/prompt`, message, 120000);
   return yield* json(200, { ...shownQueue(queueOf(session)), waits: false });
 }
 

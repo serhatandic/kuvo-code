@@ -1,4 +1,5 @@
 import ClientDesign
+import ClientSessions
 import CryptoKit
 import Foundation
 import OpenCodeKit
@@ -643,7 +644,7 @@ final class MachineEngine {
                 try? await BoxVersion.mark(on: connection, marks: marks)
             }
             self.server = server
-            let current = OpenCodeAPI(endpoint: server.endpoint, folderPrefix: RemoteFolder.prefix(for: machine.id))
+            let current = OpenCodeAPI(endpoint: server.endpoint, session: Self.patient, folderPrefix: RemoteFolder.prefix(for: machine.id))
             self.api = current
             catalog.api = current
             agents.connect(server.agentsEndpoint, folderPrefix: RemoteFolder.prefix(for: machine.id))
@@ -929,38 +930,51 @@ final class MachineEngine {
         }
     }
 
+    /// Its engine's requests through the tunnel wait as long as it's working on them: a busy
+    /// machine (a heavy load) answers late, and a tunnel that's gone fails them itself (ssh's own
+    /// checks), rather than URLSession's own minute calling one still under way "timed out" (#443).
+    nonisolated static let patient: URLSession = {
+        let configuration = URLSessionConfiguration.default
+        configuration.timeoutIntervalForRequest = 600
+        return URLSession(configuration: configuration)
+    }()
+
     @ObservationIgnored private var downCheck: Task<Void, Never>?
     /// Goes up with each disconnection, so a check from an earlier connection stops.
     @ObservationIgnored private var connections = 0
+    /// How long its feed may be down before it's checked (`Reach.grace`; tests set it).
+    @ObservationIgnored var awayDelay: Duration = Reach.grace
 
-    /// The live feed went down. It comes back by itself after a blip; but when the engine behind
-    /// the tunnel is gone (restarted on another port, say) while the tunnel stays up, nothing
-    /// would ever change. So a few seconds on, ask the engine; not answering, the connection is
-    /// lost, and connecting again starts (as after the network went).
+    /// The live feed went down. It comes back by itself after a blip, and a busy machine (a heavy
+    /// load) drops it now and then and answers late: nothing says so meanwhile. But when the
+    /// engine behind the tunnel is gone (restarted on another port, say) while the tunnel stays up,
+    /// nothing would ever change. So KuvoClient's `Reach` decides: once it's been down through the
+    /// grace and the engine doesn't answer a check in time, the connection is lost, and connecting
+    /// again starts (as after the network went), with its bar over the composer.
     private func checkWhileDown(_ api: OpenCodeAPI) {
         // Once for each time it's down: the feed says so again at each of its own retries.
         guard downCheck == nil else { return }
         let connection = connections
         downCheck = Task { [weak self] in
-            for wait in [6, 10, 20, 30] {
-                try? await Task.sleep(for: .seconds(wait))
-                guard let self, !Task.isCancelled, !isLive, state == .ready, connections == connection else { return }
-                let answered = await withTaskGroup(of: Bool.self) { group in
-                    group.addTask { (try? await api.info()) != nil }
-                    group.addTask { try? await Task.sleep(for: .seconds(5)); return false }
-                    let first = await group.next() ?? false
-                    group.cancelAll()
-                    return first
+            let delay = self?.awayDelay ?? Reach.grace
+            let away = await Reach.isAway(grace: delay, isBack: {
+                guard let self else { return true }
+                return isLive || state != .ready || connections != connection
+            }, check: {
+                do {
+                    _ = try await api.info()
+                    return true
+                } catch {
+                    // Answered, though with an error: it's there.
+                    return !(error is CancellationError) && !Reach.isTransient(error)
                 }
-                // The feed came back meanwhile (which cancels this): nothing was lost.
-                guard !Task.isCancelled else { return }
-                guard !answered else { continue }
-                log.error("\(self.machine.destination, privacy: .public)'s engine stopped answering through its tunnel")
-                connectionLost("The connection to \(machine.name) was lost.")
-                return
-            }
-            // It answered every time: the next time the feed goes down, check again.
-            if let self, connections == connection { downCheck = nil }
+            })
+            // The feed came back meanwhile (which cancels this): nothing was lost.
+            guard let self, !Task.isCancelled, connections == connection else { return }
+            downCheck = nil
+            guard away, !isLive, state == .ready else { return }
+            log.error("\(self.machine.destination, privacy: .public)'s engine stopped answering through its tunnel")
+            connectionLost("The connection to \(machine.name) was lost.")
         }
     }
 

@@ -405,7 +405,7 @@ final class OutsideAgents {
             failure = "this machine's engine started without them. They come with it when it next starts, once nothing runs there."
             return
         }
-        let api = OpenCodeAPI(endpoint: endpoint, folderPrefix: folderPrefix)
+        let api = OpenCodeAPI(endpoint: endpoint, session: MachineEngine.patient, folderPrefix: folderPrefix)
         self.api = api
         failure = nil
         listen(to: api)

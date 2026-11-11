@@ -88,7 +88,9 @@ struct SessionView: View {
     /// conversation hasn't taken the new connection yet.
     static func offlineMachine(of model: SessionModel, in app: AppModel) -> MachineEngine? {
         guard let id = RemoteFolder.machine(of: model.session.location.directory), let engine = app.machines.engine(id) else { return nil }
-        return engine.isReady && engine.isLive && app.workspace.isConnected(id) && !model.isCopy ? nil : engine
+        // Its feed down for now isn't an outage: KuvoClient's `Reach` decides when it is, and the
+        // connection is lost then (`MachineEngine.checkWhileDown`), which this says.
+        return engine.isReady && app.workspace.isConnected(id) && !model.isCopy ? nil : engine
     }
 }
 

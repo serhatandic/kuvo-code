@@ -815,6 +815,10 @@ final class SessionModel {
             isLoaded = true
             isCopy = false
             keepCopy()
+        } catch let error where isLoaded && Reach.isTransient(error) {
+            // Its machine's link went, not the read: what shows stays, and is read again once the
+            // link's back (or its machine's bar says it's out of reach), with no failure said
+            // (KuvoClient's `Reach`).
         } catch {
             fail(error)
             // Its machine is back but this one couldn't be read: no longer waiting, so the

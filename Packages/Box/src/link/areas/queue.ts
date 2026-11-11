@@ -116,6 +116,8 @@ async function* add({ request, bridge, readEngine, json, signal }: RouteContext,
   const words = typeof given.words === "string" ? given.words : given.kept !== true ? given.text : undefined;
   const before = typeof given.before === "string" && /^[A-Za-z0-9_]{1,100}$/.test(given.before) ? given.before : undefined;
   if (await keepWaitingBefore(target, session, message, { from, words }, before)) return yield* json(200, { ...shownQueue(queueOf(session)), waits: true });
-  await asked(target, "POST", `api/session/${encodeURIComponent(session)}/prompt`, message);
+  // (A busy engine takes the message late, and has it then: waited for, not given up on at the
+  // usual half minute and said to have failed, #443.)
+  await asked(target, "POST", `api/session/${encodeURIComponent(session)}/prompt`, message, 120_000);
   return yield* json(200, { ...shownQueue(queueOf(session)), waits: false });
 }
