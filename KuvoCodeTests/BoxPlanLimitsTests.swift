@@ -96,8 +96,9 @@ import UsageKit
         // Codex is this Mac's too, and its engine sign-in is the one the panel's own card takes.
         #expect(rows.map(\.isLocal) == [true, false, false, false])
         #expect(rows.filter(\.isOwnLogin).map(\.name) == ["Codex"])
-        // This Mac has no Claude of its own here: beside the panel's own Claude bar, the account's
-        // says which computers it's from (HostLimits.entries).
+        // This Mac has no Claude of its own here: where it's beside a bar of the panel's own of its
+        // name, the account's says which computers it's from (HostLimits.entries; Claude's own bar,
+        // which has no limits, gives way to it instead).
         #expect(rows.map(\.place) == [nil, "hetzner, mini-local", "hetzner", "mini-local"])
     }
 
