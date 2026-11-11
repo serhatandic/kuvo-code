@@ -9474,6 +9474,8 @@ async function lastReply(target, session) {
 function isNews(was, last) {
   if (last.id && last.id === was.reply)
     return false;
+  if (was.unread && was.upto !== undefined && last.at !== null && last.at <= was.upto)
+    return false;
   if (!was.at && !was.reply || was.early && last.began.kind !== "timer")
     return true;
   if (last.began.kind === "asked" || last.began.kind === "word")
@@ -9486,7 +9488,7 @@ function workWatcher(source, targets, { gather = GATHER, schedule = setTimeout, 
   const failures = new Map;
   const putBack = (starter, waiting) => changeWaiting(file, (all) => {
     const now = all[starter];
-    all[starter] = { lines: [...waiting.lines, ...now?.lines ?? []], asks: waiting.asks || Boolean(now?.asks), since: waiting.since };
+    all[starter] = { lines: [...waiting.lines, ...now?.lines ?? []], asks: waiting.asks || Boolean(now?.asks), since: waiting.since, ...waiting.tried ? { tried: waiting.tried } : {} };
   });
   const send = async (starter) => {
     due.delete(starter);
@@ -9495,18 +9497,26 @@ function workWatcher(source, targets, { gather = GATHER, schedule = setTimeout, 
       delete all[starter];
       return one;
     });
-    const stopped = readStopped(stoppedFile);
-    if (waiting)
-      waiting.lines = waiting.lines.filter((line) => !stopped[/\(address (\S+?)\)/.exec(line)?.[1] ?? ""]);
-    if (!waiting?.lines.length)
+    if (!waiting)
       return;
+    const tried = waiting.tried && typeof waiting.tried.id === "string" && waiting.tried.lines > 0 && waiting.tried.lines <= waiting.lines.length ? waiting.tried : null;
+    const stopped = readStopped(stoppedFile);
+    const unstopped = (lines) => lines.filter((line) => !stopped[/\(address (\S+?)\)/.exec(line)?.[1] ?? ""]);
+    const lines = tried ? waiting.lines.slice(0, tried.lines) : unstopped(waiting.lines);
+    const rest = tried ? unstopped(waiting.lines.slice(tried.lines)) : [];
+    if (!lines.length)
+      return;
+    const asks = tried ? tried.asks : waiting.asks;
+    const restAsks = rest.some((each) => each.startsWith("[Session asks]"));
+    const whole = [...lines, ...rest];
+    const id = tried?.id ?? messageID();
     const place = frozen().has(starter) ? undefined : await placeOfSession(starter, targets()).catch(() => {
       return;
     });
-    const line = wakeLineShown(waiting.lines);
-    const delivery = waiting.asks ? "steer" : "queue";
-    const about = [...new Set(waiting.lines.map((each) => /\(address (\S+?)\)/.exec(each)?.[1]).filter((each) => Boolean(each)))];
-    if (place === null && tellMovedAway(starter, wakeText(waiting.lines), { from: "Its sessions", words: line, line, delivery, about }, now()))
+    const line = wakeLineShown(lines);
+    const delivery = asks ? "steer" : "queue";
+    const about = [...new Set(whole.map((each) => /\(address (\S+?)\)/.exec(each)?.[1]).filter((each) => Boolean(each)))];
+    if (place === null && tellMovedAway(starter, wakeText(whole), { from: "Its sessions", words: wakeLineShown(whole), line: wakeLineShown(whole), delivery: asks || restAsks ? "steer" : "queue", about }, now()))
       return void failures.delete(starter);
     if (place === null && (bridgeRuns() || now() - waiting.since > NOTE_MEMORY))
       return;
@@ -9518,14 +9528,22 @@ function workWatcher(source, targets, { gather = GATHER, schedule = setTimeout, 
           return;
         throw new Error("Archived.");
       }
-      await sendInto(place.target, starter, { id: messageID(), text: wakeText(waiting.lines), delivery, metadata: boxNote("Its sessions", line) }, { from: "Its sessions", words: line });
+      await sendInto(place.target, starter, { id, text: wakeText(lines), delivery, metadata: boxNote("Its sessions", line) }, { from: "Its sessions", words: line });
       failures.delete(starter);
     } catch {
-      putBack(starter, waiting);
+      putBack(starter, { lines: whole, asks: asks || restAsks, since: waiting.since, tried: { id, lines: lines.length, asks } });
       const tries = (failures.get(starter) ?? 0) + 1;
       failures.set(starter, tries);
       soon(starter, Math.min(300000, gather * 2 ** tries));
+      return;
     }
+    if (!rest.length)
+      return;
+    changeWaiting(file, (all) => {
+      const now = all[starter];
+      all[starter] = now?.tried ? { ...now, lines: [...now.lines, ...rest], asks: now.asks || restAsks } : { lines: [...rest, ...now?.lines ?? []], asks: restAsks || Boolean(now?.asks), since: waiting.since };
+    });
+    soon(starter);
   };
   const soon = (starter, after = gather) => {
     if (due.has(starter))
@@ -9545,7 +9563,7 @@ function workWatcher(source, targets, { gather = GATHER, schedule = setTimeout, 
   const tell = (starter, line, asks) => {
     changeWaiting(file, (all) => {
       const kept = all[starter] ?? { lines: [], asks: false, since: now() };
-      all[starter] = { lines: [...kept.lines, line], asks: kept.asks || asks, since: kept.since };
+      all[starter] = { ...kept, lines: [...kept.lines, line], asks: kept.asks || asks };
     });
     soon(starter);
   };
@@ -9555,11 +9573,16 @@ function workWatcher(source, targets, { gather = GATHER, schedule = setTimeout, 
     const its = told.sessions[session] ?? {};
     if (note.reply) {
       its.reply = note.reply;
+      delete its.unread;
       if (told.held)
         delete told.held[session];
       if (told.held && !Object.keys(told.held).length)
         delete told.held;
     }
+    if (note.upto !== undefined)
+      its.upto = note.upto;
+    if (note.unread)
+      its.unread = true;
     if (note.at)
       its.at = note.at;
     if (note.turn)
@@ -9592,8 +9615,11 @@ function workWatcher(source, targets, { gather = GATHER, schedule = setTimeout, 
       return;
     }
     holding.delete(session);
-    if (reply && readTold(toldFile)?.sessions[session]?.reply === reply)
+    const told = readTold(toldFile)?.sessions[session];
+    if (reply && told?.reply === reply)
       return noteTold(session, { reply });
+    if ((!reply || told?.unread) && about.upto !== undefined && told?.upto !== undefined && about.upto <= told.upto)
+      return reply ? noteTold(session, { reply }) : undefined;
     if (waited !== "answered")
       tell(starter, line, false);
     if (about.bot) {
@@ -9602,7 +9628,7 @@ function workWatcher(source, targets, { gather = GATHER, schedule = setTimeout, 
       else
         noteOversight(about.bot, session, "finished");
     }
-    noteTold(session, { reply, at, said: about.said, early: about.early });
+    noteTold(session, { reply, at, said: about.said, early: about.early, upto: about.upto, unread: !reply });
   };
   const letGoOf = (session) => {
     deadlines.delete(session);
@@ -9647,6 +9673,7 @@ function workWatcher(source, targets, { gather = GATHER, schedule = setTimeout, 
   };
   const finish = async (session, starter, known) => {
     const at = now();
+    const upto = typeof session.time?.updated === "number" ? session.time.updated : undefined;
     const last = known ?? await lastReply(source, session.id).catch(() => null);
     if (isArchived(session) || staysStopped(session.id, last)) {
       letGoOf(session.id);
@@ -9666,7 +9693,8 @@ function workWatcher(source, targets, { gather = GATHER, schedule = setTimeout, 
     const line = await wakeLine({ type: "session.execution.succeeded", data: { sessionID: session.id } }, session, source, still);
     if (!line)
       return;
-    tellUnlessAnswered(session.id, starter, last?.id ?? undefined, line, at, { said: last?.text ? hashed(last.text) : "", early: Boolean(still) || waitedSince !== undefined, bot: worksFor(session)?.bot, working });
+    const seen = Math.max(upto ?? -Infinity, last?.at ?? -Infinity);
+    tellUnlessAnswered(session.id, starter, last?.id ?? undefined, line, at, { said: last ? last.text ? hashed(last.text) : "" : undefined, early: Boolean(still) || waitedSince !== undefined, bot: worksFor(session)?.bot, working, upto: Number.isFinite(seen) ? seen : undefined });
   };
   const settle = async (id) => {
     if (signal?.aborted)
