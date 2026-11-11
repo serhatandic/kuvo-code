@@ -181,6 +181,45 @@ import Testing
         #expect(!tabs.isKept(.session("ses_bot")))
     }
 
+    /// Back to a conversation that's beside another tab since takes it out of that split (never
+    /// in a tab and beside one at once); a split swapped keeps its way back with the tab, past the
+    /// conversation now in front.
+    @Test func backAcrossASplit() async {
+        defer { done() }
+        await sessions(["ses_bot", "ses_work", "ses_c"])
+        tabs.open(.session("ses_c"))
+        tabs.open(.session("ses_bot"))
+        tabs.go(to: .session("ses_work"), from: .session("ses_bot"))
+        tabs.open(.session("ses_c"))
+        tabs.openBeside("ses_bot")
+        tabs.open(.session("ses_work"))
+        #expect(keys == ["ses_c", "ses_work"])
+
+        tabs.goBack()
+        #expect(keys == ["ses_c", "ses_bot"])
+        #expect(tabs.selection == .session("ses_bot"))
+        #expect(tabs.splitModel == nil)
+        #expect(!tabs.isOpen(.session("ses_work")))
+        tabs.open(.session("ses_c"))
+        #expect(tabs.splitModel == nil, "out of the split it was in")
+
+        // The split swapped: the way back goes with the tab.
+        tabs.open(.session("ses_bot"))
+        tabs.go(to: .session("ses_work"), from: .session("ses_bot"))
+        tabs.openBeside("ses_c")
+        tabs.swapSplit()
+        #expect(tabs.selection == .session("ses_c"))
+        #expect(tabs.back(of: .session("ses_c")) == .session("ses_bot"))
+        // Swapped with the conversation it came from: none back to itself.
+        tabs.goBack()
+        tabs.closeBeside(.session("ses_bot"))
+        tabs.go(to: .session("ses_work"), from: .session("ses_bot"))
+        tabs.openBeside("ses_bot")
+        tabs.swapSplit()
+        #expect(tabs.selection == .session("ses_bot"))
+        #expect(tabs.back(of: .session("ses_bot")) == nil)
+    }
+
     /// A conversation deleted while one of its subagents shows in its tab (its own subagent's
     /// too): the tab goes with it, rather than showing a subagent of a conversation that's gone.
     @Test func deletingAConversationClosesItsSubagentsTab() async throws {
