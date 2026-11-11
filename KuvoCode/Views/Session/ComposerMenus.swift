@@ -173,7 +173,7 @@ struct ModeChip: View {
                 label(words: true)
                 label(words: false)
             }
-            .font(.callout)
+            .font(ComposerRow.text)
             .lineLimit(1)
             .foregroundStyle(.foreground)
             .padding(.horizontal, 8)
@@ -187,22 +187,24 @@ struct ModeChip: View {
 
     /// The approval's icon and, with `words`, its name; the orange dot while it asks first for now.
     private func label(words: Bool) -> some View {
-        HStack(spacing: 5) {
+        HStack(alignment: ComposerRow.alignment, spacing: 5) {
             Image(systemName: approval.symbol)
-                // Beside its words, a step under them; alone, the row's size, as the paperclip and
-                // the mic (#362).
-                .font(words ? .caption : .system(size: 14, weight: .medium))
+                // The row's one size and weight, beside its words or alone (ComposerRow).
+                .font(ComposerRow.icon)
                 .foregroundStyle(.secondary)
             if words { Text(approval.title) }
             if holding != nil {
                 Circle()
                     .fill(.orange)
                     .frame(width: 6, height: 6)
+                    // On the words' middle, as it was centered on them, now the row stands on
+                    // their baseline.
+                    .alignmentGuide(.firstTextBaseline) { $0[.bottom] + 1 }
                     .accessibilityHidden(true)
             }
             // The model chip's chevron: two menus side by side look alike.
             Image(systemName: "chevron.down")
-                .font(.system(size: 9, weight: .semibold))
+                .font(ComposerRow.icon)
                 .foregroundStyle(.tertiary)
                 .accessibilityHidden(true)
         }
@@ -256,16 +258,16 @@ struct AgentChip: View {
 
     var body: some View {
         Button(action: onLeave) {
-            HStack(spacing: 5) {
+            HStack(alignment: ComposerRow.alignment, spacing: 5) {
                 Image(systemName: agent == "plan" ? "list.bullet.clipboard" : "person.crop.circle")
-                    .font(.caption)
+                    .font(ComposerRow.icon)
                 Text(name)
                 Image(systemName: "xmark")
-                    .font(.system(size: 9, weight: .semibold))
+                    .font(ComposerRow.icon)
                     .foregroundStyle(.secondary)
                     .accessibilityHidden(true)
             }
-            .font(.callout)
+            .font(ComposerRow.text)
             .lineLimit(1)
             .padding(.horizontal, 8)
             .padding(.vertical, 5)
@@ -288,16 +290,16 @@ struct AutopilotChip: View {
 
     var body: some View {
         Button(action: onLeave) {
-            HStack(spacing: 5) {
+            HStack(alignment: ComposerRow.alignment, spacing: 5) {
                 Image(systemName: AutopilotShown.symbol)
-                    .font(.caption)
+                    .font(ComposerRow.icon)
                 Text("Autopilot")
                 Image(systemName: "xmark")
-                    .font(.system(size: 9, weight: .semibold))
+                    .font(ComposerRow.icon)
                     .foregroundStyle(.secondary)
                     .accessibilityHidden(true)
             }
-            .font(.callout)
+            .font(ComposerRow.text)
             .lineLimit(1)
             .padding(.horizontal, 8)
             .padding(.vertical, 5)
@@ -329,7 +331,7 @@ struct WorkplaceChip: View {
     var body: some View {
         NativeMenuButton(name: "workplace", menu: makeMenu) {
             Text(worktree ? (attempts > 1 ? "Worktree ×\(attempts)" : "Worktree") : "Local")
-                .font(.callout)
+                .font(ComposerRow.text)
                 .padding(.horizontal, 8)
                 .padding(.vertical, 6)
                 .hoverHighlight(in: Capsule(), mutesInk: true)
@@ -466,11 +468,11 @@ struct ModelChipLabel: View {
     var inUse: ModelRef?
 
     var body: some View {
-        HStack(spacing: 5) {
+        HStack(alignment: ComposerRow.alignment, spacing: 5) {
             // One of your Auto lists, by its name.
             if model?.providerID == OutsideAgents.autoProvider {
                 Image(systemName: "list.number")
-                    .font(.system(size: 11, weight: .medium))
+                    .font(ComposerRow.icon)
                     .foregroundStyle(.secondary)
             }
             Text(model?.name ?? "Choose a Model")
@@ -486,11 +488,11 @@ struct ModelChipLabel: View {
                     .help("Custom Auto is on \(name) now")
             }
             Image(systemName: "chevron.down")
-                .font(.system(size: 9, weight: .semibold))
+                .font(ComposerRow.icon)
                 .foregroundStyle(.tertiary)
                 .accessibilityHidden(true)
         }
-        .font(.callout)
+        .font(ComposerRow.text)
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
         .hoverHighlight(in: Capsule(), mutesInk: true)

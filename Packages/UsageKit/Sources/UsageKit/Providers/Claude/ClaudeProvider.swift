@@ -122,7 +122,7 @@ final class ClaudeProvider: ProviderRuntime {
         // against the same hold). The panel's own Claude reading takes this Mac's own Claude login's
         // limits, as of when, for the menu bar, the cards, notices and the host's readers; another
         // account card, none. Spend comes from the logs, as ever.
-        if HostLimits.shared.covers(provider.id) {
+        if HostLimits.limitsOnlyFromHost.contains(ProviderAccountID.family(of: provider.id)), HostLimits.shared.covers(provider.id) {
             // (Its limits come in as it's drawn, `HostLimits.applied`; with none from this Mac's
             // own Claude login yet, its bar says when they will.)
             let waiting = provider.id == "claude" && HostLimits.shared.ownRow(for: provider.id) == nil

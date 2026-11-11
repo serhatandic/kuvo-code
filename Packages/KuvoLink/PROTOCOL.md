@@ -1027,6 +1027,13 @@ client shows it from the same routes.
   it's brought back, as its own wake-ups wait, a week at most; for one moving to or from another
   computer, until it's there; for one that lives on another computer now, it goes to it
   there as a letter with `note`, "Peers", delivered there as it would have been here). Clients mark rows by `kuvo.by`.
+  One whose answer was lost (the engine slow to answer) may have arrived: it goes again alone under
+  the same message `id` (`wakes.json`'s `tried`), which a conversation takes once, and what came
+  meanwhile after it (one message at a time to each conversation). A finish is told once however many ways it's heard of at once (its run's end,
+  what it left running ending, the box catching up as its engine's stream connects again), even when
+  its reply can't be read in time: `told.json` keeps when the session last changed as it was told
+  (`upto`, by its engine's clock, and `unread` when its reply couldn't be read), and a look that saw
+  nothing newer tells nothing.
   - **Homes** (`run/work/homes.json`, bridge 0.9.203): `{<session>: {key, at}}`, the box each
     conversation that left lives on, by the newest word: this box's record of its moves, its peers'
     `moved`, a box's `lives`, and a note's `about`. Unlike `moved` it doesn't forget at two days: a
@@ -3005,9 +3012,12 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   `413 {"message"}` over 25 MB, or over `max` when it's given (`&max=<bytes>`: all a client would
   show of it), `400 {"message"}` for an address that isn't `file://`. Each box answers for its own files, a machine's with the Mac closed too.
 - On a Mac, `kuvo/usage`: the menu bar's usage panel as its Bars view lists it, for what the box
-  doesn't state yet (a plan's limits are every box's own, in "Plan limits"): it leaves out the
-  providers whose limits this Mac's box states rows for (`services`, with an account listed), whose
-  spend shows under the first of them on the Mac. A client lists the box's rows, then these: each provider's name, plan, brand color, mark as a PNG
+  doesn't state yet (a plan's limits are every box's own, in "Plan limits"). A provider whose
+  place the boxes' rows take there says so (`covers`, its service), with its limit lines left out:
+  one this Mac's box states rows for (`services`, with an account listed), and Claude, whose bar
+  has no limits of its own, wherever any of the Mac's computers states a Claude account. Its
+  spend shows under the first of those rows. A client lists these in their order, the box's rows
+  in the place of each that `covers`: each provider's name, plan, brand color, mark as a PNG
   to tint, notice, whether it's outdated, and its lines as UsageKit writes them; whether a refresh is under way and when the last one ended;
   `kuvo/usage/events` streams it as it changes, and `POST kuvo/usage/refresh` refreshes it all.
   While the usage panel isn't up, `kuvo/usage` and the refresh answer 404; the stream answers 200
@@ -3100,8 +3110,10 @@ the last reading in its folder (`limits.json`), through a restart. A client reac
   - `identity`: the account at its maker, 16 hex characters, the same from every box signed in to
     it (and from a coding agent's sign-in and the engine's to the same account), so a client
     lists it once. A hash of its maker's own ID for it, never the ID, an email or a secret:
-    Claude's account and organization (Linux only: a Mac's Claude token doesn't say who it's
-    for), ChatGPT's account and workspace member, xAI's user, GitHub's login (from Copilot's
+    Claude's account and organization (on Linux as Claude Code keeps them beside its sign-in; on a
+    Mac, whose token doesn't say who it's for, as Anthropic says in the signed policy record Claude
+    Code fetches with that token and keeps in its settings folder, once it has run with it there),
+    ChatGPT's account and workspace member, xAI's user, GitHub's login (from Copilot's
     answer), and an API key for OpenRouter, Z.ai and OpenCode Go. Absent where it isn't known, and
     from a box from before it: list that row as its box's own. Where it changes (signed in
     as another account there), the box drops what it kept of the one before, and the row says so
@@ -3145,8 +3157,11 @@ the last reading in its folder (`limits.json`), through a restart. A client reac
   with the first `label` among them ("Claude · Work"). Where two rows would have one name: a row
   whose own computer's sign-in is the engine's takes the service's name ("ChatGPT"); rows not on
   the client's own computer add the names of the boxes they're from ("Claude · hetzner, lokum"),
-  as does one beside a row the client shows of its own of that name (the Mac panel's own card);
-  rows still alike add their other boxes' names.
+  as does one beside a bar the Mac panel shows of its own of that name (a provider's card that
+  reads your own login's limits, when this Mac's box has no row of it: Codex's, say; Claude's card
+  has none, so the accounts take its place, `covers`); rows still alike add their other boxes'
+  names. A row a box can't say who it is (no `identity`) is never merged by its numbers: two
+  accounts can read alike (a personal plan and a team's, each at 12%).
 - What's read: Claude Code's accounts, on Linux from Anthropic with Claude Code's own sign-in in
   Kuvo Code's folder; on a Mac only from what its turns hear (Claude Code's rate-limit events, every
   window from each response's headers), as the token Kuvo Code signs in with there can only run
@@ -3184,7 +3199,8 @@ change what they say. Kept in `run/work-queue/` (`queues/<owner>.json`, files ke
 `features` has `work-queue`. Times are milliseconds since 1970.
 
 **An item**: `id` (`wqi_…`, never shown), `number` (its `#n`; missing while it waits for one,
-shown as new), `wanted` (a number an import asked for, until it's granted), `owner` (`ses_…` or
+shown as new), `wanted` (a number an import asked for, until it's granted; beside `number`, its own
+number asked back), `owner` (`ses_…` or
 `grp_…`), `title`, `category`, `order` (its place in its category, among every owner's items on
 the box), `inProgress`, `progress` (`{value?: 0…1, note?}`: how far, and what's being done now),
 `sessions` (`[{session, title, working}]`: the sessions working on it, and which are at work now),
@@ -3255,8 +3271,21 @@ kuvo/work-queue/import` `{owner, files: [paths]}` (Markdown files on the box: ea
 starting with `#N` is an item, in the category of the nearest heading above it that names one
 (Done, Shelved/Parked, Later/Ideas), else Next, Done with `[x]`; a line `NOW:`/`LATER:`/… with
 refs sets theirs; the first line naming a number gives its title, every line naming it its body)
-→ `{added, byCategory, waiting, skipped, said}`. An import skips a number here already under the
-same title; under another title, the item is imported with a new number and a note. Each change
+→ `{added, byCategory, waiting, skipped, said}`. An item keeps its own number wherever no other item
+has it, here or on another of your computers (as each told this box), and it isn't one this box
+gave an item that's gone from it (`numbers.json`, `used`: moved away, or deleted); one waiting for
+its number (an import's still under way) holds it as its own. An import skips a number here already under the
+same title, or waiting for it; under another title, the item is imported with a new number
+(`importedAs`) and a note, and `said` names each one renumbered and its number now, as it does
+those the primary refuses at once (on the primary itself; elsewhere a note says so when its answer
+comes). An item an import renumbered, imported again under the same number and title, isn't made
+twice: it asks for its own number back (claimed as an import's are, as `restores` too, keeping
+the one it has, and `wanted` meanwhile), where no other item has it (one on its way back to its own
+number lets it go); granted, every such item moves at once (two can trade), with a note, and
+`importedAs` goes. One whose number another item has waits (`backGranted`, never asked again) while
+that one asks for its own, and moves once it has; else, or refused, it stays as it is, with a note
+(`stays`: an import doesn't ask again). So importing the same backlog again repairs an import that
+went wrong, and once it has, changes nothing. Each change
 answers `{item}`; a category removed only once nothing, deleted items included, is in it.
 
 **Tools**: `GET kuvo/work-queue/tools` → `{tools, instructions}` (MCP definitions, and what the
@@ -3314,7 +3343,7 @@ Mac never numbers on its own; while it knows of no Mac that
 can be reached yet, items wait. The primary numbers its own
 items from its counter; another box numbers from blocks of 50 the primary gave it, and asks for the
 next when 15 or fewer are left, by mail, on its rounds: `{workQueue: {ask: {id, count, claims?,
-top?}}}`, sent again every 30 s until answered with `{workQueue: {give: {id, from, to, granted}}}`.
+restores?, own?, top?}}}`, sent again every 30 s until answered with `{workQueue: {give: {id, from, to, granted}}}`.
 `top` is the highest number the asking box used, holds or handed out: the primary moves its counter
 past it (a box that numbered on its own before, or a primary that lost its file), and past any number
 its peers tell it they use. A box that stops numbering on its own asks its new primary at once. A
@@ -3323,11 +3352,21 @@ set up) is asked through the peer that named it: `{workQueue: {ask, to: <primary
 peer, which passes it on as `{ask, for: <asking box's key>}` if it's its own primary, and the block
 back as `{give}`; one hop only, and a box takes a block only from its primary or the peer it asks
 through. The primary keeps what it gave for each ask, so an
-ask sent again gets the same answer. `claims` are numbers an import wants to keep (six digits at most, what a chip reads): the primary
-grants those at or above its counter and within 10,000 of it (or granted that box before) and moves its counter past them;
-an imported item waits without a number until then, and one refused gets the next number, with a
+ask sent again gets the same answer, and notes the box it gave each block (`given`, `by`). `claims`
+are numbers an import wants to keep (six digits at most, what a chip reads): the primary grants
+those at or above its counter and within 10,000 of it, those it granted that box before, and, for
+an ask that says `own` (a box that never claims a number it gave an item, `used`), those in a block
+it gave that box (its own: a box drops its leases at or below its claims, and takes a block only for
+the ask under way, so a block given for an ask an import replaced is never used), and moves its
+counter past them. Until those an older primary kept without whom they went to are gone from
+`given`, such a block counts for `restores` (numbers asked back for items an import renumbered)
+only where every other computer the primary knows told it, and of no number as high as the block's
+first (its `top` or its items), and the asking box told of one as high as its last: a box that
+never tells the primary (one reaching it only through a peer) could hold one unseen. An imported item waits without a number until then; an answer decides only the claims
+its ask carried (one claimed later waits for its own), and one refused gets the next number, with a
 note. An item made with no number left waits too, and takes one, oldest first, when a block comes; one left
-waiting with nothing under way (a crash midway, a move) is claimed or numbered again within a minute.
+waiting with nothing under way (a crash midway, a move), or still asking for its own number back, is
+claimed or numbered again within a minute.
 A queue file that can't be read is never written over: the change is refused and the file set aside
 (`queues/aside/`); fields a newer box keeps in an item are kept as they are, and so is a queue of a
 kind of owner this box doesn't know (`queues/<kind>_….json`, a newer box's): never read, shown,

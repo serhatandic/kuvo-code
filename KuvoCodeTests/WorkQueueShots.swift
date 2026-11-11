@@ -6,7 +6,7 @@ import Testing
 
 /// Pictures of the Work Queue (#243): the panel narrow (its tab "Work Queue · 24 items", In
 /// progress, Next numbered, the rest as counts) and expanded (filter chips, the list, an item
-/// open), and a reply naming items, drawn as their chips; light and dark. Only with
+/// open), the empty panel, and a reply naming items, drawn as their chips; light and dark. Only with
 /// KUVO_SHOTS_OUT, the folder they go in (`scripts/test-app.sh` with
 /// ONLY=KuvoCodeTests/WorkQueueShots). The queue is a stand-in for what a box tells.
 @MainActor
@@ -57,6 +57,15 @@ struct WorkQueueShots {
         return try! JSONDecoder().decode(WorkQueueView.self, from: JSONSerialization.data(withJSONObject: json))
     }
 
+    static var emptyView: WorkQueueView {
+        let json: [String: Any] = [
+            "owner": "ses_lead",
+            "categories": [["id": "next", "name": "Next", "builtIn": true], ["id": "later", "name": "Later", "builtIn": true], ["id": "parked", "name": "Parked", "builtIn": true], ["id": "done", "name": "Done", "builtIn": true]],
+            "items": [], "owners": [["owner": "ses_lead", "kind": "session", "title": "Work Queue panel"]], "removed": [],
+        ]
+        return try! JSONDecoder().decode(WorkQueueView.self, from: JSONSerialization.data(withJSONObject: json))
+    }
+
     static var detail: WorkItemDetail {
         var whole = items[0]
         whole["body"] = """
@@ -82,16 +91,17 @@ struct WorkQueueShots {
             let look = dark ? "dark" : "light"
             try await panel(width: 380, height: 640, dark: dark, open: false).write(to: URL(fileURLWithPath: out).appending(path: "collapsed-\(look).png"))
             try await panel(width: 760, height: 640, dark: dark, open: true).write(to: URL(fileURLWithPath: out).appending(path: "expanded-\(look).png"))
+            try await panel(width: 380, height: 640, dark: dark, open: false, empty: true).write(to: URL(fileURLWithPath: out).appending(path: "empty-\(look).png"))
             try await chips(dark: dark).write(to: URL(fileURLWithPath: out).appending(path: "chip-in-chat-\(look).png"))
         }
     }
 
-    private func panel(width: CGFloat, height: CGFloat, dark: Bool, open: Bool) async throws -> Data {
+    private func panel(width: CGFloat, height: CGFloat, dark: Bool, open: Bool, empty: Bool = false) async throws -> Data {
         let app = AppModel()
         app.workQueues.app = app
         app.utilities.inView.session = "ses_lead"
         let key = WorkQueues.Key(box: BoxClient.mac, owner: "ses_lead")
-        app.workQueues.standIn(Self.view, for: key, details: [Self.detail])
+        app.workQueues.standIn(empty ? Self.emptyView : Self.view, for: key, details: [Self.detail])
         app.utilities.showWorkQueue()
         if open { app.workQueues.opened[app.utilities.panelKey] = WorkQueues.Opened(box: BoxClient.mac, id: Self.detail.item.id, number: 243) }
         let pane = UtilitiesPane(utilities: app.utilities, directory: nil, model: nil, environment: [:], isExpanded: PaneSwitch(isOn: { open }, set: { _ in }))
