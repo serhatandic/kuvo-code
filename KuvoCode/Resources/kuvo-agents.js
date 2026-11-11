@@ -15086,7 +15086,7 @@ ${said.map((each) => each.text).join(`
         active.toolsSinceText = true;
         const changes = codexChanges(item.changes);
         active.changes.set(item.id, changes);
-        turn.toolStart(item.id, "patch", { files: changes.map((change) => change.path) });
+        turn.toolStart(item.id, "patch", { files: changes.flatMap((change) => [change.path, ...change.movedTo ? [change.movedTo] : []]) });
         return;
       }
       case "functionCallOutput":
@@ -15340,7 +15340,7 @@ From memory: ${cited.join("; ")}`);
         const decision = await hooks.permission({
           toolCallID: params.itemId,
           action: "edit",
-          resources: changes.length ? changes.map((change) => change.path) : [params.grantRoot ?? "*"],
+          resources: changes.length ? changes.flatMap((change) => [change.path, ...change.movedTo ? [change.movedTo] : []]) : [params.grantRoot ?? "*"],
           metadata: files.length ? { files } : undefined,
           message: params.reason ?? undefined
         });
@@ -15358,7 +15358,7 @@ From memory: ${cited.join("; ")}`);
         return { decision: decision === "reject" ? "denied" : "approved" };
       }
       case "applyPatchApproval": {
-        const paths = Object.keys(params.fileChanges ?? {});
+        const paths = Object.entries(params.fileChanges ?? {}).flatMap(([file, change]) => [file, ...[change?.move_path, change?.update?.move_path].filter((each) => typeof each === "string")]);
         const decision = await hooks.permission({ toolCallID: params.callId, action: "edit", resources: paths.length ? paths : ["*"], message: params.reason ?? undefined });
         return { decision: decision === "reject" ? "denied" : "approved" };
       }
@@ -26899,4 +26899,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents fabafdb9a600bdfb29057867ea02e7700ba5e95e3a3eba449e489d4ac58f0070
+// Built from Packages/Box/src/agents 5f0c8fc32fe1f7c8652142339e12d1c296be35d00ed8d83d2759ca7a7c6a1401
