@@ -163,6 +163,31 @@ import Textual
         #expect(app.workQueues.views[all]?.items.map(\.title) == ["Lead's own", "Handed to the child", "Someone else's"])
     }
 
+    /// #552: a session the lead put on its item, opened from the lead's queue, lists that item in its
+    /// own panel, first, under Working on; the lead's own view is as it was.
+    @Test func aSessionsPanelListsTheLeadsItemItWorksOnFirst() async throws {
+        let machine = try await MachineTestBox(name: "lab")
+        defer { machine.stop() }
+        use(machine)
+        var leads = Self.item(551, "All includes Done", order: 1)
+        leads["sessions"] = [["session": "ses_worker", "since": 1]]
+        try keep([leads, Self.item(552, "Not linked", order: 2)], for: "ses_lead", on: machine)
+        try keep([Self.item(7, "Its own", order: 1)], for: "ses_worker", on: machine)
+        let worker = WorkQueues.Key(box: BoxClient.mac, owner: "ses_worker"), lead = WorkQueues.Key(box: BoxClient.mac, owner: "ses_lead")
+        await app.workQueues.read(worker)
+        await app.workQueues.read(lead)
+
+        let view = try #require(app.workQueues.views[worker])
+        let sections = WorkQueue.sections(view)
+        #expect(Array(sections.map(\.name).prefix(3)) == ["Working on", "In progress", "Next"])
+        #expect(sections.first?.items.map(\.title) == ["All includes Done"])
+        #expect(sections.first { $0.category == "next" }?.items.map(\.title) == ["Its own"], "the lead's item shows once")
+        #expect(WorkQueue.openCount(view) == 2, "the tab counts it: “Work Queue · 2 items”")
+        let leadsView = try #require(app.workQueues.views[lead])
+        #expect(!WorkQueue.sections(leadsView).contains { $0.id == WorkQueue.workingOnID })
+        #expect(leadsView.items.map(\.title) == ["All includes Done", "Not linked"])
+    }
+
     @Test func aReferenceInAMessageIsDrawnAsItsChipOnceTheBoxKnowsItAndOpensTheItem() async throws {
         let machine = try await MachineTestBox(name: "lab")
         defer { machine.stop() }

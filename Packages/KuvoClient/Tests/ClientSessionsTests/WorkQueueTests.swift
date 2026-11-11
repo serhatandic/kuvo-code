@@ -119,11 +119,11 @@ import ClientSessions
         """
         let view = try JSONDecoder().decode(WorkQueueView.self, from: Data(json.utf8))
         let now = Date(timeIntervalSince1970: 0)
-        #expect(WorkQueue.properties(of: view.items[0], in: view, now: now).map(\.words) == ["Merged on GitHub", "Untitled session’s queue", "On lab", "Added just now"])
+        #expect(WorkQueue.properties(of: view.items[0], in: view, now: now).map(\.words) == ["Merged on GitHub", "On lab", "Added just now"], "whose only where the view names it")
         #expect(WorkQueue.properties(of: view.items[0], in: view, now: now).first?.help == "If it’s reopened there, it’s back in Later.")
         #expect(WorkQueue.properties(of: view.items[1], in: view, now: now).first?.words == "Done")
         #expect(WorkQueue.status(of: view.removed[0]) == .deleted)
-        #expect(WorkQueue.properties(of: view.removed[0], in: view, now: now).first?.words == "Untitled session’s queue", "Deleted, not In Next too")
+        #expect(WorkQueue.properties(of: view.removed[0], in: view, now: now).first?.words == "Added just now", "Deleted, not In Next too")
     }
 
     @Test func theCardSaysWhetherASessionIsAtWorkAndWhatItSaid() {

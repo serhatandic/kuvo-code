@@ -241,8 +241,8 @@ struct WorkQueuePanel: View {
         let sections = WorkQueue.sections(view)
         return Flow(spacing: 2) {
             chip("All", count: WorkQueue.openCount(view), filter: .all)
-            chip("In progress", count: sections.first?.items.count ?? 0, filter: .inProgress)
-            ForEach(sections.dropFirst()) { section in
+            chip("In progress", count: WorkQueue.items(view, .inProgress).count, filter: .inProgress)
+            ForEach(sections.filter { $0.category != nil }) { section in
                 chip(section.name, count: section.items.count, filter: .category(section.id))
             }
             if !view.removed.isEmpty {
@@ -319,11 +319,16 @@ struct WorkQueuePanel: View {
         }
     }
 
-    /// In progress and Next with their items, Next's first few until you ask for the rest; then
-    /// the other categories as counts that open (narrow) or filter the list (wide).
+    /// What this session works on that's someone else's, In progress and Next with their items,
+    /// Next's first few until you ask for the rest; then the other categories as counts that open
+    /// (narrow) or filter the list (wide).
     @ViewBuilder private func overview(_ view: WorkQueueView, wide: Bool) -> some View {
         let sections = WorkQueue.sections(view)
-        if let working = sections.first, !working.items.isEmpty {
+        if let workingOn = sections.first(where: { $0.id == WorkQueue.workingOnID }) {
+            sectionHeader(workingOn.name, count: workingOn.items.count, category: nil)
+            ForEach(workingOn.items) { item in row(item, view: view, ordinal: nil, wide: wide) }
+        }
+        if let working = sections.first(where: { $0.id == WorkQueue.inProgressID }), !working.items.isEmpty {
             sectionHeader(working.name, count: working.items.count, category: nil)
             ForEach(working.items) { item in row(item, view: view, ordinal: nil, wide: wide) }
         }
@@ -459,8 +464,8 @@ struct WorkQueuePanel: View {
 
     private func row(_ item: WorkItem, view: WorkQueueView, ordinal: Int?, wide: Bool) -> some View {
         // In progress hides which category an item is kept in: dropping there would move it to
-        // one you can't see, so nothing drops on it.
-        let takesDrops = !WorkQueue.isInProgress(item) && WorkQueue.canMove(item)
+        // one you can't see, so nothing drops on it; nor on a lead's item under Working on.
+        let takesDrops = !WorkQueue.isInProgress(item) && WorkQueue.canMove(item) && !WorkQueue.isWorkingOn(item, in: view)
         return WorkItemRow(item: item, ownerName: WorkQueue.ownerName(of: item, in: view), ordinal: ordinal, isSelected: wide && opened?.matches(item) == true,
                            openSession: item.sessions.first(where: \.working).map { linked in { app.open(.session(linked.session), from: app.tabs.messageTarget) } }) {
             store.opened[panel] = WorkQueues.Opened(box: box, id: item.id, number: item.number)

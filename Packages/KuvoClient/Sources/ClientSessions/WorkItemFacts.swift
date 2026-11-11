@@ -60,7 +60,8 @@ public extension WorkQueue {
     /// An item's properties, on one line under its title: the category it's kept in ("In Next",
     /// "Done", "Merged on GitHub"), only when no session is at work on it and it isn't deleted (its
     /// status says those, once); whose queue it's in; the computer it's on, when that's another;
-    /// where it's being handed; and when it was added.
+    /// where it's being handed; and when it was added. Whose queue only where the view names its
+    /// owner (a page opened from a chip may have no list read yet).
     static func properties(of item: WorkItem, in view: WorkQueueView, now: Date = .now, calendar: Calendar = .current, locale: Locale = .current) -> [Property] {
         var properties: [Property] = []
         if status(of: item) == nil {
@@ -74,7 +75,9 @@ public extension WorkQueue {
                 properties.append(Property(kind: .category(item.category), words: "In \(categoryName(item.category, in: view.categories))", help: nil))
             }
         }
-        properties.append(Property(kind: .owner(item.owner), words: "\(ownerWords(item.owner, in: view))’s queue", help: nil))
+        if let owner = ownerWords(item.owner, in: view) {
+            properties.append(Property(kind: .owner(item.owner), words: "\(owner)’s queue", help: nil))
+        }
         if let computer = computerName(of: item) {
             properties.append(Property(kind: .computer, words: "On \(computer)", help: "Kept on \(computer): changes to it are made there."))
         }
@@ -88,9 +91,9 @@ public extension WorkQueue {
     }
 
     /// An owner by name, whoever's view it is: the bot's name, the session's title, or the group
-    /// chat.
-    static func ownerWords(_ owner: String, in view: WorkQueueView) -> String {
-        view.owners.first { $0.owner == owner }?.name ?? (owner.hasPrefix("grp_") ? "Group chat" : "Untitled session")
+    /// chat; nil for a session the view doesn't name.
+    static func ownerWords(_ owner: String, in view: WorkQueueView) -> String? {
+        view.owners.first { $0.owner == owner }?.name ?? (owner.hasPrefix("grp_") ? "Group chat" : nil)
     }
 
     // MARK: The sessions on it
@@ -156,7 +159,7 @@ public extension WorkQueue {
             lines.append(Activity(id: "note-\(index)", kind: .note, who: note.by, whoWords: capitalized(note.by.words), what: "left a note", text: note.text, at: note.at))
         }
         for (index, handed) in detail.handed.enumerated() {
-            lines.append(Activity(id: "handed-\(index)", kind: .handed, who: nil, whoWords: ownerWords(handed.from, in: view), what: "handed it to \(ownerWords(handed.to, in: view))", at: handed.at))
+            lines.append(Activity(id: "handed-\(index)", kind: .handed, who: nil, whoWords: ownerWords(handed.from, in: view) ?? "A conversation", what: "handed it to \(ownerWords(handed.to, in: view) ?? "another conversation")", at: handed.at))
         }
         if item.isDone, item.keptIn == nil, let doneAt = item.doneAt {
             // (Who marked it done is kept only as its last change, when that's the same moment.)
