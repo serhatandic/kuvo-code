@@ -3130,7 +3130,8 @@ there are under the owner, "Work").
   has `computer`. `kuvo/work-queue/events?owner=` is the same as NDJSON: a line now and one each
   time it changes (a change here or by another process, another computer telling of its queue, or a
   linked session starting or stopping work).
-- `GET kuvo/work-queue/items/<id or number>` → `{item}`, whole. `…/files/<name>` → its bytes. An
+- `GET kuvo/work-queue/items/<id or number>` → `{item}`, whole (an issue's `gh:` ref names it too,
+  but its "/" can't go in a path through every client: a client asks by the `id` its chip has). `…/files/<name>` → its bytes. An
   item on another computer answers as that one told it, with `computer` and an empty `body`,
   `notes`, `files`, `links` and `handed`: a client reads it whole, and its files, from that computer
   (a machine by `computer.id`; a Mac, its own box).
