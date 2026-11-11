@@ -8,6 +8,11 @@ import type { Store } from "./store"
 import type { AssistantMessage, CompactionMessage, Content, ModelRef, StructuredError, TokenUsage, ToolCall, ToolOutput } from "./wire"
 import { noTokens } from "./wire"
 
+/** The metadata of a note from Kuvo Code for the user ("Your hook failed…", "Going on with
+ * Codex…"): clients show these, and not the engine's notes written for the model, which look the
+ * same otherwise (PROTOCOL.md, "Messages in a session"). */
+export const NOTICE = { kuvo: { notice: true } }
+
 export type Outcome = "succeeded" | "failed" | "interrupted"
 
 export interface StepEnd {
@@ -302,7 +307,8 @@ export class Turn {
     this.save()
   }
 
-  /** A note in the conversation from Kuvo Code, not the agent: "Going on with Codex…". */
+  /** A note in the conversation from Kuvo Code, not the agent: "Going on with Codex…". Marked as
+   * one for the user (`NOTICE`), which clients show, unlike the notes written for the model. */
   notice(text: string) {
     if (this.ended) return
     // Said again with nothing since (each of your hooks failing the same way): once is enough.
@@ -310,8 +316,8 @@ export class Turn {
     if (last?.type === "synthetic" && last.text === text) return
     this.endBlock()
     if (this.step) this.endStep()
-    const event = emit("session.synthetic", { sessionID: this.sessionID, text }, this.directory)
-    this.messages.push({ type: "synthetic", id: messageID(event.id), time: { created: event.created }, text })
+    const event = emit("session.synthetic", { sessionID: this.sessionID, text, metadata: NOTICE }, this.directory)
+    this.messages.push({ type: "synthetic", id: messageID(event.id), time: { created: event.created }, text, metadata: NOTICE })
     this.save()
   }
 

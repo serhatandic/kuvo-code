@@ -82,6 +82,20 @@ export const PHONES = object({ phones: list(object({ key: string, name: string, 
 /** A link for another phone to pair with (good once), and when it ends, in seconds since 1970. */
 export const PAIRING = object({ link: string, ends: number });
 
+/** Your setup as this box says it (`kuvo/setup`, PROTOCOL.md "Your setup"): its id and epoch, its
+ * main computer, this box (its key, and its role, null in no setup), each computer in it, another
+ * main computer named at the same epoch (never taken), and the #181 switch: the value you set, or
+ * null, and what it is then. */
+export const SETUP = object({
+  setup: nullable(string),
+  epoch: nullable(number),
+  primary: nullable(object({ key: string, name: string, kind: words("mac", "machine") })),
+  you: object({ key: nullable(string), role: nullable(words("primary", "member")) }),
+  computers: list(object({ key: string, name: string, kind: words("mac", "machine"), role: words("primary", "member"), app: bool })),
+  "conflict?": object({ primary: string, epoch: number }),
+  startsFromOthers: object({ value: nullable(words("on", "off")), default: words("on", "off") }),
+});
+
 /** Whether a client's in use here, and how many notices wait. */
 export const ATTENTION = object({ inUse: bool, held: number });
 
@@ -139,6 +153,8 @@ export const BOX_ROUTES: RouteShape[] = [
   { route: "POST kuvo/phones/remove", answers: { 200: NOTHING } },
   { route: "POST kuvo/phones/pair", answers: { 200: PAIRING } },
   { route: "DELETE kuvo/phones/pair", answers: { 200: NOTHING } },
+  { route: "GET kuvo/setup", answers: { 200: SETUP } },
+  { route: "GET kuvo/setup/events", answers: { 200: SETUP } },
   { route: "GET kuvo/attention", answers: { 200: ATTENTION } },
   { route: "POST kuvo/attention", answers: { 200: object({ for: number }) } },
   { route: "POST kuvo/attention/notice", answers: { 200: NOTHING } },

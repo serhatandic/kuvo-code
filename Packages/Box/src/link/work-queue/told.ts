@@ -15,13 +15,15 @@ import type { ItemSummary, OwnerFacts } from "./view";
 
 export const TOLD = path.join(WORK_QUEUE, "peers");
 
-/** How a computer numbers: its kind, when it was set up, the highest number it used or holds, and
- * the primary it numbers from (`self` for itself). */
+/** How a computer numbers: its kind, when it was set up, the highest number it used or holds, the
+ * primary it numbers from (`self` for itself), and whether it's a machine Macs share that aren't in
+ * one setup (PROTOCOL.md, "Your setup": then none of them leads one; an older box says neither). */
 export interface Numbering {
   kind: "mac" | "machine";
   since?: number;
   top?: number;
   primary?: { key: string; kind: "mac" | "machine"; since?: number };
+  shared?: boolean;
 }
 
 /** An item as another computer tells it: its summary, and who handed it on. */
@@ -112,7 +114,7 @@ export function numberingOf(given: Record<string, unknown>): Numbering {
   const kind = KIND(given.kind) ?? "machine";
   const primary = isObject(given.primary) && typeof given.primary.key === "string" && KEY.test(given.primary.key) && KIND(given.primary.kind)
     ? { key: given.primary.key, kind: KIND(given.primary.kind)!, ...(time(given.primary.since) ? { since: time(given.primary.since) } : {}) } : undefined;
-  return { kind, ...(time(given.since) ? { since: time(given.since) } : {}), ...(whole(given.top) ? { top: whole(given.top) } : {}), ...(primary ? { primary } : {}) };
+  return { kind, ...(time(given.since) ? { since: time(given.since) } : {}), ...(whole(given.top) ? { top: whole(given.top) } : {}), ...(primary ? { primary } : {}), ...(typeof given.shared === "boolean" ? { shared: given.shared } : {}) };
 }
 
 /** What a computer told, as it came, cleaned: null for what isn't. */

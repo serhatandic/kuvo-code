@@ -1,4 +1,5 @@
 import ClientDesign
+import ClientSessions
 import OpenCodeKit
 import SwiftUI
 

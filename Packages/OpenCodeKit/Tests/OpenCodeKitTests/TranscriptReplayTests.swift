@@ -150,7 +150,8 @@ struct TranscriptReplayTests {
         #expect(instructions.description == "Instructions updated: kuvo/project-folders")
         #expect(instructions.instructionSources == ["kuvo/project-folders"])
         #expect(instructions.metadata?["by"]?.string == "kuvo")
-        #expect(ended.backgroundEnd == "Background command finished: npm test")
+        #expect(ended.description == "npm test")
+        #expect(ended.metadata?["source"]?.string == "shell")
     }
 
     /// Stopped while it asks you something: the engine lets the ask go without a word, and its card
@@ -169,25 +170,6 @@ struct TranscriptReplayTests {
         #expect(transcript.permissions.map(\.id) == ["per_2"])
         transcript.apply(try event(5, "session.execution.failed", #""sessionID":"ses_helper","error":{"type":"aborted","message":"Aborted"}"#))
         #expect(transcript.permissions.isEmpty)
-    }
-
-    /// A reply cut off (its stream broke, or it ran out of room) that the engine carries on: the
-    /// conversation says so in a few words, not with the engine's word to the model.
-    @Test func aReplyCarriedOnSaysSoPlainly() throws {
-        var transcript = Transcript(sessionID: "ses_1")
-        for (number, text) in [
-            (1, "The previous response was interrupted. Continue from where you left off without repeating completed content."),
-            (2, "Your last response hit the output token limit (stop reason: length). Do not apologize, recap, or repeat yourself. Break the remaining work into smaller pieces."),
-            (3, "Command `npm test` finished"),
-        ] {
-            transcript.apply(try ServerEvent(json: Data(#"""
-            {"id":"evt_\#(number)","created":\#(number),"type":"session.synthetic","data":{"sessionID":"ses_1","text":"\#(text)"}}
-            """#.utf8)))
-        }
-        let words: [String?] = transcript.messages.map { message in
-            if case .synthetic(let notice) = message { notice.carriedOn } else { nil }
-        }
-        #expect(words == ["The reply was cut off, so it carried on", "Hit the length limit for one reply, so it carried on", nil])
     }
 
     /// The engine's own notice (a background command finished) waiting to go in when the

@@ -19,6 +19,8 @@ import { categories, takePrimaryCategories } from "./categories";
 import { handArrived, handedBack, sendHandings } from "./hand";
 import { mailsFor, takePart } from "./parts";
 import { movePast, ownSince, primaryOf, takeNumbersMail, topOf } from "./numbers";
+import { sharedMachine } from "../setup/settle";
+import { noteSetupNow } from "../setup/lead";
 import { allItems, OWNER, queueFollowers, refNames, WORK_QUEUE, type Item, type ItemRef } from "./store";
 import { SEEN_FILE, seenOf, withSeen } from "./github";
 import { forgetTold, keepTold, MOST_TOLD, MOST_TOLD_DONE, readTold, TOLD, toldKeys, toldOf, type Numbering, type ToldItem } from "./told";
@@ -49,7 +51,8 @@ interface Telling {
 }
 
 /** How this box numbers, as it tells its peers: its kind, when it was set up, the highest number it
- * used or holds, and its primary (itself, or another, with when that one was set up). */
+ * used or holds, its primary (itself, or another, with when that one was set up), and whether it's a
+ * machine Macs share outside one setup (said by every box that knows setups). */
 export function numberingNow(link: LinkState | null): Numbering {
   const primary = primaryOf(link);
   const own = link ? ownKey(link) : null;
@@ -61,7 +64,7 @@ export function numberingNow(link: LinkState | null): Numbering {
     const told = primary.via ? readTold(primary.via.key)?.primary?.since : readTold(primary.peer.key)?.since;
     named = { key: primary.peer.key, kind: primary.peer.kind, ...(told ? { since: told } : {}) };
   }
-  return { kind, since, top: topOf(), ...(named ? { primary: named } : {}) };
+  return { kind, since, top: topOf(), ...(named ? { primary: named } : {}), shared: sharedMachine(link) };
 }
 
 /** An item as this box tells it: its summary, with who handed it on; an issue's with when this
@@ -202,8 +205,11 @@ function takeTold(sender: MailSender, given: unknown, reply: (payload: Record<st
   // (Only from one of your computers that's still a peer: a Mac that set this one up is one.)
   if (!peersOf(link).some(peer => peer.key === sender.key)) return;
   // (What came late, older than what's kept, isn't had: had, it would never go again.)
+  const before = readTold(sender.key);
   if (!keepTold(sender.key, told)) return;
   reply({ had: told.id });
+  // How it numbers changed (it's shared now, or numbers from another): this box's setup looked at now.
+  if (before?.shared !== told.shared || before?.primary?.key !== told.primary?.key || before?.primary?.since !== told.primary?.since) noteSetupNow(Date.now(), { soon: 0 });
   const primary = primaryOf(link);
   if ("self" in primary) movePast(Math.max(told.top ?? 0, ...told.items.map(item => item.number ?? 0)));
   else if ("peer" in primary && (primary.via ? primary.via.key === sender.key && told.primary?.key === primary.peer.key : primary.peer.key === sender.key)) {
