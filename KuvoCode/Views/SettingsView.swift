@@ -399,7 +399,7 @@ private struct SettingsSidebar: View {
                 // At its fixed size, as Settings' rows are: the window's sidebar follows Text size.
                 .environment(\.messageFont, MessageFont())
             if boxes.count > 1, search.isEmpty {
-                BoxNameStrip(boxes: boxes, selected: shownBinding, marksNews: false)
+                BoxNameStrip(boxes: boxes, selected: shownBinding, marksNews: false, motion: boxMotion)
                     .padding(.top, 6)
             }
             if !search.isEmpty {
