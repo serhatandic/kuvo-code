@@ -42,11 +42,16 @@ struct QuoteBlock: View {
     let text: String
     @Environment(\.findHighlight) private var highlight
     @State private var isExpanded = false
+    /// Its four lines leave words out, as they're laid out: a narrow window's fill with fewer than
+    /// `isLong`'s characters.
+    @State private var isLimited = false
 
     /// More than fits in its four lines, likely: it opens to all of it.
     private var isLong: Bool {
         text.count > 280 || text.split(separator: "\n", omittingEmptySubsequences: false).count > 4
     }
+
+    private var isCut: Bool { isLong || isLimited }
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
@@ -57,8 +62,10 @@ struct QuoteBlock: View {
                 // AppKit's text, as your words': its pointer shows only where nothing's drawn over it.
                 SelectableText(text: MessageMentions.attributed(FindText.marked(AttributedString(text), highlight),
                                                                 font: .preferredFont(forTextStyle: .callout), color: .secondaryLabelColor).text,
-                               lineLimit: isExpanded ? nil : 4)
-                if isLong {
+                               lineLimit: isExpanded ? nil : 4,
+                               // Asked only while there's a limit: all of it showing says nothing of what Show Less brings back.
+                               cut: isExpanded ? nil : { isLimited = $0 })
+                if isExpanded || isCut {
                     Button(isExpanded ? "Show Less" : "Show All") { withAnimation(.ui) { isExpanded.toggle() } }
                         .buttonStyle(TextButtonStyle())
                         .font(.caption)
@@ -67,6 +74,6 @@ struct QuoteBlock: View {
         }
         .fixedSize(horizontal: false, vertical: true)
         // Find on a place in it: all of it shows.
-        .onChange(of: highlight?.current) { if highlight?.current != nil, isLong { isExpanded = true } }
+        .onChange(of: highlight?.current) { if highlight?.current != nil, isCut { isExpanded = true } }
     }
 }
