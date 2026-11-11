@@ -172,7 +172,7 @@ export async function* workQueueRoute(context: RouteContext, match: RegExpMatchA
       throw error;
     }
     const names = (id: string) => categories().find(each => each.id === id)?.name ?? id;
-    return yield* json(200, { added: outcome.added, byCategory: outcome.byCategory, waiting: outcome.waiting, skipped: [...skipped, ...outcome.skipped], said: importWords(outcome, skipped, names) });
+    return yield* json(200, { added: outcome.added, byCategory: outcome.byCategory, waiting: outcome.waiting, skipped: [...skipped, ...outcome.already.map(n => `#${n} (already in the Work Queue here)`), ...outcome.skipped], said: importWords(outcome, skipped, names) });
   }
 
   if (part === "events" || part === undefined) {
