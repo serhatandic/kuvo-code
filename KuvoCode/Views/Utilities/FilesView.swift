@@ -741,6 +741,8 @@ struct FileViewer: View {
         } else {
             return []
         }
+        // A file shown again (changed since) is the same file here: each once, where it came first.
+        var seen = Set<String>()
         return set.items.compactMap { item -> String? in
             guard item.isImage else { return nil }
             switch item {
@@ -751,6 +753,7 @@ struct FileViewer: View {
                 return Self.pictureKey(url)
             }
         }
+        .filter { seen.insert($0).inserted }
     }
 
     /// A file's address, the same however it was written.

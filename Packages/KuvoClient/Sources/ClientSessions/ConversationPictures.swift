@@ -1,3 +1,4 @@
+import ClientText
 import Foundation
 import OpenCodeKit
 import UniformTypeIdentifiers
@@ -13,10 +14,14 @@ public struct ConversationPicture: Hashable, Sendable, Identifiable {
         case file(uri: String, mime: String)
         /// A file the agent showed, by its path on the computer the conversation runs on.
         case shown(path: String)
+        /// A file a message of yours sent as a path for the agent to open (its model couldn't take
+        /// it as it was), by its path on the computer the conversation runs on.
+        case path(String)
     }
 
-    /// The same for as long as the conversation has it, in both apps: "<message>#<n>" for a
-    /// message's nth file, "<step>-<n>" for a step's nth output, "<step>-shown" for a file shown.
+    /// The same for as long as the conversation has it, in both apps (`ConversationPictures.id`):
+    /// "<message>#<n>" for a message's nth file, "<message>@<path>" for one it sent as a path,
+    /// "<step>-<n>" for a step's nth output, "<step>-shown" for a file shown.
     public var id: String
     public var source: Source
     /// Its name, as the message or the step gives it; nil where neither does.
@@ -44,9 +49,10 @@ public struct ConversationPicture: Hashable, Sendable, Identifiable {
 /// show you; a step's own screenshots (folded in the step) and pictures in a reply's words aren't
 /// among them.
 public enum ConversationPictures {
-    /// Every picture in `messages`, in order.
-    public static func all(in messages: [Message]) -> [ConversationPicture] {
-        messages.flatMap { message -> [ConversationPicture] in
+    /// Every picture in `messages`, in order, up to an undo waiting to be kept (`revert`, the
+    /// session's `revert.messageID`): what's after it doesn't show.
+    public static func all(in messages: [Message], undoneFrom revert: String? = nil) -> [ConversationPicture] {
+        ShownMessages.before(undo: revert, in: messages).flatMap { message -> [ConversationPicture] in
             switch message {
             case .user(let user): pictures(of: user)
             case .assistant(let step): step.content.flatMap { block -> [ConversationPicture] in
@@ -64,13 +70,34 @@ public enum ConversationPictures {
         steps.flatMap { pictures(of: $0, in: message) }
     }
 
-    /// The pictures a message of yours carried, in the order it carried them.
+    /// The pictures a message of yours carried, in the order it carried them, then those it sent
+    /// as paths (its note of attached files names them).
     public static func pictures(of message: Message.User) -> [ConversationPicture] {
-        (message.files ?? []).enumerated().compactMap { index, file in
+        let files = message.files ?? []
+        let carried = files.enumerated().compactMap { index, file -> ConversationPicture? in
             guard isPicture(file) else { return nil }
-            return ConversationPicture(id: "\(message.id)#\(index)", source: .attachment(file), name: file.name ?? file.fileURL?.lastPathComponent, message: message.id)
+            return ConversationPicture(id: id(message: message.id, file: index), source: .attachment(file), name: file.name ?? file.fileURL?.lastPathComponent, message: message.id)
         }
+        let own = Set(files.compactMap { $0.fileURL?.path })
+        var seen = Set<String>()
+        let paths = AttachedFilesNote.split(message.text).paths.compactMap { path -> ConversationPicture? in
+            guard isPicture(path: path), !own.contains(path), seen.insert(path).inserted else { return nil }
+            return ConversationPicture(id: id(message: message.id, path: path), source: .path(path), name: (path as NSString).lastPathComponent, message: message.id)
+        }
+        return carried + paths
     }
+
+    /// A message's nth file's id (counted among all its files).
+    public static func id(message: String, file index: Int) -> String { "\(message)#\(index)" }
+
+    /// The id of a file a message sent as a path.
+    public static func id(message: String, path: String) -> String { "\(message)@\(path)" }
+
+    /// A step's nth output's id (counted among all its output).
+    public static func id(step: String, output index: Int) -> String { "\(step)-\(index)" }
+
+    /// The id of the file a step showed.
+    public static func shownID(step: String) -> String { "\(step)-shown" }
 
     /// The pictures a finished step brought to show you: the file it showed, if it's a picture;
     /// the images it made, or the screenshot it took to show you. None for any other step, nor one
@@ -80,11 +107,11 @@ public enum ConversationPictures {
         let caption = input["caption"]?.string.flatMap { $0.isEmpty ? nil : $0 }
         if isShownFile(call) {
             guard let path = input["path"]?.string, isPicture(path: path) else { return [] }
-            return [ConversationPicture(id: "\(call.id)-shown", source: .shown(path: path), name: (path as NSString).lastPathComponent, caption: caption, message: message, step: call.id)]
+            return [ConversationPicture(id: shownID(step: call.id), source: .shown(path: path), name: (path as NSString).lastPathComponent, caption: caption, message: message, step: call.id)]
         }
         return output.enumerated().compactMap { index, part in
             guard case .file(let uri, let mime, let name) = part, mime.lowercased().hasPrefix("image/") else { return nil }
-            return ConversationPicture(id: "\(call.id)-\(index)", source: .file(uri: uri, mime: mime), name: name, caption: caption, message: message, step: call.id)
+            return ConversationPicture(id: id(step: call.id, output: index), source: .file(uri: uri, mime: mime), name: name, caption: caption, message: message, step: call.id)
         }
     }
 
@@ -127,5 +154,15 @@ public enum ConversationPictures {
     /// Where the picture `id` is among `pictures`, to open them on it.
     public static func index(of id: String, in pictures: [ConversationPicture]) -> Int? {
         pictures.firstIndex { $0.id == id }
+    }
+}
+
+/// A conversation's messages as it shows them: an undo waiting to be kept ends it at its message,
+/// by where it is (a message queued during a run is older than that run's later steps).
+public enum ShownMessages {
+    public static func before(undo revert: String?, in all: [Message]) -> [Message] {
+        guard let revert else { return all }
+        let cut = all.firstIndex { $0.id == revert } ?? all.firstIndex { $0.id >= revert } ?? all.count
+        return Array(all[..<cut])
     }
 }

@@ -71,7 +71,7 @@ struct ConversationPictureSet: Equatable {
         key = model.id
         read = { [weak model] in
             guard let model else { return [] }
-            return Self.items(ConversationPictures.all(in: model.transcript.messages), directory: model.session.location.directory)
+            return Self.items(ConversationPictures.all(in: model.transcript.messages, undoneFrom: model.session.revert?.messageID), directory: model.session.location.directory)
         }
     }
 
@@ -94,6 +94,8 @@ struct ConversationPictureSet: Equatable {
             case .attachment(let file): .stored(file, id: picture.id)
             case .file(let uri, let mime): StepPictures.item(uri: uri, mime: mime, name: picture.name, id: picture.id)
             case .shown(let path): MadePictureRow.shown(path, in: directory, id: picture.id)
+            // As its message draws it (`YourMessage`), by its path.
+            case .path(let path): .path(path)
             }
         }
     }
@@ -144,6 +146,8 @@ private struct ImageLightbox: View {
     @State private var copied = false
     /// How far a swipe on the trackpad has moved the picture, as it follows your fingers.
     @State private var swiped: CGFloat = 0
+    /// Where the next picture comes in from: the side the one before it went towards.
+    @State private var arrival: CGFloat = 0
     /// ‹ › show while the pointer moves over the viewer, and while it's over one of them.
     @State private var showsTurns = false
     @State private var isOverTurn = false
@@ -184,6 +188,8 @@ private struct ImageLightbox: View {
                     }
                 }
                 .offset(x: swiped)
+                .id(index)
+                .transition(.asymmetric(insertion: .offset(x: arrival).combined(with: .opacity), removal: .opacity))
                 if request.items.count > 1 {
                     HStack {
                         stepButton(-1)
@@ -216,7 +222,8 @@ private struct ImageLightbox: View {
             }
             // A swipe across it with two fingers, and ← →, go to the picture before or after.
             .background(PictureTurns(canTurn: canStep, swipes: scale <= 1.001, arrows: true, modal: true, width: proxy.size.width) { travel in
-                swiped = travel
+                // Let go short of turning, it goes back.
+                if travel == 0 { withAnimation(.ui) { swiped = 0 } } else { swiped = travel }
             } turn: { direction in
                 turned(direction)
             })
@@ -272,12 +279,15 @@ private struct ImageLightbox: View {
     /// Turned by a swipe: the next comes in from the side the fingers went to, the swipe's travel
     /// carried on rather than jumping back.
     private func turned(_ direction: Int) {
-        guard step(direction) else {
+        guard canStep(direction) else {
             withAnimation(.ui) { swiped = 0 }
             return
         }
-        swiped = CGFloat(direction) * 60
-        withAnimation(.snappy(duration: 0.25)) { swiped = 0 }
+        arrival = CGFloat(direction) * 60
+        withAnimation(.snappy(duration: 0.25)) {
+            _ = step(direction)
+            swiped = 0
+        }
     }
 
     /// Its name and size, and what else you can do with it.
@@ -393,13 +403,17 @@ private struct ImageLightbox: View {
         .buttonStyle(.glass)
         .buttonBorderShape(.circle)
         .disabled(!can)
-        // In sight while the pointer moves over the viewer; VoiceOver finds them all the time.
+        .help(direction < 0 ? "Previous (←)" : "Next (→)")
+        // In sight while the pointer moves over the viewer.
         .opacity(can && (showsTurns || isOverTurn) ? 1 : 0)
         .allowsHitTesting(can && (showsTurns || isOverTurn))
         .animation(.easeOut(duration: 0.2), value: showsTurns || isOverTurn)
         .onHover { isOverTurn = $0 }
-        .accessibilityLabel(direction < 0 ? "Previous" : "Next")
-        .help(direction < 0 ? "Previous (←)" : "Next (→)")
+        // VoiceOver offers it shown or not: hidden, it would be skipped.
+        .accessibilityRepresentation {
+            Button(direction < 0 ? "Previous" : "Next") { turned(direction) }
+                .disabled(!can)
+        }
     }
 
     private func canStep(_ direction: Int) -> Bool {
@@ -591,7 +605,9 @@ struct PictureCanvas: View {
             }
             .background {
                 if let turns {
-                    PictureTurns(canTurn: turns.canTurn, swipes: current <= 1.001, arrows: focused, width: room.width) { swiped = $0 } turn: { direction in
+                    PictureTurns(canTurn: turns.canTurn, swipes: current <= 1.001, arrows: focused, width: room.width) { travel in
+                        if travel == 0 { withAnimation(.ui) { swiped = 0 } } else { swiped = travel }
+                    } turn: { direction in
                         turns.turn(direction)
                         swiped = 0
                     }
@@ -624,11 +640,15 @@ struct PictureCanvas: View {
         .buttonStyle(.glass)
         .buttonBorderShape(.circle)
         .disabled(!turns.canTurn(direction))
+        .help(direction < 0 ? "Previous picture (←)" : "Next picture (→)")
         .opacity(shows ? 1 : 0)
         .allowsHitTesting(shows)
         .animation(.easeOut(duration: 0.15), value: shows)
-        .accessibilityLabel(direction < 0 ? "Previous Picture" : "Next Picture")
-        .help(direction < 0 ? "Previous picture (←)" : "Next picture (→)")
+        // VoiceOver offers it shown or not: hidden, it would be skipped.
+        .accessibilityRepresentation {
+            Button(direction < 0 ? "Previous Picture" : "Next Picture") { turns.turn(direction) }
+                .disabled(!turns.canTurn(direction))
+        }
     }
 
     /// KUVO_DEMO_PICTURE_ZOOM: a picture opens at this scale (1 fitted), for captures.
@@ -778,8 +798,8 @@ struct PictureTurns: NSViewRepresentable {
             travel.height += event.scrollingDeltaY
             if current == .undecided {
                 // Sideways more than up or down, on a picture that isn't zoomed in: a turn.
-                guard abs(travel.width) + abs(travel.height) > 4 else { return turns.swipes }
-                swipe = turns.swipes && abs(travel.width) > abs(travel.height) ? .mine : .notMine
+                guard abs(travel.width) + abs(travel.height) > 6 else { return turns.swipes }
+                swipe = turns.swipes && abs(travel.width) > abs(travel.height) * 1.5 ? .mine : .notMine
                 guard swipe == .mine else { return false }
             }
             let across = Self.across(event, travel.width)

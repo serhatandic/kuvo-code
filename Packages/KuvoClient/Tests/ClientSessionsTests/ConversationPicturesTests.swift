@@ -40,17 +40,19 @@ struct ConversationPicturesTests {
               Self.tool("call_failed", "generate_image", input: #"{"prompt": "a cat"}"#, status: "error"),
           ].joined(separator: ","))),
           {"id": "msg_3", "type": "idle", "time": {"created": 3}, "outcome": "succeeded"},
-          {"id": "msg_4", "type": "user", "time": {"created": 4}, "text": "And make one.", "files": [{"mime": "image/jpeg", "name": "idea.jpg", "data": "/9j/"}]},
+          {"id": "msg_4", "type": "user", "time": {"created": 4}, "text": "And make one.\\n\\n<attached-files>\\nOpen these attached files with your tools if you need them:\\n/p/big.png\\n/p/spec.pdf\\n</attached-files>", "files": [{"mime": "image/jpeg", "name": "idea.jpg", "data": "/9j/"}]},
           \(Self.step("msg_5", at: 5, Self.tool("call_made", "generate_image", input: #"{"prompt": "a cat"}"#, content: made)))
         ]
         """)
         let pictures = ConversationPictures.all(in: conversation)
-        #expect(pictures.map(\.id) == ["msg_1#0", "msg_1#2", "call_shown-shown", "call_page-1", "msg_4#0", "call_made-0"])
-        #expect(pictures.map(\.name) == ["before.png", "after.jpg", "light.png", nil, "idea.jpg", "made"])
-        #expect(pictures.map(\.message) == ["msg_1", "msg_1", "msg_2", "msg_2", "msg_4", "msg_5"])
+        #expect(pictures.map(\.id) == ["msg_1#0", "msg_1#2", "call_shown-shown", "call_page-1", "msg_4#0", "msg_4@/p/big.png", "call_made-0"])
+        #expect(pictures.map(\.name) == ["before.png", "after.jpg", "light.png", nil, "idea.jpg", "big.png", "made"])
+        #expect(pictures.map(\.message) == ["msg_1", "msg_1", "msg_2", "msg_2", "msg_4", "msg_4", "msg_5"])
+        // One sent as a path (its model couldn't take it): by its path, after the message's own.
+        #expect(pictures[5].source == .path("/p/big.png"))
         #expect(pictures[2].source == .shown(path: "/p/shots/light.png"))
         #expect(pictures[2].caption == "Light")
-        #expect(pictures[5].source == .file(uri: "file:///tmp/made.png", mime: "image/png"))
+        #expect(pictures[6].source == .file(uri: "file:///tmp/made.png", mime: "image/png"))
         #expect(ConversationPictures.index(of: "msg_4#0", in: pictures) == 4)
     }
 

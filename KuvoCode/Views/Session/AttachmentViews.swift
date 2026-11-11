@@ -364,7 +364,7 @@ struct MadePictureRow: View {
     /// shows again isn't drawn as an earlier step had it (#132), and as the phone keeps it. A
     /// machine's is never read from this Mac's disk, though this Mac has a file at that path too.
     static func shown(_ path: String, in directory: String?, step: String) -> AttachmentItem {
-        shown(path, in: directory, id: "\(step)-shown")
+        shown(path, in: directory, id: ConversationPictures.shownID(step: step))
     }
 
     static func shown(_ path: String, in directory: String?, id: String) -> AttachmentItem {
@@ -486,7 +486,7 @@ struct StepPictures: View {
     static func items(in output: [Message.ToolOutput], step: String) -> [AttachmentItem] {
         output.enumerated().compactMap { index, part -> AttachmentItem? in
             guard case .file(let uri, let mime, let name) = part, mime.lowercased().hasPrefix("image/") else { return nil }
-            return item(uri: uri, mime: mime, name: name, id: "\(step)-\(index)")
+            return item(uri: uri, mime: mime, name: name, id: ConversationPictures.id(step: step, output: index))
         }
     }
 

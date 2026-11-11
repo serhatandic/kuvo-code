@@ -138,3 +138,31 @@ public enum FromPhone {
     /// A message without the block.
     public static func removing(from text: String) -> String { split(text).text }
 }
+
+/// The note of attached files a Mac adds to the end of a message: where the files sent with it
+/// are, those sent as paths for the agent to open, and those that stayed on the Mac. Read back the
+/// same in both apps, for the files a message names.
+public enum AttachedFilesNote {
+    public static let includedHeading = "The attached files are on disk here (what's in them is in this message already):"
+    public static let pathsHeading = "Open these attached files with your tools if you need them:"
+    public static let unsentHeading = "These attached files stayed on the user's Mac (they couldn't be read, or copied to this machine):"
+    public static let block = MessageBlock(start: "<attached-files>", end: "</attached-files>", headings: [includedHeading, pathsHeading, unsentHeading])
+    /// How a file that stayed on the Mac used to be listed, on its path's line.
+    public static let unsentSuffix = " (on the user's Mac: it couldn't be copied to this machine)"
+
+    /// A message's text without the note that ends it, and the paths of the files it sent as
+    /// paths or couldn't send (the others are the message's own files).
+    public static func split(_ text: String) -> (text: String, paths: [String]) {
+        guard let (before, lines) = block.split(text) else { return (text, []) }
+        var heading = ""
+        var paths: [String] = []
+        for line in lines.map(String.init) {
+            if block.headings.contains(line) {
+                heading = line
+            } else if line.hasPrefix("/"), heading != includedHeading {
+                paths.append(line.hasSuffix(unsentSuffix) ? String(line.dropLast(unsentSuffix.count)) : line)
+            }
+        }
+        return (before.trimmingCharacters(in: .whitespacesAndNewlines), paths)
+    }
+}

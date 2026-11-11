@@ -404,8 +404,9 @@ struct TranscriptView: View {
         // message queued during a run is older than that run's later steps.
         let boundary = model.session.revert?.messageID
         let all = model.transcript.messages
-        let cut = boundary.map { boundary in all.firstIndex { $0.id == boundary } ?? all.firstIndex { $0.id >= boundary } ?? all.count }
-        let messages = cut.map { Array(all[..<$0]) } ?? all
+        let messages = ShownMessages.before(undo: boundary, in: all)
+        // Where the undone part starts, if anything's undone.
+        let cut = boundary.map { _ in messages.count }
         // The model each turn runs on, for one that fails before any reply says it: the last switch's;
         // before any, the one the first switch left (wherever it is), or the session's. Not a reply's:
         // Auto's are the model it picked for that turn.
@@ -921,7 +922,7 @@ private struct RowView: View, Equatable {
         case .user(let message):
             let written = CommandMessages.shared.text(of: message)
             let (text, comments, paths, references) = SentMessage.split(written)
-            let stored = (message.files ?? []).enumerated().map { AttachmentItem.stored($1, id: "\(message.id)#\($0)") }
+            let stored = (message.files ?? []).enumerated().map { AttachmentItem.stored($1, id: ConversationPictures.id(message: message.id, file: $0)) }
             YourMessage(text: text, references: references, folders: folders(), attachments: stored + Attachments.paths(paths, besides: (message.files ?? []).compactMap(\.fileURL)).map(AttachmentItem.path), comments: comments,
                         widget: SentMessage.widget(of: written), keyword: SentMessage.keyword(of: written), sent: Date(timeIntervalSince1970: message.time.created / 1000),
                         fromPhone: FromPhone.isFromPhone(written),
