@@ -24,8 +24,15 @@ check_console "$(stat -f %Su /dev/console 2>/dev/null || true)"
 # A heavy job of the Mac's (scripts/heavy.sh, kind mac: the one app suite that drives the UI, which
 # runs alone; builds and package tests are mac-build and run beside it). It waits for a busy Mac,
 # unless whoever started it took that turn already.
-if ! scripts/heavy.sh --holds mac; then
-    exec scripts/heavy.sh mac /bin/sh "$PWD/scripts/test-app.sh"
+# Taken with the canonical heavy.sh (kuvo-ai's in ~/Projects, which runs every job; KUVO_HEAVY_SH for
+# another), or this checkout's when there's none.
+HEAVY="${KUVO_HEAVY_SH:-}"
+if [ -z "$HEAVY" ]; then
+    HEAVY="${KUVO_HEAVY_CANONICAL-$HOME/Projects/kuvo-ai/scripts/heavy.sh}"
+    [ -n "$HEAVY" ] && [ -f "$HEAVY" ] || HEAVY=scripts/heavy.sh
+fi
+if ! /bin/sh "$HEAVY" --holds mac; then
+    exec /bin/sh "$HEAVY" mac /bin/sh "$PWD/scripts/test-app.sh"
 fi
 
 # One run at a time, whoever starts it: every run shares the test copy's settings and caches in
@@ -51,12 +58,24 @@ if grep -rnE '\bSec(Item(CopyMatching|Add|Update|Delete)|Keychain[A-Za-z]*)\(' -
     exit 1
 fi
 
+# Built with Xcode's compilation cache (scripts/xcode-cache.sh), the compiler sees the sources as
+# /^src/…, and so does #filePath: a test finds its files through its bundle, never #filePath, which
+# names no file on this Mac. (As where an issue was recorded, `file: … = #filePath`, it's only said.)
+if grep -rn '#filePath' --include='*.swift' KuvoCode KuvoCodeTests | grep -v '= #filePath'; then
+    echo "The app and its tests find their files through their bundles, never #filePath: built with the compilation cache, it's /^src/…, no file on this Mac." >&2
+    exit 1
+fi
+
 TEMP="${TMPDIR:-/tmp}"
 # Built in this user's cache folder, kept from run to run: macOS clears files the temporary folder
 # hasn't used for a few days, which left builds there missing parts of their packages.
 CACHE="$(getconf DARWIN_USER_CACHE_DIR 2>/dev/null || echo "$TEMP/")"
 BUILD="${CACHE%/}/KuvoCodeTests-build"
 BUNDLE=run.kuvo.code.tests
+# Xcode's compilation cache, one for every checkout (scripts/xcode-cache.sh; heavy.sh turns it on
+# already, this for a heavy.sh from before it): what another worktree compiled isn't compiled again.
+. scripts/xcode-cache.sh
+xcode_cache scripts
 set -- -project KuvoCode.xcodeproj -scheme KuvoCode -destination "platform=macOS,arch=$(uname -m)" \
     -derivedDataPath "$BUILD" -clonedSourcePackagesDirPath build/SourcePackages \
     APP_BUNDLE_ID=$BUNDLE CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM=
