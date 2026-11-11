@@ -3305,8 +3305,11 @@ there are under the owner, "Work").
   computers}`: `items` in the categories' order, then this box's first and each other computer's
   after, by its name (each computer keeps its own order), then each one's order; `owners` (`[{owner, kind:
   bot|session|group, title, bot?: {id, name}, startedBy?}]`) names each owner in the view;
-  `removed`, what's deleted in it here, newest first; `computers` (`[{key, name, kind, id?, at}]`),
-  each other computer that told of its queue, and as of when. `owner=all` is every queue on the box
+  `removed`, what's deleted in it here, newest first; `computers` (`[{key, name, kind, id?, at,
+  away?}]`), each other computer that told of its queue, as of when, and since when it hasn't
+  answered (`away`, as `run/peer-reach.json` says): its items show as it told them, but none of
+  them in progress, nor any of their sessions at work, as nothing there can be seen at work now (an
+  item's `refs` and page say the same). `owner=all` is every queue on the box
   and on every other computer that told of its own (the panel's All). An item on another computer
   has `computer`. `kuvo/work-queue/events?owner=` is the same as NDJSON: a line now and one each
   time it changes (a change here or by another process, another computer telling of its queue, or a

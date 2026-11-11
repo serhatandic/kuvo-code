@@ -22699,18 +22699,20 @@ function itemsElsewhere(owner, link = readLink(), here, deleted, { asTold = fals
   const custom = new Map;
   const computers = [];
   const best = new Map;
+  const reach = readReach();
   for (const peer of peersOf(link)) {
     const told = readTold3(peer.key);
     if (!told)
       continue;
     const computer = { key: peer.key, name: computerName(peer), kind: peer.kind, ...peer.id ? { id: peer.id } : {} };
-    computers.push({ ...computer, at: told.at });
+    const away = awaySince(peer.key, reach);
+    computers.push({ ...computer, at: told.at, ...away !== null ? { away } : {} });
     for (const item of told.items) {
       if (here.has(item.id) || deleted.has(item.id) && item.handing)
         continue;
       const other = best.get(item.id);
       if (!other || newer(item, told.at, other.item, other.at))
-        best.set(item.id, { item: asTold ? { ...item, computer } : withSeen({ ...item, computer }), at: told.at });
+        best.set(item.id, { item: asTold ? { ...item, computer } : withSeen({ ...asAway(item, away), computer }), at: told.at });
     }
     for (const each of told.owners)
       if (!owners.has(each.owner))
@@ -22729,10 +22731,11 @@ function itemElsewhere(ref, link = readLink(), { asTold = false } = {}) {
     const told = readTold3(peer.key);
     const item = told?.items.find((each) => refNames(ref, each));
     if (item && (!found || newer(item, told.at, found.item, found.at)))
-      found = { item: { ...item, computer: { key: peer.key, name: computerName(peer), kind: peer.kind, ...peer.id ? { id: peer.id } : {} } }, at: told.at };
+      found = { item: { ...asTold ? item : asAway(item, awaySince(peer.key)), computer: { key: peer.key, name: computerName(peer), kind: peer.kind, ...peer.id ? { id: peer.id } : {} } }, at: told.at };
   }
   return found ? asTold ? found.item : withSeen(found.item) : null;
 }
+var asAway = (item, away) => away === null || !item.inProgress && !item.sessions.some((each) => each.working) ? item : { ...item, inProgress: false, sessions: item.sessions.map((each) => ({ ...each, working: false })) };
 var newer = (a, aAt, b, bAt) => a.updated.at > b.updated.at || a.updated.at === b.updated.at && aAt > bAt;
 
 // Packages/Box/src/link/notices/hold.ts
@@ -35880,7 +35883,7 @@ import os13 from "node:os";
 import path119 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "e78c156e4781";
+var BRIDGE_VERSION = "ded352fa5678";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {

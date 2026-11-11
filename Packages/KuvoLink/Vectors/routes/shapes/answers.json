@@ -10767,7 +10767,8 @@
           ]
          },
          "id?": "string",
-         "at": "number"
+         "at": "number",
+         "away?": "number"
         }
        }
       }
@@ -11181,7 +11182,8 @@
           ]
          },
          "id?": "string",
-         "at": "number"
+         "at": "number",
+         "away?": "number"
         }
        }
       }
