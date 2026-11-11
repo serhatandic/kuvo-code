@@ -233,7 +233,16 @@ export async function keptFromSessions(folder: string, policy: FencePolicy = fen
   const walled = policy.kuvo.some(each => inside(at, each) && !homes.some(home => inside(home, each))) || matching(at, policy.kuvoPatterns);
   if (walled && !conversationPlace(at)) return reach("Kuvo Code's own folders");
   if (homes.some(home => atLogin(at, home)) || [...homes.flatMap(home => LOGIN.map(each => `${home}/${each}`)), ...SYSTEM_LOGIN].some(each => holds(at, each))) return reach("what runs as you log in");
+  // (What's kept whole from commands in your home, ~/Library on a Mac but its caches: what runs
+  // later is so much of it. Where Kuvo Code keeps conversations' own in it, they're theirs.)
+  if (inHomeKept(at, policy) && !conversationPlace(at)) return reach("what runs later outside the sandbox (~/Library)");
   return null;
+}
+
+/** Whether `at` is in what's kept whole from commands in your home (`homeKept`: ~/Library on a
+ * Mac), but for the caches in it they write. */
+function inHomeKept(at: string, policy: FencePolicy): boolean {
+  return (policy.homeKept ?? []).some(wall => inside(at, wall) || holds(at, wall)) && !policy.writable.some(each => inside(at, each));
 }
 
 const KUVO = "It reaches Kuvo Code's own folders, which is never allowed.";
@@ -1162,13 +1171,20 @@ function holdsRepository(folder: string): boolean {
   }
 }
 
-/** Whether a change the agent's file tools make at `where` is never let through as its own (its
- * project's, a worktree's): Kuvo Code's own folders, and what runs later outside the sandbox. Each
- * of those is judged as anywhere. */
-export function walledForOwn(where: string, policy: FencePolicy = fencePolicy()): boolean {
+/** Whether a change the agent's file tools make at `where` (where it really is) is never let
+ * through as its own (its folder's, its project's, a worktree's): Kuvo Code's own folders (but what's
+ * the conversation's own in them, `own`), what runs later outside the sandbox or at login, your
+ * secrets and your own settings, ~/Library, and a repository's record of its worktrees. Each of
+ * those is judged as anywhere. */
+export function walledForOwn(where: string, policy: FencePolicy = fencePolicy(), own: readonly string[] = []): boolean {
   const at = realish(where);
-  return inKuvo(at, policy) || runsLater(at, policy);
+  return inKuvo(at, policy, ownInside(own, policy)) || runsLater(at, policy) || atLogin(at, policy.home) || isSecret(at, policy)
+    || ownAt(at, policy.home) !== null || inHomeKept(at, policy) || WORKTREE_RECORDS.test(at);
 }
+
+// (Which worktrees a repository has, and where each one's repository is: what Auto counts as a
+// project's own goes by them, so a change there is never taken for its own.)
+const WORKTREE_RECORDS = new RegExp(String.raw`/\.git/worktrees(/|$)`, process.platform === "darwin" ? "i" : "");
 
 /** Whether a change to `where` would be run later outside the sandbox: git's hooks and settings and
  * the agents' in a folder, a folder on PATH, tools' settings and caches that run (`readOnly`,

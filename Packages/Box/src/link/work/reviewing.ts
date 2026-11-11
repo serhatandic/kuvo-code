@@ -348,17 +348,18 @@ async function ownFolders(at: Conversation, withTrees = true): Promise<string[]>
 }
 
 /** A conversation's project's linked worktrees, wherever they are, where it works in the project's
- * main folder (`projectWorktrees`): its own, as its folder is. But where an agent in Auto couldn't
- * start a session either (`keptFromSessions`: your home, a whole personal folder, your secrets, what
- * runs at login), and Kuvo Code's own (another session's worktree there), each judged as before. */
+ * main folder (`projectWorktrees`), by their real paths as found: its own, as its folder is. But
+ * where an agent in Auto couldn't start a session either (`keptFromSessions`: your home, a whole
+ * personal folder, your secrets, what runs at login, ~/Library), and Kuvo Code's own (another
+ * session's worktree there), each judged as before. */
 async function projectTrees(folder: string): Promise<string[]> {
   // (Worked out once for the asks of a moment: an ask is looked at several times as it's judged.)
   const known = treesFound.get(folder);
   if (known && Date.now() - known.at < TREES_FOR) return known.trees;
-  const trees = foundTrees(folder);
+  const trees = foundTrees(folder).catch(() => [] as string[]);
   treesFound.set(folder, { at: Date.now(), trees });
   if (treesFound.size > 100) treesFound.delete(treesFound.keys().next().value!);
-  return trees.catch(() => []);
+  return trees;
 }
 const treesFound = new Map<string, { at: number; trees: Promise<string[]> }>();
 const TREES_FOR = 5_000;
@@ -404,10 +405,23 @@ async function taskOf(at: Conversation, signal?: AbortSignal): Promise<ReviewCon
   return head && head[2] === starter ? { from: head[1], text: text.slice(head[0].length) } : undefined;
 }
 
-/** Whether `file` is `folder` or in it, as the disk has them: links followed, as far as they exist. */
-function isWithin(file: string, folder: string): boolean {
-  const inside = path.relative(realPath(folder), realPath(file));
+/** Whether the real path `file` is the real path `folder` or in it. */
+function within(file: string, folder: string): boolean {
+  const inside = path.relative(folder, file);
   return inside === "" || (!inside.startsWith("..") && !path.isAbsolute(inside));
+}
+
+// Where each of a conversation's own folders was first found to be, here: one traded for a link to
+// elsewhere since (by a command in it) doesn't take its files with it.
+const firstFound = new Map<string, string>();
+function foundAt(folder: string): string {
+  let found = firstFound.get(folder);
+  if (found === undefined) {
+    found = realPath(folder);
+    if (firstFound.size >= 2000) firstFound.delete(firstFound.keys().next().value!);
+    firstFound.set(folder, found);
+  }
+  return found;
 }
 
 function realPath(file: string): string {
@@ -476,7 +490,7 @@ async function answerPermission(source: Target, id: string, sessionID: string, s
   }
   // (Each path macOS may ask about, asked off the box's thread first: a project on your Desktop.)
   await askedAbout([folder, ...actions.flatMap(action => action.kind === "file" ? [action.path] : [])]);
-  if (ownByName && ownReads(isWithin)) {
+  if (ownByName && ownReads((file, place) => within(realPath(file), foundAt(place)))) {
     await engineCall(source, "POST", `/api/session/${encodeURIComponent(permission.asker)}/permission/${encodeURIComponent(permission.id)}/reply`, { decision: "once" }, signal);
     noteReview(id, sessionID, "allowed", call);
     return { decision: "allow", reason: "Its own files.", by: "code" };
@@ -490,10 +504,16 @@ async function answerPermission(source: Target, id: string, sessionID: string, s
   const reply = (body: Record<string, unknown>) => engineCall(source, "POST", `/api/session/${encodeURIComponent(permission.asker)}/permission/${encodeURIComponent(permission.id)}/reply`, body, signal);
   // (In its project's worktrees, but for Kuvo Code's own and what runs later there, judged as
   // anywhere: a worktree an agent could make up names only where it could work anyway.)
+  // Each by where the file really is, against where each folder was found to be (a worktree as
+  // found, its own folders as first found here), never by following a link put in place of one
+  // since; and never what's walled from its own wherever it is (`walledForOwn`).
   const own = await ownFolders(at, false);
   const trees = typeof folder === "string" ? await projectTrees(folder) : [];
-  const policy = trees.length ? fencePolicy() : null;
-  const ownFile = (file: string) => own.some(each => isWithin(file, each)) || (policy !== null && trees.some(each => isWithin(file, each)) && !walledForOwn(file, policy));
+  const policy = fencePolicy();
+  const ownFile = (file: string) => {
+    const real = realPath(file);
+    return (own.some(each => within(real, foundAt(each))) || trees.some(each => within(real, each))) && !walledForOwn(file, policy, own);
+  };
   if (actions.every(action => action.kind === "file" && ownFile(action.path))) {
     await reply({ decision: "once" });
     noteReview(id, sessionID, "allowed", call);
