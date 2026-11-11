@@ -9,6 +9,11 @@
 #   SKIP_BUILD=1    use build/KuvoCode.dmg from an earlier run
 #   PORT            the server's port (default 8742)
 #   SIGN_IDENTITY   default: the first "Developer ID Application" identity in your keychain
+#   TRY_UPDATE_APP, TRY_UPDATE_DOMAIN   another app and defaults domain, for its tests
+# However it ends, even killed outright, Kuvo Code goes back to the real feed: its trap does that
+# when it exits, is interrupted or loses its terminal; scripts/feed-guard.py, outside its process
+# group and tree, when it's killed (SIGKILL) or the server stops; and each run first clears a
+# 127.0.0.1 feed an earlier one left, should all of that have been stopped too.
 # The update is the version you're about to release, so once that's out, this copy doesn't take
 # it again (it's on that version already); the next one after reaches it as usual. It's signed
 # with the real update key, so it needs your keychain; it's never notarized, and stays on this Mac.
@@ -24,11 +29,21 @@ if [ -z "${1:-}" ]; then
 else
     VERSION=$1
 fi
+INSTALLED="${TRY_UPDATE_APP:-/Applications/Kuvo Code.app}"
+DOMAIN="${TRY_UPDATE_DOMAIN:-run.kuvo.code}"
+
+# An earlier run's feed, left when it and its guard were both stopped: nothing serves it now.
+STALE=$(defaults read "$DOMAIN" SUFeedURL 2>/dev/null || true)
+case "$STALE" in
+    http://127.0.0.1:* | http://localhost:*)
+        defaults delete "$DOMAIN" SUFeedURL
+        echo "Cleared the update feed an earlier run left set ($STALE)." ;;
+esac
+
 BUILD=$(./scripts/build-version.sh "$VERSION")
 PORT="${PORT:-8742}"
 OUT=build/try-update
-INSTALLED="/Applications/Kuvo Code.app"
-DOMAIN=run.kuvo.code
+FEED="http://127.0.0.1:$PORT/appcast.xml"
 
 if [ ! -d "$INSTALLED" ]; then
     echo "There's no Kuvo Code in /Applications to update." >&2
@@ -62,21 +77,30 @@ cp build/KuvoCode.dmg "$OUT/KuvoCode.dmg"
 
 SERVER=""
 finish() {
+    # Each step whatever the one before did: under set -e, a kill of a server that had already
+    # stopped (Ctrl-C reaches it too) ended this before the override was deleted.
+    set +e
+    defaults delete "$DOMAIN" SUFeedURL 2>/dev/null
     [ -n "$SERVER" ] && kill "$SERVER" 2>/dev/null
-    defaults delete "$DOMAIN" SUFeedURL 2>/dev/null || true
     echo
     echo "Stopped; Kuvo Code reads the real update feed again."
 }
 trap finish EXIT
+trap 'exit 129' HUP
 trap 'exit 130' INT TERM
 
 python3 -m http.server "$PORT" --bind 127.0.0.1 --directory "$OUT" >/dev/null 2>&1 &
 SERVER=$!
+# Before the override, so it's undone even when this is killed outright.
+if [ "$(python3 scripts/feed-guard.py "$$" "$SERVER" "$DOMAIN" "$FEED")" != watching ]; then
+    echo "The server stopped at once: is port $PORT taken? Set PORT." >&2
+    exit 1
+fi
 # Sparkle takes a feed from its defaults over Info.plist's, for testing like this.
-defaults write "$DOMAIN" SUFeedURL "http://127.0.0.1:$PORT/appcast.xml"
+defaults write "$DOMAIN" SUFeedURL "$FEED"
 
 echo
-echo "Kuvo Code $VERSION is waiting at http://127.0.0.1:$PORT/appcast.xml."
+echo "Kuvo Code $VERSION is waiting at $FEED."
 echo "Open the Kuvo Code in /Applications and choose Kuvo Code › Check for Updates…"
 echo "Press Ctrl-C here once it has updated."
 wait "$SERVER"
