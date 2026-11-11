@@ -265,6 +265,9 @@ final class Catalog {
         let name = model(ref)?.name ?? ref.id
         let there = machine.map { " on \($0)" } ?? ""
         if let provider = integrations.first(where: { $0.id == ref.providerID }), !provider.isConnected, !provider.methods.isEmpty {
+            // A ChatGPT or SuperGrok plan is signed in to as its coding agent, which never makes
+            // the engine's own OpenAI or xAI models run: those need a key.
+            if let key = PlanSignIns.needsKey(model: name, provider: ref.providerID, providerName: provider.name, there: there, accounts: "Settings › Accounts") { return key }
             return "\(name) needs a sign-in\(there): sign in to \(signInName(ref.providerID)) in Settings › Accounts, or choose another model."
         }
         return "\(name) isn’t available\(there) now: choose another model."
@@ -318,6 +321,11 @@ final class Catalog {
             return placeholder
         }
         return isUnavailable(ref) ? nil : shownModel(ref) ?? defaultModel
+    }
+
+    /// The same, for a chip that offers `scope`'s models: none for one outside them.
+    func chipModel(_ ref: ModelRef?, in scope: ModelScope) -> Model? {
+        ref.map { !scope.allows($0.providerID) } == true ? nil : chipModel(ref)
     }
 
     /// The model a new session or bot starts on: the first of `wanted` (the one picked, the one

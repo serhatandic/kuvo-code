@@ -30,7 +30,9 @@ The rules for what a message says, the same in both apps. Foundation only: no vi
 (`Offers`). Only the Mac's first launch offers them now: a computer is set up on the Mac before a
 phone pairs with it, so the phone, which had a sheet of its own for this, doesn't use them.
 `AccountNames` is what both apps call each provider's accounts in a word ("Claude", "Copilot"),
-the same in the usage panel and the work bar.
+the same in the usage panel and the work bar. `PlanSignIns` is what a conversation on the engine's
+own OpenAI or xAI model says when the engine can't run it: a ChatGPT or SuperGrok plan signs in
+through Codex or Grok, so it needs a key, or a model under that agent.
 
 ## ClientSessions
 
@@ -61,6 +63,9 @@ What a client shows of a computer's sessions, the same in both apps. Rules only,
 - `WorkWords`: what a bot's work says, as its box tells it (`kuvo/work`): the bar's line, and each
   session's row (`about`: its model, the account it runs on and its project, then shorter for a
   narrow row, the account going first).
+- `ComposerSend`: what a composer's Send and Return do with what's written: it goes; or, with no
+  model chosen (the chip says "Choose a Model"), Send is off and Return opens the model picker,
+  the message kept; a "!" command and a "/goal" that sets none go without a model.
 
 ## ClientVault
 

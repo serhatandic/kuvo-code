@@ -20,9 +20,12 @@ import Testing
         let text: String
     }
 
-    /// The text size messages are written in (Settings › Appearance), for a test to change.
+    /// What a test changes about the window: the text size messages are written in (Settings ›
+    /// Appearance), and the conversation's model; and what the composer sent.
     @Observable final class Look {
         var size = MessageFont().size
+        var model: ModelRef?
+        var sent = 0
     }
 
     struct Window: View {
@@ -38,8 +41,8 @@ import Testing
                     }
                 }
                 Composer(session: model.id, text: $model.draftText, files: $model.draftFiles, quotes: $model.draftQuotes, quoteFocus: model.quoteFocus,
-                         agent: "build", approval: .auto, model: nil, isRunning: false, keywords: [.review],
-                         onSelectAgent: { _ in }, onSelectApproval: { _ in }, onSelectModel: { _ in }, onSend: {}, onStop: {})
+                         agent: "build", approval: .auto, model: look.model, isRunning: false, keywords: [.review],
+                         onSelectAgent: { _ in }, onSelectApproval: { _ in }, onSelectModel: { look.model = $0 }, onSend: { look.sent += 1 }, onStop: {})
             }
             .environment(\.messageFont, MessageFont(size: look.size))
         }
@@ -448,5 +451,63 @@ extension ComposerFieldTests {
         #expect(field.preferredPasteboardType(from: board.types ?? [], restrictedToTypesFrom: nil) != nil, "⌘V isn't offered for a picture alone")
         #expect(field.readSelection(from: board))
         #expect(model.draftFiles.count == 1)
+    }
+
+    /// The model picker's popover, once it shows.
+    private var popover: NSWindow? {
+        NSApp.windows.first { $0.isVisible && String(describing: Swift.type(of: $0)).contains("Popover") }
+    }
+
+    /// A conversation on a model gone from its account, so the chip says "Choose a Model" (#338: an
+    /// old chat, which sent anyway and an error came back): Send is off, and Return opens the model
+    /// picker, the message kept in the field. Once a model is chosen, Return sends it.
+    @Test func withNoModelChosenReturnOpensThePickerAndKeepsTheMessage() async throws {
+        AXElement.reading(true)
+        let shown = NotificationCenter.default.addObserver(forName: NSPopover.didShowNotification, object: nil, queue: .main) { _ in TestPulse.beat() }
+        defer {
+            NotificationCenter.default.removeObserver(shown)
+            popover?.orderOut(nil)
+            AXElement.reading(false)
+            done()
+        }
+        let location = ["directory": "/"]
+        let own: [String: Any] = ["id": "v4.1-flash", "modelID": "v4.1-flash", "providerID": "deepseek", "name": "DeepSeek V4.1 Flash",
+                                  "capabilities": ["tools": true, "input": ["text"], "output": ["text"]], "variants": [], "time": ["released": 1],
+                                  "cost": [["input": 1, "output": 1]], "status": "active", "enabled": true, "limit": ["context": 100_000, "output": 8_000]]
+        engine.on("GET", "/api/integration", json: ["location": location, "data": [["id": "deepseek", "name": "DeepSeek", "methods": [["type": "key"]],
+                                                                                  "connections": [["type": "credential", "credentialID": "cred_deepseek", "method": "key"]]]]])
+        engine.on("GET", "/api/model", json: ["location": location, "data": [own]])
+        engine.on("GET", "/api/model/default", json: ["location": location, "data": own])
+        engine.on("GET", "/api/agent", json: ["location": location, "data": []])
+        engine.on("GET", "/api/command", json: ["location": location, "data": []])
+        catalog.api = engine.api
+        await catalog.refresh()
+        look.model = ModelRef(id: "v3-retired", providerID: "deepseek")
+        try await until { editing == "composer" }
+        let field = try #require(field)
+        type("Fix the build", in: field)
+
+        var send: AXElement? {
+            window.contentView?.layoutSubtreeIfNeeded()
+            TestPulse.beat()
+            return AXElement.all(in: window.contentView).first { $0.label == "Send" }
+        }
+        try await until { send?.help == "Choose a model to send it (Return opens the list)" }
+        #expect(send?.object.isAccessibilityEnabled?() == false, "Send is off")
+        #expect(AXElement.all(in: window.contentView).contains { ($0.label ?? "").contains("Choose a Model") }, "the chip asks for a model")
+
+        let returnKey = try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber,
+                                                       context: nil, characters: "\r", charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: 36))
+        field.keyDown(with: returnKey)
+        try await until { popover != nil }
+        #expect(look.sent == 0, "nothing sent")
+        #expect(model.draftText == "Fix the build", "the message stays in the field")
+
+        // A model chosen: Return sends it.
+        popover?.orderOut(nil)
+        look.model = ModelRef(id: "v4.1-flash", providerID: "deepseek")
+        try await until { send?.object.isAccessibilityEnabled?() == true }
+        field.keyDown(with: returnKey)
+        #expect(look.sent == 1)
     }
 }
