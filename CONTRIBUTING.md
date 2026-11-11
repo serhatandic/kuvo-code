@@ -332,7 +332,7 @@ stand-in, the same small one on each. To add one:
   file an area, with each field an answer can have (one ending in `?` may be left out) and its
   type, which the box's code takes its types from too. A new route, or a new field in an answer,
   goes there first; `./scripts/route-shapes.sh` writes `routes/shapes/answers.json` for both
-  runners (CI checks it's current), and both hold an answer to a shape by
+  runners (the box's suite, `test/route-shapes.test.ts`, and CI check it's current), and both hold an answer to a shape by
   `routes/shapes/cases.json`. A field that can be null is sent as `null`, never left out (this
   Mac's encoder leaves a nil out, so its fields that can be null are `@SentAsNull`), and a refusal
   is JSON, `{}` at least.
