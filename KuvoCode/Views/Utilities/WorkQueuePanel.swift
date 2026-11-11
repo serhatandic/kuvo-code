@@ -259,6 +259,9 @@ struct WorkQueuePanel: View {
         let sections = WorkQueue.sections(view)
         return Flow(spacing: 2) {
             chip("All", count: WorkQueue.allCount(view), filter: .all)
+            if let workingOn = WorkQueue.section(for: .workingOn, in: view) {
+                chip(workingOn.name, count: workingOn.items.count, filter: .workingOn)
+            }
             chip("In progress", count: WorkQueue.items(view, .inProgress).count, filter: .inProgress)
             ForEach(sections.filter { $0.category != nil }) { section in
                 chip(section.name, count: section.items.count, filter: .category(section.id))
@@ -318,8 +321,7 @@ struct WorkQueuePanel: View {
                     ForEach(view.removed) { item in deletedRow(item) }
                 } else if wide, filter != .all {
                     let items = WorkQueue.items(view, filter)
-                    let category: String? = if case .category(let id) = filter { id } else { nil }
-                    let section = WorkQueue.sections(view).first { filter == .inProgress ? $0.category == nil : $0.category == category }
+                    let section = WorkQueue.section(for: filter, in: view)
                     if items.isEmpty {
                         Text(filter == .inProgress ? "Nothing is being worked on now." : "Nothing here.")
                             .font(.system(size: 12))

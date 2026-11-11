@@ -122,7 +122,7 @@ struct WorkItemSessionCard: View {
     @ViewBuilder private func open(_ session: WorkItemSession) -> some View {
         let known = app.workspace.session(session.session) != nil
         Button("Open Session") { app.open(.session(session.session), from: app.tabs.messageTarget) }
-            .buttonStyle(OpenSessionButtonStyle(filled: card.working))
+            .buttonStyle(OpenSessionButtonStyle(filled: session.session == card.main))
             .disabled(!known)
             .help(known ? "Open \(WorkQueue.sessionName(session))" : "That session isn’t on this Mac’s list.")
             .accessibilityLabel("Open Session \(WorkQueue.sessionName(session))")

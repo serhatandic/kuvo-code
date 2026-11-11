@@ -154,7 +154,11 @@ import ClientSessions
         let sections = WorkQueue.sections(Self.sessionView)
         #expect(sections.map(\.name) == ["Working on", "In progress", "Next", "Later", "Parked", "Done"])
         #expect(sections.map { $0.items.map(\.name) } == [["#551", "#552"], ["#8"], ["#7"], [], [], []], "each once: a lead's item isn't in its category too")
-        #expect(WorkQueue.items(Self.sessionView, .inProgress).map(\.name) == ["#551", "#8"])
+        #expect(WorkQueue.items(Self.sessionView, .workingOn).map(\.name) == ["#551", "#552"])
+        #expect(WorkQueue.items(Self.sessionView, .inProgress).map(\.name) == ["#8"], "each under one filter")
+        let filters: [WorkQueue.Filter] = [.workingOn, .inProgress] + Self.sessionView.categories.map { .category($0.id) }
+        #expect(filters.map { WorkQueue.items(Self.sessionView, $0).count }.reduce(0, +) == WorkQueue.allCount(Self.sessionView), "the chips add up to All")
+        #expect(WorkQueue.section(for: .inProgress, in: Self.sessionView)?.id == WorkQueue.inProgressID)
         #expect(WorkQueue.items(Self.sessionView, .all).map(\.name) == ["#551", "#552", "#8", "#7"])
         #expect(WorkQueue.eyebrow(of: Self.sessionView.items[0], in: Self.sessionView) == ["Kuvo Foreman"])
         // A lead's own view, and All, have no Working on.
@@ -162,6 +166,24 @@ import ClientSessions
         var all = Self.sessionView
         all.owner = WorkQueueView.all
         #expect(WorkQueue.sections(all).first?.name == "In progress")
+    }
+
+    @Test func aLeadsItemDoneGoesWithTheDoneOnesNotWorkingOn() {
+        var view = Self.sessionView
+        view.items[1].category = WorkCategory.done
+        let sections = WorkQueue.sections(view)
+        #expect(sections.first { $0.id == WorkQueue.workingOnID }?.items.map(\.name) == ["#551"])
+        #expect(sections.first { $0.category == WorkCategory.done }?.items.map(\.name) == ["#552"])
+        #expect(WorkQueue.items(view, .all, showsDone: false).map(\.name) == ["#551", "#8", "#7"], "folded with the Done ones")
+    }
+
+    @Test func aPageNamesItsOwnerFromAllElseAViewThatNamesIt() {
+        var all = Self.sessionView
+        all.owner = WorkQueueView.all
+        let item = Self.sessionView.items[0]
+        #expect(WorkQueue.view(naming: item, among: [Self.view, Self.sessionView, all])?.owner == WorkQueueView.all)
+        #expect(WorkQueue.view(naming: item, among: [Self.view, Self.sessionView])?.owner == "ses_worker")
+        #expect(WorkQueue.view(naming: item, among: [Self.view]) == nil)
     }
 
     @Test func anItemAtWorkSaysInProgressOnlyAndItsCategoryOnlyWhenNoOneIs() {
@@ -196,9 +218,11 @@ import ClientSessions
         #expect(card?.heading == "Session at work")
         #expect(card?.note == "Box tests pass")
         #expect(card?.sessions.map(WorkQueue.sessionName) == ["#551 All includes Done"])
+        #expect(card?.main == "ses_worker", "its Open Session is the filled one")
         let idle = WorkQueue.sessionCard(for: Self.sessionView.items[1])
         #expect(idle?.heading == "No session at work")
         #expect(idle?.note == nil, "never “… is at work on it”")
+        #expect(idle?.main == nil, "no filled button while no one works")
         #expect(WorkQueue.progressNote(Self.sessionView.items[1]) == nil)
     }
 

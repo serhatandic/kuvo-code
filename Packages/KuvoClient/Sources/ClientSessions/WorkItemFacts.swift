@@ -90,6 +90,14 @@ public extension WorkQueue {
         return properties
     }
 
+    /// Of the views a client has read, the one to name an item's owner and history by (an item's
+    /// page opened from a chip has no list of its own): All, when it has the item, else the first
+    /// that names its owner, else any that has it.
+    static func view(naming item: WorkItem, among views: [WorkQueueView]) -> WorkQueueView? {
+        let having = views.filter { $0.items.contains { $0.id == item.id } || $0.removed.contains { $0.id == item.id } }
+        return having.first { $0.owner == WorkQueueView.all } ?? having.first { view in view.owners.contains { $0.owner == item.owner } } ?? having.first
+    }
+
     /// An owner by name, whoever's view it is: the bot's name, the session's title, or the group
     /// chat; nil for a session the view doesn't name.
     static func ownerWords(_ owner: String, in view: WorkQueueView) -> String? {
@@ -105,6 +113,9 @@ public extension WorkQueue {
         /// "Session at work", "2 sessions at work", "No session at work".
         public var heading: String
         public var sessions: [WorkItemSession]
+        /// The one its Open Session is the page's filled button for: the session at work (the
+        /// first, of several); none while none works.
+        public var main: String?
         public var note: String?
         public var progress: Double?
     }
@@ -116,7 +127,7 @@ public extension WorkQueue {
         let atWork = item.sessions.filter(\.working).count
         let heading = atWork == 0 ? "No session at work" : atWork == 1 ? "Session at work" : "\(atWork) sessions at work"
         let sessions = item.sessions.filter(\.working) + item.sessions.filter { !$0.working }
-        return SessionCard(working: atWork > 0, heading: heading, sessions: sessions, note: progressNote(item), progress: item.progress?.value)
+        return SessionCard(working: atWork > 0, heading: heading, sessions: sessions, main: sessions.first(where: \.working)?.session, note: progressNote(item), progress: item.progress?.value)
     }
 
     /// A session's name in the card: its title, as its starter gave it.

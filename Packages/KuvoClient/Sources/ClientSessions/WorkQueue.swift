@@ -369,6 +369,8 @@ public enum WorkQueue {
     /// A filter over the list: everything, what's in progress, or one category.
     public enum Filter: Hashable, Sendable {
         case all
+        /// What this session works on that's someone else's (a session's view only).
+        case workingOn
         case inProgress
         case category(String)
     }
@@ -397,10 +399,10 @@ public enum WorkQueue {
     public static func isInProgress(_ item: WorkItem) -> Bool { item.inProgress }
 
     /// Whether `item` is one the view's owner is working on that's someone else's: a lead's item
-    /// linked to the session whose view it is. The box shows those in its view, to see only; they
-    /// go first, under Working on.
+    /// linked to the session whose view it is, not Done. The box shows those in its view, to see
+    /// only; they go first, under Working on (one that's Done goes with the Done ones).
     public static func isWorkingOn(_ item: WorkItem, in view: WorkQueueView) -> Bool {
-        view.owner != WorkQueueView.all && item.owner != view.owner && item.sessions.contains { $0.session == view.owner }
+        view.owner != WorkQueueView.all && item.owner != view.owner && !item.isDone && item.sessions.contains { $0.session == view.owner }
     }
 
     /// The view's sections: Working on first when the view has any (what this session works on
@@ -419,13 +421,23 @@ public enum WorkQueue {
     }
 
     /// The items `filter` keeps, in the list's order: Working on and In progress first under All.
-    /// In progress counts what this session is working on too, while it's at work.
+    /// Each item is under one filter but All, so the others' counts add up to All's.
     public static func items(_ view: WorkQueueView, _ filter: Filter, showsDone: Bool = true) -> [WorkItem] {
+        switch filter {
+        case .all: return sections(view).filter { showsDone || $0.category != WorkCategory.done }.flatMap(\.items)
+        default: return section(for: filter, in: view)?.items ?? []
+        }
+    }
+
+    /// The section a filter shows (nil for All, and for Working on in a view without it): In
+    /// progress, Working on, or a category.
+    public static func section(for filter: Filter, in view: WorkQueueView) -> Section? {
         let sections = sections(view)
         switch filter {
-        case .all: return sections.filter { showsDone || $0.category != WorkCategory.done }.flatMap(\.items)
-        case .inProgress: return sections.filter { $0.category == nil }.flatMap(\.items).filter(isInProgress)
-        case .category(let id): return sections.first { $0.category == id }?.items ?? []
+        case .all: return nil
+        case .workingOn: return sections.first { $0.id == workingOnID }
+        case .inProgress: return sections.first { $0.id == inProgressID }
+        case .category(let id): return sections.first { $0.category == id }
         }
     }
 
