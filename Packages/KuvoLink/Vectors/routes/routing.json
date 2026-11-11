@@ -181,7 +181,10 @@
             "machine": { "status": 200, "json": { "setup": null, "epoch": null, "primary": null, "you": { "key": null, "role": null }, "computers": [], "startsFromOthers": { "value": null, "default": "on" }, "heldBy": [] } }
           }
         },
-        { "send": "POST kuvo/setup", "body": {}, "expect": { "status": 405 } }
+        { "send": "POST kuvo/setup", "body": {}, "expect": { "status": 405 } },
+        { "send": "POST kuvo/setup/judge", "body": { "probe": "Linux x86_64\nglibc\n" }, "why": "What a Mac adding a computer found there, judged by the box: nothing anyone's, here.", "expect": { "status": 200, "json": { "verdict": "free", "boxes": [] } } },
+        { "send": "POST kuvo/setup/judge", "body": {}, "expect": { "status": 400 } },
+        { "send": "GET kuvo/setup/judge", "expect": { "status": 405 } }
       ]
     },
     {

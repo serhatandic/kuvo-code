@@ -97,6 +97,29 @@ export const SETUP = object({
   heldBy: list(string),
 });
 
+/** One box found on a computer, as `kuvo/setup/judge` and `kuvo-link.js here` judge it: where it
+ * is (its folder, from the home folder; `app`, Kuvo Code's own box on a Mac), its verdict, and what
+ * it says of itself (its key, name and kind; its setup, role and main computer, `heard` when that
+ * was last heard from, ms; the Macs that set it up; how many computers and Work Queue items). */
+const JUDGED_BOX = object({
+  folder: string,
+  app: bool,
+  verdict: words("self", "free", "ours", "older", "elsewhere", "main"),
+  key: nullable(string),
+  name: string,
+  kind: nullable(words("mac", "machine")),
+  setup: nullable(string),
+  role: nullable(words("primary", "member")),
+  primary: nullable(object({ key: string, name: string, heard: nullable(number) })),
+  macs: list(object({ key: string, name: string })),
+  computers: number,
+  items: number,
+});
+
+/** What's on a computer, judged (PROTOCOL.md, "Your setup", "Already in a setup?"): one verdict, and
+ * each box found there. */
+export const JUDGED = object({ verdict: words("self", "free", "ours", "older", "elsewhere", "main", "two"), boxes: list(JUDGED_BOX) });
+
 /** Whether a client's in use here, and how many notices wait. */
 export const ATTENTION = object({ inUse: bool, held: number });
 
@@ -156,6 +179,7 @@ export const BOX_ROUTES: RouteShape[] = [
   { route: "DELETE kuvo/phones/pair", answers: { 200: NOTHING } },
   { route: "GET kuvo/setup", answers: { 200: SETUP } },
   { route: "GET kuvo/setup/events", answers: { 200: SETUP } },
+  { route: "POST kuvo/setup/judge", answers: { 200: JUDGED } },
   { route: "GET kuvo/attention", answers: { 200: ATTENTION } },
   { route: "POST kuvo/attention", answers: { 200: object({ for: number }) } },
   { route: "POST kuvo/attention/notice", answers: { 200: NOTHING } },

@@ -63,6 +63,7 @@ import { pushRows } from "./work/elsewhere";
 import { pushNumbers } from "./work-queue/numbers";
 import { noteSetupNow } from "./setup/lead";
 import { writeCard } from "./setup/card";
+import { hereNow } from "./setup/judge";
 import { pushQueues } from "./work-queue/across";
 import { handUpkeepSoon } from "./work-queue/hand";
 import { clearStaging } from "./work-queue/ops";
@@ -179,6 +180,7 @@ export { leadsNow, noteSetupNow, settleOwnSetup } from "./setup/lead";
 export { settleSetup, sharedMachine } from "./setup/settle";
 export { followedSetup, newSetupID, startsFromOthers } from "./setup/record";
 export { setupView } from "./setup/view";
+export { foundOf, hereNow, judgeComputer, judgeHere, oursNow } from "./setup/judge";
 export { cardNow, SETUP_CARD, writeCard } from "./setup/card";
 export { keptFeatures, peerOf, readPeerAgents, takeAgents } from "./peers/directory";
 export { composeLetter } from "./letters/letter";
@@ -901,6 +903,10 @@ if (main) {
   else if (mode === "box") await box(argument);
   else if (mode === "serve") await serve();
   else if (mode === "leave") leave(argument);
+  // Kuvo Code as it opens on a Mac, before it starts a box (PROTOCOL.md, "Your setup", "Already in a
+  // setup?"): whether it uses its own box, or the one already on this Mac, in place. `here [root]`,
+  // root the machines' folder's name in the home folder (`.kuvo-code`, or a test's own).
+  else if (mode === "here") console.log(JSON.stringify(hereNow(argument || undefined)));
   // A machine's start scripts' (`kuvo-launch`): what its engine starts with, its OPENCODE_CONFIG_CONTENT
   // with the sandbox's note, and what some providers need beside its settings, as this box last
   // learned it (PROTOCOL.md, "Settings per box").
@@ -967,7 +973,7 @@ if (main) {
     console.log(ok ? "ok" : "failed");
     process.exit(ok ? 0 : 1);
   } else {
-    console.error("Usage: kuvo-link.js run | serve | setup | pair [relay] | box <command> | leave <mac> | engine-config | login-path | update [--now] | browser install|start|status | selftest");
+    console.error("Usage: kuvo-link.js run | serve | setup | pair [relay] | box <command> | leave <mac> | here [root] | engine-config | login-path | update [--now] | browser install|start|status | selftest");
     process.exit(2);
   }
 }

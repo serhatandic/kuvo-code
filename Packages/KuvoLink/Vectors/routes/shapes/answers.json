@@ -4332,6 +4332,140 @@
    }
   },
   {
+   "route": "POST kuvo/setup/judge",
+   "answers": {
+    "200": {
+     "object": {
+      "verdict": {
+       "oneOf": [
+        {
+         "literal": "self"
+        },
+        {
+         "literal": "free"
+        },
+        {
+         "literal": "ours"
+        },
+        {
+         "literal": "older"
+        },
+        {
+         "literal": "elsewhere"
+        },
+        {
+         "literal": "main"
+        },
+        {
+         "literal": "two"
+        }
+       ]
+      },
+      "boxes": {
+       "list": {
+        "object": {
+         "folder": "string",
+         "app": "bool",
+         "verdict": {
+          "oneOf": [
+           {
+            "literal": "self"
+           },
+           {
+            "literal": "free"
+           },
+           {
+            "literal": "ours"
+           },
+           {
+            "literal": "older"
+           },
+           {
+            "literal": "elsewhere"
+           },
+           {
+            "literal": "main"
+           }
+          ]
+         },
+         "key": {
+          "oneOf": [
+           "string",
+           "null"
+          ]
+         },
+         "name": "string",
+         "kind": {
+          "oneOf": [
+           {
+            "oneOf": [
+             {
+              "literal": "mac"
+             },
+             {
+              "literal": "machine"
+             }
+            ]
+           },
+           "null"
+          ]
+         },
+         "setup": {
+          "oneOf": [
+           "string",
+           "null"
+          ]
+         },
+         "role": {
+          "oneOf": [
+           {
+            "oneOf": [
+             {
+              "literal": "primary"
+             },
+             {
+              "literal": "member"
+             }
+            ]
+           },
+           "null"
+          ]
+         },
+         "primary": {
+          "oneOf": [
+           {
+            "object": {
+             "key": "string",
+             "name": "string",
+             "heard": {
+              "oneOf": [
+               "number",
+               "null"
+              ]
+             }
+            }
+           },
+           "null"
+          ]
+         },
+         "macs": {
+          "list": {
+           "object": {
+            "key": "string",
+            "name": "string"
+           }
+          }
+         },
+         "computers": "number",
+         "items": "number"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  {
    "route": "GET kuvo/attention",
    "answers": {
     "200": {

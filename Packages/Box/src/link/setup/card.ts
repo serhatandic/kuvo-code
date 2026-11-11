@@ -7,7 +7,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { writePrivate } from "../files";
 import { IS_MAC, RUN } from "../home";
-import { ownKey } from "../peers/known";
+import { macsOf, ownKey } from "../peers/known";
 import { readPeerAgents } from "../peers/directory";
 import { readLink } from "../state";
 import { allItems } from "../work-queue/store";
@@ -17,8 +17,9 @@ export const SETUP_CARD = path.join(RUN, "setup-card.json");
 
 /** What the card says: the setup and its epoch, this box's role, its main computer (when it was last
  * heard from, ms; null on the main computer itself), this box, whether Kuvo Code's app runs it, how
- * many computers the setup has, how many Work Queue items are here, and the machines holding this Mac
- * back from leading one (`heldBy`). */
+ * many computers the setup has, how many Work Queue items are here, the machines holding this Mac
+ * back from leading one (`heldBy`), and the Macs that set this box up, by name (a machine's: none on
+ * a Mac), for a box in no setup to be judged by (`judge.ts`). */
 export function cardNow(): Record<string, unknown> {
   const link = readLink();
   const view = setupView(link);
@@ -37,6 +38,7 @@ export function cardNow(): Record<string, unknown> {
     computers: view.computers.length,
     items,
     heldBy: view.heldBy,
+    macs: macsOf(link).map(key => ({ key, name: String(link?.macNames?.[key] ?? "") })),
   };
 }
 

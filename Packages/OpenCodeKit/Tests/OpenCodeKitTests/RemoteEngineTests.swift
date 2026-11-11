@@ -243,6 +243,55 @@ struct RemoteEngineTests {
         #expect(!RemoteEngineInstaller.isThisAccount("computer ANOTHER-MAC \(getuid())"))
     }
 
+    /// What's already on a computer, as the probe prints it for the box to judge (PROTOCOL.md, "Your
+    /// setup", "Already in a setup?"), run with `sh` on the files `Vectors/setup/probe.json` has, in a
+    /// home of the test's own: an older box's few link.json fields, never its keys, and the card of
+    /// Kuvo Code's own box in its app folder. A test's own folder isn't the real one: the app's boxes
+    /// aren't looked at then.
+    @Test func whatsAlreadyOnAComputerIsPrintedForItsBoxToJudge() throws {
+        struct Vector: Decodable { let files: [String: String]; let lines: [String] }
+        let file = URL(filePath: #filePath).deletingLastPathComponent().appending(path: "../../../KuvoLink/Vectors/setup/probe.json").standardized
+        let vector = try JSONDecoder().decode(Vector.self, from: Data(contentsOf: file))
+        let home = FileManager.default.temporaryDirectory.appending(path: "kuvo-probe-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: home) }
+        for (path, content) in vector.files {
+            let url = home.appending(path: path)
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data(content.utf8).write(to: url)
+        }
+        func probe(root: String) throws -> (status: Int32, output: String) {
+            let process = Process()
+            process.executableURL = URL(filePath: "/bin/sh")
+            process.arguments = ["-c", RemoteEngineInstaller.$scopedRoot.withValue(root) { RemoteEngineInstaller.foundProbe }]
+            process.environment = ["HOME": home.path, "PATH": "/usr/bin:/bin"]
+            let pipe = Pipe()
+            process.standardOutput = pipe
+            process.standardError = FileHandle.nullDevice
+            try process.run()
+            let output = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            process.waitUntilExit()
+            return (process.terminationStatus, output)
+        }
+        let real = try probe(root: ".kuvo-code")
+        #expect(real.status == 0)
+        #expect(real.output.split(separator: "\n").map(String.init) == vector.lines)
+        #expect(!real.output.contains("NEVER-PRINTED"))
+        #expect(RemoteEngineInstaller.found(in: "Linux x86_64\nglibc\n\(real.output)") == vector.lines.joined(separator: "\n"))
+        // The engine's version line among them still says it's installed, and only that line does.
+        let checked = try installer().checked("Linux x86_64\nglibc\n\(OpenCodeEngine.version)\n\(real.output)")
+        #expect(checked.isInstalled && checked.found == vector.lines.joined(separator: "\n"))
+
+        try FileManager.default.moveItem(at: home.appending(path: ".kuvo-code"), to: home.appending(path: ".kuvo-code-test"))
+        let test = try probe(root: ".kuvo-code-test")
+        #expect(test.status == 0)
+        #expect(test.output.split(separator: "\n").first == "box machine .kuvo-code-test")
+        #expect(!test.output.contains("box app"), "a test's own folder: the app's boxes aren't looked at")
+        // Nothing there: nothing printed, and the probe still ends well.
+        try FileManager.default.removeItem(at: home.appending(path: ".kuvo-code-test"))
+        let none = try probe(root: ".kuvo-code-test")
+        #expect(none.status == 0 && none.output.isEmpty)
+    }
+
     @Test func aMachinesFoldersAreKeyedApartAndSentPlain() {
         let api = OpenCodeAPI(endpoint: ServerEndpoint(url: URL(string: "http://127.0.0.1:1")!, password: nil), folderPrefix: "ssh://box")
         #expect(api.enginePath("ssh://box/home/me/app") == "/home/me/app")
