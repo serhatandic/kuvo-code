@@ -486,7 +486,7 @@ enum SidebarSwipe {
     var width: CGFloat = 0
     /// The way the last swipe went (1 on, -1 back), or 1 once a name is picked: which way round
     /// the pages and the name strip both go to a box as near one way as the other (with two, the
-    /// other one).
+    /// other one), together, whatever picked it (a tab on another box goes the last swipe's way).
     var way = 1
 }
 
@@ -554,7 +554,10 @@ struct BoxPager<Page: View>: View {
             }
         }
         // The motion the box in view changed with (the name strip's), for the pages to go with it.
-        .transaction(value: index) { [change] transaction in change.animation = transaction.animation }
+        .transaction(value: index) { [change] transaction in
+            change.animation = transaction.animation
+            change.isStill = transaction.disablesAnimations
+        }
         // Where it starts, and again when computers come or go: in place, at once.
         .onAppear { stand() }
         .onChange(of: boxes) { stand() }
@@ -575,9 +578,14 @@ struct BoxPager<Page: View>: View {
     /// change, read once it has.
     private nonisolated final class Change: @unchecked Sendable {
         var animation: Animation?
+        /// Changed with motion turned off on purpose: the pages go at once too.
+        var isStill = false
     }
 
     /// The place page `place` lies at: of those it's at round the line, the nearest the one in view.
+    /// (Steps taken faster than the pages slide, with two or three computers, can need a page in
+    /// two places at once: it moves round at the latest step, and a sliver at the edge shows
+    /// nothing for a moment.)
     private func place(of place: Int) -> Int {
         let count = boxes.count
         guard count > 0 else { return 0 }
@@ -595,8 +603,8 @@ struct BoxPager<Page: View>: View {
         let steps = BoxNameStrip.steps(from: position, to: target, count: count, way: motion.way)
         guard steps != 0 else { return }
         // As the change went (the name strip's spring), or else the pages' own slide (a tab on
-        // another box); with Reduce Motion, at once.
-        withAnimation(reduceMotion ? nil : change.animation ?? Self.slide) {
+        // another box); with Reduce Motion, or motion turned off, at once.
+        withAnimation(reduceMotion || change.isStill ? nil : change.animation ?? Self.slide) {
             position += steps
             aheadOnTies = steps < 0
         }
