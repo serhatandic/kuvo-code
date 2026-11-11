@@ -62,11 +62,12 @@ private struct ImageLightbox: View {
     let request: ImageViewer.Request
     @State private var index: Int
     @State private var image: NSImage?
+    @State private var loadFailed = false
+    @State private var retry = 0
+    @State private var actionError: String?
     /// Pinched or double-clicked in; 1 is fitted to the window.
     @State private var scale: CGFloat = 1
-    @State private var pinch: CGFloat = 1
-    @State private var offset: CGSize = .zero
-    @State private var drag: CGSize = .zero
+    @State private var fitScale: CGFloat = 1
     @State private var appeared = false
     /// Just copied: the button shows a check for a moment.
     @State private var copied = false
@@ -78,7 +79,6 @@ private struct ImageLightbox: View {
     }
 
     private var item: AttachmentItem { request.items[index] }
-    private var zoom: CGFloat { max(1, min(8, scale * pinch)) }
 
     var body: some View {
         GeometryReader { proxy in
@@ -89,44 +89,15 @@ private struct ImageLightbox: View {
                     .contentShape(.rect)
                     .onTapGesture { ImageViewer.shared.close() }
                 if let image {
-                    let fitted = fit(image.size, in: CGSize(width: proxy.size.width - 96, height: proxy.size.height - 150))
-                    Image(nsImage: image)
-                        .resizable()
-                        .interpolation(.high)
-                        .frame(width: fitted.width, height: fitted.height)
-                        .clipShape(.rect(cornerRadius: zoom > 1 ? 0 : 10))
-                        .shadow(color: .black.opacity(0.35), radius: 24, y: 8)
-                        .scaleEffect(zoom)
-                        .offset(x: offset.width + drag.width, y: offset.height + drag.height)
-                        .scaleEffect(appeared ? 1 : 0.94)
-                        .gesture(
-                            MagnifyGesture()
-                                .onChanged { pinch = $0.magnification }
-                                .onEnded { _ in
-                                    scale = zoom
-                                    pinch = 1
-                                    if scale <= 1 { withAnimation(.ui) { offset = .zero } }
-                                }
-                        )
-                        .simultaneousGesture(
-                            DragGesture()
-                                .onChanged { if zoom > 1 { drag = $0.translation } }
-                                .onEnded { value in
-                                    guard zoom > 1 else { return }
-                                    offset.width += value.translation.width
-                                    offset.height += value.translation.height
-                                    drag = .zero
-                                }
-                        )
-                        // Double-click: in to twice the size, or back to fitted.
-                        .onTapGesture(count: 2) {
-                            withAnimation(.ui) {
-                                scale = zoom > 1 ? 1 : 2
-                                offset = .zero
-                            }
-                        }
-                        .help("Pinch or double-click to zoom")
+                    PictureCanvas(image: image, scale: $scale, fitScale: $fitScale, name: item.name, ownsKeys: true) { ImageViewer.shared.close() }
+                        .padding(.horizontal, 48)
+                        .padding(.vertical, 75)
                         .transition(.replacingPlaceholder)
+                } else if loadFailed {
+                    VStack(spacing: 12) {
+                        Text("This picture couldn’t be loaded.")
+                        Button("Try Again") { loadFailed = false; retry += 1 }
+                    }
                 } else {
                     let room = fit(CGSize(width: 480, height: 360), in: CGSize(width: proxy.size.width - 96, height: proxy.size.height - 150))
                     Placeholder(.image, label: "Loading picture")
@@ -144,11 +115,26 @@ private struct ImageLightbox: View {
                 VStack {
                     header
                     Spacer()
+                    if request.items.count > 1 {
+                        Text("\(index + 1) of \(request.items.count)")
+                            .font(.system(size: 12, weight: .medium))
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .glassEffect(.regular, in: .capsule)
+                            .padding(.bottom, 20)
+                    }
                 }
                 .padding(.top, 14)
                 .padding(.horizontal, 20)
             }
             .frame(width: proxy.size.width, height: proxy.size.height)
+        }
+        .alert("Picture Unavailable", isPresented: Binding(
+            get: { actionError != nil }, set: { if !$0 { actionError = nil } }
+        )) {
+            Button("OK", role: .cancel) { actionError = nil }
+        } message: {
+            Text(actionError ?? "")
         }
         .focusable()
         .focusEffectDisabled()
@@ -172,7 +158,13 @@ private struct ImageLightbox: View {
             isFocused = true
             withAnimation(.snappy(duration: 0.22)) { appeared = true }
         }
-        .task(id: index) { image = await item.loadImage() }
+        .task(id: "\(index)-\(retry)") {
+            loadFailed = false
+            let loaded = await item.loadImage()
+            guard !Task.isCancelled else { return }
+            image = loaded
+            loadFailed = loaded == nil
+        }
     }
 
     /// Its name and size, and what else you can do with it.
@@ -183,20 +175,80 @@ private struct ImageLightbox: View {
                     .font(.system(size: 13, weight: .semibold))
                     .lineLimit(1)
                     .truncationMode(.middle)
-                Text(request.items.count > 1 ? "\(index + 1) of \(request.items.count) · \(item.detail)" : item.detail)
+                Text(item.detail)
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             }
             .frame(maxWidth: 320, alignment: .leading)
             Spacer(minLength: 12)
             HStack(spacing: 2) {
+                Menu("\(PictureZoom.percent(scale, fit: fitScale))%") {
+                    Button("Fit") { withAnimation(.ui) { scale = 1 } }
+                    Button("Actual Size") { withAnimation(.ui) { scale = PictureZoom.clamped(PictureZoom.actual(fit: fitScale), fit: fitScale) } }
+                    Divider()
+                    Button("Zoom In") { withAnimation(.ui) { scale = PictureZoom.zoomedIn(scale, fit: fitScale) } }
+                    Button("Zoom Out") { withAnimation(.ui) { scale = PictureZoom.zoomedOut(scale, fit: fitScale) } }
+                }
+                .menuStyle(.button)
+                .buttonStyle(.borderless)
+                .menuIndicator(.hidden)
+                .font(.system(size: 12, weight: .medium).monospacedDigit())
+                .fixedSize()
+                .disabled(image == nil)
+                .help("Zoom (⌘+, ⌘−, ⌘0)")
+                .accessibilityLabel("Zoom")
+                .accessibilityValue("\(PictureZoom.percent(scale, fit: fitScale))%")
+                Button("Download", systemImage: "arrow.down.to.line") {
+                    let panel = NSSavePanel()
+                    panel.nameFieldStringValue = item.name
+                    if panel.runModal() == .OK, let url = panel.url {
+                        let selected = item
+                        Task {
+                            guard let data = await selected.readBytes() else {
+                                actionError = "The picture couldn’t be read. Please try again."
+                                return
+                            }
+                            do { try data.write(to: url) }
+                            catch { actionError = "The picture couldn’t be saved: \(error.localizedDescription)" }
+                        }
+                    }
+                }
+                .disabled(image == nil)
+                .help("Save a copy")
                 Button(copied ? "Copied" : "Copy", systemImage: copied ? "checkmark" : "doc.on.doc", action: copy)
                     .contentTransition(.symbolEffect(.replace))
                     .disabled(image == nil)
                     .help("Copy the picture (⌘C)")
                 Button("Open in Preview", systemImage: "arrow.up.forward.app") {
-                    item.open()
-                    ImageViewer.shared.close()
+                    let selected = item
+                    Task {
+                        let url: URL
+                        if let local = selected.localURL() {
+                            url = local
+                        } else if let written = AttachmentImages.written(selected.id), FileManager.default.fileExists(atPath: written.path) {
+                            url = written
+                        } else {
+                            // One only its machine has: its bytes through its box, written out once.
+                            guard let data = await selected.readBytes() else {
+                                actionError = "The picture couldn’t be read. Please try again."
+                                return
+                            }
+                            guard let written = Attachments.writeReceived(data, named: selected.name, type: selected.type) else {
+                                actionError = "The picture couldn’t be saved for opening."
+                                return
+                            }
+                            AttachmentImages.wrote(written, for: selected.id)
+                            url = written
+                        }
+                        if Attachments.canRun(url) {
+                            NSWorkspace.shared.activateFileViewerSelecting([url])
+                            ImageViewer.shared.close()
+                        } else if NSWorkspace.shared.open(url) {
+                            ImageViewer.shared.close()
+                        } else {
+                            actionError = "No app could open this picture."
+                        }
+                    }
                 }
                 .help("Open in its app")
                 if item.fileURL != nil {
@@ -253,8 +305,8 @@ private struct ImageLightbox: View {
         guard request.items.indices.contains(index + direction) else { return false }
         index += direction
         image = nil
+        loadFailed = false
         scale = 1
-        offset = .zero
         return true
     }
 
@@ -265,5 +317,182 @@ private struct ImageLightbox: View {
         guard size.width > 0, size.height > 0 else { return CGSize(width: min(200, room.width), height: min(200, room.height)) }
         let scale = min(room.width / size.width, room.height / size.height, 1)
         return CGSize(width: (size.width * scale).rounded(), height: (size.height * scale).rounded())
+    }
+}
+
+
+/// How a picture zooms, the same in the viewer over the window and in the side panel. A scale of 1
+/// is the picture fitted to its room (never enlarged past its own size); its own size is 1 / fit;
+/// it goes no further than eight times that, nor past what a view can draw.
+nonisolated enum PictureZoom {
+    /// The longest side a zoomed picture is drawn at: past it, a layer can't hold it.
+    static let largest: CGFloat = 16_000
+
+    /// The scale that fits `size` in `room`, at most 1.
+    static func fit(_ size: CGSize, in room: CGSize) -> CGFloat {
+        guard size.width > 0, size.height > 0, room.width > 0, room.height > 0 else { return 1 }
+        return max(0.0001, min(room.width / size.width, room.height / size.height, 1))
+    }
+
+    static func actual(fit: CGFloat) -> CGFloat { 1 / max(fit, 0.0001) }
+
+    /// `side`: the fitted picture's longest side, when known.
+    static func most(fit: CGFloat, side: CGFloat = 0) -> CGFloat {
+        let most = max(2, 8 * actual(fit: fit))
+        return side > 0 ? max(1, min(most, largest / side)) : most
+    }
+
+    static func clamped(_ scale: CGFloat, fit: CGFloat, side: CGFloat = 0) -> CGFloat { max(1, min(most(fit: fit, side: side), scale)) }
+
+    static func zoomedIn(_ scale: CGFloat, fit: CGFloat, side: CGFloat = 0) -> CGFloat { clamped(scale * 1.25, fit: fit, side: side) }
+
+    static func zoomedOut(_ scale: CGFloat, fit: CGFloat, side: CGFloat = 0) -> CGFloat { clamped(scale / 1.25, fit: fit, side: side) }
+
+    /// A double-click: back to fitted when zoomed, otherwise its own size (twice the fit for one
+    /// that fits already).
+    static func toggled(_ scale: CGFloat, fit: CGFloat, side: CGFloat = 0) -> CGFloat {
+        scale > 1 ? 1 : clamped(max(actual(fit: fit), 2), fit: fit, side: side)
+    }
+
+    /// "100%": of its own size.
+    static func percent(_ scale: CGFloat, fit: CGFloat) -> Int { Int((scale * fit * 100).rounded()) }
+
+    /// ⌘+ (⌘= too), ⌘− and ⌘0: its new scale, or nil for another key.
+    static func key(_ characters: String, scale: CGFloat, fit: CGFloat, side: CGFloat = 0) -> CGFloat? {
+        switch characters {
+        case "+", "=": zoomedIn(scale, fit: fit, side: side)
+        case "-": zoomedOut(scale, fit: fit, side: side)
+        case "0": 1
+        default: nil
+        }
+    }
+}
+
+/// A picture to look at closely, the one surface for every picture opened in the app: the viewer
+/// over the window and a picture in the side panel. Fitted at first, rounded; a pinch, a
+/// double-click and ⌘+ ⌘− ⌘0 zoom it, and zoomed in it scrolls.
+struct PictureCanvas: View {
+    let image: NSImage
+    /// 1 is fitted; see `PictureZoom`.
+    @Binding var scale: CGFloat
+    /// The fit, for what says its size in percent.
+    @Binding var fitScale: CGFloat
+    /// Its name, for VoiceOver.
+    var name = "Picture"
+    /// The viewer over the window: its zoom keys are the picture's while it's open, and the
+    /// keyboard stays with the viewer for its arrows. The side panel's picture takes them once
+    /// it has the keyboard, or while the pointer is over it.
+    var ownsKeys = false
+    /// A click beside the picture (the viewer closes).
+    var tapOutside: (() -> Void)?
+    @State private var pinch: CGFloat = 1
+    @State private var isHovering = false
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        GeometryReader { proxy in
+            let room = proxy.size
+            // In points, as Preview's Actual Size: a Retina screenshot at the size it was on screen.
+            let size = image.size
+            let fit = PictureZoom.fit(size, in: room)
+            let side = max(size.width, size.height) * fit
+            let current = PictureZoom.clamped(scale * pinch, fit: fit, side: side)
+            ScrollView([.horizontal, .vertical]) {
+                ZStack {
+                    Color.clear
+                        .contentShape(.rect)
+                        .onTapGesture { tapOutside?() }
+                    Image(nsImage: image)
+                        .resizable()
+                        .interpolation(current * fit > 2 ? .none : .high)
+                        .frame(width: max(1, size.width * fit * current), height: max(1, size.height * fit * current))
+                        // Rounded while it's whole, as in the conversation.
+                        .clipShape(.rect(cornerRadius: current > 1.001 ? 0 : 10))
+                        .onTapGesture(count: 2) {
+                            withAnimation(.ui) { scale = PictureZoom.toggled(scale, fit: fit, side: side) }
+                        }
+                }
+                .frame(minWidth: room.width, minHeight: room.height)
+            }
+            .scrollIndicators(current > 1 ? .automatic : .never)
+            .scrollBounceBehavior(.basedOnSize, axes: [.horizontal, .vertical])
+            .defaultScrollAnchor(.center, for: .initialOffset)
+            .defaultScrollAnchor(.center, for: .sizeChanges)
+            .onAppear {
+                fitScale = fit
+                if let demo = Self.demoScale { scale = PictureZoom.clamped(demo, fit: fit, side: side) }
+                // A file can finish loading while someone is typing in the composer.
+                if !ownsKeys, !(NSApp.keyWindow?.firstResponder is NSTextView) { focused = true }
+            }
+            .onChange(of: fit) { _, value in fitScale = value }
+            // Never past what it can draw, whatever set it (the viewer's zoom menu).
+            .onChange(of: scale) { _, value in
+                let most = PictureZoom.clamped(value, fit: fit, side: side)
+                if most != value { scale = most }
+            }
+            .gesture(MagnifyGesture().onChanged { pinch = $0.magnification }.onEnded { _ in
+                scale = current
+                pinch = 1
+            })
+            .onHover { isHovering = $0 }
+            .background(PictureKeys(isActive: ownsKeys || focused || isHovering) { characters in
+                guard let zoomed = PictureZoom.key(characters, scale: scale, fit: fit, side: side) else { return false }
+                withAnimation(.ui) { scale = zoomed }
+                return true
+            })
+            .focusable(!ownsKeys)
+            .focusEffectDisabled()
+            .focused($focused)
+            .help("Pinch or double-click to zoom")
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(name)
+            .accessibilityValue("\(PictureZoom.percent(current, fit: fit))%")
+            .accessibilityAddTraits(.isImage)
+            .accessibilityAdjustableAction { direction in
+                switch direction {
+                case .increment: scale = PictureZoom.zoomedIn(scale, fit: fit, side: side)
+                case .decrement: scale = PictureZoom.zoomedOut(scale, fit: fit, side: side)
+                @unknown default: break
+                }
+            }
+        }
+    }
+
+    /// KUVO_DEMO_PICTURE_ZOOM: a picture opens at this scale (1 fitted), for captures.
+    private static let demoScale = ProcessInfo.processInfo.environment["KUVO_DEMO_PICTURE_ZOOM"].flatMap(Double.init).map { CGFloat($0) }
+}
+
+/// ⌘+ ⌘− ⌘0 for a picture, ahead of the menus (⌘0 is Show Sessions otherwise), while it's
+/// active and its window has the keyboard with no sheet over it.
+private struct PictureKeys: NSViewRepresentable {
+    var isActive: Bool
+    var zoom: (String) -> Bool
+
+    func makeNSView(context: Context) -> Watcher { Watcher() }
+
+    func updateNSView(_ view: Watcher, context: Context) {
+        view.isActive = isActive
+        view.zoom = zoom
+    }
+
+    final class Watcher: NSView {
+        var isActive = false
+        var zoom: (String) -> Bool = { _ in false }
+        private var monitor: Any?
+
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            if let monitor { NSEvent.removeMonitor(monitor) }
+            monitor = nil
+            guard window != nil else { return }
+            monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                guard let self, self.isActive, let window = self.window, event.window === window, window.attachedSheet == nil,
+                      event.modifierFlags.intersection(.deviceIndependentFlagsMask).subtracting([.capsLock, .shift]) == .command,
+                      let characters = event.charactersIgnoringModifiers, self.zoom(characters) else { return event }
+                return nil
+            }
+        }
     }
 }
