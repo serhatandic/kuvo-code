@@ -2233,6 +2233,9 @@ final class Workspace {
             var folders = Set(theirs.filter { models[$0.id] != nil || running.contains($0.id) }.map(\.location.directory))
             folders.formUnion(jobFolders.removeValue(forKey: machine) ?? [])
             Task { [weak self] in for folder in folders { await self?.readShellJobs(in: folder) } }
+            // (What Auto's reviewer checks as these are read stays: only those from before can be
+            // found gone.)
+            let checking = Set(awaitingReview.keys)
             if let active = try? await api.activeSessions(), isCurrent() {
                 // (No bridge there, none at work; one not read, as they were.)
                 let bridgeActive: Set<String>? = if let bridge { bridgeListed == nil ? nil : try? await bridge.activeSessions() } else { [] }
@@ -2246,7 +2249,7 @@ final class Workspace {
                 findParents(of: active)
                 var asked = active.map { (id: $0, api: api) }
                 if let bridge, let bridgeActive { asked += bridgeActive.map { (id: $0, api: bridge) } }
-                await noteAsks(on: machine, in: asked, tell: reconnected, complete: bridgeActive != nil)
+                await noteAsks(on: machine, in: asked, tell: reconnected, complete: bridgeActive != nil, checking: checking)
             }
             // Its open conversations, kept while it was away, are read again; one deleted there
             // meanwhile goes. (The list has only the newest, so one missing from it is asked about.)
@@ -2284,8 +2287,9 @@ final class Workspace {
     /// What a machine's sessions at work ask you, once it's back: `asking` as it is there now and,
     /// when it `tell`s (connected again since launch, as for bots' news), each request made while
     /// it was out of reach (a bot's wake-up while your Mac slept) told then, as it would have
-    /// been, since no event brings it. One told before isn't told again.
-    private func noteAsks(on machine: String, in active: [(id: String, api: OpenCodeAPI)], tell: Bool, complete wholly: Bool = true) async {
+    /// been, since no event brings it. One told before isn't told again. `checking`: what Auto's
+    /// reviewer was checking before its sessions were asked which work, the most found gone.
+    private func noteAsks(on machine: String, in active: [(id: String, api: OpenCodeAPI)], tell: Bool, complete wholly: Bool = true, checking: Set<String> = []) async {
         var found: [String: String] = [:]
         // Every permission read, Auto's reviewer's too.
         var listed: Set<String> = []
@@ -2322,7 +2326,7 @@ final class Workspace {
         asking = kept.merging(found) { $1 }
         // What Auto's reviewer was checking there, gone meanwhile (its run ended, unheard): never
         // yours later (#425).
-        if complete { awaitingReview = awaitingReview.filter { !isTheirs($0.value.sessionID) || listed.contains($0.key) } }
+        if complete { awaitingReview = awaitingReview.filter { !checking.contains($0.key) || !isTheirs($0.value.sessionID) || listed.contains($0.key) } }
     }
 
     /// A machine disconnected: its sessions stay as last seen until it's back, their
