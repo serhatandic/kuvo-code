@@ -333,17 +333,16 @@ struct Composer: View {
                     VoiceComposerRow(voice: voice, cancel: { app.dictation.cancel(); focusAtEnd() }, done: { app.dictation.finish() }, openSettings: { Self.openPrivacySettings(for: voice.phase) })
                         .transition(.opacity)
                 } else {
-                    HStack(spacing: 4) {
+                    HStack(alignment: ComposerRow.alignment, spacing: 4) {
                         if isShell {
                             ShellModeLabel(folder: folders.first)
                                 .transition(.opacity)
                         } else {
                             Group {
                                 Button(action: chooseFiles) {
-                                    // The row's one size and weight (as the mic, and the mode's icon
-                                    // alone), a point under it: its long diagonal reads bigger.
+                                    // The row's one size and weight (ComposerRow), as every icon in it.
                                     Image(systemName: "paperclip")
-                                        .font(.system(size: 13, weight: .medium))
+                                        .font(ComposerRow.icon)
                                         .frame(width: 30, height: 28)
                                         .hoverHighlight(in: Capsule(), mutesInk: true)
                                 }
@@ -1040,7 +1039,7 @@ struct SendStopButton: View {
             if stops && !canSend {
                 Button(action: stop) {
                     Image(systemName: "stop.fill")
-                        .font(.system(size: 12, weight: .bold))
+                        .font(ComposerRow.icon)
                 }
                 .buttonStyle(ActionButtonStyle(isAccent: false))
                 .glassEffect(.regular, in: .circle)
@@ -1051,7 +1050,7 @@ struct SendStopButton: View {
             } else {
                 Button(action: send) {
                     Image(systemName: "arrow.up")
-                        .font(.system(size: 13, weight: .bold))
+                        .font(ComposerRow.icon)
                 }
                 .buttonStyle(ActionButtonStyle())
                 .glassEffect(.regular, in: .circle)

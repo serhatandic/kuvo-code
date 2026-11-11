@@ -39,6 +39,8 @@ struct YourMessage: View {
     /// agent, which changes files itself.
     @Environment(\.undoesChanges) private var undoesChanges
     @Environment(AppModel.self) private var app
+    /// The conversation this is in, where what it opens comes back to.
+    @Environment(\.conversationTab) private var here
     @State private var hovering = false
     @State private var confirmsUndo = false
 
@@ -119,7 +121,7 @@ struct YourMessage: View {
                 Clipboard.copy(text)
             }
             for reference in openable {
-                HeldRow.button("Open \(reference.name)") { app.open(.session(reference.session)) }
+                HeldRow.button("Open \(reference.name)") { app.open(.session(reference.session), from: here) }
             }
             HeldRow.divider
             if let fork {
@@ -137,7 +139,7 @@ struct YourMessage: View {
         .accessibilityActions {
             if !text.isEmpty { Button("Copy") { Clipboard.copy(text) } }
             ForEach(openable, id: \.session) { reference in
-                Button("Open \(reference.name)") { app.open(.session(reference.session)) }
+                Button("Open \(reference.name)") { app.open(.session(reference.session), from: here) }
             }
             if let fork, !isOffline { Button("New Session From Here", action: fork) }
             if !isOffline, undoesChanges { Button("Undo From Here…") { confirmsUndo = true } }

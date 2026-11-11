@@ -518,6 +518,8 @@ struct SidebarView: View {
                     } else {
                         workspace.model(for: result.found.id)?.showFind(words)
                     }
+                    // From the sidebar: no way back but a subagent's own, to the one it works for.
+                    app.tabs.startFresh(TabKey(result.subagent ?? result.found.id))
                 }
                 switch result.found {
                 case .bot(let bot):

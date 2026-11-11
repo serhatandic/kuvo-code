@@ -10,6 +10,9 @@ import Foundation
 /// - not after "PR", "MR", "pull request", "issue" or "step": those are someone else's numbers.
 ///
 /// An outside source's reference has a prefix (`gh:owner/repo#12`), so a bare `#n` is always ours.
+/// One names the item that is that GitHub issue or pull request, by the same rule: at the start or
+/// after a space or one of those, not in code, a link or an address, and no letter, digit or
+/// underscore after its number.
 public enum WorkItemRefs {
     /// Each reference in `text` (plain, or Markdown as written), with its number.
     public static func find(in text: String) -> [(range: Range<String.Index>, number: Int)] {
@@ -43,13 +46,60 @@ public enum WorkItemRefs {
         return find(in: text).map(\.number).filter { seen.insert($0).inserted }
     }
 
+    /// Each reference in `text`, in order, as the box is asked for it: "243" for `#243`, and an
+    /// issue's or a pull request's as written (`gh:owner/repo#12`).
+    public static func findRefs(in text: String) -> [(range: Range<String.Index>, ref: String)] {
+        var numbers = find(in: text).map { (range: $0.range, ref: String($0.number)) }
+        guard text.contains("gh:") else { return numbers }
+        let skipped = skippedRanges(in: text)
+        var sources: [(range: Range<String.Index>, ref: String)] = []
+        for match in text.matches(of: sourceRef) {
+            let range = match.range
+            if range.lowerBound > text.startIndex {
+                let before = text[text.index(before: range.lowerBound)]
+                guard before.isWhitespace || opens.contains(before) else { continue }
+            }
+            if range.upperBound < text.endIndex, text[range.upperBound].isLetter || text[range.upperBound].isNumber || text[range.upperBound] == "_" { continue }
+            guard !skipped.contains(where: { $0.overlaps(range) }) else { continue }
+            sources.append((range, String(text[range])))
+        }
+        // (A "#12" inside an issue's ref, after a "-" ending its repository's name, is the ref's.)
+        numbers.removeAll { number in sources.contains { $0.range.overlaps(number.range) } }
+        return (numbers + sources).sorted { $0.range.lowerBound < $1.range.lowerBound }
+    }
+
+    /// The refs `text` names, each once, in order (`findRefs`).
+    public static func refs(in text: String) -> [String] {
+        var seen = Set<String>()
+        return findRefs(in: text).map(\.ref).filter { seen.insert($0).inserted }
+    }
+
     /// The link a chip carries, which opens the item: `kuvo-item://243`.
     public static func link(_ number: Int) -> URL { URL(string: "\(scheme)://\(number)")! }
+
+    /// The link a chip of `ref` carries ("243", or `gh:owner/repo#12`): `kuvo-item://243`, or
+    /// `kuvo-item://ref/<ref>`.
+    public static func link(ref: String) -> URL {
+        if let number = Int(ref), number > 0 { return link(number) }
+        var parts = URLComponents()
+        parts.scheme = scheme
+        parts.host = "ref"
+        parts.path = "/" + ref
+        return parts.url ?? URL(string: "\(scheme)://ref")!
+    }
 
     /// The item a chip's link names.
     public static func number(in url: URL) -> Int? {
         guard url.scheme == scheme, let host = url.host(), let number = Int(host), number > 0 else { return nil }
         return number
+    }
+
+    /// The ref a chip's link names: "243", or `gh:owner/repo#12`.
+    public static func ref(in url: URL) -> String? {
+        if let number = number(in: url) { return String(number) }
+        guard url.scheme == scheme, url.host() == "ref", let parts = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return nil }
+        let ref = String(parts.path.dropFirst()) + (parts.fragment.map { "#" + $0 } ?? "")
+        return ref.isEmpty ? nil : ref
     }
 
     public static let scheme = "kuvo-item"
@@ -94,4 +144,6 @@ public enum WorkItemRefs {
     }
 
     nonisolated(unsafe) private static let markdownLink = /!?\[[^\]\n]*\]\([^)\n]*\)/
+    /// `gh:owner/repo#12`: a GitHub owner, a repository's name, a number.
+    nonisolated(unsafe) private static let sourceRef = /gh:[A-Za-z0-9][A-Za-z0-9_\-]{0,38}\/[A-Za-z0-9_.\-]{1,100}#[0-9]{1,10}/
 }

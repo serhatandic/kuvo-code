@@ -15,6 +15,7 @@ struct GroupChatView: View {
     @Environment(GroupChats.self) private var groups
     @Environment(Bots.self) private var bots
     @Environment(AppModel.self) private var app
+    @Environment(\.isKeptOutOfSight) private var isKept
     @State private var scroller = ConversationScroller()
     /// Goes up to have the composer take the keyboard.
     @State private var composerFocus = 0
@@ -137,9 +138,13 @@ struct GroupChatView: View {
                 for each in seatBoxes { following.addTask { await Vaults.shared.follow(each) } }
             }
         }
-        .onAppear { if NSApp.isActive { groups.markViewed(group.id) } }
-        .onChange(of: messages.count) { if NSApp.isActive { groups.markViewed(group.id) } }
-        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in groups.markViewed(group.id) }
+        // Not while it's kept out of sight under another conversation (one opened from it).
+        .onAppear { if NSApp.isActive, !isKept { groups.markViewed(group.id) } }
+        .onChange(of: messages.count) { if NSApp.isActive, !isKept { groups.markViewed(group.id) } }
+        .onChange(of: isKept) { if NSApp.isActive, !isKept { groups.markViewed(group.id) } }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in if !isKept { groups.markViewed(group.id) } }
+        // What's opened from it comes back to it.
+        .environment(\.conversationTab, .group(group.id))
     }
 
     /// The words Find looks in, as the message shows them: yours, or a bot's reply.
@@ -249,6 +254,8 @@ private struct GroupMessageRow: View, Equatable {
     @State private var confirmsUndo = false
     @Environment(\.answerAgent) private var answerAgent
     @Environment(AppModel.self) private var app
+    /// The conversation this is in, where what it opens comes back to.
+    @Environment(\.conversationTab) private var here
 
     /// Under the pointer; KUVO_DEMO_SHOW_HOVER shows every message's buttons, for screenshots.
     private var isHovering: Bool {
@@ -278,7 +285,7 @@ private struct GroupMessageRow: View, Equatable {
                 if let author {
                     // Still: the bot moves in its row, or where it's typing. A click opens its
                     // conversation, as its name does.
-                    Button { app.open(.session(author.sessionID)) } label: {
+                    Button { app.open(.session(author.sessionID), from: here) } label: {
                         BotAvatar(look: author.look, size: 28, noticed: isHovering, animates: false)
                     }
                     .buttonStyle(.plain)
@@ -295,7 +302,7 @@ private struct GroupMessageRow: View, Equatable {
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(spacing: 8) {
                         if let author {
-                            Button(author.name) { app.open(.session(author.sessionID)) }
+                            Button(author.name) { app.open(.session(author.sessionID), from: here) }
                                 .buttonStyle(TextButtonStyle(outset: true, dimsAtRest: false))
                                 .font(.callout.weight(.semibold))
                                 .help("Open \(author.name)’s Conversation")
@@ -368,7 +375,7 @@ private struct GroupMessageRow: View, Equatable {
                 HeldRow.button("Copy") { copy() }
                 if let reply { HeldRow.button("Reply", action: reply) }
                 if message.report != nil, let author {
-                    HeldRow.button("Open \(author.name)’s Conversation") { app.open(.session(author.sessionID)) }
+                    HeldRow.button("Open \(author.name)’s Conversation") { app.open(.session(author.sessionID), from: here) }
                 }
             }
         }
@@ -388,6 +395,8 @@ private struct WorkList: View {
     var stopped: Set<String> = []
     let start: (() -> Void)?
     @Environment(AppModel.self) private var app
+    /// The conversation this is in, where what it opens comes back to.
+    @Environment(\.conversationTab) private var here
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -395,7 +404,7 @@ private struct WorkList: View {
                 let bot = members.first { $0.id == task.bot } ?? app.bots.bot(task.bot)
                 let opens = bot != nil && task.state != .proposed
                 Button {
-                    if let bot, opens { app.open(.session(bot.sessionID)) }
+                    if let bot, opens { app.open(.session(bot.sessionID), from: here) }
                 } label: {
                     HStack(alignment: .top, spacing: 10) {
                         if let bot {
@@ -472,6 +481,8 @@ private struct WorkList: View {
 private struct StoppedLine: View {
     let bot: Bot
     @Environment(AppModel.self) private var app
+    /// The conversation this is in, where what it opens comes back to.
+    @Environment(\.conversationTab) private var here
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
@@ -494,8 +505,8 @@ private struct StoppedLine: View {
     /// whose computer didn't answer, is opened instead, where it says why.
     private func resume() {
         let (app, session) = (app, bot.sessionID)
-        guard let model = app.workspace.model(for: session), model.canReach else { return app.open(.session(session)) }
-        Task { if await !model.resumeQueue().value { app.open(.session(session)) } }
+        guard let model = app.workspace.model(for: session), model.canReach else { return app.open(.session(session), from: here) }
+        Task { if await !model.resumeQueue().value { app.open(.session(session), from: here) } }
     }
 }
 
@@ -557,11 +568,13 @@ private struct TypingRow: View {
     /// What it's doing, its last step: so a long turn doesn't look stuck.
     var activity: [GroupActivity] = []
     @Environment(AppModel.self) private var app
+    /// The conversation this is in, where what it opens comes back to.
+    @Environment(\.conversationTab) private var here
 
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 10) {
-                Button { app.open(.session(bot.sessionID)) } label: {
+                Button { app.open(.session(bot.sessionID), from: here) } label: {
                     BotAvatar(look: bot.look, size: 28, mood: .working)
                 }
                 .buttonStyle(.plain)

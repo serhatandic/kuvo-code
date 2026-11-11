@@ -33,7 +33,7 @@ struct MessageField: NSViewRepresentable {
     /// "/", the rest in bold, in the accent. The text stays as typed.
     var token: Token?
     /// What the Work Queue items it names are (`#243`): each drawn with its mark, in its color.
-    var refs: [Int: WorkRef] = [:]
+    var refs: [String: WorkRef] = [:]
     /// In grey after what's written (a keyword's example, "what to do each time"), until more is.
     var example: String?
 
@@ -220,7 +220,7 @@ struct MessageField: NSViewRepresentable {
         var marks: Bool
         var images: Int
         var token: Token?
-        var refs: [Int: WorkRef] = [:]
+        var refs: [String: WorkRef] = [:]
     }
 
     @MainActor final class Coordinator: NSObject, NSTextViewDelegate {
@@ -540,7 +540,7 @@ final class MessageTextView: PointerAwareTextView {
 
     /// Styles what the text names, each time from the field's own look, so a mark no longer whole
     /// goes back to plain text.
-    func restyle(marks shown: Bool, images: Int, token: MessageField.Token? = nil, refs: [Int: WorkRef] = [:]) {
+    func restyle(marks shown: Bool, images: Int, token: MessageField.Token? = nil, refs: [String: WorkRef] = [:]) {
         guard let storage = textStorage, !hasMarkedText() else { return }
         let font = font ?? .systemFont(ofSize: NSFont.systemFontSize)
         let text = string
@@ -586,13 +586,14 @@ final class MessageTextView: PointerAwareTextView {
                     marks.append(span)
                 }
             }
-            // A Work Queue item the box knows: its mark over the "#", the number in its color.
-            for (range, number) in refs.isEmpty ? [] : WorkItemRefs.find(in: text) {
-                guard let ref = refs[number] else { continue }
+            // A Work Queue item the box knows: its mark over the "#" (or the "g" of an issue's
+            // `gh:`), the ref in its color.
+            for (range, key) in refs.isEmpty ? [] : WorkItemRefs.findRefs(in: text) {
+                guard let ref = refs[key] else { continue }
                 let span = NSRange(range, in: text)
                 guard span.upperBound <= length else { continue }
                 let mark = WorkItemMark(category: ref.category, inProgress: ref.inProgress, removed: ref.removed == true)
-                storage.addAttributes([.font: bold, .foregroundColor: NSColor(mark.color), .toolTip: "#\(number) \(ref.title)"], range: span)
+                storage.addAttributes([.font: bold, .foregroundColor: NSColor(mark.color), .toolTip: "\(ref.name) \(ref.title)"], range: span)
                 face(WorkItemChipAttachment.dot(mark, size: size), at: span)
                 marks.append(span)
             }

@@ -44,20 +44,37 @@ final class HostLimitsTests: XCTestCase {
         ])
     }
 
-    func testAMachinesLoginNeverTakesThisMacsBarOrItsSpend() {
-        // This Mac's box has no Claude row yet (no turn here); a machine's has one.
+    func testAnotherComputersAccountTakesClaudesBarWhileThisMacHasNoneOfItsOwn() {
+        // This Mac's box has no Claude row yet (no turn here), and Claude's bar has no limits of its
+        // own (only the box reads them): the machines' accounts take its place, its spend under the
+        // first, each by its own name, as this Mac's own would.
         let limits = HostLimits()
-        limits.update(rows: [row("mini/claude-code", "claude", "Claude · mini")], covered: ["claude"])
-        let entries = limits.entries(groups: [group("claude"), group("cursor")]) { _ in false }
-        XCTAssertEqual(names(entries), ["panel:claude", "Claude · mini", "panel:cursor"])
-        // The host names it as the account ("Claude"): beside the panel's own Claude bar, it says
-        // which computers it's from.
-        limits.update(rows: [HostLimitRow(id: "claude#a1", providerID: "claude", name: "Claude", meters: [], isLocal: false, place: "hetzner, lokum")], covered: ["claude"])
-        XCTAssertEqual(names(limits.entries(groups: [group("claude"), group("cursor")]) { _ in false }), ["panel:claude", "Claude · hetzner, lokum", "panel:cursor"])
+        limits.update(rows: [
+            HostLimitRow(id: "claude#a1", providerID: "claude", name: "Claude", meters: [], isLocal: false, place: "hetzner, mini-local"),
+            HostLimitRow(id: "claude#b2", providerID: "claude", name: "Claude · Athas", meters: [], isLocal: false, place: "mini-local"),
+        ], covered: ["claude"])
+        XCTAssertEqual(names(limits.entries(groups: [group("claude"), group("cursor")]) { _ in false }), ["Claude +spend", "Claude · Athas", "panel:cursor"])
+        // A phone gets Claude's place for them too.
+        XCTAssertEqual(limits.phoneGroups([group("claude"), group("cursor")]).map { $0.group.provider.id + ($0.covers.map { ">" + $0 } ?? "") }, ["claude>claude", "cursor"])
         // With no bar of that name, just its name.
-        XCTAssertEqual(names(limits.entries(groups: [group("cursor")]) { _ in false }), ["panel:cursor", "Claude"])
-        // A phone gets the panel's own Claude: this Mac's box has no row for it.
-        XCTAssertEqual(limits.phoneGroups([group("claude"), group("cursor")]).map { $0.group.provider.id + ($0.covers.map { ">" + $0 } ?? "") }, ["claude", "cursor"])
+        XCTAssertEqual(names(limits.entries(groups: [group("cursor")]) { _ in false }), ["panel:cursor", "Claude", "Claude · Athas"])
+
+        // Once this Mac has a Claude account of its own, it takes the place; another computer's
+        // other account follows, named for where it's from where that's all that tells them apart.
+        limits.update(rows: [
+            row("mac/claude-code", "claude", "Claude"),
+            HostLimitRow(id: "claude#a1", providerID: "claude", name: "Claude · hetzner", meters: [], isLocal: false, place: "hetzner"),
+        ], covered: ["claude"])
+        XCTAssertEqual(names(limits.entries(groups: [group("claude")]) { _ in false }), ["Claude +spend", "Claude · hetzner"])
+    }
+
+    func testAMachinesLoginBesideABarThatReadsItsOwnLimitsSaysWhereItsFrom() {
+        // Codex's bar reads your own Codex's limits until this Mac's box has a row of it: it stays,
+        // and a machine's Codex beside it says which computer it's on.
+        let limits = HostLimits()
+        limits.update(rows: [HostLimitRow(id: "mini/codex-cli", providerID: "codex", name: "Codex", meters: [], isLocal: false, place: "mini-local")], covered: ["codex"])
+        XCTAssertEqual(names(limits.entries(groups: [group("codex"), group("cursor")]) { _ in false }), ["panel:codex", "Codex · mini-local", "panel:cursor"])
+        XCTAssertEqual(limits.phoneGroups([group("codex")]).map { $0.covers }, [nil])
     }
 
     func testAPhoneGetsThePanelInOrderWithWhereThisMacsBoxRowsGo() {
