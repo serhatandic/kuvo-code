@@ -807,7 +807,9 @@ private func collect(_ stream: LinkResponse) async throws -> (status: Int, heade
         let sending = Task { try await collect(client.send(LinkRequest(path: "api/info"), to: paired)) }
         // The request waits its time, and a check goes; the host stays busy for 10 s of it.
         await clock.advance(by: Link.answerWithin)
-        await clock.advance(by: .seconds(10), waking: 1)
+        // (The check's own wait, and the request's next, both waiting before time moves on.)
+        await clock.sleepers(2, dueWithin: .seconds(3600))
+        await clock.advance(by: .seconds(10))
         relay.unstall(host.secret.address)
         #expect(try await sending.value.status == 200)
     }
