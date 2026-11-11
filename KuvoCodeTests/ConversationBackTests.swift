@@ -93,6 +93,12 @@ import Testing
         await withCheckedContinuation { done in DispatchQueue.main.async { done.resume() } }
     }
 
+    /// Once `condition` holds, the window drawn as it is then, as it is before your next click.
+    private func settled(_ condition: () -> Bool) async throws {
+        try await until(condition)
+        try await drain()
+    }
+
     /// The rows of the conversation in view (the kept ones' are hidden).
     private var shownRows: RowStackView? {
         func views(in view: NSView) -> [NSView] { [view] + view.subviews.flatMap(views) }
@@ -136,7 +142,8 @@ import Testing
     /// The conversation picked in the sidebar, read back up to its start, as far as you scrolled.
     private func readBackUp(_ id: String) async throws -> CGFloat {
         app.tabs.choose(.session(id))
-        try await until { app.tabs.sessionID == id && (fromEnd.map { $0 < 2 } ?? false) }
+        let model = try #require(app.workspace.model(for: id))
+        try await settled { app.tabs.sessionID == id && model.isLoaded && !model.isLoadingEarlier && (fromEnd.map { $0 < 2 } ?? false) }
         let rows = try #require(shownRows)
         let scroll = try #require(rows.enclosingScrollView)
         let document = try #require(scroll.documentView)
@@ -147,6 +154,7 @@ import Testing
         scroll.reflectScrolledClipView(scroll.contentView)
         try await until { (fromEnd ?? 0) > 500 }
         try await drain()
+        try #require((fromEnd ?? 0) > 500, "still read back up, settled")
         return try #require(fromTop)
     }
 
@@ -158,7 +166,7 @@ import Testing
         #expect(backLabels.isEmpty, "the bot, picked in the sidebar, has no way back: \(backLabels)")
 
         app.open(.session(work), from: .session(bot))
-        try await until { app.tabs.sessionID == work && backLabels == ["Back to Foreman"] }
+        try await settled { app.tabs.sessionID == work && backLabels == ["Back to Foreman"] }
         #expect(app.tabs.keys == [.session(work)], "in the bot's place, in its tab")
 
         try pressBack(to: "Foreman")
@@ -173,12 +181,12 @@ import Testing
         defer { done() }
         let reading = try await readBackUp(bot)
         app.open(.session(work), from: .session(bot))
-        try await until { app.tabs.sessionID == work && backLabels == ["Back to Foreman"] }
+        try await settled { app.tabs.sessionID == work && backLabels == ["Back to Foreman"] }
         app.open(.session(sub), from: .session(work))
-        try await until { app.tabs.sessionID == sub && backLabels == ["Back to Timer cycle"] }
+        try await settled { app.tabs.sessionID == sub && backLabels == ["Back to Timer cycle"] }
 
         try pressBack(to: "Timer cycle")
-        try await until { app.tabs.sessionID == work && backLabels == ["Back to Foreman"] }
+        try await settled { app.tabs.sessionID == work && backLabels == ["Back to Foreman"] }
         try pressBack(to: "Foreman")
         try await until { app.tabs.sessionID == bot && fromTop != nil }
         try await drain()
@@ -192,7 +200,7 @@ import Testing
         defer { done() }
         app.tabs.choose(.session(bot))
         app.open(.session(work), from: .session(bot))
-        try await until { app.tabs.sessionID == work && backLabels == ["Back to Foreman"] }
+        try await settled { app.tabs.sessionID == work && backLabels == ["Back to Foreman"] }
 
         app.tabs.choose(.session(other))
         try await until { app.tabs.sessionID == other }
