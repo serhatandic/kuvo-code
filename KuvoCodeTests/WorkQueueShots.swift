@@ -37,6 +37,8 @@ struct WorkQueueShots {
         var item = item
         item["source"] = ["kind": pull ? "github-pr" : "github", "ref": "gh:kuvo/kuvo-ai#\(number)", "url": "https://github.com/kuvo/kuvo-ai/\(pull ? "pull" : "issues")/\(number)", "name": "kuvo-ai#\(number)"]
         item["seen"] = ["state": state, "at": now]
+        item["closesOn"] = "github"
+        if state == "closed" || state == "not_planned" { item["struck"] = true }
         if let keptIn { item["keptIn"] = keptIn }
         item.removeValue(forKey: "number")
         return item
@@ -120,7 +122,7 @@ struct WorkQueueShots {
                     "244": WorkRef(id: "wqi_2", number: 244, title: "A side panel for the phone", category: "next", inProgress: false, owner: "ses_lead"),
                     "212": WorkRef(id: "wqi_3", number: 212, title: "Box limits for every computer", category: "done", inProgress: false, owner: "ses_lead"),
                     "gh:kuvo/kuvo-ai#12": WorkRef(id: "wqi_4", number: nil, source: WorkSource(kind: "github", ref: "gh:kuvo/kuvo-ai#12", name: "kuvo-ai#12"), seen: WorkSeen(state: "open", at: 1), title: "Upload retries drop the file name", category: "next", inProgress: true, owner: "ses_lead"),
-                    "gh:kuvo/kuvo-ai#57": WorkRef(id: "wqi_5", number: nil, source: WorkSource(kind: "github-pr", ref: "gh:kuvo/kuvo-ai#57", name: "kuvo-ai#57"), seen: WorkSeen(state: "closed", at: 1), title: "Keep the name on retry", category: "done", inProgress: false, owner: "ses_lead")]
+                    "gh:kuvo/kuvo-ai#57": WorkRef(id: "wqi_5", number: nil, source: WorkSource(kind: "github-pr", ref: "gh:kuvo/kuvo-ai#57", name: "kuvo-ai#57"), seen: WorkSeen(state: "closed", at: 1), struck: true, title: "Keep the name on retry", category: "done", inProgress: false, owner: "ses_lead")]
         let reply = "Picked up #243 now; #244 waits on it, and #212 is merged. gh:kuvo/kuvo-ai#12 is next; gh:kuvo/kuvo-ai#57 was closed. PR #12 and `#243` stay as written."
         let view = ReplyView(markdown: reply, parser: FileLinkingParser(folders: { [] }, refs: refs))
             .padding(16)

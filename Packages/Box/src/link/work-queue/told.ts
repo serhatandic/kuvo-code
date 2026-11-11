@@ -58,7 +58,7 @@ const stamp = (value: unknown) => (isObject(value) ? { at: time(value.at), by: w
 
 /** An item as it came from another computer, cleaned: what a summary has, nothing more; null for
  * one that isn't. */
-export function toldItemOf(given: unknown): ToldItem | null {
+export function toldItemOf(given: unknown, latest = Infinity): ToldItem | null {
   if (!isObject(given) || typeof given.id !== "string" || !ITEM_ID.test(given.id) || typeof given.owner !== "string" || !OWNER.test(given.owner)) return null;
   const title = words(given.title, 200);
   const category = typeof given.category === "string" && CATEGORY.test(given.category) ? given.category : "next";
@@ -71,9 +71,12 @@ export function toldItemOf(given: unknown): ToldItem | null {
   const source = isObject(given.source) && typeof given.source.kind === "string" && typeof given.source.ref === "string"
     ? Object.fromEntries(Object.entries(given.source).filter(([key, value]) => ["kind", "ref", "url", "host", "id", "name"].includes(key) && typeof value === "string").map(([key, value]) => [key, (value as string).slice(0, 2000)])) as unknown as ItemSummary["source"]
     : undefined;
+  // (A GitHub issue's page only on GitHub: a client opens it.)
+  if (source?.url && /^github/.test(source.kind) && !/^https:\/\/github\.com\//.test(source.url)) delete source.url;
   // (What GitHub said of it there, and when; with the category it keeps while that makes it Done.)
   const seen = source && isObject(given.seen) && typeof given.seen.state === "string" && /^[a-z_]{1,20}$/.test(given.seen.state)
-    ? { state: given.seen.state, at: time(given.seen.at), ...(typeof given.seen.checked === "number" ? { checked: time(given.seen.checked) } : {}), ...(given.seen.gone === true ? { gone: true } : {}) } : undefined;
+    // (Never later than when it was told, nor than now: a clock set ahead there wins no read here.)
+    ? { state: given.seen.state, at: Math.min(time(given.seen.at), latest), ...(typeof given.seen.checked === "number" ? { checked: Math.min(time(given.seen.checked), latest) } : {}), ...(given.seen.gone === true ? { gone: true } : {}) } : undefined;
   const keptIn = seen && typeof given.keptIn === "string" && CATEGORY.test(given.keptIn) ? given.keptIn : undefined;
   return {
     id: given.id,
@@ -121,7 +124,8 @@ export function numberingOf(given: Record<string, unknown>): Numbering {
 export function toldOf(given: unknown, now = Date.now()): Omit<Told, "heard"> | null {
   if (!isObject(given) || typeof given.id !== "string" || !/^wqt_[A-Za-z0-9_-]{8,40}$/.test(given.id) || typeof given.at !== "number" || !Array.isArray(given.items)) return null;
   const seen = new Set<string>();
-  const items = given.items.slice(0, MOST_TOLD).map(toldItemOf).filter((each): each is ToldItem => each !== null && !seen.has(each.id) && seen.add(each.id) !== undefined);
+  const latest = Math.min(given.at, now);
+  const items = given.items.slice(0, MOST_TOLD).map(each => toldItemOf(each, latest)).filter((each): each is ToldItem => each !== null && !seen.has(each.id) && seen.add(each.id) !== undefined);
   const owners = (Array.isArray(given.owners) ? given.owners : []).slice(0, MOST_TOLD).map(ownerOf).filter((each): each is OwnerFacts => each !== null);
   const categories = (Array.isArray(given.categories) ? given.categories : []).filter(each => isObject(each) && typeof each.id === "string" && /^cat_[a-z0-9-]{1,40}$/.test(each.id) && typeof each.name === "string")
     .slice(0, 30).map(each => ({ id: each.id as string, name: words(each.name, 40) || (each.id as string).slice(4) }));

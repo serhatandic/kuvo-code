@@ -22,7 +22,7 @@ import { movePast, ownSince, primaryOf, takeNumbersMail, topOf } from "./numbers
 import { sharedMachine } from "../setup/settle";
 import { noteSetupNow } from "../setup/lead";
 import { allItems, OWNER, queueFollowers, refNames, WORK_QUEUE, type Item, type ItemRef } from "./store";
-import { SEEN_FILE, seenOf, withSeen } from "./github";
+import { doneOnGitHub, SEEN_FILE, seenOf, withSeen } from "./github";
 import { forgetTold, keepTold, MOST_TOLD, MOST_TOLD_DONE, readTold, TOLD, toldKeys, toldOf, type Numbering, type ToldItem } from "./told";
 import { factsOf, ownersOf, summaryOf, type Computer, type OwnerFacts } from "./view";
 import { rowsOf } from "../work/elsewhere";
@@ -83,16 +83,18 @@ const toldItem = (item: Item, working: Set<string>, titles: Map<string, { title:
 export async function tellingNow(targets: Target[], link: LinkState | null, signal?: AbortSignal, cache?: Map<string, unknown>): Promise<Telling> {
   const facts = await factsOf(targets, signal);
   const all = allItems().filter(item => OWNER.test(item.owner) && !item.removed);
-  const done = all.filter(item => item.category === "done").sort((a, b) => (b.doneAt ?? 0) - (a.doneAt ?? 0)).slice(0, MOST_TOLD_DONE);
-  const items = [...all.filter(item => item.category !== "done").sort((a, b) => b.updated.at - a.updated.at).slice(0, MOST_TOLD - done.length), ...done];
+  // (An issue closed on GitHub is Done here too: among the latest Done, not the open ones.)
+  const isDone = (item: Item) => item.category === "done" || Boolean(item.source && doneOnGitHub(seenOf(item.source)?.value?.state));
+  const done = all.filter(isDone).sort((a, b) => (b.doneAt ?? 0) - (a.doneAt ?? 0)).slice(0, MOST_TOLD_DONE);
+  const items = [...all.filter(item => !isDone(item)).sort((a, b) => b.updated.at - a.updated.at).slice(0, MOST_TOLD - done.length), ...done];
   const { owners, titles } = await ownersOf("all", items, facts, targets, cache);
   const told = items.map(item => toldItem(item, facts.working, titles));
   const custom = categories().filter(each => !each.builtIn).map(({ id, name }) => ({ id, name }));
   const content = { items: told, owners, categories: custom, ...numberingNow(link) };
-  // (When GitHub was last asked of an issue isn't news on its own: it goes with the next change, or
-  // a computer that asks for it again.)
-  const unchecked = { ...content, items: told.map(item => (item.seen?.checked !== undefined ? { ...item, seen: { ...item.seen, checked: undefined } } : item)) };
-  const id = "wqt_" + crypto.createHash("sha256").update(JSON.stringify(unchecked)).digest("base64url").slice(0, 22);
+  // (When GitHub was last asked of an issue is told too, so the others don't ask it again meanwhile:
+  // by the two minutes, so it goes again no more often than that for it.)
+  const byTwo = { ...content, items: told.map(item => (item.seen?.checked !== undefined ? { ...item, seen: { ...item.seen, checked: Math.floor(item.seen.checked / 120_000) } } : item)) };
+  const id = "wqt_" + crypto.createHash("sha256").update(JSON.stringify(byTwo)).digest("base64url").slice(0, 22);
   return { id, payload: { told: { id, at: Date.now(), ...content } } };
 }
 
@@ -260,7 +262,7 @@ export type ItemElsewhere = ToldItem & { computer: Computer };
  * the owners they name, their custom categories, and when each computer told them. Items this box
  * has itself (`here`: one on its way here, say) are left to it; one deleted here (`deleted`) is
  * theirs, unless they told of it on its way here. */
-export function itemsElsewhere(owner: string, link: LinkState | null = readLink(), here?: Set<string>, deleted?: Set<string>): {
+export function itemsElsewhere(owner: string, link: LinkState | null = readLink(), here?: Set<string>, deleted?: Set<string>, { asTold = false }: { asTold?: boolean } = {}): {
   items: ItemElsewhere[];
   owners: OwnerFacts[];
   categories: { id: string; name: string }[];
@@ -287,7 +289,7 @@ export function itemsElsewhere(owner: string, link: LinkState | null = readLink(
       // (Not one here; nor one deleted here that this one told of on its way here: it got here.)
       if (here.has(item.id) || (deleted.has(item.id) && item.handing)) continue;
       const other = best.get(item.id);
-      if (!other || newer(item, told.at, other.item, other.at)) best.set(item.id, { item: withSeen({ ...item, computer }), at: told.at });
+      if (!other || newer(item, told.at, other.item, other.at)) best.set(item.id, { item: asTold ? { ...item, computer } : withSeen({ ...item, computer }), at: told.at });
     }
     for (const each of told.owners) if (!owners.has(each.owner)) owners.set(each.owner, each);
     for (const each of told.categories) if (!custom.has(each.id)) custom.set(each.id, each.name);
@@ -300,14 +302,14 @@ export function itemsElsewhere(owner: string, link: LinkState | null = readLink(
 
 /** The item another computer told of that `ref` names (by id, number or source), or null: of two,
  * the newer word. */
-export function itemElsewhere(ref: ItemRef, link: LinkState | null = readLink()): ItemElsewhere | null {
+export function itemElsewhere(ref: ItemRef, link: LinkState | null = readLink(), { asTold = false }: { asTold?: boolean } = {}): ItemElsewhere | null {
   let found: { item: ItemElsewhere; at: number } | null = null;
   for (const peer of peersOf(link)) {
     const told = readTold(peer.key);
     const item = told?.items.find(each => refNames(ref, each));
     if (item && (!found || newer(item, told!.at, found.item, found.at))) found = { item: { ...item, computer: { key: peer.key, name: computerName(peer), kind: peer.kind, ...(peer.id ? { id: peer.id } : {}) } }, at: told!.at };
   }
-  return found ? withSeen(found.item) : null;
+  return found ? (asTold ? found.item : withSeen(found.item)) : null;
 }
 
 // Whether `a` (told at `aAt`) is newer word of an item than `b`: changed later, or the same and

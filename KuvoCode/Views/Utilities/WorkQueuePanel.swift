@@ -511,7 +511,7 @@ struct WorkQueuePanel: View {
               WorkQueue.canMove(item) else { return false }
         if case .before(let other) = place, other.id == item.id || other.computer?.key != item.computer?.key { return false }
         // (An issue's Done is GitHub's.)
-        if item.source != nil, case .top(let category) = place, category == WorkCategory.done { return false }
+        if item.closesOn != nil, case .top(let category) = place, category == WorkCategory.done { return false }
         Task { await store.move(item, to: place, on: box) }
         return true
     }

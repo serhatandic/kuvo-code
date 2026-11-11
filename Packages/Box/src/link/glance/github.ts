@@ -11,7 +11,7 @@
 import path from "node:path";
 import { isObject } from "../../shared/json";
 import { RUN } from "../home";
-import { readThrough, type Reader } from "../github/graphql";
+import { readThrough, register, type Reader } from "../github/graphql";
 import type { GlanceChecks } from "../../shared/routes/sessions";
 
 export const GITHUB_FILE = path.join(RUN, "glance", "github.json");
@@ -120,7 +120,8 @@ export function freshFor(pull: PullRead | null): number {
 
 /** Sessions' pull requests, as the shared reader of GitHub reads them (`github/graphql.ts`, the
  * Work Queue's too): each by its number, or a branch's latest. */
-export const PULLS: Reader<PullAsk, PullRead> = {
+export const PULLS: Reader<PullAsk, PullRead> = register({
+  name: "glance",
   file: GITHUB_FILE,
   keyOf,
   hostOf: ask => ask.host,
@@ -129,7 +130,7 @@ export const PULLS: Reader<PullAsk, PullRead> = {
     : isObject(found.pullRequests) && Array.isArray(found.pullRequests.nodes) ? branchPull(found.pullRequests.nodes, ask) : null),
   freshFor,
   keptFor: KEPT,
-};
+});
 
 /** The pull requests asked for, by key: as GitHub said lately (read now where it's due), or as last
  * read; none for one never read, or that GitHub doesn't have. */

@@ -58,7 +58,8 @@ export async function viewOf(owner: string, targets: Target[], facts?: Facts, si
   // (A queue of a kind a newer box keeps isn't one to show.)
   const all = here.filter(item => owner === ALL || inView(owner, item, overseen));
   // (What's shown, here or told by another computer: GitHub is read for it, only now.)
-  await readSeen([...all, ...itemsElsewhere(owner).items], wait);
+  // (Another computer's as it told them: when it last asked GitHub decides whether this box does.)
+  await readSeen([...all, ...itemsElsewhere(owner, readLink(), undefined, undefined, { asTold: true }).items], wait);
   const { owners, titles } = await ownersOf(owner, all, known, targets, cache);
   // Your other computers' items in this view, as each last told them (one deleted here that's live
   // there, a hand-off called off that had got there, is theirs).
@@ -87,11 +88,13 @@ export async function viewOf(owner: string, targets: Target[], facts?: Facts, si
 
 // What a chip shows of an item (a summary): its number (or its outside source, and what GitHub says
 // of it), title, where it stands, whose.
-const refFacts = (item: Pick<ItemSummary, "id" | "number" | "title" | "category" | "owner" | "inProgress" | "source" | "seen" | "removed">) => ({
+const refFacts = (item: Pick<ItemSummary, "id" | "number" | "title" | "category" | "owner" | "inProgress" | "source" | "seen" | "struck" | "closesOn" | "removed">) => ({
   id: item.id,
   ...(item.number !== undefined ? { number: item.number } : {}),
   ...(item.source ? { source: item.source } : {}),
   ...(item.seen ? { seen: item.seen } : {}),
+  ...(item.struck ? { struck: true } : {}),
+  ...(item.closesOn ? { closesOn: item.closesOn } : {}),
   title: item.title,
   category: item.category,
   inProgress: item.inProgress,
@@ -139,7 +142,7 @@ export async function* workQueueRoute(context: RouteContext, match: RegExpMatchA
       const named = refOf(ref);
       const item = named ? matching(items, named)[0] : undefined;
       // One on another of your computers, as it last told it.
-      return { ref, item, far: !item && named ? itemElsewhere(named) : null };
+      return { ref, item, far: !item && named ? itemElsewhere(named, readLink(), { asTold: true }) : null };
     });
     // (Their issues and pull requests read from GitHub where that's due: the chips are on screen.)
     await readSeen(found.flatMap(each => [each.item ?? each.far].filter(Boolean) as { source?: Item["source"] }[]), GITHUB_WAIT);
@@ -210,7 +213,7 @@ export async function* workQueueRoute(context: RouteContext, match: RegExpMatchA
       // keeps (its description, notes, files, links), which a client reads there.
       let far = itemElsewhere(ref);
       if (far) {
-        await readSeen([far], GITHUB_WAIT);
+        await readSeen([itemElsewhere(ref, readLink(), { asTold: true }) ?? far], GITHUB_WAIT);
         far = itemElsewhere({ id: far.id }) ?? far;
         const { handedFrom: _, ...summary } = far;
         return yield* json(200, { item: { ...summary, body: "", notes: [], files: [], links: [], handed: [] } });

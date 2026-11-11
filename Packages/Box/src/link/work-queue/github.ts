@@ -13,7 +13,7 @@ import fs from "node:fs";
 import { isObject } from "../../shared/json";
 import { plainName } from "../../shared/text";
 import { HERE } from "../home";
-import { askGitHub, keepRead, readKept, readThrough, type Read, type Reader, type Unread } from "../github/graphql";
+import { readKept, readOne, readThrough, register, type Read, type Reader, type Unread } from "../github/graphql";
 import { WORK_QUEUE, type Source } from "./store";
 import { issueAt, refText, sourceKey, type IssueAt } from "./sources";
 
@@ -24,6 +24,8 @@ export const SEEN_FILE = path.join(WORK_QUEUE, "seen.json");
 export type SeenState = "open" | "draft" | "completed" | "not_planned" | "merged" | "closed";
 /** The states that make an item Done. */
 export const DONE_STATES: ReadonlySet<string> = new Set(["completed", "not_planned", "merged", "closed"]);
+/** Those of them that close it without its being done: not planned, or a pull request not merged. */
+const STRUCK: ReadonlySet<string> = new Set(["not_planned", "closed"]);
 
 /** What GitHub said of one. */
 export interface IssueRead {
@@ -44,15 +46,24 @@ const FRESH_MISSING = 5 * 60_000;
 const ISSUE_FIELDS = "id number title url state stateReason closedAt";
 const PULL_FIELDS = "id number title url state isDraft merged closedAt";
 
-// One issue or pull request in a query, under `alias` (with its description, `body`).
-const nodeQuery = (at: IssueAt, alias: string, body = false): string =>
-  `${alias}: repository(owner: ${JSON.stringify(at.owner)}, name: ${JSON.stringify(at.repo)}) { issueOrPullRequest(number: ${at.number}) { __typename ... on Issue { ${ISSUE_FIELDS}${body ? " body" : ""} } ... on PullRequest { ${PULL_FIELDS}${body ? " body" : ""} } } }`;
+/** An issue or a pull request to read: where it is, and GitHub's id for one found missing there
+ * since (moved to another repository, or turned into a discussion), read by that instead. */
+export type IssueAsk = IssueAt & { id?: string };
 
-/** One issue or pull request from GitHub's answer (a repository's); null for none. */
-export function issueReadOf(found: unknown): IssueRead | null {
-  const node = isObject(found) ? found.issueOrPullRequest : null;
+const fields = (body: boolean) => `__typename ... on Issue { ${ISSUE_FIELDS}${body ? " body" : ""} } ... on PullRequest { ${PULL_FIELDS}${body ? " body" : ""} }`;
+
+// One issue or pull request in a query, under `alias` (with its description, `body`): by GitHub's
+// id where that's given, else by its repository and number.
+const nodeQuery = (ask: IssueAsk, alias: string, body = false): string => (ask.id
+  ? `${alias}: node(id: ${JSON.stringify(ask.id)}) { ${fields(body)} }`
+  : `${alias}: repository(owner: ${JSON.stringify(ask.owner)}, name: ${JSON.stringify(ask.repo)}) { issueOrPullRequest(number: ${ask.number}) { ${fields(body)} } }`);
+
+/** One issue or pull request from GitHub's answer (a repository's, or a node by its id); null for
+ * none. */
+export function issueReadOf(found: unknown, byID = false): IssueRead | null {
+  const node = byID ? found : isObject(found) ? found.issueOrPullRequest : null;
   if (!isObject(node) || typeof node.id !== "string" || typeof node.number !== "number" || typeof node.title !== "string" || typeof node.url !== "string") return null;
-  if (!/^https:\/\/github\.com\//.test(node.url)) return null;
+  if (!/^https:\/\/github\.com\//.test(node.url) || (node.__typename !== "Issue" && node.__typename !== "PullRequest")) return null;
   const pull = node.__typename === "PullRequest";
   const state: SeenState = pull
     ? (node.merged === true || node.state === "MERGED" ? "merged" : node.state === "CLOSED" ? "closed" : node.isDraft === true ? "draft" : "open")
@@ -70,16 +81,17 @@ export function issueReadOf(found: unknown): IssueRead | null {
 }
 
 /** The Work Queue's reader of GitHub. */
-export const ISSUES: Reader<IssueAt, IssueRead> = {
+export const ISSUES: Reader<IssueAsk, IssueRead> = register<IssueAsk, IssueRead>({
+  name: "work-queue",
   file: SEEN_FILE,
   keyOf: sourceKey,
   hostOf: at => at.host,
   query: asks => `query { ${asks.map((at, index) => nodeQuery(at, `p${index}`)).join(" ")} }`,
-  valueOf: found => issueReadOf(found),
+  valueOf: (found, ask) => issueReadOf(found, Boolean(ask.id)),
   freshFor: value => (!value ? FRESH_MISSING : DONE_STATES.has(value.state) ? FRESH_DONE : FRESH_OPEN),
   keptFor: 30 * 86_400_000,
   keepsLast: true,
-};
+});
 
 /** At most this many read at once, for one view or one ask of chips: those read longest ago first. */
 const MOST_READ = 200;
@@ -96,13 +108,20 @@ export interface Seen { state: string; at: number; checked?: number; gone?: bool
  * lately, which reads it itself. */
 export async function readSeen(items: { source?: Source; removed?: unknown; seen?: Seen }[], wait: number, now = Date.now()): Promise<void> {
   const { reads } = seenReads();
-  const asks = new Map<string, IssueAt>();
+  const asks = new Map<string, IssueAsk>();
   for (const item of items) {
     const at = item.source && !item.removed ? issueAt(item.source.ref) : null;
     if (!at) continue;
-    const told = item.seen?.checked ?? item.seen?.at;
+    // (As another computer told it lately: that one reads it. Not one it found gone.)
+    const told = item.seen && !item.seen.gone ? item.seen.checked ?? item.seen.at : undefined;
     if (told !== undefined && now - told < (DONE_STATES.has(item.seen!.state) ? FRESH_DONE : TOLD_FRESH)) continue;
-    asks.set(sourceKey(at), at);
+    const key = sourceKey(at);
+    // (One found missing where it was, or found elsewhere since: by GitHub's id, wherever it went.)
+    const kept = reads[key];
+    const there = kept?.value ? issueAt(kept.value.url) : null;
+    const moved = Boolean(there && sourceKey(there) !== key);
+    const id = kept?.gone || moved ? kept?.value?.id ?? item.source!.id : undefined;
+    if (!asks.has(key)) asks.set(key, { ...at, ...(id ? { id } : {}) });
   }
   const asked = (key: string) => reads[key]?.checked ?? reads[key]?.at ?? 0;
   const wanted = [...asks].sort(([a], [b]) => asked(a) - asked(b)).slice(0, MOST_READ).map(([, at]) => at);
@@ -156,6 +175,8 @@ interface Shown {
   seen?: Seen;
   keptIn?: string;
   doneAt?: number;
+  struck?: boolean;
+  closesOn?: string;
 }
 
 /** A summary with what GitHub says of its issue or pull request taken in: the newer of what was
@@ -165,20 +186,26 @@ export function withSeen<S extends Shown>(summary: S): S {
   if (!summary.source) return summary;
   const at = issueAt(summary.source.ref);
   if (!at) return summary;
-  const read = seenReads().reads[sourceKey(at)];
+  let read = seenReads().reads[sourceKey(at)];
   const keptIn = summary.keptIn ?? summary.category;
   let { title } = summary;
   let seen = summary.seen;
   let source: Source = { ...summary.source, name: shownName(at) };
   let closedAt: number | undefined;
-  if (read?.value && !(seen && seen.at >= read.at)) {
-    title = read.value.title;
-    seen = { state: read.value.state, at: read.at, ...(read.gone ? { gone: true } : {}) };
-    source = { ...source, kind: read.value.kind, url: read.value.url, id: read.value.id };
-    closedAt = read.value.closedAt;
+  // (The newer word, by when each was last asked of GitHub; this box's on a tie; one found gone
+  // only when the other was too, or there's no other.)
+  const toldWhen = seen ? seen.checked ?? seen.at : -Infinity;
+  const localWhen = read ? read.checked ?? read.at : -Infinity;
+  const local = Boolean(read?.value) && (!seen || (read!.gone && !seen.gone ? false : !read!.gone && seen.gone ? true : localWhen >= toldWhen));
+  if (local) {
+    read = read!;
+    title = read.value!.title;
+    seen = { state: read.value!.state, at: read.at, ...(read.gone ? { gone: true } : {}) };
+    source = { ...source, kind: read.value!.kind, url: read.value!.url, id: read.value!.id };
+    closedAt = read.value!.closedAt;
   }
   const done = doneOnGitHub(seen?.state);
-  const { keptIn: _, doneAt, ...rest } = summary;
+  const { keptIn: _, doneAt, struck: __, ...rest } = summary;
   // (A Done one's time: when GitHub closed it; one Done only by what was told keeps the time told.)
   const doneSince = closedAt ?? (summary.keptIn !== undefined ? doneAt : undefined) ?? seen?.at;
   return {
@@ -188,6 +215,9 @@ export function withSeen<S extends Shown>(summary: S): S {
     ...(seen ? { seen } : {}),
     category: done ? "done" : keptIn,
     inProgress: done ? false : summary.inProgress,
+    // (What a client draws: its title struck through when it was closed without being done.)
+    ...(seen && STRUCK.has(seen.state) ? { struck: true } : {}),
+    closesOn: "github",
     ...(done ? { keptIn, doneAt: doneSince } : doneAt !== undefined && summary.keptIn === undefined ? { doneAt } : {}),
   } as S;
 }
@@ -201,11 +231,11 @@ export const unreadWords = (unread: Unread): string =>
 /** An issue or a pull request read now, with its description, for an agent adding or linking it;
  * kept as last read. Or why not, in words. */
 export async function readIssue(at: IssueAt): Promise<{ read: IssueRead; body: string } | { refused: string }> {
-  const answer = await askGitHub(at.host, `query { ${nodeQuery(at, "p0", true)} }`);
+  // (Under the reader's lock and back-off, as every read of GitHub here.)
+  const answer = await readOne(ISSUES, at, `query { ${nodeQuery(at, "p0", true)} }`, data => issueReadOf(data.p0));
   if ("unread" in answer) return { refused: unreadWords(answer.unread) };
   const read = issueReadOf(answer.data.p0);
   if (!read) return { refused: `GitHub has no issue or pull request ${refText(at)} that gh on ${HERE} may see (gh auth status says which account it uses).` };
-  keepRead(ISSUES, at, read);
   const node = isObject(answer.data.p0) && isObject(answer.data.p0.issueOrPullRequest) ? answer.data.p0.issueOrPullRequest : {};
   return { read, body: typeof node.body === "string" ? node.body : "" };
 }

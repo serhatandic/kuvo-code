@@ -11,13 +11,18 @@
 //   (`box route`) reads it too, and only one process at a time asks GitHub (a lock beside it).
 // - A host `gh` couldn't read (not there, signed out, no network) isn't asked again for a few
 //   minutes.
+// - A process that answers once (`box route`) never waits on GitHub: a read that's due goes in a
+//   process of its own (`box github-read`), and the next ask has it.
 
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { isObject } from "../../shared/json";
 import { writePrivate } from "../files";
+import { K, OWN_RUNTIME, SCRIPT } from "../home";
+import { answeringOnce } from "../once";
 
 /** How long a process asking GitHub holds the others off, at most: past it, its lock is taken as
  * left behind. Longer than the most it could take (four queries of 30 s). */
@@ -70,6 +75,8 @@ export interface Kept<Value> {
 
 /** What one reader reads, and how. */
 export interface Reader<Ask, Value> {
+  /** Its name, for a read in a process of its own (`box github-read <name>`). */
+  name: string;
   /** Where its reads are kept. */
   file: string;
   keyOf(ask: Ask): string;
@@ -96,22 +103,58 @@ export function readKept<Value>(file: string): Kept<Value> {
   }
 }
 
-/** Takes the lock on asking GitHub: false while another process holds it (it isn't left behind). */
-function takeLock(lock: string, now: number): boolean {
+/** Takes the lock on asking GitHub (a folder, with a token of this hold's in it): the token, or null
+ * while another process holds it. One left behind (untouched for `HOLD`) is moved aside first, by a
+ * rename only one process can make; one that turns out to be fresh (another just took it over) is
+ * put back. */
+function takeLock(lock: string, now: number): string | null {
   fs.mkdirSync(path.dirname(lock), { recursive: true, mode: 0o700 });
-  try {
-    fs.mkdirSync(lock);
-    return true;
-  } catch {
+  const token = crypto.randomBytes(9).toString("base64url");
+  const make = (): string | null => {
     try {
-      if (now - fs.statSync(lock).mtimeMs < HOLD) return false;
-      fs.rmdirSync(lock);
       fs.mkdirSync(lock);
-      return true;
     } catch {
-      return false;
+      return null;
     }
+    try { fs.writeFileSync(path.join(lock, token), ""); } catch {}
+    return token;
+  };
+  const made = make();
+  if (made) return made;
+  // (What a takeover cut off midway left aside, once it's old.)
+  try {
+    for (const name of fs.readdirSync(path.dirname(lock))) {
+      if (!name.startsWith(path.basename(lock) + ".")) continue;
+      const aside = path.join(path.dirname(lock), name);
+      if (now - fs.statSync(aside).mtimeMs > HOLD) fs.rmSync(aside, { recursive: true, force: true });
+    }
+  } catch {}
+  try {
+    if (now - fs.statSync(lock).mtimeMs < HOLD) return null;
+    const aside = `${lock}.${token}`;
+    fs.renameSync(lock, aside);
+    if (Date.now() - fs.statSync(aside).mtimeMs < HOLD) {
+      try { fs.renameSync(aside, lock); } catch {}
+      return null;
+    }
+    fs.rmSync(aside, { recursive: true, force: true });
+    return make();
+  } catch {
+    return null;
   }
+}
+
+/** The lock let go, only while this hold (`token`) still has it. */
+function letGo(lock: string, token: string): void {
+  try {
+    if (!fs.existsSync(path.join(lock, token))) return;
+    fs.rmSync(lock, { recursive: true, force: true });
+  } catch {}
+}
+
+/** Keeps the lock this hold has (`token`) from being taken as left behind. */
+function touch(lock: string): void {
+  try { fs.utimesSync(lock, new Date(), new Date()); } catch {}
 }
 
 /** When a read was last asked. */
@@ -143,7 +186,8 @@ async function readDue<Ask, Value>(reader: Reader<Ask, Value>, asks: Ask[], now:
   });
   if (!due(readKept(reader.file)).length) return;
   const lock = reader.file + ".lock";
-  if (!takeLock(lock, Date.now())) return;
+  const token = takeLock(lock, Date.now());
+  if (!token) return;
   try {
     // (Read again now it's held: another may have just read them.)
     const kept = readKept<Value>(reader.file);
@@ -155,7 +199,7 @@ async function readDue<Ask, Value>(reader: Reader<Ask, Value>, asks: Ask[], now:
       for (let at = 0; at < each.length; at += PER_QUERY) {
         const part = each.slice(at, at + PER_QUERY);
         // (Still this process's: the others keep off.)
-        try { fs.utimesSync(lock, new Date(), new Date()); } catch {}
+        touch(lock);
         const answer = await askGitHub(host, reader.query(part));
         if ("unread" in answer) {
           held.set(host, now() + BACK_OFF);
@@ -173,8 +217,36 @@ async function readDue<Ask, Value>(reader: Reader<Ask, Value>, asks: Ask[], now:
     for (const [host, until] of held) latest.hosts[host] = Math.max(latest.hosts[host] ?? 0, until);
     keep(reader as Reader<unknown, Value>, latest, now());
   } finally {
-    try { fs.rmdirSync(lock); } catch {}
+    letGo(lock, token);
   }
+}
+
+/** The asks among `asks` that are due to be read, by what's kept. */
+function dueOf<Ask, Value>(reader: Reader<Ask, Value>, asks: Ask[], now: number): Ask[] {
+  const kept = readKept<Value>(reader.file);
+  return asks.filter(ask => {
+    const read = kept.reads[reader.keyOf(ask)];
+    return !(read && now - askedAt(read) < reader.freshFor(read.gone ? null : read.value)) && !((kept.hosts[reader.hostOf(ask)] ?? 0) > now);
+  });
+}
+
+/** The readers, by name, for a read in a process of its own. */
+const readers = new Map<string, Reader<unknown, unknown>>();
+
+/** `reader` known by its name, for `box github-read`. */
+export function register<Ask, Value>(reader: Reader<Ask, Value>): Reader<Ask, Value> {
+  readers.set(reader.name, reader as Reader<unknown, unknown>);
+  return reader;
+}
+
+/** `box github-read <reader>`, the asks as JSON on its input: a read that's due, made in a process
+ * of its own for one that answers once; it ends once it's kept. */
+export async function readApart(name: string | undefined, given: string | undefined): Promise<void> {
+  const reader = name ? readers.get(name) : undefined;
+  let asks: unknown;
+  try { asks = JSON.parse(given ?? ""); } catch { return; }
+  if (!reader || !Array.isArray(asks) || !asks.length || asks.length > 500) return;
+  await readThrough(reader, asks);
 }
 
 /** What GitHub says of `asks`, by key: read now where it's due (waiting `wait` ms at most for it;
@@ -184,7 +256,22 @@ export async function readThrough<Ask, Value>(reader: Reader<Ask, Value>, asks: 
   const unique = [...new Map(asks.map(ask => [reader.keyOf(ask), ask])).values()];
   const id = (ask: Ask) => `${reader.file}\n${reader.keyOf(ask)}`;
   const waiting = unique.filter(ask => !reading.has(id(ask)));
-  if (waiting.length) {
+  // (One that answers once never waits on GitHub, nor lives on after its answer for it.)
+  if (answeringOnce()) {
+    const due = dueOf(reader, waiting, now());
+    // (Not while another process is reading, or one was started for it a moment ago: what it reads
+    // is kept for the next ask. The asks go on its input, never where `ps` shows them.)
+    const recent = (file: string, within: number) => { try { return Date.now() - fs.statSync(file).mtimeMs < within; } catch { return false; } };
+    const started = reader.file + ".started";
+    if (due.length && !recent(reader.file + ".lock", HOLD) && !recent(started, 10_000)) {
+      try {
+        writePrivate(started, "");
+        const child = spawn(process.execPath, [...OWN_RUNTIME, SCRIPT, "box", "github-read", reader.name], { detached: true, stdio: ["pipe", "ignore", "ignore"], cwd: K, env: process.env });
+        child.stdin?.end(JSON.stringify(due));
+        child.unref();
+      } catch {}
+    }
+  } else if (waiting.length) {
     const read = readDue(reader, waiting, now).catch(() => {}).finally(() => { for (const ask of waiting) reading.delete(id(ask)); });
     for (const ask of waiting) reading.set(id(ask), read);
   }
@@ -204,9 +291,30 @@ export async function readThrough<Ask, Value>(reader: Reader<Ask, Value>, asks: 
   return found;
 }
 
-/** A read made apart from `readThrough` (a fuller query, say), kept as one of the reader's. */
-export function keepRead<Ask, Value>(reader: Reader<Ask, Value>, ask: Ask, value: Value | null, now = Date.now()): void {
-  const kept = readKept<Value>(reader.file);
-  kept.reads[reader.keyOf(ask)] = readOf(kept.reads[reader.keyOf(ask)], value, reader.keepsLast, now);
-  keep(reader as Reader<unknown, Value>, kept, now);
+/** One thing read now, apart from `readThrough`, with a fuller query of its own (an agent waiting
+ * on it): under the same lock (waiting for another process's read a few seconds at most); asked
+ * whatever the back-off (someone asked for it: signed in again, say), and setting it, or lifting
+ * it, as it goes; what `valueOf` makes of GitHub's answer kept as the reader's. GitHub's answer, or
+ * why it wasn't read. */
+export async function readOne<Ask, Value>(reader: Reader<Ask, Value>, ask: Ask, query: string, valueOf: (data: Record<string, unknown>) => Value | null, now = Date.now): Promise<{ data: Record<string, unknown> } | { unread: Unread }> {
+  const host = reader.hostOf(ask);
+  const lock = reader.file + ".lock";
+  let token = takeLock(lock, Date.now());
+  for (let tries = 0; !token && tries < 50; tries++) {
+    await new Promise(done => setTimeout(done, 200));
+    token = takeLock(lock, Date.now());
+  }
+  try {
+    const answer = await askGitHub(host, query);
+    const kept = readKept<Value>(reader.file);
+    if ("unread" in answer) kept.hosts[host] = Math.max(kept.hosts[host] ?? 0, now() + BACK_OFF);
+    else {
+      delete kept.hosts[host];
+      kept.reads[reader.keyOf(ask)] = readOf(kept.reads[reader.keyOf(ask)], valueOf(answer.data), reader.keepsLast, now());
+    }
+    keep(reader as Reader<unknown, Value>, kept, now());
+    return answer;
+  } finally {
+    if (token) letGo(lock, token);
+  }
 }

@@ -42,6 +42,8 @@ export const QUEUE_ITEM = object({
   "source?": SOURCE,
   "seen?": SEEN,
   "keptIn?": string,
+  "struck?": bool,
+  "closesOn?": string,
   "handing?": object({ to: string, name: string }),
   "computer?": COMPUTER,
   created: STAMP,
@@ -67,7 +69,7 @@ export const QUEUE_OWNER = object({ owner: string, kind: words("bot", "session",
 export const QUEUE_VIEW = object({ owner: string, categories: list(QUEUE_CATEGORY), items: list(QUEUE_ITEM), owners: list(QUEUE_OWNER), removed: list(QUEUE_ITEM),
   computers: list(object({ ...COMPUTER.object, at: number })) });
 
-const REF = nullable(object({ id: string, "number?": number, "source?": SOURCE, "seen?": SEEN, title: string, category: string, inProgress: bool, owner: string, "removed?": bool, "computer?": COMPUTER }));
+const REF = nullable(object({ id: string, "number?": number, "source?": SOURCE, "seen?": SEEN, "struck?": bool, "closesOn?": string, title: string, category: string, inProgress: bool, owner: string, "removed?": bool, "computer?": COMPUTER }));
 
 // An item on another of your computers: changed there.
 const ON_ANOTHER = object({ message: string, computer: COMPUTER });

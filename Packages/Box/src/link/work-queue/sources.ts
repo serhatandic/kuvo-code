@@ -12,7 +12,8 @@ export interface IssueAt {
 }
 
 export const GITHUB_HOST = "github.com";
-const OWNER = "[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})";
+// (An enterprise-managed user's owner name has a "_" in it: "ada_kuvo".)
+const OWNER = "[A-Za-z0-9](?:[A-Za-z0-9_-]{0,38})";
 const REPO = "[A-Za-z0-9_.-]{1,100}";
 const STORED = new RegExp(`^gh:(${OWNER})/(${REPO})#(\\d{1,10})$`);
 const PAGE = new RegExp(`^https?://(?:www\\.)?github\\.com/(${OWNER})/(${REPO})/(?:issues|pull)/(\\d{1,10})(?:[/?#][^\\s]*)?$`, "i");

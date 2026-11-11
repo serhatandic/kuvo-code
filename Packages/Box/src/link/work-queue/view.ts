@@ -109,6 +109,10 @@ export interface ItemSummary {
   seen?: Seen;
   /** The category it's kept in, while GitHub's word makes it Done (`category` "done"). */
   keptIn?: string;
+  /** Its title struck through: closed on GitHub without being done (not planned, or unmerged). */
+  struck?: boolean;
+  /** Where it's made Done (an issue's: "github"), never by a move here. */
+  closesOn?: string;
   /** On its way to a conversation on another computer. */
   handing?: { to: string; name: string };
   /** The computer it's on, when that isn't the one asked: as that computer last told it. */

@@ -90,7 +90,7 @@ struct WorkItemPage: View {
         VStack(alignment: .leading, spacing: 14) {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 8) {
-                    if let source = item.source, let url = source.url.flatMap(URL.init(string:)), ["http", "https"].contains(url.scheme?.lowercased() ?? "") {
+                    if let source = item.source, let url = source.url.flatMap(URL.init(string:)), url.absoluteString.hasPrefix("https://github.com/") {
                         // An issue's or a pull request's name opens it on GitHub, in the panel's browser.
                         Button { utilities.newBrowser(url.absoluteString) } label: {
                             HStack(spacing: 4) {

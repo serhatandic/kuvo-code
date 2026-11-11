@@ -48,6 +48,7 @@ import ClientText
         ("`gh:o/r#1` and [gh:o/r#2](https://x.y) and https://github.com/o/r/issues/3", []),
         ("agh:o/r#1 gh:o/r#2x gh:o/r#", []),
         ("gh:o/r-#12 and #3", ["gh:o/r-#12", "3"]),
+        ("gh:ada_kuvo/app#7", ["gh:ada_kuvo/app#7"]),
     ])
     func issuesAndPullRequestsAreFoundByTheirRefs(text: String, refs: [String]) {
         #expect(WorkItemRefs.findRefs(in: text).map(\.ref) == refs)

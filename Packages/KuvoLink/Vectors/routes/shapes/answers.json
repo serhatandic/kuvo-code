@@ -10430,6 +10430,8 @@
           }
          },
          "keptIn?": "string",
+         "struck?": "bool",
+         "closesOn?": "string",
          "handing?": {
           "object": {
            "to": "string",
@@ -10632,6 +10634,8 @@
           }
          },
          "keptIn?": "string",
+         "struck?": "bool",
+         "closesOn?": "string",
          "handing?": {
           "object": {
            "to": "string",
@@ -10840,6 +10844,8 @@
           }
          },
          "keptIn?": "string",
+         "struck?": "bool",
+         "closesOn?": "string",
          "handing?": {
           "object": {
            "to": "string",
@@ -11042,6 +11048,8 @@
           }
          },
          "keptIn?": "string",
+         "struck?": "bool",
+         "closesOn?": "string",
          "handing?": {
           "object": {
            "to": "string",
@@ -11216,6 +11224,8 @@
              "gone?": "bool"
             }
            },
+           "struck?": "bool",
+           "closesOn?": "string",
            "title": "string",
            "category": "string",
            "inProgress": "bool",
@@ -11278,6 +11288,8 @@
              "gone?": "bool"
             }
            },
+           "struck?": "bool",
+           "closesOn?": "string",
            "title": "string",
            "category": "string",
            "inProgress": "bool",
@@ -11441,6 +11453,8 @@
          }
         },
         "keptIn?": "string",
+        "struck?": "bool",
+        "closesOn?": "string",
         "handing?": {
          "object": {
           "to": "string",
@@ -11679,6 +11693,8 @@
          }
         },
         "keptIn?": "string",
+        "struck?": "bool",
+        "closesOn?": "string",
         "handing?": {
          "object": {
           "to": "string",
@@ -11877,6 +11893,8 @@
          }
         },
         "keptIn?": "string",
+        "struck?": "bool",
+        "closesOn?": "string",
         "handing?": {
          "object": {
           "to": "string",
@@ -12075,6 +12093,8 @@
          }
         },
         "keptIn?": "string",
+        "struck?": "bool",
+        "closesOn?": "string",
         "handing?": {
          "object": {
           "to": "string",

@@ -204,7 +204,14 @@ import Textual
     }
 
     @Test func anIssueInTheQueueIsNamedByItShowsGitHubsWordAndItsChipOpensIt() async throws {
-        let machine = try await MachineTestBox(name: "lab")
+        // GitHub's `gh`, standing in: it says each time it's asked, and answers nothing.
+        let bin = AppInfo.testRoot.appending(path: "gh-\(UUID().uuidString.prefix(8))")
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: bin) }
+        let asked = bin.appending(path: "asked")
+        try "#!/bin/sh\necho asked >> '\(asked.path)'\nexit 1\n".write(to: bin.appending(path: "gh"), atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: bin.appending(path: "gh").path)
+        let machine = try await MachineTestBox(name: "lab", environment: ["PATH": "\(bin.path):/usr/bin:/bin"])
         defer { machine.stop() }
         use(machine)
         // An item that's GitHub's kuvo-test/app#12 (it was #250), kept in Later; GitHub said it's
@@ -241,6 +248,7 @@ import Textual
         let opened = try #require(store.opened[app.utilities.panelKey])
         #expect(opened.matches(item))
         #expect(await store.load(box: BoxClient.mac, item: opened.name)?.item.id == item.id)
+        #expect(!FileManager.default.fileExists(atPath: asked.path), "GitHub isn't asked while its host is held off")
     }
 
     @Test func anItemOnAnotherComputerSaysWhereItIsAndItsPageAndWhatYouDoToItGoThere() async throws {

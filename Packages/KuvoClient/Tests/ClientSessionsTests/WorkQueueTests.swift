@@ -129,8 +129,8 @@ import ClientSessions
     @Test func anIssueClosedOnGitHubIsDoneWhereItWasKeptAndOnlyGitHubMovesItInOrOut() throws {
         let json = """
         {"owner":"ses_lead","categories":[{"id":"next","name":"Next","builtIn":true},{"id":"later","name":"Later","builtIn":true},{"id":"parked","name":"Parked","builtIn":true},{"id":"done","name":"Done","builtIn":true}],"owners":[],"removed":[],
-         "items":[{"id":"wqi_1","source":{"kind":"github","ref":"gh:kuvo/app#12","url":"https://github.com/kuvo/app/issues/12","name":"app#12"},"seen":{"state":"not_planned","at":5},"keptIn":"later","owner":"ses_lead","title":"Upload retries","category":"done","order":1,"inProgress":false,"sessions":[],"noteCount":0,"fileCount":0,"linkCount":0,"created":{"at":1,"by":{"user":true}},"updated":{"at":1,"by":{"user":true}}},
-                  {"id":"wqi_2","source":{"kind":"github-pr","ref":"gh:kuvo/app#57","name":"app#57"},"seen":{"state":"open","at":5},"owner":"ses_lead","title":"Keep the name","category":"next","order":2,"inProgress":false,"sessions":[],"noteCount":0,"fileCount":0,"linkCount":0,"created":{"at":1,"by":{"user":true}},"updated":{"at":1,"by":{"user":true}}}]}
+         "items":[{"id":"wqi_1","source":{"kind":"github","ref":"gh:kuvo/app#12","url":"https://github.com/kuvo/app/issues/12","name":"app#12"},"seen":{"state":"not_planned","at":5},"keptIn":"later","struck":true,"closesOn":"github","owner":"ses_lead","title":"Upload retries","category":"done","order":1,"inProgress":false,"sessions":[],"noteCount":0,"fileCount":0,"linkCount":0,"created":{"at":1,"by":{"user":true}},"updated":{"at":1,"by":{"user":true}}},
+                  {"id":"wqi_2","source":{"kind":"github-pr","ref":"gh:kuvo/app#57","name":"app#57"},"seen":{"state":"open","at":5},"closesOn":"github","owner":"ses_lead","title":"Keep the name","category":"next","order":2,"inProgress":false,"sessions":[],"noteCount":0,"fileCount":0,"linkCount":0,"created":{"at":1,"by":{"user":true}},"updated":{"at":1,"by":{"user":true}}}]}
         """
         let view = try JSONDecoder().decode(WorkQueueView.self, from: Data(json.utf8))
         let (closed, open) = (view.items[0], view.items[1])

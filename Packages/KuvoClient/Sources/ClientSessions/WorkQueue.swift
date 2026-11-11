@@ -129,10 +129,6 @@ public struct WorkSeen: Hashable, Sendable, Decodable {
         self.state = state
         self.at = at
     }
-
-    /// Closed without being done (not planned, or a pull request closed unmerged): its title is
-    /// drawn struck through.
-    public var isStruck: Bool { state == "not_planned" || state == "closed" }
 }
 
 /// Another of your computers: the one an item is on, when it isn't the box asked. A client reads
@@ -179,6 +175,10 @@ public struct WorkItem: Hashable, Sendable, Decodable, Identifiable {
     public var seen: WorkSeen?
     /// The category it's kept in while its source makes it Done (`category` "done").
     public var keptIn: String?
+    /// Its title struck through, as the box says: closed there without being done.
+    public var struck: Bool?
+    /// Where it's made Done ("github"), as the box says: never by a move here.
+    public var closesOn: String?
     public var computer: WorkComputer?
     public var handing: WorkHanding?
     public var created: WorkStamp
@@ -311,6 +311,7 @@ public struct WorkRef: Hashable, Sendable, Decodable {
     public var number: Int?
     public var source: WorkSource?
     public var seen: WorkSeen?
+    public var struck: Bool?
     public var title: String
     public var category: String
     public var inProgress: Bool
@@ -318,11 +319,12 @@ public struct WorkRef: Hashable, Sendable, Decodable {
     public var removed: Bool?
     public var computer: WorkComputer?
 
-    public init(id: String, number: Int?, source: WorkSource? = nil, seen: WorkSeen? = nil, title: String, category: String, inProgress: Bool, owner: String?, removed: Bool? = nil, computer: WorkComputer? = nil) {
+    public init(id: String, number: Int?, source: WorkSource? = nil, seen: WorkSeen? = nil, struck: Bool? = nil, title: String, category: String, inProgress: Bool, owner: String?, removed: Bool? = nil, computer: WorkComputer? = nil) {
         self.id = id
         self.number = number
         self.source = source
         self.seen = seen
+        self.struck = struck
         self.title = title
         self.category = category
         self.inProgress = inProgress
@@ -332,7 +334,7 @@ public struct WorkRef: Hashable, Sendable, Decodable {
     }
 
     public init(_ item: WorkItem) {
-        self.init(id: item.id, number: item.number, source: item.source, seen: item.seen, title: item.title, category: item.category, inProgress: item.inProgress, owner: item.owner, removed: item.removed == nil ? nil : true, computer: item.computer)
+        self.init(id: item.id, number: item.number, source: item.source, seen: item.seen, struck: item.struck, title: item.title, category: item.category, inProgress: item.inProgress, owner: item.owner, removed: item.removed == nil ? nil : true, computer: item.computer)
     }
 
     /// What a chip shows of it: its source's name ("app#12"), else "#243".
@@ -458,7 +460,7 @@ public enum WorkQueue {
     /// pull request, which is Done when it's closed there, and stays so until it's reopened.
     public static func moveTargets(for item: WorkItem, in categories: [WorkCategory]) -> [WorkCategory] {
         guard canMove(item) else { return [] }
-        return categories.filter { $0.id != item.category && (item.source == nil || $0.id != WorkCategory.done) }
+        return categories.filter { $0.id != item.category && (item.closesOn == nil || $0.id != WorkCategory.done) }
     }
 
     /// Whether you can move it at all: not one its source makes Done (an issue closed on GitHub),
@@ -477,11 +479,11 @@ public extension WorkItem {
     /// "GitHub issue app#12", "Work item 243", "New work item".
     var spokenName: String { source.map { "\($0.spokenKind) \($0.shownName)" } ?? number.map { "Work item \($0)" } ?? "New work item" }
     /// Its title struck through: closed without being done there (not planned, or unmerged).
-    var isStruck: Bool { seen?.isStruck == true }
+    var isStruck: Bool { struck == true }
 }
 
 public extension WorkRef {
     var brand: String? { source?.brand }
     var spokenName: String { source.map { "\($0.spokenKind) \($0.shownName)" } ?? number.map { "Work item \($0)" } ?? "New work item" }
-    var isStruck: Bool { seen?.isStruck == true }
+    var isStruck: Bool { struck == true }
 }

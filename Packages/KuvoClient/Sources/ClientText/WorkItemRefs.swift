@@ -145,5 +145,5 @@ public enum WorkItemRefs {
 
     nonisolated(unsafe) private static let markdownLink = /!?\[[^\]\n]*\]\([^)\n]*\)/
     /// `gh:owner/repo#12`: a GitHub owner, a repository's name, a number.
-    nonisolated(unsafe) private static let sourceRef = /gh:[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9_.\-]{1,100}#[0-9]{1,10}/
+    nonisolated(unsafe) private static let sourceRef = /gh:[A-Za-z0-9][A-Za-z0-9_\-]{0,38}\/[A-Za-z0-9_.\-]{1,100}#[0-9]{1,10}/
 }
