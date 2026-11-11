@@ -35614,7 +35614,15 @@ function enginesThere(root) {
   try {
     names = fs113.readdirSync(path119.join(root, "engine"));
   } catch {}
-  return names.filter((name) => !name.startsWith(".") && fs113.existsSync(path119.join(root, "engine", name, "opencode"))).sort(byNumbers);
+  const runs = (name) => {
+    try {
+      fs113.accessSync(path119.join(root, "engine", name, "opencode"), fs113.constants.X_OK);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  return names.filter((name) => !name.startsWith(".") && runs(name)).sort(byNumbers);
 }
 function keeperEngine(root) {
   let named;

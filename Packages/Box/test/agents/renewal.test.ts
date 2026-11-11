@@ -144,19 +144,45 @@ test("a bundle brought with an engine that hasn't started yet: it doesn't make w
   expect(held).toEqual([true])
 })
 
-test("what keeps it running starts it again: a launch since October 2026 after a run of eleven minutes; one from before only while it has started fewer than four times", () => {
+test("what keeps it running starts it again: a launch since October 2026 always; one from before only while it has started fewer than four times", () => {
   const loop = `sh -c n=0; while kill -0 "$1" 2>/dev/null && [ $n -lt 5 ]; do s=$(date +%s); "$2" … ; [ $(($(date +%s) - s)) -ge 600 ] && n=0; n=$((n + 1)); sleep 5; done kuvo-agents`
   const older = `sh -c n=0; while kill -0 "$1" 2>/dev/null && [ $n -lt 5 ]; do "$2" … ; n=$((n + 1)); sleep 5; done kuvo-agents`
-  const starts = (count: number) => '{"url": "http://127.0.0.1:1"}\n'.repeat(count)
-  expect(launchLets(loop, starts(9), 11 * 60_000)).toBe(true)
-  expect(launchLets(loop, starts(1), 10 * 60_000)).toBe(false)
-  expect(launchLets(older, starts(3), 11 * 60_000)).toBe(true)
-  expect(launchLets(older, starts(4), 11 * 60_000)).toBe(false)
-  // One it can't read is taken for one from before.
-  expect(launchLets(undefined, starts(4), 60 * 60_000)).toBe(false)
+  const starts = (count: number) => () => '{"url": "http://127.0.0.1:1"}\n'.repeat(count)
+  expect(launchLets(loop, starts(9))).toBe(true)
+  expect(launchLets(older, starts(3))).toBe(true)
+  expect(launchLets(older, starts(4))).toBe(false)
+  // One it can't read is taken for one from before; a log it can't read, for a full one.
+  expect(launchLets(undefined, starts(4))).toBe(false)
+  expect(launchLets(older, () => undefined)).toBe(false)
 })
 
-test("a quiet moment counts once nothing has run for half a minute", () => {
+test("a launch that wouldn't start it again: it waits for a restart, and holds nothing for it", () => {
+  const script = join(base, "spent.js")
+  bundle(script, own)
+  const held: boolean[] = []
+  const renewal = new Renewal({ script, build: own, work: () => ({ turns: false, other: false }), hold: (on) => held.push(on), renew: () => {}, told: () => {}, lets: () => false, now: () => Date.parse("2026-11-12T00:00:00Z"), holdAfter: 0 })
+  bundle(script, newer)
+  renewal.look()
+  expect(renewal.state?.waits).toBe("restart")
+  expect(held).toEqual([])
+})
+
+test("it goes only once it has run eleven minutes (a launch counts a shorter run as one that failed)", () => {
+  const script = join(base, "young.js")
+  bundle(script, own)
+  let uptime = 10 * 60_000
+  const held: boolean[] = []
+  const renewal = new Renewal({ script, build: own, work: () => ({ turns: false, other: false }), hold: (on) => held.push(on), renew: () => {}, told: () => {}, uptime: () => uptime, settle: 0, now: () => Date.parse("2026-11-12T12:00:00Z") })
+  bundle(script, newer)
+  renewal.look()
+  expect(held).toEqual([])
+  uptime = 11 * 60_000
+  renewal.look()
+  expect(held).toEqual([true])
+  renewal.stop()
+})
+
+test("a quiet moment counts once nothing has run for half a minute: a turn that ended meanwhile starts it again", () => {
   const script = join(base, "settle.js")
   bundle(script, own)
   let now = Date.parse("2026-11-12T12:00:00Z")
@@ -166,6 +192,10 @@ test("a quiet moment counts once nothing has run for half a minute", () => {
   bundle(script, newer)
   renewal.look()
   turns = false
+  renewal.look()
+  now += 20_000
+  // A turn came and went between two looks.
+  renewal.busied()
   renewal.look()
   now += 29_000
   renewal.look()
@@ -206,14 +236,14 @@ test("a bundle that doesn't run here: it waits for a restart, holding nothing", 
   renewal.look()
   expect(renewal.state?.waits).toBe("restart")
   expect(renewal.state?.holding).toBe(false)
-  expect(held.at(-1) ?? false).toBe(false)
+  expect(held).toEqual([])
 })
 
 test("the engine a machine's keeper starts: the one its script names while it's there, else the newest there", () => {
   const root = join(base, "machine")
   for (const version of ["2.2.5", "2.10.0", "2.9.1"]) {
     mkdirSync(join(root, "engine", version), { recursive: true })
-    writeFileSync(join(root, "engine", version, "opencode"), "")
+    writeFileSync(join(root, "engine", version, "opencode"), "", { mode: 0o755 })
   }
   mkdirSync(join(root, "bin"), { recursive: true })
   writeFileSync(join(root, "bin", "kuvo-start"), "#!/bin/sh\nV=2.2.5\n")

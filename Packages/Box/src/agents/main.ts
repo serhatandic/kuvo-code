@@ -322,6 +322,8 @@ await untilSandboxDecided()
 limits.start()
 const carrying = new Carrying(sessions, store, (provider) => sessions.agent(provider), (kind) => roster.all().filter((agent) => parseProvider(agent.providerID)?.kind === kind))
 let server: ReturnType<typeof Bun.serve>
+/** Making way for a newer bridge in its place, on a machine (below). */
+let renewal: Renewal | undefined
 const answer = handler({ roster, sessions, auto, link, password, version, build, groups, goals, sideQuestions, handoffs, places, reviews, voice, artifacts, noted, restartOutside, carrying, limits })
 /** Requests being answered now (but the event feed's, which stays open): a newer bridge waits for them. */
 let answering = 0
@@ -333,6 +335,7 @@ try {
     fetch: (request) => {
       if (new URL(request.url).pathname === "/api/event") return answer(request)
       answering++
+      renewal?.busied()
       return answer(request).finally(() => answering--)
     },
   })
@@ -387,7 +390,7 @@ writeRecord(null, true)
 // the first quiet moment, never cutting a turn, and the machine's launch starts the new one, which
 // starts what waited for it (renewal.ts). (This Mac's own bridge takes a new version with its app,
 // whose keeper starts the box again once nothing runs.)
-const renewal =
+renewal =
   onMachine && build
     ? new Renewal({
         script,
@@ -412,25 +415,30 @@ const renewal =
           return !kept || kept === basename(dirname(process.execPath))
         },
         // Only while the launch keeping it will start the new one (renewal.ts, `launchLets`).
-        lets: () => {
-          let log = ""
-          try {
-            log = readFileSync(join(machineHome!, "run", "agents.log"), "utf8")
-          } catch {}
-          return launchLets(commandLineOf(process.ppid), log, performance.now(), renewUptime)
-        },
+        lets: () =>
+          launchLets(commandLineOf(process.ppid), () => {
+            try {
+              return readFileSync(join(machineHome!, "run", "agents.log"), "utf8")
+            } catch {
+              return undefined
+            }
+          }),
+        uptime: () => performance.now(),
+        longEnough: renewUptime,
         // Only for a bundle that loads and runs on this engine.
         check: (newer) =>
-          new Promise((done) => {
+          new Promise<boolean | undefined>((done) => {
             const env: Record<string, string> = { BUN_BE_BUN: "1", BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0", PATH: process.env.PATH ?? "/usr/bin:/bin" }
             const checking = spawn(process.execPath, ["--config=/dev/null", "--no-env-file", script, "selftest"], { env, stdio: ["ignore", "pipe", "ignore"] })
             let said = ""
             checking.stdout.on("data", (chunk) => (said += chunk))
-            const late = setTimeout(() => checking.kill("SIGKILL"), 60_000)
-            checking.on("error", () => done(false))
+            let late = false
+            const timer = setTimeout(() => ((late = true), checking.kill("SIGKILL")), 60_000)
+            // (One that couldn't start, or ran out of time, says nothing of the bundle: asked again.)
+            checking.on("error", () => (clearTimeout(timer), done(undefined)))
             checking.on("close", (code) => {
-              clearTimeout(late)
-              done(code === 0 && said.trim() === `ok ${newer}`)
+              clearTimeout(timer)
+              done(late ? undefined : code === 0 && said.trim() === `ok ${newer}`)
             })
           }),
         holdAfter: renewHoldAfter,
@@ -438,9 +446,12 @@ const renewal =
       })
     : undefined
 renewal?.start()
-// The moment a turn ends may be the quiet one.
-if (renewal) subscribe((event) => {
-  if (event.type === "session.idle") renewal.look()
+// The moment a turn ends may be the quiet one: a quiet moment counts from it.
+const renewing = renewal
+if (renewing) subscribe((event) => {
+  if (event.type !== "session.idle") return
+  renewing.busied()
+  renewing.look()
 })
 
 // This box's engine, ended should it hang (it's started again as after a crash), on a machine and on

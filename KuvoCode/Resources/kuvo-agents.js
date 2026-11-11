@@ -26565,12 +26565,11 @@ function nightOf(date = new Date, zone = process.env.KUVO_TZ) {
 
 // Packages/Box/src/agents/renewal.ts
 var renewalTiming = { look: 1e4, settle: 30000, grace: 1000, patience: 60 * 60000, longest: 24 * 60 * 60000, holding: 30 * 60000, uptime: 11 * 60000 };
-function launchLets(loop, log, uptime, longEnough = renewalTiming.uptime) {
-  if (uptime < longEnough)
-    return false;
+function launchLets(loop, log) {
   if (loop?.includes("-ge 600"))
     return true;
-  return (log.match(/"url"/g) ?? []).length < 4;
+  const text = log();
+  return text !== undefined && (text.match(/"url"/g) ?? []).length < 4;
 }
 
 class Renewal {
@@ -26642,7 +26641,7 @@ class Renewal {
       this.letGo();
       return this.tell(blocked);
     }
-    if (!this.holding && this.holdsNow(this.from, now)) {
+    if (!this.holding && this.checked.get(build) !== "checking" && this.holdsNow(this.from, now)) {
       this.holding = true;
       this.heldAt = now;
       this.options.hold(true);
@@ -26655,13 +26654,13 @@ class Renewal {
     this.quietSince ??= now;
     if (!this.holding && now - this.quietSince < (this.options.settle ?? renewalTiming.settle))
       return;
-    if (!(this.options.lets?.() ?? true))
+    if ((this.options.uptime?.() ?? Infinity) < (this.options.longEnough ?? renewalTiming.uptime))
       return;
     this.going = true;
     if (!this.holding)
       this.options.hold(true);
     const later = setTimeout(() => {
-      if (this.quiet() && this.newerInPlace() === build && !this.options.paused?.() && (this.options.lets?.() ?? true))
+      if (this.quiet() && this.newerInPlace() === build && !this.options.paused?.())
         return this.options.renew();
       this.going = false;
       this.quietSince = undefined;
@@ -26673,17 +26672,22 @@ class Renewal {
   blocked(build) {
     if (!(this.options.ready?.() ?? true))
       return "engine";
+    if (!(this.options.lets?.() ?? true))
+      return "restart";
     if (!this.options.check)
       return;
     const checked = this.checked.get(build);
     if (checked === undefined) {
       this.checked.set(build, "checking");
-      this.options.check(build).then((ok) => this.checked.set(build, ok), () => this.checked.set(build, false)).then(() => this.look());
+      this.options.check(build).then((ok) => ok === undefined ? this.checked.delete(build) : this.checked.set(build, ok), () => this.checked.delete(build)).then(() => this.look());
       return;
     }
     if (checked === false)
       return "restart";
     return;
+  }
+  busied() {
+    this.quietSince = undefined;
   }
   tell(waits = this.waits) {
     const changed = waits !== this.waits;
@@ -26738,7 +26742,15 @@ function enginesThere(root) {
   try {
     names = fs5.readdirSync(path4.join(root, "engine"));
   } catch {}
-  return names.filter((name) => !name.startsWith(".") && fs5.existsSync(path4.join(root, "engine", name, "opencode"))).sort(byNumbers);
+  const runs = (name) => {
+    try {
+      fs5.accessSync(path4.join(root, "engine", name, "opencode"), fs5.constants.X_OK);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  return names.filter((name) => !name.startsWith(".") && runs(name)).sort(byNumbers);
 }
 function keeperEngine(root) {
   let named;
@@ -27237,6 +27249,7 @@ await untilSandboxDecided();
 limits.start();
 var carrying = new Carrying(sessions, store, (provider) => sessions.agent(provider), (kind) => roster.all().filter((agent) => parseProvider(agent.providerID)?.kind === kind));
 var server4;
+var renewal;
 var answer3 = handler({ roster, sessions, auto, link: link4, password, version: version3, build, groups, goals, sideQuestions, handoffs, places: places4, reviews, voice, artifacts, noted: noted2, restartOutside, carrying, limits });
 var answering = 0;
 try {
@@ -27248,6 +27261,7 @@ try {
       if (new URL(request.url).pathname === "/api/event")
         return answer3(request);
       answering++;
+      renewal?.busied();
       return answer3(request).finally(() => answering--);
     }
   });
@@ -27288,7 +27302,7 @@ var writeRecord = (renewal, first = false) => {
   }
 };
 writeRecord(null, true);
-var renewal = onMachine && build ? new Renewal({
+renewal = onMachine && build ? new Renewal({
   script,
   build,
   work: () => {
@@ -27308,33 +27322,39 @@ var renewal = onMachine && build ? new Renewal({
     const kept = keeperEngine(machineHome);
     return !kept || kept === basename12(dirname18(process.execPath));
   },
-  lets: () => {
-    let log = "";
+  lets: () => launchLets(commandLineOf(process.ppid), () => {
     try {
-      log = readFileSync31(join32(machineHome, "run", "agents.log"), "utf8");
-    } catch {}
-    return launchLets(commandLineOf(process.ppid), log, performance.now(), renewUptime);
-  },
+      return readFileSync31(join32(machineHome, "run", "agents.log"), "utf8");
+    } catch {
+      return;
+    }
+  }),
+  uptime: () => performance.now(),
+  longEnough: renewUptime,
   check: (newer) => new Promise((done) => {
     const env = { BUN_BE_BUN: "1", BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0", PATH: process.env.PATH ?? "/usr/bin:/bin" };
     const checking = spawn6(process.execPath, ["--config=/dev/null", "--no-env-file", script, "selftest"], { env, stdio: ["ignore", "pipe", "ignore"] });
     let said = "";
     checking.stdout.on("data", (chunk) => said += chunk);
-    const late = setTimeout(() => checking.kill("SIGKILL"), 60000);
-    checking.on("error", () => done(false));
+    let late = false;
+    const timer = setTimeout(() => (late = true, checking.kill("SIGKILL")), 60000);
+    checking.on("error", () => (clearTimeout(timer), done(undefined)));
     checking.on("close", (code) => {
-      clearTimeout(late);
-      done(code === 0 && said.trim() === `ok ${newer}`);
+      clearTimeout(timer);
+      done(late ? undefined : code === 0 && said.trim() === `ok ${newer}`);
     });
   }),
   holdAfter: renewHoldAfter,
   settle: renewSettle
 }) : undefined;
 renewal?.start();
-if (renewal)
+var renewing = renewal;
+if (renewing)
   subscribe((event) => {
-    if (event.type === "session.idle")
-      renewal.look();
+    if (event.type !== "session.idle")
+      return;
+    renewing.busied();
+    renewing.look();
   });
 if (runFolder)
   new HangWatch({ name: "engine", run: runFolder, record: join32(runFolder, "engine.json"), isIt: isEngine }).start();
@@ -27371,4 +27391,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents aa918574585488dcc6857f0237955f65893311a09205d409d80a17f85149b0e4
+// Built from Packages/Box/src/agents 2f3329d833bffce50f8f0f3028ecbf87ba1b23068bf09de9418038ea0ac7066b

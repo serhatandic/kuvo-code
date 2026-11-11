@@ -35,14 +35,15 @@ export type Work = { turns: boolean; other: boolean }
  * holds; and how long it runs before it may go (a launch counts a shorter run as a failed one). */
 export const renewalTiming = { look: 10_000, settle: 30_000, grace: 1_000, patience: 60 * 60_000, longest: 24 * 60 * 60_000, holding: 30 * 60_000, uptime: 11 * 60_000 }
 
-/** Whether what keeps it running (the machine's launch, `loop` its command line, `log` its
- * `run/agents.log`) starts it again once it goes, having run `uptime` ms: a launch since October 2026
- * resets its count after a run of ten minutes; one from before (no `-ge 600` in it) never does, and
- * starts it five times in all, one `"url"` line in its log each, so one more leaves a spare. */
-export function launchLets(loop: string | undefined, log: string, uptime: number, longEnough = renewalTiming.uptime): boolean {
-  if (uptime < longEnough) return false
+/** Whether what keeps it running (the machine's launch, `loop` its command line, `log` reading its
+ * `run/agents.log`) starts it again once it goes, after a run of eleven minutes (`renewalTiming.uptime`):
+ * a launch since October 2026 starts its count again after a run of ten minutes; one from before
+ * (no `-ge 600` in it, or one that can't be read) never does, and starts it five times in all, one
+ * `"url"` line in its log each, so one more leaves a spare. A log that can't be read: no. */
+export function launchLets(loop: string | undefined, log: () => string | undefined): boolean {
   if (loop?.includes("-ge 600")) return true
-  return (log.match(/"url"/g) ?? []).length < 4
+  const text = log()
+  return text !== undefined && (text.match(/"url"/g) ?? []).length < 4
 }
 
 export interface RenewalOptions {
@@ -62,8 +63,12 @@ export interface RenewalOptions {
   ready?: () => boolean
   /** Whether what keeps it running starts it again once it goes. */
   lets?: () => boolean
-  /** Whether a build in place loads and runs here (asked once for each). */
-  check?: (build: string) => Promise<boolean>
+  /** How long it has run (ms), and how long it must have before it goes. */
+  uptime?: () => number
+  longEnough?: number
+  /** Whether a build in place loads and runs here (asked once for each; undefined: it couldn't
+   * tell, asked again later). */
+  check?: (build: string) => Promise<boolean | undefined>
   now?: () => number
   zone?: string
   /** A test's: it holds this long after it saw the newer one, whatever the hour; and how long
@@ -145,7 +150,7 @@ export class Renewal {
       this.letGo()
       return this.tell(blocked)
     }
-    if (!this.holding && this.holdsNow(this.from, now)) {
+    if (!this.holding && this.checked.get(build) !== "checking" && this.holdsNow(this.from, now)) {
       this.holding = true
       this.heldAt = now
       this.options.hold(true)
@@ -160,11 +165,11 @@ export class Renewal {
     // goes.
     this.quietSince ??= now
     if (!this.holding && now - this.quietSince < (this.options.settle ?? renewalTiming.settle)) return
-    if (!(this.options.lets?.() ?? true)) return
+    if ((this.options.uptime?.() ?? Infinity) < (this.options.longEnough ?? renewalTiming.uptime)) return
     this.going = true
     if (!this.holding) this.options.hold(true)
     const later = setTimeout(() => {
-      if (this.quiet() && this.newerInPlace() === build && !this.options.paused?.() && (this.options.lets?.() ?? true)) return this.options.renew()
+      if (this.quiet() && this.newerInPlace() === build && !this.options.paused?.()) return this.options.renew()
       this.going = false
       this.quietSince = undefined
       if (!this.holding) this.options.hold(false)
@@ -176,18 +181,27 @@ export class Renewal {
    * for a restart (the build doesn't run here, or nothing would start it again). */
   private blocked(build: string): RenewalWait | undefined {
     if (!(this.options.ready?.() ?? true)) return "engine"
+    if (!(this.options.lets?.() ?? true)) return "restart"
     if (!this.options.check) return undefined
     const checked = this.checked.get(build)
     if (checked === undefined) {
       this.checked.set(build, "checking")
-      void this.options.check(build).then(
-        (ok) => this.checked.set(build, ok),
-        () => this.checked.set(build, false),
-      ).then(() => this.look())
+      void this.options
+        .check(build)
+        .then(
+          (ok) => (ok === undefined ? this.checked.delete(build) : this.checked.set(build, ok)),
+          () => this.checked.delete(build),
+        )
+        .then(() => this.look())
       return undefined
     }
     if (checked === false) return "restart"
     return undefined
+  }
+
+  /** Something just ran (a turn ended, a request came): a quiet moment counts from now. */
+  busied() {
+    this.quietSince = undefined
   }
 
   private tell(waits: RenewalWait = this.waits) {

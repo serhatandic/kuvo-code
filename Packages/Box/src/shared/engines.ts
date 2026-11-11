@@ -17,7 +17,9 @@ function byNumbers(a: string, b: string): number {
 export function enginesThere(root: string): string[] {
   let names: string[] = [];
   try { names = fs.readdirSync(path.join(root, "engine")); } catch {}
-  return names.filter(name => !name.startsWith(".") && fs.existsSync(path.join(root, "engine", name, "opencode"))).sort(byNumbers);
+  const runs = (name: string) => { try { fs.accessSync(path.join(root, "engine", name, "opencode"), fs.constants.X_OK); return true; } catch { return false; } };
+  // (As the keeper looks for them: `[ -x … ]`.)
+  return names.filter(name => !name.startsWith(".") && runs(name)).sort(byNumbers);
 }
 
 /** The engine the keeper in `root` starts, or null (none there). */

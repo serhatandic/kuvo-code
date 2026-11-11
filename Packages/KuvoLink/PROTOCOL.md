@@ -1639,16 +1639,20 @@ new version without cutting a turn:
     engine's launch (`RemoteServer.agentsScript`) starts it again five seconds after it ends, and
     gives up after five runs in a row; a launch since October 2026 starts that count again after a
     run of ten minutes (its loop says `-ge 600`), one from before never does, so there it goes
-    only while it has started fewer than four times (one `"url"` line each in `run/agents.log`).
-    Each renewal is one of those runs.
+    only while it has started fewer than four times (one `"url"` line each in `run/agents.log`;
+    a log it can't read counts as full), and otherwise waits for a restart (`waits: "restart"`),
+    holding nothing. Each renewal is one of those runs. A check that couldn't run (out of memory,
+    a minute gone) is tried again at the next look.
 
   It goes:
   - **At the first quiet moment**: nothing has run for half a minute: no turn (a subagent's, a
     message being handed to one or on its way to a subagent, the files kept after one, a session
     being deleted), no `!` command of yours, no discussion in a group chat here (a chat talking, a
-    bot's answer being read), no request being answered (but the event feed), nothing an agent
+    bot's answer being read), no request coming in (counted until its answer begins: a download's
+    body, or the event feed, isn't waited for), nothing an agent
     left running in the background, no side question being answered, review being read, handoff
-    being written, goal being checked, or sign-in waiting for you. Then it holds new turns, and a
+    being written, goal being checked, or sign-in waiting for you; a turn ending or a request
+    coming in starts the half minute again. Then it holds new turns, and a
     second later, if it's still quiet, it stops as it always does (what it has is kept) and exits,
     and its launch starts the new bundle. If that second wasn't quiet, it lets go and looks again.
   - **When there isn't one**: after an hour, in the night's window (02:00 to 05:00 in `KUVO_TZ`),
@@ -1656,7 +1660,8 @@ new version without cutting a turn:
     would start a turn stays in its session's line (`inbox`, kept with the session, marked `held`,
     and switched to `delivery: "steer"` so it goes first). Turns under way go on to their end,
     steering into them too; a group chat's seat (`metadata.kuvo.seat`) isn't held, so a discussion
-    under way goes on to its end, and so does a turn an agent starts on its own (a command it left
+    under way goes on to its end (a new one, a message of yours to a chat meanwhile, starts too, and
+    is waited for, within the half hour below), and so does a turn an agent starts on its own (a command it left
     running ended). Then it goes, whatever else is under way (what agents left running in the
     background, a side question, review, handoff or sign-in): each ends as it does at any restart,
     and says so. Half an hour after it began holding, still not gone (a turn waiting on you
