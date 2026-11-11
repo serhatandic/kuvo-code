@@ -942,7 +942,7 @@ final class MachineEngine {
     @ObservationIgnored private var downCheck: Task<Void, Never>?
     /// Goes up with each disconnection, so a check from an earlier connection stops.
     @ObservationIgnored private var connections = 0
-    /// How long its feed may be down before it's checked (`Reach.grace`; tests set it).
+    /// How long its feed may be down before it's checked (`Reach.grace`).
     @ObservationIgnored var awayDelay: Duration = Reach.grace
 
     /// The live feed went down. It comes back by itself after a blip, and a busy machine (a heavy
@@ -961,12 +961,16 @@ final class MachineEngine {
                 guard let self else { return true }
                 return isLive || state != .ready || connections != connection
             }, check: {
+                // Only the engine's own answer counts: a tunnel whose far end is gone still takes
+                // the connection and then fails it, and an engine started again behind it with
+                // another password refuses this one (401).
                 do {
                     _ = try await api.info()
                     return true
+                } catch let error as ServerError {
+                    return error.status != 401
                 } catch {
-                    // Answered, though with an error: it's there.
-                    return !(error is CancellationError) && !Reach.isTransient(error)
+                    return false
                 }
             })
             // The feed came back meanwhile (which cancels this): nothing was lost.

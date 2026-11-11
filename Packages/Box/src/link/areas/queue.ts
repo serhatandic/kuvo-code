@@ -7,7 +7,7 @@ import { wakeMarkOf } from "../../shared/queues";
 import { MOVING } from "../bots/here";
 import { frozen, liveMoves } from "../moves/records";
 import { followed } from "../follow";
-import { placeOfSession, placeOfSessionPatiently } from "../letters/letter";
+import { isRefused, placeOfSession, placeOfSessionPatiently } from "../letters/letter";
 import { targetsOf } from "../letters/tools";
 import { asked } from "../engine/client";
 import { dropWaiting, holdQueue, inboxFor, keepWaitingBefore, queueFollowers, queueOf, readQueues, resumeQueue, sendNow, showsQueue, shownQueue } from "../engine/queue";
@@ -68,8 +68,14 @@ export async function* queueRoute(context: RouteContext, match: RegExpMatchArray
   // is asked again, and still slow, says so, for its client to try again (#443).
   const targets = targetsOf({ readEngine, bridge });
   if (!targets.length) return yield* json(503, { message: "The engine isn't running." });
-  const place = await placeOfSessionPatiently(session, targets).catch(() => undefined);
-  if (place === undefined) return yield* json(504, { message: BUSY, busy: true });
+  let place: Awaited<ReturnType<typeof placeOfSessionPatiently>>;
+  try {
+    place = await placeOfSessionPatiently(session, targets);
+  } catch (error) {
+    // Nothing listening where its record says: it isn't running. Else it's there, and too busy.
+    if (isRefused(error)) return yield* json(503, { message: "The engine isn't running." });
+    return yield* json(504, { message: BUSY, busy: true });
+  }
   if (!place) return yield* json(404, { message: "There's no such conversation here." });
   try {
     if (action === "stop") return yield* json(200, shownQueue(await stopConversation(place.target, { ...place.data, id: session })));

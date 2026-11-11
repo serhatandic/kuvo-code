@@ -54,8 +54,12 @@ struct ReachTests {
         #expect(await Reach.answers(within: .seconds(3600)) { true })
     }
 
-    // The link failing is told apart from the request failing: what was read is read again then.
+    // The link failing is told apart from the request failing: what was read is read again then,
+    // soon at first, then less often while the computer stays slow.
     @Test func linkFailuresAreToldApartFromTheRequestsOwn() {
+        #expect(Reach.readAgain(after: 1) == .seconds(2))
+        #expect(Reach.readAgain(after: 3) == .seconds(8))
+        #expect(Reach.readAgain(after: 9) == .seconds(30))
         #expect(Reach.isTransient(URLError(.timedOut)))
         #expect(Reach.isTransient(URLError(.networkConnectionLost)))
         #expect(Reach.isTransient(NSError(domain: NSURLErrorDomain, code: URLError.cannotConnectToHost.rawValue)))

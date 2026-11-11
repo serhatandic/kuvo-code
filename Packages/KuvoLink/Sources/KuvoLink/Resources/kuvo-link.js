@@ -1878,7 +1878,8 @@ async function placeOfSession(session, targets, timeout = 1e4) {
       if (response.status !== 404)
         unsure = new Error(`It answered ${response.status}.`);
     } catch (error) {
-      unsure = error;
+      if (!unsure || isRefused(unsure))
+        unsure = error;
     }
   }
   if (unsure)
@@ -1886,6 +1887,10 @@ async function placeOfSession(session, targets, timeout = 1e4) {
   return null;
 }
 var PLACE_TRIES = [1e4, 20000];
+var isRefused = (error) => {
+  const said = error;
+  return [said?.code, said?.cause?.code].some((code) => code === "ECONNREFUSED" || code === "ConnectionRefused");
+};
 async function placeOfSessionPatiently(session, targets) {
   let unsure = null;
   for (const timeout of PLACE_TRIES) {
@@ -1893,7 +1898,7 @@ async function placeOfSessionPatiently(session, targets) {
       return await placeOfSession(session, targets, timeout);
     } catch (error) {
       unsure = error;
-      if (!targets.length)
+      if (isRefused(error))
         break;
     }
   }
@@ -35222,11 +35227,14 @@ async function* queueRoute(context, match) {
   const targets = targetsOf({ readEngine, bridge });
   if (!targets.length)
     return yield* json(503, { message: "The engine isn't running." });
-  const place = await placeOfSessionPatiently(session, targets).catch(() => {
-    return;
-  });
-  if (place === undefined)
+  let place;
+  try {
+    place = await placeOfSessionPatiently(session, targets);
+  } catch (error) {
+    if (isRefused(error))
+      return yield* json(503, { message: "The engine isn't running." });
     return yield* json(504, { message: BUSY, busy: true });
+  }
   if (!place)
     return yield* json(404, { message: "There's no such conversation here." });
   try {

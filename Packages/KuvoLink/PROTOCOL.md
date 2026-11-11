@@ -953,7 +953,8 @@ the same for every client and with none connected, and keeps them in `run/queues
   same order); with no `before`, or one that isn't waiting any more, last. The order it all goes
   in, and clients show: `held` in its order (in the engine or on the box), then the engine's for
   the next step, then its queue, then the rest of what waits on the box. Each answers the queue as it is
-  now; 404 for no such session here, 503 with no engine, 502 when the engine refused. 504
+  now; 404 for no such session here, 503 with no engine (none recorded, or nothing listening where
+  it's recorded), 502 when the engine refused. 504
   (`{message, busy: true}`) when the engine runs but didn't answer in time (a busy computer: it's
   asked twice, 10 s then 20 s, before that; bridge 0.9.212): it isn't down, nothing was done, and
   a client says so in those words (#443). `queue/add` waits up to two minutes for the engine to

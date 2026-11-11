@@ -815,10 +815,12 @@ final class SessionModel {
             isLoaded = true
             isCopy = false
             keepCopy()
+            quietReads = 0
         } catch let error where isLoaded && Reach.isTransient(error) {
-            // Its machine's link went, not the read: what shows stays, and is read again once the
-            // link's back (or its machine's bar says it's out of reach), with no failure said
-            // (KuvoClient's `Reach`).
+            // Its computer was slow to answer or its link went, not the read: what shows stays, with
+            // no failure said, and it's read again quietly in a moment (then less often while it
+            // stays slow), or once its link is back (KuvoClient's `Reach`, as on the phone).
+            readAgainSoon()
         } catch {
             fail(error)
             // Its machine is back but this one couldn't be read: no longer waiting, so the
@@ -827,6 +829,21 @@ final class SessionModel {
         }
         refreshChanges()
     }
+
+    /// A read its computer was too slow or too far to answer, tried again a moment later (then less
+    /// often, `Reach.readAgain`), while it can be reached; a newer read takes its place.
+    private func readAgainSoon() {
+        quietReads += 1
+        let wait = Reach.readAgain(after: quietReads)
+        quietRead?.cancel()
+        quietRead = Task { [weak self] in
+            try? await Task.sleep(for: wait)
+            guard let self, !Task.isCancelled, canReach else { return }
+            await load()
+        }
+    }
+    @ObservationIgnored private var quietRead: Task<Void, Never>?
+    @ObservationIgnored private var quietReads = 0
 
     func apply(_ event: ServerEvent) {
         if !cameDuringRead.isEmpty, Transcript.changes(with: event.type) {

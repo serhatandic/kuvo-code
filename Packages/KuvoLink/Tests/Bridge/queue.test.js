@@ -103,7 +103,7 @@ beforeEach(() => {
   whenLooked = null;
   stalls = 0;
   for (const response of stalled.splice(0)) response.destroy();
-  link.PLACE_TRIES?.splice(0, Infinity, 10_000, 20_000);
+  link.PLACE_TRIES.splice(0, Infinity, 10_000, 20_000);
   fs.rmSync(path.join(home, "run", "queues.json"), { force: true });
   fs.rmSync(path.join(home, "run", "waiting"), { recursive: true, force: true });
 });
@@ -812,7 +812,7 @@ test("the box's stream connecting again while a coding agents' run kept its file
 // #443: a box under heavy load, whose engine runs but answers late.
 test("a message added while the engine is slow to answer goes once it answers, not refused as if the engine weren't running", async () => {
   inboxes.ses_1 = [];
-  link.PLACE_TRIES?.splice(0, Infinity, 100, 2_000);
+  link.PLACE_TRIES.splice(0, Infinity, 100, 2_000);
   stalls = 1;
   const added = await ask("POST", "kuvo/sessions/ses_1/queue/add", { id: "msg_q1", text: "After this, the docs." });
   assert.deepEqual([added.status, added.json.waits], [200, false], JSON.stringify(added.json));
@@ -821,11 +821,27 @@ test("a message added while the engine is slow to answer goes once it answers, n
 
 test("an engine that stays too busy to answer says it's busy, to try again, never that it isn't running", async () => {
   inboxes.ses_1 = [];
-  link.PLACE_TRIES?.splice(0, Infinity, 50, 100);
+  link.PLACE_TRIES.splice(0, Infinity, 50, 100);
   stalls = 2;
   const added = await ask("POST", "kuvo/sessions/ses_1/queue/add", { id: "msg_q1", text: "After this, the docs." });
   assert.equal(added.status, 504);
   assert.equal(added.json.busy, true);
   assert.doesNotMatch(added.json.message, /isn.t running/);
   assert.deepEqual(prompted, [], "nothing went: it can be asked again");
+});
+
+test("an engine whose record outlived it (nothing listens there) is said not to be running, at once, not busy", async () => {
+  inboxes.ses_1 = [];
+  const closed = http.createServer();
+  await new Promise(resolve => closed.listen(0, "127.0.0.1", resolve));
+  const port = closed.address().port;
+  await new Promise(resolve => closed.close(resolve));
+  const was = target.port;
+  target.port = port;
+  try {
+    const added = await ask("POST", "kuvo/sessions/ses_1/queue/add", { id: "msg_q1", text: "After this, the docs." });
+    assert.deepEqual([added.status, added.json.message, added.json.busy], [503, "The engine isn't running.", undefined]);
+  } finally {
+    target.port = was;
+  }
 });

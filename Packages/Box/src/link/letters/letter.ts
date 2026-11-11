@@ -59,21 +59,30 @@ export async function placeOfSession(session: string, targets: Target[], timeout
       if (response.ok) return { target, data: (await (response.json() as Promise<{ data?: EngineSession } | null>).catch(() => null))?.data ?? {} };
       if (response.status !== 404) unsure = new Error(`It answered ${response.status}.`);
     } catch (error) {
-      unsure = error;
+      // (One that answered late, or wrongly, says more than one where nothing listens.)
+      if (!unsure || isRefused(unsure)) unsure = error;
     }
   }
   if (unsure) throw unsure;
   return null;
 }
 
-// How long each try of `placeOfSessionPatiently` waits for an answer: a busy computer's engine (a
-// load of 150 to 200) can take longer than the first, and a client waits on it (a message being
-// sent). Together under the minute a phone's request waits with nothing back.
+// How long each try of `placeOfSessionPatiently` waits for an answer from each of the engine and
+// the agents' bridge: a busy computer's engine (a load of 150 to 200) can take longer than the
+// first, and a client waits on it (a message being sent).
 export const PLACE_TRIES = [10_000, 20_000];
+
+// Whether `error` is a connection refused: nothing listens where the engine's record says, so it
+// isn't running (it stopped, or crashed and its record outlived it), rather than busy. (Node says
+// ECONNREFUSED, under the error's cause; Bun, ConnectionRefused.)
+export const isRefused = (error: unknown): boolean => {
+  const said = error as { code?: unknown; cause?: { code?: unknown } } | null;
+  return [said?.code, said?.cause?.code].some(code => code === "ECONNREFUSED" || code === "ConnectionRefused");
+};
 
 // `placeOfSession`, for a client waiting on it: an engine that doesn't answer in time is asked
 // again, longer, rather than taken for one that isn't running (#443). It throws as that does once
-// every try was unsure.
+// every try was unsure, or at once where nothing listens (`isRefused`).
 export async function placeOfSessionPatiently(session: string, targets: Target[]): Promise<SessionPlace | null> {
   let unsure: unknown = null;
   for (const timeout of PLACE_TRIES) {
@@ -81,7 +90,7 @@ export async function placeOfSessionPatiently(session: string, targets: Target[]
       return await placeOfSession(session, targets, timeout);
     } catch (error) {
       unsure = error;
-      if (!targets.length) break;
+      if (isRefused(error)) break;
     }
   }
   throw unsure;

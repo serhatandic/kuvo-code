@@ -84,8 +84,8 @@ struct SessionView: View {
         kept.contains { $0.id == model.id } ? kept : [model] + kept.prefix(keptCount - 1)
     }
 
-    /// The machine a session runs on, while it can't be reached (connecting again), or its
-    /// conversation hasn't taken the new connection yet.
+    /// The machine a session runs on, while it's out of reach (its connection lost, connecting
+    /// again), or its conversation hasn't taken the new connection yet.
     static func offlineMachine(of model: SessionModel, in app: AppModel) -> MachineEngine? {
         guard let id = RemoteFolder.machine(of: model.session.location.directory), let engine = app.machines.engine(id) else { return nil }
         // Its feed down for now isn't an outage: KuvoClient's `Reach` decides when it is, and the

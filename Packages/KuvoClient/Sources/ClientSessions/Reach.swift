@@ -59,6 +59,13 @@ public enum Reach {
         }
     }
 
+    /// How long before reading again what only a link failure kept from being read
+    /// (`isTransient`), after `tries` such reads in a row: soon, then less often, up to half a
+    /// minute apart while the computer stays slow.
+    public static func readAgain(after tries: Int) -> Duration {
+        .seconds(min(1 << min(max(tries, 1), 5), 30))
+    }
+
     /// A request that failed only because its computer was slow or out of reach: it timed out with
     /// nothing back, the connection dropped, or none could be made. Nothing went wrong in what was
     /// asked (an agent's turn goes on through it): what was being read is read again quietly. (A
