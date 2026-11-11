@@ -38,14 +38,19 @@ public struct MachinePieces: Decodable, Equatable, Sendable {
         public var running: String?
         public var current: String?
         public var behind: Bool
-        /// While it's behind, how it makes way (nil: one that doesn't by itself, from before).
+        /// While it's behind, since when a newer one waits, and whether new messages wait for it.
         public var renewal: Renewal?
+        /// While it's behind, what it waits for, as its box says: `quiet` (a moment nothing runs),
+        /// `holding` (the turns under way, new messages waiting), `engine` (the engine that came
+        /// with it), `restart` (its engine to start again: it won't make way by itself).
+        public var waits: String?
 
-        public init(running: String?, current: String?, behind: Bool, renewal: Renewal?) {
+        public init(running: String?, current: String?, behind: Bool, renewal: Renewal?, waits: String?) {
             self.running = running
             self.current = current
             self.behind = behind
             self.renewal = renewal
+            self.waits = waits
         }
     }
 
@@ -64,12 +69,11 @@ public struct MachinePieces: Decodable, Equatable, Sendable {
     public var line: String? {
         var said: [String] = []
         if agents.behind {
-            if agents.renewal?.holding == true {
-                said.append("Its coding agents are moving to a new version: new messages wait until the turns under way finish.")
-            } else if agents.running != nil || agents.renewal != nil {
-                said.append("Its coding agents move to a new version once nothing runs there.")
-            } else {
-                said.append("Its coding agents run an older version until its engine next starts.")
+            switch agents.waits {
+            case "holding": said.append("Its coding agents are moving to a new version: new messages wait until the turns under way finish.")
+            case "quiet": said.append("Its coding agents move to a new version once nothing runs there.")
+            case "engine": said.append("Its coding agents move to a new version with its new engine.")
+            default: said.append("Its coding agents run an older version until its engine next starts.")
             }
         }
         if engine.behind {
