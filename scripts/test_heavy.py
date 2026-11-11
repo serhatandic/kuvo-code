@@ -237,6 +237,9 @@ class HeavyTests(unittest.TestCase):
         """Stopped, or its pid now another process's (here, this test's): it leaves the line."""
         self.in_line(f"0-000000000000-{os.getpid()}-1", seen=int(time.time()) - 120)
         self.assertEqual(self.run_heavy("box", "true"), (0, ""))
+        # One that never said when (cut short as it did) neither.
+        open(os.path.join(self.queue(), f"0-000000000001-{os.getpid()}-1"), "w").close()
+        self.assertEqual(self.run_heavy("box", "true"), (0, ""))
 
     def test_a_new_job_goes_after_those_in_line_whatever_became_of_the_last_number(self):
         self.in_line(f"1-000000000005-{os.getpid()}-1")

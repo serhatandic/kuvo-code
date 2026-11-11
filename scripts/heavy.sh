@@ -264,10 +264,10 @@ esac
 QUEUE="$DIR/kuvo-code-heavy-$kind-$(id -u).queue"
 # Whose turn it is, run under the guard ($1 the queue, $2 and $3 the slots' locks, $4 this job's
 # entry or "new", $5 its priority, $6 its pid, $7 the slots it may take, $8 0 when it doesn't wait).
-# A slot already given to this job (its last look was cut short) is its own still; a new job gets
-# its entry (or finds the one it had). A job's look keeps its place; one that's gone, or hasn't
-# looked for 30 seconds (stopped, or its pid now another process's), leaves the line, and comes back
-# with its number when it looks again. A process is gone only when there's no such process: a
+# A slot given to this job in the last 30 seconds (its last look was cut short) is its own still; a
+# new job gets its entry (or finds the one it had, as it was). A job's look keeps its place; one
+# that's gone, or hasn't looked for 30 seconds (stopped, or its pid now another process's), leaves
+# the line, and comes back with its number when it looks again. A process is gone only when there's no such process: a
 # sandbox may refuse to signal one that runs. A slot is free when its lock isn't held and no one has
 # a claim on it (one older than 30 seconds, on a lock no one holds, is none). The free slots go to the
 # jobs in line in order, each to the first that may take it; a job that may take either takes slot
@@ -291,12 +291,20 @@ number() {
 }
 for n in 1 2; do
     owner=
+    since=
     [ ! -f "claim-$n" ] || read -r owner since < "claim-$n" || true
-    if [ "$owner" = "$me" ]; then
-        rm -f "$ticket"
+    [ "$owner" = "$me" ] || continue
+    number "$since"
+    if [ "$num" -gt 0 ] && [ $((now - num)) -le 30 ]; then
+        for entry in [01]-*; do
+            rest=${entry#?-}
+            owner=${rest#*-}
+            [ "${owner%-*}" != "$me" ] || rm -f "$entry"
+        done
         echo "slot $n"
         exit 0
     fi
+    rm -f "claim-$n"
 done
 last=0
 [ ! -f sequence ] || read -r last < sequence || true
@@ -311,10 +319,10 @@ for entry in [01]-*; do
     read -r seen < "$entry" || true
     number "$seen"
     seen=$num
-    if [ "$ticket" = new ] && [ "$owner" = "$me" ]; then
-        ticket=$entry
-    elif gone "$owner" || { [ "$seen" -gt 0 ] && [ $((now - seen)) -gt 30 ]; }; then
+    if gone "$owner" || [ "$seen" = 0 ] || [ $((now - seen)) -gt 30 ]; then
         rm -f "$entry"
+    elif [ "$ticket" = new ] && [ "$owner" = "$me" ] && [ "${entry%%-*}" = "$priority" ] && [ "${entry##*-}" = "$slots" ]; then
+        ticket=$entry
     fi
     number "${rest%%-*}"
     [ "$num" -le "$last" ] || last=$num
