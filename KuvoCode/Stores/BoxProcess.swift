@@ -95,11 +95,22 @@ final class BoxProcess {
         // start in a folder that isn't there (the settings would go unasked, with no word of why).
         try? FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
         // In its folder, as the box starts. Its end from `ChildProcess`, which never misses it, nor
-        // waits on something it left running that holds its output open.
-        guard let result = try? await ChildProcess.run(engine.path, ["run", "--config=/dev/null", "--no-env-file", script.path, "engine-config"],
-                                                       environment: env, directory: home, errors: .discard, limit: .seconds(timeout)),
-              !result.timedOut, result.reason == .exit, result.status == 0,
-              let text = String(data: result.output, encoding: .utf8), text.hasPrefix("{"), text.hasSuffix("}") else { return content }
+        // waits on something it left running that holds its output open. Without its settings the
+        // engine starts all the same, and the log says why.
+        let result: ChildProcess.Result
+        do {
+            result = try await ChildProcess.run(engine.path, ["run", "--config=/dev/null", "--no-env-file", script.path, "engine-config"],
+                                                environment: env, directory: home, errors: .discard, limit: .seconds(timeout))
+        } catch {
+            log.error("This Mac's box couldn't add to the engine's settings: \(error.localizedDescription, privacy: .public)")
+            return content
+        }
+        guard result.succeeded, let text = String(data: result.output, encoding: .utf8), text.hasPrefix("{"), text.hasSuffix("}") else {
+            let why = result.timedOut ? "no answer within \(timeout) seconds" : result.succeeded ? "its answer isn't settings"
+                : result.reason == .uncaughtSignal ? "it was stopped by signal \(result.status)" : "it ended with status \(result.status)"
+            log.error("This Mac's box added nothing to the engine's settings: \(why, privacy: .public)")
+            return content
+        }
         return text
     }
 
