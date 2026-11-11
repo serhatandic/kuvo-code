@@ -77,6 +77,20 @@ public final class VoiceInput {
         }
     }
 
+    /// This start got as far as listening: a failure after it stopped voice input, one before it
+    /// (the microphone not allowed or not coming on, a model that wouldn't get ready) never started it.
+    public private(set) var listened = false
+
+    /// What it's doing, in a few words, as a heading over what you say (the voice field's).
+    public var status: String {
+        switch phase {
+        case .preparing(let progress): progress.map { "Getting voice ready… \(Int(($0 * 100).rounded()))%" } ?? "Getting voice ready…"
+        case .finishing: "Finishing…"
+        case .failed: listened ? "Voice input stopped" : "Voice input couldn’t start"
+        case .idle, .listening: "Listening"
+        }
+    }
+
     @ObservationIgnored private var engine: AVAudioEngine?
     @ObservationIgnored private var analyzer: SpeechAnalyzer?
     @ObservationIgnored private var inputs: AsyncStream<AnalyzerInput>.Continuation?
@@ -117,6 +131,7 @@ public final class VoiceInput {
         recentLevels = []
         listeningSince = nil
         meter = VoiceLevel()
+        listened = false
         phase = .preparing(progress: nil)
         if model.listensWithWhisper, let folder = model.modelFolder {
             usesWhisper = true
@@ -181,6 +196,7 @@ public final class VoiceInput {
         self.level = level
         recentLevels = (0..<Self.recentCount).map { index in 0.15 + 0.8 * abs(sin(Double(index) / 4.3)) * (0.6 + 0.4 * abs(cos(Double(index) / 1.7))) }
         listeningSince = Date().addingTimeInterval(-7)
+        listened = true
         phase = .listening
     }
     #endif
@@ -266,12 +282,14 @@ public final class VoiceInput {
             } catch {
                 return fail(Self.failure(of: error, .microphone), run: run)
             }
+            listened = true
             phase = .listening
             listeningSince = .now
             try await analyzer.start(inputSequence: stream)
         } catch {
             guard self.run == run else { return }
-            fail(Self.failure(of: error, .listening(wroteSome: !transcript.isEmpty)), run: run)
+            // Before the microphone came on, it was still getting ready: nothing stopped.
+            fail(Self.failure(of: error, listened ? .listening(wroteSome: !transcript.isEmpty) : .gettingReady), run: run)
         }
     }
 
@@ -312,11 +330,12 @@ public final class VoiceInput {
             try await dictation.prepare()
         } catch {
             await dictation.stop()
-            return fail(.other("Voice input couldn’t start. Try again; if it keeps stopping, remove the voice model in Settings and download it again."), run: run)
+            return fail(.other("Whisper couldn’t load. Try again; if it still doesn’t, remove its download under Voice Input in Settings and download it again."), run: run)
         }
         guard self.run == run else { return await dictation.stop() }
         // Done while it loaded: it's finishing, and writes what was said.
         if isPreparing {
+            listened = true
             phase = .listening
             listeningSince = .now
         }
@@ -435,7 +454,7 @@ public final class VoiceInput {
         ended?(words)
     }
 
-    private func fail(_ failure: Failure, run: Int) {
+    func fail(_ failure: Failure, run: Int) {
         guard self.run == run else { return }
         stopMicrophone()
         // Apple's dictation lets go of its model, as when it's canceled: nothing more comes.
