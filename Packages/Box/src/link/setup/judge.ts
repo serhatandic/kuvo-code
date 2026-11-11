@@ -199,8 +199,10 @@ function judgedOf(found: FoundBox, verdict: JudgedBox["verdict"]): JudgedBox {
  * box is among them; `free` with nothing anyone's; the one verdict of the one box that's someone's;
  * `ours` when each box there is; `two` for boxes of more than one setup on one computer (an app's,
  * and a `~/.kuvo-code` another Mac set up). It `joins` with nothing to ask when it's another setup's
- * main computer whose setup is empty: no other computer in it and no work (as its card says: a lie
- * there skips a question at most, as the join brings what's there in all the same). */
+ * main computer that's no Mac's own app (a lone machine: a Mac's app would open as a window from
+ * then on, which you choose) and whose setup is empty: no other computer in it and no work (as its
+ * card says: a lie there skips a question at most, as the join brings what's there in all the
+ * same). */
 export function judgeComputer(found: readonly FoundBox[], ours: Ours): Judged {
   const boxes = found.slice(0, MOST_BOXES).map(each => judgedOf(each, judgeBox(each, ours)));
   const someones = boxes.filter(each => each.verdict !== "free");
@@ -209,7 +211,7 @@ export function judgeComputer(found: readonly FoundBox[], ours: Ours): Judged {
     : someones.length === 1 ? someones[0].verdict
     : someones.every(each => each.verdict === "ours") ? "ours"
     : "two";
-  const joins = verdict === "main" && someones[0].computers <= 1 && someones[0].items === 0;
+  const joins = verdict === "main" && !someones[0].app && someones[0].computers <= 1 && someones[0].items === 0;
   return { verdict, joins, boxes };
 }
 
@@ -259,15 +261,23 @@ export function judgeHere(own: FoundBox | null, machine: FoundBox | null): Here 
  * the integrations' catalog), so it's there on a Mac whose app attached to the box in place too. */
 const OWN_BOX_RAN = ["setup-card.json", "link.json", "serve.json", "keeper.json"];
 
+/** Whether the app's own engine kept your sessions in its data folder (`KUVO_ENGINE_DATA`, as the
+ * app gives its box: its database, `opencode*.db`). A version from before its box had a folder, or
+ * one that quit cleanly, leaves nothing else to say so. Never a default folder: the machines' is
+ * another box's. */
+function engineKept(engineData: string | undefined): boolean {
+  if (!engineData) return false;
+  try { return fs.readdirSync(engineData).some(file => /^opencode.*\.db$/.test(file)); } catch { return false; }
+}
+
 /** `here` on this Mac now: the app's own box in its folder (`appBox`, this process's `KUVO_HOME`),
- * once a box ran there, or once the app's own engine kept your sessions (`ownData`, which the app
- * says: a version from before its box had a folder, or one that quit cleanly, leaves no record
- * there), and the box in `~/<root>` (`.kuvo-code`, or a test's or a demo copy's own folder). Both
- * folders must be said: guessed, a copy could attach to the wrong one. */
-export function hereNow(root: string, appBox: string | undefined = process.env.KUVO_HOME, home = homeFolder(), ownData = false): Here {
+ * once a box ran there or its own engine kept your sessions (`engineData`, `KUVO_ENGINE_DATA`), and
+ * the box in `~/<root>` (`.kuvo-code`, or a test's or a demo copy's own folder). Both box folders
+ * must be said: guessed, a copy could attach to the wrong one. */
+export function hereNow(root: string, appBox: string | undefined = process.env.KUVO_HOME, home = homeFolder(), engineData = process.env.KUVO_ENGINE_DATA): Here {
   const machine = path.join(home, root || "");
   if (!root || !appBox || path.resolve(appBox) === path.resolve(machine)) throw new Error("kuvo-link.js here needs KUVO_HOME, the app's own box's folder, and the machines' folder's name: here <root>.");
-  const ownRan = ownData || OWN_BOX_RAN.some(file => fs.existsSync(path.join(appBox, "run", file)));
+  const ownRan = engineKept(engineData) || OWN_BOX_RAN.some(file => fs.existsSync(path.join(appBox, "run", file)));
   const own = ownRan ? foundAt(appBox, true, home) ?? { folder: shownFolder(appBox, home), app: true } : null;
   return judgeHere(own, foundAt(machine, false, home));
 }

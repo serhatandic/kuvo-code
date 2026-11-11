@@ -99,7 +99,7 @@ test("each verdict, as a Mac adding a computer hears it: nothing there, one of o
   assert.deepEqual([main.boxes[0].computers, main.boxes[0].items, main.boxes[0].name], [3, 37, "iMac"]);
   assert.equal((await verdict(one({ setup: otherSetup, epoch: 1, role: "primary", primary: { key: mini.pub, name: "vps", heard: null }, computers: 1, items: 4 }))).verdict, "main", "a lone box leading a setup of its own");
   const lone = await verdict(one({ self: { key: imac.pub, name: "iMac", kind: "mac" }, app: true }, "Library/Application Support/run.kuvo.code/box", "app"));
-  assert.deepEqual([lone.verdict, lone.joins], ["main", true], "a Mac whose app runs it, in no setup yet, with no work: it joins, with nothing to ask");
+  assert.deepEqual([lone.verdict, lone.joins], ["main", false], "a Mac whose app runs it, in no setup yet, with no work: asked all the same (its app would open as a window from then on)");
   const alone = await verdict(one({ setup: otherSetup, epoch: 1, role: "primary", primary: { key: mini.pub, name: "vps", heard: null }, computers: 1, items: 0 }));
   assert.deepEqual([alone.verdict, alone.joins], ["main", true], "a lone box leading an empty setup of its own");
   assert.equal(member.joins, false, "a member of another setup is moved, never joined without asking");
@@ -148,11 +148,13 @@ test("the probe's lines are what a box's link.json says: a box writes it as the 
 
 // Kuvo Code opening on a Mac, in a home of the test's own: its own box in its app folder, and the
 // one in ~/.kuvo-code.
-function here(setUp, { root = ".kuvo-code", own = true, ownData = false } = {}) {
+function here(setUp, { root = ".kuvo-code", own = true } = {}) {
   const mac = fs.mkdtempSync(path.join(support, "mac-"));
   const appBox = path.join(mac, "Library", "Application Support", "run.kuvo.code", "box");
-  setUp({ machine: path.join(mac, ".kuvo-code", "run"), app: path.join(appBox, "run"), appBox });
-  const result = spawnSync(process.execPath, [script, "here", ...(root ? [root] : []), ...(ownData ? ["--own-data"] : [])], { env: { PATH: process.env.PATH, HOME: mac, TMPDIR: support, ...(own ? { KUVO_HOME: appBox } : {}) }, encoding: "utf8" });
+  // The app's own engine's data folder, as the app gives it (its database there once it kept sessions).
+  const engineData = path.join(mac, "Library", "Application Support", "run.kuvo.code", "opencode", "data", "opencode");
+  setUp({ machine: path.join(mac, ".kuvo-code", "run"), app: path.join(appBox, "run"), appBox, engineData });
+  const result = spawnSync(process.execPath, [script, "here", ...(root ? [root] : [])], { env: { PATH: process.env.PATH, HOME: mac, TMPDIR: support, ...(own ? { KUVO_HOME: appBox, KUVO_ENGINE_DATA: engineData } : {}) }, encoding: "utf8" });
   if (result.status === 2) return { refused: result.stderr };
   assert.equal(result.status, 0, result.stderr);
   return { said: JSON.parse(result.stdout), appBox };
@@ -211,11 +213,13 @@ test("Kuvo Code opening where it has its own box: it goes on using it, with noth
   assert.deepEqual([before.verdict, before.use], ["two", "own"], "never taken from an app that works now");
 
   // An app from before its box had a folder (or one that quit cleanly, leaving no record there): its
-  // own engine kept your sessions, as the app says, so it's its own box all the same.
-  const earlier = here(({ appBox, machine }) => {
+  // own engine kept your sessions, its database where the engine keeps it, so it's its own box all
+  // the same.
+  const earlier = here(({ appBox, machine, engineData }) => {
     write(path.join(appBox, "machines.json"), "[]");
+    write(path.join(engineData, "opencode.db"), "");
     write(path.join(machine, "link.json"), JSON.stringify({ mac: imac.pub, macs: [imac.pub] }, null, 2));
-  }, { ownData: true }).said;
+  }).said;
   assert.deepEqual([earlier.verdict, earlier.use, earlier.opens], ["two", "own", "main"]);
 
   // The old main computer after a handover, or a Mac that joined: its own box is a member now, and

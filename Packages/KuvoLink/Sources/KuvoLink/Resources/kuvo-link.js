@@ -34261,7 +34261,7 @@ function judgeComputer(found, ours) {
   const boxes = found.slice(0, MOST_BOXES).map((each) => judgedOf(each, judgeBox(each, ours)));
   const someones = boxes.filter((each) => each.verdict !== "free");
   const verdict = boxes.some((each) => each.verdict === "self") ? "self" : !someones.length ? "free" : someones.length === 1 ? someones[0].verdict : someones.every((each) => each.verdict === "ours") ? "ours" : "two";
-  const joins = verdict === "main" && someones[0].computers <= 1 && someones[0].items === 0;
+  const joins = verdict === "main" && !someones[0].app && someones[0].computers <= 1 && someones[0].items === 0;
   return { verdict, joins, boxes };
 }
 function foundAt2(folder, app, home = homeFolder()) {
@@ -34294,11 +34294,20 @@ function judgeHere(own, machine) {
   return { verdict, use: "attach", opens: member ? "window" : "main", box, own: null };
 }
 var OWN_BOX_RAN = ["setup-card.json", "link.json", "serve.json", "keeper.json"];
-function hereNow(root, appBox = process.env.KUVO_HOME, home = homeFolder(), ownData = false) {
+function engineKept(engineData) {
+  if (!engineData)
+    return false;
+  try {
+    return fs106.readdirSync(engineData).some((file) => /^opencode.*\.db$/.test(file));
+  } catch {
+    return false;
+  }
+}
+function hereNow(root, appBox = process.env.KUVO_HOME, home = homeFolder(), engineData = process.env.KUVO_ENGINE_DATA) {
   const machine = path113.join(home, root || "");
   if (!root || !appBox || path113.resolve(appBox) === path113.resolve(machine))
     throw new Error("kuvo-link.js here needs KUVO_HOME, the app's own box's folder, and the machines' folder's name: here <root>.");
-  const ownRan = ownData || OWN_BOX_RAN.some((file) => fs106.existsSync(path113.join(appBox, "run", file)));
+  const ownRan = engineKept(engineData) || OWN_BOX_RAN.some((file) => fs106.existsSync(path113.join(appBox, "run", file)));
   const own = ownRan ? foundAt2(appBox, true, home) ?? { folder: shownFolder(appBox, home), app: true } : null;
   return judgeHere(own, foundAt2(machine, false, home));
 }
@@ -40938,7 +40947,7 @@ if (main) {
     leave(argument);
   else if (mode === "here") {
     try {
-      console.log(JSON.stringify(hereNow(argument, process.env.KUVO_HOME, undefined, process.argv.slice(4).includes("--own-data"))));
+      console.log(JSON.stringify(hereNow(argument)));
     } catch (error) {
       console.error(error instanceof Error ? error.message : String(error));
       process.exit(2);
@@ -40990,7 +40999,7 @@ if (main) {
     console.log(ok ? "ok" : "failed");
     process.exit(ok ? 0 : 1);
   } else {
-    console.error("Usage: kuvo-link.js run | serve | setup | pair [relay] | box <command> | leave <mac> | here <root> [--own-data] | engine-config | login-path | update [--now] | browser install|start|status | selftest");
+    console.error("Usage: kuvo-link.js run | serve | setup | pair [relay] | box <command> | leave <mac> | here <root> | engine-config | login-path | update [--now] | browser install|start|status | selftest");
     process.exit(2);
   }
 }

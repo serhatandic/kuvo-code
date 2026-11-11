@@ -295,19 +295,20 @@ setups, and pairing and adding only from the main computer come later: #183.)
     primary: {key, name, heard}, macs, computers, items}]}` (`primary` of an older box: the last Mac
     that set it up), judged against this box (itself, its setup, its peers and Macs); 400 with no
     `probe`. `joins`: adding it joins its setup with nothing to ask, as another setup's main
-    computer whose setup is empty (no other computer in it, no work items; as its card says, so a
-    lie skips a question at most); else the verdict's own question.
-  - **`kuvo-link.js here <root> [--own-data]`**: Kuvo Code on a Mac (the app, and its keeper), before it starts a box, with `KUVO_HOME` its
+    computer that's no Mac's own app (a Mac's app would open as a window from then on, which you
+    choose) and whose setup is empty (no other computer in it, no work items; as its card says, so
+    a lie skips a question at most); else the verdict's own question.
+  - **`kuvo-link.js here <root>`**: Kuvo Code on a Mac (the app, and its keeper), before it starts a box, with `KUVO_HOME` its
     own box's folder (in its app folder) and `root` the machines' folder (`.kuvo-code`, or a
     test's); without either (or with them the same) it stops, exit 2. Prints `{verdict, use:
     "own"|"attach", opens: "main"|"window", box, own}`, `box` and `own` as `boxes` above. `opens`:
     `window` where the box it uses is a member of a setup another computer is main of (a Mac mini
     another Mac set up, one that can't say yet, the old main computer after a handover, a Mac that
     joined: never main by itself, only by Make This Mac the Main One), else `main`. An app whose own box ran (its
-    folder has `run/` `setup-card.json`, `link.json`, `serve.json` or `keeper.json`, or the app
-    says `--own-data`: its own engine kept your sessions, as a version from before its box had a
-    folder, or one that quit cleanly, leaves no record there; never the folder alone, which the
-    app writes in with no box) keeps using it (`ours`, `free`, or `two`
+    folder has `run/` `setup-card.json`, `link.json`, `serve.json` or `keeper.json`, or its own
+    engine kept your sessions: an `opencode*.db` in `KUVO_ENGINE_DATA`, the engine's data folder
+    the app gives its box, as a version from before its box had a folder, or one that quit
+    cleanly, leaves no record there; never the folder alone, which the app writes in with no box) keeps using it (`ours`, `free`, or `two`
     beside another setup's `~/.kuvo-code`); one with none uses the `~/.kuvo-code` box that's there,
     in place (`attach`: never a second box on one computer), with that box's verdict; with neither,
     its own. It writes nothing, and makes no folder.

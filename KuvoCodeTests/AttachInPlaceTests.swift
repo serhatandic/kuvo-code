@@ -39,21 +39,35 @@ import Testing
         try JSONSerialization.data(withJSONObject: value).write(to: url)
     }
 
-    /// Started, with `setUp`'s home; `ownSessions`: this app's own engine kept your sessions before.
-    private func started(ownSessions: Bool = false, hereFails: Bool = false, _ setUp: () throws -> Void) async throws -> AppModel {
+    /// The engine's databases in its data folder (`opencode.db` and the like), as it keeps them.
+    private var databases: [URL] {
+        let data = AppModel.engineFolders.dataDirectory
+        let files = (try? FileManager.default.contentsOfDirectory(atPath: data.path)) ?? []
+        return files.filter { $0.hasPrefix("opencode") && $0.hasSuffix(".db") }.map { data.appending(path: $0) }
+    }
+
+    /// The engine's stand-in, with `setUp`'s home; `ownSessions`: this app's own engine kept your
+    /// sessions before, its database where the engine keeps it.
+    private func prepared(ownSessions: Bool = false, hereFails: Bool = false, _ setUp: () throws -> Void) throws -> URL {
         let binary = try fakeEngine(hereFails: hereFails)
         try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
         try setUp()
         try? FileManager.default.removeItem(at: BoxProcess.home)
-        try? FileManager.default.removeItem(at: AppModel.engineFolders.dataDirectory.appending(path: "opencode"))
+        for database in databases { try? FileManager.default.removeItem(at: database) }
         if ownSessions {
-            let data = AppModel.engineFolders.dataDirectory.appending(path: "opencode")
+            let data = AppModel.engineFolders.dataDirectory
             try FileManager.default.createDirectory(at: data, withIntermediateDirectories: true)
             try Data().write(to: data.appending(path: "opencode.db"))
         }
+        AppModel.hereHome = home
+        return binary
+    }
+
+    /// Started, as `prepared`.
+    private func started(ownSessions: Bool = false, hereFails: Bool = false, _ setUp: () throws -> Void) async throws -> AppModel {
+        let binary = try prepared(ownSessions: ownSessions, hereFails: hereFails, setUp)
         setenv("KUVO_OPENCODE_BINARY", binary.path(percentEncoded: false), 1)
         AppModel.attachesInPlace = true
-        AppModel.hereHome = home
         let app = AppModel()
         await app.start()
         return app
@@ -63,7 +77,7 @@ import Testing
         app?.stop()
         AppModel.attachesInPlace = false
         BackgroundWork.attachedHere = false
-        try? FileManager.default.removeItem(at: AppModel.engineFolders.dataDirectory.appending(path: "opencode"))
+        for database in databases { try? FileManager.default.removeItem(at: database) }
         AppModel.hereHome = FileManager.default.homeDirectoryForCurrentUser
         unsetenv("KUVO_OPENCODE_BINARY")
         try? FileManager.default.removeItem(at: folder)
@@ -124,5 +138,42 @@ import Testing
         guard case .failed(let reason) = app?.engine else { Issue.record("it doesn't start: \(String(describing: app?.engine))"); return }
         #expect(reason.contains("didn’t start one of its own"))
         #expect(!FileManager.default.fileExists(atPath: BoxProcess.home.path))
+    }
+
+    /// The keeper launchd starts (registered before, or by Turn On) asks too, before it writes
+    /// anything: on the Mac mini it starts no box and ends as it should; where it can't tell, it's
+    /// started again later; beside sessions of the app's own, it runs as always.
+    @Test func theKeeperStartsNoSecondBox() async throws {
+        defer { cleanUp(nil) }
+        let mini = try prepared { try memberOfMacBooks() }
+        #expect(await Keeper.gated(engine: mini, checked: false) == .stopped)
+        #expect(!FileManager.default.fileExists(atPath: BoxProcess.home.path), "nothing of its own written: not even its folder")
+
+        let silent = try prepared(hereFails: true) { try memberOfMacBooks() }
+        #expect(await Keeper.gated(engine: silent, checked: false) == .again)
+
+        let own = try prepared(ownSessions: true) { try memberOfMacBooks() }
+        #expect(await Keeper.gated(engine: own, checked: false) == nil)
+        // An update whose engine isn't downloaded yet can't ask: its own sessions keep its own box.
+        #expect(await Keeper.gated(engine: nil, checked: false) == nil)
+    }
+
+    /// An engine that isn't the one Kuvo Code downloaded runs nothing, the box's CLI neither: with a
+    /// box here, the start says what to do about it.
+    @Test func anEngineThatIsntItsOwnIsNeverAsked() async throws {
+        defer { cleanUp(nil) }
+        let binary = try prepared { try memberOfMacBooks() }
+        let outcome = await Here.gate(engine: binary, script: BoxProcess.script, appBox: BoxProcess.home, engineData: AppModel.engineFolders.dataDirectory,
+                                      home: home, checked: true)
+        guard case .unknown(let why) = outcome else { Issue.record("asked all the same: \(outcome)"); return }
+        #expect(why?.contains("engine") == true)
+    }
+
+    /// Only the real app looks at the real `~/.kuvo-code`; a demo, test or measurement copy does with
+    /// a folder of its own.
+    @Test func copiesNeverLookAtTheRealMachinesFolder() {
+        #expect(Here.machinesRoot(bundleID: "run.kuvo.code", hostingTests: false, given: ".kuvo-code") == ".kuvo-code")
+        #expect(Here.machinesRoot(bundleID: "run.kuvo.code.demo", hostingTests: false, given: ".kuvo-code") == nil)
+        #expect(Here.machinesRoot(bundleID: "run.kuvo.code.demo", hostingTests: false, given: ".kuvo-code-demo") == ".kuvo-code-demo")
     }
 }

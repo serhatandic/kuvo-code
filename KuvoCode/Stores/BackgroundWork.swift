@@ -65,13 +65,13 @@ final class BackgroundWork {
         }
     }
 
-    /// Registered with macOS, once (the first time Kuvo Code opens, and again if it went): launchd
-    /// starts the keeper now, and at each login. Whether it's on.
-    @discardableResult
     /// The app attached to the box already on this Mac (`Here`), which starts on its own: no keeper
     /// of the app's is registered beside it, which would start a second box.
     nonisolated(unsafe) static var attachedHere = false
 
+    /// Registered with macOS, once (the first time Kuvo Code opens, and again if it went): launchd
+    /// starts the keeper now, and at each login. Whether it's on.
+    @discardableResult
     func register() -> Bool {
         refresh()
         guard !Self.attachedHere else {

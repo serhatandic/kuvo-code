@@ -117,8 +117,8 @@ const JUDGED_BOX = object({
 });
 
 /** What's on a computer, judged (PROTOCOL.md, "Your setup", "Already in a setup?"): one verdict,
- * whether adding it joins its setup with nothing to ask (`joins`: another setup's main computer, with
- * no other computer and no work in it), and each box found there. */
+ * whether adding it joins its setup with nothing to ask (`joins`: another setup's main computer, no
+ * Mac's own app, with no other computer and no work in it), and each box found there. */
 export const JUDGED = object({ verdict: words("self", "free", "ours", "older", "elsewhere", "main", "two"), joins: bool, boxes: list(JUDGED_BOX) });
 
 /** What `kuvo-link.js here` prints as Kuvo Code opens on a Mac (PROTOCOL.md, "Already in a
