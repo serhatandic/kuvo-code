@@ -77,10 +77,12 @@ nonisolated enum PullRequests {
         return try await box.value(PullRequestDraft.self, "POST", "kuvo/git/pull-request/draft", body: Asked(directory: directory, summary: withSummary))
     }
 
-    static func create(on box: BoxClient, directory: String, title: String, body: String) async throws -> Made {
-        struct Asked: Encodable { let directory, title, body: String }
+    /// `session`: the one it's made from (the one in view), whose pull request it is from now on, on
+    /// its row and card.
+    static func create(on box: BoxClient, directory: String, title: String, body: String, session: String? = nil) async throws -> Made {
+        struct Asked: Encodable { let directory, title, body: String; let session: String? }
         struct Answer: Decodable { var url: String?; var compareURL: String? }
-        let made = try await box.value(Answer.self, "POST", "kuvo/git/pull-request", body: Asked(directory: directory, title: title, body: body))
+        let made = try await box.value(Answer.self, "POST", "kuvo/git/pull-request", body: Asked(directory: directory, title: title, body: body, session: session))
         if let url = made.url.flatMap(URL.init(string:)) { return .made(url) }
         if let page = made.compareURL.flatMap(URL.init(string:)) { return .toOpen(page) }
         return .pushed
