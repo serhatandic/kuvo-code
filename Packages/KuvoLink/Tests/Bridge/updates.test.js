@@ -38,26 +38,36 @@ const server = http.createServer((request, response) => {
   response.writeHead(200, { "content-type": "application/json" });
   response.end(JSON.stringify({ data: request.url.startsWith("/api/session/active") ? {} : [] }));
 });
-server.listen(0, "127.0.0.1", () => fs.writeFileSync(path.join(root, "run", "engine.json"),
-  JSON.stringify({ pid: process.pid, port: server.address().port, password: "pw", version, notes: { mac: "mac-1" } })));
+// Noted whole or not at all: a reader never finds it half written.
+const noted = path.join(root, "run", "engine.json");
+server.listen(0, "127.0.0.1", () => {
+  fs.writeFileSync(noted + ".new", JSON.stringify({ pid: process.pid, port: server.address().port, password: "pw", version, notes: { mac: "mac-1" } }));
+  fs.renameSync(noted + ".new", noted);
+});
 // Gone with the test's folder, however late an update in the background started it.
 setInterval(() => { if (!fs.existsSync(root)) process.exit(0); }, 300);
 `);
 process.env.FAKE_ENGINE = fakeEngine;
+// This node itself, not a version manager's shim that might start it as a child: the engine is the
+// keeper's own process (its pid, $!), as the keeper's start waits to see it noted.
+process.env.FAKE_NODE = process.execPath;
 const engineBinary = version => `#!/bin/sh
 [ "$1" = --config=/dev/null ] && shift
 [ "$1" = --no-env-file ] && shift
-case "$1" in --version) echo ${version}; exit 0 ;; *.js) exec node "$@" ;; esac
-exec node "$FAKE_ENGINE" ${version} "$KUVO_HOME"
+case "$1" in --version) echo ${version}; exit 0 ;; *.js) exec "$FAKE_NODE" "$@" ;; esac
+exec "$FAKE_NODE" "$FAKE_ENGINE" ${version} "$KUVO_HOME"
 `;
 // The keeper: stops the engine (waiting until it's gone, as the real one does), or starts this
-// version's. One that `breaks` starts none, and leaves the journal a new engine would (WAL) beside
-// the database.
+// version's. As the real one's (RemoteEngine.swift's bootScript), a start leaves an engine that
+// runs as it is, and returns once the one it started is noted in run/engine.json: never a second
+// engine, nor a note written after it returned. One that `breaks` starts none, and leaves the
+// journal a new engine would (WAL) beside the database.
 const keeper = (version, breaks = false) => `#!/bin/sh
 K="$KUVO_HOME"; R="$K/run"
+noted() { sed -n 's/.*"pid":\\([0-9]*\\).*/\\1/p' "$R/engine.json" 2>/dev/null; }
 case "$1" in
-stop) touch "$R/stopped"; pid=$(sed -n 's/.*"pid":\\([0-9]*\\).*/\\1/p' "$R/engine.json" 2>/dev/null); if [ -n "$pid" ]; then kill "$pid" 2>/dev/null; while kill -0 "$pid" 2>/dev/null; do sleep 0.1; done; fi; rm -f "$R/engine.json" ;;
-start) rm -f "$R/stopped"; ${breaks ? `mkdir -p "$K/data/opencode"; echo "the new engine's journal" > "$K/data/opencode/opencode.db-wal"` : `"$K/engine/${version}/opencode" serve >/dev/null 2>&1 &`} ;;
+stop) touch "$R/stopped"; pid=$(noted); if [ -n "$pid" ]; then kill "$pid" 2>/dev/null; while kill -0 "$pid" 2>/dev/null; do sleep 0.1; done; fi; rm -f "$R/engine.json" ;;
+start) rm -f "$R/stopped"; old=$(noted); if [ -n "$old" ] && kill -0 "$old" 2>/dev/null; then exit 0; fi; ${breaks ? `mkdir -p "$K/data/opencode"; echo "the new engine's journal" > "$K/data/opencode/opencode.db-wal"` : `"$K/engine/${version}/opencode" serve >/dev/null 2>&1 & pid=$!; until [ "$(noted)" = "$pid" ]; do kill -0 "$pid" 2>/dev/null || exit 3; sleep 0.1; done`} ;;
 esac
 `;
 
@@ -84,7 +94,7 @@ async function waitFor(check, what) {
 }
 
 // A machine on 0.9.0, its engine 1.0.0 running.
-async function machine() {
+function machine() {
   stopEngine();
   fs.rmSync(home, { recursive: true, force: true });
   fs.mkdirSync(path.join(home, "run"), { recursive: true });
@@ -95,8 +105,9 @@ async function machine() {
   write(path.join(home, "bin", ".own", "kuvo-wake"), "# the old wake-ups\n", 0o755);
   write(path.join(home, "engine", "1.0.0", "opencode"), engineBinary("1.0.0"), 0o755);
   write(path.join(home, "data", "opencode", "opencode.db"), "the old engine's data");
-  spawnSync("sh", [path.join(home, "bin", "kuvo-start"), "start"], { env: process.env });
-  await waitFor(() => fs.existsSync(engineFile), "the old engine runs");
+  // A start that never sees its engine noted fails here (status null) rather than holding up the
+  // file for good; one takes a second or two under load.
+  assert.equal(spawnSync("sh", [path.join(home, "bin", "kuvo-start"), "start"], { env: process.env, timeout: 60_000 }).status, 0, "the old engine runs");
   engines.add(read(engineFile).pid);
 }
 
@@ -104,9 +115,13 @@ async function machine() {
 const { privateKey, publicKey } = crypto.generateKeyPairSync("ed25519");
 const pinned = publicKey.export({ type: "spki", format: "der" }).subarray(-32).toString("base64");
 let served = {};
+// Each answer on a connection of its own. An update holds this process's event loop through its
+// self-test, stop and start (each a spawnSync; 3 to 5 seconds in all at a load of 120, more at
+// times), and past the server's five-second keep-alive, the next update's request went out on the
+// connection kept from the last one as the server closed it ("fetch failed").
 const server = http.createServer((request, response) => {
   const body = served[request.url];
-  response.writeHead(body ? 200 : 404);
+  response.writeHead(body ? 200 : 404, { connection: "close" });
   response.end(body ?? "");
 });
 await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
@@ -193,7 +208,7 @@ test("a box updates itself only while every Mac that started its engine lately l
 });
 
 test("a box updates to a newer release: its engine and files swapped, started again, kept until the new link says it's well", async () => {
-  await machine();
+  machine();
   release();
   const outcome = await update();
   assert.deepEqual(outcome, { result: "updated", version: "0.10.0" });
@@ -222,7 +237,7 @@ test("a box updates to a newer release: its engine and files swapped, started ag
 });
 
 test("an agent's browser waiting on you (a sign-in) holds the update: nothing is stopped or swapped", async t => {
-  await machine();
+  machine();
   release();
   write(path.join(home, "run", "browser.pid"), String(await runningAs("kuvo-browser", t)));
   write(path.join(home, "run", "browser-asks.json"), JSON.stringify({ asks: [{ id: "ask_1", kind: "signIn", host: "github.com", session: "ses_1", username: true, password: true }] }));
@@ -232,7 +247,7 @@ test("an agent's browser waiting on you (a sign-in) holds the update: nothing is
 });
 
 test("a new version that doesn't come up is taken back: the files, the box's version and the engine it had", async () => {
-  await machine();
+  machine();
   release({ breaks: true });
   const outcome = await update();
   assert.equal(outcome.result, "failed");
@@ -252,7 +267,7 @@ test("a new version that doesn't come up is taken back: the files, the box's ver
 });
 
 test("a stopped box, or one whose version isn't known, doesn't update; a lock whose process went doesn't hold one", async () => {
-  await machine();
+  machine();
   release();
   fs.writeFileSync(path.join(home, "run", "stopped"), "");
   assert.match((await update()).message, /stopped/);
@@ -312,8 +327,9 @@ test("a stopped box, or one whose version isn't known, doesn't update; a lock wh
 });
 
 test("an engine that won't stop changes nothing; no release for machines yet is nothing newer", async () => {
-  await machine();
+  machine();
   release();
+  const running = read(engineFile).pid;
   const keeperFile = path.join(home, "bin", "kuvo-start");
   write(keeperFile, keeper("1.0.0").replace(/^stop\) .*$/m, "stop) exit 4 ;;"), 0o700);
   const outcome = await update();
@@ -322,12 +338,13 @@ test("an engine that won't stop changes nothing; no release for machines yet is 
   assert.equal(fs.existsSync(path.join(home, "updates", "rollback")), false);
   assert.equal(fs.existsSync(path.join(home, "run", "update-trial")), false);
   assert.equal(read(engineFile).version, "1.0.0");
+  assert.equal(read(engineFile).pid, running, "the engine it had, still running");
   served = {};
   assert.deepEqual(await update(), { result: "current", version: "0.9.0" });
 });
 
 test("a release that isn't what it says, an older one, or one too new for the night changes nothing", async () => {
-  await machine();
+  machine();
   release({ tamper: true });
   assert.match((await update()).message, /aren't what it says/);
   release({ key: crypto.generateKeyPairSync("ed25519").privateKey });
@@ -343,7 +360,7 @@ test("a release that isn't what it says, an older one, or one too new for the ni
 });
 
 test("kuvo/update says how the box stands, and only reads and starts one", async () => {
-  await machine();
+  machine();
   const handler = link.engineHandler(() => read(engineFile), {}, () => ({}));
   const ask = async (method, body) => {
     const parts = [];
@@ -360,7 +377,7 @@ test("kuvo/update says how the box stands, and only reads and starts one", async
 });
 
 test("a machine with no bridge, updated by its `update` command: confirmed, and its integrations brought up to date", async () => {
-  await machine();
+  machine();
   release();
   const key = "KUVO_KEY_FIGMA_FIGMA_API_KEY";
   const catalog = fileURLToPath(new URL("../../Vectors/routes/box/integrations.json", import.meta.url));
