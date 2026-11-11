@@ -43,9 +43,9 @@ import type { SessionPlace } from "./letter";
 
 /** What a session's start is given: its task, and what's optional: where (a folder, a project by
  * name or folder, a chat), in a worktree, on which model and effort, in which mode, with which
- * approval, on Autopilot (a client's start; a conversation's starts take its own), and what its
- * starter hears of it (`wake`). (Unknown fields are ignored, so a newer
- * client can ask an older box.) */
+ * approval, on Autopilot (a client's start; a conversation's starts take its own), what its
+ * starter hears of it (`wake`), and whether a bot's is told to review its work (`review`).
+ * (Unknown fields are ignored, so a newer client can ask an older box.) */
 export interface StartGiven {
   task?: unknown;
   title?: unknown;
@@ -61,6 +61,8 @@ export interface StartGiven {
   wake?: unknown;
   /** The goal's step it works on (its number or id), for that step's track. */
   step?: unknown;
+  /** false: a bot's session isn't told to review its work with reviewer subagents, only to report. */
+  review?: unknown;
   computer?: unknown;
   wait?: unknown;
 }
@@ -120,8 +122,9 @@ export interface StartPlace {
 export const goalNote = "This is part of a goal the user may not be watching: what you ask can wait a while, so carry on with what doesn't depend on it, and report what you couldn't do.";
 /** What a session a bot started is told with its task: its half of the playbook (PROTOCOL.md,
  * "Work"), in the task's text, so it works with any agent. `heard`: its finish is told its bot with
- * its last reply, so its report isn't sent again as a message (#270). */
-export const sessionNote = (bot: string, heard = true) => `You were started by ${bot}, a bot coordinating this work. When you're done, review your work with reviewer subagents, fix what they find, and end with a short report as your last reply: what you did, what the reviewers found and how you fixed it, and anything left. ${heard ? `${bot} gets that reply when you finish: don't also send it with send_message.` : `${bot} reads that report.`}`;
+ * its last reply, so its report isn't sent again as a message (#270). `review`: false for a task its
+ * bot says needs no review, which is told only to report (#554). */
+export const sessionNote = (bot: string, heard = true, review = true) => `You were started by ${bot}, a bot coordinating this work. When you're done, ${review ? "review your work with reviewer subagents, fix what they find, and end with a short report as your last reply: what you did, what the reviewers found and how you fixed it, and anything left" : "end with a short report as your last reply: what you did, and anything left"}. ${heard ? `${bot} gets that reply when you finish: don't also send it with send_message.` : `${bot} reads that report.`}`;
 
 // What a start's wake names: what its starter hears of it.
 const WAKES = ["finished", "asks"];
@@ -452,7 +455,7 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
   const waits = given.wait === true;
   const id = messageID();
   const heard = wakes.includes("finished");
-  const text = by ? composeLetter(by.name, by.session, task, waits, heard) + (bot ? `\n\n${sessionNote(bot.name, heard)}${goal ? `\n\n${goalNote}` : ""}` : "") : task;
+  const text = by ? composeLetter(by.name, by.session, task, waits, heard) + (bot ? `\n\n${sessionNote(bot.name, heard, given.review !== false)}${goal ? `\n\n${goalNote}` : ""}` : "") : task;
   try {
     await asked(target, "POST", `api/session/${address}/prompt`, { id, text, delivery: "steer" });
   } catch (error) {

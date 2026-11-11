@@ -256,6 +256,7 @@ enum BrowserTools {
               "approval": ["type": "string", "enum": ["askFirst", "acceptEdits", "auto", "fullAccess"], "description": "askFirst asks before it edits or runs commands, acceptEdits edits on its own and asks before commands, auto works on its own inside the sandbox, fullAccess asks nothing. Yours by default, and never more than yours."],
               "wake": ["type": "string", "enum": ["finished", "asks", "both", "none"], "description": "What you're woken with: when it finishes, when it asks, both (a bot's default), or none (a session's default)."],
               "wait": ["type": "boolean", "description": "Wait for its first answer (up to ten minutes)."],
+              "review": ["type": "boolean", "description": "A bot's session is told to review its work with reviewer subagents before its report: false for a task that needs no review, told only to report. true by default."],
               "step": ["type": "integer", "description": "For your goal: the step it works on, by number, so that step's track follows it."]], required: ["task"]),
         tool("list_sessions", "List the sessions you started (and the ones they started), latest first: whether each is working, asking for something (what, with the ask's id), finished, failed or stopped; its model, its tokens in context now and in total, and the first lines of its last reply."),
         tool("stop_session", "Stop a session you started, by its address from list_sessions; with archive, also put it away once its work is reported. Only your own: for another, ask the user.",
