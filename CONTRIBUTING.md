@@ -186,14 +186,16 @@ scripts/test-box.sh box <test-filter>
   were, so an older script and a new one on slot 1 still exclude each other;
 - `box`: the box's whole suites (`bun test`, `node --test`) and runs on a test machine.
 
-A job also waits while the Mac is busy (its load over the last minute above 40;
-`KUVO_HEAVY_LOAD` sets another). While the Mac app's suite waits there, new jobs of the other
-kinds wait for it to start, 15 minutes at most (`KUVO_HEAVY_MAC_FIRST_FOR`), so the jobs that keep
-starting can't keep it out. A new job also waits while the Mac is short of memory: swapping more than
-10 MB a second (`KUVO_HEAVY_SWAP`), its memory pressure at warn or worse, or less than 20% of it
-available as `memory_pressure -Q` says (`KUVO_HEAVY_MEMORY`; `0` turns the memory wait off). It
-waits until two looks in a row find it isn't, 15 minutes at most from when any job found it short
-(`KUVO_HEAVY_MEMORY_WAIT_FOR`): on this Mac memory runs out before CPU does. Both apps' `scripts/test-app.sh` take their turn
+Before it joins its lane's line, a new job waits while the Mac is thrashing: swapping more than 10 MB
+a second (`KUVO_HEAVY_SWAP`) or its memory pressure critical, two minutes at most from when any job
+found it so (`KUVO_HEAVY_MEMORY_WAIT_FOR`; `KUVO_HEAVY_MEMORY=0` turns the memory wait off). It waits
+for a busy Mac (`KUVO_HEAVY_LOAD`, its load over the last minute) or for a share of memory available
+(`KUVO_HEAVY_MEMORY=20`, in percent) only when you set those: background priority (below) keeps the
+Mac usable, and on the Mini, with a dozen sessions, the load stayed over 40 and less than 20% of
+memory was available all day, so jobs only waited. While the Mac app's suite waits there, new jobs of
+the other kinds wait for it to start, two minutes at most (`KUVO_HEAVY_MAC_FIRST_FOR`). None of
+these waits happens while a job holds its lane's lock, so a job waiting for room never holds up
+the jobs in line behind it. Both apps' `scripts/test-app.sh` take their turn
 this way themselves. `python3 -m unittest discover -s scripts -p test_heavy.py`
 tries the helper.
 
@@ -214,7 +216,7 @@ were started in. On macOS every option goes before the pattern, in `pgrep` too.
 
 Every job has a time limit, so a hung one can't hold its kind's turn for hours: `mac` and `phone`
 45 minutes, `mac-build` 30, `box` 40, counted from when its command starts (not while it waits in
-line for its slot, however long, nor for a busy Mac). Past it, its group is stopped (TERM, then
+line for its slot, however long, nor for room on the Mac). Past it, its group is stopped (TERM, then
 KILL), it says what was running, and the helper exits 124. Jobs waiting for a lane wait in line,
 first come first served; `KUVO_HEAVY_PRIORITY=high` puts one before the normal ones waiting (it
 never stops a job running), and `KUVO_HEAVY_WAIT=0` answers without waiting for one (75: it
