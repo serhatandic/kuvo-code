@@ -197,6 +197,12 @@ waits until two looks in a row find it isn't, 15 minutes at most from when any j
 this way themselves. `python3 -m unittest discover -s scripts -p test_heavy.py`
 tries the helper.
 
+Jobs never starve the box (the Kuvo Code box on this Mac, which the phone talks to): every job runs
+at background priority, its children too: `taskpolicy -b` on macOS (low CPU and I/O priority; it works
+with `xcodebuild` builds and tests, simulator runs and `swift test`), `nice -n 15 ionice -c3` on Linux. On
+an idle Mac a job runs as fast as ever; on a busy one it gives way and is slower, which the time
+limit allows for (`KUVO_HEAVY_LIMIT`).
+
 A job's command runs in a process group of its own, which ends with it: when the command is over,
 and when the helper is stopped, whatever the command started that stays in that group is stopped too
 (a process that starts a group or session of its own, like a daemon, isn't; and when the helper
