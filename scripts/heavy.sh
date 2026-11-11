@@ -85,6 +85,20 @@
 #                       queue's guard, two seconds at most)
 #   KUVO_HEAVY_DIR      where the locks are (for the helper's own tests)
 #
+# Jobs never starve the box (the Kuvo Code box on this Mac, which the user's phone talks to):
+#
+#   - Every job runs at background priority, its children too: on macOS `taskpolicy -b` (background
+#     QoS: low CPU and I/O priority, which the box's own processes, at default priority, win over;
+#     tried with xcodebuild builds and tests, a simulator test run and swift test: all work), on Linux
+#     `nice -n 15 ionice -c3` (just `nice -n 15` without ionice). A job inside another gets it too.
+#   - A new job (not one inside another) doesn't start while swap used is above KUVO_HEAVY_SWAP_USED
+#     percent of the swap total (85 unless set; 0 turns this gate off) or the memory pressure is warn
+#     or worse. It waits as long as that lasts (no limit, unlike the memory check above), and says why
+#     once a minute. This one holds even with KUVO_HEAVY_MEMORY=0.
+#
+#   KUVO_HEAVY_POLL=15       seconds between looks of a waiting job at the load and memory (for tests)
+#   KUVO_HEAVY_SAY_EVERY=60  seconds between the gate's reminders of why it waits (for tests)
+#
 # Every job has a time limit, so one that hangs can't hold its kind's turn for hours: past it, the
 # job is stopped (its process group, as below: TERM, then KILL), it says what was running, and
 # heavy.sh exits 124. The clock starts when the command does: not while it waits in line for its
@@ -136,6 +150,19 @@ OLD="$DIR/kuvo-code-heavy-$(id -u).lock"
 MAX_LOAD="${KUVO_HEAVY_LOAD:-40}"
 WAITS="${KUVO_HEAVY_WAIT:-1}"
 case "$kind" in mac | phone) DEFAULT_LIMIT=45m ;; mac-build) DEFAULT_LIMIT=30m ;; box) DEFAULT_LIMIT=40m ;; esac
+
+# What every job runs under, so it never takes the CPU or the disk from the box: background priority
+# (a prefix: `$LOW "$@"`; its children keep it). macOS: `taskpolicy -b`, background QoS: low CPU and
+# I/O priority (`nice` alone leaves the I/O alone). Linux: nice and ionice.
+LOW=
+case "$(uname -s 2>/dev/null)" in
+    Darwin)
+        if command -v taskpolicy >/dev/null 2>&1; then LOW="taskpolicy -b"; else LOW="nice -n 15"; fi
+        ;;
+    *)
+        if command -v ionice >/dev/null 2>&1; then LOW="nice -n 15 ionice -c3"; else LOW="nice -n 15"; fi
+        ;;
+esac
 
 # Whether `ps` answers. A sandbox can refuse it (Auto mode), and then no process can be asked what
 # it runs under.
@@ -247,6 +274,24 @@ case "$SWAP_MB" in "" | *[!0-9]* | ???????*) echo "KUVO_HEAVY_SWAP is MB a secon
 MEMORY_SHORT="$DIR/kuvo-code-heavy-memory-short-$(id -u)"
 GIVEN_MEMORY_WAIT="${KUVO_HEAVY_MEMORY_WAIT_FOR:-15m}"
 MEMORY_WAIT_FOR=$(seconds_of "$GIVEN_MEMORY_WAIT" KUVO_HEAVY_MEMORY_WAIT_FOR) || exit 64
+# The stricter gate (below): swap used, in percent of the swap total, above which no job starts.
+SWAP_FULL="${KUVO_HEAVY_SWAP_USED:-85}"
+case "$SWAP_FULL" in
+    "" | *[!0-9]* | ????*) SWAP_FULL=bad ;;
+esac
+if [ "$SWAP_FULL" = bad ] || [ "$SWAP_FULL" -gt 100 ]; then
+    echo "KUVO_HEAVY_SWAP_USED is a share of swap in percent, 0 to 100 (it's ${KUVO_HEAVY_SWAP_USED:-})." >&2
+    exit 64
+fi
+# Seconds between looks of a waiting job, and between the gate's reminders of why it waits.
+POLL="${KUVO_HEAVY_POLL:-15}"
+SAY_EVERY="${KUVO_HEAVY_SAY_EVERY:-60}"
+case "$POLL:$SAY_EVERY" in
+    *[!0-9:]* | :* | *: | 0:* | *::* | *[0-9][0-9][0-9][0-9][0-9]*)
+        echo "KUVO_HEAVY_POLL and KUVO_HEAVY_SAY_EVERY are seconds (they're ${KUVO_HEAVY_POLL:-}, ${KUVO_HEAVY_SAY_EVERY:-})." >&2
+        exit 64
+        ;;
+esac
 # A job's place in its lane's queue: high goes before normal (0 sorts before 1).
 case "${KUVO_HEAVY_PRIORITY:-normal}" in
     normal) PRIORITY=1 ;;
@@ -434,7 +479,7 @@ else
         if [ -n "$LOCK2" ]; then
             if held "$LOCK2"; then slot_env "$LOCK2"; elif held "$LOCK"; then slot_env "$LOCK"; fi
         fi
-        exec "$@"
+        exec $LOW "$@"
     fi
     # Its kind's turn, through the lane's queue (TURN, above): in line until a slot is its own,
     # then that slot's lock, which it holds as it runs.
@@ -563,11 +608,52 @@ short_for() {
     fi
     echo $(($(date +%s) - since))
 }
-# Why it waits now, if it does (in `why`): memory, or the load.
+# The stricter gate, which never lets go on its own: swap used above $SWAP_FULL% of the swap total
+# (swap stays full long after the pressure is gone, and the box's pages are in it), or the memory
+# pressure at warn or worse. Unlike the check above, it waits as long as that lasts (and holds with
+# KUVO_HEAVY_MEMORY=0): jobs that went on past a 15-minute wait at 12.6 of 13.3 GB swapped left the
+# box too slow for the phone. Nothing is known of swap where the system doesn't say, and then only
+# the pressure counts.
+# Swap used, in percent of the total with a decimal, or nothing when unknown (no swap: 0).
+swap_used() {
+    if usage=$(sysctl -n vm.swapusage 2>/dev/null) && [ -n "$usage" ]; then
+        echo "$usage" | awk '
+            function mb(v,   unit) { unit = substr(v, length(v)); v += 0; return unit == "G" ? v * 1024 : unit == "K" ? v / 1024 : v }
+            { for (i = 1; i < NF; i++) { if ($i == "total") total = mb($(i + 2)); if ($i == "used") used = mb($(i + 2)) } }
+            END { if (total > 0) printf "%.1f\n", used * 100 / total; else if (NR > 0) print "0.0" }'
+    elif [ -r /proc/meminfo ]; then
+        awk '/^SwapTotal:/ { total = $2 } /^SwapFree:/ { free = $2 } END { if (total > 0) printf "%.1f\n", (total - free) * 100 / total; else print "0.0" }' /proc/meminfo
+    fi
+}
+# Why the gate holds, if it does (in `tight`).
+tight=
+strict_gate() {
+    tight=
+    [ "$SWAP_FULL" -gt 0 ] || return 0
+    used=$(swap_used)
+    if [ -n "$used" ] && awk -v used="$used" -v limit="$SWAP_FULL" 'BEGIN { exit !(used > limit) }'; then
+        tight="swap is ${used}% used, over $SWAP_FULL%"
+        return 0
+    fi
+    level=$(memory_level)
+    case "$level" in
+        "" | *[!0-9]*) ;;
+        *) if [ "$level" -ge 2 ]; then tight="memory pressure is $([ "$level" -ge 4 ] && echo critical || echo warn)"; fi ;;
+    esac
+    return 0
+}
+# Why it waits now, if it does (in `why`): the gate, memory, or the load.
 was_short=
 calm=0
 decide() {
     why=
+    if [ -z "${NESTED:-}" ]; then
+        strict_gate
+        if [ -n "$tight" ]; then
+            why=gate
+            return
+        fi
+    fi
     if [ "$MIN_FREE" -gt 0 ] && [ -z "${NESTED:-}" ]; then
         look_at_memory
         if memory_short; then
@@ -587,12 +673,20 @@ decide() {
 }
 
 said=
+said_at=0
 decide
 if [ "$kind" = mac ] && [ -n "$why" ] && [ "$WAITS" != 0 ]; then
     printf '%s %s\n' "$$" "$(date +%s)" > "$MAC_FIRST.$$" && mv -f "$MAC_FIRST.$$" "$MAC_FIRST"
 fi
 while [ -n "$why" ]; do
-    if [ "$why" = memory ]; then
+    if [ "$why" = gate ]; then
+        [ "$WAITS" = 0 ] && cannot_wait "The Mac's memory is too tight to start a job ($tight)."
+        now=$(date +%s)
+        if [ "$said" != gate ] || [ $((now - said_at)) -ge "$SAY_EVERY" ]; then
+            echo "Waiting for memory: the Mac's memory is too tight to start a job ($tight); it waits for as long as that lasts…" >&2
+            said_at=$now
+        fi
+    elif [ "$why" = memory ]; then
         [ "$WAITS" = 0 ] && cannot_wait "The Mac is short of memory ($(memory_said))."
         [ "$said" = memory ] || echo "Waiting for memory: the Mac is short of it ($(memory_said)), for $GIVEN_MEMORY_WAIT at most…" >&2
     else
@@ -600,7 +694,7 @@ while [ -n "$why" ]; do
         [ "$said" = load ] || echo "Waiting while the Mac is busy (load $(load), over $MAX_LOAD)…" >&2
     fi
     said=$why
-    sleep 15
+    sleep "$POLL"
     decide
 done
 # (Its own say, not another suite's since.)
@@ -655,8 +749,8 @@ over_time() {
 # In a terminal the job stays in the terminal's own group: one in a group of its own couldn't read
 # the keyboard (a passphrase prompt would stop it), and Ctrl-C reaches the whole group there anyway.
 if [ -t 0 ] || { true </dev/tty; } 2>/dev/null; then
-    [ -n "${old_way:-}" ] && exec lockf -k "$OLD" "$@"
-    exec "$@"
+    [ -n "${old_way:-}" ] && exec lockf -k "$OLD" $LOW "$@"
+    exec $LOW "$@"
 fi
 
 trap 'stopped HUP 129' HUP
@@ -667,9 +761,9 @@ command_line=$*
 trap 'over_time "$command_line"' USR1
 set -m
 if [ -n "${old_way:-}" ]; then
-    lockf -k "$OLD" "$@" &
+    lockf -k "$OLD" $LOW "$@" &
 else
-    "$@" &
+    $LOW "$@" &
 fi
 group=$!
 # `lockf` doesn't pass a signal on to its command, and lets go of the lock as it ends: this helper
