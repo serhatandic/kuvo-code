@@ -24,7 +24,7 @@ import { noteSetupNow } from "../setup/lead";
 import { allItems, OWNER, queueFollowers, refNames, WORK_QUEUE, type Item, type ItemRef } from "./store";
 import { doneOnGitHub, SEEN_FILE, seenOf, withSeen } from "./github";
 import { forgetTold, keepTold, MOST_TOLD, MOST_TOLD_DONE, readTold, TOLD, toldKeys, toldOf, type Numbering, type ToldItem } from "./told";
-import { factsOf, ownersOf, summaryOf, type Computer, type OwnerFacts } from "./view";
+import { factsOf, linkedTo, ownersOf, summaryOf, type Computer, type OwnerFacts } from "./view";
 import { rowsOf } from "../work/elsewhere";
 import type { PeerPlaces } from "../engine/client";
 import type { MailSender, Peer } from "../peers/known";
@@ -258,11 +258,12 @@ export async function takeWorkQueueMail(sender: MailSender, given: unknown, host
 export type ItemElsewhere = ToldItem & { computer: Computer };
 
 /** Your other computers' items that `owner`'s view has (`all`: every one), as each last told them:
- * those of the sessions it oversees there (their rows, "Work"), those it handed on, its own; with
- * the owners they name, their custom categories, and when each computer told them. Items this box
- * has itself (`here`: one on its way here, say) are left to it; one deleted here (`deleted`) is
- * theirs, unless they told of it on its way here. */
-export function itemsElsewhere(owner: string, link: LinkState | null = readLink(), here?: Set<string>, deleted?: Set<string>, { asTold = false }: { asTold?: boolean } = {}): {
+ * those of the sessions it oversees there (their rows, "Work"), those it handed on, its own, and
+ * with `linked` those linked to it (what it's working on, for its view to show: never what its
+ * tools may change); with the owners they name, their custom categories, and when each computer
+ * told them. Items this box has itself (`here`: one on its way here, say) are left to it; one
+ * deleted here (`deleted`) is theirs, unless they told of it on its way here. */
+export function itemsElsewhere(owner: string, link: LinkState | null = readLink(), here?: Set<string>, deleted?: Set<string>, { asTold = false, linked = false }: { asTold?: boolean; linked?: boolean } = {}): {
   items: ItemElsewhere[];
   owners: OwnerFacts[];
   categories: { id: string; name: string }[];
@@ -297,7 +298,7 @@ export function itemsElsewhere(owner: string, link: LinkState | null = readLink(
     for (const each of told.categories) if (!custom.has(each.id)) custom.set(each.id, each.name);
   }
   const items = [...best.values()].map(each => each.item)
-    .filter(item => !overseen || item.owner === owner || overseen.has(item.owner) || item.handedBy === owner || item.handedFrom?.includes(owner));
+    .filter(item => !overseen || item.owner === owner || overseen.has(item.owner) || item.handedBy === owner || item.handedFrom?.includes(owner) || (linked && linkedTo(owner, item)));
   const named = new Set(items.flatMap(item => [item.owner, ...(item.handedBy ? [item.handedBy] : [])]));
   return { items, owners: [...owners.values()].filter(each => named.has(each.owner)), categories: [...custom].map(([id, name]) => ({ id, name })), computers };
 }

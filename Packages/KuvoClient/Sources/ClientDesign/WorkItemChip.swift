@@ -82,6 +82,28 @@ public struct WorkItemDot: View {
     }
 }
 
+/// An item's mark in a list or on its page, where it's live: in progress, the working ring that
+/// turns, in In progress blue; otherwise its still dot.
+public struct WorkItemStatusMark: View {
+    let mark: WorkItemMark
+    let size: CGFloat
+
+    public init(_ mark: WorkItemMark, size: CGFloat = 10) {
+        self.mark = mark
+        self.size = size
+    }
+
+    public var body: some View {
+        if mark == .inProgress {
+            StatusMark(.working, size: size)
+                .markInk(.tinted(mark.color))
+                .accessibilityHidden(true)
+        } else {
+            WorkItemDot(mark, size: size)
+        }
+    }
+}
+
 /// A `#243` reference in a message, drawn as a chip: a small capsule with the item's mark, its
 /// number and its title cut to one line. Its words for VoiceOver are "Work item 243, <title>". One
 /// that's an issue or a pull request (`gh:owner/repo#12`) has its service's mark (`brand`, a

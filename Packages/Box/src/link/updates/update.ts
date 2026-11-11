@@ -13,6 +13,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { isObject, parsed } from "../../shared/json";
+import { nightOf } from "../../shared/night";
+import { updateUnderWay } from "../../shared/updating";
 import type { Body } from "../../shared/json";
 import { alive, processRuns as runs } from "../../shared/platform";
 import type { BridgeRecord, EngineRecord, Target } from "../../shared/records";
@@ -193,12 +195,7 @@ function ran(command: string, args: string[], env: Record<string, string> = {}, 
 // An update under way, by its process (`run/.updating/pid`): one at a time, and one whose process
 // went isn't one.
 export function isUpdating(): boolean {
-  if (!fs.existsSync(UPDATE_LOCK)) return false;
-  let pid: number | null = null;
-  try { pid = Number(fs.readFileSync(path.join(UPDATE_LOCK, "pid"), "utf8")); } catch {}
-  if (pid) return runs(pid, "kuvo-link");
-  // Just made, its process not written yet.
-  try { return Date.now() - fs.statSync(UPDATE_LOCK).mtimeMs < 60_000; } catch { return false; }
+  return updateUnderWay(RUN);
 }
 
 function takeUpdateLock(): boolean {
@@ -552,15 +549,7 @@ export function checkDrift(now = Date.now()): boolean {
 
 // Whether it's the night's window where you are (02:00 to 05:00, `KUVO_TZ`), and which night.
 export function updateNight(date = new Date(), zone: string | undefined = process.env.KUVO_TZ): string | null {
-  let parts: Record<string, string>;
-  try {
-    parts = Object.fromEntries(new Intl.DateTimeFormat("en-CA", { timeZone: zone || undefined, year: "numeric", month: "2-digit", day: "2-digit", hour: "numeric", hourCycle: "h23" })
-      .formatToParts(date).map(part => [part.type, part.value]));
-  } catch {
-    return null;
-  }
-  const hour = Number(parts.hour);
-  return hour >= 2 && hour < 5 ? `${parts.year}-${parts.month}-${parts.day}` : null;
+  return nightOf(date, zone);
 }
 
 // What `kuvo/update` says: whether updates are set up, this version and the newest heard of, how

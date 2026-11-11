@@ -245,6 +245,40 @@ export function heardWindows(info: any): Omit<LimitWindow, "read" | "source">[] 
   return [{ id: shape.id, used, minutes: shape.minutes, ...(resetsAt ? { resetsAt } : {}), ...(shape.model ? { model: shape.model } : {}) }]
 }
 
+/** How much of a limit is gone before a warning calls it close: 90%, where the Mac's usage panel turns a bar red. */
+export const CLOSE_TO_LIMIT = 0.9
+
+/**
+ * What a turn says when Claude Code warns of a limit (`allowed_warning`): how much of which one is
+ * used, and whether that's close. Claude Code warns early in a window too (a quarter of the week
+ * gone in its first day), so it's "close" only once nearly all of it is.
+ */
+export function limitWarning(info: any): { text: string; close: boolean } {
+  const limit = warnedLimit(info?.rateLimitType)
+  const stated = [info?.utilization, info?.unifiedWindows?.[info?.rateLimitType]?.utilization].find((value) => typeof value === "number" && Number.isFinite(value))
+  if (stated !== undefined) {
+    // (Never all of it till it is: 99.6% is 99%.)
+    const percent = stated < 1 ? Math.min(Math.round(Math.max(stated, 0) * 100), 99) : 100
+    if (percent === 100) return { text: `You've used all of ${limit}.`, close: true }
+    const close = percent >= CLOSE_TO_LIMIT * 100
+    return { text: close ? `You're close to ${limit}: ${percent}% used.` : `You've used ${percent}% of ${limit}.`, close }
+  }
+  // No figure: the threshold it passed, at least.
+  const passed = typeof info?.surpassedThreshold === "number" ? info.surpassedThreshold : NaN
+  if (!(passed > 0)) return { text: `Claude Code warned about ${limit}.`, close: false }
+  const close = passed >= CLOSE_TO_LIMIT
+  return { text: close ? `You're close to ${limit}.` : `You've used over ${Math.round(passed * 100)}% of ${limit}.`, close }
+}
+
+/** The limit Claude Code warns of, by its name for it. */
+function warnedLimit(type: unknown): string {
+  if (type === "five_hour") return "your 5-hour Claude limit"
+  if (type === "overage") return "your Claude extra usage limit"
+  const shape = typeof type === "string" ? HEARD[type] : undefined
+  if (shape?.minutes === 10_080) return shape.model ? `your weekly ${shape.model} limit` : "your weekly Claude limit"
+  return "your Claude usage limit"
+}
+
 /** Claude Code's windows, as the usage endpoint names them (its overage-included week is Fable's, as Claude Code calls it). */
 const HEARD: Record<string, { id: string; minutes: number; model?: string }> = {
   five_hour: { id: "five_hour", minutes: 300 },

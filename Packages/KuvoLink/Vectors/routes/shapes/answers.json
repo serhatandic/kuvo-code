@@ -3188,6 +3188,9 @@
             "literal": "phones.pair"
            },
            {
+            "literal": "pieces"
+           },
+           {
             "literal": "plugins.search"
            },
            {
@@ -3547,6 +3550,9 @@
             "literal": "phones.pair"
            },
            {
+            "literal": "pieces"
+           },
+           {
             "literal": "plugins.search"
            },
            {
@@ -3694,7 +3700,94 @@
           }
          }
         },
-        "phones?": "number"
+        "phones?": "number",
+        "pieces?": {
+         "object": {
+          "link": {
+           "object": {
+            "running": {
+             "oneOf": [
+              "string",
+              "null"
+             ]
+            },
+            "current": {
+             "oneOf": [
+              "string",
+              "null"
+             ]
+            },
+            "behind": "bool"
+           }
+          },
+          "agents": {
+           "object": {
+            "running": {
+             "oneOf": [
+              "string",
+              "null"
+             ]
+            },
+            "current": {
+             "oneOf": [
+              "string",
+              "null"
+             ]
+            },
+            "behind": "bool",
+            "renewal": {
+             "oneOf": [
+              {
+               "object": {
+                "since": "number",
+                "holding": "bool"
+               }
+              },
+              "null"
+             ]
+            },
+            "waits": {
+             "oneOf": [
+              {
+               "oneOf": [
+                {
+                 "literal": "quiet"
+                },
+                {
+                 "literal": "holding"
+                },
+                {
+                 "literal": "engine"
+                },
+                {
+                 "literal": "restart"
+                }
+               ]
+              },
+              "null"
+             ]
+            }
+           }
+          },
+          "engine": {
+           "object": {
+            "running": {
+             "oneOf": [
+              "string",
+              "null"
+             ]
+            },
+            "current": {
+             "oneOf": [
+              "string",
+              "null"
+             ]
+            },
+            "behind": "bool"
+           }
+          }
+         }
+        }
        }
       }
      ]

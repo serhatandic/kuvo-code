@@ -22,6 +22,10 @@ public struct ShimmerText: View {
     public var body: some View {
         Text(text)
             .foregroundStyle(.secondary)
+            // New words take the old ones' place at once, as the light's letters do: faded across
+            // in an animation, the old words lay under the new ones' light ("Ben is thinking…" over
+            // "Ada is thinking…").
+            .contentTransition(.identity)
             .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
             .overlay {
                 if !reduceMotion, width > 0 {

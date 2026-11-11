@@ -89,6 +89,7 @@ public struct StatusMark: View {
         case .own: .standard
         case .control: isEnabled ? .standard : .disabled
         case .onFill: isEnabled ? .onFill : .disabled
+        case .tinted(let color): isEnabled ? .tinted(color) : .disabled
         }
     }
 
@@ -150,6 +151,8 @@ extension StatusMark {
         /// A filled accent button's white: its grey once it's disabled (a default or glass prominent
         /// button's, which loses its fill then).
         case onFill
+        /// A colour of its own: a work item's In progress blue.
+        case tinted(Color)
     }
 }
 
@@ -170,7 +173,7 @@ extension EnvironmentValues {
 struct StatusMarkInk: Equatable {
     /// What the mark sits in, for its ink: a label like any other, a filled accent button's white
     /// one, or a disabled control's grey one.
-    enum Label { case standard, onFill, disabled }
+    enum Label: Equatable { case standard, onFill, disabled, tinted(Color) }
 
     var ink: Color.Resolved
     /// Quieter than ink, still clear of the row: a state that's away rather than at work.
@@ -197,6 +200,9 @@ struct StatusMarkInk: Equatable {
         case .disabled:
             ink = Color.primary.opacity(0.3).resolve(in: environment)
             faint = Color.primary.opacity(0.1).resolve(in: environment)
+        case .tinted(let color):
+            ink = color.resolve(in: environment)
+            faint = color.opacity(0.22).resolve(in: environment)
         }
         muted = Color.primary.opacity(0.38).resolve(in: environment)
         self.accent = accent.resolve(in: environment)

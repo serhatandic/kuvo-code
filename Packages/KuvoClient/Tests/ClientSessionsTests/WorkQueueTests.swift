@@ -127,10 +127,133 @@ import ClientSessions
         #expect(WorkQueue.ownerName(of: items.first { $0.number == 3 }!, in: Self.view) == "Sign-in")
     }
 
-    @Test func currentWorkIsTheAgentsNoteElseWhoIsAtWork() {
+    @Test func whatsBeingDoneIsTheAgentsNoteOnly() {
         let items = Self.view.items
-        #expect(WorkQueue.currentWork(items[0]) == "Wiring the endpoint")
-        #expect(WorkQueue.currentWork(items[1]) == nil)
+        #expect(WorkQueue.progressNote(items[0]) == "Wiring the endpoint")
+        #expect(WorkQueue.progressNote(items[1]) == nil, "never “Sign-in is at work on it”")
+    }
+
+    // MARK: A session's view, and one item
+
+    /// A session's own view, as the box sends it: its own items, and a lead's it's linked to.
+    static let sessionView: WorkQueueView = {
+        let lead = item(551, "All includes Done", "next", owner: "ses_lead", inProgress: true, note: "Box tests pass")
+            .replacingOccurrences(of: #""session":"ses_child","title":"Sign-in""#, with: ##""session":"ses_worker","title":"#551 All includes Done""##)
+        let idle = item(552, "Rows and page", "later", owner: "ses_lead")
+            .replacingOccurrences(of: #""session":"ses_child","title":"Sign-in""#, with: ##""session":"ses_worker","title":"#552""##)
+        let json = """
+        {"owner":"ses_worker","categories":[{"id":"next","name":"Next","builtIn":true},{"id":"later","name":"Later","builtIn":true},{"id":"parked","name":"Parked","builtIn":true},{"id":"done","name":"Done","builtIn":true}],
+         "items":[\(lead),\(idle),\(item(7, "Its own", "next", owner: "ses_worker")),\(item(8, "Its own at work", "later", owner: "ses_worker", inProgress: true))],
+         "owners":[{"owner":"ses_lead","kind":"bot","title":"Kuvo Foreman","bot":{"id":"bot_1","name":"Kuvo Foreman"}},{"owner":"ses_worker","kind":"session","title":"#551"}],
+         "removed":[]}
+        """
+        return try! JSONDecoder().decode(WorkQueueView.self, from: Data(json.utf8))
+    }()
+
+    @Test func aSessionsViewListsWhatItWorksOnFirstOnceWhoeversItIs() {
+        let sections = WorkQueue.sections(Self.sessionView)
+        #expect(sections.map(\.name) == ["Working on", "In progress", "Next", "Later", "Parked", "Done"])
+        #expect(sections.map { $0.items.map(\.name) } == [["#551", "#552"], ["#8"], ["#7"], [], [], []], "each once: a lead's item isn't in its category too")
+        #expect(WorkQueue.items(Self.sessionView, .workingOn).map(\.name) == ["#551", "#552"])
+        #expect(WorkQueue.items(Self.sessionView, .inProgress).map(\.name) == ["#8"], "each under one filter")
+        let filters: [WorkQueue.Filter] = [.workingOn, .inProgress] + Self.sessionView.categories.map { .category($0.id) }
+        #expect(filters.map { WorkQueue.items(Self.sessionView, $0).count }.reduce(0, +) == WorkQueue.allCount(Self.sessionView), "the chips add up to All")
+        #expect(WorkQueue.section(for: .inProgress, in: Self.sessionView)?.id == WorkQueue.inProgressID)
+        #expect(WorkQueue.items(Self.sessionView, .all).map(\.name) == ["#551", "#552", "#8", "#7"])
+        #expect(WorkQueue.eyebrow(of: Self.sessionView.items[0], in: Self.sessionView) == ["Kuvo Foreman"])
+        // A lead's own view, and All, have no Working on.
+        #expect(!WorkQueue.sections(Self.view).contains { $0.id == WorkQueue.workingOnID })
+        var all = Self.sessionView
+        all.owner = WorkQueueView.all
+        #expect(WorkQueue.sections(all).first?.name == "In progress")
+    }
+
+    @Test func aLeadsItemDoneGoesWithTheDoneOnesNotWorkingOn() {
+        var view = Self.sessionView
+        view.items[1].category = WorkCategory.done
+        let sections = WorkQueue.sections(view)
+        #expect(sections.first { $0.id == WorkQueue.workingOnID }?.items.map(\.name) == ["#551"])
+        #expect(sections.first { $0.category == WorkCategory.done }?.items.map(\.name) == ["#552"])
+        #expect(WorkQueue.items(view, .all, showsDone: false).map(\.name) == ["#551", "#8", "#7"], "folded with the Done ones")
+    }
+
+    @Test func aPageNamesItsOwnerFromAllElseAViewThatNamesIt() {
+        var all = Self.sessionView
+        all.owner = WorkQueueView.all
+        let item = Self.sessionView.items[0]
+        #expect(WorkQueue.view(naming: item, among: [Self.view, Self.sessionView, all])?.owner == WorkQueueView.all)
+        #expect(WorkQueue.view(naming: item, among: [Self.view, Self.sessionView])?.owner == "ses_worker")
+        #expect(WorkQueue.view(naming: item, among: [Self.view]) == nil)
+    }
+
+    @Test func anItemAtWorkSaysInProgressOnlyAndItsCategoryOnlyWhenNoOneIs() {
+        let now = Date(timeIntervalSince1970: 3)
+        let (atWork, idle) = (Self.sessionView.items[0], Self.sessionView.items[1])
+        #expect(WorkQueue.status(of: atWork) == .inProgress)
+        #expect(WorkQueue.properties(of: atWork, in: Self.sessionView, now: now).map(\.words) == ["Kuvo Foreman’s queue", "Added just now"], "never In Next beside In progress")
+        #expect(WorkQueue.status(of: idle) == nil)
+        #expect(WorkQueue.properties(of: idle, in: Self.sessionView, now: now).map(\.words) == ["In Later", "Kuvo Foreman’s queue", "Added just now"])
+        #expect(WorkQueue.properties(of: idle, in: Self.sessionView, now: now).last?.help == "Added just now by you. Updated just now by Sign-in.")
+    }
+
+    @Test func doneDeletedAndClosedOnGitHubAreSaidOnce() throws {
+        let json = """
+        {"owner":"ses_lead","categories":[{"id":"next","name":"Next","builtIn":true},{"id":"later","name":"Later","builtIn":true},{"id":"done","name":"Done","builtIn":true}],"owners":[],
+         "items":[{"id":"wqi_1","source":{"kind":"github-pr","ref":"gh:kuvo/app#57","name":"app#57"},"seen":{"state":"merged","at":5},"keptIn":"later","closesOn":"github","owner":"ses_lead","title":"Keep the name","category":"done","order":1,"inProgress":false,"sessions":[],"noteCount":0,"fileCount":0,"linkCount":0,"computer":{"key":"k","name":"lab","kind":"machine"},"created":{"at":1,"by":{"user":true}},"updated":{"at":1,"by":{"user":true}}},
+                  {"id":"wqi_2","number":5,"owner":"ses_lead","title":"Shipped","category":"done","doneAt":1,"order":2,"inProgress":false,"sessions":[],"noteCount":0,"fileCount":0,"linkCount":0,"created":{"at":1,"by":{"user":true}},"updated":{"at":1,"by":{"user":true}}}],
+         "removed":[{"id":"wqi_3","number":6,"owner":"ses_lead","title":"Gone","category":"next","order":3,"inProgress":false,"sessions":[],"noteCount":0,"fileCount":0,"linkCount":0,"created":{"at":1,"by":{"user":true}},"updated":{"at":1,"by":{"user":true}},"removed":{"at":1,"by":{"user":true}}}]}
+        """
+        let view = try JSONDecoder().decode(WorkQueueView.self, from: Data(json.utf8))
+        let now = Date(timeIntervalSince1970: 0)
+        #expect(WorkQueue.properties(of: view.items[0], in: view, now: now).map(\.words) == ["Merged on GitHub", "On lab", "Added just now"], "whose only where the view names it")
+        #expect(WorkQueue.properties(of: view.items[0], in: view, now: now).first?.help == "If it’s reopened there, it’s back in Later.")
+        #expect(WorkQueue.properties(of: view.items[1], in: view, now: now).first?.words == "Done")
+        #expect(WorkQueue.status(of: view.removed[0]) == .deleted)
+        #expect(WorkQueue.properties(of: view.removed[0], in: view, now: now).first?.words == "Added just now", "Deleted, not In Next too")
+    }
+
+    @Test func theCardSaysWhetherASessionIsAtWorkAndWhatItSaid() {
+        let card = WorkQueue.sessionCard(for: Self.sessionView.items[0])
+        #expect(card?.working == true)
+        #expect(card?.heading == "Session at work")
+        #expect(card?.note == "Box tests pass")
+        #expect(card?.sessions.map(WorkQueue.sessionName) == ["#551 All includes Done"])
+        #expect(card?.main == "ses_worker", "its Open Session is the filled one")
+        let idle = WorkQueue.sessionCard(for: Self.sessionView.items[1])
+        #expect(idle?.heading == "No session at work")
+        #expect(idle?.note == nil, "never “… is at work on it”")
+        #expect(idle?.main == nil, "no filled button while no one works")
+        #expect(WorkQueue.progressNote(Self.sessionView.items[1]) == nil)
+    }
+
+    @Test func activityIsNotesAndWhatTheBoxKeptOldestFirst() throws {
+        let json = """
+        {"id":"wqi_1","number":243,"owner":"ses_b","title":"T","category":"done","doneAt":9000,"order":1,"inProgress":false,"sessions":[],"noteCount":2,"fileCount":0,"linkCount":0,"created":{"at":1000,"by":{"session":"ses_lead","name":"Kuvo Foreman"}},"updated":{"at":9000,"by":{"session":"ses_b","name":"Sign-in"}},
+         "body":"","notes":[{"at":5000,"by":{"session":"ses_b","name":"Sign-in"},"text":"Halfway."},{"at":2000,"by":{"user":true},"text":"Use the new endpoint."}],"files":[],"links":[],"handed":[{"from":"ses_lead","to":"ses_b","at":3000}]}
+        """
+        let detail = try JSONDecoder().decode(WorkItemDetail.self, from: Data(json.utf8))
+        let view = WorkQueueView(owner: "ses_lead", owners: try JSONDecoder().decode([WorkOwner].self, from: Data(#"[{"owner":"ses_lead","kind":"bot","title":"Kuvo Foreman","bot":{"id":"bot_1","name":"Kuvo Foreman"}},{"owner":"ses_b","kind":"session","title":"Sign-in"}]"#.utf8)))
+        let lines = WorkQueue.activity(of: detail, in: view)
+        #expect(lines.map { "\($0.whoWords) \($0.what)" } == ["Kuvo Foreman added the item", "You left a note", "Kuvo Foreman handed it to Sign-in", "Sign-in left a note", "Sign-in marked it done"])
+        #expect(lines[1].text == "Use the new endpoint.")
+    }
+
+    @Test func aRowOpensTheSessionAtWorkElseTheOneLinkedAndSaysItAll() {
+        let (atWork, idle, own) = (Self.sessionView.items[0], Self.sessionView.items[1], Self.sessionView.items[2])
+        #expect(WorkQueue.sessionToOpen(atWork)?.session == "ses_worker")
+        #expect(WorkQueue.sessionToOpen(idle)?.session == "ses_worker", "linked, not at work: it still opens")
+        #expect(WorkQueue.sessionToOpen(own)?.session == "ses_child")
+        let now = Date(timeIntervalSince1970: 3)
+        #expect(WorkQueue.spokenRow(atWork, in: Self.sessionView, now: now) == "Work item 551, All includes Done, in progress, Box tests pass, Kuvo Foreman, updated just now")
+        #expect(WorkQueue.spokenRow(idle, in: Self.sessionView, now: now) == "Work item 552, Rows and page, Kuvo Foreman, updated just now")
+    }
+
+    @Test func aRowsTimeIsShort() {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        #expect(WorkQueue.shortAgo(now.addingTimeInterval(-20), now: now) == "now")
+        #expect(WorkQueue.shortAgo(now.addingTimeInterval(-12 * 60), now: now) == "12m")
+        #expect(WorkQueue.shortAgo(now.addingTimeInterval(-3 * 3600), now: now) == "3h")
+        #expect(WorkQueue.shortAgo(now.addingTimeInterval(-2 * 86_400), now: now) == "2d")
     }
 
     @Test func anItemMovesToAnyOtherCategoryNeverInProgress() {

@@ -49,6 +49,8 @@ interface Input {
   adopt?: ModelRef
   /** No message: its agent summarizes the conversation (`compact`). */
   compact?: boolean
+  /** Held for a newer bridge that takes this one's place (renewal.ts): it goes first there. */
+  held?: boolean
 }
 
 /** A turn under way. */
@@ -140,6 +142,12 @@ function lostWorkOf(input: Input): { at: number; work: LostWork[]; restarted: bo
   return typeof kept?.lostWork === "number" ? { at: kept.lostWork, work: Array.isArray(kept.work) ? (kept.work as LostWork[]) : [], restarted: kept.restarted === true } : undefined
 }
 
+/** A group chat's seat: its bot's part in a chat (groups/seat.ts). */
+function isSeat(session: Session): boolean {
+  const kuvo = session.metadata?.kuvo as Record<string, unknown> | undefined
+  return Boolean(kuvo && typeof kuvo === "object" && kuvo.seat)
+}
+
 /** At work: a turn, or the files being kept or put back (the app shows it working, and Undo waits). */
 function isBusy(doing: Doing): boolean {
   return doing.kind !== "idle" && doing.kind !== "deleting"
@@ -214,6 +222,7 @@ export function runCommand(command: string, directory: string, started: (group: 
     let truncated = false
     let timedOut = false
     let done = false
+    let timer: ReturnType<typeof setTimeout> | undefined
     const take = (chunk: Buffer) => {
       output += chunk.toString("utf8")
       if (output.length > shellOutputLimit * 2) {
@@ -245,7 +254,7 @@ export function runCommand(command: string, directory: string, started: (group: 
         if (child.pid) process.kill(-child.pid, signal)
       } catch {}
     }
-    const timer = setTimeout(() => {
+    timer = setTimeout(() => {
       timedOut = true
       group("SIGTERM")
       setTimeout(() => group("SIGKILL"), 5_000)
@@ -1019,10 +1028,11 @@ export class Sessions {
     // A turn starts with your message, or with a note from the app (a mid-turn model switch), and
     // a summary you asked for is one too.
     const lastUser = record.messages.findLastIndex((message) => message.type === "user" || message.type === "synthetic" || message.type === "compaction")
-    // A summary waiting for a turn that went with the bridge: that turn is over, and nothing shows it waits.
+    // A summary waiting for a turn that went with the bridge: that turn is over, and nothing shows it
+    // waits. (One held for this bridge, by the one before it, waits for it.)
     const queue = this.queue(record)
-    if (queue.some((input) => input.compact)) {
-      queue.splice(0, queue.length, ...queue.filter((input) => !input.compact))
+    if (queue.some((input) => input.compact && !input.held)) {
+      queue.splice(0, queue.length, ...queue.filter((input) => !input.compact || input.held))
       changed = true
     }
     for (const message of record.messages) {
@@ -1269,17 +1279,22 @@ export class Sessions {
     this.turnAwayOwn(live)
     for (const waiting of live.waiting.splice(0)) waiting()
     record.agent.inbox = []
-    const run = runOf(doing)
-    if (run) await this.stop(id, live, run)
-    else await this.stopSubagents(id)
-    // Its subagents' sessions go with it, unless a fork of it shows them too.
-    for (const child of this.list(undefined, id)) if (!this.shownElsewhere(child.id, id)) await this.remove(child.id)
-    for (const thread of live.threads.values()) thread.close()
-    for (const [provider, slot] of Object.entries(this.slots(record))) await this.agent(provider)?.forgetConversation?.(slot.state).catch(() => {})
-    this.stopShells(id)
-    this.store.remove(id)
-    this.live.delete(id)
-    emit("session.deleted", { sessionID: id }, record.session.location.directory)
+    this.removing++
+    try {
+      const run = runOf(doing)
+      if (run) await this.stop(id, live, run)
+      else await this.stopSubagents(id)
+      // Its subagents' sessions go with it, unless a fork of it shows them too.
+      for (const child of this.list(undefined, id)) if (!this.shownElsewhere(child.id, id)) await this.remove(child.id)
+      for (const thread of live.threads.values()) thread.close()
+      for (const [provider, slot] of Object.entries(this.slots(record))) await this.agent(provider)?.forgetConversation?.(slot.state).catch(() => {})
+      this.stopShells(id)
+      this.store.remove(id)
+      this.live.delete(id)
+      emit("session.deleted", { sessionID: id }, record.session.location.directory)
+    } finally {
+      this.removing--
+    }
   }
 
   /** Whether a session other than `except` has a step that names `child` (a fork of its conversation). */
@@ -1353,6 +1368,7 @@ export class Sessions {
     if (this.atWork(id)) record.agent.lateShells = [...((record.agent.lateShells as string[] | undefined) ?? []), message.id]
     this.store.save(id, true)
     let group: number | undefined
+    this.commands++
     void runCommand(text, directory, (started) => {
       group = started
       this.ownShell(id, started)
@@ -1367,7 +1383,7 @@ export class Sessions {
       if (!this.store.get(id)) return
       this.store.save(id, true)
       emit("session.shell.ended", { sessionID: id, shell: { id: shellID, command: text, status: message.status, exit: ran.code }, output: message.output }, directory)
-    })
+    }).finally(() => this.commands--)
   }
 
   // MARK: Undo
@@ -1705,7 +1721,10 @@ export class Sessions {
       if (!send) throw new BadRequest(`${agent.name} has let this subagent go: write to the conversation that started it, which can pick it up again.`)
       this.showMessage(id, record, input)
       const missed = () => this.subagentNote(id, `${agent.name} didn't take that message: write to the conversation that started it.`)
-      void send({ id: input.id, text: attached.text, files: attached.files }, () => this.resumedRun(parentID, parentLive, id)).then((sent) => sent || missed(), missed)
+      this.sending++
+      void send({ id: input.id, text: attached.text, files: attached.files }, () => this.resumedRun(parentID, parentLive, id))
+        .then((sent) => sent || missed(), missed)
+        .finally(() => this.sending--)
       return
     }
     // Passed on by the agent that started it: a note in that conversation, which shows the step.
@@ -1921,6 +1940,18 @@ export class Sessions {
     // (With nothing to start but one being handed, Send Now waits for it.)
     if (index >= 0 || !live.steering.size) live.go = false
     if (index < 0) return
+    // Held for a newer bridge (renewal.ts): it stays in line, kept, to go first there. (Not a group
+    // chat's seat: a discussion under way goes on to its end, and the bridge waits for it.)
+    if (this.holding && !isSeat(record.session)) {
+      const input = queue[index]
+      input.held = true
+      if (input.delivery !== "steer") {
+        input.delivery = "steer"
+        emit("session.inbox.delivery.changed", { sessionID: id, inboxID: input.id, delivery: "steer" }, record.session.location.directory)
+      }
+      this.store.save(id, true)
+      return
+    }
     const [input] = queue.splice(index, 1)
     this.start(id, live, input)
   }
@@ -3098,6 +3129,43 @@ export class Sessions {
    * night), it isn't woken (not a turn for each such session at once): the note waits for its next
    * message instead. (While an undo is staged it waits too, for Redo or that message.)
    */
+  /** Messages held for this bridge by the one before it (renewal.ts), or by this one while it waited to
+   * make way: they go now, each once. */
+  wakeHeld() {
+    for (const session of this.store.all()) {
+      const record = this.store.get(session.id)
+      if (!record) continue
+      const held = this.queue(record).filter((input) => input.held)
+      if (!held.length) continue
+      for (const input of held) delete input.held
+      this.store.save(session.id, true)
+      this.wake(session.id)
+    }
+  }
+
+  /** New turns held for a newer bridge (renewal.ts): what's sent waits in line, kept with its
+   * session, for that one to start. Let go, what waited starts here. */
+  hold(on: boolean) {
+    if (this.holding === on) return
+    this.holding = on
+    if (!on) this.wakeHeld()
+  }
+
+  private holding = false
+  /** Your `!` commands running now, and your messages on their way to a subagent. */
+  private commands = 0
+  private sending = 0
+  /** Sessions being deleted now. */
+  private removing = 0
+
+  /** What's under way, for a newer bridge to wait for: turns (a subagent's too, a message being
+   * handed to one, the files kept after one), your `!` commands, a session being deleted, which it
+   * never cuts; and what agents left running in the background. */
+  work(): { turns: boolean; other: boolean } {
+    const handing = [...this.live.values()].some((live) => live.steering.size > 0)
+    return { turns: this.active().length > 0 || this.commands > 0 || this.sending > 0 || this.removing > 0 || handing, other: Object.keys(this.background()).length > 0 }
+  }
+
   wakeLost(now = Date.now()) {
     for (const session of this.store.all()) {
       const record = this.store.get(session.id)

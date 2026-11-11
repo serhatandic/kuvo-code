@@ -15,7 +15,7 @@ import { accountName, ContextWindows, failure, KnownAccount, lostWorkNote, model
 import { fileDiff, fromPatch } from "../diff"
 import { install, installedVersion, maintenance, update, type MaintenanceDefinition } from "../maintenance"
 import { fingerprint, type LimitsSource } from "../limits"
-import { CLAUDE_LIMITS_EVERY, claudeIdentity, credentialsIn, heardWindows, readClaudeLimits, type ClaudeSignIn } from "./claude-limits"
+import { CLAUDE_LIMITS_EVERY, claudeIdentity, credentialsIn, heardWindows, limitWarning, readClaudeLimits, type ClaudeSignIn } from "./claude-limits"
 import { emit } from "../events"
 import { run, which } from "../proc"
 import { Queue } from "../queue"
@@ -1727,10 +1727,10 @@ class ClaudeThread implements Thread {
         // Where the plan stands, for its limits (limits.ts), whichever turn heard it.
         for (const window of heardWindows(info)) this.agent.limits.heard?.(window)
         if (!active || lane !== active) return
-        // Close to a limit: said once, so the stop doesn't come out of nowhere.
+        // A limit being used up: said once per threshold it passes, and again once it's close, so the stop doesn't come out of nowhere.
         if (info.status === "allowed_warning") {
-          const used = typeof info.utilization === "number" ? ` (${Math.round(info.utilization * 100)}% used)` : ""
-          this.noticeOnce(`warn:${info.rateLimitType}:${info.surpassedThreshold ?? ""}`, turn, `You're close to ${limitWords(info.rateLimitType).replace(/^You've reached /, "").replace(/\.$/, "")}${used}.`)
+          const warning = limitWarning(info)
+          this.noticeOnce(`warn:${info.rateLimitType}:${info.surpassedThreshold ?? ""}:${warning.close ? "close" : ""}`, turn, warning.text)
           return
         }
         // Over the plan's limit, unless extra usage you pay for carries on.
@@ -2507,6 +2507,8 @@ function limitWords(type: string | undefined): string {
   switch (type) {
     case "five_hour":
       return "You've reached your Claude usage limit for the next few hours."
+    case "seven_day":
+      return "You've reached your weekly Claude limit."
     case "seven_day_opus":
       return "You've reached this week's Opus limit on your Claude plan."
     case "seven_day_sonnet":

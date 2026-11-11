@@ -1442,6 +1442,8 @@ test("each feature kuvo/info names is a route the machine answers, and one it do
     "personalities.events": ["POST", "kuvo/personalities/events"],
     phones: ["GET", "kuvo/phones"],
     "phones.pair": ["DELETE", "kuvo/phones/pair"],
+    // (Which version a machine's pieces run: kuvo/info's `pieces`.)
+    pieces: ["GET", "kuvo/info"],
     "plugins.search": ["POST", "kuvo/plugins/search"],
     programs: ["POST", "kuvo/programs"],
     projects: ["GET", "kuvo/projects"],
