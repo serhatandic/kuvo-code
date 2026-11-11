@@ -13,6 +13,7 @@ import path from "node:path";
 import { isObject } from "../../shared/json";
 import { listOf, locked, textOf, writePrivate } from "../files";
 import { RUN } from "../home";
+import { sourceKeyOf } from "./sources";
 
 export const WORK_QUEUE = path.join(RUN, "work-queue");
 const QUEUES = path.join(WORK_QUEUE, "queues");
@@ -62,8 +63,12 @@ export interface Link { url: string; title?: string; kind?: string; ref?: string
 /** A session linked to an item; `box` where it runs, when that's another computer (kept as given). */
 export interface Linked { session: string; since: number; box?: string }
 export interface Handed { from: string; to: string; at: number }
-/** An outside source's item (an issue or a pull request): never numbered, named by `ref`. */
-export interface Source { kind: string; ref: string; url?: string; host?: string; id?: string }
+/** An outside source's item (an issue or a pull request, `sources.ts`): never numbered, named by
+ * `ref`; `id` is the source's own, `name` what a client shows (a summary's only, never kept). */
+export interface Source { kind: string; ref: string; url?: string; host?: string; id?: string; name?: string }
+
+/** An item named in a tool's words or a route: by its id, its number, or its source's key. */
+export type ItemRef = { id: string } | { number: number } | { source: string };
 /** An item on its way to a conversation on another computer (`hand.ts`): it stays here, unchanged,
  * until that computer has it. */
 export interface Handing { id: string; to: string; key: string; name: string; at: number; by: Who; sent?: number; missing?: number }
@@ -89,6 +94,11 @@ export interface Item {
   wanted?: number;
   /** The number it was imported with, where that was another item's, and it has a new one. */
   importedAs?: number;
+  /** Its own number (`wanted`, beside `number`) granted back, waiting for the item that has it to
+   * move to its own. */
+  backGranted?: true;
+  /** Its own number asked back and not given: it keeps the one it has, and isn't asked again. */
+  stays?: true;
   source?: Source;
   /** On its way to a conversation on another computer. */
   handing?: Handing;
@@ -125,7 +135,7 @@ export const whoOf = (given: unknown): Who | null => {
 export const FILE_NAME = /^(?!\.\.?$)[^/\\\0]{1,200}$/;
 
 // What this box knows of an item: every other field a newer box wrote is kept as it was.
-const KNOWN = new Set(["id", "number", "owner", "title", "body", "category", "order", "progress", "notes", "files", "links", "sessions", "handed", "handedBy", "wanted", "importedAs", "source", "handing", "created", "updated", "doneAt", "removed"]);
+const KNOWN = new Set(["id", "number", "owner", "title", "body", "category", "order", "progress", "notes", "files", "links", "sessions", "handed", "handedBy", "wanted", "importedAs", "backGranted", "stays", "source", "handing", "created", "updated", "doneAt", "removed"]);
 
 const handingOf = (given: unknown): Handing | null => {
   if (!isObject(given) || typeof given.id !== "string" || !/^wqh_[A-Za-z0-9_-]{8,40}$/.test(given.id) || typeof given.to !== "string" || !OWNER.test(given.to)
@@ -159,6 +169,8 @@ export function itemOf(given: unknown, owner: string): Item | null {
     ...(typeof given.handedBy === "string" && OWNER.test(given.handedBy) ? { handedBy: given.handedBy } : {}),
     ...(typeof given.wanted === "number" && Number.isInteger(given.wanted) && given.wanted > 0 ? { wanted: given.wanted } : {}),
     ...(typeof given.importedAs === "number" && Number.isInteger(given.importedAs) && given.importedAs > 0 ? { importedAs: given.importedAs } : {}),
+    ...(given.backGranted === true ? { backGranted: true as const } : {}),
+    ...(given.stays === true ? { stays: true as const } : {}),
     ...(isObject(given.source) && typeof given.source.kind === "string" && typeof given.source.ref === "string" ? { source: given.source as unknown as Source } : {}),
     ...(handingOf(given.handing) ? { handing: handingOf(given.handing)! } : {}),
     created,
@@ -325,13 +337,13 @@ export class Book {
     return [...this.queues.values()].filter(queue => OWNER.test(queue.owner)).flatMap(queue => queue.items);
   }
 
-  /** The item with this id or number (the first, where two computers gave one number twice). */
-  find(ref: { id?: string; number?: number }): Item | null {
+  /** The item `ref` names (the first, where two computers gave one number twice). */
+  find(ref: ItemRef): Item | null {
     return this.findAll(ref)[0] ?? null;
   }
 
-  /** Every item with this id or number. */
-  findAll(ref: { id?: string; number?: number }): Item[] {
+  /** Every item `ref` names. */
+  findAll(ref: ItemRef): Item[] {
     return matching(this.items(), ref);
   }
 
@@ -407,8 +419,12 @@ export function noteQueuesChanged(): void {
   for (const tell of queueFollowers) tell();
 }
 
-/** The items `ref` names, by id or number. */
-export const matching = (items: Item[], ref: { id?: string; number?: number }): Item[] => items.filter(item => (ref.id ? item.id === ref.id : item.number === ref.number));
+/** The items `ref` names, by id, number, or source (a linked item's old number names it too). */
+export const matching = <T extends Pick<Item, "id" | "number" | "source">>(items: T[], ref: ItemRef): T[] => items.filter(item => refNames(ref, item));
+
+/** Whether `ref` names `item`. */
+export const refNames = (ref: ItemRef, item: Pick<Item, "id" | "number" | "source">): boolean =>
+  "id" in ref ? item.id === ref.id : "number" in ref ? item.number === ref.number : Boolean(item.source) && sourceKeyOf(item.source!) === ref.source;
 
 /** The folder an item's files are kept in. */
 export const filesOf = (item: string) => path.join(FILES, item);

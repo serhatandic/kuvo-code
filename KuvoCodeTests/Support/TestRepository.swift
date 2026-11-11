@@ -79,6 +79,13 @@ enum TestEnvironment {
                              "GIT_COMMITTER_NAME": "Tests", "GIT_COMMITTER_EMAIL": "tests@example.com"] {
             setenv(key, value, 1)
         }
+        // Motion as most Macs have it, whatever this one's setting (`ReduceMotion`): before any
+        // window, on the main thread, where what it changes is told.
+        if Thread.isMainThread {
+            MainActor.assumeIsolated { ReduceMotion.offUnlessChosen() }
+        } else {
+            DispatchQueue.main.async { ReduceMotion.offUnlessChosen() }
+        }
     }()
 
     static func prepare() { once }

@@ -9,8 +9,10 @@ import { atWorkNow } from "../work/background";
 import { startedByOf, under, workSessions, worksFor } from "../work/tree";
 import type { Listed } from "../work/tree";
 import type { Target } from "../../shared/records";
-import type { Item, KeptFile, Link, Note, Source, Who } from "./store";
+import type { Item, ItemRef, KeptFile, Link, Note, Source, Who } from "./store";
 import { ITEM_ID } from "./store";
+import { issueAt, sourceKey } from "./sources";
+import { seenOf, withSeen, type Seen } from "./github";
 
 /** What the box knows of the sessions here, for a view: every one an agent started (put away
  * ones too, so a lead still sees their items), and those at work now. */
@@ -35,14 +37,17 @@ export const inView = (owner: string, item: Item, overseen: Set<string>): boolea
 export const inProgress = (item: Item, working: Set<string>): boolean =>
   !item.removed && item.category !== "done" && item.sessions.some(each => working.has(each.session));
 
-/** An item named in a tool's words or a route: `#243`, `243`, or its id. */
-export function refOf(given: unknown): { id: string } | { number: number } | null {
+/** An item named in a tool's words or a route: `#243`, `243`, its id, or the GitHub issue or pull
+ * request it is (`gh:owner/repo#12`, or its page). */
+export function refOf(given: unknown): ItemRef | null {
   if (typeof given === "number" && Number.isInteger(given) && given > 0 && given < 1_000_000) return { number: given };
   if (typeof given !== "string") return null;
   const text = given.trim();
   if (ITEM_ID.test(text)) return { id: text };
   const number = text.match(/^#?(\d{1,6})$/);
-  return number ? { number: Number(number[1]) } : null;
+  if (number) return { number: Number(number[1]) };
+  const at = issueAt(text);
+  return at ? { source: sourceKey(at) } : null;
 }
 
 /** A session as a view names it: its title, and whether it's at work. */
@@ -100,6 +105,14 @@ export interface ItemSummary {
   linkCount: number;
   handedBy?: string;
   source?: Source;
+  /** Where its issue or pull request stands on GitHub, as last read (`github.ts`), and since when. */
+  seen?: Seen;
+  /** The category it's kept in, while GitHub's word makes it Done (`category` "done"). */
+  keptIn?: string;
+  /** Its title struck through: closed on GitHub without being done (not planned, or unmerged). */
+  struck?: boolean;
+  /** Where it's made Done (an issue's: "github"), never by a move here. */
+  closesOn?: string;
   /** On its way to a conversation on another computer. */
   handing?: { to: string; name: string };
   /** The computer it's on, when that isn't the one asked: as that computer last told it. */
@@ -124,7 +137,7 @@ export interface ItemWhole extends ItemSummary {
 }
 
 export function summaryOf(item: Item, working: Set<string>, titles: Map<string, { title: string }>): ItemSummary {
-  return {
+  return withSeen({
     id: item.id,
     ...(item.number !== undefined ? { number: item.number } : {}),
     ...(item.wanted !== undefined ? { wanted: item.wanted } : {}),
@@ -146,7 +159,7 @@ export function summaryOf(item: Item, working: Set<string>, titles: Map<string, 
     updated: item.updated,
     ...(item.doneAt !== undefined ? { doneAt: item.doneAt } : {}),
     ...(item.removed ? { removed: item.removed } : {}),
-  };
+  });
 }
 
 export function wholeOf(item: Item, working: Set<string>, titles: Map<string, { title: string }>): ItemWhole {
@@ -184,6 +197,7 @@ export function agoWords(at: number, now = Date.now()): string {
 }
 
 /** An item as tools name it: an outside source's by its ref (`gh:owner/repo#12 "Title"`, its
- * number never shown again), `#243 "Title"`, or `"Title" (new, no number yet)`. */
+ * number never shown again), `#243 "Title"`, or `"Title" (new, no number yet)`. (An issue's
+ * title is GitHub's, as last read.) */
 export const nameOf = (item: Pick<Item, "number" | "title" | "wanted" | "id"> & { source?: Source }): string =>
-  item.source ? `${item.source.ref} "${item.title}"` : item.number !== undefined ? `#${item.number} "${item.title}"` : `"${item.title}" (${item.id}, no number yet${item.wanted ? `: asked for #${item.wanted}` : ""})`;
+  item.source ? `${item.source.ref} "${seenOf(item.source)?.value?.title ?? item.title}"` : item.number !== undefined ? `#${item.number} "${item.title}"` : `"${item.title}" (${item.id}, no number yet${item.wanted ? `: asked for #${item.wanted}` : ""})`;
