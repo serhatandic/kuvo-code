@@ -269,16 +269,16 @@ struct MachinesSettings: View {
                 Button("Remove…") { askToRemove(engine.machine) }
             }
         }
-        .contextMenu {
-            ForEach(engine.machine.otherAddresses ?? [], id: \.self) { address in
-                Button("Stop Using \(address)") { app.machines.removeAddress(address, from: engine.machine.id) }
+        .heldContextMenu {
+            for address in engine.machine.otherAddresses ?? [] {
+                HeldRow.button("Stop Using \(address)") { app.machines.removeAddress(address, from: engine.machine.id) }
             }
             // The same computer at another address, when one of them can't be reached to tell.
             let others = app.machines.list.filter { $0.id != engine.machine.id }
             if !others.isEmpty {
-                Menu("Same Computer As") {
-                    ForEach(others) { other in
-                        Button(other.name) {
+                HeldRow.submenu("Same Computer As") {
+                    for other in others {
+                        HeldRow.button(other.name) {
                             if !app.machines.sameComputer(engine.machine.id, as: other.id) { notSame = (engine.machine.name, other.name) }
                         }
                     }

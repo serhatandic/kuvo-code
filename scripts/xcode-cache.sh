@@ -32,16 +32,15 @@
 # The settings are scripts/xcode-cache.xcconfig, beside this, which xcodebuild applies over the
 # project's (those on its command line still win) through XCODE_XCCONFIG_FILE, the store's folder
 # and size through the environment: so a caller changes nothing. A caller with an XCODE_XCCONFIG_FILE
-# of its own keeps it, without the cache. Nothing here stops a build: whatever fails, it builds as
-# before, without the cache.
+# of its own keeps it, without the cache; KUVO_XCODE_CACHE=0 turns it off, and so does CI (whose
+# runner starts empty). Nothing here stops a build: whatever fails, it builds as before, without the
+# cache.
 #
-# Off unless KUVO_XCODE_CACHE=1 (never on CI, whose runner starts empty): with Xcode 27.2, a cache
-# hit on a Swift compile whose stored output has warnings crashes Xcode's build service as it
-# replays them (SWBBuildService aborts in CachingDiagnosticsProcessor::replayCachedDiagnostics, a
-# bad optional access on a prefix-mapped location: "The Xcode build system has crashed"), #562.
+# What's under /tmp or /var is mapped by its real path, /private/…, too (the xcconfig says why):
+# without that, a hit that replayed a warning there crashed Xcode 27.2's build service (#562).
 xcode_cache() {
     xcode_cache_settings="$(cd "$1" 2>/dev/null && pwd)/xcode-cache.xcconfig"
-    if [ "${KUVO_XCODE_CACHE:-0}" != 1 ] || [ -n "${CI:-}" ]; then
+    if [ "${KUVO_XCODE_CACHE:-1}" = 0 ] || [ -n "${CI:-}" ]; then
         # (Not even one a job this runs in turned on.)
         case "${XCODE_XCCONFIG_FILE:-}" in */xcode-cache.xcconfig) unset XCODE_XCCONFIG_FILE KUVO_XCODE_CAS_PATH KUVO_XCODE_CACHE_SIZE ;; esac
         return 0

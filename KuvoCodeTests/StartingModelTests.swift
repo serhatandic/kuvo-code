@@ -197,6 +197,11 @@ import Testing
         await catalog.refreshAgents(fresh: true)
         let claude = ModelRef(id: "opus", providerID: "claude-code")
         #expect(catalog.chipModel(claude)?.name == "Claude Opus")
+        // One its program no longer lists, its account signed in: named and sent, as before (the
+        // agent says whether it can run it), not "Choose a Model".
+        let dropped = ModelRef(id: "opus-4", providerID: "claude-code")
+        #expect(catalog.chipModel(dropped)?.name == "opus-4")
+        #expect(catalog.refusal(dropped) == nil)
 
         account.lock.withLock { account.signedIn = false }
         await catalog.refreshAgents(fresh: true)
@@ -222,11 +227,23 @@ import Testing
     /// signed out, it says to sign in. A coding agent's model missing while the agents start goes.
     @Test func sendingOnAModelThatCantRunSaysWhy() async throws {
         defer { StubWeb.stop() }
-        try await engine(accounts: [Self.account("anthropic", signedIn: true), Self.account("deepseek", signedIn: false)],
-                         models: [Self.model("anthropic", "sonnet-next"), Self.model("deepseek", "chat")],
+        // xAI and OpenAI as the engine lists them: their plans' sign-ins (which Accounts offers only
+        // to one made with them before), and a key. OpenAI's made with its ChatGPT plan before.
+        let xai: [String: Any] = ["id": "xai", "name": "xAI", "methods": [["type": "oauth", "id": "device", "label": "SuperGrok"], ["type": "key"]], "connections": [Any]()]
+        let openai: [String: Any] = ["id": "openai", "name": "OpenAI", "methods": [["type": "oauth", "id": "chatgpt-browser", "label": "ChatGPT Pro/Plus"], ["type": "key"]],
+                                     "connections": [["type": "credential", "credentialID": "cred_openai", "method": "oauth"]]]
+        try await engine(accounts: [Self.account("anthropic", signedIn: true), Self.account("deepseek", signedIn: false), xai, openai],
+                         models: [Self.model("anthropic", "sonnet-next"), Self.model("deepseek", "chat"), Self.model("xai", "grok-4.7")],
                          defaultModel: Self.model("anthropic", "sonnet-next"))
         #expect(catalog.refusal(sonnet, on: "devbox") == "sonnet isn’t available on devbox now: choose another model.")
         #expect(catalog.refusal(ModelRef(id: "chat", providerID: "deepseek")) == "chat needs a sign-in: sign in to Deepseek in Settings › Accounts, or choose another model.")
+        // An old conversation on the engine's xAI model (#338): a SuperGrok plan signed in to as
+        // Grok never runs it, so it says a key, or a model under Grok, not to sign in to the plan.
+        #expect(catalog.refusal(ModelRef(id: "grok-4.7", providerID: "xai")) == "grok-4.7 needs an xAI key: add one in Settings › Accounts, or choose another model (with a SuperGrok plan, one under Grok).")
+        // Its card's Sign In opens a sheet with only a key: its help says that.
+        #expect(catalog.signInHelp("xai") == "Add an xAI key (with a SuperGrok plan, choose a model under Grok instead)")
+        #expect(catalog.signInHelp("openai") == "Sign in to Codex (your ChatGPT plan, under Subscriptions)", "a plan's sign-in made before: signed in to again")
+        #expect(catalog.signInHelp("deepseek", on: "devbox") == "Sign in to Deepseek on devbox: its sign-ins are its own")
         #expect(catalog.refusal(ModelRef(id: "sonnet-next", providerID: "anthropic")) == nil)
         #expect(catalog.refusal(ModelRef(id: "opus", providerID: "claude-code")) == nil, "its agents still loading")
         // A provider the project's own settings add, which the engine lists only in that project: it goes.

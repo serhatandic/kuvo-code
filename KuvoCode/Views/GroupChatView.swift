@@ -23,6 +23,11 @@ struct GroupChatView: View {
     @State private var quoteFocus: Drafts.QuoteFocus?
     /// Find in the chat (⌘F).
     @State private var find = ConversationFind()
+    /// The chat's height, and what's over its end, and the "&" list in it, as shown: the list has
+    /// what the conversation leaves (`ComposerListRoom`).
+    @State private var height: CGFloat = .infinity
+    @State private var stackHeight: CGFloat = 0
+    @State private var listShown: CGFloat = 0
 
     private var members: [Bot] { group.members.compactMap { bots.bot($0) } }
     private var draftKey: String { BotGroups.tabKey(group.id) }
@@ -119,7 +124,9 @@ struct GroupChatView: View {
                     isTalking: groups.isDiscussing(group.id),
                     focusRequest: composerFocus,
                     send: send,
-                    stop: { groups.stop(group.id) }
+                    stop: { groups.stop(group.id) },
+                    listRoom: ComposerListRoom.height(room: height - BottomStack.conversationRoom, card: stackHeight, list: listShown, bars: 0, barsKept: 0),
+                    listHeight: $listShown
                 )
             }
             .animation(.ui, value: groups.isPaused(group.id))
@@ -129,7 +136,9 @@ struct GroupChatView: View {
             .padding(.horizontal, Metrics.gutter)
             .padding(.bottom, 16)
             .readableColumn()
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { stackHeight = $0 }
         }
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height = $0 }
         // Seen only while you're here, as a session is: what's said while you're in another app
         // waits for you (its notifications too), and counts as seen when you come back.
         // Its seats' asks of those vaults, followed while it's open (VaultAskCards).
@@ -145,6 +154,8 @@ struct GroupChatView: View {
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in if !isKept { groups.markViewed(group.id) } }
         // What's opened from it comes back to it.
         .environment(\.conversationTab, .group(group.id))
+        // Its pictures, which each of them (and the composer's, after them) opens among.
+        .environment(\.conversationPictures, ConversationPictureSet(group: group.id, groups: groups, bots: bots))
     }
 
     /// The words Find looks in, as the message shows them: yours, or a bot's reply.
@@ -371,11 +382,11 @@ private struct GroupMessageRow: View, Equatable {
             }
             .contentShape(.rect)
             .onHover { hovering = $0 }
-            .contextMenu {
-                Button("Copy") { copy() }
-                if let reply { Button("Reply", action: reply) }
+            .heldContextMenu {
+                HeldRow.button("Copy") { copy() }
+                if let reply { HeldRow.button("Reply", action: reply) }
                 if message.report != nil, let author {
-                    Button("Open \(author.name)’s Conversation") { app.open(.session(author.sessionID), from: here) }
+                    HeldRow.button("Open \(author.name)’s Conversation") { app.open(.session(author.sessionID), from: here) }
                 }
             }
         }
@@ -671,6 +682,10 @@ private struct GroupComposer: View {
     var focusRequest = 0
     let send: () -> Void
     let stop: () -> Void
+    /// How tall the "&" list can be before it scrolls inside, and how tall it is as shown, as in a
+    /// session's composer (`ComposerListRoom`).
+    var listRoom: CGFloat = .infinity
+    var listHeight: Binding<CGFloat> = .constant(0)
     @Environment(\.messageFont) private var messageFont
     /// Asks the field for the keyboard; nil once it has it.
     @State private var fieldFocus: MessageField.FocusRequest?
@@ -691,7 +706,10 @@ private struct GroupComposer: View {
             // A group chat names those its computer's box names: on a machine, its own and those of
             // your other computers it meets at the relay.
             if let named = agents.matches(in: text, excluding: nil, from: machine == nil ? nil : chatAgents ?? []) {
-                AgentReferenceList(agents: named, selected: min(agents.selected, named.count - 1)) { agents.insert($0, into: $text) }
+                let selected = min(agents.selected, named.count - 1)
+                ComposerListScroll(room: listRoom, height: listHeight, chosen: ComposerListChoice(list: "agents", row: selected)) {
+                    AgentReferenceList(agents: named, selected: selected) { agents.insert($0, into: $text) }
+                }
             }
             if !quotes.isEmpty {
                 QuoteList(quotes: $quotes, focus: answerFocus, font: messageFont.field, onKey: answerKey) { id, focused in

@@ -11,3 +11,14 @@ SWIFT_ENABLE_PROJECT_PREFIX_MAPPING = YES
 CLANG_ENABLE_PREFIX_MAPPING = YES
 CLANG_ENABLE_PROJECT_PREFIX_MAPPING = YES
 COMPILER_WORKING_DIRECTORY = $(PROJECT_DIR)
+// What's under /tmp or /var by its real path too (#562). Xcode names a checkout there /tmp/…, as
+// its project's mapping does, but SwiftPM names a package's sources by the real path,
+// /private/tmp/…, which that mapping missed; and a package that also compiles a file Xcode makes
+// (resource_bundle_accessor.swift, mapped to /^derived) had some paths mapped and some not. A hit
+// that replayed a warning of such a compile crashed Xcode 27.2's build service (SWBBuildService
+// aborts in replayCachedDiagnostics: "The Xcode build system has crashed"). Mapped as roots, not
+// as /private$(PROJECT_DIR): the compiler names a file by the longest of the paths a mapped one
+// came from, and that would be /private/Users/…, which isn't there, for every other checkout. Each
+// /tmp checkout keeps keys of its own (/^tmp/its-folder/…), as it had.
+SWIFT_OTHER_PREFIX_MAPPINGS = /private/tmp=/^tmp /private/var=/^var
+CLANG_OTHER_PREFIX_MAPPINGS = /private/tmp=/^tmp /private/var=/^var

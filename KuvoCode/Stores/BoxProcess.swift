@@ -63,7 +63,7 @@ final class BoxProcess {
 
     /// The box's script: KUVO_BOX_SCRIPT's (a checkout's `kuvo-link.js`, or its source,
     /// `Packages/Box/src/link/main.ts`) in a debug build, else the app's own.
-    private static var script: URL? {
+    static var script: URL? {
         #if DEBUG
         if let path = ProcessInfo.processInfo.environment["KUVO_BOX_SCRIPT"] { return URL(filePath: path) }
         #endif
@@ -78,9 +78,17 @@ final class BoxProcess {
     /// it isn't any more (checked again here when the box's own check is over a minute old: the
     /// engine restarts under a box that keeps running).
     func engineConfig(engine: URL, content: String?, environment: [String: String], timeout: TimeInterval = 10) async -> String? {
-        guard !refused, let script = Self.script else { return content }
+        // (A refused box says why where the app shows its failure.)
+        guard !refused else { return content }
+        guard let script = Self.script else {
+            log.error("This Mac's box added nothing to the engine's settings: its script is missing from the app")
+            return content
+        }
         if checksRuntime, checkedAt.map({ -$0.timeIntervalSinceNow > 60 }) ?? true {
-            guard await Task.detached(operation: { BoxIntegrity.trouble(engine: engine) }).value == nil else { return content }
+            if let trouble = await Task.detached(operation: { BoxIntegrity.trouble(engine: engine) }).value {
+                log.error("This Mac's box added nothing to the engine's settings: \(trouble, privacy: .public)")
+                return content
+            }
             checkedAt = Date()
         }
         let home = Self.home
@@ -95,11 +103,25 @@ final class BoxProcess {
         // start in a folder that isn't there (the settings would go unasked, with no word of why).
         try? FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
         // In its folder, as the box starts. Its end from `ChildProcess`, which never misses it, nor
-        // waits on something it left running that holds its output open.
-        guard let result = try? await ChildProcess.run(engine.path, ["run", "--config=/dev/null", "--no-env-file", script.path, "engine-config"],
-                                                       environment: env, directory: home, errors: .discard, limit: .seconds(timeout)),
-              !result.timedOut, result.reason == .exit, result.status == 0,
-              let text = String(data: result.output, encoding: .utf8), text.hasPrefix("{"), text.hasSuffix("}") else { return content }
+        // waits on something it left running that holds its output open. Without its settings the
+        // engine starts all the same, and the log says why.
+        let result: ChildProcess.Result
+        do {
+            result = try await ChildProcess.run(engine.path, ["run", "--config=/dev/null", "--no-env-file", script.path, "engine-config"],
+                                                environment: env, directory: home, errors: .discard, limit: .seconds(timeout))
+        } catch is CancellationError {
+            // The engine's start was called off: nothing went wrong.
+            return content
+        } catch {
+            log.error("This Mac's box couldn't add to the engine's settings: \(error.localizedDescription, privacy: .public)")
+            return content
+        }
+        guard result.succeeded, let text = String(data: result.output, encoding: .utf8), text.hasPrefix("{"), text.hasSuffix("}") else {
+            let why = result.timedOut ? "no answer within \(String(format: "%g", timeout)) seconds" : result.succeeded ? "its answer isn't settings"
+                : result.reason == .uncaughtSignal ? "it was stopped by signal \(result.status)" : "it ended with status \(result.status)"
+            log.error("This Mac's box added nothing to the engine's settings: \(why, privacy: .public)")
+            return content
+        }
         return text
     }
 

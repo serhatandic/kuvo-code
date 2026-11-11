@@ -158,6 +158,7 @@ test("this Mac, numbering on its own, leads a setup of its own: its peers docume
     you: { key: self.pub, role: "primary" },
     computers: [{ key: self.pub, name: "Studio", kind: "mac", role: "primary", app: true }, { key: lab.pub, name: "lab", kind: "machine", role: "member", app: false }],
     startsFromOthers: { value: null, default: "off" },
+    heldBy: [],
   });
   // Its card, as it's next written: the same, with the item made since.
   link.writeCard();
@@ -234,6 +235,40 @@ test("what a machine tells of how it numbers is looked at as it comes: lab, now 
   write(path.join(queues, "peers", `${added.pub}.json`), { id: "wqt_vpstoldvpstold", at: 1, heard: 1, kind: "machine", since: 60, items: [], owners: [], categories: [], primary: { key: self.pub, kind: "mac", since: 1_000 }, shared: true });
   link.noteSetupNow(Date.now(), { soon: 0 });
   assert.equal(ownPeers().setup, undefined, "stepped aside");
+});
+
+test("kuvo/setup and the card name the machines holding this Mac back (heldBy); a machine that never told how it numbers, or one gone for days, holds it back no more", async () => {
+  write(numbers, { primary: "self", next: 12, leases: [], since: 1_000 });
+  const vps = box("machine", "vps"), old = box("machine", "old");
+  link.updateLink(current => ({ ...current, macPeers: [lab.peer, vps.peer, old.peer] }));
+  // lab, an older box, hasn't said whether it's shared; vps never told this Mac anything; old says
+  // it's shared, but hasn't answered for four days, and the relay found it away within the hour.
+  labTold({ primary: { key: self.pub, kind: "mac", since: 1_000 }, shared: undefined });
+  write(path.join(queues, "peers", `${old.pub}.json`), { id: "wqt_oldtoldoldtold", at: 1, heard: 1, kind: "machine", since: 60, items: [], owners: [], categories: [], primary: { key: self.pub, kind: "mac", since: 1_000 }, shared: true });
+  write(path.join(run, "peer-reach.json"), { [old.pub]: Date.now() - 4 * 86_400_000 });
+  write(path.join(run, "peer-reach-checked.json"), { [old.pub]: Date.now() - 60_000 });
+  link.noteSetupNow(Date.now(), { soon: 0 });
+  assert.equal(link.readLink().setup, undefined, "lab holds it back");
+  assert.deepEqual((await route("GET", "kuvo/setup")).json.heldBy, [lab.pub], "lab alone: not vps, which never told, nor old, gone");
+  link.writeCard();
+  assert.deepEqual(read(path.join(run, "setup-card.json")).heldBy, [lab.pub]);
+
+  labTold({ primary: { key: self.pub, kind: "mac", since: 1_000 } });
+  link.noteSetupNow(Date.now(), { soon: 0 });
+  assert.equal(link.readLink().setup?.role, "primary", "it leads");
+  assert.deepEqual((await route("GET", "kuvo/setup")).json.heldBy, []);
+  // This Mac slept overnight: the relay hasn't found old away within the hour, as it's only
+  // looked again once this Mac's back on it. old, not heard from for days, is gone all the same: it
+  // leads on, rather than stepping aside for a minute.
+  write(path.join(run, "peer-reach-checked.json"), { [old.pub]: Date.now() - 10 * 3_600_000 });
+  link.noteSetupNow(Date.now(), { soon: 0 });
+  assert.equal(link.readLink().setup?.aside, undefined, "still leads after a long sleep");
+  assert.deepEqual(link.setupView(link.readLink()).heldBy, []);
+  // old answers again: it's back, and shared, so this Mac steps aside, held by it.
+  write(path.join(run, "peer-reach.json"), {});
+  link.noteSetupNow(Date.now(), { soon: 0 });
+  assert.equal(ownPeers().setup, undefined, "stepped aside");
+  assert.deepEqual(link.setupView(link.readLink()).heldBy, [old.pub]);
 });
 
 test("kuvo/setup/events says it now, and again as link.json changes, written here or by another process (setup over SSH)", async () => {

@@ -1,4 +1,5 @@
 import Foundation
+import KuvoLink
 import OpenCodeKit
 import os
 import Testing
@@ -56,8 +57,15 @@ import Testing
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: engine.path)
         let started = ContinuousClock.now
         let given = await BoxProcess().engineConfig(engine: engine, content: #"{"model":"mine"}"#, environment: [:], timeout: 30)
-        #expect(given == #"{"model":"theirs"}"#)
-        #expect(ContinuousClock.now - started < .seconds(10))
+        let took = ContinuousClock.now - started
+        // Which way it went, should it fail: a stand-in that never ran wasn't started (the box's
+        // script missing, or it couldn't start in the box's folder: the app's log says why); one
+        // that ran but wasn't heard is ChildProcess's.
+        let ran = FileManager.default.fileExists(atPath: left.path)
+        let home = FileManager.default.fileExists(atPath: BoxProcess.home.path)
+        #expect(given == #"{"model":"theirs"}"#,
+                "the stand-in \(ran ? "ran" : "never ran"), the box's script \(Bridge.scriptURL == nil ? "isn't" : "is") in the app, its folder \(home ? "is" : "isn't") there, after \(took)")
+        #expect(took < .seconds(10))
     }
 
     /// A `.env` in the box's folder (which an agent's command can write) sets nothing for it: the

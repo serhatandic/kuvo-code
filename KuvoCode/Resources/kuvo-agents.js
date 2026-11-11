@@ -4703,7 +4703,7 @@ class Handoffs {
         model: info.model,
         ...info.agent ? { agent: info.agent } : {},
         ...info.permissions ? { permissions: info.permissions } : {},
-        ...info.metadata?.kuvo?.approval ? { metadata: { kuvo: { approval: info.metadata.kuvo.approval, ...info.metadata.kuvo.applied ? { applied: info.metadata.kuvo.applied } : {} } } } : {}
+        ...info.metadata?.kuvo?.approval || info.metadata?.kuvo?.filed ? { metadata: { kuvo: { ...info.metadata.kuvo.approval ? { approval: info.metadata.kuvo.approval } : {}, ...info.metadata.kuvo.applied ? { applied: info.metadata.kuvo.applied } : {}, ...info.metadata.kuvo.filed ? { filed: info.metadata.kuvo.filed } : {} } } } : {}
       });
       to = made?.data?.id;
       if (!to)
@@ -27391,4 +27391,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 2f3329d833bffce50f8f0f3028ecbf87ba1b23068bf09de9418038ea0ac7066b
+// Built from Packages/Box/src/agents 8c325fa2a549f9d3187ba6472eb69fae3c41e28aee30d0c7c5a11c818734a2a1

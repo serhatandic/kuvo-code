@@ -98,8 +98,8 @@ export const PAIRING = object({ link: string, ends: number });
 
 /** Your setup as this box says it (`kuvo/setup`, PROTOCOL.md "Your setup"): its id and epoch, its
  * main computer, this box (its key, and its role, null in no setup), each computer in it, another
- * main computer named at the same epoch (never taken), and the #181 switch: the value you set, or
- * null, and what it is then. */
+ * main computer named at the same epoch (never taken), the #181 switch: the value you set, or
+ * null, and what it is then; and the machines holding this Mac back from leading a setup, by key. */
 export const SETUP = object({
   setup: nullable(string),
   epoch: nullable(number),
@@ -108,6 +108,44 @@ export const SETUP = object({
   computers: list(object({ key: string, name: string, kind: words("mac", "machine"), role: words("primary", "member"), app: bool })),
   "conflict?": object({ primary: string, epoch: number }),
   startsFromOthers: object({ value: nullable(words("on", "off")), default: words("on", "off") }),
+  heldBy: list(string),
+});
+
+/** One box found on a computer, as `kuvo/setup/judge` and `kuvo-link.js here` judge it: where it
+ * is (its folder, from the home folder; `app`, Kuvo Code's own box on a Mac), its verdict, and what
+ * it says of itself (its key, name and kind; its setup, role and main computer, `heard` when that
+ * was last heard from, ms; the Macs that set it up; how many computers and Work Queue items). */
+const JUDGED_BOX = object({
+  folder: string,
+  app: bool,
+  verdict: words("self", "free", "ours", "older", "elsewhere", "main"),
+  key: nullable(string),
+  name: string,
+  kind: nullable(words("mac", "machine")),
+  setup: nullable(string),
+  role: nullable(words("primary", "member")),
+  primary: nullable(object({ key: string, name: string, heard: nullable(number) })),
+  macs: list(object({ key: string, name: string })),
+  computers: nullable(number),
+  items: nullable(number),
+});
+
+/** What's on a computer, judged (PROTOCOL.md, "Your setup", "Already in a setup?"): one verdict,
+ * whether adding it joins its setup with nothing to ask (`joins`: another setup's main computer, no
+ * Mac's own app, with no other computer and no work in it), and each box found there. */
+export const JUDGED = object({ verdict: words("self", "free", "ours", "older", "elsewhere", "main", "two"), joins: bool, boxes: list(JUDGED_BOX) });
+
+/** What `kuvo-link.js here` prints as Kuvo Code opens on a Mac (PROTOCOL.md, "Already in a
+ * setup?"): one verdict, whether the app uses its own box or the one already here (`attach`), how it
+ * opens (`main`: its setup's main computer; `window`: onto a setup another computer is main of, its
+ * box one of its members), that box, and the app's own. Not a route: the app decodes it as it opens. */
+export const HERE = object({
+  verdict: words("self", "free", "ours", "older", "elsewhere", "main", "two"),
+  use: words("own", "attach"),
+  opens: words("main", "window"),
+  runs: nullable(words("running", "stopped", "gone")),
+  box: nullable(JUDGED_BOX),
+  own: nullable(JUDGED_BOX),
 });
 
 /** Whether a client's in use here, and how many notices wait. */
@@ -169,6 +207,8 @@ export const BOX_ROUTES: RouteShape[] = [
   { route: "DELETE kuvo/phones/pair", answers: { 200: NOTHING } },
   { route: "GET kuvo/setup", answers: { 200: SETUP } },
   { route: "GET kuvo/setup/events", answers: { 200: SETUP } },
+  { route: "POST kuvo/setup/judge", answers: { 200: JUDGED } },
+  { route: "POST kuvo/setup/attached", answers: { 200: NOTHING } },
   { route: "GET kuvo/attention", answers: { 200: ATTENTION } },
   { route: "POST kuvo/attention", answers: { 200: object({ for: number }) } },
   { route: "POST kuvo/attention/notice", answers: { 200: NOTHING } },
