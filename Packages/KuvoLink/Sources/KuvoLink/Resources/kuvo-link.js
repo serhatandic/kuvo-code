@@ -29763,7 +29763,7 @@ function steering(background, { after = STEER_AFTER, now = Date.now, schedule = 
         sessions.get(session)?.blocking.delete(data.id);
         break;
       case "session.inbox.enqueued":
-        if (data.item?.type !== "user")
+        if (data.item?.type !== "user" || !writtenByYou(data.item.payload?.text, data.item.payload?.metadata))
           break;
         users.add(data.inboxID);
         if (data.item.delivery === "steer")

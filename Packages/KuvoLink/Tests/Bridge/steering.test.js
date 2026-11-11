@@ -1,6 +1,7 @@
 // A message you send to an agent that waits on a long command (or a subagent) it started in the
 // foreground is read at once: the box moves what it waits on to the background, as the engine's
-// own Ctrl+B does, rather than leave your message until the command ends. Run with
+// own Ctrl+B does, rather than leave your message until the command ends. Another agent's letter or
+// the box's news never does: it's read as the command ends. Run with
 // `node --test Packages/KuvoLink/Tests/Bridge/*.test.js`.
 import "./test-safety.js";
 import assert from "node:assert/strict";
@@ -53,6 +54,45 @@ test("your message while a long command runs is read at once: the command goes o
   yours(b, "msg_1");
   b.wait(0);
   assert.deepEqual(b.backgrounded, ["ses_1"]);
+});
+
+// Another agent's letter (send_message, a lead's word) and the box's news of its sessions, each
+// sent to steer as the box sends them.
+const letter = (b, inboxID) => b.hear("session.inbox.enqueued", { inboxID, item: { type: "user", delivery: "steer", payload: { text: "[Message from Kuvo Foreman · ses_lead] (To answer, use send_message to ses_lead.)\n\nHow are the tests going?" } } });
+const news = (b, inboxID) => b.hear("session.inbox.enqueued", { inboxID, item: { type: "user", delivery: "steer", payload: { text: '[Session asks] "Fix the build" (address ses_child) asks to run a command.', metadata: { kuvo: { note: { from: "Its sessions", line: "“Fix the build” asks" } } } } } });
+// The box's own note, told by its mark alone (what Auto's reviewer held back, approved).
+const approved = (b, inboxID) => b.hear("session.inbox.enqueued", { inboxID, item: { type: "user", delivery: "steer", payload: { text: "Approved: npm publish", metadata: { kuvo: { note: { from: "Your answer", line: "You approved npm publish" } } } } } });
+
+test("another agent's letter, or a session's news, while a long command runs waits for the command: nothing goes to the background", () => {
+  const b = box();
+  command(b, "call_1", { command: "bun test" });
+  b.wait(10_000);
+  letter(b, "msg_1");
+  news(b, "msg_2");
+  approved(b, "msg_5");
+  b.wait(30_000);
+  assert.deepEqual(b.backgrounded, [], "the tests run on in the foreground");
+  // Sent now from the queue, it doesn't either.
+  b.hear("session.inbox.delivery.changed", { inboxID: "msg_1", delivery: "steer" });
+  b.wait(10_000);
+  assert.deepEqual(b.backgrounded, []);
+  // The command ends, and the agent reads them as it takes its next step.
+  b.hear("session.tool.success", { id: "call_1" });
+  b.hear("session.inbox.delivered", { inboxID: "msg_1" });
+  b.hear("session.inbox.delivered", { inboxID: "msg_2" });
+  b.hear("session.inbox.delivered", { inboxID: "msg_5" });
+  b.wait(30_000);
+  assert.deepEqual(b.backgrounded, []);
+
+  // Your own message among them still goes at once.
+  const yoursToo = box();
+  command(yoursToo, "call_2", { command: "bun test" });
+  letter(yoursToo, "msg_3");
+  yoursToo.wait(5_000);
+  assert.deepEqual(yoursToo.backgrounded, []);
+  yours(yoursToo, "msg_4");
+  yoursToo.wait(0);
+  assert.deepEqual(yoursToo.backgrounded, ["ses_1"]);
 });
 
 test("a command that has only just started gets a moment to end on its own", () => {
@@ -253,6 +293,49 @@ test("every box does it as it follows its engine, with the Mac closed too: the e
     send("session.tool.called", { id: "call_1", input: { command: "sleep 90" } });
     send("session.inbox.enqueued", { inboxID: "msg_1", item: { type: "user", delivery: "steer", payload: { text: "What's 17 + 25?" } } });
     assert.deepEqual(await backgrounded, { url: "/api/session/ses_long/background", authorization: `Basic ${Buffer.from("opencode:pw").toString("base64")}` });
+  } finally {
+    stop.abort();
+    server.closeAllConnections();
+    server.close();
+  }
+});
+
+test("following its engine, a box asks nothing for another agent's letter while a command runs, and still does for yours", { timeout: 10_000 }, async () => {
+  const posted = [];
+  let enough;
+  const done = new Promise(resolve => { enough = resolve; });
+  const followers = [];
+  let followed;
+  const following = new Promise(resolve => { followed = resolve; });
+  const server = http.createServer((request, response) => {
+    if (request.url === "/api/event") {
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.write(": hello\n\n");
+      followers.push(response);
+      return followed();
+    }
+    if (request.method === "POST" && request.url.endsWith("/background")) {
+      posted.push(request.url);
+      if (posted.filter(url => url.includes("ses_yours")).length >= 3) enough();
+    }
+    response.writeHead(204);
+    response.end();
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  const send = (session, type, data) => { for (const follower of followers) follower.write(`data: ${JSON.stringify({ type, data: { sessionID: session, ...data } })}\n\n`); };
+  const stop = new AbortController();
+  try {
+    link.watchEvents(() => ({ port: server.address().port, password: "pw" }), () => true, stop.signal, () => {}, { bots: true, notices: false, steers: true, steerAfter: 0 });
+    await following;
+    for (const session of ["ses_mail", "ses_yours"]) {
+      send(session, "session.tool.input.started", { id: "call_1", name: "shell" });
+      send(session, "session.tool.called", { id: "call_1", input: { command: "bun test" } });
+    }
+    send("ses_mail", "session.inbox.enqueued", { inboxID: "msg_1", item: { type: "user", delivery: "steer", payload: { text: "[Message from Kuvo Foreman · ses_lead] (To answer, use send_message to ses_lead.)\n\nHow are the tests going?" } } });
+    send("ses_yours", "session.inbox.enqueued", { inboxID: "msg_2", item: { type: "user", delivery: "steer", payload: { text: "How are the tests going?" } } });
+    // Yours, asked for again and again while it waits (every 0 ms here); the letter, never.
+    await done;
+    assert.deepEqual(posted.filter(url => !url.includes("ses_yours")), []);
   } finally {
     stop.abort();
     server.closeAllConnections();
