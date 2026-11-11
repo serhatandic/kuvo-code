@@ -424,6 +424,26 @@ import Testing
         #expect(tabs.workedBesideID == nil, "back on the split, you're in its tab's half until you click beside")
     }
 
+    /// Show Next Tab from the last tab, and Show Previous Tab from the first, go round to the other
+    /// end, which the tab bar draws as one more step the same way (#446). A tab picked never does.
+    @Test func cyclingPastAnEndGoesRound() async {
+        defer { done() }
+        await sessions(["ses_a", "ses_b", "ses_c"])
+        for id in ["ses_a", "ses_b", "ses_c"] { tabs.open(.session(id)) }
+        tabs.cycle(by: 1)
+        #expect(tabs.selection == .session("ses_a"))
+        #expect(tabs.loops == 1, "on from the last tab, round to the first")
+        tabs.cycle(by: 1)
+        tabs.cycle(by: -1)
+        #expect(tabs.selection == .session("ses_a"))
+        #expect(tabs.loops == 1, "steps between the ends")
+        tabs.cycle(by: -1)
+        #expect(tabs.selection == .session("ses_c"))
+        #expect(tabs.loops == 2, "back from the first tab, round to the last")
+        tabs.pick(.session("ses_a"))
+        #expect(tabs.loops == 2, "the first tab picked, from the last")
+    }
+
     // MARK: Sessions that carry on, or start
 
     /// Picking a coding agent's model in a session that's in a tab: the new session is in the same

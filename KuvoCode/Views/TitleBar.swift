@@ -75,6 +75,10 @@ struct TabStrip: View {
     let close: (String) -> Void
     /// Closes every tab except the given one, or all of them when it's nil.
     let closeAll: (_ except: String?) -> Void
+    /// How many times Show Next Tab or Show Previous Tab went round past an end of the bar. Each
+    /// time, the pill goes on round, out past that end and in from the other, as one more step
+    /// the same way: a slide back across the whole bar read as a jump backwards (#446).
+    var loops = 0
     /// Shows a session beside the one in view (split view).
     var openBeside: ((String) -> Void)?
     /// Close Split View (the two go back to tabs of their own), closes the session beside a tab's
@@ -85,13 +89,15 @@ struct TabStrip: View {
     /// Renames a session's tab (a new session's has no title to change yet).
     var rename: ((String) -> Void)?
 
-    @Namespace private var pill
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @AppStorage(PairStyle.key) private var style = PairStyle.halves
     /// How wide the tabs are, each as wide as its title, and whether some are out of sight at
     /// either end.
     @State private var tracksWidth: CGFloat = 0
     @State private var hidden = HiddenEnds()
+    /// The loops the track has been scrolled for: going round, it shows the other end at once.
+    @State private var scrolledLoops = 0
 
     struct HiddenEnds: Equatable {
         var leading = false
@@ -109,6 +115,21 @@ struct TabStrip: View {
             ScrollView(.horizontal) {
                 track
                     .padding(3)
+                    .backgroundPreferenceValue(PillPlace.self) { place in
+                        GeometryReader { layer in pill(at: place.map { layer[$0] }, in: layer.size) }
+                    }
+                    .backgroundPreferenceValue(PairFills.self) { pairs in
+                        // Two sessions side by side as one tab's soft fill, under the pill.
+                        GeometryReader { layer in
+                            ForEach(pairs.indices, id: \.self) { index in
+                                let frame = layer[pairs[index]]
+                                Capsule()
+                                    .fill(Pressable.hoverFill)
+                                    .frame(width: frame.width, height: frame.height)
+                                    .offset(x: frame.minX, y: frame.minY)
+                            }
+                        }
+                    }
                     .padding(.vertical, Self.shadowRoom)
                     .onGeometryChange(for: CGFloat.self, of: \.size.width) { tracksWidth = $0 }
             }
@@ -133,10 +154,24 @@ struct TabStrip: View {
             .padding(.vertical, -Self.shadowRoom)
             .frame(maxWidth: tracksWidth > 0 ? tracksWidth : nil)
             // Once it's laid out too: before, the room it has, and so where the tab is, isn't known.
-            .onAppear { DispatchQueue.main.async { proxy.scrollTo(selection) } }
+            .onAppear {
+                scrolledLoops = loops
+                DispatchQueue.main.async { proxy.scrollTo(selection) }
+            }
             .onGeometryChange(for: CGFloat.self, of: \.size.width) { _ in proxy.scrollTo(selection) }
             .onChange(of: tracksWidth) { proxy.scrollTo(selection) }
-            .onChange(of: selection) { _, id in withAnimation(.ui) { proxy.scrollTo(id) } }
+            .onChange(of: selection) { _, id in
+                if loops != scrolledLoops {
+                    // Gone round past an end: the other end shows at once, as the pill goes on
+                    // round. Scrolling back across every tab would read as a jump backwards.
+                    scrolledLoops = loops
+                    var jump = Transaction(animation: nil)
+                    jump.disablesAnimations = true
+                    withTransaction(jump) { proxy.scrollTo(id) }
+                } else {
+                    withAnimation(.ui) { proxy.scrollTo(id) }
+                }
+            }
             .onChange(of: tabs.map(\.id)) { withAnimation(.ui) { proxy.scrollTo(selection) } }
         }
         .glassEffect(.regular, in: .capsule)
@@ -169,7 +204,31 @@ struct TabStrip: View {
         }
     }
 
-    /// The session beside a tab's, in its half of the tab.
+    /// The raised pill, under the tab in view. It slides from tab to tab; going round past an end
+    /// (`loops`), the one there goes on out past that end, and a new one comes in from the other,
+    /// both the way you're going. With Reduce Motion, the two fade instead.
+    @ViewBuilder private func pill(at frame: CGRect?, in layer: CGSize) -> some View {
+        if let frame {
+            // Each loop's own, so going round puts one in place of the other.
+            ForEach([loops], id: \.self) { _ in
+                ActivePill()
+                    .frame(width: frame.width, height: frame.height)
+                    .offset(x: frame.minX, y: frame.minY)
+                    .frame(width: layer.width, height: layer.height, alignment: .topLeading)
+                    .transition(PillRound(shift: reduceMotion ? 0 : roundShift(of: frame, in: layer)))
+            }
+        }
+    }
+
+    /// How far along the bar the pill under the first or last tab goes to be out of sight past
+    /// that end: back past the start, or on past the end. Elsewhere, none.
+    private func roundShift(of frame: CGRect, in layer: CGSize) -> CGFloat {
+        guard tabs.count > 1 else { return 0 }
+        if selection == tabs.first?.id { return -frame.maxX }
+        if selection == tabs.last?.id { return layer.width - frame.minX }
+        return 0
+    }
+
     private func besideMenu(for tab: TabItem) -> [NSMenuItem] {
         var items: [NSMenuItem] = []
         if let swapBeside { items.append(ActionItem("Swap") { swapBeside(tab.id) }) }
@@ -186,16 +245,16 @@ struct TabStrip: View {
             HStack(spacing: 0) {
                 TabButton(tab: tab, isActive: isActive, close: { close(tab.id) }, select: select)
                     .rightClickMenu { menu(for: tab) }
-                    .background { if isActive { ActivePill().matchedGeometryEffect(id: "pill", in: pill) } }
+                    .pillPlace(isActive)
                 TabButton(tab: companion, isActive: false, close: { closeBesideTab?(tab.id) }, select: select)
                     .rightClickMenu { besideMenu(for: tab) }
             }
-            .background(Pressable.hoverFill, in: .capsule)
+            .anchorPreference(key: PairFills.self, value: .bounds) { [$0] }
         case (let companion?, .compact):
             // One tab: the two tiles stacked, and both titles.
             TabButton(tab: tab.titled(tab.title + " · " + companion.title), isActive: isActive, close: { close(tab.id) }, behind: companion, select: select)
                 .rightClickMenu { menu(for: tab) + [.separator()] + besideMenu(for: tab) }
-                .background { if isActive { ActivePill().matchedGeometryEffect(id: "pill", in: pill) } }
+                .pillPlace(isActive)
         default:
             HStack(spacing: 0) {
                 TabButton(tab: tab, isActive: isActive, close: { close(tab.id) }, select: select)
@@ -209,11 +268,9 @@ struct TabStrip: View {
                         .rightClickMenu { besideMenu(for: tab) }
                 }
             }
+            .pillPlace(isActive)
             .background {
-                if isActive {
-                    ActivePill()
-                        .matchedGeometryEffect(id: "pill", in: pill)
-                } else if !tab.companion.isEmpty {
+                if !isActive, !tab.companion.isEmpty {
                     // Two sessions in one tab read as one, even out of view.
                     Capsule().strokeBorder(Surface.hairline(scheme))
                 }
@@ -252,6 +309,55 @@ struct ActivePill: View {
             .specularRim(Capsule())
             .shadow(color: .black.opacity(scheme == .dark ? 0.35 : 0.1), radius: 0.5, y: 0.5)
             .shadow(color: .black.opacity(scheme == .dark ? 0.3 : 0.08), radius: 6, y: 2)
+    }
+}
+
+/// Where the pill goes: the tab in view (its own half, of two side by side).
+private struct PillPlace: PreferenceKey {
+    static let defaultValue: Anchor<CGRect>? = nil
+    static func reduce(value: inout Anchor<CGRect>?, nextValue: () -> Anchor<CGRect>?) { value = value ?? nextValue() }
+}
+
+/// Two sessions side by side as one tab, in halves: their soft fill goes under the pill.
+private struct PairFills: PreferenceKey {
+    static let defaultValue: [Anchor<CGRect>] = []
+    static func reduce(value: inout [Anchor<CGRect>], nextValue: () -> [Anchor<CGRect>]) { value += nextValue() }
+}
+
+private extension View {
+    /// The pill goes here while `isActive`.
+    func pillPlace(_ isActive: Bool) -> some View {
+        anchorPreference(key: PillPlace.self, value: .bounds) { isActive ? $0 : nil }
+    }
+}
+
+/// The pill going round past an end of the tab bar: in from the end it's under, or out past it,
+/// by `shift` along the bar, seen only inside the glass. With no shift, it fades.
+private struct PillRound: Transition {
+    let shift: CGFloat
+
+    func body(content: Content, phase: TransitionPhase) -> some View {
+        content
+            .offset(x: phase.isIdentity ? 0 : shift)
+            .opacity(phase.isIdentity || shift != 0 ? 1 : 0)
+            .mask { GlassEnds(clips: phase.isIdentity ? 0 : 1) }
+    }
+}
+
+/// The glass's round ends, past which the pill going round isn't seen; room above and below
+/// between them for its shadow. Nothing's cut once it's in place (`clips` 0).
+nonisolated private struct GlassEnds: Shape {
+    var clips: CGFloat
+
+    var animatableData: CGFloat {
+        get { clips }
+        set { clips = newValue }
+    }
+
+    func path(in rect: CGRect) -> Path {
+        guard clips > 0 else { return Path(rect.insetBy(dx: -40, dy: -40)) }
+        let middle = Path(rect.insetBy(dx: rect.height / 2, dy: -12))
+        return Capsule().path(in: rect).union(middle)
     }
 }
 
