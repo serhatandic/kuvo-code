@@ -4001,7 +4001,7 @@ var regex = (pattern) => `(regex ${quote2(pattern)})`;
 var param = (name) => `(subpath (param ${quote2(name)}))`;
 var GIT_GUARDED = String.raw`((((worktrees/[^/]+/)?modules/.+|worktrees/[^/]+)/)?(hooks(/|$)|config(\.worktree)?$|commondir$|gitdir$)|(modules|worktrees)(/[^/]+)?$|worktrees/[^/]+/modules$)`;
 var MODULE_FOLDERS = String.raw`/(worktrees/[^/]+/)?modules/.+`;
-var MODULE_KEPT = String.raw`/(worktrees/[^/]+/)?modules/.+/(objects/([0-9a-f][0-9a-f]|pack|info|tmp_objdir-[^/]+)|(refs|logs|lfs|rr-cache)(/.+)?|info)$`;
+var MODULE_KEPT = String.raw`/(worktrees/[^/]+/)?modules/.+/(objects|refs|logs|lfs|rr-cache)/.+$`;
 var AGENTS_GUARDED = String.raw`\.claude/settings(\.local)?\.json|\.mcp\.json|\.codex/(config\.toml|hooks\.json|\.env|rules(/.*)?)|\.cursor/(hooks|mcp)\.json|\.(gemini|grok)/settings\.json|\.grok/(config\.toml|sandbox\.toml|lsp\.json|(hooks|plugins|agents|workflows)(/.*)?)|\.(claude|cursor)/hooks(/.*)?|\.(claude|codex|cursor|gemini|grok)`;
 var WRITE = "file-write* file-write-acl file-write-create file-write-data file-write-finderinfo file-write-flags file-write-mode file-write-owner file-write-setugid file-write-times file-write-unlink file-write-xattr";
 var HOME_WRITES = "file-write* file-write-create file-write-data file-write-flags file-write-mode file-write-times file-write-xattr";
@@ -16417,7 +16417,7 @@ async function keptFromSessions(folder, policy = fencePolicy()) {
   return null;
 }
 function inHomeKept(at, policy) {
-  return (policy.homeKept ?? []).some((wall) => inside3(at, wall) || holds(at, wall)) && !policy.writable.some((each) => inside3(at, each));
+  return (policy.homeKept ?? []).some((wall) => inside3(at, wall) || holds(at, wall)) && ![...policy.writable, ...policy.homeOpen ?? []].some((each) => inside3(at, each));
 }
 var KUVO = "It reaches Kuvo Code's own folders, which is never allowed.";
 var WRECKS_HOME = "It deletes your home folder, moves it away or locks you out of it, which is never allowed.";
@@ -17308,7 +17308,8 @@ function holdsRepository(folder) {
 }
 function walledForOwn(where, policy = fencePolicy(), own = []) {
   const at = realish(where);
-  return inKuvo(at, policy, ownInside(own, policy)) || runsLater(at, policy) || atLogin(at, policy.home) || isSecret(at, policy) || ownAt(at, policy.home) !== null || inHomeKept(at, policy) || WORKTREE_RECORDS.test(at);
+  const ours = ownInside(own, policy).some((folder) => exactly(at, folder));
+  return !ours && (inKuvo(at, policy) || inHomeKept(at, policy)) || runsLater(at, policy) || atLogin(at, policy.home) || isSecret(at, policy) || ownAt(at, policy.home) !== null || WORKTREE_RECORDS.test(at);
 }
 var WORKTREE_RECORDS = new RegExp(String.raw`/\.git/worktrees(/|$)`, process.platform === "darwin" ? "i" : "");
 function runsLater(where, policy) {
@@ -17819,16 +17820,48 @@ function within2(file, folder) {
   const inside = path62.relative(folder, file);
   return inside === "" || !inside.startsWith("..") && !path62.isAbsolute(inside);
 }
-var firstFound = new Map;
+var FOUND_FILE2 = path62.join(BOX, "found-folders.json");
+var MOST_FOUND = 2000;
+var firstFound = null;
+function foundFolders() {
+  if (firstFound)
+    return firstFound;
+  firstFound = new Map;
+  try {
+    const kept = JSON.parse(fs58.readFileSync(FOUND_FILE2, "utf8"));
+    if (isObject(kept)) {
+      for (const [folder, real] of Object.entries(kept))
+        if (typeof real === "string" && path62.isAbsolute(real))
+          firstFound.set(folder, real);
+    }
+  } catch {}
+  return firstFound;
+}
+function keepFound(folder, real) {
+  const found = foundFolders();
+  if (found.get(folder) === real)
+    return;
+  found.delete(folder);
+  found.set(folder, real);
+  while (found.size > MOST_FOUND)
+    found.delete(found.keys().next().value);
+  try {
+    writePrivate(FOUND_FILE2, JSON.stringify(Object.fromEntries(found)));
+  } catch {}
+}
 function foundAt(folder) {
-  let found = firstFound.get(folder);
-  if (found === undefined) {
-    found = realPath(folder);
-    if (firstFound.size >= 2000)
-      firstFound.delete(firstFound.keys().next().value);
-    firstFound.set(folder, found);
-  }
-  return found;
+  const known = foundFolders().get(folder);
+  if (known !== undefined)
+    return known;
+  const real = realPath(folder);
+  keepFound(folder, real);
+  return real;
+}
+async function noteFolderFound(folder) {
+  if (typeof folder !== "string" || !path62.isAbsolute(folder) || foundFolders().has(folder))
+    return;
+  await askedAbout([folder]);
+  keepFound(folder, realPath(folder));
 }
 function realPath(file) {
   const rest = [];
@@ -18039,6 +18072,7 @@ async function adoptConversation(target, id, agents, signal) {
   const data = (await engineGet(target, `api/session/${encodeURIComponent(id)}`).catch(() => null))?.data;
   if (!data?.id)
     return;
+  await noteFolderFound(data.location?.directory).catch(() => {});
   const at = found2(target, data, agents);
   const now = approvalOf(at.data, { agents, bot: at.bot });
   if (!now.pending)

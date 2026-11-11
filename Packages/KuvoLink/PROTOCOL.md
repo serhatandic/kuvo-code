@@ -4393,7 +4393,7 @@ conversation is taken as the box last found it; one it never found then has its 
 back (`why: "failed"`, code's lines still refused), never left waiting on you (bridge 0.9.186), but
 one the box marked as in Full Access, which runs (bridge 0.9.187).
 
-What's a conversation's own is never reviewed by its agent's own file tools, as its folder isn't (the sandbox's walls for its commands are as they were), by where each file really is against where each of those folders was found (one traded for a link since takes nothing with it), and never what's walled from it wherever it is (Kuvo Code's own but the conversation's own in them, what runs later or at login, your secrets and your own settings, `~/Library`, a repository's `.git/worktrees`), each judged as anywhere: its folder, its project's other
+What's a conversation's own is never reviewed by its agent's own file tools, as its folder isn't (the sandbox's walls for its commands are as they were), by where each file really is against where each of those folders was found (a worktree as it's found, the conversation's own folders as the box first saw the conversation, kept in `box/found-folders.json` across restarts: one traded for a link since takes nothing with it), and never what's walled from it wherever it is (Kuvo Code's own but the conversation's own in them, what runs later or at login, your secrets and your own settings, `~/Library` but iCloud Drive and what's the conversation's own in Kuvo Code's folders there, a repository's `.git/worktrees`), each judged as anywhere: its folder, its project's other
 folders, the files sent with it, its commands' temporary folder, a bot's own and its projects, and,
 for one at work in a project's main folder, the project's linked git worktrees wherever they are
 (`git worktree add /tmp/try`: each its repository's `.git/worktrees` lists, that folder and the
@@ -4655,7 +4655,10 @@ your home: `.claude/settings.json` and
 `.cursor/hooks`; a folder moved or linked into place is checked only by its own name, so the folders
 that hold those, `.git`, a submodule's or a worktree's repository in it (`.git/modules` and
 `.git/worktrees` themselves, and every folder below `modules`, a worktree's own `modules` too, but
-for what git keeps in a submodule's as it fetches: its objects', refs' and logs' folders) and the
+for the folders below a submodule's own `objects`, `refs`, `logs`, `lfs` and `rr-cache`, which git
+keeps as it fetches; so in the sandbox a submodule gets none of those it hasn't already, nor what a
+rebase, `git am` or a cherry-pick of several keep in it, nor a nested submodule set up: those run
+outside it, with `sandbox_ask`) and the
 agents' `.claude`, `.codex`, `.cursor`, `.gemini` and `.grok`, can't be made, moved or removed, only written in, and
 neither can the conversation's folder itself and its repository's, so neither is traded for a link to
 another bot's), its conversation's own temporary
