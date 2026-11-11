@@ -9301,8 +9301,11 @@ async function describeWork(listed, working, { replies = false, signal } = {}) {
   const stoppedAt = readStopped()[data.id];
   const endedAt = endTime(lastTurnEnd(page)) ?? data.time?.idle ?? 0;
   const stoppedAtRest = stoppedAt !== undefined && endedAt < stoppedAt;
-  const state = asking ? "asking" : working.has(data.id) ? "working" : stoppedAtRest ? "stopped" : outcome === "succeeded" ? "finished" : outcome === "failed" ? "failed" : outcome === "interrupted" ? "stopped" : data.time?.idle ? "finished" : "idle";
-  const reply = !replies || state === "working" || state === "stopped" && stoppedAtRest ? null : state === "stopped" || state === "failed" ? replyIn(lastTurn(page)) : read ? replyIn(page) : await lastReplyOf(listed, signal);
+  const ended = outcome === "succeeded" ? "finished" : outcome === "failed" ? "failed" : outcome === "interrupted" ? "stopped" : data.time?.idle ? "finished" : "idle";
+  const state = asking ? "asking" : working.has(data.id) ? "working" : stoppedAtRest ? "stopped" : ended;
+  const beforeStop = stoppedAtRest && state === "stopped";
+  const said = beforeStop ? ended : state;
+  const reply = !replies || state === "working" ? null : said === "stopped" || said === "failed" ? replyIn(lastTurn(page)) : read ? replyIn(page) : await lastReplyOf(listed, signal);
   const project = folder === CHATS ? undefined : projectNameOf(folder, data);
   return {
     session: data.id,
@@ -9318,7 +9321,7 @@ async function describeWork(listed, working, { replies = false, signal } = {}) {
     started: data.time?.created ?? 0,
     tokens: tokensOf(data),
     ...typeof data.cost === "number" && data.cost > 0 ? { cost: data.cost } : {},
-    ...reply ? { lastReply: reply } : {}
+    ...reply ? { lastReply: reply, ...beforeStop ? { replyBeforeStop: true } : {} } : {}
   };
 }
 var placeWords = (work) => work.project ? `in ${work.project}` : work.folder === CHATS ? "in the chats" : `in ${path38.basename(work.folder) || work.folder}`;
@@ -10978,6 +10981,9 @@ async function stopConversation(target, data) {
   const state = await stopWork(target, data.id, true);
   if (lead)
     tellStarters([{ starter: lead, line: stoppedLine(data) }]);
+  const bot = worksFor(data)?.bot;
+  if (bot)
+    noteWorkChanged(bot);
   return state;
 }
 
@@ -18137,7 +18143,7 @@ function rowLine(work) {
   const state = work.state === "asking" ? `asks to ${(work.asks ?? "").replace(/^Wants to /, "").replace(/\.$/, "")}${work.askID ? ` (ask ${work.askID})` : ""}` : work.state;
   const under = work.depth > 1 ? `, started by ${work.startedBy}` : "";
   const reply = work.lastReply && work.state !== "asking" ? `
-  Last reply: ${work.lastReply}` : "";
+  ${work.replyBeforeStop ? "Last reply, from its turn that ended before it was stopped" : "Last reply"}: ${work.lastReply}` : "";
   const held = !work.context ? "" : ("used" in work.context) ? ` · ${work.context.used.toLocaleString("en-US")} tokens in context now` : " · just summarized, context size known after its next step";
   return `- ${work.title} (address ${work.session}), ${placeWords(work)}: ${state}${model}${under}${held}${work.tokens ? ` · ${work.tokens.toLocaleString("en-US")} tokens used in total` : ""}${reply}`;
 }
@@ -37037,7 +37043,7 @@ import os13 from "node:os";
 import path122 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "5a049bdcb9ac";
+var BRIDGE_VERSION = "68b3d9052320";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
@@ -41001,9 +41007,10 @@ async function botWork(bot, context) {
   const cost = today.reduce((sum, each) => sum + (typeof each.data.cost === "number" ? each.data.cost : 0), 0);
   return {
     bot,
-    sessions: sessions.map(({ askID: _, ...described }) => {
+    sessions: sessions.map(({ askID: _, replyBeforeStop, lastReply, ...described }) => {
       const account = accounts.get(described.session);
-      return account ? { ...described, account } : described;
+      const shown = !replyBeforeStop && lastReply ? { ...described, lastReply } : described;
+      return account ? { ...shown, account } : shown;
     }),
     answered,
     today: {

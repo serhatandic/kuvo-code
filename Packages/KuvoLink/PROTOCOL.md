@@ -1213,7 +1213,8 @@ client shows it from the same routes.
   finished, failed, stopped; its model, the tokens in its context now, or that it was just
   summarized, the tokens it used in total, and last reply's first lines: for one stopped or
   failed, only what it said in that turn, never an earlier turn's reply; one stopped at rest,
-  after its last turn ended, is stopped, with none), `stop_session`
+  after its last turn ended, is stopped, its reply said to be from that turn, before the stop;
+  `kuvo/work` gives that row none), `stop_session`
   (`{session, archive?}`; only one of its own), `compact_session` (`{session}`; only one of its
   own, by `POST api/session/<id>/compact` where it runs), `answer_ask` (`{session, ask, decision: allow|deny,
   reason}`, or `{session, ask, answer, reason}` for a question), `list_models` (the models there's

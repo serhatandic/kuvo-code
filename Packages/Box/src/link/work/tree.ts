@@ -291,8 +291,9 @@ const endTime = (row: { time?: unknown } | undefined) => (isObject(row?.time) &&
 const tokensOf = (data: Listed["data"]) => (data.tokens?.input ?? 0) + (data.tokens?.output ?? 0) + (data.tokens?.reasoning ?? 0);
 
 /** A session of a bot's work as clients show it: where it stands now (`working`, what each asks:
- * `asks`), and, with `replies`, its last reply's first lines. */
-export async function describeWork(listed: Listed, working: Set<string>, { replies = false, signal }: { replies?: boolean; signal?: AbortSignal } = {}): Promise<WorkSession & { askID?: string }> {
+ * `asks`), and, with `replies`, its last reply's first lines (`replyBeforeStop`: written in its
+ * turn that ended before it was stopped at rest). */
+export async function describeWork(listed: Listed, working: Set<string>, { replies = false, signal }: { replies?: boolean; signal?: AbortSignal } = {}): Promise<WorkSession & { askID?: string; replyBeforeStop?: true }> {
   const { data } = listed;
   const folder = data.location?.directory ?? data.directory ?? "";
   const asking = await askingNow(listed, signal);
@@ -305,12 +306,15 @@ export async function describeWork(listed: Listed, working: Set<string>, { repli
   const stoppedAt = readStopped()[data.id];
   const endedAt = endTime(lastTurnEnd(page)) ?? data.time?.idle ?? 0;
   const stoppedAtRest = stoppedAt !== undefined && endedAt < stoppedAt;
-  const state: WorkSession["state"] = asking ? "asking" : working.has(data.id) ? "working" : stoppedAtRest ? "stopped"
-    : outcome === "succeeded" ? "finished" : outcome === "failed" ? "failed" : outcome === "interrupted" ? "stopped" : data.time?.idle ? "finished" : "idle";
+  const ended: WorkSession["state"] = outcome === "succeeded" ? "finished" : outcome === "failed" ? "failed" : outcome === "interrupted" ? "stopped" : data.time?.idle ? "finished" : "idle";
+  const state: WorkSession["state"] = asking ? "asking" : working.has(data.id) ? "working" : stoppedAtRest ? "stopped" : ended;
   // A turn cut short says what it said in that turn, if anything: an earlier turn's reply would
-  // read as how it ended. One stopped at rest said nothing since.
-  const reply = !replies || state === "working" || (state === "stopped" && stoppedAtRest) ? null
-    : state === "stopped" || state === "failed" ? replyIn(lastTurn(page))
+  // read as how it ended. One stopped at rest, what its last turn said, as said before the stop
+  // (its lead may not have heard it: a finish held for what it left running).
+  const beforeStop = stoppedAtRest && state === "stopped";
+  const said = beforeStop ? ended : state;
+  const reply = !replies || state === "working" ? null
+    : said === "stopped" || said === "failed" ? replyIn(lastTurn(page))
     : read ? replyIn(page) : await lastReplyOf(listed, signal);
   const project = folder === CHATS ? undefined : projectNameOf(folder, data);
   return {
@@ -327,7 +331,7 @@ export async function describeWork(listed: Listed, working: Set<string>, { repli
     started: data.time?.created ?? 0,
     tokens: tokensOf(data),
     ...(typeof data.cost === "number" && data.cost > 0 ? { cost: data.cost } : {}),
-    ...(reply ? { lastReply: reply } : {}),
+    ...(reply ? { lastReply: reply, ...(beforeStop ? { replyBeforeStop: true as const } : {}) } : {}),
   };
 }
 
