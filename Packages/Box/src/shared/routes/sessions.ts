@@ -37,11 +37,40 @@ const REMOVED = object({ id: string, text: string, "files?": list(any), delivery
 
 export type SessionQueue = Infer<typeof QUEUE>;
 
+/** A pull request's checks as the box counts them from GitHub's: skipped and neutral ones count as
+ * passed, cancelled, timed out and the like as failed, the rest still under way. */
+export const GLANCE_CHECKS = object({ passed: number, failed: number, pending: number });
+
+/** A session's pull request: its number and page, and once GitHub was read, its state, its size
+ * and its checks (left out where it has none). */
+export const GLANCE_PULL = object({
+  number: number, url: string, "state?": words("open", "draft", "merged", "closed"),
+  "additions?": number, "deletions?": number, "checks?": GLANCE_CHECKS,
+});
+
+/** What a session's row and its card show beyond the session itself (`kuvo/sessions/glance`): the
+ * branch it has of its own (a worktree's, or its pull request's) and, without a pull request, the
+ * lines it changed since its base; its pull request; the account it runs on; and since when it's
+ * waited on you (ms), while it does. Each left out where there's none. */
+export const GLANCE = object({
+  "branch?": string, "additions?": number, "deletions?": number, "pull?": GLANCE_PULL,
+  "account?": object({ name: string, "label?": string }), "asked?": number,
+});
+
+/** The sessions asked for, by id: one this box doesn't have is left out. */
+export const GLANCES = object({ sessions: map(GLANCE) });
+
+export type Glance = Infer<typeof GLANCE>;
+export type GlancePull = Infer<typeof GLANCE_PULL>;
+export type GlanceChecks = Infer<typeof GLANCE_CHECKS>;
+
 export const SESSION_ROUTES: RouteShape[] = [
   { route: "POST kuvo/sessions/:id/agents", answers: { 200: CARRIED } },
   { route: "POST kuvo/sessions", answers: { 200: STARTED, 400: REFUSED, 403: REFUSED, 404: REFUSED, 409: object({ message: string, reason: words("fullAccessOff") }), 429: REFUSED, 502: object({ message: string, "session?": string }), 503: REFUSED } },
   { route: "POST kuvo/agent-tools", answers: { 200: TOOL_ANSWER, 400: REFUSED } },
   { route: "GET kuvo/sessions/queues/events", answers: { 200: object({ queues: map(QUEUE) }) } },
+  { route: "GET kuvo/sessions/glance", answers: { 200: GLANCES, 400: REFUSED, 503: REFUSED } },
+  { route: "GET kuvo/sessions/glance/events", answers: { 200: GLANCES, 400: REFUSED, 503: REFUSED } },
   { route: "GET kuvo/sessions/:id/queue", answers: { 200: QUEUE } },
   { route: "POST kuvo/sessions/:id/stop", answers: { 200: QUEUE, 404: REFUSED, 502: REFUSED, 503: REFUSED } },
   { route: "POST kuvo/sessions/:id/queue/hold", answers: { 200: QUEUE, 404: REFUSED, 502: REFUSED, 503: REFUSED } },

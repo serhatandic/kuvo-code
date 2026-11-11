@@ -48,6 +48,12 @@ What a client shows of a computer's sessions, the same in both apps. Rules only,
   category; the open count ("24 items"), "Updated 8m ago", whose an item is, what's being done.
 - `ReviewList`: "/review"'s lists over the message field (What to review, a commit or a folder for
   it, Look for), their rows and sizes from what the box measured, and loading those.
+- `BoxNote` and `ReplyChanges`: what the box and the engine write to an agent in its conversation,
+  as both apps show it, with no pills. A lead's sessions' news is a message from each session
+  (`BoxNote.shown`, `SessionNews`: finished, failed or asks; one still working shows nothing).
+  What changed since the reply before (the model or its effort, the mode, a summary, the project's
+  folders, a goal started) is a word in the next reply's footer (`ReplyChanges`). Notes written for
+  the model show nothing.
 - `ShellRead`: the end of what a background command printed, as Output shows it, and whether it
   has ended (its engine let go of it) or just can't be read now.
 - `AskPlace`: which of the asks waiting takes the composer's place, and "2 of 3" over it: the one
@@ -127,6 +133,10 @@ phone's copies of the Mac's design files, a piece at a time.
   scroll up away from the end.
 - `PutAways`: what a bar's ✕ put away, with Undo in its place for a few seconds: what goes only
   once the moment passes (a goal, a wake-up), and what goes at once and comes back with Undo.
+- `SessionGlance`, `SessionGlanceCard`, `PullMark`, `ChecksMark`: a session's row and card at a
+  glance, as its box says (`kuvo/sessions/glance`): the one mark a row gains (its pull request's,
+  red all over while a check fails, else its branch's), and the card its row opens (hover on the
+  Mac, a long press on the phone) with its state and age, branch, model and pull request.
 
 ## What belongs here
 

@@ -325,7 +325,7 @@ final class HostInterface {
             return .json(["sites": await SiteSignIns.shared.mac()])
         case "/link/identity":
             // This Mac's keys, for its box's link: in memory there, never in a file.
-            guard let identity = phoneLink?.boxIdentity() else { return .init(status: 503) }
+            guard let identity = await phoneLink?.boxIdentity() else { return .init(status: 503) }
             return .json(identity)
         case "/link/route":
             // What a phone asked of the Mac's own routes, answered as it comes.

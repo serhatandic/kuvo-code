@@ -99,7 +99,7 @@ struct DecisionsView: View {
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 0) {
                             ForEach(listed.rows) { decision in
-                                DecisionRow(decision: decision) { model.approveDecision(decision) }
+                                DecisionRow(decision: decision, approve: { model.approveDecision(decision) }, revoke: { model.revokePlace(decision) })
                             }
                             if listed.more > 0 {
                                 Button("…\(listed.more) more") { showsAll = true }
@@ -207,10 +207,12 @@ private struct DecisionCounts: View {
 }
 
 /// One decision on a line: its kind, what (a file's name with its folder dimmed, or the command)
-/// and when, or Approve while it's yours to. Why, on hover, or under it once clicked.
+/// and when, or Approve while it's yours to, or Revoke for a folder it allows edits in. Why, on
+/// hover, or under it once clicked.
 private struct DecisionRow: View {
     let decision: ReviewDecisions.Decision
     let approve: () -> Void
+    let revoke: () -> Void
     @State private var showsWhy = false
     @State private var isHovering = false
 
@@ -233,6 +235,13 @@ private struct DecisionRow: View {
                         .fixedSize()
                         .help("Let it run once, the next time the agent does it the same way")
                         .accessibilityLabel("Approve \(decision.action)")
+                } else if decision.revocable {
+                    Button("Revoke", action: revoke)
+                        .buttonStyle(TextButtonStyle())
+                        .font(.system(size: 12))
+                        .fixedSize()
+                        .help("Have Auto check each change here again")
+                        .accessibilityLabel("Revoke edits in \(decision.place ?? decision.action)")
                 } else {
                     Text(state ?? decision.date.formatted(date: .omitted, time: .shortened))
                         .font(.system(size: 11))
@@ -259,23 +268,31 @@ private struct DecisionRow: View {
         .onHover { isHovering = $0 }
         .help(showsWhy ? "" : decision.reason)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(decision.action)
+        .accessibilityLabel(decision.place.map { "Edits in \($0)" } ?? decision.action)
         .accessibilityValue("\(spoken). \(decision.reason)")
         .accessibilityActions {
             if decision.waiting { Button("Approve", action: approve) }
+            if decision.revocable { Button("Revoke", action: revoke) }
         }
     }
 
     /// What VoiceOver says of where it stands.
     private var spoken: String {
         if decision.waiting { return "Held back, waiting on you" }
+        if decision.revocable { return "Edits allowed here for this session" }
         if let state { return state }
         return decision.refused ? "Held back" : "Allowed"
     }
 
     /// A file's name with its folder dimmed; a command, or what a tool was.
     @ViewBuilder private var what: some View {
-        if decision.kind == "file", let space = decision.action.firstIndex(of: " ") {
+        if let place = decision.place {
+            // A folder it allows edits in: said so, its name with where it is dimmed.
+            let folder = (place as NSString).deletingLastPathComponent.split(separator: "/").suffix(2).joined(separator: "/")
+            Text("Edits in \(Text((place as NSString).lastPathComponent).foregroundStyle(.primary)) \(Text(folder).foregroundStyle(.tertiary))")
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+        } else if decision.kind == "file", let space = decision.action.firstIndex(of: " ") {
             let path = String(decision.action[decision.action.index(after: space)...])
             let file = (path as NSString).lastPathComponent
             let folder = (path as NSString).deletingLastPathComponent.split(separator: "/").suffix(2).joined(separator: "/")
@@ -289,6 +306,7 @@ private struct DecisionRow: View {
 
     private var symbol: String {
         if decision.waiting { return "hand.raised" }
+        if decision.place != nil { return "folder" }
         if decision.approved != nil || decision.used != nil { return "checkmark.circle" }
         if decision.refused { return "nosign" }
         switch decision.kind {
@@ -300,6 +318,7 @@ private struct DecisionRow: View {
 
     /// Where it stands, where that's more than when: run or approved after it was held back.
     private var state: String? {
+        if decision.revoked != nil { return "Revoked" }
         if decision.used != nil { return "Ran" }
         if decision.approved != nil { return "Approved" }
         return nil

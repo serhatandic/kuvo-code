@@ -6,6 +6,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { FEATURES } from "../../shared/features";
+import { macFeatures } from "../../shared/routes/mac";
 import { processRuns as runs } from "../../shared/platform";
 import { boxProjects } from "../areas/projects";
 import { readKit } from "../bots/kit";
@@ -15,7 +16,7 @@ import { readBridgeFile } from "../engine/client";
 import { locked, textOf, writePrivate } from "../files";
 import { IS_MAC, K } from "../home";
 import { awaySessions, movedAway } from "../moves/records";
-import { macLink, readLink } from "../state";
+import { readLink } from "../state";
 import { AGENTS_FILE, composeAgents, fitsAgent, isPutAway, keptAgent, MAC_AGENTS_FILE, PEER_AGENTS_FILE, PEER_LOCK, readPeerAgents } from "./directory";
 import { mailFor, movedOf, peersOf } from "./known";
 import { tellSeatPeers } from "./seats";
@@ -129,9 +130,8 @@ export async function refreshOwn(readEngine: () => Target, link: LinkState | nul
   return ownList;
 }
 
-// What this box answers, as its agents' mail says (`kuvo/info`'s features): on a Mac, its app's
-// list, as the app gives it (`kuvo/link/config`).
-const ownFeatures = (): readonly string[] => (IS_MAC && Array.isArray(macLink.config?.features) ? macLink.config.features : FEATURES);
+// What this box answers, as its agents' mail says (`kuvo/info`'s features).
+const ownFeatures = (): readonly string[] => (IS_MAC ? macFeatures() : FEATURES);
 
 // Tells each peer this box's agents: when they change, and every ten minutes, with a digest of
 // its documents to each that takes them, so one that missed what was given gets it then (PROTOCOL.md,

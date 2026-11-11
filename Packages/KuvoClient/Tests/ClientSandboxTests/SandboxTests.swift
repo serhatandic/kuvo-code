@@ -19,6 +19,9 @@ import Testing
         #expect(reviews[0].mark == "Auto is checking…")
         #expect(AskReview.isYours(action: outside, review: reviews[1], listsAll: true), "left for you")
         #expect(reviews[1].mark == nil)
+        // Who allowed it, on its step (#406).
+        #expect(AskReview(id: "a", session: "s", state: .allowed, at: 1).mark == "Allowed by Auto-review")
+        #expect(AskReview(id: "a", session: "s", state: .refused, at: 1).mark == "Not allowed by Auto-review")
         // Not listed yet by a box that lists them all: not yours until it says so.
         #expect(!AskReview.isYours(action: outside, review: nil, listsAll: true))
         // What the reviewer never takes up, and one not listed by a box that doesn't list them all.

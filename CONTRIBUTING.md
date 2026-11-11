@@ -207,9 +207,13 @@ you started, by its PID (`$!`, a pid file) or by a process group you created, ne
 were started in. On macOS every option goes before the pattern, in `pgrep` too.
 
 Every job has a time limit, so a hung one can't hold its kind's turn for hours: `mac` and `phone`
-45 minutes, `mac-build` 30, `box` 40, counted while it runs (not while it waits for its turn).
-Past it, its group is stopped (TERM, then KILL), it says what was running, and the helper exits
-124. `KUVO_HEAVY_LIMIT` gives one job another (`90m`, `600s`, `2h`; `0` for none). A job inside
+45 minutes, `mac-build` 30, `box` 40, counted from when its command starts (not while it waits in
+line for its slot, however long, nor for a busy Mac). Past it, its group is stopped (TERM, then
+KILL), it says what was running, and the helper exits 124. Jobs waiting for a lane wait in line,
+first come first served; `KUVO_HEAVY_PRIORITY=high` puts one before the normal ones waiting (it
+never stops a job running), and `KUVO_HEAVY_WAIT=0` answers without waiting for one (75: it
+would wait). Older copies of the helper don't queue, and can take a slot before those in line.
+`KUVO_HEAVY_LIMIT` gives one job another (`90m`, `600s`, `2h`; `0` for none). A job inside
 one of its kind runs within that one's limit (one of another kind has its own too), and one in a
 terminal has none.
 
@@ -257,8 +261,8 @@ Every route a phone uses is answered twice: by this Mac (`PhoneLink`) and by a m
 (`kuvo-link.js`). The scenarios in `Packages/KuvoLink/Vectors/routes/*.json` are written once and
 run against both: `RouteContractTests` (in `./scripts/test-app.sh`) drives the Mac's real
 `PhoneLink` and stores, and `scripts/test-box.sh bridge contract.test.js` the
-bridge's real handler. `Tests/Bridge/contract-mac.test.js` runs the scenarios of the areas that
-have moved onto this Mac's box (`PhoneLink.boxRoutes`) against the bridge's handler as this Mac's
+bridge's real handler. `Tests/Bridge/contract-mac.test.js` runs scenarios this Mac's box answers
+(all but the app's own routes, `PhoneLink.appRoutes`) against the bridge's handler as this Mac's
 box, with the app's folders and kit, checking what's expected of a Mac. Only the engine is a
 stand-in, the same small one on each. To add one:
 
