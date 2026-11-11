@@ -9289,6 +9289,7 @@ async function settleWorkRead(target, signal) {
     await keepWorkRead(target, data, signal);
   }
 }
+var endTime = (row) => isObject(row?.time) && typeof row.time.created === "number" ? row.time.created : undefined;
 var tokensOf = (data) => (data.tokens?.input ?? 0) + (data.tokens?.output ?? 0) + (data.tokens?.reasoning ?? 0);
 async function describeWork(listed, working, { replies = false, signal } = {}) {
   const { data } = listed;
@@ -9297,8 +9298,11 @@ async function describeWork(listed, working, { replies = false, signal } = {}) {
   const read = replies && !working.has(data.id);
   const page = read ? await lastMessages(listed.target, data.id, signal) : null;
   const outcome = read ? outcomeOf(listed, page) : data.outcome;
-  const state = asking ? "asking" : working.has(data.id) ? "working" : outcome === "succeeded" ? "finished" : outcome === "failed" ? "failed" : outcome === "interrupted" ? "stopped" : data.time?.idle ? "finished" : "idle";
-  const reply = !replies || state === "working" ? null : state === "stopped" || state === "failed" ? replyIn(lastTurn(page)) : read ? replyIn(page) : await lastReplyOf(listed, signal);
+  const stoppedAt = readStopped()[data.id];
+  const endedAt = endTime(lastTurnEnd(page)) ?? data.time?.idle ?? 0;
+  const stoppedAtRest = stoppedAt !== undefined && endedAt < stoppedAt;
+  const state = asking ? "asking" : working.has(data.id) ? "working" : stoppedAtRest ? "stopped" : outcome === "succeeded" ? "finished" : outcome === "failed" ? "failed" : outcome === "interrupted" ? "stopped" : data.time?.idle ? "finished" : "idle";
+  const reply = !replies || state === "working" || state === "stopped" && stoppedAtRest ? null : state === "stopped" || state === "failed" ? replyIn(lastTurn(page)) : read ? replyIn(page) : await lastReplyOf(listed, signal);
   const project = folder === CHATS ? undefined : projectNameOf(folder, data);
   return {
     session: data.id,
@@ -37033,7 +37037,7 @@ import os13 from "node:os";
 import path122 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "15662879538f";
+var BRIDGE_VERSION = "5a049bdcb9ac";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {

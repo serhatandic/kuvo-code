@@ -431,6 +431,36 @@ test("a turn cut short gives as its last reply what it said in that turn, never 
   assert.match((await tool("list_sessions", {}, "ses_pixel")).text, /Previous turn finished/);
 });
 
+test("a session stopped at rest is stopped, with no reply from the turn it finished before (#428)", async () => {
+  const session = startedAddress(await tool("start_session", { task: "One.", title: "Sign-in", project: "Tidepool" }, "ses_pixel"));
+  // (Ids are given again from test to test, and an earlier one stopped this one: new now.)
+  fs.rmSync(path.join(home, "run", "work", "stopped.json"), { force: true });
+  busy.delete(session);
+  const ended = Date.now() - 60_000;
+  Object.assign(sessions.get(session), { outcome: "succeeded" });
+  sessions.get(session).time.idle = ended;
+  const earlier = [{ id: "msg_i1", type: "idle", outcome: "succeeded", time: { created: ended } }, { id: "msg_s1", type: "assistant", content: [{ type: "text", text: "Previous turn finished." }] }, { id: "msg_u1", type: "user" }];
+  kept.set(session, earlier);
+  const line = () => tool("list_sessions", {}, "ses_pixel").then(listed => listed.text.split("\n- ").find(each => each.includes(session)));
+  assert.match(await line(), /: finished[\s\S]*Previous turn finished/);
+  // Stopped at rest: the engine records no turn, its last one ended before.
+  assert.equal((await tool("stop_session", { session }, "ses_pixel")).isError, false);
+  let listed = await line();
+  assert.match(listed, /: stopped/);
+  assert.doesNotMatch(listed, /finished/);
+  // Summarized after: still stopped.
+  kept.set(session, [{ id: "msg_i2", type: "idle", outcome: "succeeded", time: { created: Date.now() + 1 } }, { id: "msg_c", type: "compaction", status: "completed", reason: "manual" }, ...earlier]);
+  sessions.get(session).time.idle = Date.now() + 1;
+  listed = await line();
+  assert.match(listed, /: stopped/);
+  assert.doesNotMatch(listed, /Previous turn finished/);
+  // Written to again and finished since: that turn's reply.
+  const again = Date.now() + 2;
+  sessions.get(session).time.idle = again;
+  kept.set(session, [{ id: "msg_i3", type: "idle", outcome: "succeeded", time: { created: again } }, { id: "msg_s3", type: "assistant", content: [{ type: "text", text: "Done again." }] }, { id: "msg_u3", type: "user" }, ...earlier]);
+  assert.match(await line(), /: finished[\s\S]*Done again/);
+});
+
 test("how a lead reads a session past several summaries: what they did isn't how its work went", async () => {
   const session = startedAddress(await tool("start_session", { task: "One.", title: "Sign-in", project: "Tidepool" }, "ses_pixel"));
   busy.delete(session);
