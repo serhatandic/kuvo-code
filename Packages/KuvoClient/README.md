@@ -133,6 +133,10 @@ phone's copies of the Mac's design files, a piece at a time.
   scroll up away from the end.
 - `PutAways`: what a bar's ✕ put away, with Undo in its place for a few seconds: what goes only
   once the moment passes (a goal, a wake-up), and what goes at once and comes back with Undo.
+- `SessionGlance`, `SessionGlanceCard`, `PullMark`, `ChecksMark`: a session's row and card at a
+  glance, as its box says (`kuvo/sessions/glance`): the one mark a row gains (its pull request's,
+  red all over while a check fails, else its branch's), and the card its row opens (hover on the
+  Mac, a long press on the phone) with its state and age, branch, model and pull request.
 
 ## What belongs here
 
