@@ -531,7 +531,7 @@ export async function takeCall(sender: LetterSender & { name?: string }, given: 
       // short isn't a list.)
       const size = () => Buffer.byteLength(JSON.stringify({ rows }));
       while (rows.length > 1 && size() > LIST_BYTES) rows = rows.slice(0, Math.min(rows.length - 1, Math.floor(rows.length * 0.7)));
-      if (size() > LIST_BYTES) rows = rows.map(row => ({ ...row, title: row.title.slice(0, 100), lastReply: undefined, asks: row.asks?.slice(0, 200) }));
+      if (size() > LIST_BYTES) rows = rows.map(row => ({ ...row, title: row.title.slice(0, 100), lastReply: undefined, replyBeforeStop: undefined, asks: row.asks?.slice(0, 200) }));
       if (size() > LIST_BYTES) rows = [];
       said = { text: JSON.stringify({ rows }), isError: false };
     } else if (tool === "stop_session") said = await stopSessionTool(lead, { ...args, session }, targets);

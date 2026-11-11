@@ -508,7 +508,8 @@ connection.
   - **The answer** is a letter back (`{to: from, answers: <call id>, refused?}`) whose `id` is the
     call's with `-a` after it, so a call that comes again is answered by one that's already been
     seen: it reaches its lead once. `refused: true` when the tool couldn't do it (its `isError`). A
-    list's answer is `{"rows": [WorkSession & {askID?, lastReply?, context?}]}` as JSON in `text`,
+    list's answer is `{"rows": [WorkSession & {askID?, lastReply?, replyBeforeStop?, context?}]}` as JSON in `text`
+    (`replyBeforeStop: true`: `lastReply` is from its turn that ended before it was stopped at rest),
     as many as fit, with `read: {}`: it's only for the tool waiting, and dropped if none does. Any
     other's is a `note` (`from` the answering box's name, `words` the tool's own words, `about` the
     session) kept until it's there, as notes are; `text` is `[On <box>] <words>`. A tool waiting
@@ -1311,7 +1312,7 @@ client shows it from the same routes.
   its session], today: {started, working, tokens, cost?}, limits}`: its sessions the latest first,
   archived ones left out. 400 without `bot`, 404 for no such bot here, 503 with no engine. Each
   `state` is as of the read; `lastReply` is what it said last, and for one `stopped` or `failed`
-  only what it said in that turn, never an earlier turn's reply. `today.working` stays, since clients until 0.7.2 need it to read the
+  only what it said in that turn, never an earlier turn's reply (one stopped at rest has none). `today.working` stays, since clients until 0.7.2 need it to read the
   report, but no client shows it (see At work).
   `account` (bridge 0.9.209) is `{name, label?}`, the account it runs on as Settings › Accounts
   lists it where it runs (`api/integration` there, as last checked, never `fresh`): `name` its

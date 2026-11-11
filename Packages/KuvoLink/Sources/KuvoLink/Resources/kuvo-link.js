@@ -24931,7 +24931,7 @@ async function takeCall(sender, given, { send, targets, answer = leaveCallAnswer
       while (rows.length > 1 && size() > LIST_BYTES)
         rows = rows.slice(0, Math.min(rows.length - 1, Math.floor(rows.length * 0.7)));
       if (size() > LIST_BYTES)
-        rows = rows.map((row) => ({ ...row, title: row.title.slice(0, 100), lastReply: undefined, asks: row.asks?.slice(0, 200) }));
+        rows = rows.map((row) => ({ ...row, title: row.title.slice(0, 100), lastReply: undefined, replyBeforeStop: undefined, asks: row.asks?.slice(0, 200) }));
       if (size() > LIST_BYTES)
         rows = [];
       said = { text: JSON.stringify({ rows }), isError: false };
@@ -37043,7 +37043,7 @@ import os13 from "node:os";
 import path122 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "68b3d9052320";
+var BRIDGE_VERSION = "845121fb2b64";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
