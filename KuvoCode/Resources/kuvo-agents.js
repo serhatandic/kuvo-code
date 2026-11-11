@@ -24381,7 +24381,7 @@ class GroupRunner {
         live.activity = undefined;
       }
       this.keepAwake(id);
-      this.told(id);
+      this.toldAfterTurn(id);
     });
     this.answering.set(id, { abort, done });
     this.keepAwake(id);
@@ -24598,8 +24598,11 @@ class GroupRunner {
         live.speaking = undefined;
         live.activity = undefined;
       }
-      this.told(id);
+      this.toldAfterTurn(id);
     }
+  }
+  toldAfterTurn(id) {
+    setImmediate(() => this.told(id));
   }
   answered(id, botID, result, wrapUp) {
     if (result.outgrown) {
@@ -24767,7 +24770,7 @@ class GroupRunner {
         live.splitStop = undefined;
       if (live.splitting === lead)
         live.splitting = undefined;
-      this.told(id);
+      this.toldAfterTurn(id);
     }
   }
   startWork(wrapUpID, id) {
@@ -27431,4 +27434,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents cf80edc39d48c568161f211217dc2d61f9e1313b85251e3609c66c3cd2805d98
+// Built from Packages/Box/src/agents 6a311757178cb26f4ce786fa58f50f1e11786c5906aa1309ae49810d9152babc

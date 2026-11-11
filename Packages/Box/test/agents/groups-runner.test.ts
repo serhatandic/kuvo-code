@@ -895,6 +895,58 @@ describe("a group chat on any computer", () => {
     expect((await shown()).stopped).toBeUndefined()
   })
 
+  /** Who's talking, as the Mac and the phone follow the chat, each change once, from `act` until its talk is over. */
+  async function talking(groups: GroupRunner, store: GroupStore, act: () => void) {
+    const abort = new AbortController()
+    const reader = (await linkRoutes(groups, store, "GET", [id, "events"], async () => ({}), abort.signal)).body!.getReader()
+    const decoder = new TextDecoder()
+    const seen: (string | null)[] = []
+    let buffer = ""
+    let began = false
+    let over = false
+    act()
+    while (!over) {
+      const read = await reader.read()
+      if (read.done) break
+      buffer += decoder.decode(read.value, { stream: true })
+      for (let end = buffer.indexOf("\n"); end >= 0; end = buffer.indexOf("\n")) {
+        const line = JSON.parse(buffer.slice(0, end))
+        buffer = buffer.slice(end + 1)
+        const speaking = line.speaking ?? null
+        if (seen.at(-1) !== speaking) seen.push(speaking)
+        began ||= line.discussing === true
+        over ||= began && line.discussing === false
+      }
+    }
+    abort.abort()
+    await reader.cancel().catch(() => {})
+    return seen
+  }
+
+  test("a bot that stays silent hands the turn on: the apps see the next bot talking, never nobody between two turns", async () => {
+    const { groups, store } = runner()
+    engine.lines = { Ada: ["Ship it this week?"], Ben: ["PASS"] }
+    groups.put(group(), [], "active", false)
+    const seen = await talking(groups, store, () => groups.send(id, "Should we ship?"))
+    // Ada, then Ben, who passes and says nothing, then Ada again, asked who does what: the row
+    // under the chat goes from one bot to the next, rather than going as one turn ends and coming
+    // again for the next, drawn over itself.
+    expect(seen).toEqual([null, "bot_ada", "bot_ben", "bot_ada", null])
+    expect(groups.get(id)!.messages.map((message) => message.author ?? "you")).toEqual(["you", "bot_ada"])
+  })
+
+  test("a message of yours as the lead hands out the work: the apps see it go straight to the next turn", async () => {
+    const { groups, store } = runner()
+    engine.lines = { Ada: ["Ship it this week?"], Ben: ["PASS"] }
+    // The lead's list of who does what takes a while: you write meanwhile.
+    engine.heldPrompts.add("For the app, not the chat")
+    groups.put(group(), [], "active", false)
+    void until(() => engine.prompts().some((request) => String(request.body.text).includes("For the app, not the chat"))).then(() => groups.send(id, "Friday, then."))
+    const seen = await talking(groups, store, () => groups.send(id, "Should we ship?"))
+    // Ada handing out the work, stopped by your message, then Ada and Ben again on it.
+    expect(seen).toEqual([null, "bot_ada", "bot_ben", "bot_ada", "bot_ben", null])
+  })
+
   test("a part whose message was taken back before its bot read it ends, rather than working forever", async () => {
     const { store } = runner()
     const started = stamp()

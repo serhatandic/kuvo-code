@@ -601,6 +601,8 @@ private struct TypingRow: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.tail)
+                    // Its next step takes the line at once: faded across, the two lay over each other.
+                    .contentTransition(.identity)
                     // Under its name.
                     .padding(.leading, 38)
                     .transition(.opacity)

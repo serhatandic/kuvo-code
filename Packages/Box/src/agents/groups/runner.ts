@@ -647,7 +647,7 @@ export class GroupRunner {
             live.activity = undefined
           }
           this.keepAwake(id)
-          this.told(id)
+          this.toldAfterTurn(id)
         })
     this.answering.set(id, { abort, done })
     this.keepAwake(id)
@@ -789,7 +789,8 @@ export class GroupRunner {
    * One bot's turn: what it hasn't heard yet goes to its seat (the whole chat, to a seat new to
    * it), on the computer it lives on, and its answer to the chat. A `guest` (a bot outside the
    * chat that a message there named) answers in a conversation of its own for the turn, given the
-   * whole chat, which goes once it has.
+   * whole chat, which goes once it has. It says who's talking before anything it waits for
+   * (`toldAfterTurn`).
    */
   private async turn(botID: string, id: string, signal: AbortSignal, wrapUp = false, namedIn?: GroupMessage): Promise<Outcome> {
     const guest = namedIn !== undefined
@@ -892,8 +893,19 @@ export class GroupRunner {
         live.speaking = undefined
         live.activity = undefined
       }
-      this.told(id)
+      this.toldAfterTurn(id)
     }
+  }
+
+  /**
+   * A turn's end (an answer read after a restart, the lead's list of who does what), told once what
+   * follows it has begun. The next bot's turn (or the lead's list) starts at once and says who's
+   * talking itself, before anything it waits for, so the apps go from one bot to the next, never
+   * seeing nobody between two turns: the row under the chat would go as a bot passed and come again
+   * for the next, drawn over itself. Nothing after it: nobody, a moment later.
+   */
+  private toldAfterTurn(id: string) {
+    setImmediate(() => this.told(id))
   }
 
   /** What a bot said in its turn, to the chat: nothing when it passed. */
@@ -1071,7 +1083,7 @@ export class GroupRunner {
       stopped.done()
       if (live.splitStop === stopSplit) live.splitStop = undefined
       if (live.splitting === lead) live.splitting = undefined
-      this.told(id)
+      this.toldAfterTurn(id)
     }
   }
 
