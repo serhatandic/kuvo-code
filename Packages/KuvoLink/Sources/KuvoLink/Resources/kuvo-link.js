@@ -38421,6 +38421,7 @@ import http from "node:http";
 import os17 from "node:os";
 var IDLE_TOLD = 5000;
 var IDLE_KEPT = 60000;
+var HEARTBEAT = 20000;
 function serveBox(password, handle = engineHandler(readEngineFile, { name: os17.hostname() })) {
   const expected = Buffer.from("Basic " + Buffer.from(`opencode:${password}`).toString("base64"));
   return http.createServer({ keepAliveTimeout: IDLE_TOLD, keepAliveTimeoutBuffer: IDLE_KEPT }, async (request, response) => {
@@ -38440,12 +38441,23 @@ function serveBox(password, handle = engineHandler(readEngineFile, { name: os17.
     const abort = new AbortController;
     response.on("close", () => abort.abort());
     let headed = false;
+    const alive = request.httpVersionMajor > 1 || request.httpVersionMajor === 1 && request.httpVersionMinor >= 1 ? setInterval(() => {
+      if (headed || response.headersSent || response.destroyed || response.writableEnded)
+        return;
+      try {
+        response.writeProcessing();
+      } catch {}
+    }, HEARTBEAT) : undefined;
+    alive?.unref?.();
+    const quiet = () => clearInterval(alive);
+    response.once("close", quiet);
     try {
       const fromApp = request.headers["x-kuvo-from"] === "app";
       for await (const part of handle({ method: request.method ?? "GET", path: sent, headers: request.headers, body: Buffer.concat(chunks), fromApp }, {}, abort.signal)) {
         if (abort.signal.aborted)
           break;
         if (part.head && !headed) {
+          quiet();
           response.writeHead(part.head.status, part.head.headers ?? {});
           response.flushHeaders();
           headed = true;
@@ -38459,6 +38471,8 @@ function serveBox(password, handle = engineHandler(readEngineFile, { name: os17.
       response.writeHead(500, { "content-type": "application/json" });
       response.write(JSON.stringify({ message: String(error?.message ?? error) }));
       headed = true;
+    } finally {
+      quiet();
     }
     if (!headed)
       response.writeHead(502);

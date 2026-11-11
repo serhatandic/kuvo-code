@@ -3613,7 +3613,12 @@ the skills a Mac has always kept ("Skills"). It answers the box's
 routes over HTTP on `127.0.0.1`, as the agents bridge answers the app: it says `{"url"}` on its
 first line once it listens, takes only Basic `opencode:<OPENCODE_PASSWORD>`, checks a path as
 the relay does (403 for one that isn't what it seems), sends a stream as it comes (a line at a
-time for `application/x-ndjson`), and goes when its stdin closes. It finds the engine and the
+time for `application/x-ndjson`), and goes when its stdin closes. A route that holds a request
+before its answer's head (an ask waiting for you, a sandbox tool, a vault wait) sends an interim
+`102 Processing` every 20 seconds to an HTTP/1.1 client, which clients ignore but which keeps
+their wait for the head alive (URLSession's request timeout). It never reaches a phone: the app
+forwards a phone's request to the box with URLSession, which takes it in and gives on only the
+answer. It finds the engine and the
 coding agents' bridge as on a machine, by `run/engine.json` and `run/bridge.json`, which the keeper
 writes (only you can read them) as they start and removes as they stop.
 
