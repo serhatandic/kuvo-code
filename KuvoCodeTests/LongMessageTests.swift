@@ -199,7 +199,9 @@ import Testing
             let (quoted, quotedFrame) = texts[0], answerFrame = texts[1].1
             // Cut at its four lines here.
             let layout = try #require(quoted.layoutManager), container = try #require(quoted.textContainer)
-            #expect(layout.glyphRange(for: container).length < layout.numberOfGlyphs, "its four lines cut the quote")
+            let laid = layout.glyphRange(for: container)
+            let truncated = layout.truncatedGlyphRange(inLineFragmentForGlyphAt: max(0, laid.upperBound - 1))
+            #expect(laid.length < layout.numberOfGlyphs || truncated.location != NSNotFound, "its four lines cut the quote")
             // Under the quote, more than the room between it and the answer's bubble: Show All's.
             #expect(answerFrame.minY - quotedFrame.maxY > 24, "room under the quote for Show All: \(answerFrame.minY - quotedFrame.maxY)")
         }
