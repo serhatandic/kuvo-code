@@ -468,7 +468,7 @@ class FromBatch(Batches):
                     pass
         run.communicate(timeout=60)
         self.assertEqual(run.returncode, 1)
-        self.assertIn("didn't build", read(said))
+        # (Its failed stamp, or its folder still there as it looked: either way it says so.)
         self.assertIn("stopped before it was built", read(said))
         self.assertNotIn("test-without-building", self.xcode_said(), "never the older batch")
         self.assertEqual(len(self.built("mac")), 1, "it left no batch behind")

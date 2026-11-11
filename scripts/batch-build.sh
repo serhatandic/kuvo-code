@@ -115,7 +115,7 @@ one() {
         # Not done, it's removed: an interrupted build leaves no batch behind.
         # Stopped or failed before it's built, it says why (for the runs waiting for it) and leaves
         # no batch behind.
-        trap 'record_failed "stopped before it was built" ""; rm -rf "$dir"' EXIT
+        trap 'stop=$?; case "$stop" in 129 | 130 | 143) why="stopped before it was built" ;; *) why="stopped before it was built: the build failed before xcodebuild (exit $stop)" ;; esac; record_failed "$why" ""; rm -rf "$dir"' EXIT
         trap 'exit 129' HUP
         trap 'exit 130' INT
         trap 'exit 143' TERM
