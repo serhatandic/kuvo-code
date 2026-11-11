@@ -739,7 +739,7 @@ describe("What Codex asks you", () => {
       { path: sum, kind: { type: "update", move_path: null }, diff: "@@ -1 +1 @@\n-  return a - b\n+  return a + b\n" },
       { path: added, kind: { type: "add" }, diff: "expect(sum(1, 2)).toBe(3)\n" },
     ]
-    const removal = [{ path: old, kind: { type: "delete" }, diff: "export {}\n" }]
+    const removal = [{ path: old, kind: { type: "delete" }, diff: "export {}\n" }, { path: join(root, "src/moved.ts"), kind: { type: "update", move_path: "/elsewhere/LaunchAgents/x.plist" }, diff: "@@ -1 +1 @@\n-a\n+b\n" }]
     const id = start(
       [
         ["item/started", { item: { type: "fileChange", id: "p1", status: "inProgress", changes: edit } }],
@@ -768,7 +768,8 @@ describe("What Codex asks you", () => {
     sessions.replyPermission(id, first.id, "once")
     await until(() => sessions.permissions(id).some((ask) => ask.id !== first.id))
     const [second] = sessions.permissions(id)
-    expect(second).toMatchObject({ action: "edit", resources: [old], metadata: { files: [{ file: old, additions: 0, deletions: 1, status: "deleted" }] } })
+    // (A rename's new name is asked about too: it's written there.)
+    expect(second).toMatchObject({ action: "edit", resources: [old, join(root, "src/moved.ts"), "/elsewhere/LaunchAgents/x.plist"], metadata: { files: [{ file: old, additions: 0, deletions: 1, status: "deleted" }, {}] } })
     sessions.replyPermission(id, second.id, "reject")
     await until(() => ended(id))
     expect(answers()).toEqual([{ decision: "accept" }, { decision: "decline" }])

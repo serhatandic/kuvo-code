@@ -128,6 +128,9 @@ final class WindowTabs {
     private(set) var activeHalf = Pane.conversation
     /// Tabs you closed, last one last, with where they were.
     private(set) var closedTabs: [ClosedTab] = []
+    /// The conversations each tab went through to get to what it shows (`go`), the one it came
+    /// from last last: its way back, a step at a time (`back`, `goBack`).
+    private(set) var cameFrom: [TabKey: [TabKey]] = [:]
     /// The tab whose split you opened (or swapped) last: there it keeps its place in `givesWay`;
     /// another tab's, met again, gives way first.
     private(set) var keptSplit: TabKey?
@@ -333,10 +336,66 @@ final class WindowTabs {
 
     /// A tab picked in the sidebar (a session, a bot, a group chat, a terminal, a search's find):
     /// in view, and you work in its conversation, its composer with the keyboard, as a tab picked
-    /// in the tab bar.
+    /// in the tab bar. It starts fresh there, with no way back to where its tab was before.
     func choose(_ key: TabKey) {
         open(key)
+        startFresh(key)
         typeInConversation()
+    }
+
+    /// `key`'s tab forgets the conversations it went through: it has no Back.
+    func startFresh(_ key: TabKey) {
+        cameFrom[key] = nil
+    }
+
+    /// A conversation opened from inside the one `origin` (a bot's session from its bot, a bot's
+    /// conversation from a group chat, a subagent from the session it works for): in that one's
+    /// place in its tab, with the way back to it at its top (`back`), as a link opens in a
+    /// browser's tab. One it went through already is gone back to, not round again. Opened from
+    /// elsewhere (the session beside, nothing in view, a new session or a terminal, which its tab
+    /// keeps), it opens as from the sidebar.
+    func go(to key: TabKey, from origin: TabKey?) {
+        guard let origin, origin == selection, origin.sessionID != nil || origin.groupID != nil, key != origin,
+              !(key.sessionID.map { pairs.values.contains($0) } ?? false) else { return open(key) }
+        var trail = cameFrom[origin] ?? []
+        if let index = trail.firstIndex(of: key) { trail.removeSubrange(index...) } else { trail.append(origin) }
+        swap(origin, for: key, trail: trail)
+    }
+
+    /// Where `key`'s Back goes: the conversation its tab came from last (`go`), or, for a
+    /// subagent's opened otherwise (a search's find, the tabs back at launch), the one it works for.
+    func back(of key: TabKey) -> TabKey? {
+        if let last = cameFrom[key]?.last { return last }
+        guard let id = key.sessionID, workspace.session(id) == nil, let parent = workspace.parent(of: id), parent != id else { return nil }
+        return .session(parent)
+    }
+
+    /// The tab in view has a way back, and nothing covers it (Settings, an editor): View › Back
+    /// (⌘[) can take it.
+    var canGoBack: Bool {
+        guard !app.showsSettings, botEditor == nil, groupEditor == nil, let selection else { return false }
+        return back(of: selection) != nil
+    }
+
+    /// Back, in the tab in view: one step, to where `back` says, with the way back from there.
+    func goBack() {
+        guard let current = selection, let to = back(of: current) else { return }
+        // Beside another tab since: out of that split, to come back here.
+        if let id = to.sessionID, let tab = pairs.first(where: { $0.value == id && $0.key != current })?.key { closeBeside(tab) }
+        var trail = cameFrom[current] ?? []
+        if trail.last == to { trail.removeLast() }
+        swap(current, for: to, trail: trail)
+    }
+
+    /// Kept made while out of view: open in a tab or beside one, or on a tab's way back, to be
+    /// where you left it when you're back.
+    func isKept(_ key: TabKey) -> Bool {
+        isOpen(key) || isOnWayBack(key)
+    }
+
+    /// A tab's way back goes through it.
+    func isOnWayBack(_ key: TabKey) -> Bool {
+        cameFrom.values.contains { $0.contains(key) }
     }
 
     /// A subagent's conversation (or, from one, the conversation above it) in place of the
@@ -344,22 +403,33 @@ final class WindowTabs {
     /// sidebar keeps the conversation it works for picked. With no conversation in view, a tab of
     /// its own.
     func openInPlace(_ id: String) {
-        guard let current = selection, current.sessionID != nil else { return open(.session(id)) }
-        swap(current, for: .session(id))
+        go(to: .session(id), from: selection?.sessionID == nil ? nil : selection)
     }
 
-    private func swap(_ old: TabKey, for new: TabKey) {
+    /// `new` in `old`'s place in its tab, in view, its way back `trail` (none: it starts fresh).
+    private func swap(_ old: TabKey, for new: TabKey, trail: [TabKey] = []) {
         guard old != new, let index = keys.firstIndex(of: old) else { return open(new) }
         var keys = keys
+        var pairs = pairs
         keys[index] = new
-        // One tab of it is enough.
-        if let other = keys.indices.first(where: { $0 != index && keys[$0] == new }) { keys.remove(at: other) }
-        if let beside = pairs[old] {
-            pairs[old] = nil
+        // One tab of it is enough: one it had of its own goes, the session beside it there
+        // keeping that tab.
+        if let other = keys.indices.first(where: { $0 != index && keys[$0] == new }) {
+            if let beside = pairs.removeValue(forKey: new), !keys.contains(.session(beside)) {
+                keys[other] = .session(beside)
+            } else {
+                keys.remove(at: other)
+            }
+        }
+        // The session beside stays beside, unless it's the one taking the tab.
+        if let beside = pairs.removeValue(forKey: old), beside != new.sessionID {
             pairs[new] = beside
         }
+        cameFrom[old] = nil
+        cameFrom[new] = trail.isEmpty ? nil : trail
         withAnimation(.ui) {
             self.keys = keys
+            self.pairs = pairs
             selection = new
             focus = .conversation
             app.showsSettings = false
@@ -381,6 +451,7 @@ final class WindowTabs {
         keys.remove(at: index)
         Analytics.shared.sessionEnded(key.text)
         let beside = pairs[key]
+        cameFrom[key] = nil
         if let beside {
             Analytics.shared.sessionEnded(beside)
             pairs[key] = nil
@@ -419,6 +490,7 @@ final class WindowTabs {
         withAnimation(.ui) {
             keys = keys.filter { $0 == key }
             pairs = pairs.filter { $0.key == key }
+            cameFrom = cameFrom.filter { $0.key == key }
             selection = key
         }
     }
@@ -427,6 +499,7 @@ final class WindowTabs {
     func clear() {
         keys = []
         pairs = [:]
+        cameFrom = [:]
         selection = nil
     }
 
@@ -553,6 +626,17 @@ final class WindowTabs {
         let open = Set(keys)
         let kept = pairs.filter { open.contains($0.key) && !open.contains(.session($0.value)) && !isGone($0.value) }
         if kept != pairs { pairs = kept }
+        // A tab's way back goes with its tab, and past what's gone.
+        func isLeft(_ key: TabKey) -> Bool {
+            switch key {
+            case .session(let id): !isGone(id)
+            case .group(let id): app.chats.group(id) != nil
+            case .draft: true
+            case .terminal: terminals.entry(key.text) != nil
+            }
+        }
+        let trails = cameFrom.filter { open.contains($0.key) }.mapValues { $0.filter(isLeft) }.filter { !$0.value.isEmpty }
+        if trails != cameFrom { cameFrom = trails }
         // A selection that isn't one of the tabs (its session went while the app was closed)
         // shows nothing; show the last tab instead.
         if let selection, !keys.contains(selection) { self.selection = keys.last }
@@ -570,6 +654,10 @@ final class WindowTabs {
     /// tab, or its place beside one, in view if the old one was. False when no tab has it.
     @discardableResult
     func swap(from old: String, to id: String) -> Bool {
+        // On a tab's way back too.
+        if cameFrom.values.contains(where: { $0.contains(.session(old)) }) {
+            cameFrom = cameFrom.mapValues { $0.map { $0 == .session(old) ? .session(id) : $0 } }
+        }
         if let tab = pairs.first(where: { $0.value == old })?.key {
             // The same conversation, carrying on: you still work in it if you did.
             let half = activeHalf
@@ -585,6 +673,7 @@ final class WindowTabs {
             pairs[.session(id)] = beside
         }
         keys[index] = .session(id)
+        if let trail = cameFrom.removeValue(forKey: key) { cameFrom[.session(id)] = trail }
         if keptSplit == key { keptSplit = .session(id) }
         if selection == key {
             selection = .session(id)
@@ -665,6 +754,8 @@ final class WindowTabs {
         if let index = keys.firstIndex(of: tab) { keys[index] = otherKey }
         self.keys = keys
         self.pairs = pairs
+        // Its way back goes with the tab, past the one now in it.
+        if let trail = cameFrom.removeValue(forKey: tab)?.filter({ $0 != otherKey }), !trail.isEmpty { cameFrom[otherKey] = trail }
         if keptSplit == tab { keptSplit = otherKey }
         if selection == tab { selection = otherKey }
     }

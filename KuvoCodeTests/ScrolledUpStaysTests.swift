@@ -76,8 +76,12 @@ import Testing
         return true
     }
 
-    /// An animation started now, the conversation's spring, has quite ended.
+    /// An animation started now, the conversation's spring, has quite ended. Started once the
+    /// window has run what's pending, in an update of its own: started with what the test had just
+    /// done, in the same update (several answers above the view grown at once, read again),
+    /// SwiftUI never said it had ended, and the test waited for good.
     private func settled() async {
+        window.contentView?.layoutSubtreeIfNeeded()
         await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
             withAnimation(.ui, completionCriteria: .removed) { probe.isOn.toggle() } completion: { done.resume() }
         }
@@ -194,8 +198,8 @@ import Testing
 
     /// A conversation of `turns` answered turns, then a question the agent is at work on, with the
     /// run's messages so far: read, shown, and at its end.
-    private func conversation(turns: Int = 14, run messages: [[String: Any]]? = nil) async throws {
-        var all = (0..<turns).flatMap { answer($0) }
+    private func conversation(turns: Int = 14, words: Int = 40, run messages: [[String: Any]]? = nil) async throws {
+        var all = (0..<turns).flatMap { answer($0, words: words) }
         all.append(["id": run + "0900", "type": "user", "time": ["created": 1], "text": "Look around."])
         all += messages ?? [step(1), step(2)]
         engine.conversation(id, all)
@@ -370,10 +374,11 @@ import Testing
 
     /// Up in a single move (a wheel's notch, a flick), then the answers above the view get taller
     /// (read again, with more of what they said): what you read stays where it is. (The rows went on
-    /// taking it as following the end, as nothing told them since: what was above moved it.)
-    @Test(arguments: SingleMove.allCases) func rowsAboveGrowingAfterASingleMoveUpLeaveWhatYouRead(_ single: SingleMove) async throws {
+    /// taking it as following the end, as nothing told them since: what was above moved it.) Short
+    /// answers too, several of them above the view growing at once.
+    @Test(arguments: SingleMove.allCases, [40, 20]) func rowsAboveGrowingAfterASingleMoveUpLeaveWhatYouRead(_ single: SingleMove, words: Int) async throws {
         defer { done() }
-        try await conversation()
+        try await conversation(words: words)
         try await move(single, up: 300)
         try await until { isOffTheEnd }
         await settled()
@@ -384,8 +389,8 @@ import Testing
         // The answers wholly above the view, longer (made, not yet scrolled to: within a screen).
         let above = Set(rows.filter { $0.value.maxY < 0 }.map { String($0.key.prefix { $0 != "#" }) })
         let grown = Set((0..<14).filter { above.contains(run + "0\(101 + $0 * 2)") })
-        try #require(!grown.isEmpty, "answers above the view among \(rows)")
-        var longer = (0..<14).flatMap { turn in answer(turn, words: grown.contains(turn) ? 70 : 40) }
+        try #require(grown.count > (words < 40 ? 1 : 0), "answers above the view among \(rows)")
+        var longer = (0..<14).flatMap { turn in answer(turn, words: grown.contains(turn) ? words + 30 : words) }
         longer.append(["id": run + "0900", "type": "user", "time": ["created": 1], "text": "Look around."])
         longer += [step(1), step(2)]
         engine.conversation(id, longer)
@@ -404,6 +409,49 @@ import Testing
         try await until { laidOut && atTheEnd }
         #expect(!isOffTheEnd)
         #expect(stack?.scrollAnchor?.isFollowingEnd == true, "still following")
+    }
+
+    /// Scrolled up to its top, what you send takes you to its end once: in every frame drawn its
+    /// end comes nearer, never further, and it stays there, following it (the phone's #403).
+    @Test func sendingFromTheTopGoesToTheEndOnce() async throws {
+        defer { done() }
+        try await conversation(turns: 30)
+        model.apply(try engine.event("session.execution.succeeded", session: id))
+        try await until { laidOut && !model.isRunning }
+        await settled()
+        try await yourScroll(by: 200_000)
+        try await until { laidOut && isOffTheEnd && origin < 1 - (scroll?.contentInsets.top ?? 0) }
+        await settled()
+
+        // How far the end is below what shows, as each pass of the main run loop left it.
+        final class Gaps { var all: [Int] = [] }
+        let gaps = Gaps()
+        let gap = { [weak scroll, weak clip] () -> Int? in
+            guard let scroll, let clip, let height = clip.documentView?.frame.height else { return nil }
+            return Int((height + scroll.contentInsets.bottom - clip.bounds.maxY).rounded())
+        }
+        gaps.all = gap().map { [$0] } ?? []
+        let observer = CFRunLoopObserverCreateWithHandler(kCFAllocatorDefault, CFRunLoopActivity.beforeWaiting.rawValue, true, 0) { _, _ in
+            MainActor.assumeIsolated { if let now = gap(), gaps.all.last != now { gaps.all.append(now) } }
+        }
+        CFRunLoopAddObserver(CFRunLoopGetMain(), observer, .commonModes)
+        defer { CFRunLoopRemoveObserver(CFRunLoopGetMain(), observer, .commonModes) }
+        model.draftText = "Looks good.\nOne more thing:\nkeep the toggle."
+        model.submitDraft(for: nil, queue: false, commands: [])
+        try await until { laidOut && atTheEnd && !isOffTheEnd }
+        await settled()
+        await settled()
+        CFRunLoopRemoveObserver(CFRunLoopGetMain(), observer, .commonModes)
+
+        var nearest = gaps.all.first ?? 0
+        var back: [String] = []
+        for gap in gaps.all {
+            if gap > nearest + 24 { back.append("\(gap) after \(nearest)") }
+            nearest = min(nearest, gap)
+        }
+        #expect(back.isEmpty, "on the way to the end it went back up: \(back), of \(gaps.all)")
+        #expect(atTheEnd, "it didn't stay at the end: \(gaps.all)")
+        #expect(stack?.scrollAnchor?.isFollowingEnd == true, "it doesn't follow the end")
     }
 }
 

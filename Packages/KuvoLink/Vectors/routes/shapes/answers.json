@@ -529,7 +529,9 @@
          },
          "held?": "bool",
          "approved?": "number",
-         "used?": "number"
+         "used?": "number",
+         "place?": "string",
+         "revoked?": "number"
         }
        }
       },
@@ -651,7 +653,9 @@
          },
          "held?": "bool",
          "approved?": "number",
-         "used?": "number"
+         "used?": "number",
+         "place?": "string",
+         "revoked?": "number"
         }
        }
       },
@@ -10557,9 +10561,21 @@
            "ref": "string",
            "url?": "string",
            "host?": "string",
-           "id?": "string"
+           "id?": "string",
+           "name?": "string"
           }
          },
+         "seen?": {
+          "object": {
+           "state": "string",
+           "at": "number",
+           "checked?": "number",
+           "gone?": "bool"
+          }
+         },
+         "keptIn?": "string",
+         "struck?": "bool",
+         "closesOn?": "string",
          "handing?": {
           "object": {
            "to": "string",
@@ -10749,9 +10765,21 @@
            "ref": "string",
            "url?": "string",
            "host?": "string",
-           "id?": "string"
+           "id?": "string",
+           "name?": "string"
           }
          },
+         "seen?": {
+          "object": {
+           "state": "string",
+           "at": "number",
+           "checked?": "number",
+           "gone?": "bool"
+          }
+         },
+         "keptIn?": "string",
+         "struck?": "bool",
+         "closesOn?": "string",
          "handing?": {
           "object": {
            "to": "string",
@@ -10947,9 +10975,21 @@
            "ref": "string",
            "url?": "string",
            "host?": "string",
-           "id?": "string"
+           "id?": "string",
+           "name?": "string"
           }
          },
+         "seen?": {
+          "object": {
+           "state": "string",
+           "at": "number",
+           "checked?": "number",
+           "gone?": "bool"
+          }
+         },
+         "keptIn?": "string",
+         "struck?": "bool",
+         "closesOn?": "string",
          "handing?": {
           "object": {
            "to": "string",
@@ -11139,9 +11179,21 @@
            "ref": "string",
            "url?": "string",
            "host?": "string",
-           "id?": "string"
+           "id?": "string",
+           "name?": "string"
           }
          },
+         "seen?": {
+          "object": {
+           "state": "string",
+           "at": "number",
+           "checked?": "number",
+           "gone?": "bool"
+          }
+         },
+         "keptIn?": "string",
+         "struck?": "bool",
+         "closesOn?": "string",
          "handing?": {
           "object": {
            "to": "string",
@@ -11304,9 +11356,20 @@
              "ref": "string",
              "url?": "string",
              "host?": "string",
-             "id?": "string"
+             "id?": "string",
+             "name?": "string"
             }
            },
+           "seen?": {
+            "object": {
+             "state": "string",
+             "at": "number",
+             "checked?": "number",
+             "gone?": "bool"
+            }
+           },
+           "struck?": "bool",
+           "closesOn?": "string",
            "title": "string",
            "category": "string",
            "inProgress": "bool",
@@ -11357,9 +11420,20 @@
              "ref": "string",
              "url?": "string",
              "host?": "string",
-             "id?": "string"
+             "id?": "string",
+             "name?": "string"
             }
            },
+           "seen?": {
+            "object": {
+             "state": "string",
+             "at": "number",
+             "checked?": "number",
+             "gone?": "bool"
+            }
+           },
+           "struck?": "bool",
+           "closesOn?": "string",
            "title": "string",
            "category": "string",
            "inProgress": "bool",
@@ -11510,9 +11584,21 @@
           "ref": "string",
           "url?": "string",
           "host?": "string",
-          "id?": "string"
+          "id?": "string",
+          "name?": "string"
          }
         },
+        "seen?": {
+         "object": {
+          "state": "string",
+          "at": "number",
+          "checked?": "number",
+          "gone?": "bool"
+         }
+        },
+        "keptIn?": "string",
+        "struck?": "bool",
+        "closesOn?": "string",
         "handing?": {
          "object": {
           "to": "string",
@@ -11738,9 +11824,21 @@
           "ref": "string",
           "url?": "string",
           "host?": "string",
-          "id?": "string"
+          "id?": "string",
+          "name?": "string"
          }
         },
+        "seen?": {
+         "object": {
+          "state": "string",
+          "at": "number",
+          "checked?": "number",
+          "gone?": "bool"
+         }
+        },
+        "keptIn?": "string",
+        "struck?": "bool",
+        "closesOn?": "string",
         "handing?": {
          "object": {
           "to": "string",
@@ -11926,9 +12024,21 @@
           "ref": "string",
           "url?": "string",
           "host?": "string",
-          "id?": "string"
+          "id?": "string",
+          "name?": "string"
          }
         },
+        "seen?": {
+         "object": {
+          "state": "string",
+          "at": "number",
+          "checked?": "number",
+          "gone?": "bool"
+         }
+        },
+        "keptIn?": "string",
+        "struck?": "bool",
+        "closesOn?": "string",
         "handing?": {
          "object": {
           "to": "string",
@@ -12114,9 +12224,21 @@
           "ref": "string",
           "url?": "string",
           "host?": "string",
-          "id?": "string"
+          "id?": "string",
+          "name?": "string"
          }
         },
+        "seen?": {
+         "object": {
+          "state": "string",
+          "at": "number",
+          "checked?": "number",
+          "gone?": "bool"
+         }
+        },
+        "keptIn?": "string",
+        "struck?": "bool",
+        "closesOn?": "string",
         "handing?": {
          "object": {
           "to": "string",

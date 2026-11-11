@@ -33,6 +33,9 @@ import { setBoxKey } from "./areas/box-keys";
 import { addMacDefaults, changeSettings, ownsSettings, readSettings } from "./areas/config";
 import { engineConnect } from "./areas/engine";
 import { answerOnce, reconnectEverywhere, upgradeBeforeEngine, upgradeIntegrations } from "./areas/integrations";
+import { readApart } from "./github/graphql";
+import "./work-queue/github";
+import "./glance/github";
 import { keepSkillTrashClear } from "./areas/skills";
 import { sendWakes } from "./areas/wakes";
 import { finishDeletes, forgetLeftKeys } from "./bots/edit";
@@ -550,6 +553,9 @@ async function box(command: string): Promise<void> {
       const text = (!type || type.startsWith("text/") || type.includes("json")) && isUTF8(body);
       return say(text ? { status, body: body.toString("utf8") } : { status, bodyBase64: body.toString("base64"), type });
     }
+    case "github-read":
+      // A read of GitHub that was due as `route` answered, made here, outliving it.
+      return void await readApart(process.argv[4], await input()).catch(() => {});
     case "reconnect": {
       // An integration's server connected again everywhere, a moment after `route` changed its
       // keys, once the engine has read them.

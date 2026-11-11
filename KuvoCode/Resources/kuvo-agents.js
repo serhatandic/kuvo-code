@@ -10238,7 +10238,7 @@ function unzipper() {
 
 // Packages/Box/src/agents/agents/claude.ts
 import { spawn as spawn5 } from "child_process";
-import { createHash as createHash8, randomUUID } from "crypto";
+import { createHash as createHash9, randomUUID } from "crypto";
 import { existsSync as existsSync14, mkdirSync as mkdirSync15, readdirSync as readdirSync13, readFileSync as readFileSync21, renameSync as renameSync12, rmdirSync as rmdirSync2, rmSync as rmSync11, statSync as statSync10, writeFileSync as writeFileSync17 } from "fs";
 import { homedir } from "os";
 import { basename as basename8, dirname as dirname12, join as join23, resolve as resolve6 } from "path";
@@ -10553,6 +10553,7 @@ class Limits {
         entry = { windows: [], next: 0 };
         this.entries.set(account.provider, entry);
       }
+      this.switched(entry, source);
       this.identify(entry, source.identity?.());
       if (!source.read)
         continue;
@@ -10667,6 +10668,22 @@ class Limits {
     }
     entry.identity = identity;
   }
+  switched(entry, source) {
+    if (source.read || !source.signIn)
+      return;
+    const now = source.signIn();
+    if (now === undefined)
+      return;
+    if (entry.heardAs !== undefined && entry.heardAs !== now) {
+      entry.windows = [];
+      entry.plan = undefined;
+      entry.balance = undefined;
+      entry.checked = undefined;
+      entry.problem = undefined;
+      entry.identity = undefined;
+    }
+    entry.heardAs = now;
+  }
   listen(provider, source) {
     if (source.heard)
       return;
@@ -10676,7 +10693,8 @@ class Limits {
         entry = { windows: [], next: 0 };
         this.entries.set(provider, entry);
       }
-      if (entry.problem?.kind === "none")
+      this.switched(entry, source);
+      if (entry.problem?.kind === "none" || !source.read)
         entry.problem = undefined;
       const before = entry.windows.find((each) => each.id === window.id);
       const heard = {
@@ -10829,6 +10847,7 @@ function xaiIdentity(...tokens) {
 var text2 = (value) => typeof value === "string" && value.trim() ? value.trim().toLowerCase() : undefined;
 
 // Packages/Box/src/agents/agents/claude-limits.ts
+import { createHash as createHash8 } from "crypto";
 import { readFileSync as readFileSync20, statSync as statSync9 } from "fs";
 import { join as join22 } from "path";
 var claudeUsage = { url: "https://api.anthropic.com/api/oauth/usage" };
@@ -10849,7 +10868,9 @@ function credentialsIn(configHome) {
     return;
   }
 }
-function claudeIdentity(configHome) {
+function claudeIdentity(configHome, token) {
+  if (token !== undefined)
+    return tokenIdentity(configHome, token);
   const file = join22(configHome, ".claude.json");
   try {
     const { mtimeMs, size } = statSync9(file);
@@ -10876,6 +10897,41 @@ function identityIn(text) {
     return;
   }
 }
+function tokenIdentity(configHome, token) {
+  try {
+    return recordIdentity(configHome, readFileSync20(join22(configHome, "policy-limits.json.stamp.json"), "utf8"), readFileSync20(join22(configHome, "policy-limits.json.signature.json"), "utf8"), token);
+  } catch {
+    return;
+  }
+}
+function recordIdentity(configHome, stampText, signatureText, token) {
+  try {
+    const stamp = JSON.parse(stampText);
+    if (stamp?.v !== 1 || typeof stamp.identity !== "string")
+      return unread(configHome, "its policy note isn't one this version reads");
+    const principal = `token:${createHash8("sha256").update(token.trim()).digest("hex").slice(0, 32)}`;
+    if (stamp?.kind !== "token" || stamp.identity !== createHash8("sha256").update(principal).digest("hex"))
+      return;
+    const payload = String(JSON.parse(signatureText)?.jws ?? "").split(".")[1];
+    if (!payload)
+      return unread(configHome, "its policy record isn't one this version reads");
+    const claims = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
+    if (typeof stamp.sha !== "string" || claims?.sha !== stamp.sha)
+      return;
+    const account = typeof claims.sub === "string" ? claims.sub.trim().toLowerCase() : "";
+    const organization = typeof claims.aud === "string" ? claims.aud.trim().toLowerCase() : "";
+    return account && organization ? `anthropic:${account}|${organization}` : undefined;
+  } catch {
+    return;
+  }
+}
+function unread(configHome, why) {
+  if (!told.has(configHome))
+    console.error(`Claude's account in ${configHome} can't be told: ${why}.`);
+  told.add(configHome);
+  return;
+}
+var told = new Set;
 function planName(subscription, tier) {
   const base = subscription?.trim();
   if (!base)
@@ -11162,7 +11218,7 @@ var PRINTED_SECRET = /sk-ant-[A-Za-z0-9_-]+|^[^\S\n]*[A-Za-z0-9_-]{32,}[^\S\n]*$
 var VALUE = `"[^"]*"|'[^']*'|[^\\s"',;]+`;
 var SECRET_NAME = "[A-Za-z0-9_-]*(?:key|token(?!s)|secret|password|passwd)[A-Za-z0-9_-]*";
 var withoutSecrets = (text) => text.replace(ANY_TOKEN, "sk-ant-\u2026").replace(/:\/\/[^\s/]*@/g, "://\u2026@").replace(new RegExp(`\\b((?:proxy-)?authorization)(["']?\\s*[:=]\\s*)(?:"[^"]*"|'[^']*'|(?:(?:bearer|basic|token)\\s+)?[^\\s"',;]+)`, "gi"), "$1$2\u2026").replace(/\bBearer\s+(?!tokens?\b)[A-Za-z0-9._~+/-]+=*/gi, "Bearer \u2026").replace(new RegExp(`\\b(${SECRET_NAME})(\\s*=\\s*)(?:${VALUE})`, "gi"), "$1$2\u2026").replace(new RegExp(`(["'])(${SECRET_NAME})\\1(\\s*:\\s*)(?:${VALUE})`, "gi"), "$1$2$1$3\u2026").replace(new RegExp(`\\b((?:[A-Za-z0-9_-]+[-_])?(?:api[-_]?key|token)|[A-Za-z0-9_-]*(?:password|passwd|secret))(?<!(?:^|[\\s(])token)(\\s*:\\s*)(?:${VALUE})`, "gi"), "$1$2\u2026").replace(new RegExp(`(--${SECRET_NAME})(\\s+|=)(?:${VALUE})`, "gi"), "$1$2\u2026");
-var told = (error) => {
+var told2 = (error) => {
   const said = failure(error);
   return { ...said, message: withoutSecrets(said.message) };
 };
@@ -11374,7 +11430,7 @@ class ClaudeAgent {
       written = statSync10(join23(own ?? join23(homedir(), ".claude"), ".credentials.json")).mtimeMs;
     } catch {}
     if (process.platform === "darwin")
-      written = Math.max(written, await keychainWritten(`Claude Code-credentials${own ? `-${createHash8("sha256").update(own).digest("hex").slice(0, 8)}` : ""}`));
+      written = Math.max(written, await keychainWritten(`Claude Code-credentials${own ? `-${createHash9("sha256").update(own).digest("hex").slice(0, 8)}` : ""}`));
     return written;
   }
   signsInRemotely = true;
@@ -11394,7 +11450,14 @@ class ClaudeAgent {
   get tokenFile() {
     return join23(this.context.home, "claude", "tokens", `${this.instance.id}.json`);
   }
-  limits = ClaudeAgent.keychain ? { every: CLAUDE_LIMITS_EVERY } : {
+  limits = ClaudeAgent.keychain ? {
+    every: CLAUDE_LIMITS_EVERY,
+    signIn: () => fingerprint(this.token()),
+    identity: () => {
+      const token = this.token();
+      return token ? claudeIdentity(this.configHome, token) : undefined;
+    }
+  } : {
     every: CLAUDE_LIMITS_EVERY,
     bucket: "anthropic",
     read: async (now) => {
@@ -12327,7 +12390,7 @@ ${input.text}` } : input, this.copies());
         await this.heard(ended, active.hooks.signal);
       if (active.hooks.signal.aborted)
         return active.resolve({ outcome: "interrupted" });
-      active.resolve({ outcome: "failed", error: this.failed(active, active.problem ? told(active.problem) : this.stoppedWhy(ended, "Claude Code stopped.")) });
+      active.resolve({ outcome: "failed", error: this.failed(active, active.problem ? told2(active.problem) : this.stoppedWhy(ended, "Claude Code stopped.")) });
     }
   }
   lastEnd;
@@ -12350,7 +12413,7 @@ ${input.text}` } : input, this.copies());
     stopped.removeEventListener("abort", stop);
   }
   stoppedWhy(ended, otherwise = "Claude Code stopped before it took your message.") {
-    const error = told(ended ?? otherwise);
+    const error = told2(ended ?? otherwise);
     const last = this.said?.last;
     return ended !== undefined && last && !error.message.includes(last) ? { ...error, message: `${error.message}: ${last}` } : error;
   }
@@ -15086,7 +15149,7 @@ ${said.map((each) => each.text).join(`
         active.toolsSinceText = true;
         const changes = codexChanges(item.changes);
         active.changes.set(item.id, changes);
-        turn.toolStart(item.id, "patch", { files: changes.map((change) => change.path) });
+        turn.toolStart(item.id, "patch", { files: changes.flatMap((change) => [change.path, ...change.movedTo ? [change.movedTo] : []]) });
         return;
       }
       case "functionCallOutput":
@@ -15340,7 +15403,7 @@ From memory: ${cited.join("; ")}`);
         const decision = await hooks.permission({
           toolCallID: params.itemId,
           action: "edit",
-          resources: changes.length ? changes.map((change) => change.path) : [params.grantRoot ?? "*"],
+          resources: changes.length ? changes.flatMap((change) => [change.path, ...change.movedTo ? [change.movedTo] : []]) : [params.grantRoot ?? "*"],
           metadata: files.length ? { files } : undefined,
           message: params.reason ?? undefined
         });
@@ -15358,7 +15421,7 @@ From memory: ${cited.join("; ")}`);
         return { decision: decision === "reject" ? "denied" : "approved" };
       }
       case "applyPatchApproval": {
-        const paths = Object.keys(params.fileChanges ?? {});
+        const paths = Object.entries(params.fileChanges ?? {}).flatMap(([file, change]) => [file, ...[change?.move_path, change?.update?.move_path].filter((each) => typeof each === "string")]);
         const decision = await hooks.permission({ toolCallID: params.callId, action: "edit", resources: paths.length ? paths : ["*"], message: params.reason ?? undefined });
         return { decision: decision === "reject" ? "denied" : "approved" };
       }
@@ -17285,7 +17348,7 @@ async function branchRoutes(places, method, parts, body) {
 }
 
 // Packages/Box/src/agents/sessions.ts
-import { createHash as createHash9 } from "crypto";
+import { createHash as createHash10 } from "crypto";
 import { spawn as spawnProcess } from "child_process";
 import { readFileSync as readFileSync26, realpathSync as realpathSync7, statSync as statSync11 } from "fs";
 import { homedir as homedir5 } from "os";
@@ -18640,7 +18703,7 @@ class Sessions {
     const directory = body.location.directory;
     const session = {
       id: newID("ses"),
-      projectID: "prj_" + createHash9("sha1").update(directory).digest("hex").slice(0, 16),
+      projectID: "prj_" + createHash10("sha1").update(directory).digest("hex").slice(0, 16),
       agent: typeof body.agent === "string" && body.agent ? body.agent : "build",
       model: body.model,
       cost: 0,
@@ -20217,6 +20280,8 @@ ${live.agentPrompt}` : ""
         return "deny";
       if (strictest(rules, "external_directory", refusable) === "deny")
         return "deny";
+      if (away.some((each) => each.includes("\\")))
+        return "ask";
       const outside = strictest(rules, "external_directory", folders);
       if (outside === "ask" && !this.allowedOutside(live, folders))
         return "ask";
@@ -20279,7 +20344,7 @@ ${live.agentPrompt}` : ""
       const rules = [...ask.agentRules ?? live.agentRules ?? engineDefaults, ...session.permissions ?? []];
       if (strictest(rules, "external_directory", refusable) === "deny")
         return "reject";
-      const outside = strictest(rules, "external_directory", folders);
+      const outside = away.some((each) => each.includes("\\")) ? "ask" : strictest(rules, "external_directory", folders);
       const own = strictest(rules, ask.action, parts) ?? "allow";
       if (outside === "ask" && own !== "deny" && (own === "allow" || this.allowedBefore(live, ask)) && !this.allowedOutside(live, folders)) {
         return this.askPermission(id, live, turn, { ...outsideAsk(ask, away), metadata: ask.metadata, message: ask.message, sandboxed: ask.sandboxed }, plan);
@@ -20852,7 +20917,7 @@ function followed(store, read, signal) {
 }
 
 // Packages/Box/src/agents/carry.ts
-import { createHash as createHash10 } from "crypto";
+import { createHash as createHash11 } from "crypto";
 import { createReadStream } from "fs";
 import { copyFile, lstat as lstat2, mkdir, readFile as readFile3, readdir, rename, rm, stat as stat2, writeFile } from "fs/promises";
 import { basename as basename11, dirname as dirname16, isAbsolute as isAbsolute3, join as join29, normalize, sep as sep11 } from "path";
@@ -20866,7 +20931,7 @@ class CantCarry extends Error {
   }
 }
 async function hashOf(file) {
-  const hash = createHash10("sha256");
+  const hash = createHash11("sha256");
   for await (const chunk of createReadStream(file))
     hash.update(chunk);
   return hash.digest("hex");
@@ -20884,7 +20949,7 @@ async function plainFiles(from, link, at = "") {
   return files;
 }
 var digestOf = (records, lanes, said = []) => {
-  const hash = createHash10("sha256");
+  const hash = createHash11("sha256");
   for (const record of records)
     hash.update(`r ${record.path} ${record.size} ${record.sha256}
 `);
@@ -21170,7 +21235,7 @@ class Carrying {
         if (session?.id !== id || !Array.isArray(messages))
           throw new CantCarry("its conversation didn't come whole");
         session.location = { ...session.location, directory };
-        session.projectID = "prj_" + createHash10("sha1").update(directory).digest("hex").slice(0, 16);
+        session.projectID = "prj_" + createHash11("sha1").update(directory).digest("hex").slice(0, 16);
         delete agent.snapshots;
         const lanesHere = manifest.lanes.filter((lane) => lane.session === id);
         const threads = agent.threads ?? {};
@@ -26899,4 +26964,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 77067ffec0343016c1e1d08a748e6bee6284a3806596241f28dcefa0225b4a47
+// Built from Packages/Box/src/agents 7ada6f53e9b89c3d70d72541fe00e3ade7feec5c3da6528ad37f89446e2c5431

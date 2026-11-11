@@ -434,6 +434,18 @@ import Testing
     /// here the session beside.
     @Test func closingThePanelInASplitGivesTheKeyboardBackToTheHalfYouWorkedIn() async throws {
         defer { done() }
+        try await closingThePanelInASplit()
+    }
+
+    /// The same with Reduce Motion on, where the panel and the session beside show at once, in
+    /// place, while the conversation is still narrowing to make room for them: it took the
+    /// keyboard as they did, and the panel became the conversation's, without the terminal.
+    @Test(.reduceMotion) func closingThePanelInASplitWithReduceMotionGivesTheKeyboardBackToo() async throws {
+        defer { done() }
+        try await closingThePanelInASplit()
+    }
+
+    private func closingThePanelInASplit() async throws {
         _ = try #require(reply)
         app.tabs.openBeside(harbor)
         try await until { composers.count == 2 }

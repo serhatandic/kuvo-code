@@ -52,6 +52,9 @@ struct MainView: View {
     /// draft's, a group chat's or a terminal's: going back to a session finds the conversations
     /// it keeps, and its composer, as they were, rather than making them all again.
     @State private var keptSession: String?
+    /// The group chat last in view, kept made under another card while a tab's way back goes
+    /// through it (`keptGroup`).
+    @State private var keptGroupID: String?
     /// The window's content width; the title bar is sized from it.
     @State private var contentWidth: CGFloat = 1200
     /// Where the middle card starts and where the title bar's items start, in the window: the
@@ -566,28 +569,73 @@ struct MainView: View {
         .onCardClick(isOn: !overlayShown, keyboard: { keyboardReturn.remember($0, in: .split) }) { tabs.focus = .split }
     }
 
-    /// The middle card: the session's in view, or another tab's over the session's last in view,
-    /// kept made underneath.
+    /// The middle card: the session's in view, or another tab's over the session's last in view
+    /// (and a group chat's a tab goes back to), kept made underneath.
     @ViewBuilder private var conversationCard: some View {
         let inView = sessionInView
+        let groupInView = groupInView
         ZStack {
             if let model = inView ?? keptModel {
                 sessionCard(model, kept: inView == nil)
                     .modifier(KeptOutOfSight(isKept: inView == nil))
             }
-            if inView == nil { otherCard }
+            if let group = groupInView ?? keptGroup {
+                groupCard(group)
+                    .modifier(KeptOutOfSight(isKept: groupInView == nil))
+            }
+            if inView == nil && groupInView == nil { otherCard }
         }
         // Named here, for the card in view: a kept one under it isn't asked.
         .navigationTitle(windowTitle(inView))
         .onChange(of: inView?.id, initial: true) { _, id in if let id { keptSession = id } }
+        .onChange(of: groupInView?.id, initial: true) { _, id in if let id { keptGroupID = id } }
         .onCardClick(isOn: !overlayShown, keyboard: { keyboardReturn.remember($0, in: .conversation) }) { tabs.focus = .conversation }
     }
 
-    /// The session kept made under another tab's card, while its tab is open, and not beside the
-    /// tab in view (where it's made already).
+    /// The session kept made under another tab's card, while its tab is open or a tab's way back
+    /// goes through it, and not beside the tab in view (where it's made already).
     private var keptModel: SessionModel? {
-        guard let id = keptSession, id != besideID, tabs.isOpen(.session(id)) else { return nil }
+        guard let id = keptSession, id != besideID, tabs.isKept(.session(id)) else { return nil }
         return workspace.model(for: id)
+    }
+
+    /// The group chat in view, unless an editor or a terminal's card is over it.
+    private var groupInView: BotGroup? {
+        guard tabs.groupEditor == nil, tabs.botEditor == nil else { return nil }
+        if let key = selection, terminals.entry(key.text) != nil { return nil }
+        return groupID.flatMap { groups.group($0) }
+    }
+
+    /// The group chat kept made under another card while a tab's way back goes through it, to be
+    /// where you were reading when you're back.
+    private var keptGroup: BotGroup? {
+        guard let id = keptGroupID, tabs.isOnWayBack(.group(id)) else { return nil }
+        return groups.group(id)
+    }
+
+    /// A group chat's card, in view or kept (`keptGroup`).
+    private func groupCard(_ group: BotGroup) -> some View {
+        Card(title: group.name, detail: groupDetail(group), isFocused: focus == .conversation) {
+            GroupAvatar(faces: faces(of: group), size: 20)
+        } actions: {
+            // What its bots made, in a popover over the chat.
+            MadeButton(place: .group(group, box: groups.machine(of: group.id) ?? BoxClient.mac))
+            Button("Edit Group Chat", systemImage: "slider.horizontal.3") { tabs.openGroupEditor(group: group) }
+                .help("Edit Group Chat: its name, bots and lead")
+                .disabled(app.moves.isMoving(group.id))
+            Button("Close Tab", systemImage: "xmark") { tabs.close(.group(group.id)) }
+                .help("Close Tab")
+        } content: {
+            VStack(spacing: 0) {
+                // Opened from another conversation: the way back to it, as a subagent's.
+                if let back = tabs.back(of: .group(group.id)) {
+                    BackBar(to: app.backName(back)) { tabs.goBack() }
+                }
+                GroupChatView(group: group, findRequest: groupFind, focusRequest: tabs.groupFocus)
+            }
+        }
+        .onTitle("Edit Group Chat", app.moves.isMoving(group.id) ? nil : { tabs.openGroupEditor(group: group) })
+        .id(TabKey.group(group.id))
     }
 
     /// The session whose card the tab in view shows, if that's what it shows: not with an editor
@@ -643,18 +691,24 @@ struct MainView: View {
             Button("Close Tab", systemImage: "xmark") { tabs.close(.session(id)) }
                 .help("Close Tab")
         } content: {
-            SessionView(model: model)
-                .environment(\.bot, bot)
-                .environment(\.takesCardKeys, !kept && !(focus == .split && besideID != nil))
-                // Typing here is working here, however the keyboard got here.
-                .environment(\.composerFocused) { tabs.focus = .conversation }
+            VStack(spacing: 0) {
+                // Opened from another conversation: the way back to it, as a subagent's.
+                if let back = tabs.back(of: .session(id)) {
+                    BackBar(to: app.backName(back)) { tabs.goBack() }
+                }
+                SessionView(model: model)
+                    .environment(\.bot, bot)
+                    .environment(\.takesCardKeys, !kept && !(focus == .split && besideID != nil))
+                    // Typing here is working here, however the keyboard got here.
+                    .environment(\.composerFocused) { tabs.focus = .conversation }
+            }
         }
         .onTitle(bot.map { "Edit \($0.name)" }, bot.map { bot in { tabs.openBotEditor(bot: bot) } })
         .environment(catalog(for: directory))
     }
 
-    /// Any other tab's card: an editor, a terminal, a group chat, a subagent's conversation, a
-    /// session waiting for its machine, a new session, or the welcome.
+    /// Any other tab's card: an editor, a terminal, a subagent's conversation, a session waiting
+    /// for its machine, a new session, or the welcome (a group chat's is `groupCard`).
     @ViewBuilder private var otherCard: some View {
         Group {
             if let request = tabs.groupEditor {
@@ -697,22 +751,6 @@ struct MainView: View {
                     TerminalHost(session: entry.session)
                 }
                 .id(key)
-            } else if let id = groupID, let group = groups.group(id) {
-                Card(title: group.name, detail: groupDetail(group), isFocused: focus == .conversation) {
-                    GroupAvatar(faces: faces(of: group), size: 20)
-                } actions: {
-                    // What its bots made, in a popover over the chat.
-                    MadeButton(place: .group(group, box: groups.machine(of: group.id) ?? BoxClient.mac))
-                    Button("Edit Group Chat", systemImage: "slider.horizontal.3") { tabs.openGroupEditor(group: group) }
-                        .help("Edit Group Chat: its name, bots and lead")
-                        .disabled(app.moves.isMoving(group.id))
-                    Button("Close Tab", systemImage: "xmark") { tabs.close(.group(id)) }
-                        .help("Close Tab")
-                } content: {
-                    GroupChatView(group: group, findRequest: groupFind, focusRequest: tabs.groupFocus)
-                }
-                .onTitle("Edit Group Chat", app.moves.isMoving(group.id) ? nil : { tabs.openGroupEditor(group: group) })
-                .id(TabKey.group(id))
             } else if let id = sessionID, workspace.session(id) == nil, let parent = workspace.parent(of: id) {
                 // A sub-session: the conversation of a subagent its session's agent started.
                 let root = workspace.session(workspace.root(of: id))
@@ -722,9 +760,7 @@ struct MainView: View {
                     Button("Close Tab", systemImage: "xmark") { tabs.close(.session(id)) }
                         .help("Close Tab")
                 } content: {
-                    SubagentPane(id: id, folder: root?.location.directory ?? workspace.subSession(id)?.location.directory ?? "", parent: parent) {
-                        tabs.openInPlace($0)
-                    }
+                    SubagentPane(id: id, folder: root?.location.directory ?? workspace.subSession(id)?.location.directory ?? "", parent: parent)
                 }
                 .onAppear { workspace.rememberOpened(id) }
                 .id(id)
@@ -939,6 +975,8 @@ struct MainView: View {
             panelHasProject: utilities.hasProject,
             canStop: model?.isRunning == true,
             canReopenTab: tabs.canReopenTab,
+            canGoBack: tabs.canGoBack,
+            goBack: tabs.goBack,
             newSession: { tabs.newSession(in: nil) },
             newTerminalTab: { tabs.openTerminalTab(command: nil) },
             openFolder: openFolder,
@@ -992,7 +1030,11 @@ struct MainView: View {
     private var paletteSessions: [PaletteItem] {
         (workspace.projects.flatMap(\.sessions) + workspace.chats).sorted { $0.time.updated > $1.time.updated }.map { session in
             PaletteItem(id: "session:" + session.id, kind: .session, title: session.title ?? "New Session", detail: workspace.projectName(session.location.directory),
-                        symbol: workspace.worktrees[session.location.directory] == nil ? "bubble.left" : "arrow.triangle.branch") { tabs.open(.session(session.id)) }
+                        symbol: workspace.worktrees[session.location.directory] == nil ? "bubble.left" : "arrow.triangle.branch") {
+                tabs.open(.session(session.id))
+                // As from the sidebar: no way back.
+                tabs.startFresh(.session(session.id))
+            }
         }
     }
 
