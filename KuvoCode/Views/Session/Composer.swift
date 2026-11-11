@@ -107,6 +107,10 @@ struct Composer: View {
     var prompt: String?
     /// Its own card; off in the card it shares with the bars and the queue over it (the session's).
     var drawsSurface = true
+    /// How tall a list over the field can be before it scrolls inside, and how tall it is as
+    /// shown: the card's room is shared out from them (`ComposerListRoom`).
+    var listRoom: CGFloat = .infinity
+    var listHeight: Binding<CGFloat> = .constant(0)
 
     @Environment(Catalog.self) private var catalog
     @Environment(Workspace.self) private var workspace
@@ -187,23 +191,18 @@ struct Composer: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            if let commandMatches {
-                SlashList(items: commandMatches, selected: min(commandIndex, commandMatches.count - 1), project: folders.first.flatMap { Workspace.isChat($0) ? nil : workspace.projectName($0) }) { pick($0) }
-            } else if customLoop, typedKeyword?.keyword == .loop {
-                CustomLoopRow(use: { pickLoop(.preset($0)) }, cancel: {
-                    customLoop = false
-                    focusAtEnd()
-                })
-            } else if let loopChoices {
-                LoopList(choices: loopChoices, selected: min(loopIndex, loopChoices.count - 1)) { pickLoop($0) }
-            } else if let reviewerChoices {
-                ReviewerList(choices: reviewerChoices, selected: min(reviewerIndex, reviewerChoices.count - 1)) { pickReviewer($0) }
-            } else if let reviewList {
-                ReviewChoiceList(list: reviewList, selected: min(reviewerIndex, reviewList.rows.count - 1)) { pickReview($0) }
-            } else if let mention {
-                MentionList(files: mention.matches, selected: min(mentionIndex, max(mention.matches.count - 1, 0))) { insertMention($0) }
-            } else if let named = agents.matches(in: text, excluding: session) {
-                AgentReferenceList(agents: named, selected: min(agents.selected, named.count - 1)) { agents.insert($0, into: $text) }
+            // What "/", "@" and "&" offer, and what a keyword asks next: as tall as the room over
+            // the field leaves, scrolling inside past that, the chosen row in view (#299).
+            if let list = openList {
+                if case .customLoop = list {
+                    // A short form, not a list: in full, its buttons' glass unclipped.
+                    listView(list, selected: 0)
+                } else {
+                    let selected = selectedRow(in: list)
+                    ComposerListScroll(room: listRoom, height: listHeight, chosen: ComposerListChoice(list: list.name, row: selected)) {
+                        listView(list, selected: selected ?? 0)
+                    }
+                }
             }
             if let sideQuestion, asksSide {
                 SideQuestionTag(close: sideQuestion)
@@ -705,6 +704,77 @@ struct Composer: View {
         onQueue()
     }
 
+    /// The list open over the field, one at a time: what "/" offers, what a keyword asks next,
+    /// the files "@" names, or who "&" names.
+    private enum OpenList {
+        case commands([SlashItem])
+        case customLoop
+        case loop([LoopChoice])
+        case reviewers([ReviewerChoice])
+        case review(ReviewList)
+        case mentions([ProjectFiles.File])
+        case agents([AgentMail.Agent])
+
+        /// Which list it is: another one shows its chosen row afresh.
+        var name: String {
+            switch self {
+            case .commands: "commands"
+            case .customLoop: "custom-loop"
+            case .loop: "loop"
+            case .reviewers: "reviewers"
+            case .review(let list): "review." + list.title
+            case .mentions: "mentions"
+            case .agents: "agents"
+            }
+        }
+    }
+
+    private var openList: OpenList? {
+        if let commandMatches { return .commands(commandMatches) }
+        if customLoop, typedKeyword?.keyword == .loop { return .customLoop }
+        if let loopChoices { return .loop(loopChoices) }
+        if let reviewerChoices { return .reviewers(reviewerChoices) }
+        if let reviewList { return .review(reviewList) }
+        if let mention { return .mentions(mention.matches) }
+        if let named = agents.matches(in: text, excluding: session) { return .agents(named) }
+        return nil
+    }
+
+    /// The row ↑ and ↓ have chosen in `list`; nil where it has no rows to choose.
+    private func selectedRow(in list: OpenList) -> Int? {
+        switch list {
+        case .commands(let items): min(commandIndex, items.count - 1)
+        case .customLoop: nil
+        case .loop(let choices): min(loopIndex, choices.count - 1)
+        case .reviewers(let choices): min(reviewerIndex, choices.count - 1)
+        case .review(let list): min(reviewerIndex, list.rows.count - 1)
+        case .mentions(let files): min(mentionIndex, max(files.count - 1, 0))
+        case .agents(let named): min(agents.selected, named.count - 1)
+        }
+    }
+
+    @ViewBuilder private func listView(_ list: OpenList, selected: Int) -> some View {
+        switch list {
+        case .commands(let items):
+            SlashList(items: items, selected: selected, project: folders.first.flatMap { Workspace.isChat($0) ? nil : workspace.projectName($0) }) { pick($0) }
+        case .customLoop:
+            CustomLoopRow(use: { pickLoop(.preset($0)) }, cancel: {
+                customLoop = false
+                focusAtEnd()
+            })
+        case .loop(let choices):
+            LoopList(choices: choices, selected: selected) { pickLoop($0) }
+        case .reviewers(let choices):
+            ReviewerList(choices: choices, selected: selected) { pickReviewer($0) }
+        case .review(let list):
+            ReviewChoiceList(list: list, selected: selected) { pickReview($0) }
+        case .mentions(let files):
+            MentionList(files: files, selected: selected) { insertMention($0) }
+        case .agents(let named):
+            AgentReferenceList(agents: named, selected: selected) { agents.insert($0, into: $text) }
+        }
+    }
+
     /// The keywords and commands matching the "/" that starts the message, while its list is
     /// open. Not while going through sent messages: ↑ and ↓ keep doing that.
     private var commandMatches: [SlashItem]? {
@@ -1195,6 +1265,47 @@ struct ActionButtonStyle: ButtonStyle {
     }
 }
 
+/// Which list is over the message field, and the row chosen in it (nil: none to choose).
+struct ComposerListChoice: Equatable {
+    /// Another list shows its chosen row afresh.
+    let list: String
+    let row: Int?
+}
+
+/// A list over the message field, kept to `room`: past that it scrolls inside, and the chosen row
+/// (each row is `.id(index)`) comes into view as ↑ and ↓ move it, the list's top with its first.
+/// Its height as shown goes to `height`, for the card to share its room out (`ComposerListRoom`).
+struct ComposerListScroll<Content: View>: View {
+    let room: CGFloat
+    let height: Binding<CGFloat>
+    let chosen: ComposerListChoice
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    Color.clear.frame(height: 0).id("top")
+                    content
+                }
+                // Room inside the scroll view, which clips, for the rows' highlights reaching past
+                // the column's edge; the rows stay where they were.
+                .padding(.leading, 8)
+            }
+            .scrollBounceBehavior(.basedOnSize)
+            .frame(maxHeight: room)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.leading, -8)
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height.wrappedValue = $0 }
+            .onDisappear { height.wrappedValue = 0 }
+            .onChange(of: chosen, initial: true) { _, chosen in
+                guard let row = chosen.row else { return }
+                if row == 0 { proxy.scrollTo("top", anchor: .top) } else { proxy.scrollTo(row) }
+            }
+        }
+    }
+}
+
 /// The files an "@" matches, above the message field: the chosen one highlighted, any
 /// one a click away.
 private struct MentionList: View {
@@ -1227,6 +1338,9 @@ private struct MentionList: View {
                     .frame(height: 28)
                 }
                 .buttonStyle(ListRowButtonStyle(isSelected: index == selected))
+                .accessibilityAddTraits(index == selected ? .isSelected : [])
+                // Known by its place, for the list to scroll it into view (`ComposerListScroll`).
+                .id(index)
             }
         }
         .padding(.leading, -8)

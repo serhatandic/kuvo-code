@@ -154,6 +154,12 @@ struct BottomStack: View {
     static let barsFloor: CGFloat = 44
     /// The room for the bars: what the conversation leaves, less the rest of the stack.
     private var barsRoom: CGFloat { max(Self.barsFloor, stackRoom - Self.conversationRoom - (stackHeight - barsShown)) }
+    /// The list open over the composer's field ("/", "@", "&"), as shown, and its room: what the
+    /// conversation leaves, less the rest of the stack and the bars' line, past which it scrolls (#299).
+    @State private var listShown: CGFloat = 0
+    private var listRoom: CGFloat {
+        ComposerListRoom.height(room: stackRoom - Self.conversationRoom, card: stackHeight, list: listShown, bars: barsShown, barsKept: Self.barsFloor)
+    }
     /// Each conversation's card as it was last seen here: which bar is open once it's full
     /// (`BarFolds`), and the bars and news it had, so coming back to it reads what changed
     /// meanwhile. This stack stays as you switch conversations.
@@ -641,7 +647,9 @@ struct BottomStack: View {
                         onEditLast: model.editLast,
                         onStop: model.stop,
                     yieldsKeyboard: askHadPlace == model.id,
-                    drawsSurface: false
+                    drawsSurface: false,
+                    listRoom: listRoom,
+                    listHeight: $listShown
                     )
                     // Its pictures open after the conversation's.
                     .environment(\.conversationPictures, ConversationPictureSet(model: model))
@@ -931,6 +939,16 @@ struct DraftSessionView: View {
     private var draftKey: String { SidebarView.draftTag(directory) }
     @State private var failure: String?
     @LastModel private var lastModel
+    /// The page's height, and the title's, the composer's and what's under it, as shown: the
+    /// list over the composer's field has what they leave (`ComposerListRoom`), past which it scrolls.
+    @State private var pageHeight: CGFloat = .infinity
+    @State private var titleHeight: CGFloat = 0
+    @State private var composerHeight: CGFloat = 0
+    @State private var belowHeight: CGFloat = 0
+    @State private var listShown: CGFloat = 0
+    private var listRoom: CGFloat {
+        ComposerListRoom.height(room: pageHeight - titleHeight - belowHeight, card: composerHeight, list: listShown, bars: 0, barsKept: 0)
+    }
 
     /// The model picked last, when you can use it on this engine (a machine may not have every
     /// account), or its default.
@@ -939,11 +957,22 @@ struct DraftSessionView: View {
     }
 
     var body: some View {
+        // Measured on what the page is given, never on what's in it, which the list makes taller.
+        Color.clear
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { pageHeight = $0 }
+            .overlay { page }
+            .task(id: directory) { await catalog.loadCommands(in: directory) }
+            .task(id: directory) { await workspace.readApprovalHere(for: directory) }
+            .onAppear { Analytics.shared.onboardingStep("composer") }
+    }
+
+    private var page: some View {
         VStack(spacing: 0) {
-            Spacer()
+            Spacer(minLength: 0)
             Text(Workspace.isChat(directory) ? "What's on your mind?" : "What should we work on?")
                 .font(.system(size: 30, weight: .semibold))
                 .padding(.bottom, 28)
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { titleHeight = $0 }
 
             Composer(
                 text: Binding(get: { Drafts.shared[draftKey].text }, set: { Drafts.shared[draftKey].text = $0 }),
@@ -982,29 +1011,32 @@ struct DraftSessionView: View {
                 attempts: attempts,
                 onSelectAttempts: { attempts = $0 },
                 onSend: send,
-                onStop: {}
+                onStop: {},
+                listRoom: listRoom,
+                listHeight: $listShown
             )
             .padding(.horizontal, Metrics.gutter)
             .readableColumn()
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { composerHeight = $0 }
 
-            if isCreating, isRepository, worktree {
-                Text(attempts > 1 ? "Setting up \(attempts) worktrees…" : "Setting up a worktree…")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .padding(.top, 12)
+            VStack(spacing: 0) {
+                if isCreating, isRepository, worktree {
+                    Text(attempts > 1 ? "Setting up \(attempts) worktrees…" : "Setting up a worktree…")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .padding(.top, 12)
+                }
+                if let failure {
+                    ErrorCard(message: failure)
+                        .padding(.horizontal, Metrics.gutter)
+                        .padding(.top, 12)
+                        .readableColumn()
+                }
             }
-            if let failure {
-                ErrorCard(message: failure)
-                    .padding(.horizontal, Metrics.gutter)
-                    .padding(.top, 12)
-                    .readableColumn()
-            }
-            Spacer()
-            Spacer()
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { belowHeight = $0 }
+            Spacer(minLength: 0)
+            Spacer(minLength: 0)
         }
-        .task(id: directory) { await catalog.loadCommands(in: directory) }
-        .task(id: directory) { await workspace.readApprovalHere(for: directory) }
-        .onAppear { Analytics.shared.onboardingStep("composer") }
     }
 
     private func send() {

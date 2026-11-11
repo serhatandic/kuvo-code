@@ -220,6 +220,12 @@ private struct SubagentConversation: View {
         model.session.agent.map { agent in catalog.agents.first { $0.id == agent }?.name ?? agent }
     }
 
+    /// The conversation's height, and what's over its end, and the list open over the composer's
+    /// field in it, as shown: the list has what the conversation leaves (`ComposerListRoom`).
+    @State private var height: CGFloat = .infinity
+    @State private var stackHeight: CGFloat = 0
+    @State private var listShown: CGFloat = 0
+
     var body: some View {
         VStack(spacing: 0) {
             header
@@ -271,7 +277,9 @@ private struct SubagentConversation: View {
                     }
                     .padding(.horizontal, 12)
                     .padding(.bottom, 12)
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { stackHeight = $0 }
                 }
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height = $0 }
         }
         // Its row under the card's title stays put: the conversation scrolls under that row, not
         // under the card's header.
@@ -378,7 +386,9 @@ private struct SubagentConversation: View {
             note: messages.line(parentTitle: parentTitle),
             scope: .engine,
             focusesOnAppear: false,
-            prompt: isWorking ? "Tell it something: it reads it at its next step…" : "Message it: it carries on from where it left off…"
+            prompt: isWorking ? "Tell it something: it reads it at its next step…" : "Message it: it carries on from where it left off…",
+            listRoom: ComposerListRoom.height(room: height - BottomStack.conversationRoom, card: stackHeight, list: listShown, bars: 0, barsKept: 0),
+            listHeight: $listShown
         )
     }
 

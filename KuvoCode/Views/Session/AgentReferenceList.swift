@@ -92,6 +92,9 @@ struct AgentReferenceList: View {
                     .frame(height: 28)
                 }
                 .buttonStyle(ListRowButtonStyle(isSelected: index == selected))
+                .accessibilityAddTraits(index == selected ? .isSelected : [])
+                // Known by its place, for the list to scroll it into view (`ComposerListScroll`).
+                .id(index)
             }
         }
         .padding(.leading, -8)
