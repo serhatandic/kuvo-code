@@ -522,6 +522,11 @@ test("Create Pull Request pushes the branch and makes it with gh against the wor
   // gh says one is already open for the branch: that one.
   fs.writeFileSync(path.join(bin, "gh"), "#!/bin/sh\necho 'a pull request for branch \"kuvo/feature\" into branch \"main\" already exists:' >&2\necho https://github.com/kuvo-test/app/pull/7 >&2\nexit 1\n", { mode: 0o755 });
   assert.deepEqual((await pullRequest({})).json, { url: "https://github.com/kuvo-test/app/pull/7" });
+  // Made from a session: kept as that session's, for its row and card on every client; none before.
+  const pulls = path.join(home, "box", "pulls.json");
+  assert.equal(fs.existsSync(pulls), false);
+  assert.deepEqual((await pullRequest({ session: "ses_review" })).json, { url: "https://github.com/kuvo-test/app/pull/7" });
+  assert.deepEqual(Object.entries(JSON.parse(fs.readFileSync(pulls, "utf8")).sessions).map(([session, { url }]) => [session, url]), [["ses_review", "https://github.com/kuvo-test/app/pull/7"]]);
 });
 
 test("Create Pull Request's confirmation says its base, a title from the commits and whether gh makes it on the box, before anything is pushed", async () => {

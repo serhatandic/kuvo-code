@@ -22,6 +22,8 @@ import { backUpSession } from "../work/backups";
 import { markConversation, noteFullAccess, noteFullAccessAtWork } from "../work/full";
 import { queueWatcher, scanQueues, type ScanFound } from "./queue";
 import { adoptConversation } from "../areas/approval";
+import { followAsks, forgetAsksOn, noteAskEvent } from "../glance/asked";
+import { pullCatcher } from "../glance/pulls";
 import type { Target } from "../../shared/records";
 import type { SignInEvent } from "../areas/accounts";
 import type { NoticeHold } from "../notices/hold";
@@ -248,6 +250,10 @@ function backgroundTools(engine: Target, session: string): Promise<Response> {
 // and `attachmentsLooked`, each time it's looked at what deleted sessions left.
 export function watchBox({ tell = () => true, hold = null, bots = false, notices = !bots, signal, signedIn, learned, attachmentsLooked }: WatchBoxOptions = {}): void {
   const answered = (id: string | undefined) => hold?.resolve(id);
+  // What waits on you that the box asks itself, and what Auto's reviewer takes up, for the rows'
+  // "since" (glance/asked.ts).
+  const stopAsks = followAsks();
+  signal?.addEventListener("abort", stopAsks, { once: true });
   watchEvents(readEngineFile, tell, signal, answered, { bots, notices, signIns: true, hold, signedIn, steers: true, learns: true, learned, queues: true, work: "engine", attachmentsLooked });
   watchEvents(readBridgeFile, tell, signal, answered, { bots, notices, queues: true, work: "bridge", goals: true, attachmentsLooked });
 }
@@ -326,12 +332,16 @@ export async function watchEvents(read: () => Target, tell: (notice: Notice) => 
       workGone = followWork?.gone ?? null;
       // A goal paused or resumed (the agents' bridge says so): its conversation held or let go.
       const goalHeld = goals ? goalHolds(peerTargets) : null;
+      // A pull request a session made itself with `gh`, kept as its own (glance/pulls.ts).
+      const catchPull = pullCatcher(() => source);
       const response = await fetch(`http://127.0.0.1:${source.port}/api/event`, {
         headers: { authorization: `Basic ${Buffer.from(`opencode:${source.password}`).toString("base64")}`, accept: "text/event-stream" },
         signal,
       });
       if (!response.ok || !response.body) throw new Error(`${response.status}`);
       attempt = 0;
+      // When what it asks came: what it asked meanwhile went by unheard (glance/asked.ts).
+      forgetAsksOn(work || String(source.port));
       // What was answered while its events couldn't be heard (it restarted, the stream dropped).
       if (notices && hold) settleHeld(source, hold).catch(() => {});
       // Found it (it started, or this did): its bots told what they are now, before their next turn,
@@ -380,6 +390,8 @@ export async function watchEvents(read: () => Target, tell: (notice: Notice) => 
           forgetDecided(event.data.sessionID);
         }
         learn(source, LEARN_NOW.has(event.type));
+        noteAskEvent(event, work || String(source.port));
+        catchPull(event);
         // Your settings changed by hand meanwhile: the model your subagents use follows them.
         if (learns && (event.type === "session.execution.started" || event.type === "config.updated")) followSettingsFile();
         // Folders a refresh of the models left at work, closed once their work is done.
