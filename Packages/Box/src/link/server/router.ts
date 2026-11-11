@@ -8,6 +8,7 @@ import { accountsRoute, credentialsRoute } from "../areas/accounts";
 import { agentToolsRoute, startRoute } from "../areas/agent-tools";
 import { foundRoute } from "../areas/found";
 import { searchRoute } from "../areas/search";
+import { setupRoute } from "../areas/setup";
 import { changesRoute } from "../areas/changes";
 import { askAnswerRoute, asksRoute } from "../areas/asks";
 import { appNoticeRoute, attentionRoute } from "../areas/attention";
@@ -81,6 +82,7 @@ const ROUTES: (Route | Route<RegExpMatchArray>)[] = [
   { when: route => route === "kuvo/providers/models", answer: providerModelsRoute },
   { when: (route, request) => /^kuvo\/(skills|skill-library|skill-trash)(\/|\?|$)/.test(request.path), answer: skillsRoute },
   { when: (route, request) => /^kuvo\/(config|mcp\/catalog|keys)(\/|\?|$)/.test(request.path), answer: settingsRoute },
+  { when: route => route === "kuvo/setup" || route === "kuvo/setup/events", answer: setupRoute },
   { when: route => route === "kuvo/phones", answer: phonesRoute },
   { when: route => route === "kuvo/phones/remove", answer: phonesRemoveRoute },
   { when: route => route === "kuvo/phones/pair", answer: pairingRoute },

@@ -162,12 +162,16 @@ each box pairs and removes (`phones`), and each box's view of your personalities
 - **Taken**: a box takes a document that verifies, from an origin it takes that kind from, newer
   than the one it has; at the same version, the one whose bytes' hash sorts first, so every box
   keeps the same one. One of its own further on than it knew (it lost count), by a document or a
-  digest, moves its count past it, up to 2^52 (one claiming more isn't taken). It takes `peers` only from its own Macs (those in `macSigns`, given in setup); `phones` and
+  digest, moves its count past it, up to 2^52 (one claiming more isn't taken). It takes `peers`
+  only from its setup's main computer, and while it follows no setup (kept until every box knows setups) from
+  its own Macs (those in `macSigns`, given in setup), never at a lower epoch of the setup it keeps
+  ("Your setup"); `phones` and
   `personalities` from those Macs, from its peers and from itself. Documents from an origin it no
   longer takes them from go.
 - **`peers`**, one per Mac: `{boxes: [{key, sign, address, name, kind: "mac"|"machine", id?}],
-  moved: [{session, key}], left: [key]}`: the Mac itself and each of its machines whose bridge
-  signs, the same document for all of them. A box's peers are every box its Macs' documents name,
+  moved: [{session, key}], left: [key], setup?: {id, epoch, primary}}`: the Mac itself and each of
+  its machines whose bridge signs, the same document for all of them, and the setup it leads
+  ("Your setup"; older boxes read only `boxes`, `moved` and `left`). A box's peers are every box its Macs' documents name,
   itself left out ("Peers"). `left` names the machines that Mac removed (never one it still has,
   under another name): a box that finds itself there and no longer among `boxes` stops counting
   that Mac, as `leave` does. The Mac mails it to a machine as it removes it, once.
@@ -192,11 +196,76 @@ each box pairs and removes (`phones`), and each box's view of your personalities
   To a digest, a box gives what the sender lacks or has older (of what that box would take), and,
   unless it's a `reply`, answers with its own digest, marked `reply`, when the sender has something
   newer. A document it took goes on to its other peers that would take it (not back where it came
-  from, nor to its origin); one of its own that changed, to all of them. Over SSH, setup carries the
+  from, nor to its origin); one of its own that changed, to all of them. A box that would take it
+  is one its setup's document names (with its origin, for `phones` and `personalities`), or, in no
+  setup, one a Mac's document names. Over SSH, setup carries the
   Mac's documents (`docs`, its own and those it has of its machines) and its answer the machine's.
   A box doesn't give documents to a Mac that gave it no signing key.
 - **Later**: each box's agents (`{"agents"}`, "Peers") are a list of its own too, still sent as
   they change and every ten minutes; they could become a fourth kind.
+
+### Your setup
+
+All of your computers that know each other are one **setup**, with one **main computer**: a Mac
+with the app, whose box signs who's in it. Every other computer is a **member**. (Built so far: the
+setup, who's main, and what boxes take and number by it. Changing the main computer, joining two
+setups, and pairing and adding only from the main computer come later: #183.)
+
+- **The setup** has an id (`set_` and 16 random bytes, base64url) and an epoch (a whole number, one
+  more with each change of main computer, never lower on any box). Its main computer's peers
+  document names it: `setup: {id, epoch, primary}`, `primary` the main computer's static key, which
+  the document names among its `boxes` as a Mac signing with the document's key ("Documents").
+- **Kept** in `run/link.json` as `setup: {id, epoch, primary, sign, role: "primary"|"member",
+  aside?, conflict?}` (`sign`, the main computer's signing key). `aside`: kept only so a lower
+  epoch of it is never taken, and followed for nothing else (its main computer stopped naming it,
+  or this box is a shared machine).
+- **Who leads one**: this Mac's box, once it numbers on its own (the Work Queue's first computer,
+  "Numbers") and each of its machines has said no other Mac shares it (`shared: false` in what it
+  tells of its Work Queue; one that hasn't said, an older box, holds it back, and nothing changes
+  meanwhile; once it leads, a machine just added that hasn't said yet doesn't stop it, only one
+  saying `shared: true` does); and a box no Mac set up, once it numbers on its own (one paired with
+  a phone by itself, on Linux say; one its Mac let go waits for that Mac first, as "Numbers" says,
+  days). It's made once, at epoch 1, and looked at once a minute and as a machine's word on how it
+  numbers changes: a Mac that stops leading (a machine of it is shared now, or it numbers through
+  another Mac) sets it aside and its document names it no more; leading again, it names the same
+  one. A Mac whose keys were made anew (its static key, or its signing key alone) makes a new setup:
+  the one it led with its old keys is no longer its own, and its machines take the new one from it.
+  Setting a machine up again, it names its static keys before (`replaces` in `kuvo/link/setup` and
+  setup's input), which the machine lets go as `leave` does, so it's never two Macs to it. (Leading follows its machines' word, as the Work Queue's numbers already do
+  without a setup; a later part of #183 makes it hold against a member's word alone.)
+- **What a box takes it from**: a machine follows the setup its Mac leads, from that Mac's
+  document. Then it takes `peers` only from the main computer's signing key (as that Mac's setup
+  over SSH last gave it, the trust root), never at a lower epoch of the setup (whoever signed it),
+  and its peers are the boxes that document names. A Mac that names itself the main computer of the
+  same setup at the same epoch isn't taken: the box keeps the one it has and notes `conflict:
+  {primary, epoch}` (gone with that epoch). A machine with no Mac leads its own; set up by a Mac, it
+  gives that up (a setup of no other computer joins its Mac's). A box drops its setup when that Mac
+  stops counting there (it removed the box, or wasn't heard from in 30 days), as it drops that
+  Mac's documents. A box that follows no setup (kept until every box knows setups) takes `peers`
+  from its own Macs, as before. The card (below) is a hint for what looks from outside, never
+  trusted for any of this.
+- **Shared machines**: a machine more than one Mac set up, unless the setup's document names each
+  of them as one of its Macs, follows no setup, and tells its peers it's shared (the Work Queue's
+  `told`, `shared: true`), so none of those Macs leads one. Macs that share a machine, and the
+  machines numbering with them, number as before, from the first Mac you set up ("Numbers"),
+  until they're joined in one setup.
+- **`GET kuvo/setup`** (and `kuvo/setup/events`, a line now and one at each change), on every box,
+  for every client: `{setup, epoch, primary: {key, name, kind}, you: {key, role}, computers: [{key,
+  name, kind, role, app}], conflict?, startsFromOthers: {value, default}}`. Facts only, the same on
+  every box of one setup: `kind` is `mac` for a Mac with the app (`app`), `machine` otherwise; in no
+  setup, `setup`, `epoch`, `primary` and `you.role` are null and `computers` is empty.
+  `startsFromOthers` is the #181 switch (not built yet): `value` as you set it (`link.json`'s
+  `startsFromOthers`, `on` or `off`), or null, and `default`, what it is then: off on the main
+  computer (and on a Mac in no setup), on everywhere else, so it follows the role.
+- **The card**: `run/setup-card.json`, beside link.json, nothing secret in it, for what looks at a
+  computer from outside its box (the app as it opens, a Mac adding it over SSH): `{setup, epoch,
+  role, primary: {key, name, heard}, self: {key, name, kind}, app, computers, items}`. `heard`: when
+  the main computer was last heard from, as this box counts it (ms, its own time off left out, as
+  for its Macs' 30 days; null on the main computer itself); `computers`, how
+  many the setup has; `items`, the Work Queue items here. Written as the box looks at its setup, as
+  documents change it, and by `setup` and `leave` (`kuvo/setup/events` follows those too).
+- **Older boxes** read only `boxes`, `moved` and `left`, and keep taking `peers` from their Macs:
+  nothing changes for them. A box that knows setups names `setup` in `features`.
 
 ### Peers
 
@@ -206,8 +275,8 @@ connection.
 
 - **Who**: each of a box's Macs' peers documents ("Documents") names its boxes: that Mac, and its
   machines whose bridge signs (`id`, the machine's name on that Mac). A box's peers are every box
-  they name, itself left out, whoever passed the document on. Only a Mac says who a box's peers
-  are. Its bridge runs while it has peers or phones. Setup also gives the machine's `id`.
+  they name, itself left out, whoever passed the document on; in a setup, every box its main
+  computer's document names ("Your setup"). Only a Mac says who a box's peers are. Its bridge runs while it has peers or phones. Setup also gives the machine's `id`.
 - **Mail**: a box opens mail from its Macs and its peers, and drops the rest. Every mail has `at`
   (milliseconds). A sealed mail frame is at most 65,600 bytes, and one larger isn't sent: letters'
   words and lists are cut to fit.
@@ -3193,7 +3262,11 @@ numbers in a message and draws each one the box knows as a chip (its category's 
 progress, a check when done, `#243` and the title on one line), leaving one it doesn't know as
 written; the message's words never change. A chip opens the item.
 
-**Numbers**: one `#n` per item, unique across your computers, handed out by the primary: the first
+**Numbers**: one `#n` per item, unique across your computers, handed out by the primary: your
+setup's main computer ("Your setup"), the box itself when it's that; one a box can't write to yet
+(its document not here, or naming no address) is waited for, never passed over. A box that
+follows no setup (Macs that share a machine, and the machines numbering with them, or a box beside
+an older one; kept until every box knows setups and those Macs are joined in one) takes the first
 computer you set up. Each box works it out the same way from what it knows: of itself, its peers and
 the primaries they say they number from ("Across your computers", `told`), a Mac comes before a
 machine (a machine is always set up from a Mac), then the one set up first (`since`: when that box
@@ -3212,7 +3285,7 @@ still list a while) isn't one to number from; a box that reached it through that
 peer to its next. Heard from again, it's the earliest again, and boxes move back to it, which moves
 past what was numbered meanwhile (`top`). A machine set up from a
 Mac never numbers on its own; while it knows of no Mac that
-can be reached yet, items wait. (#183 will let you choose the primary.) The primary numbers its own
+can be reached yet, items wait. The primary numbers its own
 items from its counter; another box numbers from blocks of 50 the primary gave it, and asks for the
 next when 15 or fewer are left, by mail, on its rounds: `{workQueue: {ask: {id, count, claims?,
 top?}}}`, sent again every 30 s until answered with `{workQueue: {give: {id, from, to, granted}}}`.
@@ -3247,11 +3320,12 @@ item on its way to another computer (`handing`) goes with the move and is sent f
 `work-queue.elsewhere`; mail as "Peers" says, under the top-level `workQueue`):
 
 - **Told**: each box tells every such peer its Work Queue, unasked, so the others have it while it
-  sleeps: `{workQueue: {told: {id, at, kind, since, top, primary?: {key, kind, since?}, items,
-  owners, categories}}}`. `items` are its items as a view gives them (not deleted ones; the 100
-  latest Done; 1,500 at most), each with `handedFrom` (who handed it on); `owners` names their
-  owners; `categories` its custom ones; `kind`, `since` and `top` how it numbers, and `primary` the
-  one it numbers from (itself when it's the primary). `id` (`wqt_…`) is the same while all that is.
+  sleeps: `{workQueue: {told: {id, at, kind, since, top, primary?: {key, kind, since?}, shared?,
+  items, owners, categories}}}`. `items` are its items as a view gives them (not deleted ones; the
+  100 latest Done; 1,500 at most), each with `handedFrom` (who handed it on); `owners` names their
+  owners; `categories` its custom ones; `kind`, `since` and `top` how it numbers, `primary` the
+  one it numbers from (itself when it's the primary), and `shared`, whether it's a machine Macs
+  share outside one setup ("Your setup"; an older box says neither). `id` (`wqt_…`) is the same while all that is.
   It's worked out again when a queue changes and each minute (who's at work changes it), and goes
   to one computer once in 15 s at most, again each minute (sooner after a change you made from a
   client, at the next round 15 s on) until that computer answers `{workQueue: {had: id}}`, nothing
@@ -3506,6 +3580,7 @@ with its app closed, when what needs the app answers `503 {"message"}`.
 | `letters-read` | (in a peer's agents' mail) it takes a letter with `read` (bridge 0.9.100) |
 | `work.elsewhere` | (in a peer's agents' mail) it takes a lead's `call` and tells `rows` ("Peers"; bridge 0.9.204) |
 | `work-queue` | `kuvo/work-queue…` and the `queue_…` tools ("The Work Queue") |
+| `setup` | `kuvo/setup`, `…/events`: your setup and its main computer ("Your setup") |
 | `work-queue.elsewhere` | (in a peer's agents' mail) it tells and takes the Work Queue across your computers: `told`, `had`, `part`, `hand`, `handed`, and numbers' asks through a peer ("The Work Queue", Across your computers); also `POST kuvo/work-queue/refs`, `computer` and `computers` in its views, and 409 for an item elsewhere |
 | `queue` | `kuvo/sessions/<id>/queue…`, `…/stop` and `kuvo/sessions/queues/events`: the box carries the queue (bridge 0.9.100) |
 | `queue.waits` | A Stop holds the conversation: what arrives waits on the box (`waiting`), `…/queue/add` and `DELETE …/queue/<item>` (bridge 0.9.128) |

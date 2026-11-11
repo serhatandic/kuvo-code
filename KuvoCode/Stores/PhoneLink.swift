@@ -622,11 +622,13 @@ final class PhoneLink {
                 var macID = MachineEngine.macID
                 /// This Mac's name, for saying who else uses the machine.
                 var macName = PhoneLink.computerName
+                /// This Mac's keys before, made anew since, as its box names them: the machine lets them go.
+                var replaces: [String]?
             }
             let settings = folder.appending(path: "setup.json")
             // This Mac's keys and documents, as its box keeps them (a box starting, or not told
             // its settings yet, a moment later).
-            struct Given: Decodable { var mac: String; var macSign: String; var docs: [Documents.Envelope] }
+            struct Given: Decodable { var mac: String; var macSign: String; var docs: [Documents.Envelope]; var replaces: [String]? }
             // (Not up, or not told its settings yet, as it starts: it sets your machines up once it
             // is, `follow`. Said, when you asked.)
             let starting = "This Mac’s background service isn’t running yet, so it couldn’t be set up. Try again in a moment."
@@ -644,7 +646,7 @@ final class PhoneLink {
                 return
             }
             try JSONEncoder().encode(Setup(relay: relay.absoluteString, name: machine.name, mac: given.mac, macSign: given.macSign,
-                                           docs: given.docs, id: machine.id)).write(to: settings)
+                                           docs: given.docs, id: machine.id, replaces: given.replaces)).write(to: settings)
             let output = try await machine.connection.run(RemoteEngineInstaller.script("""
                 KUVO_HOME="$K" BUN_BE_BUN=1 BUN_RUNTIME_TRANSPILER_CACHE_PATH=0 "$E" --config=/dev/null --no-env-file "$K/bin/\(Bridge.fileName)" setup
                 """), input: settings)
