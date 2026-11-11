@@ -30,22 +30,29 @@ def clean_environment():
     return dict({k: v for k, v in os.environ.items() if k not in ("KUVO_HEAVY_SLOTS", "KUVO_HEAVY_HELD", "KUVO_HEAVY_HOLDING", "KUVO_HEAVY_SLOT", "KUVO_HEAVY_BUILD_SUFFIX", "KUVO_TEST_SIMULATOR", "KUVO_HEAVY_WAIT", "KUVO_HEAVY_LIMIT", "KUVO_HEAVY_MAC_FIRST_FOR", "KUVO_HEAVY_MEMORY", "KUVO_HEAVY_MEMORY_WAIT_FOR", "KUVO_HEAVY_PRIORITY", "KUVO_HEAVY_HANDED", "KUVO_HEAVY_STUCK_AFTER", "XCODE_XCCONFIG_FILE", "KUVO_XCODE_CACHE", "KUVO_XCODE_CACHE_SIZE", "KUVO_XCODE_CACHE_DIR")}, KUVO_HEAVY_CANONICAL="")
 
 
-# Prints what the priority of the process it runs in is: on macOS 1 for the background policy
-# (`taskpolicy -b`: getpriority's PRIO_DARWIN_PROCESS), 0 for the default; elsewhere its nice value.
+# Prints what the priority of the process it runs in is: its nice value (macOS's jobs run at utility
+# QoS at nice 20, elsewhere at nice 15), and on macOS whether it's in the background policy too
+# (`taskpolicy -b`, getpriority's PRIO_DARWIN_PROCESS: 1), which its jobs no longer run under.
 PRIORITY_PROBE = """import os, sys
+background = 0
 if sys.platform == "darwin":
     import ctypes
-    print(ctypes.CDLL(None).getpriority(4, 0))
-else:
-    print(os.getpriority(os.PRIO_PROCESS, 0))
+    background = ctypes.CDLL(None).getpriority(4, 0)
+print(background, os.getpriority(os.PRIO_PROCESS, 0))
 """
+UTILITY = ["-c", "utility"]  # what a job asks `taskpolicy` on macOS
 PROBE = ["/bin/sh", "-c", 'exec "$0" -S -c "$1"', sys.executable, PRIORITY_PROBE]  # in a child of the job's shell
 
 
 def is_low(printed):
-    """Whether what the probe printed is background priority."""
-    value = int(printed.strip().splitlines()[-1])
-    return value == 1 if sys.platform == "darwin" else value >= 15
+    """Whether what the probe printed is a job's low priority."""
+    background, nice = (int(value) for value in printed.strip().splitlines()[-1].split())
+    return nice >= 15 or background == 1
+
+
+def is_background(printed):
+    """Whether what the probe printed is the background policy (only the efficiency cores)."""
+    return printed.strip().splitlines()[-1].split()[0] == "1"
 
 
 _STAND_IN = None
@@ -63,7 +70,7 @@ def without_background_priority(env):
         atexit.register(shutil.rmtree, _STAND_IN, ignore_errors=True)
         path = os.path.join(_STAND_IN, "taskpolicy")
         with open(path, "w") as f:
-            f.write('#!/bin/sh\n[ -z "${FAKE_POLICY_LOG-}" ] || echo "$1" >> "$FAKE_POLICY_LOG"\n[ "$1" = -b ] && shift\nexec "$@"\n')
+            f.write('#!/bin/sh\nsaid=$1\ncase "$1" in -b) shift ;; -c) said="$1 $2"; shift 2 ;; esac\n[ -z "${FAKE_POLICY_LOG-}" ] || echo "$said" >> "$FAKE_POLICY_LOG"\nexec "$@"\n')
         os.chmod(path, 0o755)
     return dict(env, PATH=_STAND_IN + os.pathsep + env["PATH"])
 
@@ -786,9 +793,9 @@ class HeavyTests(unittest.TestCase):
                 result = subprocess.run([HEAVY, "box", "true"], env=dict(env, KUVO_HEAVY_WAIT="0"), capture_output=True, text=True, timeout=30)
                 self.assertEqual(result.returncode, WAITS if waits else 0, result.stderr)
 
-    def test_a_job_is_started_under_background_priority_in_every_way_it_starts(self):
-        """Whatever way a job starts, its command is run by `taskpolicy -b` (macOS): a stand-in logs what
-        it's asked. (Elsewhere, nice and ionice, which the test of the real policy sees.)"""
+    def test_a_job_is_started_under_low_priority_in_every_way_it_starts(self):
+        """Whatever way a job starts, its command is run by `taskpolicy -c utility` (macOS): a stand-in
+        logs what it's asked. (Its nice, and elsewhere nice and ionice, the test of the real policy sees.)"""
         if sys.platform != "darwin":
             self.skipTest("taskpolicy is macOS's")
         log = os.path.join(self.locks, "policy")
@@ -801,17 +808,17 @@ class HeavyTests(unittest.TestCase):
             with open(log) as f:
                 return f.read().split()
         with self.subTest("a job"):
-            self.assertEqual(policies(HEAVY, "box", "true"), ["-b"])
+            self.assertEqual(policies(HEAVY, "box", "true"), UTILITY)
         with self.subTest("each kind"):
             for kind in ("mac", "mac-build", "phone-build", "phone"):
-                self.assertEqual(policies(HEAVY, kind, "true"), ["-b"], kind)
+                self.assertEqual(policies(HEAVY, kind, "true"), UTILITY, kind)
         with self.subTest("inside another job"):
-            self.assertEqual(policies(HEAVY, "box", HEAVY, "box", "true"), ["-b", "-b"])
-            self.assertEqual(policies(HEAVY, "box", HEAVY, "phone", "true"), ["-b", "-b"])
+            self.assertEqual(policies(HEAVY, "box", HEAVY, "box", "true"), UTILITY * 2)
+            self.assertEqual(policies(HEAVY, "box", HEAVY, "phone", "true"), UTILITY * 2)
         with self.subTest("the old way (the single lock)"):
-            self.assertEqual(policies(HEAVY, "box", "true", KUVO_HEAVY_OLD_UNTIL="20991231"), ["-b"])
+            self.assertEqual(policies(HEAVY, "box", "true", KUVO_HEAVY_OLD_UNTIL="20991231"), UTILITY)
         with self.subTest("under a lock of an older script"):
-            self.assertEqual(policies("lockf", "-k", self.old_lock("box"), HEAVY, "box", "true"), ["-b"])
+            self.assertEqual(policies("lockf", "-k", self.old_lock("box"), HEAVY, "box", "true"), UTILITY)
         with self.subTest("in a terminal"):
             if os.path.exists(log):
                 os.remove(log)
@@ -833,12 +840,13 @@ class HeavyTests(unittest.TestCase):
                 os.close(fd)
             self.assertEqual(os.waitstatus_to_exitcode(status), 0)
             with open(log) as f:
-                self.assertEqual(f.read().split(), ["-b"])
+                self.assertEqual(f.read().split(), UTILITY)
 
-    def test_a_job_runs_at_background_priority_for_real(self):
-        """The policy the job's own children see (the real `taskpolicy`, or nice), not a process started
-        by hand, which is at the default. A background job gets almost no CPU on a Mac that's very
-        busy: if it hasn't run in two minutes, the test can't say."""
+    def test_a_job_runs_at_low_priority_for_real_but_not_in_the_background_policy(self):
+        """The policy the job's own children see (the real `taskpolicy` and nice), not a process started
+        by hand, which is at the default: nice, and not the background policy, which keeps a job to
+        the efficiency cores. A low-priority job gets little CPU on a Mac that's very busy: if it
+        hasn't run in two minutes, the test can't say."""
         baseline = subprocess.run(PROBE, capture_output=True, text=True, timeout=120).stdout
         if is_low(baseline):  # run under heavy.sh itself, say
             self.skipTest("this test run is at background priority already")
@@ -849,6 +857,7 @@ class HeavyTests(unittest.TestCase):
             self.skipTest("the Mac is too busy for a job at background priority to run")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(is_low(result.stdout), result.stdout)
+        self.assertFalse(is_background(result.stdout), result.stdout)
 
     def test_a_job_that_fails_keeps_its_answer_under_the_lower_priority(self):
         result = subprocess.run([HEAVY, "box", "/bin/sh", "-c", 'echo "$1"; exit 3', "sh", "a b"], env=self.env, capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL, start_new_session=True)

@@ -212,7 +212,7 @@ Before it joins its lane's line, a new job waits while the Mac is thrashing: swa
 a second (`KUVO_HEAVY_SWAP`) or its memory pressure critical, two minutes at most from when any job
 found it so (`KUVO_HEAVY_MEMORY_WAIT_FOR`; `KUVO_HEAVY_MEMORY=0` turns the memory wait off). It waits
 for a busy Mac (`KUVO_HEAVY_LOAD`, its load over the last minute) or for a share of memory available
-(`KUVO_HEAVY_MEMORY=20`, in percent) only when you set those: background priority (below) keeps the
+(`KUVO_HEAVY_MEMORY=20`, in percent) only when you set those: low priority (below) keeps the
 Mac usable, and on the Mini, with a dozen sessions, the load stayed over 40 and less than 20% of
 memory was available all day, so jobs only waited. While the Mac app's suite waits there, new jobs of
 the other kinds wait for it to start, two minutes at most (`KUVO_HEAVY_MAC_FIRST_FOR`). None of
@@ -222,8 +222,11 @@ this way themselves. `python3 -m unittest discover -s scripts -p test_heavy.py`
 tries the helper.
 
 Jobs never starve the box (the Kuvo Code box on this Mac, which the phone talks to): every job runs
-at background priority, its children too: `taskpolicy -b` on macOS (low CPU and I/O priority; it works
-with `xcodebuild` builds and tests, simulator runs and `swift test`), `nice -n 15 ionice -c3` on Linux. On
+at low priority, its children too: `taskpolicy -c utility nice -n 20` on macOS (utility QoS at the
+lowest nice: lower CPU and I/O priority than the box's, but on every core; it works with `xcodebuild`
+builds and tests, simulator runs and `swift test`), `nice -n 15 ionice -c3` on Linux. Not background
+QoS (`taskpolicy -b`), which on Apple silicon runs only on the efficiency cores with its I/O
+throttled: a cold build took nearly twice as long under it. On
 an idle Mac a job runs as fast as ever; on a busy one it gives way and is slower, which the time
 limit allows for (`KUVO_HEAVY_LIMIT`).
 
