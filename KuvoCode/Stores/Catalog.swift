@@ -266,6 +266,9 @@ final class Catalog {
         let name = model(ref)?.name ?? ref.id
         let there = machine.map { " on \($0)" } ?? ""
         if let provider = integrations.first(where: { $0.id == ref.providerID }), !provider.isConnected, !provider.methods.isEmpty {
+            // A ChatGPT or SuperGrok plan is signed in to as its coding agent, which never makes
+            // the engine's own OpenAI or xAI models run: those need a key.
+            if let key = PlanSignIns.needsKey(model: name, provider: ref.providerID, providerName: provider.name, there: there, accounts: "Settings › Accounts") { return key }
             return "\(name) needs a sign-in\(there): sign in to \(signInName(ref.providerID)) in Settings › Accounts, or choose another model."
         }
         return "\(name) isn’t available\(there) now: choose another model."
@@ -307,10 +310,11 @@ final class Catalog {
     }
 
     /// What a conversation's chip shows for `ref`: the model it's on, even while that model's
-    /// account needs a sign-in (its card says so, and how); nil for one that's gone, which asks you
-    /// to choose another; nothing picked, the default.
+    /// account needs a sign-in (its card says so, and how), or while a coding agent signed in
+    /// doesn't list it (its agent says whether it can run it); nil for one that's gone, which asks
+    /// you to choose another; nothing picked, the default.
     func chipModel(_ ref: ModelRef?) -> Model? {
-        if needsSignIn(ref), let ref {
+        if needsSignIn(ref) || goesToItsAgent(ref), let ref {
             if let model = model(ref) ?? lastListed[ModelRef(id: ref.id, providerID: ref.providerID)] { return model }
             var placeholder = Self.autoTemplate
             placeholder.id = ref.id
@@ -319,6 +323,19 @@ final class Catalog {
             return placeholder
         }
         return isUnavailable(ref) ? nil : shownModel(ref) ?? defaultModel
+    }
+
+    /// A coding agent's model missing from its list while its account is signed in and its program
+    /// installed (one it dropped after an update, say): it's sent, and the agent says for itself
+    /// whether it can run it, as `refusal` lets it go.
+    private func goesToItsAgent(_ ref: ModelRef?) -> Bool {
+        guard let ref, OutsideAgents.isAgent(ref.providerID), isUnavailable(ref) else { return false }
+        return integrations.contains { $0.id == ref.providerID && $0.isConnected && $0.metadata?["installed"]?.bool != false }
+    }
+
+    /// The same, for a chip that offers `scope`'s models: none for one outside them.
+    func chipModel(_ ref: ModelRef?, in scope: ModelScope) -> Model? {
+        ref.map { !scope.allows($0.providerID) } == true ? nil : chipModel(ref)
     }
 
     /// The model a new session or bot starts on: the first of `wanted` (the one picked, the one
@@ -343,6 +360,18 @@ final class Catalog {
     /// signed in to as its coding agent here.
     func signInName(_ id: String) -> String {
         Self.planName(id) ?? providerName(id)
+    }
+
+    /// What signing in to `id` from a card does (on the machine named `on`), as its button's help
+    /// says it: its sign-in, or adding a key for the engine's OpenAI or xAI where the sheet offers
+    /// only that (their plans sign in through Codex or Grok).
+    func signInHelp(_ id: String, on machine: String? = nil) -> String {
+        if let provider = integrations.first(where: { $0.id == id }),
+           !provider.offeredSignInMethods.contains(where: { if case .oauth = $0 { true } else { false } }),
+           let key = PlanSignIns.keyHelp(provider: id, providerName: provider.name, there: machine.map { " on \($0)" } ?? "") {
+            return key
+        }
+        return "Sign in to \(signInName(id))\(machine.map { " on \($0): its sign-ins are its own" } ?? "")"
     }
 
     /// It has a way to sign in that the sign-in sheet offers (a key, a sign-in page, or its own).

@@ -33,6 +33,9 @@ phone pairs with it, so the phone, which had a sheet of its own for this, doesn'
 the same in the usage panel and the work bar. `EngineProviders` is which of the engine's
 integrations Accounts lists as providers: no web search services, and not the engine's own
 "Claude Agent" (Claude comes through Claude Code, with the coding agents) unless it was added.
+`PlanSignIns` is what a conversation on the engine's own OpenAI or xAI model says when the engine
+can't run it: a ChatGPT or SuperGrok plan signs in through Codex or Grok, so it needs a key, or a
+model under that agent.
 
 ## ClientSessions
 
@@ -69,6 +72,9 @@ What a client shows of a computer's sessions, the same in both apps. Rules only,
 - `WorkWords`: what a bot's work says, as its box tells it (`kuvo/work`): the bar's line, and each
   session's row (`about`: its model, the account it runs on and its project, then shorter for a
   narrow row, the account going first).
+- `ComposerSend`: what a composer's Send and Return do with what's written: it goes; or, with no
+  model chosen (the chip says "Choose a Model"), Send is off and Return opens the model picker,
+  the message kept; a "!" command, and showing, pausing or taking away a goal, go without one.
 
 ## ClientVault
 

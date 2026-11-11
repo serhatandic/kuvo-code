@@ -183,6 +183,14 @@ struct Composer: View {
         return !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || answered || !files.isEmpty || (commentCount > 0 && !asksSide)
     }
 
+    /// What Send and Return do (`ComposerSend`): with no model chosen, the chip asks for one and
+    /// Return opens its picker, what's written kept.
+    private var sendAction: ComposerSend {
+        ComposerSend(ready: canSend, text: text, hasModel: !showsModel || catalog.chipModel(model, in: modelScope) != nil)
+    }
+    /// Opens the model picker when it changes (Return with no model chosen).
+    @State private var pickModelRequest = 0
+
     /// "!" first: the message is a command to run in the project's folder, not words for the agent.
     private var isShell: Bool { text.hasPrefix("!") }
     /// What's sent goes to the side thread: its tag shows (a command runs as typed instead).
@@ -368,7 +376,7 @@ struct Composer: View {
                                         .layoutPriority(-1)
                                 }
                                 if showsModel {
-                                    ModelChip(selection: model, onSelect: onSelectModel, scope: modelScope, inUse: modelInUse, openRequest: modelMenuRequest)
+                                    ModelChip(selection: model, onSelect: onSelectModel, scope: modelScope, inUse: modelInUse, openRequest: modelMenuRequest + pickModelRequest)
                                         .disabled(isOffline)
                                 }
                                 if let worktree {
@@ -679,9 +687,9 @@ struct Composer: View {
 
     private var actionButton: some View {
         SendStopButton(
-            stops: isRunning, canSend: canSend,
-            sendHelp: isOffline ? "Send once the connection is back" : asksSide && sideQuestionAnswering ? "Send once the side question is answered" : isShell ? "Run the Command (Return)" : isRunning ? "Send: the agent reads it at its next step (Return). ⌘Return queues it for after this run." : "Send (Return)",
-            stopHelp: "Stop (⌘.)", send: send, stop: onStop
+            stops: isRunning, canSend: sendAction.sends,
+            sendHelp: isOffline ? "Send once the connection is back" : asksSide && sideQuestionAnswering ? "Send once the side question is answered" : sendAction == .chooseModel ? "Choose a model to send it (Return opens the list)" : isShell ? "Run the Command (Return)" : isRunning ? "Send: the agent reads it at its next step (Return). ⌘Return queues it for after this run." : "Send (Return)",
+            stopHelp: "Stop (⌘.)", send: send, stop: onStop, waits: sendAction == .chooseModel
         ) {
             HeldRow.button("Send", action: send)
             HeldRow.button("Queue for After This Run", disabled: !isRunning && !hasQueue, action: queue)
@@ -693,6 +701,8 @@ struct Composer: View {
             if isOffline, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { Analytics.shared.firstMessageBlocked("engine_offline") }
             return
         }
+        // No model chosen: the picker, rather than a message that would only fail.
+        guard sendAction.sends else { return chooseModel() }
         // A keyword used: its "New" goes.
         if let (keyword, _) = Keyword.parse(text) { app.newMarks.use("keyword/" + keyword.rawValue) }
         onSend()
@@ -701,6 +711,7 @@ struct Composer: View {
     private func queue() {
         guard let onQueue else { return send() }
         guard canSend else { return }
+        guard sendAction.sends else { return chooseModel() }
         onQueue()
     }
 
@@ -773,6 +784,10 @@ struct Composer: View {
         case .agents(let named):
             AgentReferenceList(agents: named, selected: selected) { agents.insert($0, into: $text) }
         }
+    }
+
+    private func chooseModel() {
+        pickModelRequest += 1
     }
 
     /// The keywords and commands matching the "/" that starts the message, while its list is
@@ -1107,12 +1122,15 @@ struct SendStopButton: View {
     let stopHelp: String
     let send: () -> Void
     let stop: () -> Void
+    /// What's written waits for something (a model chosen): Send stays, dimmed, rather than
+    /// turning into Stop under the pointer.
+    var waits = false
     @HeldRows var menu: () -> [HeldRow]
     @Namespace private var glass
 
     var body: some View {
         GlassEffectContainer {
-            if stops && !canSend {
+            if stops && !canSend && !waits {
                 Button(action: stop) {
                     Image(systemName: "stop.fill")
                         .font(ComposerRow.icon)
@@ -1138,7 +1156,7 @@ struct SendStopButton: View {
                 .heldContextMenu(menu)
             }
         }
-        .animation(.ui, value: stops && !canSend)
+        .animation(.ui, value: stops && !canSend && !waits)
         .animation(.easeOut(duration: 0.15), value: canSend)
     }
 }

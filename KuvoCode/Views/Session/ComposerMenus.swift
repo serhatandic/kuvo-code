@@ -402,7 +402,7 @@ struct ModelChip<Label: View>: View {
     /// The model picked can't be used now: the chip asks for another rather than show the
     /// default as if it were in use.
     private var isUnavailable: Bool { catalog.isUnavailable(selection) || selection.map { !scope.allows($0.providerID) } == true }
-    private var current: Model? { selection.map { !scope.allows($0.providerID) } == true ? nil : catalog.chipModel(selection) }
+    private var current: Model? { catalog.chipModel(selection, in: scope) }
     private var variant: String? { current.flatMap { model in selection.map({ catalog.isSameModel(model.ref, $0) }) == true ? selection?.variant : nil } }
 
     var body: some View {
@@ -414,7 +414,7 @@ struct ModelChip<Label: View>: View {
         }
         .modelChipStyle(popUp: popUp)
         .clickablePointer()
-        .help(catalog.needsSignIn(selection) ? catalog.unavailable(selection!, on: catalog.machine.map { app.name(of: .machine($0)) }) : isUnavailable ? "\(catalog.model(selection)?.name ?? selection?.id ?? "") isn't available now: choose another model" : "Model and effort")
+        .help(catalog.needsSignIn(selection) ? catalog.unavailable(selection!, on: catalog.machine.map { app.name(of: .machine($0)) }) : isUnavailable && current == nil ? "\(catalog.model(selection)?.name ?? selection?.id ?? "") isn't available now: choose another model" : "Model and effort")
         .background(ScreenRoomReader(room: anchor))
         .closesWhenKept($isOpen)
         .popover(isPresented: $isOpen, arrowEdge: placement.below ? .bottom : .top) {

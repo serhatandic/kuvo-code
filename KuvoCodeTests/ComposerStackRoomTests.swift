@@ -285,6 +285,20 @@ import Testing
         defer { done() }
         let out = ProcessInfo.processInfo.environment["KUVO_SHOTS_OUT"].map { URL(fileURLWithPath: $0) }
         engine.on("POST", "/api/session/ses_pixel/prompt", json: [String: String]())
+        // Its models, as the engine lists them: a message goes on the default (with none known,
+        // the chip asks for a model and Return opens the picker instead).
+        let location = ["directory": "/"]
+        let luna: [String: Any] = ["id": "luna", "modelID": "luna", "providerID": "openai", "name": "Luna",
+                                   "capabilities": ["tools": true, "input": ["text"], "output": ["text"]], "variants": [], "time": ["released": 1],
+                                   "cost": [["input": 1, "output": 1]], "status": "active", "enabled": true, "limit": ["context": 100_000, "output": 8_000]]
+        engine.on("GET", "/api/integration", json: ["location": location, "data": [["id": "openai", "name": "OpenAI", "methods": [["type": "key"]],
+                                                                                  "connections": [["type": "credential", "credentialID": "cred_openai", "method": "key"]]]]])
+        engine.on("GET", "/api/model", json: ["location": location, "data": [luna]])
+        engine.on("GET", "/api/model/default", json: ["location": location, "data": luna])
+        engine.on("GET", "/api/agent", json: ["location": location, "data": []])
+        engine.on("GET", "/api/command", json: ["location": location, "data": []])
+        catalog.api = engine.api
+        await catalog.refresh()
         app.workspace.handle(try engine.event("form.replied", session: "ses_pixel", ["id": "frm_concept", "sessionID": "ses_pixel"]))
         app.workspace.handle(try engine.event("shell.created", session: "ses_pixel", ["info": [
             "id": "sh_408", "metadata": ["sessionID": "ses_pixel"], "status": "running", "command": "swift build"
