@@ -124,7 +124,7 @@ export { applyCompatibility, COMPATIBILITY_FILE, ENGINE_LAYER_FILE, engineConfig
 export { MODELS_DUE_FILE, refreshModels, settleDueModels } from "./engine/models";
 export { queueOf, queueWatcher, readQueues, scanQueues, stopSession } from "./engine/queue";
 export { PLACE_TRIES } from "./letters/letter";
-export { keepReadThroughSummary, keepWorkRead, settleWorkRead } from "./work/tree";
+export { keepReadThroughSummary, keepWorkRead, settleWorkRead, under } from "./work/tree";
 export { readAllOn, readGroups } from "./areas/read-all";
 export { glances, Unreached } from "./areas/glance";
 export { askedSince, forgetAsks, forgetAsksOn, noteAskEvent } from "./glance/asked";
@@ -195,7 +195,12 @@ export { bridgeAsk, bridgeClock, carrySeat, seatPayloads, seatPeers, takeSeat, t
 export { announce, ownAgents, refreshOwn, writeAgents } from "./peers/agents";
 export { answered, deliverLeftAnswers, letterMail, letterWent, sendOutbox } from "./letters/outbox";
 export { takeLetter } from "./letters/take";
-export { callAs, callsBack, takeCall } from "./letters/calls";
+export { answerResumed, callAs, callsBack, sendCall, takeCall } from "./letters/calls";
+export { computerOf, resumeStarts, stopBotWorkElsewhere } from "./letters/start-call";
+export { agentTool } from "./letters/tools";
+export { stopBotWork } from "./work/stop";
+export { allowOtherComputers, approvalOf, otherComputersAllowed } from "./work/approval";
+export { reapplyApprovals } from "./areas/approval";
 export { pushRows, takeRows } from "./work/elsewhere";
 export { askToSend, blockArrived, BLOCK as QUEUE_BLOCK, CLAIM_REACH as QUEUE_CLAIM_REACH, claimNumbers, giveBlock, LOW as QUEUE_LOW, notePrimaryNow, primaryOf, pushNumbers, rankedPrimary, readNumbers, reclaimWaiting, takeBlock, takeNumber, takeNumbersMail } from "./work-queue/numbers";
 export { forgetPushed as forgetQueuesTold, itemsElsewhere, pushQueues, takeWorkQueueMail, tellingNow as queueTellingNow, tellQueuesAgain } from "./work-queue/across";

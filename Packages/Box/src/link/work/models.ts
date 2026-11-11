@@ -54,10 +54,10 @@ export const modelNamed = (ref: { providerID: string; id: string } | null | unde
 };
 
 /** The list, for an agent to read: those that can't answer now (`held`) apart, at its end. */
-export function describeModels(all: Usable[], held: Unanswering[] = unansweringNow()): string {
+export function describeModels(all: Usable[], held: Unanswering[] = unansweringNow(), where = HERE): string {
   // Not one its provider is retiring, as the engine's own picker leaves it out.
   const models = all.filter(model => !model.retiring);
-  if (!models.length) return `There's no model with an account on ${HERE}. Ask the user to sign in to one in Settings › Accounts.`;
+  if (!models.length) return `There's no model with an account on ${where}. Ask the user to sign in to one in Settings › Accounts.`;
   const line = (model: Usable) => `- ${model.providerID}/${model.id} (${model.name})${model.efforts.length ? `, efforts: ${model.efforts.join(", ")}` : ""}`;
   const answering = models.filter(model => !holdOf(model, held));
   const holds = held.filter(each => models.some(model => holdOf(model, [each])));

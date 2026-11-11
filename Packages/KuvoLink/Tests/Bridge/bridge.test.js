@@ -1380,6 +1380,8 @@ test("each feature kuvo/info names is a route the machine answers, and one it do
     "approval.fullAccess": ["GET", "kuvo/approval"],
     // (Held back, approved from a client: decisions.)
     "approval.held": ["POST", "kuvo/sessions/ses_none/decisions"],
+    // (Whether your other computers may start work here: kuvo/approval's `otherComputers`.)
+    "approval.otherComputers": ["GET", "kuvo/approval"],
     "approval.reviewer": ["GET", "kuvo/sessions/ses_none/decisions"],
     "approval.seen": ["POST", "kuvo/sessions/ses_none/decisions"],
     // (A command the sandbox stopped, told by the engine's plugin: Auto's reviewer takes it.)
@@ -1475,6 +1477,8 @@ test("each feature kuvo/info names is a route the machine answers, and one it do
     "work-queue.elsewhere": ["POST", "kuvo/work-queue/refs"],
     // (A lead's call for the sessions it started here (list, stop, summarize, answer), on the agents' tools.)
     "work.elsewhere": ["POST", "kuvo/agent-tools"],
+    // (Starts, and reads of its models and projects, from a lead on another computer, on the agents' tools.)
+    "work.elsewhere.start": ["POST", "kuvo/agent-tools"],
     "work.goals": ["GET", "kuvo/work/goals"],
     "work.goals.apps": ["GET", "kuvo/work/apps/icon?app=com.example.none"],
     "work.goals.projects": ["POST", "kuvo/work/goals/goal_none"],

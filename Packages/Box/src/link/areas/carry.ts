@@ -2,7 +2,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { parsed } from "../../shared/json";
+import { isObject, parsed } from "../../shared/json";
 import type { Body, Fields } from "../../shared/json";
 import { botHere, isModel, isMoving, MOVING } from "../bots/here";
 import { readKit, runsWithAgents } from "../bots/kit";
@@ -171,8 +171,16 @@ export async function carryToAgents(id: string, model: unknown, readEngine: () =
     // it's made, so nothing takes it for a new conversation of yours.
     const kuvo = bot ? session.metadata?.kuvo ?? { bot: bot.described.id } : {};
     // (Filed under the project it was, in the same folder.)
-    const { approval, applied, autopilot, filed } = session.metadata?.kuvo ?? {};
-    const marks = { kuvo: { ...(approval ? { approval } : {}), ...(applied ? { applied } : {}), ...(autopilot === true ? { autopilot } : {}), ...(filed ? { filed } : {}), ...kuvo, carriedFrom: id } };
+    const { approval, applied, autopilot, filed, held, lead, line, call: startedCall, startedBy, wake, by, depth, limits } = session.metadata?.kuvo ?? {};
+    // (One a lead on another computer started keeps what came with it: that lead's Don't Allows,
+    // which its rules are made with each time; who started it and where from, its line and its
+    // bot's, so its lead's list, Stop All and news still reach it, and its bot's limits count it;
+    // and its call, so it's never started again.)
+    const fromAfar = isObject(lead) ? {
+      lead, ...(Array.isArray(held) && held.length ? { held } : {}), ...(Array.isArray(line) ? { line } : {}), ...(typeof startedCall === "string" ? { call: startedCall } : {}),
+      ...(typeof startedBy === "string" ? { startedBy } : {}), ...(Array.isArray(wake) ? { wake } : {}), ...(isObject(by) ? { by } : {}), ...(typeof depth === "number" ? { depth } : {}), ...(isObject(limits) ? { limits } : {}),
+    } : {};
+    const marks = { kuvo: { ...(approval ? { approval } : {}), ...(applied ? { applied } : {}), ...(autopilot === true ? { autopilot } : {}), ...(filed ? { filed } : {}), ...fromAfar, ...kuvo, carriedFrom: id } };
     let imported: Fields<"id"> | null = null;
     try {
       imported = await call(agents, "POST", "/api/session/import", {

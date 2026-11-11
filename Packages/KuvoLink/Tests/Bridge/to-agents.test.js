@@ -171,6 +171,26 @@ test("a conversation on Autopilot stays on it with the coding agents, its agent 
   assert.equal(others.asked.some(each => each.url.endsWith("/instructions/entries/kuvo.autopilot")), false);
 });
 
+test("one a lead on another computer started keeps what came with it as it goes on with the coding agents: the lead's Don't Allows, who and where from, so it's still under its lead, and its call", async () => {
+  const project = path.join(home, "remote");
+  const push = { action: "shell", resource: "git push*", effect: "deny" };
+  const lead = { box: "mini", key: "N".repeat(43), name: "Foreman" };
+  const by = { bot: "bot_foreman0001", name: "Foreman" };
+  // Started by a lead at the top of its line (your own conversation there): only startedBy ties it.
+  const engine = await engineFor({ id: "ses_remote", title: "Sign-in", agent: "build", location: { directory: project }, permissions: [push],
+    metadata: { kuvo: { approval: "auto", applied: "auto", startedBy: "ses_lead", by, depth: 1, wake: ["finished", "asks"], held: [push], lead, call: "cal_start000000000001" } } });
+  const agents = await agentsBridge({ id: "ses_carried" });
+  assert.equal((await link.carryToAgents("ses_remote", sonnet, () => engine.at, agents.at, undefined)).status, 200);
+  for (const sent of [agents.asked.find(each => each.url === "/api/session/import").body.metadata, agents.asked.find(each => each.method === "PATCH" && each.url === "/api/session/ses_carried").body.metadata]) {
+    assert.deepEqual(sent.kuvo.held, [push], "its lead's Don't Allows, which its rules are made with each time");
+    assert.deepEqual(sent.kuvo.lead, lead);
+    assert.equal(sent.kuvo.call, "cal_start000000000001");
+    assert.deepEqual([sent.kuvo.startedBy, sent.kuvo.by, sent.kuvo.depth, sent.kuvo.wake], ["ses_lead", by, 1, ["finished", "asks"]], "who it's for, and who hears of it");
+    // Still under its lead, so the lead's list and Stop All reach it.
+    assert.deepEqual(link.under("ses_lead", [{ target: agents.at, data: { id: "ses_carried", metadata: sent } }]).map(each => each.data.id), ["ses_carried"]);
+  }
+});
+
 test("what can't be is said, and nothing moves", async () => {
   const engine = await engineFor({ id: "ses_mine", title: "Mine", location: { directory: home } });
   const signedOut = await agentsBridge({ signedIn: false });

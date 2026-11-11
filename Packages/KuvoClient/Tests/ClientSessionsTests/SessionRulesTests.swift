@@ -121,6 +121,31 @@ struct SessionRulesTests {
         #expect(Branches.tree([tried, deeper]).top.map(\.id) == ["ses_tried"])
     }
 
+    /// A session a lead on another of your computers started, whose lead isn't listed here, says
+    /// who started it and where.
+    @Test func aSessionALeadOnAnotherComputerStartedSaysWhoAndWhere() throws {
+        let far = try session("ses_far", metadata: #"{"kuvo": {"startedBy": "ses_lead", "lead": {"box": "Mini", "key": "k", "name": "Foreman"}}}"#)
+        // Its lead isn't listed here: who started it, and on which computer.
+        #expect(Branches.hint(of: far, from: nil) == "Started from Foreman on Mini")
+        // Listed here (the lead moved here since): by its title, as any other.
+        #expect(Branches.hint(of: far, from: "Foreman") == "Started from Foreman")
+        // Started here by one that isn't listed: as before.
+        let here = try session("ses_here", metadata: #"{"kuvo": {"startedBy": "ses_gone"}}"#)
+        #expect(Branches.hint(of: here, from: nil) == "Started from another conversation")
+        #expect(Branches.lead(of: here) == nil)
+        #expect(Branches.hint(of: try session("ses_mine"), from: nil) == nil)
+        // Its row: at the top of the list (nothing above it here), it still says who and where;
+        // one started here by a conversation that isn't listed says nothing there, as before.
+        #expect(Branches.rowHint(of: far, nested: false, from: nil) == "Started from Foreman on Mini")
+        #expect(Branches.rowHint(of: here, nested: false, from: nil) == "")
+        #expect(Branches.rowHint(of: far, nested: true, from: "Foreman") == "Started from Foreman")
+        // Its row's end says where, only while nothing above it here does.
+        #expect(Branches.tail(of: far, nested: false, from: nil) == "from Mini")
+        #expect(Branches.tail(of: far, nested: false, from: "Foreman") == nil)
+        #expect(Branches.tail(of: far, nested: true, from: nil) == nil)
+        #expect(Branches.tail(of: here, nested: false, from: nil) == nil)
+    }
+
     /// Sessions an agent started from a conversation (its start_session tool, on a Mac or a
     /// machine, for any kind of agent) show under that conversation too; one started from outside
     /// any conversation stays at the top.

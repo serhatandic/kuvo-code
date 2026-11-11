@@ -295,8 +295,8 @@ export async function answerAskTool(caller: Lead, args: Record<string, unknown>,
 }
 
 /** list_models: the models there's an account for here. */
-export async function listModelsTool(engine: Target | null, bridge: Target | null, signal?: AbortSignal): Promise<ToolAnswer> {
-  return said(describeModels(await usableModels(engine, bridge, signal)));
+export async function listModelsTool(engine: Target | null, bridge: Target | null, signal?: AbortSignal, where = HERE): Promise<ToolAnswer> {
+  return said(describeModels(await usableModels(engine, bridge, signal), undefined, where));
 }
 
 /** make_project: a new project, in the projects folder you picked (or the folder you named for it),
@@ -349,16 +349,16 @@ export async function makeProjectTool(caller: Caller, args: Record<string, unkno
 
 /** list_projects: the projects here, with where each is, whether it's a git repository, and who
  * made it. */
-export function listProjectsTool(): ToolAnswer {
+export function listProjectsTool(where = HERE): ToolAnswer {
   const projects = readProjects().filter(each => !each.removed);
   const root = projectsFolder();
   const folder = root ? ` New ones go in ${shownPath(root)}.` : " No projects folder is picked yet: the user picks one the first time you make a project.";
-  if (!projects.length) return said(`There are no projects on ${HERE} yet.${folder}`);
+  if (!projects.length) return said(`There are no projects on ${where} yet.${folder}`);
   const lines = projects.slice(0, 60).map(each => {
     const git = gitIn(each.directory, ["rev-parse", "--is-inside-work-tree"]) === "true" ? "git" : "not git";
     return `- ${each.name ?? path.basename(each.directory)}: ${shownPath(each.directory)} (${git})${each.madeBy ? `, made by ${each.madeBy.name}` : ""}`;
   });
-  return said(`Projects on ${HERE}:\n${lines.join("\n")}\n${folder.trim()}`);
+  return said(`Projects on ${where}:\n${lines.join("\n")}\n${folder.trim()}`);
 }
 
 // The bot a conversation is, for the goal's tools: only a bot works through a goal of this kind (a

@@ -45,7 +45,12 @@ One WebSocket per device, binary messages, first byte the kind:
 | `0x07` gone | relay | `address(16) reason(1)` | The device at `address`, which you sent something to on its current connection, has a new connection (0, replaced) or none (1, left; any other reason reads as left). Whatever sessions you had with it are over. |
 
 Known kinds keep their lengths, and a device skips a kind it doesn't know once it's welcomed, so a
-new kind goes only after welcome. A device never sends `0x07`.
+new kind goes only after welcome. A device never sends `0x07`. The relay handles a connection's
+sends in the order they come, and what it sends back for them comes in that same order, as one
+stream: each `unreachable`, and each `deliver` of a send to the connection's own address. Boxes
+rely on it to tell a start the relay dropped from one that got there ("Starts", Sender side), so a
+relay that answers sends to your own address ahead of `unreachable`s for sends before them could
+have a start that got there said not to have started.
 
 **Gone.** The relay keeps, for each connection, the devices that sent it something on that connection
 (at most 1,024) and the connections it sent to (at most 256); past either, nothing more is recorded.
@@ -520,6 +525,76 @@ connection.
     moment the relay says nothing's connected at its address (`unreachable`, after something was
     sent there), until any mail from it comes. A file, so a machine's tools, answered by a process of
     their own, read it too. A dead connection can take the relay about a minute to notice.
+- **Starts** (to a peer whose `features` say `work.elsewhere.start`): calls that
+  start work, or read what there is to start it with: `start_session`, `list_models` and
+  `list_projects` ("Work", Across your computers). The receiving box takes them only while you let
+  your other computers start work there (`kuvo/approval`'s `otherComputers`: off on the Mac with the
+  app until you say, on for a machine), else `ok: false` with why ("<box> doesn't take work from
+  your other computers. Ask the user to allow it in Settings › Permissions on <box>."). Stops,
+  answers, compacts and lists aren't held by it: they reach only work a lead already has there.
+  Nor are moves (Move to Computer) or a group chat's seats: it's about starts alone, for now.
+  - **`as.start`** (a start's, filled in by the lead's box from its own record): `{approval, held,
+    agent: "plan"|null, model, autopilot, works: {bot, name}|null, own, depth, line, limits, homes}`:
+    the lead's approval as it comes to there now (never the one kept, nor what the agent asked), its
+    Don't Allows there (`held`, 300 at most; anything but a Don't Allow isn't a call), whether it
+    plans, its model, whether it's on Autopilot, the bot its work is for (`own`: the lead is that
+    bot), the new session's depth and line (the lead's own line, then the lead), the limits you set
+    for that bot, and where each in the line lives as the lead's box knows it (kept only for those
+    the receiver knows nothing of, on boxes it knows, and only once the start is made). A line that
+    doesn't end with `from` isn't a call.
+  - **What the receiver does**: its own `start_session`, as for a conversation of its own, from
+    the lead: in the folder named (a project there, a folder there, or a chat: a folder of the
+    lead's means nothing there), on the lead's model where there's an account for it there, else
+    the engine's default, said so; never past the lead's approval nor past what that box gives (Full
+    Access only where confirmed there, Auto only where its sandbox runs: the lead's answer says
+    why), and kept as no more than that box gives as it's made (Full Access, where it isn't
+    confirmed there, is kept as Auto, so the session never rises to it later); with the receiving
+    box's Settings › Permissions and the lead's `held` after them, kept as `kuvo.held` so they hold
+    however its rules are made again (and carried with it onto the coding agents, with `lead`,
+    `line` and `call`). Its switch is looked at again just before the session is made. It's marked `kuvo.startedBy` (the
+    lead), `by`, `depth`, `wake` (a bot's own: finished and asks; `wait` across computers becomes
+    hearing it finish), `line` (when it says more than `startedBy`), `limits` (where the bot isn't),
+    `call` (the call's id), and `lead: {box, key, name}` (the lead's computer, as the receiver names
+    it, and the lead's name, for clients' "Started from"). Its task comes as a message from "<lead>
+    on <box>", told as one here is: whether its last reply is heard as its report, and whether to
+    review its work (`review`, carried with the call). The lead is noted to live on the box that called ("Homes"), so news of the session
+    goes there. A start's call `made` over a day off is refused.
+  - **Once**: each start is kept in `run/calls/<id>.json` as it goes (the worktree made for it,
+    what it's to be made with, whether on the engine or the coding agents' bridge but never where
+    either is nor its password, then that it's made, marked, told its task, and its answer), so one
+    that comes again is answered as it was, and one cut short by the box going down is finished
+    from the step it got to at a later round, once its engine answers, wherever it is now (a
+    session marked with its `kuvo.call` is found rather than made again, and while that can't be
+    asked it waits; a worktree made for it is used, not a second; a task already there isn't sent
+    again), its lead told by the call's answer. One a day old isn't
+    finished any more, nor one whose box has stopped taking starts or was removed since: the lead
+    hears how far it got (made but not given its task, or that it may have been made where its
+    engine can't be asked), and a worktree made for one that wasn't made goes. Kept 30 days.
+  - **The answer** is a note, as for a stop, so a start whose tool stopped waiting reaches its lead
+    as a message; `list_models` and `list_projects` answer as a list does (`read: {}`), in the
+    receiving box's name.
+  - **Sender side**: a start, or a read of what's there, is never kept for a box that isn't
+    answering: the tool says at once it may be asleep, off or offline and nothing was started (so
+    too when the relay says it isn't there before the call ever went to it, or drops the call
+    itself). The relay says `unreachable` only of something sent, in order: so the first time the
+    call goes, a fence goes right before it to the box's own address (`kuvo-fence:<tag>`), and
+    once that's back, every `unreachable` for what went before has come. One for that box after
+    it, while the call is still the last thing this connection sent there, is the call's own: it
+    never got there (the link process, which hears the relay, leaves `<id>.dropped` beside the
+    call in the outbox for the tool). Once this box sends anything else there, or its relay
+    connection ends, or the call goes again, that can't be told. A call its tool took out of the
+    outbox meanwhile doesn't go. Any other start or read
+    that went and isn't answered, in time (45 seconds for a start, 20 for a read) or before the
+    relay says that box isn't there, may have got there (a box keeps a start, then says `delivered
+    {ok: true}`, before it makes anything, but that word can be lost), and so may one it said it
+    had: it's taken out of the outbox, so it's never started late or twice, and the
+    tool says it couldn't confirm, to check `list_sessions` before trying again. The lead's box notes where the session lives ("Homes") and that the lead
+    started work there (`run/work/started-elsewhere.json`, `{<lead>: {<key>: at}}`, 30 days), so
+    its `list_sessions` asks there before that computer's first rows come.
+  - **`stop_work`** (`{before}`): a bot's Stop All, on each computer that takes starts: every session
+    under the bot's conversation there that's working, waiting on an answer or on a timer, made
+    before `before` (moved onto the receiver's clock by how far the call's `at` is from its own), stops. Kept for a box that's away until it's back (30 days, `quiet`), and
+    answered with no note (it would wake the bot it stopped).
 - **Rows** (bridge 0.9.204): `{"rows": {id, at, leads: {<lead>: [WorkSession & {askID?}]}}}` tells a
   peer (one whose `features` say `work.elsewhere`) the sessions on the sending box whose lead lives
   there now ("Work", rows from elsewhere), unasked, so it has them before this box sleeps. `id`
@@ -1151,6 +1226,17 @@ client shows it from the same routes.
     seconds, what it last told, "as of" then, and that it isn't answering. A stop, a compact or an
     answer for a computer that isn't answering is kept and done when it's back (an allow for a day),
     and the tool says so; how it went comes to the lead as a message.
+  - **Starting work there**: `start_session`, `list_models` and `list_projects` take
+    `computer`, another of your computers by the name `list_agents` shows (a Mac also as "the
+    Mac" when there's one; this box's own name, "here" or none: here). Two of one name are refused,
+    asking which. A start there is checked on the lead's box first as a start here is (a group
+    chat's seat, the lead's mode, a folder named there, the limits you set for its bot counting its
+    sessions here and those other computers last told of, the net against a runaway), and refused
+    while its bot has a goal running (goals don't reach other computers yet), then goes as a call
+    ("Peers", Starts). Its answer is `[On <box>] …`, as the session's box words it. A session's
+    `kuvo.line` (the conversations above it, up to 20) lets a lead list and stop what a session it
+    started on another computer started on a third: `under` goes up a session's starters here and
+    its line, and rows go to every lead up a session's line that lives elsewhere.
   - **Rows from elsewhere** (`run/work/elsewhere/<key>.json`, `{at, heard, leads: {<lead>: [row]}}`):
     what each computer told of the sessions of leads that live here. A box works out its own each
     time its work or moves change, and each minute: every session here whose line leads up to a
@@ -3811,6 +3897,7 @@ One row a name, in order, so branches that each add one merge cleanly.
 | `approval.default` | A new conversation's approval where its client doesn't say: Auto the first time on a computer, then the last one picked there (`kuvo/approval`'s `default`, bridge 0.9.185); one a client made with `kuvo.approval` alone gets that ("Approval") |
 | `approval.fullAccess` | Full Access as it is since bridge 0.9.184: its commands run outside the sandbox, nothing asks or is reviewed, `kuvo/approval`'s `fullAccess` is whether you confirmed it on this computer (asked the first time it's picked), and Tell Auto is gone ("Approval") |
 | `approval.held` | Auto never leaves a call waiting on you (bridge 0.9.185): what its reviewer refuses or can't judge is held back, and `POST kuvo/sessions/<id>/decisions` `{approve: id}` approves one once; a sandbox ask in Auto never comes to you, so it has no `review` ("Auto's reviewer") |
+| `approval.otherComputers` | `kuvo/approval`'s `otherComputers`, and `PATCH {otherComputers}` ("Approval") |
 | `approval.reviewer` | Auto's reviewer: `kuvo/sessions/<id>/decisions` and a sandbox ask's `review` ("Approval", "Auto's reviewer", bridge 0.9.181) |
 | `approval.seen` | `seen` in `kuvo/sessions/<id>/decisions`, and `POST` `{seen: true}` as you open them: what's held back since is news on every client ("Auto's reviewer", bridge 0.9.187) |
 | `approval.stopped` | In Auto, a command the sandbox stops goes to Auto's reviewer by itself, with no `sandbox_ask`: allowed, it runs outside the sandbox and the agent gets that output; each lands in Decisions ("Asks", "Stopped commands", bridge 0.9.190) |
@@ -3894,6 +3981,7 @@ One row a name, in order, so branches that each add one merge cleanly.
 | `work-queue` | `kuvo/work-queue…` and the `queue_…` tools ("The Work Queue") |
 | `work-queue.elsewhere` | (in a peer's agents' mail) it tells and takes the Work Queue across your computers: `told`, `had`, `part`, `hand`, `handed`, and numbers' asks through a peer ("The Work Queue", Across your computers); also `POST kuvo/work-queue/refs`, `computer` and `computers` in its views, and 409 for an item elsewhere |
 | `work.elsewhere` | (in a peer's agents' mail) it takes a lead's `call` and tells `rows` ("Peers"; bridge 0.9.204) |
+| `work.elsewhere.start` | (in a peer's agents' mail) it takes starts, reads of its models and projects, and a bot's `stop_work` from your other computers, while its switch lets them ("Peers", Starts) |
 | `work.goals` | a bot's goal ("Work", Goals): `kuvo/work/goals…`, and its tools (bridge 0.9.122) |
 | `work.goals.apps` | `app` on a goal's steps and what waits, and `GET kuvo/work/apps/icon` ("Work", Goals, Apps; bridge 0.9.196) |
 | `work.goals.projects` | `{action: projects}` on a proposed goal ("Work", Goals, Its projects; bridge 0.9.196) |
@@ -4763,12 +4851,14 @@ rules. Plan mode stays the conversation's agent (`plan`), beside it.
   coding agents'; 200 as `GET` answers (Auto without the sandbox is kept, `held`), 400 for one that
   isn't one of them, 409 `{message, reason}` for Full Access where it can't be picked
   (`fullAccessOff`), 502 where the engine didn't take it.
-- `GET kuvo/approval`: this computer's `{fullAccess, default, auto: {engine, agents}}`: whether you
+- `GET kuvo/approval`: this computer's `{fullAccess, default, auto: {engine, agents}, otherComputers?}`
+  (`otherComputers`: whether your other computers may start work here, "Peers",
+  Starts; `PATCH {otherComputers}` sets it alone): whether you
   confirmed Full Access here (`box/approval.json`), the one a new conversation starts with
   (`default`: what a client's composer shows), and whether Auto runs for each (`{held?}`, as
   above). A client asks you the first time Full Access is picked on a computer (the composer's mode
   menu: it isn't a setting), then sends `PATCH kuvo/approval` `{fullAccess: true}` before `PUT`ting
-  the conversation's; 400 without a boolean `fullAccess`. A change brings what had it or was held
+  the conversation's; 400 without a boolean `fullAccess` or `otherComputers`. A change brings what had it or was held
   from it to what it can be at once.
 - A client's ⇧Tab in an empty composer goes to the next mode in the menu's order (`askFirst`,
   `acceptEdits`, `auto`, `fullAccess`, then round again), as picking it would: KuvoClient's

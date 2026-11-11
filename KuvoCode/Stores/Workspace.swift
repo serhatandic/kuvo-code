@@ -947,6 +947,19 @@ final class Workspace {
         if let has { autopilotHere[id] = has }
     }
 
+    /// Reads the approvals of the computer `id` (its box).
+    func readApprovalHere(onBox id: String) async throws {
+        guard let box = boxes?(id) else { throw CancellationError() }
+        let here = try await box.value(ApprovalHere.self, "GET", "kuvo/approval")
+        if approvalsHere[id] != here { approvalsHere[id] = here }
+    }
+
+    /// Whether your other computers may start work on the computer `id`, as you set it there.
+    func allowOtherComputers(_ on: Bool, onBox id: String) async throws {
+        guard let box = boxes?(id) else { throw CancellationError() }
+        approvalsHere[id] = try await box.value(ApprovalHere.self, "PATCH", "kuvo/approval", body: ["otherComputers": on])
+    }
+
     /// Confirms Full Access on the computer `directory` is on (asked the first time it's picked there).
     func allowFullAccess(for directory: String) async throws {
         let id = Self.box(of: directory)

@@ -1,8 +1,9 @@
 // A bot's work stopped (Stop All, and Stop the Night): every session of its work that's working or
 // waiting on an answer, and the bot's own turn with what it was still to hear of them, since it
-// would only start them again. Each lead hears once, in one message, which of its sessions you
-// stopped (as Stop on one's row tells it), so none waits on them; the bot itself as it goes on (your
-// next message, or Resume), its queue held until then, so this doesn't set it going.
+// would only start them again; and its work on your other computers, told to each (`stop_work`).
+// Each lead hears once, in one message, which of its sessions you stopped (as Stop on one's row
+// tells it), so none waits on them; the bot itself as it goes on (your next message, or Resume), its
+// queue held until then, so this doesn't set it going.
 
 import { changeQueue, stopSession } from "../engine/queue";
 import { botHere } from "../bots/here";
@@ -11,6 +12,8 @@ import { atWorkNow, hasWakeUps, readStopped, stopWork } from "./background";
 import { askingNow, ofBot, workSessions, workingNow } from "./tree";
 import { leadWaitingOn } from "./stopping";
 import { forgetWakes, stoppedLine, tellStarters } from "./wakes";
+import { leaveCall } from "../letters/calls";
+import { stopBotWorkElsewhere } from "../letters/start-call";
 import type { Target } from "../../shared/records";
 
 /** How many of `bot`'s sessions were stopped. `tell`: their leads hear it (not for a goal whose end
@@ -45,6 +48,8 @@ export async function stopBotWork(bot: string, targets: Target[], signal?: Abort
   const telling = told.filter(each => marked[each.starter] === undefined);
   if (own && telling.some(each => each.starter === own)) changeQueue(own, state => ({ ...state, paused: true }));
   tellStarters(telling);
+  // Its work on your other computers too: each is told, now or once it's back.
+  stopBotWorkElsewhere(bot, (peer, from, call) => leaveCall(peer, from, call, { wait: false, quiet: true }));
   noteWorkChanged(bot);
   return stopped;
 }

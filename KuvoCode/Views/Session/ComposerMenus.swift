@@ -145,6 +145,8 @@ struct ApprovalHere: Decodable, Equatable {
     var fullAccess: Bool
     var `default`: ToolApproval
     var auto: Auto
+    /// Whether your other computers may start work on this one; nil from a box before it.
+    var otherComputers: Bool?
 
     /// As a new conversation's composer shows it (no conversation yet to read one of).
     func shown(_ approval: ToolApproval, agents: Bool) -> ApprovalShown {

@@ -50,6 +50,41 @@ public enum Branches {
             .min { $0.time.created < $1.time.created }?.id
     }
 
+    /// The lead on another of your computers that started `session`, as its box marks it
+    /// (`kuvo.lead`: the lead's name and its computer, as that box names it); nil for one started
+    /// on the computer it's on.
+    public static func lead(of session: Session) -> (name: String, computer: String)? {
+        guard let lead = session.metadata?["kuvo"]?["lead"], let name = lead["name"]?.string, !name.isEmpty,
+              let computer = lead["box"]?.string, !computer.isEmpty else { return nil }
+        return (name, computer)
+    }
+
+    /// The hint for a conversation that came from `title`'s; started by a lead on another
+    /// computer that isn't listed here, from that lead there: "Started from Foreman on Mini".
+    public static func hint(of session: Session, from title: String?) -> String? {
+        guard let origin = origin(of: session) else { return nil }
+        if let title { return hint(origin.kind, from: title) }
+        if origin.kind == .started, let lead = lead(of: session) { return hint(.started, from: "\(lead.name) on \(lead.computer)") }
+        return hint(origin.kind, from: "another conversation")
+    }
+
+    /// What a session's row tells VoiceOver of where it came from (`title`: that conversation's,
+    /// where it's listed here): nested under it, that; at the top, only a lead on another computer
+    /// that isn't listed here, since nothing above it says so.
+    public static func rowHint(of session: Session, nested: Bool, from title: String?) -> String {
+        if nested { return hint(of: session, from: title) ?? "" }
+        guard title == nil, origin(of: session)?.kind == .started, lead(of: session) != nil else { return "" }
+        return hint(of: session, from: nil) ?? ""
+    }
+
+    /// What a session's row shows at its end when a lead on another computer started it and that
+    /// lead isn't listed here (`title` nil), at the top of the list: "from Mini". Pointed at, or
+    /// read by VoiceOver, its `rowHint` says the whole.
+    public static func tail(of session: Session, nested: Bool, from title: String?) -> String? {
+        guard !nested, title == nil, origin(of: session)?.kind == .started, let lead = lead(of: session) else { return nil }
+        return "from " + lead.computer
+    }
+
     /// The sidebar's hint for a conversation that came from `title`'s.
     public static func hint(_ kind: Kind, from title: String) -> String {
         switch kind {

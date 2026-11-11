@@ -138,6 +138,8 @@ phone's copies of the Mac's design files, a piece at a time.
 - `FolderIcon`: a project's folder, open or closed.
 - `Flow`: views in rows that wrap when the room runs out, against the leading or trailing edge
   (a sent message's pictures, chips in a row).
+- `TitleWithTail`: a row's title with a short note at its end ("from Mini"); the title always
+  wins, and the note goes where the row can't hold it and about twelve characters of the title.
 - `FileKind`: what kind a file is by its name (code, text, data, a picture…) and its symbol, where an
   app shows a file without its own icon.
 - `BrandMark`, `BrandMarkView`: the marks of providers, coding agents, integrations and MCP servers,
