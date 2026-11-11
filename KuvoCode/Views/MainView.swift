@@ -388,7 +388,7 @@ struct MainView: View {
             .padding(.trailing, identityWidth == nil ? 16 : 0)
             if !tabItems.isEmpty {
                 TabStrip(tabs: tabItems, selection: tabSelection, close: { tabs.close(TabKey($0)) }, closeAll: { tabs.closeAll(except: $0.map(TabKey.init)) },
-                         loops: tabs.loops, openBeside: tabs.besideOpener, closeBeside: { tabs.closeBeside(TabKey($0)) }, closeBesideTab: { tabs.closeBesideTab(TabKey($0)) },
+                         openBeside: tabs.besideOpener, closeBeside: { tabs.closeBeside(TabKey($0)) }, closeBesideTab: { tabs.closeBesideTab(TabKey($0)) },
                          swapBeside: { tabs.swapBeside(TabKey($0)) }) { id in
                     guard let session = workspace.session(id) else { return }
                     // Renamed in its card's header: its tab comes forward for it.
@@ -891,7 +891,7 @@ struct MainView: View {
                 withAnimation(.ui) { app.settingsTabs.close(id, machines: app.machines) }
             }, closeAll: { except in
                 withAnimation(.ui) { app.settingsTabs.closeOthers(than: except, machines: app.machines) }
-            }, loops: app.settingsTabs.loops)
+            })
         }
         .background(WindowXReader { settingsBarX = $0 })
         // Its buttons each by their own name, not all by the first one's.

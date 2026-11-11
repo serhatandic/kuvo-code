@@ -70,8 +70,6 @@ final class SettingsTabs {
 
     private(set) var tabs: [Tab] = []
     private(set) var selectedID = ""
-    /// How many times Show Next Tab or Show Previous Tab went round past an end (`WindowTabs.loops`).
-    private(set) var loops = 0
     private var sites: [String: Site] = [:]
     /// Where the page's card starts in the window, for the tabs to start there too.
     var contentX: CGFloat = 0
@@ -276,7 +274,6 @@ final class SettingsTabs {
     func cycle(by offset: Int) {
         guard let index = tabs.firstIndex(where: { $0.id == selectedID }) else { return }
         select(tabs[(index + offset + tabs.count) % tabs.count].id)
-        if !tabs.indices.contains(index + offset), tabs.count > 1 { loops += 1 }
     }
 
     /// ⌘1 to ⌘8 show that tab, ⌘9 the last.

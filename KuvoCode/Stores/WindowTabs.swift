@@ -111,9 +111,6 @@ final class WindowTabs {
             activeHalf = .conversation
         }
     }
-    /// How many times Show Next Tab or Show Previous Tab went round past an end, to the tab at the
-    /// other: the tab bar draws each as one more step the same way, not a slide back across it.
-    private(set) var loops = 0
     /// Split views, as pairs: a tab and the session beside it. Choosing another tab shows it alone;
     /// the pair comes back with its tab.
     private(set) var pairs: [TabKey: String] = [:] {
@@ -490,10 +487,7 @@ final class WindowTabs {
             withAnimation(.ui) { selection = offset > 0 ? keys.first : keys.last }
             return
         }
-        withAnimation(.ui) {
-            selection = keys[(index + offset + keys.count) % keys.count]
-            if !keys.indices.contains(index + offset), keys.count > 1 { loops += 1 }
-        }
+        withAnimation(.ui) { selection = keys[(index + offset + keys.count) % keys.count] }
     }
 
     /// A tab picked in the tab bar: in view, and you work in its conversation, wherever you were
