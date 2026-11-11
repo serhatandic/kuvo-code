@@ -120,7 +120,7 @@ struct SidebarView: View {
                 SidebarSearchRow(text: $search)
 
                 if boxes.count > 1, search.isEmpty {
-                    BoxNameStrip(boxes: boxes, selected: boxBinding)
+                    BoxNameStrip(boxes: boxes, selected: boxBinding, motion: boxMotion)
                         .padding(.top, 6)
                 }
 
@@ -461,13 +461,11 @@ struct SidebarView: View {
                 GroupRow(group: group, isSelected: selection == key) {
                     selection = key
                 }
-                .contextMenu {
-                    Button("Edit Group Chat…") { editGroup(group) }
-                        .disabled(app.moves.isMoving(group.id))
-                    MoveToComputerMenu(thing: .group(group))
-                    Divider()
-                    Button("Delete Group Chat…", role: .destructive) { deletingGroup = group }
-                        .disabled(app.moves.isMoving(group.id))
+                .heldContextMenu {
+                    HeldRow.button("Edit Group Chat…", disabled: app.moves.isMoving(group.id)) { editGroup(group) }
+                    MoveToComputerItems(thing: .group(group), app: app).submenu
+                    HeldRow.divider
+                    HeldRow.button("Delete Group Chat…", role: .destructive, disabled: app.moves.isMoving(group.id)) { deletingGroup = group }
                 }
             }
         }
@@ -528,7 +526,7 @@ struct SidebarView: View {
                     botRow(bot, snippet: SearchMatches.snippet(result.snippet, found: findsQuery), action: show)
                 case .session(let session):
                     ConversationResultRow(title: session.title ?? "New Session", snippet: SearchMatches.snippet(result.snippet, found: findsQuery), isSelected: selection == session.id, action: show)
-                        .contextMenu { menu(for: session) }
+                        .heldContextMenu { menu(for: session) }
                 }
             }
             ForEach(unsearched, id: \.key) { computer, why in
@@ -548,10 +546,9 @@ struct SidebarView: View {
         BotRow(bot: bot, isSelected: selection == bot.sessionID, animates: !stagedBots.contains(bot.id), snippet: snippet) {
             if let action { action() } else { selection = bot.sessionID }
         }
-        .contextMenu {
-            Button("Edit Bot…") { editBot(bot) }
-                .disabled(app.moves.isMoving(bot.id))
-            MoveToComputerMenu(thing: .bot(bot))
+        .heldContextMenu {
+            HeldRow.button("Edit Bot…", disabled: app.moves.isMoving(bot.id)) { editBot(bot) }
+            MoveToComputerItems(thing: .bot(bot), app: app).submenu
         }
     }
 
@@ -712,28 +709,29 @@ struct SidebarView: View {
         } openBot: { bot in
             selection = bot.sessionID
         }
-        .contextMenu {
-            Button("New Session") { newSession(project.directory) }
+        .heldContextMenu {
+            HeldRow.button("New Session") { newSession(project.directory) }
             if workspace.settings[project.directory]?.terminal != nil {
                 // Its sessions open a terminal; this still starts a conversation.
-                Button("New Conversation") { newConversation(project.directory) }
+                HeldRow.button("New Conversation") { newConversation(project.directory) }
             }
-            Button("Edit Project…") { editProject(project) }
+            HeldRow.button("Edit Project…") { editProject(project) }
             if let engine = app.machines.engine(RemoteFolder.machine(of: project.directory)) {
                 if !engine.isReady {
-                    Divider()
+                    HeldRow.divider
                     // COMPAT(0.7 engine-stop): Start. Goes 3 months after 0.8.0.
-                    Button(engine.isStopped ? "Start \(engine.machine.name)" : "Connect to \(engine.machine.name)") { app.connectOrStart(engine) }
+                    HeldRow.button(engine.isStopped ? "Start \(engine.machine.name)" : "Connect to \(engine.machine.name)") { app.connectOrStart(engine) }
                 }
             } else {
-                Divider()
-                OpenInMenu(folder: URL(filePath: project.directory))
-                Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting(project.allFolders.map { URL(filePath: $0) }) }
+                HeldRow.divider
+                openIn(URL(filePath: project.directory))
+                HeldRow.button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting(project.allFolders.map { URL(filePath: $0) }) }
             }
-            Divider()
+            HeldRow.divider
             // Its sessions are archived on its computer, so not while a machine's isn't connected.
-            Button("Remove Project…") { removingProject = project }
-                .disabled(!project.sessions.isEmpty && app.machines.engine(RemoteFolder.machine(of: project.directory)).map { !$0.isReady } ?? false)
+            HeldRow.button("Remove Project…", disabled: !project.sessions.isEmpty && app.machines.engine(RemoteFolder.machine(of: project.directory)).map { !$0.isReady } ?? false) {
+                removingProject = project
+            }
         }
         .anchorPreference(key: OverseenRows.self, value: .bounds) { [OverseenRows.project: $0] }
         if isOpen {
@@ -1056,7 +1054,7 @@ struct SidebarView: View {
                 }
             }
         }
-        .contextMenu { menu(for: session, in: place) }
+        .heldContextMenu { menu(for: session, in: place) }
         .modifier(BranchesAction(count: branches, isUnfolded: look.isUnfolded) { toggleBranches(of: session.id) })
         .modifier(SessionGlanceHover(session: session, row: "\(place)/\(session.id)", underItsProject: place == .project && !look.isSearching,
                                      acrossComputers: look.isSearching && look.acrossComputers, isUnread: look.isUnread, folded: folded))
@@ -1064,18 +1062,17 @@ struct SidebarView: View {
     }
 
     /// A conversation's side threads ("/btw"), each opening it with the thread over the composer.
-    @ViewBuilder private func sideQuestionsMenu(for session: Session, in place: Place?) -> some View {
+    @HeldRows private func sideQuestionsMenu(for session: Session, in place: Place?) -> [HeldRow] {
         let bridge = workspace.agents(forFolder: session.location.directory)
         if let count = bridge?.sideQuestionCounts[session.id], count > 0 {
-            Menu("Side Questions") {
+            HeldRow.submenu("Side Questions") {
                 let questions = bridge?.sideQuestions[session.id] ?? []
                 if questions.isEmpty {
-                    Button("Open the Latest") { showSideQuestion(nil, of: session, in: place) }
+                    HeldRow.button("Open the Latest") { showSideQuestion(nil, of: session, in: place) }
                 }
-                ForEach(SideThread.threads(questions).reversed()) { thread in
-                    Button { showSideQuestion(thread.latest.id, of: session, in: place) } label: {
-                        Text(String(thread.first.question.prefix(60)))
-                        if thread.questions.count > 1 { Text("\(thread.questions.count) asked") }
+                for thread in SideThread.threads(questions).reversed() {
+                    HeldRow.button(String(thread.first.question.prefix(60)), subtitle: thread.questions.count > 1 ? "\(thread.questions.count) asked" : nil) {
+                        showSideQuestion(thread.latest.id, of: session, in: place)
                     }
                 }
             }
@@ -1106,56 +1103,54 @@ struct SidebarView: View {
 
     /// `place`: where the row is, for renaming it there; nil for a row that can't show it (a
     /// conversation search result).
-    @ViewBuilder private func menu(for session: Session, in place: Place? = nil) -> some View {
+    @HeldRows private func menu(for session: Session, in place: Place? = nil) -> [HeldRow] {
         // A bot's own conversation (found by a search): the bot's menu. Deleting, archiving or
         // renaming it as a session would leave the bot without its conversation.
         if let bot = bots.list.first(where: { $0.sessionID == session.id }) {
-            Button("Edit Bot…") { editBot(bot) }
+            HeldRow.button("Edit Bot…") { editBot(bot) }
         } else if let engine = app.machines.engine(workspace.waitingMachine(for: session.id)) {
             // COMPAT(0.7 engine-stop): an engine an older Mac stopped. Goes 3 months after 0.8.0.
             // On a machine that's away, the session is as last seen: what it does waits for it.
-            Text(engine.isStopped ? "\(engine.machine.name)’s engine is stopped" : "\(engine.machine.name) isn’t connected")
+            HeldRow.note(engine.isStopped ? "\(engine.machine.name)’s engine is stopped" : "\(engine.machine.name) isn’t connected")
             switch engine.state {
-            case .starting, .downloading: Text("Connecting…")
+            case .starting, .downloading: HeldRow.note("Connecting…")
             // COMPAT(0.7 engine-stop): Start. Goes 3 months after 0.8.0.
-            default: Button(engine.isStopped ? "Start" : "Connect Now") { app.reconnectNow(engine) }
+            default: HeldRow.button(engine.isStopped ? "Start" : "Connect Now") { app.reconnectNow(engine) }
             }
         } else {
             liveMenu(for: session, in: place)
         }
     }
 
-    @ViewBuilder private func liveMenu(for session: Session, in place: Place?) -> some View {
+    @HeldRows private func liveMenu(for session: Session, in place: Place?) -> [HeldRow] {
         // Moving to another computer (or just moved, not yet shown where it lives now): what
         // would change it waits until it's there.
         let moving = app.moves.isHeld(session.id)
         if !Workspace.isArchived(session) {
-            Group {
-                if Workspace.isPinned(session) {
-                    Button("Unpin") { Task { await workspace.setPinned(session.id, false) } }
-                } else {
-                    Button("Pin") { Task { await workspace.setPinned(session.id, true) } }
-                }
+            if Workspace.isPinned(session) {
+                HeldRow.button("Unpin", disabled: moving) { Task { await workspace.setPinned(session.id, false) } }
+            } else {
+                HeldRow.button("Pin", disabled: moving) { Task { await workspace.setPinned(session.id, true) } }
             }
-            .disabled(moving)
         }
-        OpenBesideItem(session: session.id)
+        // Open Beside, on another session's menu while a session's tab is in view.
+        if let open = app.tabs.sessionID, open != session.id {
+            HeldRow.button("Open Beside") { app.tabs.openBeside(session.id) }
+        }
         sideQuestionsMenu(for: session, in: place)
         if let place {
-            Button("Rename…") {
+            HeldRow.button("Rename…", disabled: moving) {
                 renaming = RenameTarget(id: session.id, place: place)
             }
-            .disabled(moving)
         }
         if Workspace.isChat(session.location.directory) {
-            MoveToProjectMenu(session: session)
-                .disabled(moving)
-            MoveToComputerMenu(thing: .chat(session))
+            moveToProject(session, disabled: moving)
+            MoveToComputerItems(thing: .chat(session), app: app).submenu
         } else if !RemoteFolder.isRemote(session.location.directory) {
-            Button("Show in Finder") { NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: session.location.directory) }
+            HeldRow.button("Show in Finder") { NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: session.location.directory) }
         }
-        Divider()
-        Button("Copy as Markdown") {
+        HeldRow.divider
+        HeldRow.button("Copy as Markdown") {
             Task {
                 do {
                     guard let text = try await workspace.markdown(of: session.id) else { return }
@@ -1166,31 +1161,59 @@ struct SidebarView: View {
                 }
             }
         }
-        Button("Export as Markdown…") { Task { await export(session) } }
-        Divider()
+        HeldRow.button("Export as Markdown…") { Task { await export(session) } }
+        HeldRow.divider
         if Workspace.isArchived(session) {
-            Button("Unarchive") { Task { await workspace.setArchived(session.id, false) } }
-                .disabled(moving)
+            HeldRow.button("Unarchive", disabled: moving) { Task { await workspace.setArchived(session.id, false) } }
         } else {
-            Button("Archive") {
+            HeldRow.button("Archive", disabled: moving) {
                 Task { await workspace.setArchived(session.id, true) }
             }
-            .disabled(moving)
         }
-        Button("Delete…", role: .destructive) { confirm(session) { deleting = $0 } }
-            .disabled(moving)
+        HeldRow.button("Delete…", role: .destructive, disabled: moving) { confirm(session) { deleting = $0 } }
+    }
+
+    /// "Move to Project ›": a chat's way into one of the projects on its computer.
+    private func moveToProject(_ session: Session, disabled: Bool) -> HeldRow {
+        let machine = RemoteFolder.machine(of: session.location.directory)
+        return HeldRow.submenu("Move to Project", disabled: disabled) {
+            let projects = workspace.projects.filter { RemoteFolder.machine(of: $0.directory) == machine }
+            for project in projects {
+                HeldRow.button(project.name) {
+                    Task {
+                        do {
+                            try await workspace.move(session.id, toProject: project.directory)
+                        } catch {
+                            Modal.show(error)
+                        }
+                    }
+                }
+            }
+            if projects.isEmpty {
+                HeldRow.note(machine.map { "No projects on \($0)" } ?? "No projects on this Mac")
+            }
+        }
     }
 }
 
 // MARK: - Rows
 
-/// The developer apps on this Mac that open a folder: editors, terminals, git apps, then the
-/// Finder. (The system's own list for folders is mostly archivers and readers.)
-private struct OpenInMenu: View {
-    let folder: URL
+/// "Open In ›": the developer apps on this Mac that open a folder: editors, terminals, git apps,
+/// then the Finder. (The system's own list for folders is mostly archivers and readers.)
+private func openIn(_ folder: URL) -> HeldRow {
+    HeldRow.submenu("Open In") {
+        let workspace = NSWorkspace.shared
+        for app in OpenInApps.ids.compactMap({ workspace.urlForApplication(withBundleIdentifier: $0) }) {
+            HeldRow.button(FileManager.default.displayName(atPath: app.path).replacingOccurrences(of: ".app", with: ""), icon: workspace.icon(forFile: app.path)) {
+                workspace.open([folder], withApplicationAt: app, configuration: NSWorkspace.OpenConfiguration())
+            }
+        }
+    }
+}
 
+private enum OpenInApps {
     /// By bundle identifier, in the order they're listed.
-    private static let apps = [
+    static let ids = [
         "com.microsoft.VSCode", "com.todesktop.230313mzl4w4u92", "com.exafunction.windsurf", "dev.zed.Zed",
         "com.apple.dt.Xcode", "com.panic.Nova", "com.sublimetext.4", "com.barebones.bbedit",
         "com.jetbrains.intellij", "com.jetbrains.intellij.ce", "com.jetbrains.WebStorm", "com.jetbrains.pycharm",
@@ -1199,24 +1222,6 @@ private struct OpenInMenu: View {
         "com.DanPristupov.Fork", "com.fournova.Tower3", "com.github.GitHubClient", "com.torusknot.SourceTreeNotMAS",
         "com.apple.finder",
     ]
-
-    var body: some View {
-        let workspace = NSWorkspace.shared
-        let installed = Self.apps.compactMap { workspace.urlForApplication(withBundleIdentifier: $0) }
-        Menu("Open In") {
-            ForEach(installed, id: \.self) { app in
-                Button {
-                    workspace.open([folder], withApplicationAt: app, configuration: NSWorkspace.OpenConfiguration())
-                } label: {
-                    Label {
-                        Text(FileManager.default.displayName(atPath: app.path).replacingOccurrences(of: ".app", with: ""))
-                    } icon: {
-                        Image(nsImage: workspace.icon(forFile: app.path))
-                    }
-                }
-            }
-        }
-    }
 }
 
 /// A session found by what was said in it: its title, and the words around the match.
@@ -1564,7 +1569,7 @@ private struct TerminalRow: View {
             .accessibilityLabel("End Terminal")
         }
         .onHover { isHovering = $0 }
-        .contextMenu { Button("End Terminal", action: end) }
+        .heldContextMenu { HeldRow.button("End Terminal", action: end) }
     }
 }
 
@@ -1889,53 +1894,10 @@ private struct SearchedComputer: View {
     }
 }
 
-/// "Move to Project ›": a chat's way into one of the projects on its computer.
-private struct MoveToProjectMenu: View {
-    let session: Session
-    @Environment(Workspace.self) private var workspace
-
-    var body: some View {
-        let machine = RemoteFolder.machine(of: session.location.directory)
-        let projects = workspace.projects.filter { RemoteFolder.machine(of: $0.directory) == machine }
-        Menu("Move to Project") {
-            ForEach(projects) { project in
-                Button(project.name) { move(to: project.directory) }
-            }
-            if projects.isEmpty {
-                Text(machine.map { "No projects on \($0)" } ?? "No projects on this Mac")
-            }
-        }
-    }
-
-    private func move(to directory: String) {
-        Task {
-            do {
-                try await workspace.move(session.id, toProject: directory)
-            } catch {
-                Modal.show(error)
-            }
-        }
-    }
-}
-
 /// "Move to Computer ›": a bot's, chat's or group chat's way to another of your computers, where it
 /// carries on (`Moves`), as the box it lives on says it can go, with why not where it can't. Asked
 /// first, as the original goes to the trash where it was.
-private struct MoveToComputerMenu: View {
-    let thing: MoveToComputerItems.Thing
-    @Environment(AppModel.self) private var app
-
-    var body: some View {
-        Menu("Move to Computer") {
-            MoveToComputerItems(thing: thing)
-        }
-        .disabled(app.moves.isMoving(thing.id))
-        .onAppear { Task { await app.moves.loadPlaces(thing.kind, thing.id, from: thing.machine(in: app)) } }
-    }
-}
-
-/// What "Move to Computer ›" lists.
-struct MoveToComputerItems: View {
+struct MoveToComputerItems {
     enum Thing {
         case bot(Bot)
         case chat(Session)
@@ -1968,7 +1930,7 @@ struct MoveToComputerItems: View {
     }
 
     let thing: Thing
-    @Environment(AppModel.self) private var app
+    let app: AppModel
 
     private var id: String { thing.id }
     private var kind: String { thing.kind }
@@ -1980,24 +1942,28 @@ struct MoveToComputerItems: View {
         app.moves.places(of: id, from: here) ?? app.moves.knownPlaces(from: here)
     }
 
-    var body: some View {
+    /// Its row in a menu. Where it can go is asked of again as the menu opens, and the list is
+    /// made as the submenu opens, by when the answer has usually come.
+    var submenu: HeldRow {
+        Task { await app.moves.loadPlaces(kind, id, from: here) }
+        return HeldRow.submenu("Move to Computer", disabled: app.moves.isMoving(id)) { rows }
+    }
+
+    /// What it lists.
+    @HeldRows var rows: [HeldRow] {
         let places = places
         let reasons = Set(places.map(\.why))
         if let why = app.moves.whyNotAsked(from: here) {
-            Text(why)
+            HeldRow.note(why)
         } else if places.isEmpty {
-            Text("No other computers to move it to")
+            HeldRow.note("No other computers to move it to")
         } else if places.count > 1, reasons.count == 1, let one = places.first, !one.ok {
             // Why it can't go anywhere (it works in a project, it's moving already), once.
-            Text(one.note ?? one.why ?? "")
+            HeldRow.note(one.note ?? one.why ?? "")
         } else {
             // Why not one, in a few words beside its name (a menu doesn't wrap).
-            ForEach(places, id: \.key) { place in
-                Button { move(to: place) } label: {
-                    Text(place.name)
-                    if let why = place.note ?? place.why { Text(why) }
-                }
-                .disabled(!place.ok)
+            for place in places {
+                HeldRow.button(place.name, subtitle: place.note ?? place.why, disabled: !place.ok) { move(to: place) }
             }
         }
     }
@@ -2443,17 +2409,3 @@ private struct StillRow<Look: Equatable, Content: View>: View, Equatable {
     static func == (lhs: StillRow, rhs: StillRow) -> Bool { lhs.look == rhs.look }
 }
 
-/// Open Beside, on another session's menu while a session's tab is in view. It reads the tab in
-/// view itself, so going from a session's tab to a draft's or a group chat's works out this item
-/// again rather than every row; and only that, not the sessions (`openBeside` checks both are
-/// there), so a session changing doesn't work out every row's.
-private struct OpenBesideItem: View {
-    let session: String
-    @Environment(AppModel.self) private var app
-
-    var body: some View {
-        if let open = app.tabs.sessionID, open != session {
-            Button("Open Beside") { app.tabs.openBeside(session) }
-        }
-    }
-}

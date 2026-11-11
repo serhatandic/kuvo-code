@@ -633,12 +633,17 @@ test("a client stops all of a bot's work at once", async () => {
   const one = startedAddress(await tool("start_session", { task: "One.", project: "Tidepool" }, "ses_pixel"));
   const two = startedAddress(await tool("start_session", { task: "Two.", project: "Tidepool" }, "ses_pixel"));
   active = new Set([one, two, "ses_pixel"]);
+  // (Ids are given again from test to test, and an earlier one stopped one of these: new now.)
+  fs.rmSync(path.join(home, "run", "work", "stopped.json"), { force: true });
   // What it was still to hear of them.
   write(path.join(home, "run", "work", "wakes.json"), JSON.stringify({ ses_pixel: { lines: ["[Session finished] \"One\""], asks: false, since: 1 } }));
   const stopped = await route("POST", "kuvo/bots/bot_pixel00001/stop-all");
   assert.deepEqual(stopped, { status: 200, body: { stopped: 2 } });
   assert.deepEqual(interrupted.sort(), [one, two, "ses_pixel"].sort(), "the bot's own turn stops too: it would only start them again");
-  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(home, "run", "work", "wakes.json"), "utf8")), {}, "and it isn't woken with what they did");
+  // (#553: only that you stopped them, so it doesn't wait on them.)
+  const waiting = JSON.parse(fs.readFileSync(path.join(home, "run", "work", "wakes.json"), "utf8"));
+  assert.deepEqual(Object.keys(waiting), ["ses_pixel"]);
+  assert.deepEqual(waiting.ses_pixel.lines.map(line => /^\[Session stopped\] "[^"]*" in Tidepool \(address (\S+)\) was stopped by the user\./.exec(line)?.[1]).sort(), [one, two].sort(), "and it isn't woken with what they did, only that you stopped them");
 });
 
 test("what a bot may allow is what its own conversation could do without asking: anything its rules let through, and nothing where it would ask", async () => {

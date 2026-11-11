@@ -61,9 +61,9 @@ struct ShellRow: View {
         }
         // Find on a place in what it printed: open to show it.
         .onChange(of: marks?[1].current) { if marks?[1].current != nil { isExpanded = true } }
-        .contextMenu {
-            Button("Copy Command") { copy(shell.command) }
-            if !output.isEmpty { Button("Copy Output") { copy(output) } }
+        .heldContextMenu {
+            HeldRow.button("Copy Command") { copy(shell.command) }
+            if !output.isEmpty { HeldRow.button("Copy Output") { copy(output) } }
         }
     }
 

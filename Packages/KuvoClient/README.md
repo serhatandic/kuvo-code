@@ -50,7 +50,7 @@ What a client shows of a computer's sessions, the same in both apps. Rules only,
   it, Look for), their rows and sizes from what the box measured, and loading those.
 - `BoxNote` and `ReplyChanges`: what the box and the engine write to an agent in its conversation,
   as both apps show it, with no pills. A lead's sessions' news is a message from each session
-  (`BoxNote.shown`, `SessionNews`: finished, failed or asks; one still working shows nothing).
+  (`BoxNote.shown`, `SessionNews`: finished, failed, asks or stopped by you; one still working shows nothing).
   What changed since the reply before (the model or its effort, the mode, a summary, the project's
   folders, a goal started) is a word in the next reply's footer (`ReplyChanges`). Notes written for
   the model show nothing.
@@ -58,6 +58,9 @@ What a client shows of a computer's sessions, the same in both apps. Rules only,
   has ended (its engine let go of it) or just can't be read now.
 - `AskPlace`: which of the asks waiting takes the composer's place, and "2 of 3" over it: the one
   in view stays while others come, and once it's answered the next after it shows.
+- `ConversationPictures`: every picture of a conversation, in order, across its messages (yours,
+  and those an agent made, showed or took of a page to show you), each by an id that stays: what a
+  picture opens among, to go to the one before or after it, in both apps' viewers.
 - `WorkWords`: what a bot's work says, as its box tells it (`kuvo/work`): the bar's line, and each
   session's row (`about`: its model, the account it runs on and its project, then shorter for a
   narrow row, the account going first).

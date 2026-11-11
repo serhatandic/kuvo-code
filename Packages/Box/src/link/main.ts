@@ -129,9 +129,9 @@ export { askedSince, forgetAsks, forgetAsksOn, noteAskEvent } from "./glance/ask
 export { checksOf, pullOf, queryFor, readPulls } from "./glance/github";
 export { linkPull, pullCatcher, readPullLinks } from "./glance/pulls";
 export { letAttachmentsGo } from "./server/attached";
-export { workWatcher } from "./work/wakes";
+export { FIRST_LOOK, WAITING_LOOK, workWatcher } from "./work/wakes";
 export { forgetOldHomes } from "./work/homes";
-export { AT_WORK_LIMIT, FINISH_HOLD_LIMIT, atWorkNow, noteStopped, readBackground, readStopped, stopWork } from "./work/background";
+export { AT_WORK_LIMIT, atWorkNow, noteStopped, readBackground, readStopped, stopWork } from "./work/background";
 export { goalFollowers, goalHolds, settleGoalHolds, lookAtGoals, periodOf, periodEnd, pauseGoal, REVIEW_PAUSE } from "./work/goals";
 export { keptAwake, letGo } from "./work/awake";
 export { macLink, readLink, updateLink, writeLink } from "./state";
