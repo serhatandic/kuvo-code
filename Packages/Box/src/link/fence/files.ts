@@ -472,10 +472,15 @@ export default {
       }
       return ours.some(each => within(where, each)) ? given : where
     }
+    // The engine reads a \\ in a path as a / where it weighs your rules for folders outside the
+    // project, and the system doesn't: \`notes\\x\` would pass for a file in \`notes\` (one
+    // you allowed) while it's a folder beside it. So no file tool's path has one.
+    const SLASHED = "This names a path with a backslash, which Kuvo Code's sandbox doesn't let the engine's file tools use (the engine would take it for a slash). Name it with / only, or ask the user."
     await ctx.tool?.hook("execute.before", (call) => {
       const input = call.input
       if (!input || typeof input !== "object") return
       const field = PATHS[call.tool]
+      if (field && typeof input[field] === "string" && input[field].includes("\\\\")) throw new Error(SLASHED)
       if (field) {
         const given = really(input[field], call.tool)
         if (given !== input[field]) call.input = { ...input, [field]: given }
@@ -485,6 +490,7 @@ export default {
           const head = PATCHED.find(each => read.startsWith(each))
           if (!head) return line
           const given = read.slice(head.length).trim()
+          if (given.includes("\\\\")) throw new Error(SLASHED)
           const where = really(given)
           if (where === given) return line
           // (Never a place whose name would make lines of its own.)
