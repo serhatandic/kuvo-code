@@ -16596,11 +16596,20 @@ var VALUED2 = {
 var RUNS_ANOTHER = new Set([...WRAPPERS, "find", "watch", "parallel", "-exec", "-execdir", "-ok"]);
 var DELETERS = new Set(["rm", "rmdir", "unlink", "shred", "srm", "trash"]);
 var SHELLS = /^((ba|z|da|k|fi)?sh|eval)$/;
-var fold = (where) => process.platform === "darwin" ? where.toLowerCase() : where;
+var fold = (where) => process.platform === "darwin" ? where.normalize("NFC").toUpperCase().toLowerCase() : where;
+function pathPattern(source) {
+  if (process.platform !== "darwin")
+    return new RegExp(source);
+  try {
+    return new RegExp(source, "iu");
+  } catch {
+    return new RegExp(source, "i");
+  }
+}
 var exactly = (where, wall) => where === wall || where.startsWith(wall + "/");
 var inside3 = (where, wall) => exactly(fold(where), fold(wall));
 var holds = (folder, wall) => folder === "/" || fold(wall).startsWith(fold(folder) + "/");
-var matching3 = (where, patterns = []) => patterns.some((each) => new RegExp(each, process.platform === "darwin" ? "i" : "").test(where));
+var matching3 = (where, patterns = []) => patterns.some((each) => pathPattern(each).test(fold(where)) || pathPattern(each).test(where));
 var nameOf = (word) => word.split("/").pop() ?? "";
 var homeWord = (text) => text.replace(/^(~|\$HOME|\$\{HOME\})(?=\/|$)/, homeFolder());
 function pathOf(word, folder) {
@@ -16703,10 +16712,10 @@ var SYSTEM_LOGIN = [
 function atLogin(given, home) {
   if (SYSTEM_LOGIN.some((wall) => inside3(given, wall)))
     return true;
-  const where = fold(given);
-  if (!where.startsWith(fold(home) + "/"))
+  const where = fold(given), folded = fold(home);
+  if (!where.startsWith(folded + "/"))
     return false;
-  const rest = where.slice(home.length + 1);
+  const rest = where.slice(folded.length + 1);
   return LOGIN.some((wall) => inside3(rest, wall)) || !rest.includes("/") && LOGIN_PREFIXES.some((prefix) => rest.startsWith(prefix));
 }
 function inKuvo(where, policy, own = []) {
@@ -17002,7 +17011,7 @@ function ownAt(given, home) {
     return "credentials";
   if (!where.startsWith(fold(home) + "/"))
     return null;
-  const rest = where.slice(home.length + 1);
+  const rest = where.slice(fold(home).length + 1);
   if (GIT_GLOBAL.some((each) => inside3(rest, each)))
     return "git";
   if (CREDENTIALS.some((each) => inside3(rest, each)))
@@ -17304,7 +17313,7 @@ function isSecret(given, policy) {
   const sshKey = where.startsWith(home + "/.ssh/") && ssh && !/^(config|config\.d|known_hosts.*|authorized_keys.*|rc|environment|.*\.pub)$/.test(ssh[1]);
   return Boolean(sshKey) || where === home + "/.ssh" || policy.secrets.some((wall) => inside3(where, wall));
 }
-var RUNS_OUTSIDE = new RegExp(`^/${GUARDED}`, process.platform === "darwin" ? "i" : "");
+var RUNS_OUTSIDE = pathPattern(`^/${GUARDED}`);
 async function gitIn2(folder, args, ok = [0]) {
   const run = await ownArgsLater(args, folder);
   if (!run)
@@ -17650,11 +17659,16 @@ function holdsRepository(folder) {
 function walledForOwn(where, policy = fencePolicy(), own = []) {
   const at = realish(where);
   const ours = ownInside(own, policy).filter((folder) => inKuvo(folder, policy)).some((folder) => exactly(at, folder));
-  return !ours && (inKuvo(at, policy) || inHomeKept(at, policy)) || runsLater(at, policy) || atLogin(at, policy.home) || isSecret(at, policy) || ownAt(at, policy.home) !== null || WORKTREE_RECORDS.test(at);
+  return !ours && (inKuvo(at, policy) || inLibrary(at, policy)) || runsLater(at, policy) || atLogin(at, policy.home) || isSecret(at, policy) || ownAt(at, policy.home) !== null || WORKTREE_RECORDS.test(at) || WORKTREE_RECORDS.test(fold(at));
 }
-var WORKTREE_RECORDS = new RegExp(String.raw`/\.git/worktrees(/|$)`, process.platform === "darwin" ? "i" : "");
+function inLibrary(at, policy) {
+  if (!(policy.homeKept ?? []).some((wall) => inside3(at, wall) || holds(at, wall)))
+    return false;
+  return !(policy.homeOpen ?? []).filter((each) => /\/Library\/Mobile Documents$/i.test(each)).some((each) => inside3(at, each));
+}
+var WORKTREE_RECORDS = pathPattern(String.raw`/\.git/worktrees(/|$)`);
 function runsLater(where, policy) {
-  return RUNS_OUTSIDE.test(where) || [...policy.readOnly, ...pathFolders()].some((wall) => inside3(where, wall)) || matching3(where, policy.readOnlyPatterns);
+  return RUNS_OUTSIDE.test(where) || RUNS_OUTSIDE.test(fold(where)) || [...policy.readOnly, ...pathFolders()].some((wall) => inside3(where, wall)) || matching3(where, policy.readOnlyPatterns);
 }
 var heldBack = (reason, why) => ({ decision: "refuse", reason, by: "code", held: true, why });
 async function judge(action, context, given, now, folder) {
@@ -18164,8 +18178,10 @@ function changedBy(seen, folder) {
     return null;
   const named = [];
   const walk = (value, key, depth) => {
-    if (depth > 6)
+    if (depth > 6) {
+      named.push({ raw: "\x00", folder: false });
       return;
+    }
     if (typeof value === "string") {
       if (PATH_KEY.test(key))
         named.push({ raw: value, folder: null });
@@ -18190,7 +18206,9 @@ function changedBy(seen, folder) {
   return named.map(({ raw, folder: asFolder }) => ({ raw, path: path64.resolve(folder, raw.replace(/^~(?=\/|$)/, homeFolder())), folder: asFolder }));
 }
 var PATCHING = new Set(["patch", "apply_patch", "applypatch"]);
-var PATH_KEY = /path|file|dir|folder|destination|^(dest|dst|src|source|from|to|target|output|location|cwd|workdir|movedto|root)$/i;
+var PATH_KEY = /path|file|dir|folder|destination|save_?as|^(dest|dst|src|source|from|to|target|output|out|location|cwd|workdir|movedto|root|uri|url|name)$/i;
+var WRITING = new Set(["write", "edit", "multiedit", "patch", "apply_patch", "applypatch", "notebookedit"]);
+var plainName2 = (raw) => raw === raw.normalize("NFC") && raw.toUpperCase().toLowerCase() === raw.toLowerCase();
 var UNPLAIN = /[\x00-\x1f\x7f\u0085\u2028\u2029\\]/;
 function plainlyIn(file, folder, asFolder = false) {
   if (!path64.isAbsolute(file) || file.split("/").includes(".."))
@@ -18312,7 +18330,8 @@ async function answerPermission(source, id, sessionID, signal, found) {
     const real = plainlyIn(change.path, place, change.folder);
     return real !== null && !walledForOwn(real, policy, own);
   });
-  const ownChanges = !unread && !renames && resources.length > 0 && !permission.resources.includes("*") && changes.every((each) => !each.raw.split("/").includes("..") && !UNPLAIN.test(each.raw) && plainly(each)) && actions.every((action) => action.kind === "file");
+  const known = !seen || [WRITING, READING, RUNNING].some((each) => each.has(seen.tool.toLowerCase()));
+  const ownChanges = known && !unread && !renames && resources.length > 0 && permission.resources.every((each) => each.startsWith("/")) && changes.every((each) => !each.raw.split("/").includes("..") && !UNPLAIN.test(each.raw) && plainName2(each.raw) && plainly(each)) && actions.every((action) => action.kind === "file");
   if (ownChanges) {
     await reply({ decision: "once" });
     noteReview(id, sessionID, "allowed", call2);
