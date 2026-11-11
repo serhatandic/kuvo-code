@@ -16767,8 +16767,12 @@ async function keptFromSessions(folder, policy = fencePolicy()) {
 function inHomeKept(at, policy) {
   const walls = (policy.homeKept ?? []).filter((wall) => inside3(at, wall) || holds(at, wall));
   const open = [...policy.writable, ...policy.homeOpen ?? []].filter((each) => walls.some((wall) => holds(wall, each)));
-  return walls.length > 0 && !open.some((each) => inside3(at, each));
+  return walls.length > 0 && !open.some((each) => exceptedIn(at, each));
 }
+var exceptedIn = (at, folder) => {
+  const lowered = (where) => process.platform === "darwin" ? where.normalize("NFC").toLowerCase() : where;
+  return exactly(lowered(at), lowered(folder));
+};
 var KUVO = "It reaches Kuvo Code's own folders, which is never allowed.";
 var WRECKS_HOME = "It deletes your home folder, moves it away or locks you out of it, which is never allowed.";
 function programAt(words) {
@@ -17664,7 +17668,7 @@ function walledForOwn(where, policy = fencePolicy(), own = []) {
 function inLibrary(at, policy) {
   if (!(policy.homeKept ?? []).some((wall) => inside3(at, wall) || holds(at, wall)))
     return false;
-  return !(policy.homeOpen ?? []).filter((each) => /\/Library\/Mobile Documents$/i.test(each)).some((each) => inside3(at, each));
+  return !(policy.homeOpen ?? []).filter((each) => /\/Library\/Mobile Documents$/i.test(each)).some((each) => exceptedIn(at, path63.join(each, "com~apple~CloudDocs")));
 }
 var WORKTREE_RECORDS = pathPattern(String.raw`/\.git/worktrees(/|$)`);
 function runsLater(where, policy) {
@@ -18209,7 +18213,7 @@ var PATCHING = new Set(["patch", "apply_patch", "applypatch"]);
 var PATH_KEY = /path|file|dir|folder|destination|save_?as|^(dest|dst|src|source|from|to|target|output|out|location|cwd|workdir|movedto|root|uri|url|name)$/i;
 var WRITING = new Set(["write", "edit", "multiedit", "patch", "apply_patch", "applypatch", "notebookedit"]);
 var plainName2 = (raw) => raw === raw.normalize("NFC") && raw.toUpperCase().toLowerCase() === raw.toLowerCase();
-var UNPLAIN = /[\x00-\x1f\x7f\u0085\u2028\u2029\\]/;
+var UNPLAIN = /[\x00-\x1f\x7f\u0085\u2028\u2029\\]|\p{Default_Ignorable_Code_Point}/u;
 function plainlyIn(file, folder, asFolder = false) {
   if (!path64.isAbsolute(file) || file.split("/").includes(".."))
     return null;
@@ -18224,6 +18228,8 @@ function plainlyIn(file, folder, asFolder = false) {
     }
     if (real !== folder)
       continue;
+    if (!parts.slice(top).every(plainName2))
+      return null;
     for (let at = top;at < parts.length; at++) {
       let kind;
       try {
@@ -18331,7 +18337,7 @@ async function answerPermission(source, id, sessionID, signal, found) {
     return real !== null && !walledForOwn(real, policy, own);
   });
   const known = !seen || [WRITING, READING, RUNNING].some((each) => each.has(seen.tool.toLowerCase()));
-  const ownChanges = known && !unread && !renames && resources.length > 0 && permission.resources.every((each) => each.startsWith("/")) && changes.every((each) => !each.raw.split("/").includes("..") && !UNPLAIN.test(each.raw) && plainName2(each.raw) && plainly(each)) && actions.every((action) => action.kind === "file");
+  const ownChanges = known && !unread && !renames && resources.length > 0 && permission.resources.every((each) => each.startsWith("/")) && changes.every((each) => !each.raw.split("/").includes("..") && !UNPLAIN.test(each.raw) && plainly(each)) && actions.every((action) => action.kind === "file");
   if (ownChanges) {
     await reply({ decision: "once" });
     noteReview(id, sessionID, "allowed", call2);
