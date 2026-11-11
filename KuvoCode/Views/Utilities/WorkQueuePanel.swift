@@ -279,16 +279,23 @@ struct WorkQueuePanel: View {
 
     // MARK: The list
 
-    private func list(_ view: WorkQueueView, wide: Bool) -> some View {
+    @ViewBuilder private func list(_ view: WorkQueueView, wide: Bool) -> some View {
+        if view.items.isEmpty, view.removed.isEmpty {
+            // Outside the scroll view's leading-aligned stack, so it centres in the panel's full width.
+            if isSearching, !query.isEmpty {
+                ContentUnavailableView.search(text: query).frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                empty
+            }
+        } else {
+            populated(view, wide: wide)
+        }
+    }
+
+    private func populated(_ view: WorkQueueView, wide: Bool) -> some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
-                if view.items.isEmpty, view.removed.isEmpty {
-                    if isSearching, !query.isEmpty {
-                        ContentUnavailableView.search(text: query).padding(.top, 30)
-                    } else {
-                        empty
-                    }
-                } else if wide, showsDeleted {
+                if wide, showsDeleted {
                     sectionHeader("Recently Deleted", count: view.removed.count, category: nil)
                     ForEach(view.removed) { item in deletedRow(item) }
                 } else if wide, filter != .all {
@@ -381,7 +388,7 @@ struct WorkQueuePanel: View {
         } description: {
             Text(scope == .all ? "Agents keep their work here as they go. Ask one to add an item." : "Ask the agent to add an item: it keeps its work here as it goes, and you see it move.")
         }
-        .padding(.top, 40)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     /// A section's name in small capitals, with how many it has at the end.
@@ -455,7 +462,7 @@ struct WorkQueuePanel: View {
         // one you can't see, so nothing drops on it.
         let takesDrops = !WorkQueue.isInProgress(item) && WorkQueue.canMove(item)
         return WorkItemRow(item: item, ownerName: WorkQueue.ownerName(of: item, in: view), ordinal: ordinal, isSelected: wide && opened?.matches(item) == true,
-                           openSession: item.sessions.first(where: \.working).map { linked in { app.open(.session(linked.session)) } }) {
+                           openSession: item.sessions.first(where: \.working).map { linked in { app.open(.session(linked.session), from: app.tabs.messageTarget) } }) {
             store.opened[panel] = WorkQueues.Opened(box: box, id: item.id, number: item.number)
         }
         .padding(.horizontal, 6)

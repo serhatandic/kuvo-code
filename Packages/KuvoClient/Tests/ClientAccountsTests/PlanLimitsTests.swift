@@ -141,8 +141,9 @@ struct PlanLimitsTests {
     }
 
     @Test func aBoxThatDoesntSayWhoAnAccountIsStillShowsIt() throws {
-        // An older box (no identity), and a Mac's Claude token, which can't say: each its box's own
-        // row, named for where it's from only where two would have one name.
+        // An older box (no identity), and a Mac's Claude token before Claude Code has run with it,
+        // which can't say yet: each its box's own row, named for where it's from only where two
+        // would have one name.
         let rows = UsageListing.accounts([
             .init(key: "mac", name: nil, accounts: try box(claude(nil, used: 0.4, read: 1_794_160_000))),
             .init(key: "hetzner", name: "hetzner", accounts: try box(claude("aaaaaaaaaaaaaaaa", used: 0.5, read: 1_794_161_000))),
