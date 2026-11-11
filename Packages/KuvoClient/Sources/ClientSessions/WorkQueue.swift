@@ -477,6 +477,32 @@ public enum WorkQueue {
         return .top(category)
     }
 
+    /// Where an item's menu moves it: the top of its category, a place up and a place down, among
+    /// the items there on its computer that can move (nil where it's there already). One in
+    /// progress moves only to its category's top: its place among the others there can't be seen.
+    public struct MenuPlaces: Hashable, Sendable {
+        public var top: Place?
+        public var up: Place?
+        public var down: Place?
+
+        public init(top: Place? = nil, up: Place? = nil, down: Place? = nil) {
+            self.top = top
+            self.up = up
+            self.down = down
+        }
+    }
+
+    public static func menuPlaces(of item: WorkItem, in view: WorkQueueView) -> MenuPlaces {
+        guard canMove(item) else { return MenuPlaces() }
+        let mates = view.items.filter { $0.category == item.category && !isInProgress($0) && $0.computer?.key == item.computer?.key && canMove($0) }
+        guard !isInProgress(item), let index = mates.firstIndex(where: { $0.id == item.id }) else {
+            return MenuPlaces(top: mates.isEmpty ? nil : .top(item.category))
+        }
+        return MenuPlaces(top: index > 0 ? .top(item.category) : nil,
+                          up: index > 0 ? .before(mates[index - 1]) : nil,
+                          down: index + 1 < mates.count ? .after(mates[index + 1]) : nil)
+    }
+
     /// `view` as it will be once `item` is moved to `place`: shown at once, until the box's next
     /// word (which it then is).
     public static func moving(_ item: WorkItem, to place: Place, in view: WorkQueueView) -> WorkQueueView {

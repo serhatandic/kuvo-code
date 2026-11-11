@@ -564,7 +564,9 @@ struct WorkQueuePanel: View {
     }
 
     private func drop(_ dragged: String, at target: WorkQueues.DropTarget) {
-        Task { await store.drop(dragged, at: target, in: key) }
+        // (Counted in the rows as they're drawn: a search's, when one is on.)
+        let shown = view.map(searched)
+        Task { await store.drop(dragged, at: target, in: key, shown: shown) }
     }
 
     private func dropFill(_ isTarget: Bool) -> some View {
@@ -610,9 +612,8 @@ struct WorkItemMenu: View {
 
     var body: some View {
         let store = app.workQueues
-        // (Its order is among the items on its own computer.)
-        let mates = view.items.filter { $0.category == item.category && !WorkQueue.isInProgress($0) == !WorkQueue.isInProgress(item) && $0.computer?.key == item.computer?.key }
-        let index = mates.firstIndex { $0.id == item.id }
+        // (Its order is among the items on its own computer: KuvoClient's rule, the phone's too.)
+        let places = WorkQueue.menuPlaces(of: item, in: view)
         // (An issue closed on GitHub stays Done until it's reopened there: only Delete.)
         if WorkQueue.canMove(item) {
             Menu("Move To") {
@@ -620,16 +621,12 @@ struct WorkItemMenu: View {
                     Button(category.name) { Task { await store.move(item, to: .category(category.id), on: box) } }
                 }
             }
-            Button("Move to Top") { Task { await store.move(item, to: .top(item.category), on: box) } }
-                .disabled(index == 0)
-            Button("Move Up") {
-                if let index, index > 0 { Task { await store.move(item, to: .before(mates[index - 1]), on: box) } }
-            }
-            .disabled(index.map { $0 == 0 } ?? true)
-            Button("Move Down") {
-                if let index, index + 1 < mates.count { Task { await store.move(item, to: .after(mates[index + 1]), on: box) } }
-            }
-            .disabled(index.map { $0 + 1 >= mates.count } ?? true)
+            Button("Move to Top") { if let top = places.top { Task { await store.move(item, to: top, on: box) } } }
+                .disabled(places.top == nil)
+            Button("Move Up") { if let up = places.up { Task { await store.move(item, to: up, on: box) } } }
+                .disabled(places.up == nil)
+            Button("Move Down") { if let down = places.down { Task { await store.move(item, to: down, on: box) } } }
+                .disabled(places.down == nil)
             Divider()
         }
         Button("Delete", role: .destructive) { Task { await store.delete(item, on: box) } }

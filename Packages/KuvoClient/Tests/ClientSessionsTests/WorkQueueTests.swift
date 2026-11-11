@@ -79,6 +79,15 @@ import ClientSessions
         #expect(WorkQueue.place(of: item("#2"), at: 0, in: sections[0]) == nil)
     }
 
+    @Test func anItemsMenuMovesItAmongItsCategorysItems() throws {
+        let item = { (name: String) in Self.view.items.first { $0.name == name }! }
+        // Next (not in progress) is #2, #6.
+        #expect(WorkQueue.menuPlaces(of: item("#2"), in: Self.view) == WorkQueue.MenuPlaces(top: nil, up: nil, down: .after(item("#6"))))
+        #expect(WorkQueue.menuPlaces(of: item("#6"), in: Self.view) == WorkQueue.MenuPlaces(top: .top("next"), up: .before(item("#2")), down: nil))
+        // In progress: only to its category's top, its place among the others there unseen.
+        #expect(WorkQueue.menuPlaces(of: item("#1"), in: Self.view) == WorkQueue.MenuPlaces(top: .top("next"), up: nil, down: nil))
+    }
+
     @Test func aMovedItemShowsInItsNewPlaceAtOnce() throws {
         let item = { (name: String) in Self.view.items.first { $0.name == name }! }
         let next = { (view: WorkQueueView) in WorkQueue.sections(view).first { $0.category == "next" }!.items.map(\.name) }

@@ -110,6 +110,9 @@ final class WorkQueues {
         let me = UUID()
         following[key] = me
         defer { if following[key] == me { following[key] = nil } }
+        // (Failures in a row: a stream that drops once is only connected again; one that can't be
+        // connected again either is a machine that isn't answering.)
+        var failed = 0
         while !Task.isCancelled {
             #if DEBUG
             if isStandIn { return }
@@ -119,17 +122,24 @@ final class WorkQueues {
                 do {
                     for try await line in client.follow("kuvo/work-queue/events?owner=\(query(key.owner))") {
                         guard following[key] == me, let view = try? JSONDecoder().decode(WorkQueueView.self, from: line) else { continue }
+                        failed = 0
                         take(view, for: key)
                     }
                 } catch let refusal as BoxRefusal {
+                    failed += 1
                     if refusal.status == 404 || refusal.status == 403 {
                         older.insert(key.box)
                         wait = .seconds(300)
-                    } else if !(await fallBack(key)) {
-                        failures[key] = refusal.message
+                    } else {
+                        var fell = false
+                        if failed >= 2 { fell = await fallBack(key) }
+                        if !fell, views[key] == nil { failures[key] = refusal.message }
                     }
                 } catch {
-                    if !(await fallBack(key)), views[key] == nil { failures[key] = error.localizedDescription }
+                    failed += 1
+                    var fell = false
+                    if failed >= 2 { fell = await fallBack(key) }
+                    if !fell, views[key] == nil { failures[key] = error.localizedDescription }
                 }
             }
             try? await Task.sleep(for: wait)
@@ -146,19 +156,27 @@ final class WorkQueues {
 
     /// A machine that doesn't answer (switched off, asleep): its view as this Mac's own box has it,
     /// which every computer tells what it keeps, rather than what it said last as if it were now.
+    /// This Mac's own items in it say so ("on" this Mac), as another box's view says of them: what
+    /// you do to them goes to this Mac's box, and they're never taken for the machine's.
     private func fallBack(_ key: Key) async -> Bool {
         guard key.box != BoxClient.mac, following[key] != nil, let client = client(BoxClient.mac),
-              let view = try? await client.value(WorkQueueView.self, "GET", "kuvo/work-queue?owner=\(query(key.owner))") else { return false }
-        take(view, for: key)
+              var view = try? await client.value(WorkQueueView.self, "GET", "kuvo/work-queue?owner=\(query(key.owner))") else { return false }
+        let here = WorkComputer(key: known.mac ?? "", name: PhoneLink.computerName, kind: "mac", id: BoxClient.mac)
+        for index in view.items.indices where view.items[index].computer == nil { view.items[index].computer = here }
+        for index in view.removed.indices where view.removed[index].computer == nil { view.removed[index].computer = here }
+        take(view, for: key, refs: false)
         fellBack.insert(key)
         return true
     }
 
-    private func take(_ view: WorkQueueView, for key: Key) {
+    /// `view` as the box gave it, and what its items say kept for their chips (not for one read
+    /// from another box than the key's: `refs` false).
+    private func take(_ view: WorkQueueView, for key: Key, refs keepsRefs: Bool = true) {
         if views[key] != view { views[key] = view }
-        fellBack.remove(key)
+        if keepsRefs { fellBack.remove(key) }
         failures[key] = nil
         older.remove(key.box)
+        guard keepsRefs else { return }
         // What a view says of its items is what their chips show.
         var known = refs[key.box] ?? [:]
         for item in view.items + view.removed {
@@ -193,6 +211,14 @@ final class WorkQueues {
         } catch let refused as BoxRefusal where refused.status == 404 {
             loadFailures[box + "|" + item] = nil
         } catch {
+            // A machine that isn't answering: as this Mac's own box has it (as it last told it).
+            if box != BoxClient.mac, let mac = client(BoxClient.mac), var told = try? await mac.value(DetailAnswer.self, "GET", "kuvo/work-queue/items/\(path(refs[box]?[item]?.id ?? item))").item {
+                if told.item.computer == nil { told.item.computer = WorkComputer(key: known.mac ?? "", name: PhoneLink.computerName, kind: "mac", id: BoxClient.mac) }
+                details[box + "|" + told.item.id] = told
+                if let number = told.item.number { details[box + "|#\(number)"] = told }
+                loadFailures[box + "|" + item] = nil
+                return told
+            }
             loadFailures[box + "|" + item] = (error as? BoxRefusal)?.message ?? error.localizedDescription
         }
         return nil
@@ -236,6 +262,8 @@ final class WorkQueues {
     func box(of item: WorkItem, in box: String) -> String? {
         guard let computer = item.computer else { return box }
         let known = known
+        // (This Mac's own, in a view read from its box for a machine that isn't answering.)
+        if computer.kind == "mac", computer.id == BoxClient.mac { return BoxClient.mac }
         if computer.kind == "mac" { return computer.key == known.mac ? BoxClient.mac : nil }
         if let id = known.machines.first(where: { $0.value == computer.key })?.key { return id }
         // (A machine this Mac has, whose key it doesn't know yet: by the id the box gave, unless
@@ -285,15 +313,17 @@ final class WorkQueues {
         }
         undoable = nil
         let moved = await act(ItemAnswer.self, "POST", "kuvo/work-queue/items/\(path(item.id))/move", body: body, on: item, shownOn: box)
-        // (Refused, or on another computer: as the box has it.)
-        if moved == nil || item.computer != nil { await readAll(box) }
+        // Refused: as the box has it. (Done, it stays shown there until the box says so: one on
+        // another computer comes once that computer tells this one, never back meanwhile.)
+        if moved == nil { await readAll(box) }
     }
 
     /// The item dragged (as it's written, "#243" or `gh:owner/repo#12`, as the composer takes it too) put where `target`
     /// says in the view `key`: beside the item the line was drawn at (into that one's category), or
     /// at the top of a category it was dropped on. Nothing where it wouldn't move.
-    func drop(_ dragged: String, at target: DropTarget, in key: Key) async {
-        guard let view = views[key] else { return }
+    /// `shown`: the view as the list draws it (a search's), whose rows the target counts.
+    func drop(_ dragged: String, at target: DropTarget, in key: Key, shown: WorkQueueView? = nil) async {
+        guard let view = shown ?? views[key] else { return }
         let found = view.items.filter { $0.written == dragged }
         let items = found.isEmpty ? view.items.filter { $0.written == nil && $0.title == dragged } : found
         // (Where two computers gave one number twice: the one on this view's own box.)

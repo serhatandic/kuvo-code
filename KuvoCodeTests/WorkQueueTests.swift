@@ -414,15 +414,19 @@ import Textual
         try JSONSerialization.data(withJSONObject: ["id": "wqt_told0000001", "at": Date.now.timeIntervalSince1970 * 1000 - 3_600_000, "heard": 1, "kind": "machine", "items": [told], "owners": [], "categories": []])
             .write(to: run.appending(path: "work-queue/peers/\(labKey).json"))
         try JSONSerialization.data(withJSONObject: [labKey: Date.now.timeIntervalSince1970 * 1000 - 60_000]).write(to: run.appending(path: "peer-reach.json"))
+        // And an item of this Mac's own.
+        try keep([Self.item(7, "On this Mac", order: 1)], for: "ses_here", on: studio)
 
         let store = app.workQueues
         let studioClient = Self.appClient(studio, box: BoxClient.mac), labClient = Self.appClient(lab, box: "lab")
         store.boxes = { $0 == "lab" ? labClient : studioClient }
-        // A conversation on lab: its panel follows lab's box.
+        store.computers = { (mac: mac, machines: ["lab": labKey]) }
+        // A conversation on lab: its panel follows lab's box, its own items or every one.
         let key = WorkQueues.Key(box: "lab", owner: "ses_far")
-        let following = Task { await store.follow(key) }
-        defer { following.cancel() }
-        try await until { store.views[key] != nil }
+        let all = WorkQueues.Key(box: "lab", owner: WorkQueueView.all)
+        let following = [Task { await store.follow(key) }, Task { await store.follow(all) }]
+        defer { following.forEach { $0.cancel() } }
+        try await until { store.views[key] != nil && store.views[all] != nil }
         #expect(store.fellBack.contains(key) == false)
         #expect(store.views[key]?.items.first?.computer == nil, "lab's own, live")
 
@@ -436,6 +440,38 @@ import Textual
         #expect(item.computer?.name == "lab")
         #expect(item.inProgress == false, "nothing on a computer that's off is shown at work")
         #expect(WorkQueue.awayNote(view)?.hasPrefix("lab isn’t answering") == true)
+
+        // Every conversation's: this Mac's own item says it's this Mac's, and what you do to it
+        // goes to this Mac's box, never to lab.
+        try await until { store.fellBack.contains(all) }
+        let mine = try #require(store.views[all]?.items.first { $0.title == "On this Mac" })
+        #expect(mine.computer != nil, "never taken for lab's")
+        #expect(store.box(of: mine, in: "lab") == BoxClient.mac)
+        #expect(store.box(of: item, in: "lab") == "lab")
+        await store.move(mine, to: .category("later"), on: "lab")
+        #expect(store.refusal == nil)
+        let here = WorkQueues.Key(box: BoxClient.mac, owner: "ses_here")
+        await store.read(here)
+        #expect(store.views[here]?.items.first?.category == "later")
+        // Its page: as this Mac's box has it.
+        #expect(await store.load(box: "lab", item: "500")?.item.title == "On the lab")
+    }
+
+    @Test func aDragWhileSearchingLandsWhereTheLineWasDrawnAmongTheRowsShown() async throws {
+        let machine = try await MachineTestBox(name: "lab")
+        defer { machine.stop() }
+        use(machine)
+        try keep([Self.item(1, "Alpha", order: 1), Self.item(2, "Bravo", order: 2), Self.item(3, "Charlie", order: 3)], for: "ses_lead", on: machine)
+        let key = WorkQueues.Key(box: BoxClient.mac, owner: "ses_lead")
+        let store = app.workQueues
+        await store.read(key)
+        // A search that shows Alpha and Charlie; Alpha dropped on Charlie's lower half (the second
+        // row shown): after Charlie, not before it as the whole list's third place would say.
+        var shown = try #require(store.views[key])
+        shown.items = shown.items.filter { $0.title.localizedStandardContains("a") && $0.title != "Bravo" }
+        await store.drop("#1", at: WorkQueues.DropTarget(section: "next", index: 2), in: key, shown: shown)
+        await store.read(key)
+        #expect(titles(key, in: "next") == ["Bravo", "Charlie", "Alpha"])
     }
 }
 
