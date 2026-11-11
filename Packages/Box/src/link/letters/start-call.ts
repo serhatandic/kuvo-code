@@ -44,7 +44,7 @@ import type { MadeTree, Making, RemoteLead, StartGiven } from "./start";
 import type { ToolAnswer, ToolPlace } from "./tools";
 
 /** What a start's call asks for, as start_session takes it: never a step of a goal, nor where. */
-export const START_FIELDS = ["task", "title", "project", "folder", "chat", "worktree", "model", "effort", "mode", "approval", "wake", "wait"] as const;
+export const START_FIELDS = ["task", "title", "project", "folder", "chat", "worktree", "model", "effort", "mode", "approval", "wake", "wait", "review"] as const;
 
 /** What a box's agents' mail says when it takes starts, and reads of its models and projects, from
  * your other computers (`kuvo/info`'s `features` too). */

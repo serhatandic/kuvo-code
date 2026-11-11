@@ -18050,7 +18050,7 @@ async function finishGoalTool(caller, args, targets) {
 // Packages/Box/src/link/letters/start-call.ts
 import fs64 from "node:fs";
 import path67 from "node:path";
-var START_FIELDS = ["task", "title", "project", "folder", "chat", "worktree", "model", "effort", "mode", "approval", "wake", "wait"];
+var START_FIELDS = ["task", "title", "project", "folder", "chat", "worktree", "model", "effort", "mode", "approval", "wake", "wait", "review"];
 var START_FEATURE = "work.elsewhere.start";
 var OPEN_TOOLS = ["start_session", "list_models", "list_projects"];
 var SESSION4 = /^ses_[A-Za-z0-9]{1,60}$/;

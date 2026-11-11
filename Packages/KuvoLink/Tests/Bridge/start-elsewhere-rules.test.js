@@ -170,7 +170,9 @@ test("a lead on another computer starts a session here as its own would: marked 
   assert.deepEqual(made.model, { providerID: "p", id: "m1" }, "on the lead's model, as there's an account for it here");
   // Its task, from the lead, saying where the lead is.
   assert.equal(eng.seen.prompts.length, 1);
-  assert.match(eng.seen.prompts[0].text, /^\[Message from Foreman on mini · ses_lead\] \(To answer, use send_message to ses_lead\.\)\n\nFix the sign-in\./);
+  // (Its finish heard by its lead with its last reply: its report isn't sent again as a message.)
+  assert.match(eng.seen.prompts[0].text, /^\[Message from Foreman on mini · ses_lead\] \(They get your last reply when you finish: end with your report there, not in a message\. Use send_message to ses_lead only to ask something or say how it's going\.\)\n\nFix the sign-in\./);
+  assert.match(eng.seen.prompts[0].text, /review your work with reviewer subagents.*Foreman gets that reply when you finish: don't also send it with send_message\.$/);
   // The lead lives on mini, as this box now knows: what its session says or asks goes there.
   assert.equal(read(path.join(run, "work", "homes.json")).ses_lead.key, mini.pub);
   // The answer goes back to the lead, as this computer's word, naming the session.
@@ -178,6 +180,17 @@ test("a lead on another computer starts a session here as its own would: marked 
   assert.equal(answer.to, "ses_lead");
   assert.equal(answer.refused, undefined);
   assert.match(answer.note.words, new RegExp(`^Started "Sign-in" in api \\(address ${made.id}\\)`));
+});
+
+test("a start from another computer is told as one here is: review: false drops the reviewer line, and one whose finish its lead doesn't hear is told to answer with send_message", async () => {
+  await take(startCall({ review: false }));
+  const plain = eng.seen.prompts.at(-1).text;
+  assert.doesNotMatch(plain, /reviewer subagents/);
+  assert.match(plain, /end with a short report as your last reply: what you did, and anything left\. Foreman gets that reply when you finish/);
+  await take(startCall({ wake: "none" }));
+  const unheard = eng.seen.prompts.at(-1).text;
+  assert.match(unheard, /^\[Message from Foreman on mini · ses_lead\] \(To answer, use send_message to ses_lead\.\)/);
+  assert.match(unheard, /review your work with reviewer subagents.*Foreman reads that report\.$/);
 });
 
 test("in the lead's mode, with no more approval than the lead has nor more than this computer gives: Full Access only where it was confirmed here", async () => {

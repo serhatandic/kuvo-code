@@ -476,7 +476,8 @@ connection.
     hearing it finish), `line` (when it says more than `startedBy`), `limits` (where the bot isn't),
     `call` (the call's id), and `lead: {box, key, name}` (the lead's computer, as the receiver names
     it, and the lead's name, for clients' "Started from"). Its task comes as a message from "<lead>
-    on <box>". The lead is noted to live on the box that called ("Homes"), so news of the session
+    on <box>", told as one here is: whether its last reply is heard as its report, and whether to
+    review its work (`review`, carried with the call). The lead is noted to live on the box that called ("Homes"), so news of the session
     goes there. A start's call `made` over a day off is refused.
   - **Once**: each start is kept in `run/calls/<id>.json` as it goes (the worktree made for it,
     what it's to be made with, whether on the engine or the coding agents' bridge but never where
