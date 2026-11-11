@@ -370,6 +370,10 @@ struct AppCommands: Commands {
             Button("Show Previous Tab") { actions?.previousTab() }
                 .keyboardShortcut(.tab, modifiers: [.control, .shift])
                 .disabled(actions == nil)
+            // To the conversation this one was opened from, as its way back at the top does.
+            Button("Back") { actions?.goBack() }
+                .keyboardShortcut("[")
+                .disabled(actions?.canGoBack != true)
             // ⌘1 to ⌘8 show that tab, ⌘9 the last one, as in browsers.
             Menu("Show Tab") {
                 ForEach(1...9, id: \.self) { number in
@@ -408,6 +412,9 @@ struct SessionActions {
     var panelHasProject: Bool
     var canStop: Bool
     var canReopenTab: Bool
+    /// Back to the conversation the one in view was opened from (`WindowTabs.goBack`).
+    var canGoBack: Bool
+    var goBack: () -> Void
     var newSession: () -> Void
     /// A terminal in a tab of its own, in place of a conversation.
     var newTerminalTab: () -> Void

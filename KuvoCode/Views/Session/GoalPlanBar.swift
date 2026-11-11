@@ -26,6 +26,8 @@ struct GoalPlanBar: View {
     let putAway: () -> Void
     let failed: (String) -> Void
     @Environment(AppModel.self) private var app
+    /// The conversation this is in, where what it opens comes back to.
+    @Environment(\.conversationTab) private var here
     @State private var confirmsStop = false
     /// The view you picked for this goal, on this Mac; nil until you pick one.
     @State private var picked: GoalPaneView?
@@ -281,7 +283,7 @@ struct GoalPlanBar: View {
         } else if let (name, place) = Self.app(of: item, on: box) {
             button = ("Open \(name)", { NSWorkspace.shared.openApplication(at: place, configuration: NSWorkspace.OpenConfiguration()) })
         } else if let session = item.session {
-            button = ("Open", { app.tabs.open(.session(session)) })
+            button = ("Open", { app.open(.session(session), from: here) })
         } else {
             button = nil
         }
