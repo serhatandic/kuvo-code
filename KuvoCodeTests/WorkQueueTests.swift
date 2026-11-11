@@ -1,3 +1,4 @@
+import ClientDesign
 import ClientSessions
 import ClientText
 import Foundation
@@ -173,11 +174,11 @@ import Textual
         #expect(store.refs(in: message, box: BoxClient.mac).isEmpty)
         try await until { store.refs[BoxClient.mac]?["243"] != nil }
         let refs = store.refs(in: message, box: BoxClient.mac)
-        #expect(refs.keys.sorted() == [243], "#9 isn't an item: it stays as written")
+        #expect(refs.keys.sorted() == ["243"], "#9 isn't an item: it stays as written")
 
         let parsed = try FileLinkingParser(folders: { [] }, refs: refs).attributedString(for: message)
         let chips = parsed.runs.compactMap { $0.textual.attachment?.base as? WorkItemChipAttachment }
-        #expect(chips.map(\.number) == [243], "one chip: the code span stays code")
+        #expect(chips.map(\.name) == ["#243"], "one chip: the code span stays code")
         #expect(chips.first?.title == "Work Queue panel")
         #expect(parsed.runs.compactMap(\.link).compactMap(WorkItemRefs.number(in:)) == [243])
         #expect(String(parsed.characters).contains("#9"))
@@ -185,7 +186,7 @@ import Textual
         // Your own message: the same chip, its words kept as written.
         var yours = AttributedString("See #243")
         WorkItemChipAttachment.mark(&yours, refs: refs)
-        #expect(yours.runs.contains { $0[WorkItemChipMark.self]?.number == 243 && $0.link == WorkItemRefs.link(243) })
+        #expect(yours.runs.contains { $0[WorkItemChipMark.self]?.written == "#243" && $0.link == WorkItemRefs.link(243) })
         #expect(String(yours.characters) == "See #243")
 
         // The agent marks it done: the chip, drawn again a while later, says so.
@@ -193,13 +194,53 @@ import Textual
         var done = Self.item(243, "Work Queue panel", category: "done", order: 1)
         done["doneAt"] = Date.now.timeIntervalSince1970 * 1000
         try keep([done], for: "ses_lead", on: machine)
-        try await until { store.refs(in: message, box: BoxClient.mac)[243]?.category == "done" }
+        try await until { store.refs(in: message, box: BoxClient.mac)["243"]?.category == "done" }
 
         // Clicked: the panel shows the Work Queue with the item open.
-        app.openWorkItem(243)
+        app.openWorkItem("243")
         #expect(app.utilities.selected?.kind == .workQueue)
         #expect(store.opened[app.utilities.panelKey]?.number == 243)
         #expect(await store.load(box: BoxClient.mac, item: "243")?.body == "About Work Queue panel.")
+    }
+
+    @Test func anIssueInTheQueueIsNamedByItShowsGitHubsWordAndItsChipOpensIt() async throws {
+        let machine = try await MachineTestBox(name: "lab")
+        defer { machine.stop() }
+        use(machine)
+        // An item that's GitHub's kuvo-test/app#12 (it was #250), kept in Later; GitHub said it's
+        // closed, a moment ago (and GitHub isn't asked again here: its host is held off).
+        var issue = Self.item(250, "Upload retries", category: "later", order: 1)
+        issue["source"] = ["kind": "github", "ref": "gh:kuvo-test/app#12", "url": "https://github.com/kuvo-test/app/issues/12", "host": "github.com", "id": "I_kw12"]
+        try keep([issue], for: "ses_lead", on: machine)
+        let now = Date.now.timeIntervalSince1970 * 1000
+        let read: [String: Any] = ["at": now, "value": ["kind": "github", "id": "I_kw12", "number": 12, "title": "Upload retries drop the file name", "url": "https://github.com/kuvo-test/app/issues/12", "state": "completed"]]
+        try JSONSerialization.data(withJSONObject: ["reads": ["github.com/kuvo-test/app#12": read], "hosts": ["github.com": now + 3_600_000]])
+            .write(to: machine.folder.appending(path: "run/work-queue/seen.json"))
+        let key = WorkQueues.Key(box: BoxClient.mac, owner: "ses_lead")
+        let store = app.workQueues
+        await store.read(key)
+        let item = try #require(store.views[key]?.items.first)
+        #expect([item.name, item.title, item.category, item.keptIn] == ["app#12", "Upload retries drop the file name", "done", "later"])
+        #expect(item.brand == "github" && item.spokenName == "GitHub issue app#12")
+        let categories = try #require(store.views[key]).categories
+        #expect(WorkQueue.moveTargets(for: item, in: categories).isEmpty, "Done until it's reopened on GitHub")
+
+        // Named in a message by its ref, or by its old number: GitHub's chip either way.
+        let message = "Fixed gh:kuvo-test/app#12 (was #250)."
+        _ = store.refs(in: message, box: BoxClient.mac)
+        try await until { store.refs(in: message, box: BoxClient.mac).count == 2 }
+        let parsed = try FileLinkingParser(folders: { [] }, refs: store.refs(in: message, box: BoxClient.mac)).attributedString(for: message)
+        let chips = parsed.runs.compactMap { $0.textual.attachment?.base as? WorkItemChipAttachment }
+        #expect(chips.map(\.name) == ["app#12", "app#12"])
+        #expect(chips.map(\.written) == ["gh:kuvo-test/app#12", "#250"])
+        #expect(chips.allSatisfy { $0.brand == "github" && $0.mark == .done })
+        #expect(parsed.runs.compactMap(\.link).compactMap(WorkItemRefs.ref(in:)) == ["gh:kuvo-test/app#12", "250"])
+
+        // Clicked: open in the panel, read by its ref.
+        app.openWorkItem("gh:kuvo-test/app#12")
+        let opened = try #require(store.opened[app.utilities.panelKey])
+        #expect(opened.matches(item))
+        #expect(await store.load(box: BoxClient.mac, item: opened.name)?.item.id == item.id)
     }
 
     @Test func anItemOnAnotherComputerSaysWhereItIsAndItsPageAndWhatYouDoToItGoThere() async throws {

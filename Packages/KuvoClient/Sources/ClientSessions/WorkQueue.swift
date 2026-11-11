@@ -87,17 +87,52 @@ public struct WorkItemSession: Hashable, Sendable, Decodable {
     public var working: Bool
 }
 
-/// An outside source's item (an issue or a pull request): named by its ref, never numbered.
+/// An outside source's item (an issue or a pull request): named by its ref (`gh:owner/repo#12`),
+/// never numbered; `name` what's shown of it (`app#12`), as the box says.
 public struct WorkSource: Hashable, Sendable, Decodable {
     public var kind: String
     public var ref: String
     public var url: String?
+    public var name: String?
 
-    public init(kind: String, ref: String, url: String? = nil) {
+    public init(kind: String, ref: String, url: String? = nil, name: String? = nil) {
         self.kind = kind
         self.ref = ref
         self.url = url
+        self.name = name
     }
+
+    /// What's shown of it: the box's name for it ("app#12"), else its ref without its prefix and
+    /// owner (an older box's).
+    public var shownName: String {
+        if let name, !name.isEmpty { return name }
+        return ref.replacing(/^[a-z]+:(?:[^\/#]+\/)?/, with: "")
+    }
+
+    /// Whether it's GitHub's (an issue, or a pull request): drawn with GitHub's mark.
+    public var isGitHub: Bool { kind == "github" || kind == "github-pr" }
+
+    public var isPullRequest: Bool { kind == "github-pr" }
+
+    /// What it is, for VoiceOver: "GitHub issue", "GitHub pull request".
+    public var spokenKind: String { isGitHub ? (isPullRequest ? "GitHub pull request" : "GitHub issue") : "Issue" }
+}
+
+/// Where an outside source's item stands there, as the box last read it: `open`, `draft`,
+/// `completed`, `not_planned`, `merged` or `closed` (a pull request closed unmerged); a newer box
+/// may say more.
+public struct WorkSeen: Hashable, Sendable, Decodable {
+    public var state: String
+    public var at: Double
+
+    public init(state: String, at: Double) {
+        self.state = state
+        self.at = at
+    }
+
+    /// Closed without being done (not planned, or a pull request closed unmerged): its title is
+    /// drawn struck through.
+    public var isStruck: Bool { state == "not_planned" || state == "closed" }
 }
 
 /// Another of your computers: the one an item is on, when it isn't the box asked. A client reads
@@ -140,6 +175,10 @@ public struct WorkItem: Hashable, Sendable, Decodable, Identifiable {
     public var linkCount: Int
     public var handedBy: String?
     public var source: WorkSource?
+    /// What its source says of it (an issue's or a pull request's), as the box last read it.
+    public var seen: WorkSeen?
+    /// The category it's kept in while its source makes it Done (`category` "done").
+    public var keptIn: String?
     public var computer: WorkComputer?
     public var handing: WorkHanding?
     public var created: WorkStamp
@@ -148,8 +187,12 @@ public struct WorkItem: Hashable, Sendable, Decodable, Identifiable {
     public var removed: WorkStamp?
 
     public var isDone: Bool { category == WorkCategory.done }
-    /// An outside source's ref, "#243", or "New" while it waits for its number.
-    public var name: String { source?.ref ?? number.map { "#\($0)" } ?? "New" }
+    /// An outside source's name ("app#12"), "#243", or "New" while it waits for its number.
+    public var name: String { source?.shownName ?? number.map { "#\($0)" } ?? "New" }
+
+    /// How it's written in a message, so it names it there: `gh:owner/repo#12`, "#243"; nil while
+    /// it has no number.
+    public var written: String? { source?.ref ?? number.map { "#\($0)" } }
 }
 
 /// An item whole: its description (Markdown), notes, files, links and who handed it on.
@@ -267,6 +310,7 @@ public struct WorkRef: Hashable, Sendable, Decodable {
     public var id: String
     public var number: Int?
     public var source: WorkSource?
+    public var seen: WorkSeen?
     public var title: String
     public var category: String
     public var inProgress: Bool
@@ -274,10 +318,11 @@ public struct WorkRef: Hashable, Sendable, Decodable {
     public var removed: Bool?
     public var computer: WorkComputer?
 
-    public init(id: String, number: Int?, source: WorkSource? = nil, title: String, category: String, inProgress: Bool, owner: String?, removed: Bool? = nil, computer: WorkComputer? = nil) {
+    public init(id: String, number: Int?, source: WorkSource? = nil, seen: WorkSeen? = nil, title: String, category: String, inProgress: Bool, owner: String?, removed: Bool? = nil, computer: WorkComputer? = nil) {
         self.id = id
         self.number = number
         self.source = source
+        self.seen = seen
         self.title = title
         self.category = category
         self.inProgress = inProgress
@@ -287,8 +332,11 @@ public struct WorkRef: Hashable, Sendable, Decodable {
     }
 
     public init(_ item: WorkItem) {
-        self.init(id: item.id, number: item.number, source: item.source, title: item.title, category: item.category, inProgress: item.inProgress, owner: item.owner, removed: item.removed == nil ? nil : true, computer: item.computer)
+        self.init(id: item.id, number: item.number, source: item.source, seen: item.seen, title: item.title, category: item.category, inProgress: item.inProgress, owner: item.owner, removed: item.removed == nil ? nil : true, computer: item.computer)
     }
+
+    /// What a chip shows of it: its source's name ("app#12"), else "#243".
+    public var name: String { source?.shownName ?? number.map { "#\($0)" } ?? "New" }
 }
 
 /// The `refs` route's answer, by the ref as it was asked: null for one the box doesn't know. Each is
@@ -406,8 +454,33 @@ public enum WorkQueue {
     }
 
     /// Where an item may be moved to from a menu: every category but the one it's in. In progress
-    /// isn't one (the box works it out from the sessions at work).
+    /// isn't one (the box works it out from the sessions at work); nor is Done for an issue or a
+    /// pull request, which is Done when it's closed there, and stays so until it's reopened.
     public static func moveTargets(for item: WorkItem, in categories: [WorkCategory]) -> [WorkCategory] {
-        categories.filter { $0.id != item.category }
+        guard canMove(item) else { return [] }
+        return categories.filter { $0.id != item.category && (item.source == nil || $0.id != WorkCategory.done) }
     }
+
+    /// Whether you can move it at all: not an issue or a pull request that's Done (closed there).
+    public static func canMove(_ item: WorkItem) -> Bool { item.source == nil || !item.isDone }
+}
+
+/// What both apps draw an item's name with, in a list or a chip: the mark of the service its source
+/// is (a `BrandMark` id, "github"), and what VoiceOver says for its name.
+public extension WorkSource {
+    var brand: String? { isGitHub ? "github" : nil }
+}
+
+public extension WorkItem {
+    var brand: String? { source?.brand }
+    /// "GitHub issue app#12", "Work item 243", "New work item".
+    var spokenName: String { source.map { "\($0.spokenKind) \($0.shownName)" } ?? number.map { "Work item \($0)" } ?? "New work item" }
+    /// Its title struck through: closed without being done there (not planned, or unmerged).
+    var isStruck: Bool { seen?.isStruck == true }
+}
+
+public extension WorkRef {
+    var brand: String? { source?.brand }
+    var spokenName: String { source.map { "\($0.spokenKind) \($0.shownName)" } ?? number.map { "Work item \($0)" } ?? "New work item" }
+    var isStruck: Bool { seen?.isStruck == true }
 }

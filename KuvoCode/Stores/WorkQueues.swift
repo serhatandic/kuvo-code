@@ -31,8 +31,8 @@ final class WorkQueues {
     private(set) var older: Set<String> = []
     /// Items whole, by box and id, as last read.
     private(set) var details: [String: WorkItemDetail] = [:]
-    /// What each ref names, by box and by the ref as it was asked ("243"): known ones only (one the
-    /// box doesn't know stays plain text).
+    /// What each ref names, by box and by the ref as it was asked ("243", `gh:owner/repo#12`):
+    /// known ones only (one the box doesn't know stays plain text).
     private(set) var refs: [String: [String: WorkRef]] = [:]
     /// The last item you deleted, for Undo, until you do something else.
     private(set) var undoable: (box: String, item: WorkItem)?
@@ -49,19 +49,25 @@ final class WorkQueues {
 
     enum Scope: Hashable { case own, all }
 
-    /// An item open in the panel, by its id (from a list) or its number (from a chip).
+    /// An item open in the panel, by its id (from a list), its number or the issue it is (from a
+    /// chip: `gh:owner/repo#12`).
     struct Opened: Hashable {
         var box: String
         var id: String?
         var number: Int?
+        var source: String?
 
         func matches(_ item: WorkItem) -> Bool {
             if let id { return item.id == id }
+            if let source { return item.source?.ref.lowercased() == source.lowercased() }
             return number != nil && item.number == number
         }
+
+        /// How it's asked of the box: its id, its number, or the issue it is.
+        var name: String { id ?? number.map(String.init) ?? source ?? "" }
     }
 
-    @ObservationIgnored private var asked: [String: [Int: Date]] = [:]
+    @ObservationIgnored private var asked: [String: [String: Date]] = [:]
     @ObservationIgnored private var following: [Key: UUID] = [:]
 
     private func client(_ box: String) -> BoxClient? {
@@ -131,9 +137,9 @@ final class WorkQueues {
         // What a view says of its items is what their chips show.
         var known = refs[key.box] ?? [:]
         for item in view.items + view.removed {
-            guard let number = item.number else { continue }
             let ref = WorkRef(item)
-            if known[String(number)] != ref { known[String(number)] = ref }
+            // (By its number, and an issue's by its ref too: either names it in a message.)
+            for key in [item.number.map(String.init), item.source?.ref].compactMap({ $0 }) where known[key] != ref { known[key] = ref }
         }
         if refs[key.box] != known { refs[key.box] = known }
     }
@@ -146,7 +152,9 @@ final class WorkQueues {
     func load(box: String, item: String) async -> WorkItemDetail? {
         guard let client = client(box) else { return details[box + "|" + item] ?? details[box + "|#" + item] }
         do {
-            var detail = try await client.value(DetailAnswer.self, "GET", "kuvo/work-queue/items/\(path(item))").item
+            // (An issue's ref has a "/", which no path may carry: it's asked by the id its chip knows.)
+            let asked = refs[box]?[item]?.id ?? item
+            var detail = try await client.value(DetailAnswer.self, "GET", "kuvo/work-queue/items/\(path(asked))").item
             if let computer = detail.item.computer, let there = self.box(of: detail.item, in: box), there != box,
                let whole = try? await self.client(there)?.value(DetailAnswer.self, "GET", "kuvo/work-queue/items/\(path(detail.item.id))").item {
                 detail = whole
@@ -154,6 +162,7 @@ final class WorkQueues {
             }
             details[box + "|" + detail.item.id] = detail
             if let number = detail.item.number { details[box + "|#\(number)"] = detail }
+            if let source = detail.item.source { details[box + "|" + source.ref.lowercased()] = detail }
             loadFailures[box + "|" + item] = nil
             return detail
         } catch let refused as BoxRefusal where refused.status == 404 {
@@ -167,9 +176,10 @@ final class WorkQueues {
     /// Why item `item` (an id or a number) couldn't be read just now, other than not being there.
     func loadFailure(box: String, item: String) -> String? { loadFailures[box + "|" + item] }
 
-    func detail(box: String, id: String?, number: Int?) -> WorkItemDetail? {
+    func detail(box: String, id: String?, number: Int?, source: String? = nil) -> WorkItemDetail? {
         if let id, let found = details[box + "|" + id] { return found }
         if let number { return details[box + "|#\(number)"] }
+        if let source { return details[box + "|" + source.lowercased()] }
         return nil
     }
 
@@ -345,25 +355,26 @@ final class WorkQueues {
 
     // MARK: Chips
 
-    /// What the refs in `text` name on `box`, as far as it's known now; the ones not known yet are
-    /// asked (once a minute at most each), and their chips come when the box answers.
-    func refs(in text: String, box: String, typing: Bool = false) -> [Int: WorkRef] {
-        var found = WorkItemRefs.find(in: text)
+    /// What the refs in `text` name on `box` (by the ref as asked: "243", `gh:owner/repo#12`), as
+    /// far as it's known now; the ones not known yet are asked (once a minute at most each), and
+    /// their chips come when the box answers.
+    func refs(in text: String, box: String, typing: Bool = false) -> [String: WorkRef] {
+        var found = WorkItemRefs.findRefs(in: text)
         // One being typed at the end of a draft isn't asked for until it's whole ("#2" of "#243").
         if typing, let last = found.last, last.range.upperBound == text.endIndex { found.removeLast() }
         guard !found.isEmpty else { return [:] }
-        let numbers = Set(found.map(\.number))
+        let keys = Set(found.map(\.ref))
         let now = Date()
         // Known ones too, a minute on: a chip shows where its item stands now, not when it came.
-        let wanted = numbers.filter { asked[box]?[$0].map { now.timeIntervalSince($0) > refreshAfter } ?? true }
+        let wanted = keys.filter { asked[box]?[$0].map { now.timeIntervalSince($0) > refreshAfter } ?? true }
         if !wanted.isEmpty {
-            for number in wanted { asked[box, default: [:]][number] = now }
+            for key in wanted { asked[box, default: [:]][key] = now }
             Task { await lookUp(Array(wanted), on: box) }
         }
         startRefreshing()
         let known = refs[box] ?? [:]
-        var named: [Int: WorkRef] = [:]
-        for number in numbers { if let ref = known[String(number)] { named[number] = ref } }
+        var named: [String: WorkRef] = [:]
+        for key in keys { if let ref = known[key] { named[key] = ref } }
         return named
     }
 
@@ -376,8 +387,8 @@ final class WorkQueues {
                 try? await Task.sleep(for: .seconds(30))
                 guard let self else { return }
                 let now = Date()
-                for (box, numbers) in asked {
-                    let recent = numbers.filter { now.timeIntervalSince($0.value) < 600 }.map(\.key)
+                for (box, keys) in asked {
+                    let recent = keys.filter { now.timeIntervalSince($0.value) < 600 }.map(\.key)
                     if !recent.isEmpty { await lookUp(recent, on: box) }
                 }
             }
@@ -388,11 +399,19 @@ final class WorkQueues {
     /// How long before a chip's item is asked about again when it's drawn (a test's own).
     @ObservationIgnored var refreshAfter: TimeInterval = 60
 
-    /// Asks the box what `numbers` name.
-    func lookUp(_ numbers: [Int], on box: String) async {
-        guard let client = client(box), !numbers.isEmpty else { return }
-        let list = numbers.prefix(200).map(String.init).joined(separator: ",")
-        guard let answer = try? await client.value(WorkRefs.self, "GET", "kuvo/work-queue/refs?refs=\(list)") else { return }
+    /// Asks the box what `keys` name ("243", `gh:owner/repo#12`): numbers alone as a box before
+    /// the POST takes them, any other in a list (a box that doesn't know one says null).
+    func lookUp(_ keys: [String], on box: String) async {
+        guard let client = client(box), !keys.isEmpty else { return }
+        let wanted = Array(keys.prefix(200))
+        let answer: WorkRefs?
+        if wanted.allSatisfy({ Int($0) != nil }) {
+            answer = try? await client.value(WorkRefs.self, "GET", "kuvo/work-queue/refs?refs=\(wanted.joined(separator: ","))")
+        } else {
+            struct Asked: Encodable { var refs: [String] }
+            answer = try? await client.value(WorkRefs.self, "POST", "kuvo/work-queue/refs", body: Asked(refs: wanted))
+        }
+        guard let answer else { return }
         var known = refs[box] ?? [:]
         for (key, ref) in answer.refs { known[key] = ref }
         if refs[box] != known { refs[box] = known }
@@ -407,10 +426,10 @@ final class WorkQueues {
 
     // MARK: Opening
 
-    /// Opens item `number` in the panel of the conversation in view: from a chip. It's read by
-    /// its number, so one from another conversation's queue opens too.
-    func open(_ number: Int, on box: String, panel: String) {
-        opened[panel] = Opened(box: box, number: number)
+    /// Opens the item `ref` names ("243", `gh:owner/repo#12`) in the panel of the conversation in
+    /// view: from a chip. It's read by that, so one from another conversation's queue opens too.
+    func open(ref: String, on box: String, panel: String) {
+        opened[panel] = Int(ref).map { Opened(box: box, number: $0) } ?? Opened(box: box, source: ref)
     }
 
     private func query(_ value: String) -> String {
@@ -423,9 +442,10 @@ final class WorkQueues {
 }
 
 extension AppModel {
-    /// Opens Work Queue item `number` (a chip clicked) in the panel of the conversation in view.
-    func openWorkItem(_ number: Int) {
-        workQueues.open(number, on: utilities.queueBox, panel: utilities.panelKey)
+    /// Opens the Work Queue item `ref` names (a chip clicked: "243", `gh:owner/repo#12`) in the
+    /// panel of the conversation in view.
+    func openWorkItem(_ ref: String) {
+        workQueues.open(ref: ref, on: utilities.queueBox, panel: utilities.panelKey)
         withAnimation(.ui) {
             utilities.showWorkQueue()
             tabs.showPanel()

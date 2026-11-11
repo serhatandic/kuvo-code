@@ -137,7 +137,11 @@ struct WorkQueuePanel: View {
         guard isSearching, !words.isEmpty else { return view }
         let number = Int(words.trimmingCharacters(in: CharacterSet(charactersIn: "#")))
         var found = view
-        let keeps = { (item: WorkItem) in item.title.localizedStandardContains(words) || (number != nil && item.number == number) }
+        // (An issue by its name too: "app#12", "#12".)
+        let keeps = { (item: WorkItem) in
+            item.title.localizedStandardContains(words) || (number != nil && item.source == nil && item.number == number)
+                || (item.source.map { $0.shownName.localizedStandardContains(words) || $0.ref.localizedStandardContains(words) } ?? false)
+        }
         found.items = view.items.filter(keeps)
         found.removed = view.removed.filter(keeps)
         return found
@@ -449,21 +453,24 @@ struct WorkQueuePanel: View {
     private func row(_ item: WorkItem, view: WorkQueueView, ordinal: Int?, wide: Bool) -> some View {
         // In progress hides which category an item is kept in: dropping there would move it to
         // one you can't see, so nothing drops on it.
-        let takesDrops = !WorkQueue.isInProgress(item)
+        let takesDrops = !WorkQueue.isInProgress(item) && WorkQueue.canMove(item)
         return WorkItemRow(item: item, ownerName: WorkQueue.ownerName(of: item, in: view), ordinal: ordinal, isSelected: wide && opened?.matches(item) == true,
                            openSession: item.sessions.first(where: \.working).map { linked in { app.open(.session(linked.session)) } }) {
             store.opened[panel] = WorkQueues.Opened(box: box, id: item.id, number: item.number)
         }
         .padding(.horizontal, 6)
-        // Dragged as it's written ("#243"): dropped in the composer, it names the item.
-        .draggable(item.number.map { "#\($0)" } ?? item.title)
+        // Dragged as it's written ("#243", `gh:owner/repo#12`): dropped in the composer, it names
+        // the item.
+        .draggable(item.written ?? item.title)
         .dropDestination(for: String.self) { ids, _ in takesDrops && drop(ids, at: .before(item)) }
         .contextMenu { menu(item, view: view) }
         .accessibilityActions {
             ForEach(WorkQueue.moveTargets(for: item, in: view.categories)) { category in
                 Button("Move to \(category.name)") { Task { await store.move(item, to: .category(category.id), on: box) } }
             }
-            Button("Move to Top") { Task { await store.move(item, to: .top(item.category), on: box) } }
+            if WorkQueue.canMove(item) {
+                Button("Move to Top") { Task { await store.move(item, to: .top(item.category), on: box) } }
+            }
             Button("Delete") { Task { await store.delete(item, on: box) } }
         }
     }
@@ -500,9 +507,11 @@ struct WorkQueuePanel: View {
     /// Items dropped on a row go before it (in its category); on a category, to its top.
     private func drop(_ ids: [String], at place: WorkQueues.Place?) -> Bool {
         guard let place, let view, let dragged = ids.first else { return false }
-        let number = dragged.hasPrefix("#") ? Int(dragged.dropFirst()) : nil
-        guard let item = view.items.first(where: { number != nil ? $0.number == number : $0.number == nil && $0.title == dragged }) else { return false }
+        guard let item = view.items.first(where: { $0.written == dragged }) ?? view.items.first(where: { $0.written == nil && $0.title == dragged }),
+              WorkQueue.canMove(item) else { return false }
         if case .before(let other) = place, other.id == item.id || other.computer?.key != item.computer?.key { return false }
+        // (An issue's Done is GitHub's.)
+        if item.source != nil, case .top(let category) = place, category == WorkCategory.done { return false }
         Task { await store.move(item, to: place, on: box) }
         return true
     }
@@ -547,22 +556,25 @@ struct WorkItemMenu: View {
         // (Its order is among the items on its own computer.)
         let mates = view.items.filter { $0.category == item.category && !WorkQueue.isInProgress($0) == !WorkQueue.isInProgress(item) && $0.computer?.key == item.computer?.key }
         let index = mates.firstIndex { $0.id == item.id }
-        Menu("Move To") {
-            ForEach(WorkQueue.moveTargets(for: item, in: view.categories)) { category in
-                Button(category.name) { Task { await store.move(item, to: .category(category.id), on: box) } }
+        // (An issue closed on GitHub stays Done until it's reopened there: only Delete.)
+        if WorkQueue.canMove(item) {
+            Menu("Move To") {
+                ForEach(WorkQueue.moveTargets(for: item, in: view.categories)) { category in
+                    Button(category.name) { Task { await store.move(item, to: .category(category.id), on: box) } }
+                }
             }
+            Button("Move to Top") { Task { await store.move(item, to: .top(item.category), on: box) } }
+                .disabled(index == 0)
+            Button("Move Up") {
+                if let index, index > 0 { Task { await store.move(item, to: .before(mates[index - 1]), on: box) } }
+            }
+            .disabled(index.map { $0 == 0 } ?? true)
+            Button("Move Down") {
+                if let index, index + 1 < mates.count { Task { await store.move(item, to: .after(mates[index + 1]), on: box) } }
+            }
+            .disabled(index.map { $0 + 1 >= mates.count } ?? true)
+            Divider()
         }
-        Button("Move to Top") { Task { await store.move(item, to: .top(item.category), on: box) } }
-            .disabled(index == 0)
-        Button("Move Up") {
-            if let index, index > 0 { Task { await store.move(item, to: .before(mates[index - 1]), on: box) } }
-        }
-        .disabled(index.map { $0 == 0 } ?? true)
-        Button("Move Down") {
-            if let index, index + 1 < mates.count { Task { await store.move(item, to: .after(mates[index + 1]), on: box) } }
-        }
-        .disabled(index.map { $0 + 1 >= mates.count } ?? true)
-        Divider()
         Button("Delete", role: .destructive) { Task { await store.delete(item, on: box) } }
     }
 }
@@ -643,10 +655,14 @@ struct WorkItemRow: View {
                                 .frame(maxWidth: 160)
                                 .padding(.vertical, 2)
                         }
-                        Text(footer(working: working))
-                            .font(.system(size: 11.5).monospacedDigit())
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
+                        HStack(spacing: 4) {
+                            // An issue's or a pull request's mark, before its name.
+                            if let brand = item.brand { BrandMarkView(brand, size: 11) }
+                            Text(footer(working: working))
+                                .lineLimit(1)
+                        }
+                        .font(.system(size: 11.5).monospacedDigit())
+                        .foregroundStyle(.secondary)
                     }
                     Spacer(minLength: 0)
                 }
@@ -674,7 +690,7 @@ struct WorkItemRow: View {
     private func spoken(working: Bool) -> String {
         var parts: [String] = []
         if let ordinal { parts.append("\(ordinal).") }
-        parts.append(item.number.map { "Work item \($0)" } ?? "New work item")
+        parts.append(item.spokenName)
         parts.append(item.title)
         if working { parts.append("in progress") }
         if let now = WorkQueue.currentWork(item) { parts.append(now) }
@@ -684,7 +700,8 @@ struct WorkItemRow: View {
         return parts.filter { !$0.isEmpty }.joined(separator: ", ")
     }
 
-    /// "#181 · Updated 8m ago · in Sign-in · on lab": the number, when it's in progress how fresh
+    /// "#181 · Updated 8m ago · in Sign-in · on lab" ("app#12 · …" for an issue, after GitHub's
+    /// mark): the number, when it's in progress how fresh
     /// it is, whose it is when it isn't the view's own, and the computer it's on when that's another.
     private func footer(working: Bool) -> String {
         var parts = [item.name]

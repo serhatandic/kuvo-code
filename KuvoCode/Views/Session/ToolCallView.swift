@@ -225,7 +225,7 @@ struct ToolCallView: View {
     private func queueSummary(_ name: String) -> String {
         let item = input?["item"]?.number.flatMap { Int(exactly: $0.rounded()) }.map { "#\($0)" } ?? string("item")
         let to = string("to").map { AgentMail.shared.name(of: $0) }
-        return WorkQueueWords.summary(name, item: item, title: string("title"), to: to, category: string("category"), undo: input?["undo"]?.bool == true, add: string("add"), isActive: isActive)
+        return WorkQueueWords.summary(name, item: item, title: string("title"), to: to, category: string("category"), undo: input?["undo"]?.bool == true, add: string("add"), isActive: isActive, issue: string("issue"))
     }
     private func relative(_ path: String?) -> String? {
         guard let path else { return nil }

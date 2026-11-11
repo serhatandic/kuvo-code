@@ -63,7 +63,7 @@ private struct ParserMarks: Hashable {
     var highlight: FindHighlight?
     var mentions: [Bot]
     var agents: [MessageMentions.Agent]
-    var refs: [Int: WorkRef]
+    var refs: [String: WorkRef]
 }
 
 extension Look.Typeface {

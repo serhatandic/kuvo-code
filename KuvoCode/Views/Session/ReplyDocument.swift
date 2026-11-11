@@ -76,7 +76,7 @@ struct ReplyDocument {
         var folders: [String]
         var diagrams: Bool
         /// The Work Queue items it names, as their chips show them.
-        var refs: [Int: WorkRef] = [:]
+        var refs: [String: WorkRef] = [:]
     }
 
     private static var cache: [CacheKey: ReplyDocument] = [:]

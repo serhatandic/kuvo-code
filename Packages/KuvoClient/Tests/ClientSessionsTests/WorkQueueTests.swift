@@ -116,12 +116,31 @@ import ClientSessions
          "computers":[{"key":"k","name":"lab","kind":"machine","id":"lab","at":5000}]}
         """
         let view = try JSONDecoder().decode(WorkQueueView.self, from: Data(json.utf8))
-        #expect(view.items.map(\.name) == ["gh:owner/repo#12", "#500"], "its old number is never shown")
+        #expect(view.items.map(\.name) == ["repo#12", "#500"], "its old number is never shown; an older box's ref, shown without its prefix and owner")
+        #expect(view.items.map(\.written) == ["gh:owner/repo#12", "#500"])
         #expect(view.items.map { WorkQueue.computerName(of: $0) } == [nil, "lab"])
         #expect(view.items[1].handing?.name == "Wren")
         #expect(view.computers.first?.date == Date(timeIntervalSince1970: 5))
         // A box from before piece 3 says nothing of other computers.
         let older = try JSONDecoder().decode(WorkQueueView.self, from: Data(#"{"owner":"all","categories":[],"items":[],"owners":[],"removed":[]}"#.utf8))
         #expect(older.computers.isEmpty)
+    }
+
+    @Test func anIssueClosedOnGitHubIsDoneWhereItWasKeptAndOnlyGitHubMovesItInOrOut() throws {
+        let json = """
+        {"owner":"ses_lead","categories":[{"id":"next","name":"Next","builtIn":true},{"id":"later","name":"Later","builtIn":true},{"id":"parked","name":"Parked","builtIn":true},{"id":"done","name":"Done","builtIn":true}],"owners":[],"removed":[],
+         "items":[{"id":"wqi_1","source":{"kind":"github","ref":"gh:kuvo/app#12","url":"https://github.com/kuvo/app/issues/12","name":"app#12"},"seen":{"state":"not_planned","at":5},"keptIn":"later","owner":"ses_lead","title":"Upload retries","category":"done","order":1,"inProgress":false,"sessions":[],"noteCount":0,"fileCount":0,"linkCount":0,"created":{"at":1,"by":{"user":true}},"updated":{"at":1,"by":{"user":true}}},
+                  {"id":"wqi_2","source":{"kind":"github-pr","ref":"gh:kuvo/app#57","name":"app#57"},"seen":{"state":"open","at":5},"owner":"ses_lead","title":"Keep the name","category":"next","order":2,"inProgress":false,"sessions":[],"noteCount":0,"fileCount":0,"linkCount":0,"created":{"at":1,"by":{"user":true}},"updated":{"at":1,"by":{"user":true}}}]}
+        """
+        let view = try JSONDecoder().decode(WorkQueueView.self, from: Data(json.utf8))
+        let (closed, open) = (view.items[0], view.items[1])
+        #expect(closed.isDone && closed.keptIn == "later" && closed.isStruck)
+        #expect([closed.name, open.name] == ["app#12", "app#57"])
+        #expect([closed.spokenName, open.spokenName] == ["GitHub issue app#12", "GitHub pull request app#57"])
+        #expect(closed.brand == "github")
+        #expect(WorkQueue.moveTargets(for: closed, in: view.categories).isEmpty, "closed on GitHub: it stays Done until it's reopened there")
+        #expect(!WorkQueue.canMove(closed))
+        #expect(WorkQueue.moveTargets(for: open, in: view.categories).map(\.id) == ["later", "parked"], "never into Done")
+        #expect(WorkRef(closed).name == "app#12" && WorkRef(closed).isStruck)
     }
 }
