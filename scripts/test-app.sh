@@ -24,8 +24,15 @@ check_console "$(stat -f %Su /dev/console 2>/dev/null || true)"
 # A heavy job of the Mac's (scripts/heavy.sh, kind mac: the one app suite that drives the UI, which
 # runs alone; builds and package tests are mac-build and run beside it). It waits for a busy Mac,
 # unless whoever started it took that turn already.
-if ! scripts/heavy.sh --holds mac; then
-    exec scripts/heavy.sh mac /bin/sh "$PWD/scripts/test-app.sh"
+# Taken with the canonical heavy.sh (kuvo-ai's in ~/Projects, which runs every job; KUVO_HEAVY_SH for
+# another), or this checkout's when there's none.
+HEAVY="${KUVO_HEAVY_SH:-}"
+if [ -z "$HEAVY" ]; then
+    HEAVY="${KUVO_HEAVY_CANONICAL-$HOME/Projects/kuvo-ai/scripts/heavy.sh}"
+    [ -n "$HEAVY" ] && [ -f "$HEAVY" ] || HEAVY=scripts/heavy.sh
+fi
+if ! /bin/sh "$HEAVY" --holds mac; then
+    exec /bin/sh "$HEAVY" mac /bin/sh "$PWD/scripts/test-app.sh"
 fi
 
 # One run at a time, whoever starts it: every run shares the test copy's settings and caches in

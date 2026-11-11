@@ -5,12 +5,15 @@ old way (under the one lock for every kind) holds up every kind, a busy Mac hold
 waiting for a lane go in line, high-priority ones first, however many come at once.
 Each test has locks of its own (KUVO_HEAVY_DIR), and asks with KUVO_HEAVY_WAIT=0, which says what a
 job would wait for instead of waiting."""
+import atexit
 import os
+import pty
 import select
 import shlex
 import shutil
 import signal
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -23,7 +26,46 @@ WAITS = 75
 def clean_environment():
     """The environment of the run without what a job of heavy.sh leaves in it (a test run from inside
     one would otherwise see that job's turn and slot)."""
-    return {k: v for k, v in os.environ.items() if k not in ("KUVO_HEAVY_SLOTS", "KUVO_HEAVY_HELD", "KUVO_HEAVY_HOLDING", "KUVO_HEAVY_SLOT", "KUVO_HEAVY_BUILD_SUFFIX", "KUVO_TEST_SIMULATOR", "KUVO_HEAVY_WAIT", "KUVO_HEAVY_LIMIT", "KUVO_HEAVY_MAC_FIRST_FOR", "KUVO_HEAVY_MEMORY", "KUVO_HEAVY_MEMORY_WAIT_FOR", "KUVO_HEAVY_PRIORITY")}
+    # (And this copy runs, not the canonical one: KUVO_HEAVY_CANONICAL empty.)
+    return dict({k: v for k, v in os.environ.items() if k not in ("KUVO_HEAVY_SLOTS", "KUVO_HEAVY_HELD", "KUVO_HEAVY_HOLDING", "KUVO_HEAVY_SLOT", "KUVO_HEAVY_BUILD_SUFFIX", "KUVO_TEST_SIMULATOR", "KUVO_HEAVY_WAIT", "KUVO_HEAVY_LIMIT", "KUVO_HEAVY_MAC_FIRST_FOR", "KUVO_HEAVY_MEMORY", "KUVO_HEAVY_MEMORY_WAIT_FOR", "KUVO_HEAVY_PRIORITY", "KUVO_HEAVY_HANDED", "KUVO_HEAVY_STUCK_AFTER")}, KUVO_HEAVY_CANONICAL="")
+
+
+# Prints what the priority of the process it runs in is: on macOS 1 for the background policy
+# (`taskpolicy -b`: getpriority's PRIO_DARWIN_PROCESS), 0 for the default; elsewhere its nice value.
+PRIORITY_PROBE = """import os, sys
+if sys.platform == "darwin":
+    import ctypes
+    print(ctypes.CDLL(None).getpriority(4, 0))
+else:
+    print(os.getpriority(os.PRIO_PROCESS, 0))
+"""
+PROBE = ["/bin/sh", "-c", 'exec "$0" -S -c "$1"', sys.executable, PRIORITY_PROBE]  # in a child of the job's shell
+
+
+def is_low(printed):
+    """Whether what the probe printed is background priority."""
+    value = int(printed.strip().splitlines()[-1])
+    return value == 1 if sys.platform == "darwin" else value >= 15
+
+
+_STAND_IN = None
+
+
+def without_background_priority(env):
+    """`env` with a `taskpolicy` first on PATH that runs the command as it is (and, with FAKE_POLICY_LOG
+    set, writes the option it was given there). Jobs run at background priority, which on a Mac under
+    heavy load can take minutes for what a test starts in a second: the tests that aren't about the
+    policy run the helper's jobs as they are, and the tests of it look at what `taskpolicy` is asked,
+    and, once, at the real policy."""
+    global _STAND_IN
+    if _STAND_IN is None:
+        _STAND_IN = tempfile.mkdtemp()
+        atexit.register(shutil.rmtree, _STAND_IN, ignore_errors=True)
+        path = os.path.join(_STAND_IN, "taskpolicy")
+        with open(path, "w") as f:
+            f.write('#!/bin/sh\n[ -z "${FAKE_POLICY_LOG-}" ] || echo "$1" >> "$FAKE_POLICY_LOG"\n[ "$1" = -b ] && shift\nexec "$@"\n')
+        os.chmod(path, 0o755)
+    return dict(env, PATH=_STAND_IN + os.pathsep + env["PATH"])
 
 
 class Held:
@@ -51,7 +93,7 @@ class HeavyTests(unittest.TestCase):
     def setUp(self):
         self.locks = tempfile.mkdtemp()
         # As from the 29th, when the old single lock is over (the day before, test_the_day_before).
-        self.env = dict(clean_environment(), KUVO_HEAVY_DIR=self.locks, KUVO_HEAVY_LOAD="1000", KUVO_HEAVY_MEMORY="0", KUVO_HEAVY_OLD_UNTIL="20000101")
+        self.env = without_background_priority(dict(clean_environment(), KUVO_HEAVY_DIR=self.locks, KUVO_HEAVY_LOAD="1000", KUVO_HEAVY_MEMORY="0", KUVO_HEAVY_OLD_UNTIL="20000101"))
 
     def run_heavy(self, kind, *command, **env):
         result = subprocess.run([HEAVY, kind, *command], env=dict(self.env, KUVO_HEAVY_WAIT="0", **env), capture_output=True, text=True, timeout=30)
@@ -676,7 +718,7 @@ class HeavyTests(unittest.TestCase):
         with open(stand_in, "w") as f:
             f.write("#!/bin/sh\nexit 1\n")
         os.chmod(stand_in, 0o755)
-        return dict(self.env, PATH=folder + os.pathsep + os.environ["PATH"])
+        return dict(self.env, PATH=folder + os.pathsep + self.env["PATH"])
 
     def test_without_ps_a_job_runs_and_still_knows_it_holds_its_turn(self):
         env = self.refused_ps()
@@ -709,6 +751,108 @@ class HeavyTests(unittest.TestCase):
         self.assertEqual(code, WAITS)
         self.assertIn("The Mac is busy", said)
         self.assertEqual(self.run_heavy("box", "true", KUVO_HEAVY_LOAD="1000")[0], 0)
+
+    def test_unless_asked_a_job_waits_for_neither_the_load_nor_a_share_of_memory(self):
+        """Background priority keeps the Mac usable: by default only thrashing holds a job back (a
+        swap rate it can't reach here, and pressure that isn't critical)."""
+        level = subprocess.run(["sysctl", "-n", "kern.memorystatus_vm_pressure_level"], capture_output=True, text=True).stdout.strip()
+        if level == "4":
+            self.skipTest("this Mac's memory pressure is critical")
+        env = {k: v for k, v in self.env.items() if k not in ("KUVO_HEAVY_LOAD", "KUVO_HEAVY_MEMORY")}
+        result = subprocess.run([HEAVY, "box", "true"], env=dict(env, KUVO_HEAVY_WAIT="0", KUVO_HEAVY_SWAP="999999"), capture_output=True, text=True, timeout=30)
+        self.assertEqual((result.returncode, result.stderr), (0, ""))
+
+    def test_a_job_waiting_for_room_holds_up_no_one_in_its_lane(self):
+        """It waits before it takes its turn: another job of its kind gets the lane meanwhile."""
+        waiting = subprocess.Popen([HEAVY, "box", "true"], env=dict(self.env, KUVO_HEAVY_LOAD="-1"), stderr=subprocess.PIPE, text=True, start_new_session=True)
+        try:
+            self.assertTrue(select.select([waiting.stderr], [], [], 30)[0], "it said nothing")
+            self.assertIn("Waiting while the Mac is busy", waiting.stderr.readline())
+            self.assertFalse(subprocess.run(["lockf", "-ks", "-t", "0", self.lock("box"), "true"]).returncode, "it holds the box lane's lock")
+            self.assertEqual(self.run_heavy("box", "true"), (0, ""))
+            self.assertIsNone(waiting.poll(), "it started")
+        finally:
+            os.killpg(waiting.pid, signal.SIGKILL)
+            waiting.wait(timeout=30)
+            waiting.stderr.close()
+
+    def test_the_app_suite_holds_other_jobs_back_for_two_minutes_at_most_unless_told(self):
+        marker = os.path.join(self.locks, f"kuvo-code-heavy-mac-first-{os.getuid()}")
+        env = {k: v for k, v in self.env.items() if k != "KUVO_HEAVY_MAC_FIRST_FOR"}
+        for ago, waits in ((60, True), (150, False)):
+            with self.subTest(ago=ago):
+                with open(marker, "w") as f:
+                    f.write(f"{os.getpid()} {int(time.time()) - ago}\n")
+                result = subprocess.run([HEAVY, "box", "true"], env=dict(env, KUVO_HEAVY_WAIT="0"), capture_output=True, text=True, timeout=30)
+                self.assertEqual(result.returncode, WAITS if waits else 0, result.stderr)
+
+    def test_a_job_is_started_under_background_priority_in_every_way_it_starts(self):
+        """Whatever way a job starts, its command is run by `taskpolicy -b` (macOS): a stand-in logs what
+        it's asked. (Elsewhere, nice and ionice, which the test of the real policy sees.)"""
+        if sys.platform != "darwin":
+            self.skipTest("taskpolicy is macOS's")
+        log = os.path.join(self.locks, "policy")
+        env = dict(self.env, FAKE_POLICY_LOG=log, KUVO_HEAVY_WAIT="0")
+        def policies(*command, **more):
+            if os.path.exists(log):
+                os.remove(log)
+            result = subprocess.run(command, env=dict(env, **more), capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL, start_new_session=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            with open(log) as f:
+                return f.read().split()
+        with self.subTest("a job"):
+            self.assertEqual(policies(HEAVY, "box", "true"), ["-b"])
+        with self.subTest("each kind"):
+            for kind in ("mac", "mac-build", "phone-build", "phone"):
+                self.assertEqual(policies(HEAVY, kind, "true"), ["-b"], kind)
+        with self.subTest("inside another job"):
+            self.assertEqual(policies(HEAVY, "box", HEAVY, "box", "true"), ["-b", "-b"])
+            self.assertEqual(policies(HEAVY, "box", HEAVY, "phone", "true"), ["-b", "-b"])
+        with self.subTest("the old way (the single lock)"):
+            self.assertEqual(policies(HEAVY, "box", "true", KUVO_HEAVY_OLD_UNTIL="20991231"), ["-b"])
+        with self.subTest("under a lock of an older script"):
+            self.assertEqual(policies("lockf", "-k", self.old_lock("box"), HEAVY, "box", "true"), ["-b"])
+        with self.subTest("in a terminal"):
+            if os.path.exists(log):
+                os.remove(log)
+            pid, fd = pty.fork()
+            if pid == 0:
+                try:
+                    os.execve(HEAVY, [HEAVY, "box", "true"], env)
+                finally:
+                    os._exit(127)
+            try:
+                while select.select([fd], [], [], 60)[0]:
+                    try:
+                        if not os.read(fd, 4096):
+                            break
+                    except OSError:  # the terminal's end: the job is over
+                        break
+                _, status = os.waitpid(pid, 0)
+            finally:
+                os.close(fd)
+            self.assertEqual(os.waitstatus_to_exitcode(status), 0)
+            with open(log) as f:
+                self.assertEqual(f.read().split(), ["-b"])
+
+    def test_a_job_runs_at_background_priority_for_real(self):
+        """The policy the job's own children see (the real `taskpolicy`, or nice), not a process started
+        by hand, which is at the default. A background job gets almost no CPU on a Mac that's very
+        busy: if it hasn't run in two minutes, the test can't say."""
+        baseline = subprocess.run(PROBE, capture_output=True, text=True, timeout=120).stdout
+        if is_low(baseline):  # run under heavy.sh itself, say
+            self.skipTest("this test run is at background priority already")
+        env = dict(self.env, PATH=os.environ["PATH"], KUVO_HEAVY_WAIT="0")
+        try:
+            result = subprocess.run([HEAVY, "box", *PROBE], env=env, capture_output=True, text=True, timeout=120, stdin=subprocess.DEVNULL, start_new_session=True)
+        except subprocess.TimeoutExpired:
+            self.skipTest("the Mac is too busy for a job at background priority to run")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(is_low(result.stdout), result.stdout)
+
+    def test_a_job_that_fails_keeps_its_answer_under_the_lower_priority(self):
+        result = subprocess.run([HEAVY, "box", "/bin/sh", "-c", 'echo "$1"; exit 3', "sh", "a b"], env=self.env, capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL, start_new_session=True)
+        self.assertEqual((result.returncode, result.stdout), (3, "a b\n"))
 
     def waiting_mac(self, **env):
         """A Mac app suite that has its turn and waits for the Mac to be less busy (to it, the Mac is
@@ -837,6 +981,101 @@ class HeavyTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 64)
                 self.assertIn("KUVO_HEAVY_MEMORY is a share of memory in percent", result.stderr)
 
+    def script(self, text):
+        folder = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, folder, ignore_errors=True)
+        path = os.path.join(folder, "heavy.sh")
+        with open(path, "w") as f:
+            f.write(text)
+        os.chmod(path, 0o755)
+        return path
+
+    def test_a_copy_that_isnt_the_canonical_one_hands_its_job_to_it(self):
+        stand_in = self.script('#!/bin/sh\nfor a in "$@"; do echo "[$a]"; done; echo "$KUVO_HEAVY_HANDED $FROM_CALLER"\n')
+        result = subprocess.run([HEAVY, "box", "/bin/sh", "-c", "a b", "c"], env=dict(self.env, KUVO_HEAVY_CANONICAL=stand_in, FROM_CALLER="kept"), capture_output=True, text=True, timeout=30)
+        self.assertEqual((result.returncode, result.stdout), (0, "[box]\n[/bin/sh]\n[-c]\n[a b]\n[c]\n1 kept\n"))
+        # Asked how it stands, too: one copy says it all.
+        result = subprocess.run([HEAVY, "--holds", "mac"], env=dict(self.env, KUVO_HEAVY_CANONICAL=stand_in), capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.stdout, "[--holds]\n[mac]\n1 \n")
+
+    def test_the_canonical_copy_runs_the_job_and_what_the_job_starts_is_handed_on_again(self):
+        canonical = self.script(Path(HEAVY).read_text())
+        env = dict(self.env, KUVO_HEAVY_CANONICAL=canonical)
+        said = 'echo "$0 ${KUVO_HEAVY_HANDED-none}"'
+        result = subprocess.run([HEAVY, "box", "/bin/sh", "-c", said], env=env, capture_output=True, text=True, timeout=30)
+        self.assertEqual((result.returncode, result.stdout), (0, "/bin/sh none\n"))
+        # It holds the box lane, taken by the canonical copy: the lock this copy knows too.
+        job = Held([HEAVY, "box"], env)
+        try:
+            self.assertEqual(self.run_heavy("box", "true")[0], WAITS)
+        finally:
+            job.let_go()
+
+    def test_a_copy_hands_on_its_job_once_and_never_to_itself(self):
+        # The canonical copy is this one (by a link, even), missing, or not asked for: it runs.
+        folder = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, folder, ignore_errors=True)
+        link = os.path.join(folder, "heavy.sh")
+        os.symlink(HEAVY, link)
+        for canonical in (HEAVY, link, os.path.join(folder, "gone.sh"), ""):
+            with self.subTest(canonical=canonical):
+                result = subprocess.run([HEAVY, "box", "/bin/sh", "-c", "echo ran"], env=dict(self.env, KUVO_HEAVY_CANONICAL=canonical), capture_output=True, text=True, timeout=30)
+                self.assertEqual((result.returncode, result.stdout), (0, "ran\n"))
+        # A canonical copy that hands it back (another copy that says some other is canonical): it
+        # runs there, and isn't handed on again.
+        back = self.script(f'#!/bin/sh\nexec "{HEAVY}" "$@"\n')
+        result = subprocess.run([HEAVY, "box", "/bin/sh", "-c", "echo ran"], env=dict(self.env, KUVO_HEAVY_CANONICAL=back), capture_output=True, text=True, timeout=30)
+        self.assertEqual((result.returncode, result.stdout), (0, "ran\n"))
+
+    def status(self):
+        result = subprocess.run([HEAVY, "status"], env=self.env, capture_output=True, text=True, timeout=60)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return {line.split(":", 1)[0]: line for line in result.stdout.splitlines()}
+
+    def older_holder(self, kind="box"):
+        """A slot held as an older copy held it while it waited for room: its lock, and only a
+        `sleep` under it."""
+        holder = subprocess.Popen(["lockf", "-k", self.lock(kind), "/bin/sh", "-c", "sleep 600; :"], env=self.env, start_new_session=True)
+        def stop():
+            os.killpg(holder.pid, signal.SIGKILL)
+            holder.wait(timeout=30)
+        self.addCleanup(stop)
+        for _ in range(100):
+            if subprocess.run(["lockf", "-ks", "-t", "0", self.lock(kind), "true"]).returncode != 0:
+                break
+            time.sleep(0.05)
+        return holder
+
+    def test_status_says_for_each_lane_who_holds_it_whether_it_runs_and_who_waits(self):
+        lanes = self.status()
+        self.assertEqual(sorted(lanes), ["box", "mac", "mac-build", "phone"])
+        job = Held([HEAVY, "box"], self.env)
+        try:
+            self.assertRegex(self.status()["box"], r"^box: slot 1 pid \d+ \(.+\), held \d+s, running \d+s; none waiting$")
+            waiting = self.queued("box", ["true"])
+            self.assertRegex(self.status()["box"], r"; 1 waiting, the longest for \d+s$")
+        finally:
+            job.let_go()
+        self.assertEqual(waiting.wait(timeout=30), 0)
+        self.assertEqual(self.status()["box"], "box: slot 1 free; none waiting")
+        holder = self.older_holder()
+        self.assertRegex(self.status()["box"], rf"^box: slot 1 pid {holder.pid} \(an older heavy.sh\)(, held for [\d:]+)?, not running its command: it waits for room under the lock; none waiting$")
+
+    def test_those_in_line_say_when_a_slots_holder_hasnt_run_its_command_for_a_while(self):
+        holder = self.older_holder()
+        waiting = self.queued("box", ["true"], KUVO_HEAVY_STUCK_AFTER="0")
+        self.assertTrue(select.select([waiting.stderr], [], [], 30)[0], "it said nothing")
+        said = waiting.stderr.readline()
+        self.assertIn("slot 1 of the box lane has been held for", said)
+        self.assertIn(f"without its command running: pid {holder.pid} (an older heavy.sh)", said)
+
+    def test_a_job_given_its_slot_runs_its_command_at_once_whatever_the_mac_says(self):
+        """Nothing waits under a lane's lock: a job that got its slot while the Mac was busy and short
+        of memory (to it) starts its command at once."""
+        busy = dict(self.env, KUVO_HEAVY_LOAD="-1", KUVO_HEAVY_MEMORY="100")
+        inside = subprocess.run(["lockf", "-k", self.lock("box"), "/bin/sh", "-c", f'KUVO_HEAVY_HOLDING="{self.lock("box")}:$$" exec "{HEAVY}" box /bin/sh -c "echo ran"'], env=dict(busy, KUVO_HEAVY_WAIT="0"), capture_output=True, text=True, timeout=30)
+        self.assertEqual((inside.returncode, inside.stdout), (0, "ran\n"), inside.stderr)
+
     def test_its_command_runs_with_its_arguments_and_answer(self):
         result = subprocess.run([HEAVY, "box", "/bin/sh", "-c", 'echo "$1"; exit 3', "sh", "a b"], env=self.env, capture_output=True, text=True, timeout=30)
         self.assertEqual((result.returncode, result.stdout), (3, "a b\n"))
@@ -856,7 +1095,7 @@ class StoppingTests(unittest.TestCase):
     def setUp(self):
         self.locks = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.locks, ignore_errors=True)
-        self.env = dict(clean_environment(), KUVO_HEAVY_DIR=self.locks, KUVO_HEAVY_LOAD="1000", KUVO_HEAVY_MEMORY="0", KUVO_HEAVY_OLD_UNTIL="20000101", KUVO_HEAVY_WAIT="0")
+        self.env = without_background_priority(dict(clean_environment(), KUVO_HEAVY_DIR=self.locks, KUVO_HEAVY_LOAD="1000", KUVO_HEAVY_MEMORY="0", KUVO_HEAVY_OLD_UNTIL="20000101", KUVO_HEAVY_WAIT="0"))
         self.pids = []
 
     def tearDown(self):
