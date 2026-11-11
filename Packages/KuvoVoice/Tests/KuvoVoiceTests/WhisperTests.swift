@@ -205,7 +205,7 @@ func eachPhraseIsWrittenAfterItsPauseAndDonePutsInTheLast() async throws {
     }
     #expect(!listened)
     guard case .failed(let failure) = voice.phase else { Issue.record("not failed: \(voice.phase)"); return }
-    #expect(failure.message.hasPrefix("The voice model couldn’t load"))
+    #expect(failure.message.hasPrefix("Whisper couldn’t load"))
     #expect(!voice.keepsWords)
     voice.finish()
     #expect(voice.phase == .idle)
@@ -229,11 +229,10 @@ func eachPhraseIsWrittenAfterItsPauseAndDonePutsInTheLast() async throws {
     voice.start(clip: clip)
     #expect(voice.status == "Getting voice ready…")
     while voice.isActive { await Task.yield() }
-    guard case .failed = voice.phase else { Issue.record("not failed: \(voice.phase)"); return }
+    guard case .failed(let failure) = voice.phase else { Issue.record("not failed: \(voice.phase)"); return }
     #expect(!voice.listened)
     #expect(voice.status == "Voice input couldn’t start")
-    #expect(!voice.status.contains("stopped"))
-    #expect(!VoiceInput.Failure.microphoneDenied.message.contains("stopped"))
+    #expect(!voice.status.contains("stopped") && !failure.message.contains("stopped"))
     // One that listened, then failed, did stop.
     voice.showSample(confirmed: "", guess: "")
     #expect(voice.listened)

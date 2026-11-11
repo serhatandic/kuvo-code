@@ -37,7 +37,7 @@ struct VoiceComposerRow: View {
                         .frame(maxWidth: 260)
                 } else {
                     Spinner(size: 13)
-                    Text("Getting voice ready…")
+                    Text(voice.status)
                         .foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 8)

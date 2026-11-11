@@ -330,7 +330,7 @@ public final class VoiceInput {
             try await dictation.prepare()
         } catch {
             await dictation.stop()
-            return fail(.other("The voice model couldn’t load. Try again; if it still doesn’t, remove the voice model in Settings and download it again."), run: run)
+            return fail(.other("Whisper couldn’t load. Try again; if it still doesn’t, remove its download under Voice Input in Settings and download it again."), run: run)
         }
         guard self.run == run else { return await dictation.stop() }
         // Done while it loaded: it's finishing, and writes what was said.
