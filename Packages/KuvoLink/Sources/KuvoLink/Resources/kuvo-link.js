@@ -4383,7 +4383,8 @@ function lookalike(where) {
 // a start-up script), they'd go there as if it were the folder's. So a path in the folder that a
 // link leads out of it is given as where it really is, which the engine's rules for a folder
 // outside the project then apply to (Settings › Permissions, a bot's own).
-const PATHS = { read: "path", write: "path", edit: "path", glob: "path", grep: "path" }
+// (And the image tool's, which writes the picture it makes where its \`path\` says.)
+const PATHS = { read: "path", write: "path", edit: "path", glob: "path", grep: "path", image: "path" }
 // A patch's lines that name a file, as the engine reads them: each line (without a last \\r) with
 // the spaces around it trimmed.
 const PATCHED = ["*** Add File: ", "*** Update File: ", "*** Delete File: ", "*** Move to: "]
@@ -12077,7 +12078,8 @@ async function asksIn(target, session, signal) {
         continue;
       const resources = Array.isArray(each.resources) ? each.resources.filter((one) => typeof one === "string") : [];
       const source = isObject(each.source) ? each.source : null;
-      permissions.push({ id: each.id, asker, action: String(each.action ?? ""), resources, ...typeof source?.id === "string" ? { call: source.id } : {}, ...typeof source?.messageID === "string" ? { message: source.messageID } : {}, ...each.sandboxed === true ? { sandboxed: true } : {} });
+      const filepath = isObject(each.metadata) && typeof each.metadata.filepath === "string" ? each.metadata.filepath : null;
+      permissions.push({ id: each.id, asker, action: String(each.action ?? ""), resources, ...typeof source?.id === "string" ? { call: source.id } : {}, ...typeof source?.messageID === "string" ? { message: source.messageID } : {}, ...each.sandboxed === true ? { sandboxed: true } : {}, ...filepath ? { filepath } : {} });
     }
     const forms = await call(target, "GET", `${at}/form`, undefined, signal).catch(() => null);
     if (!Array.isArray(forms))
@@ -18152,20 +18154,25 @@ function changedBy(seen, folder) {
   if (RUNNING.has(tool))
     return null;
   const named = [];
-  for (const key of ["filePath", "file_path", "notebook_path", "path", "file"])
-    if (typeof seen.input[key] === "string")
-      named.push(seen.input[key]);
-  for (const key of ["patchText", "patch", "input", "diff"]) {
-    const text = seen.input[key];
-    if (typeof text === "string")
-      for (const found of text.matchAll(/^\*\*\* (?:Add|Update|Delete) File: (.+)$|^\*\*\* Move to: (.+)$|^(?:\+\+\+|---) (?:[ab]\/)?(.+)$/gm)) {
-        const each = (found[1] ?? found[2] ?? found[3] ?? "").trim();
+  for (const [key, value] of Object.entries(seen.input)) {
+    if (typeof value !== "string")
+      continue;
+    if (/\*\*\* (Begin Patch|Add File:|Update File:|Delete File:|Move to:)/.test(value) || /patch|diff/i.test(key) && /^\s*(\+\+\+|---) /m.test(value)) {
+      for (const line of value.split(`
+`).map((each) => each.replace(/\r$/, "").trim())) {
+        const header = /^\*\*\* (?:Add File|Update File|Delete File|Move to): (.*)$/s.exec(line) ?? /^(?:\+\+\+|---) (?:[ab]\/)?(.*)$/s.exec(line);
+        const each = header?.[1]?.trim();
         if (each && each !== "/dev/null")
           named.push(each);
       }
+      continue;
+    }
+    if (/(^|_)(file|path|dir|folder|directory|destination|dest|target|output|to)s?$/i.test(key) || /path|file/i.test(key))
+      named.push(value);
   }
   return named.map((raw) => ({ raw, path: path64.resolve(folder, raw.replace(/^~(?=\/|$)/, homeFolder())), folder: false }));
 }
+var UNPLAIN = /[\x00-\x1f\x7f\u0085\u2028\u2029]/;
 function plainlyIn(file, folder, asFolder = false) {
   if (!path64.isAbsolute(file) || file.split("/").includes(".."))
     return null;
@@ -18192,7 +18199,8 @@ function plainlyIn(file, folder, asFolder = false) {
       if (kind.isSymbolicLink())
         return null;
       const last = at === parts.length - 1;
-      if (!last || asFolder ? !kind.isDirectory() : !kind.isFile() || kind.nlink !== 1)
+      const asDirectory = !last || asFolder === true || asFolder === null && kind.isDirectory();
+      if (asDirectory ? !kind.isDirectory() : !kind.isFile() || kind.nlink !== 1)
         return null;
     }
     return path64.join(folder, ...parts.slice(top));
@@ -18272,13 +18280,18 @@ async function answerPermission(source, id, sessionID, signal, found) {
   const trees = typeof folder === "string" ? await projectTrees(folder) : [];
   const policy = fencePolicy();
   const places = [...own.map(foundAt), ...trees];
-  const changes = seen ? changedBy(seen, folder) : null;
-  const asked = changes ?? permission.resources.filter((each) => each !== "*").map((each) => ({ raw: each, path: path64.resolve(folder, each.replace(/^~(?=\/|$)/, homeFolder()).replace(/\/\*$/, "") || "/"), folder: true }));
+  const resolve = (raw) => path64.resolve(folder, raw.replace(/^~(?=\/|$)/, homeFolder()));
+  const resources = permission.resources.map((raw) => ({ raw, path: resolve(raw.replace(/\/\*$/, "") || "/"), folder: raw.endsWith("/*") ? true : null }));
+  const changes = [
+    ...resources,
+    ...permission.filepath ? [{ raw: permission.filepath, path: resolve(permission.filepath), folder: false }] : [],
+    ...seen ? changedBy(seen, folder) ?? [] : []
+  ];
   const plainly = (change) => places.some((place) => {
     const real = plainlyIn(change.path, place, change.folder);
     return real !== null && !walledForOwn(real, policy, own);
   });
-  const ownChanges = asked.length > 0 && asked.every((each) => !each.raw.split("/").includes("..") && plainly(each)) && actions.every((action) => action.kind === "file");
+  const ownChanges = resources.length > 0 && !permission.resources.includes("*") && changes.every((each) => !each.raw.split("/").includes("..") && !UNPLAIN.test(each.raw) && plainly(each)) && actions.every((action) => action.kind === "file");
   if (ownChanges) {
     await reply({ decision: "once" });
     noteReview(id, sessionID, "allowed", call2);
