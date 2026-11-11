@@ -35,6 +35,9 @@ final class MemoryRelay: @unchecked Sendable {
         /// Takes frames and never hears them, as a connection that died without closing does
         /// until the relay notices.
         fileprivate var deaf = false
+        /// Frames for it held, while it's too busy to read them (`stall`), heard in order once it
+        /// isn't; nil while it reads them as they come.
+        fileprivate var stalled: [RelayMessage]?
 
         init(address: LinkAddress, relay: MemoryRelay) {
             self.address = address
@@ -76,6 +79,21 @@ final class MemoryRelay: @unchecked Sendable {
         lock.withLock { connected[address]?.deaf = true }
     }
 
+    /// Whoever holds the connection at `address` is too busy to read what comes (a box under
+    /// heavy load) until `unstall`: what comes meanwhile waits, and is heard then, in order.
+    func stall(_ address: LinkAddress) {
+        lock.withLock { connected[address]?.stalled = [] }
+    }
+
+    func unstall(_ address: LinkAddress) {
+        let (connection, held) = lock.withLock { () -> (Connection?, [RelayMessage]) in
+            let connection = connected[address]
+            defer { connection?.stalled = nil }
+            return (connection, connection?.stalled ?? [])
+        }
+        for message in held { connection?.inbox.yield(message) }
+    }
+
     fileprivate func route(_ message: RelayMessage, from sender: Connection) {
         // A replaced connection's frames, still coming as it closes, go nowhere.
         if tellsGone, lock.withLock({ connected[sender.address] !== sender }) { return }
@@ -105,7 +123,13 @@ final class MemoryRelay: @unchecked Sendable {
             return target
         }
         if let target {
-            if !lock.withLock({ target.deaf }) { target.inbox.yield(.deliver(from: sender.address, payload: payload)) }
+            let heard = lock.withLock { () -> Bool in
+                if target.deaf { return false }
+                guard target.stalled != nil else { return true }
+                target.stalled?.append(.deliver(from: sender.address, payload: payload))
+                return false
+            }
+            if heard { target.inbox.yield(.deliver(from: sender.address, payload: payload)) }
         } else {
             sender.inbox.yield(.unreachable(to))
         }
@@ -768,6 +792,26 @@ private func collect(_ stream: LinkResponse) async throws -> (status: Int, heade
             await clock.advance(by: Link.checkTimeout, waking: 2)
             await #expect(throws: LinkError.timedOut) { try await sending.value }
         }
+    }
+
+    /// A host too busy to read what comes for several seconds (a box under a load of 200 stalled
+    /// 5.5 s, #443) is still there: the check gives it longer than that before the session, and
+    /// every request and feed on it, ends; its answers then come through as ever.
+    @Test(.timeLimit(.minutes(1))) func aHostTooBusyToAnswerForSeveralSecondsKeepsItsSession() async throws {
+        let relay = MemoryRelay()
+        let clock = ManualClock()
+        let host = TestHost(relay: relay, handle: echo)
+        let client = await phone(on: relay, clock: clock)
+        let paired = try await client.pair(host.link)
+        relay.stall(host.secret.address)
+        let sending = Task { try await collect(client.send(LinkRequest(path: "api/info"), to: paired)) }
+        // The request waits its time, and a check goes; the host stays busy for 10 s of it.
+        await clock.advance(by: Link.answerWithin)
+        // (The check's own wait, and the request's next, both waiting before time moves on.)
+        await clock.sleepers(2, dueWithin: .seconds(3600))
+        await clock.advance(by: .seconds(10))
+        relay.unstall(host.secret.address)
+        #expect(try await sending.value.status == 200)
     }
 
     /// A big body still on its way out: the host can't answer what hasn't reached it, so the

@@ -244,8 +244,8 @@ scripts/test-box.sh box <test-filter>
   were, so an older script and a new one on slot 1 still exclude each other;
 - `box`: the box's whole suites (`bun test`, `node --test`) and runs on a test machine.
 
-With `KUVO_XCODE_CACHE=1`, every job of the Xcode lanes (`mac`, `mac-build`, `phone-build`, `phone`)
-builds with Xcode's compilation cache, one for all checkouts (`scripts/xcode-cache.sh`): a content-addressed store in
+Every job of the Xcode lanes (`mac`, `mac-build`, `phone-build`, `phone`) builds with Xcode's
+compilation cache, one for all checkouts (`scripts/xcode-cache.sh`): a content-addressed store in
 `$(getconf DARWIN_USER_CACHE_DIR)KuvoCompilationCache`, keyed by what goes into each compile and not
 by where the checkout or build folder is, so a build in a new worktree replays what an earlier build
 of the same code compiled instead of compiling the app and its packages again. Code that differs gets
@@ -254,10 +254,12 @@ through `XCODE_XCCONFIG_FILE`; nothing changes in your command (settings on it s
 apps' `scripts/test-app.sh` and `scripts/build-app.sh` get it too. Xcode prunes the store to 20 GB
 (`KUVO_XCODE_CACHE_SIZE`) after a build, but only once no build has it open, so on a busy Mac it can
 grow past that for a while (heavy.sh says so at twice the size); to clear it, delete the folder while
-no Xcode build runs. It's off unless `KUVO_XCODE_CACHE=1` (and always on CI): with Xcode 27.2, a
-cache hit on a Swift compile whose stored output has warnings crashes Xcode's build service as it
-replays them ("The Xcode build system has crashed", #562). A caller with an `XCODE_XCCONFIG_FILE` of
-its own keeps that one instead. `swift build` and `swift test` don't use it.
+no Xcode build runs. `KUVO_XCODE_CACHE=0` builds without it (so does CI), and a caller with an
+`XCODE_XCCONFIG_FILE` of its own keeps that one instead. `swift build` and `swift test` don't use it.
+What's under `/tmp` or `/var` is mapped by its real path, `/private/…`, too: Xcode names a checkout
+there `/tmp/…` but SwiftPM names its packages' sources `/private/tmp/…`, and a hit that replayed a
+warning from a compile with both kinds of path crashed Xcode 27.2's build service ("The Xcode build
+system has crashed", #562).
 The compiler sees the sources as `/^src/…` (the project's folder), so `#filePath` is that too, and so
 are the places a failed test names: what `xcodebuild` builds finds its files through its bundle, never
 `#filePath` (the app's `scripts/test-app.sh` checks).
