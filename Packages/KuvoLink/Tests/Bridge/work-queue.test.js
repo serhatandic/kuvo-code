@@ -334,6 +334,24 @@ test("you reorder and move items between categories, never change what they say"
   assert.equal((await route("GET", "kuvo/work-queue/items/2")).body.item.title, "B");
 });
 
+test("a view lists the categories in order, Done last, and each one's items by their place (as you and agents set it), not by number or when they were made", async () => {
+  for (const title of ["A", "B", "C", "D"]) await tool("queue_add", { title }, "ses_lead");
+  await tool("queue_categories", { add: "Design" }, "ses_lead");
+  await tool("queue_update", { item: 4, category: "done" }, "ses_lead");
+  await tool("queue_add", { title: "E", category: "later" }, "ses_lead");
+  await tool("queue_add", { title: "F", category: "Design" }, "ses_lead");
+  await tool("queue_add", { title: "G", category: "parked" }, "ses_lead");
+  // An agent puts C first; you drag B below C, then drag A into Later, above E (a drop beside an
+  // item in another category moves it there).
+  await tool("queue_update", { item: 3, top: true }, "ses_lead");
+  assert.equal((await route("POST", "kuvo/work-queue/items/2/move", { category: "next", after: 3 })).status, 200);
+  assert.equal((await route("POST", "kuvo/work-queue/items/1/move", { category: "later", before: 5 })).status, 200);
+  const listed = (await view("ses_lead")).items.map(item => `${item.category}:${item.title}`);
+  assert.deepEqual(listed, ["next:C", "next:B", "later:A", "later:E", "cat_design:F", "parked:G", "done:D"]);
+  // Read again (a client opening the panel anew): the same order.
+  assert.deepEqual((await view("all")).items.map(item => `${item.category}:${item.title}`), listed);
+});
+
 test("what acts as you answers only a client, never a command or an agent", async () => {
   await tool("queue_add", { title: "Mine" }, "ses_lead");
   const handle = link.engineHandler();

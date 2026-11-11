@@ -13,7 +13,7 @@ import { plainName } from "../../shared/text";
 import { IS_MAC } from "../home";
 import { readPeerAgents } from "../peers/directory";
 import { ownKey, peersOf, removedBoxes } from "../peers/known";
-import { awaySince } from "../peers/reach";
+import { awaySince, readReach } from "../peers/reach";
 import { readLink } from "../state";
 import { categories, takePrimaryCategories } from "./categories";
 import { handArrived, handedBack, sendHandings } from "./hand";
@@ -267,7 +267,7 @@ export function itemsElsewhere(owner: string, link: LinkState | null = readLink(
   items: ItemElsewhere[];
   owners: OwnerFacts[];
   categories: { id: string; name: string }[];
-  computers: (Computer & { at: number })[];
+  computers: (Computer & { at: number; away?: number })[];
 } {
   if (!here || !deleted) {
     const all = allItems();
@@ -277,20 +277,22 @@ export function itemsElsewhere(owner: string, link: LinkState | null = readLink(
   const overseen = owner === "all" ? null : new Set(rowsOf(owner).flatMap(each => each.rows.map(row => row.session)));
   const owners = new Map<string, OwnerFacts>();
   const custom = new Map<string, string>();
-  const computers: (Computer & { at: number })[] = [];
+  const computers: (Computer & { at: number; away?: number })[] = [];
   // (An item two computers told of, one handed between them and the first not told again yet: the
   // newer word, so a stale copy never hides the live one.)
   const best = new Map<string, { item: ItemElsewhere; at: number }>();
+  const reach = readReach();
   for (const peer of peersOf(link)) {
     const told = readTold(peer.key);
     if (!told) continue;
     const computer: Computer = { key: peer.key, name: computerName(peer), kind: peer.kind, ...(peer.id ? { id: peer.id } : {}) };
-    computers.push({ ...computer, at: told.at });
+    const away = awaySince(peer.key, reach);
+    computers.push({ ...computer, at: told.at, ...(away !== null ? { away } : {}) });
     for (const item of told.items) {
       // (Not one here; nor one deleted here that this one told of on its way here: it got here.)
       if (here.has(item.id) || (deleted.has(item.id) && item.handing)) continue;
       const other = best.get(item.id);
-      if (!other || newer(item, told.at, other.item, other.at)) best.set(item.id, { item: asTold ? { ...item, computer } : withSeen({ ...item, computer }), at: told.at });
+      if (!other || newer(item, told.at, other.item, other.at)) best.set(item.id, { item: asTold ? { ...item, computer } : withSeen({ ...asAway(item, away), computer }), at: told.at });
     }
     for (const each of told.owners) if (!owners.has(each.owner)) owners.set(each.owner, each);
     for (const each of told.categories) if (!custom.has(each.id)) custom.set(each.id, each.name);
@@ -308,10 +310,15 @@ export function itemElsewhere(ref: ItemRef, link: LinkState | null = readLink(),
   for (const peer of peersOf(link)) {
     const told = readTold(peer.key);
     const item = told?.items.find(each => refNames(ref, each));
-    if (item && (!found || newer(item, told!.at, found.item, found.at))) found = { item: { ...item, computer: { key: peer.key, name: computerName(peer), kind: peer.kind, ...(peer.id ? { id: peer.id } : {}) } }, at: told!.at };
+    if (item && (!found || newer(item, told!.at, found.item, found.at))) found = { item: { ...(asTold ? item : asAway(item, awaySince(peer.key))), computer: { key: peer.key, name: computerName(peer), kind: peer.kind, ...(peer.id ? { id: peer.id } : {}) } }, at: told!.at };
   }
   return found ? (asTold ? found.item : withSeen(found.item)) : null;
 }
+
+// An item told by a computer that isn't answering (`away`, since when): as it told it, but with
+// none of its sessions said to be at work, as nothing there can be seen at work now.
+const asAway = (item: ToldItem, away: number | null): ToldItem =>
+  away === null || (!item.inProgress && !item.sessions.some(each => each.working)) ? item : { ...item, inProgress: false, sessions: item.sessions.map(each => ({ ...each, working: false })) };
 
 // Whether `a` (told at `aAt`) is newer word of an item than `b`: changed later, or the same and
 // told later.

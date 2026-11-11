@@ -16,7 +16,7 @@ struct WorkQueueShots {
 
     private static let now = Date.now.timeIntervalSince1970 * 1000
 
-    private static func item(_ number: Int, _ title: String, _ category: String, order: Double, working: Bool = false, note: String? = nil, value: Double? = nil, ago minutes: Double = 60, owner: String = "ses_lead") -> [String: Any] {
+    fileprivate static func item(_ number: Int, _ title: String, _ category: String, order: Double, working: Bool = false, note: String? = nil, value: Double? = nil, ago minutes: Double = 60, owner: String = "ses_lead") -> [String: Any] {
         var item: [String: Any] = [
             "id": "wqi_" + String(repeating: "s", count: 17) + String(format: "%03d", number % 1000), "number": number, "owner": owner, "title": title,
             "category": category, "order": order, "inProgress": working,
@@ -110,6 +110,53 @@ struct WorkQueueShots {
             try await panel(width: 380, height: 640, dark: dark, open: false, empty: true).write(to: URL(fileURLWithPath: out).appending(path: "empty-\(look).png"))
             try await chips(dark: dark).write(to: URL(fileURLWithPath: out).appending(path: "chip-in-chat-\(look).png"))
         }
+    }
+
+    /// #551: All with Done folded last and the counts adding up, narrow and wide; and an item being
+    /// dragged, the line where it will land. In KUVO_SHOTS_OUT too.
+    @Test func orderShots() async throws {
+        let out = try #require(ProcessInfo.processInfo.environment["KUVO_SHOTS_OUT"])
+        try FileManager.default.createDirectory(atPath: out, withIntermediateDirectories: true)
+        for dark in [false, true] {
+            let look = dark ? "dark" : "light"
+            try await allPanel(width: 380, height: 700, dark: dark, drag: false).write(to: URL(fileURLWithPath: out).appending(path: "mac-all-narrow-\(look).png"))
+            try await allPanel(width: 760, height: 640, dark: dark, drag: false).write(to: URL(fileURLWithPath: out).appending(path: "mac-all-wide-\(look).png"))
+            try await allPanel(width: 380, height: 520, dark: dark, drag: true).write(to: URL(fileURLWithPath: out).appending(path: "mac-drag-\(look).png"))
+        }
+    }
+
+    private func allPanel(width: CGFloat, height: CGFloat, dark: Bool, drag: Bool) async throws -> Data {
+        let app = AppModel()
+        app.workQueues.app = app
+        app.utilities.inView.session = "ses_lead"
+        let panel = app.utilities.panelKey
+        app.workQueues.scopes[panel] = .all
+        var view = Self.view
+        view.owner = WorkQueueView.all
+        // (Done as an import leaves it: many.)
+        let done = (0..<37).map { Self.item(700 + $0, "Shipped \($0 + 5)", "done", order: Double(10 + $0)) }
+        view.items += try JSONDecoder().decode([WorkItem].self, from: JSONSerialization.data(withJSONObject: done))
+        app.workQueues.standIn(view, for: WorkQueues.Key(box: BoxClient.mac, owner: WorkQueueView.all))
+        app.utilities.showWorkQueue()
+        if drag {
+            // #305 dragged up over the lower half of #244's row: it lands between #244 and #191.
+            app.workQueues.dropTargets[panel] = WorkQueues.DropTarget(section: "next", index: 1)
+        }
+        let pane = UtilitiesPane(utilities: app.utilities, directory: nil, model: nil, environment: [:], isExpanded: PaneSwitch(isOn: { width > 600 }, set: { _ in }))
+        let content = ZStack(alignment: .topLeading) {
+            pane.environment(app)
+            if drag {
+                // What macOS draws under the pointer as it drags: the row, lifted.
+                WorkItemRow(item: view.items.first { $0.number == 305 }!, ownerName: nil, ordinal: 3) {}
+                    .frame(width: width - 60)
+                    .background(.regularMaterial, in: .rect(cornerRadius: 8))
+                    .shadow(color: .black.opacity(0.25), radius: 10, y: 4)
+                    .opacity(0.9)
+                    .offset(x: 46, y: 196)
+                    .environment(app)
+            }
+        }
+        return try await picture(content, width: width, height: height, dark: dark) { true }
     }
 
     private func panel(width: CGFloat, height: CGFloat, dark: Bool, open: Bool, empty: Bool = false) async throws -> Data {

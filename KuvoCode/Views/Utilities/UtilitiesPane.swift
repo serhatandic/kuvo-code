@@ -144,7 +144,7 @@ struct UtilitiesPane: View {
         case .machinePage(let machine, let page):
             app.machines.engine(machine)?.browser.page(page)?.name ?? "New Tab"
         case .workQueue:
-            app.workQueues.views[queueKey].map { "Work Queue · " + WorkQueue.count(WorkQueue.openCount($0)).lowercased() } ?? "Work Queue"
+            app.workQueues.views[queueKey].map { "Work Queue · " + WorkQueue.openWords(WorkQueue.openCount($0)).lowercased() } ?? "Work Queue"
         }
     }
 

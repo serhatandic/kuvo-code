@@ -269,6 +269,8 @@ public struct WorkQueueView: Hashable, Sendable, Decodable {
         public var kind: String
         public var id: String?
         public var at: Double
+        /// Since when it hasn't answered: its items are as it last told them, none at work.
+        public var away: Double?
         public var date: Date { Date(timeIntervalSince1970: at / 1000) }
     }
 
@@ -379,6 +381,13 @@ public enum WorkQueue {
         /// The category items here are kept in; nil for In progress, which isn't one.
         public var category: String?
         public var items: [WorkItem]
+
+        public init(id: String, name: String, category: String?, items: [WorkItem]) {
+            self.id = id
+            self.name = name
+            self.category = category
+            self.items = items
+        }
     }
 
     public static let inProgressID = "in-progress"
@@ -420,7 +429,14 @@ public enum WorkQueue {
         }
     }
 
-    /// How many items are open (not Done): the tab's "24 items".
+    /// How many items All has: every one, Done too. Each counts once, so this is In progress plus
+    /// every category's count (In progress is a state over the categories: an item there isn't
+    /// counted in its category too).
+    public static func allCount(_ view: WorkQueueView) -> Int {
+        view.items.count
+    }
+
+    /// How many items are open (not Done): the tab's "24 open".
     public static func openCount(_ view: WorkQueueView) -> Int {
         view.items.count { !$0.isDone }
     }
@@ -428,6 +444,94 @@ public enum WorkQueue {
     /// "24 items", "1 item", "No items".
     public static func count(_ number: Int) -> String {
         number == 0 ? "No items" : number == 1 ? "1 item" : "\(number) items"
+    }
+
+    /// "24 open", "Nothing open": how many are left to do, beside All's count of everything.
+    public static func openWords(_ number: Int) -> String {
+        number == 0 ? "Nothing open" : "\(number) open"
+    }
+
+    // MARK: Moving by hand
+
+    /// Where you put an item, as the box's move takes it (`kuvo/work-queue/items/:item/move`, the
+    /// same `before`/`after`/`top` agents give `queue_update`): before or after another item (in that
+    /// one's category), at the top of a category, or at its end.
+    public enum Place: Hashable, Sendable {
+        case top(String)
+        case before(WorkItem)
+        case after(WorkItem)
+        case category(String)
+
+        /// The category it goes to.
+        public var category: String {
+            switch self {
+            case .top(let id), .category(let id): id
+            case .before(let other), .after(let other): other.category
+            }
+        }
+    }
+
+    /// Where `item` lands dropped at `index` among `section`'s items (0 is before the first, the
+    /// count after the last, counted as the list shows them with the item still in its old place,
+    /// as a list's move gives it): beside the nearest item on the same computer (each keeps its own
+    /// order), else the top of the category. Nil where it can't go (In progress isn't a category:
+    /// an item is there while a session works on it; one its source makes Done stays as it says) or
+    /// where it wouldn't move.
+    public static func place(of item: WorkItem, at index: Int, in section: Section) -> Place? {
+        // (An issue's Done is its source's: it's never moved there, nor one its source made Done.)
+        guard let category = section.category, canMove(item), item.closesOn == nil || category != WorkCategory.done else { return nil }
+        let index = min(max(index, 0), section.items.count)
+        // Where it is now, in this list: dropped just above or below itself, it stays.
+        if let from = section.items.firstIndex(where: { $0.id == item.id }), index == from || index == from + 1 { return nil }
+        let mates = { (other: WorkItem) in other.id != item.id && other.computer?.key == item.computer?.key && canMove(other) }
+        if let below = section.items[index...].first(where: mates) { return .before(below) }
+        if let above = section.items[..<index].last(where: mates) { return .after(above) }
+        return .top(category)
+    }
+
+    /// Where an item's menu moves it: the top of its category, a place up and a place down, among
+    /// the items there on its computer that can move (nil where it's there already). One in
+    /// progress moves only to its category's top: its place among the others there can't be seen.
+    public struct MenuPlaces: Hashable, Sendable {
+        public var top: Place?
+        public var up: Place?
+        public var down: Place?
+
+        public init(top: Place? = nil, up: Place? = nil, down: Place? = nil) {
+            self.top = top
+            self.up = up
+            self.down = down
+        }
+    }
+
+    public static func menuPlaces(of item: WorkItem, in view: WorkQueueView) -> MenuPlaces {
+        guard canMove(item) else { return MenuPlaces() }
+        let mates = view.items.filter { $0.category == item.category && !isInProgress($0) && $0.computer?.key == item.computer?.key && canMove($0) }
+        guard !isInProgress(item), let index = mates.firstIndex(where: { $0.id == item.id }) else {
+            return MenuPlaces(top: mates.isEmpty ? nil : .top(item.category))
+        }
+        return MenuPlaces(top: index > 0 ? .top(item.category) : nil,
+                          up: index > 0 ? .before(mates[index - 1]) : nil,
+                          down: index + 1 < mates.count ? .after(mates[index + 1]) : nil)
+    }
+
+    /// `view` as it will be once `item` is moved to `place`: shown at once, until the box's next
+    /// word (which it then is).
+    public static func moving(_ item: WorkItem, to place: Place, in view: WorkQueueView) -> WorkQueueView {
+        guard view.items.contains(where: { $0.id == item.id }) else { return view }
+        var view = view
+        var moved = view.items.first { $0.id == item.id } ?? item
+        view.items.removeAll { $0.id == item.id }
+        moved.category = place.category
+        // (Sections take each category's items in the list's order: where among the others it's put
+        // is all that counts.)
+        switch place {
+        case .top: view.items.insert(moved, at: 0)
+        case .category: view.items.append(moved)
+        case .before(let other): view.items.insert(moved, at: view.items.firstIndex { $0.id == other.id } ?? view.items.endIndex)
+        case .after(let other): view.items.insert(moved, at: view.items.firstIndex { $0.id == other.id }.map { $0 + 1 } ?? view.items.endIndex)
+        }
+        return view
     }
 
     /// "Updated just now", "Updated 8m ago", "Updated 3h ago", "Updated 2d ago", then the day.
@@ -443,6 +547,17 @@ public enum WorkQueue {
         if seconds < 86_400 { return "\(Int(seconds / 3600))h ago" }
         if seconds < 7 * 86_400 { return "\(Int(seconds / 86_400))d ago" }
         return date.formatted(Date.FormatStyle(locale: locale, calendar: calendar, timeZone: calendar.timeZone).month(.abbreviated).day())
+    }
+
+    /// What's said over the list when items in it are on a computer that isn't answering: "lab isn't
+    /// answering: its items are as it last told them, 2h ago." Nil while every one answers.
+    public static func awayNote(_ view: WorkQueueView, now: Date = .now, calendar: Calendar = .current, locale: Locale = .current) -> String? {
+        let shown = Set(view.items.compactMap(\.computer?.key))
+        let away = view.computers.filter { $0.away != nil && shown.contains($0.key) }
+        guard let first = away.first else { return nil }
+        if away.count == 1 { return "\(first.name) isn’t answering: its items are as it last told them, \(ago(first.date, now: now, calendar: calendar, locale: locale))." }
+        let names = away.map(\.name)
+        return "\(names.dropLast().joined(separator: ", ")) and \(names.last!) aren’t answering: their items are as they last told them."
     }
 
     /// The computer an item is on, by name, when it isn't the box the view is from: "lab".

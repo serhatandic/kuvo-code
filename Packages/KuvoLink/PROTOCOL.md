@@ -827,7 +827,7 @@ its own, which a `SIGTERM` stops waiting.
     stays unread. A read for a box that isn't answering (`run/peer-reach.json`) is refused at once,
     and so is one waiting when the relay says so: a read isn't kept.
 - **`POST kuvo/sessions`** `{task, title?, folder? | project? | chat?, worktree?, model?, effort?,
-  mode?, approval?, wake?, startedBy?, wait? = false}` →
+  mode?, approval?, wake?, review? = true, startedBy?, wait? = false}` →
   `{session, title, folder, project, answer?, got?}` (`project` null for a chat; `answer` with
   `wait`, its first answer in ten minutes, else null; `got` (bridge 0.9.180), the approval it runs with now where
   that's less than asked: Auto that asks first without the sandbox, say). `start_session` is this route, from the
@@ -1042,7 +1042,8 @@ client shows it from the same routes.
     conversation this box has always wins over a home, and a computer you removed is no one's home.
     A note's `about` counts as of its `made`.
   Its task ends with the session's half of the playbook: review your work with reviewer subagents,
-  fix what they find, and end with a short report. A session whose starter hears it finish is told
+  fix what they find, and end with a short report; with `review: false` (a small task its bot
+  says needs no review, #554), only the report, without the reviewers. A session whose starter hears it finish is told
   that report, its last reply, reaches them then, so it doesn't send it again with `send_message`
   (that's for asking something or saying how it goes); its task's first line says so too.
 - **Tools** (`POST kuvo/agent-tools`, any conversation, for the sessions under it):
@@ -3239,8 +3240,11 @@ before (a linked item is its owner's to change). A client shows them first, as "
   computers}`: `items` in the categories' order, then this box's first and each other computer's
   after, by its name (each computer keeps its own order), then each one's order; `owners` (`[{owner, kind:
   bot|session|group, title, bot?: {id, name}, startedBy?}]`) names each owner in the view;
-  `removed`, what's deleted in it here, newest first; `computers` (`[{key, name, kind, id?, at}]`),
-  each other computer that told of its queue, and as of when. `owner=all` is every queue on the box
+  `removed`, what's deleted in it here, newest first; `computers` (`[{key, name, kind, id?, at,
+  away?}]`), each other computer that told of its queue, as of when, and since when it hasn't
+  answered (`away`, as `run/peer-reach.json` says): its items show as it told them, but none of
+  them in progress, nor any of their sessions at work, as nothing there can be seen at work now (an
+  item's `refs` and page say the same). `owner=all` is every queue on the box
   and on every other computer that told of its own (the panel's All). An item on another computer
   has `computer`. `kuvo/work-queue/events?owner=` is the same as NDJSON: a line now and one each
   time it changes (a change here or by another process, another computer telling of its queue, or a
