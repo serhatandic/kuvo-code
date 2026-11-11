@@ -60,10 +60,12 @@ _STAND_IN = None
 
 def without_background_priority(env):
     """`env` with a `taskpolicy` first on PATH that runs the command as it is (and, with FAKE_POLICY_LOG
-    set, writes the option it was given there). Jobs run at low priority, which on a Mac under
-    heavy load can take minutes for what a test starts in a second: the tests that aren't about the
-    policy run the helper's jobs as they are, and the tests of it look at what `taskpolicy` is asked,
-    and, once, at the real policy."""
+    set, writes the option it was given there), and a `nice` that does too. Jobs run at low priority,
+    which on a Mac under heavy load can take minutes for what a test starts in a second: the tests
+    that aren't about the policy run the helper's jobs as they are, and the tests of it look at what
+    `taskpolicy` is asked, and, once, at the real policy. (Not nice either: a job at nice 20 that
+    starts heavy.sh again, as tests of jobs inside jobs do, waited 30 seconds and more for the CPU on
+    a busy Mac, and those tests failed now and then.)"""
     global _STAND_IN
     if _STAND_IN is None:
         _STAND_IN = tempfile.mkdtemp()
@@ -71,6 +73,10 @@ def without_background_priority(env):
         path = os.path.join(_STAND_IN, "taskpolicy")
         with open(path, "w") as f:
             f.write('#!/bin/sh\nsaid=$1\ncase "$1" in -b) shift ;; -c) said="$1 $2"; shift 2 ;; esac\n[ -z "${FAKE_POLICY_LOG-}" ] || echo "$said" >> "$FAKE_POLICY_LOG"\nexec "$@"\n')
+        os.chmod(path, 0o755)
+        path = os.path.join(_STAND_IN, "nice")
+        with open(path, "w") as f:
+            f.write('#!/bin/sh\ncase "$1" in -n) shift 2 ;; -n*) shift ;; esac\nexec "$@"\n')
         os.chmod(path, 0o755)
     return dict(env, PATH=_STAND_IN + os.pathsep + env["PATH"])
 
