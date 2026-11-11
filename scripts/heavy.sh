@@ -160,7 +160,8 @@ case "$(uname -s 2>/dev/null)" in
         if command -v taskpolicy >/dev/null 2>&1; then LOW="taskpolicy -b"; else LOW="nice -n 15"; fi
         ;;
     *)
-        if command -v ionice >/dev/null 2>&1; then LOW="nice -n 15 ionice -c3"; else LOW="nice -n 15"; fi
+        # (ionice can be refused, in a container: then nice alone.)
+        if command -v ionice >/dev/null 2>&1 && ionice -c3 true >/dev/null 2>&1; then LOW="nice -n 15 ionice -c3"; else LOW="nice -n 15"; fi
         ;;
 esac
 
@@ -292,6 +293,10 @@ case "$POLL:$SAY_EVERY" in
         exit 64
         ;;
 esac
+if [ "$POLL" -lt 1 ]; then
+    echo "KUVO_HEAVY_POLL is seconds, 1 or more (it's $POLL)." >&2
+    exit 64
+fi
 # A job's place in its lane's queue: high goes before normal (0 sorts before 1).
 case "${KUVO_HEAVY_PRIORITY:-normal}" in
     normal) PRIORITY=1 ;;
@@ -614,15 +619,15 @@ short_for() {
 # KUVO_HEAVY_MEMORY=0): jobs that went on past a 15-minute wait at 12.6 of 13.3 GB swapped left the
 # box too slow for the phone. Nothing is known of swap where the system doesn't say, and then only
 # the pressure counts.
-# Swap used, in percent of the total with a decimal, or nothing when unknown (no swap: 0).
+# Swap used, in percent of the total with two decimals, or nothing when unknown (no swap: 0).
 swap_used() {
     if usage=$(sysctl -n vm.swapusage 2>/dev/null) && [ -n "$usage" ]; then
         echo "$usage" | awk '
             function mb(v,   unit) { unit = substr(v, length(v)); v += 0; return unit == "G" ? v * 1024 : unit == "K" ? v / 1024 : v }
             { for (i = 1; i < NF; i++) { if ($i == "total") total = mb($(i + 2)); if ($i == "used") used = mb($(i + 2)) } }
-            END { if (total > 0) printf "%.1f\n", used * 100 / total; else if (NR > 0) print "0.0" }'
+            END { if (total > 0) printf "%.2f\n", used * 100 / total; else if (NR > 0) print "0.00" }'
     elif [ -r /proc/meminfo ]; then
-        awk '/^SwapTotal:/ { total = $2 } /^SwapFree:/ { free = $2 } END { if (total > 0) printf "%.1f\n", (total - free) * 100 / total; else print "0.0" }' /proc/meminfo
+        awk '/^SwapTotal:/ { total = $2 } /^SwapFree:/ { free = $2 } END { if (total > 0) printf "%.2f\n", (total - free) * 100 / total; else print "0.00" }' /proc/meminfo
     fi
 }
 # Why the gate holds, if it does (in `tight`).
@@ -683,7 +688,7 @@ while [ -n "$why" ]; do
         [ "$WAITS" = 0 ] && cannot_wait "The Mac's memory is too tight to start a job ($tight)."
         now=$(date +%s)
         if [ "$said" != gate ] || [ $((now - said_at)) -ge "$SAY_EVERY" ]; then
-            echo "Waiting for memory: the Mac's memory is too tight to start a job ($tight); it waits for as long as that lasts…" >&2
+            echo "Waiting for memory: the Mac's memory is too tight to start a job ($tight); it waits for as long as that lasts (KUVO_HEAVY_SWAP_USED=0 turns the swap check off)…" >&2
             said_at=$now
         fi
     elif [ "$why" = memory ]; then
