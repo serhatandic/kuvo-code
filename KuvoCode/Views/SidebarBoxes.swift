@@ -281,13 +281,6 @@ struct BoxNameStrip: View {
         .accessibilityLabel(name.title)
         .accessibilityValue(name.said ?? "")
         .accessibilityAddTraits(name.isOn ? .isSelected : [])
-        .contextMenu {
-            // As a mailbox's in Mail: everything new on that computer read (the sidebar's strip).
-            if marksNews {
-                Button("Mark All as Read") { app.markAllRead(on: [name.box]) }
-                    .disabled(app.boxesToMarkRead([name.box]).isEmpty)
-            }
-        }
     }
 
     /// "+3", and the menu of the computers it stands for.
@@ -298,13 +291,6 @@ struct BoxNameStrip: View {
                 menu.addItem(ActionItem(name.title, subtitle: name.said ?? name.status, image: Self.dot(for: name)) { pick(name.box) })
             }
             menu.addItem(.separator())
-            if marksNews {
-                // Theirs, as a name's own menu has it for one in the line.
-                let markRead = ActionItem("Mark All as Read") { app.markAllRead(on: rest.map(\.box)) }
-                markRead.isEnabled = !app.boxesToMarkRead(rest.map(\.box)).isEmpty
-                menu.autoenablesItems = false
-                menu.addItem(markRead)
-            }
             menu.addItem(ActionItem("Add Machine…") {
                 app.addsMachine = true
                 app.openSettings(.machines)
@@ -455,28 +441,9 @@ extension AppModel {
     func news(on box: SidebarBox) -> BoxNews? {
         let sessions = workspace.sessions.filter { SidebarBox(directory: $0.location.directory) == box && !Workspace.isArchived($0) }
         if sessions.contains(where: { workspace.needsAttention($0.id) }) { return .needsYou }
-        return hasNew(on: box) ? .new : nil
-    }
-
-    /// Whether `box` has something you haven't read (a conversation, a sub-session's finish, a group
-    /// chat): what Mark All as Read reads.
-    func hasNew(on box: SidebarBox) -> Bool {
-        let sessions = workspace.sessions.filter { SidebarBox(directory: $0.location.directory) == box && !Workspace.isArchived($0) }
         // A session's sub-session finished since you read it is news too, as its folded row says.
-        return sessions.contains(where: { $0.isUnread || workspace.hasNewSubSessions($0.id) }) || chats.list.contains(where: { SidebarBox(machine: chats.machine(of: $0.id)) == box && chats.isUnread($0) })
-    }
-
-    /// Those of `boxes` Mark All as Read asks: with something new, and within reach (a machine
-    /// that isn't connected couldn't read it now).
-    func boxesToMarkRead(_ boxes: [SidebarBox]) -> [SidebarBox] {
-        boxes.filter { box in hasNew(on: box) && (box.machine.map { machines.engine($0)?.isReady == true } ?? true) }
-    }
-
-    /// Mark All as Read on `boxes` (every computer, or one), through each box.
-    @discardableResult
-    func markAllRead(on boxes: [SidebarBox]) -> Task<Void, Never> {
-        let ids = boxesToMarkRead(boxes).map { $0.machine ?? BoxClient.mac }
-        return Task { if !ids.isEmpty { await workspace.markAllRead(on: ids) } }
+        if sessions.contains(where: { $0.isUnread || workspace.hasNewSubSessions($0.id) }) || chats.list.contains(where: { SidebarBox(machine: chats.machine(of: $0.id)) == box && chats.isUnread($0) }) { return .new }
+        return nil
     }
 }
 

@@ -70,7 +70,6 @@ export const SESSION_ROUTES: RouteShape[] = [
   { route: "POST kuvo/agent-tools", answers: { 200: TOOL_ANSWER, 400: REFUSED } },
   { route: "GET kuvo/sessions/queues/events", answers: { 200: object({ queues: map(QUEUE) }) } },
   { route: "GET kuvo/sessions/glance", answers: { 200: GLANCES, 400: REFUSED, 503: REFUSED } },
-  { route: "POST kuvo/sessions/read", answers: { 200: object({ read: number }), 503: REFUSED } },
   { route: "GET kuvo/sessions/glance/events", answers: { 200: GLANCES, 400: REFUSED, 503: REFUSED } },
   { route: "GET kuvo/sessions/:id/queue", answers: { 200: QUEUE } },
   { route: "POST kuvo/sessions/:id/stop", answers: { 200: QUEUE, 404: REFUSED, 502: REFUSED, 503: REFUSED } },
