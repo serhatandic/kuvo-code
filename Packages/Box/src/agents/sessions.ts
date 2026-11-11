@@ -27,7 +27,7 @@ import { asksFirst, holdsBack, matches, ruled } from "./rules"
 import { runningShells, stopShell } from "./shells"
 import { skillFolders, within } from "./skills"
 import type { Record_, Store } from "./store"
-import { Turn, type Outcome } from "./turn"
+import { NOTICE, Turn, type Outcome } from "./turn"
 import type { AssistantMessage, Attachment, CompactionMessage, Decision, FormAnswer, FormRequest, Message, Model, ModelRef, PermissionRequest, PermissionRule, Session, ShellMessage, FileDiff, StructuredError } from "./wire"
 import { plain } from "./proc"
 import type { Snapshots } from "./snapshots"
@@ -1761,8 +1761,8 @@ export class Sessions {
   private subagentNote(id: string, text: string) {
     const record = this.store.get(id)
     if (!record) return
-    const event = emit("session.synthetic", { sessionID: id, text }, record.session.location.directory)
-    record.messages.push({ type: "synthetic", id: messageID(event.id), time: { created: event.created }, text })
+    const event = emit("session.synthetic", { sessionID: id, text, metadata: NOTICE }, record.session.location.directory)
+    record.messages.push({ type: "synthetic", id: messageID(event.id), time: { created: event.created }, text, metadata: NOTICE })
     this.store.save(id, true)
   }
 
