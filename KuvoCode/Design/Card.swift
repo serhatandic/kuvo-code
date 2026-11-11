@@ -341,6 +341,8 @@ private struct CardClicks: NSViewRepresentable {
         var byClicks = true
         private var monitor: Any?
         private var keyboard: NSKeyValueObservation?
+        /// The cards' watchers in windows now, to tell which card has what's in two of them.
+        private static let watching = NSHashTable<Watcher>.weakObjects()
 
         override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
@@ -348,9 +350,10 @@ private struct CardClicks: NSViewRepresentable {
             super.viewDidMoveToWindow()
             stop()
             guard window != nil else { return }
+            Self.watching.add(self)
             monitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]) { [weak self] event in
                 guard let self, self.isOn, self.byClicks, let window = self.window, event.window === window,
-                      self.bounds.contains(self.convert(event.locationInWindow, from: nil)),
+                      self.isInnermost(where: { $0.bounds.contains($0.convert(event.locationInWindow, from: nil)) }),
                       !Self.isWindowButton(at: event.locationInWindow, in: window) else { return event }
                 self.clicked()
                 return event
@@ -370,6 +373,7 @@ private struct CardClicks: NSViewRepresentable {
         }
 
         func stop() {
+            Self.watching.remove(self)
             if let monitor { NSEvent.removeMonitor(monitor) }
             monitor = nil
             keyboard = nil
@@ -377,7 +381,19 @@ private struct CardClicks: NSViewRepresentable {
 
         /// Whether the keyboard is in this card.
         private func holds(_ view: NSView) -> Bool {
-            isOn && view.isInCard(self)
+            isInnermost { view.isInCard($0) }
+        }
+
+        /// Whether this card has what `has` says it has, and no smaller card in reach does: two can
+        /// for a moment as the cards move. With Reduce Motion, the session beside the conversation
+        /// and the panel show at once, in place, while the conversation is still narrowing to make
+        /// room for them, over them both: it took the keyboard from them as they took it.
+        private func isInnermost(where has: (Watcher) -> Bool) -> Bool {
+            guard isOn, has(self) else { return false }
+            let size = bounds.width * bounds.height
+            return !Self.watching.allObjects.contains { other in
+                other !== self && other.isOn && other.window === window && other.bounds.width * other.bounds.height < size && has(other)
+            }
         }
 
         /// Close, minimize and zoom, which sit over the sidebar while the tab bar is hidden.

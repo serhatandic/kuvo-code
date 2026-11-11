@@ -10,8 +10,13 @@ const STAMP = object({ at: number, by: WHO });
 const NOTE = object({ at: number, by: WHO, text: string });
 const PROGRESS = object({ "value?": number, "note?": string });
 
-/** An outside source's item (an issue or a pull request), named by its ref, never numbered. */
-const SOURCE = object({ kind: string, ref: string, "url?": string, "host?": string, "id?": string });
+/** An outside source's item (an issue or a pull request), named by its ref, never numbered; `name`
+ * is what a client shows (`kuvo-ai#12`). */
+const SOURCE = object({ kind: string, ref: string, "url?": string, "host?": string, "id?": string, "name?": string });
+/** Where its issue or pull request stands on GitHub, as last read, and since when: open, draft,
+ * completed, not_planned, merged or closed (a newer box may say more); `gone` when it couldn't be
+ * read since; `checked`, when another computer last asked GitHub of it. */
+const SEEN = object({ state: string, at: number, "checked?": number, "gone?": bool });
 /** Another of your computers, the one an item is on. */
 const COMPUTER = object({ key: string, name: string, kind: words("mac", "machine"), "id?": string });
 
@@ -35,6 +40,10 @@ export const QUEUE_ITEM = object({
   linkCount: number,
   "handedBy?": string,
   "source?": SOURCE,
+  "seen?": SEEN,
+  "keptIn?": string,
+  "struck?": bool,
+  "closesOn?": string,
   "handing?": object({ to: string, name: string }),
   "computer?": COMPUTER,
   created: STAMP,
@@ -60,7 +69,7 @@ export const QUEUE_OWNER = object({ owner: string, kind: words("bot", "session",
 export const QUEUE_VIEW = object({ owner: string, categories: list(QUEUE_CATEGORY), items: list(QUEUE_ITEM), owners: list(QUEUE_OWNER), removed: list(QUEUE_ITEM),
   computers: list(object({ ...COMPUTER.object, at: number, "away?": number })) });
 
-const REF = nullable(object({ id: string, "number?": number, "source?": SOURCE, title: string, category: string, inProgress: bool, owner: string, "removed?": bool, "computer?": COMPUTER }));
+const REF = nullable(object({ id: string, "number?": number, "source?": SOURCE, "seen?": SEEN, "struck?": bool, "closesOn?": string, title: string, category: string, inProgress: bool, owner: string, "removed?": bool, "computer?": COMPUTER }));
 
 // An item on another of your computers: changed there.
 const ON_ANOTHER = object({ message: string, computer: COMPUTER });

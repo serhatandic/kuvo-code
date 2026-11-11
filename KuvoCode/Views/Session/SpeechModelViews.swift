@@ -41,7 +41,7 @@ struct MicButton: View {
         let tip = app.dictation.tipFor == owner
         Button(action: start) {
             Image(systemName: "mic")
-                .font(.system(size: 14, weight: .medium))
+                .font(ComposerRow.icon)
                 .frame(width: 30, height: 28)
                 .overlay { MicRing(model: model) }
                 .hoverHighlight(in: Capsule(), mutesInk: true)

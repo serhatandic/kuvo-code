@@ -20,6 +20,11 @@ import { atEnd, removeAtEnd } from "./at-end.js";
 
 const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-work-queue-")));
 removeAtEnd(home);
+// GitHub's `gh`, standing in, signed out: an issue in a queue is never read from GitHub here
+// (work-queue-github.test.js reads them).
+fs.mkdirSync(path.join(home, "bin"), { recursive: true });
+fs.writeFileSync(path.join(home, "bin", "gh"), "#!/bin/sh\necho 'gh auth login' >&2\nexit 1\n", { mode: 0o755 });
+process.env.PATH = `${path.join(home, "bin")}${path.delimiter}${process.env.PATH}`;
 const script = fileURLToPath(new URL("../../Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url));
 process.env.KUVO_HOME = home;
 const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
@@ -669,7 +674,7 @@ test("an outside source's item (an issue) is never numbered, and is named by its
   await tool("queue_add", { title: "Next one" }, "ses_lead");
   const items = (await view("ses_lead")).items;
   assert.deepEqual(items.map(item => [item.title, item.number ?? null]), [["Ours", 1], ["Login loops", null], ["Next one", 2]]);
-  assert.deepEqual(items[1].source, { kind: "github", ref: "gh:owner/repo#12", url: "https://github.com/owner/repo/issues/12", host: "github.com", id: "I_kw123" });
+  assert.deepEqual(items[1].source, { kind: "github", ref: "gh:owner/repo#12", url: "https://github.com/owner/repo/issues/12", host: "github.com", id: "I_kw123", name: "repo#12" });
   const listed = await tool("queue_list", {}, "ses_lead");
   assert.match(listed.text, /- gh:owner\/repo#12 "Login loops"/);
 });

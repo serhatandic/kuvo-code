@@ -76,8 +76,12 @@ import Testing
         return true
     }
 
-    /// An animation started now, the conversation's spring, has quite ended.
+    /// An animation started now, the conversation's spring, has quite ended. Started once the
+    /// window has run what's pending, in an update of its own: started with what the test had just
+    /// done, in the same update (several answers above the view grown at once, read again),
+    /// SwiftUI never said it had ended, and the test waited for good.
     private func settled() async {
+        window.contentView?.layoutSubtreeIfNeeded()
         await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
             withAnimation(.ui, completionCriteria: .removed) { probe.isOn.toggle() } completion: { done.resume() }
         }
@@ -194,8 +198,8 @@ import Testing
 
     /// A conversation of `turns` answered turns, then a question the agent is at work on, with the
     /// run's messages so far: read, shown, and at its end.
-    private func conversation(turns: Int = 14, run messages: [[String: Any]]? = nil) async throws {
-        var all = (0..<turns).flatMap { answer($0) }
+    private func conversation(turns: Int = 14, words: Int = 40, run messages: [[String: Any]]? = nil) async throws {
+        var all = (0..<turns).flatMap { answer($0, words: words) }
         all.append(["id": run + "0900", "type": "user", "time": ["created": 1], "text": "Look around."])
         all += messages ?? [step(1), step(2)]
         engine.conversation(id, all)
@@ -370,10 +374,11 @@ import Testing
 
     /// Up in a single move (a wheel's notch, a flick), then the answers above the view get taller
     /// (read again, with more of what they said): what you read stays where it is. (The rows went on
-    /// taking it as following the end, as nothing told them since: what was above moved it.)
-    @Test(arguments: SingleMove.allCases) func rowsAboveGrowingAfterASingleMoveUpLeaveWhatYouRead(_ single: SingleMove) async throws {
+    /// taking it as following the end, as nothing told them since: what was above moved it.) Short
+    /// answers too, several of them above the view growing at once.
+    @Test(arguments: SingleMove.allCases, [40, 20]) func rowsAboveGrowingAfterASingleMoveUpLeaveWhatYouRead(_ single: SingleMove, words: Int) async throws {
         defer { done() }
-        try await conversation()
+        try await conversation(words: words)
         try await move(single, up: 300)
         try await until { isOffTheEnd }
         await settled()
@@ -384,8 +389,8 @@ import Testing
         // The answers wholly above the view, longer (made, not yet scrolled to: within a screen).
         let above = Set(rows.filter { $0.value.maxY < 0 }.map { String($0.key.prefix { $0 != "#" }) })
         let grown = Set((0..<14).filter { above.contains(run + "0\(101 + $0 * 2)") })
-        try #require(!grown.isEmpty, "answers above the view among \(rows)")
-        var longer = (0..<14).flatMap { turn in answer(turn, words: grown.contains(turn) ? 70 : 40) }
+        try #require(grown.count > (words < 40 ? 1 : 0), "answers above the view among \(rows)")
+        var longer = (0..<14).flatMap { turn in answer(turn, words: grown.contains(turn) ? words + 30 : words) }
         longer.append(["id": run + "0900", "type": "user", "time": ["created": 1], "text": "Look around."])
         longer += [step(1), step(2)]
         engine.conversation(id, longer)
