@@ -8,6 +8,7 @@ import { isObject } from "../../shared/json";
 import { writePrivate } from "../files";
 import { K } from "../home";
 import type { WorktreeRecordShape } from "../../shared/routes/worktrees";
+import { linkedTrees } from "../work/project-trees";
 
 export const WORKTREES_FILE = path.join(K, "box", "worktrees.json");
 // The branch prefix a client last gave (Settings › Git's), for one that doesn't give one.
@@ -49,13 +50,16 @@ export function readRemovedWorktrees(): Record<string, string> {
 
 /** The project each worktree folder here belongs to, by the folder its sessions run in (a
  * worktree's top folder too): those this box keeps, those removed that can come back, and those
- * removed before, so a session that ran in one is still filed under its project. The one rule
- * every client and this box's own notices go by. */
+ * removed before, so a session that ran in one is still filed under its project; and each project's
+ * linked git worktrees made elsewhere (`linkedTrees`). The one rule every client and this box's own
+ * notices go by. */
 export function worktreeProjects(): Record<string, string> {
   // Read once: followers ask each second.
   let kept: { worktrees?: unknown; removed?: unknown; restorable?: unknown } = {};
   try { kept = JSON.parse(fs.readFileSync(WORKTREES_FILE, "utf8")) ?? {}; } catch {}
-  const projects: Record<string, string> = {};
+  // (A project's git worktrees made elsewhere, `git worktree add`, are its too; this box's own
+  // records, after, say for theirs.)
+  const projects: Record<string, string> = { ...linkedTrees() };
   if (isObject(kept.removed)) for (const [folder, project] of Object.entries(kept.removed)) if (typeof project === "string") projects[folder] = project;
   const records = (list: unknown) => (Array.isArray(list) ? list.filter(each => typeof each?.root === "string" && typeof each?.project === "string") as WorktreeRecord[] : []);
   for (const tree of records(kept.restorable)) projects[tree.folder ?? tree.root] = tree.project;

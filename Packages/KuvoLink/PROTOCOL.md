@@ -162,12 +162,16 @@ each box pairs and removes (`phones`), and each box's view of your personalities
 - **Taken**: a box takes a document that verifies, from an origin it takes that kind from, newer
   than the one it has; at the same version, the one whose bytes' hash sorts first, so every box
   keeps the same one. One of its own further on than it knew (it lost count), by a document or a
-  digest, moves its count past it, up to 2^52 (one claiming more isn't taken). It takes `peers` only from its own Macs (those in `macSigns`, given in setup); `phones` and
+  digest, moves its count past it, up to 2^52 (one claiming more isn't taken). It takes `peers`
+  only from its setup's main computer, and while it follows no setup (kept until every box knows setups) from
+  its own Macs (those in `macSigns`, given in setup), never at a lower epoch of the setup it keeps
+  ("Your setup"); `phones` and
   `personalities` from those Macs, from its peers and from itself. Documents from an origin it no
   longer takes them from go.
 - **`peers`**, one per Mac: `{boxes: [{key, sign, address, name, kind: "mac"|"machine", id?}],
-  moved: [{session, key}], left: [key]}`: the Mac itself and each of its machines whose bridge
-  signs, the same document for all of them. A box's peers are every box its Macs' documents name,
+  moved: [{session, key}], left: [key], setup?: {id, epoch, primary}}`: the Mac itself and each of
+  its machines whose bridge signs, the same document for all of them, and the setup it leads
+  ("Your setup"; older boxes read only `boxes`, `moved` and `left`). A box's peers are every box its Macs' documents name,
   itself left out ("Peers"). `left` names the machines that Mac removed (never one it still has,
   under another name): a box that finds itself there and no longer among `boxes` stops counting
   that Mac, as `leave` does. The Mac mails it to a machine as it removes it, once.
@@ -192,11 +196,76 @@ each box pairs and removes (`phones`), and each box's view of your personalities
   To a digest, a box gives what the sender lacks or has older (of what that box would take), and,
   unless it's a `reply`, answers with its own digest, marked `reply`, when the sender has something
   newer. A document it took goes on to its other peers that would take it (not back where it came
-  from, nor to its origin); one of its own that changed, to all of them. Over SSH, setup carries the
+  from, nor to its origin); one of its own that changed, to all of them. A box that would take it
+  is one its setup's document names (with its origin, for `phones` and `personalities`), or, in no
+  setup, one a Mac's document names. Over SSH, setup carries the
   Mac's documents (`docs`, its own and those it has of its machines) and its answer the machine's.
   A box doesn't give documents to a Mac that gave it no signing key.
 - **Later**: each box's agents (`{"agents"}`, "Peers") are a list of its own too, still sent as
   they change and every ten minutes; they could become a fourth kind.
+
+### Your setup
+
+All of your computers that know each other are one **setup**, with one **main computer**: a Mac
+with the app, whose box signs who's in it. Every other computer is a **member**. (Built so far: the
+setup, who's main, and what boxes take and number by it. Changing the main computer, joining two
+setups, and pairing and adding only from the main computer come later: #183.)
+
+- **The setup** has an id (`set_` and 16 random bytes, base64url) and an epoch (a whole number, one
+  more with each change of main computer, never lower on any box). Its main computer's peers
+  document names it: `setup: {id, epoch, primary}`, `primary` the main computer's static key, which
+  the document names among its `boxes` as a Mac signing with the document's key ("Documents").
+- **Kept** in `run/link.json` as `setup: {id, epoch, primary, sign, role: "primary"|"member",
+  aside?, conflict?}` (`sign`, the main computer's signing key). `aside`: kept only so a lower
+  epoch of it is never taken, and followed for nothing else (its main computer stopped naming it,
+  or this box is a shared machine).
+- **Who leads one**: this Mac's box, once it numbers on its own (the Work Queue's first computer,
+  "Numbers") and each of its machines has said no other Mac shares it (`shared: false` in what it
+  tells of its Work Queue; one that hasn't said, an older box, holds it back, and nothing changes
+  meanwhile; once it leads, a machine just added that hasn't said yet doesn't stop it, only one
+  saying `shared: true` does); and a box no Mac set up, once it numbers on its own (one paired with
+  a phone by itself, on Linux say; one its Mac let go waits for that Mac first, as "Numbers" says,
+  days). It's made once, at epoch 1, and looked at once a minute and as a machine's word on how it
+  numbers changes: a Mac that stops leading (a machine of it is shared now, or it numbers through
+  another Mac) sets it aside and its document names it no more; leading again, it names the same
+  one. A Mac whose keys were made anew (its static key, or its signing key alone) makes a new setup:
+  the one it led with its old keys is no longer its own, and its machines take the new one from it.
+  Setting a machine up again, it names its static keys before (`replaces` in `kuvo/link/setup` and
+  setup's input), which the machine lets go as `leave` does, so it's never two Macs to it. (Leading follows its machines' word, as the Work Queue's numbers already do
+  without a setup; a later part of #183 makes it hold against a member's word alone.)
+- **What a box takes it from**: a machine follows the setup its Mac leads, from that Mac's
+  document. Then it takes `peers` only from the main computer's signing key (as that Mac's setup
+  over SSH last gave it, the trust root), never at a lower epoch of the setup (whoever signed it),
+  and its peers are the boxes that document names. A Mac that names itself the main computer of the
+  same setup at the same epoch isn't taken: the box keeps the one it has and notes `conflict:
+  {primary, epoch}` (gone with that epoch). A machine with no Mac leads its own; set up by a Mac, it
+  gives that up (a setup of no other computer joins its Mac's). A box drops its setup when that Mac
+  stops counting there (it removed the box, or wasn't heard from in 30 days), as it drops that
+  Mac's documents. A box that follows no setup (kept until every box knows setups) takes `peers`
+  from its own Macs, as before. The card (below) is a hint for what looks from outside, never
+  trusted for any of this.
+- **Shared machines**: a machine more than one Mac set up, unless the setup's document names each
+  of them as one of its Macs, follows no setup, and tells its peers it's shared (the Work Queue's
+  `told`, `shared: true`), so none of those Macs leads one. Macs that share a machine, and the
+  machines numbering with them, number as before, from the first Mac you set up ("Numbers"),
+  until they're joined in one setup.
+- **`GET kuvo/setup`** (and `kuvo/setup/events`, a line now and one at each change), on every box,
+  for every client: `{setup, epoch, primary: {key, name, kind}, you: {key, role}, computers: [{key,
+  name, kind, role, app}], conflict?, startsFromOthers: {value, default}}`. Facts only, the same on
+  every box of one setup: `kind` is `mac` for a Mac with the app (`app`), `machine` otherwise; in no
+  setup, `setup`, `epoch`, `primary` and `you.role` are null and `computers` is empty.
+  `startsFromOthers` is the #181 switch (not built yet): `value` as you set it (`link.json`'s
+  `startsFromOthers`, `on` or `off`), or null, and `default`, what it is then: off on the main
+  computer (and on a Mac in no setup), on everywhere else, so it follows the role.
+- **The card**: `run/setup-card.json`, beside link.json, nothing secret in it, for what looks at a
+  computer from outside its box (the app as it opens, a Mac adding it over SSH): `{setup, epoch,
+  role, primary: {key, name, heard}, self: {key, name, kind}, app, computers, items}`. `heard`: when
+  the main computer was last heard from, as this box counts it (ms, its own time off left out, as
+  for its Macs' 30 days; null on the main computer itself); `computers`, how
+  many the setup has; `items`, the Work Queue items here. Written as the box looks at its setup, as
+  documents change it, and by `setup` and `leave` (`kuvo/setup/events` follows those too).
+- **Older boxes** read only `boxes`, `moved` and `left`, and keep taking `peers` from their Macs:
+  nothing changes for them. A box that knows setups names `setup` in `features`.
 
 ### Peers
 
@@ -206,8 +275,8 @@ connection.
 
 - **Who**: each of a box's Macs' peers documents ("Documents") names its boxes: that Mac, and its
   machines whose bridge signs (`id`, the machine's name on that Mac). A box's peers are every box
-  they name, itself left out, whoever passed the document on. Only a Mac says who a box's peers
-  are. Its bridge runs while it has peers or phones. Setup also gives the machine's `id`.
+  they name, itself left out, whoever passed the document on; in a setup, every box its main
+  computer's document names ("Your setup"). Only a Mac says who a box's peers are. Its bridge runs while it has peers or phones. Setup also gives the machine's `id`.
 - **Mail**: a box opens mail from its Macs and its peers, and drops the rest. Every mail has `at`
   (milliseconds). A sealed mail frame is at most 65,600 bytes, and one larger isn't sent: letters'
   words and lists are cut to fit.
@@ -778,7 +847,10 @@ its own, which a `SIGTERM` stops waiting.
     be had: `fullAccessOff`), 429 (too many lately), 502 `{message, session?}` (not made, or
     made but its task didn't reach it), 503 (no engine).
   - Where and how, each optional (bridge 0.9.106, "Work"): `project` (a project's name or folder
-    here) or `chat: true` instead of `folder`; `worktree: true`, a worktree of its project on a
+    here) or `chat: true` instead of `folder`; `project` with `folder`, a folder in that project or
+    in one of its git worktrees wherever that is (one its repository lists that names it back),
+    where the session works, its answer's `project` the project's (400 for a folder that's neither,
+    or with `worktree: true` too: never dropped, as before #422); `worktree: true`, a worktree of its project on a
     branch of its own; `model` (`"provider/model"` or `{providerID, id}`, one there's an account for
     here, on the engine or the coding agents' bridge as it runs) and `effort` (one of its variants);
     `mode` `build` or `plan`; `approval` (Approval, below: `askFirst`, `acceptEdits`, `auto` or
@@ -955,6 +1027,13 @@ client shows it from the same routes.
   it's brought back, as its own wake-ups wait, a week at most; for one moving to or from another
   computer, until it's there; for one that lives on another computer now, it goes to it
   there as a letter with `note`, "Peers", delivered there as it would have been here). Clients mark rows by `kuvo.by`.
+  One whose answer was lost (the engine slow to answer) may have arrived: it goes again alone under
+  the same message `id` (`wakes.json`'s `tried`), which a conversation takes once, and what came
+  meanwhile after it (one message at a time to each conversation). A finish is told once however many ways it's heard of at once (its run's end,
+  what it left running ending, the box catching up as its engine's stream connects again), even when
+  its reply can't be read in time: `told.json` keeps when the session last changed as it was told
+  (`upto`, by its engine's clock, and `unread` when its reply couldn't be read), and a look that saw
+  nothing newer tells nothing.
   - **Homes** (`run/work/homes.json`, bridge 0.9.203): `{<session>: {key, at}}`, the box each
     conversation that left lives on, by the newest word: this box's record of its moves, its peers'
     `moved`, a box's `lives`, and a note's `about`. Unlike `moved` it doesn't forget at two days: a
@@ -1848,15 +1927,21 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   (`session.viewed`, `kuvo/groups/events`). What waits on your answer isn't read away: an ask
   still waits on you. A client that marks all read on every computer (the phone's Inbox) asks
   each box once.
-- **A message while a command runs** is read at once. A message sent to steer
-  (`delivery: "steer"`: yours, or another agent's letter) waits for the agent's next step, and an
-  agent waiting on a command or a subagent it started in the foreground takes none until that
-  ends. So each box, following its engine, moves what the agent waits on to the background once
-  it has run for 3 seconds (`POST api/session/<id>/background`, the engine's Ctrl+B), and again
-  every 3 seconds while the message still waits behind it: the agent reads the message now, and
-  is told when the command ends (bridge 0.9.67). A message queued for after the turn, a wake-up
-  (queued too) or the engine's own notes wait as before. The coding agents' sessions don't do
-  this yet.
+- **A message while a command runs**: yours is read at once. A message sent to steer
+  (`delivery: "steer"`) waits for the agent's next step, and an agent waiting on a command or a
+  subagent it started in the foreground takes none until that ends. So for your own message, each
+  box, following its engine, moves what the agent waits on to the background once it has run for
+  3 seconds (`POST api/session/<id>/background`, the engine's Ctrl+B), and again every 3 seconds
+  while the message still waits behind it: the agent reads the message now, and is told when the
+  command ends (bridge 0.9.67). Yours: a `user` item whose text doesn't open as the box's own do
+  (`[Message from `, `[Work from `, `[Session `, `[Wake-up]`…) and that carries no `kuvo.note`,
+  as the queue tells them (`writtenByYou`). Another agent's letter (`send_message`, the task of a
+  session an agent started) and the box's news and notes (a session that asks or finished, what
+  you approved that Auto's reviewer held back) never move it, sent now from the queue either:
+  they're read as the command ends, as any message sent to steer is, so a lead's word doesn't cut
+  short the tests its session waits on. (Boxes before #431 moved it for those too.) A message
+  queued for after the turn, a wake-up (queued too) or the engine's own notes wait as before. The
+  coding agents' sessions don't do this.
 - `POST kuvo/shell/<id>/stop` (`{"session": "ses_…"}`, which may be left out): stops a command an
   agent left running, as Stop over the Mac's composer does: SIGTERM to its process group, so the
   engine sees it end and tells the agent, with what it printed; only if that can't be sent, the
@@ -2783,7 +2868,24 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   user set has come.`, `[Goal] Nothing of the goal is at work now.`, `[Limit reset] <why> has
   reset. Carry on`, `[Session finished|still working|failed|asks] "<title>"` and `[The user answered] `: read
   them the same way
-  (`BoxNote` in KuvoClient's ClientSessions does both).
+  (`BoxNote` in KuvoClient's ClientSessions does both). A transcript shows no pill for any of them
+  (the user, 11-10). Its sessions' news (`from` `Its sessions`) shows as a message from each
+  session, in the design of a message from another agent, opening it: its text has one part per
+  session, a blank line between them, each opening `[Session <kind>] "<title>" <place> (address
+  <session>)`, then for `finished` `, after <time>:` and its reply on the lines after (`(It ended
+  without a reply.)` for none); for `failed`, `stopped: <why>.` or `stopped with an error[: <why>].`
+  and words for the lead; for `asks`, `asks to <what> (ask <id>).` or `asks: <question> (ask <id>).`
+  and words for the lead. Show what it said, never the words for the lead. `still working` shows
+  nothing, old ones included. A goal started or resumed is a word in the next reply's footer; the
+  rest show nothing. The same goes for the engine's and the bridge's notes (`synthetic`, `system`):
+  they're for the model and show nothing, but what changed (the model or its effort, the mode, a
+  summary, the project's folders) is said in a word beside the next reply's time (`ReplyChanges`).
+  The agents bridge's own notes for the user ("Your PreToolUse hook failed…", "Codex asks for
+  verification to go on…", "… Going on with Codex.") carry `metadata.kuvo.notice: true`, and show
+  as a quiet line (`Message.Notice.isForYou`); those from before it marked them show nothing. A
+  `Your answer` note `You approved: <what>` (what you approved after Auto's reviewer held it back)
+  shows as "Allowed by you" on the first step after it that does `<what>` (`WorkAnswer.yours`), and
+  nowhere if none does.
 - A prompt a phone sends (`POST api/session/<id>/prompt`, and `kuvo/agents/api/…` alike) gets a
   block at the end of its text that tells the agent it's from the phone: a line `<from-phone>`,
   the words in `FromPhone.swift`, and a line `</from-phone>`. Every box adds it, in the same
@@ -2928,9 +3030,12 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   `413 {"message"}` over 25 MB, or over `max` when it's given (`&max=<bytes>`: all a client would
   show of it), `400 {"message"}` for an address that isn't `file://`. Each box answers for its own files, a machine's with the Mac closed too.
 - On a Mac, `kuvo/usage`: the menu bar's usage panel as its Bars view lists it, for what the box
-  doesn't state yet (a plan's limits are every box's own, in "Plan limits"): it leaves out the
-  providers whose limits this Mac's box states rows for (`services`, with an account listed), whose
-  spend shows under the first of them on the Mac. A client lists the box's rows, then these: each provider's name, plan, brand color, mark as a PNG
+  doesn't state yet (a plan's limits are every box's own, in "Plan limits"). A provider whose
+  place the boxes' rows take there says so (`covers`, its service), with its limit lines left out:
+  one this Mac's box states rows for (`services`, with an account listed), and Claude, whose bar
+  has no limits of its own, wherever any of the Mac's computers states a Claude account. Its
+  spend shows under the first of those rows. A client lists these in their order, the box's rows
+  in the place of each that `covers`: each provider's name, plan, brand color, mark as a PNG
   to tint, notice, whether it's outdated, and its lines as UsageKit writes them; whether a refresh is under way and when the last one ended;
   `kuvo/usage/events` streams it as it changes, and `POST kuvo/usage/refresh` refreshes it all.
   While the usage panel isn't up, `kuvo/usage` and the refresh answer 404; the stream answers 200
@@ -3023,8 +3128,10 @@ the last reading in its folder (`limits.json`), through a restart. A client reac
   - `identity`: the account at its maker, 16 hex characters, the same from every box signed in to
     it (and from a coding agent's sign-in and the engine's to the same account), so a client
     lists it once. A hash of its maker's own ID for it, never the ID, an email or a secret:
-    Claude's account and organization (Linux only: a Mac's Claude token doesn't say who it's
-    for), ChatGPT's account and workspace member, xAI's user, GitHub's login (from Copilot's
+    Claude's account and organization (on Linux as Claude Code keeps them beside its sign-in; on a
+    Mac, whose token doesn't say who it's for, as Anthropic says in the signed policy record Claude
+    Code fetches with that token and keeps in its settings folder, once it has run with it there),
+    ChatGPT's account and workspace member, xAI's user, GitHub's login (from Copilot's
     answer), and an API key for OpenRouter, Z.ai and OpenCode Go. Absent where it isn't known, and
     from a box from before it: list that row as its box's own. Where it changes (signed in
     as another account there), the box drops what it kept of the one before, and the row says so
@@ -3068,8 +3175,11 @@ the last reading in its folder (`limits.json`), through a restart. A client reac
   with the first `label` among them ("Claude · Work"). Where two rows would have one name: a row
   whose own computer's sign-in is the engine's takes the service's name ("ChatGPT"); rows not on
   the client's own computer add the names of the boxes they're from ("Claude · hetzner, lokum"),
-  as does one beside a row the client shows of its own of that name (the Mac panel's own card);
-  rows still alike add their other boxes' names.
+  as does one beside a bar the Mac panel shows of its own of that name (a provider's card that
+  reads your own login's limits, when this Mac's box has no row of it: Codex's, say; Claude's card
+  has none, so the accounts take its place, `covers`); rows still alike add their other boxes'
+  names. A row a box can't say who it is (no `identity`) is never merged by its numbers: two
+  accounts can read alike (a personal plan and a team's, each at 12%).
 - What's read: Claude Code's accounts, on Linux from Anthropic with Claude Code's own sign-in in
   Kuvo Code's folder; on a Mac only from what its turns hear (Claude Code's rate-limit events, every
   window from each response's headers), as the token Kuvo Code signs in with there can only run
@@ -3107,13 +3217,15 @@ change what they say. Kept in `run/work-queue/` (`queues/<owner>.json`, files ke
 `features` has `work-queue`. Times are milliseconds since 1970.
 
 **An item**: `id` (`wqi_…`, never shown), `number` (its `#n`; missing while it waits for one,
-shown as new), `wanted` (a number an import asked for, until it's granted), `owner` (`ses_…` or
+shown as new), `wanted` (a number an import asked for, until it's granted; beside `number`, its own
+number asked back), `owner` (`ses_…` or
 `grp_…`), `title`, `category`, `order` (its place in its category, among every owner's items on
 the box), `inProgress`, `progress` (`{value?: 0…1, note?}`: how far, and what's being done now),
 `sessions` (`[{session, title, working}]`: the sessions working on it, and which are at work now),
 `noteCount`, `lastNote`, `fileCount`, `linkCount`, `handedBy` (the first owner that handed it on),
-`source` (an outside source's item, later: `{kind, ref, url?, host?, id?}`, named by `ref` and
-never numbered; one that had a number keeps it, never shown again), `handing` (`{to, name}`: on its
+`source` (an outside source's item: `{kind, ref, url?, host?, id?, name?}`, named by `ref` and
+never numbered; one that had a number keeps it, never shown again: "Issues and pull requests"),
+`seen` and `keptIn` (what GitHub says of it, below), `handing` (`{to, name}`: on its
 way to a conversation on another computer, unchanged until it's there), `computer` (`{key, name,
 kind: mac|machine, id?}`: the computer it's on, when that isn't the box asked, as that one last told
 it; `id`, a machine's name on this Mac, for a client to reach it), `created` and `updated` (`{at,
@@ -3147,7 +3259,8 @@ there are under the owner, "Work").
   has `computer`. `kuvo/work-queue/events?owner=` is the same as NDJSON: a line now and one each
   time it changes (a change here or by another process, another computer telling of its queue, or a
   linked session starting or stopping work).
-- `GET kuvo/work-queue/items/<id or number>` → `{item}`, whole. `…/files/<name>` → its bytes. An
+- `GET kuvo/work-queue/items/<id or number>` → `{item}`, whole (an issue's `gh:` ref names it too,
+  but its "/" can't go in a path through every client: a client asks by the `id` its chip has). `…/files/<name>` → its bytes. An
   item on another computer answers as that one told it, with `computer` and an empty `body`,
   `notes`, `files`, `links` and `handed`: a client reads it whole, and its files, from that computer
   (a machine by `computer.id`; a Mac, its own box).
@@ -3155,8 +3268,9 @@ there are under the owner, "Work").
   conversation?}` (a list, so a ref with a comma in it, an outside one later, goes whole;
   `conversation` is taken and not used yet: it's for "issue #12" in a project bound to a tracker,
   later) →
-  `{refs: {"243": {id, number?, source?, title, category, inProgress, owner?, removed?, computer?}
-  | null}}`: what each ref names, by the ref as it was asked, for a chip; one on another computer as
+  `{refs: {"243": {id, number?, source?, seen?, title, category, inProgress, owner?, removed?,
+  computer?} | null}}`: what each ref names (`#243`, `243`, an id, or an issue or pull request in a
+  queue: `gh:owner/repo#12` or its page, and a linked item's old `#n`), by the ref as it was asked, for a chip; one on another computer as
   it last told it, with `computer`; null for one no computer told this box of. A client reads each
   on its own (one it can't read is as null, the others still chips), and keeps what it learns by
   the ref as asked, not by a number.
@@ -3178,8 +3292,21 @@ kuvo/work-queue/import` `{owner, files: [paths]}` (Markdown files on the box: ea
 starting with `#N` is an item, in the category of the nearest heading above it that names one
 (Done, Shelved/Parked, Later/Ideas), else Next, Done with `[x]`; a line `NOW:`/`LATER:`/… with
 refs sets theirs; the first line naming a number gives its title, every line naming it its body)
-→ `{added, byCategory, waiting, skipped, said}`. An import skips a number here already under the
-same title; under another title, the item is imported with a new number and a note. Each change
+→ `{added, byCategory, waiting, skipped, said}`. An item keeps its own number wherever no other item
+has it, here or on another of your computers (as each told this box), and it isn't one this box
+gave an item that's gone from it (`numbers.json`, `used`: moved away, or deleted); one waiting for
+its number (an import's still under way) holds it as its own. An import skips a number here already under the
+same title, or waiting for it; under another title, the item is imported with a new number
+(`importedAs`) and a note, and `said` names each one renumbered and its number now, as it does
+those the primary refuses at once (on the primary itself; elsewhere a note says so when its answer
+comes). An item an import renumbered, imported again under the same number and title, isn't made
+twice: it asks for its own number back (claimed as an import's are, as `restores` too, keeping
+the one it has, and `wanted` meanwhile), where no other item has it (one on its way back to its own
+number lets it go); granted, every such item moves at once (two can trade), with a note, and
+`importedAs` goes. One whose number another item has waits (`backGranted`, never asked again) while
+that one asks for its own, and moves once it has; else, or refused, it stays as it is, with a note
+(`stays`: an import doesn't ask again). So importing the same backlog again repairs an import that
+went wrong, and once it has, changes nothing. Each change
 answers `{item}`; a category removed only once nothing, deleted items included, is in it.
 
 **Tools**: `GET kuvo/work-queue/tools` → `{tools, instructions}` (MCP definitions, and what the
@@ -3192,8 +3319,10 @@ told them), `queue_show` (one on another computer as it told it, saying it lives
 once; one on another computer that takes the Work Queue's mail, by address or a bot's name, by mail,
 "Across your computers"), `queue_remove` (`undo` brings back an agent's delete; only you
 bring back yours; one on its way to another computer has its hand-off called off), `queue_categories` (list, or add one), `queue_import` (items an agent read from
-an old backlog, with their numbers). `item` is a number (`#243` or `243`), or the id of one that has
-none yet (the tool says it); one on another computer is changed there, and a change from here is
+an old backlog, with their numbers). `item` is a number (`#243` or `243`), the id of one that has
+none yet (the tool says it), or the issue or pull request an item is (`gh:owner/repo#12`, or its
+page); `queue_add` with `issue` adds one, `queue_update` with `issue` makes an item that issue
+("Issues and pull requests"); one on another computer is changed there, and a change from here is
 refused saying so. A caller's queue is its conversation's (a subagent's is its
 conversation's; a seat's, its group chat's, while the chat lives on this box: a seat of one that
 lives elsewhere is refused); it changes what's in its view (by a number two computers gave twice,
@@ -3206,12 +3335,66 @@ and kept with it, all or none.
 `#243` names item 243 when the `#` is at the start or after a space or one of `([{"'/,–-`, with 1
 to 6 digits and then no letter, digit or underscore; not inside a code span or block, a Markdown
 link or a web address, and not after "PR", "MR", "pull request", "issue" or "step" (someone
-else's numbers; outside sources get a prefix, `gh:owner/repo#12`). A client asks `refs` for the
-numbers in a message and draws each one the box knows as a chip (its category's color, a ring in
-progress, a check when done, `#243` and the title on one line), leaving one it doesn't know as
-written; the message's words never change. A chip opens the item.
+else's numbers; outside sources get a prefix, `gh:owner/repo#12`). `gh:owner/repo#12` (`owner` a
+GitHub owner, `repo` a repository name, the number 1 to 10 digits; then no letter, digit or
+underscore; not in code, a link or an address either) names the item that is that issue or pull
+request. A client asks `refs` for the numbers and the `gh:` refs in a message and draws each one the
+box knows as a chip (its category's color, a ring in progress, a check when done, `#243` and the
+title on one line; for an issue or a pull request, GitHub's mark and `source.name` in place of
+`#243`, the title struck through when `seen.state` is `not_planned` or `closed`), leaving one it
+doesn't know as written; the message's words never change. A chip opens the item.
 
-**Numbers**: one `#n` per item, unique across your computers, handed out by the primary: the first
+**Issues and pull requests** (GitHub's, on github.com): an item can be an issue or a pull request
+there, read with the box's own `gh` and its sign-in (Kuvo Code keeps no key of GitHub's for it), and
+never written to: nothing here changes anything on GitHub.
+
+- In: an agent adds one (`queue_add` with `issue`: `gh:owner/repo#12` or its page), or makes an item
+  of its own one (`queue_update` with `issue`): it's that issue from then on, named by it (`source`:
+  `kind` `github` or `github-pr`, `ref` `gh:owner/repo#12`, `url`, `host`, `id` GitHub's own), its
+  number kept and never shown again (the old `#n` still names it), its title and description
+  GitHub's (what an item said before is kept as a note; a bare `#n` in an issue's description is
+  that repository's, so a client chips only its `gh:` refs). Its ref is GitHub's own name for it,
+  after a rename too. One item for each issue (by its name or GitHub's id): a second is refused,
+  naming the first. `gh` reads it once as it's added or linked (with its description; under the same
+  lock and back-off as every read); one it can't read (not there, signed out, no such issue it may
+  see) is refused in words, and nothing is added. An agent reads its description fenced off as
+  outside text, never instructions.
+- Read only for what a client shows: a view (and its events), an item, and `refs` read the issues
+  and pull requests in them where that's due (one GraphQL query for all, 200 at most, those asked
+  longest ago first; one process at a time; again after a minute while it's open, half an hour once
+  it's closed, five minutes when it couldn't be found; a host `gh` couldn't read isn't asked for five
+  minutes). One another computer told of is read here only once what it told is five minutes old
+  (`seen.checked`): that computer reads what it shows. A view's or refs' answer waits
+  3 s at most for it; the events stream doesn't wait, and its next line has it; a request answered
+  once (`box route`) never waits: a read that's due goes on in a process of its own (`kuvo-link.js
+  box github-read`), kept for the next ask. One found missing where it was is read again by GitHub's
+  id (moved, or a discussion now). Agents' tools never read GitHub: they say what was last read.
+- Kept beside the queues, `run/work-queue/seen.json` (`{reads: {"<host>/<owner>/<repo>#<n>": {at,
+  value, checked?, gone?}}, hosts}`), never in them: a read changes no item and no `updated`. `at`
+  is since when GitHub has said what it says (a read that finds the same moves only `checked`, so
+  nothing shown or told changes with it). One found missing later (gone, or no longer visible to
+  that sign-in: GitHub says the same of both) keeps what was last read, `gone`. The same reader
+  (`link/github/graphql.ts`) reads sessions' pull requests for "A session at a glance".
+- Each summary takes it in: `title` GitHub's; `source.name`, what a client shows in place of `#n`
+  (`repo#12`, `owner/repo#12` when another owner's repository read here has that name); `seen`
+  (`{state, at, gone?}`: `open`, `draft`, `completed`, `not_planned` (a duplicate too), `merged` or
+  `closed` (a pull request closed unmerged), and since when; a newer box may say more); and, while it's
+  `completed`, `not_planned`, `merged` or `closed`, `category` `done` (never in progress then), its
+  own category in `keptIn`, and `doneAt` when GitHub closed it. Reopened, it's back in its own
+  category; `struck` (closed without being done: its title drawn struck through) and `closesOn`
+  (`github`: Done is GitHub's, never a place to move it to), for clients to draw by. What another
+  computer tells carries the same, so a client draws it there without `gh`; its times are taken as
+  no later than when it told them. Where this box read it too, the word asked of GitHub later
+  (`checked`, else `at`) is shown, this box's on a tie, and one found gone only when the other is
+  too.
+- Done is GitHub's: moving one into Done, or out of it while it's closed (you or an agent), is
+  refused in words (400); its title and description aren't changed here either.
+
+**Numbers**: one `#n` per item, unique across your computers, handed out by the primary: your
+setup's main computer ("Your setup"), the box itself when it's that; one a box can't write to yet
+(its document not here, or naming no address) is waited for, never passed over. A box that
+follows no setup (Macs that share a machine, and the machines numbering with them, or a box beside
+an older one; kept until every box knows setups and those Macs are joined in one) takes the first
 computer you set up. Each box works it out the same way from what it knows: of itself, its peers and
 the primaries they say they number from ("Across your computers", `told`), a Mac comes before a
 machine (a machine is always set up from a Mac), then the one set up first (`since`: when that box
@@ -3230,10 +3413,10 @@ still list a while) isn't one to number from; a box that reached it through that
 peer to its next. Heard from again, it's the earliest again, and boxes move back to it, which moves
 past what was numbered meanwhile (`top`). A machine set up from a
 Mac never numbers on its own; while it knows of no Mac that
-can be reached yet, items wait. (#183 will let you choose the primary.) The primary numbers its own
+can be reached yet, items wait. The primary numbers its own
 items from its counter; another box numbers from blocks of 50 the primary gave it, and asks for the
 next when 15 or fewer are left, by mail, on its rounds: `{workQueue: {ask: {id, count, claims?,
-top?}}}`, sent again every 30 s until answered with `{workQueue: {give: {id, from, to, granted}}}`.
+restores?, own?, top?}}}`, sent again every 30 s until answered with `{workQueue: {give: {id, from, to, granted}}}`.
 `top` is the highest number the asking box used, holds or handed out: the primary moves its counter
 past it (a box that numbered on its own before, or a primary that lost its file), and past any number
 its peers tell it they use. A box that stops numbering on its own asks its new primary at once. A
@@ -3242,11 +3425,21 @@ set up) is asked through the peer that named it: `{workQueue: {ask, to: <primary
 peer, which passes it on as `{ask, for: <asking box's key>}` if it's its own primary, and the block
 back as `{give}`; one hop only, and a box takes a block only from its primary or the peer it asks
 through. The primary keeps what it gave for each ask, so an
-ask sent again gets the same answer. `claims` are numbers an import wants to keep (six digits at most, what a chip reads): the primary
-grants those at or above its counter and within 10,000 of it (or granted that box before) and moves its counter past them;
-an imported item waits without a number until then, and one refused gets the next number, with a
+ask sent again gets the same answer, and notes the box it gave each block (`given`, `by`). `claims`
+are numbers an import wants to keep (six digits at most, what a chip reads): the primary grants
+those at or above its counter and within 10,000 of it, those it granted that box before, and, for
+an ask that says `own` (a box that never claims a number it gave an item, `used`), those in a block
+it gave that box (its own: a box drops its leases at or below its claims, and takes a block only for
+the ask under way, so a block given for an ask an import replaced is never used), and moves its
+counter past them. Until those an older primary kept without whom they went to are gone from
+`given`, such a block counts for `restores` (numbers asked back for items an import renumbered)
+only where every other computer the primary knows told it, and of no number as high as the block's
+first (its `top` or its items), and the asking box told of one as high as its last: a box that
+never tells the primary (one reaching it only through a peer) could hold one unseen. An imported item waits without a number until then; an answer decides only the claims
+its ask carried (one claimed later waits for its own), and one refused gets the next number, with a
 note. An item made with no number left waits too, and takes one, oldest first, when a block comes; one left
-waiting with nothing under way (a crash midway, a move) is claimed or numbered again within a minute.
+waiting with nothing under way (a crash midway, a move), or still asking for its own number back, is
+claimed or numbered again within a minute.
 A queue file that can't be read is never written over: the change is refused and the file set aside
 (`queues/aside/`); fields a newer box keeps in an item are kept as they are, and so is a queue of a
 kind of owner this box doesn't know (`queues/<kind>_….json`, a newer box's): never read, shown,
@@ -3265,11 +3458,14 @@ item on its way to another computer (`handing`) goes with the move and is sent f
 `work-queue.elsewhere`; mail as "Peers" says, under the top-level `workQueue`):
 
 - **Told**: each box tells every such peer its Work Queue, unasked, so the others have it while it
-  sleeps: `{workQueue: {told: {id, at, kind, since, top, primary?: {key, kind, since?}, items,
-  owners, categories}}}`. `items` are its items as a view gives them (not deleted ones; the 100
-  latest Done; 1,500 at most), each with `handedFrom` (who handed it on); `owners` names their
-  owners; `categories` its custom ones; `kind`, `since` and `top` how it numbers, and `primary` the
-  one it numbers from (itself when it's the primary). `id` (`wqt_…`) is the same while all that is.
+  sleeps: `{workQueue: {told: {id, at, kind, since, top, primary?: {key, kind, since?}, shared?,
+  items, owners, categories}}}`. `items` are its items as a view gives them (not deleted ones; the
+  100 latest Done; 1,500 at most), each with `handedFrom` (who handed it on), an issue's or pull
+  request's with `seen` and `keptIn` as this box last read it (`seen.checked`, when it last asked
+  GitHub); `owners` names their
+  owners; `categories` its custom ones; `kind`, `since` and `top` how it numbers, `primary` the
+  one it numbers from (itself when it's the primary), and `shared`, whether it's a machine Macs
+  share outside one setup ("Your setup"; an older box says neither). `id` (`wqt_…`) is the same while all that is.
   It's worked out again when a queue changes and each minute (who's at work changes it), and goes
   to one computer once in 15 s at most, again each minute (sooner after a change you made from a
   client, at the next round 15 s on) until that computer answers `{workQueue: {had: id}}`, nothing
@@ -3524,6 +3720,7 @@ with its app closed, when what needs the app answers `503 {"message"}`.
 | `letters-read` | (in a peer's agents' mail) it takes a letter with `read` (bridge 0.9.100) |
 | `work.elsewhere` | (in a peer's agents' mail) it takes a lead's `call` and tells `rows` ("Peers"; bridge 0.9.204) |
 | `work-queue` | `kuvo/work-queue…` and the `queue_…` tools ("The Work Queue") |
+| `setup` | `kuvo/setup`, `…/events`: your setup and its main computer ("Your setup") |
 | `work-queue.elsewhere` | (in a peer's agents' mail) it tells and takes the Work Queue across your computers: `told`, `had`, `part`, `hand`, `handed`, and numbers' asks through a peer ("The Work Queue", Across your computers); also `POST kuvo/work-queue/refs`, `computer` and `computers` in its views, and 409 for an item elsewhere |
 | `queue` | `kuvo/sessions/<id>/queue…`, `…/stop` and `kuvo/sessions/queues/events`: the box carries the queue (bridge 0.9.100) |
 | `queue.waits` | A Stop holds the conversation: what arrives waits on the box (`waiting`), `…/queue/add` and `DELETE …/queue/<item>` (bridge 0.9.128) |
@@ -3903,7 +4100,10 @@ while a box is away goes there when it's back.
   sessions is brought back (a client shows it then, and not before).
   `worktrees` (bridge 0.9.207), `{"<folder>": "<project>"}`: the project each of the box's worktrees
   belongs to, by the folder its sessions run in (and its top folder), for those it keeps, those it
-  removed that can come back and those removed before. A client files a session whose folder is
+  removed that can come back and those removed before; and each project's git worktrees made
+  elsewhere (`git worktree add /tmp/try`; as its repository lists them and they name it back, by
+  their real paths, looked for again every 15 seconds or so, off the box's thread; not one that's a
+  project of its own; #422). A client files a session whose folder is
   here under that project, never as a project of its own; the events line changes with them. A box
   from before doesn't say: a client goes by `kuvo/worktrees` then.
 - `PUT kuvo/projects?directory=<folder>` with any of `{name, folders, run, terminal, removed}`
@@ -4459,6 +4659,16 @@ conversation is taken as the box last found it; one it never found then has its 
 back (`why: "failed"`, code's lines still refused), never left waiting on you (bridge 0.9.186), but
 one the box marked as in Full Access, which runs (bridge 0.9.187).
 
+What's a conversation's own is never reviewed by its agent's own file tools, as its folder isn't (the sandbox's walls for its commands are as they were), by where each file really is against where each of those folders was found (a worktree as it's found, the conversation's own folders as the box first saw the conversation, kept in `box/found-folders.json` across restarts: one traded for a link since takes nothing with it), and never what's walled from it wherever it is (Kuvo Code's own but the conversation's own in them, what runs later or at login, your secrets and your own settings, all of `~/Library` (the parts the sandbox opens to commands too: its caches, logs, Xcode's `Developer`) but iCloud Drive's own (`Mobile Documents/com~apple~CloudDocs`, not other apps' folders beside it; an exception matched as the disk matches names, never wider) and what's the conversation's own in Kuvo Code's folders there, a repository's `.git/worktrees`; on a Mac by any case Unicode has, as its disk folds names), each judged as anywhere. Every resource the engine asks about (named from `/`, `…/*` a folder), the file it says it asks about, every path argument of the call (however deep, to a point) and a patch tool's headers (read as the engine reads them) must be reached plainly so: from where the folder was found, no link below it, no `..`, no control or separator character, `\` or character a disk may skip as it compares names (a joiner, a direction mark), each name below the folder the same composed and folded by case (the folder's own path the box found itself), a file with no other name; and only for a tool known to write (the engine's write, edit and patch; Claude Code's Write, Edit, MultiEdit and NotebookEdit; Codex's changes), to read, or to run a command (by its folders), never one whose call can't be read. It's checked as the ask comes: the engine's write follows links as it writes, so a command that puts one in place between the answer and the write isn't caught here (the sandbox's plugin gives a file tool's path in the conversation's folder as where it really leads, as it runs). Its own: its folder, its project's other
+folders, the files sent with it, its commands' temporary folder, a bot's own and its projects, and,
+for one at work in a project's main folder, the project's linked git worktrees wherever they are
+(`git worktree add /tmp/try`: each its repository's `.git/worktrees` lists, that folder and the
+entry where they're named, whose own `.git` names it back; what runs later there, and Kuvo Code's
+own, still judged; never one in Kuvo Code's own folders, another session's, nor one where an agent in Auto
+couldn't start a session: your home or a folder holding it, a whole personal folder, your secrets,
+what runs at login). A conversation in a linked worktree has only that one: the project's main
+folder and its other worktrees stay the reviewer's.
+
 - Code first, only for what's never allowed, refused and the model never asked, and never held back
   for you: Kuvo Code's own folders (read or written, a script run from them), and wrecking your
   home (deleting it, moving it away or locking you out of it: `rm -r`, `mv`, `chmod -R`, `find
@@ -4496,11 +4706,18 @@ one the box marked as in Full Access, which runs (bridge 0.9.187).
   `POST /api/session/<id>/generate` `{prompt, model}` (a model of that session's maker only); the
   conversation's own model where the maker has no small one. It's counted on that account. It's
   shown only what you wrote in the conversation (never what the box, another agent or a wake-up put
-  there), and for a bot's, its goal too, with the plan you approved by starting it; the action (for a
+  there), and for a bot's, its goal too, with the plan you approved by starting it; where it works as
+  its own (its folder, then its project's other folders and worktrees); for a session another agent
+  started, the task it was started with (its first message, the letter from `kuvo.startedBy`), as
+  that agent's words, never taken for yours; the action (for a
   file, the tool and its arguments); and what a command runs, read whole first: a script by its
   path, `bash x.sh`, `python x.py`, and the project's build files its program runs (`package.json`
   for npm, pnpm, yarn and bun, a Makefile, a justfile, `conftest.py`, `build.rs`, Gradle's, a
-  Rakefile, a Taskfile). Each piece is in tags of that prompt's own, so none can pass for the
+  Rakefile, a Taskfile). One too long to read whole that's the project's own (in the
+  conversation's own folders, tracked in its git) is read in part, told as that: its start, and its
+  changes not yet committed, whole (a test file was never all a command runs: the modules it
+  imports aren't read either); one whose changes are too long too, or isn't the project's, is held
+  back (`unread`). Each piece is in tags of that prompt's own, so none can pass for the
   rules. Never the agent's own words, its `why`, nor what its tools printed.
 - A script from the web (`curl … | sh`, `bash -c "$(curl …)"`, `eval "$(curl …)"`, `wget -qO- … |
   sh`, `<(curl …)`) is
@@ -4523,19 +4740,39 @@ one the box marked as in Full Access, which runs (bridge 0.9.187).
   answer that isn't one JSON object with a known decision (`unreadable`), no model (`noModel`), or a
   model that fails or doesn't answer within a minute, or a review that fails on the box's side
   (`failed`: no quota, offline). A model that answers `ask` refuses (`reviewer`).
+- Once the model allows a change the agent's own file tool makes (never a folder a command goes
+  to, nor room asked for), a change its file tool makes in the same place goes ahead again without
+  the model for the rest of the conversation (#422: the same kind of action in the same place gets
+  the same answer), and isn't kept as a decision. The place is the repository the file is in (its
+  working folder), or else the file's folder, worked out again for each change, which must be that
+  very place (a folder in a place that isn't a repository, or a repository inside one, is another);
+  none where that holds the conversation's own folder or another repository, where an agent in
+  Auto couldn't start a session (above), what runs later outside the sandbox (the folders on PATH,
+  tools' settings, `~/Library`), or Kuvo Code's own. Never for a change to your own settings, your
+  secrets, what runs at login, what runs later (the same), or git's hooks and settings and the
+  agents' (on a Mac by any case, as are your settings and what runs at login), each judged on its
+  own. A place new to the conversation is a decision of its own (`Change <place>`, "Auto allowed
+  edits in <place> for this session.", with `place`), which any client can take back (`revoke`,
+  below); one past the last 50 is taken back by itself, and every one as the conversation leaves
+  Auto; a review under way as they're taken back stores none.
 - Three refusals in a row, or twenty in a conversation, pause Auto there: its run is stopped, and
   what it wants next is held back (`why: "paused"`) until you let it go on or approve one. Those for
-  want of a model (`noModel`, `failed`, `unreadable`) don't count. A review that can't be had at all
+  want of a model (`noModel`, `failed`, `unreadable`) don't count; the model's allow starts the
+  count in a row over (code's own allows, a place's among them, don't: an agent can't reset it with
+  what it may do anyway). A review that can't be had at all
   (a full disk) is refused with why (`failed`), never asked.
 - `GET kuvo/sessions/<id>/decisions` → `{decisions, paused?, seen?}`: the conversation's decisions, the
   latest last (the last 200), each `{id, at, action, kind, decision, reason, by, why?, held?,
-  approved?, used?}`: `kind` `command`, `file` or `tool`; `decision` `allowed` or `refused`; `by`
+  approved?, used?, place?, revoked?}`: `kind` `command`, `file` or `tool`; `decision` `allowed` or `refused`; `by`
   `code`, `model` or `you` (one you approved, run again); for a refusal, `why` (above), and `held`
   where you can approve it (then `approved`, when you did, and `used`, when it ran again). Code's
   own allows (a read outside its folder) aren't kept. Decisions from before bridge 0.9.185 may say
   `asked`, or `why: "always"` with which kind in `always`. `paused`: since when Auto is paused
   there. `seen`: when you last looked at them on any client; one held back with an `at` after it
   is news, which a client shows over its composer (bridge 0.9.187).
+- `POST kuvo/sessions/<id>/decisions` `{revoke: <id>}` takes back a place (a decision with
+  `place`): each change there is judged again; the decision gets `revoked`, when. 404 for one that
+  isn't a place, or is taken back already.
 - `POST kuvo/sessions/<id>/decisions` `{approve: <id>}` approves one held back, from any client:
   allowed once, the next time the agent does it the same way (a command in the same folder running
   the same scripts as read then: one changed since is judged again; the same file with the same
@@ -4682,8 +4919,13 @@ your home: `.claude/settings.json` and
 `settings.local.json`, `.mcp.json`, `.codex/config.toml`, `.cursor/hooks.json` and `mcp.json`,
 `.gemini/settings.json`, `.grok/settings.json`, and the scripts in `.claude/hooks` and
 `.cursor/hooks`; a folder moved or linked into place is checked only by its own name, so the folders
-that hold those, `.git`, a submodule's or a worktree's repository in it and the agents' `.claude`,
-`.codex`, `.cursor`, `.gemini` and `.grok`, can't be made, moved or removed, only written in, and
+that hold those, `.git`, a submodule's or a worktree's repository in it (`.git/modules` and
+`.git/worktrees` themselves, and every folder below `modules`, a worktree's own `modules` too, but
+for the folders below a submodule's own `objects`, `refs`, `logs`, `lfs` and `rr-cache`, which git
+keeps as it fetches; so in the sandbox a submodule gets none of those it hasn't already, nor what a
+rebase, `git am` or a cherry-pick of several keep in it, nor a nested submodule set up: those run
+outside it, with `sandbox_ask`) and the
+agents' `.claude`, `.codex`, `.cursor`, `.gemini` and `.grok`, can't be made, moved or removed, only written in, and
 neither can the conversation's folder itself and its repository's, so neither is traded for a link to
 another bot's), its conversation's own temporary
 folder (`TMPDIR`), its conversation's wake-ups' inbox (below), its bot's memory (`MEMORY.md` in the folder of the bot

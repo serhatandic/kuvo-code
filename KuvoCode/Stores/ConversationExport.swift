@@ -30,7 +30,10 @@ enum ConversationExport {
                 // Not yours: another agent's message, a wake-up, a group chat's work, what the box
                 // told the agent (as the line of what happened).
                 if let note = BoxNote.of(user) {
-                    say(note.from, note.line)
+                    // Its sessions' news as the transcript shows it, a message from each (one still
+                    // working, nothing); the box's other notes as a line of what happened.
+                    if note.news.isEmpty, note.shown.isEmpty { say(note.from, note.line) }
+                    for news in note.shown { say("From \(news.title)" + (news.status.map { " · \($0)" } ?? ""), news.body) }
                     continue
                 }
                 if let mail = AgentMail.parse(written) {

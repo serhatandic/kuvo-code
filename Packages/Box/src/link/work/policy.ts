@@ -149,11 +149,14 @@ export function allowRefusal(action: string, resources: readonly string[], folde
     const command = typeof seen?.input.command === "string" ? seen.input.command : null;
     return [...(command ? partsOf(command) : []), ...asked].every(part => ruleFor(rules, action, part) === "allow") ? null : "above";
   }
+  // (The engine reads a \ as a / as it matches a rule for a folder outside: `notes\x` would pass
+  // for a file in `notes`, while it's beside it. Never one a bot allows.)
+  const named = FILES.has(action) && seen ? [seen.input.filePath, seen.input.file_path, seen.input.path, seen.input.file].filter((each): each is string => typeof each === "string") : [];
+  if ((action === "external_directory" || FILES.has(action)) && [...asked, ...named].some(each => each.includes("\\"))) return "above";
   if (!asked.every(resource => ruleFor(rules, action, resource) === "allow")) return "above";
   // A file outside the session's folders (where it really is, a link in it followed), as its own
   // would be asked: working outside the project, allowed there as written and where it leads.
   if (FILES.has(action)) {
-    const named = seen ? [seen.input.filePath, seen.input.file_path, seen.input.path, seen.input.file].filter((each): each is string => typeof each === "string") : [];
     // (A path not from `/` is from the session's folder, as the engine takes it.)
     const full = [...asked, ...named].filter(each => each !== "*" && (path.isAbsolute(each) || folders.length)).map(each => path.resolve(folders[0] ?? "/", each));
     const outside = full.filter(each => !folders.some(folder => within(realOf(each), realOf(folder))));

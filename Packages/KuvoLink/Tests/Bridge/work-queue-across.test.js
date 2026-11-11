@@ -22,6 +22,13 @@ import { atEnd, removeAtEnd } from "./at-end.js";
 
 const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-work-queue-across-")));
 removeAtEnd(home);
+// GitHub's `gh`, standing in: it says each time it's asked (`gh-asked`), and answers what a test
+// says GitHub would (`gh-answer.json`), else that it's signed out. Never GitHub itself.
+const ghAsked = path.join(home, "gh-asked"), ghAnswer = path.join(home, "gh-answer.json");
+fs.mkdirSync(path.join(home, "bin"), { recursive: true });
+fs.writeFileSync(path.join(home, "bin", "gh"), `#!/bin/sh\necho asked >> '${ghAsked}'\nif [ -f '${ghAnswer}' ]; then cat '${ghAnswer}'; exit 0; fi\necho 'gh auth login' >&2\nexit 1\n`, { mode: 0o755 });
+const ghAsks = () => (fs.existsSync(ghAsked) ? fs.readFileSync(ghAsked, "utf8").split("\n").filter(Boolean).length : 0);
+process.env.PATH = `${path.join(home, "bin")}${path.delimiter}${process.env.PATH}`;
 process.env.KUVO_HOME = home;
 const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
 const run = path.join(home, "run");
@@ -131,6 +138,8 @@ const told = (number, owner, extra = {}) => ({
 const telling = (items, extra = {}) => ({ told: { id: `wqt_${crypto.randomBytes(9).toString("base64url")}`, at: Date.now(), kind: "machine", since: 5000, items, owners: [{ owner: "ses_far", kind: "session", title: "Far away" }], categories: [], ...extra } });
 
 beforeEach(() => {
+  fs.rmSync(ghAsked, { force: true });
+  fs.rmSync(ghAnswer, { force: true });
   fs.rmSync(run, { recursive: true, force: true });
   fs.mkdirSync(run, { recursive: true });
   write(path.join(run, "engine.json"), { ...target, version: "0.0.0" });
@@ -320,6 +329,77 @@ test("numbers come from the first computer you set up: a Mac before a machine, t
   assert.ok(lost, "noted since when");
   assert.deepEqual(link.primaryOf(link.readLink(), file, lost + 86_400_000), { away: true });
   assert.equal(link.primaryOf(link.readLink(), file, lost + 4 * 86_400_000).peer.key, mac.pub);
+});
+
+test("a machine in a setup numbers from its main computer, whatever a peer says of a Mac set up earlier; one Macs share outside one setup works it out as before, and says it's shared", async () => {
+  const file = path.join(queues, "numbers.json");
+  // Its Mac leads a setup, as the Mac's signed peers document says.
+  const seed = link.newSigningSeed();
+  const sign = link.signingKeyOf(seed);
+  const body = { boxes: [{ ...mac.peer, sign }, lab.peer, here.peer], moved: [], left: [], setup: { id: "set_AAAAAAAAAAAAAAAAAAAAAA", epoch: 1, primary: mac.pub } };
+  link.updateLink(() => ({ secret: crypto.randomBytes(32).toString("base64url"), key: k(here.key), sign: link.newSigningSeed(), relay: "wss://relay.test", name: "devbox", id: "devbox", mac: mac.pub, macs: [mac.pub], macSigns: { [mac.pub]: sign }, phones: [] }));
+  link.updateLink(current => { link.docsWork({ link: current, library: { personalities: [], removed: [] } }, { key: mac.pub, sign }, { give: [link.signDoc(seed, "peers", 1, body)] }); return current; });
+  assert.equal(link.readLink().setup?.primary, mac.pub);
+  write(file, { primary: mac.pub, leases: [], asking: { id: "wqn_tothemainmac01", count: 50, since: 1 } });
+  // lab says it numbers from a Mac set up earlier (as piece 3 would follow): this box doesn't.
+  const first = box("mac", "Old Mac");
+  write(path.join(queues, "peers", `${lab.pub}.json`), { id: "wqt_cccccccccccc", at: 3, heard: 3, kind: "machine", since: 10, items: [], owners: [], categories: [], primary: { key: first.pub, kind: "mac", since: 500 } });
+  assert.deepEqual(link.primaryOf(link.readLink(), file), { peer: link.peersOf(link.readLink()).find(peer => peer.key === mac.pub) });
+  link.notePrimaryNow(link.readLink(), { file });
+  assert.equal(link.readNumbers(file).primary, mac.pub);
+  sent.length = 0;
+  link.pushNumbers(host, link.readLink());
+  assert.equal(mailTo(lab).length, 0, "nothing through lab");
+  const asked = mailTo(mac).map(each => each.workQueue);
+  assert.equal(asked[0]?.ask?.id, "wqn_tothemainmac01");
+  assert.equal(asked[0].to, undefined, "to its main computer itself");
+  // It tells your other computers it isn't shared.
+  await link.pushQueues(host, link.readLink(), targets, Date.now());
+  assert.equal(mailTo(lab)[0].workQueue.told.shared, false);
+
+  // A second Mac sets it up, in no one setup: it sets its setup aside, numbers as before, and says
+  // it's shared.
+  const second = link.newSigningSeed();
+  link.updateLink(current => {
+    current.macs = [mac.pub, later.pub];
+    current.macSigns = { ...current.macSigns, [later.pub]: link.signingKeyOf(second) };
+    link.docsWork({ link: current, library: { personalities: [], removed: [] } }, { key: later.pub, sign: link.signingKeyOf(second) }, { give: [link.signDoc(second, "peers", 1, { boxes: [{ ...later.peer, sign: link.signingKeyOf(second) }, here.peer], moved: [], left: [] })] });
+    return current;
+  });
+  assert.equal(link.readLink().setup.aside, true);
+  sent.length = 0;
+  link.forgetQueuesTold();
+  // (What it tells is made again at most once a minute.)
+  await link.pushQueues(host, link.readLink(), targets, Date.now() + 120_000);
+  assert.equal(mailTo(lab)[0].workQueue.told.shared, true);
+  assert.equal(link.followedSetup(link.readLink()), null);
+  assert.deepEqual(link.primaryOf(link.readLink(), file), link.rankedPrimary(link.readLink(), file), "numbering as piece 3 has it");
+  sent.length = 0;
+});
+
+test("a machine its main computer lets go (removed, or not heard from in 30 days) doesn't number on its own at once: it waits for that Mac, as numbering always has, days, before it does", () => {
+  const file = path.join(queues, "numbers.json");
+  const seed = link.newSigningSeed();
+  const sign = link.signingKeyOf(seed);
+  const leads = { setup: { id: "set_BBBBBBBBBBBBBBBBBBBBBB", epoch: 1, primary: mac.pub } };
+  const library = { personalities: [], removed: [] };
+  link.updateLink(() => ({ secret: crypto.randomBytes(32).toString("base64url"), key: k(here.key), sign: link.newSigningSeed(), relay: "wss://relay.test", name: "devbox", id: "devbox", mac: mac.pub, macs: [mac.pub], macSigns: { [mac.pub]: sign }, phones: [] }));
+  link.updateLink(current => { link.docsWork({ link: current, library }, { key: mac.pub, sign }, { give: [link.signDoc(seed, "peers", 1, { boxes: [{ ...mac.peer, sign }, lab.peer, here.peer], moved: [], left: [], ...leads })] }); return current; });
+  write(file, { primary: mac.pub, leases: [], since: 9_000 });
+  assert.equal(link.readLink().setup?.role, "member");
+  // Its Mac removes it.
+  link.updateLink(current => { link.docsWork({ link: current, library }, { key: mac.pub, sign }, { give: [link.signDoc(seed, "peers", 2, { boxes: [{ ...mac.peer, sign }, lab.peer], moved: [], left: [here.pub], ...leads })] }); return current; });
+  link.noteSetupNow(Date.now(), { soon: 0 });
+  assert.equal(link.readLink().setup, undefined, "it leads none yet");
+  assert.deepEqual(link.primaryOf(link.readLink(), file), { away: true }, "its items wait, as before");
+  // Days on, unheard: it numbers on its own, and leads a setup of its own.
+  link.notePrimaryNow(link.readLink(), { file });
+  const lost = link.readNumbers(file).lost;
+  assert.ok(lost);
+  write(file, { ...link.readNumbers(file), lost: lost - 4 * 86_400_000 });
+  link.noteSetupNow(Date.now(), { soon: 0 });
+  assert.equal(link.readLink().setup?.role, "primary");
+  assert.deepEqual(link.primaryOf(link.readLink(), file), { self: true });
 });
 
 test("a box asked for numbers on behalf of its primary passes the ask on and the block back, one hop", () => {
@@ -637,4 +717,41 @@ test("a first computer that's gone (put away, or set up again with new keys) sto
   assert.deepEqual(link.primaryOf(link.readLink(), file, now), { away: true });
   write(path.join(queues, "peers", `${lab.pub}.json`), { id: "wqt_cccccccccccc", at: 5, heard: 5, kind: "machine", since: 10, items: [], owners: [], categories: [], primary: { key: mac.pub, kind: "mac", since: 1_000 } });
   assert.equal(link.primaryOf(link.readLink(), file, now).peer.key, mac.pub);
+});
+
+test("an issue another computer told of shows as it said, with no gh here; this box reads it only once what was told is old; the newer word wins, never one from a clock set ahead", async () => {
+  write(path.join(run, "work", "elsewhere", `${lab.pub}.json`), { at: Date.now(), heard: Date.now(), leads: {} });
+  const issue = seen => ({ ...told(510, "ses_far", { title: "Upload retries", category: "done", keptIn: "later", seen,
+    source: { kind: "github", ref: "gh:kuvo-test/app#12", url: "https://github.com/kuvo-test/app/issues/12", host: "github.com", id: "I_kw12" } }), number: undefined });
+  const shown = async () => (await view("all")).items.find(item => item.source?.ref === "gh:kuvo-test/app#12");
+
+  // Told a moment ago that it's closed (as it has been for two hours): shown so, GitHub not asked.
+  receive(lab, { workQueue: telling([issue({ state: "completed", at: Date.now() - 7_200_000, checked: Date.now() - 30_000 })]) });
+  let item = await shown();
+  assert.deepEqual([item.category, item.keptIn, item.seen.state, item.source.name, item.computer.name], ["done", "later", "completed", "app#12", "lab"]);
+  assert.equal(ghAsks(), 0, "lab reads what it shows, and told it lately");
+
+  // A clock set ahead there: what it says is no later than when it told it.
+  receive(lab, { workQueue: telling([issue({ state: "completed", at: Date.now() + 3_600_000, checked: Date.now() + 3_600_000 })]) });
+  item = await shown();
+  assert.ok(item.seen.at <= Date.now() && item.seen.checked <= Date.now());
+
+  // Told long ago that it's open: read here, and GitHub's word now (reopened, then closed again) wins.
+  receive(lab, { workQueue: telling([issue({ state: "open", at: Date.now() - 7_200_000, checked: Date.now() - 600_000 })]) });
+  write(ghAnswer, { data: { p0: { issueOrPullRequest: { __typename: "Issue", id: "I_kw12", number: 12, title: "Upload retries drop the name", url: "https://github.com/kuvo-test/app/issues/12", state: "CLOSED", stateReason: "NOT_PLANNED", closedAt: "2026-11-10T09:00:00Z" } } } });
+  item = await shown();
+  assert.equal(ghAsks(), 1);
+  assert.deepEqual([item.category, item.seen.state, item.struck, item.title], ["done", "not_planned", true, "Upload retries drop the name"]);
+
+  // (This box's read a second earlier than it was: what lab tells next is surely later.)
+  const seenFile = path.join(queues, "seen.json");
+  const kept = read(seenFile);
+  for (const each of Object.values(kept.reads)) { each.at -= 1000; if (each.checked) each.checked -= 1000; }
+  write(seenFile, kept);
+  // Then lab tells it asked GitHub after this box did, and it says open (as it has for two hours,
+  // by lab's word): lab's, as the later word.
+  receive(lab, { workQueue: telling([issue({ state: "open", at: Date.now() - 7_200_000, checked: Date.now() })]) });
+  item = await shown();
+  assert.deepEqual([item.category, item.seen.state, item.struck], ["later", "open", undefined]);
+  assert.equal(ghAsks(), 1, "nor asked again while lab's word is fresh");
 });

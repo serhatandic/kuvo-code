@@ -59,7 +59,8 @@ struct TranscriptView: View {
     /// subagent's) the one it works for.
     private var workAnswers: [String: WorkAnswer] {
         let root = workspace.root(of: model.id)
-        let own = WorkAnswer.byCall(model.session)
+        // What you approved after Auto's reviewer held it back, on the step that does it.
+        let own = WorkAnswer.byCall(model.session).merging(WorkAnswer.yours(in: model.transcript.messages)) { bot, _ in bot }
         guard root != model.id, let above = workspace.session(root) else { return own }
         return own.merging(WorkAnswer.byCall(above)) { mine, _ in mine }
     }
@@ -408,6 +409,9 @@ struct TranscriptView: View {
         // Auto's are the model it picked for that turn.
         let firstSwitch = all.lazy.compactMap { if case .modelSwitched(let change) = $0 { change } else { nil } }.first
         var current = firstSwitch.map(\.previous) ?? model.session.model
+        // What changed since the last reply (the model, the mode, a summary): said in the next
+        // reply's footer, never as a pill (KuvoClient's ReplyChanges, the same on the phone).
+        var changes = ReplyChanges()
         // Summed up: the agent's steps between its replies, gathered into one row.
         var steps: [Message.Content] = []
         var stepKeys: [String] = []
@@ -433,15 +437,26 @@ struct TranscriptView: View {
         }
         for (index, message) in messages.enumerated() {
             // Only what shows ends the run of steps: guidance the engine adds partway through a
-            // turn shows nothing, so the turn's steps stay one line around it.
+            // turn, a summary or a switch (said in the next reply's footer) and a note of the box's
+            // show nothing, so the turn's steps stay one line around them.
             switch message {
-            case .assistant, .synthetic, .system, .other: break
+            case .assistant, .synthetic, .system, .other, .compaction, .modelSwitched, .agentSwitched, .user: break
             default: flushSteps(live: false)
             }
             switch message {
             case .user(let user):
+                let note = BoxNote.of(user)
+                let shown = Row.messages(user, note: note)
+                if let note { changes.note(note) }
+                // A note of the box's that shows nothing (your answer told late) neither splits the
+                // turn's steps nor starts a turn of its own, unless it's what started one.
+                if shown.isEmpty {
+                    if turn.started == nil { turn = TurnStats(started: user.time.created, message: user, model: current) }
+                    break
+                }
+                flushSteps(live: false)
                 turn = TurnStats(started: user.time.created, message: user, model: current)
-                rows.append(.message(user))
+                rows += shown
             case .assistant(let assistant):
                 turn.add(assistant)
                 // The run's error shows once, at the end of the turn. A step you stopped isn't an
@@ -519,60 +534,31 @@ struct TranscriptView: View {
                     rows.append(.assistant(end, showsError: showsError))
                 }
             case .idle(let idle):
+                turn.changes = changes.replied()
                 rows.append(.turnEnd(idle, turn, isLast: index == last, isLatest: index == latestEnd))
                 turn = TurnStats()
             case .modelSwitched(let change):
                 current = change.model
                 // By its name, as the model menu shows it ("Big Pickle", not big-pickle).
-                rows.append(.notice(change.id, "cpu", "Switched to \(catalog.model(change.model)?.name ?? change.model.id)" + (change.model.variant.map { " · \(EffortLevel.title($0))" } ?? "")))
+                changes.switched(to: change.model, from: change.previous, name: catalog.model(change.model)?.name ?? change.model.id)
             case .agentSwitched(let change):
-                rows.append(.notice(change.id, change.agent == "plan" ? "list.bullet.clipboard" : "hammer", "\(change.agent.capitalized) mode"))
+                changes.switched(toMode: change.agent, from: change.previous)
             case .compaction(let compaction):
-                let words = switch compaction.status {
-                case "running": "Summarizing the conversation…"
-                case "failed": "Couldn’t summarize the conversation"
-                default: "Summarized the conversation to save space"
-                }
-                rows.append(.notice(compaction.id, "rectangle.compress.vertical", words))
+                changes.summarized(compaction.status)
             case .shell(let shell):
                 rows.append(.shell(shell))
             case .synthetic(let notice), .system(let notice):
                 // A turn the app or the engine started (a model switched mid-run carries on), timed
                 // from it as one you started is from your message.
                 if turn.started == nil { turn.started = notice.time.created }
-                let sources = notice.instructionSources
-                var shown: Row?
-                if !sources.isEmpty, sources.allSatisfy({ $0.contains(ProjectFolders.instructionKey) }) {
-                    shown = .notice(notice.id, "folder", "Project folders updated")
-                } else if !sources.isEmpty, sources.allSatisfy({ $0.hasPrefix("core/") || $0.contains(Workspace.worktreeInstructionKey) || $0.contains(Bots.instructionKey) || $0.contains(AutopilotShown.instructionKey) }) {
-                    // The engine's own guidance (for the browser tools, say), or what Kuvo Code
-                    // adds for a worktree, a bot or Autopilot: nothing you set.
-                    break
-                } else if notice.metadata?["source"]?.string == "shell" {
-                    // A command the agent left running in the background ended, which wakes it.
-                    shown = .notice(notice.id, "terminal", Self.backgroundEnd(notice))
-                } else if notice.text.hasPrefix("<system-reminder>") {
-                    // The engine's word to the model, not to you. Plan mode's rules say the mode,
-                    // for a session that starts in it (a switch says so itself); not the one that
-                    // says it's left ("You are NO LONGER in Plan mode", after Build It).
-                    if notice.text.contains("Plan mode"), notice.text.range(of: "no longer in Plan mode", options: .caseInsensitive) == nil {
-                        if case .notice(_, "list.bullet.clipboard", _)? = rows.last {} else {
-                            shown = .notice(notice.id, "list.bullet.clipboard", "Plan mode: it explores and plans, without changing files")
-                        }
-                    }
-                } else if notice.text.hasPrefix(Goal.marker) {
-                    // The box keeping the agent at its goal: given it, or told what's left.
-                    shown = .notice(notice.id, "scope", notice.description ?? String(notice.text.dropFirst(Goal.marker.count)))
-                } else if let words = notice.carriedOn {
-                    // The engine asking the model to go on after a reply was cut off or ran out of room.
-                    shown = .notice(notice.id, "arrow.turn.down.right", words)
-                } else {
-                    shown = .notice(notice.id, "info.circle", notice.description ?? notice.text)
-                }
-                if let shown {
+                // A note of the bridge's for you ("Your hook failed…"): a quiet line.
+                if notice.isForYou {
                     flushSteps(live: false)
-                    rows.append(shown)
+                    rows.append(.notice(notice.id, "info.circle", notice.text))
+                    break
                 }
+                // Words for the model, never shown: what changed is said in the next reply's footer.
+                changes.note(notice)
             case .other:
                 break
             }
@@ -588,7 +574,7 @@ struct TranscriptView: View {
         }
         // Messages waiting their turn are listed above the composer instead.
         let waiting = Set(model.waiting.map(\.id))
-        rows += model.transcript.pending.filter { !waiting.contains($0.id) }.map(Row.waiting)
+        rows += model.transcript.pending.filter { !waiting.contains($0.id) }.flatMap(Row.waiting)
         // Always while it works, with the time since your message, so a long step is plainly
         // still going.
         if model.transcript.isRunning {
@@ -644,6 +630,9 @@ struct TurnStats: Hashable {
     var model: ModelRef?
     /// The files the agent changed, in the order first changed, with their lines.
     var files: [TurnFile] = []
+    /// What changed since the reply before (the model, the mode, a summary), in a word or two each
+    /// (KuvoClient's ReplyChanges): said beside its time.
+    var changes: [String] = []
 
     /// A file a turn changed. A file written whole has no line counts.
     struct TurnFile: Hashable, Identifiable {
@@ -722,7 +711,12 @@ enum Row: Identifiable, Hashable {
     /// latest turn's end, whose row (its time, Copy and Reply) stays in view, though notes or a
     /// command you ran may come after it.
     case turnEnd(Message.Idle, TurnStats, isLast: Bool, isLatest: Bool)
+    /// A quiet line of where the conversation stands with nothing after it to say it: a run cut
+    /// off before it finished. (What changed between replies is said in the next one's footer.)
     case notice(String, String, String)
+    /// One of its sessions telling the agent what it did, as a message from it (`SessionNews`);
+    /// `at`, when it came, and none while it waits to go in.
+    case news(String, SessionNews, at: Milliseconds?)
     /// A command you ran with "!".
     case shell(Message.Shell)
     case pending(Transcript.Pending)
@@ -754,21 +748,35 @@ enum Row: Identifiable, Hashable {
         }
     }
 
-    /// A message in the conversation as its row: yours as your bubble; one the box wrote to the
-    /// agent (a goal starting, its sessions' news) as the line of what happened.
-    static func message(_ user: Message.User) -> Row {
-        BoxNote.of(user).map { .notice(user.id, $0.symbol, $0.line) } ?? .user(user)
+    /// A message in the conversation as its rows: yours as your bubble; one the box wrote to the
+    /// agent as a message from each session whose news it tells, and otherwise nothing (what it
+    /// changed shows in the next reply's footer).
+    static func messages(_ user: Message.User) -> [Row] {
+        messages(user, note: BoxNote.of(user))
+    }
+
+    /// The same, with the note it is already read.
+    static func messages(_ user: Message.User, note: BoxNote?) -> [Row] {
+        note.map { rows(of: $0, id: user.id, at: user.time.created) } ?? [.user(user)]
     }
 
     /// A message on its way in, the same way.
-    static func waiting(_ item: Transcript.Pending) -> Row {
-        BoxNote.of(text: item.text, metadata: item.metadata).map { .notice(item.id, $0.symbol, $0.line) } ?? .pending(item)
+    static func waiting(_ item: Transcript.Pending) -> [Row] {
+        BoxNote.of(text: item.text, metadata: item.metadata).map { rows(of: $0, id: item.id, at: nil) } ?? [.pending(item)]
+    }
+
+    private static func rows(of note: BoxNote, id: String, at: Milliseconds?) -> [Row] {
+        note.shown.enumerated().map { index, news in .news(index == 0 ? id : "\(id)#\(index)", news, at: at) }
     }
 
     /// The words Find looks in, as the row shows them: messages, replies, and commands you ran
     /// with what they printed.
     var findParts: [ConversationFind.Part] {
         switch self {
+        case .news(_, let news, _):
+            return [.markdown(news.body)]
+        case .notice(_, _, let text):
+            return [.plain(text)]
         case .user(let message):
             let text = CommandMessages.shared.text(of: message)
             if let mail = AgentMail.parse(text) { return [.markdown(mail.text)] }
@@ -819,7 +827,7 @@ enum Row: Identifiable, Hashable {
         // The space the Markdown style puts between those paragraphs.
         case (_, .more(_, let gap)): gap
         case (.more, .assistant), (.more, .turnEnd), (.more, .working), (.more, .steps): 10
-        case (_, .widget), (.widget, _), (_, .sent), (.sent, _): 14
+        case (_, .widget), (.widget, _), (_, .sent), (.sent, _), (_, .news), (.news, _): 14
         case (.assistant, .assistant), (.assistant, .turnEnd), (.assistant, .working),
              (.steps, .assistant), (.assistant, .steps), (.steps, .turnEnd), (.steps, .working),
              (.subagent, .subagent), (.steps, .subagent), (.subagent, .steps), (.assistant, .subagent), (.more, .subagent),
@@ -845,6 +853,7 @@ enum Row: Identifiable, Hashable {
         case .subagent(let call): call.id
         case .turnEnd(let m, _, _, _): m.id
         case .notice(let id, _, _): id
+        case .news(let id, _, _): id
         case .shell(let m): m.id
         case .pending(let item): item.id
         case .undone: "undone"
@@ -948,15 +957,13 @@ private struct RowView: View, Equatable {
         case .shell(let shell):
             ShellRow(shell: shell)
         case .notice(_, _, let text):
-            // Its words say what it is: no symbol beside them.
+            // Quiet, at the conversation's edge, as the steps' line is: no pill.
             Text(text)
-                .font(.caption)
+                .font(.callout)
                 .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 5)
-                .background(.quaternary.opacity(0.5), in: .capsule)
-                .frame(maxWidth: .infinity)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        case .news(let id, let news, let at):
+            AgentMessageRow(id: id, from: news.title, session: news.session, text: news.body, at: at, status: news.status)
         case .undone(let count):
             HStack(spacing: 10) {
                 Text("Undid " + count.counting("message"))
@@ -965,12 +972,10 @@ private struct RowView: View, Equatable {
                     .disabled(isOffline)
                     .fontWeight(.semibold)
             }
-            .font(.caption)
+            // Quiet, at the conversation's edge: no pill.
+            .font(.callout)
             .foregroundStyle(.secondary)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .background(.quaternary.opacity(0.5), in: .capsule)
-            .frame(maxWidth: .infinity)
+            .frame(maxWidth: .infinity, alignment: .leading)
             .help("Sending a message makes the undo final")
         case .working(let since, let quiet, let followsHeard, let holds, let summarizing):
             HStack(spacing: 8) {
@@ -1016,6 +1021,8 @@ struct UserBubble: View {
     var status: String?
     @Environment(\.findHighlight) private var highlight
     @Environment(AppModel.self) private var app
+    /// The conversation this is in, where what it opens comes back to.
+    @Environment(\.conversationTab) private var here
 
     /// A part of its words with its own styling, and what it names standing out: agents, files,
     /// web addresses as links, and its pictures' names as the composer showed them.
@@ -1113,12 +1120,12 @@ struct UserBubble: View {
         // A named agent opens its conversation; a named file, in the side panel; a Work Queue
         // item, in the Work Queue.
         .environment(\.openURL, OpenURLAction { url in
-            if let number = WorkItemRefs.number(in: url) {
-                app.openWorkItem(number)
+            if let ref = WorkItemRefs.ref(in: url) {
+                app.openWorkItem(ref)
                 return .handled
             }
             if let session = MessageMentions.session(in: url) {
-                if app.workspace.session(session) != nil { app.open(.session(session)) }
+                if app.workspace.session(session) != nil { app.open(.session(session), from: here) }
                 return .handled
             }
             guard url.isFileURL else { return .systemAction }
@@ -1376,6 +1383,8 @@ private struct MarkdownPiece: View, Equatable {
     let agents: [MessageMentions.Agent]
     let highlight: FindHighlight?
     @Environment(AppModel.self) private var app
+    /// The conversation this is in, where what it opens comes back to.
+    @Environment(\.conversationTab) private var here
 
     static func == (a: MarkdownPiece, b: MarkdownPiece) -> Bool {
         a.text == b.text && a.highlight == b.highlight && a.mentions == b.mentions && a.agents == b.agents
@@ -1397,12 +1406,12 @@ private struct MarkdownPiece: View, Equatable {
         return ReplyView(markdown: text, parser: FileLinkingParser(folders: folders, mentions: mentions, agents: agents, highlight: highlight, refs: refs), diagrams: true) { url in
             // A file opens in the side panel, a named agent its conversation, a Work Queue item
             // the Work Queue; web links in the browser.
-            if let number = WorkItemRefs.number(in: url) {
-                app.openWorkItem(number)
+            if let ref = WorkItemRefs.ref(in: url) {
+                app.openWorkItem(ref)
                 return true
             }
             if let session = MessageMentions.session(in: url) {
-                if app.workspace.session(session) != nil { app.open(.session(session)) }
+                if app.workspace.session(session) != nil { app.open(.session(session), from: here) }
                 return true
             }
             guard url.isFileURL else { return false }
@@ -1430,7 +1439,7 @@ private struct MarkdownPiece: View, Equatable {
             // A file opens in the side panel, a named agent its conversation; web links in the browser.
             .environment(\.openURL, OpenURLAction { url in
                 if let session = MessageMentions.session(in: url) {
-                    if app.workspace.session(session) != nil { app.open(.session(session)) }
+                    if app.workspace.session(session) != nil { app.open(.session(session), from: here) }
                     return .handled
                 }
                 guard url.isFileURL else { return .systemAction }
@@ -1663,27 +1672,32 @@ private struct TurnEndView: View {
     /// ended: always laid out, shown as `isShown` says, so nothing moves when they appear.
     private var helpers: some View {
         HStack(spacing: 6) {
-            Text(([MessageTime.sentAt(ended)] + parts).joined(separator: " · "))
+            // A reply after a change (another model, a summary) says so in view, as on the phone,
+            // where a pill used to be; its buttons still wait for the pointer.
+            Text(([MessageTime.sentAt(ended)] + stats.changes + parts).joined(separator: " · "))
                 .font(.caption)
                 .foregroundStyle(.tertiary)
                 .help(SentTime.full(ended))
+                .opacity(isShown || !stats.changes.isEmpty ? 1 : 0)
             if !stats.text.isEmpty {
-                CopyButton(text: stats.text.joined(separator: "\n\n"), help: "Copy the Reply")
-                    .focused($focused, equals: .copy)
-                if let reply {
-                    MessageActionButton(symbol: "arrowshape.turn.up.left", help: "Reply: quotes the whole reply in the composer") {
-                        reply(stats.text.joined(separator: "\n\n"))
+                HStack(spacing: 6) {
+                    CopyButton(text: stats.text.joined(separator: "\n\n"), help: "Copy the Reply")
+                        .focused($focused, equals: .copy)
+                    if let reply {
+                        MessageActionButton(symbol: "arrowshape.turn.up.left", help: "Reply: quotes the whole reply in the composer") {
+                            reply(stats.text.joined(separator: "\n\n"))
+                        }
+                        .focused($focused, equals: .reply)
                     }
-                    .focused($focused, equals: .reply)
                 }
+                .opacity(isShown ? 1 : 0)
             }
         }
-        .opacity(isShown ? 1 : 0)
         .animation(.easeOut(duration: 0.12), value: isShown)
         // VoiceOver reads it, and offers its buttons, shown or not: hidden, it would be skipped.
         .accessibilityRepresentation {
             HStack {
-                Text(([SentTime.full(ended)] + parts).joined(separator: ", "))
+                Text(([SentTime.full(ended)] + stats.changes + parts).joined(separator: ", "))
                 if !stats.text.isEmpty {
                     Button("Copy the Reply") { Clipboard.copy(stats.text.joined(separator: "\n\n")) }
                     if let reply { Button("Reply") { reply(stats.text.joined(separator: "\n\n")) } }
@@ -1990,6 +2004,8 @@ struct ErrorCard: View {
 private struct AgentSentRow: View {
     let call: Message.ToolCall
     @Environment(AppModel.self) private var app
+    /// The conversation this is in, where what it opens comes back to.
+    @Environment(\.conversationTab) private var here
 
     private var input: JSONValue? {
         let input: JSONValue? = switch call.state {
@@ -2033,7 +2049,8 @@ private struct AgentSentRow: View {
             }
         } accessory: {
             if let session = address?.session, app.workspace.session(session) != nil {
-                Button("Open") { app.open(.session(session)) }
+                Button("Open") { app.open(.session(session), from: here) }
+                    .opensInNewTab(.session(session))
                     .buttonStyle(TextButtonStyle(outset: true))
                     .help("Open \(name)'s conversation")
             }
@@ -2185,22 +2202,31 @@ private struct AgentMessageRow: View {
     let from: String
     let session: String
     let text: String
-    let at: Milliseconds
+    /// When it came; none while it waits to go in.
+    let at: Milliseconds?
+    /// What happened, after its name, for one of its sessions' news: "finished", "still working".
+    var status: String?
     @Environment(AppModel.self) private var app
+    /// The conversation this is in, where what it opens comes back to.
+    @Environment(\.conversationTab) private var here
 
     var body: some View {
-        FoldingCard(id: id, summary: text, startsOpen: FoldingCard<EmptyView, EmptyView, EmptyView>.isShort(text), help: "A message another agent sent this one") {
+        FoldingCard(id: id, summary: text, startsOpen: FoldingCard<EmptyView, EmptyView, EmptyView>.isShort(text),
+                    help: status == nil ? "A message another agent sent this one" : "One of the sessions this agent started, telling it what it did") {
             Image(systemName: "paperplane")
                 .foregroundStyle(.tint)
                 .frame(width: 16)
-            Text("From \(Text(from).fontWeight(.semibold).foregroundStyle(.primary))")
+            Text("From \(Text(from).fontWeight(.semibold).foregroundStyle(.primary))\(status.map { " · \($0)" } ?? "")")
                 .foregroundStyle(.secondary)
         } accessory: {
-            Text(Date(timeIntervalSince1970: at / 1000), format: .dateTime.hour().minute())
-                .font(.caption)
-                .foregroundStyle(.tertiary)
+            if let at {
+                Text(Date(timeIntervalSince1970: at / 1000), format: .dateTime.hour().minute())
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
             if app.workspace.session(session) != nil {
-                Button("Open") { app.open(.session(session)) }
+                Button("Open") { app.open(.session(session), from: here) }
+                    .opensInNewTab(.session(session))
                     .buttonStyle(TextButtonStyle(outset: true))
                     .help("Open \(from)'s conversation")
             }
@@ -2220,6 +2246,8 @@ private struct GroupWorkRow: View {
     let task: String
     let at: Milliseconds
     @Environment(AppModel.self) private var app
+    /// The conversation this is in, where what it opens comes back to.
+    @Environment(\.conversationTab) private var here
 
     var body: some View {
         FoldingCard(id: id, summary: task, startsOpen: FoldingCard<EmptyView, EmptyView, EmptyView>.isShort(task),
@@ -2234,7 +2262,8 @@ private struct GroupWorkRow: View {
                 .font(.caption)
                 .foregroundStyle(.tertiary)
             if app.chats.group(chatID) != nil {
-                Button("Open") { app.open(.session(BotGroups.tabKey(chatID))) }
+                Button("Open") { app.open(.group(chatID), from: here) }
+                    .opensInNewTab(.group(chatID))
                     .buttonStyle(TextButtonStyle(outset: true))
                     .help("Open \(chat)")
             }

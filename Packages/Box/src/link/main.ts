@@ -33,6 +33,9 @@ import { setBoxKey } from "./areas/box-keys";
 import { addMacDefaults, changeSettings, ownsSettings, readSettings } from "./areas/config";
 import { engineConnect } from "./areas/engine";
 import { answerOnce, reconnectEverywhere, upgradeBeforeEngine, upgradeIntegrations } from "./areas/integrations";
+import { readApart } from "./github/graphql";
+import "./work-queue/github";
+import "./glance/github";
 import { keepSkillTrashClear } from "./areas/skills";
 import { sendWakes } from "./areas/wakes";
 import { finishDeletes, forgetLeftKeys } from "./bots/edit";
@@ -61,6 +64,8 @@ import { SENDING } from "./letters/letter";
 import { watchFolders } from "./follow";
 import { pushRows } from "./work/elsewhere";
 import { pushNumbers } from "./work-queue/numbers";
+import { noteSetupNow } from "./setup/lead";
+import { writeCard } from "./setup/card";
 import { pushQueues } from "./work-queue/across";
 import { handUpkeepSoon } from "./work-queue/hand";
 import { clearStaging } from "./work-queue/ops";
@@ -173,7 +178,12 @@ export { forgetOldMacs, leaveMac, macsOf, mailFor, movedOf, noteOnline, openMail
 export { noteDocsChanged } from "./documents/changed";
 export { authorizePhone, confirmPhone, foldPhones, newPairing, pairPhone, removeAsMac, removePhones } from "./phones";
 export { noLongerNeeded } from "./keeper";
-export { changedWork, digestOf, docMails, docsWork, greetWork, ownDoc, takeDoc } from "./documents/work";
+export { changedWork, digestOf, docMails, docsWork, greetWork, macPeersBody, ownDoc, takeDoc } from "./documents/work";
+export { leadsNow, noteSetupNow, settleOwnSetup } from "./setup/lead";
+export { settleSetup, sharedMachine } from "./setup/settle";
+export { followedSetup, newSetupID, startsFromOthers } from "./setup/record";
+export { setupView } from "./setup/view";
+export { cardNow, SETUP_CARD, writeCard } from "./setup/card";
 export { keptFeatures, peerOf, readPeerAgents, takeAgents } from "./peers/directory";
 export { composeLetter } from "./letters/letter";
 export { composeAgents } from "./peers/directory";
@@ -184,7 +194,7 @@ export { answered, deliverLeftAnswers, letterMail, letterWent, sendOutbox } from
 export { takeLetter } from "./letters/take";
 export { callAs, callsBack, takeCall } from "./letters/calls";
 export { pushRows, takeRows } from "./work/elsewhere";
-export { askToSend, blockArrived, BLOCK as QUEUE_BLOCK, CLAIM_REACH as QUEUE_CLAIM_REACH, claimNumbers, giveBlock, LOW as QUEUE_LOW, notePrimaryNow, primaryOf, pushNumbers, readNumbers, reclaimWaiting, takeBlock, takeNumber, takeNumbersMail } from "./work-queue/numbers";
+export { askToSend, blockArrived, BLOCK as QUEUE_BLOCK, CLAIM_REACH as QUEUE_CLAIM_REACH, claimNumbers, giveBlock, LOW as QUEUE_LOW, notePrimaryNow, primaryOf, pushNumbers, rankedPrimary, readNumbers, reclaimWaiting, takeBlock, takeNumber, takeNumbersMail } from "./work-queue/numbers";
 export { forgetPushed as forgetQueuesTold, itemsElsewhere, pushQueues, takeWorkQueueMail, tellingNow as queueTellingNow, tellQueuesAgain } from "./work-queue/across";
 export { handUpkeep } from "./work-queue/hand";
 export { mailsFor as queueMailsFor, takePart as takeQueuePart } from "./work-queue/parts";
@@ -413,6 +423,8 @@ async function run(): Promise<void> {
     if (current?.welcomed) pushRows(current, readLink(), peerTargets()).catch(() => {});
     // The Work Queue's ask for more numbers, to the primary, while one is under way; and this box's
     // queue told to your other computers as it changes, with what it's handing to theirs.
+    // Your setup, as this box leads it or follows it (once a minute), before its numbers go by it.
+    noteSetupNow();
     try { pushNumbers(current); } catch {}
     if (current?.welcomed) pushQueues(current, readLink(), peerTargets()).catch(() => {});
     else try { handUpkeepSoon(readLink()); } catch {}
@@ -540,6 +552,9 @@ async function box(command: string): Promise<void> {
       const text = (!type || type.startsWith("text/") || type.includes("json")) && isUTF8(body);
       return say(text ? { status, body: body.toString("utf8") } : { status, bodyBase64: body.toString("base64"), type });
     }
+    case "github-read":
+      // A read of GitHub that was due as `route` answered, made here, outliving it.
+      return void await readApart(process.argv[4], await input()).catch(() => {});
     case "reconnect": {
       // An integration's server connected again everywhere, a moment after `route` changed its
       // keys, once the engine has read them.
@@ -714,6 +729,8 @@ interface SetupInput {
   peersAt?: number;
   at?: number;
   moved?: unknown[];
+  /** The Mac's keys before (made anew since), which it no longer is: let go here. */
+  replaces?: unknown;
 }
 
 // What the Mac sends: the relay, this machine's name, and the phones you've paired with the Mac,
@@ -736,6 +753,9 @@ async function setup(): Promise<void> {
   const old = readLink();
   const before = readPersonalities();
   let link = null as LinkState | null, work = null as ReturnType<typeof docsWork> | null, library = before;
+  // The Mac's keys before, made anew since (over SSH, so this box knows they were that Mac's).
+  const replaced = mac && Array.isArray(input.replaces) ? input.replaces.filter((key): key is string => typeof key === "string" && KEY.test(key) && key !== mac).slice(0, 8) : [];
+  let formerMacs: string[] = [];
   updateLink(current => {
     const next = current ?? { secret: crypto.randomBytes(32).toString("base64url"), key: newKey().toString("base64url"), phones: [] };
     next.sign ??= newSigningSeed();
@@ -754,6 +774,9 @@ async function setup(): Promise<void> {
         // A Mac that signs none yet (0.8.0-beta.1): its peers as it lists them.
         takeLegacyPeers(next, mac, input.peers, typeof input.peersAt === "number" ? input.peersAt : (typeof input.at === "number" ? input.at : 0), input.moved);
       }
+      // That Mac under its keys before: no Mac of this box's any more (never two of one Mac).
+      formerMacs = replaced.filter(key => macsOf(next).includes(key));
+      for (const key of formerMacs) leaveMac(next, key);
     }
     if (typeof input.id === "string") next.id = input.id.slice(0, 200);
     // COMPAT(0.7 visits): a Mac that doesn't say it `tolerates` newer boxes holds updates back. Goes 3 months after 0.8.0.
@@ -773,8 +796,12 @@ async function setup(): Promise<void> {
     return next;
   });
   if (work && library !== before) await takePersonalities(library).catch(() => {});
-  // The running bridge tells your other computers what changed.
+  // (What those keys' agents were, told here, goes with them.)
+  const after = link ?? readLink();
+  if (after) for (const key of formerMacs) forgetMacsAgents(key, after);
+  // The running bridge tells your other computers what changed; its setup card says what it's in now.
   noteDocsChanged();
+  try { writeCard(); } catch {}
   // None paired any more (each removed for good, as one at a time would be): no bridge.
   if (!link) {
     if (running) process.kill(running, "SIGTERM");
@@ -835,6 +862,7 @@ export function leave(mac: unknown): boolean {
   if (!link) return false;
   forgetMacsAgents(mac, link);
   noteDocsChanged();
+  try { writeCard(); } catch {}
   return true;
 }
 

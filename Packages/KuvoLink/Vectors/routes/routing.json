@@ -23,14 +23,14 @@
           "expect": {
             "mac": { "status": 200, "json": { "features": {
               "<includes>": ["accounts.credentials", "agents", "artifacts", "asks", "attention", "bots", "bots.edit", "bots.events", "bots.job", "bots.keys", "bots.make", "config", "config.apply", "engine.restart", "file", "goals", "groups", "btw", "btw.threads", "handoff", "branch", "reviews", "reviews.parts", "reviews.scopes", "moves", "moves.agents", "moves.check", "groups.delete", "groups.edit", "groups.joinable", "groups.make", "groups.seats", "integrations", "keys", "mcp.catalog", "named", "personalities", "phones", "phones.pair", "projects", "search", "sessions.agents", "sessions.glance", "shell.stop", "sign-in.return", "skills", "skills.trash", "wakes", "wakes.edit", "worktrees", "worktrees.events", "folders", "folders.files", "git", "git.merge", "git.pull-request", "git.pull-request.draft", "git.push", "git.changes.count", "plugins.search", "programs", "providers.models", "worktrees.where",
-                "accounts.ended", "accounts.found", "accounts.refresh", "claude-code", "hosts", "mac", "machines", "wakes.events", "personalities.events", "agent-tools", "sessions.start", "letters-read", "work.elsewhere", "queue", "queue.waits", "work", "work.projects", "work.goals", "autopilot", "work.goals.apps", "work.goals.projects", "work.unanswering", "vault", "sandbox", "sandbox.check", "sandbox.asks", "sandbox.reviews.whole", "approval", "approval.reviewer", "git.backups", "approval.fullAccess", "approval.held", "approval.default", "approval.seen", "approval.stopped", "limits", "work-queue", "work-queue.elsewhere"],
+                "accounts.ended", "accounts.found", "accounts.refresh", "claude-code", "hosts", "mac", "machines", "wakes.events", "personalities.events", "agent-tools", "sessions.start", "letters-read", "work.elsewhere", "queue", "queue.waits", "work", "work.projects", "work.goals", "autopilot", "work.goals.apps", "work.goals.projects", "work.unanswering", "vault", "sandbox", "sandbox.check", "sandbox.asks", "sandbox.reviews.whole", "approval", "approval.reviewer", "git.backups", "approval.fullAccess", "approval.held", "approval.default", "approval.seen", "approval.stopped", "limits", "work-queue", "work-queue.elsewhere", "setup"],
               "<excludes>": ["engine.start", "update", "browser"]
             } } },
             "machine": { "status": 200, "json": { "features": {
               "<includes>": ["accounts.credentials", "agents", "artifacts", "asks", "attention", "bots", "bots.edit", "bots.events", "bots.job", "bots.keys", "bots.make", "config", "config.apply", "engine.restart", "file", "goals", "groups", "btw", "btw.threads", "handoff", "branch", "reviews", "reviews.parts", "reviews.scopes", "moves", "moves.agents", "moves.check", "groups.delete", "groups.edit", "groups.joinable", "groups.make", "groups.seats", "integrations", "keys", "mcp.catalog", "named", "personalities", "phones", "phones.pair", "projects", "search", "sessions.agents", "sessions.glance", "shell.stop", "sign-in.return", "skills", "skills.trash", "wakes", "wakes.edit", "worktrees", "worktrees.events", "folders", "folders.files", "git", "git.merge", "git.pull-request", "git.pull-request.draft", "git.push", "git.changes.count", "plugins.search", "programs", "providers.models", "worktrees.where",
-                "engine.start", "update", "wakes.events", "personalities.events", "accounts.ended", "accounts.found", "accounts.refresh", "agent-tools", "sessions.start", "letters-read", "work.elsewhere", "queue", "queue.waits", "work", "work.projects", "work.goals", "autopilot", "work.goals.apps", "work.goals.projects", "work.unanswering", "vault", "sandbox", "sandbox.check", "sandbox.asks", "sandbox.reviews.whole", "approval", "approval.reviewer", "git.backups", "approval.fullAccess", "approval.held", "approval.default", "approval.seen", "approval.stopped", "limits", "work-queue", "work-queue.elsewhere", "browser"],
+                "engine.start", "update", "wakes.events", "personalities.events", "accounts.ended", "accounts.found", "accounts.refresh", "agent-tools", "sessions.start", "letters-read", "work.elsewhere", "queue", "queue.waits", "work", "work.projects", "work.goals", "autopilot", "work.goals.apps", "work.goals.projects", "work.unanswering", "vault", "sandbox", "sandbox.check", "sandbox.asks", "sandbox.reviews.whole", "approval", "approval.reviewer", "git.backups", "approval.fullAccess", "approval.held", "approval.default", "approval.seen", "approval.stopped", "limits", "work-queue", "work-queue.elsewhere", "browser", "setup"],
               "<excludes>": ["claude-code", "hosts", "mac", "machines", "usage"],
-              "<length>": 100
+              "<length>": 101
             } } }
           }
         }
@@ -168,6 +168,20 @@
       "name": "stopping a command no agent left running",
       "steps": [
         { "send": "POST kuvo/shell/sh_nothing/stop", "body": {}, "expect": { "status": 404 } }
+      ]
+    },
+    {
+      "name": "kuvo/setup: who's in your setup, and which is its main computer",
+      "steps": [
+        {
+          "send": "GET kuvo/setup",
+          "why": "Every box says the same facts of your setup, from its main computer's signed document; a machine in no setup yet (one never linked, as here) says so with nulls, and a Mac's box may have made its own already. The #181 switch, unset, is off on a Mac with the app and on a machine.",
+          "expect": {
+            "mac": { "status": 200, "json": { "you": { "role": "<any>" }, "computers": "<array>", "startsFromOthers": { "value": null, "default": "off" } } },
+            "machine": { "status": 200, "json": { "setup": null, "epoch": null, "primary": null, "you": { "key": null, "role": null }, "computers": [], "startsFromOthers": { "value": null, "default": "on" } } }
+          }
+        },
+        { "send": "POST kuvo/setup", "body": {}, "expect": { "status": 405 } }
       ]
     },
     {

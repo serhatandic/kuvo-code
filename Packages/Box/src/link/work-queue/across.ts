@@ -19,7 +19,10 @@ import { categories, takePrimaryCategories } from "./categories";
 import { handArrived, handedBack, sendHandings } from "./hand";
 import { mailsFor, takePart } from "./parts";
 import { movePast, ownSince, primaryOf, takeNumbersMail, topOf } from "./numbers";
-import { allItems, OWNER, queueFollowers, WORK_QUEUE, type Item } from "./store";
+import { sharedMachine } from "../setup/settle";
+import { noteSetupNow } from "../setup/lead";
+import { allItems, OWNER, queueFollowers, refNames, WORK_QUEUE, type Item, type ItemRef } from "./store";
+import { doneOnGitHub, SEEN_FILE, seenOf, withSeen } from "./github";
 import { forgetTold, keepTold, MOST_TOLD, MOST_TOLD_DONE, readTold, TOLD, toldKeys, toldOf, type Numbering, type ToldItem } from "./told";
 import { factsOf, ownersOf, summaryOf, type Computer, type OwnerFacts } from "./view";
 import { rowsOf } from "../work/elsewhere";
@@ -48,7 +51,8 @@ interface Telling {
 }
 
 /** How this box numbers, as it tells its peers: its kind, when it was set up, the highest number it
- * used or holds, and its primary (itself, or another, with when that one was set up). */
+ * used or holds, its primary (itself, or another, with when that one was set up), and whether it's a
+ * machine Macs share outside one setup (said by every box that knows setups). */
 export function numberingNow(link: LinkState | null): Numbering {
   const primary = primaryOf(link);
   const own = link ? ownKey(link) : null;
@@ -60,14 +64,18 @@ export function numberingNow(link: LinkState | null): Numbering {
     const told = primary.via ? readTold(primary.via.key)?.primary?.since : readTold(primary.peer.key)?.since;
     named = { key: primary.peer.key, kind: primary.peer.kind, ...(told ? { since: told } : {}) };
   }
-  return { kind, since, top: topOf(), ...(named ? { primary: named } : {}) };
+  return { kind, since, top: topOf(), ...(named ? { primary: named } : {}), shared: sharedMachine(link) };
 }
 
-/** An item as this box tells it: its summary, with who handed it on. */
+/** An item as this box tells it: its summary, with who handed it on; an issue's with when this
+ * box last asked GitHub of it (`seen.checked`), so another computer reads it only once that's old. */
 const toldItem = (item: Item, working: Set<string>, titles: Map<string, { title: string }>): ToldItem => {
   const summary = summaryOf(item, working, titles);
   const from = [...new Set((item.handed ?? []).map(each => each.from))];
-  return { ...summary, ...(summary.lastNote ? { lastNote: { ...summary.lastNote, text: summary.lastNote.text.slice(0, 500) } } : {}), ...(from.length ? { handedFrom: from } : {}) };
+  const read = summary.seen ? seenOf(item.source) : undefined;
+  const checked = read ? read.checked ?? read.at : undefined;
+  return { ...summary, ...(summary.lastNote ? { lastNote: { ...summary.lastNote, text: summary.lastNote.text.slice(0, 500) } } : {}), ...(from.length ? { handedFrom: from } : {}),
+    ...(summary.seen && checked !== undefined ? { seen: { ...summary.seen, checked } } : {}) };
 };
 
 /** What this box tells of its Work Queue now: its items (not deleted ones; the latest Done ones
@@ -75,13 +83,18 @@ const toldItem = (item: Item, working: Set<string>, titles: Map<string, { title:
 export async function tellingNow(targets: Target[], link: LinkState | null, signal?: AbortSignal, cache?: Map<string, unknown>): Promise<Telling> {
   const facts = await factsOf(targets, signal);
   const all = allItems().filter(item => OWNER.test(item.owner) && !item.removed);
-  const done = all.filter(item => item.category === "done").sort((a, b) => (b.doneAt ?? 0) - (a.doneAt ?? 0)).slice(0, MOST_TOLD_DONE);
-  const items = [...all.filter(item => item.category !== "done").sort((a, b) => b.updated.at - a.updated.at).slice(0, MOST_TOLD - done.length), ...done];
+  // (An issue closed on GitHub is Done here too: among the latest Done, not the open ones.)
+  const isDone = (item: Item) => item.category === "done" || Boolean(item.source && doneOnGitHub(seenOf(item.source)?.value?.state));
+  const done = all.filter(isDone).sort((a, b) => (b.doneAt ?? 0) - (a.doneAt ?? 0)).slice(0, MOST_TOLD_DONE);
+  const items = [...all.filter(item => !isDone(item)).sort((a, b) => b.updated.at - a.updated.at).slice(0, MOST_TOLD - done.length), ...done];
   const { owners, titles } = await ownersOf("all", items, facts, targets, cache);
   const told = items.map(item => toldItem(item, facts.working, titles));
   const custom = categories().filter(each => !each.builtIn).map(({ id, name }) => ({ id, name }));
   const content = { items: told, owners, categories: custom, ...numberingNow(link) };
-  const id = "wqt_" + crypto.createHash("sha256").update(JSON.stringify(content)).digest("base64url").slice(0, 22);
+  // (When GitHub was last asked of an issue is told too, so the others don't ask it again meanwhile:
+  // by the two minutes, so it goes again no more often than that for it.)
+  const byTwo = { ...content, items: told.map(item => (item.seen?.checked !== undefined ? { ...item, seen: { ...item.seen, checked: Math.floor(item.seen.checked / 120_000) } } : item)) };
+  const id = "wqt_" + crypto.createHash("sha256").update(JSON.stringify(byTwo)).digest("base64url").slice(0, 22);
   return { id, payload: { told: { id, at: Date.now(), ...content } } };
 }
 
@@ -93,7 +106,7 @@ let builtMarks = "";
 let building = false;
 /** The least time between two tellings to one computer, however busy. */
 export const TELL_SPACING = 15_000;
-const marks = () => [path.join(WORK_QUEUE, "queues"), path.join(WORK_QUEUE, "categories.json"), path.join(WORK_QUEUE, "numbers.json"), TOLD].map(file => {
+const marks = () => [path.join(WORK_QUEUE, "queues"), path.join(WORK_QUEUE, "categories.json"), path.join(WORK_QUEUE, "numbers.json"), TOLD, SEEN_FILE].map(file => {
   try { return String(fs.statSync(file).mtimeMs); } catch { return "-"; }
 }).join(" ");
 // Titles of sessions the list doesn't have, looked up once in ten minutes at most.
@@ -194,8 +207,11 @@ function takeTold(sender: MailSender, given: unknown, reply: (payload: Record<st
   // (Only from one of your computers that's still a peer: a Mac that set this one up is one.)
   if (!peersOf(link).some(peer => peer.key === sender.key)) return;
   // (What came late, older than what's kept, isn't had: had, it would never go again.)
+  const before = readTold(sender.key);
   if (!keepTold(sender.key, told)) return;
   reply({ had: told.id });
+  // How it numbers changed (it's shared now, or numbers from another): this box's setup looked at now.
+  if (before?.shared !== told.shared || before?.primary?.key !== told.primary?.key || before?.primary?.since !== told.primary?.since) noteSetupNow(Date.now(), { soon: 0 });
   const primary = primaryOf(link);
   if ("self" in primary) movePast(Math.max(told.top ?? 0, ...told.items.map(item => item.number ?? 0)));
   else if ("peer" in primary && (primary.via ? primary.via.key === sender.key && told.primary?.key === primary.peer.key : primary.peer.key === sender.key)) {
@@ -246,7 +262,7 @@ export type ItemElsewhere = ToldItem & { computer: Computer };
  * the owners they name, their custom categories, and when each computer told them. Items this box
  * has itself (`here`: one on its way here, say) are left to it; one deleted here (`deleted`) is
  * theirs, unless they told of it on its way here. */
-export function itemsElsewhere(owner: string, link: LinkState | null = readLink(), here?: Set<string>, deleted?: Set<string>): {
+export function itemsElsewhere(owner: string, link: LinkState | null = readLink(), here?: Set<string>, deleted?: Set<string>, { asTold = false }: { asTold?: boolean } = {}): {
   items: ItemElsewhere[];
   owners: OwnerFacts[];
   categories: { id: string; name: string }[];
@@ -273,7 +289,7 @@ export function itemsElsewhere(owner: string, link: LinkState | null = readLink(
       // (Not one here; nor one deleted here that this one told of on its way here: it got here.)
       if (here.has(item.id) || (deleted.has(item.id) && item.handing)) continue;
       const other = best.get(item.id);
-      if (!other || newer(item, told.at, other.item, other.at)) best.set(item.id, { item: { ...item, computer }, at: told.at });
+      if (!other || newer(item, told.at, other.item, other.at)) best.set(item.id, { item: asTold ? { ...item, computer } : withSeen({ ...item, computer }), at: told.at });
     }
     for (const each of told.owners) if (!owners.has(each.owner)) owners.set(each.owner, each);
     for (const each of told.categories) if (!custom.has(each.id)) custom.set(each.id, each.name);
@@ -284,16 +300,16 @@ export function itemsElsewhere(owner: string, link: LinkState | null = readLink(
   return { items, owners: [...owners.values()].filter(each => named.has(each.owner)), categories: [...custom].map(([id, name]) => ({ id, name })), computers };
 }
 
-/** The item another computer told of that `ref` names (by id or number), or null: of two, the newer
- * word. */
-export function itemElsewhere(ref: { id: string } | { number: number }, link: LinkState | null = readLink()): ItemElsewhere | null {
+/** The item another computer told of that `ref` names (by id, number or source), or null: of two,
+ * the newer word. */
+export function itemElsewhere(ref: ItemRef, link: LinkState | null = readLink(), { asTold = false }: { asTold?: boolean } = {}): ItemElsewhere | null {
   let found: { item: ItemElsewhere; at: number } | null = null;
   for (const peer of peersOf(link)) {
     const told = readTold(peer.key);
-    const item = told?.items.find(each => ("id" in ref ? each.id === ref.id : each.number === ref.number));
+    const item = told?.items.find(each => refNames(ref, each));
     if (item && (!found || newer(item, told!.at, found.item, found.at))) found = { item: { ...item, computer: { key: peer.key, name: computerName(peer), kind: peer.kind, ...(peer.id ? { id: peer.id } : {}) } }, at: told!.at };
   }
-  return found?.item ?? null;
+  return found ? (asTold ? found.item : withSeen(found.item)) : null;
 }
 
 // Whether `a` (told at `aAt`) is newer word of an item than `b`: changed later, or the same and

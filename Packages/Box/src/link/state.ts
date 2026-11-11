@@ -14,6 +14,7 @@ import { IS_MAC, LINK_FILE, RUN } from "./home";
 import type { NoticeHold } from "./notices/hold";
 import type { Peer } from "./peers/known";
 import type { LinkHost } from "./relay/host";
+import type { SetupRecord } from "./setup/record";
 
 /** A phone this box lets in (PROTOCOL.md, "Paired phones"). */
 export interface Phone {
@@ -70,6 +71,14 @@ export interface LinkState {
   macMoved?: unknown;
   /** Machines this Mac removed that haven't heard it yet (they hear it once it's back on the relay). */
   untold?: Peer[];
+  /** The setup it's in, and its role there (PROTOCOL.md, "Your setup"). */
+  setup?: SetupRecord;
+  /** This Mac's static key as its box last had it, and the ones before (made anew since): a machine
+   * this Mac sets up again lets those go (`replaces` in setup). */
+  keyNow?: string;
+  keysBefore?: string[];
+  /** The #181 switch, as you set it (none: it follows the role, `startsFromOthers`). */
+  startsFromOthers?: "on" | "off";
 }
 
 // This Mac's box's link (`runMacLink`): what its app said (`kuvo/link/config`, or as the box kept

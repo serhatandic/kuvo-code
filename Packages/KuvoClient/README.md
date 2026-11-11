@@ -48,6 +48,12 @@ What a client shows of a computer's sessions, the same in both apps. Rules only,
   category; the open count ("24 items"), "Updated 8m ago", whose an item is, what's being done.
 - `ReviewList`: "/review"'s lists over the message field (What to review, a commit or a folder for
   it, Look for), their rows and sizes from what the box measured, and loading those.
+- `BoxNote` and `ReplyChanges`: what the box and the engine write to an agent in its conversation,
+  as both apps show it, with no pills. A lead's sessions' news is a message from each session
+  (`BoxNote.shown`, `SessionNews`: finished, failed or asks; one still working shows nothing).
+  What changed since the reply before (the model or its effort, the mode, a summary, the project's
+  folders, a goal started) is a word in the next reply's footer (`ReplyChanges`). Notes written for
+  the model show nothing.
 - `ShellRead`: the end of what a background command printed, as Output shows it, and whether it
   has ended (its engine let go of it) or just can't be read now.
 - `AskPlace`: which of the asks waiting takes the composer's place, and "2 of 3" over it: the one
@@ -102,6 +108,9 @@ phone's copies of the Mac's design files, a piece at a time.
 - `Spinner`: the app's loader, played by Core Animation on each platform's own view.
 - `ChoiceRowLabel`: a numbered choice (a question's, a permission's answer): its number in a small
   square, its words and what it means; each app puts it in its own button.
+- `ComposerRow`: the row under a composer's field, its words' font and its icons' (the paperclip,
+  the mode's, the chips' chevrons and ✕, the mic, Send and Stop): one size and weight, the words',
+  on their baseline.
 - `FirstLineListItemStyle` (`.firstLine`): a list item's marker on its first line's middle.
 - `ShimmerText`: words that shimmer while something's under way, played by Core Animation.
 - `BotAvatar`, `BotLook`, `BotMood`, `GroupAvatar`, `MachineBadge`: the bots' looks, still and

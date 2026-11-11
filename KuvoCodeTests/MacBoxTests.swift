@@ -38,7 +38,10 @@ import Testing
         let folder = FileManager.default.temporaryDirectory.appending(path: "kuvo-engine-config-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let left = folder.appending(path: "left")
+        // Before the box's first start its folder isn't there; the settings are asked all the same.
+        try? FileManager.default.removeItem(at: BoxProcess.home)
         defer {
+            try? FileManager.default.removeItem(at: BoxProcess.home)
             if let pid = (try? String(contentsOf: left, encoding: .utf8)).flatMap({ Int32($0.trimmingCharacters(in: .whitespacesAndNewlines)) }) { kill(pid, SIGKILL) }
             try? FileManager.default.removeItem(at: folder)
         }
