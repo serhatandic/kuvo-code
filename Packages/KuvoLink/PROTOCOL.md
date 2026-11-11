@@ -162,12 +162,16 @@ each box pairs and removes (`phones`), and each box's view of your personalities
 - **Taken**: a box takes a document that verifies, from an origin it takes that kind from, newer
   than the one it has; at the same version, the one whose bytes' hash sorts first, so every box
   keeps the same one. One of its own further on than it knew (it lost count), by a document or a
-  digest, moves its count past it, up to 2^52 (one claiming more isn't taken). It takes `peers` only from its own Macs (those in `macSigns`, given in setup); `phones` and
+  digest, moves its count past it, up to 2^52 (one claiming more isn't taken). It takes `peers`
+  only from its setup's main computer, and while it follows no setup (kept until every box knows setups) from
+  its own Macs (those in `macSigns`, given in setup), never at a lower epoch of the setup it keeps
+  ("Your setup"); `phones` and
   `personalities` from those Macs, from its peers and from itself. Documents from an origin it no
   longer takes them from go.
 - **`peers`**, one per Mac: `{boxes: [{key, sign, address, name, kind: "mac"|"machine", id?}],
-  moved: [{session, key}], left: [key]}`: the Mac itself and each of its machines whose bridge
-  signs, the same document for all of them. A box's peers are every box its Macs' documents name,
+  moved: [{session, key}], left: [key], setup?: {id, epoch, primary}}`: the Mac itself and each of
+  its machines whose bridge signs, the same document for all of them, and the setup it leads
+  ("Your setup"; older boxes read only `boxes`, `moved` and `left`). A box's peers are every box its Macs' documents name,
   itself left out ("Peers"). `left` names the machines that Mac removed (never one it still has,
   under another name): a box that finds itself there and no longer among `boxes` stops counting
   that Mac, as `leave` does. The Mac mails it to a machine as it removes it, once.
@@ -192,11 +196,76 @@ each box pairs and removes (`phones`), and each box's view of your personalities
   To a digest, a box gives what the sender lacks or has older (of what that box would take), and,
   unless it's a `reply`, answers with its own digest, marked `reply`, when the sender has something
   newer. A document it took goes on to its other peers that would take it (not back where it came
-  from, nor to its origin); one of its own that changed, to all of them. Over SSH, setup carries the
+  from, nor to its origin); one of its own that changed, to all of them. A box that would take it
+  is one its setup's document names (with its origin, for `phones` and `personalities`), or, in no
+  setup, one a Mac's document names. Over SSH, setup carries the
   Mac's documents (`docs`, its own and those it has of its machines) and its answer the machine's.
   A box doesn't give documents to a Mac that gave it no signing key.
 - **Later**: each box's agents (`{"agents"}`, "Peers") are a list of its own too, still sent as
   they change and every ten minutes; they could become a fourth kind.
+
+### Your setup
+
+All of your computers that know each other are one **setup**, with one **main computer**: a Mac
+with the app, whose box signs who's in it. Every other computer is a **member**. (Built so far: the
+setup, who's main, and what boxes take and number by it. Changing the main computer, joining two
+setups, and pairing and adding only from the main computer come later: #183.)
+
+- **The setup** has an id (`set_` and 16 random bytes, base64url) and an epoch (a whole number, one
+  more with each change of main computer, never lower on any box). Its main computer's peers
+  document names it: `setup: {id, epoch, primary}`, `primary` the main computer's static key, which
+  the document names among its `boxes` as a Mac signing with the document's key ("Documents").
+- **Kept** in `run/link.json` as `setup: {id, epoch, primary, sign, role: "primary"|"member",
+  aside?, conflict?}` (`sign`, the main computer's signing key). `aside`: kept only so a lower
+  epoch of it is never taken, and followed for nothing else (its main computer stopped naming it,
+  or this box is a shared machine).
+- **Who leads one**: this Mac's box, once it numbers on its own (the Work Queue's first computer,
+  "Numbers") and each of its machines has said no other Mac shares it (`shared: false` in what it
+  tells of its Work Queue; one that hasn't said, an older box, holds it back, and nothing changes
+  meanwhile; once it leads, a machine just added that hasn't said yet doesn't stop it, only one
+  saying `shared: true` does); and a box no Mac set up, once it numbers on its own (one paired with
+  a phone by itself, on Linux say; one its Mac let go waits for that Mac first, as "Numbers" says,
+  days). It's made once, at epoch 1, and looked at once a minute and as a machine's word on how it
+  numbers changes: a Mac that stops leading (a machine of it is shared now, or it numbers through
+  another Mac) sets it aside and its document names it no more; leading again, it names the same
+  one. A Mac whose keys were made anew (its static key, or its signing key alone) makes a new setup:
+  the one it led with its old keys is no longer its own, and its machines take the new one from it.
+  Setting a machine up again, it names its static keys before (`replaces` in `kuvo/link/setup` and
+  setup's input), which the machine lets go as `leave` does, so it's never two Macs to it. (Leading follows its machines' word, as the Work Queue's numbers already do
+  without a setup; a later part of #183 makes it hold against a member's word alone.)
+- **What a box takes it from**: a machine follows the setup its Mac leads, from that Mac's
+  document. Then it takes `peers` only from the main computer's signing key (as that Mac's setup
+  over SSH last gave it, the trust root), never at a lower epoch of the setup (whoever signed it),
+  and its peers are the boxes that document names. A Mac that names itself the main computer of the
+  same setup at the same epoch isn't taken: the box keeps the one it has and notes `conflict:
+  {primary, epoch}` (gone with that epoch). A machine with no Mac leads its own; set up by a Mac, it
+  gives that up (a setup of no other computer joins its Mac's). A box drops its setup when that Mac
+  stops counting there (it removed the box, or wasn't heard from in 30 days), as it drops that
+  Mac's documents. A box that follows no setup (kept until every box knows setups) takes `peers`
+  from its own Macs, as before. The card (below) is a hint for what looks from outside, never
+  trusted for any of this.
+- **Shared machines**: a machine more than one Mac set up, unless the setup's document names each
+  of them as one of its Macs, follows no setup, and tells its peers it's shared (the Work Queue's
+  `told`, `shared: true`), so none of those Macs leads one. Macs that share a machine, and the
+  machines numbering with them, number as before, from the first Mac you set up ("Numbers"),
+  until they're joined in one setup.
+- **`GET kuvo/setup`** (and `kuvo/setup/events`, a line now and one at each change), on every box,
+  for every client: `{setup, epoch, primary: {key, name, kind}, you: {key, role}, computers: [{key,
+  name, kind, role, app}], conflict?, startsFromOthers: {value, default}}`. Facts only, the same on
+  every box of one setup: `kind` is `mac` for a Mac with the app (`app`), `machine` otherwise; in no
+  setup, `setup`, `epoch`, `primary` and `you.role` are null and `computers` is empty.
+  `startsFromOthers` is the #181 switch (not built yet): `value` as you set it (`link.json`'s
+  `startsFromOthers`, `on` or `off`), or null, and `default`, what it is then: off on the main
+  computer (and on a Mac in no setup), on everywhere else, so it follows the role.
+- **The card**: `run/setup-card.json`, beside link.json, nothing secret in it, for what looks at a
+  computer from outside its box (the app as it opens, a Mac adding it over SSH): `{setup, epoch,
+  role, primary: {key, name, heard}, self: {key, name, kind}, app, computers, items}`. `heard`: when
+  the main computer was last heard from, as this box counts it (ms, its own time off left out, as
+  for its Macs' 30 days; null on the main computer itself); `computers`, how
+  many the setup has; `items`, the Work Queue items here. Written as the box looks at its setup, as
+  documents change it, and by `setup` and `leave` (`kuvo/setup/events` follows those too).
+- **Older boxes** read only `boxes`, `moved` and `left`, and keep taking `peers` from their Macs:
+  nothing changes for them. A box that knows setups names `setup` in `features`.
 
 ### Peers
 
@@ -206,8 +275,8 @@ connection.
 
 - **Who**: each of a box's Macs' peers documents ("Documents") names its boxes: that Mac, and its
   machines whose bridge signs (`id`, the machine's name on that Mac). A box's peers are every box
-  they name, itself left out, whoever passed the document on. Only a Mac says who a box's peers
-  are. Its bridge runs while it has peers or phones. Setup also gives the machine's `id`.
+  they name, itself left out, whoever passed the document on; in a setup, every box its main
+  computer's document names ("Your setup"). Only a Mac says who a box's peers are. Its bridge runs while it has peers or phones. Setup also gives the machine's `id`.
 - **Mail**: a box opens mail from its Macs and its peers, and drops the rest. Every mail has `at`
   (milliseconds). A sealed mail frame is at most 65,600 bytes, and one larger isn't sent: letters'
   words and lists are cut to fit.
@@ -215,7 +284,7 @@ connection.
   about?, machine?, look?}], "features"?}}`: a bot's `id` (`bot_…`, as group chats name their
   members) and `look` (`{color, shape, face}`, as `kuvo/bots` has it: a colour, shape or face the
   apps don't draw is kept as the plain look's, `graphite`, `round`, `calm`), and `features` as the box's
-  `kuvo/info` names them. A box sends its bots and its 40 latest
+  `kuvo/info` names them (the box that takes them keeps the first 300 names). A box sends its bots and its 40 latest
   sessions (its engine's and its coding agents') when they change and every ten minutes. Each box
   keeps the newest list from each peer. The relay keeps nothing, so a box that has just connected adds `"ask": "agents"` to
   what it sends first (its agents; a Mac's digest), and whoever gets it tells that box its agents
@@ -880,6 +949,58 @@ the same for every client and with none connected, and keeps them in `run/queues
 - A box without `queue` in its features (its update didn't get through): each client carries that
   box's queues itself, as clients did before.
 
+### A session at a glance
+
+What a session's row and its card show beyond the session itself (`sessions.glance`): a row gains
+one mark, its pull request's (else its branch's), only on a session with a branch of its own or a
+pull request; its card (hover on a Mac, a long press on a phone) says the state and how long ago,
+the branch, the model, effort and account, and the pull request with its checks and size.
+
+- `GET kuvo/sessions/glance?sessions=<id>,<id>…` (at most 200) → `{"sessions": {<id>: {branch?,
+  additions?, deletions?, pull?: {number, url, state?, additions?, deletions?, checks?: {passed,
+  failed, pending}}, account?: {name, label?}, asked?}}}`. A session the box doesn't have is left
+  out (only when every place said it has none: `503 {"message"}` while one isn't answering, rather
+  than say it's gone); `400 {"message"}` for none named, `503` with neither the engine nor the coding
+  agents' bridge running. `GET kuvo/sessions/glance/events?sessions=…` sends the same now (ndjson),
+  and again when it changes: an ask coming or answered and a pull request linked (a moment after, so
+  a few at once are one line), and once a minute for the rest; nothing while a place isn't
+  answering, so what it said last stands. A
+  client follows it for the rows on its screen only, and opens it again as they change; through
+  `box route` it answers its first line, and a client asks again a minute later.
+- `branch`: the session's own, a worktree's of the box's (`box/worktrees.json`), else its pull
+  request's head branch; left out for one in its project's own checkout, whose row stays as it is.
+  `additions` and `deletions`, without a pull request: the lines its branch changed since it left
+  its base, uncommitted changes too (`kuvo/git/changes/count`'s `branch` scope).
+- `pull`: the pull request it made, else, in a worktree, its branch's latest on origin's GitHub
+  repository (open, merged or closed) from origin's repository itself (not a fork's branch of the
+  same name) and made since the worktree was (not an earlier branch's of the same name). It made it
+  when Create Pull Request named it (`kuvo/git/pull-request` with `session`), or when its own `gh pr
+  create` (or one of its subagents') printed it, which the box catches as the call ends: a command
+  that starts with it (or after `&&`, `;`, `|`), the last pull request it printed, and only on the
+  host of the session folder's origin. Kept in `box/pulls.json` (the latest 500), so two sessions in
+  one folder never show each other's. `state`: `open`, `draft`, `merged` or `closed`, with
+  `additions`, `deletions` and `checks` the pull request's, as GitHub last said; all left out until
+  GitHub's been read, or when it can't be (only `number` and `url`). `checks` counts the last commit's check runs and statuses: skipped and neutral ones as
+  passed; failed, errors, cancelled, timed out, stale and those needing action as failed; the rest
+  pending. Left out for none.
+- GitHub is read with GitHub's own `gh` on the box and its sign-in (Kuvo Code keeps no key of
+  GitHub's for it): one GraphQL query for every pull request asked for at once, only while a client
+  asks, and each only as often as it can change: once a minute while its checks run, every five
+  minutes while it's open otherwise (or a worktree's branch has none yet), every half hour once it's
+  merged or closed. Kept in `run/glance/github.json` (two hours), which one process at a time
+  writes, so a box asks GitHub once however many processes and clients ask it. A box without `gh`,
+  or signed out, reads nothing for five minutes, then tries again.
+- `account`: the account it runs on, as `kuvo/work` says one ("Work"); none on Custom Auto.
+- `asked`: while it waits on you, when the oldest ask still open came (ms), its subagents' too: a
+  permission or a question (not one Auto's reviewer took up), or what the box asks you for it (a
+  command outside the sandbox, the vault), as the box's long-running process heard it
+  (`run/glance/asks.json`). An ask is let go as it's answered, as its run ends or it's deleted, and
+  with all of its place's (engine, bridge) once that place is heard again after it couldn't be. An
+  ask made while the box couldn't hear it has none, and a client says how long since the session
+  last changed instead.
+- What a client draws from it (which mark, which lines on the card) is the clients' to decide
+  alike; a box without `sessions.glance` gives no marks beyond the worktree's branch, as before.
+
 ### Work
 
 A bot runs sessions as you would (bridge 0.9.106): it starts them in your projects on the model,
@@ -1066,10 +1187,12 @@ client shows it from the same routes.
     too, but it holds off a goal's nudge only for 30 minutes, and never hides a turn that failed at a
     limit.
   - **Telling a lead**: `[Session finished]` waits while any of it runs, and looks again 10 seconds
-    after it ends, since the end wakes its agent. At 30 minutes it's told anyway, but as
-    `[Session still working]` (nothing is finished), saying what still runs; clients show it as
-    "“<title>” still working". When it really finishes with something new to say, that's a normal
-    `[Session finished]`; with nothing new, nothing. A turn someone asked for doesn't wait on what was running before they asked (a dev server):
+    after it ends, since the end wakes its agent. Nothing is sent meanwhile (a lead's `list_sessions`
+    shows the session at work). At 30 minutes it's told anyway as `[Session finished]`, saying what
+    still runs, so a lead isn't left without it when something never ends (a dev server). When it
+    really finishes with something new to say, that's a normal `[Session finished]`; with nothing
+    new, nothing. Boxes before #420 told that at 30 minutes as `[Session still working]`, and
+    clients still read it so (“<title>” still working). A turn someone asked for doesn't wait on what was running before they asked (a dev server):
     it's told at once as `[Session finished]`, saying what still runs. After that a turn someone asked for is always told. A
     turn following the box's own word (what a session it started did, a limit that reset) is too, as
     what comes of it may be the result. A turn that began on its own (what it
@@ -1808,6 +1931,10 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   machine was off since), and `phones`, how many phones
   reach it. A Mac also names `integrations`, each integration's name by its MCP
   server's (`{"microsoft-365": "Outlook and Microsoft 365", …}`), for a card when one asks something.
+  A Mac's is its box's (from #191 step 2; its app answered it before), the same with the app closed:
+  its `name` and `app` as the app last said them (kept, "The relay, on this Mac's box"), its
+  `engine` the version running, or the one the app brings while none runs, its integrations from
+  the catalog the app leaves it (`bin/integrations.json`), and its `features` the box's own list.
 - `kuvo/agents/api/…`: the coding agents you already have (Claude Code, Codex, Cursor, Grok,
   Antigravity), through the agents bridge beside the host's engine, which answers the same paths
   as the engine for them: sessions, messages, prompts, permissions, questions, events
@@ -2418,8 +2545,9 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
     doesn't have; and for a merge that would conflict, `409 {"message", "conflicts": [path]}`, the
     merge taken back and nothing merged. `422 {"message"}` with git's words when it stopped for
     another reason (taken back too).
-  - `POST kuvo/git/pull-request {"directory", "title"?, "body"?}` (`git.pull-request`, bridge
-    0.9.143): Create Pull Request. Its base is the worktree's, from the box's worktrees, else
+  - `POST kuvo/git/pull-request {"directory", "title"?, "body"?, "session"?}` (`git.pull-request`, bridge
+    0.9.143): Create Pull Request. With `session`, the session it's made from (the one in view),
+    the pull request it makes is that session's ("A session at a glance"). Its base is the worktree's, from the box's worktrees, else
     origin's main branch, else `main` or `master`. `409 {"message"}` from the base itself, with changes not committed, or
     with nothing the base doesn't have. The branch is pushed to `origin` (and tracked); on GitHub,
     made a pull request on origin's repository with GitHub's `gh` when it's there and signed in →
@@ -3134,7 +3262,11 @@ numbers in a message and draws each one the box knows as a chip (its category's 
 progress, a check when done, `#243` and the title on one line), leaving one it doesn't know as
 written; the message's words never change. A chip opens the item.
 
-**Numbers**: one `#n` per item, unique across your computers, handed out by the primary: the first
+**Numbers**: one `#n` per item, unique across your computers, handed out by the primary: your
+setup's main computer ("Your setup"), the box itself when it's that; one a box can't write to yet
+(its document not here, or naming no address) is waited for, never passed over. A box that
+follows no setup (Macs that share a machine, and the machines numbering with them, or a box beside
+an older one; kept until every box knows setups and those Macs are joined in one) takes the first
 computer you set up. Each box works it out the same way from what it knows: of itself, its peers and
 the primaries they say they number from ("Across your computers", `told`), a Mac comes before a
 machine (a machine is always set up from a Mac), then the one set up first (`since`: when that box
@@ -3153,7 +3285,7 @@ still list a while) isn't one to number from; a box that reached it through that
 peer to its next. Heard from again, it's the earliest again, and boxes move back to it, which moves
 past what was numbered meanwhile (`top`). A machine set up from a
 Mac never numbers on its own; while it knows of no Mac that
-can be reached yet, items wait. (#183 will let you choose the primary.) The primary numbers its own
+can be reached yet, items wait. The primary numbers its own
 items from its counter; another box numbers from blocks of 50 the primary gave it, and asks for the
 next when 15 or fewer are left, by mail, on its rounds: `{workQueue: {ask: {id, count, claims?,
 top?}}}`, sent again every 30 s until answered with `{workQueue: {give: {id, from, to, granted}}}`.
@@ -3188,11 +3320,12 @@ item on its way to another computer (`handing`) goes with the move and is sent f
 `work-queue.elsewhere`; mail as "Peers" says, under the top-level `workQueue`):
 
 - **Told**: each box tells every such peer its Work Queue, unasked, so the others have it while it
-  sleeps: `{workQueue: {told: {id, at, kind, since, top, primary?: {key, kind, since?}, items,
-  owners, categories}}}`. `items` are its items as a view gives them (not deleted ones; the 100
-  latest Done; 1,500 at most), each with `handedFrom` (who handed it on); `owners` names their
-  owners; `categories` its custom ones; `kind`, `since` and `top` how it numbers, and `primary` the
-  one it numbers from (itself when it's the primary). `id` (`wqt_…`) is the same while all that is.
+  sleeps: `{workQueue: {told: {id, at, kind, since, top, primary?: {key, kind, since?}, shared?,
+  items, owners, categories}}}`. `items` are its items as a view gives them (not deleted ones; the
+  100 latest Done; 1,500 at most), each with `handedFrom` (who handed it on); `owners` names their
+  owners; `categories` its custom ones; `kind`, `since` and `top` how it numbers, `primary` the
+  one it numbers from (itself when it's the primary), and `shared`, whether it's a machine Macs
+  share outside one setup ("Your setup"; an older box says neither). `id` (`wqt_…`) is the same while all that is.
   It's worked out again when a queue changes and each minute (who's at work changes it), and goes
   to one computer once in 15 s at most, again each minute (sooner after a change you made from a
   client, at the next round 15 s on) until that computer answers `{workQueue: {had: id}}`, nothing
@@ -3394,7 +3527,9 @@ Mac, its app for its keys), and on a
 machine `409` for `config`, `config.apply`, `keys`, `mcp.catalog` and `integrations` until a Mac has made its
 settings its own. A name comes with what it names and never changes meaning; one the client
 doesn't know, it ignores. Both boxes are held to their lists by
-the route scenarios (`Vectors/routes/routing.json`).
+the route scenarios (`Vectors/routes/routing.json`). A Mac's list is its box's (`macFeatures`, from #191
+step 2; the app gave it before): every box's but a machine's own, and the Mac's own, the same
+with its app closed, when what needs the app answers `503 {"message"}`.
 
 | Name | What it answers |
 | --- | --- |
@@ -3445,6 +3580,7 @@ the route scenarios (`Vectors/routes/routing.json`).
 | `letters-read` | (in a peer's agents' mail) it takes a letter with `read` (bridge 0.9.100) |
 | `work.elsewhere` | (in a peer's agents' mail) it takes a lead's `call` and tells `rows` ("Peers"; bridge 0.9.204) |
 | `work-queue` | `kuvo/work-queue…` and the `queue_…` tools ("The Work Queue") |
+| `setup` | `kuvo/setup`, `…/events`: your setup and its main computer ("Your setup") |
 | `work-queue.elsewhere` | (in a peer's agents' mail) it tells and takes the Work Queue across your computers: `told`, `had`, `part`, `hand`, `handed`, and numbers' asks through a peer ("The Work Queue", Across your computers); also `POST kuvo/work-queue/refs`, `computer` and `computers` in its views, and 409 for an item elsewhere |
 | `queue` | `kuvo/sessions/<id>/queue…`, `…/stop` and `kuvo/sessions/queues/events`: the box carries the queue (bridge 0.9.100) |
 | `queue.waits` | A Stop holds the conversation: what arrives waits on the box (`waiting`), `…/queue/add` and `DELETE …/queue/<item>` (bridge 0.9.128) |
@@ -3464,6 +3600,7 @@ the route scenarios (`Vectors/routes/routing.json`).
 | `programs` | `kuvo/programs` |
 | `providers.models` | `POST kuvo/providers/models` |
 | `sessions.agents` | `POST kuvo/sessions/<id>/agents` |
+| `sessions.glance` | `kuvo/sessions/glance`, `…/events`, and `session` in `POST kuvo/git/pull-request` ("A session at a glance") |
 | `shell.stop` | `POST kuvo/shell/<id>/stop` |
 | `sign-in.return` | `POST kuvo/sign-in/return` |
 | `skills` | `kuvo/skills…` and `kuvo/skill-library…` |
@@ -3494,7 +3631,7 @@ the route scenarios (`Vectors/routes/routing.json`).
 | `hosts` | a Mac only: `kuvo/hosts…` (with its app closed its box still lists them, and `DELETE` says the app must be open) |
 | `mac` | a Mac only: `kuvo/mac` |
 | `machines` | a Mac only: `kuvo/machines…` (with its app closed its box still lists them, and the rest says the app must be open) |
-| `usage` | the Mac with the app only for now, while it has the usage panel: `kuvo/usage…`, spend and what the box doesn't state of a plan yet (a machine's box can't do this yet, on Linux or a Mac) |
+| `usage` | a Mac only for now: `kuvo/usage…`, from its app while it's open (`404` without the usage panel, `503` with the app closed), spend and what the box doesn't state of a plan yet (a machine's box can't do this yet, on Linux or a Mac). Before #191 step 2 a Mac named it only while its usage panel was there |
 | `limits` | `kuvo/agents/api/kuvo/limits…` and `plan_limits`: each account's plan limits ("Plan limits") |
 
 Here "a Mac" is the box the app runs (`KUVO_BOX=mac`), and "a machine" any box in `~/.kuvo-code`,
@@ -3551,7 +3688,12 @@ the skills a Mac has always kept ("Skills"). It answers the box's
 routes over HTTP on `127.0.0.1`, as the agents bridge answers the app: it says `{"url"}` on its
 first line once it listens, takes only Basic `opencode:<OPENCODE_PASSWORD>`, checks a path as
 the relay does (403 for one that isn't what it seems), sends a stream as it comes (a line at a
-time for `application/x-ndjson`), and goes when its stdin closes. It finds the engine and the
+time for `application/x-ndjson`), and goes when its stdin closes. A route that holds a request
+before its answer's head (an ask waiting for you, a sandbox tool, a vault wait) sends an interim
+`102 Processing` every 20 seconds to an HTTP/1.1 client, which clients ignore but which keeps
+their wait for the head alive (URLSession's request timeout). It never reaches a phone: the app
+forwards a phone's request to the box with URLSession, which takes it in and gives on only the
+answer. It finds the engine and the
 coding agents' bridge as on a machine, by `run/engine.json` and `run/bridge.json`, which the keeper
 writes (only you can read them) as they start and removes as they stop.
 
@@ -3689,8 +3831,9 @@ application/json`:
   Finder's Trash (bridge 0.9.52); one anywhere else stays where it is;
 - for its link (bridge 0.9.61, "The relay, on this Mac's box"):
   - `link/identity {}` → `{"key", "secret", "sign"}` (each 32 bytes, base64url): this Mac's link
-    key, relay secret and signing key, from the Keychain; `503` while the link isn't wanted or the
-    Keychain won't give them;
+    key, relay secret and signing key, from the Keychain, never asking you to unlock it; `503` while
+    the link isn't wanted or the Keychain won't give them (read again a minute later while it was
+    locked);
   - `link/route {"method", "path", "headers", "body", "phone"}` (`body` base64, `phone` the asking
     phone's key, base64url) → that request's answer as the app gives it: its status, its
     `content-type` and `cache-control`, `x-kuvo-answer: 1` (the app's own answer, whatever its
@@ -3713,13 +3856,14 @@ without them its link stays off and says why. What it keeps of its phones is in 
 as on a machine, without the keys, the relay or its name. Nothing its link meets (the relay gone, a
 frame that isn't one, the app away) stops the box's own routes.
 
-What a phone asks, it answers itself for the areas that have moved onto it and its phones
-(`kuvo/phones…`), and, as every box answers them, `kuvo/file`, `kuvo/sign-in/return`,
+What a phone asks, it answers itself, as a machine's bridge does, with the app open or closed:
+everything but the Mac's own routes, below (from #191 step 2, `kuvo/info` among them). Before, it
+answered only the areas that had moved onto it (a list of them, which the app kept a copy of), and
+handed the app the rest: its phones (`kuvo/phones…`), `kuvo/file`, `kuvo/sign-in/return`,
 `kuvo/accounts/credentials`, `kuvo/shell/<id>/stop`, the engine's API and the coding agents'
-(`api/…`, `kuvo/agents/…`, telling who a message names with `&`; bridge 0.9.64), and `kuvo/named`
-and `kuvo/groups…` (bridge 0.9.65), and a session's own routes: its queue, `stop`, approval,
-decisions, Autopilot (`kuvo/sessions/<id>/autopilot…`) and its move to the coding agents
-(`kuvo/sessions/<id>/agents`, both from bridge 0.9.209); the app did each before. While its
+(`api/…`, `kuvo/agents/…`, telling who a message names with `&`; bridge 0.9.64), `kuvo/named`
+and `kuvo/groups…` (bridge 0.9.65), and a session's Autopilot (`kuvo/sessions/<id>/autopilot…`)
+and move to the coding agents (`kuvo/sessions/<id>/agents`, bridge 0.9.209) were among them. While its
 engine starts, or starts again, the engine's routes answer `503 {"message": "This Mac's engine is starting. Try again in a
 moment."}` (a machine's say "This machine's"). From 0.9.66, once the app has given up on it (no try
 can help; the app's `run/engine-stopped`, why, until it starts or stops it again),
@@ -3727,11 +3871,13 @@ they say "This Mac's engine isn't running." with why, and that Try Again on the 
 from 0.9.201, while it waits for its next try, `run/engine.retry`, that it's trying again); and a
 machine's, while its keeper's next start is more than half a minute away (`run/engine.retry`, when,
 in seconds since 1970), "This machine's engine keeps stopping. It's started again in about N
-minutes." The rest, the Mac's own routes (`kuvo/info`,
-usage, machines, hosts, `kuvo/mac`, `kuvo/claude-code`, asks, the engine starting over), it hands
-the app (`link/route`), as it comes, whether its app or its keeper runs the box (the keeper's host
-passes on the app's answer as it came, `x-kuvo-answer` with it), `503 {"message"}` at once when the
-app isn't answering. Mail your
+minutes." The Mac's own routes (`MAC_APP_ROUTES`, the one list of them: `kuvo/machines…`,
+`kuvo/hosts…`, `kuvo/usage…`, `kuvo/asks…`, `kuvo/mac`, `kuvo/claude-code`, `kuvo/engine/…`), it
+hands the app (`link/route`), as it comes, whether its app or its keeper runs the box (the keeper's
+host passes on the app's answer as it came, `x-kuvo-answer` with it), `503 {"message"}` at once when
+the app isn't answering (of its machines and hosts it says what it can itself then: "Machines").
+The app answers those alone, and hands its box everything else it's asked, its own requests
+too (`BoxClient`), so a route a box gains needs no list. Mail your
 machines send it, it takes itself, as a machine's bridge does ("Peers"): their documents (from
 0.9.62), and their agents, letters and group chats' mail (from 0.9.63).
 What it asks the app goes through the app's `hello` proof first (the host interface, above), and
@@ -3744,13 +3890,23 @@ answers now.
 
 For the app only (anyone else gets `403`):
 
-- `PUT kuvo/link/config {"phones", "machines", "relay", "name", "app", "features"?}`: whether the
-  phone link is on, whether there are machines to meet, the relay (`ws:` or `wss:`), the Mac's
-  name and version as phones are told them, and what it answers (`kuvo/info`'s features, which its
-  agents' mail carries). The link is up while the phone link's on with a phone paired or a
-  pairing waiting, or there are machines. Its keys are asked for before this answers, so a pairing
-  link can be made right after. The box keeps none of it: the app says it again each time the box
-  starts. Answers the link's state.
+- `PUT kuvo/link/config {"phones", "machines", "relay", "name", "app"}`: whether the
+  phone link is on, whether there are machines to meet, the relay (`ws:` or `wss:`), and the Mac's
+  name and version as phones are told them. The link is up while the phone link's on with a phone
+  paired or a pairing waiting, or there are machines. Its keys are asked for before this answers,
+  so a pairing link can be made right after. Answers the link's state. The app says it again each
+  time the box starts, and the box keeps what it last said (from #191 step 2; it kept none before) in
+  `box/run/mac-link.json` (`0600`): the phone link on or off, the relay, the name and version,
+  never its keys nor whether there are machines. A box that starts before the app says it (the
+  keeper's, at login with Background Work on, the app closed) takes it from there, with whether
+  there are machines from the app's list of them (`box/machines.json`, one that won't read
+  counting), so this Mac is back on the relay for your phones and machines before the app opens:
+  the phone link turned off stays off, and machines you've removed don't bring it back. Its keys
+  come through the keeper's host interface then, which never asks you to unlock your Keychain
+  for them (while it's locked, they're refused at once, never with a prompt that would hold up
+  the keeper) and reads them again a minute later while it was locked. The app also says it again when the phone link is turned on or
+  off while it's open. An older app also sent `features`, what it answered: the box says that
+  itself now (`kuvo/info`, its agents' mail), and leaves it.
 - `GET kuvo/link/status` → `{"state": "off" | "connecting" | "connected" | "failed", "reason"?}`;
   `GET kuvo/link/status/events` follows it (ndjson).
 - `GET kuvo/link/phones` → `{"phones", "removed", "pairing"}`: its phones whole (with where each is),
@@ -3783,11 +3939,10 @@ phone asks for, so neither ends the other; with the phone link off it's `409 {"m
 link is off on this Mac."}`. The app's `kuvo/phones/remove` removes as the Mac does (any phone,
 and the removals a machine's phones document brings).
 
-Areas move onto it one at a time. A moved area's routes are answered there for every client: a
-phone's through the Mac's link, which hands them on (`PhoneLink.boxRoutes`), and the Mac app's
-own, which reach every box's routes the same way (`BoxClient`: this Mac's through the link's
-answer, a machine's through `kuvo-link.js box route` over SSH). Until an area moves, the Mac
-answers it itself, as below.
+Its routes are answered there for every client: a phone's through this Mac's link, and the Mac
+app's own, which reach every box's routes the same way (`BoxClient`: this Mac's through the app's
+`PhoneLink`, which hands all but its own routes on, a machine's through `kuvo-link.js box route`
+over SSH). What only the app answers is described below.
 
 ### Projects
 

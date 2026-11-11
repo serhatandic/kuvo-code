@@ -1,14 +1,20 @@
 // This Mac's box's link (PROTOCOL.md, "This Mac's box: the relay"): whether it's wanted, how it's
 // doing, its keys from the app, and the machines told they're let go. mac/relay runs it.
 
+import fs from "node:fs";
+import path from "node:path";
+import { isObject } from "../../shared/json";
 import { macPeersBody, ownDoc } from "../documents/work";
+import { writePrivate } from "../files";
+import { MAC_APP_VERSION, RUN } from "../home";
 import { linkHost } from "../host-interface";
 import { cleanPeer, fitsPeer, mailFor, peersOf } from "../peers/known";
 import { macLink, readLink, updateLink } from "../state";
+import { anyMachines } from "./machines";
 import type { SignedDoc } from "../../shared/documents";
 import type { Peer } from "../peers/known";
 import type { LinkHost } from "../relay/host";
-import type { LinkState } from "../state";
+import type { LinkState, MacLinkConfig } from "../state";
 
 /** How this Mac's link stands: off, on its way to the relay, on it, or failed (with why). */
 export type LinkStatusState = "off" | "connecting" | "connected" | "failed";
@@ -24,6 +30,38 @@ export function macNeeded(link: LinkState | null | undefined, now = Date.now()):
   if (config.machines) return true;
   const pairing = (["pairing", "appPairing"] as const).some(slot => link?.[slot] && now < link[slot]!.expires);
   return Boolean(config.phones && ((link?.phones ?? []).length || pairing));
+}
+
+// What its app last said of the link (`kuvo/link/config`), kept in a file of the box's own
+// (`run/mac-link.json`, readable by you alone; never in link.json, which keeps no relay or name on a
+// Mac): whether the phone link is on, the relay, this Mac's name and its app's version. So a box
+// started again with the app closed (by the keeper, at login with Background Work on) is back on
+// the relay as it was, before the app opens, if it ever does. Whether there are machines to meet
+// isn't kept: the box reads the app's list of them (`machines.json`) as it takes this, so machines
+// you've removed since don't bring the link back. Its keys stay in your Keychain, given through the
+// keeper's host interface as through the app's.
+export const MAC_LINK_FILE = path.join(RUN, "mac-link.json");
+
+export function saveMacConfig(config: MacLinkConfig): void {
+  const { phones, relay, name, app } = config;
+  try { writePrivate(MAC_LINK_FILE, JSON.stringify({ phones, relay, name, app })); } catch (error) {
+    console.error(`This Mac's link settings couldn't be kept: ${(error as Error).message}`);
+  }
+}
+
+/** What the app last said, as kept, with whether there are machines now: null for none kept (or
+ * what isn't what it keeps). */
+export function savedMacConfig(file = MAC_LINK_FILE): MacLinkConfig | null {
+  let kept: unknown;
+  try { kept = JSON.parse(fs.readFileSync(file, "utf8")); } catch { return null; }
+  if (!isObject(kept) || typeof kept.phones !== "boolean" || typeof kept.relay !== "string") return null;
+  try {
+    if (!["ws:", "wss:"].includes(new URL(kept.relay).protocol)) return null;
+  } catch {
+    return null;
+  }
+  return { phones: kept.phones, machines: anyMachines(), relay: kept.relay, name: typeof kept.name === "string" ? kept.name : "Mac",
+    app: MAC_APP_VERSION ?? (typeof kept.app === "string" ? kept.app : "") };
 }
 
 // Off the relay once it's no longer wanted (the phone link turned off, the last phone gone, a

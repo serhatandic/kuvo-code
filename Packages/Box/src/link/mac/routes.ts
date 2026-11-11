@@ -16,11 +16,12 @@ import { IS_MAC } from "../home";
 import { cutText, LETTER_ID, LETTER_MEMORY, LETTERS_SEEN, SENDING } from "../letters/letter";
 import { lettersSeen } from "../letters/take";
 import { refreshOwn } from "../peers/agents";
-import { keptFeatures, PEER_LOCK, readPeerAgents } from "../peers/directory";
+import { PEER_LOCK, readPeerAgents } from "../peers/directory";
 import { cleanMoved, cleanPeer, fitsPeer, KEY, MOST_PEERS, ownKey, peersOf } from "../peers/known";
 import { readPersonalities } from "../personalities/library";
 import { macLink, readLink, updateLink } from "../state";
-import { macKeys, macLinkCheck, tellGone } from "./link";
+import { macKeys, macLinkCheck, saveMacConfig, tellGone } from "./link";
+import { noteKeyNow } from "../setup/lead";
 import { macSendOutbox } from "./peers";
 import type { SignedDoc } from "../../shared/documents";
 import type { Peer } from "../peers/known";
@@ -85,16 +86,18 @@ export async function* macLinkRoute(route: string, request: LinkRequest, signal:
   switch (route) {
     case "kuvo/link/config": {
       if (method !== "PUT") return yield* json(405, {});
-      const given = parsed(request.body) as Body<"relay" | "phones" | "machines" | "name" | "app" | "features">;
+      // (An older app also says what it answers, `features`: the box says that itself now.)
+      const given = parsed(request.body) as Body<"relay" | "phones" | "machines" | "name" | "app">;
       let relay = null;
       try { relay = given?.relay ? new URL(String(given.relay)) : null; } catch {}
       if (!isObject(given) || typeof given.phones !== "boolean" || typeof given.machines !== "boolean" || !relay || !["ws:", "wss:"].includes(relay.protocol)) {
         return yield* json(400, { message: "Say whether the phone link is on (phones) and there are machines (machines), and the relay." });
       }
-      const config = { phones: given.phones, machines: given.machines, relay: relay.toString().replace(/\/$/, ""), name: String(given.name ?? "Mac").slice(0, 100), app: String(given.app ?? ""),
-        ...(Array.isArray(given.features) ? { features: keptFeatures(given.features) } : {}) };
+      const config = { phones: given.phones, machines: given.machines, relay: relay.toString().replace(/\/$/, ""), name: String(given.name ?? "Mac").slice(0, 100), app: String(given.app ?? "") };
       const before = macLink.config;
       macLink.config = config;
+      // Kept, so the link comes back as it was when the box starts again before the app opens.
+      saveMacConfig(config);
       if (macLink.overlay) macLink.overlay = { ...macLink.overlay, relay: config.relay, name: config.name };
       // Phones not let in any more (the phone link off) lose what they have open; another relay
       // means another connection.
@@ -147,12 +150,14 @@ export async function* macLinkRoute(route: string, request: LinkRequest, signal:
       const link = updateLink(link => {
         if (!link?.sign) return null;
         if (again && Array.isArray(link.left)) link.left = link.left.filter(key => key !== again);
+        noteKeyNow(link);
         const own = ownDocs({ link, library });
         docs = [...Object.values(own).map(made => made.envelope), ...Object.values(link.docs ?? {}).sort((a, b) => (a.d < b.d ? -1 : 1))];
         return link;
       });
       if (!link) return yield* json(503, { message: "This Mac's link has no keys yet." });
-      return yield* json(200, { mac: ownKey(link), macSign: ownSign(link), docs });
+      // (And the keys this Mac had before, made anew since, for the machine to let go.)
+      return yield* json(200, { mac: ownKey(link), macSign: ownSign(link), docs, replaces: link.keysBefore ?? [] });
     }
     case "kuvo/link/docs": {
       // Documents a machine gave as it was set up (over SSH): taken as if they'd come by mail.

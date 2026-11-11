@@ -6,6 +6,7 @@ import { forgetMacsAgents, writeAgents } from "../peers/agents";
 import { mailFor } from "../peers/known";
 import { readPersonalities } from "../personalities/library";
 import { takePersonalities } from "../personalities/take";
+import { writeCard } from "../setup/card";
 import { macLink, updateLink } from "../state";
 import { changedWork, docMails, docsWork, greetWork } from "./work";
 import type { PersonalityLibrary } from "../personalities/library";
@@ -37,15 +38,18 @@ function sendDocs(host: Pick<LinkHost, "send"> | null | undefined, link: LinkSta
 export async function receiveDocs(sender: DocSender, docs: DocsMail, host: LinkHost | null | undefined): Promise<void> {
   const before = readPersonalities();
   // (Set inside updateLink's change, which TypeScript can't follow: hence the `as`.)
-  let work = null as DocsDone | null, library = before;
+  let work = null as DocsDone | null, library = before, setup = "";
   const link = updateLink(link => {
     if (!link) return null;
+    setup = JSON.stringify(link.setup ?? null);
     const state: DocsState = { link, library: before, parts: docParts };
     work = docsWork(state, sender, docs);
     library = state.library;
     return link;
   });
   if (!work || !link) return;
+  // Its setup changed with them (taken, or set aside): its card says so now.
+  if (JSON.stringify(link.setup ?? null) !== setup) try { writeCard(); } catch {}
   await afterDocs(work, before, library, link, host);
 }
 

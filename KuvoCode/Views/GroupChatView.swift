@@ -349,11 +349,20 @@ private struct GroupMessageRow: View, Equatable {
                             .padding(.bottom, 2)
                     }
                     MarkdownText(text: message.text, agents: MarkdownText.agents(namedIn: message.text))
-                    ForEach((message.steps ?? []).filter(GroupChatView.isDrawn)) { call in
-                        Group {
-                            if MadePictureRow.isMade(call) { MadePictureRow(call: call) } else { WidgetCard(call: call, send: answerAgent) }
+                    // Pictures one after another in one row, to look through together.
+                    let drawn = (message.steps ?? []).filter(GroupChatView.isDrawn)
+                    let pictures = MadePictureRow.groups(in: drawn.map(Message.Content.tool))
+                    let grouped = Set(pictures.flatMap { start, calls in start..<(start + calls.count) })
+                    ForEach(Array(drawn.enumerated()), id: \.element.id) { index, call in
+                        if let calls = pictures[index] {
+                            ShownPictures(calls: calls, directory: author?.directory)
+                                .padding(.top, 6)
+                        } else if !grouped.contains(index) {
+                            Group {
+                                if MadePictureRow.isMade(call) { MadePictureRow(call: call, directory: author?.directory) } else { WidgetCard(call: call, send: answerAgent) }
+                            }
+                            .padding(.top, 6)
                         }
-                        .padding(.top, 6)
                     }
                     if let tasks = message.tasks, !tasks.isEmpty {
                         WorkList(tasks: tasks, members: members, stopped: stopped, start: startWork)
