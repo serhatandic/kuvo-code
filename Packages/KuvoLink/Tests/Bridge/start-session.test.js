@@ -15,6 +15,7 @@ import path from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { atEnd, removeAtEnd } from "./at-end.js";
+import { keepsIdle } from "./keeps-idle.js";
 
 // (Laid out as a Mac's: the box's folder in the app's, and the project beside it.)
 const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-start-session-")));
@@ -68,6 +69,7 @@ const engine = http.createServer((request, response) => {
     reply({});
   });
 });
+keepsIdle(engine);
 await new Promise(resolve => engine.listen(0, "127.0.0.1", resolve));
 atEnd(() => { engine.closeAllConnections(); engine.close(); });
 fs.mkdirSync(path.join(home, "run"), { recursive: true });
