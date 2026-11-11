@@ -673,6 +673,25 @@ test("in Auto, a file of its own is only one reached plainly: a folder of its ow
     expect((await askWith("per_l6", "apply_patch", patch(join(trees, "L", "evil.plist")), [join(trees, "L") + "/*"]))?.decision).toBe("refuse")
     expect((await askWith("per_l7", "write", { filePath: "../swap-trees/L/evil.plist" }, [join(trees, "L") + "/*"]))?.decision).toBe("refuse")
     expect((await askWith("per_l8", "write", { path: join(trees, "L", "hard.plist") }, [join(trees, "L") + "/*"]))?.decision).toBe("refuse")
+    // A patch's headers as the engine reads them (each line trimmed, split only at \n), beside one of
+    // its own: indented by any space, or a name with a character a path of its own has none of.
+    const ownHeader = `*** Add File: ${join(trees, "L", "ok1.txt")}\n+x\n`
+    const evil = join(later, "evil.plist")
+    for (const [id, line] of [["per_x1", `  *** Add File: ${evil}`], ["per_x1t", `\t*** Add File: ${evil}`], ["per_x1n", `\u00a0*** Add File: ${evil}`],
+      ["per_x1b", `\ufeff*** Add File: ${evil}`], ["per_x1i", `\u3000*** Add File: ${evil}`],
+      ["per_x2", `*** Add File: ${join(trees, "L", "ok")}\r/../../../${evil.slice(1)}`], ["per_x2l", `*** Add File: ${join(trees, "L", "ok")}\u2028/x`],
+      ["per_x2m", `*** Update File: ${join(trees, "L", "ok1.txt")}\n*** Move to: ${join(trees, "L", "ok")}\r/x`], ["per_x2d", `*** Delete File: ${join(trees, "L", "ok")}\r/x`]] as const) {
+      const text = `*** Begin Patch\n${ownHeader}${line}\n+x\n*** End Patch`
+      expect([id, (await askWith(id, "apply_patch", { patchText: text }, [join(trees, "L") + "/*"]))?.decision]).toEqual([id, "refuse"])
+    }
+    // The engine's own ask is the authority: a folder outside named there, whatever the call says;
+    // the file it says it asks about; any argument that's a path.
+    expect((await askWith("per_x3", "apply_patch", { patchText: `*** Begin Patch\n${ownHeader}*** End Patch` }, [later + "/*"]))?.decision).toBe("refuse")
+    calling.ses_swap = [{ type: "tool", id: "call_per_x5", name: "write", state: { input: { filePath: join(trees, "L", "ok2.txt") } } }]
+    asking.ses_swap = [{ id: "per_x5", action: "external_directory", resources: [join(trees, "L") + "/*"], metadata: { filepath: evil }, source: { id: "call_per_x5", messageID: "msg_1" } }]
+    expect((await reviewing.reviewPermission({ port: engine.port, password: "pw" } as never, { type: "permission.asked", data: { id: "per_x5", sessionID: "ses_swap", action: "external_directory" } }))?.decision).toBe("refuse")
+    expect((await askWith("per_x4", "copy", { path: join(trees, "L", "ok1.txt"), destination: evil }, [join(trees, "L") + "/*"]))?.decision).toBe("refuse")
+    expect((await askWith("per_x6", "room", {}, ["*"]))?.decision).toBe("refuse")
     // The worktree itself traded for a link to where what runs later is kept.
     renameSync(join(trees, "T"), join(trees, "T.r"))
     symlinkSync(later, join(trees, "T"))

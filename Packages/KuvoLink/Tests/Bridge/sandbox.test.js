@@ -765,6 +765,8 @@ test("a link a command makes doesn't take the engine's own file tools out of the
       // (The engine trims a line of any spaces, and splits lines only at \n.)
       ["patch a new file, after a no-break space", "patch", { patchText: "*** Begin Patch\n\u00a0*** Add File: keys/new\n+x\n*** End Patch" }, input => patchedFile(input.patchText)],
       ["patch a new file, by a name with a line separator", "patch", { patchText: "*** Begin Patch\n*** Add File: ok\u2028keys/new\n+x\n*** End Patch" }, input => patchedFile(input.patchText)],
+      // (The image tool writes the picture it makes where its path says.)
+      ["make a picture where a link leads out", "image", { path: "profile", prompt: "a cat" }, input => input.path],
       ["read what's in the project", "read", { path: "notes.md" }, input => input.path],
     ]) {
       const called = await engineCalls(box, project, tool, input);
@@ -785,6 +787,7 @@ test("a link a command makes doesn't take the engine's own file tools out of the
       "write through a link that goes up from another": "asks",
       "patch a new file, after a no-break space": "asks",
       "patch a new file, by a name with a line separator": "asks",
+      "make a picture where a link leads out": "asks",
       "read what's in the project": "goes",
     });
     // A link that stays in the project stays as written.

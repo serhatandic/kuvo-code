@@ -411,31 +411,41 @@ async function taskOf(at: Conversation, signal?: AbortSignal): Promise<ReviewCon
 const RUNNING = new Set(["bash", "shell", "command", "exec", "local_shell", "terminal"]);
 
 /** What a tool call changes, each by its path as given (`raw`) and as the engine takes it (from the
- * conversation's `folder`; `~` your home): a tool that writes, every file it names, a patch's
- * headers too (none where it names none, which is never its own); one that reads, the file it
- * reads; one that runs a command, nothing here (its folders, from the ask, as folders). */
+ * conversation's `folder`; `~` your home): every file it names in an argument that's a path (any of
+ * its arguments: a key the engine doesn't write to today might be one tomorrow), and a patch's
+ * headers, read as the engine reads them (each line trimmed); a tool that runs a command, nothing
+ * here (its folders, from the ask). */
 function changedBy(seen: { tool: string; input: Record<string, unknown> }, folder: string): { raw: string; path: string; folder: boolean }[] | null {
   const tool = seen.tool.toLowerCase();
   if (RUNNING.has(tool)) return null;
   const named: string[] = [];
-  for (const key of ["filePath", "file_path", "notebook_path", "path", "file"]) if (typeof seen.input[key] === "string") named.push(seen.input[key] as string);
-  for (const key of ["patchText", "patch", "input", "diff"]) {
-    const text = seen.input[key];
-    if (typeof text === "string") for (const found of text.matchAll(/^\*\*\* (?:Add|Update|Delete) File: (.+)$|^\*\*\* Move to: (.+)$|^(?:\+\+\+|---) (?:[ab]\/)?(.+)$/gm)) {
-      const each = (found[1] ?? found[2] ?? found[3] ?? "").trim();
-      if (each && each !== "/dev/null") named.push(each);
+  for (const [key, value] of Object.entries(seen.input)) {
+    if (typeof value !== "string") continue;
+    // (A patch: its headers, as the engine finds them, each line trimmed.)
+    if (/\*\*\* (Begin Patch|Add File:|Update File:|Delete File:|Move to:)/.test(value) || (/patch|diff/i.test(key) && /^\s*(\+\+\+|---) /m.test(value))) {
+      for (const line of value.split("\n").map(each => each.replace(/\r$/, "").trim())) {
+        const header = /^\*\*\* (?:Add File|Update File|Delete File|Move to): (.*)$/s.exec(line) ?? /^(?:\+\+\+|---) (?:[ab]\/)?(.*)$/s.exec(line);
+        const each = header?.[1]?.trim();
+        if (each && each !== "/dev/null") named.push(each);
+      }
+      continue;
     }
+    if (/(^|_)(file|path|dir|folder|directory|destination|dest|target|output|to)s?$/i.test(key) || /path|file/i.test(key)) named.push(value);
   }
   return named.map(raw => ({ raw, path: path.resolve(folder, raw.replace(/^~(?=\/|$)/, homeFolder())), folder: false }));
 }
+
+// What no path of its own has in it: control characters and the line and paragraph separators a
+// reader might split on and the engine doesn't (`\r`, U+2028…).
+const UNPLAIN = /[\x00-\x1f\x7f\u0085\u2028\u2029]/;
 
 /** Where `file` really is, where it's reached plainly from the folder whose real path is `folder`:
  * one of the folders it's named through leads to `folder` itself, and below that no part of it is
  * a link, each folder a folder, and the file, where it's there, a file with no other name (a hard
  * link to one elsewhere would be written there too; so a package manager's hard-linked files are
- * the reviewer's), or with `asFolder` a folder. What isn't there yet is made where it's named. Null otherwise: a link anywhere below, one that leads nowhere yet, `..` in it. (Checked as
+ * the reviewer's), or with `asFolder` a folder (`null`: either, as it is). What isn't there yet is made where it's named. Null otherwise: a link anywhere below, one that leads nowhere yet, `..` in it. (Checked as
  * it's asked: what a command changes between the answer and the write isn't.) */
-function plainlyIn(file: string, folder: string, asFolder = false): string | null {
+function plainlyIn(file: string, folder: string, asFolder: boolean | null = false): string | null {
   if (!path.isAbsolute(file) || file.split("/").includes("..")) return null;
   const parts = path.resolve(file).split("/");
   for (let top = 1; top <= parts.length; top++) {
@@ -453,7 +463,10 @@ function plainlyIn(file: string, folder: string, asFolder = false): string | nul
       }
       if (kind.isSymbolicLink()) return null;
       const last = at === parts.length - 1;
-      if (!last || asFolder ? !kind.isDirectory() : !kind.isFile() || kind.nlink !== 1) return null;
+      // (The last a folder for a folder asked about; a file for a file; either, as it is, for one
+      // the ask leaves open.)
+      const asDirectory = !last || asFolder === true || (asFolder === null && kind.isDirectory());
+      if (asDirectory ? !kind.isDirectory() : !kind.isFile() || kind.nlink !== 1) return null;
     }
     return path.join(folder, ...parts.slice(top));
   }
@@ -554,16 +567,21 @@ async function answerPermission(source: Target, id: string, sessionID: string, s
   const trees = typeof folder === "string" ? await projectTrees(folder) : [];
   const policy = fencePolicy();
   const places = [...own.map(foundAt), ...trees];
-  // What it changes: every file a tool that writes names (by its arguments, a patch's headers too;
-  // one it names none of is never its own); a command's or a room's folders, as folders; what it
-  // reads, as files. Any of them climbing (`..`) is the reviewer's.
-  const changes = seen ? changedBy(seen, folder) : null;
-  const asked = changes ?? permission.resources.filter(each => each !== "*").map(each => ({ raw: each, path: path.resolve(folder, each.replace(/^~(?=\/|$)/, homeFolder()).replace(/\/\*$/, "") || "/"), folder: true }));
-  const plainly = (change: { path: string; folder: boolean }) => places.some(place => {
+  // What it changes, all of it its own, reached plainly (`plainlyIn`): every resource the engine
+  // asks about (the authority: its own reading of the call; `…/*` a folder, else a file, or a folder
+  // where one is), the file it says it asks about, and every file the tool call names (its
+  // arguments, a patch's headers). None that climbs (`..`) or has a character no path of its own
+  // has; never on nothing named, nor `*`.
+  const resolve = (raw: string) => path.resolve(folder, raw.replace(/^~(?=\/|$)/, homeFolder()));
+  const resources = permission.resources.map(raw => ({ raw, path: resolve(raw.replace(/\/\*$/, "") || "/"), folder: raw.endsWith("/*") ? true : null }));
+  const changes = [...resources, ...(permission.filepath ? [{ raw: permission.filepath, path: resolve(permission.filepath), folder: false as boolean | null }] : []),
+    ...(seen ? changedBy(seen, folder) ?? [] : [])];
+  const plainly = (change: { path: string; folder: boolean | null }) => places.some(place => {
     const real = plainlyIn(change.path, place, change.folder);
     return real !== null && !walledForOwn(real, policy, own);
   });
-  const ownChanges = asked.length > 0 && asked.every(each => !each.raw.split("/").includes("..") && plainly(each))
+  const ownChanges = resources.length > 0 && !permission.resources.includes("*")
+    && changes.every(each => !each.raw.split("/").includes("..") && !UNPLAIN.test(each.raw) && plainly(each))
     && actions.every(action => action.kind === "file");
   if (ownChanges) {
     await reply({ decision: "once" });
