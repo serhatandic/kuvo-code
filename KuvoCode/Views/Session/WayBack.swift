@@ -68,9 +68,9 @@ private struct OpenInNewTab: ViewModifier {
     @Environment(\.conversationTab) private var here
 
     func body(content: Content) -> some View {
-        content.contextMenu {
+        content.heldContextMenu {
             if let key {
-                Button("Open in New Tab") { app.open(key, from: here, newTab: true) }
+                HeldRow.button("Open in New Tab") { app.open(key, from: here, newTab: true) }
             }
         }
     }

@@ -67,7 +67,7 @@ export const QUEUE_OWNER = object({ owner: string, kind: words("bot", "session",
 
 /** An owner's view. */
 export const QUEUE_VIEW = object({ owner: string, categories: list(QUEUE_CATEGORY), items: list(QUEUE_ITEM), owners: list(QUEUE_OWNER), removed: list(QUEUE_ITEM),
-  computers: list(object({ ...COMPUTER.object, at: number, "away?": number })) });
+  computers: list(object({ ...COMPUTER.object, at: number })) });
 
 const REF = nullable(object({ id: string, "number?": number, "source?": SOURCE, "seen?": SEEN, "struck?": bool, "closesOn?": string, title: string, category: string, inProgress: bool, owner: string, "removed?": bool, "computer?": COMPUTER }));
 

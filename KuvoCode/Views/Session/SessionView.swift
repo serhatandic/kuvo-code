@@ -87,11 +87,13 @@ struct SessionView: View {
         kept.contains { $0.id == model.id } ? kept : [model] + kept.prefix(keptCount - 1)
     }
 
-    /// The machine a session runs on, while it can't be reached (connecting again), or its
-    /// conversation hasn't taken the new connection yet.
+    /// The machine a session runs on, while it's out of reach (its connection lost, connecting
+    /// again), or its conversation hasn't taken the new connection yet.
     static func offlineMachine(of model: SessionModel, in app: AppModel) -> MachineEngine? {
         guard let id = RemoteFolder.machine(of: model.session.location.directory), let engine = app.machines.engine(id) else { return nil }
-        return engine.isReady && engine.isLive && app.workspace.isConnected(id) && !model.isCopy ? nil : engine
+        // Its feed down for now isn't an outage: KuvoClient's `Reach` decides when it is, and the
+        // connection is lost then (`MachineEngine.checkWhileDown`), which this says.
+        return engine.isReady && app.workspace.isConnected(id) && !model.isCopy ? nil : engine
     }
 }
 
@@ -494,8 +496,6 @@ struct BottomStack: View {
                                 .modifier(CardRow())
                                 .transition(.fold)
                             } else {
-                                // (One bar folds by its own chevron.)
-                                if liveBars.count > 1 { BarTuckButton { model.tuck.hide() } }
                                 if let goal = model.goal, let text = model.putAways.text(.goal(started: goal.started)) {
                                     let item = PutAway.goal(started: goal.started)
                                     UndoLine(text: text, undo: model.putAways.canUndo(item) ? { model.putAways.undo(item) } : nil)
@@ -643,12 +643,17 @@ struct BottomStack: View {
                     yieldsKeyboard: askHadPlace == model.id,
                     drawsSurface: false
                     )
+                    // Its pictures open after the conversation's.
+                    .environment(\.conversationPictures, ConversationPictureSet(model: model))
                     .transition(.opacity)
                     .onAppear { askHadPlace = nil }
                     }
                     }
                 }
                 .modifier(ComposerSurface())
+                // Its own control folds every bar to the line, over the card's edge, in no row of
+                // it. (One bar folds by its own chevron.)
+                .barTuckControl(isShown: !tucked && liveBars.count > 1) { model.tuck.hide() }
 
             }
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { stackHeight = $0 }

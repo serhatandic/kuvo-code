@@ -90,7 +90,7 @@ const GOAL_OPENINGS: [start: string, line: string][] = [
   ["[Goal] Nothing of the goal is at work now.", "Reminded to carry on"], ["[Goal resumed] The user resumed the goal you paused.", "Goal resumed"],
 ];
 const ANSWERED = "[The user answered] ";
-const SESSION_NEWS = /^\[Session (finished|still working|failed|asks)\] "([^"\n]*)"/;
+const SESSION_NEWS = /^\[Session (finished|still working|failed|asks|stopped)\] "([^"\n]*)"/;
 
 /** The note a user message in a conversation is, if the box wrote it: who it's from and its line,
  * as its mark says, or, from before it was marked, as clients read it by how it opens. */
@@ -107,7 +107,7 @@ export function boxNoteOf(text: string, metadata: unknown): { from: string; line
   // (As `wakeLineShown` says it: one session's, or how many.)
   const told = text.split("\n\n").filter(part => SESSION_NEWS.test(part)).length;
   if (told !== 1) return { from: "Its sessions", line: `${told} updates from its sessions` };
-  const what = news[1] === "finished" ? "finished" : news[1] === "still working" ? "still working" : news[1] === "failed" ? "stopped with an error" : "asks something";
+  const what = news[1] === "finished" ? "finished" : news[1] === "still working" ? "still working" : news[1] === "failed" ? "stopped with an error" : news[1] === "stopped" ? "stopped by you" : "asks something";
   return { from: "Its sessions", line: `“${news[2] || "New Session"}” ${what}` };
 }
 

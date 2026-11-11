@@ -54,6 +54,7 @@ struct ShortcutsSettings: View {
             Shortcut(keys: ["⌘", "Return"], title: "Queue for after the agent is done"),
             Shortcut(keys: ["⇧", "Return"], title: "New line"),
             Shortcut(keys: ["↑"], title: "In an empty composer: the last waiting message, then what you sent before"),
+            Shortcut(keys: ["⇧", "Tab"], title: "In an empty composer: the next mode"),
             Shortcut(keys: ["/"], title: "At the start: a command"),
             Shortcut(keys: ["!"], title: "At the start: run a shell command"),
             Shortcut(keys: ["@"], title: "Mention a file"),

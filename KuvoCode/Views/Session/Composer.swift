@@ -525,8 +525,8 @@ struct Composer: View {
     }
 
     /// The field's keys: the "&", "/" and "@" lists' first while one is open; then Return sends
-    /// (Shift- or Option-Return starts a new line, ⌘Return queues), Escape stops, and ↑ and ↓ go
-    /// through what was sent before.
+    /// (Shift- or Option-Return starts a new line, ⌘Return queues), Escape stops, ↑ and ↓ go
+    /// through what was sent before, and ⇧Tab in an empty field goes to the next mode.
     private func key(_ key: MessageField.Key) -> Bool {
         // Listening (here, or in the voice field): Return is Done, Escape is Cancel, and nothing
         // else goes to the field.
@@ -556,6 +556,12 @@ struct Composer: View {
             }
             return answerKey(key)
         case .tab:
+            // ⇧Tab in an empty field: the next mode, as picked from the Mode menu (as Claude Code's
+            // Shift+Tab); with words in it, back to the control before, as in any field.
+            if key.modifiers == .shift, text.isEmpty, showsMode, !isOffline, let next = approval.next(shown: approvalShown) {
+                onSelectApproval(next)
+                return true
+            }
             if let commandMatches {
                 switch commandMatches[min(commandIndex, commandMatches.count - 1)] {
                 case .keyword(let keyword): text = keyword.typed + " "
@@ -678,9 +684,8 @@ struct Composer: View {
             sendHelp: isOffline ? "Send once the connection is back" : asksSide && sideQuestionAnswering ? "Send once the side question is answered" : isShell ? "Run the Command (Return)" : isRunning ? "Send: the agent reads it at its next step (Return). ⌘Return queues it for after this run." : "Send (Return)",
             stopHelp: "Stop (⌘.)", send: send, stop: onStop
         ) {
-            Button("Send", action: send)
-            Button("Queue for After This Run", action: queue)
-                .disabled(!isRunning && !hasQueue)
+            HeldRow.button("Send", action: send)
+            HeldRow.button("Queue for After This Run", disabled: !isRunning && !hasQueue, action: queue)
         }
     }
 
@@ -1025,14 +1030,14 @@ struct Composer: View {
 
 /// A composer's round button, a session's or a group chat's: Send, or Stop while it works and
 /// nothing's written, the one turning into the other. `menu`, on a right-click of Send.
-struct SendStopButton<Menu: View>: View {
+struct SendStopButton: View {
     let stops: Bool
     let canSend: Bool
     let sendHelp: String
     let stopHelp: String
     let send: () -> Void
     let stop: () -> Void
-    @ViewBuilder var menu: Menu
+    @HeldRows var menu: () -> [HeldRow]
     @Namespace private var glass
 
     var body: some View {
@@ -1060,7 +1065,7 @@ struct SendStopButton<Menu: View>: View {
                 .help(sendHelp)
                 .accessibilityLabel("Send")
                 .accessibilityIdentifier("send")
-                .contextMenu { menu }
+                .heldContextMenu(menu)
             }
         }
         .animation(.ui, value: stops && !canSend)
@@ -1068,9 +1073,9 @@ struct SendStopButton<Menu: View>: View {
     }
 }
 
-extension SendStopButton where Menu == EmptyView {
+extension SendStopButton {
     init(stops: Bool, canSend: Bool, sendHelp: String, stopHelp: String, send: @escaping () -> Void, stop: @escaping () -> Void) {
-        self.init(stops: stops, canSend: canSend, sendHelp: sendHelp, stopHelp: stopHelp, send: send, stop: stop) { EmptyView() }
+        self.init(stops: stops, canSend: canSend, sendHelp: sendHelp, stopHelp: stopHelp, send: send, stop: stop) {}
     }
 }
 

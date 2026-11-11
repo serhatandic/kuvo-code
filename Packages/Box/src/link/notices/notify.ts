@@ -28,7 +28,7 @@ export function sentNotice(session: Partial<EngineSession> & { id: string }, nam
   const bot = isBot(session as EngineSession);
   return {
     title: (bot ? name : session.title) || session.title || "New Session",
-    subtitle: bot ? undefined : projectNameOf(session.location?.directory ?? ""),
+    subtitle: bot ? undefined : projectNameOf(session.location?.directory ?? "", session),
     body: sentence,
     category: bot ? "report" : "finished",
     thread: session.id,

@@ -7,12 +7,12 @@ import { wakeMarkOf } from "../../shared/queues";
 import { MOVING } from "../bots/here";
 import { frozen, liveMoves } from "../moves/records";
 import { followed } from "../follow";
-import { placeOfSession } from "../letters/letter";
+import { isRefused, placeOfSession, placeOfSessionPatiently } from "../letters/letter";
 import { targetsOf } from "../letters/tools";
 import { asked } from "../engine/client";
 import { dropWaiting, holdQueue, inboxFor, keepWaitingBefore, queueFollowers, queueOf, readQueues, resumeQueue, sendNow, showsQueue, shownQueue } from "../engine/queue";
 import { forgetStopped } from "../work/background";
-import { stopConversation } from "../work/background";
+import { stopConversation } from "../work/stopping";
 import { messageID } from "../engine/sessions";
 import { attachedIn } from "../server/attached";
 import { fromPhone, modelInput } from "../server/forward";
@@ -21,6 +21,10 @@ import type { AnswerPiece, RouteContext } from "../server/context";
 import type { Target } from "../../shared/records";
 
 export const QUEUE_ROUTE = /^kuvo\/sessions\/(?:queues\/events|([^/]+)\/(stop|queue(?:\/(hold|resume|add))?|queue\/([^/]+)(?:\/(now))?))$/;
+
+// What a queue change says when the engine here runs but is too busy to answer in time (504,
+// `busy`): it isn't down, and the change can be asked again in a moment.
+export const BUSY = "This computer is busy: its engine didn't answer in time. Try again in a moment.";
 
 // `kuvo/sessions/queues/events`: every queue that's paused or holds something, a line now and one
 // each time that changes. `GET kuvo/sessions/<id>/queue`: one session's. `POST …/stop`: what waits
@@ -60,8 +64,18 @@ export async function* queueRoute(context: RouteContext, match: RegExpMatchArray
     return yield* json(200, { ...shownQueue(queueOf(session)), ...(removed ? { removed } : {}) });
   }
   if (method !== "POST") return yield* json(405, {});
-  const place = await placeOfSession(session, targetsOf({ readEngine, bridge })).catch(() => undefined);
-  if (place === undefined) return yield* json(503, { message: "The engine isn't running." });
+  // Only an engine that isn't here isn't running: one that's only slow to answer (a busy computer)
+  // is asked again, and still slow, says so, for its client to try again (#443).
+  const targets = targetsOf({ readEngine, bridge });
+  if (!targets.length) return yield* json(503, { message: "The engine isn't running." });
+  let place: Awaited<ReturnType<typeof placeOfSessionPatiently>>;
+  try {
+    place = await placeOfSessionPatiently(session, targets);
+  } catch (error) {
+    // Nothing listening where its record says: it isn't running. Else it's there, and too busy.
+    if (isRefused(error)) return yield* json(503, { message: "The engine isn't running." });
+    return yield* json(504, { message: BUSY, busy: true });
+  }
   if (!place) return yield* json(404, { message: "There's no such conversation here." });
   try {
     if (action === "stop") return yield* json(200, shownQueue(await stopConversation(place.target, { ...place.data, id: session })));
@@ -108,6 +122,8 @@ async function* add({ request, bridge, readEngine, json, signal }: RouteContext,
   const words = typeof given.words === "string" ? given.words : given.kept !== true ? given.text : undefined;
   const before = typeof given.before === "string" && /^[A-Za-z0-9_]{1,100}$/.test(given.before) ? given.before : undefined;
   if (await keepWaitingBefore(target, session, message, { from, words }, before)) return yield* json(200, { ...shownQueue(queueOf(session)), waits: true });
-  await asked(target, "POST", `api/session/${encodeURIComponent(session)}/prompt`, message);
+  // (A busy engine takes the message late, and has it then: waited for, not given up on at the
+  // usual half minute and said to have failed, #443.)
+  await asked(target, "POST", `api/session/${encodeURIComponent(session)}/prompt`, message, 120_000);
   return yield* json(200, { ...shownQueue(queueOf(session)), waits: false });
 }

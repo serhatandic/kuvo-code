@@ -7,7 +7,7 @@ import SwiftUI
 /// group chat and chat on their way (copying, getting ready, finishing) and gives every bot two
 /// places (lab, and a Mac mini that needs a newer Kuvo Code); `KUVO_DEMO_MOVE_MENU=<bot name>`
 /// builds that bot's Move to Computer list as its menu does, before and after its box says where it
-/// can go, and prints what the menu shows each time (whether a menu that's built redraws).
+/// can go, and prints what the menu shows each time.
 @MainActor
 enum DemoMoves {
     private static var ran = false
@@ -24,9 +24,9 @@ enum DemoMoves {
                 Moves.Place(key: "mini-key", name: "Mac mini", kind: "mac", ok: false, why: "Mac mini needs a newer Kuvo Code before things can move to or from it.", note: "Needs a newer Kuvo Code"),
             ]
             if let name = menuFor, let bot = app.bots.list.first(where: { $0.name == name }) {
-                let menu = NSHostingMenu(rootView: MoveToComputerItems(thing: .bot(bot)).environment(app))
+                // Made as the menu makes it when it opens, before and after.
                 let shown = { () -> String in
-                    menu.update()
+                    let menu = HeldRow.menu(MoveToComputerItems(thing: .bot(bot), app: app).rows)
                     return menu.items.map { "\($0.title)\($0.subtitle.map { " / " + $0 } ?? "")\($0.isEnabled ? "" : " (dimmed)")" }.joined(separator: "; ")
                 }
                 print("KUVO_DEMO_MOVE_MENU before its box said: \(shown())")

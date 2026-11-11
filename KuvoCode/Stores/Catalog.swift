@@ -65,9 +65,10 @@ final class Catalog {
     @ObservationIgnored private var unavailableSince: ContinuousClock.Instant?
     private static let stallLimit: Duration = .seconds(60)
 
-    /// AI providers only: no MCP servers or web-search services.
+    /// AI providers only: no MCP servers or web-search services, nor the engine's Claude Agent
+    /// unless you added it (`EngineProviders`).
     var providers: [Integration] {
-        integrations.filter { !$0.isMCP && !Self.searchServices.contains($0.id) }
+        integrations.filter { !$0.isMCP && EngineProviders.lists($0.id, connected: $0.isConnected) }
     }
 
     var connectedProviders: [Integration] {
@@ -750,7 +751,6 @@ final class Catalog {
     /// (The outside agents have their own place, before these: `OutsideAgents.order`.)
     static let featured = ["openai", "github-copilot", "anthropic", "google", "xai", "openrouter", "opencode", "deepseek", "mistral", "groq"]
     static let featuredOrder = Dictionary(uniqueKeysWithValues: featured.enumerated().map { ($1, $0) })
-    private static let searchServices: Set = ["exa", "firecrawl", "parallel", "tavily", "tinyfish"]
 }
 
 /// Which models a picker offers: the engine's (a session on it, a bot, a machine's), or every
