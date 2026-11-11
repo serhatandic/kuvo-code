@@ -99,8 +99,9 @@ act on those (a window's tracking areas and cursor rectangles once the pointer c
 drawing as Core Animation commits), the test does it itself: `WindowServer.appKitsTurn` and
 `CATransaction.flush()` after `displayIfNeeded()`.
 
-Run tests locally through `scripts/heavy.sh`'s lanes (below): your area's tests while working,
-the full suites once on the final tip. The phone has no CI; run its tests locally through
+Run tests locally through `scripts/heavy.sh`'s lanes (below): only your area's tests, including
+what uses the code you changed, while working and at merge. No full suite unless the user asks;
+the lead asks for one before a release. The phone has no CI; run its tests locally through
 `scripts/heavy.sh phone`. While pushes and CI are paused, only the lead session runs
 `scripts/ci-branch.sh --wait`, and only when the user asks: it pushes a work branch over SSH to `origin` as
 a `ci/` branch and runs the full CI suites on GitHub (pass a local branch name to test a different
