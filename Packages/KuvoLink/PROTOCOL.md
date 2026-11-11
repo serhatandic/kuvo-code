@@ -4614,6 +4614,11 @@ rules. Plan mode stays the conversation's agent (`plan`), beside it.
   menu: it isn't a setting), then sends `PATCH kuvo/approval` `{fullAccess: true}` before `PUT`ting
   the conversation's; 400 without a boolean `fullAccess`. A change brings what had it or was held
   from it to what it can be at once.
+- A client's ⇧Tab in an empty composer goes to the next mode in the menu's order (`askFirst`,
+  `acceptEdits`, `auto`, `fullAccess`, then round again), as picking it would: KuvoClient's
+  `ApprovalCycle`. It passes over an option the box says is `unavailable` (so Full Access until
+  it's confirmed here, which only the menu asks), as Claude Code's Shift+Tab passes over Bypass
+  Permissions until it's allowed.
 - The box looks every 2 seconds at what each comes to, and makes the rules of those kept with Auto
   or Full Access again when the sandbox starts or stops, the switch changes, or the engine or the
   bridge starts again, each read again just before it's written. As Settings › Permissions change
