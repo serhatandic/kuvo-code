@@ -5,39 +5,53 @@ import ClientText
 import SwiftUI
 import Textual
 
-/// A Work Queue item named in a reply (`#243`), drawn as its chip: the item's mark, its number
-/// and its title. Copied, it's "#243" again. Clicking it opens the item in the panel
-/// (`WorkItemRefs.link`). A number the box doesn't know stays as it was written.
+/// A Work Queue item named in a reply (`#243`, or the issue it is, `gh:owner/repo#12`), drawn as
+/// its chip: the item's mark, its number (or GitHub's mark and the issue's name) and its title.
+/// Copied, it's as it was written again. Clicking it opens the item in the panel
+/// (`WorkItemRefs.link`). One the box doesn't know stays as it was written.
 nonisolated struct WorkItemChipAttachment: Attachment {
-    let number: Int
+    /// As it was written: "#243", `gh:owner/repo#12`.
+    let written: String
+    let name: String
+    let brand: String?
     let title: String
     let mark: WorkItemMark
+    let struck: Bool
+    let spokenName: String
 
-    init(_ ref: WorkRef, number: Int) {
-        self.number = number
+    init(_ ref: WorkRef, written: String) {
+        self.written = written
+        name = ref.name
+        brand = ref.brand
         title = ref.title
         mark = WorkItemMark(category: ref.category, inProgress: ref.inProgress, removed: ref.removed == true)
+        struck = ref.isStruck
+        spokenName = ref.spokenName
     }
 
-    var description: String { "#\(number)" }
+    var description: String { written }
     var selectionStyle: AttachmentSelectionStyle { .text }
 
+    func chip(size: CGFloat, dark: Bool) -> WorkItemChip {
+        WorkItemChip(name: name, brand: brand, title: title, mark: mark, struck: struck, spokenAs: spokenName, size: size, dark: dark)
+    }
+
     /// Where a reply's text is drawn by SwiftUI rather than TextKit.
-    var body: some View { WorkItemChip(number: number, title: title, mark: mark, size: 13, dark: false) }
+    var body: some View { chip(size: 13, dark: false) }
 
     /// About its size at 13 points (TextKit draws it at its own, `image`).
     func sizeThatFits(_ proposal: ProposedViewSize, in environment: TextEnvironmentValues) -> CGSize {
-        CGSize(width: 34 + 7 * Double("\(number)".count + WorkItemChip.shownTitle(title).count), height: 18)
+        CGSize(width: 34 + (brand == nil ? 0 : 13) + 7 * Double(name.count + WorkItemChip.shownTitle(title).count), height: 18)
     }
 
     /// The chip drawn at a text's `size`, for light or dark, once each.
     @MainActor static func image(_ chip: WorkItemChipAttachment, size: CGFloat, dark: Bool) -> NSImage {
         let key = "\(chip.hashValue)|\(size)|\(dark)"
         if let known = images[key] { return known }
-        let renderer = ImageRenderer(content: WorkItemChip(number: chip.number, title: chip.title, mark: chip.mark, size: size, dark: dark))
+        let renderer = ImageRenderer(content: chip.chip(size: size, dark: dark))
         renderer.scale = 2 * max(1, (NSScreen.main?.backingScaleFactor ?? 2) / 2)
         let image = renderer.nsImage ?? NSImage()
-        image.accessibilityDescription = WorkItemChip.spoken(number: chip.number, title: chip.title, mark: chip.mark)
+        image.accessibilityDescription = WorkItemChip.spoken(name: chip.spokenName, title: chip.title, mark: chip.mark)
         images[key] = image
         return image
     }
@@ -55,15 +69,16 @@ nonisolated struct WorkItemChipAttachment: Attachment {
 
     @MainActor private static var images: [String: NSImage] = [:]
 
-    /// Turns each `#n` in `text` the box knows (`refs`) into its chip, a link to the item. Not in
-    /// code or a link, nor a number for someone else (`WorkItemRefs`).
-    static func apply(to text: inout AttributedString, refs: [Int: WorkRef]) {
+    /// Turns each ref in `text` the box knows (`refs`, by the ref as asked: "243",
+    /// `gh:owner/repo#12`) into its chip, a link to the item. Not in code or a link, nor a number
+    /// for someone else (`WorkItemRefs`).
+    static func apply(to text: inout AttributedString, refs: [String: WorkRef]) {
         guard !refs.isEmpty else { return }
         let plain = String(text.characters)
-        let found = WorkItemRefs.find(in: plain).filter { refs[$0.number] != nil }
+        let found = WorkItemRefs.findRefs(in: plain).filter { refs[$0.ref] != nil }
         guard !found.isEmpty else { return }
-        for (range, number) in found.reversed() {
-            guard let ref = refs[number] else { continue }
+        for (range, key) in found.reversed() {
+            guard let ref = refs[key] else { continue }
             let lower = text.characters.index(text.startIndex, offsetBy: plain.distance(from: plain.startIndex, to: range.lowerBound))
             let span = lower..<text.characters.index(lower, offsetBy: plain.distance(from: range.lowerBound, to: range.upperBound))
             guard !text[span].runs.contains(where: { run in
@@ -71,24 +86,24 @@ nonisolated struct WorkItemChipAttachment: Attachment {
                     || run.presentationIntent?.components.contains { if case .codeBlock = $0.kind { true } else { false } } == true
             }) else { continue }
             var chip = AttributedString("\u{FFFC}", attributes: text[span].runs.first?.attributes ?? AttributeContainer())
-            chip.link = WorkItemRefs.link(number)
-            chip.textual.attachment = AnyAttachment(WorkItemChipAttachment(ref, number: number))
+            chip.link = WorkItemRefs.link(ref: key)
+            chip.textual.attachment = AnyAttachment(WorkItemChipAttachment(ref, written: String(plain[range])))
             text.replaceSubrange(span, with: chip)
         }
     }
 
-    /// Marks each `#n` in plain `text` (your own message, as written) the box knows (`refs`) to
+    /// Marks each ref in plain `text` (your own message, as written) the box knows (`refs`) to
     /// be drawn as its chip (`WorkItemChipMark`), a link to the item.
-    static func mark(_ text: inout AttributedString, refs: [Int: WorkRef]) {
+    static func mark(_ text: inout AttributedString, refs: [String: WorkRef]) {
         guard !refs.isEmpty else { return }
         let plain = String(text.characters)
-        for (range, number) in WorkItemRefs.find(in: plain) {
-            guard let ref = refs[number] else { continue }
+        for (range, key) in WorkItemRefs.findRefs(in: plain) {
+            guard let ref = refs[key] else { continue }
             let lower = text.characters.index(text.startIndex, offsetBy: plain.distance(from: plain.startIndex, to: range.lowerBound))
             let span = lower..<text.characters.index(lower, offsetBy: plain.distance(from: range.lowerBound, to: range.upperBound))
             guard !text[span].runs.contains(where: { $0.link != nil }) else { continue }
-            text[span][WorkItemChipMark.self] = WorkItemChipAttachment(ref, number: number)
-            text[span].link = WorkItemRefs.link(number)
+            text[span][WorkItemChipMark.self] = WorkItemChipAttachment(ref, written: String(plain[range]))
+            text[span].link = WorkItemRefs.link(ref: key)
         }
     }
 }

@@ -99,12 +99,14 @@ act on those (a window's tracking areas and cursor rectangles once the pointer c
 drawing as Core Animation commits), the test does it itself: `WindowServer.appKitsTurn` and
 `CATransaction.flush()` after `displayIfNeeded()`.
 
-Run quick, targeted tests locally while working. Commit the changes to a work branch, then run
-`scripts/ci-branch.sh --wait` to push it over SSH to `origin` as a `ci/` branch and run the full
-CI suites on GitHub. Pass a local branch name to test a different branch. The script prints the run
-URL, job conclusions and failed logs; it never pushes `main` or tags. Only committed changes run.
-CI covers the Mac app, Swift packages, box and bridge; the phone has no CI, so run its tests locally
-through `scripts/heavy.sh phone`. Use `scripts/heavy.sh` for other local builds or tests CI doesn't cover.
+Run tests locally through `scripts/heavy.sh`'s lanes (below): only your area's tests, including
+what uses the code you changed, while working and at merge. No full suite unless the user asks;
+the lead asks for one before a release. The phone has no CI; run its tests locally through
+`scripts/heavy.sh phone`. While pushes and CI are paused, only the lead session runs
+`scripts/ci-branch.sh --wait`, and only when the user asks: it pushes a work branch over SSH to `origin` as
+a `ci/` branch and runs the full CI suites on GitHub (pass a local branch name to test a different
+one). It prints the run URL, job conclusions and failed logs; it never pushes `main` or tags. Only
+committed changes run.
 
 Run quick, targeted box and bridge tests with `scripts/test-box.sh [box|bridge|all] [extra test args]`. It queues under the box heavy slot, installs locked dependencies when needed, and summarizes results.
 
@@ -198,8 +200,8 @@ scripts/test-box.sh box <test-filter>
   were, so an older script and a new one on slot 1 still exclude each other;
 - `box`: the box's whole suites (`bun test`, `node --test`) and runs on a test machine.
 
-Every job of the Xcode lanes (`mac`, `mac-build`, `phone-build`, `phone`) builds with Xcode's
-compilation cache, one for all checkouts (`scripts/xcode-cache.sh`): a content-addressed store in
+With `KUVO_XCODE_CACHE=1`, every job of the Xcode lanes (`mac`, `mac-build`, `phone-build`, `phone`)
+builds with Xcode's compilation cache, one for all checkouts (`scripts/xcode-cache.sh`): a content-addressed store in
 `$(getconf DARWIN_USER_CACHE_DIR)KuvoCompilationCache`, keyed by what goes into each compile and not
 by where the checkout or build folder is, so a build in a new worktree replays what an earlier build
 of the same code compiled instead of compiling the app and its packages again. Code that differs gets
@@ -208,8 +210,10 @@ through `XCODE_XCCONFIG_FILE`; nothing changes in your command (settings on it s
 apps' `scripts/test-app.sh` and `scripts/build-app.sh` get it too. Xcode prunes the store to 20 GB
 (`KUVO_XCODE_CACHE_SIZE`) after a build, but only once no build has it open, so on a busy Mac it can
 grow past that for a while (heavy.sh says so at twice the size); to clear it, delete the folder while
-no Xcode build runs. `KUVO_XCODE_CACHE=0` builds without it (so does CI), and a caller with an
-`XCODE_XCCONFIG_FILE` of its own keeps that one instead. `swift build` and `swift test` don't use it.
+no Xcode build runs. It's off unless `KUVO_XCODE_CACHE=1` (and always on CI): with Xcode 27.2, a
+cache hit on a Swift compile whose stored output has warnings crashes Xcode's build service as it
+replays them ("The Xcode build system has crashed", #562). A caller with an `XCODE_XCCONFIG_FILE` of
+its own keeps that one instead. `swift build` and `swift test` don't use it.
 The compiler sees the sources as `/^src/…` (the project's folder), so `#filePath` is that too, and so
 are the places a failed test names: what `xcodebuild` builds finds its files through its bundle, never
 `#filePath` (the app's `scripts/test-app.sh` checks).
