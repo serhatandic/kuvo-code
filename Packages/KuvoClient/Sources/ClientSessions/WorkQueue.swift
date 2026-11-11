@@ -463,13 +463,15 @@ public enum WorkQueue {
     /// count after the last, counted as the list shows them with the item still in its old place,
     /// as a list's move gives it): beside the nearest item on the same computer (each keeps its own
     /// order), else the top of the category. Nil where it can't go (In progress isn't a category:
-    /// an item is there while a session works on it) or where it wouldn't move.
+    /// an item is there while a session works on it; one its source makes Done stays as it says) or
+    /// where it wouldn't move.
     public static func place(of item: WorkItem, at index: Int, in section: Section) -> Place? {
-        guard let category = section.category else { return nil }
+        // (An issue's Done is its source's: it's never moved there, nor one its source made Done.)
+        guard let category = section.category, canMove(item), item.closesOn == nil || category != WorkCategory.done else { return nil }
         let index = min(max(index, 0), section.items.count)
         // Where it is now, in this list: dropped just above or below itself, it stays.
         if let from = section.items.firstIndex(where: { $0.id == item.id }), index == from || index == from + 1 { return nil }
-        let mates = { (other: WorkItem) in other.id != item.id && other.computer?.key == item.computer?.key }
+        let mates = { (other: WorkItem) in other.id != item.id && other.computer?.key == item.computer?.key && canMove(other) }
         if let below = section.items[index...].first(where: mates) { return .before(below) }
         if let above = section.items[..<index].last(where: mates) { return .after(above) }
         return .top(category)

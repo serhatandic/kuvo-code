@@ -41,11 +41,25 @@ final class WorkQueues {
     /// An item that couldn't be read for another reason than not being there (its box away), and why.
     private(set) var loadFailures: [String: String] = [:]
 
+    /// Views read from this Mac's own box because their computer isn't answering: what this Mac
+    /// last heard from it, said so over the list.
+    private(set) var fellBack: Set<Key> = []
+
     /// The panel's own state, by the conversation whose panel it is: the scope, the filter, the
-    /// item open, and one a chip asked to open.
+    /// item open, one a chip asked to open, and where an item being dragged over the list would land.
     var scopes: [String: Scope] = [:]
     var filters: [String: WorkQueue.Filter] = [:]
     var opened: [String: Opened] = [:]
+    var dropTargets: [String: DropTarget] = [:]
+    /// Which row or category set each panel's drop target (leaving it clears only its own).
+    @ObservationIgnored var dropOwners: [String: String] = [:]
+
+    /// Where a dragged item would land: before the item at `index` of a section's items (its count
+    /// for after the last), or on a category's name (`index` nil: its top).
+    struct DropTarget: Hashable {
+        var section: String
+        var index: Int?
+    }
 
     enum Scope: Hashable { case own, all }
 
@@ -111,11 +125,11 @@ final class WorkQueues {
                     if refusal.status == 404 || refusal.status == 403 {
                         older.insert(key.box)
                         wait = .seconds(300)
-                    } else {
+                    } else if !(await fallBack(key)) {
                         failures[key] = refusal.message
                     }
                 } catch {
-                    if views[key] == nil { failures[key] = error.localizedDescription }
+                    if !(await fallBack(key)), views[key] == nil { failures[key] = error.localizedDescription }
                 }
             }
             try? await Task.sleep(for: wait)
@@ -130,8 +144,19 @@ final class WorkQueues {
         }
     }
 
+    /// A machine that doesn't answer (switched off, asleep): its view as this Mac's own box has it,
+    /// which every computer tells what it keeps, rather than what it said last as if it were now.
+    private func fallBack(_ key: Key) async -> Bool {
+        guard key.box != BoxClient.mac, following[key] != nil, let client = client(BoxClient.mac),
+              let view = try? await client.value(WorkQueueView.self, "GET", "kuvo/work-queue?owner=\(query(key.owner))") else { return false }
+        take(view, for: key)
+        fellBack.insert(key)
+        return true
+    }
+
     private func take(_ view: WorkQueueView, for key: Key) {
         if views[key] != view { views[key] = view }
+        fellBack.remove(key)
         failures[key] = nil
         older.remove(key.box)
         // What a view says of its items is what their chips show.
@@ -240,16 +265,12 @@ final class WorkQueues {
 
     // MARK: What you do
 
-    enum Place {
-        case top(String)
-        case before(WorkItem)
-        case after(WorkItem)
-        case category(String)
-    }
+    typealias Place = WorkQueue.Place
 
     /// Moves an item: to the top of a category, before or after another (in that one's category),
-    /// or to the end of a category.
+    /// or to the end of a category. It shows there at once, until the box says how it is.
     func move(_ item: WorkItem, to place: Place, on box: String) async {
+        for (key, view) in views where key.box == box { views[key] = WorkQueue.moving(item, to: place, in: view) }
         struct Move: Encodable {
             var category: String?
             var before: String?
@@ -263,8 +284,25 @@ final class WorkQueues {
         case .category(let category): Move(category: category)
         }
         undoable = nil
-        await act(ItemAnswer.self, "POST", "kuvo/work-queue/items/\(path(item.id))/move", body: body, on: item, shownOn: box)
-        if item.computer != nil { await readAll(box) }
+        let moved = await act(ItemAnswer.self, "POST", "kuvo/work-queue/items/\(path(item.id))/move", body: body, on: item, shownOn: box)
+        // (Refused, or on another computer: as the box has it.)
+        if moved == nil || item.computer != nil { await readAll(box) }
+    }
+
+    /// The item dragged (as it's written, "#243" or `gh:owner/repo#12`, as the composer takes it too) put where `target`
+    /// says in the view `key`: beside the item the line was drawn at (into that one's category), or
+    /// at the top of a category it was dropped on. Nothing where it wouldn't move.
+    func drop(_ dragged: String, at target: DropTarget, in key: Key) async {
+        guard let view = views[key] else { return }
+        let found = view.items.filter { $0.written == dragged }
+        let items = found.isEmpty ? view.items.filter { $0.written == nil && $0.title == dragged } : found
+        // (Where two computers gave one number twice: the one on this view's own box.)
+        guard let item = items.first(where: { $0.computer == nil }) ?? items.first,
+              let section = WorkQueue.sections(view).first(where: { $0.id == target.section }) else { return }
+        // (On a category's name: its top, which is before its first item there.)
+        let place = WorkQueue.place(of: item, at: target.index ?? 0, in: section)
+        guard let place else { return }
+        await move(item, to: place, on: key.box)
     }
 
     /// Deletes an item: Undo brings it back, as does Recently Deleted for 30 days.
