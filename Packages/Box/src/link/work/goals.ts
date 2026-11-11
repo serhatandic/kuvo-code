@@ -42,6 +42,7 @@ import { folderName, isEmptyFolder, namedPlace, projectPlace, shownPath } from "
 import { projectsFolder } from "./settings";
 import { stopBotWork } from "./stop";
 import { readBackground } from "./background";
+import { finishHeld } from "./wakes";
 import { ofBot, workingNow, workSessions } from "./tree";
 import type { Listed } from "./tree";
 import type { Target } from "../../shared/records";
@@ -1345,7 +1346,8 @@ export async function lookAtGoals(tell: (notice: Notice) => boolean, targets: ()
   const turns = running.length ? await workingNow(targets(), signal).catch(() => new Set<string>()) : new Set<string>();
   const left = running.length ? readBackground() : {};
   const working = new Set([...turns, ...Object.keys(left)]);
-  const busy = new Set([...turns, ...Object.keys(left).filter(id => now - left[id]!.since < NUDGE_HOLD)]);
+  // (A session whose finish waits on its build is at it, however long: its lead hasn't heard yet.)
+  const busy = new Set([...turns, ...Object.keys(left).filter(id => now - left[id]!.since < NUDGE_HOLD || finishHeld(id))]);
   const workOf = (goal: KeptGoal) => goalWork(goal, sessions);
   // Awake only while some goal's work is at it: the bot, or one of its sessions.
   keepAwake(running.some(goal => working.has(goal.session) || workOf(goal).some(each => working.has(each.data.id))));
