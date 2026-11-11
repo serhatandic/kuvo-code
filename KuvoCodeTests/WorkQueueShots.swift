@@ -5,7 +5,7 @@ import Testing
 @testable import KuvoCode
 
 /// Pictures of the Work Queue (#243): the panel narrow (its tab "Work Queue · 24 items", In
-/// progress, Next numbered, the rest as counts) and expanded (filter chips, the list, an item
+/// progress, Next in its order, the rest as counts) and expanded (filter chips, the list, an item
 /// open), the empty panel, and a reply naming items, drawn as their chips; light and dark. Only with
 /// KUVO_SHOTS_OUT, the folder they go in (`scripts/test-app.sh` with
 /// ONLY=KuvoCodeTests/WorkQueueShots). The queue is a stand-in for what a box tells.
@@ -147,7 +147,7 @@ struct WorkQueueShots {
             pane.environment(app)
             if drag {
                 // What macOS draws under the pointer as it drags: the row, lifted.
-                WorkItemRow(item: view.items.first { $0.number == 305 }!, ownerName: nil, ordinal: 3) {}
+                WorkItemRow(item: view.items.first { $0.number == 305 }!, view: view) {}
                     .frame(width: width - 60)
                     .background(.regularMaterial, in: .rect(cornerRadius: 8))
                     .shadow(color: .black.opacity(0.25), radius: 10, y: 4)

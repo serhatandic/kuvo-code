@@ -3,9 +3,9 @@ import ClientSessions
 import ClientText
 import SwiftUI
 
-/// An item open in the Work Queue: its state and whose it is, its title, what's being done now
-/// and by which sessions (each to open), its description (Markdown, with its pictures), its files
-/// and links, and the notes agents left, oldest first. Read only: agents write it.
+/// An item open in the Work Queue, read top to bottom: its number and status, its title, its
+/// properties on one quiet line, the sessions on it (with Open Session), what it says (its
+/// description, files and links), then its activity, oldest first. Read only: agents write it.
 struct WorkItemPage: View {
     let opened: WorkQueues.Opened
     let view: WorkQueueView
@@ -49,6 +49,7 @@ struct WorkItemPage: View {
                     }
                     .buttonStyle(TextButtonStyle(outset: true))
                     Spacer()
+                    if let item { actions(item) }
                 }
                 .padding(.horizontal, 14)
                 .padding(.top, 10)
@@ -57,7 +58,8 @@ struct WorkItemPage: View {
                 ScrollView {
                     page(item)
                         .padding(.horizontal, 18)
-                        .padding(.vertical, 14)
+                        .padding(.top, back == nil ? 14 : 8)
+                        .padding(.bottom, 18)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
             } else if let failure = store.loadFailure(box: opened.box, item: name) {
@@ -83,198 +85,165 @@ struct WorkItemPage: View {
         .onDisappear { removePictures() }
     }
 
-    /// As the user's layout has it: the number and where it stands, the title, its description;
-    /// then the current work, notes and files, links; Open agent session at the end.
     @ViewBuilder private func page(_ item: WorkItem) -> some View {
-        let working = WorkQueue.isInProgress(item)
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 16) {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 8) {
-                    if let source = item.source, let url = source.url.flatMap(URL.init(string:)), url.absoluteString.hasPrefix("https://github.com/") {
-                        // An issue's or a pull request's name opens it on GitHub, in the panel's browser.
-                        Button { utilities.newBrowser(url.absoluteString) } label: {
-                            HStack(spacing: 4) {
-                                if let brand = item.brand { BrandMarkView(brand, size: 13) }
-                                Text(item.name).monospacedDigit()
-                            }
-                            .font(.system(size: 13))
-                        }
-                        .buttonStyle(TextButtonStyle(outset: true))
-                        .help("Open \(source.ref) on GitHub")
-                        .accessibilityLabel(item.spokenName)
-                    } else {
-                        HStack(spacing: 4) {
-                            if let brand = item.brand { BrandMarkView(brand, size: 13) }
-                            Text(item.name).monospacedDigit()
-                        }
-                        .font(.system(size: 13))
-                        .foregroundStyle(.secondary)
-                    }
-                    status(item)
+                    eyebrow(item)
                     Spacer(minLength: 0)
-                    if item.removed == nil, WorkQueue.canMove(item) {
-                        Menu {
-                            WorkItemMenu(item: item, view: view, box: opened.box)
-                        } label: {
-                            Image(systemName: "ellipsis")
-                        }
-                        .menuStyle(.button)
-                        .menuIndicator(.hidden)
-                        .buttonStyle(IconButtonStyle())
-                        .fixedSize()
-                        .help("Move or delete it")
-                        .accessibilityLabel("Move or Delete")
-                    } else if item.removed == nil {
-                        // (Done on GitHub: it stays so until it's reopened there; deleting is still yours.)
-                        Menu {
-                            Button("Delete", role: .destructive) { Task { await store.delete(item, on: opened.box) } }
-                        } label: {
-                            Image(systemName: "ellipsis")
-                        }
-                        .menuStyle(.button)
-                        .menuIndicator(.hidden)
-                        .buttonStyle(IconButtonStyle())
-                        .fixedSize()
-                        .help("Delete it")
-                        .accessibilityLabel("Delete")
-                    } else {
-                        Button("Restore") { Task { await store.restore(item, on: opened.box) } }
-                            .buttonStyle(ChipButtonStyle(tinted: true))
-                            .font(.system(size: 12, weight: .semibold))
-                    }
+                    if back == nil { actions(item) }
                 }
                 Text(item.title)
                     .font(.system(size: 20, weight: .semibold))
                     .strikethrough(item.isStruck, color: .secondary)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
-                HStack(spacing: 4) {
-                    Text("\(WorkQueue.updated(item.updated.date)) by \(item.updated.by.words)")
-                    if let owner = WorkQueue.ownerName(of: item, in: view) { Text("· in \(owner)") }
-                    if let computer = WorkQueue.computerName(of: item) { Text("· on \(computer)") }
-                    if let handing = item.handing { Text("· handing to \(handing.name.isEmpty ? "another computer" : handing.name)") }
-                }
-                .font(.system(size: 11.5))
-                .foregroundStyle(.secondary)
-                .help("Added \(SentTime.full(item.created.date)) by \(item.created.by.words)")
+                WorkItemProperties(item: item, view: view)
             }
-            if let detail, !detail.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                ReplyView(markdown: detail.body, parser: parser(detail.body, fromSource: item.source != nil), images: pictures) { url in open(url) }
-            } else if detail != nil {
-                Text("No description yet.")
-                    .font(.system(size: 13))
-                    .foregroundStyle(.tertiary)
+            if let card = WorkQueue.sessionCard(for: item) {
+                WorkItemSessionCard(card: card)
             }
-            Divider()
-            if working || item.progress != nil || !item.sessions.isEmpty {
-                part("Current work") { currentWork(item, working: working) }
-            }
-            if let detail, !detail.notes.isEmpty || !detail.files.isEmpty {
-                part("Notes") {
-                    VStack(alignment: .leading, spacing: 12) {
-                        ForEach(Array(detail.notes.enumerated()), id: \.offset) { _, note in
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text("\(note.by.words.prefix(1).uppercased() + note.by.words.dropFirst()) · \(WorkQueue.ago(note.date))")
-                                    .font(.system(size: 11, weight: .medium))
-                                    .foregroundStyle(.secondary)
-                                    .help(SentTime.full(note.date))
-                                ReplyView(markdown: note.text, parser: parser(note.text)) { url in open(url) }
-                            }
-                        }
-                        if !detail.files.isEmpty { files(detail) }
+            if let detail {
+                VStack(alignment: .leading, spacing: 12) {
+                    if !detail.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        ReplyView(markdown: detail.body, parser: parser(detail.body, fromSource: item.source != nil), images: pictures) { url in open(url) }
+                    } else {
+                        Text("No description yet.")
+                            .font(.system(size: 13))
+                            .foregroundStyle(.tertiary)
                     }
+                    if !detail.files.isEmpty { files(detail) }
+                    if !detail.links.isEmpty { links(detail) }
                 }
-            }
-            if let detail, !detail.links.isEmpty {
-                part("Links") {
-                    VStack(alignment: .leading, spacing: 4) {
-                        ForEach(detail.links, id: \.url) { link in
-                            Button {
-                                if let url = URL(string: link.url) { _ = open(url) }
-                            } label: {
-                                Label(link.title ?? link.url, systemImage: "link")
-                                    .font(.system(size: 13))
-                                    .lineLimit(1)
-                            }
-                            .buttonStyle(TextButtonStyle(outset: true))
-                            .help(link.url)
-                        }
-                    }
-                }
-            }
-            ForEach(item.sessions, id: \.session) { session in
-                let known = app.workspace.session(session.session) != nil
-                Button { app.open(.session(session.session), from: app.tabs.messageTarget) } label: {
-                    HStack(spacing: 5) {
-                        Image(systemName: "bubble.left")
-                        Text(item.sessions.count > 1 ? "Open \(session.title.isEmpty ? "agent session" : session.title)" : "Open agent session")
-                        Image(systemName: "arrow.up.right").font(.system(size: 10, weight: .semibold))
-                    }
-                    .font(.system(size: 13))
-                }
-                .buttonStyle(TextButtonStyle(outset: true, dimsAtRest: false))
-                .disabled(!known)
-                .help(known ? "Open the session working on it" : "That session isn’t on this Mac’s list.")
-                .opensInNewTab(known ? .session(session.session) : nil)
+                Divider()
+                activity(detail)
             }
         }
     }
 
-    private func status(_ item: WorkItem) -> some View {
+    /// The mark, the item's name (an issue's opens it on GitHub), and its status when it has one.
+    @ViewBuilder private func eyebrow(_ item: WorkItem) -> some View {
         let mark = WorkItemMark(category: item.category, inProgress: WorkQueue.isInProgress(item), removed: item.removed != nil)
-        let category = WorkQueue.categoryName(item.category, in: view.categories)
-        let words = switch mark {
-        case .inProgress: "In progress"
-        case .removed: "Deleted"
-        default: category
-        }
-        return Text(words)
-            .font(.system(size: 12.5, weight: .medium))
-            .foregroundStyle(mark.color)
-            .padding(.horizontal, 9)
-            .frame(height: 22)
-            .background(Capsule().fill(mark.color.opacity(0.14)))
-            .help(mark == .inProgress ? "A session is at work on it. It’s kept in \(category)."
-                : mark == .removed ? "Kept for 30 days: Restore brings it back."
-                : item.keptIn.map { "\(item.seen?.state == "merged" ? "Merged" : "Closed") on GitHub. If it’s reopened there, it’s back in \(WorkQueue.categoryName($0, in: view.categories))." } ?? "")
-    }
-
-    /// What's being done now, how far along, and who's on it.
-    @ViewBuilder private func currentWork(_ item: WorkItem, working: Bool) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            if let now = WorkQueue.currentWork(item) {
-                Text(now)
-                    .font(.system(size: 13))
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            } else if !working {
-                Text("No one is at work on it now.")
-                    .font(.system(size: 13))
-                    .foregroundStyle(.secondary)
-            }
-            if let value = item.progress?.value {
-                ProgressLine("Progress", fraction: value, layout: .inline)
-            }
-            if item.sessions.count > 1 || (item.sessions.count == 1 && WorkQueue.currentWork(item) != "\(item.sessions[0].title) is at work on it") {
-                ForEach(item.sessions, id: \.session) { session in
-                    HStack(spacing: 6) {
-                        StatusMark(showing: session.working ? .working : nil, size: 10)
-                            .frame(width: 10)
-                        Text(session.title.isEmpty ? "Untitled session" : session.title)
-                        Text(session.working ? "at work" : "idle").foregroundStyle(.tertiary)
-                    }
-                    .font(.system(size: 12))
+        HStack(spacing: 7) {
+            WorkItemStatusMark(mark, size: 12.5)
+            if let source = item.source, let url = source.url.flatMap(URL.init(string:)), url.absoluteString.hasPrefix("https://github.com/") {
+                // An issue's or a pull request's name opens it on GitHub, in the panel's browser.
+                Button { utilities.newBrowser(url.absoluteString) } label: {
+                    itemName(item)
                 }
+                .buttonStyle(TextButtonStyle(outset: true))
+                .help("Open \(source.ref) on GitHub")
+                .accessibilityLabel(item.spokenName)
+            } else {
+                itemName(item)
+                    .foregroundStyle(.secondary)
+                    .accessibilityLabel(item.spokenName)
+            }
+            if let status = WorkQueue.status(of: item) {
+                let color = status == .inProgress ? WorkItemMark.inProgress.color : WorkItemMark.removed.color
+                Text(status.words)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(color)
+                    .padding(.horizontal, 8)
+                    .frame(height: 21)
+                    .background(Capsule().fill(color.opacity(0.15)))
+                    .help(status.help)
             }
         }
     }
 
-    private func part<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(title)
+    private func itemName(_ item: WorkItem) -> some View {
+        HStack(spacing: 4) {
+            if let brand = item.brand { BrandMarkView(brand, size: 13) }
+            Text(item.name)
+                .font(.system(size: 13, weight: .semibold).monospacedDigit())
+        }
+    }
+
+    /// Move and Delete in •••, or Restore for one that's deleted.
+    @ViewBuilder private func actions(_ item: WorkItem) -> some View {
+        if item.removed == nil, WorkQueue.canMove(item) {
+            Menu {
+                WorkItemMenu(item: item, view: view, box: opened.box)
+            } label: {
+                Image(systemName: "ellipsis")
+            }
+            .menuStyle(.button)
+            .menuIndicator(.hidden)
+            .buttonStyle(IconButtonStyle())
+            .fixedSize()
+            .help("Move or delete it")
+            .accessibilityLabel("Move or Delete")
+        } else if item.removed == nil {
+            // (Done on GitHub: it stays so until it's reopened there; deleting is still yours.)
+            Menu {
+                Button("Delete", role: .destructive) { Task { await store.delete(item, on: opened.box) } }
+            } label: {
+                Image(systemName: "ellipsis")
+            }
+            .menuStyle(.button)
+            .menuIndicator(.hidden)
+            .buttonStyle(IconButtonStyle())
+            .fixedSize()
+            .help("Delete it")
+            .accessibilityLabel("Delete")
+        } else {
+            Button("Restore") { Task { await store.restore(item, on: opened.box) } }
+                .buttonStyle(ChipButtonStyle(tinted: true))
+                .font(.system(size: 12, weight: .semibold))
+        }
+    }
+
+    private func links(_ detail: WorkItemDetail) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            ForEach(detail.links, id: \.url) { link in
+                Button {
+                    if let url = URL(string: link.url) { _ = open(url) }
+                } label: {
+                    Label(link.title ?? link.url, systemImage: "link")
+                        .font(.system(size: 13))
+                        .lineLimit(1)
+                }
+                .buttonStyle(TextButtonStyle(outset: true))
+                .help(link.url)
+            }
+        }
+    }
+
+    /// Notes and what the box kept of its history, oldest first, on a thread.
+    private func activity(_ detail: WorkItemDetail) -> some View {
+        let lines = WorkQueue.activity(of: detail, in: view)
+        return VStack(alignment: .leading, spacing: 0) {
+            Text("Activity")
                 .font(.system(size: 13, weight: .semibold))
                 .accessibilityAddTraits(.isHeader)
-            content()
+                .padding(.bottom, 10)
+            ForEach(Array(lines.enumerated()), id: \.element.id) { index, line in
+                HStack(alignment: .top, spacing: 10) {
+                    VStack(spacing: 3) {
+                        WorkActivityMark(line: line, size: 16)
+                        if index < lines.count - 1 {
+                            Rectangle().fill(Color.primary.opacity(0.12)).frame(width: 1).frame(maxHeight: .infinity)
+                        }
+                    }
+                    .frame(width: 18)
+                    VStack(alignment: .leading, spacing: 5) {
+                        (Text(line.whoWords).fontWeight(.medium) + Text(line.whoWords.isEmpty ? line.what : " \(line.what)").foregroundStyle(.secondary) + Text(" · \(WorkQueue.ago(line.date))").foregroundStyle(.secondary))
+                            .font(.system(size: 12))
+                            .help(SentTime.full(line.date))
+                        if let text = line.text {
+                            ReplyView(markdown: text, parser: parser(text)) { url in open(url) }
+                                .padding(10)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(Color.primary.opacity(0.045), in: .rect(cornerRadius: 8))
+                        }
+                    }
+                    .padding(.top, 1)
+                    .padding(.bottom, index < lines.count - 1 ? 12 : 0)
+                }
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityElement(children: .combine)
+            }
         }
     }
 
