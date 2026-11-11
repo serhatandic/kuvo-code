@@ -2112,7 +2112,9 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   the machine's. A sign-in that renews itself (ChatGPT's, GitLab's) is never copied: each machine
   signs in itself.
   - `GET api/integration` and `GET api/integration/<id>`: each plan, its ways to sign in
-    (`methods`) and what it's signed in as (`connections`: label and status).
+    (`methods`) and what it's signed in as (`connections`: label and status). Accounts lists
+    them less MCP servers', web search services' and, unless it's signed in already, the engine's
+    `claude-agent` (Claude comes through the coding agents): `ClientAccounts`' `EngineProviders`.
   - A key: `POST api/integration/<id>/connect/key {key, answer?}`.
   - A sign-in page: `POST api/integration/<id>/connect/oauth {methodID, answer?}` → the attempt
     (its URL, `mode`, and `acceptsCode`); `GET …/connect/oauth/<attempt>` for its status; `POST
