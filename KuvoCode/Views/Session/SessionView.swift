@@ -491,8 +491,6 @@ struct BottomStack: View {
                                 .modifier(CardRow())
                                 .transition(.fold)
                             } else {
-                                // (One bar folds by its own chevron.)
-                                if liveBars.count > 1 { BarTuckButton { model.tuck.hide() } }
                                 if let goal = model.goal, let text = model.putAways.text(.goal(started: goal.started)) {
                                     let item = PutAway.goal(started: goal.started)
                                     UndoLine(text: text, undo: model.putAways.canUndo(item) ? { model.putAways.undo(item) } : nil)
@@ -646,6 +644,9 @@ struct BottomStack: View {
                     }
                 }
                 .modifier(ComposerSurface())
+                // Its own control folds every bar to the line, over the card's edge, in no row of
+                // it. (One bar folds by its own chevron.)
+                .barTuckControl(isShown: !tucked && liveBars.count > 1) { model.tuck.hide() }
 
             }
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { stackHeight = $0 }
