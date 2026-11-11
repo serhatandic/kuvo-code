@@ -10,7 +10,7 @@ import Testing
 /// still needs you. A computer with nothing new isn't asked. The engine and the boxes are stand-ins.
 @MainActor
 @Suite(.serialized, .timeLimit(.minutes(1))) struct MarkAllReadTests {
-    let engine = StubEngine(port: 47933)
+    let engine = StubEngine(port: 47935)
     let project = "/tmp/kuvo-tests-mark-all-read/web"
 
     /// Boxes that answer Mark All as Read as a box does: what each was asked, and each read told
@@ -60,16 +60,16 @@ import Testing
         app.workspace.askingInBrowser = ["ses_asks"]
         #expect(app.hasNew(on: .mac))
 
-        app.markAllRead(on: app.boxes)
-        try await until { boxes.requests(of: "mac").count == 1 && app.workspace.session("ses_yours")?.isUnread == false }
+        await app.markAllRead(on: app.boxes).value
+        try await until { app.workspace.session("ses_yours")?.isUnread == false }
         #expect(boxes.requests(of: "mac") == ["POST kuvo/sessions/read"], "one call to the box, which does the reading")
         #expect(["ses_bots", "ses_yours", "ses_asks"].allSatisfy { app.workspace.session($0)?.isUnread == false })
         #expect(app.news(on: .mac) == .needsYou, "what asks you still does")
         #expect(!app.hasNew(on: .mac))
 
         // Nothing new: the box isn't asked again.
-        app.markAllRead(on: app.boxes)
-        await app.workspace.markAllRead(on: [])
+        #expect(app.boxesToMarkRead(app.boxes).isEmpty)
+        await app.markAllRead(on: app.boxes).value
         #expect(boxes.requests(of: "mac").count == 1)
     }
 

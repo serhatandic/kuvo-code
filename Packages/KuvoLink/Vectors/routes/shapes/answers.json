@@ -7177,6 +7177,11 @@
      "object": {
       "read": "number"
      }
+    },
+    "503": {
+     "object": {
+      "message": "string"
+     }
     }
    }
   },

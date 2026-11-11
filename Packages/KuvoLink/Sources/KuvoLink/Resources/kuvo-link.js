@@ -34806,46 +34806,51 @@ async function* glanceRoute(context, match) {
 // Packages/Box/src/link/areas/read-all.ts
 var READ_ALL_ROUTE = "kuvo/sessions/read";
 var PAGES = 15;
+var AT_ONCE = 8;
+var EACH = 1e4;
+async function inTurns(items, work, signal) {
+  let done = 0, next = 0;
+  const worker = async () => {
+    while (next < items.length && !signal?.aborted)
+      if (await work(items[next++]))
+        done++;
+  };
+  await Promise.all(Array.from({ length: Math.min(AT_ONCE, items.length) }, worker));
+  return done;
+}
+var eachSignal = (signal) => signal ? AbortSignal.any([signal, AbortSignal.timeout(EACH)]) : AbortSignal.timeout(EACH);
 async function readAllOn(target, signal) {
   let read = 0;
   let query = "limit=200&order=desc";
   for (let pages = 0;pages < PAGES && query && !signal?.aborted; pages++) {
     const page = await engineGet(target, `api/session?${query}`).catch(() => null);
-    const listed = Array.isArray(page?.data) ? page.data : [];
-    for (const session of listed) {
+    if (!page || !Array.isArray(page.data))
+      return pages === 0 ? null : read;
+    const listed = page.data;
+    const unread = listed.filter((session) => {
       if (!isObject(session) || typeof session.id !== "string" || !isObject(session.time))
-        continue;
+        return false;
       const { idle, viewed } = session.time;
-      if (typeof idle !== "number" || idle <= (typeof viewed === "number" ? viewed : 0) || isArchived(session))
-        continue;
-      if (await call(target, "POST", `/api/session/${encodeURIComponent(session.id)}/view`, { idle }, signal).then(() => true, () => false))
-        read++;
-    }
-    const next = page?.cursor?.next;
+      return typeof idle === "number" && idle > (typeof viewed === "number" ? viewed : 0) && !isArchived(session);
+    });
+    read += await inTurns(unread, (session) => call(target, "POST", `/api/session/${encodeURIComponent(session.id)}/view`, { idle: session.time.idle }, eachSignal(signal)).then(() => true, () => false), signal);
+    const next = page.cursor?.next;
     query = listed.length === 200 && typeof next === "string" ? `limit=200&cursor=${encodeURIComponent(next)}` : null;
   }
   return read;
 }
 async function readGroups(bridge, signal) {
-  const listed = await fetch(`http://127.0.0.1:${bridge.port}/api/kuvo/link/groups`, {
-    headers: { authorization: `Basic ${Buffer.from(`opencode:${bridge.password}`).toString("base64")}` },
-    signal
-  }).then((response) => response.ok ? response.json() : null).catch(() => null);
-  const groups = Array.isArray(listed) ? listed : isObject(listed) && Array.isArray(listed.groups) ? listed.groups : [];
-  let read = 0;
-  for (const group of groups) {
-    if (!isObject(group) || typeof group.id !== "string" || group.unread !== true)
-      continue;
-    const looked = await fetch(`http://127.0.0.1:${bridge.port}/api/kuvo/link/groups/${encodeURIComponent(group.id)}/viewed`, {
-      method: "POST",
-      headers: { authorization: `Basic ${Buffer.from(`opencode:${bridge.password}`).toString("base64")}`, "content-type": "application/json" },
-      body: "{}",
-      signal
-    }).then((response) => response.ok, () => false);
-    if (looked)
-      read++;
-  }
-  return read;
+  const authorization = `Basic ${Buffer.from(`opencode:${bridge.password}`).toString("base64")}`;
+  const listed = await fetch(`http://127.0.0.1:${bridge.port}/api/kuvo/link/groups`, { headers: { authorization }, signal: eachSignal(signal) }).then((response) => response.ok ? response.json() : null).catch(() => null);
+  if (!isObject(listed) || !Array.isArray(listed.groups))
+    return null;
+  const unread = listed.groups.filter((group) => isObject(group) && typeof group.id === "string" && group.unread === true);
+  return inTurns(unread, (group) => fetch(`http://127.0.0.1:${bridge.port}/api/kuvo/link/groups/${encodeURIComponent(group.id)}/viewed`, {
+    method: "POST",
+    headers: { authorization, "content-type": "application/json" },
+    body: "{}",
+    signal: eachSignal(signal)
+  }).then((response) => response.ok, () => false), signal);
 }
 async function* readAllRoute({ request, readEngine, bridge, signal, json }) {
   if (request.method.toUpperCase() !== "POST")
@@ -34855,12 +34860,14 @@ async function* readAllRoute({ request, readEngine, bridge, signal, json }) {
     engine = readEngine();
   } catch {}
   const agents = bridge();
-  let read = 0;
-  if (engine)
-    read += await readAllOn(engine, signal);
-  if (agents)
-    read += await readAllOn(agents, signal) + await readGroups(agents, signal);
-  return yield* json(200, { read });
+  const counts = await Promise.all([
+    engine ? readAllOn(engine, signal) : null,
+    agents ? readAllOn(agents, signal) : null,
+    agents ? readGroups(agents, signal) : null
+  ]);
+  if (counts.every((count) => count === null))
+    return yield* json(503, { message: "Nothing here could be read just now. Try again in a moment." });
+  return yield* json(200, { read: counts.reduce((sum, count) => sum + (count ?? 0), 0) });
 }
 
 // Packages/Box/src/link/areas/work-queue.ts
@@ -39525,11 +39532,13 @@ export {
   queueOf,
   tellingNow2 as queueTellingNow,
   queueWatcher,
+  readAllOn,
   readAsks,
   readBackground,
   readCompatibility,
   readDoc,
   readFrame,
+  readGroups,
   readKit,
   readLink,
   readNumbers,

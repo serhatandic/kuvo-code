@@ -2316,6 +2316,8 @@ private struct AccountsRow: View {
 
     private func makeMenu() -> NSMenu {
         let menu = NSMenu()
+        // Its items enabled as each says (Mark All as Read with nothing new, Check for Updates).
+        menu.autoenablesItems = false
         let providers = catalog.signedInAccounts
         let accounts = ActionItem(
             providers.isEmpty ? "Connect an Account" : "Accounts",
@@ -2333,7 +2335,7 @@ private struct AccountsRow: View {
         if !app.machines.list.isEmpty { menu.addItem(machinesItem()) }
         // Everything new on every computer read at once, as Mail's Mark All as Read; what asks you stays.
         let markRead = ActionItem("Mark All as Read", image: Self.symbol("envelope.open")) { app.markAllRead(on: app.boxes) }
-        markRead.isEnabled = app.boxes.contains(where: app.hasNew(on:))
+        markRead.isEnabled = !app.boxesToMarkRead(app.boxes).isEmpty
         menu.addItem(markRead)
         let settings = ActionItem("Settings…", image: Self.symbol("gearshape")) { app.openSettings() }
         settings.keyEquivalent = ","

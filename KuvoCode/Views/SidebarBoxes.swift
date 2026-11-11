@@ -274,7 +274,7 @@ struct BoxNameStrip: View {
             // As a mailbox's in Mail: everything new on that computer read (the sidebar's strip).
             if marksNews {
                 Button("Mark All as Read") { app.markAllRead(on: [name.box]) }
-                    .disabled(!app.hasNew(on: name.box))
+                    .disabled(app.boxesToMarkRead([name.box]).isEmpty)
             }
         }
     }
@@ -287,6 +287,13 @@ struct BoxNameStrip: View {
                 menu.addItem(ActionItem(name.title, subtitle: name.said ?? name.status, image: Self.dot(for: name)) { pick(name.box) })
             }
             menu.addItem(.separator())
+            if marksNews {
+                // Theirs, as a name's own menu has it for one in the line.
+                let markRead = ActionItem("Mark All as Read") { app.markAllRead(on: rest.map(\.box)) }
+                markRead.isEnabled = !app.boxesToMarkRead(rest.map(\.box)).isEmpty
+                menu.autoenablesItems = false
+                menu.addItem(markRead)
+            }
             menu.addItem(ActionItem("Add Machine…") {
                 app.addsMachine = true
                 app.openSettings(.machines)
@@ -448,11 +455,17 @@ extension AppModel {
         return sessions.contains(where: { $0.isUnread || workspace.hasNewSubSessions($0.id) }) || chats.list.contains(where: { SidebarBox(machine: chats.machine(of: $0.id)) == box && chats.isUnread($0) })
     }
 
+    /// Those of `boxes` Mark All as Read asks: with something new, and within reach (a machine
+    /// that isn't connected couldn't read it now).
+    func boxesToMarkRead(_ boxes: [SidebarBox]) -> [SidebarBox] {
+        boxes.filter { box in hasNew(on: box) && (box.machine.map { machines.engine($0)?.isReady == true } ?? true) }
+    }
+
     /// Mark All as Read on `boxes` (every computer, or one), through each box.
-    func markAllRead(on boxes: [SidebarBox]) {
-        let ids = boxes.filter(hasNew(on:)).map { $0.machine ?? BoxClient.mac }
-        guard !ids.isEmpty else { return }
-        Task { await workspace.markAllRead(on: ids) }
+    @discardableResult
+    func markAllRead(on boxes: [SidebarBox]) -> Task<Void, Never> {
+        let ids = boxesToMarkRead(boxes).map { $0.machine ?? BoxClient.mac }
+        return Task { if !ids.isEmpty { await workspace.markAllRead(on: ids) } }
     }
 }
 

@@ -118,6 +118,7 @@ export { applyCompatibility, COMPATIBILITY_FILE, ENGINE_LAYER_FILE, engineConfig
 export { MODELS_DUE_FILE, refreshModels, settleDueModels } from "./engine/models";
 export { queueOf, queueWatcher, readQueues, scanQueues, stopSession } from "./engine/queue";
 export { keepReadThroughSummary, keepWorkRead, settleWorkRead } from "./work/tree";
+export { readAllOn, readGroups } from "./areas/read-all";
 export { glances, Unreached } from "./areas/glance";
 export { askedSince, forgetAsks, forgetAsksOn, noteAskEvent } from "./glance/asked";
 export { checksOf, pullOf, queryFor, readPulls } from "./glance/github";

@@ -22,7 +22,7 @@ const link = await import("../../Sources/KuvoLink/Resources/kuvo-link.js");
 
 // The engine: its sessions (each one's `time.idle` and `time.viewed`), each one's messages (newest
 // first), what each asks, and every client told what was read (`session.viewed`), as the engine does.
-let sessions, pages, paged, asks, followers, viewed;
+let sessions, pages, paged, asks, followers, viewed, groups, listed;
 const engine = http.createServer((request, response) => {
   let body = "";
   request.on("data", chunk => { body += chunk; });
@@ -37,8 +37,19 @@ const engine = http.createServer((request, response) => {
       return;
     }
     if (url.pathname === "/api/session") {
+      // Paged as the engine pages it: `limit` at a time, the next page from `cursor.next`.
       const parent = url.searchParams.get("parentID");
-      return reply({ data: Object.values(sessions).filter(each => parent === null || parent === "null" ? true : each.parentID === parent), cursor: null });
+      const all = Object.values(sessions).filter(each => parent === null ? true : parent === "null" ? !each.parentID : each.parentID === parent);
+      const from = Number(url.searchParams.get("cursor") ?? 0);
+      const limit = Number(url.searchParams.get("limit") ?? 50);
+      listed++;
+      return reply({ data: all.slice(from, from + limit), cursor: from + limit < all.length ? { next: String(from + limit) } : null });
+    }
+    if (url.pathname === "/api/kuvo/link/groups") return reply({ groups: Object.values(groups) });
+    const looked = url.pathname.match(/^\/api\/kuvo\/link\/groups\/([^/]+)\/viewed$/);
+    if (looked && request.method === "POST") {
+      groups[decodeURIComponent(looked[1])].unread = false;
+      return reply({});
     }
     const [, id, rest] = url.pathname.match(/^\/api\/session\/([^/]+)(\/.*)?$/) ?? [];
     const session = sessions[decodeURIComponent(id ?? "")];
@@ -83,6 +94,8 @@ beforeEach(() => {
   pages = {};
   paged = {};
   asks = {};
+  groups = {};
+  listed = 0;
   followers = [];
   viewed = [];
   fs.rmSync(told, { force: true });
@@ -287,7 +300,7 @@ async function ask(method, route) {
   return { status, json: JSON.parse(text || "{}") };
 }
 
-test("Mark All as Read reads every conversation left unread on the computer, a subagent's too; what asks you still does; an archived one is left", async () => {
+test("Mark All as Read reads every conversation left unread on the computer, a subagent's too, page after page; an archived one is left; what asks you is still asked", async () => {
   session("ses_yours");
   bots("ses_bots");
   sessions.ses_sub = { ...session("ses_sub"), parentID: "ses_yours" };
@@ -295,11 +308,31 @@ test("Mark All as Read reads every conversation left unread on the computer, a s
   asks.ses_asks = [{ id: "per_1", sessionID: "ses_asks", action: "shell", resources: ["npm publish"] }];
   session("ses_archived", { "kuvo.archived": true });
   session("ses_read").time.viewed = 2000;
+  // Hundreds more, unread, over pages of 200.
+  for (let index = 0; index < 450; index++) session(`ses_many${index}`);
   const answer = await ask("POST", "kuvo/sessions/read");
-  assert.deepEqual(answer, { status: 200, json: { read: 4 } });
-  for (const id of ["ses_yours", "ses_bots", "ses_sub", "ses_asks"]) assert.equal(isUnread(id), false, id);
+  assert.deepEqual(answer, { status: 200, json: { read: 454 } });
+  for (const id of ["ses_yours", "ses_bots", "ses_sub", "ses_asks", "ses_many0", "ses_many449"]) assert.equal(isUnread(id), false, id);
+  assert.equal(listed, 3, "three pages of 200");
   assert.equal(isUnread("ses_archived"), true);
-  // What it asks isn't read away: it's still asked.
-  assert.equal(asks.ses_asks.length, 1);
+  // Read, but still asking you: its ask is the engine's, and nothing here answers it.
+  assert.deepEqual(asks.ses_asks.map(each => each.id), ["per_1"]);
   assert.equal((await ask("GET", "kuvo/sessions/read")).status, 405);
+});
+
+test("Mark All as Read on the coding agents' bridge reads its conversations and its group chats with something new", async () => {
+  session("ses_claude");
+  groups = { grp_a: { id: "grp_a", name: "Launch", unread: true }, grp_b: { id: "grp_b", name: "Design", unread: false } };
+  // (The bridge answers as the engine does: this stand-in is both.)
+  assert.equal(await link.readAllOn(target), 1);
+  assert.equal(await link.readGroups(target), 1);
+  assert.equal(isUnread("ses_claude"), false);
+  assert.equal(groups.grp_a.unread, false);
+});
+
+test("Mark All as Read where nothing can be read (the engine down, no bridge) says so, rather than that it's done", async () => {
+  const down = link.engineHandler(() => ({ port: 9, password: "pw" }), { name: "lab" }, () => { throw new Error("none"); });
+  let status = 0;
+  for await (const part of down({ method: "POST", path: "kuvo/sessions/read", headers: {}, body: Buffer.alloc(0), fromApp: false }, {}, undefined)) if (part.head) status = part.head.status;
+  assert.equal(status, 503);
 });
