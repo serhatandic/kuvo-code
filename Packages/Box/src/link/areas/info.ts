@@ -5,12 +5,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { bundleBuild } from "../../shared/bundle";
+import { keeperEngine } from "../../shared/engines";
 import { FEATURES } from "../../shared/features";
 import { processRuns as runs } from "../../shared/platform";
 import type { BridgeRecord, EngineRecord } from "../../shared/records";
 import { macFeatures } from "../../shared/routes/mac";
 import type { BoxInfo, MachineInfo } from "../../shared/routes/box";
-import { listOf, textOf } from "../files";
+import { textOf } from "../files";
 import { BRIDGE_FILE, CHATS, ENGINE_FILE, IS_MAC, K, MAC_APP_VERSION, MAC_ENGINE_VERSION, PID_FILE, RUN, VERSION_FILE } from "../home";
 import { macsOf } from "../peers/known";
 import { macLink, readLink } from "../state";
@@ -83,17 +84,17 @@ export function pieces(engine: Partial<EngineRecord>, engineRuns: boolean): Piec
   const current = bundleBuild(script);
   const build = bridgeRuns && typeof bridge.build === "string" ? bridge.build : null;
   const agentsBehind = bridgeRuns && (build ? current !== null && build !== current : mtime(script) > mtime(BRIDGE_FILE));
-  const renewal = bridgeRuns && bridge.renewal && typeof bridge.renewal.since === "number" ? { since: bridge.renewal.since, holding: bridge.renewal.holding === true } : null;
+  const renewal = agentsBehind && bridge.renewal && typeof bridge.renewal.since === "number" ? { since: bridge.renewal.since, holding: bridge.renewal.holding === true } : null;
+  // What it waits for: one that doesn't say its build doesn't make way by itself.
+  const said = bridge.renewal?.waits;
+  const waits = !agentsBehind ? null : !build ? "restart" : said === "holding" || said === "engine" || said === "restart" ? said : "quiet";
   // The engine, against the one its keeper starts (`bin/kuvo-start`'s, while it's there, else the
   // newest there is).
   const running = engineRuns ? engine.version ?? null : null;
-  const wanted = /^V=([0-9][0-9A-Za-z.+-]*)$/m.exec(textOf(path.join(K, "bin", "kuvo-start")) ?? "")?.[1];
-  const installed = listOf(path.join(K, "engine")).filter(name => fs.existsSync(path.join(K, "engine", name, "opencode")));
-  const newest = installed.sort((a, b) => (newerVersion(a, b) ? 1 : newerVersion(b, a) ? -1 : 0)).at(-1) ?? null;
-  const currentEngine = wanted && installed.includes(wanted) ? wanted : newest;
+  const currentEngine = keeperEngine(K);
   return {
     link: { running: linkVersion, current: BRIDGE_VERSION, behind: linkVersion !== null && linkVersion !== BRIDGE_VERSION },
-    agents: { running: build, current, behind: agentsBehind, renewal: agentsBehind ? renewal : null },
+    agents: { running: build, current, behind: agentsBehind, renewal, waits },
     engine: { running, current: currentEngine, behind: running !== null && currentEngine !== null && newerVersion(currentEngine, running) },
   };
 }

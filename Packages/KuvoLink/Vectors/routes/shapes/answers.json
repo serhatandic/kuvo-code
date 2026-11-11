@@ -3725,6 +3725,27 @@
               },
               "null"
              ]
+            },
+            "waits": {
+             "oneOf": [
+              {
+               "oneOf": [
+                {
+                 "literal": "quiet"
+                },
+                {
+                 "literal": "holding"
+                },
+                {
+                 "literal": "engine"
+                },
+                {
+                 "literal": "restart"
+                }
+               ]
+              },
+              "null"
+             ]
             }
            }
           },

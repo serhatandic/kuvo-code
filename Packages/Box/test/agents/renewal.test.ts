@@ -5,10 +5,11 @@
 
 import "../safety"
 import { afterAll, expect, test } from "bun:test"
-import { mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { Renewal, renewalTiming } from "../../src/agents/renewal"
+import { launchLets, Renewal, renewalTiming } from "../../src/agents/renewal"
+import { keeperEngine } from "../../src/shared/engines"
 
 const base = mkdtempSync(join(process.env.KUVO_TEST_ROOT ?? tmpdir(), "kuvo-renewal-"))
 afterAll(() => rmSync(base, { recursive: true, force: true }))
@@ -44,7 +45,7 @@ test("a box that's never quiet: new turns wait from the night after its first ho
   const evening = bridge("evening.js", "2026-11-11T18:00:00Z")
   evening.install(newer)
   evening.renewal.look()
-  expect(evening.renewal.state).toEqual({ since: Date.parse("2026-11-11T18:00:00Z"), holding: false })
+  expect(evening.renewal.state).toEqual({ since: Date.parse("2026-11-11T18:00:00Z"), holding: false, waits: "quiet" })
   evening.at("2026-11-11T20:30:00Z")
   evening.renewal.look()
   expect(evening.held).toEqual([])
@@ -114,7 +115,7 @@ test("a turn that won't end while it holds (one waiting on you overnight): after
   box.at("2026-11-11T23:30:00Z")
   box.renewal.look()
   expect(box.held).toEqual([true, false])
-  expect(box.renewal.state).toEqual({ since: Date.parse("2026-11-11T22:00:00Z"), holding: false })
+  expect(box.renewal.state).toEqual({ since: Date.parse("2026-11-11T22:00:00Z"), holding: false, waits: "quiet" })
   // Still the night an hour on (03:30 there): it holds again.
   box.at("2026-11-12T00:29:00Z")
   box.renewal.look()
@@ -134,11 +135,90 @@ test("a bundle brought with an engine that hasn't started yet: it doesn't make w
   const renewal = new Renewal({ script, build: own, work: () => ({ turns: true, other: false }), hold: (on) => held.push(on), renew: () => {}, told: (state) => told.push(state), ready: () => ready, now: () => Date.parse("2026-11-12T00:00:00Z"), holdAfter: 0 })
   bundle(script, newer)
   renewal.look()
-  expect(renewal.state).toBeNull()
+  expect(renewal.state?.waits).toBe("engine")
+  expect(renewal.state?.holding).toBe(false)
   expect(held).toEqual([])
-  expect(told).toEqual([])
   ready = true
   renewal.look()
   expect(renewal.state?.holding).toBe(true)
   expect(held).toEqual([true])
+})
+
+test("what keeps it running starts it again: a launch since October 2026 after a run of eleven minutes; one from before only while it has started fewer than four times", () => {
+  const loop = `sh -c n=0; while kill -0 "$1" 2>/dev/null && [ $n -lt 5 ]; do s=$(date +%s); "$2" … ; [ $(($(date +%s) - s)) -ge 600 ] && n=0; n=$((n + 1)); sleep 5; done kuvo-agents`
+  const older = `sh -c n=0; while kill -0 "$1" 2>/dev/null && [ $n -lt 5 ]; do "$2" … ; n=$((n + 1)); sleep 5; done kuvo-agents`
+  const starts = (count: number) => '{"url": "http://127.0.0.1:1"}\n'.repeat(count)
+  expect(launchLets(loop, starts(9), 11 * 60_000)).toBe(true)
+  expect(launchLets(loop, starts(1), 10 * 60_000)).toBe(false)
+  expect(launchLets(older, starts(3), 11 * 60_000)).toBe(true)
+  expect(launchLets(older, starts(4), 11 * 60_000)).toBe(false)
+  // One it can't read is taken for one from before.
+  expect(launchLets(undefined, starts(4), 60 * 60_000)).toBe(false)
+})
+
+test("a quiet moment counts once nothing has run for half a minute", () => {
+  const script = join(base, "settle.js")
+  bundle(script, own)
+  let now = Date.parse("2026-11-12T12:00:00Z")
+  let turns = true
+  const held: boolean[] = []
+  const renewal = new Renewal({ script, build: own, work: () => ({ turns, other: false }), hold: (on) => held.push(on), renew: () => {}, told: () => {}, now: () => now })
+  bundle(script, newer)
+  renewal.look()
+  turns = false
+  renewal.look()
+  now += 29_000
+  renewal.look()
+  expect(held).toEqual([])
+  now += 1_000
+  renewal.look()
+  expect(held).toEqual([true])
+  renewal.stop()
+})
+
+test("an update of the box that never finished doesn't keep it holding: after half an hour what waited goes", () => {
+  const script = join(base, "paused.js")
+  bundle(script, own)
+  let now = Date.parse("2026-11-12T12:00:00Z")
+  let paused = false
+  const held: boolean[] = []
+  const renewal = new Renewal({ script, build: own, work: () => ({ turns: true, other: false }), hold: (on) => held.push(on), renew: () => {}, told: () => {}, paused: () => paused, now: () => now, holdAfter: 0 })
+  bundle(script, newer)
+  renewal.look()
+  expect(held).toEqual([true])
+  paused = true
+  now += 30 * 60_000
+  renewal.look()
+  expect(held).toEqual([true, false])
+  expect(renewal.state?.holding).toBe(false)
+})
+
+test("a bundle that doesn't run here: it waits for a restart, holding nothing", async () => {
+  const script = join(base, "broken.js")
+  bundle(script, own)
+  const held: boolean[] = []
+  let checked: () => void = () => {}
+  const answered = new Promise<void>((done) => (checked = done))
+  const renewal = new Renewal({ script, build: own, work: () => ({ turns: false, other: false }), hold: (on) => held.push(on), renew: () => {}, told: () => {}, check: async () => (setTimeout(checked, 0), false), now: () => Date.parse("2026-11-12T00:00:00Z"), holdAfter: 0 })
+  bundle(script, newer)
+  renewal.look()
+  await answered
+  renewal.look()
+  expect(renewal.state?.waits).toBe("restart")
+  expect(renewal.state?.holding).toBe(false)
+  expect(held.at(-1) ?? false).toBe(false)
+})
+
+test("the engine a machine's keeper starts: the one its script names while it's there, else the newest there", () => {
+  const root = join(base, "machine")
+  for (const version of ["2.2.5", "2.10.0", "2.9.1"]) {
+    mkdirSync(join(root, "engine", version), { recursive: true })
+    writeFileSync(join(root, "engine", version, "opencode"), "")
+  }
+  mkdirSync(join(root, "bin"), { recursive: true })
+  writeFileSync(join(root, "bin", "kuvo-start"), "#!/bin/sh\nV=2.2.5\n")
+  expect(keeperEngine(root)).toBe("2.2.5")
+  // A Mac named a newer one it didn't bring (sessions were at work): the newest there.
+  writeFileSync(join(root, "bin", "kuvo-start"), "#!/bin/sh\nV=2.11.0\n")
+  expect(keeperEngine(root)).toBe("2.10.0")
 })

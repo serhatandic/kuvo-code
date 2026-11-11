@@ -10,7 +10,7 @@
 // KUVO_AGENTS_PASSWORD, reaches the engine on KUVO_ENGINE_PORT with OPENCODE_PASSWORD, and lives
 // as long as the engine (KUVO_ENGINE_PID) does, the Mac connected or not.
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs"
 import { basename, dirname, join } from "node:path"
 import { Accounts, parseProvider } from "./accounts"
 import { record as recordArtifacts } from "./artifacts/record"
@@ -30,7 +30,11 @@ import { dropCarriedSignIns, dropOwnPrograms, machineHome, onMachine, takeOwnFol
 import { Snapshots } from "./snapshots"
 import { Roster } from "./roster"
 import { cancelSignIns, handler, signInsWaiting } from "./server"
-import { Renewal } from "./renewal"
+import { launchLets, Renewal } from "./renewal"
+import { keeperEngine } from "../shared/engines"
+import { commandLineOf } from "../shared/platform"
+import { updateUnderWay } from "../shared/updating"
+import { spawn } from "node:child_process"
 import { bundleBuild } from "../shared/bundle"
 import type { RenewalRecord } from "../shared/records"
 import { Sessions } from "./sessions"
@@ -56,6 +60,12 @@ const version = "1"
 // one put in its place is told from it (renewal.ts).
 const script = Bun.main
 const build = bundleBuild(script)
+// `selftest`: it loads and runs on this engine, and says which build it is (a bridge about to make
+// way for it asks first, renewal.ts).
+if (process.argv.slice(2).includes("selftest")) {
+  console.log(`ok ${build}`)
+  process.exit(0)
+}
 const home = process.env.KUVO_AGENTS_HOME
 const password = onMachine ? process.env.KUVO_AGENTS_PASSWORD : process.env.OPENCODE_PASSWORD
 const enginePID = Number(process.env.KUVO_ENGINE_PID)
@@ -84,7 +94,10 @@ if (onMachine) {
 }
 // A test's: how long it waits for a quiet moment before it holds new turns for a newer bridge.
 const renewHoldAfter = Number(process.env.KUVO_TEST_RENEW_HOLD) || undefined
-delete process.env.KUVO_TEST_RENEW_HOLD
+// And how long nothing must run before it goes, and how long it must have run.
+const renewSettle = process.env.KUVO_TEST_RENEW_SETTLE ? Number(process.env.KUVO_TEST_RENEW_SETTLE) : undefined
+const renewUptime = process.env.KUVO_TEST_RENEW_UPTIME ? Number(process.env.KUVO_TEST_RENEW_UPTIME) : undefined
+for (const name of ["KUVO_TEST_RENEW_HOLD", "KUVO_TEST_RENEW_SETTLE", "KUVO_TEST_RENEW_UPTIME"]) delete process.env[name]
 // Temporary files of its own and the agents' (Claude Code's task output): the app gives it a
 // folder in its own temporary folder.
 const temporary = process.env.TMPDIR?.replace(/\/$/, "") || join(home, "tmp")
@@ -309,12 +322,19 @@ await untilSandboxDecided()
 limits.start()
 const carrying = new Carrying(sessions, store, (provider) => sessions.agent(provider), (kind) => roster.all().filter((agent) => parseProvider(agent.providerID)?.kind === kind))
 let server: ReturnType<typeof Bun.serve>
+const answer = handler({ roster, sessions, auto, link, password, version, build, groups, goals, sideQuestions, handoffs, places, reviews, voice, artifacts, noted, restartOutside, carrying, limits })
+/** Requests being answered now (but the event feed's, which stays open): a newer bridge waits for them. */
+let answering = 0
 try {
   server = Bun.serve({
     hostname: "127.0.0.1",
     port,
     idleTimeout: 0,
-    fetch: handler({ roster, sessions, auto, link, password, version, build, groups, goals, sideQuestions, handoffs, places, reviews, voice, artifacts, noted, restartOutside, carrying, limits }),
+    fetch: (request) => {
+      if (new URL(request.url).pathname === "/api/event") return answer(request)
+      answering++
+      return answer(request).finally(() => answering--)
+    },
   })
 } catch (error: any) {
   console.error("couldn't listen:", error?.message ?? error)
@@ -374,8 +394,9 @@ const renewal =
         build,
         work: () => {
           const here = sessions.work()
+          const turns = here.turns || answering > 0 || (groups?.runner.busy() ?? false)
           const other = here.other || goals.busy() || sideQuestions.busy() || reviews.busy() || handoffs.busy() || signInsWaiting()
-          return { turns: here.turns, other }
+          return { turns, other }
         },
         hold: (on) => sessions.hold(on),
         renew: () => {
@@ -383,17 +404,37 @@ const renewal =
           stop()
         },
         told: (state) => writeRecord(state),
-        paused: () => existsSync(join(machineHome!, "run", ".updating")),
-        // A bundle a Mac brought with a newer engine it kept from starting (sessions were at work)
-        // waits for that engine: the keeper starts the one `bin/kuvo-start` names.
+        paused: () => updateUnderWay(join(machineHome!, "run")),
+        // Only on the engine its keeper starts: one a Mac brought with a newer engine it kept from
+        // starting (sessions were at work) waits for that engine, which starts it.
         ready: () => {
-          let wanted: string | undefined
-          try {
-            wanted = /^V=([0-9][0-9A-Za-z.+-]*)$/m.exec(readFileSync(join(machineHome!, "bin", "kuvo-start"), "utf8"))?.[1]
-          } catch {}
-          return !wanted || wanted === basename(dirname(process.execPath))
+          const kept = keeperEngine(machineHome!)
+          return !kept || kept === basename(dirname(process.execPath))
         },
+        // Only while the launch keeping it will start the new one (renewal.ts, `launchLets`).
+        lets: () => {
+          let log = ""
+          try {
+            log = readFileSync(join(machineHome!, "run", "agents.log"), "utf8")
+          } catch {}
+          return launchLets(commandLineOf(process.ppid), log, performance.now(), renewUptime)
+        },
+        // Only for a bundle that loads and runs on this engine.
+        check: (newer) =>
+          new Promise((done) => {
+            const env: Record<string, string> = { BUN_BE_BUN: "1", BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0", PATH: process.env.PATH ?? "/usr/bin:/bin" }
+            const checking = spawn(process.execPath, ["--config=/dev/null", "--no-env-file", script, "selftest"], { env, stdio: ["ignore", "pipe", "ignore"] })
+            let said = ""
+            checking.stdout.on("data", (chunk) => (said += chunk))
+            const late = setTimeout(() => checking.kill("SIGKILL"), 60_000)
+            checking.on("error", () => done(false))
+            checking.on("close", (code) => {
+              clearTimeout(late)
+              done(code === 0 && said.trim() === `ok ${newer}`)
+            })
+          }),
         holdAfter: renewHoldAfter,
+        settle: renewSettle,
       })
     : undefined
 renewal?.start()

@@ -1,6 +1,6 @@
 // @bun
 // Packages/Box/src/agents/main.ts
-import { existsSync as existsSync19, mkdirSync as mkdirSync21, readdirSync as readdirSync17, readFileSync as readFileSync31, renameSync as renameSync17, rmSync as rmSync16, writeFileSync as writeFileSync23 } from "fs";
+import { mkdirSync as mkdirSync21, readdirSync as readdirSync17, readFileSync as readFileSync31, renameSync as renameSync17, rmSync as rmSync16, writeFileSync as writeFileSync23 } from "fs";
 import { basename as basename12, dirname as dirname18, join as join32 } from "path";
 
 // Packages/Box/src/agents/accounts.ts
@@ -652,6 +652,15 @@ function commandLine(pid) {
     commandLines.clear();
   commandLines.set(pid, { line, at: now });
   return line;
+}
+function commandLineOf(pid, proc = "/proc") {
+  try {
+    return fs.readFileSync(`${proc}/${pid}/cmdline`, "utf8").split("\x00").join(" ").trim();
+  } catch {
+    if (fs.existsSync(proc))
+      return;
+    return commandLine(pid)?.trim() || undefined;
+  }
 }
 function loginShell(env = process.env, platform = process.platform) {
   const given = env.SHELL && path.isAbsolute(env.SHELL) ? env.SHELL : undefined;
@@ -17901,6 +17910,10 @@ function lostWorkOf(input) {
   const kept = input.synthetic?.metadata?.kuvo;
   return typeof kept?.lostWork === "number" ? { at: kept.lostWork, work: Array.isArray(kept.work) ? kept.work : [], restarted: kept.restarted === true } : undefined;
 }
+function isSeat(session) {
+  const kuvo = session.metadata?.kuvo;
+  return Boolean(kuvo && typeof kuvo === "object" && kuvo.seat);
+}
 function isBusy(doing) {
   return doing.kind !== "idle" && doing.kind !== "deleting";
 }
@@ -19482,7 +19495,7 @@ ${others.join(`
       live.go = false;
     if (index < 0)
       return;
-    if (this.holding) {
+    if (this.holding && !isSeat(record.session)) {
       const input = queue[index];
       input.held = true;
       if (input.delivery !== "steer") {
@@ -24277,6 +24290,9 @@ class GroupRunner {
     kept.paused = paused;
     this.context.store.saveGroup(kept);
   }
+  busy() {
+    return this.answering.size > 0 || [...this.chats.values()].some((kept) => kept.talking === true && kept.status === "active");
+  }
   setTalking(id, talking) {
     const kept = this.chats.get(id);
     if (!kept || (kept.talking ?? false) === talking)
@@ -26548,17 +26564,27 @@ function nightOf(date = new Date, zone = process.env.KUVO_TZ) {
 }
 
 // Packages/Box/src/agents/renewal.ts
-var renewalTiming = { look: 1e4, grace: 1000, patience: 60 * 60000, longest: 24 * 60 * 60000, holding: 30 * 60000 };
+var renewalTiming = { look: 1e4, settle: 30000, grace: 1000, patience: 60 * 60000, longest: 24 * 60 * 60000, holding: 30 * 60000, uptime: 11 * 60000 };
+function launchLets(loop, log, uptime, longEnough = renewalTiming.uptime) {
+  if (uptime < longEnough)
+    return false;
+  if (loop?.includes("-ge 600"))
+    return true;
+  return (log.match(/"url"/g) ?? []).length < 4;
+}
 
 class Renewal {
   options;
   since;
+  waits = "quiet";
   from = 0;
   holding = false;
   heldAt = 0;
+  quietSince;
   going = false;
   seen;
-  newer = false;
+  newer;
+  checked = new Map;
   looking;
   watching;
   constructor(options) {
@@ -26577,7 +26603,7 @@ class Renewal {
     this.watching?.close();
   }
   get state() {
-    return this.since === undefined ? null : { since: this.since, holding: this.holding };
+    return this.since === undefined ? null : { since: this.since, holding: this.holding, waits: this.waits };
   }
   holdsNow(from, now) {
     const waited = now - from;
@@ -26586,47 +26612,88 @@ class Renewal {
     return waited >= renewalTiming.longest || waited >= renewalTiming.patience && nightOf(new Date(now), this.options.zone) !== null;
   }
   look() {
-    if (this.going || this.options.paused?.())
+    if (this.going)
       return;
     const now = this.options.now?.() ?? Date.now();
-    if (!this.newerInPlace() || !(this.options.ready?.() ?? true)) {
+    const build = this.newerInPlace();
+    if (!build) {
       if (this.since === undefined)
         return;
       this.since = undefined;
+      this.quietSince = undefined;
       this.letGo();
-      this.options.told(null);
-      return;
+      this.waits = "quiet";
+      return this.tell();
     }
     if (this.since === undefined) {
       this.since = this.from = now;
-      this.options.told(this.state);
+      this.tell();
     }
-    if (this.holding && now - this.heldAt >= renewalTiming.holding && this.options.work().turns) {
+    if (this.holding && now - this.heldAt >= renewalTiming.holding) {
       this.from = now;
       this.letGo();
-      this.options.told(this.state);
+      this.tell();
+    }
+    if (this.options.paused?.())
       return;
+    const blocked = this.blocked(build);
+    if (blocked) {
+      this.quietSince = undefined;
+      this.letGo();
+      return this.tell(blocked);
     }
     if (!this.holding && this.holdsNow(this.from, now)) {
       this.holding = true;
       this.heldAt = now;
       this.options.hold(true);
-      this.options.told(this.state);
     }
-    if (!this.quiet())
+    this.tell(this.holding ? "holding" : "quiet");
+    if (!this.quiet()) {
+      this.quietSince = undefined;
+      return;
+    }
+    this.quietSince ??= now;
+    if (!this.holding && now - this.quietSince < (this.options.settle ?? renewalTiming.settle))
+      return;
+    if (!(this.options.lets?.() ?? true))
       return;
     this.going = true;
     if (!this.holding)
       this.options.hold(true);
     const later = setTimeout(() => {
-      if (this.quiet() && this.newerInPlace() && !this.options.paused?.())
+      if (this.quiet() && this.newerInPlace() === build && !this.options.paused?.() && (this.options.lets?.() ?? true))
         return this.options.renew();
       this.going = false;
+      this.quietSince = undefined;
       if (!this.holding)
         this.options.hold(false);
     }, renewalTiming.grace);
     later.unref?.();
   }
+  blocked(build) {
+    if (!(this.options.ready?.() ?? true))
+      return "engine";
+    if (!this.options.check)
+      return;
+    const checked = this.checked.get(build);
+    if (checked === undefined) {
+      this.checked.set(build, "checking");
+      this.options.check(build).then((ok) => this.checked.set(build, ok), () => this.checked.set(build, false)).then(() => this.look());
+      return;
+    }
+    if (checked === false)
+      return "restart";
+    return;
+  }
+  tell(waits = this.waits) {
+    const changed = waits !== this.waits;
+    this.waits = waits;
+    if (changed || this.lastTold !== JSON.stringify(this.state)) {
+      this.lastTold = JSON.stringify(this.state);
+      this.options.told(this.state);
+    }
+  }
+  lastTold;
   letGo() {
     if (!this.holding)
       return;
@@ -26634,6 +26701,8 @@ class Renewal {
     this.options.hold(false);
   }
   quiet() {
+    if (this.checked.get(this.newer ?? "") === "checking")
+      return false;
     const work = this.options.work();
     return !work.turns && (this.holding || !work.other);
   }
@@ -26649,10 +26718,59 @@ class Renewal {
       return this.newer;
     this.seen = seen;
     const build = bundleBuild(this.options.script);
-    this.newer = build !== null && build !== this.options.build;
+    this.newer = build !== null && build !== this.options.build ? build : undefined;
     return this.newer;
   }
 }
+
+// Packages/Box/src/shared/engines.ts
+import fs5 from "fs";
+import path4 from "path";
+function byNumbers(a, b) {
+  const [x, y] = [a, b].map((version) => version.split(".").map((part) => parseInt(part, 10) || 0));
+  for (let i = 0;i < 3; i++)
+    if ((x[i] ?? 0) !== (y[i] ?? 0))
+      return (x[i] ?? 0) - (y[i] ?? 0);
+  return 0;
+}
+function enginesThere(root) {
+  let names = [];
+  try {
+    names = fs5.readdirSync(path4.join(root, "engine"));
+  } catch {}
+  return names.filter((name) => !name.startsWith(".") && fs5.existsSync(path4.join(root, "engine", name, "opencode"))).sort(byNumbers);
+}
+function keeperEngine(root) {
+  let named;
+  try {
+    named = /^V=([0-9][0-9A-Za-z.+-]*)$/m.exec(fs5.readFileSync(path4.join(root, "bin", "kuvo-start"), "utf8"))?.[1];
+  } catch {}
+  const there = enginesThere(root);
+  return named && there.includes(named) ? named : there.at(-1) ?? null;
+}
+
+// Packages/Box/src/shared/updating.ts
+import fs6 from "fs";
+import path5 from "path";
+function updateUnderWay(run) {
+  const lock = path5.join(run, ".updating");
+  if (!fs6.existsSync(lock))
+    return false;
+  let pid = null;
+  try {
+    pid = Number(fs6.readFileSync(path5.join(lock, "pid"), "utf8"));
+  } catch {}
+  if (pid)
+    return processRuns(pid, "kuvo-link");
+  try {
+    return Date.now() - fs6.statSync(lock).mtimeMs < 60000;
+  } catch {
+    return false;
+  }
+}
+
+// Packages/Box/src/agents/main.ts
+import { spawn as spawn6 } from "child_process";
 
 // Packages/Box/src/agents/store.ts
 import { mkdirSync as mkdirSync20, readdirSync as readdirSync16, readFileSync as readFileSync30, renameSync as renameSync16, rmSync as rmSync15, statSync as statSync13, writeFileSync as writeFileSync22 } from "fs";
@@ -26755,9 +26873,9 @@ class Store {
 }
 
 // Packages/Box/src/shared/hang.ts
-import fs5 from "fs";
+import fs7 from "fs";
 import net from "net";
-import path4 from "path";
+import path6 from "path";
 var LOOK_EVERY = 30000;
 var ANSWER_WITHIN = 20000;
 var HUNG_AFTER = 600000;
@@ -26863,21 +26981,21 @@ class HangWatch {
   }
   server() {
     try {
-      const { pid, port } = JSON.parse(fs5.readFileSync(this.options.record, "utf8"));
+      const { pid, port } = JSON.parse(fs7.readFileSync(this.options.record, "utf8"));
       return Number.isInteger(pid) && pid > 1 && Number.isInteger(port) && port > 0 ? { pid, port } : null;
     } catch {
       return null;
     }
   }
   stoppedOnPurpose() {
-    return ["stopped", ".launching", ".updating", ".system-asking"].some((name) => fs5.existsSync(path4.join(this.options.run, name)));
+    return ["stopped", ".launching", ".updating", ".system-asking"].some((name) => fs7.existsSync(path6.join(this.options.run, name)));
   }
   endedLately() {
-    const file = path4.join(this.options.run, `hung-${this.options.name}.json`);
-    if (!fs5.existsSync(file))
+    const file = path6.join(this.options.run, `hung-${this.options.name}.json`);
+    if (!fs7.existsSync(file))
       return [];
     try {
-      const times = JSON.parse(fs5.readFileSync(file, "utf8"));
+      const times = JSON.parse(fs7.readFileSync(file, "utf8"));
       return Array.isArray(times) ? times.filter((time) => typeof time === "number" && this.now() - time < ENDED_WHILE && time <= this.now()) : null;
     } catch {
       return null;
@@ -26891,10 +27009,10 @@ class HangWatch {
       console.error(`The ${this.options.name} has said nothing for ${minutes} minutes, and it's been ended too often lately, or there's no telling how often: it's left as it is, for you to restart.`);
       return;
     }
-    const file = path4.join(this.options.run, `hung-${this.options.name}.json`);
+    const file = path6.join(this.options.run, `hung-${this.options.name}.json`);
     try {
-      fs5.writeFileSync(`${file}.new`, JSON.stringify([...lately, this.now()]), { mode: 384 });
-      fs5.renameSync(`${file}.new`, file);
+      fs7.writeFileSync(`${file}.new`, JSON.stringify([...lately, this.now()]), { mode: 384 });
+      fs7.renameSync(`${file}.new`, file);
     } catch {
       console.error(`The ${this.options.name} has said nothing for ${minutes} minutes, but that can't be noted in ${file}: it's left as it is, for you to restart.`);
       return;
@@ -26924,6 +27042,10 @@ var isEngine = (command) => /\bserve\b/.test(command) && !command.includes("kuvo
 var version3 = "1";
 var script = Bun.main;
 var build = bundleBuild(script);
+if (process.argv.slice(2).includes("selftest")) {
+  console.log(`ok ${build}`);
+  process.exit(0);
+}
 var home3 = process.env.KUVO_AGENTS_HOME;
 var password = onMachine ? process.env.KUVO_AGENTS_PASSWORD : process.env.OPENCODE_PASSWORD;
 var enginePID = Number(process.env.KUVO_ENGINE_PID);
@@ -26945,7 +27067,10 @@ if (onMachine) {
     delete process.env[name];
 }
 var renewHoldAfter = Number(process.env.KUVO_TEST_RENEW_HOLD) || undefined;
-delete process.env.KUVO_TEST_RENEW_HOLD;
+var renewSettle = process.env.KUVO_TEST_RENEW_SETTLE ? Number(process.env.KUVO_TEST_RENEW_SETTLE) : undefined;
+var renewUptime = process.env.KUVO_TEST_RENEW_UPTIME ? Number(process.env.KUVO_TEST_RENEW_UPTIME) : undefined;
+for (const name of ["KUVO_TEST_RENEW_HOLD", "KUVO_TEST_RENEW_SETTLE", "KUVO_TEST_RENEW_UPTIME"])
+  delete process.env[name];
 var temporary = process.env.TMPDIR?.replace(/\/$/, "") || join32(home3, "tmp");
 mkdirSync21(temporary, { recursive: true });
 rmSync16(join32(temporary, "antigravity"), { recursive: true, force: true });
@@ -27112,12 +27237,19 @@ await untilSandboxDecided();
 limits.start();
 var carrying = new Carrying(sessions, store, (provider) => sessions.agent(provider), (kind) => roster.all().filter((agent) => parseProvider(agent.providerID)?.kind === kind));
 var server4;
+var answer3 = handler({ roster, sessions, auto, link: link4, password, version: version3, build, groups, goals, sideQuestions, handoffs, places: places4, reviews, voice, artifacts, noted: noted2, restartOutside, carrying, limits });
+var answering = 0;
 try {
   server4 = Bun.serve({
     hostname: "127.0.0.1",
     port,
     idleTimeout: 0,
-    fetch: handler({ roster, sessions, auto, link: link4, password, version: version3, build, groups, goals, sideQuestions, handoffs, places: places4, reviews, voice, artifacts, noted: noted2, restartOutside, carrying, limits })
+    fetch: (request) => {
+      if (new URL(request.url).pathname === "/api/event")
+        return answer3(request);
+      answering++;
+      return answer3(request).finally(() => answering--);
+    }
   });
 } catch (error) {
   console.error("couldn't listen:", error?.message ?? error);
@@ -27161,8 +27293,9 @@ var renewal = onMachine && build ? new Renewal({
   build,
   work: () => {
     const here = sessions.work();
+    const turns = here.turns || answering > 0 || (groups?.runner.busy() ?? false);
     const other = here.other || goals.busy() || sideQuestions.busy() || reviews.busy() || handoffs.busy() || signInsWaiting();
-    return { turns: here.turns, other };
+    return { turns, other };
   },
   hold: (on) => sessions.hold(on),
   renew: () => {
@@ -27170,15 +27303,32 @@ var renewal = onMachine && build ? new Renewal({
     stop();
   },
   told: (state) => writeRecord(state),
-  paused: () => existsSync19(join32(machineHome, "run", ".updating")),
+  paused: () => updateUnderWay(join32(machineHome, "run")),
   ready: () => {
-    let wanted;
-    try {
-      wanted = /^V=([0-9][0-9A-Za-z.+-]*)$/m.exec(readFileSync31(join32(machineHome, "bin", "kuvo-start"), "utf8"))?.[1];
-    } catch {}
-    return !wanted || wanted === basename12(dirname18(process.execPath));
+    const kept = keeperEngine(machineHome);
+    return !kept || kept === basename12(dirname18(process.execPath));
   },
-  holdAfter: renewHoldAfter
+  lets: () => {
+    let log = "";
+    try {
+      log = readFileSync31(join32(machineHome, "run", "agents.log"), "utf8");
+    } catch {}
+    return launchLets(commandLineOf(process.ppid), log, performance.now(), renewUptime);
+  },
+  check: (newer) => new Promise((done) => {
+    const env = { BUN_BE_BUN: "1", BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0", PATH: process.env.PATH ?? "/usr/bin:/bin" };
+    const checking = spawn6(process.execPath, ["--config=/dev/null", "--no-env-file", script, "selftest"], { env, stdio: ["ignore", "pipe", "ignore"] });
+    let said = "";
+    checking.stdout.on("data", (chunk) => said += chunk);
+    const late = setTimeout(() => checking.kill("SIGKILL"), 60000);
+    checking.on("error", () => done(false));
+    checking.on("close", (code) => {
+      clearTimeout(late);
+      done(code === 0 && said.trim() === `ok ${newer}`);
+    });
+  }),
+  holdAfter: renewHoldAfter,
+  settle: renewSettle
 }) : undefined;
 renewal?.start();
 if (renewal)
@@ -27221,4 +27371,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 23a27da4a0d6d82e5b5ed83629d449df7cb2c04c056fe700f0bc62ea1da2b672
+// Built from Packages/Box/src/agents aa918574585488dcc6857f0237955f65893311a09205d409d80a17f85149b0e4

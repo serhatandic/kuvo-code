@@ -142,6 +142,12 @@ function lostWorkOf(input: Input): { at: number; work: LostWork[]; restarted: bo
   return typeof kept?.lostWork === "number" ? { at: kept.lostWork, work: Array.isArray(kept.work) ? (kept.work as LostWork[]) : [], restarted: kept.restarted === true } : undefined
 }
 
+/** A group chat's seat: its bot's part in a chat (groups/seat.ts). */
+function isSeat(session: Session): boolean {
+  const kuvo = session.metadata?.kuvo as Record<string, unknown> | undefined
+  return Boolean(kuvo && typeof kuvo === "object" && kuvo.seat)
+}
+
 /** At work: a turn, or the files being kept or put back (the app shows it working, and Undo waits). */
 function isBusy(doing: Doing): boolean {
   return doing.kind !== "idle" && doing.kind !== "deleting"
@@ -1934,8 +1940,9 @@ export class Sessions {
     // (With nothing to start but one being handed, Send Now waits for it.)
     if (index >= 0 || !live.steering.size) live.go = false
     if (index < 0) return
-    // Held for a newer bridge (renewal.ts): it stays first in line, kept, to go there.
-    if (this.holding) {
+    // Held for a newer bridge (renewal.ts): it stays in line, kept, to go first there. (Not a group
+    // chat's seat: a discussion under way goes on to its end, and the bridge waits for it.)
+    if (this.holding && !isSeat(record.session)) {
       const input = queue[index]
       input.held = true
       if (input.delivery !== "steer") {

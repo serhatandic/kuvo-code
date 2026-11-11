@@ -573,6 +573,12 @@ export class GroupRunner {
     this.context.store.saveGroup(kept)
   }
 
+  /** Whether a discussion is under way in a chat here, or a bot's answer is being read (a newer
+   * bridge waits for it: renewal.ts). */
+  busy(): boolean {
+    return this.answering.size > 0 || [...this.chats.values()].some((kept) => kept.talking === true && kept.status === "active")
+  }
+
   private setTalking(id: string, talking: boolean) {
     const kept = this.chats.get(id)
     if (!kept || (kept.talking ?? false) === talking) return this.keepAwake(id)

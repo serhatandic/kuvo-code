@@ -55,6 +55,17 @@ function commandLine(pid: number): string | undefined {
   return line;
 }
 
+/** `pid`'s command line: Linux's /proc (its words joined by spaces), a Mac's `ps`; undefined when
+ * it can't be read (it's gone, a sandbox refuses `ps`). */
+export function commandLineOf(pid: number, proc = "/proc"): string | undefined {
+  try {
+    return fs.readFileSync(`${proc}/${pid}/cmdline`, "utf8").split("\0").join(" ").trim();
+  } catch {
+    if (fs.existsSync(proc)) return undefined;
+    return commandLine(pid)?.trim() || undefined;
+  }
+}
+
 /**
  * The folders in a home folder that the system asks you about before an app looks into them:
  * on a Mac, its privacy prompts (so a folder list from the home folder doesn't look inside

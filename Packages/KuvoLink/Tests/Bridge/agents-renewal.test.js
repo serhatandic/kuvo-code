@@ -119,7 +119,9 @@ async function machine(prefix, extra = {}) {
   const env = {
     PATH: `${fake}:/usr/bin:/bin`, HOME: path.join(home, "home"), TMPDIR: `${home}/tmp/`, CODEX_HOME: path.join(home, "codex-home"), BUN_BE_BUN: "1",
     BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0", KUVO_AGENTS_REMOTE: "1", KUVO_HOME: home, KUVO_AGENTS_HOME: path.join(home, "agents"), KUVO_AGENTS_PORT: String(port),
-    KUVO_AGENTS_PASSWORD: "pw", KUVO_ENGINE_PORT: String(engine.address().port), KUVO_ENGINE_PID: String(process.pid), OPENCODE_PASSWORD: "engine", KUVO_SANDBOX: "off", ...extra,
+    KUVO_AGENTS_PASSWORD: "pw", KUVO_ENGINE_PORT: String(engine.address().port), KUVO_ENGINE_PID: String(process.pid), OPENCODE_PASSWORD: "engine", KUVO_SANDBOX: "off",
+    // (Not the half minute of quiet, nor the eleven minutes' run, a machine's bridge waits for.)
+    KUVO_TEST_RENEW_SETTLE: "0", KUVO_TEST_RENEW_UPTIME: "0", ...extra,
   };
   const bridges = [];
   let stopping = false, child, restarts = 0;
@@ -164,8 +166,8 @@ async function machine(prefix, extra = {}) {
   }, besides ? "the newer bridge to answer" : "the bridge to answer");
   const turns = () => { try { return fs.readFileSync(path.join(fake, "turns.log"), "utf8").trim().split("\n").filter(Boolean).map(line => JSON.parse(line)); } catch { return []; } };
   const release = word => fs.writeFileSync(path.join(fake, `release-${word}`), "");
-  const make = async title => {
-    const made = await api("POST", "api/session", { title, location: { directory: path.join(home, "work") }, model: { providerID: "codex-cli", id: "gpt-test" } });
+  const make = async (title, metadata) => {
+    const made = await api("POST", "api/session", { title, location: { directory: path.join(home, "work") }, model: { providerID: "codex-cli", id: "gpt-test" }, ...(metadata ? { metadata } : {}) });
     assert.equal(made.status, 200, JSON.stringify(made.json));
     return made.json.data.id;
   };
@@ -197,6 +199,11 @@ const NEWER = "e".repeat(64);
 
 test("a newer bridge put in place while a turn runs: that turn ends on the bridge it began on, the next runs on the new one, nothing lost or run twice", { skip: bun ? false : NO_BUN }, async () => {
   const box = await machine("kuvo-renewal-quiet-");
+  // Its keeper names an engine a Mac didn't bring (sessions were at work), so it starts the one
+  // there, which this bridge runs on: the bundle is for it.
+  fs.mkdirSync(path.join(box.home, "engine", path.basename(path.dirname(bun))), { recursive: true });
+  fs.writeFileSync(path.join(box.home, "engine", path.basename(path.dirname(bun)), "opencode"), "");
+  fs.writeFileSync(path.join(box.home, "bin", "kuvo-start"), "#!/bin/sh\nV=99.0.0\n");
   const first = await box.up();
   assert.equal((await box.pieces()).agents.behind, false, "it runs what's there");
   const session = await box.make("Long one");
@@ -214,6 +221,7 @@ test("a newer bridge put in place while a turn runs: that turn ends on the bridg
   assert.equal(said.agents.running, first.build);
   assert.equal(said.agents.renewal.since, waiting.since);
   assert.equal(said.agents.renewal.holding, false);
+  assert.equal(said.agents.waits, "quiet", "it waits for a quiet moment");
   assert.equal(box.record().pid, first.pid, "the turn's bridge runs on");
   assert.notEqual((await box.api("GET", `api/session/${session}/message?limit=1`)).json.data[0]?.type, "idle", "and its turn goes on");
 
@@ -244,11 +252,19 @@ test("a box with no quiet moment: once it has waited, a new message waits, kept,
 
   install(box.home, NEWER);
   await until(() => box.record()?.renewal?.holding, "the bridge to hold new turns");
-  assert.equal((await box.pieces()).agents.renewal.holding, true, "the box says new turns wait");
+  // A group chat's seat goes on with its discussion meanwhile: its bot's part isn't held.
+  const seat = await box.make("Seat", { kuvo: { seat: { group: "grp_team000001", bot: "bot_ada" } } });
+  await box.send(seat, "msg_renewalbusy000003", "seat part");
+  await until(() => box.turns().some(each => each.text === "seat part"), "the seat's part to start");
+  assert.equal(box.turns().find(each => each.text === "seat part").bridge, first.pid, "on the bridge that makes way, once");
+  await box.finished(seat, 1);
+  const holding = await box.pieces();
+  assert.equal(holding.agents.renewal.holding, true, "the box says new turns wait");
+  assert.equal(holding.agents.waits, "holding");
   await box.send(other, "msg_renewalbusy000002", "four");
   const waits = await until(async () => (await box.api("GET", `api/session/${other}/inbox`)).json?.data, "the message to be in line");
   assert.deepEqual(waits.map(each => each.payload.text), ["four"], "it waits in line");
-  assert.deepEqual(box.turns().map(each => each.text), ["hold three"], "and starts no turn on the bridge that makes way");
+  assert.deepEqual(box.turns().map(each => each.text), ["hold three", "seat part"], "and starts no turn on the bridge that makes way");
 
   box.release("three");
   const second = await box.up(first.pid);
@@ -259,7 +275,7 @@ test("a box with no quiet moment: once it has waited, a new message waits, kept,
   const waited = await box.finished(other, 1);
   assert.deepEqual(waited.filter(each => each.type === "user").map(each => each.text), ["four"]);
   assert.deepEqual(textOf(waited), ["Done: four"]);
-  assert.deepEqual(box.turns(), [{ text: "hold three", bridge: first.pid }, { text: "four", bridge: second.pid }], "what waited ran once, on the new bridge");
+  assert.deepEqual(box.turns(), [{ text: "hold three", bridge: first.pid }, { text: "seat part", bridge: first.pid }, { text: "four", bridge: second.pid }], "what waited ran once, on the new bridge");
   assert.deepEqual((await box.api("GET", `api/session/${other}/inbox`)).json.data, [], "and nothing's left in line");
 });
 
@@ -291,7 +307,7 @@ test("what the box says of a bridge from before bridges said their build, and of
     asking.on("close", () => { try { resolve(JSON.parse(JSON.parse(out.trim().split("\n").pop()).body).pieces); } catch (error) { reject(error); } });
     asking.stdin.end(JSON.stringify({ method: "GET", path: "kuvo/info" }));
   });
-  assert.deepEqual(said.agents, { running: null, current: said.agents.current, behind: true, renewal: null }, "an older bridge, which doesn't make way by itself");
+  assert.deepEqual(said.agents, { running: null, current: said.agents.current, behind: true, renewal: null, waits: "restart" }, "an older bridge, which doesn't make way by itself");
   assert.match(said.agents.current, /^[0-9a-f]{64}$/);
   assert.deepEqual(said.engine, { running: "2.2.5", current: "2.2.6", behind: true });
   assert.equal(said.link.behind, false, "no link runs here");

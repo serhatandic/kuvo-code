@@ -26,11 +26,19 @@ export interface BridgeRecord {
 }
 
 /** A newer bridge in place of the one running (`bridge.json`'s `renewal`): seen since `since` (ms),
- * and `holding` once new turns wait for it (it found no quiet moment in time). */
+ * `holding` once new turns wait for it (it found no quiet moment in time), and what it waits for
+ * (`waits`). */
 export interface RenewalRecord {
   since: number;
   holding: boolean;
+  waits: RenewalWait;
 }
+
+/** What a bridge behind its bundle waits for before it makes way: a quiet moment (`quiet`), the
+ * turns under way while new ones wait (`holding`), the engine that bundle came with (`engine`), or
+ * a restart of its engine, as it won't make way by itself (`restart`: a bridge from before it did,
+ * one whose launch wouldn't start it again, or a bundle that doesn't run here). */
+export type RenewalWait = "quiet" | "holding" | "engine" | "restart";
 
 /** `run/tools.json`: the port of this Mac's app's own server for Kuvo Code's tools, as the app last
  * told the agents bridge (the box's sandbox refuses it, as Kuvo Code's other servers). */

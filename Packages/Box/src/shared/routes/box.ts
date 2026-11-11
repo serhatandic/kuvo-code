@@ -45,7 +45,10 @@ export const INFO = oneOf(
     "phones?": number,
     "pieces?": object({
       link: PIECE,
-      agents: object({ running: nullable(string), current: nullable(string), behind: bool, renewal: nullable(object({ since: number, holding: bool })) }),
+      agents: object({
+        running: nullable(string), current: nullable(string), behind: bool, renewal: nullable(object({ since: number, holding: bool })),
+        waits: nullable(words("quiet", "holding", "engine", "restart")),
+      }),
       engine: PIECE,
     }),
   }),
