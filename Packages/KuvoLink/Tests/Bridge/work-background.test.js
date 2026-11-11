@@ -7,6 +7,7 @@
 import "./test-safety.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import { spawn } from "node:child_process";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -136,8 +137,8 @@ const source = { port: engine.address().port, password: "p" };
 // What a session said and when, as the engine keeps it: newest first, each later than the last.
 const at = () => (state.counter += 1, Date.now() + state.counter);
 const endJob = id => { for (const [folder, jobs] of state.shells) state.shells.set(folder, jobs.filter(each => each.id !== id)); };
-const startJob = (id, command = "npm test", when = at(), session = "ses_tests", folder = tidepool) => {
-  const job = { id, status: "running", command, cwd: folder, metadata: { sessionID: session }, time: { started: when } };
+const startJob = (id, command = "npm test", when = at(), session = "ses_tests", folder = tidepool, pid = undefined) => {
+  const job = { id, status: "running", command, cwd: folder, metadata: { sessionID: session }, time: { started: when }, ...(pid ? { pid } : {}) };
   state.shells.set(folder, [...(state.shells.get(folder) ?? []), job]);
   return { type: "shell.created", location: { directory: folder }, data: { info: job } };
 };
@@ -1024,7 +1025,8 @@ test("Stop All leaves nothing waiting for Resume where no turn ran; one that ran
   await watcher(clock()).caughtUp;
   assert.equal((await route("POST", `kuvo/bots/${bot}/stop-all`)).status, 200);
   assert.equal(link.queueOf("ses_tests").paused, false, "an idle session's next message just goes");
-  assert.equal(link.queueOf("ses_pixel").paused, false);
+  // (#553: the bot hears it stopped the session it waited on as it goes on, not now.)
+  assert.equal(link.queueOf("ses_pixel").paused, true, "the bot holds what it's to hear until you write to it");
   assert.ok(!state.interrupted.includes("ses_pixel"));
   state.sessions.ses_second = work("ses_second", "Second");
   state.active.add("ses_second");
@@ -1347,4 +1349,93 @@ test("a coding agent's process dying with its task: the bridge wakes the session
   await time.pass(3_600 * SECONDS);
   assert.equal(leadLines().length, 1);
   assert.match(finished()[0], /ran them again and they pass/);
+});
+
+test("Stop just after its finish was gathered: its lead hears it was stopped, instead of nothing", async () => {
+  const time = clock();
+  const watch = watcher(time);
+  await watch.caughtUp;
+  asked();
+  said("Done.");
+  await watch(ended());
+  assert.equal((await route("POST", "kuvo/sessions/ses_tests/stop")).status, 200);
+  await time.pass(5 * SECONDS);
+  assert.deepEqual(finished(), [], "what was gathered of it isn't sent");
+  assert.equal(stoppedLines().length, 1);
+});
+
+test("stopped by its lead, then written to again and stopped by the user: its lead hears that once", async () => {
+  const time = clock();
+  const watch = watcher(time);
+  await watch.caughtUp;
+  asked();
+  said("Started.");
+  await watch(ended());
+  await time.pass(5 * SECONDS);
+  await link.stopWork(source, "ses_tests");
+  assert.equal((await route("POST", "kuvo/sessions/ses_tests/stop")).status, 200, "a Stop of yours after it");
+  await time.pass(5 * SECONDS);
+  assert.deepEqual(stoppedLines(), [], "nothing: it was stopped already, and not set going since");
+  // Its lead writes to it again; you stop it as it works.
+  state.active.add("ses_tests");
+  await watch(started());
+  asked("[Message from Pixel · ses_pixel] (…)\n\nCarry on.");
+  await watch(delivered());
+  assert.equal((await route("POST", "kuvo/sessions/ses_tests/stop")).status, 200);
+  state.active.delete("ses_tests");
+  await watch({ type: "session.execution.interrupted", data: { sessionID: "ses_tests" } });
+  await time.pass(5 * SECONDS);
+  assert.equal(stoppedLines().length, 1);
+});
+
+// A service it left up (a dev server, a preview: anything listening on a port) isn't work its finish
+// waits on; a command that listens on nothing is. A real process each, in a group of its own, as the
+// engine runs a command.
+function process_(listens) {
+  const code = listens === "now"
+    ? "const s = require('net').createServer().listen(0, '127.0.0.1', () => console.log(s.address().port)); setInterval(() => {}, 1000);"
+    : "process.stdin.once('data', () => { const s = require('net').createServer().listen(0, '127.0.0.1', () => console.log(s.address().port)); }); setInterval(() => {}, 1000);";
+  const child = spawn(process.execPath, ["-e", code], { detached: true, stdio: ["pipe", "pipe", "ignore"] });
+  atEnd(() => { try { process.kill(-child.pid, "SIGKILL"); } catch {} });
+  const port = new Promise(resolve => child.stdout.once("data", chunk => resolve(Number(String(chunk).trim()))));
+  return { pid: child.pid, port, listen: () => child.stdin.write("go\n"), end: () => { try { process.kill(-child.pid, "SIGKILL"); } catch {} } };
+}
+
+test("a dev server it started, listening on a port, doesn't hold its finish: told at once, naming it and its port", async () => {
+  const server = process_("now");
+  const port = await server.port;
+  const time = clock();
+  const watch = watcher(time);
+  await watch.caughtUp;
+  asked("Start the dev server.");
+  await watch(startJob("sh_dev", "npm run dev", time.at, "ses_tests", tidepool, server.pid));
+  said("The dev server is up.");
+  await watch(ended());
+  await time.pass(5 * SECONDS);
+  assert.equal(leadLines().length, 1, "told at once");
+  assert.match(finished()[0], /The dev server is up\./);
+  assert.match(finished()[0], new RegExp(`\\(Still serving: \`npm run dev\` on :${port}\\.\\)$`));
+  assert.doesNotMatch(finished()[0], /Still running in the background/);
+  server.end();
+});
+
+test("a command listening on nothing holds its finish; once it listens, it's a service, and the finish is told", async () => {
+  const job = process_("later");
+  const time = clock();
+  const watch = watcher(time);
+  await watch.caughtUp;
+  asked("Start the preview.");
+  await watch(startJob("sh_prev", "npm run preview", time.at, "ses_tests", tidepool, job.pid));
+  said("The preview is starting.");
+  await watch(ended());
+  await time.pass(5 * SECONDS);
+  assert.deepEqual(leadLines(), [], "held: it listens on nothing, so it's work it may still be doing");
+  job.listen();
+  const port = await job.port;
+  await time.pass(link.FIRST_LOOK);
+  await time.pass(5 * SECONDS);
+  assert.equal(leadLines().length, 1);
+  assert.match(finished()[0], /The preview is starting\./);
+  assert.match(finished()[0], new RegExp(`Still serving: \`npm run preview\` on :${port}`));
+  job.end();
 });

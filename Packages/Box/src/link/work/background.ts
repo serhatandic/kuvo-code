@@ -28,6 +28,7 @@ import { isHiddenRun, type EngineSession } from "../engine/sessions";
 import { locked, writePrivate } from "../files";
 import { SESSION_WAKES } from "../home";
 import { noteWorkChanged, WORK_FOLDER } from "./changes";
+import { listeningPorts } from "./services";
 import { workingNow, worksFor } from "./tree";
 
 export const WORK_BACKGROUND = path.join(WORK_FOLDER, "background.json");
@@ -41,7 +42,8 @@ export const AT_WORK_LIMIT = 6 * 3_600_000;
 // As the box starts: the sessions updated this recently have their folders' tools running still.
 const RECENT = 3_600_000;
 
-export interface BackgroundCommand { id: string; command: string; started: number; folder?: string }
+/** `ports`: the TCP ports it listens on, a service's (a dev server): its session's finish doesn't wait on it. */
+export interface BackgroundCommand { id: string; command: string; started: number; folder?: string; ports?: number[] }
 export interface BackgroundHelper { id: string; since: number }
 /** What runs for a session besides its own turn. `tasks`: what else its agent keeps going. */
 export interface BackgroundWork { commands: BackgroundCommand[]; subagents: BackgroundHelper[]; tasks: BackgroundHelper[] }
@@ -103,6 +105,16 @@ export async function atWorkNow(targets: Target[], signal?: AbortSignal, file = 
 
 /** Whether any of `work` started at `at` (ms) or since. */
 export const startedSince = (work: BackgroundWork, at: number) => [...work.commands.map(each => each.started), ...work.subagents.map(each => each.since), ...work.tasks.map(each => each.since)].some(started => started >= at);
+
+/** What of `work` its session is waiting on, services (`ports`) left out; null for none. */
+export function awaited(work: BackgroundWork | null | undefined): BackgroundWork | null {
+  if (!work) return null;
+  const left = { ...work, commands: work.commands.filter(each => !each.ports?.length) };
+  return left.commands.length || left.subagents.length || left.tasks.length ? left : null;
+}
+
+/** The services among what `work` left running, in words: "`npm run dev` on :5173". */
+export const servicesWords = (work: BackgroundWork | null | undefined): string[] => (work?.commands ?? []).filter(each => each.ports?.length).slice(0, 3).map(each => `\`${each.command.split("\n")[0]!.slice(0, 80)}\` on ${each.ports!.map(port => `:${port}`).join(", ")}`);
 
 const emptyKept = (): Kept => ({ sessions: {}, folders: [] });
 
@@ -195,11 +207,15 @@ export function backgroundWatcher(source: Target, from: string, { file = WORK_BA
     const all: Record<string, BackgroundWork> = {};
     const of = (id: string) => (all[id] ??= { commands: [], subagents: [], tasks: [] });
     for (const [top, each] of helpers) of(top).subagents.push(...each);
+    // (Each command leads a process group of its own: what listens in it is a service.)
+    const jobs = [...commandsIn.values()].flat();
+    const listening = await listeningPorts(jobs.map(job => job.pid ?? 0)).catch(() => new Map<number, number[]>());
     for (const [folder, jobs] of commandsIn) {
       for (const job of jobs) {
         const session = isObject(job.metadata) && typeof job.metadata.sessionID === "string" ? job.metadata.sessionID : null;
         const top = session ? await topOf(session) : null;
-        if (top) of(top).commands.push({ id: job.id, command: String(job.command ?? ""), started: job.time?.started ?? now(), folder });
+        const ports = job.pid ? listening.get(job.pid) : undefined;
+        if (top) of(top).commands.push({ id: job.id, command: String(job.command ?? ""), started: job.time?.started ?? now(), folder, ...(ports?.length ? { ports } : {}) });
       }
     }
     return all;

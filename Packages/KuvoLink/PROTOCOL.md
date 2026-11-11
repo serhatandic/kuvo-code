@@ -1198,9 +1198,15 @@ client shows it from the same routes.
     limit.
   - **Telling a lead**: `[Session finished]` waits while any of it runs, however long (a build queued
     for hours), and looks again 10 seconds after it ends, since the end wakes its agent. Nothing is
-    sent meanwhile (a lead's `list_sessions` shows the session at work). An end that wasn't heard
-    (an event lost on a busy box) is found within 10 minutes, and what never ends (a dev server) is
-    told as it stops counting at its 6 hours. A finish never says what still runs. Boxes before #553
+    sent meanwhile (a lead's `list_sessions` shows the session at work). A service doesn't hold it:
+    a command listening on a TCP port (a dev server, a preview), found by its process group (the
+    engine's commands, whose `pid` leads one: `lsof` on macOS, `/proc` on Linux; the coding agents'
+    don't say, so theirs always hold it). When only services are left it's told at once, ending
+    `(Still serving: \`npm run dev\` on :5173.)`; a command that starts listening after its turn ended
+    is found a minute on. An end that wasn't heard (an event lost on a busy box) is found within 10
+    minutes, and anything else that never ends is told as it stops counting at its 6 hours. A
+    finish never says "Still running in the background". `background.json` gives such a command
+    `ports`. Boxes before #553
     told one still running at 30 minutes anyway, saying what still ran ("Still running in the
     background: …"), and boxes before #420 told that as `[Session still working]`; clients still
     read both: those words are left out of a finish's card, and “still working” shows nothing. A turn someone asked for doesn't wait on what
@@ -1221,8 +1227,11 @@ client shows it from the same routes.
     held, a wake-up of its own or a question of its), hears that once, so it never waits on a
     session that won't finish: `[Session stopped] "<title>" in <place> (address <id>) was stopped by
     the user. …`, without what it was holding; clients show it as “<title>” stopped by you.
-    `stop-all` drops what its bot was still to hear, then sends one such line for each session it
-    stopped, one message to each lead. A goal whose end came stops its sessions without it.
+    A second Stop says nothing more. `stop-all` (and a goal's Stop) drops what its bot was still to
+    hear, then sends one such line for each session it stopped, one message to each lead not stopped
+    itself; the bot's own queue is paused first, so its lines wait there (with its wake-ups) for your
+    next message or Resume rather than setting it going. A goal whose end came stops its sessions
+    without telling.
     Until it's set going again, nothing it does is told. What's written to it decides,
     read at `session.inbox.delivered` (the turn starts before the message is in its conversation):
     what it left running ending or its agent carrying on by itself (a `synthetic` with

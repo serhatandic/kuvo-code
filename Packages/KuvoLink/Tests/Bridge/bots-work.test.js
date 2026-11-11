@@ -633,6 +633,8 @@ test("a client stops all of a bot's work at once", async () => {
   const one = startedAddress(await tool("start_session", { task: "One.", project: "Tidepool" }, "ses_pixel"));
   const two = startedAddress(await tool("start_session", { task: "Two.", project: "Tidepool" }, "ses_pixel"));
   active = new Set([one, two, "ses_pixel"]);
+  // (Ids are given again from test to test, and an earlier one stopped one of these: new now.)
+  fs.rmSync(path.join(home, "run", "work", "stopped.json"), { force: true });
   // What it was still to hear of them.
   write(path.join(home, "run", "work", "wakes.json"), JSON.stringify({ ses_pixel: { lines: ["[Session finished] \"One\""], asks: false, since: 1 } }));
   const stopped = await route("POST", "kuvo/bots/bot_pixel00001/stop-all");

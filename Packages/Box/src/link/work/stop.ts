@@ -1,12 +1,13 @@
 // A bot's work stopped (Stop All, and Stop the Night): every session of its work that's working or
 // waiting on an answer, and the bot's own turn with what it was still to hear of them, since it
 // would only start them again. Each lead hears once, in one message, which of its sessions you
-// stopped (as Stop on one's row tells it), so none waits on them.
+// stopped (as Stop on one's row tells it), so none waits on them; the bot itself as it goes on (your
+// next message, or Resume), its queue held until then, so this doesn't set it going.
 
-import { stopSession } from "../engine/queue";
+import { changeQueue, stopSession } from "../engine/queue";
 import { botHere } from "../bots/here";
 import { noteWorkChanged } from "./changes";
-import { atWorkNow, hasWakeUps, stopWork } from "./background";
+import { atWorkNow, hasWakeUps, readStopped, stopWork } from "./background";
 import { askingNow, ofBot, workSessions, workingNow } from "./tree";
 import { leadWaitingOn } from "./stopping";
 import { forgetWakes, stoppedLine, tellStarters } from "./wakes";
@@ -25,7 +26,7 @@ export async function stopBotWork(bot: string, targets: Target[], signal?: Abort
   for (const each of work) {
     const asking = !turns.has(each.data.id) && await askingNow(each, signal);
     if (!working.has(each.data.id) && !hasWakeUps(each.data.id) && !asking) continue;
-    const lead = await leadWaitingOn(each.target, each.data, { turn: turns.has(each.data.id), atWork: true }, signal).catch(() => null);
+    const lead = await leadWaitingOn(each.target, each.data, { turn: turns.has(each.data.id), asking: Boolean(asking) }, signal).catch(() => null);
     // (What waits is held only where a turn stopped: with none running, its next message just goes.)
     if (!await stopWork(each.target, each.data.id, turns.has(each.data.id) || Boolean(asking)).then(() => true, () => false)) continue;
     stopped += 1;
@@ -38,8 +39,12 @@ export async function stopBotWork(bot: string, targets: Target[], signal?: Abort
       for (const target of targets) if (await stopSession(target, own).then(() => true, () => false)) break;
     }
   }
-  // (After what it was still to hear is dropped: only that they were stopped.)
-  tellStarters(told);
+  // (After what it was still to hear is dropped: only that they were stopped, and not to one stopped
+  // itself, which its own lead hears of.)
+  const marked = readStopped();
+  const telling = told.filter(each => marked[each.starter] === undefined);
+  if (own && telling.some(each => each.starter === own)) changeQueue(own, state => ({ ...state, paused: true }));
+  tellStarters(telling);
   noteWorkChanged(bot);
   return stopped;
 }
