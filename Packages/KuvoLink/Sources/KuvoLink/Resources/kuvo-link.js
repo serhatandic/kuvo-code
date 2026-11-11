@@ -16560,12 +16560,12 @@ function allowRefusal(action, resources, folders, rules, ruleFor, seen, { sandbo
     const command = typeof seen?.input.command === "string" ? seen.input.command : null;
     return [...command ? partsOf(command) : [], ...asked].every((part) => ruleFor(rules, action, part) === "allow") ? null : "above";
   }
+  const named = FILES3.has(action) && seen ? [seen.input.filePath, seen.input.file_path, seen.input.path, seen.input.file].filter((each) => typeof each === "string") : [];
+  if ((action === "external_directory" || FILES3.has(action)) && [...asked, ...named].some((each) => each.includes("\\")))
+    return "above";
   if (!asked.every((resource) => ruleFor(rules, action, resource) === "allow"))
     return "above";
   if (FILES3.has(action)) {
-    const named = seen ? [seen.input.filePath, seen.input.file_path, seen.input.path, seen.input.file].filter((each) => typeof each === "string") : [];
-    if ([...asked, ...named].some((each) => each.includes("\\")))
-      return "above";
     const full = [...asked, ...named].filter((each) => each !== "*" && (path62.isAbsolute(each) || folders.length)).map((each) => path62.resolve(folders[0] ?? "/", each));
     const outside = full.filter((each) => !folders.some((folder) => within(realOf(each), realOf(folder))));
     if (outside.some((each) => [each, realOf(each)].some((at) => ruleFor(rules, "external_directory", at) !== "allow")))

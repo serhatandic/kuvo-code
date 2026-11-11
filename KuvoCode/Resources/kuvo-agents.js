@@ -20217,6 +20217,8 @@ ${live.agentPrompt}` : ""
         return "deny";
       if (strictest(rules, "external_directory", refusable) === "deny")
         return "deny";
+      if (away.some((each) => each.includes("\\")))
+        return "ask";
       const outside = strictest(rules, "external_directory", folders);
       if (outside === "ask" && !this.allowedOutside(live, folders))
         return "ask";
@@ -20279,7 +20281,7 @@ ${live.agentPrompt}` : ""
       const rules = [...ask.agentRules ?? live.agentRules ?? engineDefaults, ...session.permissions ?? []];
       if (strictest(rules, "external_directory", refusable) === "deny")
         return "reject";
-      const outside = strictest(rules, "external_directory", folders);
+      const outside = away.some((each) => each.includes("\\")) ? "ask" : strictest(rules, "external_directory", folders);
       const own = strictest(rules, ask.action, parts) ?? "allow";
       if (outside === "ask" && own !== "deny" && (own === "allow" || this.allowedBefore(live, ask)) && !this.allowedOutside(live, folders)) {
         return this.askPermission(id, live, turn, { ...outsideAsk(ask, away), metadata: ask.metadata, message: ask.message, sandboxed: ask.sandboxed }, plan);
@@ -26899,4 +26901,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 747c899b3d9bd558d7cbeb6d82122eab8f2bedf8161324baa4baa9900f586bab
+// Built from Packages/Box/src/agents 35f8a59654d7e160a17b19eb08fcc736aa9d0182b1e2a5a2dada65417371d3c1
