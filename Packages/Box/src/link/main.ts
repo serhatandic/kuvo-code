@@ -909,7 +909,8 @@ if (main) {
   // KUVO_HOME the app's own box's folder: both said, never guessed.
   else if (mode === "here") {
     try {
-      console.log(JSON.stringify(hereNow(argument)));
+      // (`--own-data`: the app's own engine kept your sessions here, as the app says.)
+      console.log(JSON.stringify(hereNow(argument, process.env.KUVO_HOME, undefined, process.argv.slice(4).includes("--own-data"))));
     } catch (error) {
       console.error(error instanceof Error ? error.message : String(error));
       process.exit(2);
@@ -981,7 +982,7 @@ if (main) {
     console.log(ok ? "ok" : "failed");
     process.exit(ok ? 0 : 1);
   } else {
-    console.error("Usage: kuvo-link.js run | serve | setup | pair [relay] | box <command> | leave <mac> | here <root> | engine-config | login-path | update [--now] | browser install|start|status | selftest");
+    console.error("Usage: kuvo-link.js run | serve | setup | pair [relay] | box <command> | leave <mac> | here <root> [--own-data] | engine-config | login-path | update [--now] | browser install|start|status | selftest");
     process.exit(2);
   }
 }

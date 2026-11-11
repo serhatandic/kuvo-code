@@ -144,11 +144,11 @@ test("the probe's lines are what a box's link.json says: a box writes it as the 
 
 // Kuvo Code opening on a Mac, in a home of the test's own: its own box in its app folder, and the
 // one in ~/.kuvo-code.
-function here(setUp, { root = ".kuvo-code", own = true } = {}) {
+function here(setUp, { root = ".kuvo-code", own = true, ownData = false } = {}) {
   const mac = fs.mkdtempSync(path.join(support, "mac-"));
   const appBox = path.join(mac, "Library", "Application Support", "run.kuvo.code", "box");
   setUp({ machine: path.join(mac, ".kuvo-code", "run"), app: path.join(appBox, "run"), appBox });
-  const result = spawnSync(process.execPath, [script, "here", ...(root ? [root] : [])], { env: { PATH: process.env.PATH, HOME: mac, TMPDIR: support, ...(own ? { KUVO_HOME: appBox } : {}) }, encoding: "utf8" });
+  const result = spawnSync(process.execPath, [script, "here", ...(root ? [root] : []), ...(ownData ? ["--own-data"] : [])], { env: { PATH: process.env.PATH, HOME: mac, TMPDIR: support, ...(own ? { KUVO_HOME: appBox } : {}) }, encoding: "utf8" });
   if (result.status === 2) return { refused: result.stderr };
   assert.equal(result.status, 0, result.stderr);
   return { said: JSON.parse(result.stdout), appBox };
@@ -205,6 +205,14 @@ test("Kuvo Code opening where it has its own box: it goes on using it, with noth
     write(path.join(machine, "setup-card.json"), card({ setup: otherSetup, role: "member", primary: { key: imac.pub, name: "iMac", heard: 1 } }));
   }).said;
   assert.deepEqual([before.verdict, before.use], ["two", "own"], "never taken from an app that works now");
+
+  // An app from before its box had a folder (or one that quit cleanly, leaving no record there): its
+  // own engine kept your sessions, as the app says, so it's its own box all the same.
+  const earlier = here(({ appBox, machine }) => {
+    write(path.join(appBox, "machines.json"), "[]");
+    write(path.join(machine, "link.json"), JSON.stringify({ mac: imac.pub, macs: [imac.pub] }, null, 2));
+  }, { ownData: true }).said;
+  assert.deepEqual([earlier.verdict, earlier.use], ["two", "own"]);
 });
 
 test("here is told where the app's own box is and which folder is the machines', never guesses: without either it says so and stops", () => {

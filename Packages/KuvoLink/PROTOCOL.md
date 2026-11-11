@@ -295,12 +295,14 @@ setups, and pairing and adding only from the main computer come later: #183.)
     primary: {key, name, heard}, macs, computers, items}]}` (`primary` of an older box: the last Mac
     that set it up), judged against this box (itself, its setup, its peers and Macs); 400 with no
     `probe`.
-  - **`kuvo-link.js here <root>`**: Kuvo Code on a Mac, before it starts a box, with `KUVO_HOME` its
+  - **`kuvo-link.js here <root> [--own-data]`**: Kuvo Code on a Mac (the app, and its keeper), before it starts a box, with `KUVO_HOME` its
     own box's folder (in its app folder) and `root` the machines' folder (`.kuvo-code`, or a
     test's); without either (or with them the same) it stops, exit 2. Prints `{verdict, use:
     "own"|"attach", box, own}`, `box` and `own` as `boxes` above. An app whose own box ran (its
-    folder has `run/` `setup-card.json`, `link.json`, `serve.json` or `keeper.json`; never the
-    folder alone, which the app writes in with no box) keeps using it (`ours`, `free`, or `two`
+    folder has `run/` `setup-card.json`, `link.json`, `serve.json` or `keeper.json`, or the app
+    says `--own-data`: its own engine kept your sessions, as a version from before its box had a
+    folder, or one that quit cleanly, leaves no record there; never the folder alone, which the
+    app writes in with no box) keeps using it (`ours`, `free`, or `two`
     beside another setup's `~/.kuvo-code`); one with none uses the `~/.kuvo-code` box that's there,
     in place (`attach`: never a second box on one computer), with that box's verdict; with neither,
     its own. It writes nothing, and makes no folder.

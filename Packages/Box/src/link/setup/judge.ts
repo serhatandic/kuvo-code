@@ -252,12 +252,14 @@ export function judgeHere(own: FoundBox | null, machine: FoundBox | null): Here 
 const OWN_BOX_RAN = ["setup-card.json", "link.json", "serve.json", "keeper.json"];
 
 /** `here` on this Mac now: the app's own box in its folder (`appBox`, this process's `KUVO_HOME`),
- * once a box ran there, and the box in `~/<root>` (`.kuvo-code`, or a test's or a demo copy's own
- * folder). Both must be said: guessed, a copy could attach to the wrong one. */
-export function hereNow(root: string, appBox: string | undefined = process.env.KUVO_HOME, home = homeFolder()): Here {
+ * once a box ran there, or once the app's own engine kept your sessions (`ownData`, which the app
+ * says: a version from before its box had a folder, or one that quit cleanly, leaves no record
+ * there), and the box in `~/<root>` (`.kuvo-code`, or a test's or a demo copy's own folder). Both
+ * folders must be said: guessed, a copy could attach to the wrong one. */
+export function hereNow(root: string, appBox: string | undefined = process.env.KUVO_HOME, home = homeFolder(), ownData = false): Here {
   const machine = path.join(home, root || "");
   if (!root || !appBox || path.resolve(appBox) === path.resolve(machine)) throw new Error("kuvo-link.js here needs KUVO_HOME, the app's own box's folder, and the machines' folder's name: here <root>.");
-  const ownRan = OWN_BOX_RAN.some(file => fs.existsSync(path.join(appBox, "run", file)));
+  const ownRan = ownData || OWN_BOX_RAN.some(file => fs.existsSync(path.join(appBox, "run", file)));
   const own = ownRan ? foundAt(appBox, true, home) ?? { folder: shownFolder(appBox, home), app: true } : null;
   return judgeHere(own, foundAt(machine, false, home));
 }

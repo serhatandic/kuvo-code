@@ -32943,11 +32943,11 @@ function judgeHere(own, machine) {
   return { verdict, use: "attach", box, own: null };
 }
 var OWN_BOX_RAN = ["setup-card.json", "link.json", "serve.json", "keeper.json"];
-function hereNow(root, appBox = process.env.KUVO_HOME, home = homeFolder()) {
+function hereNow(root, appBox = process.env.KUVO_HOME, home = homeFolder(), ownData = false) {
   const machine = path108.join(home, root || "");
   if (!root || !appBox || path108.resolve(appBox) === path108.resolve(machine))
     throw new Error("kuvo-link.js here needs KUVO_HOME, the app's own box's folder, and the machines' folder's name: here <root>.");
-  const ownRan = OWN_BOX_RAN.some((file) => fs102.existsSync(path108.join(appBox, "run", file)));
+  const ownRan = ownData || OWN_BOX_RAN.some((file) => fs102.existsSync(path108.join(appBox, "run", file)));
   const own = ownRan ? foundAt(appBox, true, home) ?? { folder: shownFolder(appBox, home), app: true } : null;
   return judgeHere(own, foundAt(machine, false, home));
 }
@@ -39628,7 +39628,7 @@ if (main) {
     leave(argument);
   else if (mode === "here") {
     try {
-      console.log(JSON.stringify(hereNow(argument)));
+      console.log(JSON.stringify(hereNow(argument, process.env.KUVO_HOME, undefined, process.argv.slice(4).includes("--own-data"))));
     } catch (error) {
       console.error(error instanceof Error ? error.message : String(error));
       process.exit(2);
@@ -39680,7 +39680,7 @@ if (main) {
     console.log(ok ? "ok" : "failed");
     process.exit(ok ? 0 : 1);
   } else {
-    console.error("Usage: kuvo-link.js run | serve | setup | pair [relay] | box <command> | leave <mac> | here <root> | engine-config | login-path | update [--now] | browser install|start|status | selftest");
+    console.error("Usage: kuvo-link.js run | serve | setup | pair [relay] | box <command> | leave <mac> | here <root> [--own-data] | engine-config | login-path | update [--now] | browser install|start|status | selftest");
     process.exit(2);
   }
 }
