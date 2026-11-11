@@ -60,6 +60,8 @@ test("your message while a long command runs is read at once: the command goes o
 // sent to steer as the box sends them.
 const letter = (b, inboxID) => b.hear("session.inbox.enqueued", { inboxID, item: { type: "user", delivery: "steer", payload: { text: "[Message from Kuvo Foreman · ses_lead] (To answer, use send_message to ses_lead.)\n\nHow are the tests going?" } } });
 const news = (b, inboxID) => b.hear("session.inbox.enqueued", { inboxID, item: { type: "user", delivery: "steer", payload: { text: '[Session asks] "Fix the build" (address ses_child) asks to run a command.', metadata: { kuvo: { note: { from: "Its sessions", line: "“Fix the build” asks" } } } } } });
+// The box's own note, told by its mark alone (what Auto's reviewer held back, approved).
+const approved = (b, inboxID) => b.hear("session.inbox.enqueued", { inboxID, item: { type: "user", delivery: "steer", payload: { text: "Approved: npm publish", metadata: { kuvo: { note: { from: "Your answer", line: "You approved npm publish" } } } } } });
 
 test("another agent's letter, or a session's news, while a long command runs waits for the command: nothing goes to the background", () => {
   const b = box();
@@ -67,6 +69,7 @@ test("another agent's letter, or a session's news, while a long command runs wai
   b.wait(10_000);
   letter(b, "msg_1");
   news(b, "msg_2");
+  approved(b, "msg_5");
   b.wait(30_000);
   assert.deepEqual(b.backgrounded, [], "the tests run on in the foreground");
   // Sent now from the queue, it doesn't either.
@@ -77,6 +80,7 @@ test("another agent's letter, or a session's news, while a long command runs wai
   b.hear("session.tool.success", { id: "call_1" });
   b.hear("session.inbox.delivered", { inboxID: "msg_1" });
   b.hear("session.inbox.delivered", { inboxID: "msg_2" });
+  b.hear("session.inbox.delivered", { inboxID: "msg_5" });
   b.wait(30_000);
   assert.deepEqual(b.backgrounded, []);
 
@@ -296,7 +300,7 @@ test("every box does it as it follows its engine, with the Mac closed too: the e
   }
 });
 
-test("following its engine, a box asks nothing for another agent's letter while a command runs, and still does for yours", async () => {
+test("following its engine, a box asks nothing for another agent's letter while a command runs, and still does for yours", { timeout: 10_000 }, async () => {
   const posted = [];
   let enough;
   const done = new Promise(resolve => { enough = resolve; });

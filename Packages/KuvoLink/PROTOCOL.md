@@ -1908,11 +1908,12 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   command ends (bridge 0.9.67). Yours: a `user` item whose text doesn't open as the box's own do
   (`[Message from `, `[Work from `, `[Session `, `[Wake-up]`…) and that carries no `kuvo.note`,
   as the queue tells them (`writtenByYou`). Another agent's letter (`send_message`, the task of a
-  session an agent started) and the box's news (a session that asks or finished) never move it,
-  sent now from the queue either: they're read as the command ends, as any message sent to steer
-  is, so a lead's word doesn't cut short the tests its session waits on. (Boxes before #431 moved
-  it for those too.) A message queued for after the turn, a wake-up (queued too) or the engine's
-  own notes wait as before. The coding agents' sessions don't do this.
+  session an agent started) and the box's news and notes (a session that asks or finished, what
+  you approved that Auto's reviewer held back) never move it, sent now from the queue either:
+  they're read as the command ends, as any message sent to steer is, so a lead's word doesn't cut
+  short the tests its session waits on. (Boxes before #431 moved it for those too.) A message
+  queued for after the turn, a wake-up (queued too) or the engine's own notes wait as before. The
+  coding agents' sessions don't do this.
 - `POST kuvo/shell/<id>/stop` (`{"session": "ses_…"}`, which may be left out): stops a command an
   agent left running, as Stop over the Mac's composer does: SIGTERM to its process group, so the
   engine sees it end and tells the agent, with what it printed; only if that can't be sent, the
