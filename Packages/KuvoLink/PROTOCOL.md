@@ -3005,9 +3005,12 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   `413 {"message"}` over 25 MB, or over `max` when it's given (`&max=<bytes>`: all a client would
   show of it), `400 {"message"}` for an address that isn't `file://`. Each box answers for its own files, a machine's with the Mac closed too.
 - On a Mac, `kuvo/usage`: the menu bar's usage panel as its Bars view lists it, for what the box
-  doesn't state yet (a plan's limits are every box's own, in "Plan limits"): it leaves out the
-  providers whose limits this Mac's box states rows for (`services`, with an account listed), whose
-  spend shows under the first of them on the Mac. A client lists the box's rows, then these: each provider's name, plan, brand color, mark as a PNG
+  doesn't state yet (a plan's limits are every box's own, in "Plan limits"). A provider whose
+  place the boxes' rows take there says so (`covers`, its service), with its limit lines left out:
+  one this Mac's box states rows for (`services`, with an account listed), and Claude, whose bar
+  has no limits of its own, wherever any of the Mac's computers states a Claude account. Its
+  spend shows under the first of those rows. A client lists these in their order, the box's rows
+  in the place of each that `covers`: each provider's name, plan, brand color, mark as a PNG
   to tint, notice, whether it's outdated, and its lines as UsageKit writes them; whether a refresh is under way and when the last one ended;
   `kuvo/usage/events` streams it as it changes, and `POST kuvo/usage/refresh` refreshes it all.
   While the usage panel isn't up, `kuvo/usage` and the refresh answer 404; the stream answers 200
@@ -3100,8 +3103,10 @@ the last reading in its folder (`limits.json`), through a restart. A client reac
   - `identity`: the account at its maker, 16 hex characters, the same from every box signed in to
     it (and from a coding agent's sign-in and the engine's to the same account), so a client
     lists it once. A hash of its maker's own ID for it, never the ID, an email or a secret:
-    Claude's account and organization (Linux only: a Mac's Claude token doesn't say who it's
-    for), ChatGPT's account and workspace member, xAI's user, GitHub's login (from Copilot's
+    Claude's account and organization (on Linux as Claude Code keeps them beside its sign-in; on a
+    Mac, whose token doesn't say who it's for, as Anthropic says in the signed policy record Claude
+    Code fetches with that token and keeps in its settings folder, once it has run with it there),
+    ChatGPT's account and workspace member, xAI's user, GitHub's login (from Copilot's
     answer), and an API key for OpenRouter, Z.ai and OpenCode Go. Absent where it isn't known, and
     from a box from before it: list that row as its box's own. Where it changes (signed in
     as another account there), the box drops what it kept of the one before, and the row says so
@@ -3145,8 +3150,11 @@ the last reading in its folder (`limits.json`), through a restart. A client reac
   with the first `label` among them ("Claude · Work"). Where two rows would have one name: a row
   whose own computer's sign-in is the engine's takes the service's name ("ChatGPT"); rows not on
   the client's own computer add the names of the boxes they're from ("Claude · hetzner, lokum"),
-  as does one beside a row the client shows of its own of that name (the Mac panel's own card);
-  rows still alike add their other boxes' names.
+  as does one beside a bar the Mac panel shows of its own of that name (a provider's card that
+  reads your own login's limits, when this Mac's box has no row of it: Codex's, say; Claude's card
+  has none, so the accounts take its place, `covers`); rows still alike add their other boxes'
+  names. A row a box can't say who it is (no `identity`) is never merged by its numbers: two
+  accounts can read alike (a personal plan and a team's, each at 12%).
 - What's read: Claude Code's accounts, on Linux from Anthropic with Claude Code's own sign-in in
   Kuvo Code's folder; on a Mac only from what its turns hear (Claude Code's rate-limit events, every
   window from each response's headers), as the token Kuvo Code signs in with there can only run
