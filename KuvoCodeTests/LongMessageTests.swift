@@ -144,6 +144,69 @@ import Testing
         }
     }
 
+    /// A quote of a few sentences in your messages, in a narrow conversation, where its four lines
+    /// cut it short of the characters that surely do: Show All's room is under it from when it
+    /// comes into view, and the rows under it stay where they were put (#334: it was cut with no
+    /// Show All; then, measured a turn after it's laid out, the button pushed the rows down).
+    @Test func aQuoteCutAtFourLinesComesIntoViewWithItsShowAllsRoom() async throws {
+        TestEnvironment.prepare()
+        let app = AppModel()
+        let quote = "The harbor log lists every boat that came in today, with its name, its berth and the hour it tied up. "
+            + "The crew reads it each evening before the tide turns, and the harbormaster signs it once the last boat is in."
+        #expect(quote.count < 280 && !quote.contains("\n"), "short, as quotes go")
+        let words = "> " + quote + "\n\nSounds right."
+        let items = ["0", "1"]
+        let window = NSWindow(contentRect: NSRect(x: -20_000, y: -20_000, width: 360, height: 900), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = NSHostingView(rootView: ScrollView {
+            RowStack(items: items, id: { $0 }, same: ==, estimate: { _ in 200 }) { _, _ in
+                UserBubble(text: words).environment(app)
+            }
+        }.frame(width: 360, height: 900))
+        window.orderBack(nil)
+        defer { window.orderOut(nil); window.close() }
+
+        func all<T: NSView>(_ type: T.Type, in view: NSView?) -> [T] {
+            guard let view else { return [] }
+            return ((view as? T).map { [$0] } ?? []) + view.subviews.flatMap { all(type, in: $0) }
+        }
+        func rows() -> [NSRect] {
+            (all(RowStackView.self, in: window.contentView).first?.subviews ?? []).map(\.frame).sorted { $0.minY < $1.minY }
+        }
+        func settle(until ready: () -> Bool) async {
+            var turns = 0
+            while !ready(), turns < 400 {
+                window.contentView?.layoutSubtreeIfNeeded()
+                window.displayIfNeeded()
+                await Task.yield()
+                turns += 1
+            }
+        }
+
+        // Each row's quote and answer laid out.
+        await settle { all(SelectableTextView.self, in: window.contentView).count == 2 * items.count && rows().count == items.count }
+        let placed = rows()
+        #expect(placed.count == items.count)
+        await settle { rows() != placed }
+        #expect(rows() == placed, "the rows stayed where they were put: \(placed) then \(rows())")
+        let stack = try #require(all(RowStackView.self, in: window.contentView).first)
+        for row in rows() {
+            let texts = all(SelectableTextView.self, in: stack)
+                .map { ($0, $0.convert($0.bounds, to: stack)) }
+                .filter { row.minY <= $0.1.minY && $0.1.maxY <= row.maxY }
+                .sorted { $0.1.minY < $1.1.minY }
+            try #require(texts.count == 2, "a quote and its answer in the row")
+            let (quoted, quotedFrame) = texts[0], answerFrame = texts[1].1
+            // Cut at its four lines here.
+            let layout = try #require(quoted.layoutManager), container = try #require(quoted.textContainer)
+            let laid = layout.glyphRange(for: container)
+            let truncated = layout.truncatedGlyphRange(inLineFragmentForGlyphAt: max(0, laid.upperBound - 1))
+            #expect(laid.length < layout.numberOfGlyphs || truncated.location != NSNotFound, "its four lines cut the quote")
+            // Under the quote, more than the room between it and the answer's bubble: Show All's.
+            #expect(answerFrame.minY - quotedFrame.maxY > 24, "room under the quote for Show All: \(answerFrame.minY - quotedFrame.maxY)")
+        }
+    }
+
     /// A message too short to be called long (a list and a paragraph) in a narrow conversation,
     /// where it runs past the line limit's lines: all of it shows, since there's no Show More for it.
     @Test func aShortMessageInANarrowConversationIsNeverCutWithoutShowMore() async throws {
