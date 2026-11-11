@@ -197,6 +197,9 @@ struct ModeChip: View {
                 Circle()
                     .fill(.orange)
                     .frame(width: 6, height: 6)
+                    // On the words' middle, as it was centered on them, now the row stands on
+                    // their baseline.
+                    .alignmentGuide(.firstTextBaseline) { $0[.bottom] + 1 }
                     .accessibilityHidden(true)
             }
             // The model chip's chevron: two menus side by side look alike.
