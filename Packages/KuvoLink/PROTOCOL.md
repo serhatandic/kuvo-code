@@ -1617,6 +1617,56 @@ did: the box keeps working as itself ("For released Macs").
 - `kuvo-link.js update [--now]` updates from a shell. Only in a test's folder, it also takes
   `--url <boxes.json> --key <public key>`.
 
+#### A new version while it works
+
+A Mac that connects puts its own files on a machine (above) while the box works: its sessions may
+run day and night, so a piece waiting for "nothing runs" might never take them. Each piece takes a
+new version without cutting a turn:
+
+- **The coding agents' bridge** (`bin/kuvo-agents.js`) reads which build it runs as it starts: the
+  last `// Built from Packages/Box/src/agents <hash>` line in its bundle (`scripts/build-agents.sh`
+  writes it; a Mac's own `// kuvo-agents <hash>` line may follow it). It looks at the bundle in its
+  place when the file changes, when a turn ends, and every 10 seconds. Another build there (not
+  while the box updates itself, `run/.updating`), it makes way for it:
+  - **At the first quiet moment**: no turn under way (a subagent's, a message being handed to one,
+    the files kept after one), no `!` command of yours, nothing an agent left running in the
+    background, no side question being answered, review being read, handoff being written, goal
+    being checked, or sign-in waiting for you. It holds new turns, and a second later, if it's
+    still quiet, it stops as it always does (what it has is kept) and exits. What keeps it running
+    (the engine's launch, `RemoteServer.agentsScript`, which starts it again five seconds after it
+    ends) starts the new bundle. If that second wasn't quiet, it lets go and looks again.
+  - **When there isn't one**: after an hour, from the next night's window (02:00 to 05:00 in
+    `KUVO_TZ`), or after a day whatever the hour, it holds new turns. A message (or a summary, a
+    note) that would start a turn stays first in its session's line (`inbox`, kept with the
+    session, `delivery: "steer"`, marked `held`), and nothing else starts. Turns under way go on
+    to their end, steering into them too. Then it goes, whatever else is under way (what agents
+    left running in the background, a side question, review, handoff or sign-in): each ends as it
+    does at any restart, and says so.
+  - The new bridge, once it's up, starts what was held, each once (`held` cleared as it's woken).
+  - Its own build put back in place meanwhile, it lets go of what it held and goes on.
+  - Only on a machine, whose bridge its launch keeps. This Mac's own bridge comes in its app: the
+    app's keeper starts the whole box again from a newer app once nothing runs on it.
+- **The link** (`kuvo-link.js run`) has no turns: `setup`, which a Mac runs as it connects, starts
+  a newer one over the one running, as before.
+- **The engine** isn't ours to hold turns in. A Mac starts a newer one only when it connects and
+  nothing runs there (otherwise it keeps the one at work, and puts nothing in its place).
+- `bridge.json`, on a machine, says `{pid, port, password, build, renewal}`: `build` as above,
+  and `renewal` `{since, holding}` while another build is in its place (`since` in ms), else null.
+- `kuvo/info`'s `pieces` (a machine's) says which version each runs against the one in place:
+  `{link, agents, engine}`, each `{running, current, behind}`.
+  - `link`: `running` is `run/link.version` while the link runs (null otherwise), `current` the
+    version of the link answering (its files'), `behind` when they differ.
+  - `agents`: `running` is the build its bridge says (null while none runs, or one from before
+    builds were said runs), `current` the build of `bin/kuvo-agents.js`. `behind` while one runs
+    that isn't that build; for one that doesn't say, while the bundle is newer than its
+    `bridge.json`. `renewal` is its `bridge.json`'s while it's behind, else null: null while
+    behind means a bridge that doesn't make way by itself (from before this), which takes the new
+    one when the engine next starts.
+  - `engine`: `running` is the running engine's version (null when none runs), `current` the one
+    its keeper starts (`bin/kuvo-start`'s `V`, while that one is there, else the newest there).
+  - A client shows a line while one is `behind` (`MachinePieces`, in KuvoClient), and says
+    nothing otherwise. A Mac's own `kuvo/info` has no `pieces`.
+
 ### The browser on a machine
 
 The browser agents use on a machine (`kuvo-browser.js`, its keeper and tools) is Chrome for
@@ -1945,7 +1995,8 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   for: `macs`, the Macs that set it up (`[{key, name?, seen}]`: each one's key, its name where its
   setup gave one, `macName`, and when it was last heard from, in ms, moved on by the time the
   machine was off since), and `phones`, how many phones
-  reach it. A Mac also names `integrations`, each integration's name by its MCP
+  reach it. A machine's also says which version each of its pieces runs (`pieces`: "Updates", "A
+  new version while it works"). A Mac also names `integrations`, each integration's name by its MCP
   server's (`{"microsoft-365": "Outlook and Microsoft 365", …}`), for a card when one asks something.
   A Mac's is its box's (from #191 step 2; its app answered it before), the same with the app closed:
   its `name` and `app` as the app last said them (kept, "The relay, on this Mac's box"), its

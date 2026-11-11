@@ -100,6 +100,11 @@ export class SideQuestions {
     for (const list of this.kept.values()) for (const question of list) if (question.state === "answering") void this.answer(question)
   }
 
+  /** Whether one is being answered (a newer bridge waits for it: renewal.ts). */
+  busy(): boolean {
+    return [...this.kept.values()].some((list) => list.some((question) => question.state === "answering"))
+  }
+
   stopAll() {
     this.stopped = true
     for (const stop of this.stops.values()) stop()

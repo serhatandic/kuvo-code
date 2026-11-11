@@ -1,6 +1,6 @@
 // @bun
 // Packages/Box/src/agents/main.ts
-import { mkdirSync as mkdirSync21, readdirSync as readdirSync17, readFileSync as readFileSync31, renameSync as renameSync17, rmSync as rmSync16, writeFileSync as writeFileSync23 } from "fs";
+import { existsSync as existsSync19, mkdirSync as mkdirSync21, readdirSync as readdirSync17, readFileSync as readFileSync31, renameSync as renameSync17, rmSync as rmSync16, writeFileSync as writeFileSync23 } from "fs";
 import { join as join32 } from "path";
 
 // Packages/Box/src/agents/accounts.ts
@@ -3954,6 +3954,9 @@ class Goals {
         this.forget(session);
     });
   }
+  busy() {
+    return [...this.goals.values()].some((goal) => goal.checking);
+  }
   stopAll() {
     this.stopped = true;
     for (const timer of this.later.values())
@@ -4461,6 +4464,9 @@ class SideQuestions {
         if (question.state === "answering")
           this.answer(question);
   }
+  busy() {
+    return [...this.kept.values()].some((list) => list.some((question) => question.state === "answering"));
+  }
   stopAll() {
     this.stopped = true;
     for (const stop of this.stops.values())
@@ -4636,6 +4642,9 @@ class Handoffs {
   }
   get(session) {
     return this.kept.get(session);
+  }
+  busy() {
+    return this.starting.size > 0 || [...this.kept.values()].some((handoff) => handoff.state === "writing");
   }
   async start(session, next) {
     if (this.starting.has(session) || this.kept.get(session)?.state === "writing")
@@ -4844,6 +4853,9 @@ class Reviews {
       this.follow(session);
       this.forgetIfGone(session);
     }
+  }
+  busy() {
+    return [...this.kept.values()].some((review) => review.state === "reviewing");
   }
   stopAll() {
     this.stopped = true;
@@ -18616,8 +18628,8 @@ class Sessions {
     let changed = false;
     const lastUser = record.messages.findLastIndex((message) => message.type === "user" || message.type === "synthetic" || message.type === "compaction");
     const queue = this.queue(record);
-    if (queue.some((input) => input.compact)) {
-      queue.splice(0, queue.length, ...queue.filter((input) => !input.compact));
+    if (queue.some((input) => input.compact && !input.held)) {
+      queue.splice(0, queue.length, ...queue.filter((input) => !input.compact || input.held));
       changed = true;
     }
     for (const message of record.messages) {
@@ -18919,10 +18931,12 @@ class Sessions {
       record.agent.lateShells = [...record.agent.lateShells ?? [], message.id];
     this.store.save(id, true);
     let group;
+    this.commands++;
     runCommand(text, directory, (started) => {
       group = started;
       this.ownShell(id, started);
     }).then((ran) => {
+      this.commands--;
       const groups = this.shells.get(id);
       if (group !== undefined && !groupRuns(group))
         groups?.delete(group);
@@ -19462,6 +19476,16 @@ ${others.join(`
       live.go = false;
     if (index < 0)
       return;
+    if (this.holding) {
+      const input = queue[index];
+      input.held = true;
+      if (input.delivery !== "steer") {
+        input.delivery = "steer";
+        emit("session.inbox.delivery.changed", { sessionID: id, inboxID: input.id, delivery: "steer" }, record.session.location.directory);
+      }
+      this.store.save(id, true);
+      return;
+    }
     const [input] = queue.splice(index, 1);
     this.start(id, live, input);
   }
@@ -20539,6 +20563,33 @@ ${live.agentPrompt}` : ""
       this.queue(record).push(input);
       this.store.save(id, true);
     }
+  }
+  wakeHeld() {
+    for (const session of this.store.all()) {
+      const record = this.store.get(session.id);
+      if (!record)
+        continue;
+      const held = this.queue(record).filter((input) => input.held);
+      if (!held.length)
+        continue;
+      for (const input of held)
+        delete input.held;
+      this.store.save(session.id, true);
+      this.wake(session.id);
+    }
+  }
+  hold(on) {
+    if (this.holding === on)
+      return;
+    this.holding = on;
+    if (!on)
+      this.wakeHeld();
+  }
+  holding = false;
+  commands = 0;
+  work() {
+    const handing = [...this.live.values()].some((live) => live.steering.size > 0);
+    return { turns: this.active().length > 0 || this.commands > 0 || handing, other: Object.keys(this.background()).length > 0 };
   }
   wakeLost(now = Date.now()) {
     for (const session of this.store.all()) {
@@ -25929,6 +25980,10 @@ function cancelSignIns() {
     pending.attempt.cancel();
   attempts.clear();
 }
+function signInsWaiting() {
+  const now = Date.now();
+  return [...attempts.values()].some((pending) => now < pending.expires && pending.attempt.status().status === "pending");
+}
 setInterval(() => {
   for (const [id, pending] of attempts) {
     if (Date.now() < pending.expires + 60000)
@@ -26040,7 +26095,7 @@ function handler(context) {
         return error2(404, "Not found");
       const [, area, a, b, c, d, e] = parts;
       if (area === "info")
-        return json12({ version: context.version, pid: process.pid });
+        return json12({ version: context.version, pid: process.pid, build: context.build ?? null });
       if (area === "event")
         return feed();
       if (area === "integration") {
@@ -26440,8 +26495,147 @@ function expandCommand(template, written) {
 ${all}`;
 }
 
+// Packages/Box/src/agents/renewal.ts
+import { statSync as statSync12, watch as watch2 } from "fs";
+import { dirname as dirname17 } from "path";
+
+// Packages/Box/src/shared/bundle.ts
+import fs4 from "fs";
+var BUILT = /\/\/ Built from Packages\/Box\/src\/agents ([0-9a-f]{16,64})\s*(?:\n|$)/g;
+function buildOf(text) {
+  let found = null;
+  for (const match of text.matchAll(BUILT))
+    found = match[1];
+  return found;
+}
+function bundleBuild(file) {
+  let handle;
+  try {
+    handle = fs4.openSync(file, "r");
+    const size = fs4.fstatSync(handle).size;
+    const length = Math.min(size, 1024);
+    const tail = Buffer.alloc(length);
+    fs4.readSync(handle, tail, 0, length, size - length);
+    return buildOf(tail.toString("utf8"));
+  } catch {
+    return null;
+  } finally {
+    if (handle !== undefined)
+      try {
+        fs4.closeSync(handle);
+      } catch {}
+  }
+}
+
+// Packages/Box/src/shared/night.ts
+function nightOf(date = new Date, zone = process.env.KUVO_TZ) {
+  let parts;
+  try {
+    parts = Object.fromEntries(new Intl.DateTimeFormat("en-CA", { timeZone: zone || undefined, year: "numeric", month: "2-digit", day: "2-digit", hour: "numeric", hourCycle: "h23" }).formatToParts(date).map((part) => [part.type, part.value]));
+  } catch {
+    return null;
+  }
+  const hour = Number(parts.hour);
+  return hour >= 2 && hour < 5 ? `${parts.year}-${parts.month}-${parts.day}` : null;
+}
+
+// Packages/Box/src/agents/renewal.ts
+var renewalTiming = { look: 1e4, grace: 1000, patience: 60 * 60000, longest: 24 * 60 * 60000 };
+
+class Renewal {
+  options;
+  since;
+  holding = false;
+  going = false;
+  seen;
+  newer = false;
+  looking;
+  watching;
+  constructor(options) {
+    this.options = options;
+  }
+  start() {
+    this.looking = setInterval(() => this.look(), renewalTiming.look);
+    this.looking.unref?.();
+    try {
+      this.watching = watch2(dirname17(this.options.script), () => this.look());
+    } catch {}
+    this.look();
+  }
+  stop() {
+    clearInterval(this.looking);
+    this.watching?.close();
+  }
+  get state() {
+    return this.since === undefined ? null : { since: this.since, holding: this.holding };
+  }
+  holdsNow(since, now) {
+    const waited = now - since;
+    if (this.options.holdAfter !== undefined)
+      return waited >= this.options.holdAfter;
+    return waited >= renewalTiming.longest || waited >= renewalTiming.patience && nightOf(new Date(now), this.options.zone) !== null;
+  }
+  look() {
+    if (this.going || this.options.paused?.())
+      return;
+    const now = this.options.now?.() ?? Date.now();
+    if (!this.newerInPlace()) {
+      if (this.since === undefined)
+        return;
+      this.since = undefined;
+      if (this.holding) {
+        this.holding = false;
+        this.options.hold(false);
+      }
+      this.options.told(null);
+      return;
+    }
+    if (this.since === undefined) {
+      this.since = now;
+      this.options.told(this.state);
+    }
+    if (!this.holding && this.holdsNow(this.since, now)) {
+      this.holding = true;
+      this.options.hold(true);
+      this.options.told(this.state);
+    }
+    if (!this.quiet())
+      return;
+    this.going = true;
+    if (!this.holding)
+      this.options.hold(true);
+    const later = setTimeout(() => {
+      if (this.quiet() && this.newerInPlace())
+        return this.options.renew();
+      this.going = false;
+      if (!this.holding)
+        this.options.hold(false);
+    }, renewalTiming.grace);
+    later.unref?.();
+  }
+  quiet() {
+    const work = this.options.work();
+    return !work.turns && (this.holding || !work.other);
+  }
+  newerInPlace() {
+    let stat;
+    try {
+      stat = statSync12(this.options.script);
+    } catch {
+      return this.newer;
+    }
+    const seen = `${stat.ino}:${stat.size}:${stat.mtimeMs}`;
+    if (seen === this.seen)
+      return this.newer;
+    this.seen = seen;
+    const build = bundleBuild(this.options.script);
+    this.newer = build !== null && build !== this.options.build;
+    return this.newer;
+  }
+}
+
 // Packages/Box/src/agents/store.ts
-import { mkdirSync as mkdirSync20, readdirSync as readdirSync16, readFileSync as readFileSync30, renameSync as renameSync16, rmSync as rmSync15, statSync as statSync12, writeFileSync as writeFileSync22 } from "fs";
+import { mkdirSync as mkdirSync20, readdirSync as readdirSync16, readFileSync as readFileSync30, renameSync as renameSync16, rmSync as rmSync15, statSync as statSync13, writeFileSync as writeFileSync22 } from "fs";
 import { join as join31 } from "path";
 
 class Store {
@@ -26482,7 +26676,7 @@ class Store {
   }
   writtenAt(id) {
     try {
-      return statSync12(join31(this.root, id, "messages.json")).mtimeMs;
+      return statSync13(join31(this.root, id, "messages.json")).mtimeMs;
     } catch {
       return;
     }
@@ -26541,7 +26735,7 @@ class Store {
 }
 
 // Packages/Box/src/shared/hang.ts
-import fs4 from "fs";
+import fs5 from "fs";
 import net from "net";
 import path4 from "path";
 var LOOK_EVERY = 30000;
@@ -26649,21 +26843,21 @@ class HangWatch {
   }
   server() {
     try {
-      const { pid, port } = JSON.parse(fs4.readFileSync(this.options.record, "utf8"));
+      const { pid, port } = JSON.parse(fs5.readFileSync(this.options.record, "utf8"));
       return Number.isInteger(pid) && pid > 1 && Number.isInteger(port) && port > 0 ? { pid, port } : null;
     } catch {
       return null;
     }
   }
   stoppedOnPurpose() {
-    return ["stopped", ".launching", ".updating", ".system-asking"].some((name) => fs4.existsSync(path4.join(this.options.run, name)));
+    return ["stopped", ".launching", ".updating", ".system-asking"].some((name) => fs5.existsSync(path4.join(this.options.run, name)));
   }
   endedLately() {
     const file = path4.join(this.options.run, `hung-${this.options.name}.json`);
-    if (!fs4.existsSync(file))
+    if (!fs5.existsSync(file))
       return [];
     try {
-      const times = JSON.parse(fs4.readFileSync(file, "utf8"));
+      const times = JSON.parse(fs5.readFileSync(file, "utf8"));
       return Array.isArray(times) ? times.filter((time) => typeof time === "number" && this.now() - time < ENDED_WHILE && time <= this.now()) : null;
     } catch {
       return null;
@@ -26679,8 +26873,8 @@ class HangWatch {
     }
     const file = path4.join(this.options.run, `hung-${this.options.name}.json`);
     try {
-      fs4.writeFileSync(`${file}.new`, JSON.stringify([...lately, this.now()]), { mode: 384 });
-      fs4.renameSync(`${file}.new`, file);
+      fs5.writeFileSync(`${file}.new`, JSON.stringify([...lately, this.now()]), { mode: 384 });
+      fs5.renameSync(`${file}.new`, file);
     } catch {
       console.error(`The ${this.options.name} has said nothing for ${minutes} minutes, but that can't be noted in ${file}: it's left as it is, for you to restart.`);
       return;
@@ -26708,6 +26902,8 @@ var isEngine = (command) => /\bserve\b/.test(command) && !command.includes("kuvo
 
 // Packages/Box/src/agents/main.ts
 var version3 = "1";
+var script = Bun.main;
+var build = bundleBuild(script);
 var home3 = process.env.KUVO_AGENTS_HOME;
 var password = onMachine ? process.env.KUVO_AGENTS_PASSWORD : process.env.OPENCODE_PASSWORD;
 var enginePID = Number(process.env.KUVO_ENGINE_PID);
@@ -26728,6 +26924,8 @@ if (onMachine) {
   for (const name of ["OPENCODE_CONFIG_CONTENT", "OPENCODE_CONFIG", "OPENCODE_CLIENT", "KUVO_AGENTS_PASSWORD", "KUVO_AGENTS_PORT", "KUVO_ENGINE_PORT", "KUVO_ENGINE_PID"])
     delete process.env[name];
 }
+var renewHoldAfter = Number(process.env.KUVO_TEST_RENEW_HOLD) || undefined;
+delete process.env.KUVO_TEST_RENEW_HOLD;
 var temporary = process.env.TMPDIR?.replace(/\/$/, "") || join32(home3, "tmp");
 mkdirSync21(temporary, { recursive: true });
 rmSync16(join32(temporary, "antigravity"), { recursive: true, force: true });
@@ -26899,7 +27097,7 @@ try {
     hostname: "127.0.0.1",
     port,
     idleTimeout: 0,
-    fetch: handler({ roster, sessions, auto, link: link4, password, version: version3, groups, goals, sideQuestions, handoffs, places: places4, reviews, voice, artifacts, noted: noted2, restartOutside, carrying, limits })
+    fetch: handler({ roster, sessions, auto, link: link4, password, version: version3, build, groups, goals, sideQuestions, handoffs, places: places4, reviews, voice, artifacts, noted: noted2, restartOutside, carrying, limits })
   });
 } catch (error) {
   console.error("couldn't listen:", error?.message ?? error);
@@ -26909,6 +27107,7 @@ console.log(JSON.stringify({ url: `http://127.0.0.1:${server4.port}` }));
 self = server3(`http://127.0.0.1:${server4.port}`, password);
 link4.whenReady().then(() => {
   sessions.wakeLost();
+  sessions.wakeHeld();
   goals.start();
   sideQuestions.start();
   reviews.resume();
@@ -26925,10 +27124,41 @@ link4.whenReady().then(() => {
   }
 });
 var record2 = onMachine ? join32(machineHome, "run", "bridge.json") : undefined;
-if (record2) {
-  writeFileSync23(record2 + ".new", JSON.stringify({ pid: process.pid, port: server4.port, password }), { mode: 384 });
-  renameSync17(record2 + ".new", record2);
-}
+var writeRecord = (renewal, first = false) => {
+  if (!record2)
+    return;
+  try {
+    writeFileSync23(record2 + ".new", JSON.stringify({ pid: process.pid, port: server4.port, password, build, renewal }), { mode: 384 });
+    renameSync17(record2 + ".new", record2);
+  } catch (error) {
+    if (first)
+      throw error;
+  }
+};
+writeRecord(null, true);
+var renewal = onMachine && build ? new Renewal({
+  script,
+  build,
+  work: () => {
+    const here = sessions.work();
+    const other = here.other || goals.busy() || sideQuestions.busy() || reviews.busy() || handoffs.busy() || signInsWaiting();
+    return { turns: here.turns, other };
+  },
+  hold: (on) => sessions.hold(on),
+  renew: () => {
+    console.error("A newer bridge is in place: this one makes way for it.");
+    stop();
+  },
+  told: (state) => writeRecord(state),
+  paused: () => existsSync19(join32(machineHome, "run", ".updating")),
+  holdAfter: renewHoldAfter
+}) : undefined;
+renewal?.start();
+if (renewal)
+  subscribe((event) => {
+    if (event.type === "session.idle")
+      renewal.look();
+  });
 if (runFolder)
   new HangWatch({ name: "engine", run: runFolder, record: join32(runFolder, "engine.json"), isIt: isEngine }).start();
 var stopping = false;
@@ -26964,4 +27194,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 136106419330c90142ca3d3cef8062dcc9a3d13968fb61a24fb75bbb8c5a4e1f
+// Built from Packages/Box/src/agents cd5b953971028be0998325d35b1fb039a465d627e3dd83e811cb11fc04b75ee3

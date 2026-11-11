@@ -14,11 +14,22 @@ export interface EngineRecord {
   agentsPassword?: string;
 }
 
-/** `run/bridge.json`: the coding agents' bridge beside the engine, when it runs. */
+/** `run/bridge.json`: the coding agents' bridge beside the engine, when it runs. On a machine it
+ * also says which build it runs (`build`, as its bundle names it), and while a newer one waits in
+ * its place, since when and whether it holds new turns for it (`renewal`). */
 export interface BridgeRecord {
   pid?: number;
   port: number;
   password: string;
+  build?: string | null;
+  renewal?: RenewalRecord | null;
+}
+
+/** A newer bridge in place of the one running (`bridge.json`'s `renewal`): seen since `since` (ms),
+ * and `holding` once new turns wait for it (it found no quiet moment in time). */
+export interface RenewalRecord {
+  since: number;
+  holding: boolean;
 }
 
 /** `run/tools.json`: the port of this Mac's app's own server for Kuvo Code's tools, as the app last

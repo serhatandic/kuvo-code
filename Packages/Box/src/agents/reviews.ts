@@ -208,6 +208,11 @@ export class Reviews {
     }
   }
 
+  /** Whether one is being read (a newer bridge waits for it: renewal.ts). */
+  busy(): boolean {
+    return [...this.kept.values()].some((review) => review.state === "reviewing")
+  }
+
   stopAll() {
     this.stopped = true
     for (const stop of this.stops.values()) stop()

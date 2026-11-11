@@ -10,7 +10,7 @@
 // KUVO_AGENTS_PASSWORD, reaches the engine on KUVO_ENGINE_PORT with OPENCODE_PASSWORD, and lives
 // as long as the engine (KUVO_ENGINE_PID) does, the Mac connected or not.
 
-import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { Accounts, parseProvider } from "./accounts"
 import { record as recordArtifacts } from "./artifacts/record"
@@ -29,7 +29,10 @@ import { setToolProgram } from "./kuvotools"
 import { dropCarriedSignIns, dropOwnPrograms, machineHome, onMachine, takeOwnFolders } from "./machine"
 import { Snapshots } from "./snapshots"
 import { Roster } from "./roster"
-import { cancelSignIns, handler } from "./server"
+import { cancelSignIns, handler, signInsWaiting } from "./server"
+import { Renewal } from "./renewal"
+import { bundleBuild } from "../shared/bundle"
+import type { RenewalRecord } from "../shared/records"
 import { Sessions } from "./sessions"
 import { noteAgentsInside, untilSandboxDecided } from "./fence"
 import { useSavedLoginPath } from "./proc"
@@ -49,6 +52,10 @@ import { agentAccounts, Limits } from "./limits"
 import { ENGINE_SERVICES, EngineAccounts } from "./engine-limits"
 
 const version = "1"
+// The build it runs, as its bundle names it (none from its sources): read as it starts, so a newer
+// one put in its place is told from it (renewal.ts).
+const script = Bun.main
+const build = bundleBuild(script)
 const home = process.env.KUVO_AGENTS_HOME
 const password = onMachine ? process.env.KUVO_AGENTS_PASSWORD : process.env.OPENCODE_PASSWORD
 const enginePID = Number(process.env.KUVO_ENGINE_PID)
@@ -75,6 +82,9 @@ if (onMachine) {
   // Nor do they get what the engine starts with: its settings, with keys in them, nor these.
   for (const name of ["OPENCODE_CONFIG_CONTENT", "OPENCODE_CONFIG", "OPENCODE_CLIENT", "KUVO_AGENTS_PASSWORD", "KUVO_AGENTS_PORT", "KUVO_ENGINE_PORT", "KUVO_ENGINE_PID"]) delete process.env[name]
 }
+// A test's: how long it waits for a quiet moment before it holds new turns for a newer bridge.
+const renewHoldAfter = Number(process.env.KUVO_TEST_RENEW_HOLD) || undefined
+delete process.env.KUVO_TEST_RENEW_HOLD
 // Temporary files of its own and the agents' (Claude Code's task output): the app gives it a
 // folder in its own temporary folder.
 const temporary = process.env.TMPDIR?.replace(/\/$/, "") || join(home, "tmp")
@@ -304,7 +314,7 @@ try {
     hostname: "127.0.0.1",
     port,
     idleTimeout: 0,
-    fetch: handler({ roster, sessions, auto, link, password, version, groups, goals, sideQuestions, handoffs, places, reviews, voice, artifacts, noted, restartOutside, carrying, limits }),
+    fetch: handler({ roster, sessions, auto, link, password, version, build, groups, goals, sideQuestions, handoffs, places, reviews, voice, artifacts, noted, restartOutside, carrying, limits }),
   })
 } catch (error: any) {
   console.error("couldn't listen:", error?.message ?? error)
@@ -316,8 +326,10 @@ self = requester(`http://127.0.0.1:${server.port}`, password)
 // Once the engine's there (the app says where, a moment after this starts on the Mac): parts under
 // way are followed again, and meetings held.
 void link.whenReady().then(() => {
-  // Sessions whose background work ended as the bridge last stopped hear so now.
+  // Sessions whose background work ended as the bridge last stopped hear so now, and what the
+  // bridge before this one held for it goes.
   sessions.wakeLost()
+  sessions.wakeHeld()
   goals.start()
   sideQuestions.start()
   reviews.resume()
@@ -336,12 +348,50 @@ void link.whenReady().then(() => {
   }
 })
 // On a machine, where it's reached, for kuvo-wake and Kuvo Code's tools there (as the engine's
-// launch writes engine.json): only this user can read it, and it goes when the bridge does.
+// launch writes engine.json): only this user can read it, and it goes when the bridge does. With the
+// build it runs, and how it makes way for a newer one put in its place (renewal.ts), for the box to
+// say (`kuvo/info`'s `pieces`).
 const record = onMachine ? join(machineHome!, "run", "bridge.json") : undefined
-if (record) {
-  writeFileSync(record + ".new", JSON.stringify({ pid: process.pid, port: server.port, password }), { mode: 0o600 })
-  renameSync(record + ".new", record)
+const writeRecord = (renewal: RenewalRecord | null, first = false) => {
+  if (!record) return
+  try {
+    writeFileSync(record + ".new", JSON.stringify({ pid: process.pid, port: server.port, password, build, renewal }), { mode: 0o600 })
+    renameSync(record + ".new", record)
+  } catch (error) {
+    if (first) throw error
+  }
 }
+writeRecord(null, true)
+
+// A newer bridge put in its place on a machine (a Mac that connected brought it): it makes way at
+// the first quiet moment, never cutting a turn, and the machine's launch starts the new one, which
+// starts what waited for it (renewal.ts). (This Mac's own bridge takes a new version with its app,
+// whose keeper starts the box again once nothing runs.)
+const renewal =
+  onMachine && build
+    ? new Renewal({
+        script,
+        build,
+        work: () => {
+          const here = sessions.work()
+          const other = here.other || goals.busy() || sideQuestions.busy() || reviews.busy() || handoffs.busy() || signInsWaiting()
+          return { turns: here.turns, other }
+        },
+        hold: (on) => sessions.hold(on),
+        renew: () => {
+          console.error("A newer bridge is in place: this one makes way for it.")
+          stop()
+        },
+        told: (state) => writeRecord(state),
+        paused: () => existsSync(join(machineHome!, "run", ".updating")),
+        holdAfter: renewHoldAfter,
+      })
+    : undefined
+renewal?.start()
+// The moment a turn ends may be the quiet one.
+if (renewal) subscribe((event) => {
+  if (event.type === "session.idle") renewal.look()
+})
 
 // This box's engine, ended should it hang (it's started again as after a crash), on a machine and on
 // this Mac alike. This box's link watches this bridge in turn (link/main.ts).

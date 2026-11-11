@@ -5,12 +5,18 @@ import { FEATURES } from "../features";
 import { bool, BYTES, type Infer, list, literal, map, NOTHING, nullable, number, object, oneOf, type RouteShape, string, words } from "../shape";
 import { MAC_FEATURES } from "./mac";
 
+/** One of a machine's pieces (`kuvo/info`'s `pieces`): the version it runs (null while it doesn't,
+ * or doesn't say), the one its files hold now, and whether it runs another than those (`behind`). */
+const PIECE = object({ running: nullable(string), current: nullable(string), behind: bool });
+
 /** What the box is and runs (`kuvo/info`): a Mac's names its app's version and its integrations, a
  * machine's its bridge's version and whether its engine runs or is stopped on purpose. `started`:
  * when the engine running now came up, in seconds since 1970 (null while none runs). A machine's
  * `home`: the Mac that started its engine (its id, and its name where it noted one). `macs`: the
  * Macs that set it up (each one's key, its name where it said one, when it was last heard from, ms),
- * and `phones`, how many phones reach it: who an uninstall would stop it for. */
+ * and `phones`, how many phones reach it: who an uninstall would stop it for. A machine's `pieces`:
+ * which version its link, coding agents' bridge and engine each run, against the one in place, and
+ * while a newer bridge waits to take over, since when and whether new turns wait for it. */
 export const INFO = oneOf(
   object({
     kind: literal("mac"),
@@ -37,6 +43,11 @@ export const INFO = oneOf(
     "home?": object({ mac: string, "name?": string }),
     "macs?": list(object({ key: string, "name?": string, seen: number })),
     "phones?": number,
+    "pieces?": object({
+      link: PIECE,
+      agents: object({ running: nullable(string), current: nullable(string), behind: bool, renewal: nullable(object({ since: number, holding: bool })) }),
+      engine: PIECE,
+    }),
   }),
 );
 

@@ -3680,7 +3680,73 @@
           }
          }
         },
-        "phones?": "number"
+        "phones?": "number",
+        "pieces?": {
+         "object": {
+          "link": {
+           "object": {
+            "running": {
+             "oneOf": [
+              "string",
+              "null"
+             ]
+            },
+            "current": {
+             "oneOf": [
+              "string",
+              "null"
+             ]
+            },
+            "behind": "bool"
+           }
+          },
+          "agents": {
+           "object": {
+            "running": {
+             "oneOf": [
+              "string",
+              "null"
+             ]
+            },
+            "current": {
+             "oneOf": [
+              "string",
+              "null"
+             ]
+            },
+            "behind": "bool",
+            "renewal": {
+             "oneOf": [
+              {
+               "object": {
+                "since": "number",
+                "holding": "bool"
+               }
+              },
+              "null"
+             ]
+            }
+           }
+          },
+          "engine": {
+           "object": {
+            "running": {
+             "oneOf": [
+              "string",
+              "null"
+             ]
+            },
+            "current": {
+             "oneOf": [
+              "string",
+              "null"
+             ]
+            },
+            "behind": "bool"
+           }
+          }
+         }
+        }
        }
       }
      ]

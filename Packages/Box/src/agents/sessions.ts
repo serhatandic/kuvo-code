@@ -49,6 +49,8 @@ interface Input {
   adopt?: ModelRef
   /** No message: its agent summarizes the conversation (`compact`). */
   compact?: boolean
+  /** Held for a newer bridge that takes this one's place (renewal.ts): it goes first there. */
+  held?: boolean
 }
 
 /** A turn under way. */
@@ -1019,10 +1021,11 @@ export class Sessions {
     // A turn starts with your message, or with a note from the app (a mid-turn model switch), and
     // a summary you asked for is one too.
     const lastUser = record.messages.findLastIndex((message) => message.type === "user" || message.type === "synthetic" || message.type === "compaction")
-    // A summary waiting for a turn that went with the bridge: that turn is over, and nothing shows it waits.
+    // A summary waiting for a turn that went with the bridge: that turn is over, and nothing shows it
+    // waits. (One held for this bridge, by the one before it, waits for it.)
     const queue = this.queue(record)
-    if (queue.some((input) => input.compact)) {
-      queue.splice(0, queue.length, ...queue.filter((input) => !input.compact))
+    if (queue.some((input) => input.compact && !input.held)) {
+      queue.splice(0, queue.length, ...queue.filter((input) => !input.compact || input.held))
       changed = true
     }
     for (const message of record.messages) {
@@ -1353,10 +1356,12 @@ export class Sessions {
     if (this.atWork(id)) record.agent.lateShells = [...((record.agent.lateShells as string[] | undefined) ?? []), message.id]
     this.store.save(id, true)
     let group: number | undefined
+    this.commands++
     void runCommand(text, directory, (started) => {
       group = started
       this.ownShell(id, started)
     }).then((ran) => {
+      this.commands--
       const groups = this.shells.get(id)
       // Kept while what it started runs on in its group.
       if (group !== undefined && !groupRuns(group)) groups?.delete(group)
@@ -1921,6 +1926,17 @@ export class Sessions {
     // (With nothing to start but one being handed, Send Now waits for it.)
     if (index >= 0 || !live.steering.size) live.go = false
     if (index < 0) return
+    // Held for a newer bridge (renewal.ts): it stays first in line, kept, to go there.
+    if (this.holding) {
+      const input = queue[index]
+      input.held = true
+      if (input.delivery !== "steer") {
+        input.delivery = "steer"
+        emit("session.inbox.delivery.changed", { sessionID: id, inboxID: input.id, delivery: "steer" }, record.session.location.directory)
+      }
+      this.store.save(id, true)
+      return
+    }
     const [input] = queue.splice(index, 1)
     this.start(id, live, input)
   }
@@ -3098,6 +3114,40 @@ export class Sessions {
    * night), it isn't woken (not a turn for each such session at once): the note waits for its next
    * message instead. (While an undo is staged it waits too, for Redo or that message.)
    */
+  /** Messages held for this bridge by the one before it (renewal.ts), or by this one while it waited to
+   * make way: they go now, each once. */
+  wakeHeld() {
+    for (const session of this.store.all()) {
+      const record = this.store.get(session.id)
+      if (!record) continue
+      const held = this.queue(record).filter((input) => input.held)
+      if (!held.length) continue
+      for (const input of held) delete input.held
+      this.store.save(session.id, true)
+      this.wake(session.id)
+    }
+  }
+
+  /** New turns held for a newer bridge (renewal.ts): what's sent waits in line, kept with its
+   * session, for that one to start. Let go, what waited starts here. */
+  hold(on: boolean) {
+    if (this.holding === on) return
+    this.holding = on
+    if (!on) this.wakeHeld()
+  }
+
+  private holding = false
+  /** Your `!` commands running now. */
+  private commands = 0
+
+  /** What's under way, for a newer bridge to wait for: turns (a subagent's too, a message being
+   * handed to one, the files kept after one) and your `!` commands, which it never cuts; and what
+   * agents left running in the background. */
+  work(): { turns: boolean; other: boolean } {
+    const handing = [...this.live.values()].some((live) => live.steering.size > 0)
+    return { turns: this.active().length > 0 || this.commands > 0 || handing, other: Object.keys(this.background()).length > 0 }
+  }
+
   wakeLost(now = Date.now()) {
     for (const session of this.store.all()) {
       const record = this.store.get(session.id)

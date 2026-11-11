@@ -274,6 +274,11 @@ export class Goals {
     })
   }
 
+  /** Whether a check of one is under way (a newer bridge waits for it: renewal.ts). */
+  busy(): boolean {
+    return [...this.goals.values()].some((goal) => goal.checking)
+  }
+
   /** The bridge is stopping: nothing more is followed, checked or kept. */
   stopAll() {
     this.stopped = true

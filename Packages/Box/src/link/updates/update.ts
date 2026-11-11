@@ -13,6 +13,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { isObject, parsed } from "../../shared/json";
+import { nightOf } from "../../shared/night";
 import type { Body } from "../../shared/json";
 import { alive, processRuns as runs } from "../../shared/platform";
 import type { BridgeRecord, EngineRecord, Target } from "../../shared/records";
@@ -552,15 +553,7 @@ export function checkDrift(now = Date.now()): boolean {
 
 // Whether it's the night's window where you are (02:00 to 05:00, `KUVO_TZ`), and which night.
 export function updateNight(date = new Date(), zone: string | undefined = process.env.KUVO_TZ): string | null {
-  let parts: Record<string, string>;
-  try {
-    parts = Object.fromEntries(new Intl.DateTimeFormat("en-CA", { timeZone: zone || undefined, year: "numeric", month: "2-digit", day: "2-digit", hour: "numeric", hourCycle: "h23" })
-      .formatToParts(date).map(part => [part.type, part.value]));
-  } catch {
-    return null;
-  }
-  const hour = Number(parts.hour);
-  return hour >= 2 && hour < 5 ? `${parts.year}-${parts.month}-${parts.day}` : null;
+  return nightOf(date, zone);
 }
 
 // What `kuvo/update` says: whether updates are set up, this version and the newest heard of, how
