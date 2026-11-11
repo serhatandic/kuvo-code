@@ -543,7 +543,7 @@ struct MainView: View {
         let id = model.id
         let directory = model.session.location.directory
         let bot = bots.bot(forSession: id)
-        return Card(title: bot?.name ?? model.session.title ?? "New Session", detail: bot == nil ? workspace.projectName(directory) : nil, isFocused: focus == .split, rename: bot == nil ? rename(model.session) : nil) {
+        return Card(title: bot?.name ?? model.session.title ?? "New Session", detail: bot == nil ? workspace.projectName(of: model.session) : nil, isFocused: focus == .split, rename: bot == nil ? rename(model.session) : nil) {
             if let bot {
                 BotAvatar(look: bot.look, size: 18, mood: bots.mood(of: bot, in: workspace), animates: false)
             } else if let logo = logo(for: model.session.model, in: directory) { ProviderLogo(id: logo, size: 14) } else { Image(systemName: "bubble.left") }
@@ -614,7 +614,7 @@ struct MainView: View {
         let machine = machine(for: directory)
         let bot = bots.bot(forSession: id)
         // A bot's card has its name only: its avatar shows where it lives.
-        Card(title: bot?.name ?? model.session.title ?? "New Session", detail: bot == nil ? workspace.projectName(directory) : nil, isFocused: focus == .conversation, rename: bot == nil ? rename(model.session) : nil) {
+        Card(title: bot?.name ?? model.session.title ?? "New Session", detail: bot == nil ? workspace.projectName(of: model.session) : nil, isFocused: focus == .conversation, rename: bot == nil ? rename(model.session) : nil) {
             if let bot {
                 // Still: in view, the bot moves in its conversation.
                 BotAvatar(look: bot.look, size: 18, mood: bots.mood(of: bot, in: workspace), animates: false)
@@ -716,7 +716,7 @@ struct MainView: View {
             } else if let id = sessionID, workspace.session(id) == nil, let parent = workspace.parent(of: id) {
                 // A sub-session: the conversation of a subagent its session's agent started.
                 let root = workspace.session(workspace.root(of: id))
-                Card(title: SubagentTask.title(workspace.subSession(id)?.title ?? workspace.subagentTitle(id) ?? ""), detail: root.map { workspace.projectName($0.location.directory) }, isFocused: focus == .conversation) {
+                Card(title: SubagentTask.title(workspace.subSession(id)?.title ?? workspace.subagentTitle(id) ?? ""), detail: root.map { workspace.projectName(of: $0) }, isFocused: focus == .conversation) {
                     Image(systemName: "arrow.turn.down.right")
                 } actions: {
                     Button("Close Tab", systemImage: "xmark") { tabs.close(.session(id)) }

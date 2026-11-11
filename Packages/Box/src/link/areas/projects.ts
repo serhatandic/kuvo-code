@@ -119,12 +119,14 @@ async function atWork(target: Target, signal: AbortSignal | undefined): Promise<
 }
 
 /** Every session of the project, its worktrees' and other folders' too (worktrees removed since
- * included, whose sessions clients still show under it, and `also`, folders a client shows under it that this box doesn't
- * know: worktrees removed before it kept them), archived, on the engine and the coding agents'
- * bridge, page after page; how many weren't. None while the engine doesn't answer (`kept` null):
+ * included, whose sessions clients still show under it, and `also`, folders a client shows under
+ * it that this box doesn't know: worktrees removed before it kept them), and those filed under it
+ * from another folder (`kuvo.filed`, a subfolder's say), archived, on the engine and the coding
+ * agents' bridge, page after page; how many weren't. None while the engine doesn't answer (`kept` null):
  * its sessions are most of them, and the project would come back with them. */
 async function archiveProject(directory: string, also: string[], readEngine: () => EngineRecord, readBridge: () => BridgeRecord, signal: AbortSignal | undefined, file = PROJECTS_FILE): Promise<{ archived: number; kept: number | null }> {
-  const trees = Object.entries(filedProjects(readProjects(file))).filter(([, project]) => project === directory).map(([folder]) => folder);
+  const filed = filedProjects(readProjects(file));
+  const trees = Object.entries(filed).filter(([, project]) => project === directory).map(([folder]) => folder);
   const folders = [...new Set([directory, ...trees, ...also])];
   const targets: Target[] = [];
   try { targets.push(readEngine()); } catch { return { archived: 0, kept: null }; }
@@ -136,8 +138,9 @@ async function archiveProject(directory: string, also: string[], readEngine: () 
   } catch {}
   let archived = 0, kept = 0;
   for (const target of targets) {
-    for (const folder of folders) {
-      let query: string | null = `limit=100&order=desc&parentID=null&directory=${encodeURIComponent(folder)}`;
+    // Each folder's, then those filed under it from elsewhere, found among all of them.
+    for (const folder of [...folders, null]) {
+      let query: string | null = `limit=100&order=desc&parentID=null${folder === null ? "" : `&directory=${encodeURIComponent(folder)}`}`;
       for (let page = 0; page < 1000 && query; page++) {
         // The page whole (`call` keeps only its data), for its cursor.
         let listed: SessionPage | undefined;
@@ -150,7 +153,7 @@ async function archiveProject(directory: string, also: string[], readEngine: () 
           break;
         }
         const sessions = Array.isArray(listed?.data) ? listed.data : [];
-        const archiving = sessions.filter(session => session?.location?.directory === folder && !session.time?.archived && session.metadata?.["kuvo.archived"] !== true);
+        const archiving = sessions.filter(session => (folder === null ? filedElsewhere(session, directory, filed) : session?.location?.directory === folder) && !session.time?.archived && session.metadata?.["kuvo.archived"] !== true);
         // Only one at work can wait on you (what it asks holds its turn, its subagents' too), so
         // only those are looked at; every one when that can't be read.
         const working = await atWork(target, signal);
@@ -177,6 +180,15 @@ async function archiveProject(directory: string, also: string[], readEngine: () 
     }
   }
   return { archived, kept };
+}
+
+/** Whether `session` is filed under the project at `directory` by its own mark (`kuvo.filed`,
+ * while it's still in the folder that names), as every client files one whose folder isn't the
+ * project's own nor in `filed`. */
+function filedElsewhere(session: EngineSession | undefined, directory: string, filed: Record<string, string>): boolean {
+  const mark = session?.metadata?.kuvo?.filed;
+  const at = session?.location?.directory;
+  return isObject(mark) && mark.project === directory && typeof at === "string" && mark.folder === at && at !== directory && !(at in filed);
 }
 
 /** `kuvo/projects`: the box's projects, read and changed by any client, as Settings and the

@@ -270,16 +270,28 @@ final class Workspace {
     /// The project a session is filed under: its folder's, else the one its box filed it under as
     /// it was made (`SessionProject`: a new worktree its box hasn't listed here yet, a subfolder).
     func projectDirectory(of session: Session) -> String {
-        let directory = session.location.directory
+        let directory = session.location.directory, box = Self.box(of: directory)
+        // (The mark names folders as its box does.)
+        let project = SessionProject.project(of: session, folder: Self.onBox(directory)) { folder in
+            let here = Self.here(folder, on: box), project = projectDirectory(here)
+            return project == here ? nil : Self.onBox(project)
+        }
+        return project == Self.onBox(directory) ? directory : Self.here(project, on: box)
+    }
+
+    /// A worktree of a project's (one of its other folders, which you can open as a project of its
+    /// own, isn't).
+    private func isWorktree(_ directory: String) -> Bool {
         let project = projectDirectory(directory)
-        guard project == directory, let made = SessionProject.filed(session, folder: Self.onBox(directory)) else { return project }
-        return Self.here(made, on: Self.box(of: directory))
+        return project != directory && settings[project]?.folders.contains(directory) != true
     }
 
     /// The project's other folders, for a folder sessions run in.
     func extraFolders(_ directory: String) -> [String] {
-        // (One in one of those folders works there alone, as its box starts it.)
-        guard let folders = settings[projectDirectory(directory)]?.folders, !folders.contains(directory) else { return [] }
+        // Its project's own folder's or one of its worktrees'; one in one of the other folders, or
+        // a worktree of one, works there alone, as its box starts it.
+        let project = worktrees[directory]?.project ?? removedWorktrees[directory] ?? projectDirectory(directory)
+        guard let folders = settings[project]?.folders, !folders.contains(directory) else { return [] }
         return folders
     }
 
@@ -784,7 +796,7 @@ final class Workspace {
         let directory = folderPath(directory)
         // Chats aren't a project, nor is a bot's own folder, nor a project's worktree (a session
         // started in one stays its project's).
-        guard !folders.contains(directory), !Self.isChat(directory), !Self.isBotFolder(directory), projectDirectory(directory) == directory else { return directory }
+        guard !folders.contains(directory), !Self.isChat(directory), !Self.isBotFolder(directory), !isWorktree(directory) else { return directory }
         Analytics.shared.track("project_added", ["projects": folders.count + 1])
         folders.insert(directory, at: 0)
         UserDefaults.standard.set(folders, forKey: "projectFolders")
@@ -2692,7 +2704,7 @@ final class Workspace {
                     Notifier.shared.notify(
                         session: id,
                         title: botName?(id) ?? session.title ?? "New Session",
-                        subtitle: botName?(id) == nil ? projectName(session.location.directory) : nil,
+                        subtitle: botName?(id) == nil ? projectName(of: session) : nil,
                         body: summaryFailed ? "Couldn't summarize the conversation." : failed ? "Stopped with an error." : reply ?? "Finished.",
                         replies: true,
                         push: .init(failed || summaryFailed ? .failed : isBot ? .report : .finished, machine: machine)
@@ -3026,7 +3038,7 @@ final class Workspace {
             // Buttons only when the notification hides none of what they'd answer.
             let shown = Notifier.showsAll(body) && (question?.choices.allSatisfy { Notifier.showsAll($0.label) } ?? true)
             Notifier.shared.notify(session: session?.id ?? id, title: session.flatMap { botName?($0.id) } ?? session?.title ?? AppInfo.name,
-                                   subtitle: session.flatMap { botName?($0.id) == nil ? projectName($0.location.directory) : nil }, body: body,
+                                   subtitle: session.flatMap { botName?($0.id) == nil ? projectName(of: $0) : nil }, body: body,
                                    permission: isPermission && answerable && shown ? (session: id, request: request) : nil, always: always,
                                    question: shown ? question : nil,
                                    push: .init(isPermission ? .permission : .question, request: (session: id, id: request),

@@ -102,7 +102,7 @@ const took = (ms: number) => {
 /** A session as a line to its lead names it. */
 function namedOf(session: Partial<EngineSession> & { id: string }): string {
   const folder = session.location?.directory ?? session.directory ?? "";
-  return `"${session.title || "New Session"}" ${placeWords({ project: projectNameOf(folder), folder })} (address ${session.id})`;
+  return `"${session.title || "New Session"}" ${placeWords({ project: projectNameOf(folder, session), folder })} (address ${session.id})`;
 }
 
 /** What a conversation is told of a summary it asked of a session that failed. */

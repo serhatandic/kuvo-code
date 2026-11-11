@@ -62,7 +62,8 @@ async function engineWith(sessions, refusing = new Set(), waiting = new Set(), a
       if (request.method === "GET" && url.pathname === "/api/session") {
         const cursor = url.searchParams.get("cursor");
         const { directory, start } = cursor ? JSON.parse(Buffer.from(cursor, "base64url").toString()) : { directory: url.searchParams.get("directory"), start: 0 };
-        const inFolder = sessions.filter(each => each.location.directory === directory);
+        // (Without a folder, every one.)
+        const inFolder = sessions.filter(each => directory === null || each.location.directory === directory);
         const limit = Number(url.searchParams.get("limit"));
         const page = inFolder.slice(start, start + limit);
         return send(200, { data: page, cursor: { next: Buffer.from(JSON.stringify({ directory, start: start + limit })).toString("base64url") } });
@@ -116,13 +117,18 @@ test("a project added from any client is kept on the box as it's named, and chan
   assert.equal((await ask(handle, "POST", `kuvo/projects?directory=${encodeURIComponent(shop)}`, {})).status, 405);
 });
 
-test("Remove Project archives every session of it, its worktree's and older ones too, and keeps its settings for when one comes back", async t => {
-  // More than a page of them, one archived already, and another project's.
+test("Remove Project archives every session of it, its worktree's, its other folders', those filed under it from a subfolder and older ones too, and keeps its settings for when one comes back", async t => {
+  // More than a page of them, one archived already, one in its other folder, one an agent started
+  // in a subfolder of it (#311), and another project's, and one filed under it before it moved there.
+  const sub = path.join(shop, "Packages"), notes = path.join(work, "notes");
   const sessions = [
     ...Array.from({ length: 102 }, (_, i) => session(`ses_shop${i}`, shop)),
     session("ses_tree", tree),
     session("ses_old", shop, { "kuvo.archived": true, "kuvo.pinned": true }),
     session("ses_blog", blog, { "kuvo.pinned": true }),
+    session("ses_sub", sub, { kuvo: { filed: { folder: sub, project: shop } } }),
+    session("ses_notes", notes, { "kuvo.pinned": true }),
+    session("ses_moved", notes, { kuvo: { filed: { folder: sub, project: shop } } }),
   ];
   const engine = await engineWith(sessions);
   t.after(engine.close);
@@ -131,9 +137,10 @@ test("Remove Project archives every session of it, its worktree's and older ones
 
   const removed = await ask(handle, "DELETE", `kuvo/projects?directory=${encodeURIComponent(shop)}`);
   assert.equal(removed.status, 200, JSON.stringify(removed.json));
-  assert.deepEqual(removed.json, { archived: 103 });
-  assert.ok(sessions.filter(each => each.id !== "ses_blog").every(each => each.metadata["kuvo.archived"] === true));
-  assert.deepEqual(sessions.find(each => each.id === "ses_blog").metadata, { "kuvo.pinned": true }, "another project's stay");
+  assert.deepEqual(removed.json, { archived: 105 });
+  assert.ok(sessions.filter(each => !["ses_notes", "ses_moved"].includes(each.id)).every(each => each.metadata["kuvo.archived"] === true));
+  assert.deepEqual(sessions.find(each => each.id === "ses_notes").metadata, { "kuvo.pinned": true }, "another project's stay");
+  assert.equal(sessions.find(each => each.id === "ses_moved").metadata["kuvo.archived"], undefined, "one moved out of it since stays");
   assert.deepEqual(sessions.find(each => each.id === "ses_old").metadata, { "kuvo.archived": true, "kuvo.pinned": true });
   assert.deepEqual((await ask(handle, "GET", "kuvo/projects")).json.projects, [{ directory: shop, name: "Shop", folders: [blog], removed: true }]);
 

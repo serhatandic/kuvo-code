@@ -17,6 +17,15 @@ public enum SessionProject {
         return project
     }
 
+    /// The project `session` is filed under, by its `folder`: as its box says of that folder
+    /// (`listed`, nil where it says nothing), else as its own mark says (`filed`), the project that
+    /// names as its box says of it too, else the folder itself.
+    public static func project(of session: Session, folder: String, listed: (String) -> String?) -> String {
+        if let said = listed(folder) { return said }
+        guard let filed = filed(session, folder: folder) else { return folder }
+        return listed(filed) ?? filed
+    }
+
     /// What a client gives a session it makes in a worktree its box just made (`POST
     /// kuvo/worktrees`'s `folder` and `project`), as `kuvo.filed` in its metadata, as the box's own
     /// start does: so every client files it under its project from its first listing.

@@ -185,6 +185,17 @@ function projectOf(folder: string): { name: string; folders: readonly string[] }
   return { name: known?.name ?? path.basename(directory), folders: directory !== folder ? [] : (known?.folders ?? []) };
 }
 
+// The project a folder is, or is another folder of, kept by another name for the same place (a
+// link: an agent's folder is named by where it really is); null for none.
+async function keptAs(folder: string): Promise<string | null> {
+  const projects = readProjects().filter(each => !each.removed);
+  if (projects.some(each => each.directory === folder)) return null;
+  await askedAbout(projects.flatMap(each => [each.directory, ...each.folders]));
+  const at = realish(folder);
+  return projects.find(each => realish(each.directory) === at)?.directory
+    ?? projects.find(each => each.folders.some(other => realish(other) === at))?.directory ?? null;
+}
+
 // A project's name here, by its folder.
 const projectName = (directory: string): string => readProjects().find(each => each.directory === directory)?.name ?? path.basename(directory);
 
@@ -420,7 +431,9 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
   // client shows it there from its first listing: one may hear of the session from its engine
   // before `kuvo/projects` says whose a new worktree is, and that never names a subfolder.
   const startersFiled = filedOf(parent);
-  const under = folder === CHATS ? null : named?.directory ?? (filedUnder(folder) !== folder ? filedUnder(folder) : startersFiled?.folder === folder ? startersFiled.project : folder);
+  const mapped = folder === CHATS ? null : filedUnder(folder);
+  const its = mapped === null || mapped !== folder || named ? mapped : await keptAs(folder) ?? folder;
+  const under = its === null ? null : named?.directory ?? (its !== folder ? its : startersFiled?.folder === folder ? startersFiled.project : folder);
   const filed = under && under !== folder ? { folder, project: under } : null;
   const project = !under ? null : realish(under) !== realish(folder) ? { name: projectName(under), folders: [] as readonly string[] } : projectOf(under);
   const title = typeof given.title === "string" && given.title.trim() ? given.title.trim() : null;

@@ -4011,7 +4011,7 @@ while a box is away goes there when it's back.
   as its sessions run there (a link isn't followed), and whether it's there now or not (a drive
   that's away).
 - `DELETE kuvo/projects?directory=<folder>` is Remove Project: every session of it, its worktrees' and
-  other folders' too (removed worktrees included, and the folders an optional body `{folders}` names: those a client
+  other folders' too, and those filed under it from elsewhere (`kuvo.filed`) (removed worktrees included, and the folders an optional body `{folders}` names: those a client
   shows under it that the box doesn't know, worktrees removed before it kept them), archived on
   the engine and the coding agents' bridge, older ones included, then it's marked `removed`.
   `200 {archived}`; `409 {message, archived, kept}` when some couldn't be archived (it stays
