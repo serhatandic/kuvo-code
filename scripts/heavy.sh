@@ -245,7 +245,7 @@ esac
 OLD="$DIR/kuvo-code-heavy-$(id -u).lock"
 MAX_LOAD="${KUVO_HEAVY_LOAD:-}"
 WAITS="${KUVO_HEAVY_WAIT:-1}"
-case "$kind" in mac | phone) DEFAULT_LIMIT=45m ;; mac-build) DEFAULT_LIMIT=30m ;; box) DEFAULT_LIMIT=40m ;; esac
+case "$kind" in mac | phone) DEFAULT_LIMIT=45m ;; mac-build) DEFAULT_LIMIT=90m ;; box) DEFAULT_LIMIT=40m ;; esac
 
 # What every job runs under, so it never takes the CPU or the disk from the box: background priority
 # (a prefix: `$LOW "$@"`; its children keep it). macOS: `taskpolicy -b`, background QoS: low CPU and

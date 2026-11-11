@@ -177,7 +177,7 @@ scripts/test-box.sh box <test-filter>
   not the checkout's `build/SourcePackages` (the app suite's) or `build/DerivedData`, which two
   jobs in one checkout would share. A package's `.build` is its own to each checkout;
 - `phone-build`: the iPhone app's builds, and anything of the phone's that boots no simulator. It is
-  `mac-build`'s lane under another name (the same two slots, locks and 30-minute time limit, which
+  `mac-build`'s lane under another name (the same two slots, locks and 90-minute time limit, which
   `KUVO_HEAVY_LIMIT=60m` raises), not one of its own: a phone build and a Mac build are both `xcodebuild` compiles that compete for the same CPU and
   memory, so they count against each other, and neither waits for a simulator. Take the slot's
   folder from `KUVO_HEAVY_SLOT` and `KUVO_HEAVY_BUILD_SUFFIX` (`-1` or `-2`) and build in
