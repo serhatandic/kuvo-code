@@ -70,7 +70,8 @@ type Pieces = NonNullable<MachineInfo["pieces"]>;
 export function pieces(engine: Partial<EngineRecord>, engineRuns: boolean): Pieces {
   const mtime = (file: string) => { try { return fs.statSync(file).mtimeMs; } catch { return 0; } };
   // The link (the process that keeps the relay), from the version it noted as it started; the one
-  // here is this process's, which runs from the files in place.
+  // here is this process's. Asked through the running link that's its own; a Mac asks with a
+  // process of its own (`box route`), from the files in place, which tells the two apart.
   const linkRuns = runs(Number(textOf(PID_FILE)), "kuvo-link");
   const linkVersion = linkRuns ? textOf(VERSION_FILE)?.trim() || null : null;
   // The coding agents' bridge, by the build it says it runs; one from before it said (an older
@@ -93,6 +94,6 @@ export function pieces(engine: Partial<EngineRecord>, engineRuns: boolean): Piec
   return {
     link: { running: linkVersion, current: BRIDGE_VERSION, behind: linkVersion !== null && linkVersion !== BRIDGE_VERSION },
     agents: { running: build, current, behind: agentsBehind, renewal: agentsBehind ? renewal : null },
-    engine: { running, current: currentEngine, behind: running !== null && currentEngine !== null && running !== currentEngine },
+    engine: { running, current: currentEngine, behind: running !== null && currentEngine !== null && newerVersion(currentEngine, running) },
   };
 }

@@ -1,7 +1,7 @@
 // @bun
 // Packages/Box/src/agents/main.ts
 import { existsSync as existsSync19, mkdirSync as mkdirSync21, readdirSync as readdirSync17, readFileSync as readFileSync31, renameSync as renameSync17, rmSync as rmSync16, writeFileSync as writeFileSync23 } from "fs";
-import { join as join32 } from "path";
+import { basename as basename12, dirname as dirname18, join as join32 } from "path";
 
 // Packages/Box/src/agents/accounts.ts
 import { randomBytes } from "crypto";
@@ -17939,6 +17939,7 @@ function runCommand(command, directory, started = () => {}) {
     let truncated = false;
     let timedOut = false;
     let done = false;
+    let timer;
     const take = (chunk) => {
       output += chunk.toString("utf8");
       if (output.length > shellOutputLimit * 2) {
@@ -17972,7 +17973,7 @@ function runCommand(command, directory, started = () => {}) {
           process.kill(-child.pid, signal);
       } catch {}
     };
-    const timer = setTimeout(() => {
+    timer = setTimeout(() => {
       timedOut = true;
       group("SIGTERM");
       setTimeout(() => group("SIGKILL"), 5000);
@@ -18851,22 +18852,27 @@ class Sessions {
     for (const waiting of live.waiting.splice(0))
       waiting();
     record.agent.inbox = [];
-    const run = runOf(doing);
-    if (run)
-      await this.stop(id, live, run);
-    else
-      await this.stopSubagents(id);
-    for (const child of this.list(undefined, id))
-      if (!this.shownElsewhere(child.id, id))
-        await this.remove(child.id);
-    for (const thread of live.threads.values())
-      thread.close();
-    for (const [provider, slot] of Object.entries(this.slots(record)))
-      await this.agent(provider)?.forgetConversation?.(slot.state).catch(() => {});
-    this.stopShells(id);
-    this.store.remove(id);
-    this.live.delete(id);
-    emit("session.deleted", { sessionID: id }, record.session.location.directory);
+    this.removing++;
+    try {
+      const run = runOf(doing);
+      if (run)
+        await this.stop(id, live, run);
+      else
+        await this.stopSubagents(id);
+      for (const child of this.list(undefined, id))
+        if (!this.shownElsewhere(child.id, id))
+          await this.remove(child.id);
+      for (const thread of live.threads.values())
+        thread.close();
+      for (const [provider, slot] of Object.entries(this.slots(record)))
+        await this.agent(provider)?.forgetConversation?.(slot.state).catch(() => {});
+      this.stopShells(id);
+      this.store.remove(id);
+      this.live.delete(id);
+      emit("session.deleted", { sessionID: id }, record.session.location.directory);
+    } finally {
+      this.removing--;
+    }
   }
   shownElsewhere(child, except) {
     for (const session of this.store.all()) {
@@ -18936,7 +18942,6 @@ class Sessions {
       group = started;
       this.ownShell(id, started);
     }).then((ran) => {
-      this.commands--;
       const groups = this.shells.get(id);
       if (group !== undefined && !groupRuns(group))
         groups?.delete(group);
@@ -18949,7 +18954,7 @@ class Sessions {
         return;
       this.store.save(id, true);
       emit("session.shell.ended", { sessionID: id, shell: { id: shellID, command: text, status: message.status, exit: ran.code }, output: message.output }, directory);
-    });
+    }).finally(() => this.commands--);
   }
   async stageRevert(id, messageID) {
     const record = this.record(id);
@@ -19272,7 +19277,8 @@ class Sessions {
         throw new BadRequest(`${agent.name} has let this subagent go: write to the conversation that started it, which can pick it up again.`);
       this.showMessage(id, record, input);
       const missed = () => this.subagentNote(id, `${agent.name} didn't take that message: write to the conversation that started it.`);
-      send({ id: input.id, text: attached.text, files: attached.files }, () => this.resumedRun(parentID, parentLive, id)).then((sent) => sent || missed(), missed);
+      this.sending++;
+      send({ id: input.id, text: attached.text, files: attached.files }, () => this.resumedRun(parentID, parentLive, id)).then((sent) => sent || missed(), missed).finally(() => this.sending--);
       return;
     }
     if (parent.session.model?.providerID !== provider)
@@ -20587,9 +20593,11 @@ ${live.agentPrompt}` : ""
   }
   holding = false;
   commands = 0;
+  sending = 0;
+  removing = 0;
   work() {
     const handing = [...this.live.values()].some((live) => live.steering.size > 0);
-    return { turns: this.active().length > 0 || this.commands > 0 || handing, other: Object.keys(this.background()).length > 0 };
+    return { turns: this.active().length > 0 || this.commands > 0 || this.sending > 0 || this.removing > 0 || handing, other: Object.keys(this.background()).length > 0 };
   }
   wakeLost(now = Date.now()) {
     for (const session of this.store.all()) {
@@ -26540,12 +26548,14 @@ function nightOf(date = new Date, zone = process.env.KUVO_TZ) {
 }
 
 // Packages/Box/src/agents/renewal.ts
-var renewalTiming = { look: 1e4, grace: 1000, patience: 60 * 60000, longest: 24 * 60 * 60000 };
+var renewalTiming = { look: 1e4, grace: 1000, patience: 60 * 60000, longest: 24 * 60 * 60000, holding: 30 * 60000 };
 
 class Renewal {
   options;
   since;
+  from = 0;
   holding = false;
+  heldAt = 0;
   going = false;
   seen;
   newer = false;
@@ -26569,8 +26579,8 @@ class Renewal {
   get state() {
     return this.since === undefined ? null : { since: this.since, holding: this.holding };
   }
-  holdsNow(since, now) {
-    const waited = now - since;
+  holdsNow(from, now) {
+    const waited = now - from;
     if (this.options.holdAfter !== undefined)
       return waited >= this.options.holdAfter;
     return waited >= renewalTiming.longest || waited >= renewalTiming.patience && nightOf(new Date(now), this.options.zone) !== null;
@@ -26579,23 +26589,27 @@ class Renewal {
     if (this.going || this.options.paused?.())
       return;
     const now = this.options.now?.() ?? Date.now();
-    if (!this.newerInPlace()) {
+    if (!this.newerInPlace() || !(this.options.ready?.() ?? true)) {
       if (this.since === undefined)
         return;
       this.since = undefined;
-      if (this.holding) {
-        this.holding = false;
-        this.options.hold(false);
-      }
+      this.letGo();
       this.options.told(null);
       return;
     }
     if (this.since === undefined) {
-      this.since = now;
+      this.since = this.from = now;
       this.options.told(this.state);
     }
-    if (!this.holding && this.holdsNow(this.since, now)) {
+    if (this.holding && now - this.heldAt >= renewalTiming.holding && this.options.work().turns) {
+      this.from = now;
+      this.letGo();
+      this.options.told(this.state);
+      return;
+    }
+    if (!this.holding && this.holdsNow(this.from, now)) {
       this.holding = true;
+      this.heldAt = now;
       this.options.hold(true);
       this.options.told(this.state);
     }
@@ -26605,13 +26619,19 @@ class Renewal {
     if (!this.holding)
       this.options.hold(true);
     const later = setTimeout(() => {
-      if (this.quiet() && this.newerInPlace())
+      if (this.quiet() && this.newerInPlace() && !this.options.paused?.())
         return this.options.renew();
       this.going = false;
       if (!this.holding)
         this.options.hold(false);
     }, renewalTiming.grace);
     later.unref?.();
+  }
+  letGo() {
+    if (!this.holding)
+      return;
+    this.holding = false;
+    this.options.hold(false);
   }
   quiet() {
     const work = this.options.work();
@@ -27151,6 +27171,13 @@ var renewal = onMachine && build ? new Renewal({
   },
   told: (state) => writeRecord(state),
   paused: () => existsSync19(join32(machineHome, "run", ".updating")),
+  ready: () => {
+    let wanted;
+    try {
+      wanted = /^V=([0-9][0-9A-Za-z.+-]*)$/m.exec(readFileSync31(join32(machineHome, "bin", "kuvo-start"), "utf8"))?.[1];
+    } catch {}
+    return !wanted || wanted === basename12(dirname18(process.execPath));
+  },
   holdAfter: renewHoldAfter
 }) : undefined;
 renewal?.start();
@@ -27194,4 +27221,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents cd5b953971028be0998325d35b1fb039a465d627e3dd83e811cb11fc04b75ee3
+// Built from Packages/Box/src/agents 23a27da4a0d6d82e5b5ed83629d449df7cb2c04c056fe700f0bc62ea1da2b672

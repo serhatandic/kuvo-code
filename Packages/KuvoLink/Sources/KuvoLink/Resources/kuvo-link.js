@@ -35669,7 +35669,7 @@ function pieces2(engine, engineRuns) {
   return {
     link: { running: linkVersion, current: BRIDGE_VERSION, behind: linkVersion !== null && linkVersion !== BRIDGE_VERSION },
     agents: { running: build, current, behind: agentsBehind, renewal: agentsBehind ? renewal : null },
-    engine: { running, current: currentEngine, behind: running !== null && currentEngine !== null && running !== currentEngine }
+    engine: { running, current: currentEngine, behind: running !== null && currentEngine !== null && newerVersion(currentEngine, running) }
   };
 }
 

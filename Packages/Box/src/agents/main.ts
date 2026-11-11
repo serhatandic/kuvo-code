@@ -11,7 +11,7 @@
 // as long as the engine (KUVO_ENGINE_PID) does, the Mac connected or not.
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs"
-import { join } from "node:path"
+import { basename, dirname, join } from "node:path"
 import { Accounts, parseProvider } from "./accounts"
 import { record as recordArtifacts } from "./artifacts/record"
 import type { Source } from "./artifacts/recorder"
@@ -384,6 +384,15 @@ const renewal =
         },
         told: (state) => writeRecord(state),
         paused: () => existsSync(join(machineHome!, "run", ".updating")),
+        // A bundle a Mac brought with a newer engine it kept from starting (sessions were at work)
+        // waits for that engine: the keeper starts the one `bin/kuvo-start` names.
+        ready: () => {
+          let wanted: string | undefined
+          try {
+            wanted = /^V=([0-9][0-9A-Za-z.+-]*)$/m.exec(readFileSync(join(machineHome!, "bin", "kuvo-start"), "utf8"))?.[1]
+          } catch {}
+          return !wanted || wanted === basename(dirname(process.execPath))
+        },
         holdAfter: renewHoldAfter,
       })
     : undefined

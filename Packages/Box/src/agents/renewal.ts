@@ -4,8 +4,11 @@
 // agent left running) it goes, and what keeps it running (a machine's launch) starts the new one.
 // Waiting an hour without one, it holds new turns from the next night's window (02:00 to 05:00
 // where you are), or after a day whatever the hour: what's sent waits in line, kept, and once the
-// turns under way have ended it goes, and the new bridge starts what waited. Nothing it ran is
-// cut, and nothing sent is lost or started twice.
+// turns under way have ended it goes, and the new bridge starts what waited. A turn that doesn't
+// end within half an hour of holding (one waiting on you overnight) has it let go of what it held,
+// and try again from the next night. Nothing it ran is cut, and nothing sent is lost or started
+// twice. It makes way only for a bundle meant for the engine it runs on (`ready`): one that came
+// with a newer engine waits for that engine, which starts it.
 
 import { statSync, watch } from "node:fs"
 import { dirname } from "node:path"
@@ -13,15 +16,16 @@ import { bundleBuild } from "../shared/bundle"
 import { nightOf } from "../shared/night"
 import type { RenewalRecord } from "../shared/records"
 
-/** What's under way here: `turns`, which it never cuts (a session's turn, your `!` command, a side
- * question being answered, a sign-in…), and `other`, what it ends as it goes, said to its session
- * once it's back (what an agent left running in the background), waited for only until it holds. */
+/** What's under way here: `turns`, which it never cuts (a session's turn, a subagent's, your `!`
+ * command, a message being handed to an agent, a session being deleted), and `other`, what it ends
+ * as it goes, each saying so as after any restart (what an agent left running in the background, a
+ * side question, a review, a handoff, a sign-in), waited for only until it holds. */
 export type Work = { turns: boolean; other: boolean }
 
 /** How often it looks (besides when the file changes and when a turn ends); how long it waits once
  * quiet, for what was being sent to come in; how long it looks for a quiet moment before holding
- * at night; and the longest before it holds whatever the hour. */
-export const renewalTiming = { look: 10_000, grace: 1_000, patience: 60 * 60_000, longest: 24 * 60 * 60_000 }
+ * at night; the longest before it holds whatever the hour; and the longest it holds. */
+export const renewalTiming = { look: 10_000, grace: 1_000, patience: 60 * 60_000, longest: 24 * 60 * 60_000, holding: 30 * 60_000 }
 
 export interface RenewalOptions {
   /** The bundle this bridge runs, and its build as it started. */
@@ -32,10 +36,13 @@ export interface RenewalOptions {
   hold: (on: boolean) => void
   /** Goes, for the newer one to start. */
   renew: () => void
-  /** How it stands, as it changes (null: no newer one in place). */
+  /** How it stands, as it changes (null: no newer one in place it makes way for). */
   told: (state: RenewalRecord | null) => void
   /** Not now (the box is updating itself, which starts everything again anyway). */
   paused?: () => boolean
+  /** Whether the bundle in place is meant for the engine it runs on (else the engine that came
+   * with it starts it). */
+  ready?: () => boolean
   now?: () => number
   zone?: string
   /** A test's: it holds this long after it saw the newer one, whatever the hour. */
@@ -44,7 +51,10 @@ export interface RenewalOptions {
 
 export class Renewal {
   private since?: number
+  /** When it began looking for a moment: as it saw the newer one, or as it let go of a hold. */
+  private from = 0
   private holding = false
+  private heldAt = 0
   private going = false
   private seen?: string
   private newer = false
@@ -71,9 +81,9 @@ export class Renewal {
     return this.since === undefined ? null : { since: this.since, holding: this.holding }
   }
 
-  /** Whether it holds new turns now, `since` the newer one came. */
-  holdsNow(since: number, now: number): boolean {
-    const waited = now - since
+  /** Whether it holds new turns now, having looked for a quiet moment `from` then. */
+  holdsNow(from: number, now: number): boolean {
+    const waited = now - from
     if (this.options.holdAfter !== undefined) return waited >= this.options.holdAfter
     return waited >= renewalTiming.longest || (waited >= renewalTiming.patience && nightOf(new Date(now), this.options.zone) !== null)
   }
@@ -81,23 +91,28 @@ export class Renewal {
   look() {
     if (this.going || this.options.paused?.()) return
     const now = this.options.now?.() ?? Date.now()
-    if (!this.newerInPlace()) {
-      // Its own back in place (or none there): nothing to make way for.
+    if (!this.newerInPlace() || !(this.options.ready?.() ?? true)) {
+      // Its own back in place (or none there), or one waiting for its engine: nothing to make way for.
       if (this.since === undefined) return
       this.since = undefined
-      if (this.holding) {
-        this.holding = false
-        this.options.hold(false)
-      }
+      this.letGo()
       this.options.told(null)
       return
     }
     if (this.since === undefined) {
-      this.since = now
+      this.since = this.from = now
       this.options.told(this.state)
     }
-    if (!this.holding && this.holdsNow(this.since, now)) {
+    if (this.holding && now - this.heldAt >= renewalTiming.holding && this.options.work().turns) {
+      // A turn that won't end (one waiting on you): what waited goes, and it tries again later.
+      this.from = now
+      this.letGo()
+      this.options.told(this.state)
+      return
+    }
+    if (!this.holding && this.holdsNow(this.from, now)) {
       this.holding = true
+      this.heldAt = now
       this.options.hold(true)
       this.options.told(this.state)
     }
@@ -107,11 +122,17 @@ export class Renewal {
     this.going = true
     if (!this.holding) this.options.hold(true)
     const later = setTimeout(() => {
-      if (this.quiet() && this.newerInPlace()) return this.options.renew()
+      if (this.quiet() && this.newerInPlace() && !this.options.paused?.()) return this.options.renew()
       this.going = false
       if (!this.holding) this.options.hold(false)
     }, renewalTiming.grace)
     later.unref?.()
+  }
+
+  private letGo() {
+    if (!this.holding) return
+    this.holding = false
+    this.options.hold(false)
   }
 
   private quiet(): boolean {

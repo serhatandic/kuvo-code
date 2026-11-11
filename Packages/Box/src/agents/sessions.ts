@@ -216,6 +216,7 @@ export function runCommand(command: string, directory: string, started: (group: 
     let truncated = false
     let timedOut = false
     let done = false
+    let timer: ReturnType<typeof setTimeout> | undefined
     const take = (chunk: Buffer) => {
       output += chunk.toString("utf8")
       if (output.length > shellOutputLimit * 2) {
@@ -247,7 +248,7 @@ export function runCommand(command: string, directory: string, started: (group: 
         if (child.pid) process.kill(-child.pid, signal)
       } catch {}
     }
-    const timer = setTimeout(() => {
+    timer = setTimeout(() => {
       timedOut = true
       group("SIGTERM")
       setTimeout(() => group("SIGKILL"), 5_000)
@@ -1272,17 +1273,22 @@ export class Sessions {
     this.turnAwayOwn(live)
     for (const waiting of live.waiting.splice(0)) waiting()
     record.agent.inbox = []
-    const run = runOf(doing)
-    if (run) await this.stop(id, live, run)
-    else await this.stopSubagents(id)
-    // Its subagents' sessions go with it, unless a fork of it shows them too.
-    for (const child of this.list(undefined, id)) if (!this.shownElsewhere(child.id, id)) await this.remove(child.id)
-    for (const thread of live.threads.values()) thread.close()
-    for (const [provider, slot] of Object.entries(this.slots(record))) await this.agent(provider)?.forgetConversation?.(slot.state).catch(() => {})
-    this.stopShells(id)
-    this.store.remove(id)
-    this.live.delete(id)
-    emit("session.deleted", { sessionID: id }, record.session.location.directory)
+    this.removing++
+    try {
+      const run = runOf(doing)
+      if (run) await this.stop(id, live, run)
+      else await this.stopSubagents(id)
+      // Its subagents' sessions go with it, unless a fork of it shows them too.
+      for (const child of this.list(undefined, id)) if (!this.shownElsewhere(child.id, id)) await this.remove(child.id)
+      for (const thread of live.threads.values()) thread.close()
+      for (const [provider, slot] of Object.entries(this.slots(record))) await this.agent(provider)?.forgetConversation?.(slot.state).catch(() => {})
+      this.stopShells(id)
+      this.store.remove(id)
+      this.live.delete(id)
+      emit("session.deleted", { sessionID: id }, record.session.location.directory)
+    } finally {
+      this.removing--
+    }
   }
 
   /** Whether a session other than `except` has a step that names `child` (a fork of its conversation). */
@@ -1361,7 +1367,6 @@ export class Sessions {
       group = started
       this.ownShell(id, started)
     }).then((ran) => {
-      this.commands--
       const groups = this.shells.get(id)
       // Kept while what it started runs on in its group.
       if (group !== undefined && !groupRuns(group)) groups?.delete(group)
@@ -1372,7 +1377,7 @@ export class Sessions {
       if (!this.store.get(id)) return
       this.store.save(id, true)
       emit("session.shell.ended", { sessionID: id, shell: { id: shellID, command: text, status: message.status, exit: ran.code }, output: message.output }, directory)
-    })
+    }).finally(() => this.commands--)
   }
 
   // MARK: Undo
@@ -1710,7 +1715,10 @@ export class Sessions {
       if (!send) throw new BadRequest(`${agent.name} has let this subagent go: write to the conversation that started it, which can pick it up again.`)
       this.showMessage(id, record, input)
       const missed = () => this.subagentNote(id, `${agent.name} didn't take that message: write to the conversation that started it.`)
-      void send({ id: input.id, text: attached.text, files: attached.files }, () => this.resumedRun(parentID, parentLive, id)).then((sent) => sent || missed(), missed)
+      this.sending++
+      void send({ id: input.id, text: attached.text, files: attached.files }, () => this.resumedRun(parentID, parentLive, id))
+        .then((sent) => sent || missed(), missed)
+        .finally(() => this.sending--)
       return
     }
     // Passed on by the agent that started it: a note in that conversation, which shows the step.
@@ -3137,15 +3145,18 @@ export class Sessions {
   }
 
   private holding = false
-  /** Your `!` commands running now. */
+  /** Your `!` commands running now, and your messages on their way to a subagent. */
   private commands = 0
+  private sending = 0
+  /** Sessions being deleted now. */
+  private removing = 0
 
   /** What's under way, for a newer bridge to wait for: turns (a subagent's too, a message being
-   * handed to one, the files kept after one) and your `!` commands, which it never cuts; and what
-   * agents left running in the background. */
+   * handed to one, the files kept after one), your `!` commands, a session being deleted, which it
+   * never cuts; and what agents left running in the background. */
   work(): { turns: boolean; other: boolean } {
     const handing = [...this.live.values()].some((live) => live.steering.size > 0)
-    return { turns: this.active().length > 0 || this.commands > 0 || handing, other: Object.keys(this.background()).length > 0 }
+    return { turns: this.active().length > 0 || this.commands > 0 || this.sending > 0 || this.removing > 0 || handing, other: Object.keys(this.background()).length > 0 }
   }
 
   wakeLost(now = Date.now()) {

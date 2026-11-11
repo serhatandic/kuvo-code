@@ -100,3 +100,45 @@ test("its own build put back in place: it no longer waits, and what it held goes
   expect(box.renewal.state).toBeNull()
   expect(box.told.at(-1)).toBeNull()
 })
+
+test("a turn that won't end while it holds (one waiting on you overnight): after half an hour what it held goes, and it holds again from the next night", () => {
+  const box = bridge("stuck.js", "2026-11-11T22:00:00Z")
+  box.install(newer)
+  box.renewal.look()
+  box.at("2026-11-11T23:00:00Z")
+  box.renewal.look()
+  expect(box.held).toEqual([true])
+  box.at("2026-11-11T23:29:00Z")
+  box.renewal.look()
+  expect(box.held).toEqual([true])
+  box.at("2026-11-11T23:30:00Z")
+  box.renewal.look()
+  expect(box.held).toEqual([true, false])
+  expect(box.renewal.state).toEqual({ since: Date.parse("2026-11-11T22:00:00Z"), holding: false })
+  // Still the night an hour on (03:30 there): it holds again.
+  box.at("2026-11-12T00:29:00Z")
+  box.renewal.look()
+  expect(box.held).toEqual([true, false])
+  box.at("2026-11-12T00:30:00Z")
+  box.renewal.look()
+  expect(box.held).toEqual([true, false, true])
+  expect(renewalTiming.holding).toBe(30 * 60_000)
+})
+
+test("a bundle brought with an engine that hasn't started yet: it doesn't make way for it, nor hold anything, until that engine runs it", () => {
+  const script = join(base, "engine.js")
+  bundle(script, own)
+  let ready = false
+  const held: boolean[] = []
+  const told: unknown[] = []
+  const renewal = new Renewal({ script, build: own, work: () => ({ turns: true, other: false }), hold: (on) => held.push(on), renew: () => {}, told: (state) => told.push(state), ready: () => ready, now: () => Date.parse("2026-11-12T00:00:00Z"), holdAfter: 0 })
+  bundle(script, newer)
+  renewal.look()
+  expect(renewal.state).toBeNull()
+  expect(held).toEqual([])
+  expect(told).toEqual([])
+  ready = true
+  renewal.look()
+  expect(renewal.state?.holding).toBe(true)
+  expect(held).toEqual([true])
+})

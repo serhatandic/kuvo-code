@@ -122,7 +122,7 @@ async function machine(prefix, extra = {}) {
     KUVO_AGENTS_PASSWORD: "pw", KUVO_ENGINE_PORT: String(engine.address().port), KUVO_ENGINE_PID: String(process.pid), OPENCODE_PASSWORD: "engine", KUVO_SANDBOX: "off", ...extra,
   };
   const bridges = [];
-  let stopping = false, child;
+  let stopping = false, child, restarts = 0;
   const begin = () => {
     child = spawn(bun, ["--config=/dev/null", "--no-env-file", path.join(home, "bin", "kuvo-agents.js")], { cwd: path.join(home, "work"), env, stdio: ["ignore", "ignore", "pipe"] });
     bridges.push(child.pid);
@@ -130,8 +130,9 @@ async function machine(prefix, extra = {}) {
     child.stderr.on("data", chunk => { said += chunk; });
     child.on("exit", code => {
       if (stopping) return;
-      if (code === 98) return void (child = undefined);
-      begin();
+      // As the launch does: never for a port someone else took, and a few times in a row at most.
+      if (code === 98 || ++restarts > 5) return void (child = undefined);
+      setTimeout(() => { if (!stopping) begin(); }, 200);
     });
     child.said = () => said;
   };
@@ -260,4 +261,38 @@ test("a box with no quiet moment: once it has waited, a new message waits, kept,
   assert.deepEqual(textOf(waited), ["Done: four"]);
   assert.deepEqual(box.turns(), [{ text: "hold three", bridge: first.pid }, { text: "four", bridge: second.pid }], "what waited ran once, on the new bridge");
   assert.deepEqual((await box.api("GET", `api/session/${other}/inbox`)).json.data, [], "and nothing's left in line");
+});
+
+test("what the box says of a bridge from before bridges said their build, and of an engine a newer one waits to replace", { skip: bun ? false : NO_BUN }, async () => {
+  const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-renewal-pieces-")));
+  removeAtEnd(home);
+  for (const folder of ["bin", "run", "tmp", "home", "engine/2.2.5", "engine/2.2.6"]) fs.mkdirSync(path.join(home, folder), { recursive: true });
+  for (const version of ["2.2.5", "2.2.6"]) fs.writeFileSync(path.join(home, "engine", version, "opencode"), "", { mode: 0o755 });
+  fs.writeFileSync(path.join(home, "bin", "kuvo-start"), "#!/bin/sh\nV=2.2.6\n");
+  // Stand-ins whose command lines say what they are, as the box looks for them: an engine of the
+  // version before, and a bridge that wrote its record before the bundle in place came.
+  const standIn = (...words) => {
+    const process_ = spawn(bun, ["-e", "setInterval(() => {}, 1e6)", ...words], { env: { BUN_BE_BUN: "1", PATH: process.env.PATH }, stdio: "ignore" });
+    atEnd(() => new Promise(resolve => { if (process_.exitCode !== null) return resolve(); process_.on("exit", resolve); process_.kill(); }));
+    return process_.pid;
+  };
+  const engine = standIn(path.join(home, "engine", "2.2.5", "opencode"));
+  const bridge = standIn(path.join(home, "bin", "kuvo-agents.js"));
+  fs.writeFileSync(path.join(home, "run", "engine.json"), JSON.stringify({ pid: engine, port: 1, password: "x", version: "2.2.5" }));
+  fs.writeFileSync(path.join(home, "run", "bridge.json"), JSON.stringify({ pid: bridge, port: 2, password: "x" }));
+  const before = new Date(Date.now() - 60_000);
+  fs.utimesSync(path.join(home, "run", "bridge.json"), before, before);
+  fs.copyFileSync(built, path.join(home, "bin", "kuvo-agents.js"));
+  const said = await new Promise((resolve, reject) => {
+    const asking = spawn(process.execPath, [script, "box", "route"], { env: { PATH: process.env.PATH, KUVO_HOME: home, HOME: path.join(home, "home"), TMPDIR: `${home}/tmp` }, stdio: ["pipe", "pipe", "inherit"] });
+    let out = "";
+    asking.stdout.on("data", chunk => { out += chunk; });
+    asking.on("error", reject);
+    asking.on("close", () => { try { resolve(JSON.parse(JSON.parse(out.trim().split("\n").pop()).body).pieces); } catch (error) { reject(error); } });
+    asking.stdin.end(JSON.stringify({ method: "GET", path: "kuvo/info" }));
+  });
+  assert.deepEqual(said.agents, { running: null, current: said.agents.current, behind: true, renewal: null }, "an older bridge, which doesn't make way by itself");
+  assert.match(said.agents.current, /^[0-9a-f]{64}$/);
+  assert.deepEqual(said.engine, { running: "2.2.5", current: "2.2.6", behind: true });
+  assert.equal(said.link.behind, false, "no link runs here");
 });
