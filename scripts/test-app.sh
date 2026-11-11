@@ -6,7 +6,9 @@
 #   --from-batch   runs them from the newest batch (scripts/batch-build.sh: main, built once at
 #          04:00 and 16:00 for every session's runs) without building anything: ONLY is a must, and
 #          a name the batch hasn't (merged after it was built) is refused before it waits in line.
-#          It says which batch it tested. The same test copy, settings and checks as a run that builds.
+#          While a batch is being built, it waits for it and tests that one; when the newest build
+#          failed, it refuses, saying why. It says which batch it tested (its stamp). The same test
+#          copy, settings and checks as a run that builds.
 #
 # The test copy is built outside the checkout: a copy of the app loading its code from Desktop or
 # Documents would wait on a privacy prompt nobody can answer while tests run. It has a bundle ID
@@ -48,6 +50,7 @@ if [ -n "$FROM_BATCH" ]; then
         exit 64
     fi
     BATCH=$(/bin/sh scripts/batch.sh open mac $$)
+    BATCH_RUN=$$
     # shellcheck disable=SC2086 # (ONLY's names, one by one)
     if ! /bin/sh scripts/batch.sh check "$BATCH" kuvo-ai $ONLY; then
         /bin/sh scripts/batch.sh close "$BATCH" $$
@@ -126,6 +129,8 @@ if [ -n "$BATCH" ]; then
         exit 1
     fi
     set -- test-without-building -xctestrun "$XCTESTRUN" -destination "platform=macOS,arch=$(uname -m)" -derivedDataPath "$BUILD"
+    # (Only this run's results: they'd pile up there otherwise.)
+    rm -rf "$BUILD/Logs" "$BUILD/TestResults"
 else
     PRODUCTS="$BUILD/Build/Products"
     # Xcode's compilation cache, one for every checkout (scripts/xcode-cache.sh; heavy.sh turns it on
@@ -254,7 +259,7 @@ if [ -n "$BATCH" ]; then
         echo "No tests ran for $ONLY." >&2
         status=1
     fi
-    echo "Tested the $(/bin/sh scripts/batch.sh describe "$BATCH")."
+    echo "Tested the $(/bin/sh scripts/batch.sh stamp "$BATCH")"
 fi
 if [ $status -ne 0 ]; then echo "The whole log: $BUILD/test.log" >&2; fi
 finished=1

@@ -9,7 +9,9 @@
 #       and built there from nothing with `xcodebuild build-for-testing`, as the tests' own copy
 #       (run.kuvo.code.tests, run.kuvo.code.ios.tests: the settings scripts/test-app.sh builds
 #       with), in a slot of heavy.sh's build lane (mac-build, phone-build). Once it's built, its
-#       stamp says from which commits, when, and where its .xctestrun is. The phone's batch is built
+#       stamp says from which commits, when, and where its .xctestrun is; a build that fails
+#       leaves failed-<when>-<commit>.stamp (its commits, its first error) and .log instead, and
+#       runs from a batch refuse until the next one builds. The phone's batch is built
 #       with kuvo-ai's commit beside it, whose packages it uses. The newest 2 batches are kept;
 #       older ones go, once no test run has them open.
 #   scripts/batch-build.sh --compile-only [mac|phone|all]
@@ -28,7 +30,8 @@ set -eu
 cd "$(dirname "$0")/.."
 SCRIPTS="$PWD/scripts"
 ROOT="${KUVO_BATCH_DIR:-$(getconf DARWIN_USER_CACHE_DIR 2>/dev/null || echo "${TMPDIR:-/tmp}/")KuvoBatch}"
-ROOT="${ROOT%/}"
+mkdir -p "$ROOT"
+ROOT=$(cd "$ROOT" && pwd)
 MAC_REPO="${KUVO_BATCH_MAC_REPO:-$HOME/Projects/kuvo-ai}"
 PHONE_REPO="${KUVO_BATCH_PHONE_REPO:-$HOME/Projects/kuvo-code-ios}"
 
@@ -57,8 +60,11 @@ export_tree() {
 
 # A kept folder brought to a commit's files, with an index of its own (the checkout's is never
 # touched): a file that's the same keeps its time, so the build compiles only what changed; one
-# that changed is written again, one that's gone is removed, and a missing index writes them all.
+# that changed (or that the build changed) is written again, and one that's gone is removed.
+# Without its index, it starts again from an empty folder: what's in the folder may be anything
+# (the projects compile every file in their folders).
 update_tree() {
+    [ -f "$4" ] || rm -rf "$3"
     mkdir -p "$3"
     GIT_INDEX_FILE="$4" git --no-optional-locks -C "$1" --work-tree="$3" read-tree --reset -u "$2"
 }
@@ -138,9 +144,23 @@ one() {
     if [ "$status" -ne 0 ]; then
         grep -aE 'error:|\*\* (TEST )?BUILD' "$log" 2>/dev/null | grep -v 'warning:' | head -n 40 >&2 || true
         if [ "$mode" = batch ]; then
-            mkdir -p "$ROOT/$platform"
-            mv -f "$log" "$ROOT/$platform/failed-$name.log" 2>/dev/null || true
-            echo "The $platform batch of $what didn't build ($timing). The whole log: $ROOT/$platform/failed-$name.log" >&2
+            # What a run from a batch says while this is the newest (scripts/batch.sh open).
+            failed="$ROOT/$platform/failed-$name"
+            mv -f "$log" "$failed.log" 2>/dev/null || true
+            why=$(grep -aE 'error:' "$failed.log" 2>/dev/null | grep -v 'warning:' | head -n 1 || true)
+            {
+                echo "platform=$platform"
+                echo "kuvo_ai=$mac_commit"
+                echo "kuvo_ai_subject=$(git --no-optional-locks -C "$MAC_REPO" log -1 --format=%s "$mac_commit")"
+                if [ "$platform" = phone ]; then
+                    echo "kuvo_code_ios=$phone_commit"
+                    echo "kuvo_code_ios_subject=$(git --no-optional-locks -C "$PHONE_REPO" log -1 --format=%s "$phone_commit")"
+                fi
+                echo "failed=$(date +%Y-%m-%dT%H:%M:%S%z)"
+                echo "why=${why:-xcodebuild exited $status}"
+                echo "log=$failed.log"
+            } > "$failed.stamp"
+            echo "The $platform batch of $what didn't build ($timing). The whole log: $failed.log" >&2
         else
             echo "failed $commit $mac_commit $(date +%Y-%m-%dT%H:%M:%S%z)" > "$dir/$platform.last"
             echo "$what doesn't compile for the $platform ($timing). The whole log: $log" >&2
@@ -166,8 +186,10 @@ one() {
         echo "build_seconds=$((ended - from))"
         echo "xctestrun=$xctestrun"
     } > "$dir/stamp.tmp"
-    mv -f "$dir/stamp.tmp" "$dir/stamp"
+    # (Stopped from here on, it leaves a folder without a stamp, which the next build deletes: never
+    # a batch with its stamp deleted under a run that opened it.)
     trap - EXIT HUP INT TERM
+    mv -f "$dir/stamp.tmp" "$dir/stamp"
     echo "Built the $platform batch $name, $what ($timing)."
     /bin/sh "$SCRIPTS/batch.sh" prune "$platform" || true
 }

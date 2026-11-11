@@ -151,7 +151,7 @@ build without compiling anything: at 04:00 and 16:00, the lead runs
 checkout's `main`, or `KUVO_BATCH_MAC_REF` and `KUVO_BATCH_PHONE_REF`; the phone's with kuvo-ai's
 beside it) into a new folder, `$(getconf DARWIN_USER_CACHE_DIR)KuvoBatch/<mac|phone>/<when>-<commit>`,
 and builds it from nothing with `xcodebuild build-for-testing` as the tests' own copy (the settings
-and bundle IDs below), in a slot of the `mac-build` lane. Its `stamp` says which commits, when, and
+and bundle IDs below), in a slot of heavy.sh's build lane (`mac-build`, `phone-build`). Its `stamp` says which commits, when, and
 where its `.xctestrun` is. The newest two batches are kept; an older one is deleted by the next
 build once no run has it open. One build of a platform's batches runs at a time: a second says so
 and stops.
@@ -164,10 +164,12 @@ ONLY="KuvoCodeMobileTests/PairingTests" ~/Projects/kuvo-code-ios/scripts/test-ap
 ```
 
 It takes the newest batch, refuses at once (before it waits in line) a class or test the batch
-hasn't, merged after the build, and notes when your HEAD isn't in it. Then it waits for its turn in
+hasn't, merged after the build, and notes when your HEAD isn't in it. While a batch is being built
+it waits for that build and tests the new batch; when the newest build failed (or stopped), it
+refuses, naming the commit and the first error, rather than test an older batch. Then it waits for its turn in
 `mac` (or a `phone` slot) and runs `xcodebuild test-without-building` with the batch's `.xctestrun`:
 the same test copy, clean settings, `KUVO_TEST_BUN`, account check and guards as a run that builds.
-It says which batch it tested. Problems found go to fixes merged to main, which the next batch
+It prints the stamp of the batch it tested. Problems found go to fixes merged to main, which the next batch
 checks. `scripts/test-app.sh` without `--from-batch` still builds from your worktree, for an urgent
 run only.
 
