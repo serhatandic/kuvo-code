@@ -14,13 +14,14 @@ import Testing
     let project = "/tmp/kuvo-tests-mark-all-read/web"
 
     /// Boxes that answer Mark All as Read as a box does: what each was asked, and each read told
-    /// to `workspace` as its engine would.
-    final class Boxes: @unchecked Sendable {
+    /// to `workspace` as its engine would. A box's transport answers on any thread: what it was
+    /// asked is kept under a lock, and the workspace is only touched on the main actor.
+    nonisolated final class Boxes: @unchecked Sendable {
         private let lock = NSLock()
         private var asked: [String: [String]] = [:]
         /// What each box reads, by its id: sessions and where they ended.
         let reads: [String: [(String, Double)]]
-        weak var workspace: Workspace?
+        @MainActor weak var workspace: Workspace?
         let engine: StubEngine
 
         init(reads: [String: [(String, Double)]], engine: StubEngine) {
