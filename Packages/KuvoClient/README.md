@@ -58,6 +58,10 @@ What a client shows of a computer's sessions, the same in both apps. Rules only,
   has ended (its engine let go of it) or just can't be read now.
 - `AskPlace`: which of the asks waiting takes the composer's place, and "2 of 3" over it: the one
   in view stays while others come, and once it's answered the next after it shows.
+- `MachinePieces`: which version a machine's link, coding agents and engine each run, as its box
+  says (`kuvo/info`'s `pieces`), and the line under the machine while one runs an older version
+  than its files (a new bridge waits for a quiet moment, or holds new messages for the turns under
+  way).
 - `WorkWords`: what a bot's work says, as its box tells it (`kuvo/work`): the bar's line, and each
   session's row (`about`: its model, the account it runs on and its project, then shorter for a
   narrow row, the account going first).

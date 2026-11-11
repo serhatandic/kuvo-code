@@ -1,4 +1,5 @@
 import ClientDesign
+import ClientSessions
 import SwiftUI
 
 /// Machines: Macs and Linux servers whose engine Kuvo Code runs over SSH, for projects on them. Each can
@@ -228,6 +229,13 @@ struct MachinesSettings: View {
                             .foregroundStyle(.secondary)
                     }
                     MachineStatus(engine: engine, namesHome: true)
+                    // A piece of it still on an older version than its files (a newer coding agents'
+                    // bridge waiting for a quiet moment there), as its box says.
+                    if engine.isReady, let line = engine.pieces?.line {
+                        Text(line)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
                     // Set up for your phones and other computers: one that couldn't finish says so.
                     // A line, the reason behind it below, and Set Up Again while it’s connected
                     // (connecting sets it up too).
@@ -241,6 +249,10 @@ struct MachinesSettings: View {
                 }
             }
             .settingsText()
+            // What its box says now of its pieces' versions (and who else uses it), as you look.
+            .task(id: engine.isReady) {
+                if engine.isReady { await app.readAlsoUsedBy(engine) }
+            }
             HStack {
                 switch engine.offer {
                 case .disconnect:
