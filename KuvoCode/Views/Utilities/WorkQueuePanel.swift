@@ -458,7 +458,7 @@ struct WorkQueuePanel: View {
         // one you can't see, so nothing drops on it.
         let takesDrops = !WorkQueue.isInProgress(item)
         return WorkItemRow(item: item, ownerName: WorkQueue.ownerName(of: item, in: view), ordinal: ordinal, isSelected: wide && opened?.matches(item) == true,
-                           openSession: item.sessions.first(where: \.working).map { linked in { app.open(.session(linked.session)) } }) {
+                           openSession: item.sessions.first(where: \.working).map { linked in { app.open(.session(linked.session), from: app.tabs.messageTarget) } }) {
             store.opened[panel] = WorkQueues.Opened(box: box, id: item.id, number: item.number)
         }
         .padding(.horizontal, 6)
