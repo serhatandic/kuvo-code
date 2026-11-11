@@ -952,8 +952,18 @@ struct DraftSessionView: View {
     }
 
     var body: some View {
+        // Measured on what the page is given, never on what's in it, which the list makes taller.
+        Color.clear
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { pageHeight = $0 }
+            .overlay { page }
+            .task(id: directory) { await catalog.loadCommands(in: directory) }
+            .task(id: directory) { await workspace.readApprovalHere(for: directory) }
+            .onAppear { Analytics.shared.onboardingStep("composer") }
+    }
+
+    private var page: some View {
         VStack(spacing: 0) {
-            Spacer()
+            Spacer(minLength: 0)
             Text(Workspace.isChat(directory) ? "What's on your mind?" : "What should we work on?")
                 .font(.system(size: 30, weight: .semibold))
                 .padding(.bottom, 28)
@@ -1019,13 +1029,9 @@ struct DraftSessionView: View {
                 }
             }
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { belowHeight = $0 }
-            Spacer()
-            Spacer()
+            Spacer(minLength: 0)
+            Spacer(minLength: 0)
         }
-        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { pageHeight = $0 }
-        .task(id: directory) { await catalog.loadCommands(in: directory) }
-        .task(id: directory) { await workspace.readApprovalHere(for: directory) }
-        .onAppear { Analytics.shared.onboardingStep("composer") }
     }
 
     private func send() {
