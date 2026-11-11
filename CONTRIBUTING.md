@@ -139,6 +139,18 @@ its home as it ends, and the next run clears what a killed one left.
 `./scripts/test-app.sh` runs one at a time: a run started while another is going
 waits for it, since they share the test copy's settings and temporary folders.
 
+One copy of `scripts/heavy.sh` runs every job: `~/Projects/kuvo-ai/scripts/heavy.sh`, the canonical
+one (`KUVO_HEAVY_CANONICAL` names another). Any other copy, a worktree's or an older checkout's, hands
+the job to it at once with the same arguments and environment, and both apps' `scripts/test-app.sh`
+and the phone's `scripts/build-app.sh` call it directly (`KUVO_HEAVY_SH` for another). So a fix to
+how jobs take turns reaches every caller once it's on that checkout, and a stale copy can't jam a
+lane. To try a change to the helper itself, run your copy with `KUVO_HEAVY_CANONICAL=` (empty), as
+its tests do. A copy from before this hands nothing on: it runs as it did until its jobs end.
+`scripts/heavy.sh status` prints a line for each lane: who holds each slot, for how long, whether its
+command runs, and how many wait in line, the longest for how long. Nothing waits under a lane's lock
+in this copy; a holder that hasn't run its command for 2 minutes (an older copy waiting for room
+under the lock) is named in `status` and by every job waiting for that slot.
+
 When running heavy builds or tests locally, start them with `scripts/heavy.sh <kind>`, which
 waits for jobs of the same kind (they share build folders) and runs the other
 kinds alongside:

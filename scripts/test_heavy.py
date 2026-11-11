@@ -26,7 +26,8 @@ WAITS = 75
 def clean_environment():
     """The environment of the run without what a job of heavy.sh leaves in it (a test run from inside
     one would otherwise see that job's turn and slot)."""
-    return {k: v for k, v in os.environ.items() if k not in ("KUVO_HEAVY_SLOTS", "KUVO_HEAVY_HELD", "KUVO_HEAVY_HOLDING", "KUVO_HEAVY_SLOT", "KUVO_HEAVY_BUILD_SUFFIX", "KUVO_TEST_SIMULATOR", "KUVO_HEAVY_WAIT", "KUVO_HEAVY_LIMIT", "KUVO_HEAVY_MAC_FIRST_FOR", "KUVO_HEAVY_MEMORY", "KUVO_HEAVY_MEMORY_WAIT_FOR", "KUVO_HEAVY_PRIORITY")}
+    # (And this copy runs, not the canonical one: KUVO_HEAVY_CANONICAL empty.)
+    return dict({k: v for k, v in os.environ.items() if k not in ("KUVO_HEAVY_SLOTS", "KUVO_HEAVY_HELD", "KUVO_HEAVY_HOLDING", "KUVO_HEAVY_SLOT", "KUVO_HEAVY_BUILD_SUFFIX", "KUVO_TEST_SIMULATOR", "KUVO_HEAVY_WAIT", "KUVO_HEAVY_LIMIT", "KUVO_HEAVY_MAC_FIRST_FOR", "KUVO_HEAVY_MEMORY", "KUVO_HEAVY_MEMORY_WAIT_FOR", "KUVO_HEAVY_PRIORITY", "KUVO_HEAVY_HANDED", "KUVO_HEAVY_STUCK_AFTER")}, KUVO_HEAVY_CANONICAL="")
 
 
 # Prints what the priority of the process it runs in is: on macOS 1 for the background policy
@@ -979,6 +980,101 @@ class HeavyTests(unittest.TestCase):
                 result = subprocess.run([HEAVY, "box", "true"], env=dict(self.env, KUVO_HEAVY_MEMORY=given), capture_output=True, text=True, timeout=30)
                 self.assertEqual(result.returncode, 64)
                 self.assertIn("KUVO_HEAVY_MEMORY is a share of memory in percent", result.stderr)
+
+    def script(self, text):
+        folder = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, folder, ignore_errors=True)
+        path = os.path.join(folder, "heavy.sh")
+        with open(path, "w") as f:
+            f.write(text)
+        os.chmod(path, 0o755)
+        return path
+
+    def test_a_copy_that_isnt_the_canonical_one_hands_its_job_to_it(self):
+        stand_in = self.script('#!/bin/sh\nfor a in "$@"; do echo "[$a]"; done; echo "$KUVO_HEAVY_HANDED $FROM_CALLER"\n')
+        result = subprocess.run([HEAVY, "box", "/bin/sh", "-c", "a b", "c"], env=dict(self.env, KUVO_HEAVY_CANONICAL=stand_in, FROM_CALLER="kept"), capture_output=True, text=True, timeout=30)
+        self.assertEqual((result.returncode, result.stdout), (0, "[box]\n[/bin/sh]\n[-c]\n[a b]\n[c]\n1 kept\n"))
+        # Asked how it stands, too: one copy says it all.
+        result = subprocess.run([HEAVY, "--holds", "mac"], env=dict(self.env, KUVO_HEAVY_CANONICAL=stand_in), capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.stdout, "[--holds]\n[mac]\n1 \n")
+
+    def test_the_canonical_copy_runs_the_job_and_what_the_job_starts_is_handed_on_again(self):
+        canonical = self.script(Path(HEAVY).read_text())
+        env = dict(self.env, KUVO_HEAVY_CANONICAL=canonical)
+        said = 'echo "$0 ${KUVO_HEAVY_HANDED-none}"'
+        result = subprocess.run([HEAVY, "box", "/bin/sh", "-c", said], env=env, capture_output=True, text=True, timeout=30)
+        self.assertEqual((result.returncode, result.stdout), (0, "/bin/sh none\n"))
+        # It holds the box lane, taken by the canonical copy: the lock this copy knows too.
+        job = Held([HEAVY, "box"], env)
+        try:
+            self.assertEqual(self.run_heavy("box", "true")[0], WAITS)
+        finally:
+            job.let_go()
+
+    def test_a_copy_hands_on_its_job_once_and_never_to_itself(self):
+        # The canonical copy is this one (by a link, even), missing, or not asked for: it runs.
+        folder = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, folder, ignore_errors=True)
+        link = os.path.join(folder, "heavy.sh")
+        os.symlink(HEAVY, link)
+        for canonical in (HEAVY, link, os.path.join(folder, "gone.sh"), ""):
+            with self.subTest(canonical=canonical):
+                result = subprocess.run([HEAVY, "box", "/bin/sh", "-c", "echo ran"], env=dict(self.env, KUVO_HEAVY_CANONICAL=canonical), capture_output=True, text=True, timeout=30)
+                self.assertEqual((result.returncode, result.stdout), (0, "ran\n"))
+        # A canonical copy that hands it back (another copy that says some other is canonical): it
+        # runs there, and isn't handed on again.
+        back = self.script(f'#!/bin/sh\nexec "{HEAVY}" "$@"\n')
+        result = subprocess.run([HEAVY, "box", "/bin/sh", "-c", "echo ran"], env=dict(self.env, KUVO_HEAVY_CANONICAL=back), capture_output=True, text=True, timeout=30)
+        self.assertEqual((result.returncode, result.stdout), (0, "ran\n"))
+
+    def status(self):
+        result = subprocess.run([HEAVY, "status"], env=self.env, capture_output=True, text=True, timeout=60)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return {line.split(":", 1)[0]: line for line in result.stdout.splitlines()}
+
+    def older_holder(self, kind="box"):
+        """A slot held as an older copy held it while it waited for room: its lock, and only a
+        `sleep` under it."""
+        holder = subprocess.Popen(["lockf", "-k", self.lock(kind), "/bin/sh", "-c", "sleep 600; :"], env=self.env, start_new_session=True)
+        def stop():
+            os.killpg(holder.pid, signal.SIGKILL)
+            holder.wait(timeout=30)
+        self.addCleanup(stop)
+        for _ in range(100):
+            if subprocess.run(["lockf", "-ks", "-t", "0", self.lock(kind), "true"]).returncode != 0:
+                break
+            time.sleep(0.05)
+        return holder
+
+    def test_status_says_for_each_lane_who_holds_it_whether_it_runs_and_who_waits(self):
+        lanes = self.status()
+        self.assertEqual(sorted(lanes), ["box", "mac", "mac-build", "phone"])
+        job = Held([HEAVY, "box"], self.env)
+        try:
+            self.assertRegex(self.status()["box"], r"^box: slot 1 pid \d+ \(.+\), held \d+s, running \d+s; none waiting$")
+            waiting = self.queued("box", ["true"])
+            self.assertRegex(self.status()["box"], r"; 1 waiting, the longest for \d+s$")
+        finally:
+            job.let_go()
+        self.assertEqual(waiting.wait(timeout=30), 0)
+        self.assertEqual(self.status()["box"], "box: slot 1 free; none waiting")
+        holder = self.older_holder()
+        self.assertRegex(self.status()["box"], rf"^box: slot 1 pid {holder.pid} \(an older heavy.sh\)(, held for [\d:]+)?, not running its command: it waits for room under the lock; none waiting$")
+
+    def test_those_in_line_say_when_a_slots_holder_hasnt_run_its_command_for_a_while(self):
+        holder = self.older_holder()
+        waiting = self.queued("box", ["true"], KUVO_HEAVY_STUCK_AFTER="0")
+        self.assertTrue(select.select([waiting.stderr], [], [], 30)[0], "it said nothing")
+        said = waiting.stderr.readline()
+        self.assertIn("slot 1 of the box lane has been held for", said)
+        self.assertIn(f"without its command running: pid {holder.pid} (an older heavy.sh)", said)
+
+    def test_a_job_given_its_slot_runs_its_command_at_once_whatever_the_mac_says(self):
+        """Nothing waits under a lane's lock: a job that got its slot while the Mac was busy and short
+        of memory (to it) starts its command at once."""
+        busy = dict(self.env, KUVO_HEAVY_LOAD="-1", KUVO_HEAVY_MEMORY="100")
+        inside = subprocess.run(["lockf", "-k", self.lock("box"), "/bin/sh", "-c", f'KUVO_HEAVY_HOLDING="{self.lock("box")}:$$" exec "{HEAVY}" box /bin/sh -c "echo ran"'], env=dict(busy, KUVO_HEAVY_WAIT="0"), capture_output=True, text=True, timeout=30)
+        self.assertEqual((inside.returncode, inside.stdout), (0, "ran\n"), inside.stderr)
 
     def test_its_command_runs_with_its_arguments_and_answer(self):
         result = subprocess.run([HEAVY, "box", "/bin/sh", "-c", 'echo "$1"; exit 3', "sh", "a b"], env=self.env, capture_output=True, text=True, timeout=30)
