@@ -420,7 +420,8 @@ function changedBy(seen: { tool: string; input: Record<string, unknown> }, folde
   if (RUNNING.has(tool)) return null;
   const named: { raw: string; folder: boolean | null }[] = [];
   const walk = (value: unknown, key: string, depth: number) => {
-    if (depth > 6) return;
+    // (Deeper than looked into: something no path of its own has, so it's never one.)
+    if (depth > 6) { named.push({ raw: "\0", folder: false }); return; }
     if (typeof value === "string") {
       if (PATH_KEY.test(key)) named.push({ raw: value, folder: null });
       // A patch tool's text: the files its headers name.
@@ -441,7 +442,15 @@ function changedBy(seen: { tool: string; input: Record<string, unknown> }, folde
 // The tools that patch, and the arguments that name a place, by their keys (`filePath`, `files`,
 // `destination`, `move_path`, `outputDir`, `cwd`…).
 const PATCHING = new Set(["patch", "apply_patch", "applypatch"]);
-const PATH_KEY = /path|file|dir|folder|destination|^(dest|dst|src|source|from|to|target|output|location|cwd|workdir|movedto|root)$/i;
+const PATH_KEY = /path|file|dir|folder|destination|save_?as|^(dest|dst|src|source|from|to|target|output|out|location|cwd|workdir|movedto|root|uri|url|name)$/i;
+// The tools whose changes may be its own by code: the engine's and the coding agents' that write
+// files (the engine's write, edit and patch; Claude Code's Write, Edit, MultiEdit and NotebookEdit;
+// Codex's changes), besides those that only read and those that run a command (by their folders).
+const WRITING = new Set(["write", "edit", "multiedit", "patch", "apply_patch", "applypatch", "notebookedit"]);
+
+/** Whether `raw` names what it looks like it names, on any disk: composed (NFC), and folding by
+ * case to what it folds to lower-case (a Mac's disk takes `ſ` for `s`, the Kelvin sign for `k`). */
+const plainName = (raw: string) => raw === raw.normalize("NFC") && raw.toUpperCase().toLowerCase() === raw.toLowerCase();
 
 // What no path of its own has in it: control characters and the line and paragraph separators a
 // reader might split on and the engine doesn't (`\r`, U+2028…).
@@ -592,8 +601,11 @@ async function answerPermission(source: Target, id: string, sessionID: string, s
     const real = plainlyIn(change.path, place, change.folder);
     return real !== null && !walledForOwn(real, policy, own);
   });
-  const ownChanges = !unread && !renames && resources.length > 0 && !permission.resources.includes("*")
-    && changes.every(each => !each.raw.split("/").includes("..") && !UNPLAIN.test(each.raw) && plainly(each))
+  // (Only a tool known to write, read or run a command; only resources named from `/`; never a name
+  // that's other than it looks once composed or cased as a Mac's disk does, `opencode.jſon`.)
+  const known = !seen || [WRITING, READING, RUNNING].some(each => each.has(seen.tool.toLowerCase()));
+  const ownChanges = known && !unread && !renames && resources.length > 0 && permission.resources.every(each => each.startsWith("/"))
+    && changes.every(each => !each.raw.split("/").includes("..") && !UNPLAIN.test(each.raw) && plainName(each.raw) && plainly(each))
     && actions.every(action => action.kind === "file");
   if (ownChanges) {
     await reply({ decision: "once" });

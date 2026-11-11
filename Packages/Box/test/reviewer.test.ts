@@ -645,6 +645,9 @@ test.skipIf(process.platform !== "darwin")("on a Mac, your settings and what run
   expect(await reviewer.review(change(join(homedir(), ".Config", "GIT", "config")), yours("Fix the build"), given(ask))).toMatchObject({ decision: "refuse", why: "unasked" })
   await reviewer.review(change(join(homedir(), ".ZSHRC.kuvo-test")), yours("Fix the build"), given(ask))
   expect(ask.shown.at(-1)).toContain("It sets up something that runs at login or on a schedule")
+  // And by every case Unicode has, as the disk folds them: `ſ` is `s`.
+  expect(reviewer.walledForOwn(join(box, "proj", "opencode.j\u017fon"), policy ??= fencePolicy())).toBe(true)
+  expect(reviewer.walledForOwn(join(box, "proj", ".git", "hoo\u212as", "pre-commit"), policy)).toBe(true)
   // Kuvo Code's own folders named by pattern, too.
   expect(await reviewer.review(change(join(homedir(), "Library", "Caches", "RUN.KUVO.CODE.kuvo-test", "x")), yours("Fix the build"), given(ask))).toMatchObject({ decision: "refuse", by: "code", held: false })
 })

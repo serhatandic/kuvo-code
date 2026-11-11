@@ -108,12 +108,18 @@ const SHELLS = /^((ba|z|da|k|fi)?sh|eval)$/;
 
 // A Mac's disk, as it's usually set up, doesn't tell `~/.SSH` from `~/.ssh`: a wall is matched there
 // by any case (`exactly`, where what's the conversation's own is matched, never widens it).
-const fold = (where: string) => (process.platform === "darwin" ? where.toLowerCase() : where);
+// (As it folds them: composed, and by every case Unicode has, `ſ` as `s` and the Kelvin sign as `k`.)
+const fold = (where: string) => (process.platform === "darwin" ? where.normalize("NFC").toUpperCase().toLowerCase() : where);
+/** A pattern over paths, matched as the disk finds names: on a Mac by any case Unicode has. */
+export function pathPattern(source: string): RegExp {
+  if (process.platform !== "darwin") return new RegExp(source);
+  try { return new RegExp(source, "iu"); } catch { return new RegExp(source, "i"); }
+}
 const exactly = (where: string, wall: string) => where === wall || where.startsWith(wall + "/");
 const inside = (where: string, wall: string) => exactly(fold(where), fold(wall));
 // (Whether `folder` holds `wall`, below it.)
 const holds = (folder: string, wall: string) => folder === "/" || fold(wall).startsWith(fold(folder) + "/");
-const matching = (where: string, patterns: readonly string[] = []) => patterns.some(each => new RegExp(each, process.platform === "darwin" ? "i" : "").test(where));
+const matching = (where: string, patterns: readonly string[] = []) => patterns.some(each => pathPattern(each).test(fold(where)) || pathPattern(each).test(where));
 const nameOf = (word: string) => word.split("/").pop() ?? "";
 const homeWord = (text: string) => text.replace(/^(~|\$HOME|\$\{HOME\})(?=\/|$)/, homeFolder());
 
@@ -163,9 +169,9 @@ const SYSTEM_LOGIN = ["/Library/LaunchAgents", "/Library/LaunchDaemons", "/Libra
 /** Whether `where` is what runs as you (or anyone) log in. */
 function atLogin(given: string, home: string): boolean {
   if (SYSTEM_LOGIN.some(wall => inside(given, wall))) return true;
-  const where = fold(given);
-  if (!where.startsWith(fold(home) + "/")) return false;
-  const rest = where.slice(home.length + 1);
+  const where = fold(given), folded = fold(home);
+  if (!where.startsWith(folded + "/")) return false;
+  const rest = where.slice(folded.length + 1);
   return LOGIN.some(wall => inside(rest, wall)) || (!rest.includes("/") && LOGIN_PREFIXES.some(prefix => rest.startsWith(prefix)));
 }
 
@@ -484,7 +490,7 @@ function ownAt(given: string, home: string): OwnKind | null {
   // (opencode's sign-ins where your own XDG_DATA_HOME puts them.)
   if (where === fold(realish(opencodeAuthFile(home)))) return "credentials";
   if (!where.startsWith(fold(home) + "/")) return null;
-  const rest = where.slice(home.length + 1);
+  const rest = where.slice(fold(home).length + 1);
   if (GIT_GLOBAL.some(each => inside(rest, each))) return "git";
   if (CREDENTIALS.some(each => inside(rest, each))) return "credentials";
   if (!inside(rest, ".ssh")) return null;
@@ -772,7 +778,7 @@ function isSecret(given: string, policy: FencePolicy): boolean {
 // What runs outside the sandbox once it's written in a folder (git's hooks and settings, the
 // engine's and the coding agents' settings there): never allowed again by a place (`keptPlace`).
 // (On a Mac's disk, as it's usually set up, `.Claude` is `.claude`.)
-const RUNS_OUTSIDE = new RegExp(`^/${GUARDED}`, process.platform === "darwin" ? "i" : "");
+const RUNS_OUTSIDE = pathPattern(`^/${GUARDED}`);
 
 /** git as the box runs it by itself (`shared/git`: nothing the repository's settings name runs), in
  * `folder`: what it printed (where it ended with one of `ok`), or null where it failed or wouldn't
@@ -1209,26 +1215,35 @@ function holdsRepository(folder: string): boolean {
 /** Whether a change the agent's file tools make at `where` (where it really is) is never let
  * through as its own (its folder's, its project's, a worktree's): Kuvo Code's own folders (but what's
  * the conversation's own in them, `own`), what runs later outside the sandbox or at login, your
- * secrets and your own settings, ~/Library, and a repository's record of its worktrees. Each of
+ * secrets and your own settings, all of ~/Library but iCloud Drive (`inLibrary`), and a
+ * repository's record of its worktrees. Each of
  * those is judged as anywhere. */
 export function walledForOwn(where: string, policy: FencePolicy = fencePolicy(), own: readonly string[] = []): boolean {
   const at = realish(where);
   // (What's the conversation's own in Kuvo Code's folders, in ~/Library on a Mac, is its own there:
   // only those, never another of its folders, wherever that leads.)
   const ours = ownInside(own, policy).filter(folder => inKuvo(folder, policy)).some(folder => exactly(at, folder));
-  return (!ours && (inKuvo(at, policy) || inHomeKept(at, policy))) || runsLater(at, policy) || atLogin(at, policy.home) || isSecret(at, policy)
-    || ownAt(at, policy.home) !== null || WORKTREE_RECORDS.test(at);
+  return (!ours && (inKuvo(at, policy) || inLibrary(at, policy))) || runsLater(at, policy) || atLogin(at, policy.home) || isSecret(at, policy)
+    || ownAt(at, policy.home) !== null || WORKTREE_RECORDS.test(at) || WORKTREE_RECORDS.test(fold(at));
+}
+
+/** Whether `at` is in what's kept whole from commands in your home (`homeKept`: ~/Library on a
+ * Mac), as the agent's own file tools are kept from it: all of it, the parts the sandbox opens to
+ * commands too (its caches, logs, Xcode's `Developer`), but iCloud Drive's projects. */
+function inLibrary(at: string, policy: FencePolicy): boolean {
+  if (!(policy.homeKept ?? []).some(wall => inside(at, wall) || holds(at, wall))) return false;
+  return !(policy.homeOpen ?? []).filter(each => /\/Library\/Mobile Documents$/i.test(each)).some(each => inside(at, each));
 }
 
 // (Which worktrees a repository has, and where each one's repository is: what Auto counts as a
 // project's own goes by them, so a change there is never taken for its own.)
-const WORKTREE_RECORDS = new RegExp(String.raw`/\.git/worktrees(/|$)`, process.platform === "darwin" ? "i" : "");
+const WORKTREE_RECORDS = pathPattern(String.raw`/\.git/worktrees(/|$)`);
 
 /** Whether a change to `where` would be run later outside the sandbox: git's hooks and settings and
  * the agents' in a folder, a folder on PATH, tools' settings and caches that run (`readOnly`,
  * `readOnlyPatterns`). */
 function runsLater(where: string, policy: FencePolicy): boolean {
-  return RUNS_OUTSIDE.test(where) || [...policy.readOnly, ...pathFolders()].some(wall => inside(where, wall))
+  return RUNS_OUTSIDE.test(where) || RUNS_OUTSIDE.test(fold(where)) || [...policy.readOnly, ...pathFolders()].some(wall => inside(where, wall))
     || matching(where, policy.readOnlyPatterns);
 }
 

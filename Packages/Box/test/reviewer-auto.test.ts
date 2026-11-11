@@ -632,6 +632,14 @@ test("in Auto, a file of its own is only one reached plainly: a folder of its ow
     mkdirSync(trees)
     git(repo, "worktree", "add", "-q", "-b", "eval/swap", join(trees, "T"))
     git(repo, "worktree", "add", "-q", "-b", "eval/links", join(trees, "L"))
+    // (On a Mac, worktrees in ~/Library: in its logs, which the sandbox opens to commands, and in
+    // iCloud Drive.)
+    const logs = join(fake, "Library", "Logs", "T"), cloud = join(fake, "Library", "Mobile Documents", "com~apple~CloudDocs", "T")
+    if (process.platform === "darwin") {
+      for (const each of [logs, cloud]) mkdirSync(dirname(each), { recursive: true })
+      git(repo, "worktree", "add", "-q", "-b", "eval/logs", logs)
+      git(repo, "worktree", "add", "-q", "-b", "eval/cloud", cloud)
+    }
     const elsewhere = join(box, "someone-elses-project")
     mkdirSync(elsewhere)
     const ask = (session: string, id: string, filePath: string) => {
@@ -701,6 +709,22 @@ test("in Auto, a file of its own is only one reached plainly: a folder of its ow
     asking.ses_swap = [{ id: "per_x9", action: "external_directory", resources: [join(trees, "L") + "/*"], source: { id: "call_gone", messageID: "msg_1" } }]
     expect((await reviewing.reviewPermission({ port: engine.port, password: "pw" } as never, { type: "permission.asked", data: { id: "per_x9", sessionID: "ses_swap", action: "external_directory" } }))?.decision).toBe("refuse")
     expect((await askWith("per_x10", "experimental_image_generate", { path: join(trees, "L", "pic.webp"), prompt: "a cat" }, [join(trees, "L") + "/*"]))?.decision).toBe("refuse")
+    // A name that's another once a Mac's disk folds it (`ſ` for `s`, the Kelvin sign for `k`): the
+    // engine's and an MCP server's settings, read as they start, outside the sandbox.
+    for (const [id, name] of [["per_u1", "opencode.j\u017fon"], ["per_u2", ".mcp.j\u017fon"], ["per_u3", "\u212aeys.txt"], ["per_u4", "cafe\u0301.md"]] as const) {
+      expect([id, (await askWith(id, "write", { filePath: join(trees, "L", name), content: "{}" }, [join(trees, "L") + "/*"]))?.decision]).toEqual([id, "refuse"])
+    }
+    // Only a tool known to write, read or run a command; only resources from /; nothing deeper in its
+    // arguments than is looked into.
+    expect((await askWith("per_t1", "rename", { path: join(trees, "L", "ok.txt") }, [join(trees, "L") + "/*"]))?.decision).toBe("refuse")
+    expect((await askWith("per_t2", "write", { filePath: join(trees, "L", "ok5.txt") }, ["swap-trees/L/*"]))?.decision).toBe("refuse")
+    expect((await askWith("per_t3", "write", { filePath: join(trees, "L", "ok6.txt") }, [`file://${join(trees, "L")}/*`]))?.decision).toBe("refuse")
+    expect((await askWith("per_t4", "write", { filePath: join(trees, "L", "ok7.txt"), more: { a: { b: { c: { d: { e: { f: { g: { path: evil } } } } } } } } }, [join(trees, "L") + "/*"]))?.decision).toBe("refuse")
+    // In ~/Library, never by code but in iCloud Drive (on a Mac).
+    if (process.platform === "darwin") {
+      expect((await askWith("per_lib", "write", { filePath: join(logs, "notes.md") }, [logs + "/*"]))?.decision).toBe("refuse")
+      expect((await askWith("per_cloud", "write", { filePath: join(cloud, "notes.md") }, [cloud + "/*"]))?.decision).toBe("allow")
+    }
     // But a file whose text only mentions a patch is its own as any.
     expect((await askWith("per_x11", "write", { filePath: join(trees, "L", "notes.md"), content: "*** Add File: /elsewhere/x\n" }, [join(trees, "L") + "/*"]))?.decision).toBe("allow")
     // The worktree itself traded for a link to where what runs later is kept.
