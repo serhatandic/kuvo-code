@@ -98,34 +98,51 @@ function identityIn(text: string): string | undefined {
  * `sha`): another sign-in using the folder (yours in Terminal, in `~/.claude`) or one before keeps a
  * record of its own there, which isn't this one's. The token itself is only hashed, as Claude Code
  * does, and nothing is checked with Anthropic.
+ *
+ * These are Claude Code's own files, as 2.1.319 writes them (version 1 of the note); where they
+ * change, or a sign-in is stamped otherwise (`CLAUDE_CODE_ORGANIZATION_UUID` makes it the
+ * organization's), it's none and the account's row is its computer's own, as before, said once in
+ * the bridge's log. Another sign-in's record written over this one's in the instant between Claude
+ * Code writing the note and the record could be taken for this one's until it's next read (a minute).
  */
 function tokenIdentity(configHome: string, token: string): string | undefined {
   try {
     // (Both are small: read each time, never kept.)
-    return recordIdentity(readFileSync(join(configHome, "policy-limits.json.stamp.json"), "utf8"), readFileSync(join(configHome, "policy-limits.json.signature.json"), "utf8"), token)
+    return recordIdentity(configHome, readFileSync(join(configHome, "policy-limits.json.stamp.json"), "utf8"), readFileSync(join(configHome, "policy-limits.json.signature.json"), "utf8"), token)
   } catch {
     return undefined
   }
 }
 
-function recordIdentity(stampText: string, signatureText: string, token: string): string | undefined {
+function recordIdentity(configHome: string, stampText: string, signatureText: string, token: string): string | undefined {
   try {
     const stamp = JSON.parse(stampText)
+    if (stamp?.v !== 1 || typeof stamp.identity !== "string") return unread(configHome, "its policy note isn't one this version reads")
     // Claude Code's principal for a token: `token:` and the first half of its SHA-256; the stamp keeps
     // that principal's SHA-256.
     const principal = `token:${createHash("sha256").update(token.trim()).digest("hex").slice(0, 32)}`
     if (stamp?.kind !== "token" || stamp.identity !== createHash("sha256").update(principal).digest("hex")) return undefined
     const payload = String(JSON.parse(signatureText)?.jws ?? "").split(".")[1]
-    if (!payload) return undefined
+    if (!payload) return unread(configHome, "its policy record isn't one this version reads")
     const claims = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"))
     if (typeof stamp.sha !== "string" || claims?.sha !== stamp.sha) return undefined
     const account = typeof claims.sub === "string" ? claims.sub.trim().toLowerCase() : ""
     const organization = typeof claims.aud === "string" ? claims.aud.trim().toLowerCase() : ""
     return account && organization ? `anthropic:${account}|${organization}` : undefined
   } catch {
+    // (Read as Claude Code writes it, say: read again in a minute.)
     return undefined
   }
 }
+
+/** Said once a folder, in the bridge's log: why its account can't be told (none). */
+function unread(configHome: string, why: string): undefined {
+  if (!told.has(configHome)) console.error(`Claude's account in ${configHome} can't be told: ${why}.`)
+  told.add(configHome)
+  return undefined
+}
+
+const told = new Set<string>()
 
 /** "Max 20x", "Pro": the plan, from what Claude Code kept of the sign-in. */
 export function planName(subscription?: string, tier?: string): string | undefined {

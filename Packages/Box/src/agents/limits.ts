@@ -85,7 +85,8 @@ export interface LimitsSource {
   read?(now: number): Promise<LimitReading | null>
   /**
    * Its sign-in as it is now, as a fingerprint (never the secret): one that lapsed, or can't read its
-   * limits, isn't asked again until this changes.
+   * limits, isn't asked again until this changes; for one only its turns tell of (no `read`), what
+   * they told goes when it changes.
    */
   signIn?(): string | undefined
   /** The least time between two reads, in ms: as often as its maker's endpoint allows. */
@@ -155,6 +156,8 @@ interface Entry {
   failures?: number
   /** Who it is (`identityOf`), as last known. */
   identity?: string
+  /** For an account only its turns tell of (no `read`): the sign-in (`LimitsSource.signIn`) what's kept was heard with. */
+  heardAs?: string
 }
 
 interface Saved {
@@ -289,6 +292,7 @@ export class Limits {
         entry = { windows: [], next: 0 }
         this.entries.set(account.provider, entry)
       }
+      this.switched(entry, source)
       this.identify(entry, source.identity?.())
       if (!source.read) continue
       const at = this.now()
@@ -418,6 +422,26 @@ export class Limits {
     entry.identity = identity
   }
 
+  /**
+   * An account only its turns tell of, signed in to another since what's kept was heard (a Mac's
+   * Claude, given a new token): nothing kept is this one's, nor who it was, which its sign-in says
+   * again in time (`identity`). Its windows start over with what its turns hear next.
+   */
+  private switched(entry: Entry, source: LimitsSource) {
+    if (source.read || !source.signIn) return
+    const now = source.signIn()
+    if (now === undefined) return
+    if (entry.heardAs !== undefined && entry.heardAs !== now) {
+      entry.windows = []
+      entry.plan = undefined
+      entry.balance = undefined
+      entry.checked = undefined
+      entry.problem = undefined
+      entry.identity = undefined
+    }
+    entry.heardAs = now
+  }
+
   /** What a turn of this account hears (its rate-limit events), kept as the window's latest. */
   private listen(provider: string, source: LimitsSource) {
     if (source.heard) return
@@ -427,7 +451,9 @@ export class Limits {
         entry = { windows: [], next: 0 }
         this.entries.set(provider, entry)
       }
-      if (entry.problem?.kind === "none") entry.problem = undefined
+      this.switched(entry, source)
+      // (One that's never read has nothing a turn doesn't make current: whatever it said goes.)
+      if (entry.problem?.kind === "none" || !source.read) entry.problem = undefined
       const before = entry.windows.find((each) => each.id === window.id)
       const heard: LimitWindow = {
         ...before,

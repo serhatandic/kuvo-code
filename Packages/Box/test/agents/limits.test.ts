@@ -529,14 +529,16 @@ describe("who each account is, the same from every computer", () => {
    * a Mac's Kuvo Code runs it): Anthropic's signed record of the policies of the account the token is
    * for (`aud` its organization, `sub` the account), and its note of which sign-in fetched it.
    */
-  function policyRecord(folder: string, token: string, account: string, organization: string, plan = "consumer") {
+  function policyRecord(folder: string, token: string, account: string, organization: string, options: { plan?: string; kind?: "token" | "org"; signed?: string } = {}) {
     mkdirSync(folder, { recursive: true })
     const sha256 = (text: string) => createHash("sha256").update(text).digest("hex")
     const body = `sha256:${sha256(`policies of ${account}`)}`
+    // A sign-in Claude Code keeps itself (yours in Terminal) is stamped as its organization's.
+    const principal = options.kind === "org" ? `org:${organization}` : `token:${sha256(token).slice(0, 32)}`
     writeFileSync(join(folder, "policy-limits.json"), "{}")
-    writeFileSync(join(folder, "policy-limits.json.stamp.json"), JSON.stringify({ v: 1, identity: sha256(`token:${sha256(token).slice(0, 32)}`), kind: "token", sha: body, confirmed_at: clock.at, hipaa_seen: [] }))
+    writeFileSync(join(folder, "policy-limits.json.stamp.json"), JSON.stringify({ v: 1, identity: sha256(principal), kind: options.kind ?? "token", sha: body, confirmed_at: clock.at, hipaa_seen: [] }))
     const part = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url")
-    const claims = { v: 1, typ: "policy-limits", aud: organization, sub: account, ws: "5e0c0000-0000-4000-8000-0000000000ff", plan, iat: clock.at / 1000, exp: clock.at / 1000 + 86_400, sha: body }
+    const claims = { v: 1, typ: "policy-limits", aud: organization, sub: account, ws: "5e0c0000-0000-4000-8000-0000000000ff", plan: options.plan ?? "consumer", iat: clock.at / 1000, exp: clock.at / 1000 + 86_400, sha: options.signed ?? body }
     writeFileSync(join(folder, "policy-limits.json.signature.json"), JSON.stringify({ jws: `${part({ alg: "ES256", typ: "cc-signed-cache+jws", kid: "k1", x5c: ["MIIB"] })}.${part(claims)}.c2lnbmF0dXJl`, receivedAt: clock.at }))
   }
 
@@ -557,7 +559,7 @@ describe("who each account is, the same from every computer", () => {
     signIn(mini, "default", "token-mini")
     signIn(mini, "57eea190", "token-athas")
     policyRecord(join(mini, "claude", "home"), "token-mini", account.toLowerCase(), organization.toLowerCase())
-    policyRecord(join(mini, "claude", "accounts", "57eea190"), "token-athas", "6f1e0c4a-0000-4000-8000-000000000002", "0a1b2c3d-0000-4000-8000-0000000000bb", "team")
+    policyRecord(join(mini, "claude", "accounts", "57eea190"), "token-athas", "6f1e0c4a-0000-4000-8000-000000000002", "0a1b2c3d-0000-4000-8000-0000000000bb", { plan: "team" })
     const own = new TestClaude(mini, { id: "default", home: join(mini, "claude", "home") })
     const athas = new TestClaude(mini, { id: "57eea190", label: "Athas", home: join(mini, "claude", "accounts", "57eea190") })
     const machine = new Limits(() => agentAccounts([own, athas]), undefined, clock.now)
@@ -597,12 +599,12 @@ describe("who each account is, the same from every computer", () => {
     }
   })
 
-  test("a Mac's record that isn't for Kuvo Code's token (yours in Terminal, or the token before) says nothing of who it is", async () => {
+  test("a Mac's record that isn't for Kuvo Code's token (yours in Terminal, another's signature) says nothing of who it is", async () => {
     ClaudeAgent.keychain = true
     const folder = join(home, "claude", "home")
     signIn(home, "default", "token-kuvo")
     // Your own Claude Code in Terminal ran last in the folder, signed in as someone else.
-    policyRecord(folder, "token-yours", "00000000-0000-4000-8000-00000000000a", "00000000-0000-4000-8000-0000000000aa")
+    policyRecord(folder, "token-yours", "00000000-0000-4000-8000-00000000000a", "00000000-0000-4000-8000-0000000000aa", { kind: "org" })
     const own = new TestClaude(home, { id: "default", home: folder })
     const limits = new Limits(() => agentAccounts([own]), undefined, clock.now)
     await limits.tick()
@@ -610,11 +612,55 @@ describe("who each account is, the same from every computer", () => {
     const [account] = (await route(limits)).accounts
     expect(account!.windows.map((each) => each.used)).toEqual([0.3])
     expect(account!.identity).toBeUndefined()
+    // Stamped for Kuvo Code's token, but the signature beside it is of another record.
+    policyRecord(folder, "token-kuvo", "00000000-0000-4000-8000-00000000000b", "00000000-0000-4000-8000-0000000000bb", { signed: "sha256:another" })
+    clock.pass(60_000)
+    await limits.tick()
+    expect((await route(limits)).accounts[0]!.identity).toBeUndefined()
     // Claude Code runs with Kuvo Code's token: now it says.
     policyRecord(folder, "token-kuvo", "00000000-0000-4000-8000-00000000000b", "00000000-0000-4000-8000-0000000000bb")
     clock.pass(60_000)
     await limits.tick()
-    expect((await route(limits)).accounts[0]!.identity).toMatch(/^[0-9a-f]{16}$/)
+    const known = (await route(limits)).accounts[0]!
+    expect(known.identity).toMatch(/^[0-9a-f]{16}$/)
+    // Your Terminal's runs again, writing its own over it: who it is, and its numbers, stay.
+    policyRecord(folder, "token-yours", "00000000-0000-4000-8000-00000000000a", "00000000-0000-4000-8000-0000000000aa", { kind: "org" })
+    clock.pass(60_000)
+    await limits.tick()
+    const after = (await route(limits)).accounts[0]!
+    expect([after.identity, after.windows.map((each) => each.used), after.problem]).toEqual([known.identity, [0.3], undefined])
+  })
+
+  test("a Mac's Claude signed in to another account: what's told after is that account's, never the one before's", async () => {
+    ClaudeAgent.keychain = true
+    const folder = join(home, "claude", "home")
+    const file = join(home, "limits.json")
+    signIn(home, "default", "token-ada")
+    policyRecord(folder, "token-ada", "00000000-0000-4000-8000-00000000000a", "00000000-0000-4000-8000-0000000000aa")
+    const own = new TestClaude(home, { id: "default", home: folder })
+    const limits = new Limits(() => agentAccounts([own]), file, clock.now)
+    await limits.tick()
+    own.limits.heard!({ id: "five_hour", used: 0.3, minutes: 300 })
+    const ada = (await route(limits)).accounts[0]!
+    expect(ada.identity).toMatch(/^[0-9a-f]{16}$/)
+
+    // Signed in as Bob: Claude Code hasn't run with his token yet, and his first turn is heard.
+    signIn(home, "default", "token-bob")
+    own.limits.heard!({ id: "five_hour", used: 0.9, minutes: 300 })
+    const heard = (await route(limits)).accounts[0]!
+    expect([heard.identity, heard.windows.map((each) => each.used), heard.problem]).toEqual([undefined, [0.9], undefined])
+    // Claude Code's record for his token: his, with what his turn told, and nothing more to say.
+    policyRecord(folder, "token-bob", "00000000-0000-4000-8000-00000000000b", "00000000-0000-4000-8000-0000000000bb")
+    clock.pass(60_000)
+    await limits.tick()
+    own.limits.heard!({ id: "five_hour", used: 0.91, minutes: 300 })
+    const bob = (await route(limits)).accounts[0]!
+    expect(bob.identity).toMatch(/^[0-9a-f]{16}$/)
+    expect(bob.identity).not.toBe(ada.identity!)
+    expect([bob.windows.map((each) => each.used), bob.problem]).toEqual([[0.91], undefined])
+    // Through a restart too.
+    const restarted = new Limits(() => agentAccounts([new TestClaude(home, { id: "default", home: folder })]), file, clock.now)
+    expect((await route(restarted)).accounts[0]!.identity).toBe(bob.identity!)
   })
 
   test("signed in to another account since, what was kept of the one before isn't shown as this one's", async () => {

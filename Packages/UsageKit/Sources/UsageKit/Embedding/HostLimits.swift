@@ -212,10 +212,10 @@ public final class HostLimits {
         return entries
     }
 
-    /// The panel's providers whose own bar shows no limits while the host covers them: Claude's
-    /// (`ClaudeProvider` leaves them to this Mac's box), so it's only the provider's spend. Every
-    /// other provider's bar reads its own limits (yours, outside Kuvo Code) until this Mac's box
-    /// has a row of it.
+    /// The panel's providers whose own bar reads no limits while the host covers them, so it's only
+    /// the provider's spend: Claude's (`ClaudeProvider` leaves them to this Mac's box, by this).
+    /// Every other provider's bar reads its own limits (yours, outside Kuvo Code) until this Mac's
+    /// box has a row of it.
     static let limitsOnlyFromHost: Set<String> = ["claude"]
 
     /// The rows that take the place of the panel's own bar of a covered provider: this Mac's own

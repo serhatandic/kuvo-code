@@ -10553,6 +10553,7 @@ class Limits {
         entry = { windows: [], next: 0 };
         this.entries.set(account.provider, entry);
       }
+      this.switched(entry, source);
       this.identify(entry, source.identity?.());
       if (!source.read)
         continue;
@@ -10667,6 +10668,22 @@ class Limits {
     }
     entry.identity = identity;
   }
+  switched(entry, source) {
+    if (source.read || !source.signIn)
+      return;
+    const now = source.signIn();
+    if (now === undefined)
+      return;
+    if (entry.heardAs !== undefined && entry.heardAs !== now) {
+      entry.windows = [];
+      entry.plan = undefined;
+      entry.balance = undefined;
+      entry.checked = undefined;
+      entry.problem = undefined;
+      entry.identity = undefined;
+    }
+    entry.heardAs = now;
+  }
   listen(provider, source) {
     if (source.heard)
       return;
@@ -10676,7 +10693,8 @@ class Limits {
         entry = { windows: [], next: 0 };
         this.entries.set(provider, entry);
       }
-      if (entry.problem?.kind === "none")
+      this.switched(entry, source);
+      if (entry.problem?.kind === "none" || !source.read)
         entry.problem = undefined;
       const before = entry.windows.find((each) => each.id === window.id);
       const heard = {
@@ -10881,20 +10899,22 @@ function identityIn(text) {
 }
 function tokenIdentity(configHome, token) {
   try {
-    return recordIdentity(readFileSync20(join22(configHome, "policy-limits.json.stamp.json"), "utf8"), readFileSync20(join22(configHome, "policy-limits.json.signature.json"), "utf8"), token);
+    return recordIdentity(configHome, readFileSync20(join22(configHome, "policy-limits.json.stamp.json"), "utf8"), readFileSync20(join22(configHome, "policy-limits.json.signature.json"), "utf8"), token);
   } catch {
     return;
   }
 }
-function recordIdentity(stampText, signatureText, token) {
+function recordIdentity(configHome, stampText, signatureText, token) {
   try {
     const stamp = JSON.parse(stampText);
+    if (stamp?.v !== 1 || typeof stamp.identity !== "string")
+      return unread(configHome, "its policy note isn't one this version reads");
     const principal = `token:${createHash8("sha256").update(token.trim()).digest("hex").slice(0, 32)}`;
     if (stamp?.kind !== "token" || stamp.identity !== createHash8("sha256").update(principal).digest("hex"))
       return;
     const payload = String(JSON.parse(signatureText)?.jws ?? "").split(".")[1];
     if (!payload)
-      return;
+      return unread(configHome, "its policy record isn't one this version reads");
     const claims = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
     if (typeof stamp.sha !== "string" || claims?.sha !== stamp.sha)
       return;
@@ -10905,6 +10925,13 @@ function recordIdentity(stampText, signatureText, token) {
     return;
   }
 }
+function unread(configHome, why) {
+  if (!told.has(configHome))
+    console.error(`Claude's account in ${configHome} can't be told: ${why}.`);
+  told.add(configHome);
+  return;
+}
+var told = new Set;
 function planName(subscription, tier) {
   const base = subscription?.trim();
   if (!base)
@@ -11191,7 +11218,7 @@ var PRINTED_SECRET = /sk-ant-[A-Za-z0-9_-]+|^[^\S\n]*[A-Za-z0-9_-]{32,}[^\S\n]*$
 var VALUE = `"[^"]*"|'[^']*'|[^\\s"',;]+`;
 var SECRET_NAME = "[A-Za-z0-9_-]*(?:key|token(?!s)|secret|password|passwd)[A-Za-z0-9_-]*";
 var withoutSecrets = (text) => text.replace(ANY_TOKEN, "sk-ant-\u2026").replace(/:\/\/[^\s/]*@/g, "://\u2026@").replace(new RegExp(`\\b((?:proxy-)?authorization)(["']?\\s*[:=]\\s*)(?:"[^"]*"|'[^']*'|(?:(?:bearer|basic|token)\\s+)?[^\\s"',;]+)`, "gi"), "$1$2\u2026").replace(/\bBearer\s+(?!tokens?\b)[A-Za-z0-9._~+/-]+=*/gi, "Bearer \u2026").replace(new RegExp(`\\b(${SECRET_NAME})(\\s*=\\s*)(?:${VALUE})`, "gi"), "$1$2\u2026").replace(new RegExp(`(["'])(${SECRET_NAME})\\1(\\s*:\\s*)(?:${VALUE})`, "gi"), "$1$2$1$3\u2026").replace(new RegExp(`\\b((?:[A-Za-z0-9_-]+[-_])?(?:api[-_]?key|token)|[A-Za-z0-9_-]*(?:password|passwd|secret))(?<!(?:^|[\\s(])token)(\\s*:\\s*)(?:${VALUE})`, "gi"), "$1$2\u2026").replace(new RegExp(`(--${SECRET_NAME})(\\s+|=)(?:${VALUE})`, "gi"), "$1$2\u2026");
-var told = (error) => {
+var told2 = (error) => {
   const said = failure(error);
   return { ...said, message: withoutSecrets(said.message) };
 };
@@ -11425,6 +11452,7 @@ class ClaudeAgent {
   }
   limits = ClaudeAgent.keychain ? {
     every: CLAUDE_LIMITS_EVERY,
+    signIn: () => fingerprint(this.token()),
     identity: () => {
       const token = this.token();
       return token ? claudeIdentity(this.configHome, token) : undefined;
@@ -12362,7 +12390,7 @@ ${input.text}` } : input, this.copies());
         await this.heard(ended, active.hooks.signal);
       if (active.hooks.signal.aborted)
         return active.resolve({ outcome: "interrupted" });
-      active.resolve({ outcome: "failed", error: this.failed(active, active.problem ? told(active.problem) : this.stoppedWhy(ended, "Claude Code stopped.")) });
+      active.resolve({ outcome: "failed", error: this.failed(active, active.problem ? told2(active.problem) : this.stoppedWhy(ended, "Claude Code stopped.")) });
     }
   }
   lastEnd;
@@ -12385,7 +12413,7 @@ ${input.text}` } : input, this.copies());
     stopped.removeEventListener("abort", stop);
   }
   stoppedWhy(ended, otherwise = "Claude Code stopped before it took your message.") {
-    const error = told(ended ?? otherwise);
+    const error = told2(ended ?? otherwise);
     const last = this.said?.last;
     return ended !== undefined && last && !error.message.includes(last) ? { ...error, message: `${error.message}: ${last}` } : error;
   }
@@ -26936,4 +26964,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 8d22b11562046d5c6959e0ce46f2a350edee257fa2d28b766f5eb370ff382c9c
+// Built from Packages/Box/src/agents d2019d8bfcabcbf5448d21b7a98d90f458ebb3edc32d8c71d5ade82646c8b743

@@ -419,6 +419,8 @@ export class ClaudeAgent implements Agent {
   readonly limits: LimitsSource = ClaudeAgent.keychain
     ? {
         every: CLAUDE_LIMITS_EVERY,
+        // (Signed in to another account since, what its turns told goes: limits.ts, `switched`.)
+        signIn: () => fingerprint(this.token()),
         identity: () => {
           const token = this.token()
           return token ? claudeIdentity(this.configHome, token) : undefined
