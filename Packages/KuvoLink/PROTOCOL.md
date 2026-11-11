@@ -3184,7 +3184,8 @@ change what they say. Kept in `run/work-queue/` (`queues/<owner>.json`, files ke
 `features` has `work-queue`. Times are milliseconds since 1970.
 
 **An item**: `id` (`wqi_…`, never shown), `number` (its `#n`; missing while it waits for one,
-shown as new), `wanted` (a number an import asked for, until it's granted), `owner` (`ses_…` or
+shown as new), `wanted` (a number an import asked for, until it's granted; beside `number`, its own
+number asked back), `owner` (`ses_…` or
 `grp_…`), `title`, `category`, `order` (its place in its category, among every owner's items on
 the box), `inProgress`, `progress` (`{value?: 0…1, note?}`: how far, and what's being done now),
 `sessions` (`[{session, title, working}]`: the sessions working on it, and which are at work now),
@@ -3255,8 +3256,19 @@ kuvo/work-queue/import` `{owner, files: [paths]}` (Markdown files on the box: ea
 starting with `#N` is an item, in the category of the nearest heading above it that names one
 (Done, Shelved/Parked, Later/Ideas), else Next, Done with `[x]`; a line `NOW:`/`LATER:`/… with
 refs sets theirs; the first line naming a number gives its title, every line naming it its body)
-→ `{added, byCategory, waiting, skipped, said}`. An import skips a number here already under the
-same title; under another title, the item is imported with a new number and a note. Each change
+→ `{added, byCategory, waiting, skipped, said}`. An item keeps its own number wherever no other item
+has it, here or on another of your computers (as each told this box); one waiting for its number
+(an import's still under way) holds it as its own. An import skips a number here already under the
+same title, or waiting for it; under another title, the item is imported with a new number
+(`importedAs`) and a note, and `said` names each one renumbered and its number now, as it does
+those the primary refuses at once (on the primary itself; elsewhere a note says so when its answer
+comes). An item an import renumbered, imported again under the same number and title, isn't made
+twice: it asks for its own number back (claimed as an import's are, keeping the one it has, and
+`wanted` meanwhile), where no other item has it (one on its way back to its own number lets it go);
+granted, every such item moves at once (two can trade), with a note, and `importedAs` goes. One whose
+number another item holds waits while that one asks for its own, else stays as it is, with a note.
+So importing the same backlog again repairs an import that went wrong, and once it has, changes
+nothing. Each change
 answers `{item}`; a category removed only once nothing, deleted items included, is in it.
 
 **Tools**: `GET kuvo/work-queue/tools` → `{tools, instructions}` (MCP definitions, and what the
@@ -3323,11 +3335,19 @@ set up) is asked through the peer that named it: `{workQueue: {ask, to: <primary
 peer, which passes it on as `{ask, for: <asking box's key>}` if it's its own primary, and the block
 back as `{give}`; one hop only, and a box takes a block only from its primary or the peer it asks
 through. The primary keeps what it gave for each ask, so an
-ask sent again gets the same answer. `claims` are numbers an import wants to keep (six digits at most, what a chip reads): the primary
-grants those at or above its counter and within 10,000 of it (or granted that box before) and moves its counter past them;
-an imported item waits without a number until then, and one refused gets the next number, with a
+ask sent again gets the same answer, and notes the box it gave each block (`given`, `by`). `claims`
+are numbers an import wants to keep (six digits at most, what a chip reads): the primary grants
+those at or above its counter and within 10,000 of it, those it granted that box before, and those
+in a block it gave that box (the box's own: an import there claims none it used, and a box drops
+its leases at or below its claims, and takes a block only for the ask under way, so a block given
+for an ask an import replaced is never used), and moves its counter past them. A block an older
+primary kept without whom it went to counts as the asking box's only where no other computer told
+of a number as high as its first (its `top` or its items), and no box granted claims hasn't told
+it anything. An imported item waits without a number until then; an answer decides only the claims
+its ask carried (one claimed later waits for its own), and one refused gets the next number, with a
 note. An item made with no number left waits too, and takes one, oldest first, when a block comes; one left
-waiting with nothing under way (a crash midway, a move) is claimed or numbered again within a minute.
+waiting with nothing under way (a crash midway, a move), or still asking for its own number back, is
+claimed or numbered again within a minute.
 A queue file that can't be read is never written over: the change is refused and the file set aside
 (`queues/aside/`); fields a newer box keeps in an item are kept as they are, and so is a queue of a
 kind of owner this box doesn't know (`queues/<kind>_….json`, a newer box's): never read, shown,

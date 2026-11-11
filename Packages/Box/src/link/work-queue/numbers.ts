@@ -25,7 +25,7 @@ import { awaySince, lastFoundAway, PEER_CHECKED, readReach } from "../peers/reac
 import { followedSetup } from "../setup/record";
 import { readLink } from "../state";
 import { allItems, changeQueues, OWNER, WORK_QUEUE } from "./store";
-import type { Book } from "./store";
+import type { Book, Item } from "./store";
 import type { LinkHost } from "../relay/host";
 import type { LinkState } from "../state";
 import type { MailSender, Peer } from "../peers/known";
@@ -57,9 +57,14 @@ export interface Numbers {
   /** The peer it reaches its primary through, when that isn't one of its own. */
   through?: string;
   next?: number;
-  given?: Record<string, { from: number; to: number; granted: Ranges; at: number }>;
+  /** By ask: the block given, the claims granted with it, and the box it went to (`by`; missing in
+   * what an older primary kept). */
+  given?: Record<string, { from: number; to: number; granted: Ranges; at: number; by?: string }>;
   granted?: Record<string, Ranges>;
   leases: Ranges;
+  /** Elsewhere, the numbers of its leases it gave items here: an import here never claims one that
+   * no item here has now (it left with a move, or was deleted). */
+  used?: Ranges;
   asking?: { id: string; count: number; claims?: Ranges; since: number; sent?: number };
 }
 
@@ -108,6 +113,7 @@ export function readNumbers(file = NUMBERS_FILE): Numbers {
       ...(isObject(kept.given) ? { given: kept.given as Numbers["given"] } : {}),
       ...(isObject(kept.granted) ? { granted: Object.fromEntries(Object.entries(kept.granted).map(([box, ranges]) => [box, cleanRanges(ranges)])) } : {}),
       leases: cleanRanges(kept.leases),
+      ...(Array.isArray(kept.used) ? { used: cleanRanges(kept.used) } : {}),
       ...(asking ? { asking } : {}),
     };
   } catch {
@@ -340,18 +346,41 @@ export function takeNumber(primary: Primary, { file = NUMBERS_FILE, now = Date.n
       number = lease[0];
       if (lease[0] === lease[1]) kept.leases.shift();
       else lease[0]++;
+      kept.used = joined(kept.used ?? [], [[number, number]]).slice(-MOST_RANGES);
     }
     if (leftIn(kept.leases) <= LOW) kept.asking ??= { id: askID(), count: BLOCK, since: now };
     return number;
   }, file);
 }
 
+/** The highest number the computer `key` told it used or holds: its `top`, or its items'. */
+const toldTopOf = (key: string): number => {
+  const told = readTold(key);
+  return Math.max(told?.top ?? 0, ...(told?.items ?? []).map(item => item.number ?? 0));
+};
+
+// On the primary: the blocks it gave the box `by`, whose numbers are that box's own (an import there
+// that claims one it never used keeps it). A block kept without whom it went to (an older primary's)
+// counts when it can only be that box's: no other computer told of a number as high as its first,
+// as one holding it would (its `top`).
+function blocksOf(kept: Numbers, by: string): Ranges {
+  const given = Object.values(kept.given ?? {});
+  const own: Ranges = given.filter(each => each.by === by).map(each => [each.from, each.to]);
+  const unsaid = given.filter(each => each.by === undefined);
+  if (!unsaid.length) return joined(own);
+  const told = new Set(toldKeys());
+  // (A box granted claims that never told this one anything could hold any block: none counts.)
+  if (Object.keys(kept.granted ?? {}).some(key => key !== by && key !== "self" && !told.has(key))) return joined(own);
+  const others = Math.max(0, ...[...told].filter(key => key !== by).map(toldTopOf));
+  return joined(own, unsaid.filter(each => each.from > others).map((each): [number, number] => [each.from, each.to]));
+}
+
 // On the primary: which of `claims` the box `by` may have (at or above the counter and within reach
-// of it, or granted it before), the counter moved past them.
+// of it, granted it before, or in a block it gave that box), the counter moved past them.
 function grantOn(kept: Numbers, by: string, claims: Ranges): Ranges {
   const before = kept.granted?.[by] ?? [];
   const next = counterOf(kept);
-  const ranges = joined(overlap(claims, [[next, Math.min(next + CLAIM_REACH, MOST_NUMBER - 1)]]), overlap(claims, before));
+  const ranges = joined(overlap(claims, [[next, Math.min(next + CLAIM_REACH, MOST_NUMBER - 1)]]), overlap(claims, before), by === "self" ? [] : overlap(claims, blocksOf(kept, by)));
   if (ranges.length) {
     kept.next = Math.max(next, ranges[ranges.length - 1][1] + 1);
     kept.granted = { ...(kept.granted ?? {}), [by]: joined(before, ranges).slice(-MOST_RANGES) };
@@ -425,15 +454,18 @@ export function giveBlock(by: string, ask: unknown, { file = NUMBERS_FILE, now =
     const from = counterOf(kept);
     const to = from + count - 1;
     kept.next = to + 1;
-    const all = Object.entries({ ...(kept.given ?? {}), [id]: { from, to, granted, at: now } });
+    const all = Object.entries({ ...(kept.given ?? {}), [id]: { from, to, granted, at: now, by } });
     kept.given = Object.fromEntries(all.sort((a, b) => a[1].at - b[1].at).slice(-MOST_GIVEN));
     return { id, from, to, granted };
   }, file);
 }
 
-/** A block the primary gave, kept, if it answers the ask under way: the claimed numbers it granted,
- * or null for an answer to no ask under way. */
-export function takeBlock(give: unknown, { file = NUMBERS_FILE }: { file?: string } = {}): Ranges | null {
+/** What the primary said to claims: those it granted, of those it was asked (`claimed`). */
+export interface Granting { granted: Ranges; claimed: Ranges }
+
+/** A block the primary gave, kept, if it answers the ask under way: the claims that ask carried and
+ * those granted, or null for an answer to no ask under way. */
+export function takeBlock(give: unknown, { file = NUMBERS_FILE }: { file?: string } = {}): Granting | null {
   if (!isObject(give) || typeof give.id !== "string" || !Number.isInteger(give.from) || !Number.isInteger(give.to)) return null;
   const from = give.from as number;
   const to = give.to as number;
@@ -441,27 +473,40 @@ export function takeBlock(give: unknown, { file = NUMBERS_FILE }: { file?: strin
   const granted = cleanRanges(give.granted);
   return changeNumbers(kept => {
     if (kept.asking?.id !== give.id) return null;
+    const claimed = kept.asking?.claims ?? [];
     kept.asking = undefined;
     kept.leases = joined(kept.leases, [[from, to]]);
-    return granted;
+    return { granted, claimed };
   }, file);
 }
 
-/** Items here that wait: those imported take the number they wanted where it was granted
- * (`granted`; one refused is noted and numbered afresh), then every one without a number takes the
- * next, oldest first. */
-export function numberWaiting(book: Book, primary: Primary, granted: Ranges | null, options: { file?: string; now?: number } = {}): void {
+/** Items here that wait: those imported take the number they wanted where it was granted (one
+ * refused is noted and numbered afresh), and those given their own number back move to it
+ * (`restoreNumbers`); only the items whose numbers that answer was asked (`claimed`) are decided,
+ * the others wait for theirs. Then every one without a number takes the next, oldest first. */
+export function numberWaiting(book: Book, primary: Primary, answer: Granting | null, options: { file?: string; now?: number } = {}): void {
   const now = options.now ?? Date.now();
-  if (granted) {
+  if (answer) {
+    const back: Item[] = [];
     for (const item of book.items()) {
-      if (item.wanted === undefined || item.number !== undefined || item.source || !OWNER.test(item.owner)) continue;
-      if (inRanges(granted, item.wanted)) item.number = item.wanted;
+      if (item.wanted === undefined || item.source || !OWNER.test(item.owner) || !inRanges(answer.claimed, item.wanted)) continue;
+      const kept = inRanges(answer.granted, item.wanted);
+      if (item.number !== undefined) {
+        if (kept) back.push(item);
+        else {
+          item.notes.push({ at: now, by: { user: true }, text: `Its own number, #${item.wanted}, couldn't be given back (another of your computers was given it already, or it's far past the numbers in use), so it stays #${item.number}.` });
+          delete item.wanted;
+        }
+        continue;
+      }
+      if (kept) item.number = item.wanted;
       else {
         item.notes.push({ at: now, by: { user: true }, text: `Imported as #${item.wanted}, a number that couldn't be kept (another of your computers was given it already, or it's far past the numbers in use), so it has a new one.` });
         item.importedAs = item.wanted;
       }
       delete item.wanted;
     }
+    restoreNumbers(book, back, now);
   }
   // (Not an outside source's item, named by its ref; nor one in a queue of a kind a newer box keeps,
   // left as it is.)
@@ -473,22 +518,58 @@ export function numberWaiting(book: Book, primary: Primary, granted: Ranges | nu
   }
 }
 
+/** Items an import renumbered, given their own numbers back (`back`, granted them), all at once, so
+ * two can trade. One whose number another item here holds waits while that one is asking for its
+ * own (it's asked again within a minute, `reclaimWaiting`); else it stays as it is, with a note. */
+function restoreNumbers(book: Book, back: Item[], now: number): void {
+  if (!back.length) return;
+  const going = new Set(back);
+  const holders = new Map<number, Item[]>();
+  for (const item of book.items()) {
+    const held = item.number ?? item.wanted;
+    if (held !== undefined) holders.set(held, [...(holders.get(held) ?? []), item]);
+  }
+  const blocker = (item: Item) => (holders.get(item.wanted!) ?? []).find(each => each !== item && !going.has(each));
+  for (let changed = true; changed;) {
+    changed = false;
+    for (const item of going) {
+      if (!blocker(item)) continue;
+      going.delete(item);
+      changed = true;
+    }
+  }
+  for (const item of back) {
+    if (going.has(item)) continue;
+    const holder = blocker(item)!;
+    if (holder.number !== undefined && holder.wanted !== undefined) continue;
+    item.notes.push({ at: now, by: { user: true }, text: `Its own number, #${item.wanted}, is another item's here, so it stays #${item.number}.` });
+    delete item.wanted;
+  }
+  for (const item of going) {
+    item.notes.push({ at: now, by: { user: true }, text: `Has its own number, #${item.wanted}, again (it was #${item.number}).` });
+    item.number = item.wanted;
+    delete item.wanted;
+    delete item.importedAs;
+  }
+}
+
 /** Items here still waiting for a number with nothing under way to give them one (a crash between
- * a block's coming and its use, or items a move brought): their claims asked again (on the primary,
- * granted at once), and a block asked for those with none. What it did: whether anything waited. */
+ * a block's coming and its use, or items a move brought), or for their own number back: their
+ * claims asked again (on the primary, granted at once), and a block asked for those with none. What
+ * it did: whether anything waited. */
 export function reclaimWaiting(primary: Primary = primaryOf(), options: { file?: string; now?: number } = {}): boolean {
-  const waiting = allItems().filter(item => item.number === undefined && !item.source && !item.removed && OWNER.test(item.owner));
+  const waiting = allItems().filter(item => (item.number === undefined || item.wanted !== undefined) && !item.source && !item.removed && OWNER.test(item.owner));
   if (!waiting.length) return false;
   const kept = readNumbers(options.file);
   const asked = kept.asking?.claims ?? [];
   const wanted = waiting.flatMap(item => (item.wanted !== undefined && !inRanges(asked, item.wanted) ? [item.wanted] : []));
   if ("self" in primary) {
     const granted = wanted.length ? claimNumbers(primary, wanted, options).granted : [];
-    changeQueues(book => numberWaiting(book, primary, granted, options), undefined, { onItsOwn: true });
+    changeQueues(book => numberWaiting(book, primary, { granted: granted ?? [], claimed: rangesOf(wanted) }, options), undefined, { onItsOwn: true });
     return true;
   }
   if (wanted.length) claimNumbers(primary, wanted, options);
-  else if (!kept.asking && !leftIn(kept.leases)) changeNumbers(numbers => { numbers.asking ??= { id: askID(), count: BLOCK, since: options.now ?? Date.now() }; }, options.file);
+  else if (!kept.asking && !leftIn(kept.leases) && waiting.some(item => item.number === undefined)) changeNumbers(numbers => { numbers.asking ??= { id: askID(), count: BLOCK, since: options.now ?? Date.now() }; }, options.file);
   // (A lease left: numbered now.)
   if (leftIn(readNumbers(options.file).leases)) changeQueues(book => numberWaiting(book, primary, null, options), undefined, { onItsOwn: true });
   return true;
@@ -553,8 +634,8 @@ export function takeNumbersMail(sender: MailSender, given: unknown, host: Pick<L
 /** A block from the primary, kept, and what waits here numbered with it (imports' wanted numbers
  * as granted): whether it answered the ask under way. */
 export function blockArrived(give: unknown, primary: Primary, options: { file?: string } = {}): boolean {
-  const granted = takeBlock(give, options);
-  if (!granted) return false;
-  changeQueues(book => numberWaiting(book, primary, granted, options), undefined, { onItsOwn: true });
+  const answer = takeBlock(give, options);
+  if (!answer) return false;
+  changeQueues(book => numberWaiting(book, primary, answer, options), undefined, { onItsOwn: true });
   return true;
 }
