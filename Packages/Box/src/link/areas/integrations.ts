@@ -11,6 +11,7 @@ import { soon } from "../../shared/wait";
 import { call } from "../engine/client";
 import { listOf, locked, writePrivate } from "../files";
 import { BOTS, CONFIG_LOCK, INTEGRATION_DATA, IS_MAC, K, OWN_RUNTIME, SCRIPT } from "../home";
+import { answeringOnce } from "../once";
 import { KeysUnavailable, siteSignIns } from "../host-interface";
 import { deleteKey, keyNames, keyWork, STORED_KEY, writeKey } from "../keys";
 import type { AnswerPiece, JSONAnswer, RouteContext } from "../server/context";
@@ -305,17 +306,14 @@ async function keepsAll(variables: string[]): Promise<boolean> {
 }
 
 
-// Set by `box route`, a command that answers once and ends: what waits a moment goes in a process
-// of its own, which outlives it.
-let answersOnce = false;
-export function answerOnce(): void {
-  answersOnce = true;
-}
+// (`box route` answers once and ends: what waits a moment goes in a process of its own, which
+// outlives it, `once.ts`.)
+export { answerOnce } from "../once";
 
 /** Its server connected again a moment after its keys changed, once the engine has read them. */
 function reconnectLater(engine: EngineRecord | null, id: string, later: typeof soon): void {
   if (!engine) return;
-  if (answersOnce && later === soon) {
+  if (answeringOnce() && later === soon) {
     spawn(process.execPath, [...OWN_RUNTIME, SCRIPT, "box", "reconnect", id], { detached: true, stdio: "ignore", cwd: K, env: process.env }).unref();
     return;
   }

@@ -13,6 +13,8 @@ struct SubagentRow: View {
     var scope = ""
     @Environment(Workspace.self) private var workspace
     @Environment(AppModel.self) private var app
+    /// The conversation this is in, where what it opens comes back to.
+    @Environment(\.conversationTab) private var here
     @Environment(Catalog.self) private var catalog
     @State private var model: SessionModel?
     @Environment(\.scrollAnchor) private var scrollAnchor
@@ -69,7 +71,7 @@ struct SubagentRow: View {
             .help(isExpanded ? "Hide its steps" : "Show its steps")
             .contextMenu {
                 if let session {
-                    Button("Open Conversation") { app.tabs.openInPlace(session) }
+                    Button("Open Conversation") { app.open(.session(session), from: here) }
                 }
             }
 
@@ -87,7 +89,7 @@ struct SubagentRow: View {
                 VStack(alignment: .leading, spacing: 8) {
                     SubagentSteps(id: session, task: input?["prompt"]?.string, directory: directory)
                         .environment(\.autopilotCallsShownAbove, !decided.isEmpty)
-                    Button("Open Conversation") { app.tabs.openInPlace(session) }
+                    Button("Open Conversation") { app.open(.session(session), from: here) }
                         .buttonStyle(TextButtonStyle(outset: true))
                         .font(.callout)
                         .help("Open its conversation here: watch it, talk to it, stop it or give it another model")

@@ -99,12 +99,14 @@ act on those (a window's tracking areas and cursor rectangles once the pointer c
 drawing as Core Animation commits), the test does it itself: `WindowServer.appKitsTurn` and
 `CATransaction.flush()` after `displayIfNeeded()`.
 
-Run quick, targeted tests locally while working. Commit the changes to a work branch, then run
-`scripts/ci-branch.sh --wait` to push it over SSH to `origin` as a `ci/` branch and run the full
-CI suites on GitHub. Pass a local branch name to test a different branch. The script prints the run
-URL, job conclusions and failed logs; it never pushes `main` or tags. Only committed changes run.
-CI covers the Mac app, Swift packages, box and bridge; the phone has no CI, so run its tests locally
-through `scripts/heavy.sh phone`. Use `scripts/heavy.sh` for other local builds or tests CI doesn't cover.
+Run tests locally through `scripts/heavy.sh`'s lanes (below): only your area's tests, including
+what uses the code you changed, while working and at merge. No full suite unless the user asks;
+the lead asks for one before a release. The phone has no CI; run its tests locally through
+`scripts/heavy.sh phone`. While pushes and CI are paused, only the lead session runs
+`scripts/ci-branch.sh --wait`, and only when the user asks: it pushes a work branch over SSH to `origin` as
+a `ci/` branch and runs the full CI suites on GitHub (pass a local branch name to test a different
+one). It prints the run URL, job conclusions and failed logs; it never pushes `main` or tags. Only
+committed changes run.
 
 Run quick, targeted box and bridge tests with `scripts/test-box.sh [box|bridge|all] [extra test args]`. It queues under the box heavy slot, installs locked dependencies when needed, and summarizes results.
 
@@ -139,6 +141,18 @@ its home as it ends, and the next run clears what a killed one left.
 `./scripts/test-app.sh` runs one at a time: a run started while another is going
 waits for it, since they share the test copy's settings and temporary folders.
 
+One copy of `scripts/heavy.sh` runs every job: `~/Projects/kuvo-ai/scripts/heavy.sh`, the canonical
+one (`KUVO_HEAVY_CANONICAL` names another). Any other copy, a worktree's or an older checkout's, hands
+the job to it at once with the same arguments and environment, and both apps' `scripts/test-app.sh`
+and the phone's `scripts/build-app.sh` call it directly (`KUVO_HEAVY_SH` for another). So a fix to
+how jobs take turns reaches every caller once it's on that checkout, and a stale copy can't jam a
+lane. To try a change to the helper itself, run your copy with `KUVO_HEAVY_CANONICAL=` (empty), as
+its tests do. A copy from before this hands nothing on: it runs as it did until its jobs end.
+`scripts/heavy.sh status` prints a line for each lane: who holds each slot, for how long, whether its
+command runs, and how many wait in line, the longest for how long. Nothing waits under a lane's lock
+in this copy; a holder that hasn't run its command for 2 minutes (an older copy waiting for room
+under the lock) is named in `status` and by every job waiting for that slot.
+
 When running heavy builds or tests locally, start them with `scripts/heavy.sh <kind>`, which
 waits for jobs of the same kind (they share build folders) and runs the other
 kinds alongside:
@@ -165,7 +179,7 @@ scripts/test-box.sh box <test-filter>
   not the checkout's `build/SourcePackages` (the app suite's) or `build/DerivedData`, which two
   jobs in one checkout would share. A package's `.build` is its own to each checkout;
 - `phone-build`: the iPhone app's builds, and anything of the phone's that boots no simulator. It is
-  `mac-build`'s lane under another name (the same two slots, locks and 30-minute time limit, which
+  `mac-build`'s lane under another name (the same two slots, locks and 90-minute time limit, which
   `KUVO_HEAVY_LIMIT=60m` raises), not one of its own: a phone build and a Mac build are both `xcodebuild` compiles that compete for the same CPU and
   memory, so they count against each other, and neither waits for a simulator. Take the slot's
   folder from `KUVO_HEAVY_SLOT` and `KUVO_HEAVY_BUILD_SUFFIX` (`-1` or `-2`) and build in
@@ -186,16 +200,45 @@ scripts/test-box.sh box <test-filter>
   were, so an older script and a new one on slot 1 still exclude each other;
 - `box`: the box's whole suites (`bun test`, `node --test`) and runs on a test machine.
 
-A job also waits while the Mac is busy (its load over the last minute above 40;
-`KUVO_HEAVY_LOAD` sets another). While the Mac app's suite waits there, new jobs of the other
-kinds wait for it to start, 15 minutes at most (`KUVO_HEAVY_MAC_FIRST_FOR`), so the jobs that keep
-starting can't keep it out. A new job also waits while the Mac is short of memory: swapping more than
-10 MB a second (`KUVO_HEAVY_SWAP`), its memory pressure at warn or worse, or less than 20% of it
-available as `memory_pressure -Q` says (`KUVO_HEAVY_MEMORY`; `0` turns the memory wait off). It
-waits until two looks in a row find it isn't, 15 minutes at most from when any job found it short
-(`KUVO_HEAVY_MEMORY_WAIT_FOR`): on this Mac memory runs out before CPU does. Both apps' `scripts/test-app.sh` take their turn
+With `KUVO_XCODE_CACHE=1`, every job of the Xcode lanes (`mac`, `mac-build`, `phone-build`, `phone`)
+builds with Xcode's compilation cache, one for all checkouts (`scripts/xcode-cache.sh`): a content-addressed store in
+`$(getconf DARWIN_USER_CACHE_DIR)KuvoCompilationCache`, keyed by what goes into each compile and not
+by where the checkout or build folder is, so a build in a new worktree replays what an earlier build
+of the same code compiled instead of compiling the app and its packages again. Code that differs gets
+its own key, so branches never mix. heavy.sh hands `scripts/xcode-cache.xcconfig` to `xcodebuild`
+through `XCODE_XCCONFIG_FILE`; nothing changes in your command (settings on it still win), and both
+apps' `scripts/test-app.sh` and `scripts/build-app.sh` get it too. Xcode prunes the store to 20 GB
+(`KUVO_XCODE_CACHE_SIZE`) after a build, but only once no build has it open, so on a busy Mac it can
+grow past that for a while (heavy.sh says so at twice the size); to clear it, delete the folder while
+no Xcode build runs. It's off unless `KUVO_XCODE_CACHE=1` (and always on CI): with Xcode 27.2, a
+cache hit on a Swift compile whose stored output has warnings crashes Xcode's build service as it
+replays them ("The Xcode build system has crashed", #562). A caller with an `XCODE_XCCONFIG_FILE` of
+its own keeps that one instead. `swift build` and `swift test` don't use it.
+The compiler sees the sources as `/^src/…` (the project's folder), so `#filePath` is that too, and so
+are the places a failed test names: what `xcodebuild` builds finds its files through its bundle, never
+`#filePath` (the app's `scripts/test-app.sh` checks).
+
+Before it joins its lane's line, a new job waits while the Mac is thrashing: swapping more than 10 MB
+a second (`KUVO_HEAVY_SWAP`) or its memory pressure critical, two minutes at most from when any job
+found it so (`KUVO_HEAVY_MEMORY_WAIT_FOR`; `KUVO_HEAVY_MEMORY=0` turns the memory wait off). It waits
+for a busy Mac (`KUVO_HEAVY_LOAD`, its load over the last minute) or for a share of memory available
+(`KUVO_HEAVY_MEMORY=20`, in percent) only when you set those: low priority (below) keeps the
+Mac usable, and on the Mini, with a dozen sessions, the load stayed over 40 and less than 20% of
+memory was available all day, so jobs only waited. While the Mac app's suite waits there, new jobs of
+the other kinds wait for it to start, two minutes at most (`KUVO_HEAVY_MAC_FIRST_FOR`). None of
+these waits happens while a job holds its lane's lock, so a job waiting for room never holds up
+the jobs in line behind it. Both apps' `scripts/test-app.sh` take their turn
 this way themselves. `python3 -m unittest discover -s scripts -p test_heavy.py`
 tries the helper.
+
+Jobs never starve the box (the Kuvo Code box on this Mac, which the phone talks to): every job runs
+at low priority, its children too: `taskpolicy -c utility nice -n 20` on macOS (utility QoS at the
+lowest nice: lower CPU and I/O priority than the box's, but on every core; it works with `xcodebuild`
+builds and tests, simulator runs and `swift test`), `nice -n 15 ionice -c3` on Linux. Not background
+QoS (`taskpolicy -b`), which on Apple silicon runs only on the efficiency cores with its I/O
+throttled: a cold build took nearly twice as long under it. On
+an idle Mac a job runs as fast as ever; on a busy one it gives way and is slower, which the time
+limit allows for (`KUVO_HEAVY_LIMIT`).
 
 A job's command runs in a process group of its own, which ends with it: when the command is over,
 and when the helper is stopped, whatever the command started that stays in that group is stopped too
@@ -208,7 +251,7 @@ were started in. On macOS every option goes before the pattern, in `pgrep` too.
 
 Every job has a time limit, so a hung one can't hold its kind's turn for hours: `mac` and `phone`
 45 minutes, `mac-build` 30, `box` 40, counted from when its command starts (not while it waits in
-line for its slot, however long, nor for a busy Mac). Past it, its group is stopped (TERM, then
+line for its slot, however long, nor for room on the Mac). Past it, its group is stopped (TERM, then
 KILL), it says what was running, and the helper exits 124. Jobs waiting for a lane wait in line,
 first come first served; `KUVO_HEAVY_PRIORITY=high` puts one before the normal ones waiting (it
 never stops a job running), and `KUVO_HEAVY_WAIT=0` answers without waiting for one (75: it

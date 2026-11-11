@@ -83,11 +83,17 @@ public struct WorkItemDot: View {
 }
 
 /// A `#243` reference in a message, drawn as a chip: a small capsule with the item's mark, its
-/// number and its title cut to one line. Its words for VoiceOver are "Work item 243, <title>".
+/// number and its title cut to one line. Its words for VoiceOver are "Work item 243, <title>". One
+/// that's an issue or a pull request (`gh:owner/repo#12`) has its service's mark (`brand`, a
+/// `BrandMark` id) and its name ("app#12") in place of the number, its title struck through when
+/// it was closed without being done.
 public struct WorkItemChip: View {
-    let number: Int
+    let name: String
+    let brand: String?
     let title: String
     let mark: WorkItemMark
+    let struck: Bool
+    let spokenAs: String
     let size: CGFloat
     let dark: Bool
 
@@ -95,9 +101,18 @@ public struct WorkItemChip: View {
     public static let titleLimit = 36
 
     public init(number: Int, title: String, mark: WorkItemMark, size: CGFloat, dark: Bool) {
-        self.number = number
+        self.init(name: "#\(number)", brand: nil, title: title, mark: mark, struck: false, spokenAs: "Work item \(number)", size: size, dark: dark)
+    }
+
+    /// `name` as it's shown ("#243", "app#12"), `brand` its service's mark, `spokenAs` what
+    /// VoiceOver says for the name ("Work item 243", "GitHub issue app#12").
+    public init(name: String, brand: String?, title: String, mark: WorkItemMark, struck: Bool, spokenAs: String, size: CGFloat, dark: Bool) {
+        self.name = name
+        self.brand = brand
         self.title = title
         self.mark = mark
+        self.struck = struck
+        self.spokenAs = spokenAs
         self.size = size
         self.dark = dark
     }
@@ -115,13 +130,19 @@ public struct WorkItemChip: View {
         let font = size * 0.86
         HStack(spacing: size * 0.3) {
             WorkItemDot(mark, size: (size * 0.62).rounded())
-            Text("#\(number)")
-                .font(.system(size: font, weight: .semibold).monospacedDigit())
-                .foregroundStyle(ink.opacity(mark == .removed ? 0.5 : 0.85))
+            HStack(spacing: size * 0.18) {
+                if let brand {
+                    BrandMarkView(brand, size: (size * 0.78).rounded())
+                        .foregroundStyle(ink.opacity(mark == .removed ? 0.5 : 0.85))
+                }
+                Text(name)
+                    .font(.system(size: font, weight: .semibold).monospacedDigit())
+                    .foregroundStyle(ink.opacity(mark == .removed ? 0.5 : 0.85))
+            }
             Text(Self.shownTitle(title))
                 .font(.system(size: font))
                 .foregroundStyle(ink.opacity(mark == .removed ? 0.45 : 0.68))
-                .strikethrough(mark == .removed)
+                .strikethrough(mark == .removed || struck)
                 .lineLimit(1)
                 .fixedSize()
         }
@@ -133,11 +154,16 @@ public struct WorkItemChip: View {
         .fixedSize()
         .environment(\.colorScheme, dark ? .dark : .light)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(Self.spoken(number: number, title: title, mark: mark))
+        .accessibilityLabel(Self.spoken(name: spokenAs, title: title, mark: mark))
     }
 
     /// "Work item 243, Fix the sign-in, in progress".
     public static func spoken(number: Int, title: String, mark: WorkItemMark) -> String {
-        ["Work item \(number)", title, mark.words].filter { !$0.isEmpty }.joined(separator: ", ")
+        spoken(name: "Work item \(number)", title: title, mark: mark)
+    }
+
+    /// "GitHub issue app#12, Upload retries drop the file name, done".
+    public static func spoken(name: String, title: String, mark: WorkItemMark) -> String {
+        [name, title, mark.words].filter { !$0.isEmpty }.joined(separator: ", ")
     }
 }
