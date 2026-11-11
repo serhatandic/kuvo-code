@@ -268,7 +268,7 @@ private struct DecisionRow: View {
         .onHover { isHovering = $0 }
         .help(showsWhy ? "" : decision.reason)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(decision.action)
+        .accessibilityLabel(decision.place.map { "Edits in \($0)" } ?? decision.action)
         .accessibilityValue("\(spoken). \(decision.reason)")
         .accessibilityActions {
             if decision.waiting { Button("Approve", action: approve) }
@@ -286,7 +286,13 @@ private struct DecisionRow: View {
 
     /// A file's name with its folder dimmed; a command, or what a tool was.
     @ViewBuilder private var what: some View {
-        if decision.kind == "file", let space = decision.action.firstIndex(of: " ") {
+        if let place = decision.place {
+            // A folder it allows edits in: said so, its name with where it is dimmed.
+            let folder = (place as NSString).deletingLastPathComponent.split(separator: "/").suffix(2).joined(separator: "/")
+            Text("Edits in \(Text((place as NSString).lastPathComponent).foregroundStyle(.primary)) \(Text(folder).foregroundStyle(.tertiary))")
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+        } else if decision.kind == "file", let space = decision.action.firstIndex(of: " ") {
             let path = String(decision.action[decision.action.index(after: space)...])
             let file = (path as NSString).lastPathComponent
             let folder = (path as NSString).deletingLastPathComponent.split(separator: "/").suffix(2).joined(separator: "/")

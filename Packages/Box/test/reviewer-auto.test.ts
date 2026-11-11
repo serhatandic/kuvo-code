@@ -645,6 +645,17 @@ test("in Auto, a file of its own is only one reached plainly: a folder of its ow
     // Found, and its own, as it was: a file there, and one in a folder not made yet.
     expect((await ask("ses_swap", "per_s1", join(trees, "T", "notes.md")))?.decision).toBe("allow")
     expect((await ask("ses_swap", "per_s1b", join(trees, "L", "new", "deeper", "notes.md")))?.decision).toBe("allow")
+    // Any tool's: a patch adding a file, and a command going into a folder of one, as the engine
+    // asks for them.
+    const askWith = (id: string, tool: string, input: Record<string, unknown>, resources: string[]) => {
+      calling.ses_swap = [{ type: "tool", id: `call_${id}`, name: tool, state: { input } }]
+      asking.ses_swap = [{ id, action: "external_directory", resources, source: { id: `call_${id}`, messageID: "msg_1" } }]
+      return reviewing.reviewPermission({ port: engine.port, password: "pw" } as never, { type: "permission.asked", data: { id, sessionID: "ses_swap", action: "external_directory" } })
+    }
+    const patch = (file: string) => ({ patchText: `*** Begin Patch\n*** Add File: ${file}\n+x\n*** End Patch` })
+    mkdirSync(join(trees, "L", "Packages"))
+    expect((await askWith("per_p1", "apply_patch", patch(join(trees, "L", "Packages", "new.ts")), [join(trees, "L", "Packages") + "/*"]))?.decision).toBe("allow")
+    expect((await askWith("per_p2", "bash", { command: `cd ${join(trees, "L", "Packages")} && ls` }, [join(trees, "L", "Packages") + "/*"]))?.decision).toBe("allow")
     // (Each the reviewer's: refused here, then held back as it pauses.)
     // In one, links a command made: to a file not there yet where what runs later is kept, through
     // two links, to a folder not there yet, and `..` after a link; and a file hard-linked to one there.
@@ -658,6 +669,10 @@ test("in Auto, a file of its own is only one reached plainly: a folder of its ow
       ["per_l4", `${join(trees, "L", "l")}/../bin/evil`], ["per_l5", join(trees, "L", "hard.plist")]] as const) {
       expect([id, (await ask("ses_swap", id, file))?.decision]).toEqual([id, "refuse"])
     }
+    // Named by a patch, or from its folder, the engine asking only for the folder.
+    expect((await askWith("per_l6", "apply_patch", patch(join(trees, "L", "evil.plist")), [join(trees, "L") + "/*"]))?.decision).toBe("refuse")
+    expect((await askWith("per_l7", "write", { filePath: "../swap-trees/L/evil.plist" }, [join(trees, "L") + "/*"]))?.decision).toBe("refuse")
+    expect((await askWith("per_l8", "write", { path: join(trees, "L", "hard.plist") }, [join(trees, "L") + "/*"]))?.decision).toBe("refuse")
     // The worktree itself traded for a link to where what runs later is kept.
     renameSync(join(trees, "T"), join(trees, "T.r"))
     symlinkSync(later, join(trees, "T"))

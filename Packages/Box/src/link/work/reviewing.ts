@@ -10,10 +10,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { isObject } from "../../shared/json";
-import { writePrivate } from "../files";
 import { oneLine } from "../../shared/text";
 import { bridgeTarget, call, call as engineCall, engineGet, readEngineFile } from "../engine/client";
-import { attachmentRoots, BOX, homeFolder } from "../home";
+import { attachmentRoots, homeFolder } from "../home";
 import { sendInto, stopSession, writtenByYou } from "../engine/queue";
 import { boxNote } from "../../shared/queues";
 import { messageID } from "../engine/sessions";
@@ -28,6 +27,8 @@ import { readProjects } from "../areas/projects";
 import { commandTemporary } from "../fence/state";
 import { askedAbout, fencePolicy } from "../fence/policy";
 import { inTime, projectWorktrees } from "./project-trees";
+import { foundAt } from "./found-folders";
+export { noteFolderFound } from "./found-folders";
 import type { EngineAnswer } from "../engine/client";
 import type { EngineSession } from "../engine/sessions";
 import type { Target } from "../../shared/records";
@@ -406,13 +407,35 @@ async function taskOf(at: Conversation, signal?: AbortSignal): Promise<ReviewCon
   return head && head[2] === starter ? { from: head[1], text: text.slice(head[0].length) } : undefined;
 }
 
+// The tools that run a command (asked about the folders it names, its writes the sandbox's).
+const RUNNING = new Set(["bash", "shell", "command", "exec", "local_shell", "terminal"]);
+
+/** What a tool call changes, each by its path as given (`raw`) and as the engine takes it (from the
+ * conversation's `folder`; `~` your home): a tool that writes, every file it names, a patch's
+ * headers too (none where it names none, which is never its own); one that reads, the file it
+ * reads; one that runs a command, nothing here (its folders, from the ask, as folders). */
+function changedBy(seen: { tool: string; input: Record<string, unknown> }, folder: string): { raw: string; path: string; folder: boolean }[] | null {
+  const tool = seen.tool.toLowerCase();
+  if (RUNNING.has(tool)) return null;
+  const named: string[] = [];
+  for (const key of ["filePath", "file_path", "notebook_path", "path", "file"]) if (typeof seen.input[key] === "string") named.push(seen.input[key] as string);
+  for (const key of ["patchText", "patch", "input", "diff"]) {
+    const text = seen.input[key];
+    if (typeof text === "string") for (const found of text.matchAll(/^\*\*\* (?:Add|Update|Delete) File: (.+)$|^\*\*\* Move to: (.+)$|^(?:\+\+\+|---) (?:[ab]\/)?(.+)$/gm)) {
+      const each = (found[1] ?? found[2] ?? found[3] ?? "").trim();
+      if (each && each !== "/dev/null") named.push(each);
+    }
+  }
+  return named.map(raw => ({ raw, path: path.resolve(folder, raw.replace(/^~(?=\/|$)/, homeFolder())), folder: false }));
+}
+
 /** Where `file` really is, where it's reached plainly from the folder whose real path is `folder`:
  * one of the folders it's named through leads to `folder` itself, and below that no part of it is
  * a link, each folder a folder, and the file, where it's there, a file with no other name (a hard
- * link to one elsewhere would be written there too). What isn't there yet is made where it's
- * named. Null otherwise: a link anywhere below, one that leads nowhere yet, `..` in it. (Checked as
+ * link to one elsewhere would be written there too; so a package manager's hard-linked files are
+ * the reviewer's), or with `asFolder` a folder. What isn't there yet is made where it's named. Null otherwise: a link anywhere below, one that leads nowhere yet, `..` in it. (Checked as
  * it's asked: what a command changes between the answer and the write isn't.) */
-function plainlyIn(file: string, folder: string): string | null {
+function plainlyIn(file: string, folder: string, asFolder = false): string | null {
   if (!path.isAbsolute(file) || file.split("/").includes("..")) return null;
   const parts = path.resolve(file).split("/");
   for (let top = 1; top <= parts.length; top++) {
@@ -422,9 +445,15 @@ function plainlyIn(file: string, folder: string): string | null {
     if (real !== folder) continue;
     for (let at = top; at < parts.length; at++) {
       let kind: fs.Stats;
-      try { kind = fs.lstatSync(parts.slice(0, at + 1).join("/")); } catch { break; }
+      try { kind = fs.lstatSync(parts.slice(0, at + 1).join("/")); }
+      catch (error) {
+        // (Not there yet: made where it's named. Anything else that can't be looked at isn't plain.)
+        if ((error as NodeJS.ErrnoException)?.code === "ENOENT") break;
+        return null;
+      }
       if (kind.isSymbolicLink()) return null;
-      if (at < parts.length - 1 ? !kind.isDirectory() : !kind.isFile() || kind.nlink !== 1) return null;
+      const last = at === parts.length - 1;
+      if (!last || asFolder ? !kind.isDirectory() : !kind.isFile() || kind.nlink !== 1) return null;
     }
     return path.join(folder, ...parts.slice(top));
   }
@@ -437,45 +466,6 @@ function within(file: string, folder: string): boolean {
   return inside === "" || (!inside.startsWith("..") && !path.isAbsolute(inside));
 }
 
-// Where each of a conversation's own folders was first found to be: as the box first sees a
-// conversation (`noteFolderFound`), else as it first looks there, kept in the box's folder across
-// restarts. One traded for a link to elsewhere since (by a command in it) doesn't take its files
-// with it.
-const FOUND_FILE = path.join(BOX, "found-folders.json");
-const MOST_FOUND = 2000;
-let firstFound: Map<string, string> | null = null;
-function foundFolders(): Map<string, string> {
-  if (firstFound) return firstFound;
-  firstFound = new Map();
-  try {
-    const kept = JSON.parse(fs.readFileSync(FOUND_FILE, "utf8"));
-    if (isObject(kept)) for (const [folder, real] of Object.entries(kept)) if (typeof real === "string" && path.isAbsolute(real)) firstFound.set(folder, real);
-  } catch {}
-  return firstFound;
-}
-function keepFound(folder: string, real: string): void {
-  const found = foundFolders();
-  if (found.get(folder) === real) return;
-  found.delete(folder);
-  found.set(folder, real);
-  while (found.size > MOST_FOUND) found.delete(found.keys().next().value!);
-  try { writePrivate(FOUND_FILE, JSON.stringify(Object.fromEntries(found))); } catch {}
-}
-function foundAt(folder: string): string {
-  const known = foundFolders().get(folder);
-  if (known !== undefined) return known;
-  const real = realPath(folder);
-  keepFound(folder, real);
-  return real;
-}
-
-/** A conversation's folder as the box first sees it (as it's made, or adopted): where it really is
- * then is where its own is, whatever it's traded for later. */
-export async function noteFolderFound(folder: unknown): Promise<void> {
-  if (typeof folder !== "string" || !path.isAbsolute(folder) || foundFolders().has(folder)) return;
-  await askedAbout([folder]);
-  keepFound(folder, realPath(folder));
-}
 
 function realPath(file: string): string {
   const rest: string[] = [];
@@ -560,15 +550,22 @@ async function answerPermission(source: Target, id: string, sessionID: string, s
   // on the way down, nor `..`, a file of one name only), and never what's walled from its own
   // wherever it is (`walledForOwn`). Anything else is the reviewer's.
   const own = await ownFolders(at, false);
+  await askedAbout(own);
   const trees = typeof folder === "string" ? await projectTrees(folder) : [];
   const policy = fencePolicy();
   const places = [...own.map(foundAt), ...trees];
-  const climbs = [...(file ? [file] : []), ...permission.resources].some(each => String(each).split("/").includes(".."));
-  const ownFile = (file: string) => !climbs && places.some(place => {
-    const real = plainlyIn(file, place);
+  // What it changes: every file a tool that writes names (by its arguments, a patch's headers too;
+  // one it names none of is never its own); a command's or a room's folders, as folders; what it
+  // reads, as files. Any of them climbing (`..`) is the reviewer's.
+  const changes = seen ? changedBy(seen, folder) : null;
+  const asked = changes ?? permission.resources.filter(each => each !== "*").map(each => ({ raw: each, path: path.resolve(folder, each.replace(/^~(?=\/|$)/, homeFolder()).replace(/\/\*$/, "") || "/"), folder: true }));
+  const plainly = (change: { path: string; folder: boolean }) => places.some(place => {
+    const real = plainlyIn(change.path, place, change.folder);
     return real !== null && !walledForOwn(real, policy, own);
   });
-  if (actions.every(action => action.kind === "file" && ownFile(action.path))) {
+  const ownChanges = asked.length > 0 && asked.every(each => !each.raw.split("/").includes("..") && plainly(each))
+    && actions.every(action => action.kind === "file");
+  if (ownChanges) {
     await reply({ decision: "once" });
     noteReview(id, sessionID, "allowed", call);
     return { decision: "allow", reason: "Its own project.", by: "code" };
