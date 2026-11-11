@@ -125,28 +125,19 @@ async function machine(prefix, extra = {}) {
     // (Not the half minute of quiet, nor the eleven minutes' run, a machine's bridge waits for.)
     KUVO_TEST_RENEW_SETTLE: "0", KUVO_TEST_RENEW_UPTIME: "0", ...extra,
   };
-  const bridges = [];
-  let stopping = false, child, restarts = 0;
-  const begin = () => {
-    child = spawn(bun, ["--config=/dev/null", "--no-env-file", path.join(home, "bin", "kuvo-agents.js")], { cwd: path.join(home, "work"), env, stdio: ["ignore", "ignore", "pipe"] });
-    bridges.push(child.pid);
-    let said = "";
-    child.stderr.on("data", chunk => { said += chunk; });
-    child.on("exit", code => {
-      if (stopping) return;
-      // As the launch does: never for a port someone else took, and a few times in a row at most.
-      if (code === 98 || ++restarts > 5) return void (child = undefined);
-      setTimeout(() => { if (!stopping) begin(); }, 200);
-    });
-    child.said = () => said;
-  };
-  begin();
+  // What keeps a machine's bridge running, as its launch does (RemoteServer.agentsScript): the same
+  // loop, starting it again five seconds after it ends, while its engine (this process) runs, five
+  // runs in a row under ten minutes at most; in a process group of the test's own.
+  const loop = 'n=0; while kill -0 "$1" 2>/dev/null && [ $n -lt 5 ]; do s=$(date +%s); "$2" --config=/dev/null --no-env-file "$3" >>"$4" 2>&1 </dev/null; e=$?; [ $e -eq 98 ] && exit 98; [ $(($(date +%s) - s)) -ge 600 ] && n=0; n=$((n + 1)); sleep 5; done';
+  const launch = spawn("sh", ["-c", loop, "kuvo-agents", String(process.pid), bun, path.join(home, "bin", "kuvo-agents.js"), path.join(home, "run", "agents.log")], { cwd: path.join(home, "work"), env, stdio: "ignore", detached: true });
   atEnd(() => new Promise(resolve => {
-    stopping = true;
-    if (!child || child.exitCode !== null) return resolve();
-    child.on("exit", resolve);
-    child.kill();
+    if (launch.exitCode !== null) return resolve();
+    launch.on("exit", () => resolve());
+    // (Its group: the loop, the bridge it runs and what that started.)
+    try { process.kill(-launch.pid, "SIGTERM"); } catch { resolve(); }
   }));
+  /** How many times its launch has started it (one `"url"` line each in its log). */
+  const starts = () => (fs.readFileSync(path.join(home, "run", "agents.log"), "utf8").match(/"url"/g) ?? []).length;
 
   const auth = { authorization: "Basic " + Buffer.from("opencode:pw").toString("base64"), "content-type": "application/json", "x-opencode-directory": encodeURIComponent(path.join(home, "work")) };
   const api = async (method, route, body) => {
@@ -192,7 +183,20 @@ async function machine(prefix, extra = {}) {
     });
     asking.stdin.end(JSON.stringify({ method: "GET", path: "kuvo/info" }));
   });
-  return { home, bridges, api, record, up, turns, release, make, send, finished, pieces, said: () => child?.said?.() ?? "" };
+  /** A client following its events (the feed stays open; it follows the bridge started again). */
+  const follow = () => {
+    const stop = new AbortController();
+    atEnd(() => stop.abort());
+    const open = () => {
+      if (stop.signal.aborted) return;
+      fetch(`http://127.0.0.1:${port}/api/event`, { headers: { authorization: auth.authorization, accept: "text/event-stream" }, signal: stop.signal })
+        .then(async response => { for await (const _ of response.body) {} })
+        .catch(() => {})
+        .finally(() => setTimeout(open, 200));
+    };
+    open();
+  };
+  return { home, starts, api, record, up, turns, release, make, send, finished, pieces, follow };
 }
 
 const textOf = messages => messages.filter(each => each.type === "assistant").flatMap(each => each.content ?? []).filter(block => block.type === "text").map(block => block.text);
@@ -241,7 +245,35 @@ test("a newer bridge put in place while a turn runs: that turn ends on the bridg
   assert.deepEqual(textOf(messages), ["Done: hold one", "Done: two"]);
   assert.deepEqual(outcomes(messages), ["succeeded", "succeeded"]);
   assert.deepEqual(box.turns(), [{ text: "hold one", bridge: first.pid }, { text: "two", bridge: second.pid }], "each turn ran once, the second on the new bridge");
-  assert.deepEqual(box.bridges.slice(0, 2), [first.pid, second.pid], "the bridge started again once");
+  assert.equal(box.starts(), 2, "its launch started it again once");
+});
+
+test("a machine as it runs: its link asks the bridge whether it answers and a client follows its events all the while, and the bridge still goes at a quiet moment", { skip: bun ? false : NO_BUN }, async () => {
+  // (Two seconds of quiet here, where a machine's bridge waits half a minute; its link asks every
+  // half minute, more often than that here.)
+  const box = await machine("kuvo-renewal-watched-", { KUVO_TEST_RENEW_SETTLE: "2000" });
+  const first = await box.up();
+  box.follow();
+  let watching = true;
+  atEnd(() => { watching = false; });
+  void (async () => {
+    while (watching) {
+      await box.api("GET", "api/info");
+      await new Promise(resolve => setTimeout(resolve, 300));
+    }
+  })();
+  const session = await box.make("Done for now");
+  await box.send(session, "msg_renewalwatch00001", "one");
+  await box.finished(session, 1);
+
+  install(box.home, NEWER);
+  const second = await box.up(first.pid);
+  assert.equal(second.build, NEWER, "it went for the newer bridge with nothing at work, its link and a client looking on");
+  assert.equal(box.record().renewal, null);
+  await box.send(session, "msg_renewalwatch00002", "two");
+  const messages = await box.finished(session, 2);
+  assert.deepEqual(textOf(messages), ["Done: one", "Done: two"]);
+  assert.deepEqual(box.turns(), [{ text: "one", bridge: first.pid }, { text: "two", bridge: second.pid }]);
 });
 
 test("a box with no quiet moment: once it has waited, a new message waits, kept, the turn under way ends on its bridge, and what waited runs once on the new one", { skip: bun ? false : NO_BUN }, async () => {

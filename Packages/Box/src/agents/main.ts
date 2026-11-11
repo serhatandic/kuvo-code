@@ -335,7 +335,10 @@ try {
     fetch: (request) => {
       if (new URL(request.url).pathname === "/api/event") return answer(request)
       answering++
-      renewal?.busied()
+      // One that can start something (a message, a change) starts a quiet moment's count again; one
+      // that only reads doesn't: the link asks whether it answers every half minute, and a client
+      // reads what it shows (counted while they're answered all the same).
+      if (request.method !== "GET" && request.method !== "HEAD") renewal?.busied()
       return answer(request).finally(() => answering--)
     },
   })
@@ -390,6 +393,8 @@ writeRecord(null, true)
 // the first quiet moment, never cutting a turn, and the machine's launch starts the new one, which
 // starts what waited for it (renewal.ts). (This Mac's own bridge takes a new version with its app,
 // whose keeper starts the box again once nothing runs.)
+/** Whether its launch starts it again, as last worked out (`lets`, below). */
+let launchSaid: { at: number; lets: boolean } | undefined
 renewal =
   onMachine && build
     ? new Renewal({
@@ -415,14 +420,20 @@ renewal =
           return !kept || kept === basename(dirname(process.execPath))
         },
         // Only while the launch keeping it will start the new one (renewal.ts, `launchLets`).
-        lets: () =>
-          launchLets(commandLineOf(process.ppid), () => {
+        // (Its parent's command line and its launch's log, read once a minute at most.)
+        lets: () => {
+          const now = Date.now()
+          if (launchSaid && now - launchSaid.at < 60_000) return launchSaid.lets
+          const lets = launchLets(commandLineOf(process.ppid), () => {
             try {
               return readFileSync(join(machineHome!, "run", "agents.log"), "utf8")
             } catch {
               return undefined
             }
-          }),
+          })
+          launchSaid = { at: now, lets }
+          return lets
+        },
         uptime: () => performance.now(),
         longEnough: renewUptime,
         // Only for a bundle that loads and runs on this engine.
@@ -436,9 +447,10 @@ renewal =
             const timer = setTimeout(() => ((late = true), checking.kill("SIGKILL")), 60_000)
             // (One that couldn't start, or ran out of time, says nothing of the bundle: asked again.)
             checking.on("error", () => (clearTimeout(timer), done(undefined)))
-            checking.on("close", (code) => {
+            checking.on("close", (code, signal) => {
               clearTimeout(timer)
-              done(late ? undefined : code === 0 && said.trim() === `ok ${newer}`)
+              // (Ended by a signal, out of memory say, or out of time: nothing said of the bundle.)
+              done(late || signal ? undefined : code === 0 && said.trim() === `ok ${newer}`)
             })
           }),
         holdAfter: renewHoldAfter,

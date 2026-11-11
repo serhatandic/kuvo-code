@@ -26566,10 +26566,12 @@ function nightOf(date = new Date, zone = process.env.KUVO_TZ) {
 // Packages/Box/src/agents/renewal.ts
 var renewalTiming = { look: 1e4, settle: 30000, grace: 1000, patience: 60 * 60000, longest: 24 * 60 * 60000, holding: 30 * 60000, uptime: 11 * 60000 };
 function launchLets(loop, log) {
+  if (loop !== undefined && !(loop.includes("kuvo-agents") && loop.includes("-lt 5")))
+    return false;
   if (loop?.includes("-ge 600"))
     return true;
   const text = log();
-  return text !== undefined && (text.match(/"url"/g) ?? []).length < 4;
+  return text !== undefined && (text.match(/"url"/g) ?? []).length < 3;
 }
 
 class Renewal {
@@ -27261,7 +27263,8 @@ try {
       if (new URL(request.url).pathname === "/api/event")
         return answer3(request);
       answering++;
-      renewal?.busied();
+      if (request.method !== "GET" && request.method !== "HEAD")
+        renewal?.busied();
       return answer3(request).finally(() => answering--);
     }
   });
@@ -27302,6 +27305,7 @@ var writeRecord = (renewal, first = false) => {
   }
 };
 writeRecord(null, true);
+var launchSaid;
 renewal = onMachine && build ? new Renewal({
   script,
   build,
@@ -27322,13 +27326,20 @@ renewal = onMachine && build ? new Renewal({
     const kept = keeperEngine(machineHome);
     return !kept || kept === basename12(dirname18(process.execPath));
   },
-  lets: () => launchLets(commandLineOf(process.ppid), () => {
-    try {
-      return readFileSync31(join32(machineHome, "run", "agents.log"), "utf8");
-    } catch {
-      return;
-    }
-  }),
+  lets: () => {
+    const now = Date.now();
+    if (launchSaid && now - launchSaid.at < 60000)
+      return launchSaid.lets;
+    const lets = launchLets(commandLineOf(process.ppid), () => {
+      try {
+        return readFileSync31(join32(machineHome, "run", "agents.log"), "utf8");
+      } catch {
+        return;
+      }
+    });
+    launchSaid = { at: now, lets };
+    return lets;
+  },
   uptime: () => performance.now(),
   longEnough: renewUptime,
   check: (newer) => new Promise((done) => {
@@ -27339,9 +27350,9 @@ renewal = onMachine && build ? new Renewal({
     let late = false;
     const timer = setTimeout(() => (late = true, checking.kill("SIGKILL")), 60000);
     checking.on("error", () => (clearTimeout(timer), done(undefined)));
-    checking.on("close", (code) => {
+    checking.on("close", (code, signal) => {
       clearTimeout(timer);
-      done(late ? undefined : code === 0 && said.trim() === `ok ${newer}`);
+      done(late || signal ? undefined : code === 0 && said.trim() === `ok ${newer}`);
     });
   }),
   holdAfter: renewHoldAfter,
@@ -27391,4 +27402,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 8c325fa2a549f9d3187ba6472eb69fae3c41e28aee30d0c7c5a11c818734a2a1
+// Built from Packages/Box/src/agents 6dac46a0b758e3c51dcbaa430e32cd5b8028e1916c4c7dfd42ad64f996e3c07c

@@ -35,15 +35,19 @@ export type Work = { turns: boolean; other: boolean }
  * holds; and how long it runs before it may go (a launch counts a shorter run as a failed one). */
 export const renewalTiming = { look: 10_000, settle: 30_000, grace: 1_000, patience: 60 * 60_000, longest: 24 * 60 * 60_000, holding: 30 * 60_000, uptime: 11 * 60_000 }
 
-/** Whether what keeps it running (the machine's launch, `loop` its command line, `log` reading its
- * `run/agents.log`) starts it again once it goes, after a run of eleven minutes (`renewalTiming.uptime`):
- * a launch since October 2026 starts its count again after a run of ten minutes; one from before
- * (no `-ge 600` in it, or one that can't be read) never does, and starts it five times in all, one
- * `"url"` line in its log each, so one more leaves a spare. A log that can't be read: no. */
+/** Whether what keeps it running (the machine's launch, `loop` its parent's command line, `log`
+ * reading its `run/agents.log`) starts it again once it goes, after a run of eleven minutes
+ * (`renewalTiming.uptime`). A launch since October 2026 starts its count again after a run of ten
+ * minutes (`-ge 600` in its loop). One from before never does, and starts it five times in all, one
+ * `"url"` line in its log each but for a start that ended before it said where it listens: it goes
+ * only while there have been fewer than three, two spare. A parent that isn't such a loop: no. One
+ * whose command line can't be read (a Mac that won't say): counted from its log, as one from
+ * before. A log that can't be read: no. */
 export function launchLets(loop: string | undefined, log: () => string | undefined): boolean {
+  if (loop !== undefined && !(loop.includes("kuvo-agents") && loop.includes("-lt 5"))) return false
   if (loop?.includes("-ge 600")) return true
   const text = log()
-  return text !== undefined && (text.match(/"url"/g) ?? []).length < 4
+  return text !== undefined && (text.match(/"url"/g) ?? []).length < 3
 }
 
 export interface RenewalOptions {

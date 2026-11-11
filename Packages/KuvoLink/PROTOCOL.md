@@ -1747,10 +1747,13 @@ new version without cutting a turn:
     engine's launch (`RemoteServer.agentsScript`) starts it again five seconds after it ends, and
     gives up after five runs in a row; a launch since October 2026 starts that count again after a
     run of ten minutes (its loop says `-ge 600`), one from before never does, so there it goes
-    only while it has started fewer than four times (one `"url"` line each in `run/agents.log`;
-    a log it can't read counts as full), and otherwise waits for a restart (`waits: "restart"`),
-    holding nothing. Each renewal is one of those runs. A check that couldn't run (out of memory,
-    a minute gone) is tried again at the next look.
+    only while it has started fewer than three times (one `"url"` line each in `run/agents.log`; a
+    start that ended before it said where it listens has none, so two are spare; a log it can't
+    read counts as full). Its parent is that loop (`kuvo-agents`, `-lt 5` in its command line,
+    read once a minute at most); started by anything else it doesn't go; where the command line
+    can't be read, it counts as one from before. Otherwise it waits for a restart
+    (`waits: "restart"`), holding nothing. Each renewal is one of those runs. A check that couldn't
+    run (it couldn't start, a signal ended it, a minute went by) is tried again at the next look.
 
   It goes:
   - **At the first quiet moment**: nothing has run for half a minute: no turn (a subagent's, a
@@ -1759,8 +1762,10 @@ new version without cutting a turn:
     bot's answer being read), no request coming in (counted until its answer begins: a download's
     body, or the event feed, isn't waited for), nothing an agent
     left running in the background, no side question being answered, review being read, handoff
-    being written, goal being checked, or sign-in waiting for you; a turn ending or a request
-    coming in starts the half minute again. Then it holds new turns, and a
+    being written, goal being checked, or sign-in waiting for you; a turn ending, or a request that
+    can start something (any but `GET` and `HEAD`) coming in, starts the half minute again. Reads
+    don't: the link asks the bridge whether it answers (`GET api/info`) every half minute, and
+    clients read what they show; each is waited for while it's answered. Then it holds new turns, and a
     second later, if it's still quiet, it stops as it always does (what it has is kept) and exits,
     and its launch starts the new bundle. If that second wasn't quiet, it lets go and looks again.
   - **When there isn't one**: after an hour, in the night's window (02:00 to 05:00 in `KUVO_TZ`),
@@ -1777,6 +1782,9 @@ new version without cutting a turn:
     hour later, that night still or the next, it holds again.
   - The new bridge, once it's up, starts what was held, each once (`held` cleared as it's woken).
   - Its own build put back in place meanwhile, it lets go of what it held and goes on.
+  - A group chat held on another computer whose discussion this bridge's bot is in isn't known
+    here: going between that bot's turns, and back after more than 45 seconds, that computer goes
+    on without it for that discussion.
   - Only on a machine, whose bridge its launch keeps. This Mac's own bridge comes in its app: the
     app's keeper starts the whole box again from a newer app once nothing runs on it.
 - **The link** (`kuvo-link.js run`) has no turns: `setup`, which a Mac runs as it connects, starts

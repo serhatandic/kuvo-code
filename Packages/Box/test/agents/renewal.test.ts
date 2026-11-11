@@ -144,15 +144,19 @@ test("a bundle brought with an engine that hasn't started yet: it doesn't make w
   expect(held).toEqual([true])
 })
 
-test("what keeps it running starts it again: a launch since October 2026 always; one from before only while it has started fewer than four times", () => {
-  const loop = `sh -c n=0; while kill -0 "$1" 2>/dev/null && [ $n -lt 5 ]; do s=$(date +%s); "$2" … ; [ $(($(date +%s) - s)) -ge 600 ] && n=0; n=$((n + 1)); sleep 5; done kuvo-agents`
-  const older = `sh -c n=0; while kill -0 "$1" 2>/dev/null && [ $n -lt 5 ]; do "$2" … ; n=$((n + 1)); sleep 5; done kuvo-agents`
+test("what keeps it running starts it again: a launch since October 2026 always; one from before only while it has started fewer than three times; something else, never", () => {
+  const loop = `sh -c n=0; while kill -0 "$1" 2>/dev/null && [ $n -lt 5 ]; do s=$(date +%s); "$2" … ; [ $(($(date +%s) - s)) -ge 600 ] && n=0; n=$((n + 1)); sleep 5; done kuvo-agents 123 /k/engine/2.2.5/opencode /k/bin/kuvo-agents.js /k/run/agents.log`
+  const older = `sh -c n=0; while kill -0 "$1" 2>/dev/null && [ $n -lt 5 ]; do "$2" … ; n=$((n + 1)); sleep 5; done kuvo-agents 123 /k/engine/2.2.5/opencode /k/bin/kuvo-agents.js /k/run/agents.log`
   const starts = (count: number) => () => '{"url": "http://127.0.0.1:1"}\n'.repeat(count)
   expect(launchLets(loop, starts(9))).toBe(true)
-  expect(launchLets(older, starts(3))).toBe(true)
-  expect(launchLets(older, starts(4))).toBe(false)
-  // One it can't read is taken for one from before; a log it can't read, for a full one.
-  expect(launchLets(undefined, starts(4))).toBe(false)
+  // (A start that ended before it said where it listens is one more than its log has: two spare.)
+  expect(launchLets(older, starts(2))).toBe(true)
+  expect(launchLets(older, starts(3))).toBe(false)
+  // Started by something else (a shell of yours, a supervisor that may not start it again): never.
+  expect(launchLets("node --test agents-renewal.test.js", starts(0))).toBe(false)
+  // One it can't read is counted as one from before; a log it can't read, as a full one.
+  expect(launchLets(undefined, starts(2))).toBe(true)
+  expect(launchLets(undefined, starts(3))).toBe(false)
   expect(launchLets(older, () => undefined)).toBe(false)
 })
 
