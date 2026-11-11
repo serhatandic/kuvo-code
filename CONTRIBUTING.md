@@ -99,12 +99,13 @@ act on those (a window's tracking areas and cursor rectangles once the pointer c
 drawing as Core Animation commits), the test does it itself: `WindowServer.appKitsTurn` and
 `CATransaction.flush()` after `displayIfNeeded()`.
 
-Run quick, targeted tests locally while working. Commit the changes to a work branch, then run
-`scripts/ci-branch.sh --wait` to push it over SSH to `origin` as a `ci/` branch and run the full
-CI suites on GitHub. Pass a local branch name to test a different branch. The script prints the run
-URL, job conclusions and failed logs; it never pushes `main` or tags. Only committed changes run.
-CI covers the Mac app, Swift packages, box and bridge; the phone has no CI, so run its tests locally
-through `scripts/heavy.sh phone`. Use `scripts/heavy.sh` for other local builds or tests CI doesn't cover.
+Run tests locally through `scripts/heavy.sh`'s lanes (below): your area's tests while working,
+the full suites once on the final tip. The phone has no CI; run its tests locally through
+`scripts/heavy.sh phone`. While pushes and CI are paused, only the lead session runs
+`scripts/ci-branch.sh --wait`, and only when the user asks: it pushes a work branch over SSH to `origin` as
+a `ci/` branch and runs the full CI suites on GitHub (pass a local branch name to test a different
+one). It prints the run URL, job conclusions and failed logs; it never pushes `main` or tags. Only
+committed changes run.
 
 Run quick, targeted box and bridge tests with `scripts/test-box.sh [box|bridge|all] [extra test args]`. It queues under the box heavy slot, installs locked dependencies when needed, and summarizes results.
 
