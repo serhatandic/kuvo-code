@@ -85,6 +85,13 @@
 #                       queue's guard, two seconds at most)
 #   KUVO_HEAVY_DIR      where the locks are (for the helper's own tests)
 #
+# Jobs never starve the box (the Kuvo Code box on this Mac, which the user's phone talks to): every
+# job runs at background priority, its children too (a job inside another gets it too). macOS:
+# `taskpolicy -b`, background QoS: low CPU and I/O priority, which the box's own processes, at
+# default priority, win over (tried with xcodebuild builds and tests, a simulator test run and swift
+# test: all work). Linux: `nice -n 15 ionice -c3` (just `nice -n 15` without ionice). A job on an
+# idle Mac runs as fast as ever; on a busy one it gives way.
+#
 # Every job has a time limit, so one that hangs can't hold its kind's turn for hours: past it, the
 # job is stopped (its process group, as below: TERM, then KILL), it says what was running, and
 # heavy.sh exits 124. The clock starts when the command does: not while it waits in line for its
@@ -136,6 +143,20 @@ OLD="$DIR/kuvo-code-heavy-$(id -u).lock"
 MAX_LOAD="${KUVO_HEAVY_LOAD:-40}"
 WAITS="${KUVO_HEAVY_WAIT:-1}"
 case "$kind" in mac | phone) DEFAULT_LIMIT=45m ;; mac-build) DEFAULT_LIMIT=30m ;; box) DEFAULT_LIMIT=40m ;; esac
+
+# What every job runs under, so it never takes the CPU or the disk from the box: background priority
+# (a prefix: `$LOW "$@"`; its children keep it). macOS: `taskpolicy -b`, background QoS: low CPU and
+# I/O priority (`nice` alone leaves the I/O alone). Linux: nice and ionice.
+LOW=
+case "$(uname -s 2>/dev/null)" in
+    Darwin)
+        if command -v taskpolicy >/dev/null 2>&1; then LOW="taskpolicy -b"; else LOW="nice -n 15"; fi
+        ;;
+    *)
+        # (ionice can be refused, in a container: then nice alone.)
+        if command -v ionice >/dev/null 2>&1 && ionice -c3 true >/dev/null 2>&1; then LOW="nice -n 15 ionice -c3"; else LOW="nice -n 15"; fi
+        ;;
+esac
 
 # Whether `ps` answers. A sandbox can refuse it (Auto mode), and then no process can be asked what
 # it runs under.
@@ -434,7 +455,7 @@ else
         if [ -n "$LOCK2" ]; then
             if held "$LOCK2"; then slot_env "$LOCK2"; elif held "$LOCK"; then slot_env "$LOCK"; fi
         fi
-        exec "$@"
+        exec $LOW "$@"
     fi
     # Its kind's turn, through the lane's queue (TURN, above): in line until a slot is its own,
     # then that slot's lock, which it holds as it runs.
@@ -655,8 +676,8 @@ over_time() {
 # In a terminal the job stays in the terminal's own group: one in a group of its own couldn't read
 # the keyboard (a passphrase prompt would stop it), and Ctrl-C reaches the whole group there anyway.
 if [ -t 0 ] || { true </dev/tty; } 2>/dev/null; then
-    [ -n "${old_way:-}" ] && exec lockf -k "$OLD" "$@"
-    exec "$@"
+    [ -n "${old_way:-}" ] && exec lockf -k "$OLD" $LOW "$@"
+    exec $LOW "$@"
 fi
 
 trap 'stopped HUP 129' HUP
@@ -667,9 +688,9 @@ command_line=$*
 trap 'over_time "$command_line"' USR1
 set -m
 if [ -n "${old_way:-}" ]; then
-    lockf -k "$OLD" "$@" &
+    lockf -k "$OLD" $LOW "$@" &
 else
-    "$@" &
+    $LOW "$@" &
 fi
 group=$!
 # `lockf` doesn't pass a signal on to its command, and lets go of the lock as it ends: this helper
