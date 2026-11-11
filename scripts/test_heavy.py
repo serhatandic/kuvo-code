@@ -110,7 +110,8 @@ class HeavyTests(unittest.TestCase):
         # heavy.sh forks the job with stderr going nowhere, so a word from job control can't reach
         # it (bash's "child setpgid … Operation not permitted", under load), and gives the job its
         # own back as it starts: what the job says, the caller sees, and the fd that kept it isn't
-        # handed on.
+        # handed on. (That word itself comes too rarely to test for here: 8 times in 900 jobs, six
+        # at once, before; never after.)
         code, said = self.run_heavy("box", "/bin/sh", "-c", 'echo said >&2; if { true >&9; } 2>/dev/null; then echo "fd 9 open" >&2; fi; exit 3')
         self.assertEqual((code, said), (3, "said\n"))
         result = subprocess.run([HEAVY, "box", "/bin/sh", "-c", "echo out"], env=dict(self.env, KUVO_HEAVY_WAIT="0"), stderr=subprocess.DEVNULL, stdout=subprocess.PIPE, text=True, timeout=30)

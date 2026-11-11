@@ -870,7 +870,8 @@ trap 'over_time "$command_line"' USR1
 # says "child setpgid (N to N): Operation not permitted" on the stderr it forked with, which is the
 # job's (#562: a test that expects a quiet job failed under load). The two children are forked with
 # stderr going nowhere, and the job gets the real one back (kept as fd 9) as it starts. (`command`,
-# so a stderr that's closed doesn't end this shell.)
+# so a stderr that's closed doesn't end this shell.) Until `set +m`, below, what this shell says
+# goes nowhere too: nothing it runs there says anything.
 command exec 9>&2 2>/dev/null || exec 9>/dev/null 2>/dev/null
 set -m
 if [ -n "${old_way:-}" ]; then
