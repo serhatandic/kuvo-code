@@ -144,6 +144,47 @@ its home as it ends, and the next run clears what a killed one left.
 `./scripts/test-app.sh` runs one at a time: a run started while another is going
 waits for it, since they share the test copy's settings and temporary folders.
 
+#### Batches: one build of main for every session's runs
+
+The app's UI suite runs one job at a time, and a run that builds the app from its own worktree
+first spends about 8 minutes compiling, so with a dozen sessions they queued for most of an hour.
+Instead, main is built once, twice a day, and sessions take turns running their classes on that
+build without compiling anything: at 04:00 and 16:00, the lead runs
+`scripts/batch-build.sh` (`mac`, `phone` or `all`, the default), which exports main's files (each
+checkout's `main`, or `KUVO_BATCH_MAC_REF` and `KUVO_BATCH_PHONE_REF`; the phone's with kuvo-ai's
+beside it) into a new folder, `$(getconf DARWIN_USER_CACHE_DIR)KuvoBatch/<mac|phone>/<when>-<commit>`,
+and builds it from nothing with `xcodebuild build-for-testing` as the tests' own copy (the settings
+and bundle IDs below), in a slot of heavy.sh's build lane (`mac-build`, `phone-build`). Its `stamp` says which commits, when, and
+where its `.xctestrun` is. The newest two batches are kept; an older one is deleted by the next
+build once no run has it open. One build of a platform's batches runs at a time: a second says so
+and stops.
+
+Then each session, its work merged to main before the build, runs its classes from it:
+
+```sh
+ONLY="KuvoCodeTests/WindowTabsTests KuvoCodeTests/WorkQueueTests" ~/Projects/kuvo-ai/scripts/test-app.sh --from-batch
+ONLY="KuvoCodeMobileTests/PairingTests" ~/Projects/kuvo-code-ios/scripts/test-app.sh --from-batch
+```
+
+It takes the newest batch, refuses at once (before it waits in line) a class or test the batch
+hasn't, merged after the build, and notes when your HEAD isn't in it. While a batch is being built
+it waits for that build and tests the new batch; when the newest build failed (or stopped), it
+refuses, naming the commit and the first error, rather than test an older batch. Call it directly,
+never inside `scripts/heavy.sh`: it takes its turn itself, after any wait for a build, so it holds
+no slot while it waits. Then it waits for its turn in
+`mac` (or a `phone` slot) and runs `xcodebuild test-without-building` with the batch's `.xctestrun`:
+the same test copy, clean settings, `KUVO_TEST_BUN`, account check and guards as a run that builds.
+It prints the stamp of the batch it tested. Problems found go to fixes merged to main, which the next batch
+checks. `scripts/test-app.sh` without `--from-batch` still builds from your worktree, for an urgent
+run only.
+
+Between batches, `scripts/batch-build.sh --compile-only [mac|phone|all]` checks that main still
+compiles, the apps and their tests, after each merge: in one folder kept from check to check
+(`KuvoBatch/compile`), whose files are brought to main's one by one (only those that changed are
+written again), so it compiles only what changed, in minutes. A batch, a compile check and test
+runs each take the lane slot heavy.sh gives them, and build in folders of their own, under locks
+of their own. `cd scripts && python3 -m unittest test_batch` tries them.
+
 One copy of `scripts/heavy.sh` runs every job: `~/Projects/kuvo-ai/scripts/heavy.sh`, the canonical
 one (`KUVO_HEAVY_CANONICAL` names another). Any other copy, a worktree's or an older checkout's, hands
 the job to it at once with the same arguments and environment, and both apps' `scripts/test-app.sh`
