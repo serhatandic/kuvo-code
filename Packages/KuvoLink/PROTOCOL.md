@@ -291,14 +291,19 @@ setups, and pairing and adding only from the main computer come later: #183.)
     `~/.kuvo-code`), `box
     machine|app <folder from home>`, then `card <json>`, and for link.json `link mac|macs <key>`,
     `link seen <key> <ms>`, `link name <key> <json string>`, `link phones none|some` (other lines
-    are left alone; `mac`, the last Mac to set it up, is named first whatever its line's place). Answers `{verdict, boxes: [{folder, app, verdict, key, name, kind, setup, role,
+    are left alone; `mac`, the last Mac to set it up, is named first whatever its line's place). Answers `{verdict, joins, boxes: [{folder, app, verdict, key, name, kind, setup, role,
     primary: {key, name, heard}, macs, computers, items}]}` (`primary` of an older box: the last Mac
     that set it up), judged against this box (itself, its setup, its peers and Macs); 400 with no
-    `probe`.
+    `probe`. `joins`: adding it joins its setup with nothing to ask, as another setup's main
+    computer whose setup is empty (no other computer in it, no work items; as its card says, so a
+    lie skips a question at most); else the verdict's own question.
   - **`kuvo-link.js here <root> [--own-data]`**: Kuvo Code on a Mac (the app, and its keeper), before it starts a box, with `KUVO_HOME` its
     own box's folder (in its app folder) and `root` the machines' folder (`.kuvo-code`, or a
     test's); without either (or with them the same) it stops, exit 2. Prints `{verdict, use:
-    "own"|"attach", box, own}`, `box` and `own` as `boxes` above. An app whose own box ran (its
+    "own"|"attach", opens: "main"|"window", box, own}`, `box` and `own` as `boxes` above. `opens`:
+    `window` where the box it uses is a member of a setup another computer is main of (a Mac mini
+    another Mac set up, one that can't say yet, the old main computer after a handover, a Mac that
+    joined: never main by itself, only by Make This Mac the Main One), else `main`. An app whose own box ran (its
     folder has `run/` `setup-card.json`, `link.json`, `serve.json` or `keeper.json`, or the app
     says `--own-data`: its own engine kept your sessions, as a version from before its box had a
     folder, or one that quit cleanly, leaves no record there; never the folder alone, which the

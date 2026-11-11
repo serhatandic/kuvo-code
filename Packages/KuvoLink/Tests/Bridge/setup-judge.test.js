@@ -80,7 +80,7 @@ test("each verdict, as a Mac adding a computer hears it: nothing there, one of o
     assert.equal(judged.status, 200);
     return judged.json;
   };
-  assert.deepEqual(await verdict(""), { verdict: "free", boxes: [] }, "nothing there: added as ever");
+  assert.deepEqual(await verdict(""), { verdict: "free", joins: false, boxes: [] }, "nothing there: added as ever");
   assert.equal((await verdict("Linux x86_64\nglibc\nsomething else\n")).verdict, "free", "the probe's other lines are left alone");
 
   assert.equal((await verdict(one({ setup: ours, role: "member", self: { key: lab.pub, name: "lab", kind: "machine" } }))).verdict, "ours", "lab, in this setup");
@@ -95,10 +95,14 @@ test("each verdict, as a Mac adding a computer hears it: nothing there, one of o
   });
 
   const main = await verdict(one({ setup: otherSetup, epoch: 1, role: "primary", primary: { key: imac.pub, name: "iMac", heard: null }, self: { key: imac.pub, name: "iMac", kind: "mac" }, app: true, computers: 3, items: 37 }, "Library/Application Support/run.kuvo.code/box", "app"));
-  assert.equal(main.verdict, "main", "iMac runs Kuvo Code for 2 more computers");
+  assert.deepEqual([main.verdict, main.joins], ["main", false], "iMac runs Kuvo Code for 2 more computers: bringing them in is asked");
   assert.deepEqual([main.boxes[0].computers, main.boxes[0].items, main.boxes[0].name], [3, 37, "iMac"]);
   assert.equal((await verdict(one({ setup: otherSetup, epoch: 1, role: "primary", primary: { key: mini.pub, name: "vps", heard: null }, computers: 1, items: 4 }))).verdict, "main", "a lone box leading a setup of its own");
-  assert.equal((await verdict(one({ self: { key: imac.pub, name: "iMac", kind: "mac" }, app: true }, "Library/Application Support/run.kuvo.code/box", "app"))).verdict, "main", "a Mac whose app runs it, in no setup yet");
+  const lone = await verdict(one({ self: { key: imac.pub, name: "iMac", kind: "mac" }, app: true }, "Library/Application Support/run.kuvo.code/box", "app"));
+  assert.deepEqual([lone.verdict, lone.joins], ["main", true], "a Mac whose app runs it, in no setup yet, with no work: it joins, with nothing to ask");
+  const alone = await verdict(one({ setup: otherSetup, epoch: 1, role: "primary", primary: { key: mini.pub, name: "vps", heard: null }, computers: 1, items: 0 }));
+  assert.deepEqual([alone.verdict, alone.joins], ["main", true], "a lone box leading an empty setup of its own");
+  assert.equal(member.joins, false, "a member of another setup is moved, never joined without asking");
 
   assert.equal((await verdict(one({ macs: [{ key: imac.pub, name: "iMac" }, { key: box("mac", "Air").pub, name: "Air" }] }))).verdict, "elsewhere", "a machine other Macs share, in no setup: theirs");
   assert.equal((await verdict(one({ macs: [{ key: imac.pub, name: "iMac" }, { key: self.pub, name: "Studio" }] }))).verdict, "ours", "one this Mac shares with iMac: ours already");
@@ -160,17 +164,17 @@ test("Kuvo Code opening on your Mac mini, which MacBook set up: it attaches to t
     write(path.join(machine, "setup-card.json"), card({ setup: otherSetup, epoch: 1, role: "member", primary: { key: macbook.pub, name: "MacBook", heard: Date.now() - 60 * DAY }, computers: 2, items: 9, macs: [{ key: macbook.pub, name: "MacBook" }] }));
     write(path.join(machine, "link.json"), JSON.stringify({ mac: macbook.pub, macs: [macbook.pub] }, null, 2));
   });
-  assert.deepEqual([said.verdict, said.use, said.own], ["elsewhere", "attach", null]);
+  assert.deepEqual([said.verdict, said.use, said.opens, said.own], ["elsewhere", "attach", "window", null], "a window onto MacBook's setup");
   assert.deepEqual([said.box.folder, said.box.primary.name, said.box.role, said.box.setup], [".kuvo-code", "MacBook", "member", otherSetup]);
   assert.equal(fs.existsSync(appBox), false, "no box of its own made, not even its folder");
   assert.equal(fs.existsSync(path.dirname(appBox)), false);
 
   // An older box there, with no card: still the box it uses.
   const older = here(({ machine }) => write(path.join(machine, "link.json"), JSON.stringify({ mac: macbook.pub, macs: [macbook.pub], macNames: { [macbook.pub]: "MacBook" }, phones: [] }, null, 2))).said;
-  assert.deepEqual([older.verdict, older.use, older.box.primary.name], ["older", "attach", "MacBook"]);
+  assert.deepEqual([older.verdict, older.use, older.opens, older.box.primary.name], ["older", "attach", "window", "MacBook"]);
   // One no one's member (its Mac let it go): used in place all the same.
   const lone = here(({ machine }) => write(path.join(machine, "setup-card.json"), card({}))).said;
-  assert.deepEqual([lone.verdict, lone.use], ["free", "attach"]);
+  assert.deepEqual([lone.verdict, lone.use, lone.opens], ["free", "attach", "main"], "the main computer of its own setup");
   // Attached, the app wrote its own files in its folder (its machines' list, the integrations'
   // catalog), with no box of its own run there: still the one box here.
   const after = here(({ appBox, machine }) => {
@@ -185,7 +189,7 @@ test("Kuvo Code opening on your Mac mini, which MacBook set up: it attaches to t
 test("Kuvo Code opening where it has its own box: it goes on using it, with nothing else here, beside a ~/.kuvo-code of its own setup, or beside another's (two boxes, settled later), and an app from before cards keeps its own too", () => {
   const ownCard = card({ setup: ours, epoch: 1, role: "primary", primary: { key: self.pub, name: "Studio", heard: null }, self: { key: self.pub, name: "Studio", kind: "mac" }, app: true, computers: 2 });
   const alone = here(({ app }) => write(path.join(app, "setup-card.json"), ownCard)).said;
-  assert.deepEqual([alone.verdict, alone.use, alone.box, alone.own.folder], ["free", "own", null, "Library/Application Support/run.kuvo.code/box"]);
+  assert.deepEqual([alone.verdict, alone.use, alone.opens, alone.box, alone.own.folder], ["free", "own", "main", null, "Library/Application Support/run.kuvo.code/box"]);
 
   const withOurs = here(({ app, machine }) => {
     write(path.join(app, "setup-card.json"), ownCard);
@@ -212,7 +216,12 @@ test("Kuvo Code opening where it has its own box: it goes on using it, with noth
     write(path.join(appBox, "machines.json"), "[]");
     write(path.join(machine, "link.json"), JSON.stringify({ mac: imac.pub, macs: [imac.pub] }, null, 2));
   }, { ownData: true }).said;
-  assert.deepEqual([earlier.verdict, earlier.use], ["two", "own"]);
+  assert.deepEqual([earlier.verdict, earlier.use, earlier.opens], ["two", "own", "main"]);
+
+  // The old main computer after a handover, or a Mac that joined: its own box is a member now, and
+  // the app opens as a window onto the setup, never its main computer by itself.
+  const handedOver = here(({ app }) => write(path.join(app, "setup-card.json"), { ...ownCard, role: "member", primary: { key: imac.pub, name: "iMac", heard: 1 } })).said;
+  assert.deepEqual([handedOver.use, handedOver.opens, handedOver.own.role], ["own", "window", "member"]);
 });
 
 test("here is told where the app's own box is and which folder is the machines', never guesses: without either it says so and stops", () => {

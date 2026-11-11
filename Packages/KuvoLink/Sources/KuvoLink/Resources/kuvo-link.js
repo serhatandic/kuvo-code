@@ -34261,7 +34261,8 @@ function judgeComputer(found, ours) {
   const boxes = found.slice(0, MOST_BOXES).map((each) => judgedOf(each, judgeBox(each, ours)));
   const someones = boxes.filter((each) => each.verdict !== "free");
   const verdict = boxes.some((each) => each.verdict === "self") ? "self" : !someones.length ? "free" : someones.length === 1 ? someones[0].verdict : someones.every((each) => each.verdict === "ours") ? "ours" : "two";
-  return { verdict, boxes };
+  const joins = verdict === "main" && someones[0].computers <= 1 && someones[0].items === 0;
+  return { verdict, joins, boxes };
 }
 function foundAt2(folder, app, home = homeFolder()) {
   const read = (file) => {
@@ -34282,13 +34283,15 @@ function judgeHere(own, machine) {
   const ownCard = own?.card;
   const ours = { key: ownCard?.self.key ?? null, setup: ownCard?.setup ?? null, keys: new Set(ownCard?.self.key ? [ownCard.self.key] : []) };
   const judgedOwn = own ? judgedOf(own, "self") : null;
+  const ownOpens = ownCard?.role === "member" ? "window" : "main";
   if (!machine)
-    return { verdict: "free", use: "own", box: null, own: judgedOwn };
+    return { verdict: "free", use: "own", opens: ownOpens, box: null, own: judgedOwn };
   const verdict = judgeBox(machine, ours);
   const box = judgedOf(machine, verdict);
   if (own)
-    return { verdict: verdict === "ours" || verdict === "free" ? verdict : "two", use: "own", box, own: judgedOwn };
-  return { verdict, use: "attach", box, own: null };
+    return { verdict: verdict === "ours" || verdict === "free" ? verdict : "two", use: "own", opens: ownOpens, box, own: judgedOwn };
+  const member = box.role === "member" || verdict === "elsewhere" || verdict === "older";
+  return { verdict, use: "attach", opens: member ? "window" : "main", box, own: null };
 }
 var OWN_BOX_RAN = ["setup-card.json", "link.json", "serve.json", "keeper.json"];
 function hereNow(root, appBox = process.env.KUVO_HOME, home = homeFolder(), ownData = false) {

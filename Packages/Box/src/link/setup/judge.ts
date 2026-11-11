@@ -198,7 +198,9 @@ function judgedOf(found: FoundBox, verdict: JudgedBox["verdict"]): JudgedBox {
 /** What's on a computer, judged as one verdict (`judgeComputer(found, ours)`): `self` where this very
  * box is among them; `free` with nothing anyone's; the one verdict of the one box that's someone's;
  * `ours` when each box there is; `two` for boxes of more than one setup on one computer (an app's,
- * and a `~/.kuvo-code` another Mac set up). */
+ * and a `~/.kuvo-code` another Mac set up). It `joins` with nothing to ask when it's another setup's
+ * main computer whose setup is empty: no other computer in it and no work (as its card says: a lie
+ * there skips a question at most, as the join brings what's there in all the same). */
 export function judgeComputer(found: readonly FoundBox[], ours: Ours): Judged {
   const boxes = found.slice(0, MOST_BOXES).map(each => judgedOf(each, judgeBox(each, ours)));
   const someones = boxes.filter(each => each.verdict !== "free");
@@ -207,7 +209,8 @@ export function judgeComputer(found: readonly FoundBox[], ours: Ours): Judged {
     : someones.length === 1 ? someones[0].verdict
     : someones.every(each => each.verdict === "ours") ? "ours"
     : "two";
-  return { verdict, boxes };
+  const joins = verdict === "main" && someones[0].computers <= 1 && someones[0].items === 0;
+  return { verdict, joins, boxes };
 }
 
 /** A box's folder as `here` finds it: its card and link.json's few fields, or null with neither. */
@@ -233,16 +236,21 @@ export type Here = Infer<typeof HERE>;
 /** `here` worked out from the app's own box (`own`, in its folder: null while it has none) and the
  * box in this Mac's `~/.kuvo-code` (`machine`, null for none). An app that has a box of its own
  * keeps it (it works now, and goes on working: two boxes on one computer are settled by a join or a
- * move, `two`); one that has none attaches to the box that's here. */
+ * move, `two`); one that has none attaches to the box that's here. It opens as a `window` where the
+ * box it uses is a member of a setup (an old main computer after a handover, a Mac that joined, a
+ * Mac mini another Mac set up, or one that can't say yet: never its main computer by itself), else
+ * as its setup's `main` computer (a box no one else set up leads its own setup). */
 export function judgeHere(own: FoundBox | null, machine: FoundBox | null): Here {
   const ownCard = own?.card;
   const ours: Ours = { key: ownCard?.self.key ?? null, setup: ownCard?.setup ?? null, keys: new Set(ownCard?.self.key ? [ownCard.self.key] : []) };
   const judgedOwn = own ? judgedOf(own, "self") : null;
-  if (!machine) return { verdict: "free", use: "own", box: null, own: judgedOwn };
+  const ownOpens = ownCard?.role === "member" ? "window" : "main";
+  if (!machine) return { verdict: "free", use: "own", opens: ownOpens, box: null, own: judgedOwn };
   const verdict = judgeBox(machine, ours);
   const box = judgedOf(machine, verdict);
-  if (own) return { verdict: verdict === "ours" || verdict === "free" ? verdict : "two", use: "own", box, own: judgedOwn };
-  return { verdict, use: "attach", box, own: null };
+  if (own) return { verdict: verdict === "ours" || verdict === "free" ? verdict : "two", use: "own", opens: ownOpens, box, own: judgedOwn };
+  const member = box.role === "member" || verdict === "elsewhere" || verdict === "older";
+  return { verdict, use: "attach", opens: member ? "window" : "main", box, own: null };
 }
 
 /** What says a box of the app's own ran in its folder: what the box writes itself (its card, its
