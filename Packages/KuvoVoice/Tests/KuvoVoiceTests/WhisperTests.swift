@@ -205,11 +205,47 @@ func eachPhraseIsWrittenAfterItsPauseAndDonePutsInTheLast() async throws {
     }
     #expect(!listened)
     guard case .failed(let failure) = voice.phase else { Issue.record("not failed: \(voice.phase)"); return }
-    #expect(failure.message.hasPrefix("Voice input couldn’t start"))
+    #expect(failure.message.hasPrefix("The voice model couldn’t load"))
     #expect(!voice.keepsWords)
     voice.finish()
     #expect(voice.phase == .idle)
     #expect(told == ["", ""])
+}
+
+// A start that never listened (the microphone not allowed or not coming on, a model that wouldn't
+// get ready) never says voice input stopped, which it hadn't started (#522): the voice field's
+// heading said "Voice input stopped" over a model that wouldn't load.
+@MainActor
+@Test func aStartThatNeverListenedSaysItCouldntStartNotThatItStopped() async throws {
+    let rig = Rig()
+    defer { rig.done() }
+    // Downloaded and made ready, as far as it knows: its files aren't Whisper's.
+    let model = rig.model()
+    model.isOn = true
+    #expect(await settled(model) == .ready)
+    let voice = VoiceInput(model: model)
+    let (clip, feed) = AsyncStream<[Float]>.makeStream()
+    defer { feed.finish() }
+    voice.start(clip: clip)
+    #expect(voice.status == "Getting voice ready…")
+    while voice.isActive { await Task.yield() }
+    guard case .failed = voice.phase else { Issue.record("not failed: \(voice.phase)"); return }
+    #expect(!voice.listened)
+    #expect(voice.status == "Voice input couldn’t start")
+    #expect(!voice.status.contains("stopped"))
+    #expect(!VoiceInput.Failure.microphoneDenied.message.contains("stopped"))
+    // One that listened, then failed, did stop.
+    voice.showSample(confirmed: "", guess: "")
+    #expect(voice.listened)
+    #expect(voice.status == "Listening")
+    voice.fail(VoiceInput.stopped(wroteSome: false), run: voice.run)
+    #expect(voice.status == "Voice input stopped")
+    // A new start forgets the one before listened.
+    voice.cancel()
+    voice.start(clip: clip)
+    #expect(!voice.listened)
+    while voice.isActive { await Task.yield() }
+    #expect(voice.status == "Voice input couldn’t start")
 }
 
 /// `words`, said by macOS's own voice, as 16 kHz samples.

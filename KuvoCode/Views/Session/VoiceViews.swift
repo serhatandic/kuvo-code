@@ -111,7 +111,7 @@ struct VoiceField: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 6) {
-                Text(status)
+                Text(voice.status)
                 if let since = voice.listeningSince, voice.phase == .listening {
                     Text("·").foregroundStyle(.tertiary)
                     Text(since, style: .timer).monospacedDigit()
@@ -183,15 +183,6 @@ struct VoiceField: View {
         .accessibilityLabel("Voice input")
         // Over everything: VoiceOver stays in it, as it would in a sheet.
         .accessibilityAddTraits(.isModal)
-    }
-
-    private var status: String {
-        switch voice.phase {
-        case .preparing(let progress): progress.map { "Getting voice ready… \(Int(($0 * 100).rounded()))%" } ?? "Getting voice ready…"
-        case .finishing: "Finishing…"
-        case .failed: "Voice input stopped"
-        default: "Listening"
-        }
     }
 }
 
