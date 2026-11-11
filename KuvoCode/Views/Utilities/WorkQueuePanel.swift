@@ -2,6 +2,7 @@ import ClientDesign
 import ClientSessions
 import ClientText
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// The panel's Work Queue: the conversation's items (a lead's with those of the sessions it
 /// oversees), or every item. Narrow, one column: In progress with what's being done, Next numbered,
@@ -22,6 +23,8 @@ struct WorkQueuePanel: View {
     @State private var isSearching = false
     @State private var query = ""
     @FocusState private var searchFocused: Bool
+    /// Each row's height, for where a drop over it turns from before to after.
+    @State private var rowHeights: [String: CGFloat] = [:]
 
     /// From this width the panel has room for two panes.
     static let twoPanes: CGFloat = 620
@@ -183,7 +186,7 @@ struct WorkQueuePanel: View {
                     Text("· All").font(.system(size: 14, weight: .semibold)).foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 0)
-                Text(WorkQueue.count(WorkQueue.openCount(view)))
+                Text(WorkQueue.openWords(WorkQueue.openCount(view)))
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
@@ -221,10 +224,24 @@ struct WorkQueuePanel: View {
                         query = ""
                     }
             }
+            if let away = awayNote(view) {
+                Label(away, systemImage: "wifi.slash")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
         .padding(.horizontal, 14)
         .padding(.top, 10)
         .padding(.bottom, 8)
+    }
+
+    /// What's said when what shows isn't live: the computer this view is from isn't answering (read
+    /// from this Mac's own box instead), or one whose items are in it isn't.
+    private func awayNote(_ view: WorkQueueView) -> String? {
+        if store.fellBack.contains(key) { return "\(box) isn’t answering: its items are as it last told this Mac." }
+        return WorkQueue.awayNote(view)
     }
 
     private var ownTitle: String {
@@ -240,7 +257,7 @@ struct WorkQueuePanel: View {
     private func chips(_ view: WorkQueueView) -> some View {
         let sections = WorkQueue.sections(view)
         return Flow(spacing: 2) {
-            chip("All", count: WorkQueue.openCount(view), filter: .all)
+            chip("All", count: WorkQueue.allCount(view), filter: .all)
             chip("In progress", count: sections.first?.items.count ?? 0, filter: .inProgress)
             ForEach(sections.dropFirst()) { section in
                 chip(section.name, count: section.items.count, filter: .category(section.id))
@@ -296,20 +313,24 @@ struct WorkQueuePanel: View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
                 if wide, showsDeleted {
-                    sectionHeader("Recently Deleted", count: view.removed.count, category: nil)
+                    sectionHeader("Recently Deleted", count: view.removed.count, section: nil)
                     ForEach(view.removed) { item in deletedRow(item) }
                 } else if wide, filter != .all {
                     let items = WorkQueue.items(view, filter)
                     let category: String? = if case .category(let id) = filter { id } else { nil }
+                    let section = WorkQueue.sections(view).first { filter == .inProgress ? $0.category == nil : $0.category == category }
                     if items.isEmpty {
                         Text(filter == .inProgress ? "Nothing is being worked on now." : "Nothing here.")
                             .font(.system(size: 12))
                             .foregroundStyle(.secondary)
                             .padding(.horizontal, 14)
                             .padding(.vertical, 12)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(.rect)
+                            .onDrop(of: [.plainText], delegate: dropping(on: section, index: nil))
                     }
                     ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
-                        row(item, view: view, ordinal: category == "next" ? index + 1 : nil, wide: wide)
+                        row(item, view: view, ordinal: category == "next" ? index + 1 : nil, wide: wide, in: section, at: index, isLast: index == items.count - 1)
                     }
                 } else {
                     overview(view, wide: wide)
@@ -324,12 +345,12 @@ struct WorkQueuePanel: View {
     @ViewBuilder private func overview(_ view: WorkQueueView, wide: Bool) -> some View {
         let sections = WorkQueue.sections(view)
         if let working = sections.first, !working.items.isEmpty {
-            sectionHeader(working.name, count: working.items.count, category: nil)
-            ForEach(working.items) { item in row(item, view: view, ordinal: nil, wide: wide) }
+            sectionHeader(working.name, count: working.items.count, section: working)
+            ForEach(working.items) { item in row(item, view: view, ordinal: nil, wide: wide, in: working, at: 0, isLast: false) }
         }
         if let next = sections.first(where: { $0.category == "next" }) {
             let shows = unfolded.contains("next") || isSearching ? next.items.count : Self.nextShown
-            sectionHeader(next.name, count: next.items.count, category: next.category)
+            sectionHeader(next.name, count: next.items.count, section: next)
             if next.items.isEmpty {
                 Text("Nothing next yet. Ask an agent to add an item.")
                     .font(.system(size: 12))
@@ -337,8 +358,9 @@ struct WorkQueuePanel: View {
                     .padding(.horizontal, 14)
                     .padding(.vertical, 4)
             }
-            ForEach(Array(next.items.prefix(shows).enumerated()), id: \.element.id) { index, item in
-                row(item, view: view, ordinal: index + 1, wide: wide)
+            let shown = Array(next.items.prefix(shows))
+            ForEach(Array(shown.enumerated()), id: \.element.id) { index, item in
+                row(item, view: view, ordinal: index + 1, wide: wide, in: next, at: index, isLast: index == shown.count - 1)
             }
             if next.items.count > Self.nextShown {
                 Button {
@@ -359,8 +381,10 @@ struct WorkQueuePanel: View {
         }
         Divider().padding(.horizontal, 14).padding(.vertical, 8)
         ForEach(sections.filter { $0.category != nil && $0.category != "next" && (!$0.items.isEmpty || !$0.id.hasPrefix("cat_")) }) { section in
-            folded(section.name, count: section.items.count, id: section.id, category: section.category, symbol: Self.symbol(of: section.id), wide: wide) {
-                ForEach(section.items) { item in row(item, view: view, ordinal: nil, wide: wide) }
+            folded(section.name, count: section.items.count, id: section.id, section: section, symbol: Self.symbol(of: section.id), wide: wide) {
+                ForEach(Array(section.items.enumerated()), id: \.element.id) { index, item in
+                    row(item, view: view, ordinal: nil, wide: wide, in: section, at: index, isLast: index == section.items.count - 1)
+                }
             }
         }
         if !view.removed.isEmpty {
@@ -391,9 +415,12 @@ struct WorkQueuePanel: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    /// A section's name in small capitals, with how many it has at the end.
-    private func sectionHeader(_ title: String, count: Int, category: String?) -> some View {
-        HStack(spacing: 6) {
+    /// A section's name in small capitals, with how many it has at the end. An item dropped on it
+    /// goes to its top.
+    private func sectionHeader(_ title: String, count: Int, section: WorkQueue.Section?) -> some View {
+        let category = section?.category
+        let isTarget = section.map { dropTarget == WorkQueues.DropTarget(section: $0.id, index: nil) } ?? false
+        return HStack(spacing: 6) {
             Text(title.uppercased())
                 .font(.system(size: 11, weight: .medium))
                 .tracking(0.4)
@@ -404,11 +431,14 @@ struct WorkQueuePanel: View {
                 .foregroundStyle(.secondary)
                 .monospacedDigit()
         }
-        .padding(.horizontal, 14)
-        .padding(.top, 14)
-        .padding(.bottom, 6)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 3)
+        .background(dropFill(isTarget))
+        .padding(.horizontal, 6)
+        .padding(.top, 11)
+        .padding(.bottom, 3)
         .contentShape(.rect)
-        .dropDestination(for: String.self) { ids, _ in drop(ids, at: category.map { .top($0) }) }
+        .onDrop(of: [.plainText], delegate: dropping(on: section, index: nil))
         .heldContextMenu { if category != nil { categoryMenu(category, count: count) } }
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isHeader)
@@ -416,8 +446,10 @@ struct WorkQueuePanel: View {
 
     /// A category shown as its count: opening in place in the narrow list, filtering the list in
     /// the wide one.
-    private func folded<Rows: View>(_ title: String, count: Int, id: String, category: String? = nil, symbol: String, wide: Bool, @ViewBuilder rows: () -> Rows) -> some View {
+    private func folded<Rows: View>(_ title: String, count: Int, id: String, section: WorkQueue.Section? = nil, symbol: String, wide: Bool, @ViewBuilder rows: () -> Rows) -> some View {
         let isOpen = !wide && unfolded.contains(id)
+        let category = section?.category
+        let isTarget = section.map { dropTarget == WorkQueues.DropTarget(section: $0.id, index: nil) } ?? false
         return VStack(alignment: .leading, spacing: 0) {
             Button {
                 if wide {
@@ -449,27 +481,34 @@ struct WorkQueuePanel: View {
                 .frame(height: 32)
             }
             .buttonStyle(ListRowButtonStyle(isSelected: false))
+            .background(dropFill(isTarget))
             .padding(.horizontal, 6)
-            .dropDestination(for: String.self) { ids, _ in drop(ids, at: category.map { .top($0) }) }
+            .onDrop(of: [.plainText], delegate: dropping(on: section, index: nil))
             .heldContextMenu { if category != nil { categoryMenu(category, count: count) } }
             .accessibilityValue(wide ? "\(count) items" : "\(count) items, \(isOpen ? "open" : "closed")")
             if isOpen { rows() }
         }
     }
 
-    private func row(_ item: WorkItem, view: WorkQueueView, ordinal: Int?, wide: Bool) -> some View {
-        // In progress hides which category an item is kept in: dropping there would move it to
-        // one you can't see, so nothing drops on it.
-        let takesDrops = !WorkQueue.isInProgress(item) && WorkQueue.canMove(item)
+    /// An item's row, at `index` in `section`: dragged, it goes where it's dropped, before or after
+    /// the row it's over (by which half), into that row's category. (In progress hides which
+    /// category an item is kept in: dropping there would move it to one you can't see, so nothing
+    /// drops on it.)
+    private func row(_ item: WorkItem, view: WorkQueueView, ordinal: Int?, wide: Bool, in section: WorkQueue.Section?, at index: Int, isLast: Bool) -> some View {
+        let target = dropTarget
+        let id = section?.id ?? ""
         return WorkItemRow(item: item, ownerName: WorkQueue.ownerName(of: item, in: view), ordinal: ordinal, isSelected: wide && opened?.matches(item) == true,
                            openSession: item.sessions.first(where: \.working).map { linked in { app.open(.session(linked.session), from: app.tabs.messageTarget) } }) {
             store.opened[panel] = WorkQueues.Opened(box: box, id: item.id, number: item.number)
         }
         .padding(.horizontal, 6)
+        .overlay(alignment: .top) { if target == WorkQueues.DropTarget(section: id, index: index) { DropLine().offset(y: -3.5) } }
+        .overlay(alignment: .bottom) { if isLast, target == WorkQueues.DropTarget(section: id, index: index + 1) { DropLine().offset(y: 3.5) } }
         // Dragged as it's written ("#243", `gh:owner/repo#12`): dropped in the composer, it names
         // the item.
         .draggable(item.written ?? item.title)
-        .dropDestination(for: String.self) { ids, _ in takesDrops && drop(ids, at: .before(item)) }
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { rowHeights[item.id] = $0 }
+        .onDrop(of: [.plainText], delegate: dropping(on: section, index: index, item: item.id))
         .heldContextMenu { WorkItemMenu.rows(item, view: view, box: box, app: app) }
         .accessibilityActions {
             ForEach(WorkQueue.moveTargets(for: item, in: view.categories)) { category in
@@ -507,16 +546,29 @@ struct WorkQueuePanel: View {
         .frame(minHeight: 30)
     }
 
-    /// Items dropped on a row go before it (in its category); on a category, to its top.
-    private func drop(_ ids: [String], at place: WorkQueues.Place?) -> Bool {
-        guard let place, let view, let dragged = ids.first else { return false }
-        guard let item = view.items.first(where: { $0.written == dragged }) ?? view.items.first(where: { $0.written == nil && $0.title == dragged }),
-              WorkQueue.canMove(item) else { return false }
-        if case .before(let other) = place, other.id == item.id || other.computer?.key != item.computer?.key { return false }
-        // (An issue's Done is GitHub's.)
-        if item.closesOn != nil, case .top(let category) = place, category == WorkCategory.done { return false }
-        Task { await store.move(item, to: place, on: box) }
-        return true
+    // MARK: Dragging
+
+    private var dropTarget: WorkQueues.DropTarget? { store.dropTargets[panel] }
+
+    /// What a drop on a row (`index` in `section`), or on a category's name or an empty list
+    /// (`index` nil), does: it says where the item would land as it's dragged over, and moves it
+    /// there once it's dropped.
+    private func dropping(on section: WorkQueue.Section?, index: Int?, item: String? = nil) -> WorkItemDrop {
+        WorkItemDrop(section: section, index: index, owner: item ?? section?.id ?? "", store: store, panel: panel, rowHeight: item.flatMap { rowHeights[$0] } ?? 44) { dragged, target in
+            drop(dragged, at: target)
+        }
+    }
+
+    private func drop(_ dragged: String, at target: WorkQueues.DropTarget) {
+        // (Counted in the rows as they're drawn: a search's, when one is on.)
+        let shown = view.map(searched)
+        Task { await store.drop(dragged, at: target, in: key, shown: shown) }
+    }
+
+    private func dropFill(_ isTarget: Bool) -> some View {
+        RoundedRectangle(cornerRadius: 6)
+            .fill(Color.accentColor.opacity(isTarget ? 0.14 : 0))
+            .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color.accentColor.opacity(isTarget ? 0.6 : 0), lineWidth: 1.5))
     }
 
     // MARK: Detail pane
@@ -560,9 +612,8 @@ struct WorkItemMenu: View {
 
     @HeldRows static func rows(_ item: WorkItem, view: WorkQueueView, box: String, app: AppModel) -> [HeldRow] {
         let store = app.workQueues
-        // (Its order is among the items on its own computer.)
-        let mates = view.items.filter { $0.category == item.category && !WorkQueue.isInProgress($0) == !WorkQueue.isInProgress(item) && $0.computer?.key == item.computer?.key }
-        let index = mates.firstIndex { $0.id == item.id }
+        // (Its order is among the items on its own computer: KuvoClient's rule, the phone's too.)
+        let places = WorkQueue.menuPlaces(of: item, in: view)
         // (An issue closed on GitHub stays Done until it's reopened there: only Delete.)
         if WorkQueue.canMove(item) {
             HeldRow.submenu("Move To") {
@@ -570,13 +621,9 @@ struct WorkItemMenu: View {
                     HeldRow.button(category.name) { Task { await store.move(item, to: .category(category.id), on: box) } }
                 }
             }
-            HeldRow.button("Move to Top", disabled: index == 0) { Task { await store.move(item, to: .top(item.category), on: box) } }
-            HeldRow.button("Move Up", disabled: index.map { $0 == 0 } ?? true) {
-                if let index, index > 0 { Task { await store.move(item, to: .before(mates[index - 1]), on: box) } }
-            }
-            HeldRow.button("Move Down", disabled: index.map { $0 + 1 >= mates.count } ?? true) {
-                if let index, index + 1 < mates.count { Task { await store.move(item, to: .after(mates[index + 1]), on: box) } }
-            }
+            HeldRow.button("Move to Top", disabled: places.top == nil) { if let top = places.top { Task { await store.move(item, to: top, on: box) } } }
+            HeldRow.button("Move Up", disabled: places.up == nil) { if let up = places.up { Task { await store.move(item, to: up, on: box) } } }
+            HeldRow.button("Move Down", disabled: places.down == nil) { if let down = places.down { Task { await store.move(item, to: down, on: box) } } }
             HeldRow.divider
         }
         HeldRow.button("Delete", role: .destructive) { Task { await store.delete(item, on: box) } }
@@ -714,5 +761,84 @@ struct WorkItemRow: View {
         if let computer = WorkQueue.computerName(of: item) { parts.append("on \(computer)") }
         if let handing = item.handing { parts.append("handing to \(handing.name.isEmpty ? "another computer" : handing.name)") }
         return parts.joined(separator: " · ")
+    }
+}
+
+/// Where a dragged item will land: a line between two rows, as Finder and Reminders draw it.
+struct DropLine: View {
+    var body: some View {
+        HStack(spacing: 0) {
+            Circle()
+                .strokeBorder(Color.accentColor, lineWidth: 2)
+                .frame(width: 7, height: 7)
+            Rectangle()
+                .fill(Color.accentColor)
+                .frame(height: 2)
+        }
+        .padding(.horizontal, 10)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+}
+
+/// A drop on the Work Queue's list: over a row, before it (its upper half) or after it (its lower
+/// half); over a category's name or an empty list, its top. Says where as it's dragged over, by the
+/// panel's `dropTargets`, and puts the item there once it's dropped.
+struct WorkItemDrop: DropDelegate {
+    let section: WorkQueue.Section?
+    let index: Int?
+    /// Whose target it is (a row's item, or a section): leaving clears only its own.
+    let owner: String
+    let store: WorkQueues
+    let panel: String
+    /// The row's height: its middle is where before turns to after.
+    let rowHeight: CGFloat
+    let drop: @MainActor (String, WorkQueues.DropTarget) -> Void
+
+    /// Nothing drops in In progress (no category) or outside the list's sections.
+    private var takes: Bool { section?.category != nil }
+
+    func validateDrop(info: DropInfo) -> Bool { takes && info.hasItemsConforming(to: [.plainText]) }
+
+    func dropEntered(info: DropInfo) { aim(info) }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        guard takes else { return DropProposal(operation: .forbidden) }
+        aim(info)
+        return DropProposal(operation: .move)
+    }
+
+    func dropExited(info: DropInfo) {
+        if store.dropOwners[panel] == owner {
+            store.dropTargets[panel] = nil
+            store.dropOwners[panel] = nil
+        }
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        let target = store.dropTargets[panel] ?? target(info)
+        store.dropTargets[panel] = nil
+        store.dropOwners[panel] = nil
+        guard takes, let target, let provider = info.itemProviders(for: [.plainText]).first else { return false }
+        let drop = drop
+        Task {
+            let text: String? = await withCheckedContinuation { done in
+                _ = provider.loadObject(ofClass: NSString.self) { value, _ in done.resume(returning: (value as? NSString).map { String($0) }) }
+            }
+            if let text { drop(text, target) }
+        }
+        return true
+    }
+
+    private func aim(_ info: DropInfo) {
+        guard takes, let target = target(info) else { return }
+        if store.dropTargets[panel] != target { store.dropTargets[panel] = target }
+        store.dropOwners[panel] = owner
+    }
+
+    private func target(_ info: DropInfo) -> WorkQueues.DropTarget? {
+        guard let section else { return nil }
+        guard let index else { return WorkQueues.DropTarget(section: section.id, index: nil) }
+        return WorkQueues.DropTarget(section: section.id, index: info.location.y < rowHeight / 2 ? index : index + 1)
     }
 }
