@@ -55,9 +55,18 @@
 # For phone, slot 2 is only for a caller that handles slots (KUVO_HEAVY_SLOTS=2): an older caller would take it
 # and still build in slot 1's folder and drive slot 1's simulator, beside whoever holds slot 1.
 # With it, a job takes whichever slot is free first, slot 1 before slot 2, and when both are busy it
-# waits for whichever frees first (looking once a second).
+# waits for whichever frees first (looking once a second). One that waits for slot 1 only never
+# holds up a job behind it that may take slot 2.
 #
 #   KUVO_HEAVY_SLOTS=2  phone jobs may take either slot (1, the default, only slot 1)
+#
+# Jobs waiting for a lane wait in line, in its queue (kuvo-code-heavy-<kind>-<uid>.queue): first come,
+# first served, except that a high-priority job goes before every normal one waiting (and after the
+# high ones that came before it). It never stops or holds up a job already running: it only gets the
+# next free slot. Whoever looks at the queue or changes it does so under its guard lock, one at a
+# time, and a slot given to a job is its claim until its `lockf` holds it, so no job that came later
+# slips in between (nor waits, told not to). A job that's gone (killed, even) leaves the line. Older
+# copies of this helper don't queue: they take a slot's lock when they find it free, as before.
 #
 # A job inside one that holds its kind's lock already (a test run its caller started with this
 # helper, in either slot) runs at once. So does one under the single lock every heavy job took before
@@ -67,16 +76,17 @@
 #   scripts/heavy.sh --holds <kind>   whether this runs inside such a job already (exit 0), for
 #                                     a script that takes its turn itself (scripts/test-app.sh)
 #
-#   KUVO_HEAVY_PRIORITY=high  queue ahead of normal jobs in the same lane; FIFO within each priority
-#   Queue waits have no time limit; load may wait indefinitely (memory and mac-first waits are bounded).
-#   KUVO_HEAVY_WAIT=0   don't wait: say what it would wait for, and exit 75
+#   KUVO_HEAVY_PRIORITY=high  go before the normal jobs waiting in line (normal, the default)
+#   KUVO_HEAVY_WAIT=0   don't wait: say what it would wait for (a job running, or one in line before
+#                       it with a slot free), and exit 75, at once
 #   KUVO_HEAVY_DIR      where the locks are (for the helper's own tests)
 #
 # Every job has a time limit, so one that hangs can't hold its kind's turn for hours: past it, the
 # job is stopped (its process group, as below: TERM, then KILL), it says what was running, and
-# heavy.sh exits 124. The clock runs only while the job runs, not while it waits for its turn or for
-# a busy Mac. Generous, per kind: mac 45 minutes (the app's whole suite), phone 45, mac-build 30
-# (a build, a package's tests), box 40 (the box's and the bridge's suites, which may go together).
+# heavy.sh exits 124. The clock starts when the command does: not while it waits in line for its
+# slot (for as long as that takes), nor while it waits for a busy Mac. Generous, per kind: mac 45
+# minutes (the app's whole suite), phone 45, mac-build 30 (a build, a package's tests), box 40 (the
+# box's and the bridge's suites, which may go together).
 #
 #   KUVO_HEAVY_LIMIT    this job's limit instead: 90m, 600s, 2h, or plain minutes; 0 for none
 #
@@ -233,6 +243,96 @@ case "$SWAP_MB" in "" | *[!0-9]* | ???????*) echo "KUVO_HEAVY_SWAP is MB a secon
 MEMORY_SHORT="$DIR/kuvo-code-heavy-memory-short-$(id -u)"
 GIVEN_MEMORY_WAIT="${KUVO_HEAVY_MEMORY_WAIT_FOR:-15m}"
 MEMORY_WAIT_FOR=$(seconds_of "$GIVEN_MEMORY_WAIT" KUVO_HEAVY_MEMORY_WAIT_FOR) || exit 64
+# A job's place in its lane's queue: high goes before normal (0 sorts before 1).
+case "${KUVO_HEAVY_PRIORITY:-normal}" in
+    normal) PRIORITY=1 ;;
+    high) PRIORITY=0 ;;
+    *) echo "KUVO_HEAVY_PRIORITY is high or normal (it's $KUVO_HEAVY_PRIORITY)." >&2; exit 64 ;;
+esac
+
+# The lane's queue: a folder of its own (the phone's builds share mac-build's, as its slots).
+#   <priority>-<number>-<pid>-<slots>  a job in line: 0 high, 1 normal; its number, in the order
+#                     jobs came; its process; the slots it may take (2: either, 1: slot 1 only)
+#   sequence          the last number given
+#   claim-1, claim-2  the process a slot was just given to, until its `lockf` holds the slot
+#   guard             the lock whoever reads or changes the queue holds, for milliseconds
+QUEUE="$DIR/kuvo-code-heavy-$kind-$(id -u).queue"
+# Whose turn it is, run under the guard ($1 the queue, $2 and $3 the slots' locks, $4 this job's
+# entry or "new", $5 its priority, $6 its pid, $7 the slots it may take, $8 0 when it doesn't wait).
+# A new job gets its entry; entries and claims of processes that are gone are dropped. A slot is free
+# when its lock isn't held and no one has a claim on it. The free slots go to the jobs in line in
+# order, each to the first that may take it; a job that may take either takes slot 1, or slot 2
+# when both are free and one that may take only slot 1 waits behind it. Prints "slot <n>" when one
+# is this job's (its claim written, its entry gone), else "wait <entry>", or, told not to wait,
+# "busy" (no slot it may take is free) or "ahead" (one is, for another job in line before it).
+# shellcheck disable=SC2016 # (its own script: it expands its own arguments)
+TURN='
+queue=$1 lock1=$2 lock2=$3 ticket=$4 priority=$5 me=$6 slots=$7 waits=$8
+export LC_ALL=C
+cd "$queue" || exit 1
+if [ "$ticket" = new ]; then
+    n=0
+    [ ! -f sequence ] || read -r n < sequence || n=0
+    n=$((n + 1))
+    echo "$n" > sequence
+    ticket=$(printf "%s-%012d-%s-%s" "$priority" "$n" "$me" "$slots")
+fi
+[ -f "$ticket" ] || : > "$ticket"
+for entry in [01]-*; do
+    [ -f "$entry" ] || continue
+    owner=${entry#*-*-}
+    kill -0 "${owner%-*}" 2>/dev/null || rm -f "$entry"
+done
+free=
+for n in 1 2; do
+    lock=$lock1
+    [ "$n" = 1 ] || lock=$lock2
+    [ -n "$lock" ] || continue
+    if [ -f "claim-$n" ]; then
+        owner=
+        read -r owner < "claim-$n" || true
+        if [ -n "$owner" ] && kill -0 "$owner" 2>/dev/null; then continue; fi
+        rm -f "claim-$n"
+    fi
+    if lockf -ks -t 0 "$lock" true; then free=$free$n; fi
+done
+case "$slots:$free" in 2:?* | 1:*1*) open=1 ;; *) open= ;; esac
+singles=0
+for entry in [01]-*; do
+    if [ -f "$entry" ] && [ "${entry##*-}" = 1 ]; then singles=$((singles + 1)); fi
+done
+mine=
+for entry in [01]-*; do
+    [ -n "$free" ] || break
+    [ -f "$entry" ] || continue
+    take=
+    if [ "${entry##*-}" = 2 ]; then
+        case "$free" in
+            12) if [ "$singles" -gt 0 ]; then take=2; else take=1; fi ;;
+            *) take=$free ;;
+        esac
+    else
+        singles=$((singles - 1))
+        case "$free" in *1*) take=1 ;; esac
+    fi
+    [ -n "$take" ] || continue
+    case "$take" in 1) free=${free#1} ;; 2) free=${free%2} ;; esac
+    if [ "$entry" = "$ticket" ]; then
+        mine=$take
+        break
+    fi
+done
+if [ -n "$mine" ]; then
+    echo "$me" > "claim-$mine"
+    rm -f "$ticket"
+    echo "slot $mine"
+elif [ "$waits" = 0 ]; then
+    rm -f "$ticket"
+    if [ -n "$open" ]; then echo ahead; else echo busy; fi
+else
+    echo "wait $ticket"
+fi
+'
 
 # The lock whose turn this process has just taken (below), if any.
 TAKEN=
@@ -246,9 +346,14 @@ for candidate in "$LOCK" "$LOCK2"; do
 done
 
 if [ -n "$TAKEN" ]; then
-    # Its turn, just taken (below).
-    [ -z "${KUVO_HEAVY_TICKET:-}" ] || rm -f "$KUVO_HEAVY_TICKET"
-    unset KUVO_HEAVY_TICKET KUVO_HEAVY_HOLDING
+    # Its turn, just taken (below). Its claim on the slot is over: the slot's lock holds it now.
+    # (Nothing else claims a slot whose lock is held, so this reads and removes it safely.)
+    claim="$QUEUE/claim-1"
+    [ "$TAKEN" = "$LOCK" ] || claim="$QUEUE/claim-2"
+    if [ -f "$claim" ] && read -r owner < "$claim" 2>/dev/null && [ "$owner" = "$PPID" ]; then
+        rm -f "$claim"
+    fi
+    unset KUVO_HEAVY_HOLDING
     # Started inside another heavy job (of another kind: one of its own kind runs at once, above),
     # which says so in KUVO_HEAVY_HELD while it runs: a part of a job already running.
     NESTED=
@@ -275,46 +380,42 @@ else
         fi
         exec "$@"
     fi
-    # A ticket stays visible until its owner has acquired a slot. Registration is serialized so
-    # the sequence represents arrival order, including when several callers arrive at once.
-    queue="$DIR/kuvo-code-heavy-$kind-$(id -u).queue"
-    mkdir -p "$queue"
-    priority=1
-    [ "${KUVO_HEAVY_PRIORITY:-normal}" != high ] || priority=0
-    ticket=$(lockf -k "$queue/guard" /bin/sh -c '
-        queue=$1; priority=$2; owner=$3; slots=$4
-        n=0; [ ! -f "$queue/sequence" ] || read -r n < "$queue/sequence"
-        n=$((n + 1)); printf "%s\n" "$n" > "$queue/sequence"
-        ticket=$(printf "%s/%s-%012d-%s" "$queue" "$priority" "$n" "$owner-$slots")
-        : > "$ticket"; printf "%s\n" "$ticket"
-    ' sh "$queue" "$priority" "$$" "$SLOTS")
-    trap 'rm -f "$ticket"; exit 143' TERM HUP INT
+    # Its kind's turn, through the lane's queue (TURN, above): in line until a slot is its own,
+    # then that slot's lock, which it holds as it runs.
+    ticket=new
+    trap 'rm -f "$QUEUE/$ticket"; exit 129' HUP
+    trap 'rm -f "$QUEUE/$ticket"; exit 130' INT
+    trap 'rm -f "$QUEUE/$ticket"; exit 143' TERM
     said=
     while :; do
-        # A killed waiter may leave a ticket; it must never block the lane.
-        for entry in "$queue"/[01]-*; do
-            [ -f "$entry" ] || continue
-            owner=${entry%-*}; owner=${owner##*-}
-            kill -0 "$owner" 2>/dev/null || rm -f "$entry"
-        done
-        for slot in "$LOCK" ${LOCK2:+"$LOCK2"}; do
-            [ "$slot" = "$LOCK" ] || [ "$SLOTS" = 2 ] || continue
-            first=
-            for entry in $(printf '%s\n' "$queue"/[01]-* | LC_ALL=C sort); do
-                [ -f "$entry" ] || continue
-                if [ "$slot" = "$LOCK" ] || [ "${entry##*-}" = 2 ]; then
-                    first=$entry
-                    break
-                fi
-            done
-            if [ "$first" = "$ticket" ] && lockf -ks -t 0 "$slot" true; then
-                KUVO_HEAVY_HOLDING="$slot:$$" KUVO_HEAVY_TICKET="$ticket" exec lockf -k "$slot" /bin/sh "$0" "$kind" "$@"
-            fi
-        done
+        mkdir -p "$QUEUE"
+        # Told not to wait, it doesn't wait for the guard either, past a moment (its holders only
+        # look at files).
         if [ "$WAITS" = 0 ]; then
-            rm -f "$ticket"
-            cannot_wait "Another $kind job is running or waiting."
+            turn=$(lockf -k -t 2 "$QUEUE/guard" /bin/sh -c "$TURN" sh "$QUEUE" "$LOCK" "$LOCK2" "$ticket" "$PRIORITY" "$$" "$SLOTS" 0) || turn=
+        else
+            turn=$(lockf -k "$QUEUE/guard" /bin/sh -c "$TURN" sh "$QUEUE" "$LOCK" "$LOCK2" "$ticket" "$PRIORITY" "$$" "$SLOTS" 1) || turn=
         fi
+        case "$turn" in
+            "slot "*)
+                slot=$LOCK
+                [ "$turn" = "slot 1" ] || slot=$LOCK2
+                # Its claim keeps every other queued job off the slot until this `lockf` holds it.
+                # Only a caller outside the queue (an older script's plain `lockf`) can take it
+                # meanwhile: then this one waits for it, or, told not to wait, exits 75.
+                if [ "$WAITS" = 0 ]; then
+                    KUVO_HEAVY_HOLDING="$slot:$$" exec lockf -k -t 0 "$slot" /bin/sh "$0" "$kind" "$@"
+                fi
+                KUVO_HEAVY_HOLDING="$slot:$$" exec lockf -k "$slot" /bin/sh "$0" "$kind" "$@"
+                ;;
+            "wait "*) ticket=${turn#wait } ;;
+            busy)
+                [ "$SLOTS" = 2 ] && cannot_wait "Another $kind job is running in each of its two slots."
+                cannot_wait "Another $kind job is running."
+                ;;
+            ahead) cannot_wait "Another $kind job is waiting for its turn ahead of this one." ;;
+            *) [ "$WAITS" = 0 ] && cannot_wait "Another $kind job is taking its turn (its queue is busy)." ;;
+        esac
         [ -n "$said" ] || echo "Waiting for another $kind job to finish…" >&2
         said=1
         sleep 1

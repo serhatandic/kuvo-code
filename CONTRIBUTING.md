@@ -207,10 +207,11 @@ you started, by its PID (`$!`, a pid file) or by a process group you created, ne
 were started in. On macOS every option goes before the pattern, in `pgrep` too.
 
 Every job has a time limit, so a hung one can't hold its kind's turn for hours: `mac` and `phone`
-45 minutes, `mac-build` 30, `box` 40, counted while it runs (not while it waits for its turn).
-Past it, its group is stopped (TERM, then KILL), it says what was running, and the helper exits
-124. The limit starts when the command runs; queue waits have no limit, and load can wait indefinitely.
-Set `KUVO_HEAVY_PRIORITY=high` to go ahead of normal jobs queued for the same lane; each priority is FIFO.
+45 minutes, `mac-build` 30, `box` 40, counted from when its command starts (not while it waits in
+line for its slot, however long, nor for a busy Mac). Past it, its group is stopped (TERM, then
+KILL), it says what was running, and the helper exits 124. Jobs waiting for a lane wait in line,
+first come first served; `KUVO_HEAVY_PRIORITY=high` puts one before the normal ones waiting (it
+never stops a job running), and `KUVO_HEAVY_WAIT=0` answers at once (75: it would wait).
 `KUVO_HEAVY_LIMIT` gives one job another (`90m`, `600s`, `2h`; `0` for none). A job inside
 one of its kind runs within that one's limit (one of another kind has its own too), and one in a
 terminal has none.
