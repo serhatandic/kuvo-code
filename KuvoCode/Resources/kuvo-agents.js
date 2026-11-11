@@ -24494,8 +24494,11 @@ class GroupRunner {
         live.speaking = undefined;
         live.activity = undefined;
       }
-      this.told(id);
+      this.toldAfterTurn(id);
     }
+  }
+  toldAfterTurn(id) {
+    setImmediate(() => this.told(id));
   }
   answered(id, botID, result, wrapUp) {
     if (result.outgrown) {
@@ -26964,4 +26967,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 82f080797da6526787a6fc8eb64c9b577d06c8e2442899e26e1163675cf59e33
+// Built from Packages/Box/src/agents 76ac694e968b7153cde8437b902012ebe92e548db30182bcf2721a3decec56b5

@@ -882,6 +882,41 @@ describe("a group chat on any computer", () => {
     expect((await shown()).stopped).toBeUndefined()
   })
 
+  test("a bot that stays silent hands the turn on: the apps see the next bot talking, never nobody between two turns", async () => {
+    const { groups, store } = runner()
+    engine.lines = { Ada: ["Ship it this week?"], Ben: ["PASS"] }
+    groups.put(group(), [], "active", false)
+    // Followed as the Mac and the phone follow it: who's talking, line by line.
+    const abort = new AbortController()
+    const reader = (await linkRoutes(groups, store, "GET", [id, "events"], async () => ({}), abort.signal)).body!.getReader()
+    const decoder = new TextDecoder()
+    const talking: (string | null)[] = []
+    let buffer = ""
+    let began = false
+    let over = false
+    groups.send(id, "Should we ship?")
+    while (!over) {
+      const read = await reader.read()
+      if (read.done) break
+      buffer += decoder.decode(read.value, { stream: true })
+      for (let end = buffer.indexOf("\n"); end >= 0; end = buffer.indexOf("\n")) {
+        const line = JSON.parse(buffer.slice(0, end))
+        buffer = buffer.slice(end + 1)
+        const speaking = line.speaking ?? null
+        if (talking.at(-1) !== speaking) talking.push(speaking)
+        began ||= line.discussing === true
+        over ||= began && line.discussing === false
+      }
+    }
+    abort.abort()
+    await reader.cancel().catch(() => {})
+    // Ada, then Ben, who passes and says nothing, then Ada again, asked who does what: the row
+    // under the chat goes from one bot to the next, rather than going as one turn ends and coming
+    // again for the next, drawn over itself.
+    expect(talking).toEqual([null, "bot_ada", "bot_ben", "bot_ada", null])
+    expect(groups.get(id)!.messages.map((message) => message.author ?? "you")).toEqual(["you", "bot_ada"])
+  })
+
   test("a part whose message was taken back before its bot read it ends, rather than working forever", async () => {
     const { store } = runner()
     const started = stamp()

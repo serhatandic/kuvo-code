@@ -886,8 +886,18 @@ export class GroupRunner {
         live.speaking = undefined
         live.activity = undefined
       }
-      this.told(id)
+      this.toldAfterTurn(id)
     }
+  }
+
+  /**
+   * A turn's end, told once what follows it has begun. The next bot's turn (or the lead's list of
+   * who does what) starts at once and says who's talking itself, so the apps go from one bot to the
+   * next, never seeing nobody between two turns: the row under the chat would go as a bot passed
+   * and come again for the next, drawn over itself. Nothing after it: nobody, a moment later.
+   */
+  private toldAfterTurn(id: string) {
+    setImmediate(() => this.told(id))
   }
 
   /** What a bot said in its turn, to the chat: nothing when it passed. */
