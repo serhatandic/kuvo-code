@@ -20,7 +20,7 @@ import { forgetReviews } from "../work/reviewer";
 import { forgetDecided } from "../work/autopilot";
 import { backUpSession } from "../work/backups";
 import { markConversation, noteFullAccess, noteFullAccessAtWork } from "../work/full";
-import { queueWatcher, scanQueues, type ScanFound } from "./queue";
+import { queueWatcher, scanQueues, writtenByYou, type ScanFound } from "./queue";
 import { adoptConversation } from "../areas/approval";
 import { followAsks, forgetAsksOn, noteAskEvent } from "../glance/asked";
 import { pullCatcher } from "../glance/pulls";
@@ -34,8 +34,8 @@ import type { SessionNotes } from "./sessions";
 
 /** An engine event `steering` follows, for its session: a tool call that started, was called or
  * ended (its `id`, its tool's `name`, and with its `input`, whether it runs in the background); a
- * message queued, sent now, put back, delivered or cancelled (its `inboxID`, what it is, and how
- * it's sent); a run that ended. */
+ * message queued, sent now, put back, delivered or cancelled (its `inboxID`, what it is and says,
+ * and how it's sent); a run that ended. */
 export interface SteeringEvent {
   type: string;
   data?: {
@@ -44,7 +44,7 @@ export interface SteeringEvent {
     name?: string;
     input?: { background?: unknown };
     inboxID?: string;
-    item?: { type?: string; delivery?: string };
+    item?: { type?: string; delivery?: string; payload?: { text?: unknown; metadata?: unknown } };
     delivery?: string;
   };
 }
@@ -138,13 +138,15 @@ async function* serverEvents(body: AsyncIterable<Uint8Array>): AsyncGenerator<Bo
   }
 }
 
-// A message that reaches an agent while it waits on a command or a subagent it started in the
-// foreground is read at once, as it would be at the agent's next step, rather than when the command
-// ends: what it waits on goes on in the background, and the agent is told when it ends (the engine's
-// own Ctrl+B in its terminal). Only messages sent to steer (yours, or another agent's letter), never
-// one queued for after the turn, a wake-up or the engine's own notes; and only once what it waits
-// on has run for `after` ms, so a quick command simply ends first. While one still waits behind it
-// (the call was asking you something first, say), it's tried again every `after` ms.
+// A message of yours that reaches an agent while it waits on a command or a subagent it started in
+// the foreground is read at once, as it would be at the agent's next step, rather than when the
+// command ends: what it waits on goes on in the background, and the agent is told when it ends (the
+// engine's own Ctrl+B in its terminal). Only your own messages sent to steer, never one queued for
+// after the turn, a wake-up or the engine's own notes, and never another agent's letter or the box's
+// news (a session that asks or finished): those are read as the command ends, as any message sent to
+// steer is, so a lead's word doesn't cut short the tests its session waits on. And only once what it
+// waits on has run for `after` ms, so a quick command simply ends first. While one still waits
+// behind it (the call was asking you something first, say), it's tried again every `after` ms.
 // `background(session)` does it; each event from the engine goes to what this returns.
 export const STEER_AFTER = 3000;
 // How often a box reads its engine's models again, at most, while the engine's at work.
@@ -155,7 +157,7 @@ const LEARN_EVERY = 600_000;
 const LEARN_NOW = new Set(["credential.updated", "credential.switched", "integration.updated", "model.updated"]);
 export function steering(background: (session: string) => unknown, { after = STEER_AFTER, now = Date.now, schedule = setTimeout, cancel = clearTimeout, signal }: SteeringOptions = {}): (event: SteeringEvent) => void {
   const sessions = new Map<string, SteeredSession>(); // session → { names: call → tool, blocking: call → when it started, steers: messages waiting for its next step }
-  const users = new Set<string>(); // messages sent as a message (steered or queued) that wait
+  const users = new Set<string>(); // your own messages (steered or queued) that wait
   const timers = new Map<string, ReturnType<typeof setTimeout>>();
   const of = (session: string): SteeredSession => {
     if (!sessions.has(session)) sessions.set(session, { names: new Map(), blocking: new Map(), steers: new Set() });
@@ -209,7 +211,7 @@ export function steering(background: (session: string) => unknown, { after = STE
         sessions.get(session)?.blocking.delete(data.id!);
         break;
       case "session.inbox.enqueued":
-        if (data.item?.type !== "user") break;
+        if (data.item?.type !== "user" || !writtenByYou(data.item.payload?.text, data.item.payload?.metadata)) break;
         users.add(data.inboxID!);
         if (data.item.delivery === "steer") steer(session, data.inboxID!);
         break;
