@@ -3257,18 +3257,20 @@ starting with `#N` is an item, in the category of the nearest heading above it t
 (Done, Shelved/Parked, Later/Ideas), else Next, Done with `[x]`; a line `NOW:`/`LATER:`/… with
 refs sets theirs; the first line naming a number gives its title, every line naming it its body)
 → `{added, byCategory, waiting, skipped, said}`. An item keeps its own number wherever no other item
-has it, here or on another of your computers (as each told this box); one waiting for its number
-(an import's still under way) holds it as its own. An import skips a number here already under the
+has it, here or on another of your computers (as each told this box), and it isn't one this box
+gave an item that's gone from it (`numbers.json`, `used`: moved away, or deleted); one waiting for
+its number (an import's still under way) holds it as its own. An import skips a number here already under the
 same title, or waiting for it; under another title, the item is imported with a new number
 (`importedAs`) and a note, and `said` names each one renumbered and its number now, as it does
 those the primary refuses at once (on the primary itself; elsewhere a note says so when its answer
 comes). An item an import renumbered, imported again under the same number and title, isn't made
-twice: it asks for its own number back (claimed as an import's are, keeping the one it has, and
-`wanted` meanwhile), where no other item has it (one on its way back to its own number lets it go);
-granted, every such item moves at once (two can trade), with a note, and `importedAs` goes. One whose
-number another item holds waits while that one asks for its own, else stays as it is, with a note.
-So importing the same backlog again repairs an import that went wrong, and once it has, changes
-nothing. Each change
+twice: it asks for its own number back (claimed as an import's are, as `restores` too, keeping
+the one it has, and `wanted` meanwhile), where no other item has it (one on its way back to its own
+number lets it go); granted, every such item moves at once (two can trade), with a note, and
+`importedAs` goes. One whose number another item has waits (`backGranted`, never asked again) while
+that one asks for its own, and moves once it has; else, or refused, it stays as it is, with a note
+(`stays`: an import doesn't ask again). So importing the same backlog again repairs an import that
+went wrong, and once it has, changes nothing. Each change
 answers `{item}`; a category removed only once nothing, deleted items included, is in it.
 
 **Tools**: `GET kuvo/work-queue/tools` → `{tools, instructions}` (MCP definitions, and what the
@@ -3326,7 +3328,7 @@ Mac never numbers on its own; while it knows of no Mac that
 can be reached yet, items wait. The primary numbers its own
 items from its counter; another box numbers from blocks of 50 the primary gave it, and asks for the
 next when 15 or fewer are left, by mail, on its rounds: `{workQueue: {ask: {id, count, claims?,
-top?}}}`, sent again every 30 s until answered with `{workQueue: {give: {id, from, to, granted}}}`.
+restores?, own?, top?}}}`, sent again every 30 s until answered with `{workQueue: {give: {id, from, to, granted}}}`.
 `top` is the highest number the asking box used, holds or handed out: the primary moves its counter
 past it (a box that numbered on its own before, or a primary that lost its file), and past any number
 its peers tell it they use. A box that stops numbering on its own asks its new primary at once. A
@@ -3337,13 +3339,15 @@ back as `{give}`; one hop only, and a box takes a block only from its primary or
 through. The primary keeps what it gave for each ask, so an
 ask sent again gets the same answer, and notes the box it gave each block (`given`, `by`). `claims`
 are numbers an import wants to keep (six digits at most, what a chip reads): the primary grants
-those at or above its counter and within 10,000 of it, those it granted that box before, and those
-in a block it gave that box (the box's own: an import there claims none it used, and a box drops
-its leases at or below its claims, and takes a block only for the ask under way, so a block given
-for an ask an import replaced is never used), and moves its counter past them. A block an older
-primary kept without whom it went to counts as the asking box's only where no other computer told
-of a number as high as its first (its `top` or its items), and no box granted claims hasn't told
-it anything. An imported item waits without a number until then; an answer decides only the claims
+those at or above its counter and within 10,000 of it, those it granted that box before, and, for
+an ask that says `own` (a box that never claims a number it gave an item, `used`), those in a block
+it gave that box (its own: a box drops its leases at or below its claims, and takes a block only for
+the ask under way, so a block given for an ask an import replaced is never used), and moves its
+counter past them. Until those an older primary kept without whom they went to are gone from
+`given`, such a block counts for `restores` (numbers asked back for items an import renumbered)
+only where every other computer the primary knows told it, and of no number as high as the block's
+first (its `top` or its items), and the asking box told of one as high as its last: a box that
+never tells the primary (one reaching it only through a peer) could hold one unseen. An imported item waits without a number until then; an answer decides only the claims
 its ask carried (one claimed later waits for its own), and one refused gets the next number, with a
 note. An item made with no number left waits too, and takes one, oldest first, when a block comes; one left
 waiting with nothing under way (a crash midway, a move), or still asking for its own number back, is

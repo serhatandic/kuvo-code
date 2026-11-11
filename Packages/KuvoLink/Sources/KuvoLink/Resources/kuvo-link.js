@@ -14606,7 +14606,7 @@ var whoOf = (given) => {
   return Object.keys(kept).length ? kept : null;
 };
 var FILE_NAME = /^(?!\.\.?$)[^/\\\0]{1,200}$/;
-var KNOWN2 = new Set(["id", "number", "owner", "title", "body", "category", "order", "progress", "notes", "files", "links", "sessions", "handed", "handedBy", "wanted", "importedAs", "source", "handing", "created", "updated", "doneAt", "removed"]);
+var KNOWN2 = new Set(["id", "number", "owner", "title", "body", "category", "order", "progress", "notes", "files", "links", "sessions", "handed", "handedBy", "wanted", "importedAs", "backGranted", "stays", "source", "handing", "created", "updated", "doneAt", "removed"]);
 var handingOf = (given) => {
   if (!isObject(given) || typeof given.id !== "string" || !/^wqh_[A-Za-z0-9_-]{8,40}$/.test(given.id) || typeof given.to !== "string" || !OWNER.test(given.to) || typeof given.key !== "string" || typeof given.at !== "number")
     return null;
@@ -14637,6 +14637,8 @@ function itemOf(given, owner) {
     ...typeof given.handedBy === "string" && OWNER.test(given.handedBy) ? { handedBy: given.handedBy } : {},
     ...typeof given.wanted === "number" && Number.isInteger(given.wanted) && given.wanted > 0 ? { wanted: given.wanted } : {},
     ...typeof given.importedAs === "number" && Number.isInteger(given.importedAs) && given.importedAs > 0 ? { importedAs: given.importedAs } : {},
+    ...given.backGranted === true ? { backGranted: true } : {},
+    ...given.stays === true ? { stays: true } : {},
     ...isObject(given.source) && typeof given.source.kind === "string" && typeof given.source.ref === "string" ? { source: given.source } : {},
     ...handingOf(given.handing) ? { handing: handingOf(given.handing) } : {},
     created,
@@ -15004,7 +15006,7 @@ function readNumbers(file = NUMBERS_FILE) {
     const kept = JSON.parse(textOf(file) ?? "null");
     if (!isObject(kept))
       return { leases: [] };
-    const asking = isObject(kept.asking) && typeof kept.asking.id === "string" && typeof kept.asking.count === "number" && typeof kept.asking.since === "number" ? { id: kept.asking.id, count: kept.asking.count, since: kept.asking.since, ...typeof kept.asking.sent === "number" ? { sent: kept.asking.sent } : {}, ...Array.isArray(kept.asking.claims) ? { claims: cleanRanges(kept.asking.claims) } : {} } : undefined;
+    const asking = isObject(kept.asking) && typeof kept.asking.id === "string" && typeof kept.asking.count === "number" && typeof kept.asking.since === "number" ? { id: kept.asking.id, count: kept.asking.count, since: kept.asking.since, ...typeof kept.asking.sent === "number" ? { sent: kept.asking.sent } : {}, ...Array.isArray(kept.asking.claims) ? { claims: cleanRanges(kept.asking.claims) } : {}, ...Array.isArray(kept.asking.restores) ? { restores: cleanRanges(kept.asking.restores) } : {} } : undefined;
     return {
       ...typeof kept.primary === "string" ? { primary: kept.primary } : {},
       ...typeof kept.since === "number" && Number.isFinite(kept.since) && kept.since > 0 ? { since: kept.since } : {},
@@ -15212,29 +15214,35 @@ var toldTopOf = (key) => {
   const told = readTold2(key);
   return Math.max(told?.top ?? 0, ...(told?.items ?? []).map((item) => item.number ?? 0));
 };
-function blocksOf(kept, by) {
+function blocksOf(kept, by, restores) {
   const given = Object.values(kept.given ?? {});
   const own = given.filter((each) => each.by === by).map((each) => [each.from, each.to]);
-  const unsaid = given.filter((each) => each.by === undefined);
+  const unsaid = restores.length ? given.filter((each) => each.by === undefined) : [];
   if (!unsaid.length)
     return joined(own);
   const told = new Set(toldKeys());
-  if (Object.keys(kept.granted ?? {}).some((key) => key !== by && key !== "self" && !told.has(key)))
+  const known = new Set([...peersOf(readLink()).map((peer) => peer.key), ...Object.keys(kept.granted ?? {}), ...told]);
+  known.delete(by);
+  known.delete("self");
+  if ([...known].some((key) => !told.has(key)))
     return joined(own);
-  const others = Math.max(0, ...[...told].filter((key) => key !== by).map(toldTopOf));
-  return joined(own, unsaid.filter((each) => each.from > others).map((each) => [each.from, each.to]));
+  const others = Math.max(0, ...[...known].map(toldTopOf));
+  const theirs = toldTopOf(by);
+  const old = unsaid.filter((each) => each.from > others && each.to <= theirs).map((each) => [each.from, each.to]);
+  return joined(own, overlap(joined(old), restores));
 }
-function grantOn(kept, by, claims) {
+function grantOn(kept, by, claims, said = {}) {
   const before = kept.granted?.[by] ?? [];
   const next = counterOf(kept);
-  const ranges = joined(overlap(claims, [[next, Math.min(next + CLAIM_REACH, MOST_NUMBER - 1)]]), overlap(claims, before), by === "self" ? [] : overlap(claims, blocksOf(kept, by)));
+  const blocks = by !== "self" && said.own ? blocksOf(kept, by, overlap(said.restores ?? [], claims)) : [];
+  const ranges = joined(overlap(claims, [[next, Math.min(next + CLAIM_REACH, MOST_NUMBER - 1)]]), overlap(claims, before), overlap(claims, blocks));
   if (ranges.length) {
     kept.next = Math.max(next, ranges[ranges.length - 1][1] + 1);
     kept.granted = { ...kept.granted ?? {}, [by]: joined(before, ranges).slice(-MOST_RANGES) };
   }
   return ranges;
 }
-function claimNumbers(primary, numbers, { file = NUMBERS_FILE, now = Date.now(), link = readLink() } = {}) {
+function claimNumbers(primary, numbers, { file = NUMBERS_FILE, now = Date.now(), link = readLink(), restores = [] } = {}) {
   const claims = rangesOf(numbers);
   if (!claims.length)
     return { granted: [] };
@@ -15244,7 +15252,8 @@ function claimNumbers(primary, numbers, { file = NUMBERS_FILE, now = Date.now(),
       return { granted: grantOn(kept, "self", claims) };
     const highest = claims[claims.length - 1][1];
     kept.leases = kept.leases.map(([from, to]) => [Math.max(from, highest + 1), to]).filter(([from, to]) => from <= to);
-    kept.asking = { id: askID(), count: BLOCK, claims: joined(kept.asking?.claims ?? [], claims).slice(-MOST_RANGES), since: now };
+    const back = joined(kept.asking?.restores ?? [], overlap(rangesOf(restores), claims)).slice(-MOST_RANGES);
+    kept.asking = { id: askID(), count: BLOCK, claims: joined(kept.asking?.claims ?? [], claims).slice(-MOST_RANGES), ...back.length ? { restores: back } : {}, since: now };
     return { granted: null };
   }, file);
 }
@@ -15254,7 +15263,7 @@ function askToSend({ file = NUMBERS_FILE, now = Date.now() } = {}) {
     if (!asking || asking.sent !== undefined && now - asking.sent < ASK_AGAIN)
       return null;
     asking.sent = now;
-    return { id: asking.id, count: asking.count, ...asking.claims?.length ? { claims: asking.claims } : {} };
+    return { id: asking.id, count: asking.count, ...asking.claims?.length ? { claims: asking.claims, own: true } : {}, ...asking.restores?.length ? { restores: asking.restores } : {} };
   }, file);
   if (!asked)
     return null;
@@ -15291,7 +15300,7 @@ function giveBlock(by, ask, { file = NUMBERS_FILE, now = Date.now() } = {}) {
     const given = kept.given?.[id];
     if (given)
       return { id, from: given.from, to: given.to, granted: given.granted ?? [] };
-    const granted = grantOn(kept, by, claims);
+    const granted = grantOn(kept, by, claims, { own: ask.own === true, restores: cleanRanges(ask.restores) });
     const from = counterOf(kept);
     const to = from + count - 1;
     kept.next = to + 1;
@@ -15319,31 +15328,34 @@ function takeBlock(give, { file = NUMBERS_FILE } = {}) {
 }
 function numberWaiting(book, primary, answer, options = {}) {
   const now = options.now ?? Date.now();
+  const used = [];
   if (answer) {
-    const back = [];
     for (const item of book.items()) {
-      if (item.wanted === undefined || item.source || !OWNER.test(item.owner) || !inRanges(answer.claimed, item.wanted))
+      if (item.wanted === undefined || item.backGranted || item.source || !OWNER.test(item.owner) || !inRanges(answer.claimed, item.wanted))
         continue;
       const kept = inRanges(answer.granted, item.wanted);
       if (item.number !== undefined) {
         if (kept)
-          back.push(item);
-        else {
-          item.notes.push({ at: now, by: { user: true }, text: `Its own number, #${item.wanted}, couldn't be given back (another of your computers was given it already, or it's far past the numbers in use), so it stays #${item.number}.` });
-          delete item.wanted;
-        }
+          item.backGranted = true;
+        else
+          stays(item, `Its own number, #${item.wanted}, couldn't be given back (another of your computers was given it already, or it's far past the numbers in use), so it stays #${item.number}.`, now);
         continue;
       }
-      if (kept)
+      if (kept) {
         item.number = item.wanted;
-      else {
+        used.push(item.number);
+      } else {
         item.notes.push({ at: now, by: { user: true }, text: `Imported as #${item.wanted}, a number that couldn't be kept (another of your computers was given it already, or it's far past the numbers in use), so it has a new one.` });
         item.importedAs = item.wanted;
       }
       delete item.wanted;
     }
-    restoreNumbers(book, back, now);
   }
+  used.push(...restoreNumbers(book, now));
+  if (used.length)
+    changeNumbers((kept) => {
+      kept.used = joined(kept.used ?? [], rangesOf(used)).slice(-MOST_RANGES);
+    }, options.file);
   const waiting = book.items().filter((item) => item.number === undefined && item.wanted === undefined && !item.source && OWNER.test(item.owner)).sort((a, b) => a.created.at - b.created.at);
   for (const item of waiting) {
     const number = takeNumber(primary, options);
@@ -15352,17 +15364,28 @@ function numberWaiting(book, primary, answer, options = {}) {
     item.number = number;
   }
 }
-function restoreNumbers(book, back, now) {
+function stays(item, why, now) {
+  item.notes.push({ at: now, by: { user: true }, text: why });
+  delete item.wanted;
+  delete item.backGranted;
+  item.stays = true;
+}
+function restoreNumbers(book, now) {
+  const back = book.items().filter((item) => item.backGranted && item.wanted !== undefined && item.number !== undefined);
   if (!back.length)
-    return;
-  const going = new Set(back);
+    return [];
+  const first = new Map;
+  for (const item of back)
+    if (!first.has(item.wanted))
+      first.set(item.wanted, item);
+  const going = new Set(first.values());
   const holders = new Map;
   for (const item of book.items()) {
     const held = item.number ?? item.wanted;
     if (held !== undefined)
       holders.set(held, [...holders.get(held) ?? [], item]);
   }
-  const blocker = (item) => (holders.get(item.wanted) ?? []).find((each) => each !== item && !going.has(each));
+  const blocker = (item) => (first.get(item.wanted) !== item ? first.get(item.wanted) : undefined) ?? (holders.get(item.wanted) ?? []).find((each) => each !== item && !going.has(each));
   for (let changed = true;changed; ) {
     changed = false;
     for (const item of going) {
@@ -15376,37 +15399,43 @@ function restoreNumbers(book, back, now) {
     if (going.has(item))
       continue;
     const holder = blocker(item);
-    if (holder.number !== undefined && holder.wanted !== undefined)
+    if (!holder.removed && !holder.stays && holder.number === item.wanted && holder.wanted !== undefined)
       continue;
-    item.notes.push({ at: now, by: { user: true }, text: `Its own number, #${item.wanted}, is another item's here, so it stays #${item.number}.` });
-    delete item.wanted;
+    stays(item, `Its own number, #${item.wanted}, is another item's here, so it stays #${item.number}.`, now);
   }
+  const used = [];
   for (const item of going) {
     item.notes.push({ at: now, by: { user: true }, text: `Has its own number, #${item.wanted}, again (it was #${item.number}).` });
+    used.push(item.wanted);
     item.number = item.wanted;
     delete item.wanted;
     delete item.importedAs;
+    delete item.backGranted;
   }
+  return used;
 }
 function reclaimWaiting(primary = primaryOf(), options = {}) {
-  const waiting = allItems().filter((item) => (item.number === undefined || item.wanted !== undefined) && !item.source && !item.removed && OWNER.test(item.owner));
-  if (!waiting.length)
+  const mine = allItems().filter((item) => !item.source && !item.removed && OWNER.test(item.owner));
+  const waiting = mine.filter((item) => item.number === undefined || item.wanted !== undefined && !item.backGranted);
+  const settling = mine.some((item) => item.backGranted && item.wanted !== undefined);
+  if (!waiting.length && !settling)
     return false;
   const kept = readNumbers(options.file);
   const asked = kept.asking?.claims ?? [];
   const wanted = waiting.flatMap((item) => item.wanted !== undefined && !inRanges(asked, item.wanted) ? [item.wanted] : []);
+  const restores = waiting.flatMap((item) => item.number !== undefined && item.wanted !== undefined && !inRanges(asked, item.wanted) ? [item.wanted] : []);
   if ("self" in primary) {
-    const granted = wanted.length ? claimNumbers(primary, wanted, options).granted : [];
+    const granted = wanted.length ? claimNumbers(primary, wanted, { ...options, restores }).granted : [];
     changeQueues((book) => numberWaiting(book, primary, { granted: granted ?? [], claimed: rangesOf(wanted) }, options), undefined, { onItsOwn: true });
     return true;
   }
   if (wanted.length)
-    claimNumbers(primary, wanted, options);
+    claimNumbers(primary, wanted, { ...options, restores });
   else if (!kept.asking && !leftIn(kept.leases) && waiting.some((item) => item.number === undefined))
     changeNumbers((numbers) => {
       numbers.asking ??= { id: askID(), count: BLOCK, since: options.now ?? Date.now() };
     }, options.file);
-  if (leftIn(readNumbers(options.file).leases))
+  if (leftIn(readNumbers(options.file).leases) || settling)
     changeQueues((book) => numberWaiting(book, primary, null, options), undefined, { onItsOwn: true });
   return true;
 }
@@ -37412,6 +37441,10 @@ function importItems(book, owner, items, who, primary, now = Date.now()) {
       outcome.already.push(each.number);
       continue;
     }
+    if (earlier?.stays) {
+      outcome.skipped.push(`#${each.number} (imported before as #${earlier.number}; its own number couldn't be given back)`);
+      continue;
+    }
     const far = elsewhere.get(each.number);
     if (far !== undefined && same(far, each.title)) {
       outcome.skipped.push(`#${each.number} (already in the Work Queue on another of your computers)`);
@@ -37455,15 +37488,16 @@ function importItems(book, owner, items, who, primary, now = Date.now()) {
     outcome.added++;
     outcome.byCategory[each.category] = (outcome.byCategory[each.category] ?? 0) + 1;
   }
-  const claimed = [...made.map((item) => item.wanted), ...back.map(({ item }) => item.wanted)];
-  const { granted } = claimNumbers(primary, claimed);
+  const restores = back.map(({ item }) => item.wanted);
+  const claimed = [...made.map((item) => item.wanted), ...restores];
+  const { granted } = claimNumbers(primary, claimed, { restores });
   numberWaiting(book, primary, granted ? { granted, claimed: rangesOf(claimed) } : null, { now });
   outcome.waiting = made.filter((item) => item.number === undefined).length;
   const refused = made.filter((item) => item.importedAs !== undefined).map((item) => ({ from: item.importedAs, item }));
   outcome.renumbered = [...fresh, ...refused].sort((a, b) => a.from - b.from).map(({ from, item }) => item.number !== undefined ? `#${from} is #${item.number}` : `#${from} waits for a new number`);
   for (const { from, item } of back) {
     if (item.wanted !== undefined)
-      outcome.restoring.push(`#${from} (for #${item.wanted})`);
+      outcome.restoring.push(`#${from} (for #${item.wanted}${item.backGranted ? ", given: once the item that has it moves to its own" : ""})`);
     else if (item.importedAs === undefined)
       outcome.restored.push(`#${from} is #${item.number} again`);
     else
@@ -37491,7 +37525,7 @@ function importWords(outcome, skipped, names) {
     outcome.waiting ? `${outcome.waiting} wait${outcome.waiting === 1 ? "s" : ""} for the primary computer to grant ${outcome.waiting === 1 ? "its number" : "their numbers"}; until then ${outcome.waiting === 1 ? "it shows" : "they show"} as new.` : "",
     outcome.renumbered.length ? `Renumbered, as their own number is another item's or couldn't be kept (each has a note saying why): ${outcome.renumbered.join(", ")}.` : "",
     outcome.restored.length ? `Given their own numbers back, as imported before: ${outcome.restored.join(", ")}.` : "",
-    outcome.restoring.length ? `${outcome.restoring.length} imported before ask${outcome.restoring.length === 1 ? "s" : ""} the primary computer for ${outcome.restoring.length === 1 ? "its" : "their"} own number back, keeping the one ${outcome.restoring.length === 1 ? "it has" : "they have"} until then: ${outcome.restoring.join(", ")}.` : "",
+    outcome.restoring.length ? `${outcome.restoring.length} item${outcome.restoring.length === 1 ? "" : "s"} imported before ask${outcome.restoring.length === 1 ? "s" : ""} for ${outcome.restoring.length === 1 ? "its" : "their"} own number back, keeping the one ${outcome.restoring.length === 1 ? "it has" : "they have"} until then: ${outcome.restoring.join(", ")}.` : "",
     left ? `Left out (${left}): ${said.join("; ")}${all.length > MOST_SKIPPED_SAID ? "; …" : ""}.` : ""
   ].filter(Boolean).join(" ");
 }
