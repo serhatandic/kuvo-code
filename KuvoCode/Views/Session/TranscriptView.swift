@@ -1605,7 +1605,7 @@ private struct TurnEndView: View {
                         if let signIn, let account = actions?.signIn {
                             let again = kind == .signIn(ended: true) ? "Sign In Again" : "Sign In"
                             Button(machine.map { "\(again) on \($0)" } ?? again) { signIn.open(account.providerID) }
-                                .help("Sign in to \(catalog.signInName(account.providerID))\(machine.map { " on \($0): its sign-ins are its own" } ?? "")")
+                                .help(catalog.signInHelp(account.providerID, on: machine))
                             if actions?.switchModel == true, let switchModel {
                                 Button("Switch Model", action: switchModel)
                                     .help("Choose another model for this conversation")

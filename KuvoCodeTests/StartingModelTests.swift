@@ -197,6 +197,11 @@ import Testing
         await catalog.refreshAgents(fresh: true)
         let claude = ModelRef(id: "opus", providerID: "claude-code")
         #expect(catalog.chipModel(claude)?.name == "Claude Opus")
+        // One its program no longer lists, its account signed in: named and sent, as before (the
+        // agent says whether it can run it), not "Choose a Model".
+        let dropped = ModelRef(id: "opus-4", providerID: "claude-code")
+        #expect(catalog.chipModel(dropped)?.name == "opus-4")
+        #expect(catalog.refusal(dropped) == nil)
 
         account.lock.withLock { account.signedIn = false }
         await catalog.refreshAgents(fresh: true)
@@ -230,6 +235,9 @@ import Testing
         // An old conversation on the engine's xAI model (#338): a SuperGrok plan signed in to as
         // Grok never runs it, so it says a key, or a model under Grok, not to sign in to the plan.
         #expect(catalog.refusal(ModelRef(id: "grok-4.7", providerID: "xai")) == "grok-4.7 needs an Xai key: add one in Settings › Accounts, or choose another model (with a SuperGrok plan, one under Grok).")
+        // Its card's Sign In opens a sheet with only a key: its help says that.
+        #expect(catalog.signInHelp("xai") == "Add an Xai key (with a SuperGrok plan, choose a model under Grok instead)")
+        #expect(catalog.signInHelp("deepseek", on: "devbox") == "Sign in to Deepseek on devbox: its sign-ins are its own")
         #expect(catalog.refusal(ModelRef(id: "sonnet-next", providerID: "anthropic")) == nil)
         #expect(catalog.refusal(ModelRef(id: "opus", providerID: "claude-code")) == nil, "its agents still loading")
         // A provider the project's own settings add, which the engine lists only in that project: it goes.

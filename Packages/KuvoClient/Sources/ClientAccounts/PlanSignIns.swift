@@ -14,4 +14,12 @@ public enum PlanSignIns {
         guard let way = plans[provider] else { return nil }
         return "\(model) needs an \(providerName) key\(there): add one in \(accounts), or choose another model (with a \(way.plan) plan, one under \(way.agent))."
     }
+
+    /// What signing in to `provider` (called `providerName`) does where only its key is offered
+    /// (`there`: " on devbox", or nothing for this Mac), as a Sign In button's help says it; nil for
+    /// any other provider.
+    public static func keyHelp(provider: String, providerName: String, there: String = "") -> String? {
+        guard let way = plans[provider] else { return nil }
+        return "Add an \(providerName) key\(there) (with a \(way.plan) plan, choose a model under \(way.agent) instead)"
+    }
 }

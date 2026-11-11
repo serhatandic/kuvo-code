@@ -403,7 +403,7 @@ struct ModelChip<Label: View>: View {
         }
         .modelChipStyle(popUp: popUp)
         .clickablePointer()
-        .help(catalog.needsSignIn(selection) ? catalog.unavailable(selection!, on: catalog.machine.map { app.name(of: .machine($0)) }) : isUnavailable ? "\(catalog.model(selection)?.name ?? selection?.id ?? "") isn't available now: choose another model" : "Model and effort")
+        .help(catalog.needsSignIn(selection) ? catalog.unavailable(selection!, on: catalog.machine.map { app.name(of: .machine($0)) }) : isUnavailable && current == nil ? "\(catalog.model(selection)?.name ?? selection?.id ?? "") isn't available now: choose another model" : "Model and effort")
         .background(ScreenRoomReader(room: anchor))
         .closesWhenKept($isOpen)
         .popover(isPresented: $isOpen, arrowEdge: placement.below ? .bottom : .top) {
