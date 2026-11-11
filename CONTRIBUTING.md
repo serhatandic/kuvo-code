@@ -166,7 +166,9 @@ ONLY="KuvoCodeMobileTests/PairingTests" ~/Projects/kuvo-code-ios/scripts/test-ap
 It takes the newest batch, refuses at once (before it waits in line) a class or test the batch
 hasn't, merged after the build, and notes when your HEAD isn't in it. While a batch is being built
 it waits for that build and tests the new batch; when the newest build failed (or stopped), it
-refuses, naming the commit and the first error, rather than test an older batch. Then it waits for its turn in
+refuses, naming the commit and the first error, rather than test an older batch. Call it directly,
+never inside `scripts/heavy.sh`: it takes its turn itself, after any wait for a build, so it holds
+no slot while it waits. Then it waits for its turn in
 `mac` (or a `phone` slot) and runs `xcodebuild test-without-building` with the batch's `.xctestrun`:
 the same test copy, clean settings, `KUVO_TEST_BUN`, account check and guards as a run that builds.
 It prints the stamp of the batch it tested. Problems found go to fixes merged to main, which the next batch

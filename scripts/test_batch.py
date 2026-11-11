@@ -13,6 +13,7 @@ makes what a build would and says what it was asked.
 """
 import os
 import shutil
+import signal
 import subprocess
 import tempfile
 import time
@@ -69,9 +70,10 @@ esac
 """
 
 
-def wait_for(path, what):
+def wait_for(path, what, text=None):
+    """Until the file is there (and has the text)."""
     deadline = time.time() + 30
-    while not os.path.exists(path):
+    while not os.path.exists(path) or (text is not None and text not in read(path)):
         if time.time() > deadline:
             raise AssertionError(what)
         time.sleep(0.1)
@@ -335,6 +337,12 @@ class FromBatch(Batches):
         return subprocess.Popen(["/bin/sh", TEST_APP, "--from-batch"], env=self.env_for(only, **extra), cwd=self.mac,
                                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 
+    def start_tests_said_to(self, only, said):
+        """A run whose stderr goes to the file `said`, to see what it says as it goes."""
+        with open(said, "w") as err:
+            return subprocess.Popen(["/bin/sh", TEST_APP, "--from-batch"], env=self.env_for(only), cwd=self.mac,
+                                    stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=err, text=True)
+
     def runs(self, name):
         folder = os.path.join(self.batches, "mac", name, "runs")
         return os.listdir(folder) if os.path.isdir(folder) else []
@@ -377,12 +385,16 @@ class FromBatch(Batches):
         self.assertEqual(self.build("mac").returncode, 0)
         self.assertNotIn(name, self.built("mac"), "once it's over, the next build deletes it")
 
-    def test_a_run_inside_a_job_that_holds_the_turn_closes_its_batch_too(self):
+    def test_a_run_inside_a_job_that_holds_the_turn_and_the_runs_lock_closes_its_batch_too(self):
         self.assertEqual(self.build("mac").returncode, 0)
         name = self.built("mac")[0]
-        done = subprocess.run([self.env["KUVO_HEAVY_SH"], "mac", "/bin/sh", TEST_APP, "--from-batch"], env=self.env_for("KuvoCodeTests/WindowTabsTests"),
+        # Inside heavy.sh's mac job, and holding the app tests' own lock: it runs on as it is.
+        lock = os.path.join(self.env["FAKE_TEMP_DIR"], f"kuvo-code-tests-{os.getuid()}.lock")
+        done = subprocess.run(["lockf", "-k", lock, self.env["KUVO_HEAVY_SH"], "mac", "/bin/sh", TEST_APP, "--from-batch"],
+                              env=self.env_for("KuvoCodeTests/WindowTabsTests", KUVO_TESTS_LOCK=lock),
                               cwd=self.mac, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=60)
         self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("test-without-building", self.xcode_said())
         self.assertNotIn("rm:", done.stderr)
         self.assertEqual(self.runs(name), [])
 
@@ -403,17 +415,15 @@ class FromBatch(Batches):
                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         try:
             wait_for(hold + ".running", "the build never started")
-            run = self.start_tests("KuvoCodeTests/WindowTabsTests")
-            # (It's waiting, not testing the older batch.)
-            time.sleep(2)
-            self.assertIsNone(run.poll())
+            said = os.path.join(self.root, "said")
+            run = self.start_tests_said_to("KuvoCodeTests/WindowTabsTests", said)
+            wait_for(said, "the run never waited for the build", "Waiting for the mac batch being built now")
             self.assertNotIn("test-without-building", self.xcode_said())
         finally:
             release(hold)
             build.communicate(timeout=60)
-        out, err = run.communicate(timeout=60)
-        self.assertEqual(run.returncode, 0, err)
-        self.assertIn("Waiting for the mac batch being built now", err)
+        out, _ = run.communicate(timeout=60)
+        self.assertEqual(run.returncode, 0, read(said))
         newer = [name for name in self.built("mac") if name != older][0]
         self.assertIn("-xctestrun " + self.stamp("mac", newer)["xctestrun"], self.xcode_said())
         self.assertIn("Tested the batch " + newer, out)
@@ -434,8 +444,38 @@ class FromBatch(Batches):
         self.assertEqual(self.build("mac").returncode, 0)
         self.assertEqual(self.run_tests("KuvoCodeTests/WindowTabsTests", "--from-batch").returncode, 0)
 
+    def test_a_run_waiting_for_a_build_that_is_stopped_refuses_rather_than_test_the_older_batch(self):
+        self.assertEqual(self.build("mac").returncode, 0)
+        hold = os.path.join(self.root, "hold")
+        os.mkfifo(hold)
+        build = subprocess.Popen(["/bin/sh", BUILD, "mac"], env=dict(self.env, FAKE_XCODE_HOLD=hold), start_new_session=True,
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            wait_for(hold + ".running", "the build never started")
+            said = os.path.join(self.root, "said")
+            run = self.start_tests_said_to("KuvoCodeTests/WindowTabsTests", said)
+            wait_for(said, "the run never waited for the build", "Waiting for the mac batch being built now")
+            # Stopped, as by Ctrl-C or a caller's TERM: the build's own process group.
+            os.killpg(build.pid, signal.SIGTERM)
+            build.communicate(timeout=60)
+        finally:
+            # (The stand-in xcodebuild, if it's still there, reading its fifo.)
+            if os.path.exists(hold + ".running"):
+                try:
+                    fd = os.open(hold, os.O_WRONLY | os.O_NONBLOCK)
+                    os.close(fd)
+                except OSError:
+                    pass
+        run.communicate(timeout=60)
+        self.assertEqual(run.returncode, 1)
+        self.assertIn("didn't build", read(said))
+        self.assertIn("stopped before it was built", read(said))
+        self.assertNotIn("test-without-building", self.xcode_said(), "never the older batch")
+        self.assertEqual(len(self.built("mac")), 1, "it left no batch behind")
+
     def test_when_the_newest_build_stopped_before_it_was_built_a_run_refuses(self):
         self.assertEqual(self.build("mac").returncode, 0)
+        # (Killed outright, it couldn't say so: its folder without a stamp is what's left.)
         os.makedirs(os.path.join(self.batches, "mac", "29991231-000000-abcdef0", "src"))
         done = self.run_tests("KuvoCodeTests/WindowTabsTests", "--from-batch")
         self.assertEqual(done.returncode, 1)

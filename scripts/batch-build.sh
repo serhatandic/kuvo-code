@@ -69,6 +69,27 @@ update_tree() {
     GIT_INDEX_FILE="$4" git --no-optional-locks -C "$1" --work-tree="$3" read-tree --reset -u "$2"
 }
 
+# What a run from a batch says while this failed build is the newest (scripts/batch.sh open): its
+# commits, why ($1) and its log ($2), once.
+recorded=
+record_failed() {
+    [ -z "$recorded" ] || return 0
+    recorded=1
+    mkdir -p "$ROOT/$platform"
+    {
+        echo "platform=$platform"
+        echo "kuvo_ai=$mac_commit"
+        echo "kuvo_ai_subject=$(git --no-optional-locks -C "$MAC_REPO" log -1 --format=%s "$mac_commit")"
+        if [ "$platform" = phone ]; then
+            echo "kuvo_code_ios=$phone_commit"
+            echo "kuvo_code_ios_subject=$(git --no-optional-locks -C "$PHONE_REPO" log -1 --format=%s "$phone_commit")"
+        fi
+        echo "failed=$(date +%Y-%m-%dT%H:%M:%S%z)"
+        echo "why=$1"
+        echo "log=${2:-none}"
+    } > "$ROOT/$platform/failed-$name.stamp"
+}
+
 # One platform's build (batch or compile), under its lock: <mode> <platform> <kuvo-ai commit> <phone commit>.
 one() {
     mode=$1
@@ -92,7 +113,9 @@ one() {
         began="$dir/began"
         packages="$ROOT/packages/$platform"
         # Not done, it's removed: an interrupted build leaves no batch behind.
-        trap 'rm -rf "$dir"' EXIT
+        # Stopped or failed before it's built, it says why (for the runs waiting for it) and leaves
+        # no batch behind.
+        trap 'record_failed "stopped before it was built" ""; rm -rf "$dir"' EXIT
         trap 'exit 129' HUP
         trap 'exit 130' INT
         trap 'exit 143' TERM
@@ -144,22 +167,10 @@ one() {
     if [ "$status" -ne 0 ]; then
         grep -aE 'error:|\*\* (TEST )?BUILD' "$log" 2>/dev/null | grep -v 'warning:' | head -n 40 >&2 || true
         if [ "$mode" = batch ]; then
-            # What a run from a batch says while this is the newest (scripts/batch.sh open).
             failed="$ROOT/$platform/failed-$name"
             mv -f "$log" "$failed.log" 2>/dev/null || true
             why=$(grep -aE 'error:' "$failed.log" 2>/dev/null | grep -v 'warning:' | head -n 1 || true)
-            {
-                echo "platform=$platform"
-                echo "kuvo_ai=$mac_commit"
-                echo "kuvo_ai_subject=$(git --no-optional-locks -C "$MAC_REPO" log -1 --format=%s "$mac_commit")"
-                if [ "$platform" = phone ]; then
-                    echo "kuvo_code_ios=$phone_commit"
-                    echo "kuvo_code_ios_subject=$(git --no-optional-locks -C "$PHONE_REPO" log -1 --format=%s "$phone_commit")"
-                fi
-                echo "failed=$(date +%Y-%m-%dT%H:%M:%S%z)"
-                echo "why=${why:-xcodebuild exited $status}"
-                echo "log=$failed.log"
-            } > "$failed.stamp"
+            record_failed "${why:-xcodebuild exited $status}" "$failed.log"
             echo "The $platform batch of $what didn't build ($timing). The whole log: $failed.log" >&2
         else
             echo "failed $commit $mac_commit $(date +%Y-%m-%dT%H:%M:%S%z)" > "$dir/$platform.last"
@@ -229,11 +240,13 @@ for platform in $platforms; do
     lock="$ROOT/$platform/build.lock"
     [ "$mode" = batch ] || lock="$ROOT/compile/build.lock"
     mkdir -p "$(dirname "$lock")"
-    if ! lockf -ks -t 0 "$lock" true; then
+    # (A run from a batch holds it for a moment as it looks whether a build is under way: lockf's
+    # locks are all exclusive. So a few seconds' wait, not none.)
+    if ! lockf -ks -t 10 "$lock" true; then
         echo "Another $([ "$mode" = batch ] && echo "build of the $platform batch" || echo "compile check") is running: it holds $lock." >&2
         status=75
         continue
     fi
-    lockf -k -t 0 "$lock" /bin/sh "$SCRIPTS/batch-build.sh" --one "$mode" "$platform" "$mac_commit" "$phone_commit" || status=$?
+    lockf -k -t 10 "$lock" /bin/sh "$SCRIPTS/batch-build.sh" --one "$mode" "$platform" "$mac_commit" "$phone_commit" || status=$?
 done
 exit "$status"

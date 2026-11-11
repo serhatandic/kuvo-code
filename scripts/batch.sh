@@ -148,7 +148,8 @@ case "$command" in
             # A batch being built now is the one to test: wait for it (its lock), then look.
             said=
             while :; do
-                if ! lockf -ks -t 0 "$build_lock" true; then
+                # (Another run looking holds it for a moment, as this does: a build holds it a while.)
+                if ! lockf -ks -t 1 "$build_lock" true; then
                     [ -n "$said" ] || echo "Waiting for the $1 batch being built now, to test that one…" >&2
                     said=1
                     lockf -ks "$build_lock" true
@@ -167,6 +168,8 @@ case "$command" in
         last_failed=
         for stamp in "$ROOT/$1"/failed-*.stamp; do [ -f "$stamp" ] && last_failed=$(basename "$stamp" .stamp) && last_failed=${last_failed#failed-}; done
         last=$(newest "$last_folder" "$last_failed")
+        # (A build that started as this looked: wait for it.)
+        lockf -ks -t 0 "$build_lock" true || exit 75
         if [ -n "$last" ] && [ "$last" != "$(basename "${batch:-/}")" ]; then
             if [ "$last" = "$last_failed" ] && [ "$last" != "$last_folder" ]; then
                 failed="$ROOT/$1/failed-$last.stamp"
