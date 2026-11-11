@@ -1,0 +1,13 @@
+// Xcode's compilation cache, one for every checkout's builds: what scripts/xcode-cache.sh hands
+// xcodebuild (XCODE_XCCONFIG_FILE), which says why. Its folder and size come from the environment
+// (xcodebuild reads environment variables as settings), which xcode_cache sets; without them, a
+// build keeps the cache in its own build folder, as Xcode does.
+COMPILATION_CACHE_ENABLE_CACHING = YES
+COMPILATION_CACHE_CAS_PATH = $(KUVO_XCODE_CAS_PATH:default=$(DERIVED_DATA_DIR)/CompilationCache.noindex)
+COMPILATION_CACHE_KEEP_CAS_DIRECTORY = YES
+COMPILATION_CACHE_LIMIT_SIZE = $(KUVO_XCODE_CACHE_SIZE:default=20G)
+SWIFT_ENABLE_PREFIX_MAPPING = YES
+SWIFT_ENABLE_PROJECT_PREFIX_MAPPING = YES
+CLANG_ENABLE_PREFIX_MAPPING = YES
+CLANG_ENABLE_PROJECT_PREFIX_MAPPING = YES
+COMPILER_WORKING_DIRECTORY = $(PROJECT_DIR)

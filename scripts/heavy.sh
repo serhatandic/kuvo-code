@@ -32,7 +32,7 @@
 # KUVO_HEAVY_SWAP MB a second (10 unless set) or its memory pressure critical, for
 # KUVO_HEAVY_MEMORY_WAIT_FOR (2 minutes) at most (below; KUVO_HEAVY_MEMORY=0 for never). It waits
 # for a busy Mac (its load over the last minute above KUVO_HEAVY_LOAD) or for less than
-# KUVO_HEAVY_MEMORY% of memory available only when those are set: background priority (below) is
+# KUVO_HEAVY_MEMORY% of memory available only when those are set: low priority (below) is
 # what keeps the Mac usable, and on the Mini, with a dozen sessions, both were true all day, so jobs
 # only waited. While the Mac app's suite (mac) waits there, new phone, mac-build and box jobs wait
 # for it to start, for 2 minutes at most (KUVO_HEAVY_MAC_FIRST_FOR). None of these waits happens
@@ -89,11 +89,22 @@
 #   KUVO_HEAVY_DIR      where the locks are (for the helper's own tests)
 #
 # Jobs never starve the box (the Kuvo Code box on this Mac, which the user's phone talks to): every
-# job runs at background priority, its children too (a job inside another gets it too). macOS:
-# `taskpolicy -b`, background QoS: low CPU and I/O priority, which the box's own processes, at
-# default priority, win over (tried with xcodebuild builds and tests, a simulator test run and swift
-# test: all work). Linux: `nice -n 15 ionice -c3` (just `nice -n 15` without ionice). A job on an
-# idle Mac runs as fast as ever; on a busy one it gives way.
+# job runs at low priority, its children too (a job inside another gets it too). macOS:
+# `taskpolicy -c utility nice -n 20`, utility QoS at the lowest nice: below the box's own processes,
+# at default priority, which win over it, but on every core. Not background QoS (`taskpolicy -b`,
+# as before #557): on Apple silicon that runs only on the efficiency cores, with its I/O throttled,
+# and a cold build of the package UsageKit took 87 s under it against 49 s at utility and nice 20 on an idle Mini
+# (six of its twelve cores efficiency ones), while a stand-in for the box (six CPU-bound processes
+# at default priority) took 3.6 s alone, 3.5 s beside the background build, 4.4 s beside the utility
+# one at nice 20 and 7 s beside one at utility alone (tried with xcodebuild builds and tests, a
+# simulator test run and swift test). Linux: `nice -n 15 ionice -c3` (just `nice -n 15` without
+# ionice). A job on an idle Mac runs as fast as ever; on a busy one it gives way.
+#
+# Jobs of the Xcode lanes (mac, mac-build, phone-build, phone) build with Xcode's compilation cache,
+# one for every checkout's builds (scripts/xcode-cache.sh, beside this copy): content-addressed, so
+# a build in a new worktree replays what an earlier build of the same code compiled, wherever it was,
+# and never what another branch's code made. Their xcodebuild gets it through XCODE_XCCONFIG_FILE
+# (unless the caller has one); KUVO_XCODE_CACHE=0 builds without it.
 #
 # Every job has a time limit, so one that hangs can't hold its kind's turn for hours: past it, the
 # job is stopped (its process group, as below: TERM, then KILL), it says what was running, and
@@ -107,12 +118,112 @@
 # A job inside one of its kind (above) runs within that one's limit; one of another kind has its
 # own as well. In a terminal a job has none: you're there to stop it. Older copies of this helper
 # start their jobs with no limit, and take turns with these as before.
+#
+# One copy runs every job: the canonical one, $HOME/Projects/kuvo-ai/scripts/heavy.sh (or
+# KUVO_HEAVY_CANONICAL). Any other copy (a worktree's, a checkout of an older commit's) that finds it
+# there hands the job to it at once, with the same arguments and environment, so a fix to how jobs
+# take turns reaches every caller, whichever checkout it runs from. KUVO_HEAVY_CANONICAL= (empty)
+# runs the copy itself, for the helper's own tests and for trying a change to it.
+#
+#   scripts/heavy.sh status   a line for each lane: who holds each slot, since when, whether its
+#                             command runs, and how many wait in line, the longest since when
+#
+# A job that holds a slot starts its command at once: nothing in this copy waits while it holds a
+# lane's lock. Each job says so in its lane's queue folder (holder-<slot>: its pid, when it took the
+# slot and when its command started, and its folder), which status reads; a holder that says
+# nothing is an older copy, and status looks at what it runs instead. Every job that waits in line
+# says, once, when its slot's holder has held it for 2 minutes without its command running.
 set -eu
 
+# Not the canonical copy: the job is the canonical copy's (once: that one never hands it on).
+CANONICAL="${KUVO_HEAVY_CANONICAL-$HOME/Projects/kuvo-ai/scripts/heavy.sh}"
+if [ -n "$CANONICAL" ] && [ -z "${KUVO_HEAVY_HANDED:-}" ] && [ -f "$CANONICAL" ] && ! [ "$0" -ef "$CANONICAL" ]; then
+    KUVO_HEAVY_HANDED=1 exec /bin/sh "$CANONICAL" "$@"
+fi
+# (What it runs hands its jobs on again: a job inside this one may be another checkout's.)
+unset KUVO_HEAVY_HANDED
+
 usage() {
-    echo "Usage: scripts/heavy.sh <mac|mac-build|phone-build|phone|box> <command> [arguments…], or --holds <kind>" >&2
+    echo "Usage: scripts/heavy.sh <mac|mac-build|phone-build|phone|box> <command> [arguments…], or --holds <kind>, or status" >&2
     exit 64
 }
+
+# How long ago, said short.
+ago() { if [ "$1" -ge 3600 ]; then echo "$(($1 / 3600))h$((($1 % 3600) / 60))m"; elif [ "$1" -ge 60 ]; then echo "$(($1 / 60))m"; else echo "$1s"; fi; }
+
+# Who holds slot $2 of a lane (its lock $1, its queue folder $3), in `slot_said`, and in `idle` whether
+# its command isn't running (since `idle_from`, when its own say tells): its own say (holder-<slot>, which this copy writes), or, from an older
+# copy, which says nothing, what runs under it (only `sleep`: it waits for room under the lock).
+# Empty when the slot is free.
+describe_slot() {
+    slot_said=
+    idle=
+    idle_from=
+    lockf -ks -t 0 "$1" true 2>/dev/null && return 0
+    pid=$(lsof -t "$1" 2>/dev/null | head -n 1)
+    now=$(date +%s)
+    if [ -f "$3/holder-$2" ] && read -r job holder taken started folder < "$3/holder-$2" 2>/dev/null &&
+        [ "$holder" = "${pid:-$holder}" ] && kill -0 "$holder" 2>/dev/null; then
+        if [ "${started:-0}" -gt 0 ]; then
+            slot_said="pid $holder ($folder), held $(ago $((now - taken))), running $(ago $((now - started)))"
+        else
+            idle=1
+            idle_from=$taken
+            slot_said="pid $holder ($folder), held $(ago $((now - taken))), not running its command"
+        fi
+    elif [ -n "$pid" ]; then
+        inner=$(pgrep -P "$pid" 2>/dev/null | head -n 1)
+        kids=$(pgrep -l -P "${inner:-0}" 2>/dev/null | awk '{ print $2 }' | sort -u | tr '\n' ' ')
+        since=$(ps -o etime= -p "$pid" 2>/dev/null | tr -d ' ' || true)
+        case "$kids" in
+            "" | "sleep ")
+                idle=1
+                slot_said="pid $pid (an older heavy.sh)${since:+, held for $since}, not running its command: it waits for room under the lock"
+                ;;
+            *) slot_said="pid $pid (an older heavy.sh)${since:+, held for $since}, running" ;;
+        esac
+    else
+        slot_said="held (lsof can't say by whom)"
+    fi
+}
+
+# Each lane's health (`status`): for each slot, who holds it, since when and whether its command
+# runs, and the line's length and its longest wait. It only reads: locks, queue folders, processes.
+status() {
+    dir="${KUVO_HEAVY_DIR:-$(getconf DARWIN_USER_TEMP_DIR 2>/dev/null || echo /tmp/)}"
+    dir="${dir%/}"
+    uid=$(id -u)
+    for lane in mac mac-build phone box; do
+        queue="$dir/kuvo-code-heavy-$lane-$uid.queue"
+        line="$lane:"
+        for n in 1 2; do
+            lock="$dir/kuvo-code-heavy-$lane-$uid.lock"
+            [ "$n" = 1 ] || lock="$dir/kuvo-code-heavy-$lane-2-$uid.lock"
+            [ -f "$lock" ] || continue
+            describe_slot "$lock" "$n" "$queue"
+            line="$line slot $n ${slot_said:-free};"
+        done
+        waiting=0
+        oldest=
+        for entry in "$queue"/[01]-*; do
+            [ -f "$entry" ] || continue
+            waiting=$((waiting + 1))
+            at=$(stat -f %B "$entry" 2>/dev/null || stat -c %W "$entry" 2>/dev/null || echo 0)
+            if [ "$at" -gt 0 ] && { [ -z "$oldest" ] || [ "$at" -lt "$oldest" ]; }; then oldest=$at; fi
+        done
+        if [ "$waiting" -gt 0 ]; then
+            line="$line $waiting waiting${oldest:+, the longest for $(ago $(($(date +%s) - oldest)))}"
+        else
+            line="$line none waiting"
+        fi
+        echo "$line"
+    done
+}
+if [ "${1:-}" = status ] && [ $# -eq 1 ]; then
+    status
+    exit 0
+fi
+
 [ $# -ge 2 ] || usage
 holds=
 if [ "$1" = --holds ]; then
@@ -145,15 +256,16 @@ esac
 OLD="$DIR/kuvo-code-heavy-$(id -u).lock"
 MAX_LOAD="${KUVO_HEAVY_LOAD:-}"
 WAITS="${KUVO_HEAVY_WAIT:-1}"
-case "$kind" in mac | phone) DEFAULT_LIMIT=45m ;; mac-build) DEFAULT_LIMIT=30m ;; box) DEFAULT_LIMIT=40m ;; esac
+case "$kind" in mac | phone) DEFAULT_LIMIT=45m ;; mac-build) DEFAULT_LIMIT=90m ;; box) DEFAULT_LIMIT=40m ;; esac
 
-# What every job runs under, so it never takes the CPU or the disk from the box: background priority
-# (a prefix: `$LOW "$@"`; its children keep it). macOS: `taskpolicy -b`, background QoS: low CPU and
-# I/O priority (`nice` alone leaves the I/O alone). Linux: nice and ionice.
+# What every job runs under, so it never takes the CPU or the disk from the box: low priority (a
+# prefix: `$LOW "$@"`; its children keep it). macOS: utility QoS (lower CPU and I/O priority than
+# the box's default, on every core: `nice` alone leaves the I/O alone) at nice 20. Linux: nice and
+# ionice.
 LOW=
 case "$(uname -s 2>/dev/null)" in
     Darwin)
-        if command -v taskpolicy >/dev/null 2>&1; then LOW="taskpolicy -b"; else LOW="nice -n 15"; fi
+        if command -v taskpolicy >/dev/null 2>&1; then LOW="taskpolicy -c utility nice -n 20"; else LOW="nice -n 15"; fi
         ;;
     *)
         # (ionice can be refused, in a container: then nice alone.)
@@ -232,6 +344,16 @@ if [ -n "$holds" ]; then
     exit
 fi
 
+# The Xcode lanes' jobs build with Xcode's compilation cache, one for every checkout
+# (scripts/xcode-cache.sh and its xcconfig, beside this copy: XCODE_XCCONFIG_FILE, unless the caller
+# has one), so a build in a new worktree replays what another worktree's build compiled instead of
+# compiling it all again. Not the box's: it runs no xcodebuild.
+case "$kind" in
+    mac | mac-build | phone)
+        if [ -f "$(dirname "$0")/xcode-cache.sh" ] && . "$(dirname "$0")/xcode-cache.sh"; then xcode_cache "$(dirname "$0")"; fi
+        ;;
+esac
+
 # A time like 90m, 600s or 2h (plain: minutes), in seconds; $2 names the variable it came from.
 # (Its number in base 10, whatever zeros lead it, and at most six digits.)
 seconds_of() {
@@ -256,6 +378,8 @@ LIMIT=$(seconds_of "$GIVEN_LIMIT" KUVO_HEAVY_LIMIT) || exit 64
 GIVEN_MAC_FIRST="${KUVO_HEAVY_MAC_FIRST_FOR:-2m}"
 MAC_FIRST_FOR=$(seconds_of "$GIVEN_MAC_FIRST" KUVO_HEAVY_MAC_FIRST_FOR) || exit 64
 MAC_FIRST="$DIR/kuvo-code-heavy-mac-first-$(id -u)"
+# How long a slot's holder may hold it without running its command before those in line say so.
+STUCK_AFTER="${KUVO_HEAVY_STUCK_AFTER:-120}"
 # Memory a new job waits for (below), if asked: the share of it available, in percent (unset: none,
 # only swapping and critical pressure count; 0: it doesn't wait for memory at all).
 MIN_FREE="${KUVO_HEAVY_MEMORY:-}"
@@ -570,6 +694,14 @@ if [ -n "$TAKEN" ]; then
     # What runs under this turn knows it holds the lock, for when `ps` can't say.
     KUVO_HEAVY_HELD="${KUVO_HEAVY_HELD:-} $TAKEN:$PPID"
     [ -z "$LOCK2" ] || slot_env "$TAKEN"
+    # It says it holds the slot (status reads it), and, once it runs, since when its command does.
+    holder_file="$QUEUE/holder-1"
+    [ "$TAKEN" = "$LOCK" ] || holder_file="$QUEUE/holder-2"
+    taken_at=$(date +%s)
+    say_holder() {
+        { printf '%s %s %s %s %s\n' "$$" "$PPID" "$taken_at" "$1" "$PWD" > "$holder_file.$$" && mv -f "$holder_file.$$" "$holder_file"; } 2>/dev/null || true
+    }
+    say_holder 0
     # While jobs were still started the old way, under one lock for every kind (older checkouts'
     # test-app.sh), one of these waited for them, and held that lock too as it ran.
     if [ "$(date +%Y%m%d)" -le "${KUVO_HEAVY_OLD_UNTIL:-20261026}" ]; then
@@ -589,6 +721,36 @@ else
         fi
         exec $LOW "$@"
     fi
+    # Says once, for each slot it may take, when the slot's holder hasn't run its command for 2
+    # minutes (an older copy waiting for room under the lock, say): a lane held that way stalls.
+    idle_1=
+    idle_2=
+    told_1=
+    told_2=
+    stuck_say() {
+        for n in 1 2; do
+            [ "$n" = 1 ] || [ "$SLOTS" = 2 ] || continue
+            lock=$LOCK
+            [ "$n" = 1 ] || lock=$LOCK2
+            [ -n "$lock" ] || continue
+            describe_slot "$lock" "$n" "$QUEUE"
+            if [ -z "$idle" ]; then
+                eval "idle_$n="
+                continue
+            fi
+            since=$(eval echo "\${idle_$n}")
+            if [ -z "$since" ]; then
+                since=$(date +%s)
+                # (Its own say gives when it took the slot.)
+                [ -z "$idle_from" ] || since=$idle_from
+                eval "idle_$n=$since"
+            fi
+            if [ $(($(date +%s) - since)) -ge "$STUCK_AFTER" ] && [ -z "$(eval echo "\${told_$n}")" ]; then
+                echo "heavy.sh: slot $n of the $kind lane has been held for $(ago $(($(date +%s) - since))) without its command running: $slot_said." >&2
+                eval "told_$n=1"
+            fi
+        done
+    }
     # Room on the Mac first, while it holds nothing.
     wait_for_room
     # Its kind's turn, through the lane's queue (TURN, above): in line until a slot is its own,
@@ -637,6 +799,9 @@ else
         [ "$turn" = "" ] || failed=0
         [ -n "$said" ] || echo "Waiting for another $kind job to finish…" >&2
         said=1
+        # Now and then, whether a slot it may take is held by a job whose command doesn't run.
+        looks=$((${looks:-0} + 1))
+        [ $((looks % 30)) != 1 ] || stuck_say
         sleep 1
     done
 fi
@@ -687,6 +852,8 @@ over_time() {
 
 # In a terminal the job stays in the terminal's own group: one in a group of its own couldn't read
 # the keyboard (a passphrase prompt would stop it), and Ctrl-C reaches the whole group there anyway.
+# (Its command starts now: whoever looks at its slot sees it running.)
+[ -z "${holder_file:-}" ] || say_holder "$(date +%s)"
 if [ -t 0 ] || { true </dev/tty; } 2>/dev/null; then
     [ -n "${old_way:-}" ] && exec lockf -k "$OLD" $LOW "$@"
     exec $LOW "$@"
