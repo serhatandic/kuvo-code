@@ -152,6 +152,12 @@ struct BottomStack: View {
     static let barsFloor: CGFloat = 44
     /// The room for the bars: what the conversation leaves, less the rest of the stack.
     private var barsRoom: CGFloat { max(Self.barsFloor, stackRoom - Self.conversationRoom - (stackHeight - barsShown)) }
+    /// The list open over the composer's field ("/", "@", "&"), as shown, and its room: what the
+    /// conversation leaves, less the rest of the stack and the bars' line, past which it scrolls (#299).
+    @State private var listShown: CGFloat = 0
+    private var listRoom: CGFloat {
+        ComposerListRoom.height(room: stackRoom - Self.conversationRoom, card: stackHeight, list: listShown, bars: barsShown, barsKept: Self.barsFloor)
+    }
     /// Each conversation's card as it was last seen here: which bar is open once it's full
     /// (`BarFolds`), and the bars and news it had, so coming back to it reads what changed
     /// meanwhile. This stack stays as you switch conversations.
@@ -641,7 +647,9 @@ struct BottomStack: View {
                         onEditLast: model.editLast,
                         onStop: model.stop,
                     yieldsKeyboard: askHadPlace == model.id,
-                    drawsSurface: false
+                    drawsSurface: false,
+                    listRoom: listRoom,
+                    listHeight: $listShown
                     )
                     .transition(.opacity)
                     .onAppear { askHadPlace = nil }

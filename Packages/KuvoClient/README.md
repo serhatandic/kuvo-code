@@ -111,6 +111,8 @@ phone's copies of the Mac's design files, a piece at a time.
 - `ComposerRow`: the row under a composer's field, its words' font and its icons' (the paperclip,
   the mode's, the chips' chevrons and ✕, the mic, Send and Stop): one size and weight, the words',
   on their baseline.
+- `ComposerListRoom`: how tall a list over a composer's field ("/", "@", "&") can be before it
+  scrolls inside: the card's room less the field and its chips and what the bars keep at least.
 - `FirstLineListItemStyle` (`.firstLine`): a list item's marker on its first line's middle.
 - `ShimmerText`: words that shimmer while something's under way, played by Core Animation.
 - `BotAvatar`, `BotLook`, `BotMood`, `GroupAvatar`, `MachineBadge`: the bots' looks, still and

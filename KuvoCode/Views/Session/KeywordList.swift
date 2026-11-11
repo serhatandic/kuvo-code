@@ -55,17 +55,23 @@ struct SlashList: View {
         let firstCommand = items.firstIndex { if case .command = $0 { true } else { false } }
         VStack(alignment: .leading, spacing: 1) {
             ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
-                if index == firstCommand, index > 0, let project {
-                    Text(project)
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 8)
-                        .padding(.top, 6)
-                        .padding(.bottom, 2)
-                        .accessibilityAddTraits(.isHeader)
+                // The project's name and its first command, known by its place together, so the
+                // name comes into view with it (`ComposerListScroll`).
+                VStack(alignment: .leading, spacing: 1) {
+                    if index == firstCommand, index > 0, let project {
+                        Text(project)
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 8)
+                            .padding(.top, 6)
+                            .padding(.bottom, 2)
+                            .accessibilityAddTraits(.isHeader)
+                    }
+                    Button { choose(item) } label: { row(item) }
+                        .buttonStyle(ListRowButtonStyle(isSelected: index == selected))
+                        .accessibilityAddTraits(index == selected ? .isSelected : [])
                 }
-                Button { choose(item) } label: { row(item) }
-                    .buttonStyle(ListRowButtonStyle(isSelected: index == selected))
+                .id(index)
             }
         }
         .padding(.leading, -8)
@@ -162,6 +168,8 @@ struct LoopList: View {
                     ForEach(Array(choices.enumerated()), id: \.element.id) { index, choice in
                         Button { choose(choice) } label: { row(choice, now: timeline.date) }
                             .buttonStyle(ListRowButtonStyle(isSelected: index == selected))
+                            .accessibilityAddTraits(index == selected ? .isSelected : [])
+                            .id(index)
                     }
                 }
             }
@@ -228,6 +236,8 @@ struct ReviewerList: View {
             ForEach(Array(choices.enumerated()), id: \.element.id) { index, choice in
                 Button { choose(choice) } label: { row(choice) }
                     .buttonStyle(ListRowButtonStyle(isSelected: index == selected))
+                    .accessibilityAddTraits(index == selected ? .isSelected : [])
+                    .id(index)
             }
         }
         .padding(.leading, -8)
@@ -275,6 +285,7 @@ struct ReviewChoiceList: View {
                 Button { choose(row) } label: { label(row) }
                     .buttonStyle(ListRowButtonStyle(isSelected: index == selected))
                     .accessibilityAddTraits(index == selected ? .isSelected : [])
+                    .id(index)
             }
         }
         .padding(.leading, -8)
