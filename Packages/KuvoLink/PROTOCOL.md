@@ -3210,23 +3210,29 @@ never written to: nothing here changes anything on GitHub.
   of its own one (`queue_update` with `issue`): it's that issue from then on, named by it (`source`:
   `kind` `github` or `github-pr`, `ref` `gh:owner/repo#12`, `url`, `host`, `id` GitHub's own), its
   number kept and never shown again (the old `#n` still names it), its title and description
-  GitHub's (what an item said before is kept as a note). One item for each issue: a second is
-  refused, naming the first. `gh` reads it as it's added; one it can't (not there, signed out, no
+  GitHub's (what an item said before is kept as a note; a bare `#n` in an issue's description is
+  that repository's, so a client chips only its `gh:` refs). Its ref is GitHub's own name for it,
+  after a rename too. One item for each issue (by its name or GitHub's id): a second is refused,
+  naming the first. `gh` reads it as it's added; one it can't (not there, signed out, no
   such issue it may see) is refused in words, and nothing is added.
 - Read only for what a client shows: a view (and its events), an item, and `refs` read the issues
-  and pull requests in them where that's due (one GraphQL query for all, one process at a time;
-  again after a minute while it's open, half an hour once it's closed, five minutes when it couldn't
-  be found; a host `gh` couldn't read isn't asked for five minutes). A view's or refs' answer waits
+  and pull requests in them where that's due (one GraphQL query for all, 200 at most, those asked
+  longest ago first; one process at a time; again after a minute while it's open, half an hour once
+  it's closed, five minutes when it couldn't be found; a host `gh` couldn't read isn't asked for five
+  minutes). One another computer told of is read here only once what it told is five minutes old
+  (`seen.checked`): that computer reads what it shows. A view's or refs' answer waits
   3 s at most for it; the events stream doesn't wait, and its next line has it. Agents' tools never
   read GitHub: they say what was last read.
 - Kept beside the queues, `run/work-queue/seen.json` (`{reads: {"<host>/<owner>/<repo>#<n>": {at,
-  value, checked?, gone?}}, hosts}`), never in them: a read changes no item and no `updated`. One
-  found missing later (gone, or no longer visible to that sign-in: GitHub says the same of both)
-  keeps what was last read.
+  value, checked?, gone?}}, hosts}`), never in them: a read changes no item and no `updated`. `at`
+  is since when GitHub has said what it says (a read that finds the same moves only `checked`, so
+  nothing shown or told changes with it). One found missing later (gone, or no longer visible to
+  that sign-in: GitHub says the same of both) keeps what was last read, `gone`. The same reader
+  (`link/github/graphql.ts`) reads sessions' pull requests for "A session at a glance".
 - Each summary takes it in: `title` GitHub's; `source.name`, what a client shows in place of `#n`
   (`repo#12`, `owner/repo#12` when another owner's repository read here has that name); `seen`
-  (`{state, at}`: `open`, `draft`, `completed`, `not_planned` (a duplicate too), `merged` or
-  `closed` (a pull request closed unmerged), as read when; a newer box may say more); and, while it's
+  (`{state, at, gone?}`: `open`, `draft`, `completed`, `not_planned` (a duplicate too), `merged` or
+  `closed` (a pull request closed unmerged), and since when; a newer box may say more); and, while it's
   `completed`, `not_planned`, `merged` or `closed`, `category` `done` (never in progress then), its
   own category in `keptIn`, and `doneAt` when GitHub closed it. Reopened, it's back in its own
   category. What another computer tells carries the same, so a client draws it there without `gh`;
@@ -3291,7 +3297,8 @@ item on its way to another computer (`handing`) goes with the move and is sent f
   sleeps: `{workQueue: {told: {id, at, kind, since, top, primary?: {key, kind, since?}, items,
   owners, categories}}}`. `items` are its items as a view gives them (not deleted ones; the 100
   latest Done; 1,500 at most), each with `handedFrom` (who handed it on), an issue's or pull
-  request's with `seen` and `keptIn` as this box last read it; `owners` names their
+  request's with `seen` and `keptIn` as this box last read it (`seen.checked`, when it last asked
+  GitHub, left out of `id`); `owners` names their
   owners; `categories` its custom ones; `kind`, `since` and `top` how it numbers, and `primary` the
   one it numbers from (itself when it's the primary). `id` (`wqt_…`) is the same while all that is.
   It's worked out again when a queue changes and each minute (who's at work changes it), and goes
