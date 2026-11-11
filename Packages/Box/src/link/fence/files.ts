@@ -375,7 +375,9 @@ function lookalike(where) {
 // a start-up script), they'd go there as if it were the folder's. So a path in the folder that a
 // link leads out of it is given as where it really is, which the engine's rules for a folder
 // outside the project then apply to (Settings › Permissions, a bot's own).
-const PATHS = { read: "path", write: "path", edit: "path", glob: "path", grep: "path" }
+// (And the image tool's, which writes the picture it makes where its \`path\` says, by the name of
+// the format it made.)
+const PATHS = { read: "path", write: "path", edit: "path", glob: "path", grep: "path", experimental_image_generate: "path" }
 // A patch's lines that name a file, as the engine reads them: each line (without a last \\r) with
 // the spaces around it trimmed.
 const PATCHED = ["*** Add File: ", "*** Update File: ", "*** Delete File: ", "*** Move to: "]
@@ -470,10 +472,15 @@ export default {
       }
       return ours.some(each => within(where, each)) ? given : where
     }
+    // The engine reads a \\ in a path as a / where it weighs your rules for folders outside the
+    // project, and the system doesn't: \`notes\\x\` would pass for a file in \`notes\` (one
+    // you allowed) while it's a folder beside it. So no file tool's path has one.
+    const SLASHED = "This names a path with a backslash, which Kuvo Code's sandbox doesn't let the engine's file tools use (the engine would take it for a slash). Name it with / only, or ask the user."
     await ctx.tool?.hook("execute.before", (call) => {
       const input = call.input
       if (!input || typeof input !== "object") return
       const field = PATHS[call.tool]
+      if (field && typeof input[field] === "string" && input[field].includes("\\\\")) throw new Error(SLASHED)
       if (field) {
         const given = really(input[field], call.tool)
         if (given !== input[field]) call.input = { ...input, [field]: given }
@@ -483,6 +490,7 @@ export default {
           const head = PATCHED.find(each => read.startsWith(each))
           if (!head) return line
           const given = read.slice(head.length).trim()
+          if (given.includes("\\\\")) throw new Error(SLASHED)
           const where = really(given)
           if (where === given) return line
           // (Never a place whose name would make lines of its own.)

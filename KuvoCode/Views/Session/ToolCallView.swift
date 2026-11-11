@@ -831,7 +831,8 @@ struct WorkAnswerLine: View {
                 .lineLimit(2)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .help("\(answer.verdict) at \(answer.date.formatted(date: .omitted, time: .shortened)), not by you: \(answer.reason)")
+        .help(answer.isYours ? "\(answer.verdict) at \(answer.date.formatted(date: .omitted, time: .shortened)), after Auto's reviewer held it back"
+              : "\(answer.verdict) at \(answer.date.formatted(date: .omitted, time: .shortened)), not by you: \(answer.reason)")
         .accessibilityElement(children: .combine)
     }
 }

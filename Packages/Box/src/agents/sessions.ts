@@ -27,7 +27,7 @@ import { asksFirst, holdsBack, matches, ruled } from "./rules"
 import { runningShells, stopShell } from "./shells"
 import { skillFolders, within } from "./skills"
 import type { Record_, Store } from "./store"
-import { Turn, type Outcome } from "./turn"
+import { NOTICE, Turn, type Outcome } from "./turn"
 import type { AssistantMessage, Attachment, CompactionMessage, Decision, FormAnswer, FormRequest, Message, Model, ModelRef, PermissionRequest, PermissionRule, Session, ShellMessage, FileDiff, StructuredError } from "./wire"
 import { plain } from "./proc"
 import type { Snapshots } from "./snapshots"
@@ -1761,8 +1761,8 @@ export class Sessions {
   private subagentNote(id: string, text: string) {
     const record = this.store.get(id)
     if (!record) return
-    const event = emit("session.synthetic", { sessionID: id, text }, record.session.location.directory)
-    record.messages.push({ type: "synthetic", id: messageID(event.id), time: { created: event.created }, text })
+    const event = emit("session.synthetic", { sessionID: id, text, metadata: NOTICE }, record.session.location.directory)
+    record.messages.push({ type: "synthetic", id: messageID(event.id), time: { created: event.created }, text, metadata: NOTICE })
     this.store.save(id, true)
   }
 
@@ -2811,6 +2811,8 @@ export class Sessions {
       const refusable = outsideRefusable(ask, away, folders)
       if (live.blocks && strictest(live.blocks, "external_directory", refusable) === "deny") return "deny"
       if (strictest(rules, "external_directory", refusable) === "deny") return "deny"
+      // (A path with a \ is never one your rules allow: the engine's reading of them takes it for a /.)
+      if (away.some((each) => each.includes("\\"))) return "ask"
       const outside = strictest(rules, "external_directory", folders)
       if (outside === "ask" && !this.allowedOutside(live, folders)) return "ask"
     }
@@ -2875,7 +2877,8 @@ export class Sessions {
       if (live.blocks && strictest(live.blocks, "external_directory", refusable) === "deny") return "reject"
       const rules = [...(ask.agentRules ?? live.agentRules ?? engineDefaults), ...(session.permissions ?? [])]
       if (strictest(rules, "external_directory", refusable) === "deny") return "reject"
-      const outside = strictest(rules, "external_directory", folders)
+      // (A path with a \ is never one your rules allow: the engine's reading of them takes it for a /.)
+      const outside = away.some((each) => each.includes("\\")) ? "ask" : strictest(rules, "external_directory", folders)
       const own = strictest(rules, ask.action, parts) ?? "allow"
       if (outside === "ask" && own !== "deny" && (own === "allow" || this.allowedBefore(live, ask)) && !this.allowedOutside(live, folders)) {
         return this.askPermission(id, live, turn, { ...outsideAsk(ask, away), metadata: ask.metadata, message: ask.message, sandboxed: ask.sandboxed }, plan)

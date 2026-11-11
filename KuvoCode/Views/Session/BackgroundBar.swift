@@ -475,10 +475,3 @@ struct ShellOutputView: View {
         }
     }
 }
-
-extension TranscriptView {
-    /// The line for a background command's end (OpenCodeKit words it, for the phone too).
-    static func backgroundEnd(_ notice: Message.Notice) -> String {
-        notice.backgroundEnd ?? notice.description ?? notice.text
-    }
-}

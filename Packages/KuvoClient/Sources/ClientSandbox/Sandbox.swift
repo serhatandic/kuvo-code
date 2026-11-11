@@ -280,9 +280,9 @@ public struct AskReview: Codable, Equatable, Sendable {
     public var mark: String? {
         switch state {
         case .checking: "Auto is checking…"
-        case .allowed: "Auto allowed"
+        case .allowed: "Allowed by Auto-review"
         case .heldBack: "Held back"
-        case .refused: "Auto refused"
+        case .refused: "Not allowed by Auto-review"
         case .yours: nil
         }
     }

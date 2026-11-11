@@ -429,6 +429,32 @@ test("one Auto's reviewer held back is approved from any client: allowed once, t
   assert.equal((await route("POST", "kuvo/sessions/ses_auto/decisions", {})).status, 400);
 });
 
+test("a folder Auto allowed edits in for the session shows as a decision, and any client can take it back: changes there are judged again (#422)", async () => {
+  sessions.set("ses_place", session("ses_place", [], { metadata: { kuvo: { approval: "auto", applied: "auto" } } }));
+  const decisions = [
+    { id: "rd_change", at: 1, action: "Change /tmp/eval/T2/a.js", kind: "file", decision: "allowed", reason: "Part of the evaluation.", by: "model" },
+    { id: "rd_place", at: 1, action: "Change /tmp/eval/T2", kind: "file", decision: "allowed", reason: "Auto allowed edits in /tmp/eval/T2 for this session.", by: "model", place: "/tmp/eval/T2" },
+  ];
+  const file = path.join(home, "box", "reviews", "ses_place.json");
+  write(file, JSON.stringify({ decisions, refusedInRow: 0, refused: 0, places: ["/tmp/eval/T2"] }));
+  const read = await route("GET", "kuvo/sessions/ses_place/decisions");
+  assert.equal(read.body.decisions.find(each => each.id === "rd_place").place, "/tmp/eval/T2");
+  assert.ok(!("places" in read.body), "where it goes ahead stays on the box, but as its decisions say");
+  const revoked = await route("POST", "kuvo/sessions/ses_place/decisions", { revoke: "rd_place" });
+  assert.equal(revoked.status, 200);
+  assert.equal(typeof revoked.body.decisions.find(each => each.id === "rd_place").revoked, "number");
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, "utf8")).places, []);
+  // Once; and only a place.
+  assert.equal((await route("POST", "kuvo/sessions/ses_place/decisions", { revoke: "rd_place" })).status, 404);
+  assert.equal((await route("POST", "kuvo/sessions/ses_place/decisions", { revoke: "rd_change" })).status, 404);
+  // Out of Auto, every folder it allowed goes: back in Auto, each change there is judged again.
+  write(file, JSON.stringify({ decisions: [...decisions, { ...decisions[1], id: "rd_again", place: "/tmp/eval/T3" }], refusedInRow: 0, refused: 0, places: ["/tmp/eval/T3"] }));
+  assert.equal((await route("PUT", "kuvo/sessions/ses_place/approval", { approval: "askFirst" })).status, 200);
+  const kept = JSON.parse(fs.readFileSync(file, "utf8"));
+  assert.deepEqual(kept.places, []);
+  assert.equal(typeof kept.decisions.find(each => each.id === "rd_again").revoked, "number");
+});
+
 test("what Auto held back, looked at on one client, isn't news on another, but what it holds back after is", async () => {
   sessions.set("ses_seen", session("ses_seen", [], { metadata: { kuvo: { approval: "auto", applied: "auto" } } }));
   const held = (id, at) => ({ id, at, action: `make ${id}`, kind: "command", decision: "refused", reason: "Not what you asked.", by: "model", why: "reviewer", held: true, key: `command make ${id}` });

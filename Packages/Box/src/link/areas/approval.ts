@@ -13,8 +13,8 @@ import { bridgeTarget, call, engineGet, readEngineFile } from "../engine/client"
 import { allowFullAccess, APPROVALS, approvalOf, approvalRules, approvalsSince, defaultApproval, effectiveApproval, fullAccessAllowed, isApproval, madeBefore, rememberApproval, unavailable } from "../work/approval";
 import { resumeReviewedSession } from "../work/goals";
 import { sandboxOn } from "../work/sandbox";
-import { approveHeld, clearFetched, resumeReviews, reviewLog, seeHeld, shownReviews } from "../work/reviewer";
-import { tellApproved } from "../work/reviewing";
+import { approveHeld, clearFetched, clearPlaces, resumeReviews, reviewLog, revokePlace, seeHeld, shownReviews } from "../work/reviewer";
+import { noteFolderFound, tellApproved } from "../work/reviewing";
 import { markConversation } from "../work/full";
 import { botOfConversation, worksFor } from "../work/tree";
 import { listBots } from "../bots/list";
@@ -126,6 +126,8 @@ export async function adoptConversation(target: Target, id: unknown, agents: boo
   if (typeof id !== "string" || !id) return;
   const data = (await engineGet(target, `api/session/${encodeURIComponent(id)}`).catch(() => null) as EngineAnswer<EngineSession> | null)?.data;
   if (!data?.id) return;
+  // (Where its folder is now is where its own is: `reviewing.ts`.)
+  await noteFolderFound(data.location?.directory).catch(() => {});
   const at = found(target, data, agents);
   const now = approvalOf(at.data, { agents, bot: at.bot });
   if (!now.pending) return;
@@ -181,7 +183,10 @@ export async function setApproval(id: string, wanted: Approval, engine: Target |
   // (What it comes to may have changed while it was written.)
   await settle(at, signal);
   // Its commands from now on in the sandbox or outside it, at once (and its next run's subagents).
-  markConversation(at.data.id, approvalOf(at.data, { agents: at.agents, bot: at.bot }).effective === "fullAccess");
+  const effective = approvalOf(at.data, { agents: at.agents, bot: at.bot }).effective;
+  markConversation(at.data.id, effective === "fullAccess");
+  // Out of Auto, the folders it allowed edits in go with it.
+  if (effective !== "auto") try { clearPlaces(at.data.id); } catch {}
   return { status: 200, value: shown(at) };
 }
 
@@ -220,6 +225,8 @@ export async function reapplyApprovals(engine: Target | null, bridge: Target | n
         const now = approvalOf(data, { agents, bot }, since, byDefault);
         // (Full Access's list for the sandbox's launcher, as each is now: one from before too.)
         markConversation(data.id, now.effective === "fullAccess");
+        // Out of Auto (the sandbox stopped, its rules changed by a client): the folders it allowed go.
+        if (now.effective !== "auto") try { clearPlaces(data.id); } catch {}
         // (Settings › Permissions changed: any kept with an approval, whose rules don't follow them yet.)
         const remade = settings && now.stored && changeFor(found(target, data, agents), now.approval) !== null;
         // (Ask First and Accept Edits come to themselves anywhere; a bot's from before, to its own.)
@@ -351,7 +358,15 @@ export async function* approvalRoute(context: RouteContext): AsyncGenerator<Answ
       await tellApproved(decisions, approved).catch(() => false);
       return yield* json(200, shownReviews(reviewLog(decisions)));
     }
-    if (given.resume !== true) return yield* json(400, { message: "Say approve: <id> to approve one held back, resume: true to let Auto go on here, or seen: true once you've looked." });
+    if (typeof given.revoke === "string" && given.revoke) {
+      // A folder Auto allowed edits in for the session, taken back: each change there is judged again.
+      let revoked: ReturnType<typeof revokePlace>;
+      try { revoked = revokePlace(decisions, given.revoke); }
+      catch (error) { return yield* json(500, { message: `It couldn't be kept: ${String((error as Error)?.message ?? error).slice(0, 120)}` }); }
+      if (!revoked) return yield* json(404, { message: "That isn't a folder Auto allows edits in here: it was taken back already, or it's gone." });
+      return yield* json(200, shownReviews(reviewLog(decisions)));
+    }
+    if (given.resume !== true) return yield* json(400, { message: "Say approve: <id> to approve one held back, revoke: <id> to take back a folder Auto allowed edits in, resume: true to let Auto go on here, or seen: true once you've looked." });
     try { resumeReviews(decisions); }
     catch (error) { return yield* json(500, { message: `It couldn't be kept: ${String((error as Error)?.message ?? error).slice(0, 120)}` }); }
     resumeReviewedSession(decisions);
