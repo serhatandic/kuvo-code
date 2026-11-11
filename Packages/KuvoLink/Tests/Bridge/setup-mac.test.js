@@ -257,6 +257,13 @@ test("kuvo/setup and the card name the machines holding this Mac back (heldBy); 
   link.noteSetupNow(Date.now(), { soon: 0 });
   assert.equal(link.readLink().setup?.role, "primary", "it leads");
   assert.deepEqual((await route("GET", "kuvo/setup")).json.heldBy, []);
+  // This Mac slept overnight: the relay hasn't found old away within the hour, as it's only
+  // looked again once this Mac's back on it. old, not heard from for days, is gone all the same: it
+  // leads on, rather than stepping aside for a minute.
+  write(path.join(run, "peer-reach-checked.json"), { [old.pub]: Date.now() - 10 * 3_600_000 });
+  link.noteSetupNow(Date.now(), { soon: 0 });
+  assert.equal(link.readLink().setup?.aside, undefined, "still leads after a long sleep");
+  assert.deepEqual(link.setupView(link.readLink()).heldBy, []);
   // old answers again: it's back, and shared, so this Mac steps aside, held by it.
   write(path.join(run, "peer-reach.json"), {});
   link.noteSetupNow(Date.now(), { soon: 0 });

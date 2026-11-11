@@ -145,6 +145,29 @@ export function keepTold(key: string, told: Omit<Told, "heard">, now = Date.now(
   return true;
 }
 
+// What each computer last said of being shared, by the told file's time and size: read once a
+// second for each one by `kuvo/setup/events`, so the whole of what it told is read only as it changes.
+const sharedSaid = new Map<string, { stamp: string; shared: boolean | undefined }>();
+/** Whether the computer `key` says it's a machine Macs share (`shared`), as it last told this one:
+ * undefined for one that tells but doesn't say (an older box), null for one that never told. */
+export function toldShared(key: string): boolean | undefined | null {
+  if (!KEY.test(key)) return null;
+  let stamp: string;
+  try {
+    const stat = fs.statSync(fileOf(key));
+    stamp = `${stat.mtimeMs}:${stat.size}`;
+  } catch {
+    sharedSaid.delete(key);
+    return null;
+  }
+  const kept = sharedSaid.get(key);
+  if (kept?.stamp === stamp) return kept.shared;
+  const told = readTold(key);
+  if (!told) return null;
+  sharedSaid.set(key, { stamp, shared: told.shared });
+  return told.shared;
+}
+
 /** The computers that told this one, by key. */
 export const toldKeys = (): string[] => listOf(TOLD).filter(name => name.endsWith(".json")).map(name => name.slice(0, -5)).filter(key => KEY.test(key));
 

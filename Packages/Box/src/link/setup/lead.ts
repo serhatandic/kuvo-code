@@ -27,8 +27,8 @@ import type { LinkState } from "../state";
 export function leadsNow(link: LinkState, now = Date.now()): boolean {
   // (A machine its Mac let go waits for that Mac as numbering always has, days, before it numbers
   // on its own: never at once.)
-  if (!IS_MAC) return !macsOf(link).length && "self" in rankedPrimary(link);
-  return "self" in rankedPrimary(link) && !heldBy(link, now).length;
+  if (!IS_MAC) return !macsOf(link).length && "self" in rankedPrimary(link, undefined, now);
+  return "self" in rankedPrimary(link, undefined, now) && !heldBy(link, now).length;
 }
 
 /** This Mac's static key noted (in place, under link.json's lock): one made anew since the last is
@@ -42,13 +42,13 @@ export function noteKeyNow(link: LinkState): void {
 
 /** This box's setup as it stands now (in place, under link.json's lock): one it leads made, or set
  * aside while it doesn't lead it; a machine's taken as its documents say. */
-export function settleOwnSetup(link: LinkState): void {
+export function settleOwnSetup(link: LinkState, now = Date.now()): void {
   noteKeyNow(link);
   settleSetup(link);
   const own = ownKey(link);
   const sign = ownSign(link);
   if (!own || !sign || (!IS_MAC && macsOf(link).length)) return;
-  const leads = leadsNow(link);
+  const leads = leadsNow(link, now);
   // (Keys made anew, its folder kept: a new setup, as it's a new computer to the others; the one
   // it led with its old keys is no longer its own.)
   if (!link.setup || link.setup.role !== "primary" || link.setup.primary !== own || link.setup.sign !== sign) {
@@ -74,7 +74,7 @@ export function noteSetupNow(now = Date.now(), { soon = 60_000 }: { soon?: numbe
     updateLink(link => {
       if (!link) return null;
       const before = JSON.stringify(link.setup ?? null);
-      settleOwnSetup(link);
+      settleOwnSetup(link, now);
       if (JSON.stringify(link.setup ?? null) === before) return null;
       changed = true;
       return link;
