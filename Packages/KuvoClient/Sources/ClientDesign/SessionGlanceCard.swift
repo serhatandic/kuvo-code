@@ -248,14 +248,18 @@ public struct GlanceSpoken: ViewModifier {
     }
 
     public func body(content: Content) -> some View {
-        let lines = Dictionary(facts.spoken().map { ($0.label, $0.value) }) { first, _ in first }
-        content
-            .accessibilityCustomContent("State", lines["State"])
-            .accessibilityCustomContent("Project", lines["Project"])
-            .accessibilityCustomContent("Computer", lines["Computer"])
-            .accessibilityCustomContent("Branch", lines["Branch"])
-            .accessibilityCustomContent("Model", lines["Model"])
-            .accessibilityCustomContent("Pull request", lines["Pull request"])
+        var lines: [String: String] = [:]
+        for line in facts.spoken() where lines[line.label] == nil { lines[line.label] = line.value }
+        let state: String? = lines["State"], project: String? = lines["Project"], computer: String? = lines["Computer"]
+        let branch: String? = lines["Branch"], model: String? = lines["Model"], pull: String? = lines["Pull request"]
+        let first = content
+            .accessibilityCustomContent(AccessibilityCustomContentKey("State"), state.map { Text(verbatim: $0) })
+            .accessibilityCustomContent(AccessibilityCustomContentKey("Project"), project.map { Text(verbatim: $0) })
+            .accessibilityCustomContent(AccessibilityCustomContentKey("Computer"), computer.map { Text(verbatim: $0) })
+        return first
+            .accessibilityCustomContent(AccessibilityCustomContentKey("Branch"), branch.map { Text(verbatim: $0) })
+            .accessibilityCustomContent(AccessibilityCustomContentKey("Model"), model.map { Text(verbatim: $0) })
+            .accessibilityCustomContent(AccessibilityCustomContentKey("Pull request"), pull.map { Text(verbatim: $0) })
     }
 }
 
