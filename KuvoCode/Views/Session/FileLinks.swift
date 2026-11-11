@@ -104,7 +104,7 @@ struct FileLinkingParser: MarkupParser {
     var agents: [MessageMentions.Agent] = []
     var highlight: FindHighlight?
     /// What the Work Queue items it names are (`#243`): drawn as their chips.
-    var refs: [Int: WorkRef] = [:]
+    var refs: [String: WorkRef] = [:]
 
     func attributedString(for input: String) throws -> AttributedString {
         #if DEBUG

@@ -1021,6 +1021,8 @@ struct UserBubble: View {
     var status: String?
     @Environment(\.findHighlight) private var highlight
     @Environment(AppModel.self) private var app
+    /// The conversation this is in, where what it opens comes back to.
+    @Environment(\.conversationTab) private var here
 
     /// A part of its words with its own styling, and what it names standing out: agents, files,
     /// web addresses as links, and its pictures' names as the composer showed them.
@@ -1118,12 +1120,12 @@ struct UserBubble: View {
         // A named agent opens its conversation; a named file, in the side panel; a Work Queue
         // item, in the Work Queue.
         .environment(\.openURL, OpenURLAction { url in
-            if let number = WorkItemRefs.number(in: url) {
-                app.openWorkItem(number)
+            if let ref = WorkItemRefs.ref(in: url) {
+                app.openWorkItem(ref)
                 return .handled
             }
             if let session = MessageMentions.session(in: url) {
-                if app.workspace.session(session) != nil { app.open(.session(session)) }
+                if app.workspace.session(session) != nil { app.open(.session(session), from: here) }
                 return .handled
             }
             guard url.isFileURL else { return .systemAction }
@@ -1381,6 +1383,8 @@ private struct MarkdownPiece: View, Equatable {
     let agents: [MessageMentions.Agent]
     let highlight: FindHighlight?
     @Environment(AppModel.self) private var app
+    /// The conversation this is in, where what it opens comes back to.
+    @Environment(\.conversationTab) private var here
 
     static func == (a: MarkdownPiece, b: MarkdownPiece) -> Bool {
         a.text == b.text && a.highlight == b.highlight && a.mentions == b.mentions && a.agents == b.agents
@@ -1402,12 +1406,12 @@ private struct MarkdownPiece: View, Equatable {
         return ReplyView(markdown: text, parser: FileLinkingParser(folders: folders, mentions: mentions, agents: agents, highlight: highlight, refs: refs), diagrams: true) { url in
             // A file opens in the side panel, a named agent its conversation, a Work Queue item
             // the Work Queue; web links in the browser.
-            if let number = WorkItemRefs.number(in: url) {
-                app.openWorkItem(number)
+            if let ref = WorkItemRefs.ref(in: url) {
+                app.openWorkItem(ref)
                 return true
             }
             if let session = MessageMentions.session(in: url) {
-                if app.workspace.session(session) != nil { app.open(.session(session)) }
+                if app.workspace.session(session) != nil { app.open(.session(session), from: here) }
                 return true
             }
             guard url.isFileURL else { return false }
@@ -1435,7 +1439,7 @@ private struct MarkdownPiece: View, Equatable {
             // A file opens in the side panel, a named agent its conversation; web links in the browser.
             .environment(\.openURL, OpenURLAction { url in
                 if let session = MessageMentions.session(in: url) {
-                    if app.workspace.session(session) != nil { app.open(.session(session)) }
+                    if app.workspace.session(session) != nil { app.open(.session(session), from: here) }
                     return .handled
                 }
                 guard url.isFileURL else { return .systemAction }
@@ -2000,6 +2004,8 @@ struct ErrorCard: View {
 private struct AgentSentRow: View {
     let call: Message.ToolCall
     @Environment(AppModel.self) private var app
+    /// The conversation this is in, where what it opens comes back to.
+    @Environment(\.conversationTab) private var here
 
     private var input: JSONValue? {
         let input: JSONValue? = switch call.state {
@@ -2043,7 +2049,8 @@ private struct AgentSentRow: View {
             }
         } accessory: {
             if let session = address?.session, app.workspace.session(session) != nil {
-                Button("Open") { app.open(.session(session)) }
+                Button("Open") { app.open(.session(session), from: here) }
+                    .opensInNewTab(.session(session))
                     .buttonStyle(TextButtonStyle(outset: true))
                     .help("Open \(name)'s conversation")
             }
@@ -2200,6 +2207,8 @@ private struct AgentMessageRow: View {
     /// What happened, after its name, for one of its sessions' news: "finished", "still working".
     var status: String?
     @Environment(AppModel.self) private var app
+    /// The conversation this is in, where what it opens comes back to.
+    @Environment(\.conversationTab) private var here
 
     var body: some View {
         FoldingCard(id: id, summary: text, startsOpen: FoldingCard<EmptyView, EmptyView, EmptyView>.isShort(text),
@@ -2216,7 +2225,8 @@ private struct AgentMessageRow: View {
                     .foregroundStyle(.tertiary)
             }
             if app.workspace.session(session) != nil {
-                Button("Open") { app.open(.session(session)) }
+                Button("Open") { app.open(.session(session), from: here) }
+                    .opensInNewTab(.session(session))
                     .buttonStyle(TextButtonStyle(outset: true))
                     .help("Open \(from)'s conversation")
             }
@@ -2236,6 +2246,8 @@ private struct GroupWorkRow: View {
     let task: String
     let at: Milliseconds
     @Environment(AppModel.self) private var app
+    /// The conversation this is in, where what it opens comes back to.
+    @Environment(\.conversationTab) private var here
 
     var body: some View {
         FoldingCard(id: id, summary: task, startsOpen: FoldingCard<EmptyView, EmptyView, EmptyView>.isShort(task),
@@ -2250,7 +2262,8 @@ private struct GroupWorkRow: View {
                 .font(.caption)
                 .foregroundStyle(.tertiary)
             if app.chats.group(chatID) != nil {
-                Button("Open") { app.open(.session(BotGroups.tabKey(chatID))) }
+                Button("Open") { app.open(.group(chatID), from: here) }
+                    .opensInNewTab(.group(chatID))
                     .buttonStyle(TextButtonStyle(outset: true))
                     .help("Open \(chat)")
             }

@@ -39,6 +39,8 @@ struct SessionView: View {
                     .environment(\.isConversationShown, isShown && isInSight)
                     .zIndex(isShown ? 1 : 0)
                     .environment(\.isOffline, Self.offlineMachine(of: each, in: app) != nil)
+                    // What's opened from it comes back to it.
+                    .environment(\.conversationTab, .session(each.id))
             }
         }
         .onGeometryChange(for: CGSize.self) { $0.size } action: { size = $0 }
@@ -50,6 +52,7 @@ struct SessionView: View {
         }
         .conversationBar {
             BottomStack(model: model, lastModel: $lastModel)
+                .environment(\.conversationTab, .session(model.id))
                 // Room for the composer, the cards' own buttons and a little conversation.
                 .environment(\.cardRoom, max(160, height - 440))
                 .environment(\.stackRoom, height)

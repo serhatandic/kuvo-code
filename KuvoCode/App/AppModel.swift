@@ -275,6 +275,42 @@ final class AppModel {
 
     /// Shows the main window, with `request` open in it.
     func open(_ request: Request) {
+        showWindow()
+        switch request {
+        case .folder(let path): tabs.newSession(in: workspace.addFolder(path))
+        case .session(let id): openFresh(TabKey(id))
+        case .newSession: tabs.newSession(in: nil)
+        case .bot(let recipe): tabs.openBotEditor(bot: nil, recipe: recipe)
+        }
+    }
+
+    /// A conversation opened from inside `origin`, the one a view is in (`conversationTab`): in its
+    /// place, with the way back to it (`WindowTabs.go`). With ⌘ held (`newTab`), or its menu's
+    /// Open in New Tab, in a tab of its own next to the one in view instead, as in Safari and the
+    /// Finder. From no conversation, as from outside.
+    func open(_ key: TabKey, from origin: TabKey?, newTab: Bool = AppModel.wantsNewTab(NSApp.currentEvent)) {
+        guard origin != nil else {
+            showWindow()
+            return openFresh(key)
+        }
+        guard !newTab else { return openFresh(key) }
+        tabs.go(to: key, from: origin)
+    }
+
+    /// The click (or key) that opens something asks for a tab of its own: ⌘ is held.
+    static func wantsNewTab(_ event: NSEvent?) -> Bool {
+        guard let event, [.leftMouseUp, .leftMouseDown, .keyDown].contains(event.type) else { return false }
+        return event.modifierFlags.contains(.command)
+    }
+
+    /// From outside the conversations (a notification, the menu bar): no way back.
+    private func openFresh(_ key: TabKey) {
+        tabs.open(key)
+        tabs.startFresh(key)
+    }
+
+    /// The main window in front, unless a demo copy keeps to the background.
+    private func showWindow() {
         #if DEBUG
         // A demo copy launched with KUVO_DEMO_BACKGROUND stays behind, so it never takes the keyboard
         // (opening the window activates the app too).
@@ -285,12 +321,6 @@ final class AppModel {
         if !background {
             openMainWindow?()
             NSApp.activate()
-        }
-        switch request {
-        case .folder(let path): tabs.newSession(in: workspace.addFolder(path))
-        case .session(let id): tabs.open(TabKey(id))
-        case .newSession: tabs.newSession(in: nil)
-        case .bot(let recipe): tabs.openBotEditor(bot: nil, recipe: recipe)
         }
     }
 
