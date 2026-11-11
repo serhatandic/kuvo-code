@@ -8,6 +8,7 @@
 // 429 for as long as it says. What a turn hears (Claude Code's rate-limit events, each window as
 // every response's headers give it) keeps them current between reads, and is all a Mac has.
 
+import { createHash } from "node:crypto"
 import { readFileSync, statSync } from "node:fs"
 import { join } from "node:path"
 import { LimitsProblem, retryAt, type LimitReading, type LimitWindow } from "../limits"
@@ -49,12 +50,16 @@ export function credentialsIn(configHome: string): ClaudeSignIn | undefined {
 }
 
 /**
- * Who Claude Code is signed in as in a settings folder (Linux), as it keeps it beside the sign-in
- * (`.claude.json`'s `oauthAccount`): the account and the organization whose plan it uses (one
- * account can have a personal plan and a team's, each with its own limits). None on a Mac: Kuvo
- * Code's token there says nothing of who it's for, and Claude Code doesn't know either.
+ * Who a Claude Code sign-in is in a settings folder: the account and the organization whose plan it
+ * uses (one account can have a personal plan and a team's, each with its own limits), as
+ * `anthropic:<account>|<organization>`, the same however it's signed in.
+ * - Claude Code's own sign-in (Linux): as it keeps it beside the sign-in (`.claude.json`'s `oauthAccount`).
+ * - Kuvo Code's token (`token`, a Mac's, from `claude setup-token`), which says nothing of who it's
+ *   for and leaves `oauthAccount` out: as Anthropic says in the policy record Claude Code fetches
+ *   with it as it runs (`tokenIdentity`). None until it has run with this token.
  */
-export function claudeIdentity(configHome: string): string | undefined {
+export function claudeIdentity(configHome: string, token?: string): string | undefined {
+  if (token !== undefined) return tokenIdentity(configHome, token)
   const file = join(configHome, ".claude.json")
   try {
     // (It keeps each project's state too, and can be large: read again only when it changed.)
@@ -78,6 +83,45 @@ function identityIn(text: string): string | undefined {
     if (!uuid) return undefined
     const organization = typeof account.organizationUuid === "string" ? account.organizationUuid.trim().toLowerCase() : ""
     return `anthropic:${uuid}|${organization}`
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Who Kuvo Code's token is for, from the record of the organization's policies Claude Code fetches
+ * with it as it runs and keeps in its settings folder, signed by Anthropic for the sign-in that
+ * asked (`policy-limits.json.signature.json`: a JSON Web Signature whose `aud` is the organization
+ * and `sub` the account, as Claude Code itself reads them). Taken only where Claude Code's note
+ * beside it (`policy-limits.json.stamp.json`) says that record was fetched with this very token
+ * (its `identity`, a hash of the token's own, as Claude Code makes it) and is the one signed (its
+ * `sha`): another sign-in using the folder (yours in Terminal, in `~/.claude`) or one before keeps a
+ * record of its own there, which isn't this one's. The token itself is only hashed, as Claude Code
+ * does, and nothing is checked with Anthropic.
+ */
+function tokenIdentity(configHome: string, token: string): string | undefined {
+  try {
+    // (Both are small: read each time, never kept.)
+    return recordIdentity(readFileSync(join(configHome, "policy-limits.json.stamp.json"), "utf8"), readFileSync(join(configHome, "policy-limits.json.signature.json"), "utf8"), token)
+  } catch {
+    return undefined
+  }
+}
+
+function recordIdentity(stampText: string, signatureText: string, token: string): string | undefined {
+  try {
+    const stamp = JSON.parse(stampText)
+    // Claude Code's principal for a token: `token:` and the first half of its SHA-256; the stamp keeps
+    // that principal's SHA-256.
+    const principal = `token:${createHash("sha256").update(token.trim()).digest("hex").slice(0, 32)}`
+    if (stamp?.kind !== "token" || stamp.identity !== createHash("sha256").update(principal).digest("hex")) return undefined
+    const payload = String(JSON.parse(signatureText)?.jws ?? "").split(".")[1]
+    if (!payload) return undefined
+    const claims = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"))
+    if (typeof stamp.sha !== "string" || claims?.sha !== stamp.sha) return undefined
+    const account = typeof claims.sub === "string" ? claims.sub.trim().toLowerCase() : ""
+    const organization = typeof claims.aud === "string" ? claims.aud.trim().toLowerCase() : ""
+    return account && organization ? `anthropic:${account}|${organization}` : undefined
   } catch {
     return undefined
   }

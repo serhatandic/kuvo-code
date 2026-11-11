@@ -98,7 +98,8 @@ export interface LimitsSource {
    * Who the account is at its maker, as its sign-in says, the same on every computer signed in to
    * it: its maker's own account ID (`anthropic:<account>|<organization>`, `chatgpt:<account>/<user>`,
    * `xai:<user>`), or `key:<the key>` for an API key. Never an email. Only ever hashed before it
-   * leaves (`identityOf`); undefined where the sign-in doesn't say (a Mac's Claude token).
+   * leaves (`identityOf`); undefined where the sign-in doesn't say (a Mac's Claude token before
+   * Claude Code has run with it).
    */
   identity?(): string | undefined
 }

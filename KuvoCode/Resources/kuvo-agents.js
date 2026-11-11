@@ -10238,7 +10238,7 @@ function unzipper() {
 
 // Packages/Box/src/agents/agents/claude.ts
 import { spawn as spawn5 } from "child_process";
-import { createHash as createHash8, randomUUID } from "crypto";
+import { createHash as createHash9, randomUUID } from "crypto";
 import { existsSync as existsSync14, mkdirSync as mkdirSync15, readdirSync as readdirSync13, readFileSync as readFileSync21, renameSync as renameSync12, rmdirSync as rmdirSync2, rmSync as rmSync11, statSync as statSync10, writeFileSync as writeFileSync17 } from "fs";
 import { homedir } from "os";
 import { basename as basename8, dirname as dirname12, join as join23, resolve as resolve6 } from "path";
@@ -10829,6 +10829,7 @@ function xaiIdentity(...tokens) {
 var text2 = (value) => typeof value === "string" && value.trim() ? value.trim().toLowerCase() : undefined;
 
 // Packages/Box/src/agents/agents/claude-limits.ts
+import { createHash as createHash8 } from "crypto";
 import { readFileSync as readFileSync20, statSync as statSync9 } from "fs";
 import { join as join22 } from "path";
 var claudeUsage = { url: "https://api.anthropic.com/api/oauth/usage" };
@@ -10849,7 +10850,9 @@ function credentialsIn(configHome) {
     return;
   }
 }
-function claudeIdentity(configHome) {
+function claudeIdentity(configHome, token) {
+  if (token !== undefined)
+    return tokenIdentity(configHome, token);
   const file = join22(configHome, ".claude.json");
   try {
     const { mtimeMs, size } = statSync9(file);
@@ -10872,6 +10875,32 @@ function identityIn(text) {
       return;
     const organization = typeof account.organizationUuid === "string" ? account.organizationUuid.trim().toLowerCase() : "";
     return `anthropic:${uuid}|${organization}`;
+  } catch {
+    return;
+  }
+}
+function tokenIdentity(configHome, token) {
+  try {
+    return recordIdentity(readFileSync20(join22(configHome, "policy-limits.json.stamp.json"), "utf8"), readFileSync20(join22(configHome, "policy-limits.json.signature.json"), "utf8"), token);
+  } catch {
+    return;
+  }
+}
+function recordIdentity(stampText, signatureText, token) {
+  try {
+    const stamp = JSON.parse(stampText);
+    const principal = `token:${createHash8("sha256").update(token.trim()).digest("hex").slice(0, 32)}`;
+    if (stamp?.kind !== "token" || stamp.identity !== createHash8("sha256").update(principal).digest("hex"))
+      return;
+    const payload = String(JSON.parse(signatureText)?.jws ?? "").split(".")[1];
+    if (!payload)
+      return;
+    const claims = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
+    if (typeof stamp.sha !== "string" || claims?.sha !== stamp.sha)
+      return;
+    const account = typeof claims.sub === "string" ? claims.sub.trim().toLowerCase() : "";
+    const organization = typeof claims.aud === "string" ? claims.aud.trim().toLowerCase() : "";
+    return account && organization ? `anthropic:${account}|${organization}` : undefined;
   } catch {
     return;
   }
@@ -11374,7 +11403,7 @@ class ClaudeAgent {
       written = statSync10(join23(own ?? join23(homedir(), ".claude"), ".credentials.json")).mtimeMs;
     } catch {}
     if (process.platform === "darwin")
-      written = Math.max(written, await keychainWritten(`Claude Code-credentials${own ? `-${createHash8("sha256").update(own).digest("hex").slice(0, 8)}` : ""}`));
+      written = Math.max(written, await keychainWritten(`Claude Code-credentials${own ? `-${createHash9("sha256").update(own).digest("hex").slice(0, 8)}` : ""}`));
     return written;
   }
   signsInRemotely = true;
@@ -11394,7 +11423,13 @@ class ClaudeAgent {
   get tokenFile() {
     return join23(this.context.home, "claude", "tokens", `${this.instance.id}.json`);
   }
-  limits = ClaudeAgent.keychain ? { every: CLAUDE_LIMITS_EVERY } : {
+  limits = ClaudeAgent.keychain ? {
+    every: CLAUDE_LIMITS_EVERY,
+    identity: () => {
+      const token = this.token();
+      return token ? claudeIdentity(this.configHome, token) : undefined;
+    }
+  } : {
     every: CLAUDE_LIMITS_EVERY,
     bucket: "anthropic",
     read: async (now) => {
@@ -17285,7 +17320,7 @@ async function branchRoutes(places, method, parts, body) {
 }
 
 // Packages/Box/src/agents/sessions.ts
-import { createHash as createHash9 } from "crypto";
+import { createHash as createHash10 } from "crypto";
 import { spawn as spawnProcess } from "child_process";
 import { readFileSync as readFileSync26, realpathSync as realpathSync7, statSync as statSync11 } from "fs";
 import { homedir as homedir5 } from "os";
@@ -18640,7 +18675,7 @@ class Sessions {
     const directory = body.location.directory;
     const session = {
       id: newID("ses"),
-      projectID: "prj_" + createHash9("sha1").update(directory).digest("hex").slice(0, 16),
+      projectID: "prj_" + createHash10("sha1").update(directory).digest("hex").slice(0, 16),
       agent: typeof body.agent === "string" && body.agent ? body.agent : "build",
       model: body.model,
       cost: 0,
@@ -20854,7 +20889,7 @@ function followed(store, read, signal) {
 }
 
 // Packages/Box/src/agents/carry.ts
-import { createHash as createHash10 } from "crypto";
+import { createHash as createHash11 } from "crypto";
 import { createReadStream } from "fs";
 import { copyFile, lstat as lstat2, mkdir, readFile as readFile3, readdir, rename, rm, stat as stat2, writeFile } from "fs/promises";
 import { basename as basename11, dirname as dirname16, isAbsolute as isAbsolute3, join as join29, normalize, sep as sep11 } from "path";
@@ -20868,7 +20903,7 @@ class CantCarry extends Error {
   }
 }
 async function hashOf(file) {
-  const hash = createHash10("sha256");
+  const hash = createHash11("sha256");
   for await (const chunk of createReadStream(file))
     hash.update(chunk);
   return hash.digest("hex");
@@ -20886,7 +20921,7 @@ async function plainFiles(from, link, at = "") {
   return files;
 }
 var digestOf = (records, lanes, said = []) => {
-  const hash = createHash10("sha256");
+  const hash = createHash11("sha256");
   for (const record of records)
     hash.update(`r ${record.path} ${record.size} ${record.sha256}
 `);
@@ -21172,7 +21207,7 @@ class Carrying {
         if (session?.id !== id || !Array.isArray(messages))
           throw new CantCarry("its conversation didn't come whole");
         session.location = { ...session.location, directory };
-        session.projectID = "prj_" + createHash10("sha1").update(directory).digest("hex").slice(0, 16);
+        session.projectID = "prj_" + createHash11("sha1").update(directory).digest("hex").slice(0, 16);
         delete agent.snapshots;
         const lanesHere = manifest.lanes.filter((lane) => lane.session === id);
         const threads = agent.threads ?? {};
@@ -26901,4 +26936,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 35f8a59654d7e160a17b19eb08fcc736aa9d0182b1e2a5a2dada65417371d3c1
+// Built from Packages/Box/src/agents 8d22b11562046d5c6959e0ce46f2a350edee257fa2d28b766f5eb370ff382c9c
