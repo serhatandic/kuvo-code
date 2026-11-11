@@ -851,7 +851,7 @@ interface Lane {
   /** Items whose words came as deltas (their completion doesn't add them again). */
   streamed: Set<string>
   /** File changes, by item, for their approval and their result. */
-  changes: Map<string, { path: string; kind: string; diff: string }[]>
+  changes: Map<string, { path: string; kind: string; diff: string; movedTo?: string }[]>
   /** A command's output so far, by item. */
   output: Map<string, string>
   /** A tool ran since the last words: the next words start a new step. */
