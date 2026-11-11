@@ -1,11 +1,12 @@
 // Reading GitHub on a box, for whatever shows what GitHub says (the Work Queue's issues and pull
-// requests; meant for a session's pull request at a glance too, #395): with GitHub's own `gh` and
+// requests, `work-queue/github.ts`; a session's pull request at a glance, `glance/github.ts`), each
+// a `Reader` of its own: with GitHub's own `gh` and
 // its sign-in on this box, so Kuvo Code keeps no key of GitHub's for it. Only reads: nothing here
 // writes to GitHub.
 //
 // - One GraphQL query for everything asked at once on a host, `PER_QUERY` at most each.
 // - Read only as a client asks (what's on its screen), and each thing again only as often as it can
-//   change (the reader's own `freshFor`: a minute while it's open, half an hour once it's closed).
+//   change (the reader's own `freshFor`: about a minute while it's open, half an hour once closed).
 // - What was read is kept in the reader's file, so a route answered in a process of its own
 //   (`box route`) reads it too, and only one process at a time asks GitHub (a lock beside it).
 // - A host `gh` couldn't read (not there, signed out, no network) isn't asked again for a few

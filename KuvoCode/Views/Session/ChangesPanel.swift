@@ -845,7 +845,7 @@ private struct PullRequestForm: View {
         Task {
             defer { isWorking = false }
             do {
-                let made = try await PullRequests.create(on: box.client, directory: box.path, title: title, body: body)
+                let made = try await PullRequests.create(on: box.client, directory: box.path, title: title, body: body, session: model?.session.id)
                 Analytics.shared.track("pull_request_opened", ["host": draft.host, "made": draft.creates ? "yes" : "no"])
                 switch made {
                 case .made(let page), .toOpen(let page):

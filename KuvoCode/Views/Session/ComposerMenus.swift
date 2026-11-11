@@ -1,4 +1,5 @@
 import AppKit
+import ClientDesign
 import ClientSessions
 import OpenCodeKit
 import SwiftUI
@@ -499,13 +500,5 @@ struct ModelChipLabel: View {
 extension Model {
     /// The logo of who made the model, so a Claude model served through Copilot
     /// still shows Anthropic's mark. Falls back to the provider's logo.
-    var makerLogoID: String {
-        let family = (family ?? id).lowercased()
-        let prefixes: [(String, String)] = [
-            ("claude", "anthropic"), ("gpt", "openai"), ("o1", "openai"), ("o3", "openai"), ("o4", "openai"), ("codex", "openai"),
-            ("gemini", "google"), ("gemma", "google"), ("grok", "xai"), ("kimi", "moonshotai"), ("deepseek", "deepseek"),
-            ("mistral", "mistral"), ("codestral", "mistral"), ("devstral", "mistral"), ("llama", "meta"), ("glm", "zhipuai"), ("minimax", "minimax"),
-        ]
-        return prefixes.first { family.hasPrefix($0.0) }?.1 ?? providerID
-    }
+    var makerLogoID: String { BrandMark.maker(of: family ?? id, provider: providerID) }
 }

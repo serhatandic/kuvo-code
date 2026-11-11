@@ -508,6 +508,8 @@ struct BoxPager<Page: View>: View {
                             // there for VoiceOver and the keyboard.
                             .allowsHitTesting(box == selected)
                             .accessibilityHidden(box != selected)
+                            // Its rows count as on screen only while it's in view.
+                            .environment(\.pageInView, box == selected)
                     }
                 }
             }
@@ -523,11 +525,14 @@ struct BoxPager<Page: View>: View {
             }
         }
         .animation(reduceMotion ? nil : .spring(response: 0.38, dampingFraction: 0.9), value: index)
+        // A row's card goes with its page.
+        .onChange(of: index) { GlanceCardPanel.shared.hide() }
     }
 
     /// Fingers moved `dx` sideways: the pages follow (or go the other way, set so), with give past
     /// the first and the last, where no page lies beside (let go far enough, the line wraps round).
     private func drag(_ moved: CGFloat) {
+        GlanceCardPanel.shared.hide()
         let dx = reverses ? -moved : moved
         let pulled = motion.offset + dx
         let pastEnd = (pulled > 0 && index == 0) || (pulled < 0 && index == boxes.count - 1)

@@ -91,6 +91,11 @@ nonisolated enum AttachmentItem: Identifiable, Sendable {
     func loadImage() async -> NSImage? {
         let key = contentID as NSString
         if let cached = AttachmentImages.cache.object(forKey: key) { return cached }
+        if let remote = remoteLocation {
+            guard let data = try? await BoxClient.machine(remote.machine).file(remote.path), let image = NSImage(data: data) else { return nil }
+            AttachmentImages.cache.setObject(image, forKey: key)
+            return image
+        }
         let item = self
         let image = await Task.detached(priority: .userInitiated) { () -> NSImage? in
             if let url = item.fileURL, let image = NSImage(contentsOf: url) { return image }
@@ -121,6 +126,21 @@ nonisolated enum AttachmentItem: Identifiable, Sendable {
         guard let bytes = file.bytes, let url = Attachments.writeReceived(bytes, named: name, type: type) else { return nil }
         AttachmentImages.wrote(url, for: id)
         return url
+    }
+
+    func readBytes() async -> Data? {
+        if let remote = remoteLocation { return try? await BoxClient.machine(remote.machine).file(remote.path) }
+        if let url = fileURL { return try? Data(contentsOf: url) }
+        if case .stored(let file, _) = self { return file.bytes }
+        return nil
+    }
+
+    /// Where it is on a machine, for one only that machine has (a file an agent there showed):
+    /// read through its box (`kuvo/file`), never from this Mac's disk.
+    var remoteLocation: (machine: String, path: String)? {
+        if case .stored(let file, _) = self, case .uri(let uri) = file.source,
+           let url = URL(string: uri) { return RemoteFolder.parse(url) }
+        return nil
     }
 
     func revealInFinder() {
@@ -154,6 +174,7 @@ struct ComposerAttachment: View {
     var route: Attachments.Route = .content
     /// A picture's place among the message's pictures: its name in the message, "[Image 2]".
     var number: Int?
+    var pictures: [URL] = []
     let remove: () -> Void
     @State private var isHovering = false
 
@@ -208,14 +229,20 @@ struct ComposerAttachment: View {
         .onHover { isHovering = $0 }
         // A picture opens in the viewer.
         .contentShape(.rect(cornerRadius: 10))
-        .onTapGesture { if item.isImage { ImageViewer.shared.show([item]) } }
+        .onTapGesture { showPicture(item) }
         .help(reason.map { "\(url.path)\n\($0)" } ?? url.path)
         // One element for VoiceOver, whose remove button is there only on hover.
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(title)
         .accessibilityValue(detail)
         .accessibilityAction(named: "Remove", remove)
-        .accessibilityAction { if item.isImage { ImageViewer.shared.show([item]) } }
+        .accessibilityAction { showPicture(item) }
+    }
+
+    private func showPicture(_ item: AttachmentItem) {
+        guard item.isImage else { return }
+        let images = pictures.isEmpty ? [url] : pictures
+        ImageViewer.shared.show(images.map(AttachmentItem.local), at: images.firstIndex(of: url) ?? 0)
     }
 
     private var reason: String? {
@@ -311,6 +338,33 @@ struct MadePictureRow: View {
         call.name == "kuvo-browser_" + BrowserTools.showFile
     }
 
+    /// Whether it brought pictures to show among others beside it: a picture it showed, an image it
+    /// made, a page it took a screenshot of. One still at work, failed or with none (a file that
+    /// isn't a picture) shows on its own.
+    static func isGroupable(_ call: Message.ToolCall) -> Bool {
+        guard isMade(call), case .completed(_, let output, _) = call.state else { return false }
+        guard isShownFile(call) else { return !StepPictures.items(in: output, step: call.id).isEmpty }
+        let path = call.state.input?["path"]?.string ?? ""
+        return UTType(filenameExtension: (path as NSString).pathExtension)?.conforms(to: .image) == true
+    }
+
+    /// Pictures that come one after another, with nothing between them, are one row to look
+    /// through together: by the index of the first, its steps.
+    static func groups(in content: [Message.Content]) -> [Int: [Message.ToolCall]] {
+        var groups: [Int: [Message.ToolCall]] = [:]
+        var start: Int?
+        for (index, block) in content.enumerated() {
+            if case .tool(let call) = block, isGroupable(call) {
+                let first = start ?? index
+                start = first
+                groups[first, default: []].append(call)
+            } else {
+                start = nil
+            }
+        }
+        return groups
+    }
+
     /// The file a show_file step shows, at `path` in a conversation in `directory` (a machine's,
     /// or this Mac's): that step's, as an image a step made is, so a picture the agent changed and
     /// shows again isn't drawn as an earlier step had it (#132), and as the phone keeps it. A
@@ -332,7 +386,7 @@ struct MadePictureRow: View {
         case .completed:
             let url = RemoteFolder.fileURL(path, in: directory ?? "/")
             VStack(alignment: .leading, spacing: 6) {
-                if url.isFileURL, UTType(filenameExtension: url.pathExtension)?.conforms(to: .image) == true {
+                if UTType(filenameExtension: url.pathExtension)?.conforms(to: .image) == true {
                     StepPictures(items: [Self.shown(path, in: directory, step: call.id)], height: 420, maxWidth: 560)
                 } else {
                     AttachmentRow(item: Self.shown(path, in: directory, step: call.id)) { app.utilities.show(url) }
@@ -381,18 +435,48 @@ struct MadePictureRow: View {
     }
 }
 
+/// Pictures that came one after another (shown, made, screenshots of a page), side by side in a
+/// row, each with its caption: one opens the viewer on it, with the others a swipe or an arrow away.
+struct ShownPictures: View {
+    let calls: [Message.ToolCall]
+    var directory: String?
+
+    var body: some View {
+        let pictures = calls.flatMap { call -> [(AttachmentItem, String)] in
+            if MadePictureRow.isShownFile(call) {
+                guard let path = call.state.input?["path"]?.string else { return [] }
+                return [(MadePictureRow.shown(path, in: directory, step: call.id), call.state.input?["caption"]?.string ?? "")]
+            }
+            guard case .completed(_, let output, _) = call.state else { return [] }
+            return StepPictures.items(in: output, step: call.id).map { ($0, "") }
+        }
+        let single = pictures.count == 1
+        StepPictures(items: pictures.map(\.0), height: single ? 420 : 200, maxWidth: single ? 560 : 300, captions: pictures.map(\.1))
+    }
+}
+
 /// Pictures a step brought back (a screenshot of the page the agent browses), under the step.
 struct StepPictures: View {
     let items: [AttachmentItem]
     /// How tall and wide one may be: a step's are small, an image the agent made is shown large.
     var height: CGFloat?
     var maxWidth: CGFloat = 360
+    var captions: [String] = []
 
     var body: some View {
-        HStack(alignment: .top, spacing: 6) {
-            ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
-                AttachmentPicture(item: item, height: height ?? (items.count == 1 ? 220 : 140), maxWidth: maxWidth) {
-                    ImageViewer.shared.show(items, at: index)
+        Flow(spacing: 6) {
+            ForEach(Array(items.enumerated()), id: \.offset) { index, item in
+                VStack(alignment: .leading, spacing: 6) {
+                    AttachmentPicture(item: item, height: height ?? (items.count == 1 ? 220 : 140), maxWidth: maxWidth) {
+                        ImageViewer.shared.show(items, at: index)
+                    }
+                    if captions.indices.contains(index), !captions[index].isEmpty {
+                        Text(captions[index])
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                            .frame(maxWidth: maxWidth, alignment: .leading)
+                    }
                 }
             }
         }
@@ -420,6 +504,8 @@ private struct AttachmentPicture: View {
     @State private var image: NSImage?
     /// Loaded without a picture (data that isn't one, a file that's gone): no spinner then.
     @State private var isMissing = false
+    /// Clicked again after it couldn't be read.
+    @State private var tries = 0
     @State private var isHovering = false
     @Environment(\.colorScheme) private var scheme
 
@@ -470,10 +556,16 @@ private struct AttachmentPicture: View {
         .contentShape(.rect(cornerRadius: 12))
         .onHover { isHovering = $0 }
         .animation(.easeOut(duration: 0.12), value: isHovering)
-        .onTapGesture(perform: view)
-        .contextMenu { AttachmentMenu(item: item) }
-        .help("\(item.name) — click to look closer")
-        .task(id: item.contentID) {
+        .onTapGesture {
+            // One that couldn't be read (its computer away) is asked for again, and opens.
+            if isMissing { tries += 1 }
+            view()
+        }
+        // Open: in the viewer, where one only its computer has opens in its app too.
+        .contextMenu { AttachmentMenu(item: item, open: view) }
+        .help(isMissing ? "\(item.name) couldn’t be read — click to try again" : "\(item.name) — click to look closer")
+        .task(id: "\(item.contentID)\n\(tries)") {
+            if tries > 0 { isMissing = false }
             image = await item.loadImage()
             isMissing = image == nil
         }

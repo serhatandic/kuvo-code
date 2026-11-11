@@ -3161,6 +3161,9 @@
             "literal": "sessions.agents"
            },
            {
+            "literal": "sessions.glance"
+           },
+           {
             "literal": "shell.stop"
            },
            {
@@ -3506,6 +3509,9 @@
            },
            {
             "literal": "sessions.agents"
+           },
+           {
+            "literal": "sessions.glance"
            },
            {
             "literal": "shell.stop"
@@ -7094,6 +7100,138 @@
         }
        }
       }
+     }
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/sessions/glance",
+   "answers": {
+    "200": {
+     "object": {
+      "sessions": {
+       "map": {
+        "object": {
+         "branch?": "string",
+         "additions?": "number",
+         "deletions?": "number",
+         "pull?": {
+          "object": {
+           "number": "number",
+           "url": "string",
+           "state?": {
+            "oneOf": [
+             {
+              "literal": "open"
+             },
+             {
+              "literal": "draft"
+             },
+             {
+              "literal": "merged"
+             },
+             {
+              "literal": "closed"
+             }
+            ]
+           },
+           "additions?": "number",
+           "deletions?": "number",
+           "checks?": {
+            "object": {
+             "passed": "number",
+             "failed": "number",
+             "pending": "number"
+            }
+           }
+          }
+         },
+         "account?": {
+          "object": {
+           "name": "string",
+           "label?": "string"
+          }
+         },
+         "asked?": "number"
+        }
+       }
+      }
+     }
+    },
+    "400": {
+     "object": {
+      "message": "string"
+     }
+    },
+    "503": {
+     "object": {
+      "message": "string"
+     }
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/sessions/glance/events",
+   "answers": {
+    "200": {
+     "object": {
+      "sessions": {
+       "map": {
+        "object": {
+         "branch?": "string",
+         "additions?": "number",
+         "deletions?": "number",
+         "pull?": {
+          "object": {
+           "number": "number",
+           "url": "string",
+           "state?": {
+            "oneOf": [
+             {
+              "literal": "open"
+             },
+             {
+              "literal": "draft"
+             },
+             {
+              "literal": "merged"
+             },
+             {
+              "literal": "closed"
+             }
+            ]
+           },
+           "additions?": "number",
+           "deletions?": "number",
+           "checks?": {
+            "object": {
+             "passed": "number",
+             "failed": "number",
+             "pending": "number"
+            }
+           }
+          }
+         },
+         "account?": {
+          "object": {
+           "name": "string",
+           "label?": "string"
+          }
+         },
+         "asked?": "number"
+        }
+       }
+      }
+     }
+    },
+    "400": {
+     "object": {
+      "message": "string"
+     }
+    },
+    "503": {
+     "object": {
+      "message": "string"
      }
     }
    }

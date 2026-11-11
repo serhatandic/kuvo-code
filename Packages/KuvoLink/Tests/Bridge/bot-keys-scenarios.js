@@ -13,12 +13,18 @@ import { fileURLToPath } from "node:url";
 import { atEnd } from "./at-end.js";
 
 export const script = fileURLToPath(new URL("../../Sources/KuvoLink/Resources/kuvo-link.js", import.meta.url));
-/** Where a box (its folder `KUVO_HOME`) keeps its conversations' SSH agents (vault/ssh.ts): on a Mac,
- * where a socket's path is short, outside it, so a test clears it itself (a box it stops with SIGTERM
- * can't). */
-export const sshAgentsOf = home => process.platform === "darwin"
-  ? ownPath(path.join("/private/tmp", `kuvo-ssh-${process.getuid()}`, `agents-${crypto.createHash("sha256").update(home).digest("hex").slice(0, 8)}`))
-  : path.join(home, "run", "ssh-agents");
+/** Where a box (its folder `KUVO_HOME`) keeps its conversations' SSH agents (vault/ssh.ts): on a Mac
+ * with a home too long for a socket's path, outside it, so a test clears it itself (a box it stops
+ * with SIGTERM can't); in a home short enough for the socket, as the box keeps them there. The same
+ * choice `SSH_AGENTS` makes in Packages/Box/src/link/home.ts: this Mac's box (`macBox`, KUVO_BOX=mac),
+ * or over 68 bytes to the agents' folder. (GitHub's macOS runners' home is `/Users/runner`: 63-64
+ * bytes there, so the box keeps its agents in the home; looking in `/private/tmp` on every Mac waited
+ * 60 s for an agent never there, #410.) */
+export const sshAgentsOf = (home, macBox = false) => {
+  const agents = path.join(home, "run", "ssh-agents");
+  if (process.platform !== "darwin" || (!macBox && Buffer.byteLength(agents) <= 68)) return agents;
+  return ownPath(path.join("/private/tmp", `kuvo-ssh-${process.getuid()}`, `agents-${crypto.createHash("sha256").update(home).digest("hex").slice(0, 8)}`));
+};
 export const own = "KUVO_KEY_TODOIST_API_KEY__BOT_SCOUT";
 
 const catalog = (version = "1.0.0") => ({ integrations: [
