@@ -2075,20 +2075,28 @@ final class CardFolds {
     private var choices: [String: Bool] = [:]
 
     func isOpen(_ id: String, otherwise open: Bool) -> Bool { choices[id] ?? open }
+    /// Opened by you, rather than shown open from the start.
+    func isOpenedByYou(_ id: String) -> Bool { choices[id] == true }
     func set(_ id: String, open: Bool) { choices[id] = open }
     func forget(_ id: String) { choices[id] = nil }
     /// What was opened or closed among those kept under this, closed with what they're in.
     func kept(under prefix: String) -> [String] { choices.keys.filter { $0.hasPrefix(prefix) } }
 
-    /// Steps you opened or closed, in their conversation: opened, once they have, the end is no
-    /// longer followed, so what comes in next doesn't move what you read (`holds` false: a step
-    /// under way, kept in view until it ends); closing what you opened goes back to it (see
-    /// `ConversationScroller.reading`). `closes`: what goes with it.
-    func toggle(_ id: String, open: Bool, in anchor: ScrollAnchor?, holds: Bool = true, closes: [String] = []) {
+    /// Steps and cards you opened or closed, in their conversation: opened, the end is no longer
+    /// followed, so what comes in next doesn't move what you read (`holds` false: a step under way,
+    /// kept in view until it ends). It's let go of before it opens, so it opens where it is, under
+    /// its header, with nothing above it moving; once open, the view goes down to all of it, as
+    /// following the end would have (`reveals`; else nothing moves: see
+    /// `ConversationScroller.opening`). Closing what you opened goes back to the end (see
+    /// `ConversationScroller.reading`). `closes`: what goes with it; `then`: once it has opened or
+    /// closed.
+    func toggle(_ id: String, open: Bool, in anchor: ScrollAnchor?, holds: Bool = true, reveals: Bool = true, closes: [String] = [], then: @escaping () -> Void = {}) {
+        if open, holds { anchor?.opening?(id, reveals) }
         withAnimation(.ui) {
             set(id, open: open)
             closes.forEach(forget)
         } completion: { [weak anchor] in
+            then()
             // Not if you've changed your mind since. (What's closed with others is forgotten.)
             guard self.isOpen(id, otherwise: closes.contains(id) ? false : !open) == open else { return }
             for closed in closes { anchor?.reading?(closed, false) }
@@ -2112,6 +2120,9 @@ private struct FoldingCard<Header: View, Accessory: View, Content: View>: View {
     @ViewBuilder var accessory: Accessory
     @ViewBuilder var content: Content
     @State private var isHoveringHeader = false
+    /// Folded by you, its words still on their way out.
+    @State private var isFolding = false
+    @Environment(\.scrollAnchor) private var scrollAnchor
 
     private static var radius: CGFloat { 10 }
     private static var padding: CGSize { CGSize(width: 10, height: 9) }
@@ -2134,26 +2145,34 @@ private struct FoldingCard<Header: View, Accessory: View, Content: View>: View {
     var body: some View {
         let folds = CardFolds.shared
         let open = folds.isOpen(id, otherwise: startsOpen)
+        // Not while its words are still folding away: the two never show at once.
+        let showsLine = !open && !isFolding
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Button {
-                    withAnimation(.ui) { folds.set(id, open: !open) }
+                    if open { isFolding = true }
+                    // Its words open under it, where it is: the view doesn't go down to them.
+                    folds.toggle(id, open: !open, in: scrollAnchor, reveals: false) {
+                        withAnimation(.easeOut(duration: 0.15)) { isFolding = false }
+                    }
                 } label: {
-                    // Centered, not on the first baseline: the first line leaving as it opens would
-                    // slide up out of line with the header while it fades. (Two lines of it keep to the
-                    // header's line.)
-                    HStack(alignment: summaryLines > 1 ? .firstTextBaseline : .center, spacing: 8) {
-                        header
+                    // The same open or folded, so nothing in it moves or is laid out anew as the
+                    // words open and fold under it: the line it folds to only shows or doesn't.
+                    FoldingCardHeader(holdsLine: !open && !firstLine.isEmpty) {
+                        HStack(spacing: 8) { header }
+                            .lineLimit(1)
                         Image(systemName: "chevron.right")
                             .font(.caption2.weight(.semibold))
                             .foregroundStyle(.secondary)
                             .rotationEffect(.degrees(open ? 90 : 0))
-                        if !open, !firstLine.isEmpty {
-                            Text(firstLine)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(summaryLines)
-                                .truncationMode(.tail)
-                        }
+                        Text(firstLine)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(summaryLines)
+                            .truncationMode(.tail)
+                            .opacity(showsLine ? 1 : 0)
+                            // Gone at once as the words start to show; back as they've gone.
+                            .animation(showsLine ? .easeOut(duration: 0.15) : nil, value: showsLine)
+                            .accessibilityHidden(!showsLine)
                     }
                     // A fill under the pointer that reaches past the words without moving them,
                     // as far as the card's padding allows less `Self.chipInset` on every side, so
@@ -2185,7 +2204,76 @@ private struct FoldingCard<Header: View, Accessory: View, Content: View>: View {
         .padding(.vertical, Self.padding.height)
         .recessedWell(RoundedRectangle(cornerRadius: Self.radius))
         .padding(.horizontal, -Self.padding.width)
+        .foldOpen(folds.isOpenedByYou(id))
         .help(help)
+    }
+}
+
+/// A folding card's header, on one line: what it is (its icon, from or to whom), the chevron, and
+/// the line it folds to, laid out the same whether that shows or not. Short of room, what it is
+/// takes its share of the line (up to `share`, more where the folded line needs less) and the
+/// folded line the rest, each cut short with "…": a long name never leaves the folded line no
+/// room, nor wraps. The chevron sits on the middle of the first line, the folded line on its
+/// baseline. Open, the folded line takes no height (one of two lines leaves no gap over the
+/// words).
+private struct FoldingCardHeader: Layout {
+    var holdsLine: Bool
+    var spacing: CGFloat = 8
+    static let share: CGFloat = 0.4
+
+    private func widths(_ proposal: ProposedViewSize, _ subviews: Subviews) -> [CGFloat] {
+        let ideal = subviews.map { $0.sizeThatFits(.unspecified).width }
+        guard subviews.count == 3, let width = proposal.width, width.isFinite else { return ideal }
+        let room = max(0, width - ideal[1] - spacing * 2)
+        guard ideal[0] + ideal[2] > room else { return ideal }
+        let header = min(ideal[0], max(room * Self.share, room - ideal[2]))
+        return [header, ideal[1], room - header]
+    }
+
+    /// Each one's size at its width, where it goes (from the top left), and the header's baseline.
+    private func places(_ proposal: ProposedViewSize, _ subviews: Subviews) -> (size: CGSize, frames: [CGRect], baseline: CGFloat?) {
+        let widths = widths(proposal, subviews)
+        let sizes = subviews.indices.map { subviews[$0].dimensions(in: ProposedViewSize(width: widths[$0], height: nil)) }
+        guard subviews.count == 3 else {
+            var x: CGFloat = 0, frames: [CGRect] = []
+            for size in sizes {
+                frames.append(CGRect(x: x, y: 0, width: size.width, height: size.height))
+                x += size.width + spacing
+            }
+            return (CGSize(width: max(0, x - spacing), height: sizes.map(\.height).max() ?? 0), frames, nil)
+        }
+        let (header, chevron, line) = (sizes[0], sizes[1], sizes[2])
+        // On the header's first baseline; the chevron on the middle of the header's line.
+        let baseline = max(header[VerticalAlignment.firstTextBaseline], line[VerticalAlignment.firstTextBaseline])
+        let headerTop = baseline - header[VerticalAlignment.firstTextBaseline]
+        let lineTop = baseline - line[VerticalAlignment.firstTextBaseline]
+        let chevronTop = headerTop + (header.height - chevron.height) / 2
+        let frames = [
+            CGRect(x: 0, y: headerTop, width: header.width, height: header.height),
+            CGRect(x: header.width + spacing, y: chevronTop, width: chevron.width, height: chevron.height),
+            CGRect(x: header.width + chevron.width + spacing * 2, y: lineTop, width: line.width, height: line.height),
+        ]
+        let shown = holdsLine ? frames : Array(frames.prefix(2))
+        let width = header.width + chevron.width + spacing + (line.width > 0 ? spacing + line.width : 0)
+        return (CGSize(width: width, height: shown.map(\.maxY).max() ?? 0), frames, baseline)
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        places(proposal, subviews).size
+    }
+
+    /// The header's baseline, for what's beside it (the time, Open).
+    func explicitAlignment(of guide: VerticalAlignment, in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGFloat? {
+        guard guide == .firstTextBaseline, let baseline = places(proposal, subviews).baseline else { return nil }
+        return bounds.minY + baseline
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let frames = places(proposal, subviews).frames
+        for (subview, frame) in zip(subviews, frames) {
+            subview.place(at: CGPoint(x: bounds.minX + frame.minX, y: bounds.minY + frame.minY), anchor: .topLeading,
+                          proposal: ProposedViewSize(width: frame.width, height: nil))
+        }
     }
 }
 

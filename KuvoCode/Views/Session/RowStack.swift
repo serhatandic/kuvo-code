@@ -1173,12 +1173,17 @@ private final class SelectionTint: NSView {
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 
-/// Its one child at its top left, at the child's own height; as big as it's offered itself, and
-/// never shorter than the child (measured, a row is offered no height at all).
+/// Its one child at its top left, at the child's own height; as big as it's offered itself, even
+/// when the child is taller (measured, a row is offered no height at all: then the child's
+/// height). A part opening makes the child taller before its row's view is: grown past what the
+/// view offered, the hosting view would center it in itself, and SwiftUI animate everything in it
+/// from there, as if it had moved by half what it grew. Each thing in the row then came in from
+/// below its place (and went the other way), while the words that came in were already in theirs.
 private struct TopLayout: Layout {
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
         let child = subviews.first?.sizeThatFits(.init(width: proposal.width, height: nil)) ?? .zero
-        return CGSize(width: proposal.width ?? child.width, height: max(proposal.height ?? 0, child.height))
+        let offered = proposal.height ?? 0
+        return CGSize(width: proposal.width ?? child.width, height: offered > 0 && offered.isFinite ? offered : child.height)
     }
 
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
