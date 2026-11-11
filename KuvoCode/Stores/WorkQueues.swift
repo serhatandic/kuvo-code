@@ -212,7 +212,7 @@ final class WorkQueues {
             loadFailures[box + "|" + item] = nil
         } catch {
             // A machine that isn't answering: as this Mac's own box has it (as it last told it).
-            if box != BoxClient.mac, let mac = client(BoxClient.mac), var told = try? await mac.value(DetailAnswer.self, "GET", "kuvo/work-queue/items/\(path(refs[box]?[item]?.id ?? item))").item {
+            if box != BoxClient.mac, let mac = self.client(BoxClient.mac), var told = try? await mac.value(DetailAnswer.self, "GET", "kuvo/work-queue/items/\(path(refs[box]?[item]?.id ?? item))").item {
                 if told.item.computer == nil { told.item.computer = WorkComputer(key: known.mac ?? "", name: PhoneLink.computerName, kind: "mac", id: BoxClient.mac) }
                 details[box + "|" + told.item.id] = told
                 if let number = told.item.number { details[box + "|#\(number)"] = told }
