@@ -40,7 +40,7 @@ if sys.platform == "darwin":
     background = ctypes.CDLL(None).getpriority(4, 0)
 print(background, os.getpriority(os.PRIO_PROCESS, 0))
 """
-UTILITY = ["-c", "utility"]  # what a job asks `taskpolicy` on macOS
+UTILITY = ["-c", "utility", "-n", "20"]  # what a job asks `taskpolicy` and `nice` on macOS
 PROBE = ["/bin/sh", "-c", 'exec "$0" -S -c "$1"', sys.executable, PRIORITY_PROBE]  # in a child of the job's shell
 
 
@@ -63,7 +63,7 @@ def without_background_priority(env):
     set, writes the option it was given there), and a `nice` that does too. Jobs run at low priority,
     which on a Mac under heavy load can take minutes for what a test starts in a second: the tests
     that aren't about the policy run the helper's jobs as they are, and the tests of it look at what
-    `taskpolicy` is asked, and, once, at the real policy. (Not nice either: a job at nice 20 that
+    `taskpolicy` and `nice` are asked, and, once, at the real policy. (Not nice either: a job at nice 20 that
     starts heavy.sh again, as tests of jobs inside jobs do, waited 30 seconds and more for the CPU on
     a busy Mac, and those tests failed now and then.)"""
     global _STAND_IN
@@ -76,7 +76,7 @@ def without_background_priority(env):
         os.chmod(path, 0o755)
         path = os.path.join(_STAND_IN, "nice")
         with open(path, "w") as f:
-            f.write('#!/bin/sh\ncase "$1" in -n) shift 2 ;; -n*) shift ;; esac\nexec "$@"\n')
+            f.write('#!/bin/sh\ncase "$1" in -n) said="$1 $2"; shift 2 ;; -n*) said="-n ${1#-n}"; shift ;; *) said= ;; esac\n[ -z "${FAKE_POLICY_LOG-}" ] || [ -z "$said" ] || echo "$said" >> "$FAKE_POLICY_LOG"\nexec "$@"\n')
         os.chmod(path, 0o755)
     return dict(env, PATH=_STAND_IN + os.pathsep + env["PATH"])
 
@@ -814,8 +814,9 @@ class HeavyTests(unittest.TestCase):
                 self.assertEqual(result.returncode, WAITS if waits else 0, result.stderr)
 
     def test_a_job_is_started_under_low_priority_in_every_way_it_starts(self):
-        """Whatever way a job starts, its command is run by `taskpolicy -c utility` (macOS): a stand-in
-        logs what it's asked. (Its nice, and elsewhere nice and ionice, the test of the real policy sees.)"""
+        """Whatever way a job starts, its command is run by `taskpolicy -c utility` and `nice -n 20`
+        (macOS): stand-ins log what they're asked. (Elsewhere, nice and ionice, the test of the real
+        policy sees.)"""
         if sys.platform != "darwin":
             self.skipTest("taskpolicy is macOS's")
         log = os.path.join(self.locks, "policy")
