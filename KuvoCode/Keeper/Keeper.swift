@@ -67,6 +67,28 @@ final class Keeper {
 
     /// `--box`: runs until launchd stops it, or it's told to stop. Never returns.
     nonisolated static func main() -> Never {
+        // A box already on this Mac (one you set up as a machine) that the app attaches to in place
+        // is the only one: a keeper registered before, or by Turn On, starts no second one, and
+        // writes nothing first (its record would make it this Mac's box from then on). Nor does one
+        // that couldn't tell, with a box there.
+        guard AppModel.attachesInPlace else {
+            run()
+            dispatchMain()
+        }
+        Task { @MainActor in
+            let engine = await Task.detached { EngineInstaller(root: AppInfo.supportDirectory.appending(path: "engine")).installed() }.value
+            if await Here.gate(engine: engine, script: BoxProcess.script, appBox: BoxProcess.home, home: AppModel.hereHome, checked: true) != .own {
+                log.notice("The box already on this Mac is its box: no keeper of the app's")
+                exit(Exit.stopped.rawValue)
+            }
+            run()
+        }
+        dispatchMain()
+    }
+
+    /// The keeper's own start, once it's this Mac's box's (on the main thread, before or within
+    /// `dispatchMain`).
+    private nonisolated static func run() {
         try? FileManager.default.createDirectory(at: KeeperRecord.run, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         // One keeper at a time: one started while another runs (the app starting it while launchd
         // already has) goes at once, and cleanly, so launchd doesn't start it again.
@@ -84,7 +106,6 @@ final class Keeper {
         terminate.resume()
         MainActor.assumeIsolated { keeper.terminate = terminate }
         Task { @MainActor in await keeper.start() }
-        dispatchMain()
     }
 
     private var terminate: DispatchSourceSignal?

@@ -502,12 +502,21 @@ final class AppModel {
             shellEnvironment = shell
             // A box already on this Mac (one you set up as a machine): the app attaches to it in
             // place, and starts, claims and registers nothing of its own, so there's never a second.
-            if Self.attachesInPlace, keeperBox == nil, !ownBoxStarted, let binary, let script = BoxProcess.script,
-               let here = await Here.ask(engine: binary, script: script, appBox: BoxProcess.home, home: Self.hereHome, root: RemoteEngineInstaller.root),
-               here.use == .attach {
+            // (One that couldn't tell, with a box here, starts nothing: its own would be a second, for good.)
+            if Self.attachesInPlace, keeperBox == nil, !ownBoxStarted {
+                attached = nil
+                let outcome = await Here.gate(engine: binary, script: BoxProcess.script, appBox: BoxProcess.home, home: Self.hereHome, checked: Self.engineOverride == nil)
                 guard launch == self.launch else { return }
-                attached = here
-                return
+                switch outcome {
+                case .attach(let here):
+                    attached = here
+                    BackgroundWork.attachedHere = true
+                    return
+                case .unknown:
+                    throw MachineFailure(message: "Kuvo Code couldn’t check the box already on this Mac, so it didn’t start one of its own.")
+                case .own:
+                    break
+                }
             }
             guard launch == self.launch else { return }
             followAgents()
@@ -649,7 +658,8 @@ final class AppModel {
     /// than starting one of its own: a Mac you set up as a machine, your Mac mini say.
     private(set) var attached: Here?
     /// Whether the app attaches to a box already on this Mac (#183): on with the screen that says
-    /// so, which the window shows instead of starting; the tests' until then.
+    /// so, which the window shows instead of starting (with a state of its own, not `.starting`,
+    /// which it stays in meanwhile); the tests' until then.
     nonisolated(unsafe) static var attachesInPlace = false
     /// The home folder `here` looks in (the tests' own).
     nonisolated(unsafe) static var hereHome = FileManager.default.homeDirectoryForCurrentUser
