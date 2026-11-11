@@ -27,13 +27,16 @@
 #
 # Jobs of one kind share their build folders, which two builds at once break, so they run one at a
 # time, each waiting on its kind's lock in this user's own temporary folder (getconf's, not
-# $TMPDIR, which a caller may point elsewhere). Jobs of different kinds run side by side. Once its
-# turn comes, a job also waits while the Mac is busy (its load over the last minute above
-# KUVO_HEAVY_LOAD, 40 unless set), so it stays usable, and a new one while it's short of memory
-# (below; KUVO_HEAVY_MEMORY, 20% available unless set, 0 for never, for KUVO_HEAVY_MEMORY_WAIT_FOR,
-# 15 minutes, at most). While the Mac app's suite (mac) waits there,
-# new phone, mac-build and box jobs wait for it to start, for 15 minutes at most
-# (KUVO_HEAVY_MAC_FIRST_FOR): the jobs that kept starting kept the Mac busy, and it rarely got in.
+# $TMPDIR, which a caller may point elsewhere). Jobs of different kinds run side by side. Before it
+# joins its lane's line, a new job waits while the Mac is thrashing: swapping more than
+# KUVO_HEAVY_SWAP MB a second (10 unless set) or its memory pressure critical, for
+# KUVO_HEAVY_MEMORY_WAIT_FOR (2 minutes) at most (below; KUVO_HEAVY_MEMORY=0 for never). It waits
+# for a busy Mac (its load over the last minute above KUVO_HEAVY_LOAD) or for less than
+# KUVO_HEAVY_MEMORY% of memory available only when those are set: low priority (below) is
+# what keeps the Mac usable, and on the Mini, with a dozen sessions, both were true all day, so jobs
+# only waited. While the Mac app's suite (mac) waits there, new phone, mac-build and box jobs wait
+# for it to start, for 2 minutes at most (KUVO_HEAVY_MAC_FIRST_FOR). None of these waits happens
+# while a job holds its lane's lock: a job waiting for room holds up no one behind it in line.
 #
 # phone has two slots, so two phone jobs can run at once, each on a simulator of its own (the Mac
 # mini has room for it). Slot 1 is the lock above, unchanged, with the simulator "Kuvo Code Tests";
@@ -85,10 +88,28 @@
 #                       queue's guard, two seconds at most)
 #   KUVO_HEAVY_DIR      where the locks are (for the helper's own tests)
 #
+# Jobs never starve the box (the Kuvo Code box on this Mac, which the user's phone talks to): every
+# job runs at low priority, its children too (a job inside another gets it too). macOS:
+# `taskpolicy -c utility nice -n 20`, utility QoS at the lowest nice: below the box's own processes,
+# at default priority, which win over it, but on every core. Not background QoS (`taskpolicy -b`,
+# as before #557): on Apple silicon that runs only on the efficiency cores, with its I/O throttled,
+# and a cold build of the package UsageKit took 87 s under it against 49 s at utility and nice 20 on an idle Mini
+# (six of its twelve cores efficiency ones), while a stand-in for the box (six CPU-bound processes
+# at default priority) took 3.6 s alone, 3.5 s beside the background build, 4.4 s beside the utility
+# one at nice 20 and 7 s beside one at utility alone (tried with xcodebuild builds and tests, a
+# simulator test run and swift test). Linux: `nice -n 15 ionice -c3` (just `nice -n 15` without
+# ionice). A job on an idle Mac runs as fast as ever; on a busy one it gives way.
+#
+# Jobs of the Xcode lanes (mac, mac-build, phone-build, phone) build with Xcode's compilation cache,
+# one for every checkout's builds (scripts/xcode-cache.sh, beside this copy): content-addressed, so
+# a build in a new worktree replays what an earlier build of the same code compiled, wherever it was,
+# and never what another branch's code made. Their xcodebuild gets it through XCODE_XCCONFIG_FILE
+# (unless the caller has one); KUVO_XCODE_CACHE=0 builds without it.
+#
 # Every job has a time limit, so one that hangs can't hold its kind's turn for hours: past it, the
 # job is stopped (its process group, as below: TERM, then KILL), it says what was running, and
 # heavy.sh exits 124. The clock starts when the command does: not while it waits in line for its
-# slot (for as long as that takes), nor while it waits for a busy Mac. Generous, per kind: mac 45
+# slot (for as long as that takes), nor while it waits for room on the Mac. Generous, per kind: mac 45
 # minutes (the app's whole suite), phone 45, mac-build 30 (a build, a package's tests), box 40 (the
 # box's and the bridge's suites, which may go together).
 #
@@ -97,12 +118,112 @@
 # A job inside one of its kind (above) runs within that one's limit; one of another kind has its
 # own as well. In a terminal a job has none: you're there to stop it. Older copies of this helper
 # start their jobs with no limit, and take turns with these as before.
+#
+# One copy runs every job: the canonical one, $HOME/Projects/kuvo-ai/scripts/heavy.sh (or
+# KUVO_HEAVY_CANONICAL). Any other copy (a worktree's, a checkout of an older commit's) that finds it
+# there hands the job to it at once, with the same arguments and environment, so a fix to how jobs
+# take turns reaches every caller, whichever checkout it runs from. KUVO_HEAVY_CANONICAL= (empty)
+# runs the copy itself, for the helper's own tests and for trying a change to it.
+#
+#   scripts/heavy.sh status   a line for each lane: who holds each slot, since when, whether its
+#                             command runs, and how many wait in line, the longest since when
+#
+# A job that holds a slot starts its command at once: nothing in this copy waits while it holds a
+# lane's lock. Each job says so in its lane's queue folder (holder-<slot>: its pid, when it took the
+# slot and when its command started, and its folder), which status reads; a holder that says
+# nothing is an older copy, and status looks at what it runs instead. Every job that waits in line
+# says, once, when its slot's holder has held it for 2 minutes without its command running.
 set -eu
 
+# Not the canonical copy: the job is the canonical copy's (once: that one never hands it on).
+CANONICAL="${KUVO_HEAVY_CANONICAL-$HOME/Projects/kuvo-ai/scripts/heavy.sh}"
+if [ -n "$CANONICAL" ] && [ -z "${KUVO_HEAVY_HANDED:-}" ] && [ -f "$CANONICAL" ] && ! [ "$0" -ef "$CANONICAL" ]; then
+    KUVO_HEAVY_HANDED=1 exec /bin/sh "$CANONICAL" "$@"
+fi
+# (What it runs hands its jobs on again: a job inside this one may be another checkout's.)
+unset KUVO_HEAVY_HANDED
+
 usage() {
-    echo "Usage: scripts/heavy.sh <mac|mac-build|phone-build|phone|box> <command> [arguments…], or --holds <kind>" >&2
+    echo "Usage: scripts/heavy.sh <mac|mac-build|phone-build|phone|box> <command> [arguments…], or --holds <kind>, or status" >&2
     exit 64
 }
+
+# How long ago, said short.
+ago() { if [ "$1" -ge 3600 ]; then echo "$(($1 / 3600))h$((($1 % 3600) / 60))m"; elif [ "$1" -ge 60 ]; then echo "$(($1 / 60))m"; else echo "$1s"; fi; }
+
+# Who holds slot $2 of a lane (its lock $1, its queue folder $3), in `slot_said`, and in `idle` whether
+# its command isn't running (since `idle_from`, when its own say tells): its own say (holder-<slot>, which this copy writes), or, from an older
+# copy, which says nothing, what runs under it (only `sleep`: it waits for room under the lock).
+# Empty when the slot is free.
+describe_slot() {
+    slot_said=
+    idle=
+    idle_from=
+    lockf -ks -t 0 "$1" true 2>/dev/null && return 0
+    pid=$(lsof -t "$1" 2>/dev/null | head -n 1)
+    now=$(date +%s)
+    if [ -f "$3/holder-$2" ] && read -r job holder taken started folder < "$3/holder-$2" 2>/dev/null &&
+        [ "$holder" = "${pid:-$holder}" ] && kill -0 "$holder" 2>/dev/null; then
+        if [ "${started:-0}" -gt 0 ]; then
+            slot_said="pid $holder ($folder), held $(ago $((now - taken))), running $(ago $((now - started)))"
+        else
+            idle=1
+            idle_from=$taken
+            slot_said="pid $holder ($folder), held $(ago $((now - taken))), not running its command"
+        fi
+    elif [ -n "$pid" ]; then
+        inner=$(pgrep -P "$pid" 2>/dev/null | head -n 1)
+        kids=$(pgrep -l -P "${inner:-0}" 2>/dev/null | awk '{ print $2 }' | sort -u | tr '\n' ' ')
+        since=$(ps -o etime= -p "$pid" 2>/dev/null | tr -d ' ' || true)
+        case "$kids" in
+            "" | "sleep ")
+                idle=1
+                slot_said="pid $pid (an older heavy.sh)${since:+, held for $since}, not running its command: it waits for room under the lock"
+                ;;
+            *) slot_said="pid $pid (an older heavy.sh)${since:+, held for $since}, running" ;;
+        esac
+    else
+        slot_said="held (lsof can't say by whom)"
+    fi
+}
+
+# Each lane's health (`status`): for each slot, who holds it, since when and whether its command
+# runs, and the line's length and its longest wait. It only reads: locks, queue folders, processes.
+status() {
+    dir="${KUVO_HEAVY_DIR:-$(getconf DARWIN_USER_TEMP_DIR 2>/dev/null || echo /tmp/)}"
+    dir="${dir%/}"
+    uid=$(id -u)
+    for lane in mac mac-build phone box; do
+        queue="$dir/kuvo-code-heavy-$lane-$uid.queue"
+        line="$lane:"
+        for n in 1 2; do
+            lock="$dir/kuvo-code-heavy-$lane-$uid.lock"
+            [ "$n" = 1 ] || lock="$dir/kuvo-code-heavy-$lane-2-$uid.lock"
+            [ -f "$lock" ] || continue
+            describe_slot "$lock" "$n" "$queue"
+            line="$line slot $n ${slot_said:-free};"
+        done
+        waiting=0
+        oldest=
+        for entry in "$queue"/[01]-*; do
+            [ -f "$entry" ] || continue
+            waiting=$((waiting + 1))
+            at=$(stat -f %B "$entry" 2>/dev/null || stat -c %W "$entry" 2>/dev/null || echo 0)
+            if [ "$at" -gt 0 ] && { [ -z "$oldest" ] || [ "$at" -lt "$oldest" ]; }; then oldest=$at; fi
+        done
+        if [ "$waiting" -gt 0 ]; then
+            line="$line $waiting waiting${oldest:+, the longest for $(ago $(($(date +%s) - oldest)))}"
+        else
+            line="$line none waiting"
+        fi
+        echo "$line"
+    done
+}
+if [ "${1:-}" = status ] && [ $# -eq 1 ]; then
+    status
+    exit 0
+fi
+
 [ $# -ge 2 ] || usage
 holds=
 if [ "$1" = --holds ]; then
@@ -133,9 +254,24 @@ case "$kind" in
         ;;
 esac
 OLD="$DIR/kuvo-code-heavy-$(id -u).lock"
-MAX_LOAD="${KUVO_HEAVY_LOAD:-40}"
+MAX_LOAD="${KUVO_HEAVY_LOAD:-}"
 WAITS="${KUVO_HEAVY_WAIT:-1}"
-case "$kind" in mac | phone) DEFAULT_LIMIT=45m ;; mac-build) DEFAULT_LIMIT=30m ;; box) DEFAULT_LIMIT=40m ;; esac
+case "$kind" in mac | phone) DEFAULT_LIMIT=45m ;; mac-build) DEFAULT_LIMIT=90m ;; box) DEFAULT_LIMIT=40m ;; esac
+
+# What every job runs under, so it never takes the CPU or the disk from the box: low priority (a
+# prefix: `$LOW "$@"`; its children keep it). macOS: utility QoS (lower CPU and I/O priority than
+# the box's default, on every core: `nice` alone leaves the I/O alone) at nice 20. Linux: nice and
+# ionice.
+LOW=
+case "$(uname -s 2>/dev/null)" in
+    Darwin)
+        if command -v taskpolicy >/dev/null 2>&1; then LOW="taskpolicy -c utility nice -n 20"; else LOW="nice -n 15"; fi
+        ;;
+    *)
+        # (ionice can be refused, in a container: then nice alone.)
+        if command -v ionice >/dev/null 2>&1 && ionice -c3 true >/dev/null 2>&1; then LOW="nice -n 15 ionice -c3"; else LOW="nice -n 15"; fi
+        ;;
+esac
 
 # Whether `ps` answers. A sandbox can refuse it (Auto mode), and then no process can be asked what
 # it runs under.
@@ -208,6 +344,16 @@ if [ -n "$holds" ]; then
     exit
 fi
 
+# The Xcode lanes' jobs build with Xcode's compilation cache, one for every checkout
+# (scripts/xcode-cache.sh and its xcconfig, beside this copy: XCODE_XCCONFIG_FILE, unless the caller
+# has one), so a build in a new worktree replays what another worktree's build compiled instead of
+# compiling it all again. Not the box's: it runs no xcodebuild.
+case "$kind" in
+    mac | mac-build | phone)
+        if [ -f "$(dirname "$0")/xcode-cache.sh" ] && . "$(dirname "$0")/xcode-cache.sh"; then xcode_cache "$(dirname "$0")"; fi
+        ;;
+esac
+
 # A time like 90m, 600s or 2h (plain: minutes), in seconds; $2 names the variable it came from.
 # (Its number in base 10, whatever zeros lead it, and at most six digits.)
 seconds_of() {
@@ -227,17 +373,21 @@ seconds_of() {
 }
 GIVEN_LIMIT="${KUVO_HEAVY_LIMIT:-$DEFAULT_LIMIT}"
 LIMIT=$(seconds_of "$GIVEN_LIMIT" KUVO_HEAVY_LIMIT) || exit 64
-# How long the Mac app's suite, waiting on a busy Mac with its turn, holds back new jobs of the
+# How long the Mac app's suite, waiting for room on the Mac, holds back new jobs of the
 # other kinds (below).
-GIVEN_MAC_FIRST="${KUVO_HEAVY_MAC_FIRST_FOR:-15m}"
+GIVEN_MAC_FIRST="${KUVO_HEAVY_MAC_FIRST_FOR:-2m}"
 MAC_FIRST_FOR=$(seconds_of "$GIVEN_MAC_FIRST" KUVO_HEAVY_MAC_FIRST_FOR) || exit 64
 MAC_FIRST="$DIR/kuvo-code-heavy-mac-first-$(id -u)"
-# Memory a new job waits for (below): the share of it available, in percent (0: it doesn't wait).
-MIN_FREE="${KUVO_HEAVY_MEMORY:-20}"
+# How long a slot's holder may hold it without running its command before those in line say so.
+STUCK_AFTER="${KUVO_HEAVY_STUCK_AFTER:-120}"
+# Memory a new job waits for (below), if asked: the share of it available, in percent (unset: none,
+# only swapping and critical pressure count; 0: it doesn't wait for memory at all).
+MIN_FREE="${KUVO_HEAVY_MEMORY:-}"
 case "$MIN_FREE" in
-    "" | *[!0-9]* | ????*) MIN_FREE=bad ;;
+    "") ;;
+    *[!0-9]* | ????*) MIN_FREE=bad ;;
 esac
-if [ "$MIN_FREE" = bad ] || [ "${KUVO_HEAVY_MEMORY:-20}" -gt 100 ]; then
+if [ "$MIN_FREE" = bad ] || [ "${MIN_FREE:-0}" -gt 100 ]; then
     echo "KUVO_HEAVY_MEMORY is a share of memory in percent, 0 to 100 (it's ${KUVO_HEAVY_MEMORY:-})." >&2
     exit 64
 fi
@@ -245,7 +395,7 @@ fi
 SWAP_MB="${KUVO_HEAVY_SWAP:-10}"
 case "$SWAP_MB" in "" | *[!0-9]* | ???????*) echo "KUVO_HEAVY_SWAP is MB a second (it's $SWAP_MB)." >&2; exit 64 ;; esac
 MEMORY_SHORT="$DIR/kuvo-code-heavy-memory-short-$(id -u)"
-GIVEN_MEMORY_WAIT="${KUVO_HEAVY_MEMORY_WAIT_FOR:-15m}"
+GIVEN_MEMORY_WAIT="${KUVO_HEAVY_MEMORY_WAIT_FOR:-2m}"
 MEMORY_WAIT_FOR=$(seconds_of "$GIVEN_MEMORY_WAIT" KUVO_HEAVY_MEMORY_WAIT_FOR) || exit 64
 # A job's place in its lane's queue: high goes before normal (0 sorts before 1).
 case "${KUVO_HEAVY_PRIORITY:-normal}" in
@@ -390,6 +540,137 @@ else
 fi
 '
 
+# The Mac busy: wait until it isn't.
+load() { sysctl -n vm.loadavg | awk '{ print $2 }'; }
+busy() { [ -n "$MAX_LOAD" ] && [ "$(load | awk -v max="$MAX_LOAD" '{ print ($1 > max) }')" = 1 ]; }
+
+# The Mac app's suite first: while it waits for room on the Mac, phone, mac-build and box jobs that
+# kept starting meanwhile kept the Mac busy, so it rarely got in. While it waits there (it says so in $MAC_FIRST: its pid and since when), a new job of another kind waits
+# for it to start, for $MAC_FIRST_FOR at most. Jobs already running go on. A suite that's gone, or
+# that started, says nothing; a job started inside one already running doesn't wait (it's part of
+# that one); older copies of this helper neither say it nor wait for it.
+mac_waits() {
+    [ -f "$MAC_FIRST" ] || return 1
+    read -r pid since < "$MAC_FIRST" 2>/dev/null || return 1
+    [ -n "${pid:-}" ] && [ -n "${since:-}" ] && kill -0 "$pid" 2>/dev/null && [ $(($(date +%s) - since)) -lt "$MAC_FIRST_FOR" ]
+}
+
+# Short of memory: with two simulators, the app's suite, builds and the engine going, the Mac ran
+# out of memory long before CPU (15 of 16 GB used, 9 GB swapped, the CPU half idle), and the load
+# grew with the swapping. So a new job (not one started inside a job already running) also waits
+# while the Mac thrashes, by what the system does and says: it's swapping (pages in and out, more
+# than $SWAP_MB MB a second since the last look, from vm_stat) or its memory pressure is critical
+# (kern.memorystatus_vm_pressure_level), and, when KUVO_HEAVY_MEMORY asks, while less than
+# $MIN_FREE% of it is available (kern.memorystatus_level, what `memory_pressure -Q` calls free; with
+# 16 GB and a dozen sessions it's below 20% all day, so it isn't asked unless set). Not swap used:
+# it stays long after the pressure is gone. Short, it waits until two looks in a row find it isn't,
+# so the jobs that waited don't all start at once, and for $MEMORY_WAIT_FOR at most from when any
+# job found it short ($MEMORY_SHORT): then the load alone decides (when it's asked to).
+memory_level() { sysctl -n kern.memorystatus_vm_pressure_level 2>/dev/null || echo 1; }
+memory_free() { sysctl -n kern.memorystatus_level 2>/dev/null || echo 100; }
+page_size=$(vm_stat 2>/dev/null | sed -n 's/.*page size of \([0-9]*\) bytes.*/\1/p')
+page_size=${page_size:-16384}
+# Pages swapped in and out so far.
+swapped() { vm_stat 2>/dev/null | awk '/^Swapins/ { gsub("\\.", "", $2); n += $2 } /^Swapouts/ { gsub("\\.", "", $2); n += $2 } END { print n + 0 }'; }
+swap_pages=
+swap_at=
+swap_rate=0
+# Looks again: how much it swapped a second since the last look (the first, over three seconds).
+look_at_memory() {
+    if [ -z "$swap_pages" ]; then
+        swap_pages=$(swapped)
+        swap_at=$(date +%s)
+        sleep 3
+    fi
+    pages=$(swapped)
+    at=$(date +%s)
+    seconds=$((at - swap_at))
+    [ "$seconds" -gt 0 ] || seconds=1
+    swap_rate=$(((pages - swap_pages) * page_size / 1000000 / seconds))
+    swap_pages=$pages
+    swap_at=$at
+}
+memory_short() {
+    [ "$swap_rate" -gt "$SWAP_MB" ] || [ "$(memory_level)" -ge 4 ] || { [ -n "$MIN_FREE" ] && [ "$(memory_free)" -lt "$MIN_FREE" ]; }
+}
+memory_said() {
+    case "$(memory_level)" in 1) pressure=normal ;; 2) pressure=warn ;; 4) pressure=critical ;; *) pressure="level $(memory_level)" ;; esac
+    echo "swapping ${swap_rate} MB a second, pressure $pressure, $(memory_free)% available"
+}
+# How long memory has been short, for any job: since the first that found it so.
+short_for() {
+    since=
+    [ -f "$MEMORY_SHORT" ] && read -r since < "$MEMORY_SHORT" 2>/dev/null
+    if [ -z "${since:-}" ]; then
+        since=$(date +%s)
+        printf '%s\n' "$since" > "$MEMORY_SHORT.$$" && mv -f "$MEMORY_SHORT.$$" "$MEMORY_SHORT"
+    fi
+    echo $(($(date +%s) - since))
+}
+# Why it waits now, if it does (in `why`): memory, or the load.
+was_short=
+calm=0
+decide() {
+    why=
+    if [ "${MIN_FREE:-1}" -gt 0 ] && [ -z "${NESTED:-}" ]; then
+        look_at_memory
+        if memory_short; then
+            calm=0
+            was_short=1
+            [ "$(short_for)" -lt "$MEMORY_WAIT_FOR" ] && why=memory && return
+        elif [ -n "$was_short" ] && [ "$calm" -lt 1 ]; then
+            # (Once more, so it's not a moment's calm.)
+            calm=$((calm + 1))
+            why=memory
+            return
+        else
+            rm -f "$MEMORY_SHORT"
+        fi
+    fi
+    if busy; then why=load; fi
+}
+
+# Waits until there's room for a new job: called before it queues for its lane, never while it
+# holds a lane's lock, so a job waiting here holds up no one behind it in its lane.
+wait_for_room() {
+    if [ "$kind" != mac ] && [ -z "${NESTED:-}" ]; then
+        said=
+        while mac_waits; do
+            [ "$WAITS" = 0 ] && cannot_wait "The Mac app's suite is waiting for the Mac to be less busy, and goes first."
+            [ -n "$said" ] || echo "Waiting for the Mac app's suite to start first: it's waiting for the Mac to be less busy (for $GIVEN_MAC_FIRST at most)…" >&2
+            said=1
+            sleep 5
+        done
+    fi
+    said=
+    decide
+    if [ "$kind" = mac ] && [ -n "$why" ] && [ "$WAITS" != 0 ]; then
+        printf '%s %s\n' "$$" "$(date +%s)" > "$MAC_FIRST.$$" && mv -f "$MAC_FIRST.$$" "$MAC_FIRST"
+    fi
+    while [ -n "$why" ]; do
+        if [ "$why" = memory ]; then
+            [ "$WAITS" = 0 ] && cannot_wait "The Mac is short of memory ($(memory_said))."
+            [ "$said" = memory ] || echo "Waiting for memory: the Mac is short of it ($(memory_said)), for $GIVEN_MEMORY_WAIT at most…" >&2
+        else
+            [ "$WAITS" = 0 ] && cannot_wait "The Mac is busy (load $(load), over $MAX_LOAD)."
+            [ "$said" = load ] || echo "Waiting while the Mac is busy (load $(load), over $MAX_LOAD)…" >&2
+        fi
+        said=$why
+        sleep 15
+        decide
+    done
+    # (Its own say, not another suite's since.)
+    if [ "$kind" = mac ] && [ -f "$MAC_FIRST" ] && read -r pid since < "$MAC_FIRST" 2>/dev/null && [ "$pid" = "$$" ]; then
+        rm -f "$MAC_FIRST"
+    fi
+}
+
+
+# Started inside another heavy job (of another kind: one of its own kind runs at once, below),
+# which says so in KUVO_HEAVY_HELD while it runs: a part of a job already running.
+NESTED=
+for claim in ${KUVO_HEAVY_HELD:-}; do kill -0 "${claim##*:}" 2>/dev/null && NESTED=1; done
+
 # The lock whose turn this process has just taken (below), if any.
 TAKEN=
 for candidate in "$LOCK" "$LOCK2"; do
@@ -410,13 +691,17 @@ if [ -n "$TAKEN" ]; then
         rm -f "$claim"
     fi
     unset KUVO_HEAVY_HOLDING
-    # Started inside another heavy job (of another kind: one of its own kind runs at once, above),
-    # which says so in KUVO_HEAVY_HELD while it runs: a part of a job already running.
-    NESTED=
-    for claim in ${KUVO_HEAVY_HELD:-}; do kill -0 "${claim##*:}" 2>/dev/null && NESTED=1; done
     # What runs under this turn knows it holds the lock, for when `ps` can't say.
     KUVO_HEAVY_HELD="${KUVO_HEAVY_HELD:-} $TAKEN:$PPID"
     [ -z "$LOCK2" ] || slot_env "$TAKEN"
+    # It says it holds the slot (status reads it), and, once it runs, since when its command does.
+    holder_file="$QUEUE/holder-1"
+    [ "$TAKEN" = "$LOCK" ] || holder_file="$QUEUE/holder-2"
+    taken_at=$(date +%s)
+    say_holder() {
+        { printf '%s %s %s %s %s\n' "$$" "$PPID" "$taken_at" "$1" "$PWD" > "$holder_file.$$" && mv -f "$holder_file.$$" "$holder_file"; } 2>/dev/null || true
+    }
+    say_holder 0
     # While jobs were still started the old way, under one lock for every kind (older checkouts'
     # test-app.sh), one of these waited for them, and held that lock too as it ran.
     if [ "$(date +%Y%m%d)" -le "${KUVO_HEAVY_OLD_UNTIL:-20261026}" ]; then
@@ -434,8 +719,40 @@ else
         if [ -n "$LOCK2" ]; then
             if held "$LOCK2"; then slot_env "$LOCK2"; elif held "$LOCK"; then slot_env "$LOCK"; fi
         fi
-        exec "$@"
+        exec $LOW "$@"
     fi
+    # Says once, for each slot it may take, when the slot's holder hasn't run its command for 2
+    # minutes (an older copy waiting for room under the lock, say): a lane held that way stalls.
+    idle_1=
+    idle_2=
+    told_1=
+    told_2=
+    stuck_say() {
+        for n in 1 2; do
+            [ "$n" = 1 ] || [ "$SLOTS" = 2 ] || continue
+            lock=$LOCK
+            [ "$n" = 1 ] || lock=$LOCK2
+            [ -n "$lock" ] || continue
+            describe_slot "$lock" "$n" "$QUEUE"
+            if [ -z "$idle" ]; then
+                eval "idle_$n="
+                continue
+            fi
+            since=$(eval echo "\${idle_$n}")
+            if [ -z "$since" ]; then
+                since=$(date +%s)
+                # (Its own say gives when it took the slot.)
+                [ -z "$idle_from" ] || since=$idle_from
+                eval "idle_$n=$since"
+            fi
+            if [ $(($(date +%s) - since)) -ge "$STUCK_AFTER" ] && [ -z "$(eval echo "\${told_$n}")" ]; then
+                echo "heavy.sh: slot $n of the $kind lane has been held for $(ago $(($(date +%s) - since))) without its command running: $slot_said." >&2
+                eval "told_$n=1"
+            fi
+        done
+    }
+    # Room on the Mac first, while it holds nothing.
+    wait_for_room
     # Its kind's turn, through the lane's queue (TURN, above): in line until a slot is its own,
     # then that slot's lock, which it holds as it runs.
     ticket=new
@@ -482,130 +799,11 @@ else
         [ "$turn" = "" ] || failed=0
         [ -n "$said" ] || echo "Waiting for another $kind job to finish…" >&2
         said=1
+        # Now and then, whether a slot it may take is held by a job whose command doesn't run.
+        looks=$((${looks:-0} + 1))
+        [ $((looks % 30)) != 1 ] || stuck_say
         sleep 1
     done
-fi
-
-# The Mac busy: wait until it isn't.
-load() { sysctl -n vm.loadavg | awk '{ print $2 }'; }
-busy() { [ "$(load | awk -v max="$MAX_LOAD" '{ print ($1 > max) }')" = 1 ]; }
-
-# The Mac app's suite first: with its turn, it waits for the Mac to be less busy, and phone,
-# mac-build and box jobs that kept starting meanwhile kept it busy, so it rarely got in. While it
-# waits there (it says so in $MAC_FIRST: its pid and since when), a new job of another kind waits
-# for it to start, for $MAC_FIRST_FOR at most. Jobs already running go on. A suite that's gone, or
-# that started, says nothing; a job started inside one already running doesn't wait (it's part of
-# that one); older copies of this helper neither say it nor wait for it.
-mac_waits() {
-    [ -f "$MAC_FIRST" ] || return 1
-    read -r pid since < "$MAC_FIRST" 2>/dev/null || return 1
-    [ -n "${pid:-}" ] && [ -n "${since:-}" ] && kill -0 "$pid" 2>/dev/null && [ $(($(date +%s) - since)) -lt "$MAC_FIRST_FOR" ]
-}
-if [ "$kind" != mac ] && [ -z "${NESTED:-}" ]; then
-    said=
-    while mac_waits; do
-        [ "$WAITS" = 0 ] && cannot_wait "The Mac app's suite is waiting for the Mac to be less busy, and goes first."
-        [ -n "$said" ] || echo "Waiting for the Mac app's suite to start first: it's waiting for the Mac to be less busy (for $GIVEN_MAC_FIRST at most)…" >&2
-        said=1
-        sleep 5
-    done
-fi
-
-# Short of memory: with two simulators, the app's suite, builds and the engine going, the Mac ran
-# out of memory long before CPU (15 of 16 GB used, 9 GB swapped, the CPU half idle), and the load
-# grew with the swapping. So a new job (not one started inside a job already running) also waits
-# while memory is short, by what the system does and says: it's swapping (pages in and out, more
-# than $SWAP_MB MB a second since the last look, from vm_stat), its memory pressure is at warn or
-# worse (kern.memorystatus_vm_pressure_level), or less than $MIN_FREE% of it is available
-# (kern.memorystatus_level, what `memory_pressure -Q` calls free; it counts memory in use by apps
-# too, so it falls late). Not swap used: it stays long after the pressure is gone. Short, it waits
-# until two looks in a row find it isn't, so the jobs that waited don't all start at once, and for
-# $MEMORY_WAIT_FOR at most from when any job found it short ($MEMORY_SHORT): then the load alone
-# decides.
-memory_level() { sysctl -n kern.memorystatus_vm_pressure_level 2>/dev/null || echo 1; }
-memory_free() { sysctl -n kern.memorystatus_level 2>/dev/null || echo 100; }
-page_size=$(vm_stat 2>/dev/null | sed -n 's/.*page size of \([0-9]*\) bytes.*/\1/p')
-page_size=${page_size:-16384}
-# Pages swapped in and out so far.
-swapped() { vm_stat 2>/dev/null | awk '/^Swapins/ { gsub("\\.", "", $2); n += $2 } /^Swapouts/ { gsub("\\.", "", $2); n += $2 } END { print n + 0 }'; }
-swap_pages=
-swap_at=
-swap_rate=0
-# Looks again: how much it swapped a second since the last look (the first, over three seconds).
-look_at_memory() {
-    if [ -z "$swap_pages" ]; then
-        swap_pages=$(swapped)
-        swap_at=$(date +%s)
-        sleep 3
-    fi
-    pages=$(swapped)
-    at=$(date +%s)
-    seconds=$((at - swap_at))
-    [ "$seconds" -gt 0 ] || seconds=1
-    swap_rate=$(((pages - swap_pages) * page_size / 1000000 / seconds))
-    swap_pages=$pages
-    swap_at=$at
-}
-memory_short() {
-    [ "$swap_rate" -gt "$SWAP_MB" ] || [ "$(memory_level)" -ge 2 ] || [ "$(memory_free)" -lt "$MIN_FREE" ]
-}
-memory_said() {
-    case "$(memory_level)" in 1) pressure=normal ;; 2) pressure=warn ;; 4) pressure=critical ;; *) pressure="level $(memory_level)" ;; esac
-    echo "swapping ${swap_rate} MB a second, pressure $pressure, $(memory_free)% available"
-}
-# How long memory has been short, for any job: since the first that found it so.
-short_for() {
-    since=
-    [ -f "$MEMORY_SHORT" ] && read -r since < "$MEMORY_SHORT" 2>/dev/null
-    if [ -z "${since:-}" ]; then
-        since=$(date +%s)
-        printf '%s\n' "$since" > "$MEMORY_SHORT.$$" && mv -f "$MEMORY_SHORT.$$" "$MEMORY_SHORT"
-    fi
-    echo $(($(date +%s) - since))
-}
-# Why it waits now, if it does (in `why`): memory, or the load.
-was_short=
-calm=0
-decide() {
-    why=
-    if [ "$MIN_FREE" -gt 0 ] && [ -z "${NESTED:-}" ]; then
-        look_at_memory
-        if memory_short; then
-            calm=0
-            was_short=1
-            [ "$(short_for)" -lt "$MEMORY_WAIT_FOR" ] && why=memory && return
-        elif [ -n "$was_short" ] && [ "$calm" -lt 1 ]; then
-            # (Once more, so it's not a moment's calm.)
-            calm=$((calm + 1))
-            why=memory
-            return
-        else
-            rm -f "$MEMORY_SHORT"
-        fi
-    fi
-    if busy; then why=load; fi
-}
-
-said=
-decide
-if [ "$kind" = mac ] && [ -n "$why" ] && [ "$WAITS" != 0 ]; then
-    printf '%s %s\n' "$$" "$(date +%s)" > "$MAC_FIRST.$$" && mv -f "$MAC_FIRST.$$" "$MAC_FIRST"
-fi
-while [ -n "$why" ]; do
-    if [ "$why" = memory ]; then
-        [ "$WAITS" = 0 ] && cannot_wait "The Mac is short of memory ($(memory_said))."
-        [ "$said" = memory ] || echo "Waiting for memory: the Mac is short of it ($(memory_said)), for $GIVEN_MEMORY_WAIT at most…" >&2
-    else
-        [ "$WAITS" = 0 ] && cannot_wait "The Mac is busy (load $(load), over $MAX_LOAD)."
-        [ "$said" = load ] || echo "Waiting while the Mac is busy (load $(load), over $MAX_LOAD)…" >&2
-    fi
-    said=$why
-    sleep 15
-    decide
-done
-# (Its own say, not another suite's since.)
-if [ "$kind" = mac ] && [ -f "$MAC_FIRST" ] && read -r pid since < "$MAC_FIRST" 2>/dev/null && [ "$pid" = "$$" ]; then
-    rm -f "$MAC_FIRST"
 fi
 
 # The job runs in a process group of its own, and the group ends with the job: once the command is
@@ -654,9 +852,11 @@ over_time() {
 
 # In a terminal the job stays in the terminal's own group: one in a group of its own couldn't read
 # the keyboard (a passphrase prompt would stop it), and Ctrl-C reaches the whole group there anyway.
+# (Its command starts now: whoever looks at its slot sees it running.)
+[ -z "${holder_file:-}" ] || say_holder "$(date +%s)"
 if [ -t 0 ] || { true </dev/tty; } 2>/dev/null; then
-    [ -n "${old_way:-}" ] && exec lockf -k "$OLD" "$@"
-    exec "$@"
+    [ -n "${old_way:-}" ] && exec lockf -k "$OLD" $LOW "$@"
+    exec $LOW "$@"
 fi
 
 trap 'stopped HUP 129' HUP
@@ -667,9 +867,9 @@ command_line=$*
 trap 'over_time "$command_line"' USR1
 set -m
 if [ -n "${old_way:-}" ]; then
-    lockf -k "$OLD" "$@" &
+    lockf -k "$OLD" $LOW "$@" &
 else
-    "$@" &
+    $LOW "$@" &
 fi
 group=$!
 # `lockf` doesn't pass a signal on to its command, and lets go of the lock as it ends: this helper
