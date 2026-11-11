@@ -2869,7 +2869,24 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   user set has come.`, `[Goal] Nothing of the goal is at work now.`, `[Limit reset] <why> has
   reset. Carry on`, `[Session finished|still working|failed|asks] "<title>"` and `[The user answered] `: read
   them the same way
-  (`BoxNote` in KuvoClient's ClientSessions does both).
+  (`BoxNote` in KuvoClient's ClientSessions does both). A transcript shows no pill for any of them
+  (the user, 11-10). Its sessions' news (`from` `Its sessions`) shows as a message from each
+  session, in the design of a message from another agent, opening it: its text has one part per
+  session, a blank line between them, each opening `[Session <kind>] "<title>" <place> (address
+  <session>)`, then for `finished` `, after <time>:` and its reply on the lines after (`(It ended
+  without a reply.)` for none); for `failed`, `stopped: <why>.` or `stopped with an error[: <why>].`
+  and words for the lead; for `asks`, `asks to <what> (ask <id>).` or `asks: <question> (ask <id>).`
+  and words for the lead. Show what it said, never the words for the lead. `still working` shows
+  nothing, old ones included. A goal started or resumed is a word in the next reply's footer; the
+  rest show nothing. The same goes for the engine's and the bridge's notes (`synthetic`, `system`):
+  they're for the model and show nothing, but what changed (the model or its effort, the mode, a
+  summary, the project's folders) is said in a word beside the next reply's time (`ReplyChanges`).
+  The agents bridge's own notes for the user ("Your PreToolUse hook failed…", "Codex asks for
+  verification to go on…", "… Going on with Codex.") carry `metadata.kuvo.notice: true`, and show
+  as a quiet line (`Message.Notice.isForYou`); those from before it marked them show nothing. A
+  `Your answer` note `You approved: <what>` (what you approved after Auto's reviewer held it back)
+  shows as "Allowed by you" on the first step after it that does `<what>` (`WorkAnswer.yours`), and
+  nowhere if none does.
 - A prompt a phone sends (`POST api/session/<id>/prompt`, and `kuvo/agents/api/…` alike) gets a
   block at the end of its text that tells the agent it's from the phone: a line `<from-phone>`,
   the words in `FromPhone.swift`, and a line `</from-phone>`. Every box adds it, in the same
