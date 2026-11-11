@@ -21,7 +21,8 @@ The protocol is `Packages/KuvoLink/PROTOCOL.md`. Code that's there only for rele
 After changing anything in `src/link` or `src/shared`, run `scripts/build-box.sh` and commit
 `kuvo-link.js` with it. It builds with the Bun CI has (1.4.2), so every computer builds the same
 file, and CI fails when the file isn't what the sources build, byte for byte (`build-box.sh
---check`). After changing `src/agents` (or `src/shared`), run `scripts/build-agents.sh` and commit
+--check`). Never bump the link's version (`src/link/version.ts`): `build-box.sh` writes a hash of
+what it built in its place. After changing `src/agents` (or `src/shared`), run `scripts/build-agents.sh` and commit
 `kuvo-agents.js`; its last line names what it was built from (those folders and this package's
 `package.json` and lockfile, so a change to either needs it rebuilt too), which CI checks
 (`build-agents.sh --check`). `bun run build` runs both.

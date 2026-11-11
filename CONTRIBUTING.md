@@ -376,7 +376,8 @@ stand-in, the same small one on each. To add one:
   file an area, with each field an answer can have (one ending in `?` may be left out) and its
   type, which the box's code takes its types from too. A new route, or a new field in an answer,
   goes there first; `./scripts/route-shapes.sh` writes `routes/shapes/answers.json` for both
-  runners (the box's suite, `test/route-shapes.test.ts`, and CI check it's current), and both hold an answer to a shape by
+  runners, and `routes/features.json` from the box's lists of what it answers (the box's suite,
+  `test/route-shapes.test.ts`, and CI check both are current: never edit them), and both hold an answer to a shape by
   `routes/shapes/cases.json`. A field that can be null is sent as `null`, never left out (this
   Mac's encoder leaves a nil out, so its fields that can be null are `@SentAsNull`), and a refusal
   is JSON, `{}` at least.
@@ -810,6 +811,43 @@ Every change starts from an issue and lands on `main` through a pull request.
    It's then squash-merged and the branch is deleted.
 
 `main` only accepts changes through pull requests.
+
+### What branches don't edit by hand
+
+Many branches change the box at once, so what each would bump or count is worked out instead,
+and the lists they add to merge line by line:
+
+- **The bridge's version** (`BRIDGE_VERSION`, `Packages/Box/src/link/version.ts`): never bump
+  it. `scripts/build-box.sh` writes in a hash of the link as built, so it changes with every
+  change (a machine's `setup` replaces a running bridge whose version isn't its own), and nothing
+  compares it: clients check `features`. A note of when something came in (PROTOCOL.md) names its
+  feature, not a bridge version.
+- **What a box answers** (`FEATURES` in `Packages/Box/src/shared/features.ts`; `MAC_FEATURES`
+  and `MACHINE_FEATURES` in `shared/routes/mac.ts`): add a name on a line of its own, in order
+  (`LC_ALL=C sort`). Names two branches add in different places merge cleanly; git merges
+  `features.ts` by union (`.gitattributes`), so two names added side by side both stay too,
+  though maybe out of order: the box's tests (`test/features.test.ts`) and `route-shapes.sh`
+  refuse a list out of order or a name twice, so put them in order. Change nothing else in
+  `features.ts` in a branch that adds a name, and don't remove a name next to one another branch
+  adds (union keeps it; the bridge's tests check every name has its route). A name for what only
+  a machine answers goes in `MACHINE_FEATURES` too, and one only a Mac answers in `MAC_FEATURES`
+  instead: this Mac's box claims every other name (`macFeatures`).
+- **Other lists a feature adds to** are one entry a line, in order, so they merge the same way
+  (without union): the bridge's test of each name's route (`routes` in
+  `Tests/Bridge/bridge.test.js`, whose order it checks), `MAC_FEATURES`, `MACHINE_FEATURES`, and
+  PROTOCOL.md's table of names ("Features").
+- **A branch from before these were one a line** (#396) merges main into itself first, where the
+  old lines conflict as they always did, and puts its names back one a line, in order. Merged the
+  other way, into main, `features.ts`'s union takes its old line whole beside the new ones: it
+  still builds, with names twice, and only the tests and `route-shapes.sh` catch it.
+- **What's written from those**: `./scripts/route-shapes.sh` writes `routes/shapes/answers.json`
+  and `routes/features.json` (each box's `kuvo/info` features, which both route runners check);
+  `./scripts/build-box.sh` and `./scripts/build-agents.sh` write `kuvo-link.js` and
+  `kuvo-agents.js`. Never edit them. After a merge, run the three scripts again and commit what
+  they write: that settles a conflict in one (take either side first: names added side by side
+  conflict in the JSON, and the bundles always do), and the `--check` of each (CI's, and the box's
+  suite for the route shapes) fails on one that isn't what its sources write.
+- **`CHANGELOG.md`**: add lines; it's merged by union too.
 
 ## Pull requests
 
