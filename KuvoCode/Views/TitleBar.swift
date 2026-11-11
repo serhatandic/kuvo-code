@@ -185,28 +185,28 @@ struct TabStrip: View {
             // One tab in two halves on a soft fill; the tab's own half raised while it's in view.
             HStack(spacing: 0) {
                 TabButton(tab: tab, isActive: isActive, close: { close(tab.id) }, select: select)
-                    .rightClickMenu { menu(for: tab) }
+                    .heldContextMenu { menu(for: tab) }
                     .background { if isActive { ActivePill().matchedGeometryEffect(id: "pill", in: pill) } }
                 TabButton(tab: companion, isActive: false, close: { closeBesideTab?(tab.id) }, select: select)
-                    .rightClickMenu { besideMenu(for: tab) }
+                    .heldContextMenu { besideMenu(for: tab) }
             }
             .background(Pressable.hoverFill, in: .capsule)
         case (let companion?, .compact):
             // One tab: the two tiles stacked, and both titles.
             TabButton(tab: tab.titled(tab.title + " · " + companion.title), isActive: isActive, close: { close(tab.id) }, behind: companion, select: select)
-                .rightClickMenu { menu(for: tab) + [.separator()] + besideMenu(for: tab) }
+                .heldContextMenu { menu(for: tab) + [.separator()] + besideMenu(for: tab) }
                 .background { if isActive { ActivePill().matchedGeometryEffect(id: "pill", in: pill) } }
         default:
             HStack(spacing: 0) {
                 TabButton(tab: tab, isActive: isActive, close: { close(tab.id) }, select: select)
-                    .rightClickMenu { menu(for: tab) }
+                    .heldContextMenu { menu(for: tab) }
                 // The session beside it, in the same tab: a crease between the two.
                 if let companion = tab.companion.first {
                     Rectangle()
                         .fill(Surface.hairline(scheme))
                         .frame(width: 1, height: 16)
                     TabButton(tab: companion, isActive: isActive, close: { closeBesideTab?(tab.id) }, select: select)
-                        .rightClickMenu { besideMenu(for: tab) }
+                        .heldContextMenu { besideMenu(for: tab) }
                 }
             }
             .background {

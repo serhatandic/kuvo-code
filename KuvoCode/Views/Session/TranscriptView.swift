@@ -149,6 +149,8 @@ struct TranscriptView: View {
         // What Auto's reviewer did with what its steps asked, beside them.
         .environment(\.askReviews, Sandboxes.shared.reviewMarks(on: Workspace.box(of: model.session.location.directory)))
         .environment(\.conversationSignIn, signIn)
+        // Its pictures, which each of them opens among.
+        .environment(\.conversationPictures, ConversationPictureSet(model: model))
         // Its sign-in, where this conversation runs (a machine signs in on its own).
         .sheet(item: $signingIn) { item in
             ConnectView(integrationID: item.id, onDone: { signingIn = nil }, onCancel: { signingIn = nil })
@@ -402,8 +404,9 @@ struct TranscriptView: View {
         // message queued during a run is older than that run's later steps.
         let boundary = model.session.revert?.messageID
         let all = model.transcript.messages
-        let cut = boundary.map { boundary in all.firstIndex { $0.id == boundary } ?? all.firstIndex { $0.id >= boundary } ?? all.count }
-        let messages = cut.map { Array(all[..<$0]) } ?? all
+        let messages = ShownMessages.before(undo: boundary, in: all)
+        // Where the undone part starts, if anything's undone.
+        let cut = boundary.map { _ in messages.count }
         // The model each turn runs on, for one that fails before any reply says it: the last switch's;
         // before any, the one the first switch left (wherever it is), or the session's. Not a reply's:
         // Auto's are the model it picked for that turn.
@@ -919,7 +922,7 @@ private struct RowView: View, Equatable {
         case .user(let message):
             let written = CommandMessages.shared.text(of: message)
             let (text, comments, paths, references) = SentMessage.split(written)
-            let stored = (message.files ?? []).enumerated().map { AttachmentItem.stored($1, id: "\(message.id)#\($0)") }
+            let stored = (message.files ?? []).enumerated().map { AttachmentItem.stored($1, id: ConversationPictures.id(message: message.id, file: $0)) }
             YourMessage(text: text, references: references, folders: folders(), attachments: stored + Attachments.paths(paths, besides: (message.files ?? []).compactMap(\.fileURL)).map(AttachmentItem.path), comments: comments,
                         widget: SentMessage.widget(of: written), keyword: SentMessage.keyword(of: written), sent: Date(timeIntervalSince1970: message.time.created / 1000),
                         fromPhone: FromPhone.isFromPhone(written),
@@ -933,7 +936,7 @@ private struct RowView: View, Equatable {
             UserBubble(text: text, references: references, folders: folders(), attachments: item.files.map(AttachmentItem.local) + item.inlineFiles.enumerated().map { AttachmentItem.stored($1, id: "\(item.id)#\(item.files.count + $0)") }
                            + Attachments.paths(paths, besides: item.files).map(AttachmentItem.path), comments: comments,
                        widget: SentMessage.widget(of: item.text), keyword: SentMessage.keyword(of: item.text), status: item.isLocal ? "Sending" : item.delivery == .queue ? "Queued" : "Sending")
-                .contextMenu { Button("Cancel", role: .destructive) { cancel(item) }.disabled(isOffline) }
+                .heldContextMenu { HeldRow.button("Cancel", role: .destructive, disabled: isOffline) { cancel(item) } }
         case .assistant(let message, let showsError):
             AssistantStepView(message: message, directory: directory, folders: folders, showsError: showsError)
         case .more(let message, _):
@@ -1882,9 +1885,9 @@ private struct TurnRow: ViewModifier {
 
     func body(content: Content) -> some View {
         if let words = row.words {
-            content.contextMenu {
-                Button("Copy Reply") { Clipboard.copy(said(words)) }
-                if let reply { Button("Reply") { reply(said(words)) } }
+            content.heldContextMenu {
+                HeldRow.button("Copy Reply") { Clipboard.copy(said(words)) }
+                if let reply { HeldRow.button("Reply") { reply(said(words)) } }
             }
         } else {
             content
@@ -2091,14 +2094,14 @@ final class CardFolds {
     /// What was opened or closed among those kept under this, closed with what they're in.
     func kept(under prefix: String) -> [String] { choices.keys.filter { $0.hasPrefix(prefix) } }
 
-    /// Steps and cards you opened or closed, in their conversation: opened, once they have, the
-    /// end is no longer followed, so what comes in next doesn't move what you read (`holds` false:
-    /// a step under way, kept in view until it ends); closing what you opened goes back to it (see
-    /// `ConversationScroller.reading`). `staysPut`: a card that opens where it is, the end let go of
-    /// before it opens rather than once it has (see `ConversationScroller.opening`). `closes`: what
-    /// goes with it; `then`: once it has opened or closed.
-    func toggle(_ id: String, open: Bool, in anchor: ScrollAnchor?, holds: Bool = true, staysPut: Bool = false, closes: [String] = [], then: @escaping () -> Void = {}) {
-        if open, holds, staysPut { anchor?.opening?(id) }
+    /// Steps and the agents' message cards you opened or closed, in their conversation: opened,
+    /// the end is no longer followed from before it grows, so it opens down past the composer,
+    /// moving nothing above it (#416), and what comes in next doesn't move what you read (`holds`
+    /// false: a step under way, kept in view until it ends); closing what you opened goes back to
+    /// the end once it has (see `ConversationScroller.reading`). `closes`: what goes with it;
+    /// `then`: once it has opened or closed.
+    func toggle(_ id: String, open: Bool, in anchor: ScrollAnchor?, holds: Bool = true, closes: [String] = [], then: @escaping () -> Void = {}) {
+        if open, holds { anchor?.opening?(id) }
         withAnimation(.ui) {
             set(id, open: open)
             closes.forEach(forget)
@@ -2107,7 +2110,7 @@ final class CardFolds {
             // Not if you've changed your mind since. (What's closed with others is forgotten.)
             guard self.isOpen(id, otherwise: closes.contains(id) ? false : !open) == open else { return }
             for closed in closes { anchor?.reading?(closed, false) }
-            if !open || holds { anchor?.reading?(id, open) }
+            if !open { anchor?.reading?(id, false) }
         }
     }
 }
@@ -2132,7 +2135,6 @@ private struct FoldingCard<Header: View, Accessory: View, Content: View>: View {
     /// How many times it's been opened or folded here.
     @State private var folding = 0
     @Environment(\.scrollAnchor) private var scrollAnchor
-    @Environment(\.conversationRow) private var row
 
     private static var radius: CGFloat { 10 }
     private static var padding: CGSize { CGSize(width: 10, height: 9) }
@@ -2165,15 +2167,10 @@ private struct FoldingCard<Header: View, Accessory: View, Content: View>: View {
                     folding += 1
                     let change = folding
                     isFolding = open
-                    // Its words open under it, where it is; once they have, as far into view as
-                    // they need, its header kept in view.
-                    folds.toggle(id, open: !open, in: scrollAnchor, staysPut: true) {
-                        guard change == folding else { return }
-                        if open {
-                            withAnimation(.easeOut(duration: 0.15)) { isFolding = false }
-                        } else if let row {
-                            scrollAnchor?.stack?.reveal(row)
-                        }
+                    // Its words open under it, where it is, moving nothing above it.
+                    folds.toggle(id, open: !open, in: scrollAnchor) {
+                        guard change == folding, open else { return }
+                        withAnimation(.easeOut(duration: 0.15)) { isFolding = false }
                     }
                 } label: {
                     // The same open or folded, so nothing in it moves or is laid out anew as the

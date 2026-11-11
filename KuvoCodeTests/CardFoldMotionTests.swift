@@ -290,9 +290,9 @@ import Testing
     }
 
     /// Opened at the end of a conversation that follows it: it opens where it is, under its header,
-    /// with nothing above it moving (the end followed took it up under you as it grew). Once open,
-    /// the view goes down as far as its words need, its header kept in view.
-    @Test func openingAtTheEndMovesNothingThenShowsIt() async throws {
+    /// down past the composer, with nothing above it moving, as steps do (#416); the end followed
+    /// took it up under you as it grew. What comes next doesn't move it either.
+    @Test func openingAtTheEndMovesNothingAboveIt() async throws {
         defer { done() }
         await longConversation()
         try await until { labels.contains { $0.contains(Self.name) } }
@@ -311,14 +311,11 @@ import Testing
         #expect(opening.difference(above, from: folded) < 2, "nothing above moves as it opens")
         #expect(abs(origin - start) < 1, "the view stays: moved from \(start) to \(origin)")
         await letGo(held)
-        // Once open, the view goes down to its words.
-        try await until {
-            DispatchQueue.main.async { TestPulse.beat() }
-            return origin > start + 20
-        }
-        await settled()
-        let after = try self.header(Self.name)
-        #expect(after.minY >= 0 && after.maxY <= Self.size.height, "its header is still in view: \(after)")
+
+        let open = try shot("end-open")
+        #expect(open.difference(name, from: folded) < 2, "open, the header is where it was")
+        #expect(open.difference(above, from: folded) < 2, "and so is all above it")
+        #expect(abs(origin - start) < 1, "the view stays: moved from \(start) to \(origin)")
         #expect(!isFollowing, "you're reading what you opened: what comes next doesn't move it")
     }
 

@@ -1,0 +1,56 @@
+{
+ "about": "What the Add Machine probe (RemoteEngineInstaller.foundProbe, OpenCodeKit) prints for the boxes already on a computer, and what's in their folders then (from the home folder): an older ~/.kuvo-code two Macs set up, with no card (its link.json as a box writes it), and Kuvo Code's own box in its app folder, with its card (and that app's folder, `app`). OpenCodeKit's tests run the probe on these files and expect these lines; the bridge's tests check a box writes link.json this way, and judge these lines (setup-judge.test.js). Nothing secret is printed.",
+ "link": {
+  "relay": "wss://relay.kuvo.run",
+  "secret": "SECRET-NEVER-PRINTED",
+  "key": "KEY-NEVER-PRINTED",
+  "sign": "SIGN-NEVER-PRINTED",
+  "name": "mini",
+  "id": "mini",
+  "mac": "qHt2nLdLQi0ED1Fax_yOZpLR9maYFEFNczxd9BpHAWg",
+  "macs": [
+   "qHt2nLdLQi0ED1Fax_yOZpLR9maYFEFNczxd9BpHAWg",
+   "2g2quksVaWHASatLhbbQvLoociALfe20qnf5IIxgFEQ"
+  ],
+  "macSigns": {
+   "qHt2nLdLQi0ED1Fax_yOZpLR9maYFEFNczxd9BpHAWg": "BJ_yZjxbKrBhbsF9RcE1fAhQ_nFOEJCISWpr2lsna5M",
+   "2g2quksVaWHASatLhbbQvLoociALfe20qnf5IIxgFEQ": "mruiAnsbLt62v53F9Ioa0iZL5xuLeM2ZqvBbmJ6ej10"
+  },
+  "macSeen": {
+   "qHt2nLdLQi0ED1Fax_yOZpLR9maYFEFNczxd9BpHAWg": 1762800000000,
+   "2g2quksVaWHASatLhbbQvLoociALfe20qnf5IIxgFEQ": 1762700000000
+  },
+  "macNames": {
+   "qHt2nLdLQi0ED1Fax_yOZpLR9maYFEFNczxd9BpHAWg": "iMac",
+   "2g2quksVaWHASatLhbbQvLoociALfe20qnf5IIxgFEQ": "Studio \"Office\""
+  },
+  "phones": [
+   {
+    "key": "RVadpX9Le_Ry16hk70eBRRyuY4P-6fsK5AxZqhzkdbc",
+    "name": "iPhone",
+    "from": "mac",
+    "mac": "qHt2nLdLQi0ED1Fax_yOZpLR9maYFEFNczxd9BpHAWg",
+    "pairing": "PAIRING-NEVER-PRINTED"
+   }
+  ]
+ },
+ "files": {
+  ".kuvo-code/run/link.json": "{\n  \"relay\": \"wss://relay.kuvo.run\",\n  \"secret\": \"SECRET-NEVER-PRINTED\",\n  \"key\": \"KEY-NEVER-PRINTED\",\n  \"sign\": \"SIGN-NEVER-PRINTED\",\n  \"name\": \"mini\",\n  \"id\": \"mini\",\n  \"mac\": \"qHt2nLdLQi0ED1Fax_yOZpLR9maYFEFNczxd9BpHAWg\",\n  \"macs\": [\n    \"qHt2nLdLQi0ED1Fax_yOZpLR9maYFEFNczxd9BpHAWg\",\n    \"2g2quksVaWHASatLhbbQvLoociALfe20qnf5IIxgFEQ\"\n  ],\n  \"macSigns\": {\n    \"qHt2nLdLQi0ED1Fax_yOZpLR9maYFEFNczxd9BpHAWg\": \"BJ_yZjxbKrBhbsF9RcE1fAhQ_nFOEJCISWpr2lsna5M\",\n    \"2g2quksVaWHASatLhbbQvLoociALfe20qnf5IIxgFEQ\": \"mruiAnsbLt62v53F9Ioa0iZL5xuLeM2ZqvBbmJ6ej10\"\n  },\n  \"macSeen\": {\n    \"qHt2nLdLQi0ED1Fax_yOZpLR9maYFEFNczxd9BpHAWg\": 1762800000000,\n    \"2g2quksVaWHASatLhbbQvLoociALfe20qnf5IIxgFEQ\": 1762700000000\n  },\n  \"macNames\": {\n    \"qHt2nLdLQi0ED1Fax_yOZpLR9maYFEFNczxd9BpHAWg\": \"iMac\",\n    \"2g2quksVaWHASatLhbbQvLoociALfe20qnf5IIxgFEQ\": \"Studio \\\"Office\\\"\"\n  },\n  \"phones\": [\n    {\n      \"key\": \"RVadpX9Le_Ry16hk70eBRRyuY4P-6fsK5AxZqhzkdbc\",\n      \"name\": \"iPhone\",\n      \"from\": \"mac\",\n      \"mac\": \"qHt2nLdLQi0ED1Fax_yOZpLR9maYFEFNczxd9BpHAWg\",\n      \"pairing\": \"PAIRING-NEVER-PRINTED\"\n    }\n  ]\n}",
+  "Library/Application Support/run.kuvo.code/box/run/setup-card.json": "{\"setup\":\"set_AAAAAAAAAAAAAAAAAAAAAA\",\"epoch\":2,\"role\":\"primary\",\"primary\":{\"key\":\"2g2quksVaWHASatLhbbQvLoociALfe20qnf5IIxgFEQ\",\"name\":\"Studio\",\"heard\":null},\"self\":{\"key\":\"2g2quksVaWHASatLhbbQvLoociALfe20qnf5IIxgFEQ\",\"name\":\"Studio\",\"kind\":\"mac\"},\"app\":true,\"computers\":3,\"items\":37,\"heldBy\":[],\"macs\":[]}",
+  ".kuvo-code/bin/kuvo-start": "#!/bin/sh\n"
+ },
+ "lines": [
+  "box machine .kuvo-code",
+  "link mac qHt2nLdLQi0ED1Fax_yOZpLR9maYFEFNczxd9BpHAWg",
+  "link macs qHt2nLdLQi0ED1Fax_yOZpLR9maYFEFNczxd9BpHAWg",
+  "link macs 2g2quksVaWHASatLhbbQvLoociALfe20qnf5IIxgFEQ",
+  "link seen qHt2nLdLQi0ED1Fax_yOZpLR9maYFEFNczxd9BpHAWg 1762800000000",
+  "link seen 2g2quksVaWHASatLhbbQvLoociALfe20qnf5IIxgFEQ 1762700000000",
+  "link name qHt2nLdLQi0ED1Fax_yOZpLR9maYFEFNczxd9BpHAWg \"iMac\"",
+  "link name 2g2quksVaWHASatLhbbQvLoociALfe20qnf5IIxgFEQ \"Studio \\\"Office\\\"\"",
+  "link phones some",
+  "box app Library/Application Support/run.kuvo.code/box",
+  "card {\"setup\":\"set_AAAAAAAAAAAAAAAAAAAAAA\",\"epoch\":2,\"role\":\"primary\",\"primary\":{\"key\":\"2g2quksVaWHASatLhbbQvLoociALfe20qnf5IIxgFEQ\",\"name\":\"Studio\",\"heard\":null},\"self\":{\"key\":\"2g2quksVaWHASatLhbbQvLoociALfe20qnf5IIxgFEQ\",\"name\":\"Studio\",\"kind\":\"mac\"},\"app\":true,\"computers\":3,\"items\":37,\"heldBy\":[],\"macs\":[]}",
+  "app Library/Application Support/run.kuvo.code"
+ ]
+}

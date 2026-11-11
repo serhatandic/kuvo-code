@@ -115,6 +115,8 @@ public struct BoxNote: Equatable, Sendable {
 public struct SessionNews: Hashable, Sendable {
     public enum Kind: String, Hashable, Sendable {
         case finished, working, failed, asks, notSummarized
+        /// You stopped it (Stop on its row, Stop All), so it won't finish.
+        case stopped
         /// Words from its sessions this app doesn't read: shown whole.
         case other
 
@@ -126,6 +128,7 @@ public struct SessionNews: Hashable, Sendable {
             case .failed: "stopped with an error"
             case .asks: "asks something"
             case .notSummarized: "wasn’t summarized"
+            case .stopped: "stopped by you"
             case .other: "has news"
             }
         }
@@ -156,6 +159,8 @@ public struct SessionNews: Hashable, Sendable {
         case .working:
             let still = running.map { "Still running in the background: \($0)." }
             return [said.isEmpty ? nil : said, still].compactMap { $0 }.joined(separator: "\n\n").nonEmpty ?? "Still working."
+        case .stopped:
+            return "You stopped it."
         case .failed, .asks, .notSummarized, .other:
             return said
         }
@@ -170,6 +175,7 @@ public struct SessionNews: Hashable, Sendable {
         case .failed: "stopped"
         case .asks: "asks"
         case .notSummarized: "not summarized"
+        case .stopped: "stopped by you"
         case .other: nil
         }
     }
@@ -224,6 +230,9 @@ public struct SessionNews: Hashable, Sendable {
             if let cut = said.range(of: " Its conversation and work are as they were.") { said = String(said[..<cut.lowerBound]) }
             said = said.trimmingCharacters(in: .whitespaces)
             return SessionNews(session: session, title: title, kind: .notSummarized, said: sentence(said.isEmpty || said == "It couldn't." ? "It couldn’t summarize its conversation" : said))
+        case "stopped":
+            // `was stopped by the user. Nothing more comes from it …`: the lead's to know, the card says it plainly.
+            return SessionNews(session: session, title: title, kind: .stopped, said: "")
         case "asks":
             // `asks to <what> (ask per_1). Answer with …`, or `asks: <question> (ask frm_1). …`
             var said = rest

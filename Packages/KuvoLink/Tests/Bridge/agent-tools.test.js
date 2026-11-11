@@ -319,6 +319,18 @@ test("a session whose starter hears it finish is told its last reply is its repo
   assert.match(prompts.at(-1).text, /^\[Message from Lead · ses_lead\] \(They get your last reply when you finish: end with your report there, not in a message\. Use send_message to ses_lead only to ask something or say how it's going\.\)\n\nReview the docs\.$/);
 });
 
+test("a bot's session started with review: false is told to report but not to review its work; by default it reviews (#554)", async () => {
+  const letter = "[Message from Scout · ses_scout] (They get your last reply when you finish: end with your report there, not in a message. Use send_message to ses_scout only to ask something or say how it's going.)\n\nFix the typo.";
+  const heard = "Scout gets that reply when you finish: don't also send it with send_message.";
+  assert.equal((await tool("start_session", { task: "Fix the typo.", review: false }, "ses_scout")).isError, false);
+  assert.equal(prompts.at(-1).text, `${letter}\n\nYou were started by Scout, a bot coordinating this work. When you're done, end with a short report as your last reply: what you did, and anything left. ${heard}`);
+  assert.doesNotMatch(prompts.at(-1).text, /review/i);
+  for (const review of [undefined, true]) {
+    assert.equal((await tool("start_session", { task: "Fix the typo.", ...(review === undefined ? {} : { review }) }, "ses_scout")).isError, false);
+    assert.equal(prompts.at(-1).text, `${letter}\n\nYou were started by Scout, a bot coordinating this work. When you're done, review your work with reviewer subagents, fix what they find, and end with a short report as your last reply: what you did, what the reviewers found and how you fixed it, and anything left. ${heard}`);
+  }
+});
+
 test("a group chat's seat neither writes to agents nor starts sessions", async () => {
   for (const name of ["send_message", "start_session"]) {
     const said = await tool(name, { to: "Scout", text: "Hi.", task: "Hi." }, "ses_seat");

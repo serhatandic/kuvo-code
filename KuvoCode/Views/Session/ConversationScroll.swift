@@ -100,19 +100,26 @@ final class ConversationScroller {
     /// as a reply comes in, which drew the conversation again each time.
     fileprivate func sees(atEnd: Bool) {
         self.atEnd = atEnd
-        // (And while a card you opened at the end opens under the composer, before it shows itself.)
-        let sees = atEnd || followsEnd || !beingOpened.isEmpty
+        let sees = atEnd || followsEnd
         if seesEnd != sees { seesEnd = sees }
     }
 
+    /// `id`, a step that's done or an agents' message card, about to be opened by you: while
+    /// following the end, following stops before it grows, so it opens down past the composer,
+    /// moving nothing above it, as a disclosure row does (#416); followed, the conversation went
+    /// up by all it grew at once, as the fold was still opening. What comes in next doesn't move
+    /// it either.
+    fileprivate func opening(_ id: String) {
+        guard followsEnd || !heldFor.isEmpty else { return }
+        if followsEnd { follow(false) }
+        heldFor.insert(id)
+    }
+
     /// `id` opened or closed by you: back to the end once the last you left it for is closed.
+    /// (One you open as it's done is held as it opens: `opening`. One opened as it was under way
+    /// is held once it has ended, all of it in view first.)
     fileprivate func reading(_ id: String, isOpen: Bool) {
         if isOpen {
-            // Let go of as it started to open (`opening`): it shows itself.
-            if beingOpened.remove(id) != nil {
-                sees(atEnd: atEnd)
-                return
-            }
             guard followsEnd || !heldFor.isEmpty else { return }
             if followsEnd {
                 // All of what opened in view first: following would have got there in a moment.
@@ -120,26 +127,9 @@ final class ConversationScroller {
                 ask(.end(animated: true))
             }
             heldFor.insert(id)
-        } else {
-            beingOpened.remove(id)
-            if heldFor.remove(id) != nil, heldFor.isEmpty {
-                toEnd(animated: true)
-            }
+        } else if heldFor.remove(id) != nil, heldFor.isEmpty {
+            toEnd(animated: true)
         }
-    }
-
-    /// What you're opening that the end was followed for (`opening`).
-    @ObservationIgnored private var beingOpened: Set<String> = []
-
-    /// A card starting to open, by you: the end is let go of first, as reading it does, so the
-    /// conversation doesn't go to its end as it grows, which took the card up under you as it
-    /// opened, its header out of view. It opens where it is, and shows itself once it has (see
-    /// `RowStackView.reveal`).
-    fileprivate func opening(_ id: String) {
-        guard followsEnd else { return }
-        follow(false)
-        heldFor.insert(id)
-        beingOpened.insert(id)
     }
 
     private func ask(_ request: Request) {
@@ -757,7 +747,7 @@ final class ScrollAnchor {
     var stopFollowing: () -> Void = {}
     /// Steps opened (true) or closed by you, by what their fold is kept by.
     var reading: ((String, Bool) -> Void)?
-    /// A card starting to open by you (see `ConversationScroller.opening`).
+    /// A step that's done, or an agents' message card, about to be opened by you, before it grows.
     var opening: ((String) -> Void)?
 
     /// The rows laid out, where they are in the conversation, and those shown now. A row that

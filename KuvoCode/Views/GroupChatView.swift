@@ -145,6 +145,8 @@ struct GroupChatView: View {
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in if !isKept { groups.markViewed(group.id) } }
         // What's opened from it comes back to it.
         .environment(\.conversationTab, .group(group.id))
+        // Its pictures, which each of them (and the composer's, after them) opens among.
+        .environment(\.conversationPictures, ConversationPictureSet(group: group.id, groups: groups, bots: bots))
     }
 
     /// The words Find looks in, as the message shows them: yours, or a bot's reply.
@@ -371,11 +373,11 @@ private struct GroupMessageRow: View, Equatable {
             }
             .contentShape(.rect)
             .onHover { hovering = $0 }
-            .contextMenu {
-                Button("Copy") { copy() }
-                if let reply { Button("Reply", action: reply) }
+            .heldContextMenu {
+                HeldRow.button("Copy") { copy() }
+                if let reply { HeldRow.button("Reply", action: reply) }
                 if message.report != nil, let author {
-                    Button("Open \(author.name)’s Conversation") { app.open(.session(author.sessionID), from: here) }
+                    HeldRow.button("Open \(author.name)’s Conversation") { app.open(.session(author.sessionID), from: here) }
                 }
             }
         }

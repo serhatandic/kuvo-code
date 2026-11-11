@@ -416,7 +416,9 @@ private struct ConnectedRow: View {
                         .frame(width: 26, height: 22)
                         .accessibilityLabel("Refreshing models")
                 } else {
-                    Menu(content: menu) {
+                    Menu {
+                        HeldMenuContent(rows: menu())
+                    } label: {
                         Image(systemName: "ellipsis")
                             .frame(width: 22, height: 22)
                             .contentShape(.rect)
@@ -433,7 +435,7 @@ private struct ConnectedRow: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
         .contentShape(.rect)
-        .contextMenu(menuItems: { if catalog.refreshesModels(provider.id) { menu() } })
+        .heldContextMenu { if catalog.refreshesModels(provider.id) { menu() } }
         .alert("Couldn't Disconnect \(provider.name)", isPresented: Binding(get: { failure != nil }, set: { if !$0 { failure = nil } })) {
             Button("OK", role: .cancel) {}
         } message: {
@@ -442,8 +444,8 @@ private struct ConnectedRow: View {
         .refreshModelsFailure($refreshFailure)
     }
 
-    @ViewBuilder private func menu() -> some View {
-        RefreshModelsButton(provider: provider.id, failure: $refreshFailure, waits: $refreshWaits)
+    private func menu() -> [HeldRow] {
+        refreshModelsRow(provider.id, catalog: catalog, failure: $refreshFailure, waits: $refreshWaits)
     }
 
     private var active: Integration.Connection? { provider.connections.first }

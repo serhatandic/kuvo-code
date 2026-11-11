@@ -1,1 +1,9 @@
 CHANGELOG.md merge=union
+# Lists that many branches add to, one name a line, in order: union keeps the lines both sides
+# added instead of a conflict (CONTRIBUTING.md, "What branches don't edit by hand"). Only where
+# each line of the list is whole by itself (a trailing comma on each) and nothing else in the file
+# changes often. Never the JSON written from them (routes/features.json, shapes/answers.json):
+# a union there can leave a file that reads but is wrong, so a conflict there is settled by
+# running scripts/route-shapes.sh again. A union that leaves a list out of order, or a name
+# twice, fails the box's tests (test/features.test.ts) and `route-shapes.sh --check`.
+Packages/Box/src/shared/features.ts merge=union

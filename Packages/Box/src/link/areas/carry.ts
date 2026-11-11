@@ -170,8 +170,9 @@ export async function carryToAgents(id: string, model: unknown, readEngine: () =
     // `letAttachmentsGo`); a bot's as its too; in the mode it was in, its rules made for it. As
     // it's made, so nothing takes it for a new conversation of yours.
     const kuvo = bot ? session.metadata?.kuvo ?? { bot: bot.described.id } : {};
-    const { approval, applied, autopilot } = session.metadata?.kuvo ?? {};
-    const marks = { kuvo: { ...(approval ? { approval } : {}), ...(applied ? { applied } : {}), ...(autopilot === true ? { autopilot } : {}), ...kuvo, carriedFrom: id } };
+    // (Filed under the project it was, in the same folder.)
+    const { approval, applied, autopilot, filed } = session.metadata?.kuvo ?? {};
+    const marks = { kuvo: { ...(approval ? { approval } : {}), ...(applied ? { applied } : {}), ...(autopilot === true ? { autopilot } : {}), ...(filed ? { filed } : {}), ...kuvo, carriedFrom: id } };
     let imported: Fields<"id"> | null = null;
     try {
       imported = await call(agents, "POST", "/api/session/import", {

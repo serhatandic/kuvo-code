@@ -663,21 +663,21 @@ private struct AgentAccountRow: View {
                     note: account.isConnected || ended ? nil : "Not signed in",
                     problem: ended ? AccountProblem.signInEnded.text : limit.map { AccountProblem.atLimit(until: $0).text },
                     signIn: account.isConnected ? nil : connect) {
-            Button("Sign In Again…", action: connect)
+            HeldRow.button("Sign In Again…", action: connect)
             if isAdded {
-                Button("Rename…") {
+                HeldRow.button("Rename…") {
                     name = label ?? ""
                     renaming = true
                 }
-                Divider()
-                Button("Remove Account…", role: .destructive) { confirmsRemove = true }
+                HeldRow.divider
+                HeldRow.button("Remove Account…", role: .destructive) { confirmsRemove = true }
             } else if signsOut {
-                Divider()
-                Button("Sign Out", role: .destructive, action: signOut)
+                HeldRow.divider
+                HeldRow.button("Sign Out", role: .destructive, action: signOut)
             } else if let tool {
-                Divider()
+                HeldRow.divider
                 // Why it can't be removed here: it's the agent's own.
-                Text("Shared with \(tool) in Terminal")
+                HeldRow.note("Shared with \(tool) in Terminal")
             }
         }
         .alert("Rename This Account", isPresented: $renaming) {
@@ -775,21 +775,21 @@ private struct PlanAccountRow: View {
                     isWorking: isInUse && catalog.refreshingModels[plan.id] != nil) {
             if connection.type == "credential" {
                 if !isInUse, let id = connection.credentialID {
-                    Button("Use This Account") {
+                    HeldRow.button("Use This Account") {
                         change { try await app.reachableAPI(for: box).activateCredential(id) }
                         app.releaseLimit(plan.id)
                     }
                 }
-                Button("Sign In Again…", action: connect)
+                HeldRow.button("Sign In Again…", action: connect)
                 // The engine reads the models of the account in use.
-                if isInUse { RefreshModelsButton(provider: plan.id, failure: $refreshFailure, waits: $refreshWaits) }
-                Divider()
-                Button("Remove Account", role: .destructive, action: remove)
+                if isInUse { refreshModelsRow(plan.id, catalog: catalog, failure: $refreshFailure, waits: $refreshWaits) }
+                HeldRow.divider
+                HeldRow.button("Remove Account", role: .destructive, action: remove)
             } else {
-                Text("Set in your shell's environment")
+                HeldRow.note("Set in your shell's environment")
                 if isInUse, catalog.refreshesModels(plan.id) {
-                    Divider()
-                    RefreshModelsButton(provider: plan.id, failure: $refreshFailure, waits: $refreshWaits)
+                    HeldRow.divider
+                    refreshModelsRow(plan.id, catalog: catalog, failure: $refreshFailure, waits: $refreshWaits)
                 }
             }
         }
@@ -830,7 +830,7 @@ private struct PlanAccountRow: View {
 /// An account's line: the name you gave it, who's signed in, a note when it's in use, and its
 /// menu at the right edge, where every account's is. Not signed in, it says so, with Sign In;
 /// a sign-in that ended says so in orange.
-private struct AccountLine<Menu: View>: View {
+private struct AccountLine: View {
     let label: String?
     let who: String?
     /// How it stands, quietly: "Not signed in".
@@ -840,7 +840,7 @@ private struct AccountLine<Menu: View>: View {
     var badge: String? = nil
     /// Refresh Models under way: a spinner in the menu's place.
     var isWorking = false
-    @ViewBuilder let menu: () -> Menu
+    @HeldRows let menu: () -> [HeldRow]
 
     var body: some View {
         HStack(spacing: 8) {
@@ -886,7 +886,9 @@ private struct AccountLine<Menu: View>: View {
                     .frame(width: 26, height: 22)
                     .accessibilityLabel("Refreshing models")
             } else {
-                SwiftUI.Menu(content: menu) {
+                Menu {
+                    HeldMenuContent(rows: menu())
+                } label: {
                     Image(systemName: "ellipsis")
                         .frame(width: 22, height: 22)
                         .contentShape(.rect)
@@ -901,7 +903,7 @@ private struct AccountLine<Menu: View>: View {
         }
         .frame(minHeight: 30)
         .contentShape(.rect)
-        .contextMenu(menuItems: menu)
+        .heldContextMenu(menu)
     }
 }
 
@@ -909,21 +911,13 @@ private struct AccountLine<Menu: View>: View {
 /// computer whose page this is, without restarting its engine (the box's
 /// `kuvo/accounts/<provider>/refresh`); a model the account gained shows in the model pickers once
 /// it's done. Only for the providers that computer's box brings new models to.
-struct RefreshModelsButton: View {
-    let provider: String
-    @Binding var failure: String?
-    /// Some of that computer's projects get them only once their work is done.
-    @Binding var waits: Bool
-    @Environment(Catalog.self) private var catalog
-
-    var body: some View {
-        if catalog.refreshesModels(provider) {
-            Button("Refresh Models") {
-                Task {
-                    do { waits = try await catalog.refreshModels(provider) } catch { failure = error.localizedDescription }
-                }
+/// `waits`: some of that computer's projects get them only once their work is done.
+@HeldRows func refreshModelsRow(_ provider: String, catalog: Catalog, failure: Binding<String?>, waits: Binding<Bool>) -> [HeldRow] {
+    if catalog.refreshesModels(provider) {
+        HeldRow.button("Refresh Models", disabled: catalog.refreshingModels[provider] != nil) {
+            Task {
+                do { waits.wrappedValue = try await catalog.refreshModels(provider) } catch { failure.wrappedValue = error.localizedDescription }
             }
-            .disabled(catalog.refreshingModels[provider] != nil)
         }
     }
 }

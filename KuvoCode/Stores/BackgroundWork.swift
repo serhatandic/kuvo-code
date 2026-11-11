@@ -65,11 +65,20 @@ final class BackgroundWork {
         }
     }
 
+    /// Why no keeper of the app's is registered now, where there's a box already on this Mac
+    /// (`Here`): the app attached to it, and it starts on its own; or the app couldn't tell whether
+    /// it's this Mac's. A keeper beside it would start a second box.
+    nonisolated(unsafe) static var heldBack: String?
+
     /// Registered with macOS, once (the first time Kuvo Code opens, and again if it went): launchd
     /// starts the keeper now, and at each login. Whether it's on.
     @discardableResult
     func register() -> Bool {
         refresh()
+        if let heldBack = Self.heldBack {
+            failure = heldBack
+            return false
+        }
         // A demo, test or measurement copy runs its work itself, also when its bundle ID was
         // registered before (by a copy run with KUVO_KEEPER=on): launchd would start that copy's
         // keeper, from wherever it was, or none at all.

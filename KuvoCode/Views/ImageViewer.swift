@@ -1,10 +1,13 @@
 import AppKit
 import ClientDesign
+import ClientSessions
+import OpenCodeKit
 import SwiftUI
 
-/// Pictures you sent, looked at closer without leaving the window: over everything, fitted to it,
-/// with the others from the same message an arrow key away. Escape, a click around the picture,
-/// or the close button puts it away.
+/// Pictures looked at closer without leaving the window: over everything, fitted to it, with every
+/// other picture of the conversation before and after it (KuvoClient's `ConversationPictures`), a
+/// swipe, an arrow key or a click away. Escape, a click around the picture, or the close button
+/// puts it away.
 @Observable
 final class ImageViewer {
     static let shared = ImageViewer()
@@ -20,10 +23,31 @@ final class ImageViewer {
     func show(_ items: [AttachmentItem], at index: Int = 0) {
         let pictures = items.filter(\.isImage)
         guard !pictures.isEmpty else { return }
+        // The one asked for, wherever it is among the pictures.
+        let asked = items.indices.contains(index) ? items[index].id : nil
+        let at = asked.flatMap { id in pictures.firstIndex { $0.id == id } } ?? min(max(0, index), pictures.count - 1)
         withAnimation(.easeOut(duration: 0.16)) {
-            request = Request(items: pictures, index: min(max(0, index), pictures.count - 1))
+            request = Request(items: pictures, index: at)
         }
         OverContent.opened(Self.layer) { [weak self] in self?.close() }
+    }
+
+    /// Opens `items[index]` among every picture of `conversation`, where it's one of them; among
+    /// `items` otherwise (a picture of a message still on its way, of a step's own).
+    func show(_ items: [AttachmentItem], at index: Int, in conversation: ConversationPictureSet?) {
+        guard items.indices.contains(index) else { return }
+        let all = conversation?.items ?? []
+        if let found = all.firstIndex(where: { $0.id == items[index].id }) {
+            show(all, at: found)
+        } else {
+            show(items, at: index)
+        }
+    }
+
+    /// Opens `items[index]`, a picture in the composer, after every picture of `conversation`.
+    func show(composer items: [AttachmentItem], at index: Int, in conversation: ConversationPictureSet?) {
+        let all = conversation?.items ?? []
+        show(all + items, at: all.count + index)
     }
 
     func close() {
@@ -33,6 +57,55 @@ final class ImageViewer {
 
     /// It, among what's open over the window (`OverContent`), which Escape closes first.
     private static let layer = UUID()
+}
+
+/// Every picture of a conversation, in order, as the viewer opens them: read from its messages
+/// when a picture opens (KuvoClient's `ConversationPictures`), so it's never behind them. A
+/// session's, or a group chat's (its bots' pictures, each in its bot's folder).
+struct ConversationPictureSet: Equatable {
+    /// Which conversation: the same one is the same set.
+    let key: String
+    private let read: @MainActor () -> [AttachmentItem]
+
+    init(model: SessionModel) {
+        key = model.id
+        read = { [weak model] in
+            guard let model else { return [] }
+            return Self.items(ConversationPictures.all(in: model.transcript.messages, undoneFrom: model.session.revert?.messageID), directory: model.session.location.directory)
+        }
+    }
+
+    init(group: String, groups: GroupChats, bots: Bots) {
+        key = "group:" + group
+        read = { [weak groups, weak bots] in
+            guard let groups else { return [] }
+            return groups.messages(in: group).flatMap { message in
+                Self.items(ConversationPictures.pictures(of: message.steps ?? [], in: message.id), directory: message.author.flatMap { bots?.bot($0)?.directory })
+            }
+        }
+    }
+
+    var items: [AttachmentItem] { read() }
+
+    /// The same pictures as the conversation draws them, under the same ids.
+    static func items(_ pictures: [ConversationPicture], directory: String?) -> [AttachmentItem] {
+        pictures.map { picture in
+            switch picture.source {
+            case .attachment(let file): .stored(file, id: picture.id)
+            case .file(let uri, let mime): StepPictures.item(uri: uri, mime: mime, name: picture.name, id: picture.id)
+            case .shown(let path): MadePictureRow.shown(path, in: directory, id: picture.id)
+            // As its message draws it (`YourMessage`), by its path.
+            case .path(let path): .path(path)
+            }
+        }
+    }
+
+    static func == (a: Self, b: Self) -> Bool { a.key == b.key }
+}
+
+extension EnvironmentValues {
+    /// The conversation a picture shows in, whose pictures it opens among.
+    @Entry var conversationPictures: ConversationPictureSet? = nil
 }
 
 /// The title bar's items, dimmed with the window while the viewer is open (it can't reach over
@@ -71,6 +144,14 @@ private struct ImageLightbox: View {
     @State private var appeared = false
     /// Just copied: the button shows a check for a moment.
     @State private var copied = false
+    /// How far a swipe on the trackpad has moved the picture, as it follows your fingers.
+    @State private var swiped: CGFloat = 0
+    /// Where the next picture comes in from: the side the one before it went towards.
+    @State private var arrival: CGFloat = 0
+    /// ‹ › show while the pointer moves over the viewer, and while it's over one of them.
+    @State private var showsTurns = false
+    @State private var isOverTurn = false
+    @State private var hidingTurns: Task<Void, Never>?
     @FocusState private var isFocused: Bool
 
     init(request: ImageViewer.Request) {
@@ -88,22 +169,27 @@ private struct ImageLightbox: View {
                     .ignoresSafeArea()
                     .contentShape(.rect)
                     .onTapGesture { ImageViewer.shared.close() }
-                if let image {
-                    PictureCanvas(image: image, scale: $scale, fitScale: $fitScale, name: item.name, ownsKeys: true) { ImageViewer.shared.close() }
-                        .padding(.horizontal, 48)
-                        .padding(.vertical, 75)
-                        .transition(.replacingPlaceholder)
-                } else if loadFailed {
-                    VStack(spacing: 12) {
-                        Text("This picture couldn’t be loaded.")
-                        Button("Try Again") { loadFailed = false; retry += 1 }
+                ZStack {
+                    if let image {
+                        PictureCanvas(image: image, scale: $scale, fitScale: $fitScale, name: item.name, ownsKeys: true) { ImageViewer.shared.close() }
+                            .padding(.horizontal, 48)
+                            .padding(.vertical, 75)
+                            .transition(.replacingPlaceholder)
+                    } else if loadFailed {
+                        VStack(spacing: 12) {
+                            Text("This picture couldn’t be loaded.")
+                            Button("Try Again") { loadFailed = false; retry += 1 }
+                        }
+                    } else {
+                        let room = fit(CGSize(width: 480, height: 360), in: CGSize(width: proxy.size.width - 96, height: proxy.size.height - 150))
+                        Placeholder(.image, label: "Loading picture")
+                            .frame(width: room.width, height: room.height)
+                            .environment(\.colorScheme, .dark)
                     }
-                } else {
-                    let room = fit(CGSize(width: 480, height: 360), in: CGSize(width: proxy.size.width - 96, height: proxy.size.height - 150))
-                    Placeholder(.image, label: "Loading picture")
-                        .frame(width: room.width, height: room.height)
-                        .environment(\.colorScheme, .dark)
                 }
+                .offset(x: swiped)
+                .id(index)
+                .transition(.asymmetric(insertion: .offset(x: arrival).combined(with: .opacity), removal: .opacity))
                 if request.items.count > 1 {
                     HStack {
                         stepButton(-1)
@@ -128,6 +214,19 @@ private struct ImageLightbox: View {
                 .padding(.horizontal, 20)
             }
             .frame(width: proxy.size.width, height: proxy.size.height)
+            .onContinuousHover { phase in
+                switch phase {
+                case .active: pointerMoved()
+                case .ended: withAnimation(.easeOut(duration: 0.2)) { showsTurns = false }
+                }
+            }
+            // A swipe across it with two fingers, and ← →, go to the picture before or after.
+            .background(PictureTurns(canTurn: canStep, swipes: scale <= 1.001, arrows: true, modal: true, width: proxy.size.width) { travel in
+                // Let go short of turning, it goes back.
+                if travel == 0 { withAnimation(.ui) { swiped = 0 } } else { swiped = travel }
+            } turn: { direction in
+                turned(direction)
+            })
         }
         .alert("Picture Unavailable", isPresented: Binding(
             get: { actionError != nil }, set: { if !$0 { actionError = nil } }
@@ -147,23 +246,47 @@ private struct ImageLightbox: View {
             ImageViewer.shared.close()
             return .handled
         }
-        .onKeyPress(.leftArrow) { step(-1) ? .handled : .ignored }
         .onKeyPress(characters: ["c"], phases: .down) { press in
             guard press.modifiers == .command else { return .ignored }
             copy()
             return .handled
         }
-        .onKeyPress(.rightArrow) { step(1) ? .handled : .ignored }
         .onAppear {
             isFocused = true
             withAnimation(.snappy(duration: 0.22)) { appeared = true }
         }
+        .onDisappear { hidingTurns?.cancel() }
         .task(id: "\(index)-\(retry)") {
             loadFailed = false
             let loaded = await item.loadImage()
             guard !Task.isCancelled else { return }
             image = loaded
             loadFailed = loaded == nil
+        }
+    }
+
+    /// ‹ › in sight for a moment, as in Quick Look.
+    private func pointerMoved() {
+        if !showsTurns { withAnimation(.easeOut(duration: 0.15)) { showsTurns = true } }
+        hidingTurns?.cancel()
+        hidingTurns = Task {
+            try? await Task.sleep(for: .seconds(2))
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeOut(duration: 0.3)) { showsTurns = false }
+        }
+    }
+
+    /// Turned by a swipe: the next comes in from the side the fingers went to, the swipe's travel
+    /// carried on rather than jumping back.
+    private func turned(_ direction: Int) {
+        guard canStep(direction) else {
+            withAnimation(.ui) { swiped = 0 }
+            return
+        }
+        arrival = CGFloat(direction) * 60
+        withAnimation(.snappy(duration: 0.25)) {
+            _ = step(direction)
+            swiped = 0
         }
     }
 
@@ -269,8 +392,9 @@ private struct ImageLightbox: View {
     }
 
     private func stepButton(_ direction: Int) -> some View {
-        Button {
-            _ = step(direction)
+        let can = canStep(direction)
+        return Button {
+            turned(direction)
         } label: {
             Image(systemName: direction < 0 ? "chevron.left" : "chevron.right")
                 .font(.system(size: 15, weight: .semibold))
@@ -278,9 +402,22 @@ private struct ImageLightbox: View {
         }
         .buttonStyle(.glass)
         .buttonBorderShape(.circle)
-        .disabled(!request.items.indices.contains(index + direction))
-        .accessibilityLabel(direction < 0 ? "Previous" : "Next")
+        .disabled(!can)
         .help(direction < 0 ? "Previous (←)" : "Next (→)")
+        // In sight while the pointer moves over the viewer.
+        .opacity(can && (showsTurns || isOverTurn) ? 1 : 0)
+        .allowsHitTesting(can && (showsTurns || isOverTurn))
+        .animation(.easeOut(duration: 0.2), value: showsTurns || isOverTurn)
+        .onHover { isOverTurn = $0 }
+        // VoiceOver offers it shown or not: hidden, it would be skipped.
+        .accessibilityRepresentation {
+            Button(direction < 0 ? "Previous" : "Next") { turned(direction) }
+                .disabled(!can)
+        }
+    }
+
+    private func canStep(_ direction: Int) -> Bool {
+        request.items.indices.contains(index + direction)
     }
 
     /// The picture to the clipboard, as one item that pastes as a picture anywhere.
@@ -385,9 +522,20 @@ struct PictureCanvas: View {
     var ownsKeys = false
     /// A click beside the picture (the viewer closes).
     var tapOutside: (() -> Void)?
+    /// The pictures before and after it, where it turns to them itself (the side panel's, among
+    /// the conversation's): a swipe, ← → once it has the keyboard, and ‹ › under the pointer. The
+    /// viewer over the window turns its own.
+    var turns: Turns?
     @State private var pinch: CGFloat = 1
     @State private var isHovering = false
+    @State private var swiped: CGFloat = 0
     @FocusState private var focused: Bool
+
+    struct Turns {
+        /// Whether there's one that way: -1 before, 1 after.
+        var canTurn: (Int) -> Bool
+        var turn: (Int) -> Void
+    }
 
     var body: some View {
         GeometryReader { proxy in
@@ -414,6 +562,7 @@ struct PictureCanvas: View {
                 }
                 .frame(minWidth: room.width, minHeight: room.height)
             }
+            .offset(x: swiped)
             .scrollIndicators(current > 1 ? .automatic : .never)
             .scrollBounceBehavior(.basedOnSize, axes: [.horizontal, .vertical])
             .defaultScrollAnchor(.center, for: .initialOffset)
@@ -434,7 +583,6 @@ struct PictureCanvas: View {
                 scale = current
                 pinch = 1
             })
-            .onHover { isHovering = $0 }
             .background(PictureKeys(isActive: ownsKeys || focused || isHovering) { characters in
                 guard let zoomed = PictureZoom.key(characters, scale: scale, fit: fit, side: side) else { return false }
                 withAnimation(.ui) { scale = zoomed }
@@ -455,6 +603,51 @@ struct PictureCanvas: View {
                 @unknown default: break
                 }
             }
+            .background {
+                if let turns {
+                    PictureTurns(canTurn: turns.canTurn, swipes: current <= 1.001, arrows: focused, width: room.width) { travel in
+                        if travel == 0 { withAnimation(.ui) { swiped = 0 } } else { swiped = travel }
+                    } turn: { direction in
+                        turns.turn(direction)
+                        swiped = 0
+                    }
+                }
+            }
+        }
+        .overlay {
+            if let turns {
+                HStack {
+                    turnButton(-1, turns)
+                    Spacer()
+                    turnButton(1, turns)
+                }
+                .padding(.horizontal, 8)
+            }
+        }
+        .onHover { isHovering = $0 }
+    }
+
+    /// ‹ or ›, in sight under the pointer where there's a picture that way.
+    private func turnButton(_ direction: Int, _ turns: Turns) -> some View {
+        let shows = isHovering && turns.canTurn(direction)
+        return Button {
+            turns.turn(direction)
+        } label: {
+            Image(systemName: direction < 0 ? "chevron.left" : "chevron.right")
+                .font(.system(size: 13, weight: .semibold))
+                .frame(width: 30, height: 30)
+        }
+        .buttonStyle(.glass)
+        .buttonBorderShape(.circle)
+        .disabled(!turns.canTurn(direction))
+        .help(direction < 0 ? "Previous picture (←)" : "Next picture (→)")
+        .opacity(shows ? 1 : 0)
+        .allowsHitTesting(shows)
+        .animation(.easeOut(duration: 0.15), value: shows)
+        // VoiceOver offers it shown or not: hidden, it would be skipped.
+        .accessibilityRepresentation {
+            Button(direction < 0 ? "Previous Picture" : "Next Picture") { turns.turn(direction) }
+                .disabled(!turns.canTurn(direction))
         }
     }
 
@@ -493,6 +686,146 @@ private struct PictureKeys: NSViewRepresentable {
                       let characters = event.charactersIgnoringModifiers, self.zoom(characters) else { return event }
                 return nil
             }
+        }
+    }
+}
+
+/// Going to the picture before or after, the same wherever a picture is looked at (the viewer,
+/// the side panel): a swipe across it with two fingers on the trackpad, the picture following the
+/// fingers until they let go (far enough, or a flick, and it turns; else it goes back), as in
+/// Photos; a three-finger swipe where the trackpad pages that way; and ← →, while `arrows`. A
+/// picture zoomed in (`swipes` false) moves under the fingers instead.
+struct PictureTurns: NSViewRepresentable {
+    /// Whether there's a picture that way: -1 before, 1 after.
+    var canTurn: (Int) -> Bool
+    var swipes: Bool
+    var arrows: Bool
+    /// Over everything (the viewer): ← → are its at either end too, and go nowhere else.
+    var modal = false
+    /// How wide it is: a third of it, or a flick, turns.
+    var width: CGFloat
+    /// How far the fingers have taken the picture (0 once they let go).
+    var dragged: (CGFloat) -> Void
+    var turn: (Int) -> Void
+
+    func makeNSView(context: Context) -> Watcher { Watcher() }
+
+    func updateNSView(_ view: Watcher, context: Context) {
+        view.turns = self
+    }
+
+    final class Watcher: NSView {
+        var turns: PictureTurns?
+        private var monitor: Any?
+        private enum Swipe { case undecided, mine, notMine, gliding }
+        private var swipe: Swipe?
+        private var travel = CGSize.zero
+        private var started: TimeInterval = 0
+
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            if let monitor { NSEvent.removeMonitor(monitor) }
+            monitor = nil
+            guard window != nil else { return }
+            monitor = NSEvent.addLocalMonitorForEvents(matching: [.scrollWheel, .swipe, .keyDown]) { [weak self] event in
+                guard let self else { return event }
+                switch event.type {
+                case .scrollWheel: return self.scrolled(event) ? nil : event
+                case .swipe: return self.swiped(event) ? nil : event
+                default: return self.pressed(event) ? nil : event
+                }
+            }
+        }
+
+        /// Whether it's the one to turn now: the viewer's while it's open, over the panel's.
+        private var isInFront: Bool {
+            guard let turns, let window, window.attachedSheet == nil, !isHiddenOrHasHiddenAncestor else { return false }
+            return turns.modal || ImageViewer.shared.request == nil
+        }
+
+        /// Whether `event` is in its window, with nothing over it, and where in it.
+        private func isOver(_ event: NSEvent) -> Bool {
+            guard let window, isInFront else { return false }
+            let point: NSPoint
+            if event.window === window {
+                point = event.locationInWindow
+            } else if event.window == nil, event.windowNumber == window.windowNumber {
+                point = window.convertPoint(fromScreen: event.locationInWindow)
+            } else {
+                return false
+            }
+            return bounds.contains(convert(point, from: nil))
+        }
+
+        /// The fingers' way across, left negative, whichever way scrolling goes on this Mac.
+        private static func across(_ event: NSEvent, _ x: CGFloat) -> CGFloat {
+            event.isDirectionInvertedFromDevice ? x : -x
+        }
+
+        private func scrolled(_ event: NSEvent) -> Bool {
+            guard let turns else { return false }
+            // What glides on after a swipe of its own is its own too, to its end.
+            if !event.momentumPhase.isEmpty {
+                guard swipe == .gliding else { return false }
+                if event.momentumPhase.contains(.ended) || event.momentumPhase.contains(.cancelled) { swipe = nil }
+                return true
+            }
+            if event.phase.contains(.began) {
+                guard isOver(event) else { swipe = nil; return false }
+                swipe = .undecided
+                travel = .zero
+                started = event.timestamp
+            }
+            guard let current = swipe, current == .undecided || current == .mine else { return false }
+            if event.phase.contains(.ended) || event.phase.contains(.cancelled) {
+                swipe = .gliding
+                guard current == .mine else { swipe = nil; return false }
+                let across = Self.across(event, travel.width)
+                let seconds = max(0.001, event.timestamp - started)
+                let direction = across < 0 ? 1 : -1
+                let far = abs(across) > min(160, turns.width / 3) || (abs(across) > 30 && abs(across) / seconds > 600)
+                if event.phase.contains(.ended), far, turns.canTurn(direction) {
+                    turns.turn(direction)
+                } else {
+                    turns.dragged(0)
+                }
+                return true
+            }
+            guard event.phase.contains(.changed) || event.phase.contains(.began) else { return false }
+            travel.width += event.scrollingDeltaX
+            travel.height += event.scrollingDeltaY
+            if current == .undecided {
+                // Sideways more than up or down, on a picture that isn't zoomed in: a turn.
+                guard abs(travel.width) + abs(travel.height) > 6 else { return turns.swipes }
+                swipe = turns.swipes && abs(travel.width) > abs(travel.height) * 1.5 ? .mine : .notMine
+                guard swipe == .mine else { return false }
+            }
+            let across = Self.across(event, travel.width)
+            // Past either end it gives a little, and goes back.
+            turns.dragged(turns.canTurn(across < 0 ? 1 : -1) ? across : across / 4)
+            return true
+        }
+
+        /// A three-finger swipe, where the trackpad turns pages that way: left for the next.
+        private func swiped(_ event: NSEvent) -> Bool {
+            guard let turns, turns.swipes, event.deltaX != 0, isOver(event) else { return false }
+            let direction = event.deltaX > 0 ? 1 : -1
+            if turns.canTurn(direction) { turns.turn(direction) }
+            return true
+        }
+
+        private func pressed(_ event: NSEvent) -> Bool {
+            guard let turns, turns.arrows, event.keyCode == 123 || event.keyCode == 124, let window,
+                  event.window === window, isInFront,
+                  event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty else { return false }
+            // Typing in a field: its caret moves, unless the viewer is over it.
+            if !turns.modal, (window.firstResponder as? NSTextView)?.isEditable == true { return false }
+            let direction = event.keyCode == 123 ? -1 : 1
+            guard turns.canTurn(direction) else { return turns.modal }
+            turns.turn(direction)
+            return true
         }
     }
 }

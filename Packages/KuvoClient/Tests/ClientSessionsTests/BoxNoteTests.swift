@@ -83,6 +83,13 @@ struct BoxNoteTests {
         let ended = try message("[Session finished] \"\" in x (address ses_1):\n(It ended without a reply.)")
         #expect(BoxNote.of(ended)?.news == [SessionNews(session: "ses_1", title: "New Session", kind: .finished, said: "")])
         #expect(BoxNote.of(ended)?.news.first?.body == "It ended without a reply.")
+
+        // You stopped it (#553): its card says so, not what the lead is told to do.
+        let stopped = try message("[Session stopped] \"Tests\" in tidepool (address ses_7) was stopped by the user. Nothing more comes from it unless it's written to again: don't start it or its work again unless the user asks.")
+        #expect(BoxNote.of(stopped)?.line == "“Tests” stopped by you")
+        #expect(BoxNote.of(stopped)?.shown.map(\.body) == ["You stopped it."])
+        #expect(BoxNote.of(stopped)?.shown.map(\.status) == ["stopped by you"])
+        #expect(BoxNote.of(stopped)?.shown.map(\.session) == ["ses_7"])
     }
 
     /// The box's other notes tell of no session.

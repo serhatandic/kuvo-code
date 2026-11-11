@@ -287,7 +287,7 @@ struct CustomProviderEditor: View {
         let slug = Self.providerID(for: title)
         guard !slug.isEmpty else { return }
         // Not one the engine already has: that would change it instead.
-        guard config.value(at: CustomProvidersSection.path + [slug]) == nil, !catalog.providers.contains(where: { $0.id == slug }) else {
+        guard config.value(at: CustomProvidersSection.path + [slug]) == nil, !catalog.integrations.contains(where: { $0.id == slug }) else {
             problem = "There's already a provider called that."
             return
         }
