@@ -14,13 +14,15 @@ type Session = Partial<EngineSession> & { id: string };
 
 /** Who's to hear that the user stopped `data`: its starter, when it follows its finishes and still
  * waits on it (a turn under way, what it left running, its finish held, a wake-up of its own, or a
- * question of its waiting); null for none, or one stopped already. `atWork`: known to be already.
+ * question of its waiting); null for none. One stopped already counts only if a turn of its runs
+ * (set going again since), so a second Stop tells nothing. `known`: what the caller found already.
  * Asked before it's stopped. */
-export async function leadWaitingOn(target: Target, data: Session, atWork = false, signal?: AbortSignal): Promise<string | null> {
+export async function leadWaitingOn(target: Target, data: Session, known?: { turn: boolean; atWork: boolean }, signal?: AbortSignal): Promise<string | null> {
   const starter = startedByOf(data);
-  if (!starter || !wakesOf(data).includes("finished") || isArchived(data) || readStopped()[data.id] !== undefined) return null;
-  if (atWork || readBackground()[data.id] || finishHeld(data.id) || hasWakeUps(data.id)) return starter;
-  if ((await workingNow([target], signal)).has(data.id)) return starter;
+  if (!starter || !wakesOf(data).includes("finished") || isArchived(data)) return null;
+  const turn = known?.turn ?? (await workingNow([target], signal)).has(data.id);
+  if (readStopped()[data.id] !== undefined) return turn ? starter : null;
+  if (turn || known?.atWork || readBackground()[data.id] || finishHeld(data.id) || hasWakeUps(data.id)) return starter;
   return (await askingNow({ target, data } as Listed, signal).catch(() => null)) ? starter : null;
 }
 

@@ -25,7 +25,7 @@ export async function stopBotWork(bot: string, targets: Target[], signal?: Abort
   for (const each of work) {
     const asking = !turns.has(each.data.id) && await askingNow(each, signal);
     if (!working.has(each.data.id) && !hasWakeUps(each.data.id) && !asking) continue;
-    const lead = await leadWaitingOn(each.target, each.data, true, signal).catch(() => null);
+    const lead = await leadWaitingOn(each.target, each.data, { turn: turns.has(each.data.id), atWork: true }, signal).catch(() => null);
     // (What waits is held only where a turn stopped: with none running, its next message just goes.)
     if (!await stopWork(each.target, each.data.id, turns.has(each.data.id) || Boolean(asking)).then(() => true, () => false)) continue;
     stopped += 1;
