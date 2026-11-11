@@ -243,7 +243,10 @@ export async function keptFromSessions(folder: string, policy: FencePolicy = fen
  * Mac), but for the caches in it they write and what's open in it again (`homeOpen`: iCloud Drive,
  * logs). */
 function inHomeKept(at: string, policy: FencePolicy): boolean {
-  return (policy.homeKept ?? []).some(wall => inside(at, wall) || holds(at, wall)) && ![...policy.writable, ...(policy.homeOpen ?? [])].some(each => inside(at, each));
+  const walls = (policy.homeKept ?? []).filter(wall => inside(at, wall) || holds(at, wall));
+  // (Only what's open again inside those walls, as the sandbox has it.)
+  const open = [...policy.writable, ...(policy.homeOpen ?? [])].filter(each => walls.some(wall => holds(wall, each)));
+  return walls.length > 0 && !open.some(each => inside(at, each));
 }
 
 const KUVO = "It reaches Kuvo Code's own folders, which is never allowed.";
@@ -1210,8 +1213,9 @@ function holdsRepository(folder: string): boolean {
  * those is judged as anywhere. */
 export function walledForOwn(where: string, policy: FencePolicy = fencePolicy(), own: readonly string[] = []): boolean {
   const at = realish(where);
-  // (What's the conversation's own in Kuvo Code's folders, in ~/Library on a Mac, is its own there.)
-  const ours = ownInside(own, policy).some(folder => exactly(at, folder));
+  // (What's the conversation's own in Kuvo Code's folders, in ~/Library on a Mac, is its own there:
+  // only those, never another of its folders, wherever that leads.)
+  const ours = ownInside(own, policy).filter(folder => inKuvo(folder, policy)).some(folder => exactly(at, folder));
   return (!ours && (inKuvo(at, policy) || inHomeKept(at, policy))) || runsLater(at, policy) || atLogin(at, policy.home) || isSecret(at, policy)
     || ownAt(at, policy.home) !== null || WORKTREE_RECORDS.test(at);
 }

@@ -1,6 +1,6 @@
 import "./safety"
 import { afterAll, beforeAll, expect, test } from "bun:test"
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
+import { existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { spawnSync } from "node:child_process"
 import { homedir, tmpdir } from "node:os"
 import { dirname, join, relative } from "node:path"
@@ -613,52 +613,82 @@ test("in Auto, the reviewer judges by where the session works and the task anoth
   expect(prompts.at(-1)).not.toContain("Delete the backups too.")
 })
 
-test("in Auto, a folder of its own traded for a link to elsewhere takes nothing with it: a worktree or its own folder made to lead into ~/Library/LaunchAgents or another project is judged as anywhere (#422)", async () => {
-  const repo = join(box, "swap-repo")
-  mkdirSync(repo)
-  writeFileSync(join(repo, "README.md"), "hi\n")
-  git(repo, "init", "-q")
-  git(repo, "add", "-A")
-  git(repo, "commit", "-qm", "first")
-  const trees = join(box, "swap-trees")
-  mkdirSync(trees)
-  git(repo, "worktree", "add", "-q", "-b", "eval/swap", join(trees, "T"))
-  const elsewhere = join(box, "someone-elses-project")
-  mkdirSync(elsewhere)
-  const ask = (session: string, id: string, filePath: string) => {
-    calling[session] = [{ type: "tool", id: `call_${id}`, name: "write", state: { input: { filePath } } }]
-    asking[session] = [{ id, action: "external_directory", resources: [join(filePath, "..", "*")], source: { id: `call_${id}`, messageID: "msg_1" } }]
-    return reviewing.reviewPermission({ port: engine.port, password: "pw" } as never, { type: "permission.asked", data: { id, sessionID: session, action: "external_directory" } })
+test("in Auto, a file of its own is only one reached plainly: a folder of its own or a worktree traded for a link, a link or a hard link in one, or `..` after one, is judged as anywhere (#422)", async () => {
+  // (A home of the test's own: where what runs later outside the sandbox is kept, as on a Mac.)
+  const runsHome = process.env.HOME
+  const fake = realpathSync(mkdtempSync(join(tmpdir(), "kuvo-fake-home-")))
+  process.env.HOME = fake
+  try {
+    const later = join(fake, ...(process.platform === "darwin" ? ["Library", "LaunchAgents"] : [".local", "bin"]))
+    const kept = join(fake, ...(process.platform === "darwin" ? ["Library", "Preferences"] : [".local", "bin"]))
+    for (const each of [later, kept, join(fake, ".local", "share")]) mkdirSync(each, { recursive: true })
+    const repo = join(box, "swap-repo")
+    mkdirSync(repo)
+    writeFileSync(join(repo, "README.md"), "hi\n")
+    git(repo, "init", "-q")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "first")
+    const trees = join(box, "swap-trees")
+    mkdirSync(trees)
+    git(repo, "worktree", "add", "-q", "-b", "eval/swap", join(trees, "T"))
+    git(repo, "worktree", "add", "-q", "-b", "eval/links", join(trees, "L"))
+    const elsewhere = join(box, "someone-elses-project")
+    mkdirSync(elsewhere)
+    const ask = (session: string, id: string, filePath: string) => {
+      calling[session] = [{ type: "tool", id: `call_${id}`, name: "write", state: { input: { filePath } } }]
+      asking[session] = [{ id, action: "external_directory", resources: [join(filePath, "..", "*")], source: { id: `call_${id}`, messageID: "msg_1" } }]
+      return reviewing.reviewPermission({ port: engine.port, password: "pw" } as never, { type: "permission.asked", data: { id, sessionID: session, action: "external_directory" } })
+    }
+    reply = () => '{"decision": "refuse", "reason": "Not what it was asked to do."}'
+    conversation("ses_swap", "auto", "Compare the models")
+    sessions.ses_swap.location = { directory: repo }
+    // Found, and its own, as it was: a file there, and one in a folder not made yet.
+    expect((await ask("ses_swap", "per_s1", join(trees, "T", "notes.md")))?.decision).toBe("allow")
+    expect((await ask("ses_swap", "per_s1b", join(trees, "L", "new", "deeper", "notes.md")))?.decision).toBe("allow")
+    // (Each the reviewer's: refused here, then held back as it pauses.)
+    // In one, links a command made: to a file not there yet where what runs later is kept, through
+    // two links, to a folder not there yet, and `..` after a link; and a file hard-linked to one there.
+    symlinkSync(join(later, "evil.plist"), join(trees, "L", "evil.plist"))
+    symlinkSync(join(trees, "L", "evil.plist"), join(trees, "L", "twice.plist"))
+    symlinkSync(join(later, "new-folder"), join(trees, "L", "d"))
+    symlinkSync(join(fake, ".local", "share"), join(trees, "L", "l"))
+    writeFileSync(join(later, "existing.plist"), "<plist/>\n")
+    linkSync(join(later, "existing.plist"), join(trees, "L", "hard.plist"))
+    for (const [id, file] of [["per_l1", join(trees, "L", "evil.plist")], ["per_l2", join(trees, "L", "twice.plist")], ["per_l3", join(trees, "L", "d", "x.plist")],
+      ["per_l4", `${join(trees, "L", "l")}/../bin/evil`], ["per_l5", join(trees, "L", "hard.plist")]] as const) {
+      expect([id, (await ask("ses_swap", id, file))?.decision]).toEqual([id, "refuse"])
+    }
+    // The worktree itself traded for a link to where what runs later is kept.
+    renameSync(join(trees, "T"), join(trees, "T.r"))
+    symlinkSync(later, join(trees, "T"))
+    expect((await ask("ses_swap", "per_s2", join(trees, "T", "evil.plist")))?.decision).toBe("refuse")
+    expect((await ask("ses_swap", "per_s3", join(later, "evil.plist")))?.decision).toBe("refuse")
+    // Its own folder, likewise: after it first asked, before (as the box saw it made), and never seen.
+    const own = join(box, "own-folder")
+    mkdirSync(own)
+    conversation("ses_own_swap", "auto", "Fix the build")
+    sessions.ses_own_swap.location = { directory: own }
+    expect((await ask("ses_own_swap", "per_s4", join(own, "notes.md")))?.decision).toBe("allow")
+    renameSync(own, own + ".r")
+    symlinkSync(elsewhere, own)
+    expect((await ask("ses_own_swap", "per_s5", join(own, "theirs.md")))?.decision).toBe("refuse")
+    const early = join(box, "own-early")
+    mkdirSync(early)
+    conversation("ses_early_swap", "auto", "Fix the build")
+    sessions.ses_early_swap.location = { directory: early }
+    await reviewing.noteFolderFound(early)
+    renameSync(early, early + ".r")
+    symlinkSync(elsewhere, early)
+    expect((await ask("ses_early_swap", "per_s6", join(early, "theirs.md")))?.decision).toBe("refuse")
+    const never = join(box, "own-never")
+    mkdirSync(never)
+    conversation("ses_never_swap", "auto", "Fix the build")
+    sessions.ses_never_swap.location = { directory: never }
+    renameSync(never, never + ".r")
+    symlinkSync(kept, never)
+    expect((await ask("ses_never_swap", "per_s7", join(never, "com.example.plist")))?.decision).toBe("refuse")
+  } finally {
+    process.env.HOME = runsHome
+    rmSync(fake, { recursive: true, force: true })
   }
-  reply = () => '{"decision": "refuse", "reason": "Not what it was asked to do."}'
-  conversation("ses_swap", "auto", "Compare the models")
-  sessions.ses_swap.location = { directory: repo }
-  // Found, and its own, as it was.
-  expect((await ask("ses_swap", "per_s1", join(trees, "T", "notes.md")))?.decision).toBe("allow")
-  // Traded for a link to where what runs at login is kept, while what was found is still at hand.
-  renameSync(join(trees, "T"), join(trees, "T.r"))
-  symlinkSync(join(homedir(), "Library", "LaunchAgents"), join(trees, "T"))
-  const asked = prompts.length
-  expect((await ask("ses_swap", "per_s2", join(trees, "T", "evil.plist")))?.decision).toBe("refuse")
-  expect((await ask("ses_swap", "per_s3", join(homedir(), "Library", "LaunchAgents", "evil.plist")))?.decision).toBe("refuse")
-  expect(prompts.length).toBe(asked + 2)
-  // Its own folder, likewise (a session in a folder of /tmp, its commands free to move it).
-  const own = join(box, "own-folder")
-  mkdirSync(own)
-  conversation("ses_own_swap", "auto", "Fix the build")
-  sessions.ses_own_swap.location = { directory: own }
-  expect((await ask("ses_own_swap", "per_s4", join(own, "..", "own-folder", "notes.md")))?.decision).toBe("allow")
-  renameSync(own, own + ".r")
-  symlinkSync(elsewhere, own)
-  expect((await ask("ses_own_swap", "per_s5", join(own, "theirs.md")))?.decision).toBe("refuse")
-  expect(prompts.length).toBe(asked + 3)
-  // Traded before it first asked: as the box saw it made.
-  const early = join(box, "own-early")
-  mkdirSync(early)
-  conversation("ses_early_swap", "auto", "Fix the build")
-  sessions.ses_early_swap.location = { directory: early }
-  await reviewing.noteFolderFound(early)
-  renameSync(early, early + ".r")
-  symlinkSync(elsewhere, early)
-  expect((await ask("ses_early_swap", "per_s6", join(early, "theirs.md")))?.decision).toBe("refuse")
-})
+}, 60_000)

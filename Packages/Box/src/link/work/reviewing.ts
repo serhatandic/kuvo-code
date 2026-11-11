@@ -406,6 +406,31 @@ async function taskOf(at: Conversation, signal?: AbortSignal): Promise<ReviewCon
   return head && head[2] === starter ? { from: head[1], text: text.slice(head[0].length) } : undefined;
 }
 
+/** Where `file` really is, where it's reached plainly from the folder whose real path is `folder`:
+ * one of the folders it's named through leads to `folder` itself, and below that no part of it is
+ * a link, each folder a folder, and the file, where it's there, a file with no other name (a hard
+ * link to one elsewhere would be written there too). What isn't there yet is made where it's
+ * named. Null otherwise: a link anywhere below, one that leads nowhere yet, `..` in it. (Checked as
+ * it's asked: what a command changes between the answer and the write isn't.) */
+function plainlyIn(file: string, folder: string): string | null {
+  if (!path.isAbsolute(file) || file.split("/").includes("..")) return null;
+  const parts = path.resolve(file).split("/");
+  for (let top = 1; top <= parts.length; top++) {
+    const named = parts.slice(0, top).join("/") || "/";
+    let real: string;
+    try { real = fs.realpathSync(named); } catch { return null; }
+    if (real !== folder) continue;
+    for (let at = top; at < parts.length; at++) {
+      let kind: fs.Stats;
+      try { kind = fs.lstatSync(parts.slice(0, at + 1).join("/")); } catch { break; }
+      if (kind.isSymbolicLink()) return null;
+      if (at < parts.length - 1 ? !kind.isDirectory() : !kind.isFile() || kind.nlink !== 1) return null;
+    }
+    return path.join(folder, ...parts.slice(top));
+  }
+  return null;
+}
+
 /** Whether the real path `file` is the real path `folder` or in it. */
 function within(file: string, folder: string): boolean {
   const inside = path.relative(folder, file);
@@ -530,18 +555,19 @@ async function answerPermission(source: Target, id: string, sessionID: string, s
     return null;
   }
   const reply = (body: Record<string, unknown>) => engineCall(source, "POST", `/api/session/${encodeURIComponent(permission.asker)}/permission/${encodeURIComponent(permission.id)}/reply`, body, signal);
-  // (In its project's worktrees, but for Kuvo Code's own and what runs later there, judged as
-  // anywhere: a worktree an agent could make up names only where it could work anyway.)
-  // Each by where the file really is, against where each folder was found to be (a worktree as
-  // found, its own folders as first found here), never by following a link put in place of one
-  // since; and never what's walled from its own wherever it is (`walledForOwn`).
+  // Its own folders and its project's worktrees, each by where it was found (a worktree as found, its
+  // own folders as first seen), a file in one allowed only as reached plainly (`plainlyIn`: no link
+  // on the way down, nor `..`, a file of one name only), and never what's walled from its own
+  // wherever it is (`walledForOwn`). Anything else is the reviewer's.
   const own = await ownFolders(at, false);
   const trees = typeof folder === "string" ? await projectTrees(folder) : [];
   const policy = fencePolicy();
-  const ownFile = (file: string) => {
-    const real = realPath(file);
-    return (own.some(each => within(real, foundAt(each))) || trees.some(each => within(real, each))) && !walledForOwn(file, policy, own);
-  };
+  const places = [...own.map(foundAt), ...trees];
+  const climbs = [...(file ? [file] : []), ...permission.resources].some(each => String(each).split("/").includes(".."));
+  const ownFile = (file: string) => !climbs && places.some(place => {
+    const real = plainlyIn(file, place);
+    return real !== null && !walledForOwn(real, policy, own);
+  });
   if (actions.every(action => action.kind === "file" && ownFile(action.path))) {
     await reply({ decision: "once" });
     noteReview(id, sessionID, "allowed", call);
