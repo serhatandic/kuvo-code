@@ -19,8 +19,9 @@ import { callOffHanding, refuseLiveElsewhere } from "../work-queue/hand";
 import { TOLD } from "../work-queue/told";
 import { readLink } from "../state";
 import { allItems, changeQueues, FILE_NAME, filesOf, matching, OWNER, queueFollowers, readAll, WORK_QUEUE, type Item } from "../work-queue/store";
+import { readSeen, SEEN_FILE } from "../work-queue/github";
 import { callQueueTool, QUEUE_INSTRUCTIONS, QUEUE_TOOLS } from "../work-queue/tools";
-import { factsOf, inProgress, inView, nameOf, overseenBy, ownersOf, refOf, summaryOf, wholeOf, type Facts } from "../work-queue/view";
+import { factsOf, inView, nameOf, overseenBy, ownersOf, refOf, summaryOf, wholeOf, type Facts, type ItemSummary } from "../work-queue/view";
 import type { AnswerPiece, RouteContext } from "../server/context";
 import type { Target } from "../../shared/records";
 
@@ -42,15 +43,23 @@ const notClient = ({ request }: RouteContext) => (request.fromMac && request.hea
 const fromClient = ({ request, phone }: RouteContext) => Boolean(phone?.key || request.fromApp || (request.fromMac && provedRequest(request)));
 const queryOf = (request: RouteContext["request"]) => new URLSearchParams(request.path.split("?")[1] ?? "");
 
+/** How long a client's ask waits for GitHub to say what its issues and pull requests are now (a
+ * read that takes longer goes on, for the next ask or the view's next line). */
+const GITHUB_WAIT = 3_000;
+
 /** An owner's view, as `kuvo/work-queue` gives it: the categories, its items and those it oversees
  * or handed on (summaries), whose each is, and what's deleted among them. `all` is every item on
- * the box, whoever's it is. */
-export async function viewOf(owner: string, targets: Target[], facts?: Facts, signal?: AbortSignal, cache?: Map<string, unknown>) {
+ * the box, whoever's it is. Its issues and pull requests are read from GitHub where that's due,
+ * waiting `wait` ms at most. */
+export async function viewOf(owner: string, targets: Target[], facts?: Facts, signal?: AbortSignal, cache?: Map<string, unknown>, wait = GITHUB_WAIT) {
   const known = facts ?? await factsOf(targets, signal);
   const overseen = owner === ALL ? new Set<string>() : overseenBy(owner, known.all);
   const here = allItems();
   // (A queue of a kind a newer box keeps isn't one to show.)
   const all = here.filter(item => owner === ALL || inView(owner, item, overseen));
+  // (What's shown, here or told by another computer: GitHub is read for it, only now.)
+  // (Another computer's as it told them: when it last asked GitHub decides whether this box does.)
+  await readSeen([...all, ...itemsElsewhere(owner, readLink(), undefined, undefined, { asTold: true }).items], wait);
   const { owners, titles } = await ownersOf(owner, all, known, targets, cache);
   // Your other computers' items in this view, as each last told them (one deleted here that's live
   // there, a hand-off called off that had got there, is theirs).
@@ -77,14 +86,18 @@ export async function viewOf(owner: string, targets: Target[], facts?: Facts, si
   };
 }
 
-// What a chip shows of an item: its number (or its outside source), title, where it stands, whose.
-const refFacts = (item: Pick<Item, "id" | "number" | "title" | "category" | "owner"> & { source?: Item["source"]; removed?: unknown }, working: boolean) => ({
+// What a chip shows of an item (a summary): its number (or its outside source, and what GitHub says
+// of it), title, where it stands, whose.
+const refFacts = (item: Pick<ItemSummary, "id" | "number" | "title" | "category" | "owner" | "inProgress" | "source" | "seen" | "struck" | "closesOn" | "removed">) => ({
   id: item.id,
   ...(item.number !== undefined ? { number: item.number } : {}),
   ...(item.source ? { source: item.source } : {}),
+  ...(item.seen ? { seen: item.seen } : {}),
+  ...(item.struck ? { struck: true } : {}),
+  ...(item.closesOn ? { closesOn: item.closesOn } : {}),
   title: item.title,
   category: item.category,
-  inProgress: working,
+  inProgress: item.inProgress,
   owner: item.owner,
   ...(item.removed ? { removed: true } : {}),
 });
@@ -125,13 +138,18 @@ export async function* workQueueRoute(context: RouteContext, match: RegExpMatchA
     const wanted = listed.filter((each): each is string => typeof each === "string").map(each => each.trim()).filter(each => each && each.length <= 300).slice(0, 200);
     const items = allItems();
     const facts = await factsOf(targets, signal ?? undefined);
-    const refs: Record<string, unknown> = {};
-    for (const ref of wanted) {
+    const found = wanted.map(ref => {
       const named = refOf(ref);
-      const item = named ? items.find(each => ("id" in named ? each.id === named.id : each.number === named.number)) : undefined;
+      const item = named ? matching(items, named)[0] : undefined;
       // One on another of your computers, as it last told it.
-      const far = !item && named ? itemElsewhere(named) : null;
-      refs[ref] = item ? refFacts(item, inProgress(item, facts.working)) : far ? { ...refFacts(far, far.inProgress), computer: far.computer } : null;
+      return { ref, item, far: !item && named ? itemElsewhere(named, readLink(), { asTold: true }) : null };
+    });
+    // (Their issues and pull requests read from GitHub where that's due: the chips are on screen.)
+    await readSeen(found.flatMap(each => [each.item ?? each.far].filter(Boolean) as { source?: Item["source"] }[]), GITHUB_WAIT);
+    const refs: Record<string, unknown> = {};
+    for (const { ref, item, far } of found) {
+      const again = far ? itemElsewhere({ id: far.id }) : null;
+      refs[ref] = item ? refFacts(summaryOf(item, facts.working, new Map())) : again ? { ...refFacts(again), computer: again.computer } : null;
     }
     return yield* json(200, { refs });
   }
@@ -193,14 +211,17 @@ export async function* workQueueRoute(context: RouteContext, match: RegExpMatchA
     if (!item) {
       // One on another of your computers: as it last told it, without what only that computer
       // keeps (its description, notes, files, links), which a client reads there.
-      const far = itemElsewhere(ref);
+      let far = itemElsewhere(ref);
       if (far) {
+        await readSeen([itemElsewhere(ref, readLink(), { asTold: true }) ?? far], GITHUB_WAIT);
+        far = itemElsewhere({ id: far.id }) ?? far;
         const { handedFrom: _, ...summary } = far;
         return yield* json(200, { item: { ...summary, body: "", notes: [], files: [], links: [], handed: [] } });
       }
       return yield* json(404, { message: "There's no such item." });
     }
     const facts = await factsOf(targets, signal ?? undefined);
+    await readSeen([item], GITHUB_WAIT);
     const { titles } = await ownersOf(item.owner, [item], facts, targets);
     return yield* json(200, { item: wholeOf(item, facts.working, titles) });
   }
@@ -276,7 +297,8 @@ async function* followView(owner: string, targets: Target[], signal?: AbortSigna
   // locks and the numbers there.)
   try { fs.mkdirSync(TOLD, { recursive: true, mode: 0o700 }); } catch {}
   const queuesWatch = watchFolders([path.join(WORK_QUEUE, "queues"), TOLD], told, { recursive: false });
-  const categoriesWatch = watchFolders([WORK_QUEUE], ((_: unknown, name: unknown) => { if (String(name ?? "") === "categories.json") told(); }) as () => void, { recursive: false });
+  // (And what GitHub said of its issues and pull requests, read as it's shown.)
+  const categoriesWatch = watchFolders([WORK_QUEUE], ((_: unknown, name: unknown) => { if (["categories.json", path.basename(SEEN_FILE)].includes(String(name ?? ""))) told(); }) as () => void, { recursive: false });
   const watching = { close: () => { queuesWatch.close(); categoriesWatch.close(); } };
   signal?.addEventListener("abort", () => wake?.(), { once: true });
   let last = "";
@@ -297,7 +319,8 @@ async function* followView(owner: string, targets: Target[], signal?: AbortSigna
         facts = { all: known.all, working: await atWorkNow(targets, signal).catch(() => known.working) };
       }
       dirty = false;
-      const line = JSON.stringify(await viewOf(owner, targets, facts, signal, titles));
+      // (GitHub isn't waited for: what it says comes as a line of its own once it's read.)
+      const line = JSON.stringify(await viewOf(owner, targets, facts, signal, titles, 0));
       if (line !== last) {
         yield { body: Buffer.from(line + "\n") };
         last = line;

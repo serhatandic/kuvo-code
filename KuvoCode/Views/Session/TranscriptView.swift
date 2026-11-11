@@ -1120,8 +1120,8 @@ struct UserBubble: View {
         // A named agent opens its conversation; a named file, in the side panel; a Work Queue
         // item, in the Work Queue.
         .environment(\.openURL, OpenURLAction { url in
-            if let number = WorkItemRefs.number(in: url) {
-                app.openWorkItem(number)
+            if let ref = WorkItemRefs.ref(in: url) {
+                app.openWorkItem(ref)
                 return .handled
             }
             if let session = MessageMentions.session(in: url) {
@@ -1406,8 +1406,8 @@ private struct MarkdownPiece: View, Equatable {
         return ReplyView(markdown: text, parser: FileLinkingParser(folders: folders, mentions: mentions, agents: agents, highlight: highlight, refs: refs), diagrams: true) { url in
             // A file opens in the side panel, a named agent its conversation, a Work Queue item
             // the Work Queue; web links in the browser.
-            if let number = WorkItemRefs.number(in: url) {
-                app.openWorkItem(number)
+            if let ref = WorkItemRefs.ref(in: url) {
+                app.openWorkItem(ref)
                 return true
             }
             if let session = MessageMentions.session(in: url) {
