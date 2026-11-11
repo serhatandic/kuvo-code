@@ -5,8 +5,11 @@
 // own `.git` file leads back there, `.git/worktrees` and each entry where they're named (no link to
 // another repository's). On a Mac a command in the sandbox can't move or replace those
 // (seatbelt.ts's GIT_GUARDED); on Linux it can, and the agent's own file tools can anywhere: a pair
-// made up so passes only for a folder an agent in Auto could start a session in anyway, never one
-// of Kuvo Code's or what runs later (`reviewing.ts`).
+// made up so passes only for a folder an agent in Auto could start a session in anyway
+// (`keptFromSessions`: never your home, a whole personal folder, your secrets, what runs at login or
+// ~/Library), never one of Kuvo Code's, and a change in one is never let through where it's walled
+// from a conversation's own (`walledForOwn`), by where the worktree was found, never through a link
+// put in its place since (`reviewing.ts`).
 
 import fs from "node:fs";
 import path from "node:path";

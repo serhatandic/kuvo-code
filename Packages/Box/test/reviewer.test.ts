@@ -664,3 +664,8 @@ test("a place taken back while a review is under way isn't stored again by it (#
   expect(reviewer.reviewLog(context.session, reviews).places ?? []).toEqual([])
   expect(reviewer.reviewLog(context.session, reviews).decisions.filter(each => each.place)).toEqual([])
 })
+
+test.skipIf(process.platform !== "darwin")("an agent in Auto never starts a session in ~/Library, nor takes one of its folders for its own, but for the caches commands write there", async () => {
+  expect(await reviewer.keptFromSessions(join(homedir(), "Library", "Preferences", "kuvo-test"), policy ??= fencePolicy())).toMatch(/~\/Library/)
+  expect(await reviewer.keptFromSessions(join(homedir(), "Library", "Developer", "kuvo-test"), policy)).toBeNull()
+})

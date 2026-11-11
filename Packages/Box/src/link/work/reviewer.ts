@@ -972,7 +972,7 @@ export function keepDecision(session: string, decision: Decision, folder = REVIE
     else if (decision.decision === "allowed") log.refusedInRow = 0;
     // A place new to it is a decision of its own, which you can see and take back (`revokePlace`).
     // (Not from a review that started before places were taken back: you, or leaving Auto, came after.)
-    const taken = since !== undefined && (log.placesTaken ?? 0) >= since;
+    const taken = since !== undefined && Math.max(log.placesTaken ?? 0, takenWhile.get(session) ?? 0) >= since;
     if (place && !taken && decision.decision === "allowed" && !(log.places ?? []).includes(place)) {
       const places = [...(log.places ?? []), place];
       // (One past the most kept goes, as if taken back.)
@@ -1036,6 +1036,11 @@ export function revokePlace(session: string, id: string, now = Date.now(), folde
   });
 }
 
+// The conversations with a review under way here (how many), and when places were taken back in
+// one of them meanwhile.
+const underWay = new Map<string, number>();
+const takenWhile = new Map<string, number>();
+
 /** Whether `place` is one the conversation keeps now (read again: one taken back while it was
  * worked out is gone). */
 async function stillPlaced(session: string, folder: string, place: string | undefined): Promise<boolean> {
@@ -1045,6 +1050,8 @@ async function stillPlaced(session: string, folder: string, place: string | unde
 /** Every place taken back at once, as the conversation leaves Auto: back in it, each change is
  * judged again until the model allows one there anew. */
 export function clearPlaces(session: string, now = Date.now(), folder = REVIEWS_FOLDER): void {
+  // (A review under way there now, before it has any: it stores none either.)
+  if (underWay.has(session)) takenWhile.set(session, now);
   if (!reviewLog(session, folder).places?.length) return;
   changeLog(session, folder, log => {
     for (const each of log.decisions) if (each.place && !each.revoked) each.revoked = now;
@@ -1125,6 +1132,17 @@ export async function review(action: ReviewedAction, context: ReviewContext, giv
   const now = given.now ?? Date.now;
   const folder = given.folder ?? REVIEWS_FOLDER;
   const started = now();
+  underWay.set(context.session, (underWay.get(context.session) ?? 0) + 1);
+  try {
+    return await reviewed(action, context, given, now, folder, started);
+  } finally {
+    const left = (underWay.get(context.session) ?? 1) - 1;
+    if (left > 0) underWay.set(context.session, left);
+    else { underWay.delete(context.session); takenWhile.delete(context.session); }
+  }
+}
+
+async function reviewed(action: ReviewedAction, context: ReviewContext, given: ReviewWith, now: () => number, folder: string, started: number): Promise<Verdict & { paused?: boolean }> {
   // (What it names that macOS may ask about, asked off the box's thread first: `askedAbout`.)
   await askedAbout([...namedBy(action), ...(given.own ?? [])]);
   // (One it fails to judge is held back like any it can't, on the log for you to approve.)

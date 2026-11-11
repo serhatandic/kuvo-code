@@ -4388,7 +4388,7 @@ conversation is taken as the box last found it; one it never found then has its 
 back (`why: "failed"`, code's lines still refused), never left waiting on you (bridge 0.9.186), but
 one the box marked as in Full Access, which runs (bridge 0.9.187).
 
-What's a conversation's own is never reviewed by its agent's own file tools, as its folder isn't (the sandbox's walls for its commands are as they were): its folder, its project's other
+What's a conversation's own is never reviewed by its agent's own file tools, as its folder isn't (the sandbox's walls for its commands are as they were), by where each file really is against where each of those folders was found (one traded for a link since takes nothing with it), and never what's walled from it wherever it is (Kuvo Code's own but the conversation's own in them, what runs later or at login, your secrets and your own settings, `~/Library`, a repository's `.git/worktrees`), each judged as anywhere: its folder, its project's other
 folders, the files sent with it, its commands' temporary folder, a bot's own and its projects, and,
 for one at work in a project's main folder, the project's linked git worktrees wherever they are
 (`git worktree add /tmp/try`: each its repository's `.git/worktrees` lists, that folder and the
@@ -4483,7 +4483,7 @@ folder and its other worktrees stay the reviewer's.
   own. A place new to the conversation is a decision of its own (`Change <place>`, "Auto allowed
   edits in <place> for this session.", with `place`), which any client can take back (`revoke`,
   below); one past the last 50 is taken back by itself, and every one as the conversation leaves
-  Auto.
+  Auto; a review under way as they're taken back stores none.
 - Three refusals in a row, or twenty in a conversation, pause Auto there: its run is stopped, and
   what it wants next is held back (`why: "paused"`) until you let it go on or approve one. Those for
   want of a model (`noModel`, `failed`, `unreadable`) don't count; the model's allow starts the
@@ -4648,8 +4648,10 @@ your home: `.claude/settings.json` and
 `settings.local.json`, `.mcp.json`, `.codex/config.toml`, `.cursor/hooks.json` and `mcp.json`,
 `.gemini/settings.json`, `.grok/settings.json`, and the scripts in `.claude/hooks` and
 `.cursor/hooks`; a folder moved or linked into place is checked only by its own name, so the folders
-that hold those, `.git`, a submodule's or a worktree's repository in it and the agents' `.claude`,
-`.codex`, `.cursor`, `.gemini` and `.grok`, can't be made, moved or removed, only written in, and
+that hold those, `.git`, a submodule's or a worktree's repository in it (`.git/modules` and
+`.git/worktrees` themselves, and every folder below `modules`, a worktree's own `modules` too, but
+for what git keeps in a submodule's as it fetches: its objects', refs' and logs' folders) and the
+agents' `.claude`, `.codex`, `.cursor`, `.gemini` and `.grok`, can't be made, moved or removed, only written in, and
 neither can the conversation's folder itself and its repository's, so neither is traded for a link to
 another bot's), its conversation's own temporary
 folder (`TMPDIR`), its conversation's wake-ups' inbox (below), its bot's memory (`MEMORY.md` in the folder of the bot
