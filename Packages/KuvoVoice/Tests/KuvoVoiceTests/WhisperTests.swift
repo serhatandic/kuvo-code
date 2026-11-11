@@ -232,7 +232,8 @@ func eachPhraseIsWrittenAfterItsPauseAndDonePutsInTheLast() async throws {
     guard case .failed(let failure) = voice.phase else { Issue.record("not failed: \(voice.phase)"); return }
     #expect(!voice.listened)
     #expect(voice.status == "Voice input couldn’t start")
-    #expect(!voice.status.contains("stopped") && !failure.message.contains("stopped"))
+    #expect(!voice.status.contains("stopped"))
+    #expect(!failure.message.contains("stopped"))
     // One that listened, then failed, did stop.
     voice.showSample(confirmed: "", guess: "")
     #expect(voice.listened)
