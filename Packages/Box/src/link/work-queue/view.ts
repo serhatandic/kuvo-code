@@ -33,6 +33,12 @@ export const overseenBy = (owner: string, all: Listed[]): Set<string> => new Set
 export const inView = (owner: string, item: Item, overseen: Set<string>): boolean =>
   item.owner === owner || overseen.has(item.owner) || item.handedBy === owner || Boolean(item.handed?.some(each => each.from === owner));
 
+/** Whether `item` is one `owner` is working on without it being in its view: someone else's,
+ * linked to it, not deleted. A view shows these too (seeing only: what its agent may change is
+ * still `inView`'s). */
+export const linkedTo = (owner: string, item: { sessions: { session: string }[]; removed?: unknown }): boolean =>
+  !item.removed && item.sessions.some(each => each.session === owner);
+
 /** Whether the item is in progress: not done or deleted, and a session linked to it at work. */
 export const inProgress = (item: Item, working: Set<string>): boolean =>
   !item.removed && item.category !== "done" && item.sessions.some(each => working.has(each.session));

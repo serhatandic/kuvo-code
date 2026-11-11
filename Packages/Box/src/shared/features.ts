@@ -74,6 +74,7 @@ export const FEATURES = [
   "personalities.events",
   "phones",
   "phones.pair",
+  "pieces",
   "plugins.search",
   "programs",
   "projects",

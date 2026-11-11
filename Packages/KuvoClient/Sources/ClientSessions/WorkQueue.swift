@@ -369,6 +369,8 @@ public enum WorkQueue {
     /// A filter over the list: everything, what's in progress, or one category.
     public enum Filter: Hashable, Sendable {
         case all
+        /// What this session works on that's someone else's (a session's view only).
+        case workingOn
         case inProgress
         case category(String)
     }
@@ -391,29 +393,51 @@ public enum WorkQueue {
     }
 
     public static let inProgressID = "in-progress"
+    public static let workingOnID = "working-on"
 
     /// In progress, as the box says (it never says so of one that's Done or deleted).
     public static func isInProgress(_ item: WorkItem) -> Bool { item.inProgress }
 
-    /// The view's sections, In progress first, then every category (empty ones too: the panel says
-    /// how many each holds).
+    /// Whether `item` is one the view's owner is working on that's someone else's: a lead's item
+    /// linked to the session whose view it is, not Done. The box shows those in its view, to see
+    /// only; they go first, under Working on (one that's Done goes with the Done ones).
+    public static func isWorkingOn(_ item: WorkItem, in view: WorkQueueView) -> Bool {
+        view.owner != WorkQueueView.all && item.owner != view.owner && !item.isDone && item.sessions.contains { $0.session == view.owner }
+    }
+
+    /// The view's sections: Working on first when the view has any (what this session works on
+    /// that's someone else's), then In progress (whatever its items' categories), then every
+    /// category (empty ones too: the panel says how many each holds). Each item shows once.
     public static func sections(_ view: WorkQueueView) -> [Section] {
-        let working = view.items.filter(isInProgress)
-        var sections = [Section(id: inProgressID, name: "In progress", category: nil, items: working)]
-        let rest = view.items.filter { !isInProgress($0) }
+        let workingOn = view.items.filter { isWorkingOn($0, in: view) }
+        let rest = view.items.filter { !isWorkingOn($0, in: view) }
+        var sections = workingOn.isEmpty ? [] : [Section(id: workingOnID, name: "Working on", category: nil, items: workingOn)]
+        sections.append(Section(id: inProgressID, name: "In progress", category: nil, items: rest.filter(isInProgress)))
+        let kept = rest.filter { !isInProgress($0) }
         for category in view.categories {
-            sections.append(Section(id: category.id, name: category.name, category: category.id, items: rest.filter { $0.category == category.id }))
+            sections.append(Section(id: category.id, name: category.name, category: category.id, items: kept.filter { $0.category == category.id }))
         }
         return sections
     }
 
-    /// The items `filter` keeps, in the list's order: In progress first under All.
+    /// The items `filter` keeps, in the list's order: Working on and In progress first under All.
+    /// Each item is under one filter but All, so the others' counts add up to All's.
     public static func items(_ view: WorkQueueView, _ filter: Filter, showsDone: Bool = true) -> [WorkItem] {
+        switch filter {
+        case .all: return sections(view).filter { showsDone || $0.category != WorkCategory.done }.flatMap(\.items)
+        default: return section(for: filter, in: view)?.items ?? []
+        }
+    }
+
+    /// The section a filter shows (nil for All, and for Working on in a view without it): In
+    /// progress, Working on, or a category.
+    public static func section(for filter: Filter, in view: WorkQueueView) -> Section? {
         let sections = sections(view)
         switch filter {
-        case .all: return sections.filter { showsDone || $0.category != WorkCategory.done }.flatMap(\.items)
-        case .inProgress: return sections.first?.items ?? []
-        case .category(let id): return sections.first { $0.category == id }?.items ?? []
+        case .all: return nil
+        case .workingOn: return sections.first { $0.id == workingOnID }
+        case .inProgress: return sections.first { $0.id == inProgressID }
+        case .category(let id): return sections.first { $0.category == id }
         }
     }
 
@@ -558,11 +582,11 @@ public enum WorkQueue {
         return view.owners.first { $0.owner == item.owner }?.name ?? (item.owner.hasPrefix("grp_") ? "Group chat" : "Untitled session")
     }
 
-    /// What's being done now: the agent's note, else the session at work.
-    public static func currentWork(_ item: WorkItem) -> String? {
-        if let note = item.progress?.note?.trimmingCharacters(in: .whitespacesAndNewlines), !note.isEmpty { return note }
-        if let working = item.sessions.first(where: \.working) { return "\(working.title.isEmpty ? "A session" : working.title) is at work on it" }
-        return nil
+    /// What the agent said it's doing, when it said something: nil otherwise (the working mark
+    /// says a session is at work; the session's title would repeat the item's).
+    public static func progressNote(_ item: WorkItem) -> String? {
+        guard let note = item.progress?.note?.trimmingCharacters(in: .whitespacesAndNewlines), !note.isEmpty else { return nil }
+        return note
     }
 
     /// The category an item is kept in, by name.

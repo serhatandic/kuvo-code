@@ -11,7 +11,7 @@
 // as long as the engine (KUVO_ENGINE_PID) does, the Mac connected or not.
 
 import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs"
-import { join } from "node:path"
+import { basename, dirname, join } from "node:path"
 import { Accounts, parseProvider } from "./accounts"
 import { record as recordArtifacts } from "./artifacts/record"
 import type { Source } from "./artifacts/recorder"
@@ -29,7 +29,14 @@ import { setToolProgram } from "./kuvotools"
 import { dropCarriedSignIns, dropOwnPrograms, machineHome, onMachine, takeOwnFolders } from "./machine"
 import { Snapshots } from "./snapshots"
 import { Roster } from "./roster"
-import { cancelSignIns, handler } from "./server"
+import { cancelSignIns, handler, signInsWaiting } from "./server"
+import { launchLets, Renewal } from "./renewal"
+import { keeperEngine } from "../shared/engines"
+import { commandLineOf } from "../shared/platform"
+import { updateUnderWay } from "../shared/updating"
+import { spawn } from "node:child_process"
+import { bundleBuild } from "../shared/bundle"
+import type { RenewalRecord } from "../shared/records"
 import { Sessions } from "./sessions"
 import { noteAgentsInside, untilSandboxDecided } from "./fence"
 import { useSavedLoginPath } from "./proc"
@@ -49,6 +56,16 @@ import { agentAccounts, Limits } from "./limits"
 import { ENGINE_SERVICES, EngineAccounts } from "./engine-limits"
 
 const version = "1"
+// The build it runs, as its bundle names it (none from its sources): read as it starts, so a newer
+// one put in its place is told from it (renewal.ts).
+const script = Bun.main
+const build = bundleBuild(script)
+// `selftest`: it loads and runs on this engine, and says which build it is (a bridge about to make
+// way for it asks first, renewal.ts).
+if (process.argv.slice(2).includes("selftest")) {
+  console.log(`ok ${build}`)
+  process.exit(0)
+}
 const home = process.env.KUVO_AGENTS_HOME
 const password = onMachine ? process.env.KUVO_AGENTS_PASSWORD : process.env.OPENCODE_PASSWORD
 const enginePID = Number(process.env.KUVO_ENGINE_PID)
@@ -75,6 +92,12 @@ if (onMachine) {
   // Nor do they get what the engine starts with: its settings, with keys in them, nor these.
   for (const name of ["OPENCODE_CONFIG_CONTENT", "OPENCODE_CONFIG", "OPENCODE_CLIENT", "KUVO_AGENTS_PASSWORD", "KUVO_AGENTS_PORT", "KUVO_ENGINE_PORT", "KUVO_ENGINE_PID"]) delete process.env[name]
 }
+// A test's: how long it waits for a quiet moment before it holds new turns for a newer bridge.
+const renewHoldAfter = Number(process.env.KUVO_TEST_RENEW_HOLD) || undefined
+// And how long nothing must run before it goes, and how long it must have run.
+const renewSettle = process.env.KUVO_TEST_RENEW_SETTLE ? Number(process.env.KUVO_TEST_RENEW_SETTLE) : undefined
+const renewUptime = process.env.KUVO_TEST_RENEW_UPTIME ? Number(process.env.KUVO_TEST_RENEW_UPTIME) : undefined
+for (const name of ["KUVO_TEST_RENEW_HOLD", "KUVO_TEST_RENEW_SETTLE", "KUVO_TEST_RENEW_UPTIME"]) delete process.env[name]
 // Temporary files of its own and the agents' (Claude Code's task output): the app gives it a
 // folder in its own temporary folder.
 const temporary = process.env.TMPDIR?.replace(/\/$/, "") || join(home, "tmp")
@@ -299,12 +322,25 @@ await untilSandboxDecided()
 limits.start()
 const carrying = new Carrying(sessions, store, (provider) => sessions.agent(provider), (kind) => roster.all().filter((agent) => parseProvider(agent.providerID)?.kind === kind))
 let server: ReturnType<typeof Bun.serve>
+/** Making way for a newer bridge in its place, on a machine (below). */
+let renewal: Renewal | undefined
+const answer = handler({ roster, sessions, auto, link, password, version, build, groups, goals, sideQuestions, handoffs, places, reviews, voice, artifacts, noted, restartOutside, carrying, limits })
+/** Requests being answered now (but the event feed's, which stays open): a newer bridge waits for them. */
+let answering = 0
 try {
   server = Bun.serve({
     hostname: "127.0.0.1",
     port,
     idleTimeout: 0,
-    fetch: handler({ roster, sessions, auto, link, password, version, groups, goals, sideQuestions, handoffs, places, reviews, voice, artifacts, noted, restartOutside, carrying, limits }),
+    fetch: (request) => {
+      if (new URL(request.url).pathname === "/api/event") return answer(request)
+      answering++
+      // One that can start something (a message, a change) starts a quiet moment's count again; one
+      // that only reads doesn't: the link asks whether it answers every half minute, and a client
+      // reads what it shows (counted while they're answered all the same).
+      if (request.method !== "GET" && request.method !== "HEAD") renewal?.busied()
+      return answer(request).finally(() => answering--)
+    },
   })
 } catch (error: any) {
   console.error("couldn't listen:", error?.message ?? error)
@@ -316,8 +352,10 @@ self = requester(`http://127.0.0.1:${server.port}`, password)
 // Once the engine's there (the app says where, a moment after this starts on the Mac): parts under
 // way are followed again, and meetings held.
 void link.whenReady().then(() => {
-  // Sessions whose background work ended as the bridge last stopped hear so now.
+  // Sessions whose background work ended as the bridge last stopped hear so now, and what the
+  // bridge before this one held for it goes.
   sessions.wakeLost()
+  sessions.wakeHeld()
   goals.start()
   sideQuestions.start()
   reviews.resume()
@@ -336,12 +374,97 @@ void link.whenReady().then(() => {
   }
 })
 // On a machine, where it's reached, for kuvo-wake and Kuvo Code's tools there (as the engine's
-// launch writes engine.json): only this user can read it, and it goes when the bridge does.
+// launch writes engine.json): only this user can read it, and it goes when the bridge does. With the
+// build it runs, and how it makes way for a newer one put in its place (renewal.ts), for the box to
+// say (`kuvo/info`'s `pieces`).
 const record = onMachine ? join(machineHome!, "run", "bridge.json") : undefined
-if (record) {
-  writeFileSync(record + ".new", JSON.stringify({ pid: process.pid, port: server.port, password }), { mode: 0o600 })
-  renameSync(record + ".new", record)
+const writeRecord = (renewal: RenewalRecord | null, first = false) => {
+  if (!record) return
+  try {
+    writeFileSync(record + ".new", JSON.stringify({ pid: process.pid, port: server.port, password, build, renewal }), { mode: 0o600 })
+    renameSync(record + ".new", record)
+  } catch (error) {
+    if (first) throw error
+  }
 }
+writeRecord(null, true)
+
+// A newer bridge put in its place on a machine (a Mac that connected brought it): it makes way at
+// the first quiet moment, never cutting a turn, and the machine's launch starts the new one, which
+// starts what waited for it (renewal.ts). (This Mac's own bridge takes a new version with its app,
+// whose keeper starts the box again once nothing runs.)
+/** Whether its launch starts it again, as last worked out (`lets`, below). */
+let launchSaid: { at: number; lets: boolean } | undefined
+renewal =
+  onMachine && build
+    ? new Renewal({
+        script,
+        build,
+        work: () => {
+          const here = sessions.work()
+          const turns = here.turns || answering > 0 || (groups?.runner.busy() ?? false)
+          const other = here.other || goals.busy() || sideQuestions.busy() || reviews.busy() || handoffs.busy() || signInsWaiting()
+          return { turns, other }
+        },
+        hold: (on) => sessions.hold(on),
+        renew: () => {
+          console.error("A newer bridge is in place: this one makes way for it.")
+          stop()
+        },
+        told: (state) => writeRecord(state),
+        paused: () => updateUnderWay(join(machineHome!, "run")),
+        // Only on the engine its keeper starts: one a Mac brought with a newer engine it kept from
+        // starting (sessions were at work) waits for that engine, which starts it.
+        ready: () => {
+          const kept = keeperEngine(machineHome!)
+          return !kept || kept === basename(dirname(process.execPath))
+        },
+        // Only while the launch keeping it will start the new one (renewal.ts, `launchLets`).
+        // (Its parent's command line and its launch's log, read once a minute at most.)
+        lets: () => {
+          const now = Date.now()
+          if (launchSaid && now - launchSaid.at < 60_000) return launchSaid.lets
+          const lets = launchLets(commandLineOf(process.ppid), () => {
+            try {
+              return readFileSync(join(machineHome!, "run", "agents.log"), "utf8")
+            } catch {
+              return undefined
+            }
+          })
+          launchSaid = { at: now, lets }
+          return lets
+        },
+        uptime: () => performance.now(),
+        longEnough: renewUptime,
+        // Only for a bundle that loads and runs on this engine.
+        check: (newer) =>
+          new Promise<boolean | undefined>((done) => {
+            const env: Record<string, string> = { BUN_BE_BUN: "1", BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0", PATH: process.env.PATH ?? "/usr/bin:/bin" }
+            const checking = spawn(process.execPath, ["--config=/dev/null", "--no-env-file", script, "selftest"], { env, stdio: ["ignore", "pipe", "ignore"] })
+            let said = ""
+            checking.stdout.on("data", (chunk) => (said += chunk))
+            let late = false
+            const timer = setTimeout(() => ((late = true), checking.kill("SIGKILL")), 60_000)
+            // (One that couldn't start, or ran out of time, says nothing of the bundle: asked again.)
+            checking.on("error", () => (clearTimeout(timer), done(undefined)))
+            checking.on("close", (code, signal) => {
+              clearTimeout(timer)
+              // (Ended by a signal, out of memory say, or out of time: nothing said of the bundle.)
+              done(late || signal ? undefined : code === 0 && said.trim() === `ok ${newer}`)
+            })
+          }),
+        holdAfter: renewHoldAfter,
+        settle: renewSettle,
+      })
+    : undefined
+renewal?.start()
+// The moment a turn ends may be the quiet one: a quiet moment counts from it.
+const renewing = renewal
+if (renewing) subscribe((event) => {
+  if (event.type !== "session.idle") return
+  renewing.busied()
+  renewing.look()
+})
 
 // This box's engine, ended should it hang (it's started again as after a crash), on a machine and on
 // this Mac alike. This box's link watches this bridge in turn (link/main.ts).

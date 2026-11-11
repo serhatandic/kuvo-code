@@ -1,7 +1,7 @@
 // @bun
 // Packages/Box/src/agents/main.ts
 import { mkdirSync as mkdirSync21, readdirSync as readdirSync17, readFileSync as readFileSync31, renameSync as renameSync17, rmSync as rmSync16, writeFileSync as writeFileSync23 } from "fs";
-import { join as join32 } from "path";
+import { basename as basename12, dirname as dirname18, join as join32 } from "path";
 
 // Packages/Box/src/agents/accounts.ts
 import { randomBytes } from "crypto";
@@ -652,6 +652,15 @@ function commandLine(pid) {
     commandLines.clear();
   commandLines.set(pid, { line, at: now });
   return line;
+}
+function commandLineOf(pid, proc = "/proc") {
+  try {
+    return fs.readFileSync(`${proc}/${pid}/cmdline`, "utf8").split("\x00").join(" ").trim();
+  } catch {
+    if (fs.existsSync(proc))
+      return;
+    return commandLine(pid)?.trim() || undefined;
+  }
 }
 function loginShell(env = process.env, platform = process.platform) {
   const given = env.SHELL && path.isAbsolute(env.SHELL) ? env.SHELL : undefined;
@@ -3954,6 +3963,9 @@ class Goals {
         this.forget(session);
     });
   }
+  busy() {
+    return [...this.goals.values()].some((goal) => goal.checking);
+  }
   stopAll() {
     this.stopped = true;
     for (const timer of this.later.values())
@@ -4461,6 +4473,9 @@ class SideQuestions {
         if (question.state === "answering")
           this.answer(question);
   }
+  busy() {
+    return [...this.kept.values()].some((list) => list.some((question) => question.state === "answering"));
+  }
   stopAll() {
     this.stopped = true;
     for (const stop of this.stops.values())
@@ -4636,6 +4651,9 @@ class Handoffs {
   }
   get(session) {
     return this.kept.get(session);
+  }
+  busy() {
+    return this.starting.size > 0 || [...this.kept.values()].some((handoff) => handoff.state === "writing");
   }
   async start(session, next) {
     if (this.starting.has(session) || this.kept.get(session)?.state === "writing")
@@ -4844,6 +4862,9 @@ class Reviews {
       this.follow(session);
       this.forgetIfGone(session);
     }
+  }
+  busy() {
+    return [...this.kept.values()].some((review) => review.state === "reviewing");
   }
   stopAll() {
     this.stopped = true;
@@ -11031,6 +11052,33 @@ function heardWindows(info) {
     return [];
   return [{ id: shape.id, used, minutes: shape.minutes, ...resetsAt ? { resetsAt } : {}, ...shape.model ? { model: shape.model } : {} }];
 }
+var CLOSE_TO_LIMIT = 0.9;
+function limitWarning(info) {
+  const limit = warnedLimit(info?.rateLimitType);
+  const stated = [info?.utilization, info?.unifiedWindows?.[info?.rateLimitType]?.utilization].find((value) => typeof value === "number" && Number.isFinite(value));
+  if (stated !== undefined) {
+    const percent = stated < 1 ? Math.min(Math.round(Math.max(stated, 0) * 100), 99) : 100;
+    if (percent === 100)
+      return { text: `You've used all of ${limit}.`, close: true };
+    const close = percent >= CLOSE_TO_LIMIT * 100;
+    return { text: close ? `You're close to ${limit}: ${percent}% used.` : `You've used ${percent}% of ${limit}.`, close };
+  }
+  const passed = typeof info?.surpassedThreshold === "number" ? info.surpassedThreshold : NaN;
+  if (!(passed > 0))
+    return { text: `Claude Code warned about ${limit}.`, close: false };
+  const close = passed >= CLOSE_TO_LIMIT;
+  return { text: close ? `You're close to ${limit}.` : `You've used over ${Math.round(passed * 100)}% of ${limit}.`, close };
+}
+function warnedLimit(type) {
+  if (type === "five_hour")
+    return "your 5-hour Claude limit";
+  if (type === "overage")
+    return "your Claude extra usage limit";
+  const shape = typeof type === "string" ? HEARD[type] : undefined;
+  if (shape?.minutes === 10080)
+    return shape.model ? `your weekly ${shape.model} limit` : "your weekly Claude limit";
+  return "your Claude usage limit";
+}
 var HEARD = {
   five_hour: { id: "five_hour", minutes: 300 },
   seven_day: { id: "seven_day", minutes: 10080 },
@@ -12527,8 +12575,8 @@ ${input.text}` } : input, this.copies());
         if (!active || lane !== active)
           return;
         if (info.status === "allowed_warning") {
-          const used = typeof info.utilization === "number" ? ` (${Math.round(info.utilization * 100)}% used)` : "";
-          this.noticeOnce(`warn:${info.rateLimitType}:${info.surpassedThreshold ?? ""}`, turn, `You're close to ${limitWords2(info.rateLimitType).replace(/^You've reached /, "").replace(/\.$/, "")}${used}.`);
+          const warning = limitWarning(info);
+          this.noticeOnce(`warn:${info.rateLimitType}:${info.surpassedThreshold ?? ""}:${warning.close ? "close" : ""}`, turn, warning.text);
           return;
         }
         if (info.status !== "rejected" || info.overageInUse || info.isUsingOverage)
@@ -13293,6 +13341,8 @@ function limitWords2(type) {
   switch (type) {
     case "five_hour":
       return "You've reached your Claude usage limit for the next few hours.";
+    case "seven_day":
+      return "You've reached your weekly Claude limit.";
     case "seven_day_opus":
       return "You've reached this week's Opus limit on your Claude plan.";
     case "seven_day_sonnet":
@@ -17889,6 +17939,10 @@ function lostWorkOf(input) {
   const kept = input.synthetic?.metadata?.kuvo;
   return typeof kept?.lostWork === "number" ? { at: kept.lostWork, work: Array.isArray(kept.work) ? kept.work : [], restarted: kept.restarted === true } : undefined;
 }
+function isSeat(session) {
+  const kuvo = session.metadata?.kuvo;
+  return Boolean(kuvo && typeof kuvo === "object" && kuvo.seat);
+}
 function isBusy(doing) {
   return doing.kind !== "idle" && doing.kind !== "deleting";
 }
@@ -17927,6 +17981,7 @@ function runCommand(command, directory, started = () => {}) {
     let truncated = false;
     let timedOut = false;
     let done = false;
+    let timer;
     const take = (chunk) => {
       output += chunk.toString("utf8");
       if (output.length > shellOutputLimit * 2) {
@@ -17960,7 +18015,7 @@ function runCommand(command, directory, started = () => {}) {
           process.kill(-child.pid, signal);
       } catch {}
     };
-    const timer = setTimeout(() => {
+    timer = setTimeout(() => {
       timedOut = true;
       group("SIGTERM");
       setTimeout(() => group("SIGKILL"), 5000);
@@ -18616,8 +18671,8 @@ class Sessions {
     let changed = false;
     const lastUser = record.messages.findLastIndex((message) => message.type === "user" || message.type === "synthetic" || message.type === "compaction");
     const queue = this.queue(record);
-    if (queue.some((input) => input.compact)) {
-      queue.splice(0, queue.length, ...queue.filter((input) => !input.compact));
+    if (queue.some((input) => input.compact && !input.held)) {
+      queue.splice(0, queue.length, ...queue.filter((input) => !input.compact || input.held));
       changed = true;
     }
     for (const message of record.messages) {
@@ -18839,22 +18894,27 @@ class Sessions {
     for (const waiting of live.waiting.splice(0))
       waiting();
     record.agent.inbox = [];
-    const run = runOf(doing);
-    if (run)
-      await this.stop(id, live, run);
-    else
-      await this.stopSubagents(id);
-    for (const child of this.list(undefined, id))
-      if (!this.shownElsewhere(child.id, id))
-        await this.remove(child.id);
-    for (const thread of live.threads.values())
-      thread.close();
-    for (const [provider, slot] of Object.entries(this.slots(record)))
-      await this.agent(provider)?.forgetConversation?.(slot.state).catch(() => {});
-    this.stopShells(id);
-    this.store.remove(id);
-    this.live.delete(id);
-    emit("session.deleted", { sessionID: id }, record.session.location.directory);
+    this.removing++;
+    try {
+      const run = runOf(doing);
+      if (run)
+        await this.stop(id, live, run);
+      else
+        await this.stopSubagents(id);
+      for (const child of this.list(undefined, id))
+        if (!this.shownElsewhere(child.id, id))
+          await this.remove(child.id);
+      for (const thread of live.threads.values())
+        thread.close();
+      for (const [provider, slot] of Object.entries(this.slots(record)))
+        await this.agent(provider)?.forgetConversation?.(slot.state).catch(() => {});
+      this.stopShells(id);
+      this.store.remove(id);
+      this.live.delete(id);
+      emit("session.deleted", { sessionID: id }, record.session.location.directory);
+    } finally {
+      this.removing--;
+    }
   }
   shownElsewhere(child, except) {
     for (const session of this.store.all()) {
@@ -18919,6 +18979,7 @@ class Sessions {
       record.agent.lateShells = [...record.agent.lateShells ?? [], message.id];
     this.store.save(id, true);
     let group;
+    this.commands++;
     runCommand(text, directory, (started) => {
       group = started;
       this.ownShell(id, started);
@@ -18935,7 +18996,7 @@ class Sessions {
         return;
       this.store.save(id, true);
       emit("session.shell.ended", { sessionID: id, shell: { id: shellID, command: text, status: message.status, exit: ran.code }, output: message.output }, directory);
-    });
+    }).finally(() => this.commands--);
   }
   async stageRevert(id, messageID) {
     const record = this.record(id);
@@ -19258,7 +19319,8 @@ class Sessions {
         throw new BadRequest(`${agent.name} has let this subagent go: write to the conversation that started it, which can pick it up again.`);
       this.showMessage(id, record, input);
       const missed = () => this.subagentNote(id, `${agent.name} didn't take that message: write to the conversation that started it.`);
-      send({ id: input.id, text: attached.text, files: attached.files }, () => this.resumedRun(parentID, parentLive, id)).then((sent) => sent || missed(), missed);
+      this.sending++;
+      send({ id: input.id, text: attached.text, files: attached.files }, () => this.resumedRun(parentID, parentLive, id)).then((sent) => sent || missed(), missed).finally(() => this.sending--);
       return;
     }
     if (parent.session.model?.providerID !== provider)
@@ -19462,6 +19524,16 @@ ${others.join(`
       live.go = false;
     if (index < 0)
       return;
+    if (this.holding && !isSeat(record.session)) {
+      const input = queue[index];
+      input.held = true;
+      if (input.delivery !== "steer") {
+        input.delivery = "steer";
+        emit("session.inbox.delivery.changed", { sessionID: id, inboxID: input.id, delivery: "steer" }, record.session.location.directory);
+      }
+      this.store.save(id, true);
+      return;
+    }
     const [input] = queue.splice(index, 1);
     this.start(id, live, input);
   }
@@ -20539,6 +20611,35 @@ ${live.agentPrompt}` : ""
       this.queue(record).push(input);
       this.store.save(id, true);
     }
+  }
+  wakeHeld() {
+    for (const session of this.store.all()) {
+      const record = this.store.get(session.id);
+      if (!record)
+        continue;
+      const held = this.queue(record).filter((input) => input.held);
+      if (!held.length)
+        continue;
+      for (const input of held)
+        delete input.held;
+      this.store.save(session.id, true);
+      this.wake(session.id);
+    }
+  }
+  hold(on) {
+    if (this.holding === on)
+      return;
+    this.holding = on;
+    if (!on)
+      this.wakeHeld();
+  }
+  holding = false;
+  commands = 0;
+  sending = 0;
+  removing = 0;
+  work() {
+    const handing = [...this.live.values()].some((live) => live.steering.size > 0);
+    return { turns: this.active().length > 0 || this.commands > 0 || this.sending > 0 || this.removing > 0 || handing, other: Object.keys(this.background()).length > 0 };
   }
   wakeLost(now = Date.now()) {
     for (const session of this.store.all()) {
@@ -24218,6 +24319,9 @@ class GroupRunner {
     kept.paused = paused;
     this.context.store.saveGroup(kept);
   }
+  busy() {
+    return this.answering.size > 0 || [...this.chats.values()].some((kept) => kept.talking === true && kept.status === "active");
+  }
   setTalking(id, talking) {
     const kept = this.chats.get(id);
     if (!kept || (kept.talking ?? false) === talking)
@@ -25932,6 +26036,10 @@ function cancelSignIns() {
     pending.attempt.cancel();
   attempts.clear();
 }
+function signInsWaiting() {
+  const now = Date.now();
+  return [...attempts.values()].some((pending) => now < pending.expires && pending.attempt.status().status === "pending");
+}
 setInterval(() => {
   for (const [id, pending] of attempts) {
     if (Date.now() < pending.expires + 60000)
@@ -26043,7 +26151,7 @@ function handler(context) {
         return error2(404, "Not found");
       const [, area, a, b, c, d, e] = parts;
       if (area === "info")
-        return json12({ version: context.version, pid: process.pid });
+        return json12({ version: context.version, pid: process.pid, build: context.build ?? null });
       if (area === "event")
         return feed();
       if (area === "integration") {
@@ -26443,8 +26551,275 @@ function expandCommand(template, written) {
 ${all}`;
 }
 
+// Packages/Box/src/agents/renewal.ts
+import { statSync as statSync12, watch as watch2 } from "fs";
+import { dirname as dirname17 } from "path";
+
+// Packages/Box/src/shared/bundle.ts
+import fs4 from "fs";
+var BUILT = /\/\/ Built from Packages\/Box\/src\/agents ([0-9a-f]{16,64})\s*(?:\n|$)/g;
+function buildOf(text) {
+  let found = null;
+  for (const match of text.matchAll(BUILT))
+    found = match[1];
+  return found;
+}
+function bundleBuild(file) {
+  let handle;
+  try {
+    handle = fs4.openSync(file, "r");
+    const size = fs4.fstatSync(handle).size;
+    const length = Math.min(size, 1024);
+    const tail = Buffer.alloc(length);
+    fs4.readSync(handle, tail, 0, length, size - length);
+    return buildOf(tail.toString("utf8"));
+  } catch {
+    return null;
+  } finally {
+    if (handle !== undefined)
+      try {
+        fs4.closeSync(handle);
+      } catch {}
+  }
+}
+
+// Packages/Box/src/shared/night.ts
+function nightOf(date = new Date, zone = process.env.KUVO_TZ) {
+  let parts;
+  try {
+    parts = Object.fromEntries(new Intl.DateTimeFormat("en-CA", { timeZone: zone || undefined, year: "numeric", month: "2-digit", day: "2-digit", hour: "numeric", hourCycle: "h23" }).formatToParts(date).map((part) => [part.type, part.value]));
+  } catch {
+    return null;
+  }
+  const hour = Number(parts.hour);
+  return hour >= 2 && hour < 5 ? `${parts.year}-${parts.month}-${parts.day}` : null;
+}
+
+// Packages/Box/src/agents/renewal.ts
+var renewalTiming = { look: 1e4, settle: 30000, grace: 1000, patience: 60 * 60000, longest: 24 * 60 * 60000, holding: 30 * 60000, uptime: 11 * 60000 };
+function launchLets(loop, log) {
+  if (loop !== undefined && !(loop.includes("kuvo-agents") && loop.includes("-lt 5")))
+    return false;
+  if (loop?.includes("-ge 600"))
+    return true;
+  const text = log();
+  return text !== undefined && (text.match(/"url"/g) ?? []).length < 3;
+}
+
+class Renewal {
+  options;
+  since;
+  waits = "quiet";
+  from = 0;
+  holding = false;
+  heldAt = 0;
+  quietSince;
+  going = false;
+  seen;
+  newer;
+  checked = new Map;
+  looking;
+  watching;
+  constructor(options) {
+    this.options = options;
+  }
+  start() {
+    this.looking = setInterval(() => this.look(), renewalTiming.look);
+    this.looking.unref?.();
+    try {
+      this.watching = watch2(dirname17(this.options.script), () => this.look());
+    } catch {}
+    this.look();
+  }
+  stop() {
+    clearInterval(this.looking);
+    this.watching?.close();
+  }
+  get state() {
+    return this.since === undefined ? null : { since: this.since, holding: this.holding, waits: this.waits };
+  }
+  holdsNow(from, now) {
+    const waited = now - from;
+    if (this.options.holdAfter !== undefined)
+      return waited >= this.options.holdAfter;
+    return waited >= renewalTiming.longest || waited >= renewalTiming.patience && nightOf(new Date(now), this.options.zone) !== null;
+  }
+  look() {
+    if (this.going)
+      return;
+    const now = this.options.now?.() ?? Date.now();
+    const build = this.newerInPlace();
+    if (!build) {
+      if (this.since === undefined)
+        return;
+      this.since = undefined;
+      this.quietSince = undefined;
+      this.letGo();
+      this.waits = "quiet";
+      return this.tell();
+    }
+    if (this.since === undefined) {
+      this.since = this.from = now;
+      this.tell();
+    }
+    if (this.holding && now - this.heldAt >= renewalTiming.holding) {
+      this.from = now;
+      this.letGo();
+      this.tell();
+    }
+    if (this.options.paused?.())
+      return;
+    const blocked = this.blocked(build);
+    if (blocked) {
+      this.quietSince = undefined;
+      this.letGo();
+      return this.tell(blocked);
+    }
+    if (!this.holding && this.checked.get(build) !== "checking" && this.holdsNow(this.from, now)) {
+      this.holding = true;
+      this.heldAt = now;
+      this.options.hold(true);
+    }
+    this.tell(this.holding ? "holding" : "quiet");
+    if (!this.quiet()) {
+      this.quietSince = undefined;
+      return;
+    }
+    this.quietSince ??= now;
+    if (!this.holding && now - this.quietSince < (this.options.settle ?? renewalTiming.settle))
+      return;
+    if ((this.options.uptime?.() ?? Infinity) < (this.options.longEnough ?? renewalTiming.uptime))
+      return;
+    this.going = true;
+    if (!this.holding)
+      this.options.hold(true);
+    const later = setTimeout(() => {
+      if (this.quiet() && this.newerInPlace() === build && !this.options.paused?.())
+        return this.options.renew();
+      this.going = false;
+      this.quietSince = undefined;
+      if (!this.holding)
+        this.options.hold(false);
+    }, renewalTiming.grace);
+    later.unref?.();
+  }
+  blocked(build) {
+    if (!(this.options.ready?.() ?? true))
+      return "engine";
+    if (!(this.options.lets?.() ?? true))
+      return "restart";
+    if (!this.options.check)
+      return;
+    const checked = this.checked.get(build);
+    if (checked === undefined) {
+      this.checked.set(build, "checking");
+      this.options.check(build).then((ok) => ok === undefined ? this.checked.delete(build) : this.checked.set(build, ok), () => this.checked.delete(build)).then(() => this.look());
+      return;
+    }
+    if (checked === false)
+      return "restart";
+    return;
+  }
+  busied() {
+    this.quietSince = undefined;
+  }
+  tell(waits = this.waits) {
+    const changed = waits !== this.waits;
+    this.waits = waits;
+    if (changed || this.lastTold !== JSON.stringify(this.state)) {
+      this.lastTold = JSON.stringify(this.state);
+      this.options.told(this.state);
+    }
+  }
+  lastTold;
+  letGo() {
+    if (!this.holding)
+      return;
+    this.holding = false;
+    this.options.hold(false);
+  }
+  quiet() {
+    if (this.checked.get(this.newer ?? "") === "checking")
+      return false;
+    const work = this.options.work();
+    return !work.turns && (this.holding || !work.other);
+  }
+  newerInPlace() {
+    let stat;
+    try {
+      stat = statSync12(this.options.script);
+    } catch {
+      return this.newer;
+    }
+    const seen = `${stat.ino}:${stat.size}:${stat.mtimeMs}`;
+    if (seen === this.seen)
+      return this.newer;
+    this.seen = seen;
+    const build = bundleBuild(this.options.script);
+    this.newer = build !== null && build !== this.options.build ? build : undefined;
+    return this.newer;
+  }
+}
+
+// Packages/Box/src/shared/engines.ts
+import fs5 from "fs";
+import path4 from "path";
+function byNumbers(a, b) {
+  const [x, y] = [a, b].map((version) => version.split(".").map((part) => parseInt(part, 10) || 0));
+  for (let i = 0;i < 3; i++)
+    if ((x[i] ?? 0) !== (y[i] ?? 0))
+      return (x[i] ?? 0) - (y[i] ?? 0);
+  return 0;
+}
+function enginesThere(root) {
+  let names = [];
+  try {
+    names = fs5.readdirSync(path4.join(root, "engine"));
+  } catch {}
+  const runs = (name) => {
+    try {
+      fs5.accessSync(path4.join(root, "engine", name, "opencode"), fs5.constants.X_OK);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  return names.filter((name) => !name.startsWith(".") && runs(name)).sort(byNumbers);
+}
+function keeperEngine(root) {
+  let named;
+  try {
+    named = /^V=([0-9][0-9A-Za-z.+-]*)$/m.exec(fs5.readFileSync(path4.join(root, "bin", "kuvo-start"), "utf8"))?.[1];
+  } catch {}
+  const there = enginesThere(root);
+  return named && there.includes(named) ? named : there.at(-1) ?? null;
+}
+
+// Packages/Box/src/shared/updating.ts
+import fs6 from "fs";
+import path5 from "path";
+function updateUnderWay(run) {
+  const lock = path5.join(run, ".updating");
+  if (!fs6.existsSync(lock))
+    return false;
+  let pid = null;
+  try {
+    pid = Number(fs6.readFileSync(path5.join(lock, "pid"), "utf8"));
+  } catch {}
+  if (pid)
+    return processRuns(pid, "kuvo-link");
+  try {
+    return Date.now() - fs6.statSync(lock).mtimeMs < 60000;
+  } catch {
+    return false;
+  }
+}
+
+// Packages/Box/src/agents/main.ts
+import { spawn as spawn6 } from "child_process";
+
 // Packages/Box/src/agents/store.ts
-import { mkdirSync as mkdirSync20, readdirSync as readdirSync16, readFileSync as readFileSync30, renameSync as renameSync16, rmSync as rmSync15, statSync as statSync12, writeFileSync as writeFileSync22 } from "fs";
+import { mkdirSync as mkdirSync20, readdirSync as readdirSync16, readFileSync as readFileSync30, renameSync as renameSync16, rmSync as rmSync15, statSync as statSync13, writeFileSync as writeFileSync22 } from "fs";
 import { join as join31 } from "path";
 
 class Store {
@@ -26485,7 +26860,7 @@ class Store {
   }
   writtenAt(id) {
     try {
-      return statSync12(join31(this.root, id, "messages.json")).mtimeMs;
+      return statSync13(join31(this.root, id, "messages.json")).mtimeMs;
     } catch {
       return;
     }
@@ -26544,9 +26919,9 @@ class Store {
 }
 
 // Packages/Box/src/shared/hang.ts
-import fs4 from "fs";
+import fs7 from "fs";
 import net from "net";
-import path4 from "path";
+import path6 from "path";
 var LOOK_EVERY = 30000;
 var ANSWER_WITHIN = 20000;
 var HUNG_AFTER = 600000;
@@ -26652,21 +27027,21 @@ class HangWatch {
   }
   server() {
     try {
-      const { pid, port } = JSON.parse(fs4.readFileSync(this.options.record, "utf8"));
+      const { pid, port } = JSON.parse(fs7.readFileSync(this.options.record, "utf8"));
       return Number.isInteger(pid) && pid > 1 && Number.isInteger(port) && port > 0 ? { pid, port } : null;
     } catch {
       return null;
     }
   }
   stoppedOnPurpose() {
-    return ["stopped", ".launching", ".updating", ".system-asking"].some((name) => fs4.existsSync(path4.join(this.options.run, name)));
+    return ["stopped", ".launching", ".updating", ".system-asking"].some((name) => fs7.existsSync(path6.join(this.options.run, name)));
   }
   endedLately() {
-    const file = path4.join(this.options.run, `hung-${this.options.name}.json`);
-    if (!fs4.existsSync(file))
+    const file = path6.join(this.options.run, `hung-${this.options.name}.json`);
+    if (!fs7.existsSync(file))
       return [];
     try {
-      const times = JSON.parse(fs4.readFileSync(file, "utf8"));
+      const times = JSON.parse(fs7.readFileSync(file, "utf8"));
       return Array.isArray(times) ? times.filter((time) => typeof time === "number" && this.now() - time < ENDED_WHILE && time <= this.now()) : null;
     } catch {
       return null;
@@ -26680,10 +27055,10 @@ class HangWatch {
       console.error(`The ${this.options.name} has said nothing for ${minutes} minutes, and it's been ended too often lately, or there's no telling how often: it's left as it is, for you to restart.`);
       return;
     }
-    const file = path4.join(this.options.run, `hung-${this.options.name}.json`);
+    const file = path6.join(this.options.run, `hung-${this.options.name}.json`);
     try {
-      fs4.writeFileSync(`${file}.new`, JSON.stringify([...lately, this.now()]), { mode: 384 });
-      fs4.renameSync(`${file}.new`, file);
+      fs7.writeFileSync(`${file}.new`, JSON.stringify([...lately, this.now()]), { mode: 384 });
+      fs7.renameSync(`${file}.new`, file);
     } catch {
       console.error(`The ${this.options.name} has said nothing for ${minutes} minutes, but that can't be noted in ${file}: it's left as it is, for you to restart.`);
       return;
@@ -26711,6 +27086,12 @@ var isEngine = (command) => /\bserve\b/.test(command) && !command.includes("kuvo
 
 // Packages/Box/src/agents/main.ts
 var version3 = "1";
+var script = Bun.main;
+var build = bundleBuild(script);
+if (process.argv.slice(2).includes("selftest")) {
+  console.log(`ok ${build}`);
+  process.exit(0);
+}
 var home3 = process.env.KUVO_AGENTS_HOME;
 var password = onMachine ? process.env.KUVO_AGENTS_PASSWORD : process.env.OPENCODE_PASSWORD;
 var enginePID = Number(process.env.KUVO_ENGINE_PID);
@@ -26731,6 +27112,11 @@ if (onMachine) {
   for (const name of ["OPENCODE_CONFIG_CONTENT", "OPENCODE_CONFIG", "OPENCODE_CLIENT", "KUVO_AGENTS_PASSWORD", "KUVO_AGENTS_PORT", "KUVO_ENGINE_PORT", "KUVO_ENGINE_PID"])
     delete process.env[name];
 }
+var renewHoldAfter = Number(process.env.KUVO_TEST_RENEW_HOLD) || undefined;
+var renewSettle = process.env.KUVO_TEST_RENEW_SETTLE ? Number(process.env.KUVO_TEST_RENEW_SETTLE) : undefined;
+var renewUptime = process.env.KUVO_TEST_RENEW_UPTIME ? Number(process.env.KUVO_TEST_RENEW_UPTIME) : undefined;
+for (const name of ["KUVO_TEST_RENEW_HOLD", "KUVO_TEST_RENEW_SETTLE", "KUVO_TEST_RENEW_UPTIME"])
+  delete process.env[name];
 var temporary = process.env.TMPDIR?.replace(/\/$/, "") || join32(home3, "tmp");
 mkdirSync21(temporary, { recursive: true });
 rmSync16(join32(temporary, "antigravity"), { recursive: true, force: true });
@@ -26897,12 +27283,22 @@ await untilSandboxDecided();
 limits.start();
 var carrying = new Carrying(sessions, store, (provider) => sessions.agent(provider), (kind) => roster.all().filter((agent) => parseProvider(agent.providerID)?.kind === kind));
 var server4;
+var renewal;
+var answer3 = handler({ roster, sessions, auto, link: link4, password, version: version3, build, groups, goals, sideQuestions, handoffs, places: places4, reviews, voice, artifacts, noted: noted2, restartOutside, carrying, limits });
+var answering = 0;
 try {
   server4 = Bun.serve({
     hostname: "127.0.0.1",
     port,
     idleTimeout: 0,
-    fetch: handler({ roster, sessions, auto, link: link4, password, version: version3, groups, goals, sideQuestions, handoffs, places: places4, reviews, voice, artifacts, noted: noted2, restartOutside, carrying, limits })
+    fetch: (request) => {
+      if (new URL(request.url).pathname === "/api/event")
+        return answer3(request);
+      answering++;
+      if (request.method !== "GET" && request.method !== "HEAD")
+        renewal?.busied();
+      return answer3(request).finally(() => answering--);
+    }
   });
 } catch (error) {
   console.error("couldn't listen:", error?.message ?? error);
@@ -26912,6 +27308,7 @@ console.log(JSON.stringify({ url: `http://127.0.0.1:${server4.port}` }));
 self = server3(`http://127.0.0.1:${server4.port}`, password);
 link4.whenReady().then(() => {
   sessions.wakeLost();
+  sessions.wakeHeld();
   goals.start();
   sideQuestions.start();
   reviews.resume();
@@ -26928,10 +27325,80 @@ link4.whenReady().then(() => {
   }
 });
 var record2 = onMachine ? join32(machineHome, "run", "bridge.json") : undefined;
-if (record2) {
-  writeFileSync23(record2 + ".new", JSON.stringify({ pid: process.pid, port: server4.port, password }), { mode: 384 });
-  renameSync17(record2 + ".new", record2);
-}
+var writeRecord = (renewal, first = false) => {
+  if (!record2)
+    return;
+  try {
+    writeFileSync23(record2 + ".new", JSON.stringify({ pid: process.pid, port: server4.port, password, build, renewal }), { mode: 384 });
+    renameSync17(record2 + ".new", record2);
+  } catch (error) {
+    if (first)
+      throw error;
+  }
+};
+writeRecord(null, true);
+var launchSaid;
+renewal = onMachine && build ? new Renewal({
+  script,
+  build,
+  work: () => {
+    const here = sessions.work();
+    const turns = here.turns || answering > 0 || (groups?.runner.busy() ?? false);
+    const other = here.other || goals.busy() || sideQuestions.busy() || reviews.busy() || handoffs.busy() || signInsWaiting();
+    return { turns, other };
+  },
+  hold: (on) => sessions.hold(on),
+  renew: () => {
+    console.error("A newer bridge is in place: this one makes way for it.");
+    stop();
+  },
+  told: (state) => writeRecord(state),
+  paused: () => updateUnderWay(join32(machineHome, "run")),
+  ready: () => {
+    const kept = keeperEngine(machineHome);
+    return !kept || kept === basename12(dirname18(process.execPath));
+  },
+  lets: () => {
+    const now = Date.now();
+    if (launchSaid && now - launchSaid.at < 60000)
+      return launchSaid.lets;
+    const lets = launchLets(commandLineOf(process.ppid), () => {
+      try {
+        return readFileSync31(join32(machineHome, "run", "agents.log"), "utf8");
+      } catch {
+        return;
+      }
+    });
+    launchSaid = { at: now, lets };
+    return lets;
+  },
+  uptime: () => performance.now(),
+  longEnough: renewUptime,
+  check: (newer) => new Promise((done) => {
+    const env = { BUN_BE_BUN: "1", BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0", PATH: process.env.PATH ?? "/usr/bin:/bin" };
+    const checking = spawn6(process.execPath, ["--config=/dev/null", "--no-env-file", script, "selftest"], { env, stdio: ["ignore", "pipe", "ignore"] });
+    let said = "";
+    checking.stdout.on("data", (chunk) => said += chunk);
+    let late = false;
+    const timer = setTimeout(() => (late = true, checking.kill("SIGKILL")), 60000);
+    checking.on("error", () => (clearTimeout(timer), done(undefined)));
+    checking.on("close", (code, signal) => {
+      clearTimeout(timer);
+      done(late || signal ? undefined : code === 0 && said.trim() === `ok ${newer}`);
+    });
+  }),
+  holdAfter: renewHoldAfter,
+  settle: renewSettle
+}) : undefined;
+renewal?.start();
+var renewing = renewal;
+if (renewing)
+  subscribe((event) => {
+    if (event.type !== "session.idle")
+      return;
+    renewing.busied();
+    renewing.look();
+  });
 if (runFolder)
   new HangWatch({ name: "engine", run: runFolder, record: join32(runFolder, "engine.json"), isIt: isEngine }).start();
 var stopping = false;
@@ -26967,4 +27434,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents f45bdfcd96fed7e4d60e631be02f4d59e1c55200908a752b4131387f809ebcc7
+// Built from Packages/Box/src/agents 6a311757178cb26f4ce786fa58f50f1e11786c5906aa1309ae49810d9152babc

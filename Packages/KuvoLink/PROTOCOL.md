@@ -1103,7 +1103,7 @@ the same for every client and with none connected, and keeps them in `run/queues
   now; 404 for no such session here, 503 with no engine (none recorded, or nothing listening where
   it's recorded), 502 when the engine refused. 504
   (`{message, busy: true}`) when the engine runs but didn't answer in time (a busy computer: it's
-  asked twice, 10 s then 20 s, before that; bridge 0.9.212): it isn't down, nothing was done, and
+  asked twice, 10 s then 20 s, before that; #443): it isn't down, nothing was done, and
   a client says so in those words (#443). `queue/add` waits up to two minutes for the engine to
   take the message. A run that
   fails pauses the queue again while anything waits on the box; a conversation deleted takes its
@@ -1811,6 +1811,94 @@ did: the box keeps working as itself ("For released Macs").
 - `kuvo-link.js update [--now]` updates from a shell. Only in a test's folder, it also takes
   `--url <boxes.json> --key <public key>`.
 
+#### A new version while it works
+
+A Mac that connects puts its own files on a machine (above) while the box works: its sessions may
+run day and night, so a piece waiting for "nothing runs" might never take them. Each piece takes a
+new version without cutting a turn:
+
+- **The coding agents' bridge** (`bin/kuvo-agents.js`) reads which build it runs as it starts: the
+  last `// Built from Packages/Box/src/agents <hash>` line in its bundle (`scripts/build-agents.sh`
+  writes it; a Mac's own `// kuvo-agents <hash>` line may follow it). It looks at the bundle in its
+  place when the file changes, when a turn ends, and every 10 seconds. It makes way for another
+  build there only:
+  - while the box isn't updating itself (`run/.updating`, held by a link process that still runs);
+  - while it runs on the engine its keeper starts (the version folder of its runtime,
+    `engine/<version>/opencode`, is `bin/kuvo-start`'s `V` while that one is there, else the
+    newest there): a bundle a Mac brought with a newer engine it didn't start, as sessions were at
+    work, waits for that engine, which starts it (`waits: "engine"`);
+  - once the bundle has answered a check on this engine (`<engine> kuvo-agents.js selftest`, which
+    prints `ok <build>` and exits): one that doesn't waits for a restart (`waits: "restart"`);
+  - once it has run eleven minutes, and while what keeps it running will start the new one: the
+    engine's launch (`RemoteServer.agentsScript`) starts it again five seconds after it ends, and
+    gives up after five runs in a row; a launch since October 2026 starts that count again after a
+    run of ten minutes (its loop says `-ge 600`), one from before never does, so there it goes
+    only while it has started fewer than three times (one `"url"` line each in `run/agents.log`; a
+    start that ended before it said where it listens has none, so two are spare; a log it can't
+    read counts as full). Its parent is that loop (`kuvo-agents`, `-lt 5` in its command line,
+    read once a minute at most); started by anything else it doesn't go; where the command line
+    can't be read, it counts as one from before. Otherwise it waits for a restart
+    (`waits: "restart"`), holding nothing. Each renewal is one of those runs. A check that couldn't
+    run (it couldn't start, a signal ended it, a minute went by) is tried again at the next look.
+
+  It goes:
+  - **At the first quiet moment**: nothing has run for half a minute: no turn (a subagent's, a
+    message being handed to one or on its way to a subagent, the files kept after one, a session
+    being deleted), no `!` command of yours, no discussion in a group chat here (a chat talking, a
+    bot's answer being read), no request coming in (counted until its answer begins: a download's
+    body, or the event feed, isn't waited for), nothing an agent
+    left running in the background, no side question being answered, review being read, handoff
+    being written, goal being checked, or sign-in waiting for you; a turn ending, or a request that
+    can start something (any but `GET` and `HEAD`) coming in, starts the half minute again. Reads
+    don't: the link asks the bridge whether it answers (`GET api/info`) every half minute, and
+    clients read what they show; each is waited for while it's answered. Then it holds new turns, and a
+    second later, if it's still quiet, it stops as it always does (what it has is kept) and exits,
+    and its launch starts the new bundle. If that second wasn't quiet, it lets go and looks again.
+  - **When there isn't one**: after an hour, in the night's window (02:00 to 05:00 in `KUVO_TZ`),
+    or after a day whatever the hour, it holds new turns: a message (or a summary, a note) that
+    would start a turn stays in its session's line (`inbox`, kept with the session, marked `held`,
+    and switched to `delivery: "steer"` so it goes first). Turns under way go on to their end,
+    steering into them too; a group chat's seat (`metadata.kuvo.seat`) isn't held, so a discussion
+    under way goes on to its end (a new one, a message of yours to a chat meanwhile, starts too, and
+    is waited for, within the half hour below), and so does a turn an agent starts on its own (a command it left
+    running ended). Then it goes, whatever else is under way (what agents left running in the
+    background, a side question, review, handoff or sign-in): each ends as it does at any restart,
+    and says so. Half an hour after it began holding, still not gone (a turn waiting on you
+    overnight, an update of the box that never finished), it lets go: what it held starts, and an
+    hour later, that night still or the next, it holds again.
+  - The new bridge, once it's up, starts what was held, each once (`held` cleared as it's woken).
+  - Its own build put back in place meanwhile, it lets go of what it held and goes on.
+  - A group chat held on another computer whose discussion this bridge's bot is in isn't known
+    here: going between that bot's turns, and back after more than 45 seconds, that computer goes
+    on without it for that discussion.
+  - Only on a machine, whose bridge its launch keeps. This Mac's own bridge comes in its app: the
+    app's keeper starts the whole box again from a newer app once nothing runs on it.
+- **The link** (`kuvo-link.js run`) has no turns: `setup`, which a Mac runs as it connects, starts
+  a newer one over the one running, as before.
+- **The engine** isn't ours to hold turns in. A Mac starts a newer one only when it connects and
+  nothing runs there (otherwise it keeps the one at work, and puts nothing in its place).
+- `bridge.json`, on a machine, says `{pid, port, password, build, renewal}`: `build` as above,
+  and `renewal` `{since, holding, waits}` while another build is in its place (`since` in ms;
+  `waits` is `quiet`, `holding`, `engine` or `restart`, as above), else null.
+- `kuvo/info`'s `pieces` (a machine's) says which version each runs against the one in place:
+  `{link, agents, engine}`, each `{running, current, behind}`.
+  - `link`: `running` is `run/link.version` while the link runs (null otherwise), `current` the
+    version of the link answering, `behind` when they differ. Through the running link (a phone)
+    that's its own version; a Mac asks with a process of its own (`kuvo-link.js box route`), from
+    the files in place.
+  - `agents`: `running` is the build its bridge says (null while none runs, or one from before
+    builds were said runs), `current` the build of `bin/kuvo-agents.js`. `behind` while one runs
+    that isn't that build; for one that doesn't say, while the bundle is newer than its
+    `bridge.json`. `renewal` is its `bridge.json`'s `{since, holding}` while it's behind, else
+    null. `waits`, while it's behind (else null), is what it waits for: its `bridge.json`'s, or
+    `restart` for one that doesn't say its build (from before bridges made way by themselves),
+    which takes the new one when the engine next starts.
+  - `engine`: `running` is the running engine's version (null when none runs), `current` the one
+    its keeper starts (`bin/kuvo-start`'s `V`, while that one is there, else the newest there).
+    `behind` while that one is newer.
+  - A client shows a line while one is `behind` (`MachinePieces`, in KuvoClient, its words for
+    the coding agents by `waits`), and says nothing otherwise. A Mac's own `kuvo/info` has no `pieces`.
+
 ### The browser on a machine
 
 The browser agents use on a machine (`kuvo-browser.js`, its keeper and tools) is Chrome for
@@ -2158,7 +2246,8 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   for: `macs`, the Macs that set it up (`[{key, name?, seen}]`: each one's key, its name where its
   setup gave one, `macName`, and when it was last heard from, in ms, moved on by the time the
   machine was off since), and `phones`, how many phones
-  reach it. A Mac also names `integrations`, each integration's name by its MCP
+  reach it. A machine's also says which version each of its pieces runs (`pieces`: "Updates", "A
+  new version while it works"). A Mac also names `integrations`, each integration's name by its MCP
   server's (`{"microsoft-365": "Outlook and Microsoft 365", …}`), for a card when one asks something.
   A Mac's is its box's (from #191 step 2; its app answered it before), the same with the app closed:
   its `name` and `app` as the app last said them (kept, "The relay, on this Mac's box"), its
@@ -3455,7 +3544,11 @@ custom one only another computer has (before Parked), for its items there.
 **Who sees what**: an owner's view is its own items, those of the sessions it oversees (started by
 it, or by those, put away ones too), and those it handed on, each living once in its owner's queue,
 on any of your computers: those on another, as it last told them (its `rows` say which sessions
-there are under the owner, "Work").
+there are under the owner, "Work"). A session's view also shows the items linked to it that are
+someone else's (what it's working on, a lead's item say), unless they're deleted. That's seeing
+only: its agent's tools still change, show and list only what's in its view without those, as
+before (a linked item is its owner's to change). A client shows them first, as "Working on"
+(`item.owner` isn't the view's `owner`, and the item's `sessions` include it).
 
 - `GET kuvo/work-queue?owner=<ses_…|grp_…>` → `{owner, categories, items, owners, removed,
   computers}`: `items` in the categories' order, then this box's first and each other computer's
@@ -3954,6 +4047,7 @@ One row a name, in order, so branches that each add one merge cleanly.
 | `personalities.events` | `kuvo/personalities/events` |
 | `phones` | `kuvo/phones` and `POST kuvo/phones/remove` |
 | `phones.pair` | `kuvo/phones/pair` |
+| `pieces` | a machine only: `kuvo/info`'s `pieces`, which version its link, coding agents' bridge and engine run ("Updates", "A new version while it works") |
 | `plugins.search` | `kuvo/plugins/search` |
 | `programs` | `kuvo/programs` |
 | `providers.models` | `POST kuvo/providers/models` |

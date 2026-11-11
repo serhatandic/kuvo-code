@@ -21,7 +21,7 @@ import { readLink } from "../state";
 import { allItems, changeQueues, FILE_NAME, filesOf, matching, OWNER, queueFollowers, readAll, WORK_QUEUE, type Item } from "../work-queue/store";
 import { readSeen, SEEN_FILE } from "../work-queue/github";
 import { callQueueTool, QUEUE_INSTRUCTIONS, QUEUE_TOOLS } from "../work-queue/tools";
-import { factsOf, inView, nameOf, overseenBy, ownersOf, refOf, summaryOf, wholeOf, type Facts, type ItemSummary } from "../work-queue/view";
+import { factsOf, inView, linkedTo, nameOf, overseenBy, ownersOf, refOf, summaryOf, wholeOf, type Facts, type ItemSummary } from "../work-queue/view";
 import type { AnswerPiece, RouteContext } from "../server/context";
 import type { Target } from "../../shared/records";
 
@@ -48,22 +48,23 @@ const queryOf = (request: RouteContext["request"]) => new URLSearchParams(reques
 const GITHUB_WAIT = 3_000;
 
 /** An owner's view, as `kuvo/work-queue` gives it: the categories, its items and those it oversees
- * or handed on (summaries), whose each is, and what's deleted among them. `all` is every item on
- * the box, whoever's it is. Its issues and pull requests are read from GitHub where that's due,
- * waiting `wait` ms at most. */
+ * or handed on (summaries), those linked to it that are someone else's (what it's working on: seen
+ * here, changed only by their owner's side), whose each is, and what's deleted among them. `all` is
+ * every item on the box, whoever's it is. Its issues and pull requests are read from GitHub where
+ * that's due, waiting `wait` ms at most. */
 export async function viewOf(owner: string, targets: Target[], facts?: Facts, signal?: AbortSignal, cache?: Map<string, unknown>, wait = GITHUB_WAIT) {
   const known = facts ?? await factsOf(targets, signal);
   const overseen = owner === ALL ? new Set<string>() : overseenBy(owner, known.all);
   const here = allItems();
   // (A queue of a kind a newer box keeps isn't one to show.)
-  const all = here.filter(item => owner === ALL || inView(owner, item, overseen));
+  const all = here.filter(item => owner === ALL || inView(owner, item, overseen) || linkedTo(owner, item));
   // (What's shown, here or told by another computer: GitHub is read for it, only now.)
   // (Another computer's as it told them: when it last asked GitHub decides whether this box does.)
-  await readSeen([...all, ...itemsElsewhere(owner, readLink(), undefined, undefined, { asTold: true }).items], wait);
+  await readSeen([...all, ...itemsElsewhere(owner, readLink(), undefined, undefined, { asTold: true, linked: true }).items], wait);
   const { owners, titles } = await ownersOf(owner, all, known, targets, cache);
   // Your other computers' items in this view, as each last told them (one deleted here that's live
   // there, a hand-off called off that had got there, is theirs).
-  const elsewhere = itemsElsewhere(owner, readLink(), new Set(here.filter(item => !item.removed).map(item => item.id)), new Set(here.filter(item => item.removed).map(item => item.id)));
+  const elsewhere = itemsElsewhere(owner, readLink(), new Set(here.filter(item => !item.removed).map(item => item.id)), new Set(here.filter(item => item.removed).map(item => item.id)), { linked: true });
   const named = new Set(owners.map(each => each.owner));
   // The categories: this box's, then custom ones only another computer has, before Parked.
   const own = categories();
