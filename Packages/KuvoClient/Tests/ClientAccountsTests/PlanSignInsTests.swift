@@ -8,9 +8,9 @@ import Testing
 struct PlanSignInsTests {
     @Test func aPlanThroughAnAgentSaysKeyOrItsAgentsModels() {
         #expect(PlanSignIns.needsKey(model: "grok-4.7", provider: "xai", providerName: "xAI", there: " on Studio Mac", accounts: "Accounts")
-            == "grok-4.7 needs an xAI key on Studio Mac: add one in Accounts, or choose another model (for your SuperGrok plan, one under Grok).")
+            == "grok-4.7 needs an xAI key on Studio Mac: add one in Accounts, or choose another model (with a SuperGrok plan, one under Grok).")
         #expect(PlanSignIns.needsKey(model: "GPT-5", provider: "openai", providerName: "OpenAI", accounts: "Settings › Accounts")
-            == "GPT-5 needs an OpenAI key: add one in Settings › Accounts, or choose another model (for your ChatGPT plan, one under Codex).")
+            == "GPT-5 needs an OpenAI key: add one in Settings › Accounts, or choose another model (with a ChatGPT plan, one under Codex).")
     }
 
     @Test func anyOtherProviderIsSaidAsBefore() {

@@ -684,7 +684,7 @@ struct Composer: View {
         SendStopButton(
             stops: isRunning, canSend: sendAction.sends,
             sendHelp: isOffline ? "Send once the connection is back" : asksSide && sideQuestionAnswering ? "Send once the side question is answered" : sendAction == .chooseModel ? "Choose a model to send it (Return opens the list)" : isShell ? "Run the Command (Return)" : isRunning ? "Send: the agent reads it at its next step (Return). ⌘Return queues it for after this run." : "Send (Return)",
-            stopHelp: "Stop (⌘.)", send: send, stop: onStop
+            stopHelp: "Stop (⌘.)", send: send, stop: onStop, waits: sendAction == .chooseModel
         ) {
             Button("Send", action: send)
             Button("Queue for After This Run", action: queue)
@@ -1047,12 +1047,15 @@ struct SendStopButton<Menu: View>: View {
     let stopHelp: String
     let send: () -> Void
     let stop: () -> Void
+    /// What's written waits for something (a model chosen): Send stays, dimmed, rather than
+    /// turning into Stop under the pointer.
+    var waits = false
     @ViewBuilder var menu: Menu
     @Namespace private var glass
 
     var body: some View {
         GlassEffectContainer {
-            if stops && !canSend {
+            if stops && !canSend && !waits {
                 Button(action: stop) {
                     Image(systemName: "stop.fill")
                         .font(ComposerRow.icon)
@@ -1078,7 +1081,7 @@ struct SendStopButton<Menu: View>: View {
                 .contextMenu { menu }
             }
         }
-        .animation(.ui, value: stops && !canSend)
+        .animation(.ui, value: stops && !canSend && !waits)
         .animation(.easeOut(duration: 0.15), value: canSend)
     }
 }

@@ -12,6 +12,6 @@ public enum PlanSignIns {
     /// ("Settings › Accounts" on the Mac).
     public static func needsKey(model: String, provider: String, providerName: String, there: String = "", accounts: String) -> String? {
         guard let way = plans[provider] else { return nil }
-        return "\(model) needs an \(providerName) key\(there): add one in \(accounts), or choose another model (for your \(way.plan) plan, one under \(way.agent))."
+        return "\(model) needs an \(providerName) key\(there): add one in \(accounts), or choose another model (with a \(way.plan) plan, one under \(way.agent))."
     }
 }

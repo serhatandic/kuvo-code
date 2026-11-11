@@ -229,7 +229,7 @@ import Testing
         #expect(catalog.refusal(ModelRef(id: "chat", providerID: "deepseek")) == "chat needs a sign-in: sign in to Deepseek in Settings › Accounts, or choose another model.")
         // An old conversation on the engine's xAI model (#338): a SuperGrok plan signed in to as
         // Grok never runs it, so it says a key, or a model under Grok, not to sign in to the plan.
-        #expect(catalog.refusal(ModelRef(id: "grok-4.7", providerID: "xai")) == "grok-4.7 needs an Xai key: add one in Settings › Accounts, or choose another model (for your SuperGrok plan, one under Grok).")
+        #expect(catalog.refusal(ModelRef(id: "grok-4.7", providerID: "xai")) == "grok-4.7 needs an Xai key: add one in Settings › Accounts, or choose another model (with a SuperGrok plan, one under Grok).")
         #expect(catalog.refusal(ModelRef(id: "sonnet-next", providerID: "anthropic")) == nil)
         #expect(catalog.refusal(ModelRef(id: "opus", providerID: "claude-code")) == nil, "its agents still loading")
         // A provider the project's own settings add, which the engine lists only in that project: it goes.

@@ -5,7 +5,7 @@ import OpenCodeKit
 /// (the model chip says "Choose a Model"), nothing goes: Send is off and Return opens the model
 /// picker instead, everything written kept in the field, as Cursor's, Codex's and Claude's
 /// composers never send without a model. What needs no model still goes: a "!" command, which runs
-/// in the project's folder, and showing, pausing, resuming or taking away a goal.
+/// in the project's folder, and showing, pausing or taking away a goal.
 public enum ComposerSend: Equatable, Sendable {
     /// It goes.
     case send
@@ -28,10 +28,11 @@ public enum ComposerSend: Equatable, Sendable {
     /// Send can be pressed.
     public var sends: Bool { self == .send }
 
-    /// Whether what's written needs a model to go: everything but a "!" command and a "/goal" that
-    /// sets none.
+    /// Whether what's written needs a model to go: everything but a "!" command, and showing,
+    /// pausing or taking away a goal (resuming one starts its next turn on the model).
     public static func needsModel(_ text: String, runsShell: Bool = true) -> Bool {
         if runsShell, text.hasPrefix("!"), !text.dropFirst().trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return false }
-        return GoalCommand(text)?.needsModel ?? true
+        guard let goal = GoalCommand(text) else { return true }
+        return goal.needsModel || goal == .resume
     }
 }

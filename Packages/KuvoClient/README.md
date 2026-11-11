@@ -65,7 +65,7 @@ What a client shows of a computer's sessions, the same in both apps. Rules only,
   narrow row, the account going first).
 - `ComposerSend`: what a composer's Send and Return do with what's written: it goes; or, with no
   model chosen (the chip says "Choose a Model"), Send is off and Return opens the model picker,
-  the message kept; a "!" command and a "/goal" that sets none go without a model.
+  the message kept; a "!" command, and showing, pausing or taking away a goal, go without one.
 
 ## ClientVault
 
