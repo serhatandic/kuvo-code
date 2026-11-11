@@ -400,8 +400,8 @@ private struct FileTreeView: View {
                 rows
             }
         }
-        .contextMenu {
-            Button("Reload") { tree.reload() }
+        .heldContextMenu {
+            HeldRow.button("Reload") { tree.reload() }
         }
     }
 
@@ -559,11 +559,11 @@ private struct TreeRow: View {
         }
         .buttonStyle(.plain)
         .clickablePointer()
-        .contextMenu {
+        .heldContextMenu {
             if entry.url.isFileURL {
-                Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([entry.url]) }
+                HeldRow.button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([entry.url]) }
             }
-            Button("Copy Path") { copyPath(entry.url) }
+            HeldRow.button("Copy Path") { copyPath(entry.url) }
         }
     }
 }

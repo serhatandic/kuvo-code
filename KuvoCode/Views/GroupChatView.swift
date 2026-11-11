@@ -373,11 +373,11 @@ private struct GroupMessageRow: View, Equatable {
             }
             .contentShape(.rect)
             .onHover { hovering = $0 }
-            .contextMenu {
-                Button("Copy") { copy() }
-                if let reply { Button("Reply", action: reply) }
+            .heldContextMenu {
+                HeldRow.button("Copy") { copy() }
+                if let reply { HeldRow.button("Reply", action: reply) }
                 if message.report != nil, let author {
-                    Button("Open \(author.name)’s Conversation") { app.open(.session(author.sessionID), from: here) }
+                    HeldRow.button("Open \(author.name)’s Conversation") { app.open(.session(author.sessionID), from: here) }
                 }
             }
         }

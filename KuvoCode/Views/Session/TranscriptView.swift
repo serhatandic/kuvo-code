@@ -936,7 +936,7 @@ private struct RowView: View, Equatable {
             UserBubble(text: text, references: references, folders: folders(), attachments: item.files.map(AttachmentItem.local) + item.inlineFiles.enumerated().map { AttachmentItem.stored($1, id: "\(item.id)#\(item.files.count + $0)") }
                            + Attachments.paths(paths, besides: item.files).map(AttachmentItem.path), comments: comments,
                        widget: SentMessage.widget(of: item.text), keyword: SentMessage.keyword(of: item.text), status: item.isLocal ? "Sending" : item.delivery == .queue ? "Queued" : "Sending")
-                .contextMenu { Button("Cancel", role: .destructive) { cancel(item) }.disabled(isOffline) }
+                .heldContextMenu { HeldRow.button("Cancel", role: .destructive, disabled: isOffline) { cancel(item) } }
         case .assistant(let message, let showsError):
             AssistantStepView(message: message, directory: directory, folders: folders, showsError: showsError)
         case .more(let message, _):
@@ -1885,9 +1885,9 @@ private struct TurnRow: ViewModifier {
 
     func body(content: Content) -> some View {
         if let words = row.words {
-            content.contextMenu {
-                Button("Copy Reply") { Clipboard.copy(said(words)) }
-                if let reply { Button("Reply") { reply(said(words)) } }
+            content.heldContextMenu {
+                HeldRow.button("Copy Reply") { Clipboard.copy(said(words)) }
+                if let reply { HeldRow.button("Reply") { reply(said(words)) } }
             }
         } else {
             content
