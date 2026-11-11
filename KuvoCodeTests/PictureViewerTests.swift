@@ -1,5 +1,6 @@
 import AppKit
 import CoreGraphics
+import OpenCodeKit
 import SwiftUI
 import Testing
 @testable import KuvoCode
