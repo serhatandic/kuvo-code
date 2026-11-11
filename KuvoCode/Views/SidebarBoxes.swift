@@ -516,6 +516,7 @@ struct BoxPager<Page: View>: View {
     /// Which side a page lies on when it's as near one way as the other (with two boxes, the other
     /// one): ahead while a swipe pulls it in from there or after a step back, else behind.
     @State private var aheadOnTies = false
+    @State private var change = Change()
 
     private var index: Int { boxes.firstIndex(of: selected) ?? 0 }
 
@@ -552,15 +553,8 @@ struct BoxPager<Page: View>: View {
                 TrackpadSwipe(onDrag: drag, onEnd: settle)
             }
         }
-        // A box picked without motion of its own (a tab on another box) slides in all the same;
-        // one picked with it (the name strip's) goes as that says. With Reduce Motion, at once.
-        .transaction(value: position) { transaction in
-            if reduceMotion || transaction.disablesAnimations {
-                transaction.animation = nil
-            } else if transaction.animation == nil {
-                transaction.animation = Self.slide
-            }
-        }
+        // The motion the box in view changed with (the name strip's), for the pages to go with it.
+        .transaction(value: index) { [change] transaction in change.animation = transaction.animation }
         // Where it starts, and again when computers come or go: in place, at once.
         .onAppear { stand() }
         .onChange(of: boxes) { stand() }
@@ -572,9 +566,15 @@ struct BoxPager<Page: View>: View {
     private static var slide: Animation { .spring(response: 0.38, dampingFraction: 0.9) }
 
     private func stand() {
-        var still = Transaction()
+        var still = Transaction(animation: nil)
         still.disablesAnimations = true
         withTransaction(still) { position = index }
+    }
+
+    /// The motion the box in view last changed with, if any: written as SwiftUI applies the
+    /// change, read once it has.
+    private nonisolated final class Change: @unchecked Sendable {
+        var animation: Animation?
     }
 
     /// The place page `place` lies at: of those it's at round the line, the nearest the one in view.
@@ -594,8 +594,12 @@ struct BoxPager<Page: View>: View {
         guard count > 0 else { return }
         let steps = BoxNameStrip.steps(from: position, to: target, count: count, way: motion.way)
         guard steps != 0 else { return }
-        position += steps
-        aheadOnTies = steps < 0
+        // As the change went (the name strip's spring), or else the pages' own slide (a tab on
+        // another box); with Reduce Motion, at once.
+        withAnimation(reduceMotion ? nil : change.animation ?? Self.slide) {
+            position += steps
+            aheadOnTies = steps < 0
+        }
     }
 
     /// Fingers moved `dx` sideways: the pages follow (or go the other way, set so), the next box

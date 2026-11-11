@@ -135,9 +135,7 @@ private enum Pages {
         window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
         window.contentView = host
         window.orderBack(nil)
-        AXElement.reading(true)
         defer {
-            AXElement.reading(false)
             window.orderOut(nil)
             window.close()
             window.contentView = nil
@@ -152,26 +150,29 @@ private enum Pages {
             host.cacheDisplay(in: host.bounds, to: rep)
             return try #require(rep.cgImage)
         }
-        // The page in view is the one VoiceOver reads, and it's drawn: the page there at first,
-        // and after the change, something other than before (drawn a turn or two after the views
-        // change). Each look comes again after a turn of the main run loop.
-        func inView(_ box: SidebarBox) -> Bool {
-            host.layoutSubtreeIfNeeded()
-            DispatchQueue.main.async { TestPulse.beat() }
-            return AXElement.all(in: host).contains { $0.label == BoxLoopTests.names[box] }
-        }
+        // Drawn as it is: the page in view across the whole width at first, and after the change,
+        // something other than before (drawn a turn or two after the views change). Each look
+        // comes again after a turn of the main run loop.
         var image = try drawn()
         let scale = CGFloat(image.width) / host.bounds.width
         func shows(_ check: (Pixels) -> Bool) -> Bool {
+            DispatchQueue.main.async { TestPulse.beat() }
             guard let now = try? drawn(), let pixels = try? Pixels(now) else { return false }
             image = now
             return check(pixels)
         }
-        try await until { inView(from) && shows { Self.pages($0, scale: scale)[from] != nil } }
-        if from != to {
-            let before = try Pixels(image)
-            withTransaction(Transaction(animation: Animation(HeldAt(fraction: fraction)))) { state.selected = to }
-            try await until { inView(to) && shows { fraction == 0 || $0 != before } }
+        do {
+            try await until { shows { Self.pages($0, scale: scale) == [from: 0...Int(width) - 1] } }
+            if from != to {
+                let before = try Pixels(image)
+                withTransaction(Transaction(animation: Animation(HeldAt(fraction: fraction)))) { state.selected = to }
+                try await until { shows { fraction == 0 || $0 != before } }
+            }
+        } catch {
+            // What it showed instead, to see why.
+            let pages = (try? Pixels(image)).map { Self.pages($0, scale: scale) } ?? [:]
+            Issue.record("Never drawn as \(from) then \(to): the pages' tints show at \(pages)")
+            throw error
         }
         return (image, scale)
     }
