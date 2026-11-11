@@ -248,7 +248,7 @@ enum BrowserTools {
               "title": ["type": "string", "description": "A short name, like \"Write the tests\"."],
               "project": ["type": "string", "description": "One of the user's projects, by name or folder."],
               "chat": ["type": "boolean", "description": "Start it as a chat, in no project."],
-              "folder": ["type": "string", "description": "A full path: this conversation's folder by default."],
+              "folder": ["type": "string", "description": "A full path: this conversation's folder by default. With project: a folder in it or one of its worktrees, else it's refused."],
               "worktree": ["type": "boolean", "description": "In a worktree of its project, on a branch of its own, out of other sessions' way."],
               "model": ["type": "string", "description": "provider/model from list_models: yours by default."],
               "effort": ["type": "string", "description": "One of the efforts list_models gives for the model."],

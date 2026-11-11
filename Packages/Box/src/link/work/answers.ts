@@ -62,6 +62,8 @@ export interface PendingPermission {
   /** The coding agents' bridge says the agent asking runs in the box's sandbox now (its whole
    * program, so its commands too). The engine says nothing: its own state does. */
   sandboxed?: boolean;
+  /** The file the engine says it asks about (its `metadata.filepath`), where it says one. */
+  filepath?: string;
 }
 
 /** A tool call, as the engine keeps it in its message: its tool and its whole input. */
@@ -214,7 +216,8 @@ export async function asksIn(target: Target, session: string, signal?: AbortSign
       if (!isObject(each) || typeof each.id !== "string") continue;
       const resources = Array.isArray(each.resources) ? each.resources.filter((one: unknown): one is string => typeof one === "string") : [];
       const source = isObject(each.source) ? each.source : null;
-      permissions.push({ id: each.id, asker, action: String(each.action ?? ""), resources, ...(typeof source?.id === "string" ? { call: source.id } : {}), ...(typeof source?.messageID === "string" ? { message: source.messageID } : {}), ...(each.sandboxed === true ? { sandboxed: true } : {}) });
+      const filepath = isObject(each.metadata) && typeof each.metadata.filepath === "string" ? each.metadata.filepath : null;
+      permissions.push({ id: each.id, asker, action: String(each.action ?? ""), resources, ...(typeof source?.id === "string" ? { call: source.id } : {}), ...(typeof source?.messageID === "string" ? { message: source.messageID } : {}), ...(each.sandboxed === true ? { sandboxed: true } : {}), ...(filepath ? { filepath } : {}) });
     }
     const forms = await call(target, "GET", `${at}/form`, undefined, signal).catch(() => null);
     if (!Array.isArray(forms)) whole = false;

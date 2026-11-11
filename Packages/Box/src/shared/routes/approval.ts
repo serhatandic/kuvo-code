@@ -34,20 +34,23 @@ export const APPROVAL_HERE = object({
  * what kind (a command run outside the sandbox, a file outside its folder, a tool), what was
  * decided, why in a sentence, and by code (a hard line, a pause), the model, or you (one you
  * approved, run again); for a refusal, why (`why`), and whether you can approve it (`held`: then
- * `approved`, when you did, and `used`, when it ran again). (`asked`, and `always` with `why:
- * always`, are from a box before 0.9.185, where some came to you.) */
+ * `approved`, when you did, and `used`, when it ran again); for a folder the model allowed edits in
+ * for the rest of the conversation, that folder (`place`), and `revoked`, when you took it back.
+ * (`asked`, and `always` with `why: always`, are from a box before 0.9.185, where some came to
+ * you.) */
 export const REVIEW_DECISION = object({
   "id?": string, at: number, action: string, kind: words("command", "file", "tool"),
   decision: words("allowed", "refused", "asked"), reason: string, by: words("code", "model", "you"),
   "why?": words("always", "reviewer", "unread", "unpinned", "unasked", "unreadable", "noModel", "failed", "paused"),
   "always?": words("payment", "delete", "permissions", "account", "message", "credentials", "gitConfig", "publish"),
-  "held?": bool, "approved?": number, "used?": number,
+  "held?": bool, "approved?": number, "used?": number, "place?": string, "revoked?": number,
 });
 
 /** A conversation's decisions (the latest last), since when Auto is paused there after too many
  * refusals (`paused`), and when you last looked (`seen`: what's held back from before is not
  * news). `POST` with `{approve: id}` approves one held back, once (and lets a paused one go on);
- * `{resume: true}` lets a paused one go on; `{seen: true}` marks what's held back by now as seen. */
+ * `{revoke: id}` takes back a folder Auto allowed edits in (`place`); `{resume: true}` lets a
+ * paused one go on; `{seen: true}` marks what's held back by now as seen. */
 export const REVIEW_DECISIONS = object({ decisions: list(REVIEW_DECISION), "paused?": number, "seen?": number });
 
 export type SessionApproval = Infer<typeof SESSION_APPROVAL>;

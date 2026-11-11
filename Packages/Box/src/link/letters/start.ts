@@ -28,6 +28,7 @@ import { approvalOf, approvalRules, defaultApproval, effectiveApproval, isApprov
 import { settleAgain } from "../areas/approval";
 import { noteFullAccess } from "../work/full";
 import { keptFromSessions } from "../work/reviewer";
+import { findLinkedTrees, inProjectWorktree, inTime } from "../work/project-trees";
 import type { Approval } from "../work/approval";
 import { linkSession, pauseGoal, runningGoal } from "../work/goals";
 import { nextMidnight, startOfDay } from "../work/clock";
@@ -193,6 +194,16 @@ function findProject(named: string): { directory: string; name: string } | null 
 }
 const projectNames = () => readProjects().filter(each => !each.removed).map(each => each.name ?? path.basename(each.directory)).slice(0, 12);
 
+// Whether `folder` is in the project at `directory`: in its folder or its other folders, or in one
+// of its worktrees, wherever that is (by where each really is).
+async function inProject(folder: string, directory: string): Promise<boolean> {
+  await askedAbout([folder, directory]);
+  const at = realish(folder);
+  const others = readProjects().find(each => each.directory === directory)?.folders ?? [];
+  await askedAbout(others);
+  return [directory, ...others].map(realish).some(each => at === each || at.startsWith(each + "/")) || inTime(inProjectWorktree(at, directory), false);
+}
+
 /** A new session with `given`'s task, from the conversation `by` (null: from a client). A bot's
  * (and its sessions') are its work: marked so, held to the limits you set for it, if any, with a
  * net against a runaway; another conversation's, a few in a while (`limits.ts`). */
@@ -224,38 +235,45 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
   const parentFolder = parent?.location?.directory ?? parent?.directory;
   let folder = parentFolder ? (isBotFolder(parentFolder) ? CHATS : parentFolder) : null;
   let projectDirectory: string | null = null;
+  // The project named, where one is: a folder given with it is one in it (or in one of its
+  // worktrees, wherever that is), which the session works in, as the project's.
+  let named: { directory: string; name: string } | null = null;
   if (given.chat === true) {
     folder = CHATS;
-  } else if (typeof given.project === "string" && given.project.trim()) {
-    const found = findProject(given.project);
-    if (!found) {
-      const names = projectNames();
-      return no(400, `There's no project called ${given.project.trim()} on ${HERE}.${names.length ? ` Its projects: ${names.join(", ")}.` : ""}`);
+  } else {
+    if (typeof given.project === "string" && given.project.trim()) {
+      named = findProject(given.project);
+      if (!named) {
+        const names = projectNames();
+        return no(400, `There's no project called ${given.project.trim()} on ${HERE}.${names.length ? ` Its projects: ${names.join(", ")}.` : ""}`);
+      }
+      folder = projectDirectory = named.directory;
     }
-    folder = projectDirectory = found.directory;
-  } else if (typeof given.folder === "string" && given.folder.trim()) {
-    const written = given.folder.trim();
-    const full = written.replace(/^~(?=$|\/)/, homeFolder());
-    // (Each folder it's checked by that macOS may ask about, asked off the box's thread first: a
-    // project on your Desktop holds whoever opens it until you answer, and the box answers no one
-    // meanwhile.)
-    const oursGiven = [...readProjects().filter(each => !each.removed).flatMap(each => [each.directory, ...(each.folders ?? [])]),
-      ...readWorktrees().map(each => each.folder ?? each.root), ...(parentFolder ? [parentFolder] : [])];
-    if (path.isAbsolute(full)) await askedAbout([full, ...(by ? oursGiven : [])]);
-    let isFolder = false;
-    try { isFolder = fs.statSync(full).isDirectory(); } catch {}
-    if (!path.isAbsolute(full) || !isFolder) return no(400, `${written} isn't a folder on ${HERE}. Give a full path to one.`);
-    // (Its commands would write it whole, in the sandbox: an agent in Auto never starts one where
-    // that's real damage, its own conversation's folder and your projects aside; one in Full
-    // Access, anywhere, as its own commands go.)
-    const ours = by ? oursGiven.map(realish) : [];
-    // (An agent's by where it really is as it's checked: a link swapped in after is never followed.)
-    const at = by ? fs.realpathSync(full) : full;
-    const bridgeNow = place.bridge?.() ?? null;
-    const fullAccess = Boolean(by?.place && approvalOf(by.place.data, { agents: Boolean(bridgeNow && by.place.target.port === bridgeNow.port), bot: Boolean(botOfConversation(by.session) ?? worksFor(by.place.data)) }).effective === "fullAccess");
-    const kept = by && !fullAccess && !ours.includes(at) ? await keptFromSessions(at) : null;
-    if (kept) return no(403, `An agent in Auto can't start a session in ${written} on ${HERE}: ${kept}. Ask the user to start it there.`);
-    folder = isBotFolder(at) ? CHATS : at;
+    if (typeof given.folder === "string" && given.folder.trim()) {
+      const written = given.folder.trim();
+      const full = written.replace(/^~(?=$|\/)/, homeFolder());
+      // (Each folder it's checked by that macOS may ask about, asked off the box's thread first: a
+      // project on your Desktop holds whoever opens it until you answer, and the box answers no one
+      // meanwhile.)
+      const oursGiven = [...readProjects().filter(each => !each.removed).flatMap(each => [each.directory, ...(each.folders ?? [])]),
+        ...readWorktrees().map(each => each.folder ?? each.root), ...(parentFolder ? [parentFolder] : [])];
+      if (path.isAbsolute(full)) await askedAbout([full, ...(by ? oursGiven : [])]);
+      let isFolder = false;
+      try { isFolder = fs.statSync(full).isDirectory(); } catch {}
+      if (!path.isAbsolute(full) || !isFolder) return no(400, `${written} isn't a folder on ${HERE}. Give a full path to one.`);
+      // (Its commands would write it whole, in the sandbox: an agent in Auto never starts one where
+      // that's real damage, its own conversation's folder and your projects aside; one in Full
+      // Access, anywhere, as its own commands go.)
+      const ours = by ? oursGiven.map(realish) : [];
+      // (An agent's by where it really is as it's checked: a link swapped in after is never followed.)
+      const at = by ? fs.realpathSync(full) : full;
+      const bridgeNow = place.bridge?.() ?? null;
+      const fullAccess = Boolean(by?.place && approvalOf(by.place.data, { agents: Boolean(bridgeNow && by.place.target.port === bridgeNow.port), bot: Boolean(botOfConversation(by.session) ?? worksFor(by.place.data)) }).effective === "fullAccess");
+      const kept = by && !fullAccess && !ours.includes(at) ? await keptFromSessions(at) : null;
+      if (kept) return no(403, `An agent in Auto can't start a session in ${written} on ${HERE}: ${kept}. Ask the user to start it there.`);
+      if (named && !await inProject(at, named.directory)) return no(400, `${written} isn't in ${named.name} on ${HERE}: give a folder in it or in one of its worktrees, or leave out project.`);
+      folder = isBotFolder(at) ? CHATS : at;
+    }
   }
   if (!folder) return no(400, "Give the folder it works in (folder), as a full path.");
   if (given.mode !== undefined && given.mode !== null && given.mode !== "build" && given.mode !== "plan") return no(400, "mode is build or plan.");
@@ -350,6 +368,11 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
   // In a worktree of its project's, on a branch of its own (taken away again should the session not
   // start).
   let madeTree: string | null = null;
+  // (A worktree of its own is made from the project: one given a folder too would leave that.)
+  if (given.worktree === true && named && folder && realish(folder) !== realish(named.directory)) {
+    giveBack();
+    return no(400, "Give a folder or worktree: true, not both: a new worktree is made from the project.");
+  }
   if (given.worktree === true) {
     const project = projectDirectory ?? (folder !== CHATS ? projectOfFolder(folder) : null);
     if (!project) {
@@ -380,7 +403,9 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
   const asBefore = Boolean(from && !from.stored && wanted === starters && !bot);
   const applied = asBefore ? wanted : effectiveApproval(wanted, { agents }).approval;
   const got = applied !== (requested ?? wanted) && lowerOf(applied, requested ?? wanted) === applied ? applied : undefined;
-  const project = projectOf(folder);
+  // (A worktree made elsewhere is its project's, as the projects' worktrees are found now.)
+  if (folder !== CHATS) await inTime(findLinkedTrees(), undefined, 3_000);
+  const project = named && realish(folder) !== realish(named.directory) ? { name: named.name, folders: [] as readonly string[] } : projectOf(named?.directory ?? folder);
   const title = typeof given.title === "string" && given.title.trim() ? given.title.trim() : null;
   const rules = rulesFor(applied, parent, project?.folders ?? []);
   // Its mode: the one asked for, else the conversation's (one that plans starts sessions that plan).
