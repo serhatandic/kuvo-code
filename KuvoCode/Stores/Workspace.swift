@@ -2048,6 +2048,7 @@ final class Workspace {
             sharedForms[request] = nil
             Notifier.shared.clear(request: request)
         }
+        awaitingReview = awaitingReview.filter { !isMac($0.value.sessionID) }
         running = running.filter { !isMac($0) }
         dropShellJobs(where: isMac)
         for model in models.values where isMac(model.id) { model.bridgeStopped() }
@@ -2068,6 +2069,7 @@ final class Workspace {
             asking[request] = nil
             Notifier.shared.clear(request: request)
         }
+        awaitingReview = awaitingReview.filter { !isMacs($0.value.sessionID) }
         running = running.filter { !isMacs($0) }
         dropShellJobs(where: isMacs)
         for model in models.values where isMacs(model.id) { model.bridgeStopped() }
@@ -2285,6 +2287,8 @@ final class Workspace {
     /// been, since no event brings it. One told before isn't told again.
     private func noteAsks(on machine: String, in active: [(id: String, api: OpenCodeAPI)], tell: Bool, complete wholly: Bool = true) async {
         var found: [String: String] = [:]
+        // Every permission read, Auto's reviewer's too.
+        var listed: Set<String> = []
         // (Some of its sessions not read at all: what they asked stays as it was.)
         var complete = wholly
         for (id, api) in active {
@@ -2296,6 +2300,7 @@ final class Workspace {
                 continue
             }
             for request in permissions {
+                listed.insert(request.id)
                 // (One its box's reviewer takes up isn't yours: not listed, nor told.)
                 guard tellsOnceYours(request) else { continue }
                 found[request.id] = request.sessionID
@@ -2315,6 +2320,9 @@ final class Workspace {
         // offering an answer to a request that's gone.
         for request in asking.keys where kept[request] == nil && found[request] == nil { Notifier.shared.clear(request: request) }
         asking = kept.merging(found) { $1 }
+        // What Auto's reviewer was checking there, gone meanwhile (its run ended, unheard): never
+        // yours later (#425).
+        if complete { awaitingReview = awaitingReview.filter { !isTheirs($0.value.sessionID) || listed.contains($0.key) } }
     }
 
     /// A machine disconnected: its sessions stay as last seen until it's back, their
@@ -2414,6 +2422,7 @@ final class Workspace {
                 asking[request] = nil
                 Notifier.shared.clear(request: request)
             }
+            awaitingReview = awaitingReview.filter { !gone.contains($0.value.sessionID) && sessionMachines[$0.value.sessionID] != machine }
             sessionMachines = sessionMachines.filter { $0.value != machine }
         }
     }
@@ -2460,6 +2469,12 @@ final class Workspace {
                 }
             }
             Notifier.shared.clear(request: request)
+        }
+        // What Auto's reviewer was checking here, gone meanwhile (its run ended unheard, or the
+        // engine started again): never yours later (#425).
+        for (request, permission) in awaitingReview where sessionMachines[permission.sessionID] == nil && !isBridgeSession(permission.sessionID) {
+            guard let api = api(forSession: permission.sessionID), let asked = await Self.stillAsked(in: permission.sessionID, api: api), !asked.contains(request) else { continue }
+            awaitingReview[request] = nil
         }
     }
 
@@ -2663,7 +2678,7 @@ final class Workspace {
             if machine != nil { Attachments.forget(session: id) }
             models[id] = nil
             asking = asking.filter { $0.value != id }
-            awaitingReview = awaitingReview.filter { $0.value.sessionID != id }
+            awaitingReview = awaitingReview.filter { $0.value.sessionID != id && root(of: $0.value.sessionID) != id }
             // Deleted while it worked: it isn't working any more (nor keeping the Mac awake).
             if running.contains(id) { running.remove(id) }
             shellJobs[id] = nil
