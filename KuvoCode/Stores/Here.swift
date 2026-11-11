@@ -133,10 +133,10 @@ nonisolated struct Here: Decodable, Equatable, Sendable {
             log.error("The box here didn't start: \(error.localizedDescription, privacy: .public)")
         }
         var here: Here?
-        for _ in 0..<6 {
-            here = await ask(engine: engine, script: script, appBox: appBox, engineData: engineData, home: home, root: root)
+        for attempt in 0..<6 {
+            if attempt > 0 { try? await Task.sleep(for: .milliseconds(500)) }
+            here = await ask(engine: engine, script: script, appBox: appBox, engineData: engineData, home: home, root: root, timeout: 5)
             if here?.runs == .running { break }
-            try? await Task.sleep(for: .milliseconds(500))
         }
         return here
     }
