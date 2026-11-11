@@ -2053,15 +2053,27 @@ var FEATURES = [
   "accounts.ended",
   "accounts.found",
   "accounts.refresh",
+  "agent-tools",
   "agents",
+  "approval",
+  "approval.default",
+  "approval.fullAccess",
+  "approval.held",
+  "approval.reviewer",
+  "approval.seen",
+  "approval.stopped",
   "artifacts",
   "asks",
   "attention",
+  "autopilot",
   "bots",
   "bots.edit",
+  "bots.events",
+  "bots.job",
   "bots.keys",
   "bots.make",
   "branch",
+  "browser",
   "btw",
   "btw.threads",
   "config",
@@ -2072,6 +2084,7 @@ var FEATURES = [
   "folders",
   "folders.files",
   "git",
+  "git.backups",
   "git.changes.count",
   "git.merge",
   "git.pull-request",
@@ -2087,69 +2100,56 @@ var FEATURES = [
   "handoff",
   "integrations",
   "keys",
+  "letters-read",
+  "limits",
   "mcp.catalog",
   "moves",
   "moves.agents",
   "moves.check",
   "named",
   "personalities",
-  "plugins.search",
-  "programs",
-  "providers.models",
   "personalities.events",
   "phones",
   "phones.pair",
+  "plugins.search",
+  "programs",
   "projects",
+  "providers.models",
+  "queue",
+  "queue.waits",
   "reviews",
   "reviews.parts",
   "reviews.scopes",
+  "sandbox",
+  "sandbox.asks",
+  "sandbox.check",
+  "sandbox.reviews.whole",
   "search",
   "sessions.agents",
   "sessions.glance",
+  "sessions.start",
+  "setup",
   "shell.stop",
   "sign-in.return",
   "skills",
   "skills.trash",
   "update",
+  "vault",
   "wakes",
   "wakes.edit",
   "wakes.events",
-  "worktrees",
-  "worktrees.events",
-  "worktrees.where",
-  "bots.events",
-  "bots.job",
-  "agent-tools",
-  "sessions.start",
-  "letters-read",
-  "work.elsewhere",
-  "queue",
-  "queue.waits",
   "work",
-  "work.projects",
+  "work-queue",
+  "work-queue.elsewhere",
+  "work.elsewhere",
   "work.goals",
   "work.goals.apps",
   "work.goals.projects",
+  "work.projects",
   "work.unanswering",
-  "autopilot",
-  "vault",
-  "sandbox",
-  "sandbox.check",
-  "sandbox.asks",
-  "sandbox.reviews.whole",
-  "approval",
-  "approval.reviewer",
-  "git.backups",
-  "approval.fullAccess",
-  "approval.held",
-  "approval.default",
-  "approval.seen",
-  "approval.stopped",
-  "limits",
-  "work-queue",
-  "work-queue.elsewhere",
-  "browser",
-  "setup"
+  "worktrees",
+  "worktrees.events",
+  "worktrees.where"
 ];
 
 // Packages/Box/src/shared/shape.ts
@@ -2168,8 +2168,19 @@ var NOTHING = object({});
 var BYTES = "bytes";
 
 // Packages/Box/src/shared/routes/mac.ts
-var MAC_FEATURES = ["accounts.ended", "claude-code", "hosts", "mac", "machines", "usage"];
-var MACHINE_FEATURES = ["engine.start", "update", "browser"];
+var MAC_FEATURES = [
+  "accounts.ended",
+  "claude-code",
+  "hosts",
+  "mac",
+  "machines",
+  "usage"
+];
+var MACHINE_FEATURES = [
+  "browser",
+  "engine.start",
+  "update"
+];
 var macFeatures = () => [...new Set([...FEATURES.filter((feature) => !MACHINE_FEATURES.includes(feature)), ...MAC_FEATURES])];
 var HOSTS = object({
   hosts: list(object({ kind: literal("machine"), name: string, address: string, key: string, relay: string, machine: string, anotherMac: bool, removed: bool }))
@@ -35850,7 +35861,7 @@ import os13 from "node:os";
 import path119 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "0.9.211";
+var BRIDGE_VERSION = "82288ec01ee5";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
