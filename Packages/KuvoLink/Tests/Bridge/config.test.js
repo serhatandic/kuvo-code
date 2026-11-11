@@ -9,6 +9,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
 import { removeAtEnd } from "./at-end.js";
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "kuvo-link-config-"));
@@ -43,7 +44,7 @@ async function macBox(t, { folder = fs.mkdtempSync(path.join(root, "mac-")), def
     fs.mkdirSync(path.join(config, "opencode"), { recursive: true });
     fs.writeFileSync(path.join(config, "opencode", "opencode.json"), settings);
   }
-  const child = spawn(process.execPath, [script.pathname, "serve"], {
+  const child = spawn(process.execPath, [fileURLToPath(script), "serve"], {
     env: { ...process.env, KUVO_HOME: box, KUVO_BOX: "mac", KUVO_ENGINE_CONFIG: config, KUVO_KEYS: keys, OPENCODE_PASSWORD: "pw" }, stdio: ["pipe", "pipe", "inherit"],
   });
   t.after(() => child.kill());
