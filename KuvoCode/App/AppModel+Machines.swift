@@ -483,6 +483,14 @@ extension AppModel {
             var macs: [Mac]?
             var phones: Int?
             var pieces: MachinePieces?
+            private enum Keys: String, CodingKey { case macs, phones, pieces }
+            init(from decoder: any Decoder) throws {
+                let info = try decoder.container(keyedBy: Keys.self)
+                macs = try info.decodeIfPresent([Mac].self, forKey: .macs)
+                phones = try info.decodeIfPresent(Int.self, forKey: .phones)
+                // (One it can't read leaves the rest as it is.)
+                pieces = try? info.decodeIfPresent(MachinePieces.self, forKey: .pieces)
+            }
         }
         guard let info = try? await box(engine.machine.id).value(Info.self, "GET", "kuvo/info") else { return }
         if engine.pieces != info.pieces { engine.pieces = info.pieces }
