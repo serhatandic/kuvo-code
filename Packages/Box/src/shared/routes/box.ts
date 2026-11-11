@@ -120,6 +120,11 @@ const JUDGED_BOX = object({
  * each box found there. */
 export const JUDGED = object({ verdict: words("self", "free", "ours", "older", "elsewhere", "main", "two"), boxes: list(JUDGED_BOX) });
 
+/** What `kuvo-link.js here` prints as Kuvo Code opens on a Mac (PROTOCOL.md, "Already in a
+ * setup?"): one verdict, whether the app uses its own box or the one already here (`attach`), that
+ * box, and the app's own. Not a route: the app decodes it as it opens. */
+export const HERE = object({ verdict: words("self", "free", "ours", "older", "elsewhere", "main", "two"), use: words("own", "attach"), box: nullable(JUDGED_BOX), own: nullable(JUDGED_BOX) });
+
 /** Whether a client's in use here, and how many notices wait. */
 export const ATTENTION = object({ inUse: bool, held: number });
 

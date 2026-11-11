@@ -318,16 +318,17 @@ public struct RemoteEngineInstaller: Sendable {
     }
 
     /// The probe's part that says what's already on the computer (PROTOCOL.md, "Your setup",
-    /// "Already in a setup?"): each box there, Kuvo Code's own in a Mac's app folder too (only for
-    /// the real `~/.kuvo-code`: a test's or a demo copy's own folder is a box of its own), by its
-    /// card, and for an older box with none, a few fields of its link.json, never its keys. Only
+    /// "Already in a setup?"): each box there, Kuvo Code's own in a Mac's app folder too (once a box
+    /// ran there, even one from before cards; only for the real `~/.kuvo-code`: a test's or a demo
+    /// copy's own folder is a box of its own), by its card, and for an older box with none, a few
+    /// fields of its link.json, never its keys. Only
     /// `sed`, so a machine still needs nothing but `sh` and `tar`. The box judges what it printed
     /// (`POST kuvo/setup/judge`): `box machine|app <folder>`, `card <json>`, `link …`.
     static var foundProbe: String {
-        let apps = root == ".kuvo-code" ? #" "$HOME"/Library/*/run.kuvo.code*/box"# : ""
+        let apps = root == ".kuvo-code" ? #" "$HOME/Library/Application Support"/run.kuvo.code*/box"# : ""
         return #"""
             for b in "$HOME/\#(root)"\#(apps); do
-              [ -f "$b/run/link.json" ] || [ -f "$b/run/setup-card.json" ] || continue
+              [ -f "$b/run/link.json" ] || [ -f "$b/run/setup-card.json" ] || [ -f "$b/run/serve.json" ] || [ -f "$b/run/keeper.json" ] || continue
               if [ "$b" = "$HOME/\#(root)" ]; then echo "box machine ${b#"$HOME"/}"; else echo "box app ${b#"$HOME"/}"; fi
               [ -f "$b/run/setup-card.json" ] && printf 'card %s\n' "$(sed -n 1p "$b/run/setup-card.json")"
               [ -f "$b/run/link.json" ] && sed -n -e 's/^  "mac": "\([A-Za-z0-9_-]*\)",\{0,1\}$/link mac \1/p' \

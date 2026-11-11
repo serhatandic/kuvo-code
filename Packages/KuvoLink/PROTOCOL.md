@@ -279,28 +279,31 @@ setups, and pairing and adding only from the main computer come later: #183.)
   fields of its link.json (its Macs, when each was last heard from, their names, whether it has
   phones; never its keys). What's found is a hint, never trusted: a lie changes a warning at most.
   Per box: `self` (the judging box itself), `ours` (in its setup, or one it or its computers set
-  up, a shared machine too), `elsewhere` (a member of another setup, however long its main computer
-  has been unheard of, or a machine only other Macs set up), `main` (another setup's main computer,
-  or a Mac whose app runs it in no setup), `older` (no card, and a Mac set it up or it has phones:
-  it needs an update before it can say), `free` (nothing, or no Mac set it up and it leads
-  nothing). For the computer: `self` if any is; `free` if none is anyone's; the one box's verdict;
+  up, a shared machine too, unless it's in another setup now), `elsewhere` (a member of another
+  setup, however long its main computer has been unheard of, or a machine only other Macs set up),
+  `main` (another setup's main computer, or a Mac whose app runs it in no setup), `older` (no card,
+  and a Mac set it up, it has phones, or it's Kuvo Code's own box on a Mac: it needs an update
+  before it can say), `free` (nothing, or no Mac set it up and it leads nothing). For the computer: `self` if any is; `free` if none is anyone's; the one box's verdict;
   `ours` if all are; else `two` (boxes of more than one setup on one computer).
   - **`POST kuvo/setup/judge {probe}`**: what a Mac adding a computer over SSH found there, as its
     probe printed it (`RemoteEngineInstaller.foundProbe`, only `sed`): for `~/.kuvo-code` and each
-    `~/Library/*/run.kuvo.code*/box` (only when adding to the real `~/.kuvo-code`), `box
+    `~/Library/Application Support/run.kuvo.code*/box` a box ran in (only when adding to the real
+    `~/.kuvo-code`), `box
     machine|app <folder from home>`, then `card <json>`, and for link.json `link mac|macs <key>`,
     `link seen <key> <ms>`, `link name <key> <json string>`, `link phones none|some` (other lines
-    are left alone). Answers `{verdict, boxes: [{folder, app, verdict, key, name, kind, setup, role,
+    are left alone; `mac`, the last Mac to set it up, is named first whatever its line's place). Answers `{verdict, boxes: [{folder, app, verdict, key, name, kind, setup, role,
     primary: {key, name, heard}, macs, computers, items}]}` (`primary` of an older box: the last Mac
     that set it up), judged against this box (itself, its setup, its peers and Macs); 400 with no
     `probe`.
-  - **`kuvo-link.js here [root]`**: Kuvo Code on a Mac, before it starts a box, with `KUVO_HOME` its
+  - **`kuvo-link.js here <root>`**: Kuvo Code on a Mac, before it starts a box, with `KUVO_HOME` its
     own box's folder (in its app folder) and `root` the machines' folder (`.kuvo-code`, or a
-    test's). Prints `{verdict, use: "own"|"attach", box, own}`, `box` and `own` as `boxes` above:
-    an app whose own folder is there keeps using it (`ours`, `free`, or `two` beside another
-    setup's `~/.kuvo-code`); one with none uses the `~/.kuvo-code` box that's there, in place
-    (`attach`: never a second box on one computer), with that box's verdict; with neither, its own.
-    It writes nothing, and makes no folder.
+    test's); without either (or with them the same) it stops, exit 2. Prints `{verdict, use:
+    "own"|"attach", box, own}`, `box` and `own` as `boxes` above. An app whose own box ran (its
+    folder has `run/` `setup-card.json`, `link.json`, `serve.json` or `keeper.json`; never the
+    folder alone, which the app writes in with no box) keeps using it (`ours`, `free`, or `two`
+    beside another setup's `~/.kuvo-code`); one with none uses the `~/.kuvo-code` box that's there,
+    in place (`attach`: never a second box on one computer), with that box's verdict; with neither,
+    its own. It writes nothing, and makes no folder.
 
 ### Peers
 

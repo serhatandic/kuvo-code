@@ -103,6 +103,8 @@ test("each verdict, as a Mac adding a computer hears it: nothing there, one of o
   assert.equal((await verdict(one({ macs: [{ key: imac.pub, name: "iMac" }, { key: box("mac", "Air").pub, name: "Air" }] }))).verdict, "elsewhere", "a machine other Macs share, in no setup: theirs");
   assert.equal((await verdict(one({ macs: [{ key: imac.pub, name: "iMac" }, { key: self.pub, name: "Studio" }] }))).verdict, "ours", "one this Mac shares with iMac: ours already");
   assert.equal((await verdict(one({}))).verdict, "free", "a box no Mac set up, leading nothing (its Mac let it go)");
+  assert.equal((await verdict(one({ setup: otherSetup, role: "member", primary: { key: imac.pub, name: "iMac", heard: 1 }, self: { key: lab.pub, name: "lab", kind: "machine" } }))).verdict, "elsewhere",
+    "lab, still among this Mac's machines, but a member of iMac's setup now: not one to set up again as ours");
 
   assert.equal((await judge(undefined)).status, 400);
 });
@@ -123,6 +125,13 @@ test("an older box, with no card, is judged by its link.json: set up from iMac, 
   assert.equal((await judge([...lines, `link macs ${self.pub}`].join("\n"))).json.verdict, "ours", "this Mac set it up too");
   assert.equal((await judge("box machine .kuvo-code\nlink phones some")).json.verdict, "older", "a lone box paired with a phone: it can't say its setup yet");
   assert.equal((await judge("box machine .kuvo-code\nlink phones none")).json.verdict, "free", "one no Mac counts any more");
+  // Kuvo Code's own box on a Mac, from before cards: it runs Kuvo Code, never free.
+  assert.equal((await judge("box app Library/Application Support/run.kuvo.code/box")).json.verdict, "older");
+  assert.equal((await judge("box app Library/Application Support/run.kuvo.code/box\nlink phones none")).json.verdict, "older");
+  // The last Mac to set it up is the one named, wherever its line comes.
+  const newest = box("mac", "Newest");
+  const last = (await judge(["box machine .kuvo-code", `link macs ${imac.pub}`, `link macs ${newest.pub}`, `link mac ${newest.pub}`, `link name ${newest.pub} "Newest"`].join("\n"))).json.boxes[0];
+  assert.equal(last.primary.key, newest.pub);
 });
 
 test("the probe's lines are what a box's link.json says: a box writes it as the probe reads it", () => {
@@ -135,11 +144,12 @@ test("the probe's lines are what a box's link.json says: a box writes it as the 
 
 // Kuvo Code opening on a Mac, in a home of the test's own: its own box in its app folder, and the
 // one in ~/.kuvo-code.
-function here(setUp) {
+function here(setUp, { root = ".kuvo-code", own = true } = {}) {
   const mac = fs.mkdtempSync(path.join(support, "mac-"));
   const appBox = path.join(mac, "Library", "Application Support", "run.kuvo.code", "box");
   setUp({ machine: path.join(mac, ".kuvo-code", "run"), app: path.join(appBox, "run"), appBox });
-  const result = spawnSync(process.execPath, [script, "here", ".kuvo-code"], { env: { PATH: process.env.PATH, HOME: mac, TMPDIR: support, KUVO_HOME: appBox }, encoding: "utf8" });
+  const result = spawnSync(process.execPath, [script, "here", ...(root ? [root] : [])], { env: { PATH: process.env.PATH, HOME: mac, TMPDIR: support, ...(own ? { KUVO_HOME: appBox } : {}) }, encoding: "utf8" });
+  if (result.status === 2) return { refused: result.stderr };
   assert.equal(result.status, 0, result.stderr);
   return { said: JSON.parse(result.stdout), appBox };
 }
@@ -161,6 +171,15 @@ test("Kuvo Code opening on your Mac mini, which MacBook set up: it attaches to t
   // One no one's member (its Mac let it go): used in place all the same.
   const lone = here(({ machine }) => write(path.join(machine, "setup-card.json"), card({}))).said;
   assert.deepEqual([lone.verdict, lone.use], ["free", "attach"]);
+  // Attached, the app wrote its own files in its folder (its machines' list, the integrations'
+  // catalog), with no box of its own run there: still the one box here.
+  const after = here(({ appBox, machine }) => {
+    write(path.join(machine, "setup-card.json"), card({ setup: otherSetup, role: "member", primary: { key: macbook.pub, name: "MacBook", heard: 1 } }));
+    write(path.join(appBox, "machines.json"), "[]");
+    write(path.join(appBox, "bin", "integrations.json"), "{}");
+    fs.mkdirSync(path.join(appBox, "run"), { recursive: true });
+  }).said;
+  assert.deepEqual([after.verdict, after.use], ["elsewhere", "attach"]);
 });
 
 test("Kuvo Code opening where it has its own box: it goes on using it, with nothing else here, beside a ~/.kuvo-code of its own setup, or beside another's (two boxes, settled later), and an app from before cards keeps its own too", () => {
@@ -180,10 +199,17 @@ test("Kuvo Code opening where it has its own box: it goes on using it, with noth
   }).said;
   assert.deepEqual([two.verdict, two.use, two.box.primary.name], ["two", "own", "iMac"]);
 
-  // The app ran before, as a version from before cards: its folder is there with no card in it.
+  // The app ran its box before, as a version from before cards: no card, its start's record there.
   const before = here(({ appBox, machine }) => {
-    fs.mkdirSync(path.join(appBox, "run"), { recursive: true });
+    write(path.join(appBox, "run", "serve.json"), { port: 1 });
     write(path.join(machine, "setup-card.json"), card({ setup: otherSetup, role: "member", primary: { key: imac.pub, name: "iMac", heard: 1 } }));
   }).said;
   assert.deepEqual([before.verdict, before.use], ["two", "own"], "never taken from an app that works now");
+});
+
+test("here is told where the app's own box is and which folder is the machines', never guesses: without either it says so and stops", () => {
+  const noRoot = here(() => {}, { root: "" });
+  assert.match(noRoot.refused ?? "", /KUVO_HOME/);
+  const noHome = here(({ machine }) => write(path.join(machine, "setup-card.json"), card({})), { own: false });
+  assert.match(noHome.refused ?? "", /KUVO_HOME/, "never taken for an app with no box of its own");
 });

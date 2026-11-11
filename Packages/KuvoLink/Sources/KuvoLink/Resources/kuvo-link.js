@@ -32802,7 +32802,7 @@ function cardOf(given) {
 function linkOf(given) {
   if (!isObject(given))
     return;
-  const macs = [...new Set([...Array.isArray(given.macs) ? given.macs : [], given.mac].map(key).filter((each) => each !== null))].slice(0, 16);
+  const macs = [...new Set([given.mac, ...Array.isArray(given.macs) ? given.macs : []].map(key).filter((each) => each !== null))].slice(0, 16);
   const pick = (map, clean) => isObject(map) ? Object.fromEntries(Object.entries(map).filter(([each]) => key(each)).slice(0, 16).map(([each, value]) => [each, clean(value)]).filter(([, value]) => value !== null)) : {};
   return { macs, seen: pick(given.macSeen, time2), names: pick(given.macNames, (value) => words3(value) || null), phones: Array.isArray(given.phones) && given.phones.length > 0 };
 }
@@ -32837,7 +32837,9 @@ function foundOf(lines) {
       kept.phones = first === "some";
     else if (!key(first))
       continue;
-    else if (name === "mac" || name === "macs") {
+    else if (name === "mac")
+      kept.macs = [first, ...kept.macs.filter((each) => each !== first)].slice(0, 16);
+    else if (name === "macs") {
       if (!kept.macs.includes(first) && kept.macs.length < 16)
         kept.macs.push(first);
     } else if (name === "seen" && time2(Number(rest)) !== null)
@@ -32863,12 +32865,14 @@ function judgeBox(found, ours) {
     if (ours.key && card.self.key === ours.key)
       return "self";
     const macs = card.macs?.map((each) => each.key) ?? found.link?.macs ?? [];
-    if (card.setup && card.setup === ours.setup || card.self.key && ours.keys.has(card.self.key) || macs.some((each) => ours.keys.has(each)))
+    if (card.setup && card.setup === ours.setup)
       return "ours";
-    if (card.role === "member")
+    if (card.setup && card.role === "member")
       return "elsewhere";
-    if (card.role === "primary")
+    if (card.setup && card.role === "primary")
       return "main";
+    if (card.self.key && ours.keys.has(card.self.key) || macs.some((each) => ours.keys.has(each)))
+      return "ours";
     if (macs.length)
       return "elsewhere";
     if (card.app)
@@ -32879,10 +32883,10 @@ function judgeBox(found, ours) {
   }
   const link = found.link;
   if (!link)
-    return "free";
+    return found.app ? "older" : "free";
   if (link.macs.some((each) => ours.keys.has(each)))
     return "ours";
-  return link.macs.length || link.phones ? "older" : "free";
+  return link.macs.length || link.phones || found.app ? "older" : "free";
 }
 function judgedOf(found, verdict) {
   const card = found.card;
@@ -32938,10 +32942,13 @@ function judgeHere(own, machine) {
     return { verdict: verdict === "ours" || verdict === "free" ? verdict : "two", use: "own", box, own: judgedOwn };
   return { verdict, use: "attach", box, own: null };
 }
-function hereNow(root = ".kuvo-code", home = homeFolder()) {
-  const machine = path108.join(home, root);
-  const ownThere = path108.resolve(K) !== path108.resolve(machine) && fs102.existsSync(K);
-  const own = ownThere ? foundAt(K, true, home) ?? { folder: shownFolder(K, home), app: true } : null;
+var OWN_BOX_RAN = ["setup-card.json", "link.json", "serve.json", "keeper.json"];
+function hereNow(root, appBox = process.env.KUVO_HOME, home = homeFolder()) {
+  const machine = path108.join(home, root || "");
+  if (!root || !appBox || path108.resolve(appBox) === path108.resolve(machine))
+    throw new Error("kuvo-link.js here needs KUVO_HOME, the app's own box's folder, and the machines' folder's name: here <root>.");
+  const ownRan = OWN_BOX_RAN.some((file) => fs102.existsSync(path108.join(appBox, "run", file)));
+  const own = ownRan ? foundAt(appBox, true, home) ?? { folder: shownFolder(appBox, home), app: true } : null;
   return judgeHere(own, foundAt(machine, false, home));
 }
 
@@ -39619,9 +39626,14 @@ if (main) {
     await serve();
   else if (mode === "leave")
     leave(argument);
-  else if (mode === "here")
-    console.log(JSON.stringify(hereNow(argument || undefined)));
-  else if (mode === "engine-config") {
+  else if (mode === "here") {
+    try {
+      console.log(JSON.stringify(hereNow(argument)));
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : String(error));
+      process.exit(2);
+    }
+  } else if (mode === "engine-config") {
     await upgradeIntegrations().catch(() => {});
     if (knowsEngineSettings()) {
       try {
@@ -39668,7 +39680,7 @@ if (main) {
     console.log(ok ? "ok" : "failed");
     process.exit(ok ? 0 : 1);
   } else {
-    console.error("Usage: kuvo-link.js run | serve | setup | pair [relay] | box <command> | leave <mac> | here [root] | engine-config | login-path | update [--now] | browser install|start|status | selftest");
+    console.error("Usage: kuvo-link.js run | serve | setup | pair [relay] | box <command> | leave <mac> | here <root> | engine-config | login-path | update [--now] | browser install|start|status | selftest");
     process.exit(2);
   }
 }

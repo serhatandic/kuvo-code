@@ -11,11 +11,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { isObject } from "../../shared/json";
 import { plainName } from "../../shared/text";
-import { homeFolder, K } from "../home";
+import { homeFolder } from "../home";
 import { KEY, macsOf, ownKey, peersOf } from "../peers/known";
 import { followedSetup } from "./record";
 import { setupView } from "./view";
-import type { JUDGED } from "../../shared/routes/box";
+import type { HERE, JUDGED } from "../../shared/routes/box";
 import type { Infer } from "../../shared/shape";
 import type { LinkState } from "../state";
 
@@ -36,7 +36,7 @@ export interface FoundCard {
   macs?: { key: string; name: string }[];
 }
 
-/** What an older box's link.json says, for want of a card: the Macs that set it up (`mac` the last),
+/** What an older box's link.json says, for want of a card: the Macs that set it up (the last, `mac`, first),
  * when each was last heard from, their names, and whether it has phones. */
 export interface FoundLink {
   macs: string[];
@@ -91,7 +91,7 @@ export function cardOf(given: unknown): FoundCard | undefined {
  * probe prints, nothing else. */
 export function linkOf(given: unknown): FoundLink | undefined {
   if (!isObject(given)) return undefined;
-  const macs = [...new Set([...(Array.isArray(given.macs) ? given.macs : []), given.mac].map(key).filter((each): each is string => each !== null))].slice(0, 16);
+  const macs = [...new Set([given.mac, ...(Array.isArray(given.macs) ? given.macs : [])].map(key).filter((each): each is string => each !== null))].slice(0, 16);
   const pick = <T>(map: unknown, clean: (value: unknown) => T | null): Record<string, T> => (isObject(map)
     ? Object.fromEntries(Object.entries(map).filter(([each]) => key(each)).slice(0, 16).map(([each, value]) => [each, clean(value)]).filter(([, value]) => value !== null)) : {});
   return { macs, seen: pick(given.macSeen, time), names: pick(given.macNames, value => words(value) || null), phones: Array.isArray(given.phones) && given.phones.length > 0 };
@@ -125,7 +125,9 @@ export function foundOf(lines: readonly string[]): FoundBox[] {
     const [, name, first, rest] = field;
     if (name === "phones") kept.phones = first === "some";
     else if (!key(first)) continue;
-    else if (name === "mac" || name === "macs") { if (!kept.macs.includes(first) && kept.macs.length < 16) kept.macs.push(first); }
+    // (The last Mac to set it up first, wherever its line comes.)
+    else if (name === "mac") kept.macs = [first, ...kept.macs.filter(each => each !== first)].slice(0, 16);
+    else if (name === "macs") { if (!kept.macs.includes(first) && kept.macs.length < 16) kept.macs.push(first); }
     else if (name === "seen" && time(Number(rest)) !== null) kept.seen[first] = Number(rest);
     else if (name === "name" && rest) try { const said = JSON.parse(rest); if (typeof said === "string" && words(said)) kept.names[first] = words(said); } catch {}
   }
@@ -150,9 +152,11 @@ export function judgeBox(found: FoundBox, ours: Ours): Exclude<Verdict, "two"> {
   if (card) {
     if (ours.key && card.self.key === ours.key) return "self";
     const macs = card.macs?.map(each => each.key) ?? found.link?.macs ?? [];
-    if ((card.setup && card.setup === ours.setup) || (card.self.key && ours.keys.has(card.self.key)) || macs.some(each => ours.keys.has(each))) return "ours";
-    if (card.role === "member") return "elsewhere";
-    if (card.role === "primary") return "main";
+    if (card.setup && card.setup === ours.setup) return "ours";
+    // In another setup now, whoever set it up before (a machine of ours that forgot us, say).
+    if (card.setup && card.role === "member") return "elsewhere";
+    if (card.setup && card.role === "primary") return "main";
+    if ((card.self.key && ours.keys.has(card.self.key)) || macs.some(each => ours.keys.has(each))) return "ours";
     // In no setup now: set aside (a machine Macs share), held back, or one its Mac let go.
     if (macs.length) return "elsewhere";
     if (card.app) return "main";
@@ -161,9 +165,10 @@ export function judgeBox(found: FoundBox, ours: Ours): Exclude<Verdict, "two"> {
     return "free";
   }
   const link = found.link;
-  if (!link) return "free";
+  if (!link) return found.app ? "older" : "free";
   if (link.macs.some(each => ours.keys.has(each))) return "ours";
-  return link.macs.length || link.phones ? "older" : "free";
+  // (Kuvo Code's own box on a Mac, from before cards: it runs Kuvo Code, and can't say its setup yet.)
+  return link.macs.length || link.phones || found.app ? "older" : "free";
 }
 
 /** A found box as a client reads it, with its verdict. */
@@ -223,12 +228,7 @@ const shownFolder = (folder: string, home: string) => (folder.startsWith(`${home
  * attaches to the one already on this Mac, in place (`attach`: a `~/.kuvo-code` another Mac set up,
  * or one of its own: one box per computer, never a second), with that box's verdict, as a Mac adding
  * this computer would judge it, and what it says of its setup. */
-export interface Here {
-  verdict: Verdict;
-  use: "own" | "attach";
-  box: JudgedBox | null;
-  own: JudgedBox | null;
-}
+export type Here = Infer<typeof HERE>;
 
 /** `here` worked out from the app's own box (`own`, in its folder: null while it has none) and the
  * box in this Mac's `~/.kuvo-code` (`machine`, null for none). An app that has a box of its own
@@ -245,12 +245,19 @@ export function judgeHere(own: FoundBox | null, machine: FoundBox | null): Here 
   return { verdict, use: "attach", box, own: null };
 }
 
-/** `here` on this Mac now: the app's own box in its folder (this process's `KUVO_HOME`: there once
- * it's been started, card or not, as an app from before cards has one), and the box in `~/<root>`
- * (`.kuvo-code`, or a test's or a demo copy's own folder). */
-export function hereNow(root = ".kuvo-code", home = homeFolder()): Here {
-  const machine = path.join(home, root);
-  const ownThere = path.resolve(K) !== path.resolve(machine) && fs.existsSync(K);
-  const own = ownThere ? foundAt(K, true, home) ?? { folder: shownFolder(K, home), app: true } : null;
+/** What says a box of the app's own ran in its folder: what the box writes itself (its card, its
+ * link.json), or what the app writes only as it starts one (`serve.json`) or its keeper does
+ * (`keeper.json`). Never the folder alone: the app writes in it with no box (its machines' list,
+ * the integrations' catalog), so it's there on a Mac whose app attached to the box in place too. */
+const OWN_BOX_RAN = ["setup-card.json", "link.json", "serve.json", "keeper.json"];
+
+/** `here` on this Mac now: the app's own box in its folder (`appBox`, this process's `KUVO_HOME`),
+ * once a box ran there, and the box in `~/<root>` (`.kuvo-code`, or a test's or a demo copy's own
+ * folder). Both must be said: guessed, a copy could attach to the wrong one. */
+export function hereNow(root: string, appBox: string | undefined = process.env.KUVO_HOME, home = homeFolder()): Here {
+  const machine = path.join(home, root || "");
+  if (!root || !appBox || path.resolve(appBox) === path.resolve(machine)) throw new Error("kuvo-link.js here needs KUVO_HOME, the app's own box's folder, and the machines' folder's name: here <root>.");
+  const ownRan = OWN_BOX_RAN.some(file => fs.existsSync(path.join(appBox, "run", file)));
+  const own = ownRan ? foundAt(appBox, true, home) ?? { folder: shownFolder(appBox, home), app: true } : null;
   return judgeHere(own, foundAt(machine, false, home));
 }
