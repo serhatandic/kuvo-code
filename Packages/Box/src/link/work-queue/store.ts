@@ -89,6 +89,11 @@ export interface Item {
   wanted?: number;
   /** The number it was imported with, where that was another item's, and it has a new one. */
   importedAs?: number;
+  /** Its own number (`wanted`, beside `number`) granted back, waiting for the item that has it to
+   * move to its own. */
+  backGranted?: true;
+  /** Its own number asked back and not given: it keeps the one it has, and isn't asked again. */
+  stays?: true;
   source?: Source;
   /** On its way to a conversation on another computer. */
   handing?: Handing;
@@ -125,7 +130,7 @@ export const whoOf = (given: unknown): Who | null => {
 export const FILE_NAME = /^(?!\.\.?$)[^/\\\0]{1,200}$/;
 
 // What this box knows of an item: every other field a newer box wrote is kept as it was.
-const KNOWN = new Set(["id", "number", "owner", "title", "body", "category", "order", "progress", "notes", "files", "links", "sessions", "handed", "handedBy", "wanted", "importedAs", "source", "handing", "created", "updated", "doneAt", "removed"]);
+const KNOWN = new Set(["id", "number", "owner", "title", "body", "category", "order", "progress", "notes", "files", "links", "sessions", "handed", "handedBy", "wanted", "importedAs", "backGranted", "stays", "source", "handing", "created", "updated", "doneAt", "removed"]);
 
 const handingOf = (given: unknown): Handing | null => {
   if (!isObject(given) || typeof given.id !== "string" || !/^wqh_[A-Za-z0-9_-]{8,40}$/.test(given.id) || typeof given.to !== "string" || !OWNER.test(given.to)
@@ -159,6 +164,8 @@ export function itemOf(given: unknown, owner: string): Item | null {
     ...(typeof given.handedBy === "string" && OWNER.test(given.handedBy) ? { handedBy: given.handedBy } : {}),
     ...(typeof given.wanted === "number" && Number.isInteger(given.wanted) && given.wanted > 0 ? { wanted: given.wanted } : {}),
     ...(typeof given.importedAs === "number" && Number.isInteger(given.importedAs) && given.importedAs > 0 ? { importedAs: given.importedAs } : {}),
+    ...(given.backGranted === true ? { backGranted: true as const } : {}),
+    ...(given.stays === true ? { stays: true as const } : {}),
     ...(isObject(given.source) && typeof given.source.kind === "string" && typeof given.source.ref === "string" ? { source: given.source as unknown as Source } : {}),
     ...(handingOf(given.handing) ? { handing: handingOf(given.handing)! } : {}),
     created,
