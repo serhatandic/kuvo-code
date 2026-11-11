@@ -34803,6 +34803,66 @@ async function* glanceRoute(context, match) {
   }
 }
 
+// Packages/Box/src/link/areas/read-all.ts
+var READ_ALL_ROUTE = "kuvo/sessions/read";
+var PAGES = 15;
+async function readAllOn(target, signal) {
+  let read = 0;
+  let query = "limit=200&order=desc";
+  for (let pages = 0;pages < PAGES && query && !signal?.aborted; pages++) {
+    const page = await engineGet(target, `api/session?${query}`).catch(() => null);
+    const listed = Array.isArray(page?.data) ? page.data : [];
+    for (const session of listed) {
+      if (!isObject(session) || typeof session.id !== "string" || !isObject(session.time))
+        continue;
+      const { idle, viewed } = session.time;
+      if (typeof idle !== "number" || idle <= (typeof viewed === "number" ? viewed : 0) || isArchived(session))
+        continue;
+      if (await call(target, "POST", `/api/session/${encodeURIComponent(session.id)}/view`, { idle }, signal).then(() => true, () => false))
+        read++;
+    }
+    const next = page?.cursor?.next;
+    query = listed.length === 200 && typeof next === "string" ? `limit=200&cursor=${encodeURIComponent(next)}` : null;
+  }
+  return read;
+}
+async function readGroups(bridge, signal) {
+  const listed = await fetch(`http://127.0.0.1:${bridge.port}/api/kuvo/link/groups`, {
+    headers: { authorization: `Basic ${Buffer.from(`opencode:${bridge.password}`).toString("base64")}` },
+    signal
+  }).then((response) => response.ok ? response.json() : null).catch(() => null);
+  const groups = Array.isArray(listed) ? listed : isObject(listed) && Array.isArray(listed.groups) ? listed.groups : [];
+  let read = 0;
+  for (const group of groups) {
+    if (!isObject(group) || typeof group.id !== "string" || group.unread !== true)
+      continue;
+    const looked = await fetch(`http://127.0.0.1:${bridge.port}/api/kuvo/link/groups/${encodeURIComponent(group.id)}/viewed`, {
+      method: "POST",
+      headers: { authorization: `Basic ${Buffer.from(`opencode:${bridge.password}`).toString("base64")}`, "content-type": "application/json" },
+      body: "{}",
+      signal
+    }).then((response) => response.ok, () => false);
+    if (looked)
+      read++;
+  }
+  return read;
+}
+async function* readAllRoute({ request, readEngine, bridge, signal, json }) {
+  if (request.method.toUpperCase() !== "POST")
+    return yield* json(405, {});
+  let engine = null;
+  try {
+    engine = readEngine();
+  } catch {}
+  const agents = bridge();
+  let read = 0;
+  if (engine)
+    read += await readAllOn(engine, signal);
+  if (agents)
+    read += await readAllOn(agents, signal) + await readGroups(agents, signal);
+  return yield* json(200, { read });
+}
+
 // Packages/Box/src/link/areas/work-queue.ts
 import fs115 from "node:fs";
 import path120 from "node:path";
@@ -38327,6 +38387,7 @@ var ROUTES = [
   { when: (route) => SESSION_AUTOPILOT_ROUTE.test(route), answer: autopilotRoute },
   { when: (route) => route.match(QUEUE_ROUTE), answer: queueRoute },
   { when: (route) => route.match(GLANCE_ROUTE), answer: glanceRoute },
+  { when: (route) => route === READ_ALL_ROUTE, answer: readAllRoute },
   { when: (route) => route.match(WORK_QUEUE_ROUTE), answer: workQueueRoute },
   { when: (route) => route === "kuvo/search", answer: searchRoute },
   { when: (route) => route === "kuvo/git/backups" || route === "kuvo/git/backups/restore", answer: backupsRoute },

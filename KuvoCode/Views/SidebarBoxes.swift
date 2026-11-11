@@ -270,6 +270,13 @@ struct BoxNameStrip: View {
         .accessibilityLabel(name.title)
         .accessibilityValue(name.said ?? "")
         .accessibilityAddTraits(name.isOn ? .isSelected : [])
+        .contextMenu {
+            // As a mailbox's in Mail: everything new on that computer read (the sidebar's strip).
+            if marksNews {
+                Button("Mark All as Read") { app.markAllRead(on: [name.box]) }
+                    .disabled(!app.hasNew(on: name.box))
+            }
+        }
     }
 
     /// "+3", and the menu of the computers it stands for.
@@ -430,9 +437,22 @@ extension AppModel {
     func news(on box: SidebarBox) -> BoxNews? {
         let sessions = workspace.sessions.filter { SidebarBox(directory: $0.location.directory) == box && !Workspace.isArchived($0) }
         if sessions.contains(where: { workspace.needsAttention($0.id) }) { return .needsYou }
+        return hasNew(on: box) ? .new : nil
+    }
+
+    /// Whether `box` has something you haven't read (a conversation, a sub-session's finish, a group
+    /// chat): what Mark All as Read reads.
+    func hasNew(on box: SidebarBox) -> Bool {
+        let sessions = workspace.sessions.filter { SidebarBox(directory: $0.location.directory) == box && !Workspace.isArchived($0) }
         // A session's sub-session finished since you read it is news too, as its folded row says.
-        if sessions.contains(where: { $0.isUnread || workspace.hasNewSubSessions($0.id) }) || chats.list.contains(where: { SidebarBox(machine: chats.machine(of: $0.id)) == box && chats.isUnread($0) }) { return .new }
-        return nil
+        return sessions.contains(where: { $0.isUnread || workspace.hasNewSubSessions($0.id) }) || chats.list.contains(where: { SidebarBox(machine: chats.machine(of: $0.id)) == box && chats.isUnread($0) })
+    }
+
+    /// Mark All as Read on `boxes` (every computer, or one), through each box.
+    func markAllRead(on boxes: [SidebarBox]) {
+        let ids = boxes.filter(hasNew(on:)).map { $0.machine ?? BoxClient.mac }
+        guard !ids.isEmpty else { return }
+        Task { await workspace.markAllRead(on: ids) }
     }
 }
 

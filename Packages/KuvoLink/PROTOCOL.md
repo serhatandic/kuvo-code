@@ -1841,6 +1841,13 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   bridge, it does the same for those left unread meanwhile. No client decides it: each follows
   `session.viewed`, so such a session shows nothing new on any client (its row, its project, its
   computer) unless it has news for you, and its lead's row is where its work shows.
+  **Mark All as Read** is the box's too: `POST kuvo/sessions/read` reads every conversation on the
+  box left unread (on the engine and the coding agents' bridge, subagents' too, archived ones
+  left as they are) up to where each ended, as `POST …/view` does one, and every group chat with
+  something new up to now; it answers `{"read"}`, how many. Each client hears of each as above
+  (`session.viewed`, `kuvo/groups/events`). What waits on your answer isn't read away: an ask
+  still waits on you. A client that marks all read on every computer (the phone's Inbox) asks
+  each box once.
 - **A message while a command runs** is read at once. A message sent to steer
   (`delivery: "steer"`: yours, or another agent's letter) waits for the agent's next step, and an
   agent waiting on a command or a subagent it started in the foreground takes none until that

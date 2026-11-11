@@ -273,3 +273,33 @@ test("a long session is read back page by page only as far as you last read it; 
   assert.equal(isUnread("ses_long_to_you"), true);
   assert.equal(paged.ses_long_to_you, reads);
 });
+
+// ---- Mark All as Read (PROTOCOL.md, "What's been read"): the box's, one call a computer ----
+
+// The box's routes, as a client asks them.
+const handle = link.engineHandler(() => target, { name: "lab" }, () => { throw new Error("none"); });
+async function ask(method, route) {
+  let status = 0, text = "";
+  for await (const part of handle({ method, path: route, headers: {}, body: Buffer.alloc(0), fromApp: false }, {}, undefined)) {
+    if (part.head) status = part.head.status;
+    if (part.body) text += part.body.toString();
+  }
+  return { status, json: JSON.parse(text || "{}") };
+}
+
+test("Mark All as Read reads every conversation left unread on the computer, a subagent's too; what asks you still does; an archived one is left", async () => {
+  session("ses_yours");
+  bots("ses_bots");
+  sessions.ses_sub = { ...session("ses_sub"), parentID: "ses_yours" };
+  session("ses_asks");
+  asks.ses_asks = [{ id: "per_1", sessionID: "ses_asks", action: "shell", resources: ["npm publish"] }];
+  session("ses_archived", { "kuvo.archived": true });
+  session("ses_read").time.viewed = 2000;
+  const answer = await ask("POST", "kuvo/sessions/read");
+  assert.deepEqual(answer, { status: 200, json: { read: 4 } });
+  for (const id of ["ses_yours", "ses_bots", "ses_sub", "ses_asks"]) assert.equal(isUnread(id), false, id);
+  assert.equal(isUnread("ses_archived"), true);
+  // What it asks isn't read away: it's still asked.
+  assert.equal(asks.ses_asks.length, 1);
+  assert.equal((await ask("GET", "kuvo/sessions/read")).status, 405);
+});

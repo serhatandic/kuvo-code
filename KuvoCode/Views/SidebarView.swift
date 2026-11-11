@@ -2331,6 +2331,10 @@ private struct AccountsRow: View {
         menu.addItem(.separator())
         menu.addItem(usageItem())
         if !app.machines.list.isEmpty { menu.addItem(machinesItem()) }
+        // Everything new on every computer read at once, as Mail's Mark All as Read; what asks you stays.
+        let markRead = ActionItem("Mark All as Read", image: Self.symbol("envelope.open")) { app.markAllRead(on: app.boxes) }
+        markRead.isEnabled = app.boxes.contains(where: app.hasNew(on:))
+        menu.addItem(markRead)
         let settings = ActionItem("Settings…", image: Self.symbol("gearshape")) { app.openSettings() }
         settings.keyEquivalent = ","
         settings.keyEquivalentModifierMask = NSEvent.ModifierFlags.command
