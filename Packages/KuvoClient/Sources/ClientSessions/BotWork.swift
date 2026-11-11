@@ -48,6 +48,11 @@ public struct WorkAnswer: Decodable, Sendable, Hashable, Identifiable {
     public struct By: Decodable, Sendable, Hashable {
         public let bot: String?
         public let name: String
+
+        public init(bot: String?, name: String) {
+            self.bot = bot
+            self.name = name
+        }
     }
 
     /// The session it was in: given in a bot's work, left out on the session itself.
@@ -88,12 +93,68 @@ public struct WorkAnswer: Decodable, Sendable, Hashable, Identifiable {
         init(from decoder: Decoder) throws { answer = try? WorkAnswer(from: decoder) }
     }
 
-    /// What its step says: "Allowed by Pixel", "Denied by Pixel", "Answered by Pixel".
+    /// What its step says: "Allowed by Pixel", "Not allowed by Pixel", "Answered by Pixel",
+    /// "Allowed by you".
     public var verdict: String {
         switch decision {
         case .allow: "Allowed by \(by.name)"
-        case .deny: "Denied by \(by.name)"
+        case .deny: "Not allowed by \(by.name)"
         case .answer: "Answered by \(by.name)"
+        }
+    }
+
+    /// Given by you rather than an agent (`yours(in:)`).
+    public var isYours: Bool { by.bot == nil && by.name == Self.you }
+    static let you = "you"
+
+    public init(session: String? = nil, ask: String, call: String?, what: String, decision: Decision, reason: String, by: By, at: Double) {
+        self.session = session
+        self.ask = ask
+        self.call = call
+        self.what = what
+        self.decision = decision
+        self.reason = reason
+        self.by = by
+        self.at = at
+    }
+
+    /// What you approved after Auto's reviewer held it back, by the step it's about, for its mark
+    /// ("Allowed by you") in place of the box's word to the agent ("You approved: <what>", which
+    /// shows nothing): the first step after that word that does what it names. One that matches no
+    /// step (in a conversation from before) shows nowhere.
+    public static func yours(in messages: [Message]) -> [String: WorkAnswer] {
+        var byCall: [String: WorkAnswer] = [:]
+        var approved: [(what: String, at: Double)] = []
+        for message in messages {
+            switch message {
+            case .user(let user):
+                guard user.metadata?["kuvo"]?["note"]?["from"]?.string == "Your answer",
+                      let line = user.metadata?["kuvo"]?["note"]?["line"]?.string, line.hasPrefix(approvedLine) else { continue }
+                approved.append((String(line.dropFirst(approvedLine.count)), user.time.created))
+            case .assistant(let assistant) where !approved.isEmpty:
+                for case .tool(let call) in assistant.content {
+                    guard let index = approved.firstIndex(where: { does(call, $0.what) }) else { continue }
+                    let found = approved.remove(at: index)
+                    byCall[call.id] = WorkAnswer(ask: "you-" + call.id, call: call.id, what: found.what, decision: .allow, reason: "",
+                                                 by: By(bot: nil, name: you), at: found.at)
+                }
+            default:
+                break
+            }
+        }
+        return byCall
+    }
+
+    private static let approvedLine = "You approved: "
+
+    /// Whether `call` does `what`, as the reviewer named it: its command, or the file it's about.
+    private static func does(_ call: Message.ToolCall, _ what: String) -> Bool {
+        let what = what.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !what.isEmpty, let input = call.state.input?.object else { return false }
+        let home = what.hasPrefix("~/") ? String(what.dropFirst()) : nil
+        return input.values.contains { value in
+            guard let value = value.string?.trimmingCharacters(in: .whitespacesAndNewlines) else { return false }
+            return value == what || home.map { value.hasSuffix($0) } == true
         }
     }
 }

@@ -91,6 +91,9 @@ final class BoxProcess {
         env["BUN_RUNTIME_TRANSPILER_CACHE_PATH"] = "0"
         env["KUVO_HOME"] = home.path
         env["OPENCODE_CONFIG_CONTENT"] = content
+        // Its folder is made first: before the box's first start there is none, and a program can't
+        // start in a folder that isn't there (the settings would go unasked, with no word of why).
+        try? FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
         // In its folder, as the box starts. Its end from `ChildProcess`, which never misses it, nor
         // waits on something it left running that holds its output open.
         guard let result = try? await ChildProcess.run(engine.path, ["run", "--config=/dev/null", "--no-env-file", script.path, "engine-config"],

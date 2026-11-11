@@ -17425,6 +17425,8 @@ ${text}` : text;
 var noTokens = () => ({ input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } });
 
 // Packages/Box/src/agents/turn.ts
+var NOTICE = { kuvo: { notice: true } };
+
 class Turn {
   store;
   sessionID;
@@ -17705,8 +17707,8 @@ class Turn {
     this.endBlock();
     if (this.step)
       this.endStep();
-    const event = emit("session.synthetic", { sessionID: this.sessionID, text }, this.directory);
-    this.messages.push({ type: "synthetic", id: messageID(event.id), time: { created: event.created }, text });
+    const event = emit("session.synthetic", { sessionID: this.sessionID, text, metadata: NOTICE }, this.directory);
+    this.messages.push({ type: "synthetic", id: messageID(event.id), time: { created: event.created }, text, metadata: NOTICE });
     this.save();
   }
   compacting() {
@@ -19248,8 +19250,8 @@ ${others.join(`
     const record = this.store.get(id);
     if (!record)
       return;
-    const event = emit("session.synthetic", { sessionID: id, text }, record.session.location.directory);
-    record.messages.push({ type: "synthetic", id: messageID(event.id), time: { created: event.created }, text });
+    const event = emit("session.synthetic", { sessionID: id, text, metadata: NOTICE }, record.session.location.directory);
+    record.messages.push({ type: "synthetic", id: messageID(event.id), time: { created: event.created }, text, metadata: NOTICE });
     this.store.save(id, true);
   }
   threadOf(id, live, record, provider) {
@@ -26897,4 +26899,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents bac33a27d33aa53c0cde47928b96c7207a44d4dc56a3355b075432e61ca901a2
+// Built from Packages/Box/src/agents fabafdb9a600bdfb29057867ea02e7700ba5e95e3a3eba449e489d4ac58f0070
