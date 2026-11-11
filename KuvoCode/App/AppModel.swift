@@ -500,6 +500,16 @@ final class AppModel {
             // As this Mac's box gives its engine (`MacBoxRunner`): the terminals you open get the same.
             if AppInfo.neverPrompts { shell["OPENCODE_DISABLE_CLAUDE_CODE_SKILLS"] = "1" }
             shellEnvironment = shell
+            // A box already on this Mac (one you set up as a machine): the app attaches to it in
+            // place, and starts, claims and registers nothing of its own, so there's never a second.
+            if Self.attachesInPlace, keeperBox == nil, !ownBoxStarted, let binary, let script = BoxProcess.script,
+               let here = await Here.ask(engine: binary, script: script, appBox: BoxProcess.home, home: Self.hereHome, root: RemoteEngineInstaller.root),
+               here.use == .attach {
+                guard launch == self.launch else { return }
+                attached = here
+                return
+            }
+            guard launch == self.launch else { return }
             followAgents()
             let endpoint = try await boxEngine()
             guard launch == self.launch else { return }
@@ -634,6 +644,15 @@ final class AppModel {
     }
     /// The own box was started this launch (restarting it is starting its engine over).
     @ObservationIgnored private var ownBoxStarted = false
+
+    /// The box already on this Mac that the app attached to in place as it opened (`Here`), rather
+    /// than starting one of its own: a Mac you set up as a machine, your Mac mini say.
+    private(set) var attached: Here?
+    /// Whether the app attaches to a box already on this Mac (#183): on with the screen that says
+    /// so, which the window shows instead of starting; the tests' until then.
+    nonisolated(unsafe) static var attachesInPlace = false
+    /// The home folder `here` looks in (the tests' own).
+    nonisolated(unsafe) static var hereHome = FileManager.default.homeDirectoryForCurrentUser
 
     /// This Mac's engine once it's up: the keeper's (started, or made way for after an update, as
     /// needed), or the app's own. What becomes of it later comes to `boxEngineChanged`.
