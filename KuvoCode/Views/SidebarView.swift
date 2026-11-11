@@ -120,7 +120,7 @@ struct SidebarView: View {
                 SidebarSearchRow(text: $search)
 
                 if boxes.count > 1, search.isEmpty {
-                    BoxNameStrip(boxes: boxes, selected: boxBinding)
+                    BoxNameStrip(boxes: boxes, selected: boxBinding, motion: boxMotion)
                         .padding(.top, 6)
                 }
 
