@@ -49,12 +49,12 @@ export const pausedNote = (name?: string): string =>
 // A session here, where it runs: the engine's or the coding agents' bridge's, by asking each, and
 // what it is. Null when each says there's no such session; it throws when one can't be asked (try
 // again later).
-export async function placeOfSession(session: string, targets: Target[]): Promise<SessionPlace | null> {
+export async function placeOfSession(session: string, targets: Target[], timeout = 10_000): Promise<SessionPlace | null> {
   if (!targets.length) throw new Error("Its engine isn't running.");
   let unsure: unknown = null;
   for (const target of targets) {
     try {
-      const response = await fetch(`http://127.0.0.1:${target.port}/api/session/${encodeURIComponent(session)}`, { headers: { authorization: `Basic ${Buffer.from(`opencode:${target.password}`).toString("base64")}` }, signal: AbortSignal.timeout(10_000) });
+      const response = await fetch(`http://127.0.0.1:${target.port}/api/session/${encodeURIComponent(session)}`, { headers: { authorization: `Basic ${Buffer.from(`opencode:${target.password}`).toString("base64")}` }, signal: AbortSignal.timeout(timeout) });
       // (As the engine and the agents' bridge answer it: a session they have, whole.)
       if (response.ok) return { target, data: (await (response.json() as Promise<{ data?: EngineSession } | null>).catch(() => null))?.data ?? {} };
       if (response.status !== 404) unsure = new Error(`It answered ${response.status}.`);
@@ -64,6 +64,27 @@ export async function placeOfSession(session: string, targets: Target[]): Promis
   }
   if (unsure) throw unsure;
   return null;
+}
+
+// How long each try of `placeOfSessionPatiently` waits for an answer: a busy computer's engine (a
+// load of 150 to 200) can take longer than the first, and a client waits on it (a message being
+// sent). Together under the minute a phone's request waits with nothing back.
+export const PLACE_TRIES = [10_000, 20_000];
+
+// `placeOfSession`, for a client waiting on it: an engine that doesn't answer in time is asked
+// again, longer, rather than taken for one that isn't running (#443). It throws as that does once
+// every try was unsure.
+export async function placeOfSessionPatiently(session: string, targets: Target[]): Promise<SessionPlace | null> {
+  let unsure: unknown = null;
+  for (const timeout of PLACE_TRIES) {
+    try {
+      return await placeOfSession(session, targets, timeout);
+    } catch (error) {
+      unsure = error;
+      if (!targets.length) break;
+    }
+  }
+  throw unsure;
 }
 
 // When each letter was last sent, by id: one goes again each minute until its box says it has it.

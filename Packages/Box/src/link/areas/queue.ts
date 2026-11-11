@@ -7,7 +7,7 @@ import { wakeMarkOf } from "../../shared/queues";
 import { MOVING } from "../bots/here";
 import { frozen, liveMoves } from "../moves/records";
 import { followed } from "../follow";
-import { placeOfSession } from "../letters/letter";
+import { placeOfSession, placeOfSessionPatiently } from "../letters/letter";
 import { targetsOf } from "../letters/tools";
 import { asked } from "../engine/client";
 import { dropWaiting, holdQueue, inboxFor, keepWaitingBefore, queueFollowers, queueOf, readQueues, resumeQueue, sendNow, showsQueue, shownQueue } from "../engine/queue";
@@ -21,6 +21,10 @@ import type { AnswerPiece, RouteContext } from "../server/context";
 import type { Target } from "../../shared/records";
 
 export const QUEUE_ROUTE = /^kuvo\/sessions\/(?:queues\/events|([^/]+)\/(stop|queue(?:\/(hold|resume|add))?|queue\/([^/]+)(?:\/(now))?))$/;
+
+// What a queue change says when the engine here runs but is too busy to answer in time (504,
+// `busy`): it isn't down, and the change can be asked again in a moment.
+export const BUSY = "This computer is busy: its engine didn't answer in time. Try again in a moment.";
 
 // `kuvo/sessions/queues/events`: every queue that's paused or holds something, a line now and one
 // each time that changes. `GET kuvo/sessions/<id>/queue`: one session's. `POST …/stop`: what waits
@@ -60,8 +64,12 @@ export async function* queueRoute(context: RouteContext, match: RegExpMatchArray
     return yield* json(200, { ...shownQueue(queueOf(session)), ...(removed ? { removed } : {}) });
   }
   if (method !== "POST") return yield* json(405, {});
-  const place = await placeOfSession(session, targetsOf({ readEngine, bridge })).catch(() => undefined);
-  if (place === undefined) return yield* json(503, { message: "The engine isn't running." });
+  // Only an engine that isn't here isn't running: one that's only slow to answer (a busy computer)
+  // is asked again, and still slow, says so, for its client to try again (#443).
+  const targets = targetsOf({ readEngine, bridge });
+  if (!targets.length) return yield* json(503, { message: "The engine isn't running." });
+  const place = await placeOfSessionPatiently(session, targets).catch(() => undefined);
+  if (place === undefined) return yield* json(504, { message: BUSY, busy: true });
   if (!place) return yield* json(404, { message: "There's no such conversation here." });
   try {
     if (action === "stop") return yield* json(200, shownQueue(await stopConversation(place.target, { ...place.data, id: session })));

@@ -119,6 +119,7 @@ export { movesElsewhere } from "./moves/elsewhere";
 export { applyCompatibility, COMPATIBILITY_FILE, ENGINE_LAYER_FILE, engineConfigContent, learnCompatibility, readCompatibility } from "./engine/compatibility";
 export { MODELS_DUE_FILE, refreshModels, settleDueModels } from "./engine/models";
 export { queueOf, queueWatcher, readQueues, scanQueues, stopSession } from "./engine/queue";
+export { PLACE_TRIES } from "./letters/letter";
 export { keepReadThroughSummary } from "./work/tree";
 export { glances, Unreached } from "./areas/glance";
 export { askedSince, forgetAsks, forgetAsksOn, noteAskEvent } from "./glance/asked";

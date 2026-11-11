@@ -1866,13 +1866,13 @@ var composeLetter = (name, session, words, waits, finishHeard = false) => `[Mess
 
 ${words}`;
 var pausedNote = (name) => `${name ? `${name} is stopped: the user paused its conversation.` : "That conversation is stopped: the user paused it."} Your message waits there and goes once they resume it; its answer, if it writes one, comes to you as a message.`;
-async function placeOfSession(session, targets) {
+async function placeOfSession(session, targets, timeout = 1e4) {
   if (!targets.length)
     throw new Error("Its engine isn't running.");
   let unsure = null;
   for (const target of targets) {
     try {
-      const response = await fetch(`http://127.0.0.1:${target.port}/api/session/${encodeURIComponent(session)}`, { headers: { authorization: `Basic ${Buffer.from(`opencode:${target.password}`).toString("base64")}` }, signal: AbortSignal.timeout(1e4) });
+      const response = await fetch(`http://127.0.0.1:${target.port}/api/session/${encodeURIComponent(session)}`, { headers: { authorization: `Basic ${Buffer.from(`opencode:${target.password}`).toString("base64")}` }, signal: AbortSignal.timeout(timeout) });
       if (response.ok)
         return { target, data: (await response.json().catch(() => null))?.data ?? {} };
       if (response.status !== 404)
@@ -1884,6 +1884,20 @@ async function placeOfSession(session, targets) {
   if (unsure)
     throw unsure;
   return null;
+}
+var PLACE_TRIES = [1e4, 20000];
+async function placeOfSessionPatiently(session, targets) {
+  let unsure = null;
+  for (const timeout of PLACE_TRIES) {
+    try {
+      return await placeOfSession(session, targets, timeout);
+    } catch (error) {
+      unsure = error;
+      if (!targets.length)
+        break;
+    }
+  }
+  throw unsure;
 }
 var letterTries = new Map;
 
@@ -34844,7 +34858,7 @@ import os12 from "node:os";
 import path115 from "node:path";
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "0.9.211";
+var BRIDGE_VERSION = "0.9.212";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
@@ -35171,6 +35185,7 @@ async function* engineRoute(context) {
 
 // Packages/Box/src/link/areas/queue.ts
 var QUEUE_ROUTE = /^kuvo\/sessions\/(?:queues\/events|([^/]+)\/(stop|queue(?:\/(hold|resume|add))?|queue\/([^/]+)(?:\/(now))?))$/;
+var BUSY = "This computer is busy: its engine didn't answer in time. Try again in a moment.";
 async function* queueRoute(context, match) {
   const { request, readEngine, bridge, signal, json } = context;
   const method = request.method.toUpperCase();
@@ -35204,11 +35219,14 @@ async function* queueRoute(context, match) {
   }
   if (method !== "POST")
     return yield* json(405, {});
-  const place = await placeOfSession(session, targetsOf({ readEngine, bridge })).catch(() => {
+  const targets = targetsOf({ readEngine, bridge });
+  if (!targets.length)
+    return yield* json(503, { message: "The engine isn't running." });
+  const place = await placeOfSessionPatiently(session, targets).catch(() => {
     return;
   });
   if (place === undefined)
-    return yield* json(503, { message: "The engine isn't running." });
+    return yield* json(504, { message: BUSY, busy: true });
   if (!place)
     return yield* json(404, { message: "There's no such conversation here." });
   try {
@@ -40113,6 +40131,7 @@ export {
   NEWS_HOLD,
   NOTICE_LIMIT,
   NoticeHold,
+  PLACE_TRIES,
   PROLOGUE,
   PUSHED_FILE,
   BLOCK as QUEUE_BLOCK,

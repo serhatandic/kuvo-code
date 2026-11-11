@@ -943,7 +943,11 @@ the same for every client and with none connected, and keeps them in `run/queues
   same order); with no `before`, or one that isn't waiting any more, last. The order it all goes
   in, and clients show: `held` in its order (in the engine or on the box), then the engine's for
   the next step, then its queue, then the rest of what waits on the box. Each answers the queue as it is
-  now; 404 for no such session here, 503 with no engine, 502 when the engine refused. A run that
+  now; 404 for no such session here, 503 with no engine, 502 when the engine refused. 504
+  (`{message, busy: true}`) when the engine runs but didn't answer in time (a busy computer: it's
+  asked twice, 10 s then 20 s, before that; bridge 0.9.212): it isn't down, so a client asks again
+  quietly, keeping a message it sends as on its way, and says so only if it stays busy past the
+  grace (`Reach` in KuvoClient, #443). A run that
   fails pauses the queue again while anything waits on the box; a conversation deleted takes its
   queue and what waited for it with it.
 - Clients show what's held and whether it's paused from these; the in-flight record of a message
