@@ -648,3 +648,19 @@ test.skipIf(process.platform !== "darwin")("on a Mac, your settings and what run
   // Kuvo Code's own folders named by pattern, too.
   expect(await reviewer.review(change(join(homedir(), "Library", "Caches", "RUN.KUVO.CODE.kuvo-test", "x")), yours("Fix the build"), given(ask))).toMatchObject({ decision: "refuse", by: "code", held: false })
 })
+
+test("a place taken back while a review is under way isn't stored again by it (#422)", async () => {
+  const context = yours("Write the notes")
+  const reviews = join(box, "reviews")
+  const notes = join(box, "notes-race")
+  mkdirSync(notes, { recursive: true })
+  const change = (where: string) => ({ kind: "file" as const, path: where, access: "write" as const, folder: project, tool: "write", input: { filePath: where } })
+  // The conversation leaves Auto (or you revoke) while the model is still deciding.
+  const slow = Object.assign(async () => {
+    reviewer.clearPlaces(context.session, Date.now(), reviews)
+    return allows
+  }, { shown: [] as string[] })
+  expect(await reviewer.review(change(join(notes, "a.md")), context, given(slow as never))).toMatchObject({ decision: "allow", by: "model" })
+  expect(reviewer.reviewLog(context.session, reviews).places ?? []).toEqual([])
+  expect(reviewer.reviewLog(context.session, reviews).decisions.filter(each => each.place)).toEqual([])
+})

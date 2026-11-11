@@ -915,6 +915,8 @@ export interface ReviewLog {
   paused?: number;
   seen?: number;
   places?: string[];
+  /** When places were last taken back: a review that started before stores none. */
+  placesTaken?: number;
 }
 
 const logFile = (session: string, folder: string) => path.join(folder, `${session.replace(/[^A-Za-z0-9_-]/g, "_")}.json`);
@@ -927,7 +929,7 @@ export function reviewLog(session: string, folder = REVIEWS_FOLDER): ReviewLog {
       return {
         decisions: kept.decisions as Decision[], refusedInRow: Number(kept.refusedInRow) || 0, refused: Number(kept.refused) || 0,
         ...(typeof kept.paused === "number" ? { paused: kept.paused } : {}), ...(typeof kept.seen === "number" ? { seen: kept.seen } : {}),
-        ...(places.length ? { places } : {}),
+        ...(places.length ? { places } : {}), ...(typeof kept.placesTaken === "number" ? { placesTaken: kept.placesTaken } : {}),
       };
     }
   } catch {}
@@ -962,14 +964,16 @@ const PLACES = 50;
 /** A decision kept; whether it paused the conversation now (refusals in a row, or in all, but
  * those for want of a model). `place`: a folder the model allowed its agent to change files in,
  * kept for the rest of the conversation (`keptPlace`). */
-export function keepDecision(session: string, decision: Decision, folder = REVIEWS_FOLDER, place?: string): boolean {
+export function keepDecision(session: string, decision: Decision, folder = REVIEWS_FOLDER, place?: string, since?: number): boolean {
   return changeLog(session, folder, log => {
     log.decisions = latest([...log.decisions, { id: decisionID(), ...decision }]);
     // (Not one it couldn't judge for want of a model: an outage at night isn't the agent's doing.)
     if (decision.decision === "refused" && !OUTAGES.has(decision.why ?? "")) { log.refusedInRow++; log.refused++; }
     else if (decision.decision === "allowed") log.refusedInRow = 0;
     // A place new to it is a decision of its own, which you can see and take back (`revokePlace`).
-    if (place && decision.decision === "allowed" && !(log.places ?? []).includes(place)) {
+    // (Not from a review that started before places were taken back: you, or leaving Auto, came after.)
+    const taken = since !== undefined && (log.placesTaken ?? 0) >= since;
+    if (place && !taken && decision.decision === "allowed" && !(log.places ?? []).includes(place)) {
       const places = [...(log.places ?? []), place];
       // (One past the most kept goes, as if taken back.)
       for (const gone of places.slice(0, -PLACES)) for (const each of log.decisions) if (each.place === gone && !each.revoked) each.revoked = decision.at;
@@ -1027,8 +1031,15 @@ export function revokePlace(session: string, id: string, now = Date.now(), folde
     if (!given) return null;
     given.revoked = now;
     log.places = (log.places ?? []).filter(each => each !== given.place);
+    log.placesTaken = now;
     return { ...given };
   });
+}
+
+/** Whether `place` is one the conversation keeps now (read again: one taken back while it was
+ * worked out is gone). */
+async function stillPlaced(session: string, folder: string, place: string | undefined): Promise<boolean> {
+  return Boolean(place && reviewLog(session, folder).places?.includes(place));
 }
 
 /** Every place taken back at once, as the conversation leaves Auto: back in it, each change is
@@ -1038,6 +1049,7 @@ export function clearPlaces(session: string, now = Date.now(), folder = REVIEWS_
   changeLog(session, folder, log => {
     for (const each of log.decisions) if (each.place && !each.revoked) each.revoked = now;
     log.places = [];
+    log.placesTaken = now;
   });
 }
 
@@ -1112,6 +1124,7 @@ function answerWithin(model: NonNullable<SmallModel>, prompt: string, within: nu
 export async function review(action: ReviewedAction, context: ReviewContext, given: ReviewWith): Promise<Verdict & { paused?: boolean }> {
   const now = given.now ?? Date.now;
   const folder = given.folder ?? REVIEWS_FOLDER;
+  const started = now();
   // (What it names that macOS may ask about, asked off the box's thread first: `askedAbout`.)
   await askedAbout([...namedBy(action), ...(given.own ?? [])]);
   // (One it fails to judge is held back like any it can't, on the log for you to approve.)
@@ -1131,7 +1144,7 @@ export async function review(action: ReviewedAction, context: ReviewContext, giv
       decision: verdict.decision === "allow" ? "allowed" : "refused",
       reason: verdict.reason, by: verdict.by,
       ...(verdict.decision === "refuse" ? { ...(verdict.why ? { why: verdict.why } : {}), ...(verdict.held ? { held: true, key } : {}) } : {}),
-    }, folder, place);
+    }, folder, place, started);
   } catch (error) {
     forgetFetched(verdict.fetched);
     throw error;
@@ -1274,7 +1287,7 @@ async function judge(action: ReviewedAction, context: ReviewContext, given: Revi
   // agents' there, each judged on its own).
   if (action.kind === "file" && action.access === "write" && action.tool && action.input && log.places?.length && !own && !persists
     && !isSecret(realish(action.path), policy) && !runsLater(realish(action.path), policy)
-    && log.places.includes(await keptPlace(action, policy, context.folders ?? given.own ?? []) ?? "")) {
+    && await stillPlaced(context.session, folder, await keptPlace(action, policy, context.folders ?? given.own ?? []))) {
     return done({ decision: "allow", reason: "Auto's reviewer allowed changing files there earlier in this conversation.", by: "code" });
   }
   const environments = environmentsOf(action);
