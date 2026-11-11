@@ -11031,6 +11031,30 @@ function heardWindows(info) {
     return [];
   return [{ id: shape.id, used, minutes: shape.minutes, ...resetsAt ? { resetsAt } : {}, ...shape.model ? { model: shape.model } : {} }];
 }
+var CLOSE_TO_LIMIT = 0.9;
+function limitWarning(info) {
+  const limit = warnedLimit(info?.rateLimitType);
+  const stated = [info?.utilization, info?.unifiedWindows?.[info?.rateLimitType]?.utilization].find((value) => typeof value === "number" && Number.isFinite(value));
+  if (stated !== undefined) {
+    const used = Math.min(Math.max(stated, 0), 1);
+    const percent = used < 1 ? Math.min(Math.round(used * 100), 99) : 100;
+    return percent >= CLOSE_TO_LIMIT * 100 ? `You're close to ${limit}: ${percent}% used.` : `You've used ${percent}% of ${limit}.`;
+  }
+  const passed = typeof info?.surpassedThreshold === "number" ? info.surpassedThreshold : NaN;
+  if (!(passed > 0))
+    return `Claude Code warned about ${limit}.`;
+  return passed >= CLOSE_TO_LIMIT ? `You're close to ${limit}.` : `You've used over ${Math.round(passed * 100)}% of ${limit}.`;
+}
+function warnedLimit(type) {
+  if (type === "five_hour")
+    return "your 5-hour Claude limit";
+  if (type === "overage")
+    return "your Claude extra usage";
+  const shape = typeof type === "string" ? HEARD[type] : undefined;
+  if (shape?.minutes === 10080)
+    return shape.model ? `your weekly ${shape.model} limit` : "your weekly Claude limit";
+  return "your Claude usage limit";
+}
 var HEARD = {
   five_hour: { id: "five_hour", minutes: 300 },
   seven_day: { id: "seven_day", minutes: 10080 },
@@ -12527,8 +12551,7 @@ ${input.text}` } : input, this.copies());
         if (!active || lane !== active)
           return;
         if (info.status === "allowed_warning") {
-          const used = typeof info.utilization === "number" ? ` (${Math.round(info.utilization * 100)}% used)` : "";
-          this.noticeOnce(`warn:${info.rateLimitType}:${info.surpassedThreshold ?? ""}`, turn, `You're close to ${limitWords2(info.rateLimitType).replace(/^You've reached /, "").replace(/\.$/, "")}${used}.`);
+          this.noticeOnce(`warn:${info.rateLimitType}:${info.surpassedThreshold ?? ""}`, turn, limitWarning(info));
           return;
         }
         if (info.status !== "rejected" || info.overageInUse || info.isUsingOverage)
@@ -26964,4 +26987,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 82f080797da6526787a6fc8eb64c9b577d06c8e2442899e26e1163675cf59e33
+// Built from Packages/Box/src/agents f9dd58d52361adc6a2535efb5913f1ffba2b5e5da3d26cd40554a913b3b923d2

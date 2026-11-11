@@ -993,6 +993,15 @@ describe("Claude Code, nothing dropped", () => {
     expect(notices(id)).toEqual([row, row])
     expect(sessions.messages(id).map((message) => message.type)).toEqual(["user", "synthetic", "compaction", "synthetic", "idle"])
   })
+
+  test("Claude Code's early warning of a limit says how much is used, and calls it close only near the end (#257)", async () => {
+    const id = await turn(() => [
+      // A quarter of the week gone in its first day: Claude Code warns, but it's far from the limit.
+      { type: "rate_limit_event", rate_limit_info: { status: "allowed_warning", rateLimitType: "seven_day", utilization: 0.25, surpassedThreshold: 0.25 } },
+      { type: "rate_limit_event", rate_limit_info: { status: "allowed_warning", rateLimitType: "five_hour", utilization: 0.93, surpassedThreshold: 0.9 } },
+    ])
+    expect(notices(id)).toEqual(["You've used 25% of your weekly Claude limit.", "You're close to your 5-hour Claude limit: 93% used."])
+  })
 })
 
 describe("Claude Code's models", () => {
