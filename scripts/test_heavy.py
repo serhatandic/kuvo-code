@@ -751,6 +751,40 @@ class HeavyTests(unittest.TestCase):
         self.assertIn("The Mac is busy", said)
         self.assertEqual(self.run_heavy("box", "true", KUVO_HEAVY_LOAD="1000")[0], 0)
 
+    def test_unless_asked_a_job_waits_for_neither_the_load_nor_a_share_of_memory(self):
+        """Background priority keeps the Mac usable: by default only thrashing holds a job back (a
+        swap rate it can't reach here, and pressure that isn't critical)."""
+        level = subprocess.run(["sysctl", "-n", "kern.memorystatus_vm_pressure_level"], capture_output=True, text=True).stdout.strip()
+        if level == "4":
+            self.skipTest("this Mac's memory pressure is critical")
+        env = {k: v for k, v in self.env.items() if k not in ("KUVO_HEAVY_LOAD", "KUVO_HEAVY_MEMORY")}
+        result = subprocess.run([HEAVY, "box", "true"], env=dict(env, KUVO_HEAVY_WAIT="0", KUVO_HEAVY_SWAP="999999"), capture_output=True, text=True, timeout=30)
+        self.assertEqual((result.returncode, result.stderr), (0, ""))
+
+    def test_a_job_waiting_for_room_holds_up_no_one_in_its_lane(self):
+        """It waits before it takes its turn: another job of its kind gets the lane meanwhile."""
+        waiting = subprocess.Popen([HEAVY, "box", "true"], env=dict(self.env, KUVO_HEAVY_LOAD="-1"), stderr=subprocess.PIPE, text=True, start_new_session=True)
+        try:
+            self.assertTrue(select.select([waiting.stderr], [], [], 30)[0], "it said nothing")
+            self.assertIn("Waiting while the Mac is busy", waiting.stderr.readline())
+            self.assertFalse(subprocess.run(["lockf", "-ks", "-t", "0", self.lock("box"), "true"]).returncode, "it holds the box lane's lock")
+            self.assertEqual(self.run_heavy("box", "true"), (0, ""))
+            self.assertIsNone(waiting.poll(), "it started")
+        finally:
+            os.killpg(waiting.pid, signal.SIGKILL)
+            waiting.wait(timeout=30)
+            waiting.stderr.close()
+
+    def test_the_app_suite_holds_other_jobs_back_for_two_minutes_at_most_unless_told(self):
+        marker = os.path.join(self.locks, f"kuvo-code-heavy-mac-first-{os.getuid()}")
+        env = {k: v for k, v in self.env.items() if k != "KUVO_HEAVY_MAC_FIRST_FOR"}
+        for ago, waits in ((60, True), (150, False)):
+            with self.subTest(ago=ago):
+                with open(marker, "w") as f:
+                    f.write(f"{os.getpid()} {int(time.time()) - ago}\n")
+                result = subprocess.run([HEAVY, "box", "true"], env=dict(env, KUVO_HEAVY_WAIT="0"), capture_output=True, text=True, timeout=30)
+                self.assertEqual(result.returncode, WAITS if waits else 0, result.stderr)
+
     def test_a_job_is_started_under_background_priority_in_every_way_it_starts(self):
         """Whatever way a job starts, its command is run by `taskpolicy -b` (macOS): a stand-in logs what
         it's asked. (Elsewhere, nice and ionice, which the test of the real policy sees.)"""
