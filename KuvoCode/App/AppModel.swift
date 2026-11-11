@@ -543,15 +543,13 @@ final class AppModel {
                 case .attach(var here):
                     attached = here
                     BackgroundWork.heldBack = "This Mac’s box is the one already here, which starts on its own."
-                    if let binary, let script = BoxProcess.script {
-                        await Here.sayAttached(engine: binary, script: script, home: Self.hereHome)
-                        // Stopped (its keeper ended: only a login or a restart starts it again by
-                        // itself): started in place, as its start at login does.
-                        if here.runs == .stopped, let now = await Here.started(engine: binary, script: script, appBox: BoxProcess.home,
-                                                                               engineData: engineFolders.dataDirectory, home: Self.hereHome),
-                           now.use == .attach {
-                            here = now
-                        }
+                    // Stopped (its keeper ended: only a login or a restart starts it again by
+                    // itself): started again in place, by launchd where its agent is there.
+                    if here.runs == .stopped, let binary, let script = BoxProcess.script,
+                       let now = await Here.started(engine: binary, script: script, appBox: BoxProcess.home,
+                                                    engineData: engineFolders.dataDirectory, home: Self.hereHome),
+                       now.use == .attach {
+                        here = now
                     }
                     guard launch == self.launch else { return }
                     attached = here
@@ -559,6 +557,8 @@ final class AppModel {
                     guard here.runs == .running else {
                         throw MachineFailure(message: "The box already on this Mac didn’t start. Try again in a moment.")
                     }
+                    // Running, it's told the app is here, for good.
+                    await Here.sayAttached(home: Self.hereHome)
                     return
                 case .unknown(let why):
                     let couldnt = "Kuvo Code couldn’t check the box already on this Mac, so it didn’t start one of its own."

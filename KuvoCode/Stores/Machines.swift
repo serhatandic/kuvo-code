@@ -1221,6 +1221,8 @@ final class Machines {
         removalMark + """
         K="$HOME/\(RemoteEngineInstaller.root)"
         case "$(cat "$K/run/engine.json" 2>/dev/null)" in *'"mac":"\(MachineEngine.macID)"'*) ;; *'"mac":"'*) exit 0 ;; esac
+        # Stopped first (marked off), if it isn't already: its way to stop goes next.
+        \(RemoteServer.stopCommand)
         \(leftovers)
         true
         """

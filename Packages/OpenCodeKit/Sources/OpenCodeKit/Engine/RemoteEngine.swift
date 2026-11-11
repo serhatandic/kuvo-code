@@ -332,6 +332,8 @@ public struct RemoteEngineInstaller: Sendable {
         return #"""
             for b in "$HOME/\#(root)"\#(apps); do
               [ -f "$b/run/link.json" ] || [ -f "$b/run/setup-card.json" ] || [ -f "$b/run/serve.json" ] || [ -f "$b/run/keeper.json" ] || continue
+              # (A machines' box its Mac removed, its way to start gone or marked off, is no box.)
+              if [ "$b" = "$HOME/\#(root)" ]; then { [ -f "$b/bin/kuvo-start" ] && [ ! -f "$b/run/off" ]; } || continue; fi
               if [ "$b" = "$HOME/\#(root)" ]; then echo "box machine ${b#"$HOME"/}"; else echo "box app ${b#"$HOME"/}"; fi
               [ -f "$b/run/setup-card.json" ] && printf 'card %s\n' "$(sed -n 1p "$b/run/setup-card.json")"
               [ -f "$b/run/link.json" ] && sed -n -e 's/^  "mac": "\([A-Za-z0-9_-]*\)",\{0,1\}$/link mac \1/p' \
@@ -898,6 +900,7 @@ public final class RemoteServer: @unchecked Sendable {
         case "${1:-box}" in
         box)
           [ -f "$K/bin/kuvo-start" ] || exit 0
+          [ -f "$R/off" ] && exit 0
           is "$(cat "$R/box.pid" 2>/dev/null)" kuvo-start && exit 0
           cd "$K" || exit 0
           # This script (kuvo-start, or the copy below), as the keeper.
@@ -1084,8 +1087,9 @@ public final class RemoteServer: @unchecked Sendable {
           # Everything it runs, for good (the machine removed, a demo copy done): the phone link
           # first, which would start the keeper again, then the keeper, which would start the
           # rest again, then the engine and its agents' bridge. Then it's as before its first
-          # start, for when it's added again.
-          touch "$R/stopped"
+          # start, for when it's added again; marked off (`run/off`) until a Mac starts it there
+          # again, so nothing takes it for a box that runs, or starts it, meanwhile.
+          touch "$R/off" "$R/stopped"
           rm -f "$R/link.needed"
           l=$(cat "$R/link.pid" 2>/dev/null); is "$l" kuvo-link && kill "$l" 2>/dev/null
           b=$(cat "$R/box.pid" 2>/dev/null); is "$b" kuvo-start && kill "$b" 2>/dev/null; rm -f "$R/box.pid"
@@ -1137,6 +1141,7 @@ public final class RemoteServer: @unchecked Sendable {
         \(boot ? "V=${KUVO_VERSION:-\(OpenCodeEngine.version)}; unset KUVO_VERSION" : "V=\(OpenCodeEngine.version)")
         \(RemoteEngineInstaller.folders)
         R="$K/run"; mkdir -p "$R"; chmod 700 "$R"
+        \(boot ? "" : "# A Mac starts it: no longer off (its Mac removed it before), if it was.\nrm -f \"$R/off\"")
         \(RemoteProcess.check)
         \(RemoteProcess.session)
         # One launch at a time; one left by a launch that was cut off goes after five minutes (a
@@ -1270,7 +1275,7 @@ public final class RemoteServer: @unchecked Sendable {
 
     /// The launch agent that starts the box as you log in to a Mac (automatically, on one set to):
     /// its one file outside `~/.kuvo-code`, as the crontab line is on Linux. launchd reads it by itself.
-    static let launchAgent = "run.kuvo.code.machine"
+    public static let launchAgent = "run.kuvo.code.machine"
 
     /// The agent's file.
     static var launchAgentPlist: String {

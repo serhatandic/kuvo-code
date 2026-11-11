@@ -250,36 +250,36 @@ const shownFolder = (folder: string, home: string) => (folder.startsWith(`${home
  * this computer would judge it, and what it says of its setup. */
 export type Here = Infer<typeof HERE>;
 
-/** Whether the box in `~/<root>` can run (`machine`, its folder): `running` (its keeper, `run/box.pid`,
- * runs now), `stopped` (it has its way to start, `bin/kuvo-start`, which its keeper and the start
- * at boot run), or `gone` (neither: the Mac that set it up removed it, which takes its way to
- * start and its keys, leaving its link.json and card). */
+/** Whether the box in `~/<root>` can run (`machine`, its folder): `gone` where the Mac that set it up
+ * removed it (its `kuvo-start off` leaves `run/off`, which only a Mac's start there takes away, and
+ * then its way to start, `bin/kuvo-start`, goes with its keys, leaving its link.json and card: a
+ * keeper still ending is gone too; that file is only ever replaced whole, never missing while it's
+ * updated); else `running` (its keeper, `run/box.pid`, runs now) or `stopped`. */
 export function runsAt(machine: string): "running" | "stopped" | "gone" {
+  if (!fs.existsSync(path.join(machine, "bin", "kuvo-start")) || fs.existsSync(path.join(machine, "run", "off"))) return "gone";
   let keeper: number | null = null;
   try { keeper = Number(fs.readFileSync(path.join(machine, "run", "box.pid"), "utf8")); } catch {}
-  if (keeper && processRuns(keeper, "kuvo-start")) return "running";
-  return fs.existsSync(path.join(machine, "bin", "kuvo-start")) ? "stopped" : "gone";
+  return keeper && processRuns(keeper, "kuvo-start") ? "running" : "stopped";
 }
 
 /** `here` worked out from the app's own box (`own`, in its folder: null while it has none) and the
- * box in this Mac's `~/.kuvo-code` (`machine`, null for none; `runs`, as `runsAt` says it). An app
- * that has a box of its own keeps it (it works now, and goes on working: two boxes on one computer
- * are settled by a join or a move, `two`); one that has none attaches to the box that's here, where
- * that box can run (one that's `gone`, its Mac having removed it, is no box: the app's own starts,
- * as with none). It opens as a `window` where the box it uses is a member of a setup (an old main
+ * box in this Mac's `~/.kuvo-code` (`machine`, null for none; `runs`, as `runsAt` says it: one
+ * that's `gone`, its Mac having removed it, is no box, whatever its card still says). An app that
+ * has a box of its own keeps it (it works now, and goes on working: two boxes on one computer are
+ * settled by a join or a move, `two`); one that has none attaches to the box that's here. It opens as a `window` where the box it uses is a member of a setup (an old main
  * computer after a handover, a Mac that joined, a Mac mini another Mac set up, or one that can't say
  * yet: never its main computer by itself), else as its setup's `main` computer (a box no one else
  * set up leads its own setup). */
-export function judgeHere(own: FoundBox | null, machine: FoundBox | null, runs: "running" | "stopped" | "gone" | null = machine ? "running" : null): Here {
+export function judgeHere(own: FoundBox | null, there: FoundBox | null, runs: "running" | "stopped" | "gone" | null = there ? "running" : null): Here {
+  const machine = runs === "gone" ? null : there;
   const ownCard = own?.card;
   const ours: Ours = { key: ownCard?.self.key ?? null, setup: ownCard?.setup ?? null, keys: new Set(ownCard?.self.key ? [ownCard.self.key] : []) };
   const judgedOwn = own ? judgedOf(own, "self") : null;
   const ownOpens = ownCard?.role === "member" ? "window" : "main";
-  if (!machine) return { verdict: "free", use: "own", opens: ownOpens, runs: null, box: null, own: judgedOwn };
+  if (!machine) return { verdict: "free", use: "own", opens: ownOpens, runs, box: null, own: judgedOwn };
   const verdict = judgeBox(machine, ours);
   const box = judgedOf(machine, verdict);
   if (own) return { verdict: verdict === "ours" || verdict === "free" ? verdict : "two", use: "own", opens: ownOpens, runs, box, own: judgedOwn };
-  if (runs === "gone") return { verdict: "free", use: "own", opens: "main", runs, box, own: null };
   const member = box.role === "member" || verdict === "elsewhere" || verdict === "older";
   return { verdict, use: "attach", opens: member ? "window" : "main", runs, box, own: null };
 }

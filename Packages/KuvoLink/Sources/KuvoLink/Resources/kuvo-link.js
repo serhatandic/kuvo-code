@@ -16013,27 +16013,26 @@ function foundAt2(folder, app, home = homeFolder()) {
 }
 var shownFolder = (folder, home) => folder.startsWith(`${home}/`) ? folder.slice(home.length + 1) : folder;
 function runsAt(machine) {
+  if (!fs56.existsSync(path59.join(machine, "bin", "kuvo-start")) || fs56.existsSync(path59.join(machine, "run", "off")))
+    return "gone";
   let keeper = null;
   try {
     keeper = Number(fs56.readFileSync(path59.join(machine, "run", "box.pid"), "utf8"));
   } catch {}
-  if (keeper && processRuns(keeper, "kuvo-start"))
-    return "running";
-  return fs56.existsSync(path59.join(machine, "bin", "kuvo-start")) ? "stopped" : "gone";
+  return keeper && processRuns(keeper, "kuvo-start") ? "running" : "stopped";
 }
-function judgeHere(own, machine, runs = machine ? "running" : null) {
+function judgeHere(own, there, runs = there ? "running" : null) {
+  const machine = runs === "gone" ? null : there;
   const ownCard = own?.card;
   const ours = { key: ownCard?.self.key ?? null, setup: ownCard?.setup ?? null, keys: new Set(ownCard?.self.key ? [ownCard.self.key] : []) };
   const judgedOwn = own ? judgedOf(own, "self") : null;
   const ownOpens = ownCard?.role === "member" ? "window" : "main";
   if (!machine)
-    return { verdict: "free", use: "own", opens: ownOpens, runs: null, box: null, own: judgedOwn };
+    return { verdict: "free", use: "own", opens: ownOpens, runs, box: null, own: judgedOwn };
   const verdict = judgeBox(machine, ours);
   const box = judgedOf(machine, verdict);
   if (own)
     return { verdict: verdict === "ours" || verdict === "free" ? verdict : "two", use: "own", opens: ownOpens, runs, box, own: judgedOwn };
-  if (runs === "gone")
-    return { verdict: "free", use: "own", opens: "main", runs, box, own: null };
   const member = box.role === "member" || verdict === "elsewhere" || verdict === "older";
   return { verdict, use: "attach", opens: member ? "window" : "main", runs, box, own: null };
 }

@@ -291,7 +291,8 @@ setups, and pairing and adding only from the main computer come later: #183.)
   - **`POST kuvo/setup/judge {probe}`**: what a Mac adding a computer over SSH found there, as its
     probe printed it (`RemoteEngineInstaller.foundProbe`, only `sed`): for `~/.kuvo-code` and each
     `~/Library/Application Support/run.kuvo.code*/box` a box ran in (only when adding to the real
-    `~/.kuvo-code`), `box machine|app <folder from home>`, then `card <json>`, and for link.json
+    `~/.kuvo-code`; a `~/.kuvo-code` box its Mac removed, with no `bin/kuvo-start` or with
+    `run/off`, left out), `box machine|app <folder from home>`, then `card <json>`, and for link.json
     `link mac|macs <key>`, `link seen <key> <ms>`, `link name <key> <json string>`, `link phones
     none|some`; then `app <folder from home>` for each Kuvo Code app's folder there
     (`run.kuvo.code*`), whether or not a box of its own ran in it (other lines are left alone;
@@ -306,18 +307,22 @@ setups, and pairing and adding only from the main computer come later: #183.)
     items: one that doesn't say is asked; a lie skips a question at most); else the verdict's own
     question.
   - **`POST kuvo/setup/attached`**: Kuvo Code on this computer attached to this box in place (the
-    app, by `kuvo-link.js box route` with `KUVO_HOME` the box's folder), from then on said on its
-    card (`app: true`, `run/app-attached.json`), so a Mac adding this computer asks before a join.
-    Only from Kuvo Code on this computer (`box route`, or the app beside its own box): 403 from a
-    phone. Answers `{}`.
+    app, once the box runs, by the box's own `bin/kuvo-link.js box route` with its own engine, as a
+    Mac reaches a machine's box over SSH), from then on said on its card (`app: true`,
+    `run/app-attached.json`), so a Mac adding this computer asks before a join. Any `box route`
+    caller may say it (the app here, a Mac over SSH, this box's own agents), and the app beside its
+    own box; 403 from a phone or the relay. It can't be undone, and can only make a join ask first.
+    Answers `{}`.
   - **`kuvo-link.js here <root>`**: Kuvo Code on a Mac (the app, and its keeper), before it starts
     a box, with `KUVO_HOME` its own box's folder (in its app folder) and `root` the machines'
     folder (`.kuvo-code`, or a test's); without either (or with them the same) it stops, exit 2.
     Prints `{verdict, use: "own"|"attach", opens: "main"|"window", runs, box, own}`, `box` and
-    `own` as `boxes` above. `runs`, for the box in `~/<root>`: `running` (its keeper, `run/box.pid`,
-    runs `kuvo-start` now), `stopped` (it has its way to start, `bin/kuvo-start`), or `gone`
-    (neither: its Mac removed it, which takes its way to start and its keys and leaves its
-    link.json and card); null with none there. `opens`: `window` where the box it uses is a member
+    `own` as `boxes` above. `runs`, for the box in `~/<root>`: `gone` where its Mac removed it
+    (`kuvo-start off` leaves `run/off`, which only a Mac's start there takes away, and then its way
+    to start, `bin/kuvo-start`, goes with its keys, leaving its link.json and card: no
+    `bin/kuvo-start`, or `run/off`, whatever still runs), else `running` (its keeper,
+    `run/box.pid`, runs `kuvo-start` now) or `stopped`; null with none there. A `gone` box is no
+    box: as with none (`box` null), and the probe leaves it out too. `opens`: `window` where the box it uses is a member
     of a setup another computer is main of (a Mac mini another Mac set up, one that can't say yet,
     the old main computer after a handover, a Mac that joined: never main by itself, only by Make
     This Mac the Main One), else `main`. An app whose own box ran (its folder has `run/`
@@ -327,9 +332,10 @@ setups, and pairing and adding only from the main computer come later: #183.)
     there; never the folder alone, which the app writes in with no box) keeps using it (`ours`,
     `free`, or `two` beside another setup's `~/.kuvo-code`); one with none uses the `~/.kuvo-code`
     box that's there, in place (`attach`: never a second box on one computer), with that box's
-    verdict, unless that box is `gone` (no box any more: its own, as with none); with neither, its
-    own. It writes nothing, and makes no folder. The app attached to a box that isn't `running`
-    says so, to try again, rather than waiting on it.
+    verdict; with neither, its own. It writes nothing, and makes no folder. The app attached to a
+    box that's `stopped` starts it again in place (by launchd, through its Mac's launch agent
+    `run.kuvo.code.machine` where it's there, else its own `kuvo-start`), and says one that won't
+    start so, to try again, rather than waiting on it.
 
 ### Peers
 

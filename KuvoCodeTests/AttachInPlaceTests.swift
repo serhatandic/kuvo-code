@@ -85,6 +85,12 @@ import Testing
         engine.stop()
     }
 
+    /// The card of the box in the machines' folder, as it is now.
+    private func card() -> [String: Any]? {
+        let file = home.appending(path: "\(RemoteEngineInstaller.root)/run/setup-card.json")
+        return (try? Data(contentsOf: file)).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+    }
+
     /// MacBook set up this Mac as a machine, and hasn't been heard from for 40 days. Its box `runs`:
     /// its keeper running (`bin/kuvo-start keep`, until the test's folder goes), stopped (its way to
     /// start there: which starts its keeper, as a box's does, where it `starts`), or gone (MacBook
@@ -102,6 +108,19 @@ import Testing
                 \(starts ? "sh \"$0\" keep </dev/null >/dev/null 2>&1 & echo $! >'\(pid)'" : "exit 0")
 
                 """.write(to: start, atomically: true, encoding: .utf8)
+            // Its own engine and CLI (`box route`), which tell what ran them.
+            let node = try #require(TestBox.node)
+            let engine = box.appending(path: "engine/\(OpenCodeEngine.version)/opencode")
+            try FileManager.default.createDirectory(at: engine.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try "#!/bin/sh\nshift 2\nexec '\(node.path(percentEncoded: false))' \"$@\"\n".write(to: engine, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: engine.path(percentEncoded: false))
+            try """
+                const fs = require("fs"), path = require("path"), run = path.join(process.env.KUVO_HOME, "run");
+                fs.writeFileSync(path.join(run, "app-attached.json"), "{}");
+                fs.writeFileSync(path.join(run, "setup-card.json"), JSON.stringify({ app: true, by: "its own" }));
+                console.log(JSON.stringify({ status: 200, body: "{}" }));
+
+                """.write(to: box.appending(path: "bin/kuvo-link.js"), atomically: true, encoding: .utf8)
             if runs == .running {
                 let keeper = Process()
                 keeper.executableURL = URL(filePath: "/bin/sh")
@@ -128,9 +147,9 @@ import Testing
         #expect(app?.engine != .ready)
         #expect(!BackgroundWork.shared.register() && BackgroundWork.shared.failure?.contains("already here") == true, "Turn On registers no keeper beside it")
         #expect(!FileManager.default.fileExists(atPath: BoxProcess.home.path), "no box of its own: not even its folder")
-        // Told so, its card says Kuvo Code is on this Mac: a Mac adding it asks before it joins.
-        let card = try JSONSerialization.jsonObject(with: Data(contentsOf: home.appending(path: "\(RemoteEngineInstaller.root)/run/setup-card.json"))) as? [String: Any]
-        #expect(card?["app"] as? Bool == true)
+        // Told so, by its own CLI and engine, its card says Kuvo Code is on this Mac: a Mac adding it
+        // asks before it joins.
+        #expect(card()?["app"] as? Bool == true && card()?["by"] as? String == "its own")
     }
 
     /// The box here isn't running now (its keeper ended, and only a login starts it by itself): the
@@ -153,6 +172,20 @@ import Testing
         guard case .failed(let reason) = app?.engine else { Issue.record("waits on it: \(String(describing: app?.engine))"); return }
         #expect(reason.contains("didn’t start"))
         #expect(!FileManager.default.fileExists(atPath: BoxProcess.home.path))
+        #expect(card()?["app"] as? Bool == false, "not said attached to a box that didn't start")
+    }
+
+    /// Started again by launchd, through the launch agent its Mac put in place, as at login (never
+    /// under Kuvo Code's own permissions); by its own script where there's none.
+    @Test func aStoppedBoxIsStartedByLaunchdWhereItCanBe() throws {
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let own = Here.startCommand(home: home, root: ".kuvo-code", user: 501)
+        #expect(own.path == "/bin/sh" && own.arguments == [home.appending(path: ".kuvo-code/bin/kuvo-start").path])
+        let agent = home.appending(path: "Library/LaunchAgents/\(RemoteServer.launchAgent).plist")
+        try FileManager.default.createDirectory(at: agent.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data().write(to: agent)
+        let launchd = Here.startCommand(home: home, root: ".kuvo-code", user: 501)
+        #expect(launchd.path == "/bin/launchctl" && launchd.arguments == ["kickstart", "gui/501/run.kuvo.code.machine"])
     }
 
     /// MacBook removed this Mac as a machine (its way to start and keys went, its card stayed): no box

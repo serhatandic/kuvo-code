@@ -95,22 +95,25 @@ nonisolated struct Here: Decodable, Equatable, Sendable {
     }
 
     /// Tells the box in the machines' folder that the app attached to it in place (`POST
-    /// kuvo/setup/attached`, by its CLI, `box route`, as the app runs `here`): its card says Kuvo Code
-    /// is on this Mac from then on, so a Mac adding it never has it join another setup unasked.
-    static func sayAttached(engine: URL, script: URL, home: URL) async {
+    /// kuvo/setup/attached`): its card says Kuvo Code is on this Mac from then on, so a Mac adding it
+    /// never has it join another setup unasked. By that box's own CLI and engine (`box route`, as a
+    /// Mac reaches a machine's box over SSH, here without SSH), never the app's: what it writes is
+    /// that box's, in its version.
+    static func sayAttached(home: URL) async {
         guard let root else { return }
         let box = home.appending(path: root)
         // (Said once: it's kept.)
         guard !FileManager.default.fileExists(atPath: box.appending(path: "run/app-attached.json").path) else { return }
-        let env = ["HOME": home.path, "PATH": "/usr/bin:/bin", "BUN_BE_BUN": "1", "BUN_RUNTIME_TRANSPILER_CACHE_PATH": "0", "KUVO_HOME": box.path,
-                   "TMPDIR": FileManager.default.temporaryDirectory.path]
+        let command = RemoteEngineInstaller.$scopedRoot.withValue(root) {
+            RemoteEngineInstaller.script(#"KUVO_HOME="$K" BUN_BE_BUN=1 BUN_RUNTIME_TRANSPILER_CACHE_PATH=0 "$E" --config=/dev/null --no-env-file "$K/bin/kuvo-link.js" box route"#)
+        }
+        let env = ["HOME": home.path, "PATH": "/usr/bin:/bin:/usr/sbin:/sbin"]
         let request = Data(#"{"method":"POST","path":"kuvo/setup/attached"}"#.utf8)
         let input = FileManager.default.temporaryDirectory.appending(path: "kuvo-attached-\(UUID().uuidString).json")
         defer { try? FileManager.default.removeItem(at: input) }
         do {
             try request.write(to: input)
-            let result = try await ChildProcess.run(engine.path, ["run", "--config=/dev/null", "--no-env-file", script.path, "box", "route"],
-                                                    environment: env, directory: box, input: .file(input), limit: .seconds(20))
+            let result = try await ChildProcess.run("/bin/sh", ["-c", command], environment: env, directory: box, input: .file(input), limit: .seconds(20))
             if !result.succeeded || !result.outputText.contains(#""status":200"#) {
                 log.error("The box here wasn't told the app attached: \(result.outputText.suffix(200), privacy: .public) \(result.errorText.suffix(200), privacy: .public)")
             }
@@ -119,18 +122,36 @@ nonisolated struct Here: Decodable, Equatable, Sendable {
         }
     }
 
-    /// The box in the machines' folder, stopped, started in place as its start at login does (its own
-    /// `bin/kuvo-start`, which starts its keeper once and returns): what `here` says then, once it
-    /// runs or after a few seconds.
+    /// How the box in the machines' folder is started again: by launchd, through the launch agent its
+    /// Mac put in place (the real `~/.kuvo-code`'s), as at login, so it runs as its own and never
+    /// under Kuvo Code's privacy permissions; else by its own `bin/kuvo-start`.
+    static func startCommand(home: URL, root: String, user: uid_t = getuid()) -> (path: String, arguments: [String]) {
+        let agent = home.appending(path: "Library/LaunchAgents/\(RemoteServer.launchAgent).plist")
+        if root == ".kuvo-code", FileManager.default.fileExists(atPath: agent.path) {
+            return ("/bin/launchctl", ["kickstart", "gui/\(user)/\(RemoteServer.launchAgent)"])
+        }
+        return ("/bin/sh", [home.appending(path: root).appending(path: "bin/kuvo-start").path])
+    }
+
+    /// The box in the machines' folder, stopped, started again in place (`startCommand`; its own
+    /// `kuvo-start` where launchd can't, which starts its keeper once and returns): what `here` says
+    /// then, once it runs or after a few seconds.
     static func started(engine: URL, script: URL, appBox: URL, engineData: URL, home: URL) async -> Here? {
         guard let root else { return nil }
         let box = home.appending(path: root)
         let env = ["HOME": home.path, "PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "TMPDIR": FileManager.default.temporaryDirectory.path]
-        do {
-            let result = try await ChildProcess.run("/bin/sh", [box.appending(path: "bin/kuvo-start").path], environment: env, directory: box, limit: .seconds(20))
-            if !result.succeeded { log.error("The box here didn't start: \(result.errorText.suffix(200), privacy: .public)") }
-        } catch {
-            log.error("The box here didn't start: \(error.localizedDescription, privacy: .public)")
+        var command = startCommand(home: home, root: root)
+        for _ in 0..<2 {
+            do {
+                let result = try await ChildProcess.run(command.path, command.arguments, environment: env, directory: box, limit: .seconds(20))
+                if result.succeeded { break }
+                log.error("The box here didn't start (\(command.path, privacy: .public)): \(result.errorText.suffix(200), privacy: .public)")
+            } catch {
+                log.error("The box here didn't start: \(error.localizedDescription, privacy: .public)")
+            }
+            // (An agent launchd hasn't loaded yet, put in place since this login: its own script.)
+            guard command.path != "/bin/sh" else { break }
+            command = ("/bin/sh", [box.appending(path: "bin/kuvo-start").path])
         }
         var here: Here?
         for attempt in 0..<6 {

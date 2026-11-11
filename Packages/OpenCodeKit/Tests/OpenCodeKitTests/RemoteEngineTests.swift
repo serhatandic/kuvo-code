@@ -280,6 +280,15 @@ struct RemoteEngineTests {
         // The engine's version line among them still says it's installed, and only that line does.
         let checked = try installer().checked("Linux x86_64\nglibc\n\(OpenCodeEngine.version)\n\(real.output)")
         #expect(checked.isInstalled && checked.found == vector.lines.joined(separator: "\n"))
+        // Removed by its Mac (marked off, then its way to start gone): no box there any more.
+        let off = home.appending(path: ".kuvo-code/run/off")
+        try Data().write(to: off)
+        #expect(!(try probe(root: ".kuvo-code")).output.contains("box machine"))
+        try FileManager.default.removeItem(at: off)
+        let start = home.appending(path: ".kuvo-code/bin/kuvo-start")
+        try FileManager.default.moveItem(at: start, to: home.appending(path: "kuvo-start"))
+        #expect(!(try probe(root: ".kuvo-code")).output.contains("box machine"))
+        try FileManager.default.moveItem(at: home.appending(path: "kuvo-start"), to: start)
 
         try FileManager.default.moveItem(at: home.appending(path: ".kuvo-code"), to: home.appending(path: ".kuvo-code-test"))
         let test = try probe(root: ".kuvo-code-test")

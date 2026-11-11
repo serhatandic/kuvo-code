@@ -293,3 +293,35 @@ test("Kuvo Code attached to a box in place says so to it (box route, as the app 
   for await (const piece of handle({ method: "POST", path: "kuvo/setup/attached", headers: {}, body: Buffer.from("{}") }, undefined)) pieces.push(piece);
   assert.equal(pieces.find(each => each.head).head.status, 403, "from a phone");
 });
+
+test("a box its Mac removed is no box, whatever's left of it: its keeper still ending, or marked off before its way to start went; and beside the app's own, no second one", () => {
+  const macbook = box("mac", "MacBook");
+  const member = machine => write(path.join(machine, "setup-card.json"), card({ setup: otherSetup, role: "member", primary: { key: macbook.pub, name: "MacBook", heard: 1 } }));
+  let keeper;
+  try {
+    // Its way to start already gone, its keeper still running out its last round.
+    const ending = here(({ machine, mac }) => {
+      member(machine);
+      const start = path.join(mac, "keeper", "kuvo-start");
+      write(start, "#!/bin/sh\nwhile :; do sleep 1; done\n");
+      keeper = spawn("sh", [start], { stdio: "ignore" });
+      write(path.join(machine, "box.pid"), String(keeper.pid));
+    }, { startable: false }).said;
+    assert.deepEqual([ending.use, ending.runs, ending.box], ["own", "gone", null]);
+  } finally {
+    keeper?.kill();
+  }
+  // Stopped for good (`kuvo-start off`), its way to start not yet gone.
+  const off = here(({ machine }) => {
+    member(machine);
+    write(path.join(machine, "off"), "");
+  }).said;
+  assert.deepEqual([off.use, off.runs, off.box], ["own", "gone", null]);
+  // Beside the app's own box: its own, alone, never two.
+  const ownCard = card({ setup: ours, epoch: 1, role: "primary", primary: { key: self.pub, name: "Studio", heard: null }, self: { key: self.pub, name: "Studio", kind: "mac" }, app: true, computers: 1 });
+  const beside = here(({ app, machine }) => {
+    write(path.join(app, "setup-card.json"), ownCard);
+    member(machine);
+  }, { startable: false }).said;
+  assert.deepEqual([beside.verdict, beside.use, beside.box], ["free", "own", null]);
+});
