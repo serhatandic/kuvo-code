@@ -83,9 +83,9 @@ final class Keeper {
         dispatchMain()
     }
 
-    /// Whether this keeper may start this Mac's box (nil), or how it ends instead: as it should
-    /// (`stopped`) where the box already here is this Mac's; or to be started again in a while
-    /// (`again`, launchd waits between) where it couldn't tell with a box here.
+    /// Whether this keeper may start this Mac's box (nil), or that it ends instead, as it should
+    /// (`stopped`, so launchd leaves it): where the box already here is this Mac's, or where it
+    /// couldn't tell with a box here and none of the app's own ran (opening the app asks again).
     static func gated(engine: URL?, checked: Bool) async -> Exit? {
         switch await Here.gate(engine: engine, script: BoxProcess.script, appBox: BoxProcess.home, engineData: AppModel.engineFolders.dataDirectory,
                                home: AppModel.hereHome, checked: checked) {
@@ -96,7 +96,7 @@ final class Keeper {
             return .stopped
         case .unknown(let why):
             log.error("Couldn't tell whether the box already on this Mac is its box: \(why ?? "here didn't answer", privacy: .public)")
-            return .again
+            return .stopped
         }
     }
 

@@ -535,17 +535,19 @@ final class AppModel {
             // (One that couldn't tell, with a box here, starts nothing: its own would be a second, for good.)
             if Self.attachesInPlace, keeperBox == nil, !ownBoxStarted {
                 attached = nil
-                BackgroundWork.attachedHere = false
+                BackgroundWork.heldBack = nil
                 let outcome = await Here.gate(engine: binary, script: BoxProcess.script, appBox: BoxProcess.home, engineData: engineFolders.dataDirectory,
                                               home: Self.hereHome, checked: Self.engineOverride == nil)
                 guard launch == self.launch else { return }
                 switch outcome {
                 case .attach(let here):
                     attached = here
-                    BackgroundWork.attachedHere = true
+                    BackgroundWork.heldBack = "This Mac’s box is the one already here, which starts on its own."
                     return
                 case .unknown(let why):
-                    throw MachineFailure(message: why ?? "Kuvo Code couldn’t check the box already on this Mac, so it didn’t start one of its own.")
+                    let couldnt = "Kuvo Code couldn’t check the box already on this Mac, so it didn’t start one of its own."
+                    BackgroundWork.heldBack = couldnt
+                    throw MachineFailure(message: why ?? couldnt)
                 case .own:
                     break
                 }

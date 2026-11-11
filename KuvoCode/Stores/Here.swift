@@ -53,13 +53,16 @@ nonisolated struct Here: Decodable, Equatable, Sendable {
         hostingTests || bundleID.lowercased() == AppInfo.realBundleID || given != ".kuvo-code" ? given : nil
     }
 
+    /// The box's `OWN_BOX_RAN` (`judge.ts`), as it is there (a test holds them the same).
+    static let ownBoxFiles = ["setup-card.json", "link.json", "serve.json", "keeper.json"]
+
     /// What `here` counts as the app's own box having run (`judge.ts`, `OWN_BOX_RAN`, and its engine's
     /// database), for a start that can't ask it: one whose own box ran keeps it, whatever is beside
     /// it, as the box would say. (An update whose engine isn't downloaded yet, say.)
     static func ownBoxRan(appBox: URL, engineData: URL) -> Bool {
         let manager = FileManager.default
         let kept = (try? manager.contentsOfDirectory(atPath: engineData.path)) ?? []
-        return ["setup-card.json", "link.json", "serve.json", "keeper.json"].contains { manager.fileExists(atPath: appBox.appending(path: "run").appending(path: $0).path) }
+        return ownBoxFiles.contains { manager.fileExists(atPath: appBox.appending(path: "run").appending(path: $0).path) }
             || kept.contains { $0.hasPrefix("opencode") && $0.hasSuffix(".db") }
     }
 

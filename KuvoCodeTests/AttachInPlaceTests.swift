@@ -76,7 +76,7 @@ import Testing
     private func cleanUp(_ app: AppModel?) {
         app?.stop()
         AppModel.attachesInPlace = false
-        BackgroundWork.attachedHere = false
+        BackgroundWork.heldBack = nil
         for database in databases { try? FileManager.default.removeItem(at: database) }
         AppModel.hereHome = FileManager.default.homeDirectoryForCurrentUser
         unsetenv("KUVO_OPENCODE_BINARY")
@@ -137,6 +137,7 @@ import Testing
         #expect(app?.attached == nil)
         guard case .failed(let reason) = app?.engine else { Issue.record("it doesn't start: \(String(describing: app?.engine))"); return }
         #expect(reason.contains("didn’t start one of its own"))
+        #expect(!BackgroundWork.shared.register() && BackgroundWork.shared.failure?.contains("couldn’t check") == true, "Turn On registers no keeper either")
         #expect(!FileManager.default.fileExists(atPath: BoxProcess.home.path))
     }
 
@@ -149,8 +150,10 @@ import Testing
         #expect(await Keeper.gated(engine: mini, checked: false) == .stopped)
         #expect(!FileManager.default.fileExists(atPath: BoxProcess.home.path), "nothing of its own written: not even its folder")
 
+        // (Opening the app asks again; launchd leaves it, rather than start it every few seconds.)
         let silent = try prepared(hereFails: true) { try memberOfMacBooks() }
-        #expect(await Keeper.gated(engine: silent, checked: false) == .again)
+        #expect(await Keeper.gated(engine: silent, checked: false) == .stopped)
+        #expect(!FileManager.default.fileExists(atPath: BoxProcess.home.path))
 
         let own = try prepared(ownSessions: true) { try memberOfMacBooks() }
         #expect(await Keeper.gated(engine: own, checked: false) == nil)
@@ -175,5 +178,18 @@ import Testing
         #expect(Here.machinesRoot(bundleID: "run.kuvo.code", hostingTests: false, given: ".kuvo-code") == ".kuvo-code")
         #expect(Here.machinesRoot(bundleID: "run.kuvo.code.demo", hostingTests: false, given: ".kuvo-code") == nil)
         #expect(Here.machinesRoot(bundleID: "run.kuvo.code.demo", hostingTests: false, given: ".kuvo-code-demo") == ".kuvo-code-demo")
+        #expect(Here.machinesRoot(bundleID: "Run.Kuvo.Code", hostingTests: false, given: ".kuvo-code") == ".kuvo-code")
+        #expect(Here.machinesRoot(bundleID: "run.kuvo.code.tests", hostingTests: true, given: ".kuvo-code") == ".kuvo-code", "the tests' home is their own")
+    }
+
+    /// The files the app counts as its own box having run, when the box can't be asked, are the box's
+    /// own: one the box stopped counting would make the app keep a box the box would attach.
+    @Test func whatCountsAsItsOwnBoxIsTheBoxs() throws {
+        let judge = URL(filePath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appending(path: "Packages/Box/src/link/setup/judge.ts")
+        let source = try String(contentsOf: judge, encoding: .utf8)
+        let line = try #require(source.split(separator: "\n").first { $0.hasPrefix("const OWN_BOX_RAN = [") })
+        let files = line.matches(of: /"([^"]+)"/).map { String($0.1) }
+        #expect(files == Here.ownBoxFiles)
     }
 }
