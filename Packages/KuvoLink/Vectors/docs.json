@@ -13,6 +13,17 @@
    "h": "H0hGkNSLrrE"
   },
   {
+   "name": "a main computer's peers, naming the setup it leads",
+   "envelope": {
+    "d": "eyJ2IjoxLCJraW5kIjoicGVlcnMiLCJvcmlnaW4iOiJJQ1FPTlJBM1hreDhHbUI5Yi1XdVJFTWpESXd0QWE5SVNqV2J1WW4yVWlVIiwibiI6MiwiYm9keSI6eyJib3hlcyI6W3sia2V5IjoiZE9IdDdhaGtTRkNVQkZTc0VmUTJIRHZDNTktNnRvTjBUTmF0Sm45SnhYRSIsInNpZ24iOiJJQ1FPTlJBM1hreDhHbUI5Yi1XdVJFTWpESXd0QWE5SVNqV2J1WW4yVWlVIiwiYWRkcmVzcyI6IkFRRUJBUUVCQVFFQkFRRUJBUUVCQVEiLCJuYW1lIjoiTWFjQm9vayIsImtpbmQiOiJtYWMifSx7ImtleSI6IjVVb0Y3dTZRa0JOSWFqanRCNVdOVnFmdUxvQnptRFZRZnJwRHNZQlNoNDgiLCJzaWduIjoiZE84ODRpMjdMUEg4dTRiTEdZOXlnN2VoZjlocXliWVhyTC1QcnVDMHhtMCIsImFkZHJlc3MiOiJBZ0lDQWdJQ0FnSUNBZ0lDQWdJQ0FnIiwibmFtZSI6ImRldmJveCIsImtpbmQiOiJtYWNoaW5lIiwiaWQiOiJkZXZib3guaW52YWxpZCJ9XSwibW92ZWQiOltdLCJsZWZ0IjpbXSwic2V0dXAiOnsiaWQiOiJzZXRfQlFVRkJRVUZCUVVGQlFVRkJRVUZCUSIsImVwb2NoIjozLCJwcmltYXJ5IjoiZE9IdDdhaGtTRkNVQkZTc0VmUTJIRHZDNTktNnRvTjBUTmF0Sm45SnhYRSJ9fX0",
+    "s": "UzOZ47v_AtxSHK77qbVoVt6G15DRXvNI06mFjYx4mqEC3mMQosEe5K7jLH4dFvjpdLVY-v6w7_EkdS2qqsGXDg"
+   },
+   "origin": "ICQONRA3Xkx8GmB9b-WuREMjDIwtAa9ISjWbuYn2UiU",
+   "kind": "peers",
+   "n": 2,
+   "h": "64NkzZ3qJcU"
+  },
+  {
    "name": "a machine's phones, with a removal and words that aren't ASCII",
    "envelope": {
     "d": "eyJ2IjoxLCJraW5kIjoicGhvbmVzIiwib3JpZ2luIjoiZE84ODRpMjdMUEg4dTRiTEdZOXlnN2VoZjlocXliWVhyTC1QcnVDMHhtMCIsIm4iOjcsImJvZHkiOnsicGhvbmVzIjpbeyJrZXkiOiJCd2NIQndjSEJ3Y0hCd2NIQndjSEJ3Y0hCd2NIQndjSEJ3Y0hCd2NIQndjIiwibmFtZSI6ImlQaG9uZSDinKYiLCJwYWlyaW5nIjoiYWJjIn1dLCJyZW1vdmVkIjpbeyJrZXkiOiJDUWtKQ1FrSkNRa0pDUWtKQ1FrSkNRa0pDUWtKQ1FrSkNRa0pDUWtKQ1FrIiwicGFpcmluZyI6Im9sZCJ9XX19",

@@ -3297,6 +3297,9 @@
             "literal": "browser"
            },
            {
+            "literal": "setup"
+           },
+           {
             "literal": "accounts.ended"
            },
            {
@@ -3645,6 +3648,9 @@
            },
            {
             "literal": "browser"
+           },
+           {
+            "literal": "setup"
            }
           ]
          }
@@ -4058,6 +4064,268 @@
    "answers": {
     "200": {
      "object": {}
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/setup",
+   "answers": {
+    "200": {
+     "object": {
+      "setup": {
+       "oneOf": [
+        "string",
+        "null"
+       ]
+      },
+      "epoch": {
+       "oneOf": [
+        "number",
+        "null"
+       ]
+      },
+      "primary": {
+       "oneOf": [
+        {
+         "object": {
+          "key": "string",
+          "name": "string",
+          "kind": {
+           "oneOf": [
+            {
+             "literal": "mac"
+            },
+            {
+             "literal": "machine"
+            }
+           ]
+          }
+         }
+        },
+        "null"
+       ]
+      },
+      "you": {
+       "object": {
+        "key": {
+         "oneOf": [
+          "string",
+          "null"
+         ]
+        },
+        "role": {
+         "oneOf": [
+          {
+           "oneOf": [
+            {
+             "literal": "primary"
+            },
+            {
+             "literal": "member"
+            }
+           ]
+          },
+          "null"
+         ]
+        }
+       }
+      },
+      "computers": {
+       "list": {
+        "object": {
+         "key": "string",
+         "name": "string",
+         "kind": {
+          "oneOf": [
+           {
+            "literal": "mac"
+           },
+           {
+            "literal": "machine"
+           }
+          ]
+         },
+         "role": {
+          "oneOf": [
+           {
+            "literal": "primary"
+           },
+           {
+            "literal": "member"
+           }
+          ]
+         },
+         "app": "bool"
+        }
+       }
+      },
+      "conflict?": {
+       "object": {
+        "primary": "string",
+        "epoch": "number"
+       }
+      },
+      "startsFromOthers": {
+       "object": {
+        "value": {
+         "oneOf": [
+          {
+           "oneOf": [
+            {
+             "literal": "on"
+            },
+            {
+             "literal": "off"
+            }
+           ]
+          },
+          "null"
+         ]
+        },
+        "default": {
+         "oneOf": [
+          {
+           "literal": "on"
+          },
+          {
+           "literal": "off"
+          }
+         ]
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/setup/events",
+   "answers": {
+    "200": {
+     "object": {
+      "setup": {
+       "oneOf": [
+        "string",
+        "null"
+       ]
+      },
+      "epoch": {
+       "oneOf": [
+        "number",
+        "null"
+       ]
+      },
+      "primary": {
+       "oneOf": [
+        {
+         "object": {
+          "key": "string",
+          "name": "string",
+          "kind": {
+           "oneOf": [
+            {
+             "literal": "mac"
+            },
+            {
+             "literal": "machine"
+            }
+           ]
+          }
+         }
+        },
+        "null"
+       ]
+      },
+      "you": {
+       "object": {
+        "key": {
+         "oneOf": [
+          "string",
+          "null"
+         ]
+        },
+        "role": {
+         "oneOf": [
+          {
+           "oneOf": [
+            {
+             "literal": "primary"
+            },
+            {
+             "literal": "member"
+            }
+           ]
+          },
+          "null"
+         ]
+        }
+       }
+      },
+      "computers": {
+       "list": {
+        "object": {
+         "key": "string",
+         "name": "string",
+         "kind": {
+          "oneOf": [
+           {
+            "literal": "mac"
+           },
+           {
+            "literal": "machine"
+           }
+          ]
+         },
+         "role": {
+          "oneOf": [
+           {
+            "literal": "primary"
+           },
+           {
+            "literal": "member"
+           }
+          ]
+         },
+         "app": "bool"
+        }
+       }
+      },
+      "conflict?": {
+       "object": {
+        "primary": "string",
+        "epoch": "number"
+       }
+      },
+      "startsFromOthers": {
+       "object": {
+        "value": {
+         "oneOf": [
+          {
+           "oneOf": [
+            {
+             "literal": "on"
+            },
+            {
+             "literal": "off"
+            }
+           ]
+          },
+          "null"
+         ]
+        },
+        "default": {
+         "oneOf": [
+          {
+           "literal": "on"
+          },
+          {
+           "literal": "off"
+          }
+         ]
+        }
+       }
+      }
+     }
     }
    }
   },
