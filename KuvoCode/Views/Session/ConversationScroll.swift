@@ -100,17 +100,17 @@ final class ConversationScroller {
     /// as a reply comes in, which drew the conversation again each time.
     fileprivate func sees(atEnd: Bool) {
         self.atEnd = atEnd
-        let sees = atEnd || followsEnd
+        // (And while a card you opened at the end opens under the composer, before it shows itself.)
+        let sees = atEnd || followsEnd || !beingOpened.isEmpty
         if seesEnd != sees { seesEnd = sees }
     }
 
     /// `id` opened or closed by you: back to the end once the last you left it for is closed.
     fileprivate func reading(_ id: String, isOpen: Bool) {
         if isOpen {
-            // Let go of as it started to open (`opening`): now it has, all of it in view, as
-            // following would have shown it, unless you've gone somewhere since.
-            if let reveals = beingOpened.removeValue(forKey: id) {
-                if reveals, heldFor.contains(id) { ask(.end(animated: true)) }
+            // Let go of as it started to open (`opening`): it shows itself.
+            if beingOpened.remove(id) != nil {
+                sees(atEnd: atEnd)
                 return
             }
             guard followsEnd || !heldFor.isEmpty else { return }
@@ -121,26 +121,25 @@ final class ConversationScroller {
             }
             heldFor.insert(id)
         } else {
-            beingOpened[id] = nil
+            beingOpened.remove(id)
             if heldFor.remove(id) != nil, heldFor.isEmpty {
                 toEnd(animated: true)
             }
         }
     }
 
-    /// What you're opening that the end was followed for, and whether the view goes down to all
-    /// of it once it has (`reading`).
-    @ObservationIgnored private var beingOpened: [String: Bool] = [:]
+    /// What you're opening that the end was followed for (`opening`).
+    @ObservationIgnored private var beingOpened: Set<String> = []
 
-    /// `id` starting to open, by you: the end is let go of first, as reading it does, so the
-    /// conversation doesn't go to its end as it grows. That took what you opened up under you as
-    /// it opened, its header out of view. `reveals`: once open, the view goes down to all of it
-    /// (steps, which open at the end); else nothing moves.
-    fileprivate func opening(_ id: String, reveals: Bool) {
+    /// A card starting to open, by you: the end is let go of first, as reading it does, so the
+    /// conversation doesn't go to its end as it grows, which took the card up under you as it
+    /// opened, its header out of view. It opens where it is, and shows itself once it has (see
+    /// `RowStackView.reveal`).
+    fileprivate func opening(_ id: String) {
         guard followsEnd else { return }
         follow(false)
         heldFor.insert(id)
-        beingOpened[id] = reveals
+        beingOpened.insert(id)
     }
 
     private func ask(_ request: Request) {
@@ -557,7 +556,7 @@ extension ConversationScroll {
     fileprivate func wire() {
         anchor.stopFollowing = { [scroller] in scroller.follow(false) }
         anchor.reading = { [scroller] id, isOpen in scroller.reading(id, isOpen: isOpen) }
-        anchor.opening = { [scroller] id, reveals in scroller.opening(id, reveals: reveals) }
+        anchor.opening = { [scroller] id in scroller.opening(id) }
         anchor.isFollowingEnd = scroller.followsEnd
         scroller.followChanged = { [weak anchor] in anchor?.isFollowingEnd = $0 }
     }
@@ -758,9 +757,8 @@ final class ScrollAnchor {
     var stopFollowing: () -> Void = {}
     /// Steps opened (true) or closed by you, by what their fold is kept by.
     var reading: ((String, Bool) -> Void)?
-    /// Steps or a card starting to open by you, and whether the view goes down to all of it once
-    /// it has (see `ConversationScroller.opening`).
-    var opening: ((String, Bool) -> Void)?
+    /// A card starting to open by you (see `ConversationScroller.opening`).
+    var opening: ((String) -> Void)?
 
     /// The rows laid out, where they are in the conversation, and those shown now. A row that
     /// goes and comes back where it was (the whole conversation hidden a moment) isn't told its

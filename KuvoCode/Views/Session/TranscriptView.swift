@@ -2035,6 +2035,8 @@ private struct AgentSentRow: View {
                 .frame(width: 16)
             Text("To \(Text(name).fontWeight(.semibold).foregroundStyle(.primary))")
                 .foregroundStyle(.secondary)
+                // Whole, where the header cuts it short.
+                .help("To \(name)")
             if case .running = call.state, input?["wait"]?.bool == true {
                 StepActivity(symbol: nil, running: true, size: 12)
                 Text("Waiting for its answer")
@@ -2089,16 +2091,14 @@ final class CardFolds {
     /// What was opened or closed among those kept under this, closed with what they're in.
     func kept(under prefix: String) -> [String] { choices.keys.filter { $0.hasPrefix(prefix) } }
 
-    /// Steps and cards you opened or closed, in their conversation: opened, the end is no longer
-    /// followed, so what comes in next doesn't move what you read (`holds` false: a step under way,
-    /// kept in view until it ends). It's let go of before it opens, so it opens where it is, under
-    /// its header, with nothing above it moving; once open, the view goes down to all of it, as
-    /// following the end would have (`reveals`; else nothing moves: see
-    /// `ConversationScroller.opening`). Closing what you opened goes back to the end (see
-    /// `ConversationScroller.reading`). `closes`: what goes with it; `then`: once it has opened or
-    /// closed.
-    func toggle(_ id: String, open: Bool, in anchor: ScrollAnchor?, holds: Bool = true, reveals: Bool = true, closes: [String] = [], then: @escaping () -> Void = {}) {
-        if open, holds { anchor?.opening?(id, reveals) }
+    /// Steps and cards you opened or closed, in their conversation: opened, once they have, the
+    /// end is no longer followed, so what comes in next doesn't move what you read (`holds` false:
+    /// a step under way, kept in view until it ends); closing what you opened goes back to it (see
+    /// `ConversationScroller.reading`). `staysPut`: a card that opens where it is, the end let go of
+    /// before it opens rather than once it has (see `ConversationScroller.opening`). `closes`: what
+    /// goes with it; `then`: once it has opened or closed.
+    func toggle(_ id: String, open: Bool, in anchor: ScrollAnchor?, holds: Bool = true, staysPut: Bool = false, closes: [String] = [], then: @escaping () -> Void = {}) {
+        if open, holds, staysPut { anchor?.opening?(id) }
         withAnimation(.ui) {
             set(id, open: open)
             closes.forEach(forget)
@@ -2129,7 +2129,10 @@ private struct FoldingCard<Header: View, Accessory: View, Content: View>: View {
     @State private var isHoveringHeader = false
     /// Folded by you, its words still on their way out.
     @State private var isFolding = false
+    /// How many times it's been opened or folded here.
+    @State private var folding = 0
     @Environment(\.scrollAnchor) private var scrollAnchor
+    @Environment(\.conversationRow) private var row
 
     private static var radius: CGFloat { 10 }
     private static var padding: CGSize { CGSize(width: 10, height: 9) }
@@ -2157,10 +2160,20 @@ private struct FoldingCard<Header: View, Accessory: View, Content: View>: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Button {
-                    if open { isFolding = true }
-                    // Its words open under it, where it is: the view doesn't go down to them.
-                    folds.toggle(id, open: !open, in: scrollAnchor, reveals: false) {
-                        withAnimation(.easeOut(duration: 0.15)) { isFolding = false }
+                    // Only the latest change says when the words have gone (opened and folded
+                    // again at once, the first ending says nothing).
+                    folding += 1
+                    let change = folding
+                    isFolding = open
+                    // Its words open under it, where it is; once they have, as far into view as
+                    // they need, its header kept in view.
+                    folds.toggle(id, open: !open, in: scrollAnchor, staysPut: true) {
+                        guard change == folding else { return }
+                        if open {
+                            withAnimation(.easeOut(duration: 0.15)) { isFolding = false }
+                        } else if let row {
+                            scrollAnchor?.stack?.reveal(row)
+                        }
                     }
                 } label: {
                     // The same open or folded, so nothing in it moves or is laid out anew as the
@@ -2306,6 +2319,7 @@ private struct AgentMessageRow: View {
                 .frame(width: 16)
             Text("From \(Text(from).fontWeight(.semibold).foregroundStyle(.primary))\(status.map { " · \($0)" } ?? "")")
                 .foregroundStyle(.secondary)
+                .help("From \(from)\(status.map { " · \($0)" } ?? "")")
         } accessory: {
             if let at {
                 Text(Date(timeIntervalSince1970: at / 1000), format: .dateTime.hour().minute())
@@ -2345,6 +2359,7 @@ private struct GroupWorkRow: View {
                 .frame(width: 16)
             Text("Work from \(Text(chat).fontWeight(.semibold).foregroundStyle(.primary))")
                 .foregroundStyle(.secondary)
+                .help("Work from \(chat)")
         } accessory: {
             Text(Date(timeIntervalSince1970: at / 1000), format: .dateTime.hour().minute())
                 .font(.caption)

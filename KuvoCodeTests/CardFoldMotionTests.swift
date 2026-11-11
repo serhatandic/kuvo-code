@@ -260,6 +260,68 @@ import Testing
         #expect(again.ink(words) < 0.002)
     }
 
+    /// A conversation taller than the window, at its end and following it, with the folded card
+    /// last, over the composer.
+    private func longConversation() async {
+        let run = run
+        var messages: [[String: Any]] = []
+        for turn in 0..<10 {
+            let at = Double(turn) / 100
+            messages.append(["id": run + "0\(100 + turn * 2)", "type": "user", "time": ["created": at], "text": "Question \(turn)"])
+            messages.append(["id": run + "0\(101 + turn * 2)", "type": "assistant", "agent": "build", "time": ["created": at, "completed": at], "model": ["id": "m", "providerID": "p"],
+                             "content": [["type": "text", "text": String(repeating: "Some words of the answer. ", count: 40)]]])
+        }
+        messages.append(["id": run + "01", "type": "user", "time": ["created": 1], "text": "Hand the header band to the phone's session."])
+        messages.append(Self.sent(run, number: 3, to: Self.name, text: Self.words))
+        engine.conversation(id, messages)
+        await model.load()
+    }
+
+    private var stack: RowStackView? {
+        func stacks(_ view: NSView?) -> [RowStackView] { guard let view else { return [] }; return (view as? RowStackView).map { [$0] } ?? view.subviews.flatMap(stacks) }
+        return stacks(window.contentView).first
+    }
+
+    private var origin: CGFloat { stack?.enclosingScrollView?.contentView.bounds.origin.y ?? -1 }
+
+    private var isFollowing: Bool {
+        DispatchQueue.main.async { TestPulse.beat() }
+        return stack?.scrollAnchor?.isFollowingEnd ?? false
+    }
+
+    /// Opened at the end of a conversation that follows it: it opens where it is, under its header,
+    /// with nothing above it moving (the end followed took it up under you as it grew). Once open,
+    /// the view goes down as far as its words need, its header kept in view.
+    @Test func openingAtTheEndMovesNothingThenShowsIt() async throws {
+        defer { done() }
+        await longConversation()
+        try await until { labels.contains { $0.contains(Self.name) } }
+        await settled()
+        try await until { isFollowing }
+        let start = origin
+        #expect(start > 0, "it scrolls")
+        let header = try header(Self.name)
+        let name = CGRect(x: header.minX, y: header.minY, width: header.width * 0.3, height: header.height)
+        let above = CGRect(x: 0, y: max(0, header.minY - 200), width: Self.size.width, height: 190)
+        let folded = try shot("end-folded")
+
+        let held = try await pressHeld(Self.name)
+        let opening = try shot("end-opening")
+        #expect(opening.difference(name, from: folded) < 2, "the header stays where it is as it opens")
+        #expect(opening.difference(above, from: folded) < 2, "nothing above moves as it opens")
+        #expect(abs(origin - start) < 1, "the view stays: moved from \(start) to \(origin)")
+        await letGo(held)
+        // Once open, the view goes down to its words.
+        try await until {
+            DispatchQueue.main.async { TestPulse.beat() }
+            return origin > start + 20
+        }
+        await settled()
+        let after = try self.header(Self.name)
+        #expect(after.minY >= 0 && after.maxY <= Self.size.height, "its header is still in view: \(after)")
+        #expect(!isFollowing, "you're reading what you opened: what comes next doesn't move it")
+    }
+
     /// Folded, a header is one line however long the name: the name is cut short at its share and
     /// the line it folds to has the rest.
     @Test func foldedHeaderIsOneLine() async throws {

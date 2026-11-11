@@ -9,6 +9,11 @@ struct RowHasOpenFold: PreferenceKey {
     static func reduce(value: inout Bool, nextValue: () -> Bool) { value = value || nextValue() }
 }
 
+extension EnvironmentValues {
+    /// The conversation's row a view is in, by its id (`RowStackView.reveal`).
+    @Entry var conversationRow: String?
+}
+
 extension View {
     /// Says so to the row it's in, along with whatever else in the row does.
     func foldOpen(_ isOpen: Bool) -> some View {
@@ -277,6 +282,7 @@ final class RowStackView: NSView, NSUserInterfaceValidations {
         AnyView(
             TopLayout {
                 content
+                    .environment(\.conversationRow, id)
                     .fixedSize(horizontal: false, vertical: true)
                     .onGeometryChange(for: CGFloat.self) { ceil($0.size.height) } action: { [weak self] height in
                         self?.rowResized(id, to: height)
@@ -501,6 +507,17 @@ final class RowStackView: NSView, NSUserInterfaceValidations {
             // where it last knew it to be, the next time the conversation's size changes.
             NotificationCenter.default.post(name: NSView.boundsDidChangeNotification, object: clip)
         }
+    }
+
+    /// Row `id`, opened by you where it was, brought as far into what's in sight as it needs: its
+    /// end over the composer, its top no higher than the top of what's in sight. Nothing moves when
+    /// it's all in sight already.
+    func reveal(_ id: String) {
+        guard let index = rowIndex[id], let clip = enclosingScrollView?.contentView, width > 0 else { return }
+        let row = frame(at: index), sight = inSight
+        let down = min(row.maxY - sight.maxY, row.minY - sight.minY)
+        guard down > 0.5 else { return }
+        scrollAnchor?.scroll(to: clip.bounds.origin.y + down, animated: true)
     }
 
     /// The rows are taller than the conversation has been told yet: where the view is may be past
