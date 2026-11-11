@@ -145,6 +145,8 @@ struct GroupChatView: View {
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in if !isKept { groups.markViewed(group.id) } }
         // What's opened from it comes back to it.
         .environment(\.conversationTab, .group(group.id))
+        // Its pictures, which each of them (and the composer's, after them) opens among.
+        .environment(\.conversationPictures, ConversationPictureSet(group: group.id, groups: groups, bots: bots))
     }
 
     /// The words Find looks in, as the message shows them: yours, or a bot's reply.

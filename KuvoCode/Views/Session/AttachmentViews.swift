@@ -1,5 +1,6 @@
 import AppKit
 import ClientDesign
+import ClientSessions
 import OpenCodeKit
 import SwiftUI
 import UniformTypeIdentifiers
@@ -177,6 +178,7 @@ struct ComposerAttachment: View {
     var pictures: [URL] = []
     let remove: () -> Void
     @State private var isHovering = false
+    @Environment(\.conversationPictures) private var conversation
 
     /// A pasted picture goes by its name in the message; a file by its own name.
     private var title: String {
@@ -242,7 +244,7 @@ struct ComposerAttachment: View {
     private func showPicture(_ item: AttachmentItem) {
         guard item.isImage else { return }
         let images = pictures.isEmpty ? [url] : pictures
-        ImageViewer.shared.show(images.map(AttachmentItem.local), at: images.firstIndex(of: url) ?? 0)
+        ImageViewer.shared.show(composer: images.map(AttachmentItem.local), at: images.firstIndex(of: url) ?? 0, in: conversation)
     }
 
     private var reason: String? {
@@ -295,6 +297,7 @@ private struct AttachmentIcon: View {
 /// A message's attachments, above its text: images as pictures, other files as rows.
 struct MessageAttachments: View {
     let items: [AttachmentItem]
+    @Environment(\.conversationPictures) private var conversation
 
     var body: some View {
         VStack(alignment: .trailing, spacing: 6) {
@@ -303,7 +306,7 @@ struct MessageAttachments: View {
                 Flow(alignment: .trailing, spacing: 6) {
                     ForEach(Array(images.enumerated()), id: \.element.id) { index, item in
                         AttachmentPicture(item: item, height: images.count == 1 ? 220 : 140) {
-                            ImageViewer.shared.show(images, at: index)
+                            ImageViewer.shared.show(images, at: index, in: conversation)
                         }
                     }
                 }
@@ -325,27 +328,18 @@ struct MadePictureRow: View {
     var directory: String?
     @Environment(AppModel.self) private var app
 
-    static func isMade(_ call: Message.ToolCall) -> Bool {
-        call.name == "generate_image" || isShownFile(call) || isShownPage(call)
-    }
+    static func isMade(_ call: Message.ToolCall) -> Bool { ConversationPictures.isMade(call) }
 
     /// A screenshot of the page the agent took to show you (browser_screenshot's show).
-    static func isShownPage(_ call: Message.ToolCall) -> Bool {
-        call.name == "kuvo-browser_browser_screenshot" && call.state.input?["show"]?.bool == true
-    }
+    static func isShownPage(_ call: Message.ToolCall) -> Bool { ConversationPictures.isShownPage(call) }
 
-    static func isShownFile(_ call: Message.ToolCall) -> Bool {
-        call.name == "kuvo-browser_" + BrowserTools.showFile
-    }
+    static func isShownFile(_ call: Message.ToolCall) -> Bool { ConversationPictures.isShownFile(call) }
 
     /// Whether it brought pictures to show among others beside it: a picture it showed, an image it
     /// made, a page it took a screenshot of. One still at work, failed or with none (a file that
     /// isn't a picture) shows on its own.
     static func isGroupable(_ call: Message.ToolCall) -> Bool {
-        guard isMade(call), case .completed(_, let output, _) = call.state else { return false }
-        guard isShownFile(call) else { return !StepPictures.items(in: output, step: call.id).isEmpty }
-        let path = call.state.input?["path"]?.string ?? ""
-        return UTType(filenameExtension: (path as NSString).pathExtension)?.conforms(to: .image) == true
+        !ConversationPictures.pictures(of: call).isEmpty
     }
 
     /// Pictures that come one after another, with nothing between them, are one row to look
@@ -370,9 +364,13 @@ struct MadePictureRow: View {
     /// shows again isn't drawn as an earlier step had it (#132), and as the phone keeps it. A
     /// machine's is never read from this Mac's disk, though this Mac has a file at that path too.
     static func shown(_ path: String, in directory: String?, step: String) -> AttachmentItem {
+        shown(path, in: directory, id: ConversationPictures.shownID(step: step))
+    }
+
+    static func shown(_ path: String, in directory: String?, id: String) -> AttachmentItem {
         let url = RemoteFolder.fileURL(path, in: directory ?? "/")
         let mime = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType ?? "application/octet-stream"
-        return .stored(Message.User.Attachment(mime: mime, name: (path as NSString).lastPathComponent, source: .uri(url.absoluteString)), id: "\(step)-shown")
+        return .stored(Message.User.Attachment(mime: mime, name: (path as NSString).lastPathComponent, source: .uri(url.absoluteString)), id: id)
     }
 
     var body: some View {
@@ -462,13 +460,14 @@ struct StepPictures: View {
     var height: CGFloat?
     var maxWidth: CGFloat = 360
     var captions: [String] = []
+    @Environment(\.conversationPictures) private var conversation
 
     var body: some View {
         Flow(spacing: 6) {
             ForEach(Array(items.enumerated()), id: \.offset) { index, item in
                 VStack(alignment: .leading, spacing: 6) {
                     AttachmentPicture(item: item, height: height ?? (items.count == 1 ? 220 : 140), maxWidth: maxWidth) {
-                        ImageViewer.shared.show(items, at: index)
+                        ImageViewer.shared.show(items, at: index, in: conversation)
                     }
                     if captions.indices.contains(index), !captions[index].isEmpty {
                         Text(captions[index])
@@ -487,11 +486,16 @@ struct StepPictures: View {
     static func items(in output: [Message.ToolOutput], step: String) -> [AttachmentItem] {
         output.enumerated().compactMap { index, part -> AttachmentItem? in
             guard case .file(let uri, let mime, let name) = part, mime.lowercased().hasPrefix("image/") else { return nil }
-            let type = UTType(mimeType: mime).flatMap { $0.conforms(to: .image) ? $0 : nil } ?? .png
-            let stem = name.map { (Attachments.fileName($0) as NSString).deletingPathExtension } ?? "Screenshot"
-            let file = Message.User.Attachment(mime: mime, name: stem + "." + (type.preferredFilenameExtension ?? "png"), source: .uri(uri))
-            return .stored(file, id: "\(step)-\(index)")
+            return item(uri: uri, mime: mime, name: name, id: ConversationPictures.id(step: step, output: index))
         }
+    }
+
+    /// A picture a step brought back, by where it is and its type.
+    static func item(uri: String, mime: String, name: String?, id: String) -> AttachmentItem {
+        let type = UTType(mimeType: mime).flatMap { $0.conforms(to: .image) ? $0 : nil } ?? .png
+        let stem = name.map { (Attachments.fileName($0) as NSString).deletingPathExtension } ?? "Screenshot"
+        let file = Message.User.Attachment(mime: mime, name: stem + "." + (type.preferredFilenameExtension ?? "png"), source: .uri(uri))
+        return .stored(file, id: id)
     }
 }
 
