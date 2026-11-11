@@ -130,6 +130,16 @@ doesn't know.
 Transport messages then go both ways, in order (the relay keeps the order of one
 connection). Any message that doesn't decrypt ends the session.
 
+**When a client says a computer isn't connected** (#443, `Reach` in KuvoClient). A computer under
+a heavy load answers late and drops its link now and then, and is still there. Its event feed
+down, a client says nothing for 10 s (at most that what's on screen is being read again); then it
+checks (`kuvo/info`, or the engine's `api/info` through a tunnel) and only a check with no answer
+within 30 s (or one that finds no engine there) makes it "isn't connected". A check that answers
+keeps it in reach, checked again 10 s later while the feed stays down. A request isn't given up on
+while the computer is there (the phone's waits up to 10 minutes with nothing back; the link's own
+checks fail what's on a session that's gone), and a read that fails because the link went is read
+again, not shown as a failure.
+
 ## Mail
 
 Pushes and other messages for a device that may not be connected use
@@ -945,7 +955,12 @@ the same for every client and with none connected, and keeps them in `run/queues
   same order); with no `before`, or one that isn't waiting any more, last. The order it all goes
   in, and clients show: `held` in its order (in the engine or on the box), then the engine's for
   the next step, then its queue, then the rest of what waits on the box. Each answers the queue as it is
-  now; 404 for no such session here, 503 with no engine, 502 when the engine refused. A run that
+  now; 404 for no such session here, 503 with no engine (none recorded, or nothing listening where
+  it's recorded), 502 when the engine refused. 504
+  (`{message, busy: true}`) when the engine runs but didn't answer in time (a busy computer: it's
+  asked twice, 10 s then 20 s, before that; bridge 0.9.212): it isn't down, nothing was done, and
+  a client says so in those words (#443). `queue/add` waits up to two minutes for the engine to
+  take the message. A run that
   fails pauses the queue again while anything waits on the box; a conversation deleted takes its
   queue and what waited for it with it.
 - Clients show what's held and whether it's paused from these; the in-flight record of a message
@@ -1885,7 +1900,7 @@ like HTTP:
 | `{"t": "res", "id": 7, "s": 200, "h": {"content-type": "…"}, "end": false}` | The response's status and headers, with the first piece of its body. |
 | `{"t": "data", "id": 7, "end": false}` | More body. Event streams (`api/event`) go on until cancelled. |
 | `{"t": "cancel", "id": 7}` | Either side stops request 7. |
-| `{"t": "ping"}`, `{"t": "pong"}` | Is the other end still there? The relay's own pings only reach the relay. The phone pings while a request waits with nothing from the host, once its own frames have gone out: a host whose connection died without closing takes frames until the relay notices, and never answers. No answer ends the session, after 5 s and a second more for each 64 KB the phone sent that no host has answered yet (by answering a request sent after it, or a ping): frames the phone's connection says it sent may still be in the system's buffers, on a slow network or at the relay, ahead of the ping. So a host whose connection died is found out that much later after a big body (a 10 MB one: about 2.5 minutes). A host that started again or left is told by the relay (`gone`), so a quiet session isn't checked. Answer at once. |
+| `{"t": "ping"}`, `{"t": "pong"}` | Is the other end still there? The relay's own pings only reach the relay. The phone pings while a request waits with nothing from the host, once its own frames have gone out: a host whose connection died without closing takes frames until the relay notices, and never answers. No answer ends the session, after 15 s (a host under a heavy load can take that long to read its connection, and is still there) and a second more for each 64 KB the phone sent that no host has answered yet (by answering a request sent after it, or a ping): frames the phone's connection says it sent may still be in the system's buffers, on a slow network or at the relay, ahead of the ping. So a host whose connection died is found out that much later after a big body (a 10 MB one: about 2.5 minutes). A host that started again or left is told by the relay (`gone`), so a quiet session isn't checked. Answer at once. |
 
 `h` holds `x-opencode-directory` and `content-type`; the host adds the engine's password
 itself. Which route answers is told by its path before any `?`: a query string never changes it,
