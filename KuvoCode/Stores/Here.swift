@@ -126,9 +126,8 @@ nonisolated struct Here: Decodable, Equatable, Sendable {
     /// Mac put in place (the real `~/.kuvo-code`'s), as at login, so it runs as its own and never
     /// under Kuvo Code's privacy permissions; else by its own `bin/kuvo-start`.
     /// (`real`: the account's own home, which launchd's agents are of: never a test's.)
-    static func startCommand(home: URL, root: String, user: uid_t = getuid(),
-                             real: Bool = !AppInfo.isHostingTests && home.standardizedFileURL == FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL)
-        -> (path: String, arguments: [String]) {
+    static func startCommand(home: URL, root: String, user: uid_t = getuid(), real: Bool? = nil) -> (path: String, arguments: [String]) {
+        let real = real ?? (!AppInfo.isHostingTests && home.standardizedFileURL == FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL)
         let agent = home.appending(path: "Library/LaunchAgents/\(RemoteServer.launchAgent).plist")
         if real, root == ".kuvo-code", FileManager.default.fileExists(atPath: agent.path) {
             return ("/bin/launchctl", ["kickstart", "gui/\(user)/\(RemoteServer.launchAgent)"])
