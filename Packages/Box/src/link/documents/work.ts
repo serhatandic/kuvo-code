@@ -16,6 +16,8 @@ import { IS_MAC } from "../home";
 import { cleanMoved, leaveMac, macDoc, macsOf, ownKey, peersOf } from "../peers/known";
 import { mergePersonalities, MOST_COUNT, readPersonalities } from "../personalities/library";
 import { foldPhones, ownPhones } from "../phones";
+import { followedSetup, lowerEpoch, setupDoc, type SetupWord } from "../setup/record";
+import { noteConflict, settleSetup } from "../setup/settle";
 import { macLink, macSign, updateLink } from "../state";
 import { bodyHash, DOC_PART, docKey, held, MOST_DOC, ownSign, readDoc, shortHash, signDoc } from "./format";
 import { assemble, type DocPart, type PendingParts } from "./parts";
@@ -72,11 +74,13 @@ export interface DocsState {
 /** A box as a Mac's peers document names it: this Mac itself, or one of its machines. */
 export type PeersBox = { key: string | null; sign: string | null; address: string | null; name: string; kind: "mac" } | (Peer & { kind: "machine" });
 
-/** A Mac's peers document: its boxes, the conversations being moved, and the machines it removed. */
+/** A Mac's peers document: its boxes, the conversations being moved, the machines it removed, and
+ * the setup it leads (PROTOCOL.md, "Your setup"). */
 export interface MacPeersBody {
   boxes: PeersBox[];
   moved: MovedSession[];
   left: string[];
+  setup?: SetupWord;
 }
 
 /** What's to go to one box while documents are worked out. */
@@ -87,17 +91,21 @@ interface Outgoing {
   reply?: boolean;
 }
 
-// Whether this box takes `kind` from `origin`: who its boxes are, only from its own Macs; phones and
-// personalities from those Macs, its peers, and itself (a copy of its own it lost count of).
+// Whether this box takes `kind` from `origin`: who its boxes are, in a setup only from its main
+// computer, and otherwise from its own Macs (a box in no setup: an older Mac's machine, a shared one;
+// kept until every box knows setups); phones and personalities from those Macs, its peers, and
+// itself (a copy of its own it lost count of).
 function takesFrom(link: LinkState, origin: string, kind: DocKind): boolean {
   const macs = macsOf(link).map(mac => macSign(link, mac)).filter(Boolean);
+  const setup = followedSetup(link);
   // (This Mac takes a copy of its own, one it lost count of.)
-  if (kind === "peers") return macs.includes(origin) || (IS_MAC && origin === ownSign(link));
+  if (kind === "peers") return setup?.role === "member" ? origin === setup.sign : macs.includes(origin) || (IS_MAC && origin === ownSign(link));
   return macs.includes(origin) || origin === ownSign(link) || peersOf(link).some(peer => peer.sign === origin);
 }
 
-// Whether the box with the key `to` takes `kind` from `origin`, as far as this box knows: one of
-// this box's Macs lists them both (or is `origin`; who a Mac's boxes are, only from that Mac).
+// Whether the box with the key `to` takes `kind` from `origin`, as far as this box knows: its setup's
+// document, or else one of this box's Macs', lists them both (or is `origin`; who a setup's or a
+// Mac's boxes are, only from its signer).
 function takenBy(link: LinkState, to: string, origin: string | null, kind: DocKind): boolean {
   // This Mac's: each of its machines takes all of this Mac's, and the phones and personalities of
   // the others it names (who its boxes are, only from this Mac).
@@ -105,8 +113,8 @@ function takenBy(link: LinkState, to: string, origin: string | null, kind: DocKi
     const peers = peersOf(link);
     return peers.some(peer => peer.key === to) && (origin === ownSign(link) || (kind !== "peers" && peers.some(peer => peer.sign === origin)));
   }
-  for (const mac of macsOf(link)) {
-    const doc = macDoc(link, mac, "peers");
+  const setup = setupDoc(link);
+  for (const doc of setup ? [setup] : macsOf(link).map(mac => macDoc(link, mac, "peers"))) {
     const boxes = Array.isArray(doc?.body.boxes) ? doc.body.boxes : [];
     if (!boxes.some(box => box?.key === to)) continue;
     if (origin === doc!.origin || (kind !== "peers" && boxes.some(box => box?.sign === origin))) return true;
@@ -125,7 +133,13 @@ const docPeers = (link: LinkState): Peer[] => peersOf(link).filter(peer => typeo
 // count), moves its count on. The document (`mine` for one of its own), or null.
 export function takeDoc(link: LinkState, envelope: unknown): TakenDoc | null {
   const doc = readDoc(envelope);
-  if (!doc || !takesFrom(link, doc.origin, doc.kind)) return null;
+  if (!doc) return null;
+  if (!takesFrom(link, doc.origin, doc.kind)) {
+    if (doc.kind === "peers") noteConflict(link, doc);
+    return null;
+  }
+  // (Never a lower epoch of the setup this box keeps, whoever signed it.)
+  if (lowerEpoch(link, doc)) return null;
   if (doc.origin === ownSign(link)) {
     if ((doc.kind === "peers" && !IS_MAC) || doc.n > MOST_COUNT) return null;
     const had = link.own?.[doc.kind];
@@ -205,7 +219,11 @@ export function macPeersBody(link: LinkState): MacPeersBody {
   try { address = addressOf(Buffer.from(link.secret!, "base64url")).toString("base64url"); } catch {}
   const me: PeersBox = { key: ownKey(link), sign: ownSign(link), address, name: String(link.name ?? "Mac").slice(0, 100), kind: "mac" };
   const current = new Set(peers.map(peer => peer.key));
-  return { boxes: [me, ...peers.map((peer): PeersBox => ({ ...peer, kind: "machine" }))], moved: cleanMoved(link.macMoved), left: (Array.isArray(link.left) ? link.left : []).filter(key => !current.has(key)) };
+  // The setup this Mac leads, while it leads it (`setup/lead.ts`).
+  const setup = followedSetup(link);
+  const leads = setup?.role === "primary" && setup.primary === me.key && setup.sign === me.sign;
+  return { boxes: [me, ...peers.map((peer): PeersBox => ({ ...peer, kind: "machine" }))], moved: cleanMoved(link.macMoved), left: (Array.isArray(link.left) ? link.left : []).filter(key => !current.has(key)),
+    ...(leads && setup ? { setup: { id: setup.id, epoch: setup.epoch, primary: setup.primary } } : {}) };
 }
 
 // What this box has, as it tells other boxes: each document's origin, kind, version and hash.
@@ -263,6 +281,8 @@ export function docsWork(state: DocsState, sender: DocSender, docs: DocsMail, { 
     sends.set(peer.key, docs);
   };
   const given: SignedDoc[] = Array.isArray(docs?.give) ? docs.give.slice(0, 64) : [];
+  // The setup as this box's Macs stand now (one more may have set it up since).
+  settleSetup(link);
   if (isObject(docs?.part)) {
     state.parts ??= new Map();
     const whole = assemble(state.parts, sender.key, docs.part);
@@ -287,6 +307,8 @@ export function docsWork(state: DocsState, sender: DocSender, docs: DocsMail, { 
     if (mac && !named && Array.isArray(doc.body.left) && doc.body.left.includes(own)) left.push(mac);
   }
   for (const mac of left.filter(each => each !== stay)) leaveMac(link, mac);
+  // Who its boxes are as the documents it took say (its setup with them), then the rest.
+  settleSetup(link);
   pruneDocs(link);
   foldPhones(link);
   const personalities = took.filter(doc => doc.kind === "personalities").map(doc => doc.body);

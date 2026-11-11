@@ -3161,6 +3161,9 @@
             "literal": "sessions.agents"
            },
            {
+            "literal": "sessions.glance"
+           },
+           {
             "literal": "shell.stop"
            },
            {
@@ -3288,6 +3291,9 @@
            },
            {
             "literal": "browser"
+           },
+           {
+            "literal": "setup"
            },
            {
             "literal": "accounts.ended"
@@ -3508,6 +3514,9 @@
             "literal": "sessions.agents"
            },
            {
+            "literal": "sessions.glance"
+           },
+           {
             "literal": "shell.stop"
            },
            {
@@ -3635,6 +3644,9 @@
            },
            {
             "literal": "browser"
+           },
+           {
+            "literal": "setup"
            }
           ]
          }
@@ -4048,6 +4060,268 @@
    "answers": {
     "200": {
      "object": {}
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/setup",
+   "answers": {
+    "200": {
+     "object": {
+      "setup": {
+       "oneOf": [
+        "string",
+        "null"
+       ]
+      },
+      "epoch": {
+       "oneOf": [
+        "number",
+        "null"
+       ]
+      },
+      "primary": {
+       "oneOf": [
+        {
+         "object": {
+          "key": "string",
+          "name": "string",
+          "kind": {
+           "oneOf": [
+            {
+             "literal": "mac"
+            },
+            {
+             "literal": "machine"
+            }
+           ]
+          }
+         }
+        },
+        "null"
+       ]
+      },
+      "you": {
+       "object": {
+        "key": {
+         "oneOf": [
+          "string",
+          "null"
+         ]
+        },
+        "role": {
+         "oneOf": [
+          {
+           "oneOf": [
+            {
+             "literal": "primary"
+            },
+            {
+             "literal": "member"
+            }
+           ]
+          },
+          "null"
+         ]
+        }
+       }
+      },
+      "computers": {
+       "list": {
+        "object": {
+         "key": "string",
+         "name": "string",
+         "kind": {
+          "oneOf": [
+           {
+            "literal": "mac"
+           },
+           {
+            "literal": "machine"
+           }
+          ]
+         },
+         "role": {
+          "oneOf": [
+           {
+            "literal": "primary"
+           },
+           {
+            "literal": "member"
+           }
+          ]
+         },
+         "app": "bool"
+        }
+       }
+      },
+      "conflict?": {
+       "object": {
+        "primary": "string",
+        "epoch": "number"
+       }
+      },
+      "startsFromOthers": {
+       "object": {
+        "value": {
+         "oneOf": [
+          {
+           "oneOf": [
+            {
+             "literal": "on"
+            },
+            {
+             "literal": "off"
+            }
+           ]
+          },
+          "null"
+         ]
+        },
+        "default": {
+         "oneOf": [
+          {
+           "literal": "on"
+          },
+          {
+           "literal": "off"
+          }
+         ]
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/setup/events",
+   "answers": {
+    "200": {
+     "object": {
+      "setup": {
+       "oneOf": [
+        "string",
+        "null"
+       ]
+      },
+      "epoch": {
+       "oneOf": [
+        "number",
+        "null"
+       ]
+      },
+      "primary": {
+       "oneOf": [
+        {
+         "object": {
+          "key": "string",
+          "name": "string",
+          "kind": {
+           "oneOf": [
+            {
+             "literal": "mac"
+            },
+            {
+             "literal": "machine"
+            }
+           ]
+          }
+         }
+        },
+        "null"
+       ]
+      },
+      "you": {
+       "object": {
+        "key": {
+         "oneOf": [
+          "string",
+          "null"
+         ]
+        },
+        "role": {
+         "oneOf": [
+          {
+           "oneOf": [
+            {
+             "literal": "primary"
+            },
+            {
+             "literal": "member"
+            }
+           ]
+          },
+          "null"
+         ]
+        }
+       }
+      },
+      "computers": {
+       "list": {
+        "object": {
+         "key": "string",
+         "name": "string",
+         "kind": {
+          "oneOf": [
+           {
+            "literal": "mac"
+           },
+           {
+            "literal": "machine"
+           }
+          ]
+         },
+         "role": {
+          "oneOf": [
+           {
+            "literal": "primary"
+           },
+           {
+            "literal": "member"
+           }
+          ]
+         },
+         "app": "bool"
+        }
+       }
+      },
+      "conflict?": {
+       "object": {
+        "primary": "string",
+        "epoch": "number"
+       }
+      },
+      "startsFromOthers": {
+       "object": {
+        "value": {
+         "oneOf": [
+          {
+           "oneOf": [
+            {
+             "literal": "on"
+            },
+            {
+             "literal": "off"
+            }
+           ]
+          },
+          "null"
+         ]
+        },
+        "default": {
+         "oneOf": [
+          {
+           "literal": "on"
+          },
+          {
+           "literal": "off"
+          }
+         ]
+        }
+       }
+      }
+     }
     }
    }
   },
@@ -7094,6 +7368,138 @@
         }
        }
       }
+     }
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/sessions/glance",
+   "answers": {
+    "200": {
+     "object": {
+      "sessions": {
+       "map": {
+        "object": {
+         "branch?": "string",
+         "additions?": "number",
+         "deletions?": "number",
+         "pull?": {
+          "object": {
+           "number": "number",
+           "url": "string",
+           "state?": {
+            "oneOf": [
+             {
+              "literal": "open"
+             },
+             {
+              "literal": "draft"
+             },
+             {
+              "literal": "merged"
+             },
+             {
+              "literal": "closed"
+             }
+            ]
+           },
+           "additions?": "number",
+           "deletions?": "number",
+           "checks?": {
+            "object": {
+             "passed": "number",
+             "failed": "number",
+             "pending": "number"
+            }
+           }
+          }
+         },
+         "account?": {
+          "object": {
+           "name": "string",
+           "label?": "string"
+          }
+         },
+         "asked?": "number"
+        }
+       }
+      }
+     }
+    },
+    "400": {
+     "object": {
+      "message": "string"
+     }
+    },
+    "503": {
+     "object": {
+      "message": "string"
+     }
+    }
+   }
+  },
+  {
+   "route": "GET kuvo/sessions/glance/events",
+   "answers": {
+    "200": {
+     "object": {
+      "sessions": {
+       "map": {
+        "object": {
+         "branch?": "string",
+         "additions?": "number",
+         "deletions?": "number",
+         "pull?": {
+          "object": {
+           "number": "number",
+           "url": "string",
+           "state?": {
+            "oneOf": [
+             {
+              "literal": "open"
+             },
+             {
+              "literal": "draft"
+             },
+             {
+              "literal": "merged"
+             },
+             {
+              "literal": "closed"
+             }
+            ]
+           },
+           "additions?": "number",
+           "deletions?": "number",
+           "checks?": {
+            "object": {
+             "passed": "number",
+             "failed": "number",
+             "pending": "number"
+            }
+           }
+          }
+         },
+         "account?": {
+          "object": {
+           "name": "string",
+           "label?": "string"
+          }
+         },
+         "asked?": "number"
+        }
+       }
+      }
+     }
+    },
+    "400": {
+     "object": {
+      "message": "string"
+     }
+    },
+    "503": {
+     "object": {
+      "message": "string"
      }
     }
    }

@@ -15,6 +15,7 @@ import { IS_MAC, K } from "../home";
 import type { AnswerPiece, RouteContext } from "../server/context";
 import { FILE_LIMIT } from "./file";
 import { readWorktrees } from "./worktree-records";
+import { linkPull } from "../glance/pulls";
 
 // git's empty tree: what a repository with no commits yet is compared with.
 const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
@@ -385,7 +386,7 @@ async function unready(directory: string, branch: string, target: string): Promi
 }
 
 /** The box's worktree `directory` is in (its record), if it's one. */
-function worktreeOf(directory: string) {
+export function worktreeOf(directory: string) {
   const real = realOr(directory);
   return readWorktrees().find(tree => real === realOr(tree.root) || real.startsWith(realOr(tree.root) + path.sep));
 }
@@ -464,6 +465,9 @@ export function comparePage(remote: string, branch: string, base: string | undef
   const named = (branch: string) => encodeURIComponent(branch).replace(/%2F/g, "/");
   return `${at}/compare/${(base ? `${named(base)}...` : "") + named(branch)}?${query}`;
 }
+
+/** Where `directory`'s repository is pushed: origin's address, or null. */
+export const originOf = async (directory: string): Promise<string | null> => (await text(directory, ["remote", "get-url", "origin"]))?.trim() || null;
 
 /** Where a pull request for `directory`'s branch goes, and whether it can go yet: its base is its
  * worktree's, from the box's worktrees, else origin's main branch. */
@@ -665,6 +669,8 @@ export async function* changesRoute(context: RouteContext): AsyncGenerator<Answe
     }
     const words = (value: unknown) => (typeof value === "string" && value.trim() ? value.trim() : undefined);
     const made = await pullRequest(directory, words(body.title), words(body.body));
+    // Made from a session (the one in view): its pull request from now on, on its row and card.
+    if (!("failed" in made) && made.url && typeof body.session === "string") await linkPull(body.session, made.url).catch(() => false);
     return yield* "failed" in made ? json(made.status, { message: made.failed }) : json(200, made);
   }
   return yield* json(404, {});
