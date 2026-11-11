@@ -5,6 +5,7 @@ import { isObject } from "../../shared/json";
 import { macPeersBody } from "../documents/work";
 import { IS_MAC } from "../home";
 import { ownKey } from "../peers/known";
+import { heldBy } from "./held";
 import { followedSetup, setupDoc, startsFromOthers } from "./record";
 import type { SETUP } from "../../shared/routes/box";
 import type { Infer } from "../../shared/shape";
@@ -15,12 +16,14 @@ type Computer = SetupView["computers"][number];
 
 /** This box's setup as a client reads it: its id and epoch, its main computer, this box's role, each
  * computer in it (its key, name, kind, role, and whether Kuvo Code's app runs it), a main computer
- * another box named at the same epoch, and the #181 switch. In no setup, nulls and no computers. */
+ * another box named at the same epoch, the #181 switch, and the machines holding this Mac back from
+ * leading one (`heldBy`). In no setup, nulls and no computers. */
 export function setupView(link: LinkState | null | undefined): SetupView {
   const setup = followedSetup(link);
   const own = link ? ownKey(link) : null;
   const switched = startsFromOthers(link);
-  if (!setup || !own) return { setup: null, epoch: null, primary: null, you: { key: own, role: null }, computers: [], startsFromOthers: switched };
+  const held = heldBy(link);
+  if (!setup || !own) return { setup: null, epoch: null, primary: null, you: { key: own, role: null }, computers: [], startsFromOthers: switched, heldBy: held };
   const boxes: unknown[] = setup.role === "member" ? (Array.isArray(setupDoc(link)?.body.boxes) ? setupDoc(link)!.body.boxes as unknown[] : [])
     : IS_MAC ? macPeersBody(link!).boxes : [{ key: own, name: String(link!.name ?? ""), kind: "machine" }];
   const computers: Computer[] = [];
@@ -37,5 +40,6 @@ export function setupView(link: LinkState | null | undefined): SetupView {
     computers,
     ...(setup.conflict ? { conflict: setup.conflict } : {}),
     startsFromOthers: switched,
+    heldBy: held,
   };
 }

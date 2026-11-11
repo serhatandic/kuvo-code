@@ -590,6 +590,14 @@ import Testing
         #expect(keeper == nil && pid("link.pid").map(alive) != true, "nothing started again")
         // Added again, it starts, as one never stopped.
         #expect(!FileManager.default.fileExists(atPath: run.appending(path: "stopped").path))
+        // Marked off meanwhile (Kuvo Code on this Mac takes it for no box): its start after a restart
+        // starts nothing, until a Mac starts it there.
+        #expect(FileManager.default.fileExists(atPath: run.appending(path: "off").path))
+        #expect(try start() == 0)
+        usleep(300_000)
+        #expect(keeper == nil, "not started again from its crontab")
+        #expect(try macLaunch() == 0)
+        #expect(!FileManager.default.fileExists(atPath: run.appending(path: "off").path), "a Mac's start: off no longer")
     }
 
     /// A Stop while a start is under way waits for it, then stops what it started, for good: the

@@ -153,13 +153,17 @@
       "steps": [
         {
           "send": "GET kuvo/setup",
-          "why": "Every box says the same facts of your setup, from its main computer's signed document; a machine in no setup yet (one never linked, as here) says so with nulls, and a Mac's box may have made its own already. The #181 switch, unset, is off on a Mac with the app and on a machine.",
+          "why": "Every box says the same facts of your setup, from its main computer's signed document; a machine in no setup yet (one never linked, as here) says so with nulls, and a Mac's box may have made its own already. The #181 switch, unset, is off on a Mac with the app and on a machine. Only a Mac is held back from leading one by its machines (`heldBy`).",
           "expect": {
-            "mac": { "status": 200, "json": { "you": { "role": "<any>" }, "computers": "<array>", "startsFromOthers": { "value": null, "default": "off" } } },
-            "machine": { "status": 200, "json": { "setup": null, "epoch": null, "primary": null, "you": { "key": null, "role": null }, "computers": [], "startsFromOthers": { "value": null, "default": "on" } } }
+            "mac": { "status": 200, "json": { "you": { "role": "<any>" }, "computers": "<array>", "startsFromOthers": { "value": null, "default": "off" }, "heldBy": "<array>" } },
+            "machine": { "status": 200, "json": { "setup": null, "epoch": null, "primary": null, "you": { "key": null, "role": null }, "computers": [], "startsFromOthers": { "value": null, "default": "on" }, "heldBy": [] } }
           }
         },
-        { "send": "POST kuvo/setup", "body": {}, "expect": { "status": 405 } }
+        { "send": "POST kuvo/setup", "body": {}, "expect": { "status": 405 } },
+        { "send": "POST kuvo/setup/judge", "body": { "probe": "Linux x86_64\nglibc\n" }, "why": "What a Mac adding a computer found there, judged by the box: nothing anyone's, here.", "expect": { "status": 200, "json": { "verdict": "free", "joins": false, "boxes": [] } } },
+        { "send": "POST kuvo/setup/judge", "body": {}, "expect": { "status": 400 } },
+        { "send": "GET kuvo/setup/judge", "expect": { "status": 405 } },
+        { "send": "GET kuvo/setup/attached", "why": "Kuvo Code on this computer saying it attached to this box is a POST.", "expect": { "status": 405 } }
       ]
     },
     {

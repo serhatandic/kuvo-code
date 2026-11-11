@@ -233,7 +233,9 @@ setups, and pairing and adding only from the main computer come later: #183.)
   "Numbers") and each of its machines has said no other Mac shares it (`shared: false` in what it
   tells of its Work Queue; one that hasn't said, an older box, holds it back, and nothing changes
   meanwhile; once it leads, a machine just added that hasn't said yet doesn't stop it, only one
-  saying `shared: true` does); and a box no Mac set up, once it numbers on its own (one paired with
+  saying `shared: true` does; a machine that never told this Mac how it numbers, or one the Work
+  Queue counts as gone, not heard for days, holds it back from neither, so one stale machine never
+  keeps a Mac out of a setup); and a box no Mac set up, once it numbers on its own (one paired with
   a phone by itself, on Linux say; one its Mac let go waits for that Mac first, as "Numbers" says,
   days). It's made once, at epoch 1, and looked at once a minute and as a machine's word on how it
   numbers changes: a Mac that stops leading (a machine of it is shared now, or it numbers through
@@ -261,21 +263,89 @@ setups, and pairing and adding only from the main computer come later: #183.)
   until they're joined in one setup.
 - **`GET kuvo/setup`** (and `kuvo/setup/events`, a line now and one at each change), on every box,
   for every client: `{setup, epoch, primary: {key, name, kind}, you: {key, role}, computers: [{key,
-  name, kind, role, app}], conflict?, startsFromOthers: {value, default}}`. Facts only, the same on
+  name, kind, role, app}], conflict?, startsFromOthers: {value, default}, heldBy: [key]}`. Facts only, the same on
   every box of one setup: `kind` is `mac` for a Mac with the app (`app`), `machine` otherwise; in no
   setup, `setup`, `epoch`, `primary` and `you.role` are null and `computers` is empty.
   `startsFromOthers` is the #181 switch (not built yet): `value` as you set it (`link.json`'s
   `startsFromOthers`, `on` or `off`), or null, and `default`, what it is then: off on the main
-  computer (and on a Mac in no setup), on everywhere else, so it follows the role.
+  computer (and on a Mac in no setup), on everywhere else, so it follows the role. `heldBy`: on a
+  Mac, the machines whose word holds it back from leading now (not said yet, or `shared: true`;
+  "Who leads one"), by key; empty elsewhere. Only the machines' word: a Mac that numbers through an
+  earlier Mac doesn't lead either, with none of them named. Once it leads, a machine not heard from
+  for days stays gone until it's heard from again (so a Mac back from a long sleep doesn't step
+  aside while the relay hasn't looked again).
 - **The card**: `run/setup-card.json`, beside link.json, nothing secret in it, for what looks at a
   computer from outside its box (the app as it opens, a Mac adding it over SSH): `{setup, epoch,
-  role, primary: {key, name, heard}, self: {key, name, kind}, app, computers, items}`. `heard`: when
+  role, primary: {key, name, heard}, self: {key, name, kind}, app, computers, items, heldBy, macs}`
+  (`macs`, the Macs that set this box up, `[{key, name}]`; none on a Mac). `heard`: when
   the main computer was last heard from, as this box counts it (ms, its own time off left out, as
   for its Macs' 30 days; null on the main computer itself); `computers`, how
   many the setup has; `items`, the Work Queue items here. Written as the box looks at its setup, as
   documents change it, and by `setup` and `leave` (`kuvo/setup/events` follows those too).
 - **Older boxes** read only `boxes`, `moved` and `left`, and keep taking `peers` from their Macs:
   nothing changes for them. A box that knows setups names `setup` in `features`.
+- **Already in a setup?** What's on a computer is judged by a box, as one verdict, which clients
+  only draw. Each box found there says what it is by its card, or, an older box with none, by a few
+  fields of its link.json (its Macs, when each was last heard from, their names, whether it has
+  phones; never its keys). What's found is a hint, never trusted: a lie changes a warning at most.
+  Per box: `self` (the judging box itself), `ours` (in its setup, or one it or its computers set
+  up, a shared machine too, unless it's in another setup now; or in a setup the judging box led
+  before it made its setup anew, its card naming it main), `elsewhere` (a member of another
+  setup, however long its main computer has been unheard of, or a machine only other Macs set up),
+  `main` (another setup's main computer, or a Mac whose app runs it in no setup), `older` (no card,
+  and a Mac set it up, it has phones, or it's Kuvo Code's own box on a Mac; or a card from before
+  cards named Macs, with no link.json fields beside it: it needs an update before it can say),
+  `free` (nothing, or no Mac set it up and it leads nothing). For the computer: `self` if any is;
+  `free` if none is anyone's; the one box's verdict; `ours` if all are; else `two` (boxes of more
+  than one setup on one computer).
+  - **`POST kuvo/setup/judge {probe}`**: what a Mac adding a computer over SSH found there, as its
+    probe printed it (`RemoteEngineInstaller.foundProbe`, only `sed`): for `~/.kuvo-code` and each
+    `~/Library/Application Support/run.kuvo.code*/box` a box ran in (only when adding to the real
+    `~/.kuvo-code`; a `~/.kuvo-code` box its Mac removed, with no `bin/kuvo-start` or with
+    `run/off`, left out), `box machine|app <folder from home>`, then `card <json>`, and for link.json
+    `link mac|macs <key>`, `link seen <key> <ms>`, `link name <key> <json string>`, `link phones
+    none|some`; then `app <folder from home>` for each Kuvo Code app's folder there
+    (`run.kuvo.code*`), whether or not a box of its own ran in it (other lines are left alone;
+    `mac`, the last Mac to set it up, is named first whatever its line's place). Answers `{verdict,
+    joins, boxes: [{folder, app, verdict, key, name, kind, setup, role, primary: {key, name,
+    heard}, macs, computers, items}]}` (`primary` of an older box: the last Mac that set it up;
+    `computers` and `items` null where its card doesn't say), judged against this box (itself, its
+    setup, its peers and Macs); 400 with no `probe`, or one over 200,000 characters. `joins`:
+    adding it joins its setup with nothing to ask, as another setup's main computer with no Kuvo
+    Code app there (no box's card says `app`, no `app` line: a Mac's app would open as a window from
+    then on, which you choose) whose setup is empty (its card says no other computer and no work
+    items: one that doesn't say is asked; a lie skips a question at most); else the verdict's own
+    question.
+  - **`POST kuvo/setup/attached`**: Kuvo Code on this computer attached to this box in place (the
+    app, once the box runs, by the box's own `bin/kuvo-link.js box route` with its own engine, as a
+    Mac reaches a machine's box over SSH), from then on said on its card (`app: true`,
+    `run/app-attached.json`), so a Mac adding this computer asks before a join. Any `box route`
+    caller may say it (the app here, a Mac over SSH, this box's own agents), and the app beside its
+    own box; 403 from a phone or the relay. It can't be undone, and can only make a join ask first.
+    Answers `{}`.
+  - **`kuvo-link.js here <root>`**: Kuvo Code on a Mac (the app, and its keeper), before it starts
+    a box, with `KUVO_HOME` its own box's folder (in its app folder) and `root` the machines'
+    folder (`.kuvo-code`, or a test's); without either (or with them the same) it stops, exit 2.
+    Prints `{verdict, use: "own"|"attach", opens: "main"|"window", runs, box, own}`, `box` and
+    `own` as `boxes` above. `runs`, for the box in `~/<root>`: `gone` where its Mac removed it
+    (`kuvo-start off` leaves `run/off`, which only a Mac's start there takes away, and then its way
+    to start, `bin/kuvo-start`, goes with its keys, leaving its link.json and card: no
+    `bin/kuvo-start`, or `run/off`, whatever still runs), else `running` (its keeper,
+    `run/box.pid`, runs `kuvo-start` now) or `stopped`; null with none there. A `gone` box is no
+    box: as with none (`box` null), and the probe leaves it out too. `opens`: `window` where the box it uses is a member
+    of a setup another computer is main of (a Mac mini another Mac set up, one that can't say yet,
+    the old main computer after a handover, a Mac that joined: never main by itself, only by Make
+    This Mac the Main One), else `main`. An app whose own box ran (its folder has `run/`
+    `setup-card.json`, `link.json`, `serve.json` or `keeper.json`, or its own engine kept your
+    sessions: an `opencode*.db` in `KUVO_ENGINE_DATA`, the engine's data folder the app gives its
+    box, as a version from before its box had a folder, or one that quit cleanly, leaves no record
+    there; never the folder alone, which the app writes in with no box) keeps using it (`ours`,
+    `free`, or `two` beside another setup's `~/.kuvo-code`); one with none uses the `~/.kuvo-code`
+    box that's there, in place (`attach`: never a second box on one computer), with that box's
+    verdict; with neither, its own. It writes nothing, and makes no folder. The app attached to a
+    box that's `stopped` starts it again in place (by launchd, through its Mac's launch agent
+    `run.kuvo.code.machine` where it's there, else its own `kuvo-start`), and says one that won't
+    start so, to try again, rather than waiting on it.
 
 ### Peers
 

@@ -16,6 +16,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ### All Changes
 
+- A computer you remove from your machines, where the removal was cut short (it went to sleep, say, before Kuvo Code finished there), no longer starts Kuvo Code's background service again at its next restart: it stays off until a Mac adds it again.
 - With machines, going from the last computer in the sidebar to the first is one more step forward, like every other: its page comes in from the side the next one always does, and the names move on a step, as on your iPhone. Before, the pages slid back past every computer between (picking a name) or only faded in (a two-finger swipe). Going back from the first computer to the last is the same, the other way. This is the same in Settings' sidebar.
 - Opening a step in a conversation at its end opens it under the pointer: what's above stays where it is, and the step opens down past the composer, as a disclosure row does. Before, the conversation jumped up to show all of it while it was still opening.
 - A right-click menu stays as it opened while sessions work: in the sidebar, the transcript, the Work Queue and elsewhere, an open menu had its items made again each time a session started or finished a step, losing the item you pointed at or closing an open submenu. Each menu now shows what's true as you open it.
