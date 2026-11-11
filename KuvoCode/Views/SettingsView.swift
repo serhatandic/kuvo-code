@@ -526,10 +526,10 @@ private struct SettingsSidebar: View {
         }
         .buttonStyle(.plain)
         .clickablePointer()
-        .contextMenu {
+        .heldContextMenu {
             // Without the tab bar, one page at a time.
             if showsTabBar {
-                Button("Open in New Tab") { openInNewTab(page, box) }
+                HeldRow.button("Open in New Tab") { openInNewTab(page, box) }
             }
         }
         .id(page)

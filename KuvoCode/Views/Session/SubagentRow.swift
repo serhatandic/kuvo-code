@@ -66,9 +66,9 @@ struct SubagentRow: View {
             .buttonStyle(TextButtonStyle(outset: true))
             .disabled(session == nil)
             .help(isExpanded ? "Hide its steps" : "Show its steps")
-            .contextMenu {
+            .heldContextMenu {
                 if let session {
-                    Button("Open Conversation") { app.tabs.openInPlace(session) }
+                    HeldRow.button("Open Conversation") { app.tabs.openInPlace(session) }
                 }
             }
 

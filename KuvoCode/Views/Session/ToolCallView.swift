@@ -96,15 +96,15 @@ struct ToolCallView: View {
                     header.foregroundStyle(.secondary)
                 }
             }
-            .contextMenu {
+            .heldContextMenu {
                 if let file, !file.isFileURL {
-                    Button("Open in Panel") { app.utilities.show(file) }
+                    HeldRow.button("Open in Panel") { app.utilities.show(file) }
                 } else if let file, FileManager.default.fileExists(atPath: file.path) {
-                    Button("Open in Panel") { app.utilities.show(file) }
-                    Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([file]) }
+                    HeldRow.button("Open in Panel") { app.utilities.show(file) }
+                    HeldRow.button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([file]) }
                 }
                 if let file {
-                    Button("Copy Path") { Clipboard.copy(file.path) }
+                    HeldRow.button("Copy Path") { Clipboard.copy(file.path) }
                 }
             }
 

@@ -562,7 +562,7 @@ private struct AttachmentPicture: View {
             view()
         }
         // Open: in the viewer, where one only its computer has opens in its app too.
-        .contextMenu { AttachmentMenu(item: item, open: view) }
+        .heldContextMenu { attachmentMenu(item, open: view) }
         .help(isMissing ? "\(item.name) couldn’t be read — click to try again" : "\(item.name) — click to look closer")
         .task(id: "\(item.contentID)\n\(tries)") {
             if tries > 0 { isMissing = false }
@@ -612,19 +612,13 @@ private struct AttachmentRow: View {
         .clickablePointer()
         .onHover { isHovering = $0 }
         .animation(.easeOut(duration: 0.12), value: isHovering)
-        .contextMenu { AttachmentMenu(item: item, open: open) }
+        .heldContextMenu { attachmentMenu(item, open: open) }
         .help(item.fileURL?.path ?? item.name)
     }
 }
 
-private struct AttachmentMenu: View {
-    let item: AttachmentItem
-    /// What Open does for one that isn't on this Mac (a machine's file, in the panel).
-    var open: (() -> Void)?
-
-    var body: some View {
-        Button("Open") { if item.fileURL == nil, let open { open() } else { item.open() } }
-        Button("Show in Finder") { item.revealInFinder() }
-            .disabled(item.fileURL == nil)
-    }
+/// `open`: what Open does for one that isn't on this Mac (a machine's file, in the panel).
+@HeldRows private func attachmentMenu(_ item: AttachmentItem, open: (() -> Void)?) -> [HeldRow] {
+    HeldRow.button("Open") { if item.fileURL == nil, let open { open() } else { item.open() } }
+    HeldRow.button("Show in Finder", disabled: item.fileURL == nil) { item.revealInFinder() }
 }

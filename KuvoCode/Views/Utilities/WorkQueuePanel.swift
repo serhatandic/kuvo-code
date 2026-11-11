@@ -76,19 +76,19 @@ struct WorkQueuePanel: View {
     }
 
     /// Rename and Remove for a category of your own (the built-in ones stay as they are).
-    @ViewBuilder private func categoryMenu(_ id: String?, count: Int, adds: Bool = true) -> some View {
+    @HeldRows private func categoryMenu(_ id: String?, count: Int, adds: Bool = true) -> [HeldRow] {
         if let id, let category = view?.categories.first(where: { $0.id == id }), !category.builtIn {
-            Button("Rename “\(category.name)”…") {
+            HeldRow.button("Rename “\(category.name)”…") {
                 name = category.name
                 naming = .some(category)
             }
-            Button("Remove “\(category.name)”", role: .destructive) { Task { await store.removeCategory(category.id, on: box) } }
-                .disabled(count > 0)
-                .help(count > 0 ? "Move its items out first." : "")
-            if adds { Divider() }
+            HeldRow.button("Remove “\(category.name)”", role: .destructive, disabled: count > 0, help: count > 0 ? "Move its items out first." : "") {
+                Task { await store.removeCategory(category.id, on: box) }
+            }
+            if adds { HeldRow.divider }
         }
         if adds {
-            Button("New Category…") {
+            HeldRow.button("New Category…") {
                 name = ""
                 naming = .some(nil)
             }
@@ -192,7 +192,7 @@ struct WorkQueuePanel: View {
                 .buttonStyle(IconButtonStyle())
                 .help("Find an item by its title or number")
                 Menu {
-                    categoryMenu(nil, count: 0)
+                    HeldMenuContent(rows: categoryMenu(nil, count: 0))
                 } label: {
                     Image(systemName: "ellipsis")
                 }
@@ -268,7 +268,7 @@ struct WorkQueuePanel: View {
         }
         .buttonStyle(FilledButtonStyle(shape: Capsule(), rest: 0))
         .accessibilityAddTraits(isOn ? .isSelected : [])
-        .contextMenu {
+        .heldContextMenu {
             if case .category(let id) = filter, id != Self.deleted { categoryMenu(id, count: count) }
         }
     }
@@ -398,7 +398,7 @@ struct WorkQueuePanel: View {
         .padding(.bottom, 6)
         .contentShape(.rect)
         .dropDestination(for: String.self) { ids, _ in drop(ids, at: category.map { .top($0) }) }
-        .contextMenu { if category != nil { categoryMenu(category, count: count) } }
+        .heldContextMenu { if category != nil { categoryMenu(category, count: count) } }
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isHeader)
     }
@@ -440,7 +440,7 @@ struct WorkQueuePanel: View {
             .buttonStyle(ListRowButtonStyle(isSelected: false))
             .padding(.horizontal, 6)
             .dropDestination(for: String.self) { ids, _ in drop(ids, at: category.map { .top($0) }) }
-            .contextMenu { if category != nil { categoryMenu(category, count: count) } }
+            .heldContextMenu { if category != nil { categoryMenu(category, count: count) } }
             .accessibilityValue(wide ? "\(count) items" : "\(count) items, \(isOpen ? "open" : "closed")")
             if isOpen { rows() }
         }
@@ -458,7 +458,7 @@ struct WorkQueuePanel: View {
         // Dragged as it's written ("#243"): dropped in the composer, it names the item.
         .draggable(item.number.map { "#\($0)" } ?? item.title)
         .dropDestination(for: String.self) { ids, _ in takesDrops && drop(ids, at: .before(item)) }
-        .contextMenu { menu(item, view: view) }
+        .heldContextMenu { WorkItemMenu.rows(item, view: view, box: box, app: app) }
         .accessibilityActions {
             ForEach(WorkQueue.moveTargets(for: item, in: view.categories)) { category in
                 Button("Move to \(category.name)") { Task { await store.move(item, to: .category(category.id), on: box) } }
@@ -491,10 +491,6 @@ struct WorkQueuePanel: View {
         }
         .padding(.horizontal, 14)
         .frame(minHeight: 30)
-    }
-
-    @ViewBuilder private func menu(_ item: WorkItem, view: WorkQueueView) -> some View {
-        WorkItemMenu(item: item, view: view, box: box)
     }
 
     /// Items dropped on a row go before it (in its category); on a category, to its top.
@@ -543,27 +539,28 @@ struct WorkItemMenu: View {
     @Environment(AppModel.self) private var app
 
     var body: some View {
+        HeldMenuContent(rows: Self.rows(item, view: view, box: box, app: app))
+    }
+
+    @HeldRows static func rows(_ item: WorkItem, view: WorkQueueView, box: String, app: AppModel) -> [HeldRow] {
         let store = app.workQueues
         // (Its order is among the items on its own computer.)
         let mates = view.items.filter { $0.category == item.category && !WorkQueue.isInProgress($0) == !WorkQueue.isInProgress(item) && $0.computer?.key == item.computer?.key }
         let index = mates.firstIndex { $0.id == item.id }
-        Menu("Move To") {
-            ForEach(WorkQueue.moveTargets(for: item, in: view.categories)) { category in
-                Button(category.name) { Task { await store.move(item, to: .category(category.id), on: box) } }
+        HeldRow.submenu("Move To") {
+            for category in WorkQueue.moveTargets(for: item, in: view.categories) {
+                HeldRow.button(category.name) { Task { await store.move(item, to: .category(category.id), on: box) } }
             }
         }
-        Button("Move to Top") { Task { await store.move(item, to: .top(item.category), on: box) } }
-            .disabled(index == 0)
-        Button("Move Up") {
+        HeldRow.button("Move to Top", disabled: index == 0) { Task { await store.move(item, to: .top(item.category), on: box) } }
+        HeldRow.button("Move Up", disabled: index.map { $0 == 0 } ?? true) {
             if let index, index > 0 { Task { await store.move(item, to: .before(mates[index - 1]), on: box) } }
         }
-        .disabled(index.map { $0 == 0 } ?? true)
-        Button("Move Down") {
+        HeldRow.button("Move Down", disabled: index.map { $0 + 1 >= mates.count } ?? true) {
             if let index, index + 1 < mates.count { Task { await store.move(item, to: .after(mates[index + 1]), on: box) } }
         }
-        .disabled(index.map { $0 + 1 >= mates.count } ?? true)
-        Divider()
-        Button("Delete", role: .destructive) { Task { await store.delete(item, on: box) } }
+        HeldRow.divider
+        HeldRow.button("Delete", role: .destructive) { Task { await store.delete(item, on: box) } }
     }
 }
 

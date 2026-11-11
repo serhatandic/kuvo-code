@@ -114,22 +114,19 @@ struct YourMessage: View {
         }
         .contentShape(.rect)
         .onHover { hovering = $0 }
-        .contextMenu {
-            Button("Copy") {
+        .heldContextMenu {
+            HeldRow.button("Copy", disabled: text.isEmpty) {
                 Clipboard.copy(text)
             }
-            .disabled(text.isEmpty)
-            ForEach(openable, id: \.session) { reference in
-                Button("Open \(reference.name)") { app.open(.session(reference.session)) }
+            for reference in openable {
+                HeldRow.button("Open \(reference.name)") { app.open(.session(reference.session)) }
             }
-            Divider()
+            HeldRow.divider
             if let fork {
-                Button("New Session From Here", action: fork)
-                    .disabled(isOffline)
+                HeldRow.button("New Session From Here", disabled: isOffline, action: fork)
             }
             if undoesChanges {
-                Button("Undo From Here…") { confirmsUndo = true }
-                    .disabled(isOffline)
+                HeldRow.button("Undo From Here…", disabled: isOffline) { confirmsUndo = true }
             }
         }
         // With VoiceOver: the message, read as one, with what shows under the pointer and in its
