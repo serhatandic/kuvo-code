@@ -431,6 +431,36 @@ test.skipIf(!canFence || !mac)("on a Mac, a command never moves or replaces its 
   }
 })
 
+// A submodule's repository is any folder below `.git/modules` (by a name with slashes, or one's own
+// `modules`), and a linked worktree's submodules are below its own folder in `.git/worktrees`: none
+// is moved out, nor another moved in with hooks and settings of its own, nor its settings written;
+// what git keeps in each as it fetches and tidies up still comes and goes.
+test.skipIf(!canFence || !mac)("on a Mac, a command never moves a submodule's repository in or out, however it's named, and git still fetches into one", () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "kuvo-sandbox-walls-modules-")))
+  try {
+    const { home, run } = walled(root)
+    const project = join(home, "app")
+    const git = join(project, ".git")
+    files(home, { "app/.git/HEAD": "ref: refs/heads/main\n", "app/.git/modules/vendor/lib/HEAD": "x\n", "app/.git/modules/vendor/lib/objects/info/packs": "\n",
+      "app/.git/modules/a/modules/b/HEAD": "x\n", "app/.git/worktrees/wt/modules/x/config": "[core]\n", "app/fake/hooks/post-checkout": "#!/bin/sh\n" })
+    mkdirSync(join(git, "objects"), { recursive: true })
+    mkdirSync(join(git, "modules", "vendor", "lib", "refs", "heads"), { recursive: true })
+    const out = run(project, [
+      tries("moves a module named with a slash out", `mv ${git}/modules/vendor/lib ${project}/lib-out`),
+      tries("moves a nested module out", `mv ${git}/modules/a/modules/b ${project}/b-out`),
+      tries("moves a folder in as a module", `mv ${project}/fake ${git}/modules/vendor/evil`),
+      tries("writes a worktree's module settings", `echo '[core] fsmonitor = evil' >> ${git}/worktrees/wt/modules/x/config`),
+      tries("fetches objects into a module", `mkdir ${git}/modules/vendor/lib/objects/ab && echo x > ${git}/modules/vendor/lib/objects/ab/cd && rm -r ${git}/modules/vendor/lib/objects/ab`),
+      tries("keeps a module's branch", `mkdir -p ${git}/modules/vendor/lib/refs/heads/feature && echo 0 > ${git}/modules/vendor/lib/refs/heads/feature/x && rm -r ${git}/modules/vendor/lib/refs/heads/feature`),
+    ].join("\n"), { KUVO_FENCE_GIT: git })
+    expect(outcomes(out)).toEqual({ "moves a module named with a slash out": "refused", "moves a nested module out": "refused", "moves a folder in as a module": "refused",
+      "writes a worktree's module settings": "refused", "fetches objects into a module": "allowed", "keeps a module's branch": "allowed" })
+    expect(existsSync(join(git, "modules", "vendor", "evil"))).toBe(false)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
 // HOME names where tools look for what runs later, but never a folder that isn't a home.
 test("HOME set to / or a folder above yours adds no home to keep", () => {
   const account = realpathSync(userInfo().homedir)

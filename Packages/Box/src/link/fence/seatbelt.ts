@@ -50,7 +50,13 @@ const param = (name: string) => `(subpath (param ${quote(name)}))`;
 // only by its own name, never by what's in it, so the folders that hold those (`.git`, a submodule's
 // or a worktree's repository, and the folders that hold those, `modules` and `worktrees`, and the
 // agents' folders) can't be made, moved or removed, only written in.
-const GIT_GUARDED = String.raw`(((modules/.+|worktrees/[^/]+)/)?(hooks(/|$)|config(\.worktree)?$|commondir$|gitdir$)|(modules|worktrees)(/[^/]+)?$)`;
+const GIT_GUARDED = String.raw`((((worktrees/[^/]+/)?modules/.+|worktrees/[^/]+)/)?(hooks(/|$)|config(\.worktree)?$|commondir$|gitdir$)|(modules|worktrees)(/[^/]+)?$|worktrees/[^/]+/modules$)`;
+// A submodule's repository is any folder below `modules` (`vendor/lib`, one's own `modules/b`), so
+// none of those folders is made, moved or removed by a command: one moved in would bring its own
+// hooks and settings. But for what git keeps in each as it fetches and tidies up (its objects, refs,
+// logs), whose folders come and go.
+const MODULE_FOLDERS = String.raw`/(worktrees/[^/]+/)?modules/.+`;
+const MODULE_KEPT = String.raw`/(worktrees/[^/]+/)?modules/.+/(objects/([0-9a-f][0-9a-f]|pack|info|tmp_objdir-[^/]+)|(refs|logs|lfs|rr-cache)(/.+)?|info)$`;
 const AGENTS_GUARDED = String.raw`\.claude/settings(\.local)?\.json|\.mcp\.json|\.codex/(config\.toml|hooks\.json|\.env|rules(/.*)?)|\.cursor/(hooks|mcp)\.json|\.(gemini|grok)/settings\.json|\.grok/(config\.toml|sandbox\.toml|lsp\.json|(hooks|plugins|agents|workflows)(/.*)?)|\.(claude|cursor)/hooks(/.*)?|\.(claude|codex|cursor|gemini|grok)`;
 /** Every kind of write, by name, and `file-write*`. A rule on a kind by its name is checked before any
  * on `file-write*`, whatever their order, so the profile names them all wherever it carves one out of
@@ -215,6 +221,8 @@ export function seatbeltProfile(policy: FencePolicy, options: SeatbeltOptions): 
   deny(WRITE, under("WORK_RE", "/" + GUARDED), under("GIT_RE", "/" + GIT_GUARDED),
     ...Array.from({ length: MOST_FOLDERS }, (_, at) => under(`ALLOW${at}_RE`, "/" + GUARDED)));
   deny(WRITE, ...homes.map(home => inHome(home, `"/(.*/)?(" (param "KEPT") ")(/|$)"`)));
+  deny("file-write-create file-write-unlink", `(require-all ${under("GIT_RE", MODULE_FOLDERS)} (vnode-type DIRECTORY))`);
+  allow("file-write-create file-write-unlink", `(require-all ${under("GIT_RE", MODULE_KEPT)} (vnode-type DIRECTORY))`);
 
   out.push(";; your secrets");
   // Never read, nor moved, named again or replaced: one in a folder commands write (cargo's sign-in
