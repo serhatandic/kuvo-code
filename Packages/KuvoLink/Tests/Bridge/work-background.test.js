@@ -1152,8 +1152,14 @@ test("a finish heard twice while the engine can't read it at all wakes its lead 
   await lookingAgain;
   await time.pass(5 * SECONDS);
   await time.pass(60 * SECONDS);
-  reads.stop();
   assert.equal(finished().length, 1, "its lead woken once");
+  // Told something new, it finishes again, its reply still unread in time: told again.
+  asked("Also check #444.");
+  said(long("#444 appears nowhere."));
+  await watch(ended());
+  await time.pass(5 * SECONDS);
+  reads.stop();
+  assert.equal(finished().length, 2);
 });
 
 test("a finish whose delivery took but whose answer was lost is sent again under its own id: its lead hears it once", async () => {

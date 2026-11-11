@@ -1029,7 +1029,7 @@ client shows it from the same routes.
   there as a letter with `note`, "Peers", delivered there as it would have been here). Clients mark rows by `kuvo.by`.
   One whose answer was lost (the engine slow to answer) may have arrived: it goes again alone under
   the same message `id` (`wakes.json`'s `tried`), which a conversation takes once, and what came
-  meanwhile after it. A finish is told once however many ways it's heard of at once (its run's end,
+  meanwhile after it (one message at a time to each conversation). A finish is told once however many ways it's heard of at once (its run's end,
   what it left running ending, the box catching up as its engine's stream connects again), even when
   its reply can't be read in time: `told.json` keeps when the session last changed as it was told
   (`upto`, by its engine's clock, and `unread` when its reply couldn't be read), and a look that saw

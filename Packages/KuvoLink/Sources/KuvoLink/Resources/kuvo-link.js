@@ -9293,6 +9293,7 @@ var LOCK5 = path41.join(WORK_FOLDER, ".wakes.lock");
 var GATHER = 4000;
 var SETTLE = 1e4;
 var SUBSTANCE = 200;
+var sending = new Set;
 var readWaiting = (file) => {
   try {
     const kept = JSON.parse(fs39.readFileSync(file, "utf8"));
@@ -9492,6 +9493,18 @@ function workWatcher(source, targets, { gather = GATHER, schedule = setTimeout, 
   });
   const send = async (starter) => {
     due.delete(starter);
+    const key = `${file}
+${starter}`;
+    if (sending.has(key))
+      return soon(starter);
+    sending.add(key);
+    try {
+      await sendNow(starter);
+    } finally {
+      sending.delete(key);
+    }
+  };
+  const sendNow = async (starter) => {
     const waiting = changeWaiting(file, (all) => {
       const one = all[starter];
       delete all[starter];
@@ -9502,14 +9515,18 @@ function workWatcher(source, targets, { gather = GATHER, schedule = setTimeout, 
     const tried = waiting.tried && typeof waiting.tried.id === "string" && waiting.tried.lines > 0 && waiting.tried.lines <= waiting.lines.length ? waiting.tried : null;
     const stopped = readStopped(stoppedFile);
     const unstopped = (lines) => lines.filter((line) => !stopped[/\(address (\S+?)\)/.exec(line)?.[1] ?? ""]);
-    const lines = tried ? waiting.lines.slice(0, tried.lines) : unstopped(waiting.lines);
-    const rest = tried ? unstopped(waiting.lines.slice(tried.lines)) : [];
+    const first = unstopped(tried ? waiting.lines.slice(0, tried.lines) : waiting.lines);
+    const after = tried ? unstopped(waiting.lines.slice(tried.lines)) : [];
+    const again = tried && first.length ? tried : null;
+    const lines = again ? first : [...first, ...after];
+    const rest = again ? after : [];
     if (!lines.length)
       return;
-    const asks = tried ? tried.asks : waiting.asks;
-    const restAsks = rest.some((each) => each.startsWith("[Session asks]"));
+    const isAsk = (line) => line.startsWith("[Session asks]");
+    const asks = again ? again.asks : tried ? lines.some(isAsk) : waiting.asks;
+    const restAsks = rest.some(isAsk);
     const whole = [...lines, ...rest];
-    const id = tried?.id ?? messageID();
+    const id = again?.id ?? messageID();
     const place = frozen().has(starter) ? undefined : await placeOfSession(starter, targets()).catch(() => {
       return;
     });
@@ -9520,6 +9537,7 @@ function workWatcher(source, targets, { gather = GATHER, schedule = setTimeout, 
       return void failures.delete(starter);
     if (place === null && (bridgeRuns() || now() - waiting.since > NOTE_MEMORY))
       return;
+    let posted = false;
     try {
       if (!place)
         throw new Error("Not reached.");
@@ -9528,10 +9546,11 @@ function workWatcher(source, targets, { gather = GATHER, schedule = setTimeout, 
           return;
         throw new Error("Archived.");
       }
+      posted = true;
       await sendInto(place.target, starter, { id, text: wakeText(lines), delivery, metadata: boxNote("Its sessions", line) }, { from: "Its sessions", words: line });
       failures.delete(starter);
     } catch {
-      putBack(starter, { lines: whole, asks: asks || restAsks, since: waiting.since, tried: { id, lines: lines.length, asks } });
+      putBack(starter, { lines: whole, asks: asks || restAsks, since: waiting.since, ...posted || again ? { tried: { id, lines: lines.length, asks } } : {} });
       const tries = (failures.get(starter) ?? 0) + 1;
       failures.set(starter, tries);
       soon(starter, Math.min(300000, gather * 2 ** tries));
@@ -9541,7 +9560,7 @@ function workWatcher(source, targets, { gather = GATHER, schedule = setTimeout, 
       return;
     changeWaiting(file, (all) => {
       const now = all[starter];
-      all[starter] = now?.tried ? { ...now, lines: [...now.lines, ...rest], asks: now.asks || restAsks } : { lines: [...rest, ...now?.lines ?? []], asks: restAsks || Boolean(now?.asks), since: waiting.since };
+      all[starter] = { lines: [...rest, ...now?.lines ?? []], asks: restAsks || Boolean(now?.asks), since: waiting.since };
     });
     soon(starter);
   };
@@ -9678,6 +9697,11 @@ function workWatcher(source, targets, { gather = GATHER, schedule = setTimeout, 
     if (isArchived(session) || staysStopped(session.id, last)) {
       letGoOf(session.id);
       return noteTold(session.id, { reply: last?.id ?? undefined });
+    }
+    if (!last) {
+      const active = await call(source, "GET", "/api/session/active", undefined, signal).catch(() => null);
+      if ((Array.isArray(active) ? active : isObject(active) ? Object.keys(active) : []).includes(session.id))
+        return;
     }
     const folder = session.location?.directory ?? session.directory;
     const still = await background.of(session.id, folder).catch(() => null);

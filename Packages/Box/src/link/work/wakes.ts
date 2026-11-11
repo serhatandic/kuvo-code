@@ -50,6 +50,11 @@ export const SETTLE = 10_000;
  * length in characters): a timer's "nothing new yet" isn't news. */
 export const SUBSTANCE = 200;
 
+// The conversations being written to now, by wakes file: one message at a time to each, from
+// whichever watcher (each connection to the engine makes one), so what one puts back, to go again
+// as it was, is never overtaken.
+const sending = new Set<string>();
+
 /** What waits to be told a conversation: its lines, whether one is an ask (sent to be read at its
  * next step, not after its turn), and since when (ms). `tried`: its first lines went once already
  * under this id, and the answer was lost (the engine slow, say), so they may have arrived: they go
@@ -364,25 +369,39 @@ export function workWatcher(source: Target, targets: () => Target[], { gather = 
   });
   const send = async (starter: string) => {
     due.delete(starter);
+    // (One at a time to each, whichever watcher sends it: what one puts back goes first.)
+    const key = `${file}\n${starter}`;
+    if (sending.has(key)) return soon(starter);
+    sending.add(key);
+    try {
+      await sendNow(starter);
+    } finally {
+      sending.delete(key);
+    }
+  };
+  const sendNow = async (starter: string) => {
     const waiting = changeWaiting(file, all => {
       const one = all[starter];
       delete all[starter];
       return one;
     });
     if (!waiting) return;
-    // What went once already, its answer lost: again as it was, alone, under the same id (taken once
-    // if it arrived), and what came after it next. One stopped since it was gathered: nothing to
-    // tell of it.
+    // What went once already, its answer lost: again alone, under the same id (taken once if it
+    // arrived), and what came after it next. One stopped since it was gathered: nothing to tell of it.
     const tried = waiting.tried && typeof waiting.tried.id === "string" && waiting.tried.lines > 0 && waiting.tried.lines <= waiting.lines.length ? waiting.tried : null;
     const stopped = readStopped(stoppedFile);
     const unstopped = (lines: string[]) => lines.filter(line => !stopped[/\(address (\S+?)\)/.exec(line)?.[1] ?? ""]);
-    const lines = tried ? waiting.lines.slice(0, tried.lines) : unstopped(waiting.lines);
-    const rest = tried ? unstopped(waiting.lines.slice(tried.lines)) : [];
+    const first = unstopped(tried ? waiting.lines.slice(0, tried.lines) : waiting.lines);
+    const after = tried ? unstopped(waiting.lines.slice(tried.lines)) : [];
+    const again = tried && first.length ? tried : null;
+    const lines = again ? first : [...first, ...after];
+    const rest = again ? after : [];
     if (!lines.length) return;
-    const asks = tried ? tried.asks : waiting.asks;
-    const restAsks = rest.some(each => each.startsWith("[Session asks]"));
+    const isAsk = (line: string) => line.startsWith("[Session asks]");
+    const asks = again ? again.asks : tried ? lines.some(isAsk) : waiting.asks;
+    const restAsks = rest.some(isAsk);
     const whole = [...lines, ...rest];
-    const id = tried?.id ?? messageID();
+    const id = again?.id ?? messageID();
     // Gone for sure: nothing to tell. Not to be reached now (the engine starting again, the coding
     // agents' bridge not running, whose it may be, or moving to or from another computer, when a
     // turn here would be left behind): kept, as long as a note would be, and tried again a little
@@ -394,6 +413,7 @@ export function workWatcher(source: Target, targets: () => Target[], { gather = 
     const about = [...new Set(whole.map(each => /\(address (\S+?)\)/.exec(each)?.[1]).filter((each): each is string => Boolean(each)))];
     if (place === null && tellMovedAway(starter, wakeText(whole), { from: "Its sessions", words: wakeLineShown(whole), line: wakeLineShown(whole), delivery: asks || restAsks ? "steer" : "queue", about }, now())) return void failures.delete(starter);
     if (place === null && (bridgeRuns() || now() - waiting.since > NOTE_MEMORY)) return;
+    let posted = false;
     try {
       if (!place) throw new Error("Not reached.");
       // Archived (from any app): kept until it's brought back, as its own wake-ups and goal wait,
@@ -403,23 +423,22 @@ export function workWatcher(source: Target, targets: () => Target[], { gather = 
         throw new Error("Archived.");
       }
       // Stopped by the user: it waits there with the queue, as theirs does.
+      posted = true;
       await sendInto(place.target, starter, { id, text: wakeText(lines), delivery, metadata: boxNote("Its sessions", line) }, { from: "Its sessions", words: line });
       failures.delete(starter);
     } catch {
-      // (It may have arrived, its answer lost: kept with its id, to go again as it was.)
-      putBack(starter, { lines: whole, asks: asks || restAsks, since: waiting.since, tried: { id, lines: lines.length, asks } });
+      // (Sent, its answer lost, it may have arrived: kept with its id, to go again as it was.)
+      putBack(starter, { lines: whole, asks: asks || restAsks, since: waiting.since, ...(posted || again ? { tried: { id, lines: lines.length, asks } } : {}) });
       const tries = (failures.get(starter) ?? 0) + 1;
       failures.set(starter, tries);
       soon(starter, Math.min(300_000, gather * 2 ** tries));
       return;
     }
     if (!rest.length) return;
-    // (Ahead of what came meanwhile, unless that's itself waiting to go again as it was.)
+    // (Ahead of what came meanwhile.)
     changeWaiting(file, all => {
       const now = all[starter];
-      all[starter] = now?.tried
-        ? { ...now, lines: [...now.lines, ...rest], asks: now.asks || restAsks }
-        : { lines: [...rest, ...(now?.lines ?? [])], asks: restAsks || Boolean(now?.asks), since: waiting.since };
+      all[starter] = { lines: [...rest, ...(now?.lines ?? [])], asks: restAsks || Boolean(now?.asks), since: waiting.since };
     });
     soon(starter);
   };
@@ -546,6 +565,12 @@ export function workWatcher(source: Target, targets: () => Target[], { gather = 
     if (isArchived(session) || staysStopped(session.id, last)) {
       letGoOf(session.id);
       return noteTold(session.id, { reply: last?.id ?? undefined });
+    }
+    // Its reply unread (the engine slow), and at work again by now: told as that turn ends, so what
+    // that turn writes meanwhile isn't taken as told here.
+    if (!last) {
+      const active = await call(source, "GET", "/api/session/active", undefined, signal).catch(() => null);
+      if ((Array.isArray(active) ? active : isObject(active) ? Object.keys(active) : []).includes(session.id)) return;
     }
     const folder = session.location?.directory ?? session.directory;
     const still = await background.of(session.id, folder).catch(() => null);
