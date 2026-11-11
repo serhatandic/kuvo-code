@@ -83,3 +83,19 @@ test("a project's git worktree made elsewhere (`git worktree add /tmp/try`) is f
     rmSync(root, { recursive: true, force: true })
   }
 })
+
+test("a project's other folders are filed under it, and so is a worktree of one, but not one that's a project of its own or a removed project's (#311)", async () => {
+  const web = "/work/kuvo-web", admin = "/work/kuvo-admin", site = "/work/site", webTree = "/trees/web-otter"
+  mkdirSync(join(home, "box"), { recursive: true })
+  writeFileSync(join(home, "box", "worktrees.json"), JSON.stringify({ worktrees: [{ project: web, root: webTree, folder: webTree, branch: "kuvo/web-otter" }] }))
+  writeFileSync(join(home, "box", "projects.json"), JSON.stringify({ projects: [
+    { directory: shop, name: "Kuvo Code", folders: [web, admin, site] },
+    { directory: site, folders: [] },
+    { directory: "/work/old", folders: ["/work/legacy"], removed: true },
+  ] }))
+  const [answer] = await Array.fromAsync(ask("kuvo/projects"))
+  // (Those of the test before, made with git, may still be listed.)
+  expect(answer.worktrees).toMatchObject({ [web]: shop, [admin]: shop, [webTree]: shop })
+  expect(answer.worktrees[site]).toBeUndefined()
+  expect(answer.worktrees["/work/legacy"]).toBeUndefined()
+})

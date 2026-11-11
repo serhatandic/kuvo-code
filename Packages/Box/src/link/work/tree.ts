@@ -203,7 +203,7 @@ export async function describeWork(listed: Listed, working: Set<string>, { repli
   const reply = !replies || state === "working" ? null
     : state === "stopped" || state === "failed" ? replyIn(lastTurn(page))
     : read ? replyIn(page) : await lastReplyOf(listed, signal);
-  const project = folder === CHATS ? undefined : projectNameOf(folder);
+  const project = folder === CHATS ? undefined : projectNameOf(folder, data);
   return {
     session: data.id,
     title: data.title || "New Session",
