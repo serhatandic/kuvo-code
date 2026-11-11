@@ -540,15 +540,24 @@ final class AppModel {
                                               home: Self.hereHome, checked: Self.engineOverride == nil)
                 guard launch == self.launch else { return }
                 switch outcome {
-                case .attach(let here):
+                case .attach(var here):
                     attached = here
                     BackgroundWork.heldBack = "This Mac’s box is the one already here, which starts on its own."
-                    if let binary, let script = BoxProcess.script { await Here.sayAttached(engine: binary, script: script, home: Self.hereHome) }
+                    if let binary, let script = BoxProcess.script {
+                        await Here.sayAttached(engine: binary, script: script, home: Self.hereHome)
+                        // Stopped (its keeper ended: only a login or a restart starts it again by
+                        // itself): started in place, as its start at login does.
+                        if here.runs == .stopped, let now = await Here.started(engine: binary, script: script, appBox: BoxProcess.home,
+                                                                               engineData: engineFolders.dataDirectory, home: Self.hereHome),
+                           now.use == .attach {
+                            here = now
+                        }
+                    }
                     guard launch == self.launch else { return }
-                    // (Its keeper starts it at login, and again as it stops: one that isn't running now
-                    // is said so, to try again, rather than waited on.)
+                    attached = here
+                    // One that won't start is said so, to try again, rather than waited on.
                     guard here.runs == .running else {
-                        throw MachineFailure(message: "The box already on this Mac isn’t running. Try again in a moment.")
+                        throw MachineFailure(message: "The box already on this Mac didn’t start. Try again in a moment.")
                     }
                     return
                 case .unknown(let why):

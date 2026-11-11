@@ -23,7 +23,7 @@ import Testing
         let script = """
             #!/bin/sh
             \(hereFails ? "[ \"$5\" = here ] && exit 3" : "")
-            [ "$2" = "--config=/dev/null" ] && shift 3 && exec '\(node.path(percentEncoded: false))' "$@"
+            case "$5" in here|box) shift 3; exec '\(node.path(percentEncoded: false))' "$@";; esac
             [ "$1" = "run" ] && exit 1
             echo '{"url":"\(engine.url)"}'
             while [ -d '\(folder.path(percentEncoded: false))' ]; do sleep 0.05; done
@@ -86,20 +86,27 @@ import Testing
     }
 
     /// MacBook set up this Mac as a machine, and hasn't been heard from for 40 days. Its box `runs`:
-    /// its keeper running (`bin/kuvo-start`, until the test's folder goes), stopped (its way to start
-    /// there), or gone (MacBook removed it: its way to start went, its card stayed).
-    private func memberOfMacBooks(runs: Here.Runs = .running) throws {
+    /// its keeper running (`bin/kuvo-start keep`, until the test's folder goes), stopped (its way to
+    /// start there: which starts its keeper, as a box's does, where it `starts`), or gone (MacBook
+    /// removed it: its way to start went, its card stayed).
+    private func memberOfMacBooks(runs: Here.Runs = .running, starts: Bool = true) throws {
         let box = home.appending(path: RemoteEngineInstaller.root)
         if runs != .gone {
             let start = box.appending(path: "bin/kuvo-start")
+            let pid = box.appending(path: "run/box.pid").path(percentEncoded: false)
             try FileManager.default.createDirectory(at: start.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try "#!/bin/sh\nwhile [ -d '\(folder.path(percentEncoded: false))' ]; do sleep 0.2; done\n".write(to: start, atomically: true, encoding: .utf8)
+            try FileManager.default.createDirectory(at: box.appending(path: "run"), withIntermediateDirectories: true)
+            try """
+                #!/bin/sh
+                if [ "$1" = keep ]; then while [ -d '\(folder.path(percentEncoded: false))' ]; do sleep 0.2; done; exit 0; fi
+                \(starts ? "sh \"$0\" keep </dev/null >/dev/null 2>&1 & echo $! >'\(pid)'" : "exit 0")
+
+                """.write(to: start, atomically: true, encoding: .utf8)
             if runs == .running {
                 let keeper = Process()
                 keeper.executableURL = URL(filePath: "/bin/sh")
-                keeper.arguments = [start.path(percentEncoded: false)]
+                keeper.arguments = [start.path(percentEncoded: false), "keep"]
                 try keeper.run()
-                try FileManager.default.createDirectory(at: box.appending(path: "run"), withIntermediateDirectories: true)
                 try Data(String(keeper.processIdentifier).utf8).write(to: box.appending(path: "run/box.pid"))
             }
         }
@@ -126,15 +133,25 @@ import Testing
         #expect(card?["app"] as? Bool == true)
     }
 
-    /// The box here isn't running now (its keeper starts it at login): the app attached to it says
-    /// so, to try again, rather than wait on it; and starts nothing of its own.
-    @Test func aBoxThatIsntRunningIsSaidSo() async throws {
+    /// The box here isn't running now (its keeper ended, and only a login starts it by itself): the
+    /// app starts it in place, as its start at login does; and starts nothing of its own.
+    @Test func aStoppedBoxIsStartedInPlace() async throws {
         var app: AppModel?
         defer { cleanUp(app) }
         app = try await started { try memberOfMacBooks(runs: .stopped) }
+        #expect(app?.attached?.runs == .running)
+        #expect(app?.engine != .ready)
+        #expect(!FileManager.default.fileExists(atPath: BoxProcess.home.path))
+    }
+
+    /// One that won't start is said so, to try again, rather than waited on.
+    @Test func aBoxThatWontStartIsSaidSo() async throws {
+        var app: AppModel?
+        defer { cleanUp(app) }
+        app = try await started { try memberOfMacBooks(runs: .stopped, starts: false) }
         #expect(app?.attached?.runs == .stopped)
         guard case .failed(let reason) = app?.engine else { Issue.record("waits on it: \(String(describing: app?.engine))"); return }
-        #expect(reason.contains("isn’t running"))
+        #expect(reason.contains("didn’t start"))
         #expect(!FileManager.default.fileExists(atPath: BoxProcess.home.path))
     }
 
@@ -229,5 +246,16 @@ import Testing
         #expect(Here.machinesRoot(bundleID: "run.kuvo.code.demo", hostingTests: false, given: ".kuvo-code-demo") == ".kuvo-code-demo")
         #expect(Here.machinesRoot(bundleID: "Run.Kuvo.Code", hostingTests: false, given: ".kuvo-code") == ".kuvo-code")
         #expect(Here.machinesRoot(bundleID: "run.kuvo.code.tests", hostingTests: true, given: ".kuvo-code") == ".kuvo-code", "the tests' home is their own")
+    }
+
+    /// The files the app counts as its own box having run, when the box can't be asked, are the box's
+    /// own: one the box stopped counting would make the app keep a box the box would attach.
+    @Test func whatCountsAsItsOwnBoxIsTheBoxs() throws {
+        let judge = URL(filePath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appending(path: "Packages/Box/src/link/setup/judge.ts")
+        let source = try String(contentsOf: judge, encoding: .utf8)
+        let line = try #require(source.split(separator: "\n").first { $0.hasPrefix("const OWN_BOX_RAN = [") })
+        let files = line.matches(of: /"([^"]+)"/).map { String($0.1) }
+        #expect(files == Here.ownBoxFiles)
     }
 }
