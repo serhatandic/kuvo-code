@@ -3138,6 +3138,16 @@ final class Workspace {
         }
     }
 
+    /// Mark All as Read on each of `boxes` ("mac", or a machine's id): its box reads everything new
+    /// there (`POST kuvo/sessions/read`, KuvoLink's PROTOCOL.md "What's been read"), once a box, and
+    /// each read comes back as `session.viewed`, as one made elsewhere does. What asks you stays.
+    func markAllRead(on boxes: [String]) async {
+        let clients = boxes.compactMap { self.boxes?($0) }
+        await withTaskGroup(of: Void.self) { group in
+            for client in clients { group.addTask { _ = try? await client.send("POST", "kuvo/sessions/read") } }
+        }
+    }
+
     /// Read elsewhere, as its box says: the same as `markViewed`, without telling the box again.
     private func sawViewed(_ id: String, idle: Milliseconds) {
         readElsewhere[id] = max(idle, readElsewhere[id] ?? 0)
