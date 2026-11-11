@@ -14818,7 +14818,7 @@ function rankedPrimary(link = readLink(), file = NUMBERS_FILE, now = Date.now())
   return { away: true };
 }
 var LOST_FOR = 3 * 86400000;
-function goneOf(link, now) {
+function goneOf(link, now = Date.now()) {
   const gone = new Set;
   const reach = readReach();
   const checked = readReach(PEER_CHECKED);
@@ -15170,13 +15170,26 @@ function blockArrived(give, primary, options = {}) {
 import fs53 from "node:fs";
 import path56 from "node:path";
 
+// Packages/Box/src/link/setup/held.ts
+function heldBy(link, now = Date.now()) {
+  if (!IS_MAC || !link)
+    return [];
+  const gone = goneOf(link, now);
+  const leading = followedSetup(link)?.role === "primary";
+  return peersOf(link).filter((peer) => {
+    const told = gone.has(peer.key) ? null : readTold2(peer.key);
+    return told !== null && (leading ? told.shared === true : told.shared !== false);
+  }).map((peer) => peer.key);
+}
+
 // Packages/Box/src/link/setup/view.ts
 function setupView(link) {
   const setup = followedSetup(link);
   const own = link ? ownKey(link) : null;
   const switched = startsFromOthers(link);
+  const held = heldBy(link);
   if (!setup || !own)
-    return { setup: null, epoch: null, primary: null, you: { key: own, role: null }, computers: [], startsFromOthers: switched };
+    return { setup: null, epoch: null, primary: null, you: { key: own, role: null }, computers: [], startsFromOthers: switched, heldBy: held };
   const boxes = setup.role === "member" ? Array.isArray(setupDoc(link)?.body.boxes) ? setupDoc(link).body.boxes : [] : IS_MAC ? macPeersBody(link).boxes : [{ key: own, name: String(link.name ?? ""), kind: "machine" }];
   const computers = [];
   for (const box of boxes.slice(0, 64)) {
@@ -15192,7 +15205,8 @@ function setupView(link) {
     you: { key: own, role: setup.role },
     computers,
     ...setup.conflict ? { conflict: setup.conflict } : {},
-    startsFromOthers: switched
+    startsFromOthers: switched,
+    heldBy: held
   };
 }
 
@@ -15216,7 +15230,8 @@ function cardNow() {
     self: { key: own, name: String(link?.name ?? ""), kind: IS_MAC ? "mac" : "machine" },
     app: IS_MAC,
     computers: view.computers.length,
-    items
+    items,
+    heldBy: view.heldBy
   };
 }
 var written2 = "";
@@ -15230,13 +15245,10 @@ function writeCard() {
 }
 
 // Packages/Box/src/link/setup/lead.ts
-function leadsNow(link) {
+function leadsNow(link, now = Date.now()) {
   if (!IS_MAC)
     return !macsOf(link).length && "self" in rankedPrimary(link);
-  if (!("self" in rankedPrimary(link)))
-    return false;
-  const said = peersOf(link).map((peer) => readTold2(peer.key)?.shared);
-  return followedSetup(link)?.role === "primary" ? !said.includes(true) : said.every((shared) => shared === false);
+  return "self" in rankedPrimary(link) && !heldBy(link, now).length;
 }
 function noteKeyNow(link) {
   const own = IS_MAC ? ownKey(link) : null;

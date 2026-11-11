@@ -17,7 +17,8 @@ export const SETUP_CARD = path.join(RUN, "setup-card.json");
 
 /** What the card says: the setup and its epoch, this box's role, its main computer (when it was last
  * heard from, ms; null on the main computer itself), this box, whether Kuvo Code's app runs it, how
- * many computers the setup has, and how many Work Queue items are here. */
+ * many computers the setup has, how many Work Queue items are here, and the machines holding this Mac
+ * back from leading one (`heldBy`). */
 export function cardNow(): Record<string, unknown> {
   const link = readLink();
   const view = setupView(link);
@@ -35,6 +36,7 @@ export function cardNow(): Record<string, unknown> {
     app: IS_MAC,
     computers: view.computers.length,
     items,
+    heldBy: view.heldBy,
   };
 }
 

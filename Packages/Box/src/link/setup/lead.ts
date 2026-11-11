@@ -8,11 +8,11 @@
 import { noteDocsChanged } from "../documents/changed";
 import { ownSign } from "../documents/format";
 import { IS_MAC } from "../home";
-import { macsOf, ownKey, peersOf } from "../peers/known";
+import { macsOf, ownKey } from "../peers/known";
 import { updateLink } from "../state";
-import { readTold } from "../work-queue/told";
 import { rankedPrimary } from "../work-queue/numbers";
 import { writeCard } from "./card";
+import { heldBy } from "./held";
 import { followedSetup, newSetupID } from "./record";
 import { settleSetup } from "./settle";
 import type { LinkState } from "../state";
@@ -21,15 +21,14 @@ import type { LinkState } from "../state";
  * it and its peers know (it numbers from none other) and no machine of it says another Mac shares it;
  * to start leading (or lead again), each machine must have said so (one that hasn't, an older box,
  * holds it back: nothing changes meanwhile), while one that leads goes on through a machine that
- * hasn't said yet (one just added, its first word still on its way). A machine leads while no Mac
- * set it up and it numbers on its own. */
-export function leadsNow(link: LinkState): boolean {
+ * hasn't said yet (one just added, its first word still on its way); one that never told it how it
+ * numbers, or is gone, counts for neither (`heldBy`). A machine leads while no Mac set it up and it
+ * numbers on its own. */
+export function leadsNow(link: LinkState, now = Date.now()): boolean {
   // (A machine its Mac let go waits for that Mac as numbering always has, days, before it numbers
   // on its own: never at once.)
   if (!IS_MAC) return !macsOf(link).length && "self" in rankedPrimary(link);
-  if (!("self" in rankedPrimary(link))) return false;
-  const said = peersOf(link).map(peer => readTold(peer.key)?.shared);
-  return followedSetup(link)?.role === "primary" ? !said.includes(true) : said.every(shared => shared === false);
+  return "self" in rankedPrimary(link) && !heldBy(link, now).length;
 }
 
 /** This Mac's static key noted (in place, under link.json's lock): one made anew since the last is

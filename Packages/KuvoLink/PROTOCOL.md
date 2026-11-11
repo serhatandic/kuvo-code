@@ -223,7 +223,9 @@ setups, and pairing and adding only from the main computer come later: #183.)
   "Numbers") and each of its machines has said no other Mac shares it (`shared: false` in what it
   tells of its Work Queue; one that hasn't said, an older box, holds it back, and nothing changes
   meanwhile; once it leads, a machine just added that hasn't said yet doesn't stop it, only one
-  saying `shared: true` does); and a box no Mac set up, once it numbers on its own (one paired with
+  saying `shared: true` does; a machine that never told this Mac how it numbers, or one the Work
+  Queue counts as gone, not heard for days, holds it back from neither, so one stale machine never
+  keeps a Mac out of a setup); and a box no Mac set up, once it numbers on its own (one paired with
   a phone by itself, on Linux say; one its Mac let go waits for that Mac first, as "Numbers" says,
   days). It's made once, at epoch 1, and looked at once a minute and as a machine's word on how it
   numbers changes: a Mac that stops leading (a machine of it is shared now, or it numbers through
@@ -251,15 +253,17 @@ setups, and pairing and adding only from the main computer come later: #183.)
   until they're joined in one setup.
 - **`GET kuvo/setup`** (and `kuvo/setup/events`, a line now and one at each change), on every box,
   for every client: `{setup, epoch, primary: {key, name, kind}, you: {key, role}, computers: [{key,
-  name, kind, role, app}], conflict?, startsFromOthers: {value, default}}`. Facts only, the same on
+  name, kind, role, app}], conflict?, startsFromOthers: {value, default}, heldBy: [key]}`. Facts only, the same on
   every box of one setup: `kind` is `mac` for a Mac with the app (`app`), `machine` otherwise; in no
   setup, `setup`, `epoch`, `primary` and `you.role` are null and `computers` is empty.
   `startsFromOthers` is the #181 switch (not built yet): `value` as you set it (`link.json`'s
   `startsFromOthers`, `on` or `off`), or null, and `default`, what it is then: off on the main
-  computer (and on a Mac in no setup), on everywhere else, so it follows the role.
+  computer (and on a Mac in no setup), on everywhere else, so it follows the role. `heldBy`: on a
+  Mac, the machines whose word holds it back from leading now (not said yet, or `shared: true`;
+  "Who leads one"), by key; empty elsewhere.
 - **The card**: `run/setup-card.json`, beside link.json, nothing secret in it, for what looks at a
   computer from outside its box (the app as it opens, a Mac adding it over SSH): `{setup, epoch,
-  role, primary: {key, name, heard}, self: {key, name, kind}, app, computers, items}`. `heard`: when
+  role, primary: {key, name, heard}, self: {key, name, kind}, app, computers, items, heldBy}`. `heard`: when
   the main computer was last heard from, as this box counts it (ms, its own time off left out, as
   for its Macs' 30 days; null on the main computer itself); `computers`, how
   many the setup has; `items`, the Work Queue items here. Written as the box looks at its setup, as

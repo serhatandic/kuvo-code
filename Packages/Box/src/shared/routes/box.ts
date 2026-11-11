@@ -84,8 +84,8 @@ export const PAIRING = object({ link: string, ends: number });
 
 /** Your setup as this box says it (`kuvo/setup`, PROTOCOL.md "Your setup"): its id and epoch, its
  * main computer, this box (its key, and its role, null in no setup), each computer in it, another
- * main computer named at the same epoch (never taken), and the #181 switch: the value you set, or
- * null, and what it is then. */
+ * main computer named at the same epoch (never taken), the #181 switch: the value you set, or
+ * null, and what it is then; and the machines holding this Mac back from leading a setup, by key. */
 export const SETUP = object({
   setup: nullable(string),
   epoch: nullable(number),
@@ -94,6 +94,7 @@ export const SETUP = object({
   computers: list(object({ key: string, name: string, kind: words("mac", "machine"), role: words("primary", "member"), app: bool })),
   "conflict?": object({ primary: string, epoch: number }),
   startsFromOthers: object({ value: nullable(words("on", "off")), default: words("on", "off") }),
+  heldBy: list(string),
 });
 
 /** Whether a client's in use here, and how many notices wait. */
