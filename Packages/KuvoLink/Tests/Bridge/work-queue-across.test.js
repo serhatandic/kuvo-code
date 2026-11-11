@@ -218,6 +218,32 @@ test("what your other computers told shows in the All view and a lead's view, wi
   assert.equal((await view("all")).items.some(item => item.number === 600), false);
 });
 
+test("a computer that isn't answering: its items show as it last told them, none of them in progress, and say since when; heard again, they're as it tells them", async () => {
+  const tellsNow = telling([told(500, "ses_far", { inProgress: true, progress: { note: "Writing the test" }, sessions: [{ session: "ses_far", title: "Far away", working: true }] }), told(501, "ses_far")]);
+  receive(lab, { workQueue: tellsNow });
+  const live = await view("all");
+  assert.equal(live.items.find(item => item.number === 500).inProgress, true, "at work as lab says, while lab answers");
+  assert.equal(live.computers[0].away, undefined);
+
+  // The relay finds nothing connected at lab (it's switched off).
+  const since = Date.now() - 60_000;
+  write(path.join(run, "peer-reach.json"), { [lab.pub]: since });
+  const away = await view("all");
+  const item = away.items.find(each => each.number === 500);
+  assert.equal(item.inProgress, false, "nothing on a computer that's off can be seen at work");
+  assert.deepEqual(item.sessions.map(each => each.working), [false]);
+  assert.equal(item.progress.note, "Writing the test", "what it said is kept");
+  assert.deepEqual(away.computers.map(each => [each.name, each.away]), [["lab", since]]);
+  assert.equal((await route("GET", "kuvo/work-queue/refs?refs=500")).body.refs["500"].inProgress, false, "its chip says so too");
+  assert.equal((await route("GET", "kuvo/work-queue/items/500")).body.item.inProgress, false, "and its page");
+
+  // Lab's mail comes again: it answers.
+  receive(lab, { workQueue: telling([told(500, "ses_far", { inProgress: true, sessions: [{ session: "ses_far", title: "Far away", working: true }] })]) });
+  const back = await view("all");
+  assert.equal(back.items.find(each => each.number === 500).inProgress, true);
+  assert.equal(back.computers[0].away, undefined);
+});
+
 test("this box tells your other computers its queue as it changes: again until it's had, then not until it changes; too big for one mail, in parts", async () => {
   write(path.join(queues, "numbers.json"), { primary: mac.pub, leases: [[100, 149]] });
   await tool("queue_add", { title: "Fix the login page" }, "ses_child");
