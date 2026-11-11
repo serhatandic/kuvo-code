@@ -79,6 +79,37 @@ class HeavyTests(unittest.TestCase):
         out, _ = second.communicate(timeout=30)
         self.assertEqual((second.returncode, out), (7, "ran\n"))
 
+    def test_priority_overtakes_waiting_normal_jobs_in_fifo_order(self):
+        first = Held([HEAVY, "box"], self.env)
+        jobs = []
+        output = os.path.join(self.locks, "order")
+        try:
+            for name, priority in (("normal1", "normal"), ("normal2", "normal"), ("high", "high")):
+                job = subprocess.Popen([HEAVY, "box", "/bin/sh", "-c", f"echo {name} >> '{output}'"],
+                                       env=dict(self.env, KUVO_HEAVY_PRIORITY=priority), stderr=subprocess.PIPE, text=True)
+                jobs.append(job)
+                self.assertIn("Waiting for another box job", job.stderr.readline())
+        finally:
+            first.let_go()
+        for job in jobs:
+            self.assertEqual(job.wait(timeout=30), 0)
+            job.stderr.close()
+        with open(output) as f:
+            self.assertEqual(f.read().splitlines(), ["high", "normal1", "normal2"])
+
+    def test_waiting_longer_than_limit_preserves_runtime(self):
+        first = Held([HEAVY, "box"], self.env)
+        job = subprocess.Popen([HEAVY, "box", "/bin/sh", "-c", "sleep 2"],
+                               env=dict(self.env, KUVO_HEAVY_LIMIT="4s"), stderr=subprocess.PIPE, text=True)
+        try:
+            self.assertIn("Waiting for another box job", job.stderr.readline())
+            time.sleep(5)
+            self.assertIsNone(job.poll())
+        finally:
+            first.let_go()
+        self.assertEqual(job.wait(timeout=30), 0)
+        job.stderr.close()
+
     def test_a_job_inside_its_kinds_job_runs_at_once(self):
         nested = f'KUVO_HEAVY_WAIT=0 "{HEAVY}" mac true'
         result = subprocess.run([HEAVY, "mac", "/bin/sh", "-c", nested], env=self.env, timeout=30)

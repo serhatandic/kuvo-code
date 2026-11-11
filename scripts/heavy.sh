@@ -67,6 +67,8 @@
 #   scripts/heavy.sh --holds <kind>   whether this runs inside such a job already (exit 0), for
 #                                     a script that takes its turn itself (scripts/test-app.sh)
 #
+#   KUVO_HEAVY_PRIORITY=high  queue ahead of normal jobs in the same lane; FIFO within each priority
+#   Queue waits have no time limit; load may wait indefinitely (memory and mac-first waits are bounded).
 #   KUVO_HEAVY_WAIT=0   don't wait: say what it would wait for, and exit 75
 #   KUVO_HEAVY_DIR      where the locks are (for the helper's own tests)
 #
@@ -245,7 +247,8 @@ done
 
 if [ -n "$TAKEN" ]; then
     # Its turn, just taken (below).
-    unset KUVO_HEAVY_HOLDING
+    [ -z "${KUVO_HEAVY_TICKET:-}" ] || rm -f "$KUVO_HEAVY_TICKET"
+    unset KUVO_HEAVY_TICKET KUVO_HEAVY_HOLDING
     # Started inside another heavy job (of another kind: one of its own kind runs at once, above),
     # which says so in KUVO_HEAVY_HELD while it runs: a part of a job already running.
     NESTED=
@@ -272,30 +275,50 @@ else
         fi
         exec "$@"
     fi
-    # Its kind's turn.
-    if [ "$SLOTS" = 2 ]; then
-        # The first free slot, slot 1 first. Taking one is `lockf` on it, the job's own parent as
-        # before. Between the look and the `lockf` (a few milliseconds) another job can take that
-        # slot: this one then waits for it, even if the other slot frees first, and with
-        # KUVO_HEAVY_WAIT=0 it waits too. That needs two jobs starting within those milliseconds.
-        said=
-        while :; do
-            for slot in "$LOCK" "$LOCK2"; do
-                if lockf -ks -t 0 "$slot" true; then
-                    KUVO_HEAVY_HOLDING="$slot:$$" exec lockf -k "$slot" /bin/sh "$0" "$kind" "$@"
+    # A ticket stays visible until its owner has acquired a slot. Registration is serialized so
+    # the sequence represents arrival order, including when several callers arrive at once.
+    queue="$DIR/kuvo-code-heavy-$kind-$(id -u).queue"
+    mkdir -p "$queue"
+    priority=1
+    [ "${KUVO_HEAVY_PRIORITY:-normal}" != high ] || priority=0
+    ticket=$(lockf -k "$queue/guard" /bin/sh -c '
+        queue=$1; priority=$2; owner=$3; slots=$4
+        n=0; [ ! -f "$queue/sequence" ] || read -r n < "$queue/sequence"
+        n=$((n + 1)); printf "%s\n" "$n" > "$queue/sequence"
+        ticket=$(printf "%s/%s-%012d-%s" "$queue" "$priority" "$n" "$owner-$slots")
+        : > "$ticket"; printf "%s\n" "$ticket"
+    ' sh "$queue" "$priority" "$$" "$SLOTS")
+    trap 'rm -f "$ticket"; exit 143' TERM HUP INT
+    said=
+    while :; do
+        # A killed waiter may leave a ticket; it must never block the lane.
+        for entry in "$queue"/[01]-*; do
+            [ -f "$entry" ] || continue
+            owner=${entry%-*}; owner=${owner##*-}
+            kill -0 "$owner" 2>/dev/null || rm -f "$entry"
+        done
+        for slot in "$LOCK" ${LOCK2:+"$LOCK2"}; do
+            [ "$slot" = "$LOCK" ] || [ "$SLOTS" = 2 ] || continue
+            first=
+            for entry in $(printf '%s\n' "$queue"/[01]-* | LC_ALL=C sort); do
+                [ -f "$entry" ] || continue
+                if [ "$slot" = "$LOCK" ] || [ "${entry##*-}" = 2 ]; then
+                    first=$entry
+                    break
                 fi
             done
-            [ "$WAITS" = 0 ] && cannot_wait "Another $kind job is running in each of its two slots."
-            [ -n "$said" ] || echo "Waiting for another $kind job to finish…" >&2
-            said=1
-            sleep 1
+            if [ "$first" = "$ticket" ] && lockf -ks -t 0 "$slot" true; then
+                KUVO_HEAVY_HOLDING="$slot:$$" KUVO_HEAVY_TICKET="$ticket" exec lockf -k "$slot" /bin/sh "$0" "$kind" "$@"
+            fi
         done
-    fi
-    if ! lockf -ks -t 0 "$LOCK" true; then
-        [ "$WAITS" = 0 ] && cannot_wait "Another $kind job is running."
-        echo "Waiting for another $kind job to finish…" >&2
-    fi
-    KUVO_HEAVY_HOLDING="$LOCK:$$" exec lockf -k "$LOCK" /bin/sh "$0" "$kind" "$@"
+        if [ "$WAITS" = 0 ]; then
+            rm -f "$ticket"
+            cannot_wait "Another $kind job is running or waiting."
+        fi
+        [ -n "$said" ] || echo "Waiting for another $kind job to finish…" >&2
+        said=1
+        sleep 1
+    done
 fi
 
 # The Mac busy: wait until it isn't.
