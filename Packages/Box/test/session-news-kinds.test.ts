@@ -1,27 +1,33 @@
 import "./safety"
 import { expect, test } from "bun:test"
-import { wakeLine, wakeLineShown } from "../src/link/work/wakes"
+import { stoppedLine, wakeLine, wakeLineShown } from "../src/link/work/wakes"
 import { writtenByYou } from "../src/link/engine/queue"
 import { boxNoteOf } from "../src/shared/queues"
 
-// A lead told of a session whose turn ended while what it left running goes on (the hold ran out)
-// hears it as finished, saying what runs: never "still working" (#420), though a line kept from a box
-// before that is still read.
+// A lead hears a session finished only once nothing it left running goes on (#553), so a finish
+// never says what still runs, and is never "still working" (#420), though a line kept from a box
+// before those is still read. One the user stopped says only that.
 const session = { id: "ses_1", title: "Tests", directory: "/tmp/kuvo-news-kinds", time: { created: Date.now() - 5 * 60_000, updated: Date.now() - 5 * 60_000 } }
 const target = { kind: "engine" } as never
-const running = { commands: [{ id: "sh_1", command: "npm test", started: Date.now() }], subagents: [], tasks: [] } as never
 const done = { type: "session.execution.succeeded", data: { sessionID: "ses_1" } } as never
 
-test("a session told while its command runs says so; it is 'finished', never 'still working'", async () => {
-  const line = (await wakeLine(done, session, target, running))!
+test("a finish is 'finished', and never says what still runs", async () => {
+  const line = (await wakeLine(done, session, target))!
   expect(line).toStartWith('[Session finished] "Tests"')
   expect(line).not.toContain("still working")
-  expect(line).toContain("Still running in the background")
+  expect(line).not.toContain("Still running")
   expect(wakeLineShown([line])).toBe("“Tests” finished")
   expect(boxNoteOf(line, undefined)?.line).toBe("“Tests” finished")
-  const plain = (await wakeLine(done, session, target, null))!
-  expect(plain).toStartWith('[Session finished] "Tests"')
-  expect(plain).not.toContain("Still running")
+})
+
+test("one the user stopped reads as that, for its lead and on its card", () => {
+  const line = stoppedLine(session)
+  expect(line).toStartWith('[Session stopped] "Tests"')
+  expect(line).toContain("(address ses_1) was stopped by the user.")
+  expect(wakeLineShown([line])).toBe("“Tests” stopped by you")
+  expect(boxNoteOf(line, undefined)?.line).toBe("“Tests” stopped by you")
+  expect(writtenByYou(line, undefined)).toBe(false)
+  expect(wakeLineShown([line, line])).toBe("2 updates from its sessions")
 })
 
 test("a line kept from a box that told 'still working' is still read", () => {
