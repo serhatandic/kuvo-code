@@ -18,10 +18,11 @@ export const MAC_FEATURES = [
 ] as const;
 
 /** What only a machine answers: it updates itself, starts an engine an older Mac's Stop left down,
- * and sets up its own browser (a Mac's is the app's). One a line, in order. */
+ * sets up its own browser (a Mac's is the app's), and says which version its pieces run. One a line, in order. */
 export const MACHINE_FEATURES = [
   "browser",
   "engine.start",
+  "pieces",
   "update",
 ] as const satisfies readonly Feature[];
 

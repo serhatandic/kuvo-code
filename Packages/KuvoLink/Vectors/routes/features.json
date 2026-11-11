@@ -122,6 +122,7 @@
          "<excludes>": [
           "browser",
           "engine.start",
+          "pieces",
           "update"
          ]
         }
@@ -194,6 +195,7 @@
          "personalities.events",
          "phones",
          "phones.pair",
+         "pieces",
          "plugins.search",
          "programs",
          "projects",

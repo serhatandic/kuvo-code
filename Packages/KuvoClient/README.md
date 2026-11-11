@@ -63,6 +63,10 @@ What a client shows of a computer's sessions, the same in both apps. Rules only,
   has ended (its engine let go of it) or just can't be read now.
 - `AskPlace`: which of the asks waiting takes the composer's place, and "2 of 3" over it: the one
   in view stays while others come, and once it's answered the next after it shows.
+- `MachinePieces`: which version a machine's link, coding agents and engine each run, as its box
+  says (`kuvo/info`'s `pieces`), and the line under the machine while one runs an older version
+  than its files (a new bridge waits for a quiet moment, or holds new messages for the turns under
+  way).
 - `ConversationPictures`: every picture of a conversation, in order, across its messages (yours,
   and those an agent made, showed or took of a page to show you), each by an id that stays: what a
   picture opens among, to go to the one before or after it, in both apps' viewers.

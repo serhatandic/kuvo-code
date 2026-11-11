@@ -1,5 +1,6 @@
 import AppKit
 import ClientDesign
+import ClientSessions
 import OpenCodeKit
 import os
 
@@ -475,14 +476,26 @@ extension AppModel {
 
     /// Who else uses a machine, as its box says (`kuvo/info`'s `macs` and `phones`): your other
     /// Macs, by name, and your phones. What Uninstall would stop it for, so its dialog says so.
+    /// And which version its pieces run (`pieces`), for the line under it while one is behind.
     func readAlsoUsedBy(_ engine: MachineEngine) async {
         struct Info: Decodable {
             struct Mac: Decodable { var key: String; var name: String? }
             var macs: [Mac]?
             var phones: Int?
+            var pieces: MachinePieces?
+            private enum Keys: String, CodingKey { case macs, phones, pieces }
+            init(from decoder: any Decoder) throws {
+                let info = try decoder.container(keyedBy: Keys.self)
+                macs = try info.decodeIfPresent([Mac].self, forKey: .macs)
+                phones = try info.decodeIfPresent(Int.self, forKey: .phones)
+                // (One it can't read leaves the rest as it is.)
+                pieces = try? info.decodeIfPresent(MachinePieces.self, forKey: .pieces)
+            }
         }
+        guard let info = try? await box(engine.machine.id).value(Info.self, "GET", "kuvo/info") else { return }
+        if engine.pieces != info.pieces { engine.pieces = info.pieces }
         // (Which of them is this Mac: its key, as they know it.)
-        guard let own = phoneLink.macKey, let info = try? await box(engine.machine.id).value(Info.self, "GET", "kuvo/info"), let macs = info.macs else { return }
+        guard let own = phoneLink.macKey, let macs = info.macs else { return }
         engine.alsoUsedBy = .init(macs: macs.filter { $0.key != own }.map { $0.name ?? "another Mac" }, phones: info.phones ?? 0)
     }
 

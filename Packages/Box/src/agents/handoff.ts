@@ -58,6 +58,11 @@ export class Handoffs {
     return this.kept.get(session)
   }
 
+  /** Whether one is being written or checked to start (a newer bridge waits for it: renewal.ts). */
+  busy(): boolean {
+    return this.starting.size > 0 || [...this.kept.values()].some((handoff) => handoff.state === "writing")
+  }
+
   /** Starts one: answers with it writing, and says when it's done or why not (`kuvo.handoff`). */
   async start(session: string, next?: string): Promise<Handoff> {
     if (this.starting.has(session) || this.kept.get(session)?.state === "writing") throw new HandoffError(409, "It's being handed off already.")

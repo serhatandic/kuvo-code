@@ -459,6 +459,10 @@ final class MachineEngine {
         var isEmpty: Bool { macs.isEmpty && phones == 0 }
     }
     var alsoUsedBy: AlsoUsedBy?
+    /// Which version its pieces run, as its box last said (`kuvo/info`'s `pieces`): a line shows
+    /// under it while one runs an older version than its files. Nil until read, or from a box from
+    /// before it said.
+    var pieces: MachinePieces?
 
     /// The Mac that runs the engine there, when it's another one.
     var otherMac: OtherMac? { isAnotherMacsEngine ? OtherMac(name: server?.engine.notes["macName"]) : nil }

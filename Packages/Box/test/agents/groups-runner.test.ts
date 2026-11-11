@@ -205,6 +205,19 @@ describe("a group chat on a machine", () => {
     await until(() => engine.requests.some((request) => request.method === "DELETE" && request.path === `/api/session/${session}`))
   })
 
+  test("a discussion under way holds back a newer bridge that would take this one's place; once it's over, nothing does", async () => {
+    const { groups } = runner()
+    engine.slow.set("Ada", 300)
+    engine.lines = { Ada: ["Thinking it over.", "NONE"], Ben: ["PASS", "PASS"] }
+    groups.put(group(), [], "active", false)
+    expect(groups.busy()).toBe(false)
+    groups.send("grp_team000001", "Should we ship?")
+    await until(() => groups.talk("grp_team000001").speaking === "bot_ada")
+    expect(groups.busy()).toBe(true)
+    await until(() => !groups.talk("grp_team000001").discussing)
+    expect(groups.busy()).toBe(false)
+  })
+
   test("a guest you name while a bot is talking still answers, after that bot", async () => {
     const { groups } = runner()
     bot("bot_carl", "Carl")

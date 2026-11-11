@@ -39,6 +39,8 @@ export interface Context {
   link: EngineLink
   password: string
   version: string
+  /** The build it runs, as its bundle names it (none run from its sources). */
+  build?: string | null
   /** The group chats that live on this computer (groups/runner.ts), and its part in those on your others; none where they don't run here. */
   groups?: { runner: GroupRunner; store: GroupStore; peers?: PeerParts }
   /** Restarts the agents' processes started before the box's sandbox was on, as you said to (main.ts). */
@@ -69,6 +71,12 @@ const attempts = new Map<string, { agent: Agent; attempt: SignInAttempt; created
 export function cancelSignIns() {
   for (const pending of attempts.values()) pending.attempt.cancel()
   attempts.clear()
+}
+
+/** Whether a sign-in waits for you to finish it (a newer bridge waits for it: renewal.ts). */
+export function signInsWaiting(): boolean {
+  const now = Date.now()
+  return [...attempts.values()].some((pending) => now < pending.expires && pending.attempt.status().status === "pending")
 }
 
 // Sign-ins left waiting past their time: stopped, with what they started.
@@ -208,7 +216,7 @@ export function handler(context: Context) {
       if (parts[0] !== "api") return error(404, "Not found")
       const [, area, a, b, c, d, e] = parts
 
-      if (area === "info") return json({ version: context.version, pid: process.pid })
+      if (area === "info") return json({ version: context.version, pid: process.pid, build: context.build ?? null })
       if (area === "event") return feed()
 
       // Sign-in
