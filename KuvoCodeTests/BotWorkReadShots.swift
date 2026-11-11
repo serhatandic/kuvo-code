@@ -58,8 +58,9 @@ struct BotWorkReadShots {
             UserDefaults.standard.removeObject(forKey: SidebarBox.inViewKey)
             try? FileManager.default.removeItem(atPath: "/tmp/kuvo-tests-work-read-shots")
         }
-        for asks in [false, true] {
-            for read in [false, true] {
+        // (Before first: a read is kept over the app's start, as a client keeps one it made.)
+        for read in [false, true] {
+            for asks in [false, true] {
                 for dark in [true, false] {
                     let png = try await picture(read: read, asks: asks, dark: dark)
                     try png.write(to: URL(fileURLWithPath: out).appending(path: "mac-\(read ? "after" : "before")\(asks ? "-asks" : "")-\(dark ? "dark" : "light").png"))
