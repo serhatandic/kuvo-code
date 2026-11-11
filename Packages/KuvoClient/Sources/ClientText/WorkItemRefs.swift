@@ -49,7 +49,7 @@ public enum WorkItemRefs {
     /// Each reference in `text`, in order, as the box is asked for it: "243" for `#243`, and an
     /// issue's or a pull request's as written (`gh:owner/repo#12`).
     public static func findRefs(in text: String) -> [(range: Range<String.Index>, ref: String)] {
-        let numbers = find(in: text).map { (range: $0.range, ref: String($0.number)) }
+        var numbers = find(in: text).map { (range: $0.range, ref: String($0.number)) }
         guard text.contains("gh:") else { return numbers }
         let skipped = skippedRanges(in: text)
         var sources: [(range: Range<String.Index>, ref: String)] = []
@@ -63,6 +63,8 @@ public enum WorkItemRefs {
             guard !skipped.contains(where: { $0.overlaps(range) }) else { continue }
             sources.append((range, String(text[range])))
         }
+        // (A "#12" inside an issue's ref, after a "-" ending its repository's name, is the ref's.)
+        numbers.removeAll { number in sources.contains { $0.range.overlaps(number.range) } }
         return (numbers + sources).sorted { $0.range.lowerBound < $1.range.lowerBound }
     }
 

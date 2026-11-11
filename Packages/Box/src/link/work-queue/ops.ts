@@ -202,7 +202,8 @@ export function applyFileOps(acting: Acting): void {
   for (const op of acting.fileOps.splice(0)) op();
 }
 
-const openIn = (book: Book, owner: string) => book.queue(owner).items.filter(item => !item.removed && item.category !== "done").length;
+// (An issue or a pull request closed on GitHub is Done, whatever category it's kept in.)
+const openIn = (book: Book, owner: string) => book.queue(owner).items.filter(item => !item.removed && item.category !== "done" && !(item.source && doneOnGitHub(seenOf(item.source)?.value?.state))).length;
 
 /** A new item in `owner`'s queue: numbered now if there's a number to give, else once one comes;
  * an outside source's (`source`, an issue or a pull request) never. */

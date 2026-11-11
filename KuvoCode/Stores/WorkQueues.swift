@@ -399,19 +399,12 @@ final class WorkQueues {
     /// How long before a chip's item is asked about again when it's drawn (a test's own).
     @ObservationIgnored var refreshAfter: TimeInterval = 60
 
-    /// Asks the box what `keys` name ("243", `gh:owner/repo#12`): numbers alone as a box before
-    /// the POST takes them, any other in a list (a box that doesn't know one says null).
+    /// Asks the box what `keys` name ("243", `gh:owner/repo#12`), in a list (a box that doesn't
+    /// know one says null).
     func lookUp(_ keys: [String], on box: String) async {
         guard let client = client(box), !keys.isEmpty else { return }
-        let wanted = Array(keys.prefix(200))
-        let answer: WorkRefs?
-        if wanted.allSatisfy({ Int($0) != nil }) {
-            answer = try? await client.value(WorkRefs.self, "GET", "kuvo/work-queue/refs?refs=\(wanted.joined(separator: ","))")
-        } else {
-            struct Asked: Encodable { var refs: [String] }
-            answer = try? await client.value(WorkRefs.self, "POST", "kuvo/work-queue/refs", body: Asked(refs: wanted))
-        }
-        guard let answer else { return }
+        struct Asked: Encodable { var refs: [String] }
+        guard let answer = try? await client.value(WorkRefs.self, "POST", "kuvo/work-queue/refs", body: Asked(refs: Array(keys.prefix(200)))) else { return }
         var known = refs[box] ?? [:]
         for (key, ref) in answer.refs { known[key] = ref }
         if refs[box] != known { refs[box] = known }

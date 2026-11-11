@@ -142,6 +142,16 @@ test("an agent adds a GitHub issue: the item is that issue, named by it, with Gi
   assert.equal((await tool("queue_update", { item: "gh:kuvo-test/app#12", progress_note: "Writing the failing test first" })).isError, false);
   const retitled = await tool("queue_update", { item: "gh:kuvo-test/app#12", title: "Mine" });
   assert.deepEqual(retitled, { isError: true, text: 'gh:kuvo-test/app#12 "Upload retries drop the file name" takes its title and description from GitHub: change them there.' });
+  // Read again a minute on and found the same: what's shown of it doesn't change (no line for it).
+  const since = (await view()).items[0].seen.at;
+  ageReads();
+  assert.equal((await view()).items[0].seen.at, since - 3_600_000, "since when GitHub has said so, not when it was asked");
+  assert.equal(queries().length, 2);
+  // Named by another case, or by an old name GitHub still answers to: GitHub's own name, and still
+  // one item.
+  const renamed = await tool("queue_add", { issue: "gh:kuvo-test/old-app#12" });
+  assert.equal(renamed.isError, true);
+  assert.match(renamed.text, /is in your Work Queue already: refer to it as gh:kuvo-test\/app#12\./);
   // A number handed out later is the next one: it took none.
   assert.match((await tool("queue_add", { title: "Local work" })).text, /^Added #1 /);
 });
@@ -175,6 +185,8 @@ test("GitHub's word on screen: read again only once it's due, closed is Done (it
   [item] = (await view()).items;
   assert.equal(queries().length, 3);
   assert.deepEqual([item.category, item.keptIn, item.seen.state, item.doneAt], ["later", undefined, "open", undefined]);
+  const intoDone = await route("POST", `kuvo/work-queue/items/${item.id}/move`, { category: "done" });
+  assert.equal(intoDone.status, 400, "nor you, into Done");
   const done = await tool("queue_update", { item: "gh:kuvo-test/app#12", category: "done" });
   assert.deepEqual(done, { isError: true, text: 'gh:kuvo-test/app#12 "Upload retries drop the name" is Done once it\'s closed on GitHub (or, a pull request, merged): close it there, or let the pull request that fixes it close it.' });
 
@@ -243,7 +255,7 @@ test("what gh can't read is said in words, and nothing is added; one gone later 
   github(null);
   ageReads();
   const [item] = (await view()).items;
-  assert.deepEqual([item.title, item.seen.state, item.category], ["Upload retries drop the file name", "open", "next"]);
+  assert.deepEqual([item.title, item.seen.state, item.seen.gone, item.category], ["Upload retries drop the file name", "open", true, "next"]);
   // Signed out since: not asked again for a while.
   fs.writeFileSync(fail, "gh auth login\n");
   ageReads();
@@ -252,10 +264,17 @@ test("what gh can't read is said in words, and nothing is added; one gone later 
   assert.equal(queries().length, 3, "added, found gone, then signed out: held off since");
 });
 
+test("an issue's own description is GitHub's: its bare #n are that repository's, said so to agents", async () => {
+  github(issue(12, { body: "Duplicate of #45." }));
+  await tool("queue_add", { issue: "gh:kuvo-test/app#12" });
+  assert.match((await tool("queue_show", { item: "gh:kuvo-test/app#12" })).text, /Its description on GitHub \(a bare #n there is gh:kuvo-test\/app's, not a Work Queue item\):\nDuplicate of #45\./);
+});
+
 test("what this box tells your other computers carries GitHub's word, so they show it without gh", async () => {
   github(issue(12, { state: "CLOSED", stateReason: "COMPLETED" }));
   await tool("queue_add", { issue: "gh:kuvo-test/app#12", category: "parked" });
   const told = (await link.queueTellingNow([{ port: engine.address().port, password: "p" }], null)).payload.told;
   const [item] = told.items;
   assert.deepEqual([item.category, item.keptIn, item.seen.state, item.source.name], ["done", "parked", "completed", "app#12"]);
+  assert.equal(typeof item.seen.checked, "number", "when it last asked GitHub, so the others don't ask again soon");
 });

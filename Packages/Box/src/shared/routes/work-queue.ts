@@ -13,9 +13,10 @@ const PROGRESS = object({ "value?": number, "note?": string });
 /** An outside source's item (an issue or a pull request), named by its ref, never numbered; `name`
  * is what a client shows (`kuvo-ai#12`). */
 const SOURCE = object({ kind: string, ref: string, "url?": string, "host?": string, "id?": string, "name?": string });
-/** Where its issue or pull request stands on GitHub, as last read, and when: open, draft,
- * completed, not_planned, merged or closed (a newer box may say more). */
-const SEEN = object({ state: string, at: number });
+/** Where its issue or pull request stands on GitHub, as last read, and since when: open, draft,
+ * completed, not_planned, merged or closed (a newer box may say more); `gone` when it couldn't be
+ * read since; `checked`, when another computer last asked GitHub of it. */
+const SEEN = object({ state: string, at: number, "checked?": number, "gone?": bool });
 /** Another of your computers, the one an item is on. */
 const COMPUTER = object({ key: string, name: string, kind: words("mac", "machine"), "id?": string });
 

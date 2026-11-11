@@ -51,9 +51,10 @@ export function askGitHub(host: string, query: string, timeout = 30_000): Promis
   });
 }
 
-/** A thing as last read: when, and what GitHub said (null: nothing there, or nothing this sign-in
- * may see). For a reader that `keepsLast`, one found missing since keeps what was read before, with
- * when it was asked again (`checked`) and that it was missing (`gone`). */
+/** A thing as last read: what GitHub said (null: nothing there, or nothing this sign-in may see),
+ * since when it has said so (`at`: a read that finds it the same leaves it, so what's shown of it
+ * doesn't change with every read), and when it was last asked (`checked`, when that's later). For
+ * a reader that `keepsLast`, one found missing since keeps what was read before, said `gone`. */
 export interface Read<Value> {
   at: number;
   value: Value | null;
@@ -123,6 +124,13 @@ function keep<Value>(reader: Reader<unknown, Value>, kept: Kept<Value>, now: num
   writePrivate(reader.file, JSON.stringify(kept) + "\n");
 }
 
+/** What a read found of one thing, kept after what was read of it before. */
+function readOf<Value>(before: Read<Value> | undefined, value: Value | null, keepsLast: boolean | undefined, now: number): Read<Value> {
+  if (value === null && keepsLast && before?.value) return { at: before.at, value: before.value, checked: now, gone: true };
+  if (before && JSON.stringify(before.value) === JSON.stringify(value) && !before.gone) return { at: before.at, value, checked: now };
+  return { at: now, value };
+}
+
 /** Reads now under way in this process, by reader and key. */
 const reading = new Map<string, Promise<void>>();
 
@@ -139,6 +147,8 @@ async function readDue<Ask, Value>(reader: Reader<Ask, Value>, asks: Ask[], now:
   try {
     // (Read again now it's held: another may have just read them.)
     const kept = readKept<Value>(reader.file);
+    const read = new Map<string, Read<Value>>();
+    const held = new Map<string, number>();
     const byHost = new Map<string, Ask[]>();
     for (const ask of due(kept)) byHost.set(reader.hostOf(ask), [...(byHost.get(reader.hostOf(ask)) ?? []), ask]);
     for (const [host, each] of byHost) {
@@ -148,18 +158,20 @@ async function readDue<Ask, Value>(reader: Reader<Ask, Value>, asks: Ask[], now:
         try { fs.utimesSync(lock, new Date(), new Date()); } catch {}
         const answer = await askGitHub(host, reader.query(part));
         if ("unread" in answer) {
-          kept.hosts[host] = now() + BACK_OFF;
+          held.set(host, now() + BACK_OFF);
           break;
         }
         part.forEach((ask, index) => {
           const key = reader.keyOf(ask);
-          const value = reader.valueOf(answer.data[`p${index}`], ask);
-          const before = kept.reads[key];
-          kept.reads[key] = value === null && reader.keepsLast && before?.value ? { at: before.at, value: before.value, checked: now(), gone: true } : { at: now(), value };
+          read.set(key, readOf(kept.reads[key], reader.valueOf(answer.data[`p${index}`], ask), reader.keepsLast, now()));
         });
       }
     }
-    keep(reader as Reader<unknown, Value>, kept, now());
+    // (Into what's kept now: a read kept meanwhile apart from this one, `keepRead`, stays.)
+    const latest = readKept<Value>(reader.file);
+    for (const [key, each] of read) latest.reads[key] = each;
+    for (const [host, until] of held) latest.hosts[host] = Math.max(latest.hosts[host] ?? 0, until);
+    keep(reader as Reader<unknown, Value>, latest, now());
   } finally {
     try { fs.rmdirSync(lock); } catch {}
   }
@@ -195,6 +207,6 @@ export async function readThrough<Ask, Value>(reader: Reader<Ask, Value>, asks: 
 /** A read made apart from `readThrough` (a fuller query, say), kept as one of the reader's. */
 export function keepRead<Ask, Value>(reader: Reader<Ask, Value>, ask: Ask, value: Value | null, now = Date.now()): void {
   const kept = readKept<Value>(reader.file);
-  kept.reads[reader.keyOf(ask)] = { at: now, value };
+  kept.reads[reader.keyOf(ask)] = readOf(kept.reads[reader.keyOf(ask)], value, reader.keepsLast, now);
   keep(reader as Reader<unknown, Value>, kept, now);
 }

@@ -103,7 +103,7 @@ public struct WorkSource: Hashable, Sendable, Decodable {
     }
 
     /// What's shown of it: the box's name for it ("app#12"), else its ref without its prefix and
-    /// owner (an older box's).
+    /// owner.
     public var shownName: String {
         if let name, !name.isEmpty { return name }
         return ref.replacing(/^[a-z]+:(?:[^\/#]+\/)?/, with: "")
@@ -461,8 +461,9 @@ public enum WorkQueue {
         return categories.filter { $0.id != item.category && (item.source == nil || $0.id != WorkCategory.done) }
     }
 
-    /// Whether you can move it at all: not an issue or a pull request that's Done (closed there).
-    public static func canMove(_ item: WorkItem) -> Bool { item.source == nil || !item.isDone }
+    /// Whether you can move it at all: not one its source makes Done (an issue closed on GitHub),
+    /// which the box says by the category it keeps it in (`keptIn`).
+    public static func canMove(_ item: WorkItem) -> Bool { item.keptIn == nil }
 }
 
 /// What both apps draw an item's name with, in a list or a chip: the mark of the service its source

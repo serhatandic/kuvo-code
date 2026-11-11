@@ -20,7 +20,7 @@ import { handArrived, handedBack, sendHandings } from "./hand";
 import { mailsFor, takePart } from "./parts";
 import { movePast, ownSince, primaryOf, takeNumbersMail, topOf } from "./numbers";
 import { allItems, OWNER, queueFollowers, refNames, WORK_QUEUE, type Item, type ItemRef } from "./store";
-import { SEEN_FILE, withSeen } from "./github";
+import { SEEN_FILE, seenOf, withSeen } from "./github";
 import { forgetTold, keepTold, MOST_TOLD, MOST_TOLD_DONE, readTold, TOLD, toldKeys, toldOf, type Numbering, type ToldItem } from "./told";
 import { factsOf, ownersOf, summaryOf, type Computer, type OwnerFacts } from "./view";
 import { rowsOf } from "../work/elsewhere";
@@ -64,11 +64,15 @@ export function numberingNow(link: LinkState | null): Numbering {
   return { kind, since, top: topOf(), ...(named ? { primary: named } : {}) };
 }
 
-/** An item as this box tells it: its summary, with who handed it on. */
+/** An item as this box tells it: its summary, with who handed it on; an issue's with when this
+ * box last asked GitHub of it (`seen.checked`), so another computer reads it only once that's old. */
 const toldItem = (item: Item, working: Set<string>, titles: Map<string, { title: string }>): ToldItem => {
   const summary = summaryOf(item, working, titles);
   const from = [...new Set((item.handed ?? []).map(each => each.from))];
-  return { ...summary, ...(summary.lastNote ? { lastNote: { ...summary.lastNote, text: summary.lastNote.text.slice(0, 500) } } : {}), ...(from.length ? { handedFrom: from } : {}) };
+  const read = summary.seen ? seenOf(item.source) : undefined;
+  const checked = read ? read.checked ?? read.at : undefined;
+  return { ...summary, ...(summary.lastNote ? { lastNote: { ...summary.lastNote, text: summary.lastNote.text.slice(0, 500) } } : {}), ...(from.length ? { handedFrom: from } : {}),
+    ...(summary.seen && checked !== undefined ? { seen: { ...summary.seen, checked } } : {}) };
 };
 
 /** What this box tells of its Work Queue now: its items (not deleted ones; the latest Done ones
@@ -82,7 +86,10 @@ export async function tellingNow(targets: Target[], link: LinkState | null, sign
   const told = items.map(item => toldItem(item, facts.working, titles));
   const custom = categories().filter(each => !each.builtIn).map(({ id, name }) => ({ id, name }));
   const content = { items: told, owners, categories: custom, ...numberingNow(link) };
-  const id = "wqt_" + crypto.createHash("sha256").update(JSON.stringify(content)).digest("base64url").slice(0, 22);
+  // (When GitHub was last asked of an issue isn't news on its own: it goes with the next change, or
+  // a computer that asks for it again.)
+  const unchecked = { ...content, items: told.map(item => (item.seen?.checked !== undefined ? { ...item, seen: { ...item.seen, checked: undefined } } : item)) };
+  const id = "wqt_" + crypto.createHash("sha256").update(JSON.stringify(unchecked)).digest("base64url").slice(0, 22);
   return { id, payload: { told: { id, at: Date.now(), ...content } } };
 }
 

@@ -159,7 +159,7 @@ struct WorkItemPage: View {
                 .help("Added \(SentTime.full(item.created.date)) by \(item.created.by.words)")
             }
             if let detail, !detail.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                ReplyView(markdown: detail.body, parser: parser(detail.body), images: pictures) { url in open(url) }
+                ReplyView(markdown: detail.body, parser: parser(detail.body, fromSource: item.source != nil), images: pictures) { url in open(url) }
             } else if detail != nil {
                 Text("No description yet.")
                     .font(.system(size: 13))
@@ -235,7 +235,7 @@ struct WorkItemPage: View {
             .background(Capsule().fill(mark.color.opacity(0.14)))
             .help(mark == .inProgress ? "A session is at work on it. It’s kept in \(category)."
                 : mark == .removed ? "Kept for 30 days: Restore brings it back."
-                : item.keptIn.map { "Closed on GitHub. If it’s reopened there, it’s back in \(WorkQueue.categoryName($0, in: view.categories))." } ?? "")
+                : item.keptIn.map { "\(item.seen?.state == "merged" ? "Merged" : "Closed") on GitHub. If it’s reopened there, it’s back in \(WorkQueue.categoryName($0, in: view.categories))." } ?? "")
     }
 
     /// What's being done now, how far along, and who's on it.
@@ -314,9 +314,12 @@ struct WorkItemPage: View {
         }
     }
 
-    /// What it says, as a reply is drawn: other items it names (`#212`) as their chips.
-    private func parser(_ text: String) -> FileLinkingParser {
-        FileLinkingParser(folders: { [] }, refs: text.contains("#") ? store.refs(in: text, box: opened.box) : [:])
+    /// What it says, as a reply is drawn: other items it names (`#212`) as their chips. An issue's
+    /// own description is GitHub's, where a bare `#45` is that repository's: only its `gh:` refs.
+    private func parser(_ text: String, fromSource: Bool = false) -> FileLinkingParser {
+        var refs = text.contains("#") ? store.refs(in: text, box: opened.box) : [:]
+        if fromSource { refs = refs.filter { Int($0.key) == nil } }
+        return FileLinkingParser(folders: { [] }, refs: refs)
     }
 
     /// Opens a link from what it says: a chip's item here, a web page in the panel's browser.

@@ -70,7 +70,8 @@ export function toldItemOf(given: unknown): ToldItem | null {
     ? Object.fromEntries(Object.entries(given.source).filter(([key, value]) => ["kind", "ref", "url", "host", "id", "name"].includes(key) && typeof value === "string").map(([key, value]) => [key, (value as string).slice(0, 2000)])) as unknown as ItemSummary["source"]
     : undefined;
   // (What GitHub said of it there, and when; with the category it keeps while that makes it Done.)
-  const seen = source && isObject(given.seen) && typeof given.seen.state === "string" && /^[a-z_]{1,20}$/.test(given.seen.state) ? { state: given.seen.state, at: time(given.seen.at) } : undefined;
+  const seen = source && isObject(given.seen) && typeof given.seen.state === "string" && /^[a-z_]{1,20}$/.test(given.seen.state)
+    ? { state: given.seen.state, at: time(given.seen.at), ...(typeof given.seen.checked === "number" ? { checked: time(given.seen.checked) } : {}), ...(given.seen.gone === true ? { gone: true } : {}) } : undefined;
   const keptIn = seen && typeof given.keptIn === "string" && CATEGORY.test(given.keptIn) ? given.keptIn : undefined;
   return {
     id: given.id,

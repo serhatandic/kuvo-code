@@ -15,7 +15,7 @@ import { importItems, importWords, givenItems } from "./import";
 import { numberWaiting, primaryOf } from "./numbers";
 import { addItem, applyFileOps, changeItem, handItem, linkSession, linkSource, Refusal, refuseHanding, refuseMoving, removeItem, restoreItem, stageFiles, type Acting, type Fields, type FilePlaces } from "./ops";
 import { allItems, byUser, changeQueues, matching, MOST_BODY, whoWords, type Book, type Item, type Who } from "./store";
-import { readIssue, seenOf, sourceOf, withSeen, type IssueRead } from "./github";
+import { canonicalOf, readIssue, seenOf, sourceOf, withSeen, type IssueRead } from "./github";
 import { issueAt, refText, sourceKey, sourceKeyOf, type IssueAt } from "./sources";
 import { computerName, itemElsewhere, itemsElsewhere, takesQueues, type ItemElsewhere } from "./across";
 import { callOffHanding, elsewhereOf, handElsewhere, refuseLiveElsewhere } from "./hand";
@@ -253,7 +253,7 @@ async function run(name: string, args: Record<string, unknown>, caller: QueueCal
       const issue = args.issue !== undefined ? await issueFor(args.issue, caller, overseen) : null;
       const fields = issue ? { ...args, title: issue.read.title } : args;
       const item = withFiles(args, caller, acting, () => change(book => {
-        if (issue) refuseTaken(book.items(), issue.at, caller, overseen);
+        if (issue) refuseTaken(book.items(), issue.at, caller, overseen, undefined, issue.read.id);
         const made = addItem(book, caller.owner, fields as Fields, acting, primaryOf(), issue ? sourceOf(issue.at, issue.read) : undefined);
         if (issue) made.body = issue.body.slice(0, MOST_BODY);
         if (args.working === true && !caller.seat) linkSession(book, made, caller.session, now);
@@ -285,7 +285,7 @@ async function run(name: string, args: Record<string, unknown>, caller: QueueCal
         refuseMoving([item.owner]);
         refuseHanding(item);
         if (issue) {
-          refuseTaken(book.items(), issue.at, caller, overseen, item.id);
+          refuseTaken(book.items(), issue.at, caller, overseen, item.id, issue.read.id);
           linkedFrom.number = item.number;
           linkSource(item, sourceOf(issue.at, issue.read), issue.read.title, issue.body, acting);
         }
@@ -366,22 +366,27 @@ const seenWords = (state: string): string =>
 
 // The issue or pull request a call names, read from GitHub now; or why not.
 async function issueFor(given: unknown, caller: QueueCaller, overseen: Set<string>, except?: string): Promise<{ at: IssueAt; read: IssueRead; body: string }> {
-  const at = issueAt(given);
-  if (!at) throw new Refusal("Give the issue or pull request (issue) as gh:owner/repo#12, or its address on github.com.");
-  refuseTaken(allItems(), at, caller, overseen, except);
-  const read = await readIssue(at);
+  const named = issueAt(given);
+  if (!named) throw new Refusal("Give the issue or pull request (issue) as gh:owner/repo#12, or its address on github.com.");
+  refuseTaken(allItems(), named, caller, overseen, except);
+  const read = await readIssue(named);
   if ("refused" in read) throw new Refusal(read.refused);
+  // (As GitHub names it, after a rename or a transfer too; and by its id, the same one by any name.)
+  const at = canonicalOf(named, read.read);
+  refuseTaken(allItems(), at, caller, overseen, except, read.read.id);
   return { at, ...read };
 }
 
-// One item per issue or pull request: refused, with where it is, when another is it already.
-function refuseTaken(items: Item[], at: IssueAt, caller: QueueCaller, overseen: Set<string>, except?: string): void {
+// One item per issue or pull request: refused, with where it is, when another is it already (by its
+// name, or GitHub's id for it).
+function refuseTaken(items: Item[], at: IssueAt, caller: QueueCaller, overseen: Set<string>, except?: string, id?: string): void {
   const key = sourceKey(at);
-  const here = items.find(item => item.id !== except && item.source && sourceKeyOf(item.source) === key);
+  const isIt = (source: Item["source"]) => Boolean(source) && (sourceKeyOf(source!) === key || (id !== undefined && source!.id === id));
+  const here = items.find(item => item.id !== except && isIt(item.source));
   if (here?.removed) throw new Refusal(deletedWords(here));
   if (here && inView(caller.owner, here, overseen)) throw new Refusal(`${nameOf(here)} is in your Work Queue already: refer to it as ${here.source!.ref}.`);
   if (here) throw new Refusal(`${nameOf(here)} is in the Work Queue already, in the queue of ${here.owner}: one item for each issue. Ask that conversation, or the user.`);
-  const far = itemElsewhere({ source: key });
+  const far = itemElsewhere({ source: key }) ?? (id !== undefined ? itemsElsewhere("all").items.find(item => isIt(item.source)) ?? null : null);
   if (far && far.id !== except) throw new Refusal(`${nameOf(far)} is in the Work Queue already, on ${far.computer.name}: one item for each issue.`);
 }
 
@@ -518,7 +523,7 @@ async function showWords(item: Item, facts: Facts, targets: Target[], caller: Qu
     `Added ${agoWords(item.created.at, now)} by ${whoWords(item.created.by)}; updated ${agoWords(item.updated.at, now)}.`,
     item.progress ? `Progress: ${item.progress.value !== undefined ? `${Math.round(item.progress.value * 100)}%` : ""}${item.progress.value !== undefined && item.progress.note ? " · " : ""}${item.progress.note ?? ""}` : "",
     item.sessions.length ? `Sessions on it: ${item.sessions.map(each => `${title(each.session)} (${each.session}) ${facts.working.has(each.session) ? "at work" : "not at work"}`).join("; ")}` : "",
-    item.body ? `\n${item.body}` : "",
+    item.body ? `\n${item.source ? `Its description on GitHub (a bare #n there is ${item.source.ref.replace(/#\d+$/, "")}'s, not a Work Queue item):\n` : ""}${item.body}` : "",
     item.links.length ? `\nLinks:\n${item.links.map(each => `- ${each.title ? `${each.title}: ` : ""}${each.url}`).join("\n")}` : "",
     item.files.length ? `\nFiles: ${item.files.map(each => each.name).join(", ")}` : "",
     item.notes.length ? `\nNotes:\n${item.notes.slice(-20).map(each => `- ${agoWords(each.at, now)}, ${whoWords(each.by)}: ${each.text}`).join("\n")}` : "",

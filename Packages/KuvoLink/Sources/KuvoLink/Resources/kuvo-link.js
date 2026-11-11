@@ -14552,7 +14552,7 @@ function toldItemOf(given) {
   const sessions = (Array.isArray(given.sessions) ? given.sessions : []).filter((each) => isObject(each) && typeof each.session === "string" && SESSION3.test(each.session)).slice(0, 20).map((each) => ({ session: each.session, title: words2(each.title, 200) || "New Session", working: each.working === true }));
   const lastNote = isObject(given.lastNote) && typeof given.lastNote.text === "string" ? { at: time(given.lastNote.at), by: whoOf2(given.lastNote.by), text: cut(given.lastNote.text, 500) } : undefined;
   const source = isObject(given.source) && typeof given.source.kind === "string" && typeof given.source.ref === "string" ? Object.fromEntries(Object.entries(given.source).filter(([key, value]) => ["kind", "ref", "url", "host", "id", "name"].includes(key) && typeof value === "string").map(([key, value]) => [key, value.slice(0, 2000)])) : undefined;
-  const seen = source && isObject(given.seen) && typeof given.seen.state === "string" && /^[a-z_]{1,20}$/.test(given.seen.state) ? { state: given.seen.state, at: time(given.seen.at) } : undefined;
+  const seen = source && isObject(given.seen) && typeof given.seen.state === "string" && /^[a-z_]{1,20}$/.test(given.seen.state) ? { state: given.seen.state, at: time(given.seen.at), ...typeof given.seen.checked === "number" ? { checked: time(given.seen.checked) } : {}, ...given.seen.gone === true ? { gone: true } : {} } : undefined;
   const keptIn = seen && typeof given.keptIn === "string" && CATEGORY.test(given.keptIn) ? given.keptIn : undefined;
   return {
     id: given.id,
@@ -20020,6 +20020,13 @@ function keep2(reader, kept, now) {
   writePrivate(reader.file, JSON.stringify(kept) + `
 `);
 }
+function readOf(before, value, keepsLast, now) {
+  if (value === null && keepsLast && before?.value)
+    return { at: before.at, value: before.value, checked: now, gone: true };
+  if (before && JSON.stringify(before.value) === JSON.stringify(value) && !before.gone)
+    return { at: before.at, value, checked: now };
+  return { at: now, value };
+}
 var reading2 = new Map;
 async function readDue(reader, asks, now) {
   const due = (kept) => asks.filter((ask) => {
@@ -20033,6 +20040,8 @@ async function readDue(reader, asks, now) {
     return;
   try {
     const kept = readKept4(reader.file);
+    const read = new Map;
+    const held = new Map;
     const byHost = new Map;
     for (const ask of due(kept))
       byHost.set(reader.hostOf(ask), [...byHost.get(reader.hostOf(ask)) ?? [], ask]);
@@ -20044,18 +20053,21 @@ async function readDue(reader, asks, now) {
         } catch {}
         const answer = await askGitHub(host, reader.query(part));
         if ("unread" in answer) {
-          kept.hosts[host] = now() + BACK_OFF;
+          held.set(host, now() + BACK_OFF);
           break;
         }
         part.forEach((ask, index) => {
           const key = reader.keyOf(ask);
-          const value = reader.valueOf(answer.data[`p${index}`], ask);
-          const before = kept.reads[key];
-          kept.reads[key] = value === null && reader.keepsLast && before?.value ? { at: before.at, value: before.value, checked: now(), gone: true } : { at: now(), value };
+          read.set(key, readOf(kept.reads[key], reader.valueOf(answer.data[`p${index}`], ask), reader.keepsLast, now()));
         });
       }
     }
-    keep2(reader, kept, now());
+    const latest = readKept4(reader.file);
+    for (const [key, each] of read)
+      latest.reads[key] = each;
+    for (const [host, until] of held)
+      latest.hosts[host] = Math.max(latest.hosts[host] ?? 0, until);
+    keep2(reader, latest, now());
   } finally {
     try {
       fs65.rmdirSync(lock);
@@ -20096,7 +20108,7 @@ ${reader.keyOf(ask)}`;
 }
 function keepRead(reader, ask, value, now = Date.now()) {
   const kept = readKept4(reader.file);
-  kept.reads[reader.keyOf(ask)] = { at: now, value };
+  kept.reads[reader.keyOf(ask)] = readOf(kept.reads[reader.keyOf(ask)], value, reader.keepsLast, now);
   keep2(reader, kept, now);
 }
 
@@ -20139,10 +20151,23 @@ var ISSUES = {
   keepsLast: true
 };
 var MOST_READ = 200;
-async function readSeen(items, wait) {
-  const asks = items.flatMap((item) => item.source && !item.removed ? [issueAt(item.source.ref)] : []).filter((at) => at !== null).slice(0, MOST_READ);
-  if (asks.length)
-    await readThrough(ISSUES, asks, { wait });
+var TOLD_FRESH = 5 * 60000;
+async function readSeen(items, wait, now = Date.now()) {
+  const { reads } = seenReads();
+  const asks = new Map;
+  for (const item of items) {
+    const at = item.source && !item.removed ? issueAt(item.source.ref) : null;
+    if (!at)
+      continue;
+    const told = item.seen?.checked ?? item.seen?.at;
+    if (told !== undefined && now - told < (DONE_STATES.has(item.seen.state) ? FRESH_DONE : TOLD_FRESH))
+      continue;
+    asks.set(sourceKey(at), at);
+  }
+  const asked = (key) => reads[key]?.checked ?? reads[key]?.at ?? 0;
+  const wanted = [...asks].sort(([a], [b]) => asked(a) - asked(b)).slice(0, MOST_READ).map(([, at]) => at);
+  if (wanted.length)
+    await readThrough(ISSUES, wanted, { wait });
 }
 var cache = null;
 function seenReads() {
@@ -20186,7 +20211,7 @@ function withSeen(summary) {
   let closedAt;
   if (read?.value && !(seen && seen.at >= read.at)) {
     title = read.value.title;
-    seen = { state: read.value.state, at: read.at };
+    seen = { state: read.value.state, at: read.at, ...read.gone ? { gone: true } : {} };
     source = { ...source, kind: read.value.kind, url: read.value.url, id: read.value.id };
     closedAt = read.value.closedAt;
   }
@@ -20215,7 +20240,8 @@ async function readIssue(at) {
   const node = isObject(answer.data.p0) && isObject(answer.data.p0.issueOrPullRequest) ? answer.data.p0.issueOrPullRequest : {};
   return { read, body: typeof node.body === "string" ? node.body : "" };
 }
-var sourceOf = (at, read) => ({ kind: read.kind, ref: refText(at), url: read.url, host: at.host, id: read.id });
+var canonicalOf = (at, read) => issueAt(read.url) ?? at;
+var sourceOf = (at, read) => ({ kind: read.kind, ref: refText(canonicalOf(at, read)), url: read.url, host: at.host, id: read.id });
 
 // Packages/Box/src/link/work-queue/view.ts
 async function factsOf(targets, signal) {
@@ -20485,7 +20511,7 @@ function applyFileOps(acting) {
   for (const op of acting.fileOps.splice(0))
     op();
 }
-var openIn = (book, owner) => book.queue(owner).items.filter((item) => !item.removed && item.category !== "done").length;
+var openIn = (book, owner) => book.queue(owner).items.filter((item) => !item.removed && item.category !== "done" && !(item.source && doneOnGitHub(seenOf(item.source)?.value?.state))).length;
 function addItem2(book, owner, fields, acting, primary, source) {
   const title = plainName(text2(fields.title ?? "", MOST_TITLE * 4, "The title")).slice(0, MOST_TITLE);
   if (!title)
@@ -20996,7 +21022,14 @@ function numberingNow(link) {
 var toldItem = (item, working, titles) => {
   const summary = summaryOf(item, working, titles);
   const from = [...new Set((item.handed ?? []).map((each) => each.from))];
-  return { ...summary, ...summary.lastNote ? { lastNote: { ...summary.lastNote, text: summary.lastNote.text.slice(0, 500) } } : {}, ...from.length ? { handedFrom: from } : {} };
+  const read = summary.seen ? seenOf(item.source) : undefined;
+  const checked = read ? read.checked ?? read.at : undefined;
+  return {
+    ...summary,
+    ...summary.lastNote ? { lastNote: { ...summary.lastNote, text: summary.lastNote.text.slice(0, 500) } } : {},
+    ...from.length ? { handedFrom: from } : {},
+    ...summary.seen && checked !== undefined ? { seen: { ...summary.seen, checked } } : {}
+  };
 };
 async function tellingNow2(targets, link, signal, cache) {
   const facts = await factsOf(targets, signal);
@@ -21007,7 +21040,8 @@ async function tellingNow2(targets, link, signal, cache) {
   const told = items.map((item) => toldItem(item, facts.working, titles));
   const custom = categories().filter((each) => !each.builtIn).map(({ id, name }) => ({ id, name }));
   const content = { items: told, owners, categories: custom, ...numberingNow(link) };
-  const id = "wqt_" + crypto30.createHash("sha256").update(JSON.stringify(content)).digest("base64url").slice(0, 22);
+  const unchecked = { ...content, items: told.map((item) => item.seen?.checked !== undefined ? { ...item, seen: { ...item.seen, checked: undefined } } : item) };
+  const id = "wqt_" + crypto30.createHash("sha256").update(JSON.stringify(unchecked)).digest("base64url").slice(0, 22);
   return { id, payload: { told: { id, at: Date.now(), ...content } } };
 }
 var pushed = new Map;
@@ -36874,7 +36908,7 @@ async function run3(name, args, caller, targets, signal) {
       const fields = issue ? { ...args, title: issue.read.title } : args;
       const item = withFiles(args, caller, acting, () => change4((book) => {
         if (issue)
-          refuseTaken(book.items(), issue.at, caller, overseen);
+          refuseTaken(book.items(), issue.at, caller, overseen, undefined, issue.read.id);
         const made = addItem2(book, caller.owner, fields, acting, primaryOf(), issue ? sourceOf(issue.at, issue.read) : undefined);
         if (issue)
           made.body = issue.body.slice(0, MOST_BODY);
@@ -36907,7 +36941,7 @@ async function run3(name, args, caller, targets, signal) {
         refuseMoving([item.owner]);
         refuseHanding(item);
         if (issue) {
-          refuseTaken(book.items(), issue.at, caller, overseen, item.id);
+          refuseTaken(book.items(), issue.at, caller, overseen, item.id, issue.read.id);
           linkedFrom.number = item.number;
           linkSource(item, sourceOf(issue.at, issue.read), issue.read.title, issue.body, acting);
         }
@@ -36997,25 +37031,28 @@ async function run3(name, args, caller, targets, signal) {
 }
 var seenWords = (state) => ({ open: "open", draft: "a draft", completed: "closed", not_planned: "closed as not planned", merged: "merged", closed: "closed without merging" })[state] ?? state;
 async function issueFor(given, caller, overseen, except) {
-  const at = issueAt(given);
-  if (!at)
+  const named = issueAt(given);
+  if (!named)
     throw new Refusal("Give the issue or pull request (issue) as gh:owner/repo#12, or its address on github.com.");
-  refuseTaken(allItems(), at, caller, overseen, except);
-  const read = await readIssue(at);
+  refuseTaken(allItems(), named, caller, overseen, except);
+  const read = await readIssue(named);
   if ("refused" in read)
     throw new Refusal(read.refused);
+  const at = canonicalOf(named, read.read);
+  refuseTaken(allItems(), at, caller, overseen, except, read.read.id);
   return { at, ...read };
 }
-function refuseTaken(items, at, caller, overseen, except) {
+function refuseTaken(items, at, caller, overseen, except, id) {
   const key = sourceKey(at);
-  const here = items.find((item) => item.id !== except && item.source && sourceKeyOf(item.source) === key);
+  const isIt = (source) => Boolean(source) && (sourceKeyOf(source) === key || id !== undefined && source.id === id);
+  const here = items.find((item) => item.id !== except && isIt(item.source));
   if (here?.removed)
     throw new Refusal(deletedWords(here));
   if (here && inView(caller.owner, here, overseen))
     throw new Refusal(`${nameOf3(here)} is in your Work Queue already: refer to it as ${here.source.ref}.`);
   if (here)
     throw new Refusal(`${nameOf3(here)} is in the Work Queue already, in the queue of ${here.owner}: one item for each issue. Ask that conversation, or the user.`);
-  const far = itemElsewhere({ source: key });
+  const far = itemElsewhere({ source: key }) ?? (id !== undefined ? itemsElsewhere("all").items.find((item) => isIt(item.source)) ?? null : null);
   if (far && far.id !== except)
     throw new Refusal(`${nameOf3(far)} is in the Work Queue already, on ${far.computer.name}: one item for each issue.`);
 }
@@ -37167,7 +37204,8 @@ async function showWords(item, facts, targets, caller) {
     item.progress ? `Progress: ${item.progress.value !== undefined ? `${Math.round(item.progress.value * 100)}%` : ""}${item.progress.value !== undefined && item.progress.note ? " · " : ""}${item.progress.note ?? ""}` : "",
     item.sessions.length ? `Sessions on it: ${item.sessions.map((each) => `${title(each.session)} (${each.session}) ${facts.working.has(each.session) ? "at work" : "not at work"}`).join("; ")}` : "",
     item.body ? `
-${item.body}` : "",
+${item.source ? `Its description on GitHub (a bare #n there is ${item.source.ref.replace(/#\d+$/, "")}'s, not a Work Queue item):
+` : ""}${item.body}` : "",
     item.links.length ? `
 Links:
 ${item.links.map((each) => `- ${each.title ? `${each.title}: ` : ""}${each.url}`).join(`

@@ -12,7 +12,7 @@ import type { Target } from "../../shared/records";
 import type { Item, ItemRef, KeptFile, Link, Note, Source, Who } from "./store";
 import { ITEM_ID } from "./store";
 import { issueAt, sourceKey } from "./sources";
-import { seenOf, withSeen } from "./github";
+import { seenOf, withSeen, type Seen } from "./github";
 
 /** What the box knows of the sessions here, for a view: every one an agent started (put away
  * ones too, so a lead still sees their items), and those at work now. */
@@ -105,8 +105,8 @@ export interface ItemSummary {
   linkCount: number;
   handedBy?: string;
   source?: Source;
-  /** Where its issue or pull request stands on GitHub, as last read (`github.ts`), and when. */
-  seen?: { state: string; at: number };
+  /** Where its issue or pull request stands on GitHub, as last read (`github.ts`), and since when. */
+  seen?: Seen;
   /** The category it's kept in, while GitHub's word makes it Done (`category` "done"). */
   keptIn?: string;
   /** On its way to a conversation on another computer. */

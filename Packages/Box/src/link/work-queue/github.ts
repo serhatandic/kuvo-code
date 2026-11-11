@@ -81,15 +81,32 @@ export const ISSUES: Reader<IssueAt, IssueRead> = {
   keepsLast: true,
 };
 
-/** At most this many read at once, for one view or one ask of chips. */
+/** At most this many read at once, for one view or one ask of chips: those read longest ago first. */
 const MOST_READ = 200;
+/** How fresh what another computer told of one must be for this box not to read it itself: that
+ * computer reads what it shows, and tells it. */
+const TOLD_FRESH = 5 * 60_000;
+
+/** What a summary says of its issue as last read, and when it was last asked (another computer's). */
+export interface Seen { state: string; at: number; checked?: number; gone?: boolean }
 
 /** What GitHub says of the issues and pull requests among `items`, read now where it's due:
  * waiting `wait` ms at most (a read that takes longer goes on, and a client following the view
- * hears of it when it's kept). Only for what a client is showing. */
-export async function readSeen(items: { source?: Source; removed?: unknown }[], wait: number): Promise<void> {
-  const asks = items.flatMap(item => (item.source && !item.removed ? [issueAt(item.source.ref)] : [])).filter((at): at is IssueAt => at !== null).slice(0, MOST_READ);
-  if (asks.length) await readThrough(ISSUES, asks, { wait });
+ * hears of it when it's kept). Only for what a client is showing; not one another computer told of
+ * lately, which reads it itself. */
+export async function readSeen(items: { source?: Source; removed?: unknown; seen?: Seen }[], wait: number, now = Date.now()): Promise<void> {
+  const { reads } = seenReads();
+  const asks = new Map<string, IssueAt>();
+  for (const item of items) {
+    const at = item.source && !item.removed ? issueAt(item.source.ref) : null;
+    if (!at) continue;
+    const told = item.seen?.checked ?? item.seen?.at;
+    if (told !== undefined && now - told < (DONE_STATES.has(item.seen!.state) ? FRESH_DONE : TOLD_FRESH)) continue;
+    asks.set(sourceKey(at), at);
+  }
+  const asked = (key: string) => reads[key]?.checked ?? reads[key]?.at ?? 0;
+  const wanted = [...asks].sort(([a], [b]) => asked(a) - asked(b)).slice(0, MOST_READ).map(([, at]) => at);
+  if (wanted.length) await readThrough(ISSUES, wanted, { wait });
 }
 
 // What's kept, read again only when the file changed.
@@ -136,7 +153,7 @@ interface Shown {
   category: string;
   inProgress: boolean;
   source?: Source;
-  seen?: { state: string; at: number };
+  seen?: Seen;
   keptIn?: string;
   doneAt?: number;
 }
@@ -156,7 +173,7 @@ export function withSeen<S extends Shown>(summary: S): S {
   let closedAt: number | undefined;
   if (read?.value && !(seen && seen.at >= read.at)) {
     title = read.value.title;
-    seen = { state: read.value.state, at: read.at };
+    seen = { state: read.value.state, at: read.at, ...(read.gone ? { gone: true } : {}) };
     source = { ...source, kind: read.value.kind, url: read.value.url, id: read.value.id };
     closedAt = read.value.closedAt;
   }
@@ -193,5 +210,10 @@ export async function readIssue(at: IssueAt): Promise<{ read: IssueRead; body: s
   return { read, body: typeof node.body === "string" ? node.body : "" };
 }
 
-/** An item's source as it's kept: the stored ref, its page, and GitHub's id and kind. */
-export const sourceOf = (at: IssueAt, read: IssueRead): Source => ({ kind: read.kind, ref: refText(at), url: read.url, host: at.host, id: read.id });
+/** Where GitHub says it is: its owner's and repository's names as GitHub writes them, after a
+ * rename or a transfer too (from its page); else as it was named. */
+export const canonicalOf = (at: IssueAt, read: IssueRead): IssueAt => issueAt(read.url) ?? at;
+
+/** An item's source as it's kept: the stored ref (GitHub's own names), its page, and GitHub's id
+ * and kind. */
+export const sourceOf = (at: IssueAt, read: IssueRead): Source => ({ kind: read.kind, ref: refText(canonicalOf(at, read)), url: read.url, host: at.host, id: read.id });

@@ -10156,7 +10156,9 @@
          "seen?": {
           "object": {
            "state": "string",
-           "at": "number"
+           "at": "number",
+           "checked?": "number",
+           "gone?": "bool"
           }
          },
          "keptIn?": "string",
@@ -10356,7 +10358,9 @@
          "seen?": {
           "object": {
            "state": "string",
-           "at": "number"
+           "at": "number",
+           "checked?": "number",
+           "gone?": "bool"
           }
          },
          "keptIn?": "string",
@@ -10562,7 +10566,9 @@
          "seen?": {
           "object": {
            "state": "string",
-           "at": "number"
+           "at": "number",
+           "checked?": "number",
+           "gone?": "bool"
           }
          },
          "keptIn?": "string",
@@ -10762,7 +10768,9 @@
          "seen?": {
           "object": {
            "state": "string",
-           "at": "number"
+           "at": "number",
+           "checked?": "number",
+           "gone?": "bool"
           }
          },
          "keptIn?": "string",
@@ -10935,7 +10943,9 @@
            "seen?": {
             "object": {
              "state": "string",
-             "at": "number"
+             "at": "number",
+             "checked?": "number",
+             "gone?": "bool"
             }
            },
            "title": "string",
@@ -10995,7 +11005,9 @@
            "seen?": {
             "object": {
              "state": "string",
-             "at": "number"
+             "at": "number",
+             "checked?": "number",
+             "gone?": "bool"
             }
            },
            "title": "string",
@@ -11155,7 +11167,9 @@
         "seen?": {
          "object": {
           "state": "string",
-          "at": "number"
+          "at": "number",
+          "checked?": "number",
+          "gone?": "bool"
          }
         },
         "keptIn?": "string",
@@ -11391,7 +11405,9 @@
         "seen?": {
          "object": {
           "state": "string",
-          "at": "number"
+          "at": "number",
+          "checked?": "number",
+          "gone?": "bool"
          }
         },
         "keptIn?": "string",
@@ -11587,7 +11603,9 @@
         "seen?": {
          "object": {
           "state": "string",
-          "at": "number"
+          "at": "number",
+          "checked?": "number",
+          "gone?": "bool"
          }
         },
         "keptIn?": "string",
@@ -11783,7 +11801,9 @@
         "seen?": {
          "object": {
           "state": "string",
-          "at": "number"
+          "at": "number",
+          "checked?": "number",
+          "gone?": "bool"
          }
         },
         "keptIn?": "string",
