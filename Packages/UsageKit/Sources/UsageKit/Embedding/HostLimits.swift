@@ -173,7 +173,9 @@ public final class HostLimits {
     /// What the Bars view lists: each of the panel's providers in its order, one the host covers as
     /// the rows this Mac has a share in when it has them (the first with the provider's spend under
     /// it), then the rest; then the host's rows for providers the panel doesn't list, unless you
-    /// hid that provider. A row beside a bar of the panel's own of its name says where it's from.
+    /// hid that provider. Where this Mac has none yet and the panel's own bar has no limits to show
+    /// (`limitsOnlyFromHost`), the other computers' rows take its place as this Mac's would. A row
+    /// beside a bar of the panel's own of its name says where it's from.
     func entries(groups: [ProviderGroup], known: (String) -> Provider? = { _ in nil }, isHidden: (String) -> Bool) -> [BarsEntry] {
         var entries: [BarsEntry] = []
         var placed = Set<String>()
@@ -188,11 +190,11 @@ public final class HostLimits {
             let family = ProviderAccountID.family(of: group.provider.id)
             guard !placed.contains(family + "|") else { continue }
             let mine = rows.filter { ProviderAccountID.family(of: $0.providerID) == family }
-            let local = mine.filter(\.isLocal)
+            let first = takingPlace(of: family)
             // This Mac's own logins in place of the panel's bar, its spend under the first; with
             // none from this Mac's box yet, the panel's own bar, as it was. Then the machines'.
-            if covers(family), !local.isEmpty, !isHidden(family) {
-                for (index, row) in local.enumerated() { entries.append(host(row, group.provider, index == 0 ? group : nil)) }
+            if covers(family), !first.isEmpty, !isHidden(family) {
+                for (index, row) in first.enumerated() { entries.append(host(row, group.provider, index == 0 ? group : nil)) }
                 placed.insert(family + "|")
             } else {
                 entries.append(.group(group))
@@ -200,7 +202,8 @@ public final class HostLimits {
                 if !covers(family) { continue }
             }
             placed.insert(family + "|")
-            for row in mine where !row.isLocal && !isHidden(family) { entries.append(host(row, group.provider, nil)) }
+            let taken = Set(first.map(\.id))
+            for row in mine where !row.isLocal && !taken.contains(row.id) && !isHidden(family) { entries.append(host(row, group.provider, nil)) }
             placed.formUnion(mine.map(\.id))
         }
         for row in rows where !placed.contains(row.id) && !isHidden(row.providerID) {
@@ -209,14 +212,30 @@ public final class HostLimits {
         return entries
     }
 
-    /// The panel's own bars a phone gets (`kuvo/usage`), in the Bars view's order: those this
-    /// Mac's box states rows for say so (`covers`, their service), keeping only what the box doesn't
-    /// state (spend, its trend), which the phone shows under the first of those rows, where they go.
+    /// The panel's providers whose own bar shows no limits while the host covers them: Claude's
+    /// (`ClaudeProvider` leaves them to this Mac's box), so it's only the provider's spend. Every
+    /// other provider's bar reads its own limits (yours, outside Kuvo Code) until this Mac's box
+    /// has a row of it.
+    static let limitsOnlyFromHost: Set<String> = ["claude"]
+
+    /// The rows that take the place of the panel's own bar of a covered provider: this Mac's own
+    /// logins; with none yet, where its bar has no limits of its own, the other computers' (one row
+    /// per account across them, so an account on several is still one row, by its own name).
+    private func takingPlace(of family: String) -> [HostLimitRow] {
+        let mine = rows.filter { ProviderAccountID.family(of: $0.providerID) == family }
+        let local = mine.filter(\.isLocal)
+        return local.isEmpty && Self.limitsOnlyFromHost.contains(family) ? mine : local
+    }
+
+    /// The panel's own bars a phone gets (`kuvo/usage`), in the Bars view's order: those whose
+    /// place the box's rows take, as the Bars view takes them (`takingPlace`), say so (`covers`,
+    /// their service), keeping only what the box doesn't state (spend, its trend), which the phone
+    /// shows under the first of those rows, where they go.
     func phoneGroups(_ groups: [ProviderGroup]) -> [(group: ProviderGroup, covers: String?)] {
         var placed = Set<String>()
         return groups.compactMap { group in
             let family = ProviderAccountID.family(of: group.provider.id)
-            guard covers(family), rows.contains(where: { $0.isLocal && ProviderAccountID.family(of: $0.providerID) == family }) else { return (group, nil) }
+            guard covers(family), !takingPlace(of: family).isEmpty else { return (group, nil) }
             // (One place per service: its other account cards go with it.)
             guard placed.insert(family).inserted else { return nil }
             return (group, family)
