@@ -102,6 +102,7 @@ import type { SignedDoc } from "../shared/documents";
 import type { EngineRecord } from "../shared/records";
 import { fenceOwnPort, keepFence } from "./fence/state";
 import { keepApprovals } from "./areas/approval";
+import { keepGroupSettings } from "./areas/group-settings";
 import type { KeptNotice } from "./notices/hold";
 import type { Notice } from "./notices/notice";
 import type { GivenLibrary } from "./personalities/library";
@@ -369,6 +370,8 @@ async function run(): Promise<void> {
   keepFence();
   // Conversations' approval kept to what it comes to as the sandbox starts or stops.
   keepApprovals();
+  // What its group chats go by, worked out here and given to the bridge that runs them.
+  keepGroupSettings();
   // The vault, held here: its key in this process's memory, its asks told to your phones.
   holdVault(engineHandler(readEngineFile, { name: os.hostname() }));
   setVaultTell(tell);
@@ -658,6 +661,7 @@ async function serve(): Promise<void> {
   fenceOwnPort((server.address() as AddressInfo).port);
   keepFence();
   keepApprovals();
+  keepGroupSettings();
   keepEngineDefaults();
   // The vault, held here (on a machine, `run` holds it; a test's box serves alone), its asks told
   // to your phones through this Mac's link: listening before it says where it is, so what reaches

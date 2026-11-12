@@ -69,14 +69,14 @@ export interface BotWords {
 
 /** What a Mac gave this box of what's its own (`bots/kit.json`, the Mac's Bots.MachineKit): the
  * name it calls this machine, the personalities you made, the model a bot starts on, its projects,
- * the rules a new conversation gets, your time zone and (for a machine) its rules, base64. */
+ * your time zone and (for a machine) its rules, base64. (An older Mac's has the rules a new
+ * conversation gets, from its own last pick, too: not read, as this box makes a bot's from its own.) */
 export interface MacKit {
   kuvo: 1;
   machine?: string;
   personalities: BotPersonality[];
   startingModel?: BotModel | null;
   projects: OfferedProject[];
-  rules: KitRule[];
   timeZone: string;
   zoneinfo?: string;
 }
@@ -99,7 +99,6 @@ export interface BotKit {
   greeting: string;
   startingModel: BotModel | null;
   projects: OfferedProject[];
-  rules: KitRule[];
   timeZone: string;
   zoneinfo?: string;
 }
@@ -140,8 +139,7 @@ export function readWords(file = WORDS_FILE): BotWords | null {
 
 // What this box makes bots with: its own words, filled in for where it runs, with what's its own
 // from the kit its Mac gave it (the name the Mac calls it, your time zone, the model a bot starts
-// on, its projects, the rules a new conversation gets, and the personalities you made, until its
-// library has them), or else its own. This Mac's box needs its app's kit; a machine makes bots
+// on, its projects, and the personalities you made, until its library has them), or else its own. This Mac's box needs its app's kit; a machine makes bots
 // without one. An older Mac's kit has its own words too, which aren't used: the box is never older
 // than a Mac that connects.
 // `system` is a platform name, only a test passes it: a box says which system it is from its own.
@@ -166,7 +164,7 @@ export function readKit(system: string = process.platform): BotKit | null {
     instructions: wordsHere(words, here, system, machine, timeZone),
     job: { none: String(words.job.none ?? ""), line: String(words.job.line ?? ""), details: String(words.job.details ?? "") },
     projectNote: words.projectNote, identityNote: words.identityNote, memory: words.memory, greeting: words.greeting,
-    startingModel: mac?.startingModel ?? null, projects: Array.isArray(mac?.projects) ? mac.projects : [], rules: Array.isArray(mac?.rules) ? mac.rules : [],
+    startingModel: mac?.startingModel ?? null, projects: Array.isArray(mac?.projects) ? mac.projects : [],
     timeZone: timeZone || "UTC",
     ...(typeof mac?.zoneinfo === "string" ? { zoneinfo: mac.zoneinfo } : {}),
   };

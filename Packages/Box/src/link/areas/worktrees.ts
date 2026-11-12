@@ -14,13 +14,13 @@ import { bridgeTarget, call, engineGet, readBridgeFile, readEngineFile } from ".
 import type { EngineAnswer } from "../engine/client";
 import { isHiddenRun } from "../engine/sessions";
 import type { EngineSession } from "../engine/sessions";
-import { writePrivate } from "../files";
 import { followed } from "../follow";
 import { BY_KUVO, firstCommit, gitAsked, gitIn, gitLater, sizeLater } from "../git";
 import { ENGINE_DATA, homeFolder } from "../home";
 import type { AnswerPiece, JSONAnswer, RouteContext } from "../server/context";
 import { readProjects } from "./projects";
-import { BRANCH_PREFIX_FILE, branchPrefix, readRestorableWorktrees, readWorktrees, updateWorktrees, worktreeFollowers } from "./worktree-records";
+import { branchPrefixHere, keepInGitFile } from "./git-words";
+import { readRestorableWorktrees, readWorktrees, updateWorktrees, worktreeFollowers } from "./worktree-records";
 import type { RestorableWorktree, WorktreeRecord } from "./worktree-records";
 
 /** Sessions by the folder they run in, and which are at work (their ids). */
@@ -29,8 +29,8 @@ interface SessionsHere {
   active: Set<string>;
 }
 
-/** What a client sends `kuvo/worktrees…`, as it comes: a new one's project and branch prefix, one
- * an older Mac kept, one to remove (`path`, `forget`, `discard`), or one to restore (`folder`, where
+/** What a client sends `kuvo/worktrees…`, as it comes: a new one's project (and an older Mac's
+ * branch prefix), one an older Mac kept, one to remove (`path`, `forget`, `discard`), or one to restore (`folder`, where
  * its sessions ran). Each is checked as it's used. */
 export interface WorktreesBody {
   project?: unknown;
@@ -258,9 +258,9 @@ export async function answerWorktrees(method: string, requestPath: string, body:
     const project = body?.project;
     if (typeof project !== "string" || !path.isAbsolute(project) || !fs.existsSync(project)) return { status: 400, value: message("Send the project's folder on this machine as {\"project\"}.") };
     if (!engine?.port) return { status: 503, value: message("The engine isn't running.") };
-    // What its branch's name starts with: as given, and kept for a client that doesn't say (a
-    // phone), so one made from there starts as yours do.
-    const kept = branchPrefix();
+    // What its branch's name starts with: Settings › Git's on this computer.
+    // COMPAT(beta.1 worktree-prefix): a Mac's own, sent with each, used as given and kept for a client that sends none while this box has none set. Goes when 0.8.0 ships.
+    const kept = branchPrefixHere();
     const prefix = typeof body?.branchPrefix === "string" ? body.branchPrefix : kept;
     // Where the project is in its repository, as git sees it (through any links in its path).
     const subpath = gitIn(project, ["rev-parse", "--show-prefix"]);
@@ -285,7 +285,7 @@ export async function answerWorktrees(method: string, requestPath: string, body:
       return { status: 502, value: message(prefix ? `A branch starting with “${prefix}” couldn’t be made in this repository. Change the branch prefix in Settings › Git, then try again.` : "Its branch couldn't be made.") };
     }
     // The prefix it was made with, kept for a client that gives none, once a branch with it was made.
-    if (prefix !== kept) writePrivate(BRANCH_PREFIX_FILE, JSON.stringify({ branchPrefix: prefix }));
+    if (prefix !== kept) keepInGitFile({ branchPrefix: prefix }); // COMPAT(beta.1 worktree-prefix): kept for a client that sends none. Goes when 0.8.0 ships.
     const tree = { project, root, folder: subpath ? path.join(root, subpath.replace(/\/$/, "")) : root, branch, ...(base ? { base } : {}), made: branch, prefix } satisfies WorktreeRecordShape;
     updateWorktrees(list => [...list.filter(each => each.root !== root), tree]);
     return { status: 200, value: tree };

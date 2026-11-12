@@ -280,6 +280,20 @@ test("a session a phone makes in a worktree it asked for is told it works there"
   assert.equal((await ask("POST", "kuvo/worktrees/remove", { path: made.root, forget: true })).status, 200);
 });
 
+test("a worktree asked for by any client starts its branch as Settings › Git says on that computer, as git takes it", async () => {
+  const settings = path.join(process.env.KUVO_HOME, "box", "opencode.json");
+  fs.mkdirSync(path.dirname(settings), { recursive: true });
+  fs.writeFileSync(settings, JSON.stringify({ branch_prefix: " -ada:/ " }));
+  try {
+    const made = (await ask("POST", "kuvo/worktrees", { project })).value;
+    assert.match(made.branch, /^ada\/brave-otter-\d+$/);
+    assert.equal(made.prefix, "ada/");
+    assert.equal((await ask("POST", "kuvo/worktrees/remove", { path: made.root, forget: true })).status, 200);
+  } finally {
+    fs.rmSync(settings);
+  }
+});
+
 test("the machine names a branch after its session's title, once, and only one it made", async () => {
   const made = (await ask("POST", "kuvo/worktrees", { project, branchPrefix: "me/" })).value;
   sessions.push({ id: "ses_named", title: "Giriş düzeltmesi", location: { directory: made.folder } });

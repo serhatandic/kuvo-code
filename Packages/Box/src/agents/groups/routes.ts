@@ -17,18 +17,26 @@ export async function groupRoutes(runner: GroupRunner | undefined, store: GroupS
     if (method === "GET") return json({ version, data: runner.list() })
     return error(405, "Not allowed")
   }
-  // What the Mac says for every chat here: personalities, Ask First, what's denied, the time zone.
-  if (id === "settings" && method === "PUT") {
+  // What every chat here goes by. The box's link works out its own (`settings/box`: what each
+  // personality tells a bot, who sets what about one, Ask First, what's denied); a client says only
+  // your clock (time zone, how you write dates), which a machine can't know. (An older Mac sends
+  // the rest too, which the box's own stand over.)
+  if (id === "settings" && method === "PUT" && (action === undefined || action === "box")) {
     const value = await body()
     const before = store.settings()
-    store.writeSettings({
-      personalities: value?.personalities && typeof value.personalities === "object" ? value.personalities : {},
-      identityNote: typeof value?.identityNote === "string" ? value.identityNote : "",
-      askFirst: value?.askFirst === true,
-      denies: Array.isArray(value?.denies) ? value.denies : [],
-      timeZone: typeof value?.timeZone === "string" ? value.timeZone : undefined,
-      locale: typeof value?.locale === "string" ? value.locale : undefined,
-    })
+    if (action === "box") {
+      store.writeSettings({
+        personalities: value?.personalities && typeof value.personalities === "object" ? value.personalities : {},
+        identityNote: typeof value?.identityNote === "string" ? value.identityNote : "",
+        askFirst: value?.askFirst === true,
+        denies: Array.isArray(value?.denies) ? value.denies : [],
+      })
+    } else {
+      store.writeSettings({
+        timeZone: typeof value?.timeZone === "string" ? value.timeZone : undefined,
+        locale: typeof value?.locale === "string" ? value.locale : undefined,
+      })
+    }
     const after = store.settings()
     if (JSON.stringify([before?.askFirst, before?.denies]) !== JSON.stringify([after?.askFirst, after?.denies])) runner.rulesChanged()
     return json({})
