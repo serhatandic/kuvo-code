@@ -3227,6 +3227,9 @@
             "literal": "sandbox.check"
            },
            {
+            "literal": "sandbox.reviews.settled"
+           },
+           {
             "literal": "sandbox.reviews.whole"
            },
            {
@@ -3590,6 +3593,9 @@
            },
            {
             "literal": "sandbox.check"
+           },
+           {
+            "literal": "sandbox.reviews.settled"
            },
            {
             "literal": "sandbox.reviews.whole"
@@ -7248,6 +7254,26 @@
            },
            {
             "literal": "yours"
+           }
+          ]
+         },
+         "at": "number"
+        }
+       }
+      },
+      "settled?": {
+       "list": {
+        "object": {
+         "id": "string",
+         "session": "string",
+         "call?": "string",
+         "state": {
+          "oneOf": [
+           {
+            "literal": "answered"
+           },
+           {
+            "literal": "gone"
            }
           ]
          },

@@ -319,6 +319,212 @@ test("every client hears which of a conversation's asks Auto's reviewer is check
   }
 })
 
+test("the box keeps each ask Auto's reviewer takes up as every client reads it: checked, then yours, then answered or gone, and nothing stale once its run ends or its engine or the box starts again (sandbox.reviews.settled)", async () => {
+  type Listed = { reviews?: { id: string; state: string }[]; settled?: { id: string; session: string; state: string }[] }
+  // What a client reads (`reviews` and `settled` on `kuvo/sandbox/asks`): each ask's state, wherever it's listed.
+  const listed = async (): Promise<Listed> => JSON.parse(JSON.stringify({ reviews: reviewing.listAskReviews(), settled: reviewing.listSettledReviews?.() ?? [] }))
+  const stateOf = (list: Listed, id: string) => list.reviews?.find(each => each.id === id)?.state ?? list.settled?.find(each => each.id === id)?.state ?? null
+  const waits = (list: Listed, id: string) => list.reviews?.some(each => each.id === id && (each.state === "checking" || each.state === "yours")) ?? false
+  const source = { port: engine.port, password: "pw" } as never
+  const states: Record<string, string[]> = {}
+  const stop = reviewing.onAskReviewsChanged(() => {
+    for (const each of reviewing.listAskReviews()) if (each.id.startsWith("per_k") && states[each.id]?.at(-1) !== each.state) (states[each.id] ??= []).push(each.state)
+  })
+  // `session` asks to edit a file outside its folder, as the engine's event says.
+  const asks = (session: string, ...ids: string[]) => {
+    calling[session] = ids.map(id => ({ type: "tool", id: `call_${id}`, name: "edit", state: { input: { filePath: join(box, "notes", `${id}.md`) } } }))
+    asking[session] = ids.map(id => ({ id, action: "external_directory", resources: [join(box, "notes", "*")], source: { id: `call_${id}`, messageID: "msg_1" } }))
+  }
+  const heard = (session: string, id: string) => reviewing.reviewPermission(source, { type: "permission.asked", data: { id, sessionID: session, action: "external_directory" } }, undefined, undefined, "engine")
+  try {
+    // Checked as it's heard, then left for you (not in Auto), then answered.
+    conversation("ses_kept", "askFirst", "Update the shared notes")
+    asks("ses_kept", "per_k1")
+    await heard("ses_kept", "per_k1")
+    expect(states.per_k1).toEqual(["checking", "yours"])
+    expect(stateOf(await listed(), "per_k1")).toBe("yours")
+    asking.ses_kept = []
+    reviewing.settleAskReview("per_k1")
+    let now = await listed()
+    expect(stateOf(now, "per_k1")).toBe("answered")
+    expect(waits(now, "per_k1")).toBe(false)
+
+    // Left for you, and its run ends (stopped, say): gone with it, with no word of the ask.
+    asks("ses_kept", "per_k2")
+    await heard("ses_kept", "per_k2")
+    expect(stateOf(await listed(), "per_k2")).toBe("yours")
+    asking.ses_kept = []
+    reviewing.settleRunReviews("ses_kept")
+    now = await listed()
+    expect(now.settled?.find(each => each.id === "per_k2")).toMatchObject({ session: "ses_kept", state: "gone" })
+    expect(waits(now, "per_k2")).toBe(false)
+
+    // Left for you, and its engine starts again unheard, taking the ask with it: as the box hears
+    // the engine again, it's gone, never left for you.
+    asks("ses_kept", "per_k3")
+    await heard("ses_kept", "per_k3")
+    expect(stateOf(await listed(), "per_k3")).toBe("yours")
+    asking.ses_kept = []
+    await reviewing.takeUpWaitingAsks(source, [], undefined, "engine")
+    now = await listed()
+    expect(stateOf(now, "per_k3")).toBe("gone")
+    expect(waits(now, "per_k3")).toBe(false)
+
+    // Its session deleted while the box wasn't listening (its engine answers it doesn't have it):
+    // gone too. One asked on the coding agents' bridge is that place's to look for again.
+    conversation("ses_deleted", "askFirst", "Update the shared notes")
+    asks("ses_deleted", "per_k6")
+    await heard("ses_deleted", "per_k6")
+    conversation("ses_bridged", "askFirst", "Update the shared notes")
+    asks("ses_bridged", "per_k7")
+    await reviewing.reviewPermission(source, { type: "permission.asked", data: { id: "per_k7", sessionID: "ses_bridged", action: "external_directory" } }, undefined, undefined, "bridge")
+    asking.ses_bridged = []
+    delete sessions.ses_deleted
+    await reviewing.takeUpWaitingAsks(source, [], undefined, "engine")
+    now = await listed()
+    expect(stateOf(now, "per_k6")).toBe("gone")
+    expect(stateOf(now, "per_k7")).toBe("yours")
+
+    // In Auto, its run stopped while the box was still reading what it asked: never checked again
+    // nor reviewed, nor left for you once the reviewer's answer can't go.
+    conversation("ses_late", "auto", "Update the shared notes")
+    asks("ses_late", "per_k8")
+    const words = said.ses_late
+    let stopped = false
+    Object.defineProperty(said, "ses_late", { configurable: true, enumerable: true, get() {
+      if (!stopped) {
+        stopped = true
+        asking.ses_late = []
+        reviewing.settleRunReviews("ses_late")
+      }
+      return words
+    } })
+    const reviewed = prompts.length
+    await heard("ses_late", "per_k8").catch(() => null)
+    now = await listed()
+    expect(stopped).toBe(true)
+    expect(stateOf(now, "per_k8")).toBe("gone")
+    expect(prompts.length).toBe(reviewed)
+
+    // In Auto, answered on your phone just as the reviewer answers it, whose own answer then
+    // can't go: listed answered, never left for you.
+    conversation("ses_both", "auto", "Update the shared notes")
+    reply = () => '{"decision": "allow", "reason": "The notes the user asked for."}'
+    asks("ses_both", "per_k9")
+    // (Its engine, but for that answer: your answer's event comes first, and the reviewer's is too late.)
+    const late = Bun.serve({
+      port: 0,
+      async fetch(request) {
+        const url = new URL(request.url)
+        if (request.method === "POST" && url.pathname.endsWith("/permission/per_k9/reply")) {
+          reviewing.settleAskReview("per_k9")
+          return Response.json({ message: "That request was answered already." }, { status: 404 })
+        }
+        return fetch(`http://127.0.0.1:${engine.port}${url.pathname}${url.search}`, { method: request.method, headers: request.headers, body: request.method === "GET" ? undefined : await request.text() })
+      },
+    })
+    try {
+      await reviewing.reviewPermission({ port: late.port, password: "pw" } as never, { type: "permission.asked", data: { id: "per_k9", sessionID: "ses_both", action: "external_directory" } }, undefined, undefined, "engine").catch(() => null)
+    } finally {
+      late.stop(true)
+    }
+    expect(stateOf(await listed(), "per_k9")).toBe("answered")
+
+    // Heard as its session was deleted, before the box could read it: gone, never yours.
+    await reviewing.reviewPermission(source, { type: "permission.asked", data: { id: "per_k10", sessionID: "ses_vanished", action: "external_directory" } }, undefined, undefined, "engine")
+    expect(stateOf(await listed(), "per_k10")).toBe("gone")
+    expect(reviewing.isOver("per_k10") && reviewing.isOver("per_k1") && !reviewing.isOver("per_k4")).toBe(true)
+
+    // Two left for you, and the box starts again: one its engine still asks is listed again from
+    // the start (checked, then yours), the one gone meanwhile isn't listed as waiting.
+    conversation("ses_kept2", "askFirst", "Update the shared notes")
+    asks("ses_kept2", "per_k4", "per_k5")
+    await heard("ses_kept2", "per_k4")
+    await heard("ses_kept2", "per_k5")
+    asks("ses_kept2", "per_k4")
+    // (The box's process started again: the module fresh, as the engine still runs.)
+    const restarted = await import(String("../src/link/work/reviewing.ts?restarted")) as typeof import("../src/link/work/reviewing")
+    expect(restarted.listAskReviews()).toEqual([])
+    await restarted.takeUpWaitingAsks(source, ["ses_kept2"], undefined, "engine")
+    const after = { reviews: restarted.listAskReviews(), settled: restarted.listSettledReviews?.() ?? [] }
+    expect(stateOf(after, "per_k4")).toBe("yours")
+    expect(waits(after, "per_k5")).toBe(false)
+  } finally {
+    stop()
+  }
+})
+
+test("an ask Auto's reviewer was checking when you stopped its run reaches none of your phones (sandbox.reviews.settled)", async () => {
+  const { watchEvents } = await import("../src/link/engine/watch")
+  const told: { data?: Record<string, unknown> }[] = []
+  let send: (event: unknown) => void = () => {}
+  let following: () => void = () => {}
+  const followed = new Promise<void>(done => { following = done })
+  let answered: () => void = () => {}
+  const answerRefused = new Promise<void>(done => { answered = done })
+  let toldOther: () => void = () => {}
+  const otherTold = new Promise<void>(done => { toldOther = done })
+  // Its engine, with its events, but for what's said here: as the reviewer asks the model, you
+  // stop the run (its event comes, and the box lists the ask gone); then its answer can't go.
+  const engineAt = Bun.serve({
+    port: 0,
+    idleTimeout: 0,
+    async fetch(request) {
+      const url = new URL(request.url)
+      if (url.pathname === "/api/event") {
+        return new Response(new ReadableStream({ start(stream) {
+          send = event => stream.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(event)}\n\n`))
+          following()
+        } }), { headers: { "content-type": "text/event-stream" } })
+      }
+      if (request.method === "POST" && url.pathname === "/api/experimental/generate") {
+        const stopped = new Promise<void>(done => {
+          const stop = reviewing.onAskReviewsChanged(() => { if (reviewing.isOver("per_n1")) { stop(); done() } })
+        })
+        asking.ses_tell = []
+        send({ type: "session.execution.interrupted", data: { sessionID: "ses_tell", reason: "user" } })
+        await stopped
+      }
+      if (request.method === "POST" && url.pathname.endsWith("/permission/per_n1/reply")) {
+        answered()
+        return Response.json({ message: "That request isn't asked any more." }, { status: 404 })
+      }
+      return fetch(`http://127.0.0.1:${engine.port}${url.pathname}${url.search}`, { method: request.method, headers: request.headers, body: request.method === "GET" ? undefined : await request.text() })
+    },
+  })
+  writeFileSync(engineFile, JSON.stringify({ pid: process.pid, port: engineAt.port, password: "pw", version: "test" }))
+  const stop = new AbortController()
+  const asked = (id: string, session: string, action: string, resources: string[]) => ({ type: "permission.asked", data: { id, sessionID: session, action, resources } })
+  try {
+    conversation("ses_tell", "auto", "Update the shared notes")
+    conversation("ses_other", "askFirst", "Run the tests")
+    asking.ses_other = [{ id: "per_n2", action: "shell", resources: ["npm test"] }]
+    reply = () => '{"decision": "allow", "reason": "The notes the user asked for."}'
+    calling.ses_tell = [{ type: "tool", id: "call_per_n1", name: "edit", state: { input: { filePath: join(box, "notes", "per_n1.md") } } }]
+    asking.ses_tell = [{ id: "per_n1", action: "external_directory", resources: [join(box, "notes", "*")], source: { id: "call_per_n1", messageID: "msg_1" } }]
+    void watchEvents(() => ({ port: engineAt.port, password: "pw" }) as never, notice => {
+      told.push(notice as never)
+      if ((notice as { data?: { request?: unknown } }).data?.request === "per_n2") toldOther()
+      return true
+    }, stop.signal, () => {}, { work: "engine" })
+    await followed
+    const first = asked("per_n1", "ses_tell", "external_directory", [join(box, "notes", "*")])
+    send(first)
+    await answerRefused
+    // (The reviewer's answer couldn't go: what follows of that ask has come by now.)
+    await reviewing.reviewPermission({ port: engineAt.port, password: "pw" } as never, first).catch(() => null)
+    // Then another conversation asks you something: told, and nothing before it.
+    send(asked("per_n2", "ses_other", "shell", ["npm test"]))
+    await otherTold
+    expect(reviewing.isOver("per_n1")).toBe(true)
+    expect(told.map(each => each.data?.request)).toEqual(["per_n2"])
+  } finally {
+    stop.abort()
+    engineAt.stop(true)
+    writeFileSync(engineFile, JSON.stringify({ pid: process.pid, port: engine.port, password: "pw", version: "test" }))
+  }
+}, 30_000)
+
 // The engine doesn't answer for a moment (starting again, busy): `work` runs meanwhile.
 async function engineDown(work: () => Promise<void>) {
   down = true
