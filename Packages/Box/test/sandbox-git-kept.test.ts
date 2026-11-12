@@ -41,6 +41,9 @@ interface Way {
   after?: string
   /** A way in Linux's sandbox doesn't close yet (PROTOCOL.md, "Sandbox"), which a Mac's does. */
   openOnLinux?: boolean
+  /** One a Mac's doesn't (#422: its rules keep git's own files by their names, not where a link there
+   * leads, nor what a repository's `commondir` already names), which Linux's does. */
+  openOnMac?: boolean
 }
 
 // (Each a shell script; the conversation's folder is the current one, its repository `$G`.)
@@ -68,20 +71,26 @@ const WAYS: Record<string, Way> = {
   "a hook, its linked folder traded for one of its own": { before: "mv .git/hooks ../hooks-kept && ln -s ../../hooks-kept .git/hooks", tries: `rm "$G/hooks" && mkdir "$G/hooks" && printf '%s\\n' "$HOOK" > "$G/hooks/pre-commit" && chmod +x "$G/hooks/pre-commit"` },
   "its git settings, their link traded for a file of its own": { before: "mv .git/config ../config-kept && ln -s ../../config-kept .git/config", tries: `rm "$G/config" && cp "$G/../../config-kept" "$G/config" && printf '[core]\\n\\tfsmonitor = %s\\n' "$FSMONITOR" >> "$G/config"` },
   "its git settings, its folder made read-only first": { before: "rm -rf .git/hooks && chmod a-w .git", tries: `chmod u+w "$G"; printf '[core]\\n\\tfsmonitor = %s\\n' "$FSMONITOR" >> "$G/config"`, after: "chmod u+w .git" },
-  "a submodule's folder led elsewhere, its repository read-only whole": { submodule: true, before: "mv .git/hooks ../hooks-kept && ln -s ../../hooks-kept .git/hooks", tries: `cp -R "$G/modules/lib" evil && git config --file evil/config --unset core.worktree; git config --file evil/config core.fsmonitor "$FSMONITOR" && printf 'gitdir: %s\\n' "$PWD/evil" > lib/.git` },
+  "a submodule's folder led elsewhere, its hooks a link": { submodule: true, before: "mv .git/hooks ../hooks-kept && ln -s ../../hooks-kept .git/hooks", tries: `cp -R "$G/modules/lib" evil && git config --file evil/config --unset core.worktree; git config --file evil/config core.fsmonitor "$FSMONITOR" && printf 'gitdir: %s\\n' "$PWD/evil" > lib/.git` },
   "a submodule's folder traded for another": { submodule: true, openOnLinux: true, tries: `cp -R "$G/modules/lib" evil && git config --file evil/config --unset core.worktree; git config --file evil/config core.fsmonitor "$FSMONITOR" && mv lib lib-old && mkdir lib && printf 'gitdir: %s\\n' "$PWD/evil" > lib/.git` },
+  // (A repository the launcher can't give what it lacks, which commands only read: every check
+  // still runs there. A Mac's rules don't look where a link or a commondir already leads, #422.)
+  "a submodule's hooks a link to its folder, its repository read-only whole": { submodule: true, openOnMac: true, before: "mv .git/modules/lib/hooks lib-hooks && ln -s ../../../lib-hooks .git/modules/lib/hooks && rm -rf .git/hooks && chmod a-w .git", tries: `printf '%s\\n' "$HOOK" > lib-hooks/post-checkout && chmod +x lib-hooks/post-checkout`, after: "chmod u+w .git" },
+  "a common folder led into its folder, its repository read-only whole": { openOnMac: true, before: "rm -rf .git/hooks && cp -R .git evil && printf '../evil\\n' > .git/commondir && chmod a-w .git", tries: `git config core.fsmonitor "$FSMONITOR"`, after: "chmod u+w .git" },
+  "a worktree's common folder led into its folder, its repository read-only whole": { worktree: true, openOnMac: true, before: "rm -rf .git/hooks && cp -R .git ../wt/evil && printf '%s\\n' \"$(cd ../wt && pwd -P)/evil\" > .git/worktrees/wt/commondir && chmod a-w .git", tries: `git config core.fsmonitor "$FSMONITOR"`, after: "chmod u+w .git" },
+  "a worktree's submodule's folder led elsewhere, its repository read-only whole": { worktree: true, submodule: true, before: "git -c protocol.file.allow=always -C ../wt submodule update -q --init && rm -rf .git/hooks && chmod a-w .git", tries: `cp -R "$G/worktrees/wt/modules/lib" evil && git config --file evil/config --unset core.worktree; git config --file evil/config core.fsmonitor "$FSMONITOR" && printf 'gitdir: %s\\n' "$PWD/evil" > lib/.git`, after: "chmod u+w .git" },
   "a submodule's repository traded": { submodule: true, tries: `cp -R "$G/modules/lib" evil && git config --file evil/config core.fsmonitor "$FSMONITOR" && mv "$G/modules/lib" "$G/modules/lib-old" && mv evil "$G/modules/lib"` },
 }
 
 /** A sandbox of the box's own in `root`, with what the planted code makes where no command can write
  * (Kuvo Code's folder), so only code run outside the sandbox makes it. */
-function fenced(root: string) {
+function fenced(root: string, sockets: string[] = []) {
   const kuvo = join(root, "kuvo")
   const home = join(root, "home")
   const marks = join(kuvo, "marks")
   mkdirSync(marks, { recursive: true })
   mkdirSync(home, { recursive: true })
-  realFence(kuvo)
+  realFence(kuvo, sockets)
   const library = join(root, "library")
   mkdirSync(library)
   writeFileSync(join(library, "lib.txt"), "lib\n")
@@ -144,7 +153,7 @@ test.skipIf(!canFence)("a command plants nothing git runs outside the sandbox in
       if (existsSync(mark)) escaped.push(name)
     }
     if (escaped.length) console.log("What the commands said:\n" + escaped.map(name => `- ${name}: ${said[name]}`).join("\n"))
-    expect(escaped).toEqual(Object.entries(WAYS).filter(([, way]) => way.openOnLinux && process.platform === "linux").map(([name]) => name))
+    expect(escaped).toEqual(Object.entries(WAYS).filter(([, way]) => process.platform === "linux" ? way.openOnLinux : way.openOnMac).map(([name]) => name))
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
@@ -203,15 +212,22 @@ test.skipIf(!canFence)("git works in the sandbox as ever in a repository kept so
 test.skipIf(!canFence || process.platform !== "linux")("on Linux, a repository whose git files can't be kept runs nothing, and one that can't be written is told so", () => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "kuvo-sandbox-git-unkept-")))
   try {
-    const { repository, run } = fenced(root)
-    // A hooks folder linked to one kept in the project: where it leads, read-only, and the repository
-    // too (the link could be traded for a folder of its own), said once.
-    const linked = repository("linked", { before: "mv .git/hooks ../hooks && ln -s ../../hooks .git/hooks" })
-    const tries = "(echo hook > .git/hooks/pre-commit) 2>/dev/null && echo wrote || echo kept; (echo x > .git/HEAD.lock) 2>/dev/null && echo wrote || echo kept"
-    const once = run(linked.work, linked.git, tries)
-    expect([once.code, once.out]).toEqual([0, "kept\nkept"])
-    expect(once.said).toContain(`Note: commands only read git's own files in ${linked.git}: its hooks folder or settings are a link`)
-    expect(run(linked.work, linked.git, tries)).toEqual({ code: 0, out: "kept\nkept", said: "kept\nkept" })
+    // (Another app's sockets, which each command's namespace hides: `apps/agent`.)
+    const apps = join(root, "apps")
+    mkdirSync(join(apps, "agent"), { recursive: true })
+    writeFileSync(join(apps, "agent", "socket"), "")
+    const { repository, run } = fenced(root, [join(apps, "agent")])
+    expect(run(root, "", `ls -A ${sh(join(apps, "agent"))}`)).toEqual({ code: 0, out: "", said: "" })
+    // A hooks folder or settings that's a link, which a command could trade for its own: nothing runs
+    // there (and so where it leads isn't mounted anew, uncovering what's hidden in it).
+    for (const [slug, before, name] of [
+      ["above", `rm -rf .git/hooks && ln -s ${sh(apps)} .git/hooks`, "hooks"],
+      ["linked", "mv .git/hooks ../hooks && ln -s ../../hooks .git/hooks", "hooks"],
+      ["settings", "mv .git/config ../config && ln -s ../../config .git/config", "config"],
+    ] as const) {
+      const linked = repository(slug, { before })
+      expect(run(linked.work, linked.git, `ls -A ${sh(join(apps, "agent"))}; echo ran`)).toEqual({ code: 126, out: "", said: `This command can't run in the sandbox here: ${linked.git}/${name} is a link, which it can't keep as it is. Ask the user.` })
+    }
     const led = repository("led", { before: "cp -R .git ../elsewhere && echo ../../elsewhere > .git/commondir" })
     expect(run(led.work, led.git, "echo ran")).toEqual({ code: 126, out: "", said: `This command can't run in the sandbox here: ${led.git}/commondir leads git to another repository. Ask the user.` })
     // (git reads up to a NUL, the shell past it, which leads it home: neither is taken.)

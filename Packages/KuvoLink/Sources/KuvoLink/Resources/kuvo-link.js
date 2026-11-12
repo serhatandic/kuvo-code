@@ -4140,19 +4140,6 @@ keep() {
   mount -c --bind "$1" "$1" 2>/dev/null && [ ! -L "$1" ] && { [ "$2" != ro ] || mount -c -o remount,bind,ro "$1" 2>/dev/null; } || fail "$1 can't be kept from it."
 }
 ro() { mount -c -o remount,bind,ro "$1" 2>/dev/null || fail "$1 can't be kept from it."; }
-# (Settings or hooks that are a link, to a hooks folder kept in the project say: where it leads,
-# read-only; and, as a command could trade the link for its own, the repository read-only whole,
-# said once. One that leads nowhere could be made there.)
-led() {
-  local to
-  to=$(readlink -f "$1" 2>/dev/null) && [ -e "$to" ] || fail "$1 is a link to nothing, which it can't keep. Ask the user."
-  mount --bind "$to" "$to" 2>/dev/null && mount -o remount,bind,ro "$to" 2>/dev/null || fail "$to can't be kept from it."
-}
-led_note() {
-  [ ! -e "$k_notes$1" ] || return 0
-  mkdir -p "$k_notes$1" 2>/dev/null
-  echo "Note: commands only read git's own files in $1: its hooks folder or settings are a link, which Kuvo Code's sandbox can't keep from being traded for another (make it a folder or file of its own to let git write there)." >&2
-}
 # (Each submodule's work tree's .git file, which its kept settings name: read-only.)
 tree_file() {
   local t
@@ -4160,10 +4147,6 @@ tree_file() {
   [ -n "$t" ] || return 0
   t=$(cd "$1" 2>/dev/null && cd -P "$t" 2>/dev/null && pwd -P) && [ -f "$t/.git" ] && [ ! -L "$t/.git" ] || return 0
   keep "$t/.git" ro
-}
-trees() {
-  [ -d "$1" ] && [ ! -L "$1" ] || return 0
-  find "$1" \( -name objects -o -name refs -o -name logs -o -name lfs -o -name rr-cache -o -name hooks -o -name info \) -prune -o -name HEAD -type f -print 2>/dev/null | while IFS= read -r k_h; do tree_file "$(dirname "$k_h")"; done || exit 126
 }
 # Where a commondir leads, as git reads it: one line, with no NUL or carriage return (which the shell
 # and git would read differently), from its folder. (A worktree's own as git writes it, first: one
@@ -4178,44 +4161,46 @@ as_is() { [ -d "$1" ] && [ ! -L "$1" ] && [ "$(cd -P "$1" 2>/dev/null && pwd -P)
 # (Whether a folder has nothing in it.)
 empty() { for k_x in "$1"/* "$1"/.[!.]* "$1"/..?*; do [ -e "$k_x" ] || [ -L "$k_x" ] && return 1; done; return 0; }
 repo() {
-  local r e f
+  local r e f k_lacks
   r=$1
   keep "$r"
-  # (One that still lacks what the launcher gives it, or whose settings or hooks are a link:
-  # read-only whole, its submodules' work trees' .git files too.)
-  e=
-  for f in commondir hooks config.worktree modules worktrees; do [ -e "$r/$f" ] || [ -L "$r/$f" ] || e=lacks; done
-  for f in config hooks; do [ ! -L "$r/$f" ] || { led "$r/$f"; e=led; }; done
-  if [ "$e" = led ]; then led_note "$r"; elif [ -e "$k_notes$r" ]; then rmdir "$k_notes$r" 2>/dev/null; fi
-  if [ -n "$e" ]; then ro "$r"; trees "$r/modules"; return 0; fi
+  # (Each a link refuses: one a command could trade for its own, or that leads where commands are
+  # kept from.)
   for f in config config.worktree commondir gitdir hooks; do keep "$r/$f" ro; done
-  [ "$(leads "$r" commondir "$r")" = "$r" ] || fail "$r/commondir leads git to another repository. Ask the user."
-  keep "$r/worktrees"
-  for e in "$r/worktrees"/* "$r/worktrees"/.[!.]* "$r/worktrees"/..?*; do [ ! -L "$e" ] || keep "$e"; [ ! -d "$e" ] || keep "$e"; done
-  ro "$r/worktrees"
-  # (Another's, many at once: each its own few mounts, side by side.)
-  k_failed=$own/failed
-  for e in "$r/worktrees"/* "$r/worktrees"/.[!.]* "$r/worktrees"/..?*; do
-    [ -d "$e" ] || continue
-    case "$k_own
+  # (One that still lacks what the launcher gives it: every check all the same, then read-only whole
+  # but for what's kept on its own in it, which are checked as ever, so none of those can be made.)
+  k_lacks=
+  for f in commondir hooks config.worktree modules worktrees; do [ -e "$r/$f" ] || [ -L "$r/$f" ] || k_lacks=1; done
+  [ ! -e "$r/commondir" ] || [ "$(leads "$r" commondir "$r")" = "$r" ] || fail "$r/commondir leads git to another repository. Ask the user."
+  if [ -e "$r/worktrees" ] || [ -L "$r/worktrees" ]; then
+    keep "$r/worktrees"
+    for e in "$r/worktrees"/* "$r/worktrees"/.[!.]* "$r/worktrees"/..?*; do [ ! -L "$e" ] || keep "$e"; [ ! -d "$e" ] || keep "$e"; done
+    ro "$r/worktrees"
+    # (Another's, many at once: each its own few mounts, side by side.)
+    k_failed=$own/failed
+    for e in "$r/worktrees"/* "$r/worktrees"/.[!.]* "$r/worktrees"/..?*; do
+      [ -d "$e" ] || continue
+      case "$k_own
 " in *"
 $e
 "*) continue ;; esac
-    ( if [ ! -e "$e/config.worktree" ] || [ ! -e "$e/modules" ] || [ "$(leads "$e" commondir "$r")" != "$r" ]; then ro "$e"
-      else for f in commondir gitdir config.worktree modules; do keep "$e/$f" ro; done; fi ) </dev/null || : >"$k_failed" &
-  done
-  wait
-  [ ! -e "$k_failed" ] || exit 126
-  for e in "$r/worktrees"/* "$r/worktrees"/.[!.]* "$r/worktrees"/..?*; do
-    case "$k_own
+      ( if [ ! -e "$e/config.worktree" ] || [ ! -e "$e/modules" ] || [ "$(leads "$e" commondir "$r")" != "$r" ]; then ro "$e"
+        else for f in commondir gitdir config.worktree modules; do keep "$e/$f" ro; done; fi ) </dev/null || : >"$k_failed" &
+    done
+    wait
+    [ ! -e "$k_failed" ] || exit 126
+    for e in "$r/worktrees"/* "$r/worktrees"/.[!.]* "$r/worktrees"/..?*; do
+      case "$k_own
 " in *"
 $e
 "*) [ -d "$e" ] || continue ;; *) continue ;; esac
-    [ -e "$e/config.worktree" ] && [ -e "$e/modules" ] && [ "$(leads "$e" commondir "$r")" = "$r" ] || fail "$e/commondir doesn't lead git back to its repository. Ask the user."
-    for f in commondir gitdir config.worktree; do keep "$e/$f" ro; done
-    mods "$e/modules"
-  done
+      [ -e "$e/config.worktree" ] && [ -e "$e/modules" ] && [ "$(leads "$e" commondir "$r")" = "$r" ] || fail "$e/commondir doesn't lead git back to its repository. Ask the user."
+      for f in commondir gitdir config.worktree; do keep "$e/$f" ro; done
+      mods "$e/modules"
+    done
+  fi
   mods "$r/modules"
+  [ -z "$k_lacks" ] || ro "$r"
 }
 mods() {
   local m k_found k_done h d k_in p
@@ -4246,7 +4231,7 @@ EOF_FOUND
 # The .git file that leads a folder to its repository (a worktree's), up from it: kept read-only, and
 # the worktree's own folder it names is the conversation's (k_own, one a line); or the .git folder
 # found instead (k_dirs).
-k_own= k_dirs= k_plain=$own/commondir k_notes=$(dirname "$own")/unkept/led
+k_own= k_dirs= k_plain=$own/commondir
 printf '../..\n' >"$k_plain" || fail "it isn't set up."
 gitfile() {
   local at
@@ -4394,6 +4379,12 @@ function ownNamespaceLater(own, unshare = UNSHARE.find((each) => fs19.existsSync
       resolve(late || didntFinish({ status, signal }) ? UNFINISHED : status === 0 ? unshare : null);
     });
   });
+}
+function readOnlyHere(unshare, at) {
+  const tried = spawnSync2(unshare, ["-Urm", "/bin/sh", "-c", `mount -c --bind "$0" "$0" 2>/dev/null && mount -c -o remount,bind,ro "$0" 2>/dev/null`, at], { cwd: "/", stdio: "ignore", timeout: TRY_FOR });
+  if (didntFinish(tried))
+    return UNFINISHED;
+  return tried.status === 0;
 }
 var TRY_FOR = 1e4;
 var namespaceTry = (unshare, own) => ["-Urm", "/bin/sh", "-c", HIDE, unshare, String(process.getuid?.() ?? -1), String(process.getgid?.() ?? -1), "", own, "/dev/null", "", "", "", "", "", "/bin/sh", "-c", '[ "$(id -u)" = "$0" ]', String(process.getuid?.() ?? -1)];
@@ -5167,7 +5158,8 @@ function fenceState() {
     return { ...base, ...now };
   if (checked.unfinished || fs20.existsSync(HELD))
     return { ...base, on: false, ...cannot({ able: true, passed: false, reason: "checking", why: PENDING_WHY }) };
-  return { ...base, ...now, ...withoutNamespace ? { gaps: ["services"], needs: withoutNamespace } : {} };
+  const gaps = [...withoutNamespace ? ["services"] : [], ...namespace && !readOnly ? ["git"] : []];
+  return { ...base, ...now, ...gaps.length ? { gaps } : {}, ...withoutNamespace ? { needs: withoutNamespace } : {} };
 }
 var PENDING_WHY = "Its check didn't finish in time (this computer may be busy), so it's checked again in a minute. Until then commands still run in it, and Auto asks first.";
 function fenceWhole() {
@@ -5337,6 +5329,7 @@ var namespace = null;
 var namespaceKnown = false;
 var namespaceUnfinished = false;
 var withoutNamespace = null;
+var readOnly = true;
 var kept = null;
 var inUse = () => kept ?? namespace;
 var namespaceHere = () => {
@@ -5358,6 +5351,12 @@ function able(found) {
   else if (!namespaceKnown)
     namespace = UNSHARE.find((each) => fs20.existsSync(each)) ?? null;
   withoutNamespace = namespace ? null : UNSHARE.some((each) => fs20.existsSync(each)) ? "user namespaces" : "util-linux";
+  if (namespace && !namespaceUnfinished) {
+    fs20.mkdirSync(NAMESPACE_FOLDER, { recursive: true, mode: 448 });
+    const found = readOnlyHere(namespace, NAMESPACE_FOLDER);
+    if (found !== UNFINISHED)
+      readOnly = found;
+  }
   if (withoutNamespace && WITHOUT_NAMESPACE === "off") {
     const services = "which the sandbox needs to keep commands from the services your login runs: systemd, your keyring, your agents";
     return withoutNamespace === "user namespaces" ? { able: false, passed: false, why: `This machine doesn't let commands have a namespace of their own (it restricts unprivileged user namespaces, as Ubuntu 24.04 and later do), ${services}.`, reason: "namespaces", needs: withoutNamespace } : { able: false, passed: false, why: `This machine has no unshare (util-linux's), ${services}.`, reason: "namespaces", needs: withoutNamespace };
@@ -38663,7 +38662,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "1b11e92db667";
+var BRIDGE_VERSION = "a4f0b78ce22e";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {

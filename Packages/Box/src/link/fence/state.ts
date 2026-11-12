@@ -19,7 +19,7 @@ import { accountHome, BOTS, BRIDGE_FILE, CHATS, ENGINE_CONFIG, ENGINE_DATA, ENGI
 import { tellLauncher } from "./allowed";
 import { agentShellScript, agentsNote, launcherScript, pluginScript, type FencePlaces } from "./files";
 import { didntFinish } from "./finished";
-import { LANDLOCK_RUNNER, landlockPolicy, ownNamespaceLater, triedNamespace, UNFINISHED, UNSHARE } from "./landlock";
+import { LANDLOCK_RUNNER, landlockPolicy, ownNamespaceLater, readOnlyHere, triedNamespace, UNFINISHED, UNSHARE } from "./landlock";
 import { appTemporary, fencePolicy, realish, sandboxCaches, whenReadLate } from "./policy";
 import { seatbeltProfile } from "./seatbelt";
 
@@ -51,13 +51,15 @@ export interface FenceState {
    * your login runs (systemd, your keyring, your SSH agent), and git's own files in the repositories
    * they write (fence/landlock.ts, KEEP_GIT), where commands can't have a namespace of their own
    * (`needs` says what for). The vault isn't open to agents there, nor do goals go on
-   * alone: `fenceWhole`. */
+   * alone: `fenceWhole`. And `git`: on a Linux machine where a folder can't be made read-only in a
+   * command's namespace (fence/landlock.ts, `readOnlyHere`), each command in a repository refuses
+   * rather than run with git's own files open to it. */
   gaps?: FenceGap[];
 }
 
 export type FenceReason = "kernel" | "namespaces" | "macos" | "engineMissing" | "checking" | "checkFailed" | "plugin" | "engineDown" | "waiting";
 export type FenceAction = "help" | "softwareUpdate" | "retry" | "fix" | "restartEngine";
-export type FenceGap = "services";
+export type FenceGap = "services" | "git";
 export type FenceCheck = "folder" | "tempFiles" | "readsOwn" | "writesOwn" | "services" | "didntRun" | "setup";
 
 const CHECK = "POST kuvo/sandbox/check";
@@ -130,7 +132,8 @@ export function fenceState(): FenceState {
   if (!now.on) return { ...base, ...now };
   // A check that didn't finish, here or in another of the box's processes (`box route`).
   if (checked.unfinished || fs.existsSync(HELD)) return { ...base, on: false, ...cannot({ able: true, passed: false, reason: "checking", why: PENDING_WHY }) };
-  return { ...base, ...now, ...(withoutNamespace ? { gaps: ["services"], needs: withoutNamespace } : {}) };
+  const gaps: FenceGap[] = [...(withoutNamespace ? ["services" as const] : []), ...(namespace && !readOnly ? ["git" as const] : [])];
+  return { ...base, ...now, ...(gaps.length ? { gaps } : {}), ...(withoutNamespace ? { needs: withoutNamespace } : {}) };
 }
 
 const PENDING_WHY = "Its check didn't finish in time (this computer may be busy), so it's checked again in a minute. Until then commands still run in it, and Auto asks first.";
@@ -334,6 +337,9 @@ let namespaceKnown = false;
 let namespaceUnfinished = false;
 /** Where it runs without one, what the machine needs for it (`FenceState.needs`). */
 let withoutNamespace: string | null = null;
+/** Whether a folder can be made read-only in commands' namespace, as each command's keeps git's own
+ * files (`gaps`: `git` where it can't), as `able` last found it. */
+let readOnly = true;
 /** One in effect that the last try says commands can't have, kept while that's checked and until
  * nothing counts on the sandbox (`setUpFence`): what commands' namespace comes from meanwhile. */
 let kept: string | null = null;
@@ -358,6 +364,12 @@ function able(found?: string | null | typeof UNFINISHED): Checked {
   if (!namespaceUnfinished) [namespace, namespaceKnown] = [tried as string | null, true];
   else if (!namespaceKnown) namespace = UNSHARE.find(each => fs.existsSync(each)) ?? null;
   withoutNamespace = namespace ? null : UNSHARE.some(each => fs.existsSync(each)) ? "user namespaces" : "util-linux";
+  // (One that didn't finish says nothing new.)
+  if (namespace && !namespaceUnfinished) {
+    fs.mkdirSync(NAMESPACE_FOLDER, { recursive: true, mode: 0o700 });
+    const found = readOnlyHere(namespace, NAMESPACE_FOLDER);
+    if (found !== UNFINISHED) readOnly = found;
+  }
   if (withoutNamespace && WITHOUT_NAMESPACE === "off") {
     const services = "which the sandbox needs to keep commands from the services your login runs: systemd, your keyring, your agents";
     return withoutNamespace === "user namespaces"
