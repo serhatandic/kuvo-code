@@ -619,8 +619,9 @@ import Testing
         try start()
         // Its keeper's start done.
         until { running() != nil && !FileManager.default.fileExists(atPath: lock.path) }
-        // A start under way: it holds the lock.
+        // A start under way: it holds the lock, and says so (this test's process, which runs).
         try FileManager.default.createDirectory(at: lock, withIntermediateDirectories: false)
+        try write(lock.appending(path: "pid"), "\(ProcessInfo.processInfo.processIdentifier)\n")
         let stop = Process()
         stop.executableURL = URL(filePath: "/bin/sh")
         stop.arguments = [root.appending(path: "bin/kuvo-start").path, "stop"]
@@ -639,6 +640,38 @@ import Testing
         usleep(800_000)
         #expect(running() == nil, "it stays stopped")
         #expect(FileManager.default.fileExists(atPath: run.appending(path: "stopped").path))
+    }
+
+    /// A start or a stop cut off as it held the launch's lock (killed: `off` ending the keeper as it
+    /// took it, say) leaves no wait behind: the next stop, `off` and start take it at once, where
+    /// they waited minutes for it to go.
+    @Test func aLockWhoseHolderIsGoneIsntWaitedFor() throws {
+        defer { cleanUp() }
+        let lock = run.appending(path: ".launching")
+        // Held by one that has ended.
+        let gone = Process()
+        gone.executableURL = URL(filePath: "/usr/bin/true")
+        try gone.run()
+        gone.waitUntilExit()
+        func leftBehind() throws {
+            try? FileManager.default.removeItem(at: lock)
+            try FileManager.default.createDirectory(at: lock, withIntermediateDirectories: false)
+            try write(lock.appending(path: "pid"), "\(gone.processIdentifier)\n")
+        }
+        try leftBehind()
+        var began = Date.now
+        #expect(try start("stop") == 0)
+        #expect(Date.now.timeIntervalSince(began) < 20, "stop took it at once")
+        #expect(!FileManager.default.fileExists(atPath: lock.path), "and let it go")
+        try leftBehind()
+        began = Date.now
+        #expect(try start("off") == 0)
+        #expect(Date.now.timeIntervalSince(began) < 20, "off took it at once")
+        try leftBehind()
+        began = Date.now
+        #expect(try macLaunch(["KUVO_START=1"]) == 0)
+        #expect(Date.now.timeIntervalSince(began) < 30, "a Mac's start took it at once")
+        #expect(running() != nil)
     }
 
     @Test func twoAtOnceStartOne() async throws {
