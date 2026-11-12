@@ -276,6 +276,10 @@ nonisolated enum Git {
         let found: Answer
         do {
             found = try await place.client.value(Answer.self, "POST", "kuvo/git/changes", body: asked)
+        } catch let refusal as BoxRefusal where refusal.status == 503 {
+            // Not up (this Mac's background service starting again, say): out of reach, not a
+            // folder without git.
+            return .unreachable
         } catch is BoxRefusal {
             return .refused
         } catch is DecodingError {

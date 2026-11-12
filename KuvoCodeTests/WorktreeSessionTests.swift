@@ -175,6 +175,35 @@ import Testing
         #expect(workspace.projectDirectory(of: session) == workspace.folderPath(repository.path))
     }
 
+    /// Stop on a command an agent left running: this Mac's box finds it where the engine lists it,
+    /// in the session's folder, and sends its process group SIGTERM, so it ends as the engine sees.
+    @Test func stopEndsACommandLeftRunningThroughTheBox() async throws {
+        defer { done() }
+        let session = try await workspace.createSession(in: repository.path, model: nil, agent: "build", worktree: true)
+        let folder = session.location.directory
+        // A command in a process group of its own, as the engine starts one.
+        var attributes: posix_spawnattr_t?
+        posix_spawnattr_init(&attributes)
+        defer { posix_spawnattr_destroy(&attributes) }
+        posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_SETPGROUP))
+        posix_spawnattr_setpgroup(&attributes, 0)
+        var pid: pid_t = 0
+        let arguments: [UnsafeMutablePointer<CChar>?] = [strdup("/bin/sleep"), strdup("600"), nil]
+        defer { arguments.forEach { free($0) } }
+        #expect(posix_spawn(&pid, "/bin/sleep", nil, &attributes, arguments, nil) == 0)
+        // The engine has it only in the session's folder, which it reads from the request's header.
+        StubWeb.route(Self.engine + "/api/shell/sh_left", sent: { request, _ in
+            guard request.value(forHTTPHeaderField: "x-opencode-directory")?.removingPercentEncoding == folder else { return StubWeb.json([:], status: 404) }
+            return StubWeb.json(["data": ["id": "sh_left", "status": "running", "command": "sleep 600", "pid": Int(pid)]])
+        })
+        let stopped = await workspace.stopShellJob(ShellJob(id: "sh_left", status: "running", command: "sleep 600"), in: session.id)
+        #expect(stopped == "signal")
+        if stopped != "signal" { kill(-pid, SIGKILL) }
+        var status: Int32 = 0
+        waitpid(pid, &status, 0)
+        #expect(status & 0x7f == SIGTERM, "ended by its SIGTERM")
+    }
+
     /// The project's folder switched to another branch since: Merge says so rather than merging
     /// into that one.
     /// A session started in a worktree's own folder (a review's Fix in a New Session) works there,

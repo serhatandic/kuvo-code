@@ -1,4 +1,5 @@
 import Foundation
+import KuvoLink
 import Testing
 @testable import KuvoCode
 
@@ -41,6 +42,21 @@ import Testing
         #expect(changes.files.map(\.path) == ["new.txt", "README.md"])
         #expect(await changes.hasStaged() == false)
         #expect(!FileManager.default.fileExists(atPath: ran.path(percentEncoded: false)), "the repository's fsmonitor ran")
+    }
+
+    /// This Mac's background service not running (starting again after an update, say): Changes
+    /// says it can't reach it, as for a machine that's away, rather than reading the project as a
+    /// folder without git.
+    @Test func thisMacsBoxNotRunningReadsAsOutOfReach() async throws {
+        try repo.write("README.md", "Hello\nWorld\n")
+        let changes = ProjectChanges(directory: repo.path) { id in
+            BoxClient(box: id, transport: LocalBox { _ in PhoneLink.boxUnavailable() })
+        }
+        await changes.refresh()
+        #expect(changes.shown == .waiting)
+        #expect(changes.isRepository, "not read as a folder without git")
+        #expect(await changes.perform(.stage, on: ChangedFile(path: "README.md", status: .modified, url: repo.url.appending(path: "README.md"), root: repo.path))
+            == "Kuvo Code’s background service on this Mac isn’t running. Try again in a moment.")
     }
 
     /// Commit is what you asked for: its hooks run, and one that says no stops it, in its words.

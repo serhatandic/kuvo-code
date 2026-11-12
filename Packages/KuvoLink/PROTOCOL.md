@@ -2350,8 +2350,8 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   engine sees it end and tells the agent, with what it printed; only if that can't be sent, the
   engine's own remove (which deletes the output, and the agent hears the command wasn't found).
   Answers `200 {"stopped": "signal"}` or `200 {"stopped": "removed"}`, or `404 {}` when no such
-  command runs. A client sends `x-opencode-directory`, the session's folder (as the engine's API
-  takes it), for the engine to find it there; the Mac's Stop asks this of the box the session is
+  command runs. A client sends `x-opencode-directory`, the session's folder, percent-encoded as
+  the engine's API takes it, for the engine to find it there; the Mac's Stop asks this of the box the session is
   on, its own too. The engine's commands, and a coding agent's (`shl_…`, through their bridge: bridge
   0.9.64; while the engine is down too, from 0.9.66). Every box does it for its own, a machine's
   with the Mac closed too.

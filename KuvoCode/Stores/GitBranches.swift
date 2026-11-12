@@ -2,8 +2,8 @@ import ClientChanges
 import Foundation
 import OpenCodeKit
 
-/// What's left of git run by this app (`Git.run`): whether a worktree has changes before Delete
-/// says what goes with it.
+/// Whether a worktree has changes before Delete says what goes with it: one of what's left of git
+/// run by this app (`Git.run`), with the title bar's branches and the file list.
 nonisolated extension Git {
     /// Changes that aren't committed, new files included; and, when git can't say (a machine's
     /// connection dropped), as if there were, so nothing is thrown away on a guess.
@@ -76,7 +76,8 @@ nonisolated extension Workspace.Worktree {
             if let conflicts = answer?.conflicts, !conflicts.isEmpty { return .conflict(conflicts, into: into) }
             // A box from before Merge into… (bridge 0.9.143) has no such route. (A machine takes this
             // Mac's as it connects, so only one not connected since.)
-            if status == 404, answer?.message == nil {
+            // (Nor, from before #341, one without a branch named.)
+            if status == 404 && answer?.message == nil || status == 400 && base == nil {
                 return .failed("\(place.machine ?? "This Mac’s box") needs a newer Kuvo Code to merge. It updates by itself overnight, or connect to it from this Mac.")
             }
             return .failed(BoxRefusal(status: status, data: data).message)
