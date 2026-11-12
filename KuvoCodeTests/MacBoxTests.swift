@@ -129,6 +129,26 @@ import Testing
         #expect(!FileManager.default.fileExists(atPath: ran.path), "the engine never ran")
     }
 
+    /// The box is the very process the keeper started, no shell or launcher between them: the box
+    /// tells it runs under the keeper (and so restarts its engine through it with the app closed,
+    /// `keeperRuns` in relay.ts) by the keeper's record naming its parent. Here this test's process
+    /// stands for the keeper, which starts it with the same `BoxProcess`.
+    @Test func theBoxIsItsKeepersOwnChild() async throws {
+        let node = try #require(TestBox.node, "Node runs this Mac's box in the tests")
+        let box = BoxProcess()
+        defer {
+            box.stop()
+            try? FileManager.default.removeItem(at: BoxProcess.home)
+        }
+        await box.start(node: node)
+        let pid = try #require(box.processID, "it started: \(box.failure ?? "")")
+        var info = kinfo_proc()
+        var size = MemoryLayout<kinfo_proc>.stride
+        var name: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
+        #expect(sysctl(&name, u_int(name.count), &info, &size, nil, 0) == 0 && size > 0)
+        #expect(info.kp_eproc.e_ppid == getpid())
+    }
+
     @Test func theBoxFindsTheEngineTheAppStarted() async throws {
         let node = try #require(TestBox.node, "Node runs this Mac's box in the tests")
         let box = BoxProcess()
