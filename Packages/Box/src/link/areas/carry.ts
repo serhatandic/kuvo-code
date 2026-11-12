@@ -21,8 +21,7 @@ import { holdArchived } from "./wakes";
 import { carryDecided, tellAutopilot } from "../work/autopilot";
 import { carryWorkQueue } from "../work-queue/moves";
 import { tellWorktree } from "./worktrees";
-import { PROJECT_FOLDERS_ENTRY, projectFoldersNote, readProjects } from "./projects";
-import { projectOf as projectOfFolder } from "./worktree-records";
+import { foldersFor, PROJECT_FOLDERS_ENTRY, projectFoldersNote } from "./projects";
 import type { Target } from "../../shared/records";
 import type { EngineAnswer, UncheckedAnswer } from "../engine/client";
 import type { EngineMessage } from "../engine/conversations";
@@ -203,7 +202,7 @@ export async function carryToAgents(id: string, model: unknown, readEngine: () =
     await tellWorktree(agents, moved).catch(() => {});
     await rewriteOn(agents, moved, now => ({ metadata: withNotes(now.metadata, marks.kuvo) })).catch(() => {});
     // Its project's other folders, as a session started there is told of them.
-    const folders = directory ? readProjects().find(each => each.directory === projectOfFolder(directory))?.folders ?? [] : [];
+    const folders = directory ? foldersFor(directory) : [];
     if (directory && folders.length) {
       await call(agents, "PUT", `/api/experimental/session/${encodeURIComponent(moved)}/instructions/entries/${PROJECT_FOLDERS_ENTRY}`, { value: projectFoldersNote(directory, folders) }).catch(() => {});
     }

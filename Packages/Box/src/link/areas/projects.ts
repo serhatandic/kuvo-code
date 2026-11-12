@@ -14,6 +14,7 @@ import { locked, writePrivate } from "../files";
 import { followed } from "../follow";
 import { K } from "../home";
 import type { AnswerPiece, LinkRequest } from "../server/context";
+import type { KitRule } from "../bots/kit";
 import { holdArchived } from "./wakes";
 import { stopIfWaiting } from "../work/answers";
 import { worktreeFollowers, worktreeProjects } from "./worktree-records";
@@ -52,6 +53,112 @@ export const PROJECT_FOLDERS_ENTRY = "kuvo.project-folders";
  * the Mac told it (ProjectFolders.instructions). */
 export const projectFoldersNote = (primary: string, folders: readonly string[]): string =>
   `This project spans several folders. You work in its primary folder, ${path.basename(primary)} (${primary}). These folders belong to the project too, and you can read, search and change files in them the same way:\n${folders.map(folder => `- ${path.basename(folder)}: ${folder}`).join("\n")}\nWhen the user mentions one of these folders by name, they mean that folder.`;
+
+/** A project's other folders as a session in `folder` gets them: those of the project it's the
+ * primary folder of, or a worktree of; none for one in one of those other folders (or a worktree of
+ * one), which works there alone, nor for a chat or a folder that's no project. */
+export function foldersFor(folder: string, projects: Project[] = readProjects()): readonly string[] {
+  const directory = worktreeProjects()[folder] ?? folder;
+  const folders = projects.find(each => each.directory === directory)?.folders ?? [];
+  return folders.includes(folder) ? [] : folders;
+}
+
+/** The rules allowing a project's other folders, symlinks resolved too (`/var` is `/private/var`):
+ * after its approval's rules, as the last rule that matches wins and Ask First asks about any
+ * folder. */
+export function folderRules(folders: readonly string[]): KitRule[] {
+  const paths: string[] = [];
+  for (const folder of folders) {
+    let real = folder;
+    try { real = fs.realpathSync(folder); } catch {}
+    for (const each of [folder, real]) if (!paths.includes(each)) paths.push(each);
+  }
+  return paths.map(each => ({ action: "external_directory", resource: path.join(each, "*"), effect: "allow" }));
+}
+
+/** A rule allowing one folder (its project's, a bot's own). */
+export const isFolderRule = (rule: KitRule): boolean => rule.action === "external_directory" && rule.effect === "allow" && rule.resource.endsWith("/*");
+
+/** `rules` with the folders they allow made `folders`: a bot's own folder stays allowed, as it isn't
+ * one of the project's. */
+export const withFolders = (rules: readonly KitRule[], folders: readonly string[]): KitRule[] =>
+  [...rules.filter(rule => !isFolderRule(rule) || rule.resource.includes("/bots/bot_")), ...folderRules(folders)];
+
+/** A session on `target` given its project's other folders as they're set where it is now (or in
+ * `folder`, where it's moving: the engine moves one at work at its next step), `foldersFor`: its
+ * rules allowing them, in its turn, and its instructions naming them (or neither, for none). False
+ * where the engine didn't answer or take it, or it's gone. */
+export async function giveFolders(target: Target, session: string, signal?: AbortSignal, folder?: string): Promise<boolean> {
+  let at: string | null = null;
+  let folders: readonly string[] = [];
+  let done;
+  try {
+    done = await rewriteOn(target, session, now => {
+      at = folder ?? now.location?.directory ?? now.directory ?? null;
+      folders = at ? foldersFor(at) : [];
+      const current = (now.permissions ?? []) as KitRule[];
+      const permissions = withFolders(current, folders);
+      return JSON.stringify(permissions) === JSON.stringify(current) ? null : { permissions } as Partial<EngineSession>;
+    }, signal);
+  } catch {
+    return false;
+  }
+  if (!done || !at) return false;
+  const entry = `/api/experimental/session/${encodeURIComponent(session)}/instructions/entries/${PROJECT_FOLDERS_ENTRY}`;
+  try {
+    if (folders.length) await call(target, "PUT", entry, { value: projectFoldersNote(at, folders) }, signal);
+    // (None to name: one it had goes; there's none to take away for most.)
+    else await call(target, "DELETE", entry, undefined, signal).catch(() => {});
+  } catch {
+    return false;
+  }
+  return true;
+}
+
+/** How many sessions a project's change of folders reaches at once. */
+const GIVING_AT_ONCE = 8;
+
+/** Each session of the project at `directory` (in its own folder or one of its worktrees, on the
+ * engine and the coding agents' bridge, but for subagents' and those put away) given its folders as
+ * they're set now (`giveFolders`), as they change. How many couldn't be: tried again as each opens
+ * on a client from before, and as it's moved or its folders change again. */
+export async function giveProjectFolders(directory: string, readEngine: () => EngineRecord, readBridge: () => BridgeRecord, signal?: AbortSignal): Promise<number> {
+  const trees = Object.entries(worktreeProjects()).filter(([, project]) => project === directory).map(([folder]) => folder);
+  const targets: Target[] = [];
+  try { targets.push(readEngine()); } catch {}
+  try {
+    const bridge = readBridge();
+    if (bridge?.port && bridge?.password && runs(bridge.pid, "kuvo-agents")) targets.push(bridge);
+  } catch {}
+  let missed = 0;
+  for (const target of targets) {
+    for (const folder of [...new Set([directory, ...trees])]) {
+      let query: string | null = `limit=100&order=desc&parentID=null&directory=${encodeURIComponent(folder)}`;
+      for (let page = 0; page < 1000 && query; page++) {
+        let listed: SessionPage | undefined;
+        try {
+          const response = await fetch(`http://127.0.0.1:${target.port}/api/session?${query}`, { headers: { authorization: `Basic ${Buffer.from(`opencode:${target.password}`).toString("base64")}` }, signal });
+          if (!response.ok) throw new Error();
+          listed = await response.json() as SessionPage;
+        } catch {
+          missed += 1;
+          break;
+        }
+        const sessions = Array.isArray(listed?.data) ? listed.data : [];
+        const giving = sessions.filter(session => session?.id && !session.parentID && session.location?.directory === folder && !session.time?.archived && session.metadata?.["kuvo.archived"] !== true);
+        let taken = 0;
+        await Promise.all(Array.from({ length: Math.min(GIVING_AT_ONCE, giving.length) }, async () => {
+          while (taken < giving.length) {
+            if (!await giveFolders(target, giving[taken++]!.id, signal)) missed += 1;
+          }
+        }));
+        const next = listed?.cursor?.next;
+        query = sessions.length === 100 && next ? `limit=100&cursor=${encodeURIComponent(next)}` : null;
+      }
+    }
+  }
+  return missed;
+}
 
 /** The projects New Bot offers here, `{directory, name}` each: the box's own, once it keeps them;
  * before, those its Mac named in the kit. */
@@ -220,11 +327,16 @@ export async function* answerProjects(request: LinkRequest, readEngine: () => En
     // Kept as it's named: its sessions run there, by that name (a link followed would be another
     // project), and one whose drive isn't there now stays.
     let project!: Project;
+    let folders: readonly string[] = [];
     changeProjects(projects => {
       const before = projects.find(each => each.directory === given);
+      folders = before?.folders ?? [];
       project = keptProject(given, body, before);
       return before ? projects.map(each => (each === before ? project : each)) : [project, ...projects];
     }, file, lock);
+    // Its folders changed: each of its sessions is given them now, whichever client changed them,
+    // before the answer, so a client reading its sessions after finds them so.
+    if (JSON.stringify(folders) !== JSON.stringify(project.folders)) await giveProjectFolders(given, readEngine, readBridge, signal);
     return yield* json(200, { project } satisfies { project: Project });
   }
   if (method === "DELETE") {
