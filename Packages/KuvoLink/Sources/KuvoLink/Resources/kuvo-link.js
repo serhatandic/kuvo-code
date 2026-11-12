@@ -8606,7 +8606,7 @@ function ownKey(link) {
     return null;
   }
 }
-function openMail(body, link) {
+function openMail(body, link, vouched = () => []) {
   if (!link?.key)
     return null;
   const key = Buffer.from(link.key, "base64url");
@@ -8615,6 +8615,12 @@ function openMail(body, link) {
     try {
       const payload = JSON.parse(openOneWay(body, key, Buffer.from(sender.key, "base64url")).payload.toString("utf8"));
       return isObject(payload) ? { sender: peersOf(link).find((peer) => peer.key === sender.key) ?? sender, payload } : null;
+    } catch {}
+  }
+  for (const sender of vouched()) {
+    try {
+      const payload = JSON.parse(openOneWay(body, key, Buffer.from(sender.key, "base64url")).payload.toString("utf8"));
+      return isObject(payload) ? { sender, payload, vouched: true } : null;
     } catch {}
   }
   return null;
@@ -10328,11 +10334,29 @@ function takeAgents(sender, given, file = PEER_AGENTS_FILE, lock = PEER_LOCK) {
       ...sender.id ? { id: sender.id } : {},
       list: given.list.filter(fitsAgent).slice(0, MOST_AGENTS).map(keptAgent),
       ...Array.isArray(given.features) ? { features: keptFeatures(given.features) } : {},
-      ...Array.isArray(given.moved) ? { moved: keptMoved(given.moved) } : {}
+      ...Array.isArray(given.moved) ? { moved: keptMoved(given.moved) } : {},
+      ...Array.isArray(given.boxes) ? { boxes: keptBoxes(given.boxes) } : {}
     };
     writePrivate(file, JSON.stringify(all));
     return true;
   });
+}
+var keptBoxes = (boxes) => boxes.filter(fitsPeer).slice(0, MOST_PEERS).map(cleanPeer).map(({ key, address, kind, name }) => ({ key, address, kind, name }));
+function vouchedOf(link, told = readPeerAgents()) {
+  if (!link)
+    return [];
+  const own = ownKey(link);
+  const peers = peersOf(link);
+  const known = new Set(peers.map((peer) => peer.key));
+  const vouched = new Map;
+  for (const peer of peers) {
+    for (const box of told[peer.key]?.boxes ?? []) {
+      if (!fitsPeer(box) || box.key === own || known.has(box.key) || vouched.has(box.key))
+        continue;
+      vouched.set(box.key, cleanPeer(box));
+    }
+  }
+  return [...vouched.values()].slice(0, MOST_PEERS);
 }
 function readPeerAgents(file = PEER_AGENTS_FILE) {
   let all = {};
@@ -22995,7 +23019,7 @@ function seatPayloads(mail, id) {
   return Array.from({ length: of }, (_, i) => ({ seatPart: { whole, i, of, d: d.slice(i * DOC_PART, (i + 1) * DOC_PART), s: id ?? "" } }));
 }
 function sendSeat(host, to, mail, id, link = readLink()) {
-  const peer = peersOf(link).find((each) => each.key === to);
+  const peer = peersOf(link).find((each) => each.key === to) ?? (mail.kind === "limits" ? vouchedOf(link).find((each) => each.key === to) : undefined);
   if (!peer || !host)
     return false;
   if (mail.kind === "limits") {
@@ -23064,6 +23088,7 @@ function seatPeers(link = readLink(), told = readPeerAgents()) {
   const name = plainName(IS_MAC ? macLink.config?.name : link?.name) || os10.hostname();
   return {
     ...key ? { self: { key, name } } : {},
+    also: vouchedOf(link, told).map((box) => ({ key: box.key, name: plainName(box.name) || "another computer" })),
     boxes: peers.map((peer) => ({ key: peer.key, name: plainName(peer.name) || "another computer", seats: (told[peer.key]?.features ?? []).includes("groups.seats") })),
     bots: peers.flatMap((peer) => (told[peer.key]?.list ?? []).filter((agent) => agent.kind === "bot" && agent.id).map((agent) => ({ id: agent.id, name: agent.name, job: agent.about ?? "", box: peer.key, session: agent.session, ...agent.look ? { look: agent.look } : {} })))
   };
@@ -29399,7 +29424,8 @@ async function announce(host, readEngine, link = readLink(), now = Date.now(), a
   if (!ownList)
     return;
   const moved = movedAway(now).map(({ session, key, at }) => ({ session, key, at }));
-  const json = JSON.stringify([ownList, moved]);
+  const boxes = peersOf(link).map(({ key, address, kind, name }) => ({ key, address, kind, name }));
+  const json = JSON.stringify([ownList, moved, boxes]);
   let have = null;
   for (const peer of peersOf(link)) {
     const last = toldPeers.get(peer.key);
@@ -29411,7 +29437,7 @@ async function announce(host, readEngine, link = readLink(), now = Date.now(), a
     let bytes = null, sent = [];
     for (const count of [ownList.length, Math.floor(ownList.length / 2), Math.floor(ownList.length / 4)]) {
       sent = ownList.slice(0, count);
-      bytes = mailFor(peer, { agents: { at: now, list: sent, features: ownFeatures(), moved }, ...docs, at: now, ...ask ? { ask: "agents" } : {} }, link);
+      bytes = mailFor(peer, { agents: { at: now, list: sent, features: ownFeatures(), moved, boxes: boxes.filter((box) => box.key !== peer.key) }, ...docs, at: now, ...ask ? { ask: "agents" } : {} }, link);
       if (bytes)
         break;
     }
@@ -37513,10 +37539,15 @@ function peerMail(sender, payload, host, places = () => ({ targets: [], bridge: 
 }
 function receiveMail(body, host, peerMail = () => {}, attended = () => {}) {
   const link = readLink();
-  const opened = openMail(body, link);
+  const opened = openMail(body, link, () => vouchedOf(link));
   if (!opened)
     return;
   const { sender, payload } = opened;
+  if (opened.vouched) {
+    if (isObject(payload.limits))
+      takeLimits(sender, payload.limits).catch(() => {});
+    return;
+  }
   if (noteHeard(sender.key)) {
     callsBack(sender.key);
     rowsBack();
@@ -38588,7 +38619,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "d511e668959e";
+var BRIDGE_VERSION = "87d2aa8eda45";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {

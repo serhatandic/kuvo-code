@@ -217,6 +217,8 @@ export class LinkDirectory implements PeerDirectory, LimitsDirectory {
   private listed: PeerBot[] = []
   private homes = new Map<string, RemoteHome>()
   private self?: { key: string; name: string }
+  /** Boxes only a peer knows (another Mac's, beside a machine two Macs share): for plan limits alone. */
+  private also = new Map<string, string>()
   private listeners: (() => void)[] = []
   /** Whether the link has said who your computers are since this started. */
   told = false
@@ -236,6 +238,10 @@ export class LinkDirectory implements PeerDirectory, LimitsDirectory {
     this.boxes = boxes
     const self = given.self
     this.self = self && typeof self === "object" && typeof self.key === "string" ? { key: self.key, name: typeof self.name === "string" ? self.name : "" } : undefined
+    this.also = new Map()
+    for (const box of Array.isArray(given.also) ? given.also : []) {
+      if (box && typeof box.key === "string" && box.key && !boxes.has(box.key)) this.also.set(box.key, typeof box.name === "string" && box.name ? box.name : "another computer")
+    }
     this.told = true
     this.listed = given.bots
       .filter((bot: any) => bot && typeof bot.id === "string" && /^bot_[A-Za-z0-9]+$/.test(bot.id) && typeof bot.name === "string" && typeof bot.box === "string" && boxes.has(bot.box))
@@ -251,9 +257,9 @@ export class LinkDirectory implements PeerDirectory, LimitsDirectory {
     return true
   }
 
-  /** Your other computers, by key and name. */
+  /** Your other computers whose plan limits this box shares, by key and name: its peers, and the boxes they know. */
   peerBoxes(): { key: string; name: string }[] {
-    return [...this.boxes].map(([key, box]) => ({ key, name: box.name }))
+    return [...[...this.boxes].map(([key, box]) => ({ key, name: box.name })), ...[...this.also].map(([key, name]) => ({ key, name }))]
   }
 
   /** This computer, as the link names it (a link from before it didn't). */

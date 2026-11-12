@@ -20,7 +20,7 @@ import { listOf, writePrivate } from "../files";
 import { LETTER_ID, LETTER_MEMORY, SENDING, letterTries } from "../letters/letter";
 import { IS_MAC } from "../home";
 import { macLink, readLink } from "../state";
-import { readPeerAgents } from "./directory";
+import { readPeerAgents, vouchedOf } from "./directory";
 import { mailFor, ownKey, peersOf } from "./known";
 import type { ToldAgents } from "../../shared/records";
 import type { SeatLine as SharedLine, SeatMailKind, SeatPeers } from "../../shared/seats";
@@ -132,7 +132,8 @@ export function seatPayloads(mail: SeatMail, id?: string): SeatPayload[] | null 
 // The bridge's mail for `to`, sent now, each part as a mail of its own: whether it all went, or
 // "too big" for one that can't go at all (said in the log).
 function sendSeat(host: SeatHost | null | undefined, to: string, mail: SeatMail, id: string | undefined, link: LinkState | null = readLink()): boolean | "too big" {
-  const peer = peersOf(link).find(each => each.key === to);
+  // (Plan limits go to a box a peer vouches for too.)
+  const peer = peersOf(link).find(each => each.key === to) ?? (mail.kind === "limits" ? vouchedOf(link).find(each => each.key === to) : undefined);
   if (!peer || !host) return false;
   // Its plan limits: a mail of their own, whole (the bridge sends no more than fits).
   if (mail.kind === "limits") {
@@ -194,6 +195,8 @@ export function seatPeers(link: LinkState | null = readLink(), told: Record<stri
   const name = plainName(IS_MAC ? macLink.config?.name : link?.name) || os.hostname();
   return {
     ...(key ? { self: { key, name } } : {}),
+    // Boxes only a peer knows, for plan limits alone.
+    also: vouchedOf(link, told).map(box => ({ key: box.key, name: plainName(box.name) || "another computer" })),
     boxes: peers.map(peer => ({ key: peer.key, name: plainName(peer.name) || "another computer", seats: (told[peer.key]?.features ?? []).includes("groups.seats") })),
     bots: peers.flatMap(peer => (told[peer.key]?.list ?? []).filter(agent => agent.kind === "bot" && agent.id)
       .map(agent => ({ id: agent.id!, name: agent.name, job: agent.about ?? "", box: peer.key, session: agent.session, ...(agent.look ? { look: agent.look } : {}) }))),

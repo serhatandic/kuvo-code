@@ -381,3 +381,48 @@ test("plan limits (PROTOCOL.md, \"Plan limits\"): what the bridge tells a comput
     server.close();
   }
 });
+
+test("plan limits with a box only a peer knows (another Mac's, beside a machine two Macs share): its limits go to it and come from it, and nothing else does", async () => {
+  fresh();
+  const air = box("mac", "air");
+  // The second machine says which boxes it knows: this one, and the Air, which isn't this box's peer.
+  link.takeAgents(second.peer, { at: Date.now(), list: [], boxes: [here.peer, air.peer, { key: "not a key", address: "x", kind: "mac" }] });
+  const peers = link.seatPeers(link.readLink());
+  assert.deepEqual(peers.also, [{ key: air.pub, name: "air" }]);
+  assert.ok(!peers.boxes.some(each => each.key === air.pub), "not in its group chats");
+
+  // What the bridge tells it goes there; nothing else of the bridge's does.
+  const sent = [];
+  const host = { send: bytes => sent.push(bytes) };
+  link.carrySeat(host, { id: "sm_limits002", to: air.pub, durable: false, mail: { kind: "limits", at: 7, accounts: [] } }, link.readLink());
+  assert.equal(sent.length, 1);
+  assert.deepEqual(opened(sent[0], air).payload.limits, { at: 7, accounts: [] });
+  link.carrySeat(host, { id: "sm_turn0002", to: air.pub, durable: false, mail: { kind: "turn", turn: { id: "trn_9" } } }, link.readLink());
+  assert.equal(sent.length, 1, "a group chat's mail isn't sent to it");
+
+  // What it sends: its limits reach the bridge; its agents and letters are dropped.
+  const posted = [];
+  let heard;
+  const got = new Promise(resolve => { heard = resolve; });
+  const server = http.createServer((request, response) => {
+    let body = "";
+    request.on("data", chunk => { body += chunk; });
+    request.on("end", () => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end("{}");
+      posted.push(JSON.parse(body));
+      heard();
+    });
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  fs.writeFileSync(path.join(run, "bridge.json"), JSON.stringify({ port: server.address().port, password: "bridge-pw" }));
+  try {
+    const mail = link.mailFor(here.peer, { limits: { at: 8, accounts: [] }, agents: { at: Date.now(), list: [{ session: "ses_air1", name: "Air's", kind: "session" }] }, letter: { id: "ltr_x" }, at: Date.now() }, { key: k(air.key) });
+    link.receiveMail(link.readFrame(mail.subarray(17)).body, host, (sender, given) => link.peerMail(sender, given, host));
+    await got;
+    assert.deepEqual(posted, [{ from: air.pub, mail: { at: 8, accounts: [], kind: "limits" } }]);
+    assert.equal(link.readPeerAgents()[air.pub], undefined, "its agents aren't taken");
+  } finally {
+    server.close();
+  }
+});

@@ -164,9 +164,9 @@ class Box {
     }
   }
 
-  /** Its link says who your other computers are (`PUT /api/kuvo/peers`). */
-  async meet(others: Box[]) {
-    await peerRoutes(this.parts, "PUT", [], async () => ({ self: { key: this.key, name: this.name }, boxes: others.map((box) => ({ key: box.key, name: box.name, seats: true })), bots: [] }))
+  /** Its link says who your other computers are (`PUT /api/kuvo/peers`): its peers, and `also`, the boxes they know that it doesn't. */
+  async meet(others: Box[], also: Box[] = []) {
+    await peerRoutes(this.parts, "PUT", [], async () => ({ self: { key: this.key, name: this.name }, boxes: others.map((box) => ({ key: box.key, name: box.name, seats: true })), also: also.map((box) => ({ key: box.key, name: box.name })), bots: [] }))
   }
 
   async route(method = "GET", rest: string[] = []) {
@@ -463,6 +463,55 @@ describe("plan limits across your computers", () => {
     expect(await post("mail", { from: "key-other", mail: { kind: "limits", at: time, accounts: [] } })).toBe(200)
     expect(await post("mail", { from: "key-other", mail: { kind: "work", work: { task: "gt_1" } } })).toBe(404)
     expect(await post("gaveup", { to: "key-other", mail: { kind: "work", work: { task: "gt_1" } } })).toBe(404)
+  })
+
+  test("two Macs that share a machine aren't each other's peers, yet each lists the other's accounts, and an account both are signed in to is read once", async () => {
+    const studio = new Box("key-studio", "Studio", relay, [claude(maker, "studio", "anthropic:work|org"), claude(maker, "studio", "anthropic:studio|org", "claude-code@studio01")])
+    const air = new Box("key-air", "Air", relay, [claude(maker, "air", "anthropic:work|org")])
+    const shared = new Box("key-shared", "shared", relay, [])
+    // The machine's peers are both Macs; each Mac's are its machine, and the box the machine knows.
+    await shared.meet([studio, air])
+    await studio.meet([shared], [air])
+    await air.meet([shared], [studio])
+    await studio.limits.tick()
+    await relay.settled()
+    await air.limits.tick()
+    await relay.settled()
+    expect(maker.reads.map((read) => `${read.box} ${read.who}`)).toEqual(["studio anthropic:work|org", "studio anthropic:studio|org"])
+    // Each has the whole list: the Studio-only account on the Air, both Macs on the work account's row.
+    for (const box of [studio, air, shared]) {
+      expect(box.rows().map((row) => row.boxes.map((each) => each.name).sort().join(",")).sort()).toEqual(["Air,Studio", "Studio"])
+    }
+  })
+
+  test("the link saying who your computers are again tells no one again, and an ask is answered once a minute at most", async () => {
+    const { mac, hetzner, lokum, all } = await threeComputers()
+    await relay.settled()
+    const before = relay.sent.length
+    // (The link says it each time a peer's bots change.)
+    for (const box of all) await box.meet(all.filter((other) => other !== box))
+    await relay.settled()
+    expect(relay.sent.length).toBe(before)
+    // A minute on, lokum asks twice within the minute: the Mac answers once.
+    pass(MINUTE)
+    const ask = { kind: "limits", at: time, accounts: [], ask: true }
+    await peerRoutes(mac.parts, "POST", ["mail"], async () => ({ from: lokum.key, mail: ask }))
+    await peerRoutes(mac.parts, "POST", ["mail"], async () => ({ from: lokum.key, mail: ask }))
+    await relay.settled()
+    expect(relay.sent.slice(before).map((each) => `${each.from} ${each.to}`)).toEqual(["key-mac key-lokum"])
+    void hetzner
+  })
+
+  test("an account of a service a newer box knows and this one doesn't is listed by its name", async () => {
+    const { mac, hetzner } = await threeComputers()
+    await peerRoutes(mac.parts, "POST", ["mail"], async () => ({
+      from: hetzner.key,
+      mail: { kind: "limits", at: time, accounts: [{ provider: "kimi", service: "kimi-code", identity: "abcdefabcdefabcd", windows: [{ id: "week", used: 0.25, minutes: 10_080, read: time, source: "usage" }], checked: time }] },
+    }))
+    expect(mac.rows().map((row) => `${row.service} ${row.windows[0]?.used}`)).toEqual(["kimi-code 0.25"])
+    // What isn't a service's name isn't taken.
+    await peerRoutes(mac.parts, "POST", ["mail"], async () => ({ from: hetzner.key, mail: { kind: "limits", at: time, accounts: [{ provider: "x", service: "Not A Name!", windows: [] }] } }))
+    expect(mac.rows()).toEqual([])
   })
 
   test("a computer you removed goes from the list, with its accounts", async () => {

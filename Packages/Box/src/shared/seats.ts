@@ -43,6 +43,8 @@ export interface SeatBot {
  * this box itself, as its peers name it (its key, and its name: what its plan limits' rows call it). */
 export interface SeatPeers {
   self?: { key: string; name: string };
+  /** Boxes a peer knows that aren't this box's peers (another Mac's, beside a machine two Macs share): for plan limits alone. */
+  also?: { key: string; name: string }[];
   boxes: SeatBox[];
   bots: SeatBot[];
 }

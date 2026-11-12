@@ -369,7 +369,10 @@ connection.
   about?, machine?, look?}], "features"?}}`: a bot's `id` (`bot_…`, as group chats name their
   members) and `look` (`{color, shape, face}`, as `kuvo/bots` has it: a colour, shape or face the
   apps don't draw is kept as the plain look's, `graphite`, `round`, `calm`), and `features` as the box's
-  `kuvo/info` names them (the box that takes them keeps the first 300 names). A box sends its bots and its 40 latest
+  `kuvo/info` names them (the box that takes them keeps the first 300 names), and `boxes`
+  (`[{key, address, kind, name}]`, 64 at most), the sender's other peers, which the receiver takes
+  plan limits from and tells its own to where they aren't its peers too ("Plan limits", "Across your
+  computers"; nothing else). A box sends its bots and its 40 latest
   sessions (its engine's and its coding agents') when they change and every ten minutes. Each box
   keeps the newest list from each peer. The relay keeps nothing, so a box that has just connected adds `"ask": "agents"` to
   what it sends first (its agents; a Mac's digest), and whoever gets it tells that box its agents
@@ -3613,17 +3616,25 @@ the last reading in its folder (`limits.json`), through a restart. A client reac
   each time either changes (a peer's word included).
 - **Across your computers** (#210): every box is equal, none is a hub, and each works with any
   other off.
-  - Each box's bridge tells each peer ("Peers") what it read of its own accounts, through its
-    link: `{"limits": {at, accounts, ask?, refresh?}}`, `accounts` as its `GET` lists them (each
-    account's hashed `identity`, its windows with when each was read, `checked`, `next`, its plan,
-    credits and problem; never a sign-in, a token or an ID), as many as fit in 28 KB; `at`, the
-    sender's clock. It's sent at once after a read, at most once a minute for what turns hear, again
-    every ten minutes though nothing changed (the relay keeps nothing), and to each as its link says
-    who your computers are (`ask: true`: tell me yours, answered with the receiver's own). A box
-    from before this ignores it, and sends none. A sealed mail that doesn't fit isn't sent.
+  - **Who**: a box's limits peers are its peers ("Peers") and the boxes they say they know
+    (`agents.boxes`) that it doesn't: so two Macs that share a machine, which aren't each other's
+    peers, and each Mac's other machines, share their limits through no one. It takes only `limits`
+    from those (any other mail from them is dropped, as from anyone else), and they go when no peer
+    names them any more. A box two hops away (known only to a box only a peer knows) isn't one.
+  - Each box's bridge tells each limits peer what it read of its own accounts, through its link:
+    `{"limits": {at, accounts, ask?, refresh?}}`, `accounts` as its `GET` lists them, but its own
+    numbers only (each account's hashed `identity`, its windows with when each was read, `checked`,
+    `next`, its plan, credits and problem; never a sign-in, a token or an ID), as many as fit in 28
+    KB; `at`, the sender's clock. It's sent at once after a read, at most once a minute for what
+    turns hear, again every ten minutes though nothing changed (the relay keeps nothing), and at once
+    to a peer it hasn't told since its bridge started, with `ask: true` (tell me yours). A box
+    answers `ask`, and a peer back after being away, with its own, at most once a minute as it is.
+    A box from before this ignores it, and sends none. A sealed mail that doesn't fit isn't sent.
   - The receiver keeps the last from each peer (`limits-peers.json` in the bridge's folder, through
     a restart), its times moved onto its own clock where the sender's `at` is a minute or more off
-    (`resetsAt`, its maker's, as it is). A computer you removed goes, with what it said.
+    (`resetsAt`, its maker's, as it is), and a `service` it doesn't know (a newer box's) as its name
+    (lowercase letters, digits and dashes, 40 at most). A computer you removed goes, with what it
+    said.
   - **One read per account**: before asking a maker, a box looks for a peer's reading of the same
     account (`service` and `identity`) that its maker answered without a problem within the
     account's time between reads (15 minutes for Claude's, 10 for the rest). Then it doesn't ask,
@@ -3670,8 +3681,8 @@ the last reading in its folder (`limits.json`), through a restart. A client reac
   rows still alike add their other boxes' names. Otherwise (a computer the client reaches answers
   without `rows`, a box from before them, or one whose own rows the first box doesn't have from it
   as it hears it now, not `away`: just added, or the relay down), the client merges each box's
-  `accounts` itself, by the rules for `rows` above, and refreshes each; that goes three months after
-  the release that carries #210.
+  `accounts` itself, by the rules for `rows` above, and refreshes each ("For released Macs",
+  `limits-merge`).
 - What's read: Claude Code's accounts, on Linux from Anthropic with Claude Code's own sign-in in
   Kuvo Code's folder; on a Mac only from what its turns hear (Claude Code's rate-limit events, every
   window from each response's headers), as the token Kuvo Code signs in with there can only run
@@ -6226,6 +6237,16 @@ before connects (the box notes one: `run/attached`).
   "Notices"), which stays until a box tells its news without its bridge: removing it before then
   loses those notices.
   <!-- compat: 0.7 box-notices -->
+- **Plan limits from before `rows`** (#210): a client from before them (a released Mac, a phone)
+  reads each box's own `accounts` and merges them itself. A box that let a peer's reading stand
+  for a read of an account lists it there with that reading's numbers (`accounts`, "Plan limits"),
+  so such a client doesn't show it stale or empty.
+  <!-- compat: 0.7 limits-own-numbers -->
+- **Boxes from before `rows`**: a client asks each box it reaches and merges their `accounts`
+  itself while one of them answers without `rows` ("Plan limits", "Listing them"). The same merge
+  covers a computer the first box doesn't hear from now (the relay down); removing the fallback
+  needs an answer for that first.
+  <!-- compat: 0.7 limits-merge -->
 
 **This Mac's own group chats, from 0.5 to 0.8.0-beta.1.** Those Macs ran their group chats in the
 app (`groups.json`, each chat's messages in `groups/<id>.json`). A Mac with this version moves

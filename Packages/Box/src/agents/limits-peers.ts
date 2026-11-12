@@ -64,7 +64,8 @@ const SKEW = MINUTE
 /** A mail at most this big, its JSON in UTF-8, so it fits in one sealed mail (65,600 bytes) with room to spare. */
 const MOST_BYTES = 40_000
 
-const SERVICES = new Set<LimitsService>(["claude", "codex", "grok", "cursor", "antigravity", "copilot", "openrouter", "zai", "ollama", "opencode"])
+/** A service as a newer box may name one this box doesn't know yet: kept as its name. */
+const SERVICE = /^[a-z0-9][a-z0-9-]{0,39}$/
 const PROBLEMS = new Set(["rate-limited", "expired", "unreadable", "failed"])
 
 export class LimitsPeers {
@@ -114,19 +115,19 @@ export class LimitsPeers {
 
   /**
    * This box's accounts told to its peers: at once after a read, at most once a minute for what
-   * turns hear, and again each ten minutes. `force`: to each now (the link just said who they are).
+   * turns hear, and again each ten minutes; to a peer not told since this started at once, asking
+   * for its own (it may have told while this was away).
    */
-  tell(urgent = false, force = false) {
+  tell(urgent = false) {
     if (!this.transport.followed || !this.directory.told) return
     const now = this.now()
     const accounts = this.shared()
     const json = JSON.stringify(accounts)
     for (const { key } of this.directory.peerBoxes()) {
       const last = this.told.get(key)
-      const due = force || !last || now - last.at >= TELL_AGAIN || (last.json !== json && (urgent || now - last.at >= HEARD_EVERY))
+      const due = !last || now - last.at >= TELL_AGAIN || (last.json !== json && (urgent || now - last.at >= HEARD_EVERY))
       if (!due) continue
-      // The first since this started asks for theirs: they may have told while it was away.
-      this.transport.send(key, { kind: "limits", at: now, accounts, ...(force || !last ? { ask: true as const } : {}) }, false)
+      this.transport.send(key, { kind: "limits", at: now, accounts, ...(!last ? { ask: true as const } : {}) }, false)
       this.told.set(key, { json, at: now })
     }
   }
@@ -144,11 +145,13 @@ export class LimitsPeers {
       const taken = takenAccount(account, off, now)
       return taken ? [taken] : []
     })
-    const name = this.directory.peerBoxes().find((box) => box.key === from)?.name ?? this.peers.get(from)?.name ?? "another computer"
+    const before = this.peers.get(from)
+    const name = this.directory.peerBoxes().find((box) => box.key === from)?.name ?? before?.name ?? "another computer"
     this.peers.set(from, { name, heard: now, accounts })
     this.save()
     this.limits.peersChanged()
-    if (given.ask === true) this.tellOne(from)
+    // Asked, or back after being away (it may have missed what was told meanwhile): told this box's.
+    if (given.ask === true || (before && now - before.heard > PEER_AWAY)) this.tellOne(from)
     if (Array.isArray(given.refresh)) {
       const ids = new Set(given.refresh.filter((id): id is string => typeof id === "string").slice(0, 200))
       if (ids.size) void this.limits.refresh((account, identity) => ids.has(this.idOf(account, identity)))
@@ -181,10 +184,13 @@ export class LimitsPeers {
     return identity ? `${account.service}#${identity}` : `${this.directory.own()?.key ?? ""}/${account.provider}`
   }
 
+  /** This box's accounts told to one peer now, unless they were within the minute as they are. */
   private tellOne(key: string) {
     if (!this.transport.followed) return
     const now = this.now()
     const accounts = this.shared()
+    const last = this.told.get(key)
+    if (last && now - last.at < HEARD_EVERY && last.json === JSON.stringify(accounts)) return
     this.transport.send(key, { kind: "limits", at: now, accounts }, false)
     this.told.set(key, { json: JSON.stringify(accounts), at: now })
   }
@@ -196,7 +202,7 @@ export class LimitsPeers {
     return accounts
   }
 
-  /** The link said who your computers are: those no longer among them go, and each is told now. */
+  /** The link said who your computers are: those no longer among them go, and one new to this box is told now. */
   private directorySaid() {
     const here = new Set(this.directory.peerBoxes().map((box) => box.key))
     let gone = false
@@ -210,7 +216,7 @@ export class LimitsPeers {
       this.save()
       this.limits.peersChanged()
     }
-    this.tell(false, true)
+    this.tell()
   }
 
   private load() {
@@ -245,7 +251,7 @@ function takenAccount(given: unknown, off: number, now: number): AccountLimits |
   if (!given || typeof given !== "object") return null
   const account = given as Record<string, any>
   const provider = text(account.provider)
-  if (!provider || !SERVICES.has(account.service)) return null
+  if (!provider || typeof account.service !== "string" || !SERVICE.test(account.service)) return null
   const moved = (value: unknown) => {
     const at = time(value)
     return at === undefined ? undefined : Math.min(at + off, now)
@@ -274,7 +280,7 @@ function takenAccount(given: unknown, off: number, now: number): AccountLimits |
   const next = time(account.next) === undefined ? undefined : account.next + off
   return {
     provider,
-    service: account.service,
+    service: account.service as LimitsService,
     ...(kinds.includes(account.agent) ? { agent: account.agent as AgentKind, ...(text(account.account) ? { account: text(account.account) } : {}) } : {}),
     ...(text(account.label, 100) ? { label: text(account.label, 100) } : {}),
     ...(typeof account.identity === "string" && /^[0-9a-f]{16}$/.test(account.identity) ? { identity: account.identity } : {}),

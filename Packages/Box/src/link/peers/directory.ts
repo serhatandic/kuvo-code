@@ -9,7 +9,8 @@ import { isObject } from "../../shared/json";
 import { plainName } from "../../shared/text";
 import { locked, writePrivate } from "../files";
 import { RUN } from "../home";
-import { KEY } from "./known";
+import { KEY, MOST_PEERS, cleanPeer, fitsPeer, ownKey, peersOf } from "./known";
+import type { LinkState } from "../state";
 import type { AgentsFile, ListedAgent, ToldAgents } from "../../shared/records";
 import type { EngineSession } from "../engine/sessions";
 import { type BotLook, LOOKS as LOOK_WORDS } from "../../shared/routes/bots";
@@ -78,10 +79,32 @@ export function takeAgents(sender: { key: string; kind: "mac" | "machine"; id?: 
       return false;
     }
     all[sender.key] = { at: given.at as number, heard: Date.now(), kind: sender.kind, ...(sender.id ? { id: sender.id } : {}), list: (given.list as unknown[]).filter(fitsAgent).slice(0, MOST_AGENTS).map(keptAgent),
-      ...(Array.isArray(given.features) ? { features: keptFeatures(given.features) } : {}), ...(Array.isArray(given.moved) ? { moved: keptMoved(given.moved) } : {}) };
+      ...(Array.isArray(given.features) ? { features: keptFeatures(given.features) } : {}), ...(Array.isArray(given.moved) ? { moved: keptMoved(given.moved) } : {}),
+      ...(Array.isArray(given.boxes) ? { boxes: keptBoxes(given.boxes) } : {}) };
     writePrivate(file, JSON.stringify(all));
     return true;
   });
+}
+
+const keptBoxes = (boxes: unknown[]): NonNullable<ToldAgents["boxes"]> => boxes.filter(fitsPeer).slice(0, MOST_PEERS).map(cleanPeer).map(({ key, address, kind, name }) => ({ key, address, kind, name }));
+
+// The boxes this box's peers say they know that aren't its peers too (another Mac's box, and that
+// Mac's machines, beside a machine two Macs share): it takes plan limits from them, and tells its
+// own to them, and nothing else (PROTOCOL.md, "Plan limits", "Across your computers"). A peer's word
+// on them is as good as the peer, which a Mac set up; it goes with that peer.
+export function vouchedOf(link: LinkState | null | undefined, told: Record<string, ToldAgents> = readPeerAgents()): Peer[] {
+  if (!link) return [];
+  const own = ownKey(link);
+  const peers = peersOf(link);
+  const known = new Set(peers.map(peer => peer.key));
+  const vouched = new Map<string, Peer>();
+  for (const peer of peers) {
+    for (const box of told[peer.key]?.boxes ?? []) {
+      if (!fitsPeer(box) || box.key === own || known.has(box.key) || vouched.has(box.key)) continue;
+      vouched.set(box.key, cleanPeer(box));
+    }
+  }
+  return [...vouched.values()].slice(0, MOST_PEERS);
 }
 
 // What each peer told, by its key, as it last said it by mail.

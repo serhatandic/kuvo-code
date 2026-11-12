@@ -26971,6 +26971,7 @@ class LinkDirectory {
   listed = [];
   homes = new Map;
   self;
+  also = new Map;
   listeners = [];
   told = false;
   constructor(transport, clock = realClock) {
@@ -26988,6 +26989,11 @@ class LinkDirectory {
     this.boxes = boxes;
     const self = given.self;
     this.self = self && typeof self === "object" && typeof self.key === "string" ? { key: self.key, name: typeof self.name === "string" ? self.name : "" } : undefined;
+    this.also = new Map;
+    for (const box of Array.isArray(given.also) ? given.also : []) {
+      if (box && typeof box.key === "string" && box.key && !boxes.has(box.key))
+        this.also.set(box.key, typeof box.name === "string" && box.name ? box.name : "another computer");
+    }
     this.told = true;
     this.listed = given.bots.filter((bot) => bot && typeof bot.id === "string" && /^bot_[A-Za-z0-9]+$/.test(bot.id) && typeof bot.name === "string" && typeof bot.box === "string" && boxes.has(bot.box)).map((bot) => ({
       id: bot.id,
@@ -27002,7 +27008,7 @@ class LinkDirectory {
     return true;
   }
   peerBoxes() {
-    return [...this.boxes].map(([key, box]) => ({ key, name: box.name }));
+    return [...[...this.boxes].map(([key, box]) => ({ key, name: box.name })), ...[...this.also].map(([key, name]) => ({ key, name }))];
   }
   own() {
     return this.self;
@@ -28098,7 +28104,7 @@ var PEER_AWAY = 25 * MINUTE2;
 var HEARD_EVERY = MINUTE2;
 var SKEW = MINUTE2;
 var MOST_BYTES = 40000;
-var SERVICES = new Set(["claude", "codex", "grok", "cursor", "antigravity", "copilot", "openrouter", "zai", "ollama", "opencode"]);
+var SERVICE = /^[a-z0-9][a-z0-9-]{0,39}$/;
 var PROBLEMS = new Set(["rate-limited", "expired", "unreadable", "failed"]);
 
 class LimitsPeers {
@@ -28143,7 +28149,7 @@ class LimitsPeers {
       boxes.push({ key, name: this.directory.peerBoxes().find((box) => box.key === key)?.name ?? kept.name, here: false, away: now - kept.heard > PEER_AWAY, accounts: kept.accounts });
     return limitRows(boxes);
   }
-  tell(urgent = false, force = false) {
+  tell(urgent = false) {
     if (!this.transport.followed || !this.directory.told)
       return;
     const now = this.now();
@@ -28151,10 +28157,10 @@ class LimitsPeers {
     const json = JSON.stringify(accounts);
     for (const { key } of this.directory.peerBoxes()) {
       const last = this.told.get(key);
-      const due = force || !last || now - last.at >= TELL_AGAIN || last.json !== json && (urgent || now - last.at >= HEARD_EVERY);
+      const due = !last || now - last.at >= TELL_AGAIN || last.json !== json && (urgent || now - last.at >= HEARD_EVERY);
       if (!due)
         continue;
-      this.transport.send(key, { kind: "limits", at: now, accounts, ...force || !last ? { ask: true } : {} }, false);
+      this.transport.send(key, { kind: "limits", at: now, accounts, ...!last ? { ask: true } : {} }, false);
       this.told.set(key, { json, at: now });
     }
   }
@@ -28172,11 +28178,12 @@ class LimitsPeers {
       const taken = takenAccount(account, off, now);
       return taken ? [taken] : [];
     });
-    const name = this.directory.peerBoxes().find((box) => box.key === from)?.name ?? this.peers.get(from)?.name ?? "another computer";
+    const before = this.peers.get(from);
+    const name = this.directory.peerBoxes().find((box) => box.key === from)?.name ?? before?.name ?? "another computer";
     this.peers.set(from, { name, heard: now, accounts });
     this.save();
     this.limits.peersChanged();
-    if (given.ask === true)
+    if (given.ask === true || before && now - before.heard > PEER_AWAY)
       this.tellOne(from);
     if (Array.isArray(given.refresh)) {
       const ids = new Set(given.refresh.filter((id) => typeof id === "string").slice(0, 200));
@@ -28211,6 +28218,9 @@ class LimitsPeers {
       return;
     const now = this.now();
     const accounts = this.shared();
+    const last = this.told.get(key);
+    if (last && now - last.at < HEARD_EVERY && last.json === JSON.stringify(accounts))
+      return;
     this.transport.send(key, { kind: "limits", at: now, accounts }, false);
     this.told.set(key, { json: JSON.stringify(accounts), at: now });
   }
@@ -28236,7 +28246,7 @@ class LimitsPeers {
       this.save();
       this.limits.peersChanged();
     }
-    this.tell(false, true);
+    this.tell();
   }
   load() {
     if (!this.file)
@@ -28267,7 +28277,7 @@ function takenAccount(given, off, now) {
     return null;
   const account = given;
   const provider = text4(account.provider);
-  if (!provider || !SERVICES.has(account.service))
+  if (!provider || typeof account.service !== "string" || !SERVICE.test(account.service))
     return null;
   const moved = (value) => {
     const at = time(value);
@@ -28666,4 +28676,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 1472a4c5a8755e37f3d47ed27c3134f98da7fdbe2702fcf0671e02fb35c6b61e
+// Built from Packages/Box/src/agents 7fd17c868ef3bbb2c51eb1d2deaafd4071ebcb232803cfd4344e33361620a45d

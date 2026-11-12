@@ -152,7 +152,9 @@ export async function announce(host: Pick<LinkHost, "send">, readEngine: () => T
   if (!ownList) return;
   // With the conversations it moved away lately, and where each lives now.
   const moved = movedAway(now).map(({ session, key, at }) => ({ session, key, at }));
-  const json = JSON.stringify([ownList, moved]);
+  // And the boxes it knows: each peer may take plan limits from those it doesn't know itself.
+  const boxes = peersOf(link).map(({ key, address, kind, name }) => ({ key, address, kind, name }));
+  const json = JSON.stringify([ownList, moved, boxes]);
   let have: DigestEntry[] | false | null = null;
   for (const peer of peersOf(link)) {
     const last = toldPeers.get(peer.key);
@@ -164,7 +166,7 @@ export async function announce(host: Pick<LinkHost, "send">, readEngine: () => T
     let bytes: Buffer | null = null, sent: ListedAgent[] = [];
     for (const count of [ownList.length, Math.floor(ownList.length / 2), Math.floor(ownList.length / 4)]) {
       sent = ownList.slice(0, count);
-      bytes = mailFor(peer, { agents: { at: now, list: sent, features: ownFeatures(), moved }, ...docs, at: now, ...(ask ? { ask: "agents" } : {}) }, link);
+      bytes = mailFor(peer, { agents: { at: now, list: sent, features: ownFeatures(), moved, boxes: boxes.filter(box => box.key !== peer.key) }, ...docs, at: now, ...(ask ? { ask: "agents" } : {}) }, link);
       if (bytes) break;
     }
     if (!bytes) continue;

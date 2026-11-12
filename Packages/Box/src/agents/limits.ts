@@ -273,6 +273,7 @@ export class Limits {
       // another account since says so), or read on another of your computers in its place.
       if (!entry.checked && !entry.windows.length && !entry.problem && !entry.elsewhere) continue
       const problem = entry.problem ? { kind: entry.problem.kind, message: entry.problem.message, ...(entry.problem.until ? { until: entry.problem.until } : {}) } : undefined
+      // COMPAT(0.7 limits-own-numbers): a skipped account's own row carries the peer's newer numbers, for clients from before rows. Goes 3 months after 0.8.0.
       const peer = borrowed && entry.elsewhere && entry.identity ? this.peers?.freshest(account.service, entry.identity) : undefined
       if (peer?.checked && peer.checked > (entry.checked ?? 0)) {
         listed.push({
