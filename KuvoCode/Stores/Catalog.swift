@@ -1,4 +1,5 @@
 import ClientAccounts
+import ClientSessions
 import Foundation
 import OpenCodeKit
 import os
@@ -242,6 +243,8 @@ final class Catalog {
     /// the engine would drop a message on it without a word, so it's said before it's sent.
     /// Only then: a model missing from a list for a moment (a coding agent's, as it starts) goes
     /// to its agent, which says for itself if it can't run it.
+    /// The old-box path, with `refusal`, `unavailable`, `chipModel` and `signInHelp`: a box with
+    /// `sessions.models` says this itself (`SessionModelState`, the `said:` versions below).
     func needsSignIn(_ ref: ModelRef?) -> Bool {
         guard let ref, isUnavailable(ref) else { return false }
         return integrations.contains { $0.id == ref.providerID && !$0.isConnected && !$0.methods.isEmpty }
@@ -337,6 +340,75 @@ final class Catalog {
     func chipModel(_ ref: ModelRef?, in scope: ModelScope) -> Model? {
         ref.map { !scope.allows($0.providerID) } == true ? nil : chipModel(ref)
     }
+
+    // MARK: What a session's box says of its model
+
+    /// What a conversation's chip shows for `ref`, from what its box says of its model (`said`,
+    /// `kuvo/sessions/models`): the model while it runs or its account needs something; nil for
+    /// one gone, or none chosen, which asks for another. Where the box hasn't said it of `ref` (a
+    /// box from before `sessions.models`, not read yet, or another model just picked), the old-box
+    /// path: as this Mac works it out (`chipModel`).
+    func chipModel(_ ref: ModelRef?, in scope: ModelScope, said: SessionModelState?) -> Model? {
+        guard let said, said.isAbout(ref) else { return chipModel(ref, in: scope) }
+        // None of its own, and none it runs on: "Choose a Model" (one it can't say yet, as here).
+        guard let shown = ref ?? said.model else { return said.namesModel ? chipModel(ref, in: scope) : nil }
+        guard scope.allows(shown.providerID), said.namesModel else { return nil }
+        if let model = model(shown) ?? lastListed[ModelRef(id: shown.id, providerID: shown.providerID)] { return model }
+        var placeholder = Self.autoTemplate
+        placeholder.id = shown.id
+        placeholder.providerID = shown.providerID
+        placeholder.name = said.name ?? shown.id
+        return placeholder
+    }
+
+    /// Why a message on `ref` can't be sent (on the machine named `on`), from what its box says
+    /// (`said`); nil when it can go. Where the box hasn't said it of `ref`, the old-box path
+    /// (`refusal`).
+    func refusal(_ ref: ModelRef, on machine: String? = nil, said: SessionModelState?) -> String? {
+        guard let said, said.isAbout(ref) else { return refusal(ref, on: machine) }
+        return said.refusal(there: machine.map { " on \($0)" } ?? "", accounts: "Settings › Accounts", shownName: shownName(ref))
+    }
+
+    /// The chip's help for `ref`: why it can't run and what to do, else what it is. Where the box
+    /// hasn't said it of `ref`, the old-box path.
+    func chipHelp(_ ref: ModelRef?, in scope: ModelScope, on machine: String? = nil, said: SessionModelState?) -> String {
+        if let said, said.isAbout(ref), let shown = ref ?? said.model, scope.allows(shown.providerID) {
+            return said.refusal(there: machine.map { " on \($0)" } ?? "", accounts: "Settings › Accounts", shownName: shownName(shown)) ?? "Model and effort"
+        }
+        if let said, ref == nil, said.model == nil, !said.namesModel { return said.refusal(accounts: "Settings › Accounts") ?? "Model and effort" }
+        if let ref, needsSignIn(ref) { return unavailable(ref, on: machine) }
+        let unavailable = isUnavailable(ref) || ref.map { !scope.allows($0.providerID) } == true
+        return unavailable && chipModel(ref, in: scope) == nil ? "\(model(ref)?.name ?? ref?.id ?? "") isn't available now: choose another model" : "Model and effort"
+    }
+
+    /// What a sign-in card's Sign In for `id` does (on the machine named `on`), from what the
+    /// box says of the conversation's model where that's this account's; else the old-box path.
+    func signInHelp(_ id: String, on machine: String? = nil, said: SessionModelState?) -> String {
+        said?.signInHelp(id, there: machine.map { " on \($0)" } ?? "") ?? signInHelp(id, on: machine)
+    }
+
+    /// Whether `ref`'s account needs a sign-in, a key or its agent installed now, from what the
+    /// box says where it's said of `ref`; else the old-box path (`needsSignIn`).
+    func needsAccount(_ ref: ModelRef, said: SessionModelState?) -> Bool {
+        guard let said, said.isAbout(ref) else { return needsSignIn(ref) }
+        return said.needsAccount
+    }
+
+    /// `ref`'s name as last listed here, for one its box no longer names.
+    private func shownName(_ ref: ModelRef) -> String? {
+        model(ref)?.name ?? lastListed[ModelRef(id: ref.id, providerID: ref.providerID)]?.name
+    }
+
+    /// Changes each time the accounts or models are read anew (and Custom Auto's lists change):
+    /// what a session's box says of its model is asked again then.
+    var listsKey: Int {
+        var hasher = Hasher()
+        hasher.combine(listsRead)
+        hasher.combine(auto)
+        return hasher.finalize()
+    }
+    /// How many times the accounts and models were read.
+    private(set) var listsRead = 0
 
     /// The model a new session or bot starts on: the first of `wanted` (the one picked, the one
     /// picked last) you can use now; else the engine's default, if you can; else the first model
@@ -542,8 +614,11 @@ final class Catalog {
     }
 
     private func merge() {
-        integrations = engineIntegrations + agentIntegrations
-        models = engineModels + agentModels
+        let integrations = engineIntegrations + agentIntegrations
+        let models = engineModels + agentModels
+        if integrations != self.integrations || models != self.models { listsRead += 1 }
+        self.integrations = integrations
+        self.models = models
         for model in models { lastListed[ModelRef(id: model.id, providerID: model.providerID)] = model }
     }
 

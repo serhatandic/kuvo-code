@@ -34,7 +34,7 @@ struct TranscriptView: View {
     /// A failed turn's Sign In, to its model's account, here.
     private var signIn: ConversationSignIn? {
         guard !isOffline else { return nil }
-        return ConversationSignIn(current: model.session.model) { providerID in signingIn = SigningIn(id: providerID) }
+        return ConversationSignIn(current: model.session.model, said: model.modelState) { providerID in signingIn = SigningIn(id: providerID) }
     }
     @AppStorage(StepsDetail.key) private var stepsDetail = StepsDetail.summary
     @State private var scroller = ConversationScroller()
@@ -1576,7 +1576,7 @@ private struct TurnEndView: View {
 
     /// What its card offers for a sign-in, from here (none while offline).
     private var actions: SignInCard.Actions? {
-        signIn.map { SignInCard.actions(failed: stats.model, current: $0.current, catalog: catalog) }
+        signIn.map { SignInCard.actions(failed: stats.model, current: $0.current, said: $0.said, catalog: catalog) }
     }
 
     /// The engine's words under the headline; for a sign-in that ended, which the engine says only
@@ -1608,7 +1608,7 @@ private struct TurnEndView: View {
                         if let signIn, let account = actions?.signIn {
                             let again = kind == .signIn(ended: true) ? "Sign In Again" : "Sign In"
                             Button(machine.map { "\(again) on \($0)" } ?? again) { signIn.open(account.providerID) }
-                                .help(catalog.signInHelp(account.providerID, on: machine))
+                                .help(catalog.signInHelp(account.providerID, on: machine, said: signIn.said))
                             if actions?.switchModel == true, let switchModel {
                                 Button("Switch Model", action: switchModel)
                                     .help("Choose another model for this conversation")
@@ -2599,6 +2599,8 @@ extension TranscriptView {
 struct ConversationSignIn {
     /// The model the conversation is on now, which Try Again sends with.
     let current: ModelRef?
+    /// What its box says of that model (`kuvo/sessions/models`); nil from a box before it.
+    var said: SessionModelState?
     let open: (String) -> Void
 }
 
@@ -2617,10 +2619,11 @@ enum SignInCard {
         var tryAgain = true
     }
 
-    static func actions(failed: ModelRef?, current: ModelRef?, catalog: Catalog) -> Actions {
+    /// `said`: what the conversation's box says of its model now, where it has it.
+    static func actions(failed: ModelRef?, current: ModelRef?, said: SessionModelState? = nil, catalog: Catalog) -> Actions {
         func signedOut(_ ref: ModelRef?) -> Bool {
             guard let ref, ref.providerID != OutsideAgents.autoProvider else { return false }
-            return catalog.needsSignIn(ref) || catalog.hasEndedSignIn(ref.providerID)
+            return catalog.needsAccount(ref, said: said) || catalog.hasEndedSignIn(ref.providerID)
         }
         guard let failed, failed.providerID != OutsideAgents.autoProvider, catalog.offersSignIn(failed.providerID) else {
             return Actions(tryAgain: !signedOut(current))

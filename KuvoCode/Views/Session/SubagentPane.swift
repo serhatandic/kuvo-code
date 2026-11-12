@@ -286,6 +286,11 @@ private struct SubagentConversation: View {
         .preference(key: CardTopIsFixed.self, value: true)
         // What's opened from it comes back to it.
         .environment(\.conversationTab, .session(model.id))
+        // What its box says of its model, as for any conversation.
+        .task(id: [model.id, model.session.model.map { $0.providerID + "/" + $0.id } ?? "", String(catalog.listsKey)]) {
+            guard !isAgentsOwn else { return }
+            await model.readModelState()
+        }
     }
 
     private var header: some View {
@@ -366,7 +371,8 @@ private struct SubagentConversation: View {
             quoteFocus: model.quoteFocus,
             agent: model.agent,
             approval: model.approval,
-            model: model.session.model ?? catalog.startingModel(lastModel),
+            model: model.session.model ?? model.modelState?.model ?? catalog.startingModel(lastModel),
+            modelState: model.modelState,
             isRunning: isWorking,
             hasQueue: !model.waiting.isEmpty,
             history: { model.sentMessages },
@@ -395,6 +401,9 @@ private struct SubagentConversation: View {
     private func send() {
         guard !isOffline else { return }
         Analytics.shared.track("subagent_messaged", ["working": isWorking])
-        model.submitDraft(for: catalog.model(model.session.model), queue: false, commands: catalog.commands(in: model.session.location.directory))
+        // A model whose account needs something, as its box says: said instead, as for any conversation.
+        let machine = RemoteFolder.machine(of: model.session.location.directory).map { id in app.machines.list.first { $0.id == id }?.name ?? id }
+        let unavailable = isAgentsOwn ? nil : model.session.model.flatMap { ref in model.modelState.flatMap { $0.isAbout(ref) ? catalog.refusal(ref, on: machine, said: $0) : nil } }
+        model.submitDraft(for: catalog.model(model.session.model), queue: false, commands: catalog.commands(in: model.session.location.directory), unavailable: unavailable)
     }
 }

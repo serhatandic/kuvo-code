@@ -427,6 +427,11 @@ final class SessionModel {
     @ObservationIgnored private var queueFollow: Task<Void, Never>?
     /// The session's box (this Mac's, or its machine's).
     @ObservationIgnored var box: () -> BoxClient? = { nil }
+    /// What its box says of its model (`kuvo/sessions/models`, `readModelState`): the model it runs
+    /// on, whether it can, and what's missing if not, which its model button, Send and a sign-in
+    /// card draw. Nil until read, and from a box without `sessions.models`, whose model this Mac
+    /// works out as before (`Catalog`'s old-box path).
+    private(set) var modelState: SessionModelState?
     /// Its approval as its box shows it (`readApproval`); nil until read.
     var approvalShown: ApprovalShown?
     /// Auto's reviewer's decisions here, as its box keeps them (`readDecisions`); nil until read.
@@ -2037,6 +2042,19 @@ final class SessionModel {
 
     /// What its box answers (`kuvo/info`'s `features`), once read; this Mac's has all of them.
     @ObservationIgnored private var readFeatures: Set<String>?
+
+    /// Reads what its box says of its model again (`modelState`): as it opens, as its model
+    /// changes, and as its box's accounts, models or Custom Auto lists do. One the box can't say
+    /// about yet is as it is, and a message on it goes; what can't be read keeps what was.
+    func readModelState() async {
+        guard let box = box(), await boxHas("sessions.models") else {
+            modelState = nil
+            return
+        }
+        guard let read = try? await box.value(SessionModelStates.self, "GET", SessionModelState.path([id])), !Task.isCancelled else { return }
+        let state = read.sessions[id] ?? .unknown(session.model)
+        if modelState != state { modelState = state }
+    }
     /// Whether its box answers `feature` (`kuvo/info`'s `features`); this Mac's answers them all.
     func boxHas(_ feature: String) async -> Bool {
         guard let box = box() else { return false }
