@@ -1417,6 +1417,8 @@ test("each feature kuvo/info names is a route the machine answers, and one it do
     "git.pull-request": ["POST", "kuvo/git/pull-request"],
     "git.pull-request.draft": ["POST", "kuvo/git/pull-request/draft"],
     "git.push": ["POST", "kuvo/git/push"],
+    // (Settings › Git kept here, and the prompts written here: a Mac's from before moves in once.)
+    "git.words": ["POST", "kuvo/git/settings/move"],
     goals: ["GET", "kuvo/agents/api/kuvo/goals"],
     groups: ["GET", "kuvo/groups"],
     "groups.delete": ["DELETE", "kuvo/groups/grp_none"],
