@@ -12094,7 +12094,95 @@
   {
    "route": "GET kuvo/work-queue/items/:item/files/:name",
    "answers": {
-    "200": "bytes"
+    "200": "bytes",
+    "409": {
+     "object": {
+      "message": "string",
+      "computer": {
+       "object": {
+        "key": "string",
+        "name": "string",
+        "kind": {
+         "oneOf": [
+          {
+           "literal": "mac"
+          },
+          {
+           "literal": "machine"
+          }
+         ]
+        },
+        "id?": "string"
+       }
+      }
+     }
+    },
+    "413": {
+     "object": {
+      "message": "string",
+      "computer?": {
+       "object": {
+        "key": "string",
+        "name": "string",
+        "kind": {
+         "oneOf": [
+          {
+           "literal": "mac"
+          },
+          {
+           "literal": "machine"
+          }
+         ]
+        },
+        "id?": "string"
+       }
+      }
+     }
+    },
+    "502": {
+     "object": {
+      "message": "string",
+      "computer": {
+       "object": {
+        "key": "string",
+        "name": "string",
+        "kind": {
+         "oneOf": [
+          {
+           "literal": "mac"
+          },
+          {
+           "literal": "machine"
+          }
+         ]
+        },
+        "id?": "string"
+       }
+      }
+     }
+    },
+    "503": {
+     "object": {
+      "message": "string",
+      "computer": {
+       "object": {
+        "key": "string",
+        "name": "string",
+        "kind": {
+         "oneOf": [
+          {
+           "literal": "mac"
+          },
+          {
+           "literal": "machine"
+          }
+         ]
+        },
+        "id?": "string"
+       }
+      }
+     }
+    }
    }
   },
   {

@@ -17,12 +17,12 @@ import { itemElsewhere, itemsElsewhere, tellQueuesAgain } from "../work-queue/ac
 import { Refusal, refuseMoving } from "../work-queue/ops";
 import { TOLD } from "../work-queue/told";
 import { readLink } from "../state";
-import { allItems, changeQueues, FILE_NAME, filesOf, matching, OWNER, queueFollowers, readAll, WORK_QUEUE, type Item } from "../work-queue/store";
+import { allItems, changeQueues, matching, OWNER, queueFollowers, readAll, WORK_QUEUE, type Item } from "../work-queue/store";
 import { readSeen, SEEN_FILE } from "../work-queue/github";
 import { callQueueTool, QUEUE_INSTRUCTIONS, QUEUE_TOOLS } from "../work-queue/tools";
 import { factsOf, inView, linkedTo, nameOf, overseenBy, ownersOf, refOf, summaryOf, type Facts, type ItemSummary } from "../work-queue/view";
-import { forwardAct, type Act, type Acted } from "../work-queue/forward";
-import { actHere, GITHUB_WAIT } from "../work-queue/acts";
+import { forwardAct, type Acted } from "../work-queue/forward";
+import { actHere, fileOf, GITHUB_WAIT } from "../work-queue/acts";
 import type { AnswerPiece, RouteContext } from "../server/context";
 import type { Target } from "../../shared/records";
 
@@ -209,20 +209,24 @@ export async function* workQueueRoute(context: RouteContext, match: RegExpMatchA
     return yield* json(200, { item: { ...summary, body: "", notes: [], events: [], files: [], links: [], handed: [], told: true } });
   }
   if (action?.startsWith("files/") && method === "GET") {
-    const name = decodeURIComponent(rawFile ?? "");
-    const item = find(allItems());
-    const kept = item?.files.find(each => each.name === name);
-    if (!item || !kept || !FILE_NAME.test(name)) return yield* json(404, { message: "There's no such file." });
-    let bytes: Buffer;
-    try {
-      bytes = fs.readFileSync(path.join(filesOf(item.id), name));
-    } catch {
-      return yield* json(404, { message: "There's no such file." });
+    let name = "";
+    try { name = decodeURIComponent(rawFile ?? ""); } catch {}
+    // One kept with an item on another of your computers: from there, for a client (up to a few MB).
+    const far = !find(allItems()) && fromClient(context) ? itemElsewhere(ref) : null;
+    let file = far ? null : fileOf(ref, name);
+    if (far) {
+      const there = await forwardAct(far.computer, nameOf(far), { method: "GET", item: far.id, action: "file", name }, signal);
+      if ("refused" in there) return yield* json(there.status, { message: there.refused, computer: far.computer });
+      const value = isObject(there.value) ? there.value : {};
+      if (there.status !== 200) return yield* json(there.status, { ...value, computer: far.computer });
+      if (typeof value.data !== "string" || typeof value.type !== "string") return yield* json(502, { message: `${far.computer.name} answered something this computer can't read.`, computer: far.computer });
+      file = { type: value.type, bytes: Buffer.from(value.data, "base64") };
     }
-    yield { head: { status: 200, headers: { "content-type": kept.type } } };
-    return yield { body: bytes };
+    if (!file) return yield* json(404, { message: "There's no such file." });
+    yield { head: { status: 200, headers: { "content-type": file.type } } };
+    return yield { body: file.bytes };
   }
-  const asked: Pick<Act, "method" | "action"> | null = method === "DELETE" && action === undefined ? { method: "DELETE" }
+  const asked: { method: "DELETE" | "POST"; action?: "move" | "restore" } | null = method === "DELETE" && action === undefined ? { method: "DELETE" }
     : method === "POST" && (action === "move" || action === "restore") ? { method: "POST", action }
     : null;
   if (!asked) return yield* json(405, {});
@@ -235,7 +239,9 @@ export async function* workQueueRoute(context: RouteContext, match: RegExpMatchA
   const there = await forwardAct(far.computer, nameOf(far), { ...asked, item: far.id, ...(asked.action === "move" ? { body: { category, before, after, top } } : {}) }, signal);
   if ("refused" in there) return yield* json(there.status, { message: there.refused, computer: far.computer });
   // (As this box names that computer, so a client knows where it is.)
-  const value = isObject(there.value) && isObject(there.value.item) ? { ...there.value, item: { ...there.value.item, computer: far.computer } } : there.value;
+  const value = !isObject(there.value) ? there.value
+    : isObject(there.value.item) ? { ...there.value, item: { ...there.value.item, computer: far.computer } }
+    : there.status === 200 ? there.value : { ...there.value, computer: far.computer };
   return yield* json(there.status, value);
 }
 

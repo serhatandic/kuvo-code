@@ -210,7 +210,7 @@ export { pushRows, takeRows } from "./work/elsewhere";
 export { askToSend, blockArrived, BLOCK as QUEUE_BLOCK, CLAIM_REACH as QUEUE_CLAIM_REACH, claimNumbers, giveBlock, LOW as QUEUE_LOW, notePrimaryNow, primaryOf, pushNumbers, rankedPrimary, readNumbers, reclaimWaiting, takeBlock, takeNumber, takeNumbersMail } from "./work-queue/numbers";
 export { forgetPushed as forgetQueuesTold, itemsElsewhere, pushQueues, takeWorkQueueMail, tellingNow as queueTellingNow, tellQueuesAgain } from "./work-queue/across";
 export { handUpkeep } from "./work-queue/hand";
-export { forgetActs as forgetQueueActs, FORWARD_WAIT as QUEUE_FORWARD_WAIT, FORWARDS as QUEUE_FORWARDS, forwardsSoon as queueForwardsSoon, sendForwards as sendQueueForwards } from "./work-queue/forward";
+export { forgetActs as forgetQueueActs, FORWARDS as QUEUE_FORWARDS, forwardsSoon as queueForwardsSoon, forwardTiming as queueForwardTiming, sendForwards as sendQueueForwards } from "./work-queue/forward";
 export { mailsFor as queueMailsFor, takePart as takeQueuePart } from "./work-queue/parts";
 export { parseBacklog } from "./work-queue/import";
 export { carryWorkQueue, forgetWorkQueues, packWorkQueues, placeWorkQueues } from "./work-queue/moves";

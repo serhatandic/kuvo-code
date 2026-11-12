@@ -92,7 +92,8 @@ export const WORK_QUEUE_ROUTES: RouteShape[] = [
   { route: "POST kuvo/work-queue/categories", answers: { 200: object({ categories: list(QUEUE_CATEGORY) }) } },
   { route: "POST kuvo/work-queue/import", answers: { 200: object({ added: number, byCategory: map(number), waiting: number, skipped: list(string), said: string }) } },
   { route: "GET kuvo/work-queue/items/:item", answers: { 200: object({ item: QUEUE_ITEM_WHOLE }) } },
-  { route: "GET kuvo/work-queue/items/:item/files/:name", answers: { 200: BYTES } },
+  // (A file of an item on another computer: from there, 4 MB at most, else 413.)
+  { route: "GET kuvo/work-queue/items/:item/files/:name", answers: { 200: BYTES, 409: ON_ANOTHER, 413: object({ message: string, "computer?": COMPUTER }), 502: ON_ANOTHER, 503: ON_ANOTHER } },
   { route: "POST kuvo/work-queue/items/:item/move", answers: { 200: object({ item: QUEUE_ITEM }), 409: ON_ANOTHER, 503: ON_ANOTHER } },
   { route: "POST kuvo/work-queue/items/:item/restore", answers: { 200: object({ item: QUEUE_ITEM }), 409: ON_ANOTHER, 503: ON_ANOTHER } },
   { route: "DELETE kuvo/work-queue/items/:item", answers: { 200: object({ item: QUEUE_ITEM }), 409: ON_ANOTHER, 503: ON_ANOTHER } },
