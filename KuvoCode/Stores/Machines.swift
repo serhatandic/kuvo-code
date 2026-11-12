@@ -384,7 +384,7 @@ final class MachineEngine {
             default: nil
             }
         }
-        switch state {
+        return switch state {
         case .ready: .disconnect
         // COMPAT(0.7 engine-stop): Start. Goes 3 months after 0.8.0.
         case .preparing where isStopped: .start
