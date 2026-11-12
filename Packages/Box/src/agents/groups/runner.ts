@@ -12,6 +12,7 @@ import { SeatAPI, type Requester } from "./api"
 import {
   compose,
   isPass,
+  isPassReport,
   label,
   limit,
   nextSpeaker,
@@ -1238,10 +1239,12 @@ export class GroupRunner {
       part.finished = stamp()
       delete part.lost
     })
-    this.append({ id: groupMessageID(), author: botID, text: result.text, time: stamp(), kind: "message", report: taskID }, id)
+    // A pass: done, with nothing to report, so nothing's said in the chat (and nothing for the parts after it).
+    const passed = isPassReport(result.text)
+    if (!passed) this.append({ id: groupMessageID(), author: botID, text: result.text, time: stamp(), kind: "message", report: taskID }, id)
     this.startReady(wrapUpID, id)
     const kept = this.chats.get(id)
-    if (kept) emit("kuvo.group.done", { id, name: kept.group.name, bot: botID, who: this.name(botID), text: result.text })
+    if (kept && !passed) emit("kuvo.group.done", { id, name: kept.group.name, bot: botID, who: this.name(botID), text: result.text })
   }
 
   /** What another computer says of a part its bot is doing: whether it waits on its conversation there, stopped by you. */
