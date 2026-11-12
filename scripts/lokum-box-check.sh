@@ -47,7 +47,7 @@ cleanup() {
 }
 trap cleanup EXIT
 trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM
-mkdir -p "$T/repo" "$T/tmp" "$T/home" "$T/cache"
+mkdir -p "$T/repo" "$T/tmp" "$T/cache"
 printf '%s\n' "$tmp_before" > "$T/tmp-before"
 printf '%s\n' "$home_before" > "$T/home-before"
 tar xzf - -C "$T/repo"
@@ -56,7 +56,11 @@ engine=$(printf '%s\n' "$real_home"/.kuvo-code/engine/*/opencode | sort -V | tai
 for var in $(compgen -e); do
     case "$var" in KUVO_*|OPENCODE_*|XDG_*|SSH_AUTH_SOCK|CLAUDE*|CODEX_HOME|BUN_*|NODE_OPTIONS) unset "$var";; esac
 done
-export HOME=$T/home TMPDIR=$T/tmp XDG_CACHE_HOME=$T/cache
+# HOME stays yours, as on the Mac (scripts/test-box.sh): the guard (test-safety.js) gives the run a
+# home of its own in ~/.kuvo-code-test and removes it, and the tests that judge your own home (Auto's
+# reviewer, the walls' HOME check) need HOME to be the account's, as the system has it. A scratch HOME
+# failed 19 tests, the SSH agents' one too (its sockets' paths, deeper, past Linux's 108 bytes).
+export TMPDIR=$T/tmp XDG_CACHE_HOME=$T/cache
 export BUN_INSTALL_CACHE_DIR=$T/cache/bun npm_config_cache=$T/cache/npm UV_CACHE_DIR=$T/cache/uv
 export BUN_RUNTIME_TRANSPILER_CACHE_PATH=$T/cache/transpiler
 export PATH=/usr/local/bin:/usr/bin:/bin
