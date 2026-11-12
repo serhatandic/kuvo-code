@@ -127,7 +127,10 @@ async function engineOf(box) {
     const text = await response.text();
     return text ? JSON.parse(text) : null;
   };
-  // Its agents loaded, and the skills it found, as a conversation starts.
+  // Its plugins set up (its providers wait for them; from 2.2.7 its agents and skills are listed at
+  // once, with what it has so far), then its agents loaded, and the skills it found, as a
+  // conversation starts.
+  await api("GET", "api/provider");
   const agents = (await api("GET", "api/agent")).data;
   await api("GET", "api/skill");
   const session = (await api("POST", "api/session", { location: { directory: path.join(box.home, "work") } })).data.id;
@@ -175,6 +178,8 @@ for (const mac of [false, true]) {
     // The engine sees its plugins folder change and sets up its plugins and agents again, for the
     // folders it has open (its agents first).
     await reloaded;
+    // (Its plugins set up again, as its providers wait for.)
+    await engine.api("GET", "api/provider");
     for (const agent of AGENTS) {
       assert.equal(await engine.effect(agent, path.join(box.home, ".ssh")), "ask", `${agent} asks before reading your SSH keys`);
       assert.equal(await engine.effect(agent, path.join(box.home, "shared")), "allow", `${agent}: your allow wins`);
