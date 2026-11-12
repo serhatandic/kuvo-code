@@ -55,7 +55,9 @@ final class BotAsks {
     func follow(_ box: String) async {
         let me = UUID()
         following[box] = me
-        let onThisMac = box == BoxClient.mac
+        // (Followed as it changes on the app's own box, which streams; read now and then on any
+        // other, the one attached in place too, which answers once a read.)
+        let onThisMac = BoxClient.streams(box)
         var older = false
         while !Task.isCancelled {
             if !onThisMac {
@@ -94,7 +96,7 @@ final class BotAsks {
     /// What `box` asks now, read once (as it connects, and as a bot's work there says it asks
     /// something new).
     func read(_ box: String) async {
-        guard box == BoxClient.mac || isConnected(box), let client = client(box), let list = try? await client.value(WorkAskList.self, "GET", "kuvo/work/asks") else { return }
+        guard BoxClient.isThisMac(box) || isConnected(box), let client = client(box), let list = try? await client.value(WorkAskList.self, "GET", "kuvo/work/asks") else { return }
         take(list.asks, from: box)
     }
 
@@ -122,8 +124,8 @@ final class BotAsks {
     // A notification for it: this Mac's box tells your phones its own; a machine tells them itself.
     private func tell(_ ask: WorkAsk, on box: String) {
         let title = ask.action == .cloneProject ? "\(ask.name) asks to clone a project" : "\(ask.name) asks to make a project"
-        let body = ask.folder.map { box == BoxClient.mac ? ($0 as NSString).abbreviatingWithTildeInPath : $0 } ?? ask.project
-        Notifier.shared.notify(session: ask.session, title: title, body: body, push: .init(.ask, ask: ask.id, machine: box == BoxClient.mac ? nil : box, answerable: false))
+        let body = ask.folder.map { BoxClient.isThisMac(box) ? ($0 as NSString).abbreviatingWithTildeInPath : $0 } ?? ask.project
+        Notifier.shared.notify(session: ask.session, title: title, body: body, push: .init(.ask, ask: ask.id, machine: BoxClient.isThisMac(box) ? nil : box, answerable: false))
     }
 
     /// How an answer went: what was done, in words (the bot is told too), and whether it failed.
@@ -155,7 +157,7 @@ final class BotAsks {
         guard let done else { return nil }
         if answer == .always { await app?.bots.refresh(box) }
         // A machine's projects are read as it connects: the new one, now. (This Mac's are followed.)
-        if answer != .deny, box != BoxClient.mac { await app?.workspace.loadProjects(on: box) }
+        if answer != .deny, !BoxClient.streams(box) { await app?.workspace.loadProjects(on: box) }
         return done
     }
 }

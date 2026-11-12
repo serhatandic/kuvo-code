@@ -837,7 +837,8 @@ final class WindowTabs {
     /// `conversation`: one, even in a project whose sessions open its terminal command.
     func newSession(in directory: String?, conversation: Bool = false) {
         let inView = activeDirectory.map(workspace.projectDirectory).flatMap { Workspace.isBotFolder($0) ? nil : $0 }
-        let directory = directory ?? inView ?? workspace.projects.first?.directory ?? Workspace.chatsFolder
+        // (On this Mac: its box's, the app's own or the one attached in place.)
+        let directory = Workspace.onThisMac(directory ?? inView ?? workspace.projects.first?.directory ?? Workspace.thisMacsChats)
         // A project that has a terminal command for its sessions opens that, not a conversation.
         if !conversation, let command = workspace.settings[workspace.projectDirectory(directory)]?.terminal {
             openTerminalTab(command: command, in: directory)

@@ -62,7 +62,7 @@ struct GoalModelRow: View {
     }
 
     private var computer: String {
-        box == BoxClient.mac ? "this Mac" : app.machines.engine(box)?.machine.name ?? box
+        BoxClient.isThisMac(box) ? "this Mac" : app.machines.engine(box)?.machine.name ?? box
     }
 
     /// The box's own name for its pick where the models here aren't read yet (the picker shows its id).

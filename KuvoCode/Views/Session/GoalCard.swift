@@ -52,7 +52,7 @@ struct GoalCard: View {
     @State private var reviews = false
 
     private var isAnswering: Bool { app.goalPlans.answering.contains(plan.id) }
-    private var onThisMac: Bool { box == BoxClient.mac }
+    private var onThisMac: Bool { BoxClient.isThisMac(box) }
     private var computer: String { onThisMac ? "This Mac" : app.machines.engine(box)?.machine.name ?? box }
     private var bot: Bot? { app.bots.list.first { $0.id == plan.bot } }
     /// What only you can do (and what failed), first.
@@ -238,7 +238,7 @@ struct GoalCard: View {
     // MARK: The sandbox row
 
     private var sandboxRow: GoalSandbox.Row? {
-        GoalSandbox.row(sandbox, computer: computer, onThisMac: onThisMac, bot: plan.name,
+        GoalSandbox.row(sandbox, computer: computer, onThisMac: box == BoxClient.mac, bot: plan.name,
                         codingAgent: bot?.agents == true, restarting: restartingAgents, restartingSessions: restartingSessions)
     }
 
@@ -473,8 +473,10 @@ struct GoalCard: View {
     /// where new projects go (Settings › Worktrees, on its computer).
     private func open(_ action: GoalPlan.Check.Action) {
         switch action.kind {
-        case .open: if let url = action.url { app.utilities.openForAgent(url, bot: plan.bot, machine: onThisMac ? nil : box) }
-        case .projectsFolder: app.openSettings(.worktrees, on: SidebarBox(machine: onThisMac ? nil : box))
+        // (In the bot's browser: the app's own box's is the panel's; any other box's, the one
+        // attached in place too, its own.)
+        case .open: if let url = action.url { app.utilities.openForAgent(url, bot: plan.bot, machine: box == BoxClient.mac ? nil : box) }
+        case .projectsFolder: app.openSettings(.worktrees, on: SidebarBox(id: box))
         }
     }
 

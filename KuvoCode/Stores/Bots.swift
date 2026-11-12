@@ -328,9 +328,11 @@ final class Bots {
     /// A box's bots as it keeps them, from now on (`kuvo/bots/events`): one made, changed or deleted,
     /// by an agent, a phone or here, shows as it happens. This Mac's always; a machine's while it's
     /// connected (its connection ends this).
-    func follow(_ box: String = BoxClient.mac) async {
+    func follow(_ box: String = BoxClient.thisMac) async {
         struct Line: Decodable { var bots: [ListedBot] }
-        let onThisMac = box == BoxClient.mac
+        // (Followed as it changes on the app's own box, which streams; read now and then on any
+        // other, the one attached in place too, which answers once a read.)
+        let onThisMac = BoxClient.streams(box)
         // (A machine's box from before it had them: asked again only now and then.)
         var older = false
         while !Task.isCancelled {
@@ -405,7 +407,7 @@ final class Bots {
     /// The box `machine` (nil: this Mac) keeps its bots on, while it can be asked.
     private func box(_ machine: String?) throws -> BoxClient {
         if let machine, !canReach(machine) { throw Failure.notConnected(placeName(machine)) }
-        guard let client = client(machine ?? BoxClient.mac) else { throw CancellationError() }
+        guard let client = client(machine ?? BoxClient.thisMac) else { throw CancellationError() }
         return client
     }
 
@@ -634,7 +636,7 @@ final class Bots {
     func personalitiesChanged() {
         writeMacKit()
         // Told at once, as before, rather than at their next run.
-        guard let client = client(BoxClient.mac) else { return }
+        guard let client = client(BoxClient.thisMac) else { return }
         Task { _ = try? await client.send("POST", "kuvo/bots/retell") }
     }
 

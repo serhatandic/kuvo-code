@@ -82,6 +82,7 @@ import Testing
         AppModel.hereHome = AppModel.defaultHereHome
         SSHConnection.thisMacHome = AppModel.defaultHereHome.path(percentEncoded: false)
         MachineEngine.standIn = nil
+        BoxClient.thisMac = BoxClient.mac
         unsetenv("KUVO_OPENCODE_BINARY")
         try? FileManager.default.removeItem(at: folder)
         engine.stop()
@@ -187,6 +188,30 @@ import Testing
         #expect(!FileManager.default.fileExists(atPath: Machines.file.path(percentEncoded: false)) && !FileManager.default.fileExists(atPath: BoxProcess.home.path))
         // Its name is never one of your machines to add.
         #expect(MachineForm.problem(with: SSHConnection.thisMac) == "That’s this Mac.")
+    }
+
+    /// What has no computer of its own is on the box here (#333): Settings and ⌘, open on it, this
+    /// Mac's own pages with it; a new session with no project is a chat in its chats folder, and a
+    /// folder you open is one of its folders; and Settings › Machines offers nothing that would
+    /// disconnect, start or remove this Mac's box.
+    @Test func whatHasNoComputerIsOnTheBoxHere() async throws {
+        var app: AppModel?
+        defer { cleanUp(app) }
+        MachineEngine.standIn = { _ in nil }
+        app = try await started { try memberOfMacBooks() }
+        let model = try #require(app)
+        // (As ⌘, and Settings… open it, without bringing the window forward.)
+        model.settingsTabs.show(.general)
+        #expect(model.settingsTabs.page == .general && model.settingsTabs.box == .attached)
+        model.settingsTabs.show(.accounts)
+        #expect(model.settingsTabs.page == .accounts && model.settingsTabs.box == .attached)
+        model.tabs.newSession(in: nil, conversation: true)
+        let chats = RemoteFolder.folder(home.path(percentEncoded: false) + "/\(RemoteEngineInstaller.root)/chats", on: SSHConnection.thisMac)
+        #expect(model.tabs.selection == .draft(chats) && Workspace.isChat(chats))
+        #expect(Workspace.onThisMac("/Users/me/project") == RemoteFolder.folder("/Users/me/project", on: SSHConnection.thisMac))
+        #expect(Workspace.box(of: "/Users/me/project") == SSHConnection.thisMac)
+        let box = try #require(model.machines.engine(SSHConnection.thisMac))
+        #expect(![.disconnect, .start].contains(box.offer))
     }
 
     /// Its routes go to its own CLI here, in its own home folder, with no SSH: as a machine's do.

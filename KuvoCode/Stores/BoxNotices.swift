@@ -65,7 +65,9 @@ final class BoxNotices {
     /// removed): read as it connects, and followed while it's connected and ready. A box from before them is asked again only
     /// now and then, and words its own as it did.
     func follow(_ box: String) async {
-        let onThisMac = box == BoxClient.mac
+        // (Followed as it changes on the app's own box, which streams; read now and then on any
+        // other, the one attached in place too, which answers once a read.)
+        let onThisMac = BoxClient.streams(box)
         var older = false
         var first = true
         while !Task.isCancelled {
@@ -107,7 +109,7 @@ final class BoxNotices {
     /// A notice as this Mac's notification: its conversation or group chat opens from it, Reply
     /// writes back; its box tells your phones itself.
     static func notify(_ notice: Told.Notice, box: String) {
-        let machine = box == BoxClient.mac ? nil : box
+        let machine = BoxClient.isThisMac(box) ? nil : box
         let group = notice.data?["group"]
         guard let session = group.map(BotGroups.tabKey) ?? notice.data?["session"] else { return }
         Notifier.shared.notify(session: session, title: notice.title ?? "", subtitle: notice.subtitle, body: notice.body ?? "",

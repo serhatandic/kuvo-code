@@ -264,7 +264,7 @@ struct GoalPlanBar: View {
     /// The app on this Mac what waits for you is in, to open it there: none for a page to open, an
     /// app this Mac doesn't have, or one on a machine, which is out of reach from here.
     static func app(of item: GoalPlan.Waiting, on box: String) -> (name: String, at: URL)? {
-        guard box == BoxClient.mac, item.url == nil, let app = item.app, let id = app.id,
+        guard BoxClient.isThisMac(box), item.url == nil, let app = item.app, let id = app.id,
               let place = NSWorkspace.shared.urlForApplication(withBundleIdentifier: id) else { return nil }
         return (app.name, place)
     }

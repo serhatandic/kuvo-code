@@ -93,7 +93,7 @@ extension GoalPlanWords.StepMark {
 
 extension EnvironmentValues {
     /// The box whose goal is shown, which has the apps its steps name.
-    @Entry var goalBox = BoxClient.mac
+    @Entry var goalBox = BoxClient.thisMac
 }
 
 /// A service's mark, by its site: its icon once it's here, else its letter.

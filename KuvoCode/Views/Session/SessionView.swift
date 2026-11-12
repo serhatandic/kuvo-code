@@ -334,7 +334,7 @@ struct BottomStack: View {
         case .plan(let plan, let box):
             GoalCard(plan: plan, box: box)
                 .environment(\.goalBox, box)
-                .disabled(offlineMachine != nil && box != BoxClient.mac)
+                .disabled(offlineMachine != nil && !BoxClient.isThisMac(box))
         }
     }
 

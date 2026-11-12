@@ -673,7 +673,7 @@ struct MainView: View {
         } actions: {
             // What it made, in a popover over the conversation: a bot's Shelf, or a
             // session's outputs besides code (its Changes are in the panel).
-            MadeButton(place: bot.map { .bot($0) } ?? .session(id, box: RemoteFolder.parse(directory)?.machine ?? BoxClient.mac))
+            MadeButton(place: bot.map { .bot($0) } ?? .session(id, box: Workspace.box(of: directory)))
             if let bot {
                 Button("Edit Bot", systemImage: "slider.horizontal.3") { tabs.openBotEditor(bot: bot) }
                     .help("Edit Bot: its look, job, wake-ups and memory")
@@ -810,7 +810,7 @@ struct MainView: View {
                     // The welcome only once the sessions are read and none opened: until then
                     // the latest may still open here, and the welcome would flash first.
                     if workspace.isLoaded {
-                        WelcomeView(openFolder: openFolder, newChat: { tabs.newSession(in: Workspace.chatsFolder) }, showProviders: { app.openSettings(.accounts) })
+                        WelcomeView(openFolder: openFolder, newChat: { tabs.newSession(in: Workspace.thisMacsChats) }, showProviders: { app.openSettings(.accounts) })
                     } else {
                         Color.clear
                             .accessibilityHidden(true)
@@ -986,7 +986,7 @@ struct MainView: View {
             newBot: { tabs.openBotEditor(bot: nil) },
             importBot: { if let recipe = BotRecipe.pick() { tabs.openBotEditor(bot: nil, recipe: recipe) } },
             newGroup: { tabs.openGroupEditor(group: nil) },
-            newChat: { tabs.newSession(in: Workspace.chatsFolder) },
+            newChat: { tabs.newSession(in: Workspace.thisMacsChats) },
             stop: { model?.stop() },
             isPlanning: model?.session.agent == "plan",
             togglePlan: { model?.togglePlan() },
