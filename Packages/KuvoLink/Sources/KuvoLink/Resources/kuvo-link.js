@@ -24599,6 +24599,15 @@ async function moveMail(sender, given, id) {
         await switchHere(mine);
         noteEnded(id, "switched", Date.now(), [], last);
         forgetMove(id);
+        const list = await refreshOwn(readEngineFile);
+        if (mine.kind === "chat" && mine.sessions[0]) {
+          const machine = readLink()?.id ?? null;
+          const own = list ?? ownAsLast(machine);
+          if (!own.some((agent) => agent.session === mine.sessions[0])) {
+            keepOwn([...own, { session: mine.sessions[0], name: mine.name, kind: "session" }], machine);
+            writeAgents();
+          }
+        }
         return void tell(sender.key, { op: "switched", id });
       }
       if (mine?.role === "to")
@@ -28380,11 +28389,12 @@ function givenUp(id) {
       writePrivate(file, JSON.stringify({ ...letter, wait: false }));
   } catch {}
 }
-function leaveLetter2(letter, now = Date.now(), id = "ltr_" + crypto39.randomBytes(16).toString("base64url")) {
+function leaveLetter2(letter, now = Date.now(), id = "ltr_" + crypto39.randomBytes(16).toString("base64url"), wake = true) {
   try {
     fs94.mkdirSync(SENDING, { recursive: true, mode: 448 });
     writePrivate(path97.join(SENDING, `${id}.json`), JSON.stringify({ ...letter, wait: false, at: now }));
-    outboxSoon.send();
+    if (wake)
+      outboxSoon.send();
     return true;
   } catch {
     return false;
@@ -28442,7 +28452,17 @@ function letterWent(sender, { id, ok, why, retry, answer, lives }, now = Date.no
         return;
       } catch {}
   }
+  let notice = false;
+  if (!ok && letter.wait !== true && !note && !call && !letter.answers && !letter.read && letter.from) {
+    const text = `Your message to ${letter.to} wasn't delivered: ${words ?? "It wasn't accepted there."}`;
+    const mine = ownKey(readLink() ?? {});
+    if (!mine || !leaveLetter2({ to: letter.from, text, peer: mine, note: { from: "Kuvo Code", words: text, delivery: "steer" } }, now, undefined, false))
+      return;
+    notice = true;
+  }
   fs94.rmSync(file, { force: true });
+  if (notice)
+    outboxSoon.send();
   if (letter.wait !== true)
     return;
   if (!ok)
@@ -38023,7 +38043,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "cee2cd615333";
+var BRIDGE_VERSION = "8e925cf5588f";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {

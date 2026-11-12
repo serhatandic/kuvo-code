@@ -173,11 +173,11 @@ export function givenUp(id: string): void {
 }
 
 // A letter for the outbox, from this box (an answer, say); false if it couldn't be left.
-function leaveLetter(letter: OutboxLetter, now = Date.now(), id = "ltr_" + crypto.randomBytes(16).toString("base64url")): boolean {
+function leaveLetter(letter: OutboxLetter, now = Date.now(), id = "ltr_" + crypto.randomBytes(16).toString("base64url"), wake = true): boolean {
   try {
     fs.mkdirSync(SENDING, { recursive: true, mode: 0o700 });
     writePrivate(path.join(SENDING, `${id}.json`), JSON.stringify({ ...letter, wait: false, at: now }));
-    outboxSoon.send();
+    if (wake) outboxSoon.send();
     return true;
   } catch {
     return false;
@@ -241,7 +241,18 @@ export function letterWent(sender: Pick<Peer, "key">, { id, ok, why, retry, answ
       return;
     } catch {}
   }
+  // A send without waiting already returned "On its way". Keep the failure as the box's
+  // own word to its sender: the outbox delivers it here, or follows a sender that moved.
+  // Notes and answers mustn't produce failure notices about failure notices.
+  let notice = false;
+  if (!ok && letter.wait !== true && !note && !call && !letter.answers && !letter.read && letter.from) {
+    const text = `Your message to ${letter.to} wasn't delivered: ${words ?? "It wasn't accepted there."}`;
+    const mine = ownKey(readLink() ?? {});
+    if (!mine || !leaveLetter({ to: letter.from, text, peer: mine, note: { from: "Kuvo Code", words: text, delivery: "steer" } }, now, undefined, false)) return;
+    notice = true;
+  }
   fs.rmSync(file, { force: true });
+  if (notice) outboxSoon.send();
   // Only a tool waiting for its answer reads how it went.
   if (letter.wait !== true) return;
   if (!ok) reply(id, { failed: words ?? "It wasn't delivered." });

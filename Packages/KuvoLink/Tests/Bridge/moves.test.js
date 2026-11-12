@@ -319,6 +319,9 @@ test("where something can go: each of your other computers", { timeout: 60_000 }
 
 test("a chat moves from this Mac to the machine, with its wake-ups; here it's gone, kept in the trash", { timeout: 60_000 }, async t => {
   signal = t.signal;
+  // The imported chat is older than the destination's latest forty: it is still ours
+  // immediately at landing, even when a normal directory refresh would leave it out.
+  for (let i = 0; i < 45; i++) labEngine.sessions.set(`ses_recent${i}`, { id: `ses_recent${i}`, title: `Recent ${i}`, directory: labChats, messages: [] });
   const said = macEngine.sessions.get("ses_chat1").messages;
   const moved = await ask("POST", "kuvo/moves", { kind: "chat", id: "ses_chat1", to: lab.key });
   assert.equal(moved.status, 200, JSON.stringify(moved.json));
@@ -342,19 +345,29 @@ test("a chat moves from this Mac to the machine, with its wake-ups; here it's go
   assert.deepEqual(underWay((await askMachine("GET", "kuvo/moves")).json), { moves: [], away: [] });
 });
 
-// The machine tells this Mac its agents every 60 s, and a chat that just moved is in that list only
-// at its next round: 59.8 s measured on an idle Mac (this wait), leaving under a fifth of a second of
-// the 60 s a test had, so any load at all failed it. Two minutes leaves the round room.
-test("the chat that moved takes messages where it lives now", { timeout: 120_000 }, async t => {
+test("the chat that moved takes messages where it lives now", { timeout: 60_000 }, async t => {
   signal = t.signal;
-  // Once the machine has said the chat is one of its agents now.
-  await eventually(() => {
-    try { return JSON.parse(fs.readFileSync(path.join(macHome, "run", "peer-agents.json"), "utf8"))[lab.key]?.list.some(agent => agent.session === "ses_chat1"); } catch { return false; }
-  });
+  const listed = JSON.parse(fs.readFileSync(path.join(machineHome, "run", "agents.json"), "utf8"));
+  assert.ok(listed.agents.some(agent => agent.session === "ses_chat1" && agent.machine === listed.machine), "the receiving box lists the chat before acknowledging the move");
   const sent = await ask("POST", "kuvo/agent-tools", { name: "send_message", arguments: { to: "ses_chat1", text: "Did you book it?", wait: false }, session: "ses_chat2" });
   assert.equal(sent.status, 200);
   assert.equal(sent.json.isError, false, sent.json.text);
-  const prompt = await eventually(() => labEngine.prompts.find(each => each.session === "ses_chat1"));
+
+  // Stop on a refusal too: a stale receiving list must fail this test immediately.
+  const result = await eventually(() => {
+    const prompt = labEngine.prompts.find(each => each.session === "ses_chat1");
+    if (prompt) return { prompt };
+    for (const mail of relay.delivered) {
+      try {
+        const body = link.readFrame(mail.payload).body;
+        const payload = JSON.parse(link.openOneWay(body, macKey, Buffer.from(lab.key, "base64url")).payload.toString());
+        if (payload.delivered?.ok === false) return { refused: payload.delivered.why };
+      } catch {}
+    }
+    return false;
+  });
+  assert.equal(result.refused, undefined);
+  const { prompt } = result;
   assert.match(prompt.text, /Did you book it\?$/);
 });
 
