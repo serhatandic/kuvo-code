@@ -228,11 +228,39 @@ public struct SandboxAsks: Codable, Equatable, Sendable {
     /// How Auto's reviewer takes up asks to work outside a conversation's folder (none from a box
     /// before bridge 0.9.192, whose asks are all yours).
     public var reviews: [AskReview]?
-    public init(asks: [SandboxAsk], restart: Bool? = nil, reviews: [AskReview]? = nil) {
+    /// Those it was checking or had left for you that are over: answered or gone (none from a box
+    /// before `sandbox.reviews.settled`).
+    public var settled: [AskReview]?
+    public init(asks: [SandboxAsk], restart: Bool? = nil, reviews: [AskReview]? = nil, settled: [AskReview]? = nil) {
         self.asks = asks
         self.restart = restart
         self.reviews = reviews
+        self.settled = settled
     }
+
+    private enum CodingKeys: String, CodingKey { case asks, restart, reviews, settled }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        asks = try container.decode([SandboxAsk].self, forKey: .asks)
+        restart = try container.decodeIfPresent(Bool.self, forKey: .restart)
+        // (One a newer box words otherwise is left out, not the whole list.)
+        reviews = try container.decodeIfPresent([Lossy<AskReview>].self, forKey: .reviews)?.compactMap(\.value)
+        settled = try container.decodeIfPresent([Lossy<AskReview>].self, forKey: .settled)?.compactMap(\.value)
+    }
+
+    /// Every ask its box says how Auto's reviewer took up, still at it or over, for `AskReview.isYours`
+    /// (nil from a box that says nothing of them).
+    public var everyReview: [AskReview]? {
+        guard reviews != nil || settled != nil else { return nil }
+        return (reviews ?? []) + (settled ?? [])
+    }
+}
+
+/// One that reads as `Value`, or nothing for one that doesn't (a newer box's).
+private struct Lossy<Value: Decodable>: Decodable {
+    let value: Value?
+    init(from decoder: Decoder) throws { value = try? Value(from: decoder) }
 }
 
 /// How an ask to work outside a conversation's folder (`external_directory`) was taken up on its
@@ -241,6 +269,9 @@ public struct SandboxAsks: Codable, Equatable, Sendable {
 public struct AskReview: Codable, Equatable, Sendable {
     public enum State: String, Codable, Sendable {
         case checking, allowed, heldBack, refused, yours
+        /// Over without the reviewer's word (`settled`, `sandbox.reviews.settled`): answered, or
+        /// gone with its run or its engine. Never yours, heard or not.
+        case answered, gone
     }
 
     public var id: String
@@ -260,14 +291,18 @@ public struct AskReview: Codable, Equatable, Sendable {
     /// The feature of a box that lists every ask its reviewer may take up, from the moment it
     /// hears it (PROTOCOL.md, "Sandbox"): its word is the whole of it.
     public static let listsAllFeature = "sandbox.reviews.whole"
+    /// The feature of a box that lists the asks it took up that are over (`settled`, answered or
+    /// gone) and keeps them to their end, so a client holds nothing of its own for them
+    /// (PROTOCOL.md, "Sandbox").
+    public static let settlesFeature = "sandbox.reviews.settled"
 
     /// Whether an ask is yours to answer, as its box says: one it left for you, or one it doesn't
     /// take up (only asks to work outside the folder are). One it may take up and hasn't listed is
     /// yours only from a box that doesn't list them all (`listsAll`, from before
     /// `sandbox.reviews.whole`), or while its box isn't heard (`heard`: its link down or starting
     /// again, so nothing would list it); what the box last said of one stands meanwhile (a phone
-    /// back from the background doesn't tell you again of one being checked). A client waits for
-    /// nothing of its own.
+    /// back from the background doesn't tell you again of one being checked). One it lists as over
+    /// (`answered`, `gone`) is never yours, heard or not. A client waits for nothing of its own.
     public static func isYours(action: String, review: AskReview?, listsAll: Bool, heard: Bool = true) -> Bool {
         if let review { return review.state == .yours }
         if !heard { return true }
@@ -283,7 +318,7 @@ public struct AskReview: Codable, Equatable, Sendable {
         case .allowed: "Allowed by Auto-review"
         case .heldBack: "Held back"
         case .refused: "Not allowed by Auto-review"
-        case .yours: nil
+        case .yours, .answered, .gone: nil
         }
     }
 }

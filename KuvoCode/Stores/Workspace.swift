@@ -55,7 +55,9 @@ final class Workspace {
     @ObservationIgnored var machineAPI: (String) -> OpenCodeAPI? = { _ in nil }
     /// The machine each session's events came from, for sessions without a row (a subagent's).
     @ObservationIgnored private var sessionMachines: [String: String] = [:]
-    /// Permissions kept until their box says whether its reviewer takes them up.
+    /// Permissions kept until their box says whether its reviewer takes them up: the old-box path,
+    /// for a box from before `sandbox.reviews.settled`. A box with it keeps them itself, to their
+    /// end (`Sandboxes.settles`), and nothing is kept here.
     @ObservationIgnored private var awaitingReview: [String: PermissionRequest] = [:]
     /// Machines' sessions as last seen, kept across launches so their tabs wait for the machine
     /// to connect instead of closing.
@@ -2048,6 +2050,7 @@ final class Workspace {
             sharedForms[request] = nil
             Notifier.shared.clear(request: request)
         }
+        // (Old-box path: what Auto's reviewer was checking here, kept for a box before `sandbox.reviews.settled`.)
         awaitingReview = awaitingReview.filter { !isMac($0.value.sessionID) }
         running = running.filter { !isMac($0) }
         dropShellJobs(where: isMac)
@@ -2069,6 +2072,7 @@ final class Workspace {
             asking[request] = nil
             Notifier.shared.clear(request: request)
         }
+        // (Old-box path: what Auto's reviewer was checking there.)
         awaitingReview = awaitingReview.filter { !isMacs($0.value.sessionID) }
         running = running.filter { !isMacs($0) }
         dropShellJobs(where: isMacs)
@@ -2233,8 +2237,8 @@ final class Workspace {
             var folders = Set(theirs.filter { models[$0.id] != nil || running.contains($0.id) }.map(\.location.directory))
             folders.formUnion(jobFolders.removeValue(forKey: machine) ?? [])
             Task { [weak self] in for folder in folders { await self?.readShellJobs(in: folder) } }
-            // (What Auto's reviewer checks as these are read stays: only those from before can be
-            // found gone.)
+            // (Old-box path: what Auto's reviewer checks as these are read stays; only those from
+            // before can be found gone.)
             let checking = Set(awaitingReview.keys)
             if let active = try? await api.activeSessions(), isCurrent() {
                 // (No bridge there, none at work; one not read, as they were.)
@@ -2325,7 +2329,7 @@ final class Workspace {
         for request in asking.keys where kept[request] == nil && found[request] == nil { Notifier.shared.clear(request: request) }
         asking = kept.merging(found) { $1 }
         // What Auto's reviewer was checking there, gone meanwhile (its run ended, unheard): never
-        // yours later (#425).
+        // yours later (#425). The old-box path: a box with `sandbox.reviews.settled` lists it gone.
         if complete { awaitingReview = awaitingReview.filter { !checking.contains($0.key) || !isTheirs($0.value.sessionID) || listed.contains($0.key) } }
     }
 
@@ -2426,6 +2430,7 @@ final class Workspace {
                 asking[request] = nil
                 Notifier.shared.clear(request: request)
             }
+            // (Old-box path: what Auto's reviewer was checking there.)
             awaitingReview = awaitingReview.filter { !gone.contains($0.value.sessionID) && sessionMachines[$0.value.sessionID] != machine }
             sessionMachines = sessionMachines.filter { $0.value != machine }
         }
@@ -2475,7 +2480,8 @@ final class Workspace {
             Notifier.shared.clear(request: request)
         }
         // What Auto's reviewer was checking here, gone meanwhile (its run ended unheard, or the
-        // engine started again): never yours later (#425).
+        // engine started again): never yours later (#425). The old-box path: a box with
+        // `sandbox.reviews.settled` lists it gone.
         for (request, permission) in awaitingReview where sessionMachines[permission.sessionID] == nil && !isBridgeSession(permission.sessionID) {
             guard let api = api(forSession: permission.sessionID), let asked = await Self.stillAsked(in: permission.sessionID, api: api), !asked.contains(request) else { continue }
             awaitingReview[request] = nil
@@ -2682,6 +2688,7 @@ final class Workspace {
             if machine != nil { Attachments.forget(session: id) }
             models[id] = nil
             asking = asking.filter { $0.value != id }
+            // (Old-box path: what Auto's reviewer was checking in it.)
             awaitingReview = awaitingReview.filter { $0.value.sessionID != id && root(of: $0.value.sessionID) != id }
             // Deleted while it worked: it isn't working any more (nor keeping the Mac awake).
             if running.contains(id) { running.remove(id) }
@@ -2899,7 +2906,8 @@ final class Workspace {
     private func noteQuestions(_ event: ServerEvent) {
         switch event.type {
         case "permission.asked":
-            guard let request = try? event.payload(as: PermissionRequest.self), tellsOnceYours(request) else { return }
+            // (Told already: its box listed it yours before its event came.)
+            guard let request = try? event.payload(as: PermissionRequest.self), asking[request.id] == nil, tellsOnceYours(request) else { return }
             tellYours(request)
         case "permission.replied":
             if let reply = try? event.payload(as: EventPayload.PermissionReplied.self) { settled(reply.requestID) }
@@ -2916,7 +2924,8 @@ final class Workspace {
             // bridge says itself). Its permissions are named `per_…`.
             guard let ended = event.sessionID, !isBridgeSession(ended) else { return }
             for (request, session) in asking where session == ended && request.hasPrefix("per_") { settled(request) }
-            // And one Auto's reviewer was checking: gone too, never yours later (#425).
+            // And one Auto's reviewer was checking: gone too, never yours later (#425; the old-box
+            // path, as a box with `sandbox.reviews.settled` lists it gone).
             for (request, permission) in awaitingReview where permission.sessionID == ended && request.hasPrefix("per_") { settled(request) }
         default:
             break
@@ -3004,11 +3013,13 @@ final class Workspace {
         Notifier.shared.clear(request: request)
     }
 
-    /// Whether a permission is yours now; one its box's reviewer takes up is kept until its box
-    /// lists it as yours (`Sandboxes.onYours`), and told then.
+    /// Whether a permission is yours now. One its box's reviewer takes up is told once its box
+    /// lists it as yours (`Sandboxes.onYours`): read from its engine then, from a box that keeps it
+    /// to its end (`sandbox.reviews.settled`); kept here meanwhile from one before (the old-box path).
     private func tellsOnceYours(_ request: PermissionRequest) -> Bool {
-        guard !Sandboxes.shared.isYours(request, on: box(of: request)) else { return true }
-        awaitingReview[request.id] = request
+        let box = box(of: request)
+        guard !Sandboxes.shared.isYours(request, on: box) else { return true }
+        if !Sandboxes.shared.settles(box) { awaitingReview[request.id] = request }
         return false
     }
 
@@ -3022,14 +3033,44 @@ final class Workspace {
         notifyAsk(request.sessionID, body: Self.describe(request, home: askHome(request.sessionID)), request: request.id, isPermission: true, answerable: Self.showsAll(request), always: alwaysWords(request))
     }
 
-    /// One kept for its box's word turned out to be yours (nil: each kept, looked at again).
+    /// One its box's reviewer took up turned out to be yours (nil: its box not heard now, or its
+    /// word not whole). From a box that keeps them to their end, the one it lists yours, as its
+    /// engine still asks it; what it last listed of the rest stands. From a box before that (the
+    /// old-box path), each kept here, looked at again.
     func reviewLeftForYou(_ id: String?) {
+        if let id, awaitingReview[id] == nil, let listed = Sandboxes.shared.review(of: id), Sandboxes.shared.settles(listed.box), listed.review.state == .yours {
+            let session = listed.review.session
+            // (As its open conversation has it, at once; else as its engine says.)
+            if let request = models[session]?.permissions.first(where: { $0.id == id }) ?? models[root(of: session)]?.permissions.first(where: { $0.id == id }) {
+                if asking[id] == nil { tellYours(request) }
+            } else {
+                Task { await tellLeftForYou(id, in: session) }
+            }
+            return
+        }
         let ids = id.map { [$0] } ?? Array(awaitingReview.keys)
         for id in ids {
             guard let request = awaitingReview[id], Sandboxes.shared.isYours(request, on: box(of: request)) else { continue }
             awaitingReview[id] = nil
             tellYours(request)
         }
+    }
+
+    /// One its box's reviewer took up that its box lists as over (answered, or gone with its run
+    /// or its engine): off the Dock's count and Notification Center, though its answer or its
+    /// run's end wasn't heard here.
+    func reviewOver(_ id: String) {
+        guard asking[id] != nil || awaitingReview[id] != nil || notifying.contains(id) else { return }
+        settled(id)
+    }
+
+    /// An ask its box lists yours in a conversation not open here, told as its engine asks it now:
+    /// one its engine no longer asks (answered, or gone with its run) is never told.
+    private func tellLeftForYou(_ id: String, in session: String) async {
+        guard asking[id] == nil, let api = api(forSession: session),
+              let request = try? await api.permissions(session: session).first(where: { $0.id == id }),
+              asking[id] == nil, let listed = Sandboxes.shared.review(of: id), Sandboxes.shared.isYours(request, on: listed.box) else { return }
+        tellYours(request)
     }
 
     /// A question in a conversation on Autopilot counts and tells you only if its box says it waits

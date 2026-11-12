@@ -183,4 +183,98 @@ import Testing
         #expect(!app.botWork.runsWork(pixel))
         #expect(app.botWork.reports[pixel.id] == nil)
     }
+
+    /// The bar's report of a bot's work, read again as each of its sessions changes, and as its
+    /// box says it changed, keeps up with many sessions changing at once: a read over SSH that's
+    /// slow (a machine's, every 10 s) never lands after a newer one, so a session that's moved on
+    /// isn't left saying what it asked (#425's row kept "Wants to work outside the project…" while
+    /// 16 sessions changed, #575).
+    @Test func aSlowReadNeverLandsOverANewerOne() async throws {
+        let box = SlowWorkBox()
+        let client = BoxClient(box: BoxClient.mac, transport: LocalBox { box.answer($0) })
+        app.bots.boxes = { _ in client }
+        app.botWork.boxes = { _ in client }
+        await app.bots.refresh(BoxClient.mac)
+        let pixel = try #require(app.bots.bot("bot_pixel00001"))
+        // Read as its box follows it: slow, while Sign-in still asks.
+        let slow = Task { await app.botWork.read(pixel) }
+        _ = await box.arrived.first { _ in true }
+        // Meanwhile Sign-in's ask is answered and it finishes; the bar reads again as it changes.
+        box.finish()
+        let again = Task { await app.botWork.read(pixel) }
+        box.release()
+        await slow.value
+        await again.value
+        let signIn = try #require(app.botWork.reports[pixel.id]?.sessions.first)
+        #expect(signIn.state == .finished, "the newer read is what shows")
+        #expect(signIn.asks == nil)
+    }
+}
+
+/// A box answering a bot's work as it is when each read reaches it, the first read held until
+/// released (one over SSH, slow).
+private final class SlowWorkBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var asking = true
+    private var reads = 0
+    private var held: (AsyncThrowingStream<LinkResponsePart, Error>.Continuation, Data)?
+    private let told: AsyncStream<Void>.Continuation
+    /// Told as the first read reaches it.
+    let arrived: AsyncStream<Void>
+
+    init() {
+        let (stream, continuation) = AsyncStream<Void>.makeStream()
+        arrived = stream
+        told = continuation
+    }
+
+    func finish() { lock.withLock { asking = false } }
+
+    func release() {
+        let first = lock.withLock { () -> (AsyncThrowingStream<LinkResponsePart, Error>.Continuation, Data)? in
+            defer { held = nil }
+            return held
+        }
+        guard let first else { return }
+        first.0.yield(.head(status: 200, headers: ["content-type": "application/json"]))
+        first.0.yield(.body(first.1))
+        first.0.finish()
+    }
+
+    func answer(_ request: LinkRequest) -> AsyncThrowingStream<LinkResponsePart, Error> {
+        let path = request.path.hasPrefix("/") ? String(request.path.dropFirst()) : request.path
+        let body: Any
+        let first: Bool
+        switch path {
+        case "kuvo/bots":
+            first = false
+            body = ["bots": [["id": "bot_pixel00001", "session": "ses_pixel", "name": "Pixel", "look": ["color": "sky", "shape": "round", "face": "calm"], "created": "2026-10-01T09:00:00Z"]]]
+        case _ where path.hasPrefix("kuvo/work?bot="):
+            let (asking, isFirst) = lock.withLock { () -> (Bool, Bool) in
+                reads += 1
+                return (self.asking, reads == 1)
+            }
+            first = isFirst
+            var signIn: [String: Any] = ["session": "ses_signin", "title": "Sign-in", "folder": "/Users/me/tidepool", "startedBy": "ses_pixel", "depth": 1,
+                                         "state": asking ? "asking" : "finished", "started": 1, "tokens": 0]
+            if asking { signIn["asks"] = "Wants to work outside the project: ~/notes" }
+            body = ["bot": "bot_pixel00001", "answered": [Any](), "today": ["started": 1, "tokens": 0], "sessions": [signIn]]
+        default:
+            first = false
+            body = [String: Any]()
+        }
+        let data = (try? JSONSerialization.data(withJSONObject: body)) ?? Data()
+        return AsyncThrowingStream { continuation in
+            if first {
+                lock.withLock { held = (continuation, data) }
+                told.yield()
+                return
+            }
+            if !path.hasSuffix("/events") {
+                continuation.yield(.head(status: 200, headers: ["content-type": "application/json"]))
+                continuation.yield(.body(data))
+            }
+            continuation.finish()
+        }
+    }
 }

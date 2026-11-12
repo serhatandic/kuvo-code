@@ -35,8 +35,39 @@ final class BotWork {
     /// Whether the box a bot lives on runs its work (one from before doesn't).
     func runsWork(_ bot: Bot) -> Bool { !older.contains(bot.box) }
 
-    /// The bot's work, read again from its box.
+    /// The bot's work, read again from its box: one read at a time for each bot, each caller's done
+    /// once a read that started after it asked is in. A read isn't let go when the one who asked
+    /// stops waiting (the bar's read starts again as each of the bot's sessions changes), so with
+    /// many changing, the report still keeps up, and an older answer never comes in after a newer
+    /// one.
     func read(_ bot: Bot) async {
+        readsWanted[bot.id, default: 0] += 1
+        let wanted = readsWanted[bot.id] ?? 0
+        while (readsDone[bot.id] ?? 0) < wanted, !Task.isCancelled {
+            await reading(bot).value
+        }
+    }
+
+    /// Reads asked for and read, by bot, and the read under way.
+    @ObservationIgnored private var readsWanted: [String: Int] = [:]
+    @ObservationIgnored private var readsDone: [String: Int] = [:]
+    @ObservationIgnored private var reads: [String: Task<Void, Never>] = [:]
+
+    private func reading(_ bot: Bot) -> Task<Void, Never> {
+        if let reading = reads[bot.id] { return reading }
+        let task = Task { [weak self] in
+            while let self, (self.readsDone[bot.id] ?? 0) < (self.readsWanted[bot.id] ?? 0) {
+                let wanted = self.readsWanted[bot.id] ?? 0
+                await self.readNow(bot)
+                self.readsDone[bot.id] = wanted
+            }
+            self?.reads[bot.id] = nil
+        }
+        reads[bot.id] = task
+        return task
+    }
+
+    private func readNow(_ bot: Bot) async {
         #if DEBUG
         // KUVO_DEMO_BOT_WORK=<bot's name>: its work, a sample, for a look at the bar and its list.
         if ProcessInfo.processInfo.environment["KUVO_DEMO_BOT_WORK"] == bot.name {
