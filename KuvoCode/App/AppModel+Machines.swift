@@ -590,6 +590,8 @@ extension AppModel {
     /// long as its connection lasts.
     private func connected(_ engine: MachineEngine, _ connection: MachineConnection) async {
         let machine = engine.machine.id
+        // This Mac's own box, attached in place: its engine is this Mac's, at once.
+        if engine.machine.isThisMac { thisMacsBoxConnected(engine) }
         // What waits for it (a bot deleted, an integration removed while it was away), now.
         guard await MachineConnection.inTurn([{ await self.machines.runWaiting(only: machine) }]) else { return }
         // Its sessions, once it's up: tried again a few times, as they're what makes them live.
@@ -656,12 +658,11 @@ extension AppModel {
         connection.run("projects") { [weak self] in await self?.workspace.followProjects(on: machine) }
         // This Mac's own box, attached in place: what the app's own box is followed for as it runs
         // is followed there too (its wake-ups and worktrees, and your personalities, which it keeps
-        // for this Mac), read now and then as it answers once a read; and it's this Mac's engine.
+        // for this Mac), read now and then as it answers once a read.
         if engine.machine.isThisMac {
             connection.run("follow-wakes") { [weak self] in await self?.wakeUps.follow(on: machine) }
             connection.run("follow-worktrees") { [weak self] in await self?.workspace.followWorktrees(on: machine) }
             connection.run("follow-personalities") { await Personalities.shared.follow() }
-            thisMacsBoxConnected(engine)
         }
     }
 

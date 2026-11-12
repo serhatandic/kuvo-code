@@ -134,7 +134,7 @@ final class PhoneLink {
     /// by AppModel.
     @ObservationIgnored var noBox: () -> String? = { nil }
     /// What `noBox` says while the app uses the box already on this Mac.
-    static let keptByTheBoxHere = "The box already on this Mac keeps its own link to your phones and other computers, so a phone can’t be paired, or a machine set up for them, from here yet. Do it from the Mac that set this one up."
+    static let keptByTheBoxHere = "The box already on this Mac keeps its own link to your phones and other computers. For now, pair a phone or set up a machine for them from the Mac that set this one up."
     /// Following the link's state and its phones, as the box keeps them.
     @ObservationIgnored private var running: Task<Void, Never>?
     @ObservationIgnored private var endpoint: ServerEndpoint?

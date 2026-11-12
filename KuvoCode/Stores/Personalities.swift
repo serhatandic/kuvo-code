@@ -126,19 +126,20 @@ final class Personalities {
     /// machine's things are.
     func follow() async {
         while !Task.isCancelled {
-            var streams = true
+            if let client = box(), !BoxClient.streams(client.box) {
+                // (Read as it connected: read again a while after.)
+                try? await Task.sleep(for: BoxClient.readAgainAfter)
+                guard !Task.isCancelled else { return }
+                await refresh()
+                continue
+            }
             if let client = box() {
-                streams = BoxClient.streams(client.box)
-                if streams {
-                    do {
-                        for try await _ in client.follow("kuvo/personalities/events") { await refresh() }
-                    } catch {}
-                } else {
-                    await refresh()
-                }
+                do {
+                    for try await _ in client.follow("kuvo/personalities/events") { await refresh() }
+                } catch {}
             }
             // Its box started again, or isn't up yet: followed again in a moment.
-            try? await Task.sleep(for: streams ? .seconds(2) : BoxClient.readAgainAfter)
+            try? await Task.sleep(for: .seconds(2))
         }
     }
 

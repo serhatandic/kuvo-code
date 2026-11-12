@@ -157,14 +157,10 @@ final class WakeUps {
         }
     }
 
-    /// Whether a conversation (by its key) lives on `box`: the app's own (`livesHere`), or a
-    /// machine's, by its id (the box attached in place). One not listed here yet is taken as its.
+    /// Whether a conversation (by its key) that `box` lists is its to say: on the app's own, one
+    /// that lives here (`livesHere`); any other (the box attached in place) lists only its own.
     private func lives(_ key: String, on box: String) -> Bool {
-        guard box != BoxClient.mac else { return livesHere(key) }
-        guard let app else { return false }
-        if let bot = app.bots.bot(key) { return bot.machine == box }
-        guard let session = app.workspace.session(key) else { return true }
-        return RemoteFolder.machine(of: session.location.directory) == box
+        box != BoxClient.mac || livesHere(key)
     }
 
     // MARK: Changing them
@@ -357,7 +353,8 @@ final class WakeUps {
             }
             if await Task.detached(operation: { RemoteShell.run(script, on: machine) }).value != nil { shared[machine] = zone }
         }
-        await readSessions(on: machine)
+        // (This Mac's own box, attached in place, is followed whole, its bots' too: `follow(on:)`.)
+        if !engine.machine.isThisMac { await readSessions(on: machine) }
     }
 
     /// The wake-ups of a machine's sessions that keep some: the sidebar's signs, and the phone's

@@ -408,7 +408,8 @@ final class AppModel {
         phoneLink.readyMachines = { [weak self] in self?.machines.engines.values.filter(\.isReady) ?? [] }
         // With machines, this Mac meets them at the relay, phone or not.
         phoneLink.hasMachines = { [weak self] in self.map { !$0.machines.list.isEmpty || $0.machines.fileDidntRead } ?? false }
-        Machines.linkKey = { [weak self] in self?.phoneLink.macKey }
+        // (Attached in place, the app set up no machine with its own link: none to leave, as before.)
+        Machines.linkKey = { [weak self] in self?.attached == nil ? self?.phoneLink.macKey : nil }
         phoneLink.bots = bots
         phoneLink.browserAsks = browserAsks
         phoneLink.workspace = workspace
@@ -766,6 +767,7 @@ final class AppModel {
         // the box here has its own.
         wireStores()
         wirePhoneLink()
+        followActivation()
         engine = .ready
         startMachines()
         // Where its chats go, as it says, for a new chat with no project.
@@ -1104,14 +1106,19 @@ final class AppModel {
                 })
             }
         }
-        // Back in the app, you may have installed an agent or signed in to one in Terminal.
-        if agentsActivation == nil {
-            agentsActivation = NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated {
-                    // (This Mac's: the box attached in place's, if that's where it is.)
-                    if let self { self.catalog(for: self.thisMacsBox).refreshAgentsIfStale() }
-                    self?.workspace.reloadMachinesProjects()
-                }
+        followActivation()
+    }
+
+    /// Back in the app, you may have installed an agent or signed in to one in Terminal: this Mac's
+    /// agents are read again (its own engine's, or, attached in place, the box here's), and your
+    /// machines' projects. Once, from either start.
+    func followActivation() {
+        guard agentsActivation == nil else { return }
+        agentsActivation = NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.catalog(for: self.thisMacsBox).refreshAgentsIfStale()
+                self.workspace.reloadMachinesProjects()
             }
         }
     }

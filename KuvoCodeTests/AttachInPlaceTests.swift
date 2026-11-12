@@ -77,9 +77,14 @@ import Testing
     }
 
     private func cleanUp(_ app: AppModel?) {
+        // The box here's connection ends, and what follows it there with it.
+        app?.machines.engine(SSHConnection.thisMac)?.disconnect()
         app?.stop()
-        // (The usage panel reads the app's own engine's spend again, not this test's folder.)
+        // (The usage panel reads the app's own engine's spend again, not this test's folder, and
+        // the shared stores look at no box of this test's.)
         app?.usage.readEngineData([AppModel.engineFolders.dataDirectory])
+        Personalities.shared.box = { nil }
+        Analytics.shared.catalog = nil
         AppModel.attachesInPlace = false
         BackgroundWork.heldBack = nil
         for database in databases { try? FileManager.default.removeItem(at: database) }
@@ -389,6 +394,7 @@ import Testing
         try await until { model.workspace.worktrees[root]?.branch == "kuvo/fix" }
         try boxHereAnswers(["kuvo/worktrees?records=1": ["worktrees": []]])
         try await until { model.workspace.worktrees[root] == nil }
+        #expect(!askedOfTheBoxHere.contains { $0.hasPrefix("POST kuvo/worktrees/record") }, "what it removed isn't handed back to it")
     }
 
     /// Attached, this Mac's engine is the box here's: the usage panel reads its accounts (#333).
