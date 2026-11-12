@@ -1184,6 +1184,12 @@ describe.skipIf(!canFence)("The computer's MCP servers, for an ACP agent in the 
     expect(words(id)).toBe(`files=key:${KEYS.shared}files=key:${KEYS.bot}`)
   })
 
+  /** What puts the relay's timing back after a test that changed it. */
+  const afterChecks: (() => void)[] = []
+  afterEach(() => {
+    for (const undo of afterChecks.splice(0)) undo()
+  })
+
   /** One like Antigravity, which gives up its whole session when one server it's given doesn't start. */
   const startingAll = (tries: Record<string, [string, string]>) => new TestGrok(program(fakeAcp([], [], undefined, { tries, startsServers: true }), join(root, "grok")), root)
   const given = () => received().filter((message) => message.method === "session/new" || message.method === "session/load").map((message) => message.params.mcpServers as any[])
@@ -1203,10 +1209,8 @@ describe.skipIf(!canFence)("The computer's MCP servers, for an ACP agent in the 
     send(id, "again")
     await settled(id, 2)
     expect(words(id).slice(said.length)).toContain(`tracker=auth:Bearer ${KEYS.again},key:none,at:/tracker`)
-    const [first, ...later] = given()
-    const tracker = (list: any[]) => list.find((server) => server.name === "tracker").url
-    expect(later).not.toHaveLength(0)
-    expect(later.map(tracker)).not.toContain(tracker(first!))
+    // (Started again: given it as it started.)
+    expect(given().length).toBeGreaterThan(1)
   })
 
   test("one that turns down its sign-in partway, at a call, answers it as the tool's error saying to sign in again, rather than failing the agent's connection", async () => {
@@ -1288,6 +1292,7 @@ describe.skipIf(!canFence)("The computer's MCP servers, for an ACP agent in the 
     const timing = { ...relayTiming }
     relayTiming.starts = 60_000
     relayTiming.check = 100
+    relayTiming.checkEvery = 0
     try {
       send(id, "again")
       await settled(id, 2)
@@ -1298,6 +1303,10 @@ describe.skipIf(!canFence)("The computer's MCP servers, for an ACP agent in the 
   })
 
   test("one that couldn't be reached as the agent started is given to it afresh at the next message once it answers again", async () => {
+    // (Checked at each message, not a few minutes on.)
+    const timing = { ...relayTiming }
+    relayTiming.checkEvery = 0
+    afterChecks.push(() => Object.assign(relayTiming, timing))
     servers.notesDown = "start"
     const id = await run(startingAll({ notes: ["server", "notes"] }))
     expect(words(id)).toStartWith("notes=The notes server couldn't be reached (HTTP 500)")
@@ -1309,10 +1318,8 @@ describe.skipIf(!canFence)("The computer's MCP servers, for an ACP agent in the 
     send(id, "and again")
     await settled(id, 3)
     expect(words(id)).toEndWith(`notes=auth:none,key:${KEYS.notes},at:/notes`)
-    const [first, ...later] = given()
-    const notes = (list: any[]) => list.find((server) => server.name === "notes").url
-    expect(later).not.toHaveLength(0)
-    expect(later.map(notes)).not.toContain(notes(first!))
+    // (Started again: given it as it started.)
+    expect(given().length).toBeGreaterThan(1)
   })
 
   test("one connected for real that then turns down its sign-in: its lists say why as an error, not as if it had no tools, and its stream is none; calls at once ask the engine only once", async () => {
@@ -1332,6 +1339,51 @@ describe.skipIf(!canFence)("The computer's MCP servers, for an ACP agent in the 
     expect(servers.connects).toBe(2)
     const stream = await fetch(tracker.url, { method: "GET", headers: { ...session, Accept: "text/event-stream" } })
     expect(stream.status).toBe(405)
+  })
+
+  test("a command's server that won't start isn't started again at the next messages (it's checked a few minutes on), and what it started of its own stops with it", async () => {
+    const starts = join(root, "starts.log")
+    const child = join(root, "child.pid")
+    servers.filesEnvironment = { REFUSES_TO_START: "1", START_LOG: starts, CHILD_PID_FILE: child }
+    forgetServers()
+    // (The agent tries nothing itself at its prompts: only its start reaches the server.)
+    const id = await run(startingAll({}))
+    expect(ended(id)).toMatchObject({ type: "idle", outcome: "succeeded" })
+    send(id, "again")
+    await settled(id, 2)
+    send(id, "and again")
+    await settled(id, 3)
+    expect(readFileSync(starts, "utf8")).toBe("start\n")
+    const pid = Number(readFileSync(child, "utf8"))
+    await until(() => {
+      try {
+        process.kill(pid, 0)
+        return false
+      } catch {
+        return true
+      }
+    })
+  })
+
+  test("a command's server that doesn't answer its start in time doesn't stop the turn", async () => {
+    servers.filesEnvironment = { HANGS_AT_START: "1" }
+    forgetServers()
+    const timing = { ...relayTiming }
+    relayTiming.commandStarts = 300
+    afterChecks.push(() => Object.assign(relayTiming, timing))
+    const id = await run(startingAll({ files: ["server", "files"], notes: ["server", "notes"] }))
+    expect(ended(id)).toMatchObject({ type: "idle", outcome: "succeeded" })
+    expect(words(id)).toBe(`files=The files server couldn't start: The files server took too long. notes=auth:none,key:${KEYS.notes},at:/notes`)
+  })
+
+  test("your sign-in renewed for a server that's down doesn't start the agent again: it's still down", async () => {
+    servers.trackerDown = true
+    const id = await run(startingAll({}))
+    servers.signedInAgain = true
+    forgetServers()
+    send(id, "again")
+    await settled(id, 2)
+    expect(given()).toHaveLength(1)
   })
 
   test("a command's server that can't start (its program isn't installed) doesn't stop the turn: the agent goes on with the rest, told why", async () => {

@@ -32,6 +32,9 @@ export function computerServers(folder: string) {
 const send = (message) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...message }) + "\\n")
 const fs = require("node:fs")
 let asked
+// Each start written down, and what it starts of its own (a helper), where its settings say.
+if (process.env.START_LOG) fs.appendFileSync(process.env.START_LOG, "start\\n")
+if (process.env.CHILD_PID_FILE) fs.writeFileSync(process.env.CHILD_PID_FILE, String(require("node:child_process").spawn("/bin/sleep", ["600"], { stdio: "ignore" }).pid))
 const tools = {
   reveal: () => "key:" + (process.env.SERVICE_KEY ?? "none"),
   read: ({ path }) => { try { fs.readFileSync(path); return "yes" } catch { return "no" } },
@@ -46,6 +49,7 @@ process.stdin.on("data", (chunk) => {
     buffer = buffer.slice(at + 1)
     if (message.id === "ask-1" && !message.method) { asked(message.error ? "error:" + message.error.code : "answered"); continue }
     if (message.id === undefined || message.method === undefined) continue
+    if (message.method === "initialize" && process.env.HANGS_AT_START) continue
     if (message.method === "initialize" && process.env.REFUSES_TO_START) send({ id: message.id, error: { code: -32603, message: "Its settings are wrong." } })
     else if (message.method === "initialize") send({ id: message.id, result: { protocolVersion: message.params.protocolVersion, capabilities: { tools: {} }, serverInfo: { name: "files", version: "1" } } })
     else if (message.method === "tools/call" && message.params.name === "asks") {
@@ -105,6 +109,10 @@ process.stdin.on("data", (chunk) => {
     notesStart: undefined as undefined | "error" | "redirect" | "elsewhere" | "hangs" | "moved" | "stream",
     /** Your sign-in to the tracker never runs out (the engine keeps none for when). */
     noExpiry: false,
+    /** The tracker is down: it answers every request with a server error. */
+    trackerDown: false,
+    /** The connections the URL's servers were asked about, as named (`mcp-session-id`). */
+    seen: [] as string[],
     /** The command server's command, as its settings name it. */
     filesCommand: SERVER_COMMAND,
     async serve() {
@@ -117,6 +125,9 @@ process.stdin.on("data", (chunk) => {
           // Your sign-in, once it ran out, it turns down.
           if (fake.expiring && request.headers.get("authorization") === `Bearer ${KEYS.tracker}`) return new Response("Expired.", { status: 401 })
           const path = new URL(request.url).pathname.replace(/^\/notes\/$/, "/notes")
+          const connection = request.headers.get("mcp-session-id")
+          if (connection) fake.seen.push(connection)
+          if (path === "/tracker" && fake.trackerDown) return new Response("Down.", { status: 500 })
           if (path === "/login") return new Response("<html>Sign in to your company</html>", { headers: { "Content-Type": "text/html" } })
           if (path === "/notes" && (fake.notesDown === "start" || (fake.notesDown === "calls" && message.method === "tools/call"))) return new Response("Down.", { status: 500 })
           if (path === "/notes" && message.method === "initialize" && fake.notesStart) {

@@ -39,9 +39,13 @@ const served = new Map<string, { directory: string; servers: Map<string, Compute
 /** The command servers running, each for one of an agent's connections: by session, name and connection. */
 const running = new Map<string, Program>()
 /** The relay's own stand-ins for servers that couldn't be reached, by the connection it gave each
- * agent: the server, how it was set up then (`setup`), why it isn't there, and whether that's its
- * sign-in turned down (`signIn`: only another sign-in sets it right). */
-const standIns = new Map<string, { sessionID: string; name: string; setup: string; why: string; signIn: boolean }>()
+ * agent: the server, how it was set up then (`setup`), why it isn't there, whether that's its
+ * sign-in turned down (`signIn`: only another sign-in sets it right), and whether it's set right
+ * since (`retired`: the agent's connection to it still answered as a stand-in's, never passed on to
+ * the server under a name the server never gave). */
+const standIns = new Map<string, { sessionID: string; name: string; setup: string; why: string; signIn: boolean; retired?: boolean }>()
+/** The connections the relay names for its stand-ins. */
+const STAND_IN = "unavailable-"
 /** The engine asked to connect each session's server again, by session and name, for how it was
  * set up when it turned down its sign-in: once for each setup, however many calls it turns down. */
 const refusals = new Map<string, { setup: string; asked: Promise<void> }>()
@@ -49,12 +53,24 @@ const refusals = new Map<string, { setup: string; asked: Promise<void> }>()
 const setRight = new Map<string, Map<string, number>>()
 /** Whether each session's server that wasn't there answers now, being checked, by session and name: one check at a time. */
 const checks = new Map<string, Promise<boolean>>()
+/** When each session's server that wasn't there is next checked, by session and name, and how long
+ * after that the one after is, while it still isn't there; for how it's set up (`setup`: set up
+ * otherwise, it's checked at once). */
+const checkedLater = new Map<string, { setup: string; next: number; wait: number }>()
+/** The sessions whose agent gives up its whole session when one server doesn't start (ACP's): their
+ * servers have brief starts. */
+const brief = new Set<string>()
 
-/** How long a server has to start as an agent connects, before the agent goes on without it (some
- * give up their whole session well before a server's own time); a command's longer, as it may fetch
- * its package the first time. And how long an agent's next message waits for word on whether one
- * that wasn't there answers now (the check goes on without it, for the message after). */
-export const relayTiming = { starts: 15_000, commandStarts: 30_000, check: 1_000 }
+/**
+ * How long a server has to start as an agent that gives up its whole session over one connects
+ * (ACP's), before the agent goes on without it: within the agent's own limits (Grok waits 30s for a
+ * server to start; Antigravity 300s; the bridge 120s for its session), a command's longer, as it may
+ * fetch its package the first time. How long an agent's next message waits for word on whether one
+ * that wasn't there answers now (the check goes on without it, for the message after). And how
+ * often one that isn't there is checked: first a few minutes after it wasn't, then less and less
+ * often, at most every half hour (a command's server starts each time, which can open a sign-in).
+ */
+export const relayTiming = { starts: 15_000, commandStarts: 25_000, check: 1_000, checkEvery: 3 * 60_000, checkAtMost: 30 * 60_000 }
 
 /** A command's server no connection has used for an hour is stopped (an agent that started again
  * has a new one), as the engine stops its own; one it comes back to it starts again. */
@@ -103,7 +119,8 @@ export function relayedTools(sessionID: string, holder: object): Extract<KuvoToo
  * the session's key. What each runs or reaches is the latest given (a key you changed, a sign-in
  * renewed): a command's server already running for a connection goes on as it started.
  */
-export function relayedServers(sessionID: string, holder: object, directory: string, found: ComputerServers): RelayedServer[] {
+export function relayedServers(sessionID: string, holder: object, directory: string, found: ComputerServers, options: { brief?: boolean } = {}): RelayedServer[] {
+  if (options.brief) brief.add(sessionID)
   // (Those set right since the relay stood in for them, noted.)
   retireChanged(sessionID, found)
   if (!found.servers.length) {
@@ -135,14 +152,20 @@ export async function serversKey(sessionID: string, found: ComputerServers): Pro
   const waiting = new Set<Promise<boolean>>()
   for (const standIn of standIns.values()) {
     const now = found.servers.find((each) => each.name === standIn.name)
-    if (standIn.sessionID !== sessionID || standIn.signIn || !now) continue
+    if (standIn.sessionID !== sessionID || standIn.retired || standIn.signIn || !now) continue
     const at = `${sessionID}\n${standIn.name}`
     let check = checks.get(at)
     if (!check) {
+      // (Not again so soon, unless it's set up otherwise now: your change may be what it needed.)
+      const later = checkedLater.get(at)
+      if (later && later.setup === setupOf(now) && Date.now() < later.next) continue
       const name = standIn.name
       check = answers(now, sessionID, served.get(sessionID)?.directory).then((started) => {
         checks.delete(at)
-        if (started) retire(sessionID, name)
+        if (started) {
+          checkedLater.delete(at)
+          retire(sessionID, name)
+        } else checkLater(at, setupOf(now), later)
         return started
       })
       checks.set(at, check)
@@ -159,19 +182,31 @@ export async function serversKey(sessionID: string, found: ComputerServers): Pro
   return times.length ? `${found.key} ${JSON.stringify(times)}` : found.key
 }
 
-/** A session's servers the relay stood in for that are set up otherwise now (or gone), retired. */
+/** A server that isn't there, checked again later: a few minutes on, then each time twice as long, up to the most. */
+function checkLater(at: string, setup: string, before?: { setup: string; wait: number }) {
+  const wait = before && before.setup === setup ? Math.min(before.wait * 2, relayTiming.checkAtMost) : relayTiming.checkEvery
+  checkedLater.set(at, { setup, next: Date.now() + wait, wait })
+}
+
+/** A session's servers the relay stood in for that are gone now, or, turned down its sign-in, set
+ * up otherwise (signed in again), retired. (One that couldn't be reached is retired once it answers:
+ * a sign-in renewed meanwhile doesn't make it answer.) */
 function retireChanged(sessionID: string, found: ComputerServers) {
   for (const standIn of [...standIns.values()]) {
-    if (standIn.sessionID !== sessionID) continue
+    if (standIn.sessionID !== sessionID || standIn.retired) continue
     const now = found.servers.find((each) => each.name === standIn.name)
-    if (!now || setupOf(now) !== standIn.setup) retire(sessionID, standIn.name)
+    if (!now || (standIn.signIn && setupOf(now) !== standIn.setup)) retire(sessionID, standIn.name)
   }
 }
 
-/** A session's server set right: the relay's stand-ins for it go, and its agent is given it at another address. */
+/** A session's server set right: the relay's stand-ins for it are retired, and its agent is given it at another address. */
 function retire(sessionID: string, name: string) {
   let any = false
-  for (const [connection, standIn] of standIns) if (standIn.sessionID === sessionID && standIn.name === name) any = standIns.delete(connection)
+  for (const standIn of standIns.values()) {
+    if (standIn.sessionID !== sessionID || standIn.name !== name || standIn.retired) continue
+    standIn.retired = true
+    any = true
+  }
   if (!any) return
   let times = setRight.get(sessionID)
   if (!times) setRight.set(sessionID, (times = new Map()))
@@ -182,15 +217,18 @@ function retire(sessionID: string, name: string) {
  * to, and let go. */
 async function answers(entry: ComputerServer, sessionID: string, directory: string | undefined): Promise<boolean> {
   const initialize = { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "kuvo-code", version: "1" } } }
-  if (entry.kind === "local") {
-    if (!directory) return false
-    const started = startServer(entry, sessionID, directory)
-    if (typeof started === "string") return false
-    const answer: any = await started.send(initialize, Math.min(entry.timeout, relayTiming.commandStarts), "check")
-    started.stop()
-    return Boolean(answer?.result) && !answer.error
-  }
   try {
+    if (entry.kind === "local") {
+      if (!directory) return false
+      const started = startServer(entry, sessionID, directory)
+      if (typeof started === "string") return false
+      try {
+        const answer: any = await started.send(initialize, Math.min(entry.timeout, relayTiming.commandStarts), "check")
+        return Boolean(answer?.result) && !answer.error
+      } finally {
+        started.stop()
+      }
+    }
     const signal = AbortSignal.timeout(Math.min(entry.timeout, relayTiming.starts))
     const response = await fetchHere(entry.url, { method: "POST", headers: { ...entry.headers, "Content-Type": "application/json", Accept: "application/json, text/event-stream" }, body: JSON.stringify(initialize), signal })
     const started = response.ok ? await readStart(response, 1) : { failure: `HTTP ${response.status}`, body: null }
@@ -224,6 +262,9 @@ export function dropRelayed(sessionID: string, holder: object) {
   for (const [at, program] of running) if (at.startsWith(sessionID + "\n")) program.stop()
   for (const [connection, standIn] of standIns) if (standIn.sessionID === sessionID) standIns.delete(connection)
   for (const at of refusals.keys()) if (at.startsWith(sessionID + "\n")) refusals.delete(at)
+  for (const at of checkedLater.keys()) if (at.startsWith(sessionID + "\n")) checkedLater.delete(at)
+  setRight.delete(sessionID)
+  brief.delete(sessionID)
 }
 
 async function answer(request: Request): Promise<Response> {
@@ -267,7 +308,7 @@ async function answer(request: Request): Promise<Response> {
 }
 
 /** A request on to a server over HTTP, with `headers`; what it answers, back. */
-async function forward(request: Request, url: string, headers: Record<string, string>, timeout: number, body: string | undefined, failed: string): Promise<Response> {
+async function forward(request: Request, url: string, headers: Record<string, string>, timeout: number | AbortSignal, body: string | undefined, failed: string): Promise<Response> {
   const sent: Record<string, string> = { ...headers, Accept: request.headers.get("accept") ?? "application/json, text/event-stream" }
   for (const name of ["content-type", "mcp-session-id", "mcp-protocol-version", "last-event-id"]) {
     const value = request.headers.get(name)
@@ -275,7 +316,8 @@ async function forward(request: Request, url: string, headers: Record<string, st
   }
   try {
     // Given up with the agent's own request; a call, not a stream of what comes, after the server's time.
-    const signal = request.method === "POST" ? AbortSignal.any([request.signal, AbortSignal.timeout(timeout)]) : request.signal
+    // (Or by a signal of the caller's: a start's, untied once it has started.)
+    const signal = typeof timeout !== "number" ? AbortSignal.any([request.signal, timeout]) : request.method === "POST" ? AbortSignal.any([request.signal, AbortSignal.timeout(timeout)]) : request.signal
     const response = await fetchHere(url, { method: request.method, headers: sent, body, signal })
     const back = new Headers()
     for (const name of ["content-type", "mcp-session-id"]) {
@@ -431,14 +473,19 @@ const jsonOf = (text: string): unknown => {
  * gives up its whole session when one server fails to start goes on with the rest.
  */
 function standInFor(sessionID: string, name: string, setup: string, why: string, messages: any[], many: boolean, signIn = false): Response {
-  const connection = `unavailable-${randomBytes(12).toString("hex")}`
+  const connection = `${STAND_IN}${randomBytes(12).toString("hex")}`
   standIns.set(connection, { sessionID, name, setup, why, signIn })
+  // (This start was a check of its own: the next, a few minutes on.)
+  const at = `${sessionID}\n${name}`
+  if (!signIn && !checkedLater.has(at)) checkLater(at, setup)
   return standInAnswers(messages, why, many, { "mcp-session-id": connection })
 }
 
-/** A session's server reached for real: the relay's stand-ins for it from before go. */
+/** A session's server reached for real: the relay's stand-ins for it from before are retired
+ * (their connections still a stand-in's), without its agent being given it afresh. */
 function reached(sessionID: string, name: string) {
-  for (const [connection, standIn] of standIns) if (standIn.sessionID === sessionID && standIn.name === name) standIns.delete(connection)
+  for (const standIn of standIns.values()) if (standIn.sessionID === sessionID && standIn.name === name) standIn.retired = true
+  checkedLater.delete(`${sessionID}\n${name}`)
 }
 
 /** A request to a stand-in, answered by the relay. */
@@ -499,17 +546,29 @@ async function answerServer(request: Request, sessionID: string, name: string): 
   if (!session || !entry) return new Response("No such server here.", { status: 404 })
   const failed = `The ${name} server didn't answer.`
   const connection = request.headers.get("mcp-session-id") ?? ""
-  const standIn = standIns.get(connection)
-  if (standIn?.sessionID === sessionID && standIn.name === name) return answerStandIn(request, connection, standIn.why)
+  if (connection.startsWith(STAND_IN)) {
+    // One of the relay's own, set right since or not (one it no longer knows, after its agent left
+    // it: as a stand-in still), never passed on to the server, which never gave it.
+    const standIn = standIns.get(connection)
+    if (standIn && (standIn.sessionID !== sessionID || standIn.name !== name)) return new Response("No such connection here.", { status: 404 })
+    return answerStandIn(request, connection, standIn?.why ?? `The ${name} server isn't connected in this conversation now`)
+  }
   if (entry.kind === "remote") {
     const body = request.method === "POST" ? await request.text() : undefined
     const sent = body === undefined ? undefined : jsonOf(body)
     const messages: any[] = sent === undefined ? [] : Array.isArray(sent) ? sent : [sent]
     const initialize = messages.find((message) => message?.method === "initialize")
-    // (Its start, briefly, renewals and all: an agent may give up its whole session while it waits.)
-    const deadline = Date.now() + relayTiming.starts
-    const limit = (server: ComputerServer) => (initialize ? Math.max(1, Math.min(server.timeout, deadline - Date.now())) : server.timeout)
-    const renewing = () => (initialize ? inTime(renewed(sessionID, session, name), deadline) : renewed(sessionID, session, name))
+    // Its start, by one deadline, renewals and all: briefly for an agent that gives up its whole
+    // session while it waits (ACP's), else in the server's own time. Untied once it has started (a
+    // server may keep its answer's stream open).
+    const short = initialize && brief.has(sessionID)
+    const deadline = Date.now() + (short ? Math.min(entry.timeout, relayTiming.starts) : entry.timeout)
+    const giveUp = new AbortController()
+    const timer = initialize ? setTimeout(() => giveUp.abort(), deadline - Date.now()) : undefined
+    // (No time at all: given up at once.)
+    if (initialize && deadline <= Date.now()) giveUp.abort()
+    const limit = (server: ComputerServer) => (initialize ? giveUp.signal : server.timeout)
+    const renewing = () => (short ? inTime(renewed(sessionID, session, name), deadline) : renewed(sessionID, session, name))
     // Your sign-in to it running out (in a long turn): renewed by the engine first; one it turned
     // down, renewed and tried once more.
     let current = entry.expires !== undefined && entry.expires < Date.now() + 60_000 ? ((await renewing()) ?? entry) : entry
@@ -550,6 +609,7 @@ async function answerServer(request: Request, sessionID: string, name: string): 
         await answer.body?.cancel()
         why = whyNot(name, answer.status)
       }
+      clearTimeout(timer)
       if (why) return standInFor(sessionID, name, setupOf(current), why, messages, Array.isArray(sent), answer.status === 401)
       reached(sessionID, name)
       return new Response(started, { status: answer.status, headers: answer.headers })
@@ -590,7 +650,8 @@ async function answerServer(request: Request, sessionID: string, name: string): 
     running.set(key, started)
     started.whenStopped(() => running.get(key) === started && running.delete(key))
     // (Its start, briefly: an agent may give up its whole session while it waits.)
-    const answers = await Promise.all(messages.map((message) => started.send(message, message === initialize ? Math.min(entry.timeout, relayTiming.commandStarts) : entry.timeout, fresh)))
+    const startIn = brief.has(sessionID) ? Math.min(entry.timeout, relayTiming.commandStarts) : entry.timeout
+    const answers = await Promise.all(messages.map((message) => started.send(message, message === initialize ? startIn : entry.timeout, fresh)))
     // (One that ends, or says no, before it's started: the agent goes on without it.)
     const answered: any = answers[messages.indexOf(initialize)]
     if (!answered || answered.error) {
@@ -711,7 +772,8 @@ class Program {
     this.name = spec.name
     if (spec.ended) this.stopping.push(spec.ended)
     // (What it says on stderr isn't kept: a server's own can have its keys in it.)
-    this.child = spawn(spec.command, spec.args, { env: spec.env, cwd: spec.cwd, stdio: ["pipe", "pipe", "ignore"] })
+    // In a process group of its own, so what it starts (npx's server, a sign-in's helper) stops with it.
+    this.child = spawn(spec.command, spec.args, { env: spec.env, cwd: spec.cwd, stdio: ["pipe", "pipe", "ignore"], detached: true })
     this.child.on("error", () => this.stop())
     this.child.on("exit", () => this.stop())
     let buffered = ""
@@ -791,7 +853,13 @@ class Program {
   stop() {
     if (this.stopped) return
     this.stopped = true
-    this.child.kill()
+    // (The group this made, by its own number.)
+    try {
+      if (this.child.pid) process.kill(-this.child.pid, "SIGTERM")
+      else this.child.kill()
+    } catch {
+      this.child.kill()
+    }
     for (const [, waiting] of this.waiting) waiting.done(failure(waiting.id, `${this.name} stopped.`))
     this.waiting.clear()
     for (const then of this.stopping.splice(0)) then()

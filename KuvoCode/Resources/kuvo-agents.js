@@ -7414,10 +7414,13 @@ var holders = new Map;
 var served = new Map;
 var running = new Map;
 var standIns = new Map;
+var STAND_IN = "unavailable-";
 var refusals = new Map;
 var setRight = new Map;
 var checks = new Map;
-var relayTiming = { starts: 15000, commandStarts: 30000, check: 1000 };
+var checkedLater = new Map;
+var brief2 = new Set;
+var relayTiming = { starts: 15000, commandStarts: 25000, check: 1000, checkEvery: 3 * 60000, checkAtMost: 30 * 60000 };
 var IDLE = 60 * 60000;
 setInterval(() => {
   for (const program of running.values())
@@ -7445,7 +7448,9 @@ function relayedTools(sessionID, holder) {
   const key = hold2(sessionID, holder);
   return { kind: "http", name: tools.name, key: tools.key, timeout: tools.timeout, url: `http://127.0.0.1:${relayPort()}/mcp`, headers: { Authorization: `Bearer ${key}` } };
 }
-function relayedServers(sessionID, holder, directory, found) {
+function relayedServers(sessionID, holder, directory, found, options = {}) {
+  if (options.brief)
+    brief2.add(sessionID);
   retireChanged(sessionID, found);
   if (!found.servers.length) {
     served.delete(sessionID);
@@ -7464,17 +7469,23 @@ async function serversKey(sessionID, found) {
   const waiting = new Set;
   for (const standIn of standIns.values()) {
     const now = found.servers.find((each) => each.name === standIn.name);
-    if (standIn.sessionID !== sessionID || standIn.signIn || !now)
+    if (standIn.sessionID !== sessionID || standIn.retired || standIn.signIn || !now)
       continue;
     const at = `${sessionID}
 ${standIn.name}`;
     let check = checks.get(at);
     if (!check) {
+      const later = checkedLater.get(at);
+      if (later && later.setup === setupOf(now) && Date.now() < later.next)
+        continue;
       const name = standIn.name;
       check = answers(now, sessionID, served.get(sessionID)?.directory).then((started) => {
         checks.delete(at);
-        if (started)
+        if (started) {
+          checkedLater.delete(at);
           retire(sessionID, name);
+        } else
+          checkLater(at, setupOf(now), later);
         return started;
       });
       checks.set(at, check);
@@ -7489,20 +7500,27 @@ ${standIn.name}`;
   const times = [...setRight.get(sessionID) ?? []].sort(([a], [b]) => a.localeCompare(b));
   return times.length ? `${found.key} ${JSON.stringify(times)}` : found.key;
 }
+function checkLater(at, setup, before) {
+  const wait = before && before.setup === setup ? Math.min(before.wait * 2, relayTiming.checkAtMost) : relayTiming.checkEvery;
+  checkedLater.set(at, { setup, next: Date.now() + wait, wait });
+}
 function retireChanged(sessionID, found) {
   for (const standIn of [...standIns.values()]) {
-    if (standIn.sessionID !== sessionID)
+    if (standIn.sessionID !== sessionID || standIn.retired)
       continue;
     const now = found.servers.find((each) => each.name === standIn.name);
-    if (!now || setupOf(now) !== standIn.setup)
+    if (!now || standIn.signIn && setupOf(now) !== standIn.setup)
       retire(sessionID, standIn.name);
   }
 }
 function retire(sessionID, name) {
   let any = false;
-  for (const [connection, standIn] of standIns)
-    if (standIn.sessionID === sessionID && standIn.name === name)
-      any = standIns.delete(connection);
+  for (const standIn of standIns.values()) {
+    if (standIn.sessionID !== sessionID || standIn.name !== name || standIn.retired)
+      continue;
+    standIn.retired = true;
+    any = true;
+  }
   if (!any)
     return;
   let times = setRight.get(sessionID);
@@ -7512,17 +7530,20 @@ function retire(sessionID, name) {
 }
 async function answers(entry, sessionID, directory) {
   const initialize = { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "kuvo-code", version: "1" } } };
-  if (entry.kind === "local") {
-    if (!directory)
-      return false;
-    const started = startServer(entry, sessionID, directory);
-    if (typeof started === "string")
-      return false;
-    const answer = await started.send(initialize, Math.min(entry.timeout, relayTiming.commandStarts), "check");
-    started.stop();
-    return Boolean(answer?.result) && !answer.error;
-  }
   try {
+    if (entry.kind === "local") {
+      if (!directory)
+        return false;
+      const started = startServer(entry, sessionID, directory);
+      if (typeof started === "string")
+        return false;
+      try {
+        const answer = await started.send(initialize, Math.min(entry.timeout, relayTiming.commandStarts), "check");
+        return Boolean(answer?.result) && !answer.error;
+      } finally {
+        started.stop();
+      }
+    }
     const signal = AbortSignal.timeout(Math.min(entry.timeout, relayTiming.starts));
     const response = await fetchHere(entry.url, { method: "POST", headers: { ...entry.headers, "Content-Type": "application/json", Accept: "application/json, text/event-stream" }, body: JSON.stringify(initialize), signal });
     const started = response.ok ? await readStart(response, 1) : { failure: `HTTP ${response.status}`, body: null };
@@ -7561,6 +7582,12 @@ function dropRelayed(sessionID, holder) {
     if (at.startsWith(sessionID + `
 `))
       refusals.delete(at);
+  for (const at of checkedLater.keys())
+    if (at.startsWith(sessionID + `
+`))
+      checkedLater.delete(at);
+  setRight.delete(sessionID);
+  brief2.delete(sessionID);
 }
 async function answer2(request) {
   const key = /^Bearer (\S+)$/.exec(request.headers.get("authorization") ?? "")?.[1];
@@ -7611,7 +7638,7 @@ async function forward(request, url, headers, timeout, body, failed) {
       sent[name] = value;
   }
   try {
-    const signal = request.method === "POST" ? AbortSignal.any([request.signal, AbortSignal.timeout(timeout)]) : request.signal;
+    const signal = typeof timeout !== "number" ? AbortSignal.any([request.signal, timeout]) : request.method === "POST" ? AbortSignal.any([request.signal, AbortSignal.timeout(timeout)]) : request.signal;
     const response = await fetchHere(url, { method: request.method, headers: sent, body, signal });
     const back = new Headers;
     for (const name of ["content-type", "mcp-session-id"]) {
@@ -7752,14 +7779,20 @@ var jsonOf = (text) => {
   }
 };
 function standInFor(sessionID, name, setup, why, messages, many, signIn = false) {
-  const connection = `unavailable-${randomBytes4(12).toString("hex")}`;
+  const connection = `${STAND_IN}${randomBytes4(12).toString("hex")}`;
   standIns.set(connection, { sessionID, name, setup, why, signIn });
+  const at = `${sessionID}
+${name}`;
+  if (!signIn && !checkedLater.has(at))
+    checkLater(at, setup);
   return standInAnswers(messages, why, many, { "mcp-session-id": connection });
 }
 function reached(sessionID, name) {
-  for (const [connection, standIn] of standIns)
+  for (const standIn of standIns.values())
     if (standIn.sessionID === sessionID && standIn.name === name)
-      standIns.delete(connection);
+      standIn.retired = true;
+  checkedLater.delete(`${sessionID}
+${name}`);
 }
 async function answerStandIn(request, connection, why) {
   if (request.method === "DELETE") {
@@ -7814,17 +7847,25 @@ async function answerServer(request, sessionID, name) {
     return new Response("No such server here.", { status: 404 });
   const failed = `The ${name} server didn't answer.`;
   const connection = request.headers.get("mcp-session-id") ?? "";
-  const standIn = standIns.get(connection);
-  if (standIn?.sessionID === sessionID && standIn.name === name)
-    return answerStandIn(request, connection, standIn.why);
+  if (connection.startsWith(STAND_IN)) {
+    const standIn = standIns.get(connection);
+    if (standIn && (standIn.sessionID !== sessionID || standIn.name !== name))
+      return new Response("No such connection here.", { status: 404 });
+    return answerStandIn(request, connection, standIn?.why ?? `The ${name} server isn't connected in this conversation now`);
+  }
   if (entry.kind === "remote") {
     const body = request.method === "POST" ? await request.text() : undefined;
     const sent = body === undefined ? undefined : jsonOf(body);
     const messages = sent === undefined ? [] : Array.isArray(sent) ? sent : [sent];
     const initialize = messages.find((message) => message?.method === "initialize");
-    const deadline = Date.now() + relayTiming.starts;
-    const limit = (server) => initialize ? Math.max(1, Math.min(server.timeout, deadline - Date.now())) : server.timeout;
-    const renewing = () => initialize ? inTime(renewed(sessionID, session, name), deadline) : renewed(sessionID, session, name);
+    const short = initialize && brief2.has(sessionID);
+    const deadline = Date.now() + (short ? Math.min(entry.timeout, relayTiming.starts) : entry.timeout);
+    const giveUp = new AbortController;
+    const timer = initialize ? setTimeout(() => giveUp.abort(), deadline - Date.now()) : undefined;
+    if (initialize && deadline <= Date.now())
+      giveUp.abort();
+    const limit = (server) => initialize ? giveUp.signal : server.timeout;
+    const renewing = () => short ? inTime(renewed(sessionID, session, name), deadline) : renewed(sessionID, session, name);
     let current = entry.expires !== undefined && entry.expires < Date.now() + 60000 ? await renewing() ?? entry : entry;
     let answer = await forward(request, current.url, current.headers, limit(current), body, failed);
     const at = `${sessionID}
@@ -7863,6 +7904,7 @@ ${name}`;
         await answer.body?.cancel();
         why = whyNot(name, answer.status);
       }
+      clearTimeout(timer);
       if (why)
         return standInFor(sessionID, name, setupOf(current), why, messages, Array.isArray(sent), answer.status === 401);
       reached(sessionID, name);
@@ -7905,7 +7947,8 @@ ${name}
 ${fresh}`;
     running.set(key, started);
     started.whenStopped(() => running.get(key) === started && running.delete(key));
-    const answers = await Promise.all(messages.map((message) => started.send(message, message === initialize ? Math.min(entry.timeout, relayTiming.commandStarts) : entry.timeout, fresh)));
+    const startIn = brief2.has(sessionID) ? Math.min(entry.timeout, relayTiming.commandStarts) : entry.timeout;
+    const answers = await Promise.all(messages.map((message) => started.send(message, message === initialize ? startIn : entry.timeout, fresh)));
     const answered = answers[messages.indexOf(initialize)];
     if (!answered || answered.error) {
       started.stop();
@@ -8003,7 +8046,7 @@ class Program {
     this.name = spec.name;
     if (spec.ended)
       this.stopping.push(spec.ended);
-    this.child = spawn4(spec.command, spec.args, { env: spec.env, cwd: spec.cwd, stdio: ["pipe", "pipe", "ignore"] });
+    this.child = spawn4(spec.command, spec.args, { env: spec.env, cwd: spec.cwd, stdio: ["pipe", "pipe", "ignore"], detached: true });
     this.child.on("error", () => this.stop());
     this.child.on("exit", () => this.stop());
     let buffered = "";
@@ -8083,7 +8126,14 @@ class Program {
     if (this.stopped)
       return;
     this.stopped = true;
-    this.child.kill();
+    try {
+      if (this.child.pid)
+        process.kill(-this.child.pid, "SIGTERM");
+      else
+        this.child.kill();
+    } catch {
+      this.child.kill();
+    }
     for (const [, waiting] of this.waiting)
       waiting.done(failure2(waiting.id, `${this.name} stopped.`));
     this.waiting.clear();
@@ -8177,12 +8227,13 @@ class AcpThread {
     const key = JSON.stringify({ ...mode, program: this.flavor.program?.() ?? 0, tools: kuvoTools(this.session.id)?.key, fence, servers });
     this.computer = computer;
     if (this.rpc && !this.rpc.isClosed)
-      relayedServers(this.session.id, this, this.session.location.directory, computer);
+      relayedServers(this.session.id, this, this.session.location.directory, computer, { brief: true });
     if (this.rpc && !this.rpc.isClosed && this.spawnedWith === key && this.rpc !== this.stale)
       return this.rpc;
     if (this.rpc && !this.rpc.isClosed && this.tasks.size)
       this.cut.push(...this.taskWork());
     this.close();
+    const startedWith = JSON.stringify({ ...mode, program: this.flavor.program?.() ?? 0, tools: kuvoTools(this.session.id)?.key, fence, servers: await serversKey(this.session.id, computer) });
     const launch = await this.flavor.command(mode);
     const whole = this.wholeLaunch(launch.argv, launch.env, launch.cleanEnv, [skills, subagents]);
     this.fenced = Boolean(whole);
@@ -8245,7 +8296,7 @@ class AcpThread {
 `) || `${this.name} stopped.`);
     };
     this.rpc = rpc;
-    this.spawnedWith = key;
+    this.spawnedWith = startedWith;
     if (launch.signInFile) {
       const file = launch.signInFile;
       const watch = setInterval(() => {
@@ -8356,7 +8407,7 @@ class AcpThread {
         servers.push({ type: "http", name: tools.name, url: tools.url, headers: listed(tools.headers) });
     }
     if (http)
-      for (const server of relayedServers(this.session.id, this, this.session.location.directory, this.computer))
+      for (const server of relayedServers(this.session.id, this, this.session.location.directory, this.computer, { brief: true }))
         servers.push({ type: "http", name: server.name, url: server.url, headers: listed(server.headers) });
     return servers;
   }
@@ -28081,4 +28132,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 1605dcfa81449bbeebac464d19ab9d4be957c2180133da372cc98b89485ceb13
+// Built from Packages/Box/src/agents a11a6fc1c5ce7250ac19cab52a7932d1629a5e24e5d3b05b2e8bcd09cf45a0c8

@@ -248,12 +248,14 @@ export class AcpThread implements Thread {
     const key = JSON.stringify({ ...mode, program: this.flavor.program?.() ?? 0, tools: kuvoTools(this.session.id)?.key, fence, servers })
     this.computer = computer
     // (What each reaches, a key you changed, a sign-in renewed, for the same agent going on too.)
-    if (this.rpc && !this.rpc.isClosed) relayedServers(this.session.id, this, this.session.location.directory, computer)
+    if (this.rpc && !this.rpc.isClosed) relayedServers(this.session.id, this, this.session.location.directory, computer, { brief: true })
     if (this.rpc && !this.rpc.isClosed && this.spawnedWith === key && this.rpc !== this.stale) return this.rpc
     // Started again for another approval mode (the agent takes it as it starts), or an updated program.
     // (What it left going in the background ends with it: the next message says so.)
     if (this.rpc && !this.rpc.isClosed && this.tasks.size) this.cut.push(...this.taskWork())
     this.close()
+    // (What the relay noted of its servers went with it: the key it starts with is as they are now.)
+    const startedWith = JSON.stringify({ ...mode, program: this.flavor.program?.() ?? 0, tools: kuvoTools(this.session.id)?.key, fence, servers: await serversKey(this.session.id, computer) })
     const launch = await this.flavor.command(mode)
     const whole = this.wholeLaunch(launch.argv, launch.env, launch.cleanEnv, [skills, subagents])
     this.fenced = Boolean(whole)
@@ -317,7 +319,7 @@ export class AcpThread implements Thread {
       this.end(active, "failed", rpc.stderr.trim().split("\n").slice(-3).join("\n") || `${this.name} stopped.`)
     }
     this.rpc = rpc
-    this.spawnedWith = key
+    this.spawnedWith = startedWith
     if (launch.signInFile) {
       const file = launch.signInFile
       const watch = setInterval(() => {
@@ -437,7 +439,7 @@ export class AcpThread implements Thread {
       if (tools.kind === "stdio") servers.push({ name: tools.name, command: tools.command, args: tools.args, env: Object.entries(tools.env).map(([name, value]) => ({ name, value })) })
       else servers.push({ type: "http", name: tools.name, url: tools.url, headers: listed(tools.headers) })
     }
-    if (http) for (const server of relayedServers(this.session.id, this, this.session.location.directory, this.computer)) servers.push({ type: "http", name: server.name, url: server.url, headers: listed(server.headers) })
+    if (http) for (const server of relayedServers(this.session.id, this, this.session.location.directory, this.computer, { brief: true })) servers.push({ type: "http", name: server.name, url: server.url, headers: listed(server.headers) })
     return servers
   }
 
