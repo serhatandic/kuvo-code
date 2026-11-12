@@ -705,6 +705,23 @@ import Testing
         #expect(FileManager.default.fileExists(atPath: run.appending(path: "stopped").path))
     }
 
+    /// One lets go of the launch's lock only while it's said to be its own: one taken from it (held
+    /// over five minutes) and taken again since stays the new holder's.
+    @Test func eachLetsGoOfItsOwnLockOnly() throws {
+        defer { cleanUp() }
+        let lock = run.appending(path: ".launching")
+        try FileManager.default.createDirectory(at: lock, withIntermediateDirectories: false)
+        try write(run.appending(path: ".launching.pid"), "\(ProcessInfo.processInfo.processIdentifier)\n")
+        let letGo = Process()
+        letGo.executableURL = URL(filePath: "/bin/sh")
+        letGo.arguments = ["-c", "R=\(SSHConnection.quoted(run.path))\n" + RemoteServer.launchLock + "\nunlock"]
+        try letGo.run()
+        letGo.waitUntilExit()
+        #expect(letGo.terminationStatus == 0)
+        #expect(FileManager.default.fileExists(atPath: lock.path), "still the other's")
+        #expect(FileManager.default.fileExists(atPath: run.appending(path: ".launching.pid").path))
+    }
+
     @Test func twoAtOnceStartOne() async throws {
         defer { cleanUp() }
         try ranBefore()

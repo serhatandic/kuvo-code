@@ -851,9 +851,13 @@ public final class RemoteServer: @unchecked Sendable {
     /// whose holder is gone (a start or a stop cut off: killed, a crash, `off` ending the keeper as
     /// it held it) is taken away by the next one waiting for it, at once; one whose holder runs is
     /// waited for, up to five minutes, as one that doesn't say is (an older Kuvo Code's, or one
-    /// taken a moment ago). Taking one away is one at a time (`run/.launching.breaking`), and only
-    /// if it's still the one found so: two waiting never both take it. Each lets go of its own lock
-    /// only. `$R` is the box's `run`.
+    /// taken a moment ago). Taking one away is one at a time (`run/.launching.breaking`, itself
+    /// taken away after a minute by one that couldn't make it), looked at again first: two waiting
+    /// for one whose holder is gone don't both take it. Each lets go of its lock only while it's
+    /// still said to be its own. (A folder lock can't close every gap: one held over five minutes
+    /// that's let go and taken again in the very moment it's taken away, or one an older script
+    /// took after taking away a newer one's, can still be had twice, as between older scripts
+    /// before.) `$R` is the box's `run`.
     static let launchLock = #"""
         locked() { echo $$ >"$R/.launching.pid"; }
         unlock() {
@@ -867,8 +871,10 @@ public final class RemoteServer: @unchecked Sendable {
         held_long() { [ -n "$(find "$R/.launching" -maxdepth 0 -mmin +5 2>/dev/null)" ]; }
         unheld() {
           held_by_gone || held_long || return 1
-          [ -z "$(find "$R/.launching.breaking" -maxdepth 0 -mmin +1 2>/dev/null)" ] || rmdir "$R/.launching.breaking" 2>/dev/null
-          mkdir "$R/.launching.breaking" 2>/dev/null || return 1
+          if ! mkdir "$R/.launching.breaking" 2>/dev/null; then
+            [ -z "$(find "$R/.launching.breaking" -maxdepth 0 -mmin +1 2>/dev/null)" ] || rmdir "$R/.launching.breaking" 2>/dev/null
+            return 1
+          fi
           if held_by_gone || held_long; then rm -f "$R/.launching.pid"; rmdir "$R/.launching" 2>/dev/null; fi
           rmdir "$R/.launching.breaking" 2>/dev/null
         }
