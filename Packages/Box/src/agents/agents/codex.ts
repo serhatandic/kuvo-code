@@ -668,7 +668,8 @@ export class CodexAgent implements Agent {
     let cursor: string | undefined
     let order = 1000
     do {
-      const page: any = await rpc.request("model/list", cursor ? { cursor } : {}, 30_000)
+      // (With those it hides from its picker, which it lists only when asked: they still run.)
+      const page: any = await rpc.request("model/list", { includeHidden: true, ...(cursor ? { cursor } : {}) }, 30_000)
       for (const info of page?.data ?? []) {
         models.push(
           model(this.providerID, info.model ?? info.id, info.displayName ?? info.model, {

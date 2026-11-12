@@ -262,7 +262,11 @@ process.stdin.on("data", (chunk) => {
     } else if (message.method === "thread/backgroundTerminals/clean") {
       terminals = []
       send({ id: message.id, result: {} })
-    } else if (message.method === "model/list") send({ id: message.id, result: { data: [{ id: "gpt-test", model: "gpt-test", displayName: "GPT Test", isDefault: true }, { id: "gpt-mini", model: "gpt-mini", displayName: "GPT Mini", hidden: true }] } })
+    } else if (message.method === "model/list") {
+      // (Those it hides from its picker only when asked for, as the real one lists them.)
+      const hidden = message.params?.includeHidden === true ? [{ id: "gpt-mini", model: "gpt-mini", displayName: "GPT Mini", hidden: true }] : []
+      send({ id: message.id, result: { data: [{ id: "gpt-test", model: "gpt-test", displayName: "GPT Test", isDefault: true }, ...hidden] } })
+    }
     else if (message.id !== undefined) send({ id: message.id, result: {} })
   }
 })

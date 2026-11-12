@@ -36,6 +36,8 @@ struct SessionModelStateTests {
         #expect(install.refusal(accounts: "Accounts", shownName: "Composer 2") == "Composer 2 needs Cursor installed: install it in Accounts, or choose another model.")
         #expect(install.accountStep(for: "cursor")?.title == "Install")
         #expect(out.accountStep(for: "github-copilot")?.title == "Sign In")
+        #expect(out.cardButton(for: "github-copilot", ended: true) == "Sign In Again")
+        #expect(install.cardButton(for: "cursor", ended: false) == "Install")
     }
 
     /// The engine's xAI model with no key, while a SuperGrok plan is signed in to through Grok: a
@@ -48,6 +50,9 @@ struct SessionModelStateTests {
         // Its card's button says what it does: it opens the key sheet.
         #expect(xai.accountStep(for: "xai")?.title == "Add Key")
         #expect(xai.accountStep(for: "grok-cli") == nil, "another account's card is its own")
+        #expect(xai.cardButton(for: "xai", ended: false) == "Add Key")
+        #expect(xai.cardButton(for: "xai", ended: true) == "Add Key", "a key, even where a sign-in ended")
+        #expect(xai.cardButton(for: "claude-code", ended: true) == nil, "a card about another account: the app's own words")
     }
 
     /// A model gone from its provider's list (a coding agent's dropped while it's signed in, #338's

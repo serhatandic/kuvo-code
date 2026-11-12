@@ -14074,7 +14074,7 @@ class CodexAgent {
     let cursor;
     let order = 1000;
     do {
-      const page = await rpc.request("model/list", cursor ? { cursor } : {}, 30000);
+      const page = await rpc.request("model/list", { includeHidden: true, ...cursor ? { cursor } : {} }, 30000);
       for (const info of page?.data ?? []) {
         models.push(model(this.providerID, info.model ?? info.id, info.displayName ?? info.model, {
           variants: (info.supportedReasoningEfforts ?? []).map((effort) => effort.reasoningEffort),
@@ -20096,7 +20096,7 @@ ${text.slice(0, 4000)}
     const agent = this.agent(providerID);
     if (!agent)
       return [];
-    return await Promise.race([agent.models().catch(() => []), Bun.sleep(3000).then(() => [])]);
+    return await Promise.race([agent.models({ hidden: true }).catch(() => []), Bun.sleep(3000).then(() => [])]);
   }
   static modelIn(models, id) {
     return models.find((model) => model.id === id) ?? models.find((model) => model.aliases?.includes(id));
@@ -27444,4 +27444,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 67b0be35096d5b40655fed11149c88c08c90b163c5e0889fd79122328c7f4832
+// Built from Packages/Box/src/agents d9a9c542ee33aaad6fedb136bef002f1a3340606aeea9e951f5586dbed40ade2
