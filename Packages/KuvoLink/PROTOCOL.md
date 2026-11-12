@@ -5635,7 +5635,9 @@ vault does (`run/vault.sock`); another passes them on.
   client never takes an ask listed in `settled` for one that waits, heard or not, so none is left
   with an ask that's over (a session's row saying it asks). Such a client holds nothing of its own
   for an ask the box takes up: it tells you of one (a notification) once it's listed `yours`,
-  reading it from its engine then, and shows it only while its engine still asks it. The box's
+  reading it from its engine then (one its engine no longer asks isn't told; where its engine
+  can't be read, it's told without its words), and lets go of one listed in `settled`. The
+  reviewer's own answer isn't listed `answered`: the ask goes from `checking` to what it decided. The box's
   process started again lists what still waits as it takes it up again (`checking` at once) and
   none from before. From a box without `settled`, a client keeps what it heard asked until the box
   lists it, as before. An ask: `{id, at, session?, sessionName?, bot?, botName?,

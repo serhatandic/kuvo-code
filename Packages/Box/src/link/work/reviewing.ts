@@ -269,6 +269,9 @@ const reviewFollowers = new Set<() => void>();
 export const listAskReviews = (): AskReview[] => [...askReviews.values()];
 export const listSettledReviews = (): SettledReview[] => [...settledReviews.values()];
 
+// The asks the reviewer is answering now, whose answer's event isn't someone else's.
+const replying = new Set<string>();
+
 const waitsOnReview = (review: AskReview | undefined) => review?.state === "yours" || review?.state === "checking";
 
 function settle(reviews: AskReview[], state: SettledReview["state"]): void {
@@ -287,6 +290,8 @@ function settle(reviews: AskReview[], state: SettledReview["state"]): void {
  * listed `answered` from now on, so what's listed as waiting is what waits; what the reviewer
  * decided stays, for the mark on its step. */
 export function settleAskReview(id: string): void {
+  // (The reviewer's own answer: what it decided is listed as it notes it.)
+  if (replying.has(id)) return;
   const review = askReviews.get(id);
   if (waitsOnReview(review)) settle([review!], "answered");
 }
@@ -304,13 +309,15 @@ export function settleRunReviews(session: string): void {
 async function settleGoneReviews(source: Target, place: string, since: number, signal?: AbortSignal): Promise<void> {
   const looked = [...askReviews.values()].filter(each => waitsOnReview(each) && each.at <= since && askedOn.get(each.id) === place);
   const gone: AskReview[] = [];
-  for (const review of looked) {
+  // (Each session's asks read once; one deleted meanwhile asks nothing.)
+  for (const session of new Set(looked.map(each => each.session))) {
     if (signal?.aborted) return;
-    const listed = await call(source, "GET", `/api/session/${encodeURIComponent(review.session)}/permission`, undefined, signal)
-      .catch(error => (String((error as Error)?.message) === "404" ? [] : null));
-    if (!Array.isArray(listed) || listed.some(each => isObject(each) && each.id === review.id)) continue;
+    const listed = await call(source, "GET", `/api/session/${encodeURIComponent(session)}/permission`, undefined, signal)
+      .catch(error => ((error as { status?: number } | null)?.status === 404 ? [] : null));
+    if (!Array.isArray(listed)) continue;
+    const asked = new Set(listed.filter(isObject).map(each => each.id));
     // (Noted again meanwhile, as it's taken up again: it's that one's.)
-    if (askReviews.get(review.id) === review) gone.push(review);
+    gone.push(...looked.filter(each => each.session === session && !asked.has(each.id) && askReviews.get(each.id) === each));
   }
   settle(gone, "gone");
 }
@@ -321,7 +328,11 @@ export function onAskReviewsChanged(changed: () => void): () => void {
   return () => { reviewFollowers.delete(changed); };
 }
 
-function noteReview(id: string, session: string, state: AskReview["state"], call?: string, place?: string): void {
+/** `fresh`: as it's heard (or found waiting); otherwise one answered or gone meanwhile stays so,
+ * never checked or left for you again, and only what the reviewer decided is noted. */
+function noteReview(id: string, session: string, state: AskReview["state"], call?: string, place?: string, fresh = false): void {
+  const waiting = state === "checking" || state === "yours";
+  if (waiting && !fresh && !askReviews.has(id)) return;
   askReviews.delete(id);
   settledReviews.delete(id);
   askReviews.set(id, { id, session, ...(call ? { call } : {}), state, at: Date.now() });
@@ -347,7 +358,7 @@ export async function reviewPermission(source: Target, event: { type?: string; d
   const taken = reviewing.get(id);
   if (taken) return taken;
   // Listed as checked at once, before anything is read, so no client shows it meanwhile.
-  if (event.data?.action === "external_directory") noteReview(id, sessionID, "checking", undefined, place);
+  if (event.data?.action === "external_directory") noteReview(id, sessionID, "checking", undefined, place, true);
   // (Taken up again as the event comes again, should this one fail; meanwhile it's yours.)
   const answering = answerPermission(source, id, sessionID, signal, found).catch(error => {
     reviewing.delete(id);
@@ -372,9 +383,11 @@ export async function takeUpWaitingAsks(source: Target, sessions: string[], sign
     if (signal?.aborted) return;
     const { permissions } = await asksIn(source, session, signal).catch(() => ({ permissions: [] as { id: string; asker: string; action: string }[] }));
     for (const each of permissions) {
+      // (One listed as over that its engine still asks waits after all: taken up again.)
+      if (each.action === "external_directory" && settledReviews.has(each.id)) reviewing.delete(each.id);
       if (each.action !== "external_directory" || reviewing.has(each.id) || askReviews.has(each.id)) continue;
       // Listed as checked at once, all of them, before any is read.
-      noteReview(each.id, each.asker, "checking", undefined, place);
+      noteReview(each.id, each.asker, "checking", undefined, place, true);
       waiting.push(each);
     }
   }
@@ -584,7 +597,7 @@ async function answerPermission(source: Target, id: string, sessionID: string, s
   // as an ask it doesn't take up is.
   if (!permission) {
     if (askReviews.get(id)?.state === "checking") {
-      const own = await call(source, "GET", `/api/session/${encodeURIComponent(sessionID)}/permission`, undefined, signal).catch(() => null);
+      const own = await engineCall(source, "GET", `/api/session/${encodeURIComponent(sessionID)}/permission`, undefined, signal).catch(() => null);
       const now = askReviews.get(id);
       if (now?.state !== "checking") return null;
       if (Array.isArray(own) && !own.some(each => isObject(each) && each.id === id)) settle([now], "gone");
@@ -626,11 +639,20 @@ async function answerPermission(source: Target, id: string, sessionID: string, s
     noteReview(id, sessionID, "yours", call);
     return null;
   }
+  // Its answer, and how it decided, listed as it answers (its answer's event isn't taken for yours).
+  const reply = async (body: Record<string, unknown>, decided: AskReview["state"]) => {
+    replying.add(id);
+    try {
+      await engineCall(source, "POST", `/api/session/${encodeURIComponent(permission.asker)}/permission/${encodeURIComponent(permission.id)}/reply`, body, signal);
+      noteReview(id, sessionID, decided, call);
+    } finally {
+      replying.delete(id);
+    }
+  };
   // (Each path macOS may ask about, asked off the box's thread first: a project on your Desktop.)
   await askedAbout([folder, ...actions.flatMap(action => action.kind === "file" ? [action.path] : [])]);
   if (ownByName && ownReads((file, place) => within(realPath(file), foundAt(place)))) {
-    await engineCall(source, "POST", `/api/session/${encodeURIComponent(permission.asker)}/permission/${encodeURIComponent(permission.id)}/reply`, { decision: "once" }, signal);
-    noteReview(id, sessionID, "allowed", call);
+    await reply({ decision: "once" }, "allowed");
     return { decision: "allow", reason: "Its own files.", by: "code" };
   }
   // Its own project, and a bot's (one it made, its goal's), are its to work in as its folder is:
@@ -639,7 +661,6 @@ async function answerPermission(source: Target, id: string, sessionID: string, s
     noteReview(id, sessionID, "yours", call);
     return null;
   }
-  const reply = (body: Record<string, unknown>) => engineCall(source, "POST", `/api/session/${encodeURIComponent(permission.asker)}/permission/${encodeURIComponent(permission.id)}/reply`, body, signal);
   // Its own folders and its project's worktrees, each by where it was found (a worktree as found, its
   // own folders as first seen), a file in one allowed only as reached plainly (`plainlyIn`: no link
   // on the way down, nor `..`, a file of one name only), and never what's walled from its own
@@ -673,11 +694,12 @@ async function answerPermission(source: Target, id: string, sessionID: string, s
     && changes.every(each => !each.raw.split("/").includes("..") && !UNPLAIN.test(each.raw) && plainly(each))
     && actions.every(action => action.kind === "file");
   if (ownChanges) {
-    await reply({ decision: "once" });
-    noteReview(id, sessionID, "allowed", call);
+    await reply({ decision: "once" }, "allowed");
     return { decision: "allow", reason: "Its own project.", by: "code" };
   }
   noteReview(id, sessionID, "checking", call);
+  // (Answered or gone meanwhile, its run stopped, say: nothing to review.)
+  if (!askReviews.has(id)) return null;
   // (The engine runs a command it asked about itself: a script from the web in it can't be pinned
   // to the copy reviewed, so that one is held back. Of several paths, the first refused decides.)
   let verdict: Awaited<ReturnType<typeof reviewIn>> = null;
@@ -689,7 +711,6 @@ async function answerPermission(source: Target, id: string, sessionID: string, s
     noteReview(id, sessionID, "yours", call);
     return null;
   }
-  await reply(verdict.decision === "allow" ? { decision: "once" } : { decision: "reject", message: refusalWords(verdict) });
-  noteReview(id, sessionID, verdict.decision === "allow" ? "allowed" : verdict.held ? "heldBack" : "refused", call);
+  await reply(verdict.decision === "allow" ? { decision: "once" } : { decision: "reject", message: refusalWords(verdict) }, verdict.decision === "allow" ? "allowed" : verdict.held ? "heldBack" : "refused");
   return verdict;
 }

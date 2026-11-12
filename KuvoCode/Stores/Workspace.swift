@@ -58,6 +58,8 @@ final class Workspace {
     /// Permissions kept until their box says whether its reviewer takes them up: the old-box path,
     /// for a box from before `sandbox.reviews.settled`. A box with it keeps them itself, to their
     /// end (`Sandboxes.settles`), and nothing is kept here.
+    // COMPAT(0.8 sandbox-reviews-settled): `awaitingReview` and what keeps it (each marked "old-box
+    // path"), for a machine's box from before `sandbox.reviews.settled`. Goes 3 months after 0.8.0.
     @ObservationIgnored private var awaitingReview: [String: PermissionRequest] = [:]
     /// Machines' sessions as last seen, kept across launches so their tabs wait for the machine
     /// to connect instead of closing.
@@ -3067,10 +3069,18 @@ final class Workspace {
     /// An ask its box lists yours in a conversation not open here, told as its engine asks it now:
     /// one its engine no longer asks (answered, or gone with its run) is never told.
     private func tellLeftForYou(_ id: String, in session: String) async {
-        guard asking[id] == nil, let api = api(forSession: session),
-              let request = try? await api.permissions(session: session).first(where: { $0.id == id }),
-              asking[id] == nil, let listed = Sandboxes.shared.review(of: id), Sandboxes.shared.isYours(request, on: listed.box) else { return }
-        tellYours(request)
+        guard asking[id] == nil, let api = api(forSession: session) else { return }
+        let read: [PermissionRequest]?
+        do { read = try await api.permissions(session: session) } catch { read = nil }
+        guard asking[id] == nil, Sandboxes.shared.review(of: id)?.review.state == .yours else { return }
+        guard let read else {
+            // Its engine not read now: yours as its box says, told without its words (opened, the
+            // conversation shows them).
+            asking[id] = session
+            notifyAsk(session, body: "Wants to work outside the project.", request: id, isPermission: true, answerable: false)
+            return
+        }
+        if let request = read.first(where: { $0.id == id }) { tellYours(request) }
     }
 
     /// A question in a conversation on Autopilot counts and tells you only if its box says it waits

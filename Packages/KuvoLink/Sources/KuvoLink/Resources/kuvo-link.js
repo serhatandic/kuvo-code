@@ -16644,6 +16644,7 @@ var askedOn = new Map;
 var reviewFollowers = new Set;
 var listAskReviews = () => [...askReviews.values()];
 var listSettledReviews = () => [...settledReviews.values()];
+var replying = new Set;
 var waitsOnReview = (review) => review?.state === "yours" || review?.state === "checking";
 function settle(reviews, state) {
   if (!reviews.length)
@@ -16660,6 +16661,8 @@ function settle(reviews, state) {
     changed();
 }
 function settleAskReview(id) {
+  if (replying.has(id))
+    return;
   const review = askReviews.get(id);
   if (waitsOnReview(review))
     settle([review], "answered");
@@ -16670,14 +16673,14 @@ function settleRunReviews(session) {
 async function settleGoneReviews(source, place, since, signal) {
   const looked = [...askReviews.values()].filter((each) => waitsOnReview(each) && each.at <= since && askedOn.get(each.id) === place);
   const gone = [];
-  for (const review of looked) {
+  for (const session of new Set(looked.map((each) => each.session))) {
     if (signal?.aborted)
       return;
-    const listed = await call(source, "GET", `/api/session/${encodeURIComponent(review.session)}/permission`, undefined, signal).catch((error) => String(error?.message) === "404" ? [] : null);
-    if (!Array.isArray(listed) || listed.some((each) => isObject(each) && each.id === review.id))
+    const listed = await call(source, "GET", `/api/session/${encodeURIComponent(session)}/permission`, undefined, signal).catch((error) => error?.status === 404 ? [] : null);
+    if (!Array.isArray(listed))
       continue;
-    if (askReviews.get(review.id) === review)
-      gone.push(review);
+    const asked = new Set(listed.filter(isObject).map((each) => each.id));
+    gone.push(...looked.filter((each) => each.session === session && !asked.has(each.id) && askReviews.get(each.id) === each));
   }
   settle(gone, "gone");
 }
@@ -16687,7 +16690,10 @@ function onAskReviewsChanged(changed) {
     reviewFollowers.delete(changed);
   };
 }
-function noteReview(id, session, state, call, place) {
+function noteReview(id, session, state, call, place, fresh = false) {
+  const waiting = state === "checking" || state === "yours";
+  if (waiting && !fresh && !askReviews.has(id))
+    return;
   askReviews.delete(id);
   settledReviews.delete(id);
   askReviews.set(id, { id, session, ...call ? { call } : {}, state, at: Date.now() });
@@ -16712,7 +16718,7 @@ async function reviewPermission(source, event, signal, found, place) {
   if (taken)
     return taken;
   if (event.data?.action === "external_directory")
-    noteReview(id, sessionID, "checking", undefined, place);
+    noteReview(id, sessionID, "checking", undefined, place, true);
   const answering = answerPermission(source, id, sessionID, signal, found).catch((error) => {
     reviewing.delete(id);
     if (askReviews.has(id))
@@ -16732,9 +16738,11 @@ async function takeUpWaitingAsks(source, sessions, signal, place) {
       return;
     const { permissions } = await asksIn(source, session, signal).catch(() => ({ permissions: [] }));
     for (const each of permissions) {
+      if (each.action === "external_directory" && settledReviews.has(each.id))
+        reviewing.delete(each.id);
       if (each.action !== "external_directory" || reviewing.has(each.id) || askReviews.has(each.id))
         continue;
-      noteReview(each.id, each.asker, "checking", undefined, place);
+      noteReview(each.id, each.asker, "checking", undefined, place, true);
       waiting.push(each);
     }
   }
@@ -16905,7 +16913,7 @@ async function answerPermission(source, id, sessionID, signal, found) {
   }
   if (!permission) {
     if (askReviews.get(id)?.state === "checking") {
-      const own = await call2(source, "GET", `/api/session/${encodeURIComponent(sessionID)}/permission`, undefined, signal).catch(() => null);
+      const own = await call(source, "GET", `/api/session/${encodeURIComponent(sessionID)}/permission`, undefined, signal).catch(() => null);
       const now = askReviews.get(id);
       if (now?.state !== "checking")
         return null;
@@ -16942,17 +16950,24 @@ async function answerPermission(source, id, sessionID, signal, found) {
     noteReview(id, sessionID, "yours", call2);
     return null;
   }
+  const reply = async (body, decided) => {
+    replying.add(id);
+    try {
+      await call(source, "POST", `/api/session/${encodeURIComponent(permission.asker)}/permission/${encodeURIComponent(permission.id)}/reply`, body, signal);
+      noteReview(id, sessionID, decided, call2);
+    } finally {
+      replying.delete(id);
+    }
+  };
   await askedAbout([folder, ...actions.flatMap((action) => action.kind === "file" ? [action.path] : [])]);
   if (ownByName && ownReads((file, place) => within2(realPath2(file), foundAt(place)))) {
-    await call(source, "POST", `/api/session/${encodeURIComponent(permission.asker)}/permission/${encodeURIComponent(permission.id)}/reply`, { decision: "once" }, signal);
-    noteReview(id, sessionID, "allowed", call2);
+    await reply({ decision: "once" }, "allowed");
     return { decision: "allow", reason: "Its own files.", by: "code" };
   }
   if (!inAuto(at)) {
     noteReview(id, sessionID, "yours", call2);
     return null;
   }
-  const reply = (body) => call(source, "POST", `/api/session/${encodeURIComponent(permission.asker)}/permission/${encodeURIComponent(permission.id)}/reply`, body, signal);
   const own = await ownFolders(at, false);
   await askedAbout(own);
   const trees = typeof folder === "string" ? await projectTrees(folder) : [];
@@ -16974,11 +16989,12 @@ async function answerPermission(source, id, sessionID, signal, found) {
   const known = !seen || [WRITING, READING, RUNNING].some((each) => each.has(seen.tool.toLowerCase()));
   const ownChanges = known && !unread && !renames && resources.length > 0 && permission.resources.every((each) => each.startsWith("/")) && changes.every((each) => !each.raw.split("/").includes("..") && !UNPLAIN.test(each.raw) && plainly(each)) && actions.every((action) => action.kind === "file");
   if (ownChanges) {
-    await reply({ decision: "once" });
-    noteReview(id, sessionID, "allowed", call2);
+    await reply({ decision: "once" }, "allowed");
     return { decision: "allow", reason: "Its own project.", by: "code" };
   }
   noteReview(id, sessionID, "checking", call2);
+  if (!askReviews.has(id))
+    return null;
   let verdict = null;
   for (const action of actions) {
     verdict = await reviewIn(sessionID, action, signal, at, false);
@@ -16989,8 +17005,7 @@ async function answerPermission(source, id, sessionID, signal, found) {
     noteReview(id, sessionID, "yours", call2);
     return null;
   }
-  await reply(verdict.decision === "allow" ? { decision: "once" } : { decision: "reject", message: refusalWords(verdict) });
-  noteReview(id, sessionID, verdict.decision === "allow" ? "allowed" : verdict.held ? "heldBack" : "refused", call2);
+  await reply(verdict.decision === "allow" ? { decision: "once" } : { decision: "reject", message: refusalWords(verdict) }, verdict.decision === "allow" ? "allowed" : verdict.held ? "heldBack" : "refused");
   return verdict;
 }
 
@@ -37165,7 +37180,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "bec99750575c";
+var BRIDGE_VERSION = "0398a215c3c9";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {

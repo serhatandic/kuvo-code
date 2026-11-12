@@ -48,6 +48,9 @@ final class BotWork {
         }
     }
 
+    /// How long a read may take before it's let go.
+    static let readLimit: Duration = .seconds(60)
+
     /// Reads asked for and read, by bot, and the read under way.
     @ObservationIgnored private var readsWanted: [String: Int] = [:]
     @ObservationIgnored private var readsDone: [String: Int] = [:]
@@ -58,7 +61,14 @@ final class BotWork {
         let task = Task { [weak self] in
             while let self, (self.readsDone[bot.id] ?? 0) < (self.readsWanted[bot.id] ?? 0) {
                 let wanted = self.readsWanted[bot.id] ?? 0
-                await self.readNow(bot)
+                // (One that hangs, a machine's over SSH, is let go after a while, so the next can go.)
+                let read = Task { await self.readNow(bot) }
+                let limit = Task {
+                    try? await Task.sleep(for: BotWork.readLimit)
+                    read.cancel()
+                }
+                await read.value
+                limit.cancel()
                 self.readsDone[bot.id] = wanted
             }
             self?.reads[bot.id] = nil

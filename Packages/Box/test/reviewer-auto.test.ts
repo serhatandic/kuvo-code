@@ -370,6 +370,42 @@ test("the box keeps each ask Auto's reviewer takes up as every client reads it: 
     expect(stateOf(now, "per_k3")).toBe("gone")
     expect(waits(now, "per_k3")).toBe(false)
 
+    // Its session deleted while the box wasn't listening (its engine answers it doesn't have it):
+    // gone too. One asked on the coding agents' bridge is that place's to look for again.
+    conversation("ses_deleted", "askFirst", "Update the shared notes")
+    asks("ses_deleted", "per_k6")
+    await heard("ses_deleted", "per_k6")
+    conversation("ses_bridged", "askFirst", "Update the shared notes")
+    asks("ses_bridged", "per_k7")
+    await reviewing.reviewPermission(source, { type: "permission.asked", data: { id: "per_k7", sessionID: "ses_bridged", action: "external_directory" } }, undefined, undefined, "bridge")
+    asking.ses_bridged = []
+    delete sessions.ses_deleted
+    await reviewing.takeUpWaitingAsks(source, [], undefined, "engine")
+    now = await listed()
+    expect(stateOf(now, "per_k6")).toBe("gone")
+    expect(stateOf(now, "per_k7")).toBe("yours")
+
+    // In Auto, its run stopped while the box was still reading what it asked: never checked again
+    // nor reviewed, nor left for you once the reviewer's answer can't go.
+    conversation("ses_late", "auto", "Update the shared notes")
+    asks("ses_late", "per_k8")
+    const words = said.ses_late
+    let stopped = false
+    Object.defineProperty(said, "ses_late", { configurable: true, enumerable: true, get() {
+      if (!stopped) {
+        stopped = true
+        asking.ses_late = []
+        reviewing.settleRunReviews("ses_late")
+      }
+      return words
+    } })
+    const reviewed = prompts.length
+    await heard("ses_late", "per_k8").catch(() => null)
+    now = await listed()
+    expect(stopped).toBe(true)
+    expect(stateOf(now, "per_k8")).toBe("gone")
+    expect(prompts.length).toBe(reviewed)
+
     // Two left for you, and the box starts again: one its engine still asks is listed again from
     // the start (checked, then yours), the one gone meanwhile isn't listed as waiting.
     conversation("ses_kept2", "askFirst", "Update the shared notes")
