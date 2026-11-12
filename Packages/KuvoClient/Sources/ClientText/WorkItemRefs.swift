@@ -122,12 +122,12 @@ public enum WorkItemRefs {
     }
 
     private static func isOrdinal(_ text: String, _ hash: String.Index, _ end: String.Index) -> Bool {
-        let words: Set<String> = ["ranked", "rank", "number", "result", "spot", "place", "position"]
+        let words: Set<String> = ["ranked", "rank", "number", "result", "results", "spot", "place", "position", "priority", "seller"]
         let before = text[..<hash].reversed().drop(while: { $0.isWhitespace }).prefix(while: { $0.isLetter }).reversed()
         let after = text[end...].drop(while: { $0.isWhitespace })
         if words.contains(String(before).lowercased()) || words.contains(after.prefix(while: { $0.isLetter }).lowercased()) { return true }
         let following = after.split(maxSplits: 2, whereSeparator: { $0.isWhitespace }).prefix(2).map { $0.lowercased().trimmingCharacters(in: .punctuationCharacters) }
-        return following == ["on", "google"] || following == ["in", "search"] || following == ["google", "result"]
+        return (following.count == 2 && ["on", "in"].contains(following[0]) && following[1].contains(where: { $0.isLetter })) || (following.count == 2 && following[0] == "google" && ["result", "results"].contains(following[1]))
     }
 
     /// Resolves references for a conversation. Bare numbers must be in its visible queue;

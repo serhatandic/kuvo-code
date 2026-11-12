@@ -460,7 +460,6 @@ final class WorkQueues {
     /// far as it's known now; the ones not known yet are asked (once a minute at most each), and
     /// their chips come when the box answers.
     func refs(in text: String, box: String, owner: String? = nil, typing: Bool = false) -> [String: WorkRef] {
-        guard let owner, !owner.isEmpty else { return [:] }
         var found = WorkItemRefs.findRefs(in: text)
         // One being typed at the end of a draft isn't asked for until it's whole ("#2" of "#243").
         if typing, let last = found.last, last.range.upperBound == text.endIndex { found.removeLast() }
@@ -475,7 +474,8 @@ final class WorkQueues {
         }
         if keys.contains(where: { $0.hasPrefix("gh:") }) { startRefreshing() }
         let known = keys.contains(where: { $0.hasPrefix("gh:") }) ? refs[box] ?? [:] : [:]
-        return WorkItemRefs.chipRefs(in: text, known: known, visible: chipView(Key(box: box, owner: owner)).refs)
+        let visible = owner.flatMap { $0.isEmpty ? nil : chipView(Key(box: box, owner: $0)).refs } ?? [:]
+        return WorkItemRefs.chipRefs(in: text, known: known, visible: visible)
             .filter { keys.contains($0.key) }
     }
 

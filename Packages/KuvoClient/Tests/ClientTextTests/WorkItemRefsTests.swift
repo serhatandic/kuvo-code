@@ -24,7 +24,7 @@ import ClientText
         #expect(WorkItemRefs.find(in: text).map(\.number) == numbers)
     }
 
-    @Test(arguments: ["the #1 Google result", "to #1 on Google", "ranked #1", "#1 spot", "#1 on Google", "We’re #1 on Google", "it hit #1 in search", "#1 Google result", "rank #1", "number #1", "#1 result", "#1 place", "#1 position"])
+    @Test(arguments: ["the #1 Google result", "to #1 on Google", "ranked #1", "#1 spot", "#1 on Google", "We’re #1 on Google", "it hit #1 in search", "#1 Google result", "rank #1", "number #1", "#1 result", "#1 place", "#1 position", "#1 priority", "#1 seller", "#1 results", "#1 on Amazon", "#1 in Europe", "priority #10", "seller #2"])
     func ordinalsStayPlain(text: String) {
         #expect(WorkItemRefs.refs(in: text).isEmpty)
     }
@@ -42,6 +42,11 @@ import ClientText
     @Test(arguments: ["Linked to #243", "Added a note to #243", "Look at #243", "Fix the #243 bug", "Moved it to\n#243", "to #243", "at #243", "the #243", "ranked #243", "#243 result"])
     func realReferencesSurvive(text: String) {
         #expect(WorkItemRefs.chipRefs(in: text, known: [:], visible: ["243": "ours"])["243"] == "ours")
+    }
+
+    @Test func qualifiedReferencesNeedNoConversation() {
+        let known = ["gh:owner/repo#12": "issue", "12": "queue item"]
+        #expect(WorkItemRefs.chipRefs(in: "gh:owner/repo#12 and #12", known: known, visible: [:]) == ["gh:owner/repo#12": "issue"])
     }
 
     @Test func aReasonRequiresVisibility() {

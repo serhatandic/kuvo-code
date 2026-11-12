@@ -37,6 +37,15 @@ import Textual
         #expect(store.refs(in: "the #1 Google result", box: BoxClient.mac, owner: "ses_ours").isEmpty)
     }
 
+    @Test func aDraftCanChipQualifiedRefsWithoutAQueue() throws {
+        let store = app.workQueues
+        var item = try JSONDecoder().decode(WorkItem.self, from: JSONSerialization.data(withJSONObject: Self.item(243, "Issue", order: 0)))
+        item.source = WorkSource(kind: "github", ref: "gh:owner/repo#12")
+        store.standIn(WorkQueueView(owner: "ses_ours", items: [item]), for: .init(box: BoxClient.mac, owner: "ses_ours"))
+        #expect(store.refs(in: "#243 gh:owner/repo#12", box: BoxClient.mac).keys.sorted() == ["gh:owner/repo#12"])
+        #expect(store.refs(in: "#243 gh:owner/repo#12", box: BoxClient.mac, owner: "").keys.sorted() == ["gh:owner/repo#12"])
+    }
+
     @Test func unrelatedQueueUpdatesDoNotInvalidateNumericChips() throws {
         let store = app.workQueues
         let item = try JSONDecoder().decode(WorkItem.self, from: JSONSerialization.data(withJSONObject: Self.item(243, "Ours", order: 0)))

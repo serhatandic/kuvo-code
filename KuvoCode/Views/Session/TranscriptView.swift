@@ -1542,7 +1542,6 @@ private struct TurnEndView: View {
     /// The latest turn's end: its row stays in view.
     var isLatest = false
     @Environment(AppModel.self) private var app
-
     @Environment(Catalog.self) private var catalog
     @Environment(\.conversationSignIn) private var signIn
     @Environment(TurnHover.self) private var hover: TurnHover?
@@ -1731,7 +1730,6 @@ private struct TurnFiles: View {
     let files: [TurnStats.TurnFile]
     let directory: String
     @Environment(AppModel.self) private var app
-
     @Environment(\.bot) private var bot
     @State private var isShowing = false
 
@@ -2012,7 +2010,6 @@ struct ErrorCard: View {
 private struct AgentSentRow: View {
     let call: Message.ToolCall
     @Environment(AppModel.self) private var app
-
     /// The conversation this is in, where what it opens comes back to.
     @Environment(\.conversationTab) private var here
 
@@ -2311,7 +2308,6 @@ private struct AgentMessageRow: View {
     /// What happened, after its name, for one of its sessions' news: "finished", "still working".
     var status: String?
     @Environment(AppModel.self) private var app
-
     /// The conversation this is in, where what it opens comes back to.
     @Environment(\.conversationTab) private var here
 
@@ -2352,7 +2348,6 @@ private struct GroupWorkRow: View {
     let task: String
     let at: Milliseconds
     @Environment(AppModel.self) private var app
-
     /// The conversation this is in, where what it opens comes back to.
     @Environment(\.conversationTab) private var here
 
