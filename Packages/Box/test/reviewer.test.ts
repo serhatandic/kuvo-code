@@ -528,7 +528,11 @@ test("once the model allows a change its file tool makes in a folder, the same t
   const places = () => reviewer.reviewLog(context.session, join(box, "reviews")).decisions.filter(each => each.place)
   expect(places()).toEqual([expect.objectContaining({ action: `Change ${realpathSync(copy)}`, decision: "allowed", by: "model",
     reason: `Auto allowed edits in ${realpathSync(copy)} for this session.`, place: realpathSync(copy) })])
-  expect(reviewer.revokePlace(context.session, places()[0].id!, Date.now(), join(box, "reviews"))).toMatchObject({ revoked: expect.any(Number) })
+  const revokedAt = Date.now()
+  expect(reviewer.revokePlace(context.session, places()[0].id!, revokedAt, join(box, "reviews"))).toMatchObject({ revoked: expect.any(Number) })
+  // (The reviews after it start after it, as a change the agent makes once you've taken it back
+  // does: one that starts in the same millisecond counts as under way as it went, and keeps nothing.)
+  while (Date.now() <= revokedAt) await Bun.sleep(1)
   expect(await reviewer.review(change(join(copy, "Tests", "vault.test.js")), context, given(ask))).toMatchObject({ decision: "refuse", by: "model" })
   // Allowed there again, it's kept again, as a new decision.
   expect(await reviewer.review(change(join(copy, "Tests", "vault.test.js")), context, given(model(allows)))).toMatchObject({ decision: "allow", by: "model" })
@@ -703,4 +707,20 @@ test("a place you revoke while another review is under way isn't stored by it ei
   }, { shown: [] as string[] })
   await reviewer.review(change(join(second, "b.md")), context, given(slow as never))
   expect(reviewer.reviewLog(context.session, reviews).places ?? []).toEqual([])
+})
+
+test("a review that starts in the very millisecond a place is taken back keeps none, as one under way then; one a millisecond after does (#422)", async () => {
+  const context = yours("Write the notes")
+  const reviews = join(box, "reviews")
+  const notes = join(box, "notes-same-moment")
+  mkdirSync(notes, { recursive: true })
+  const change = (where: string) => ({ kind: "file" as const, path: where, access: "write" as const, folder: project, tool: "write", input: { filePath: where } })
+  await reviewer.review(change(join(notes, "a.md")), context, given(model(allows)))
+  const kept = reviewer.reviewLog(context.session, reviews).decisions.find(each => each.place)!
+  const at = Date.now() + 60_000
+  reviewer.revokePlace(context.session, kept.id!, at, reviews)
+  expect(await reviewer.review(change(join(notes, "b.md")), context, { ...given(model(allows)), now: () => at })).toMatchObject({ decision: "allow", by: "model" })
+  expect(reviewer.reviewLog(context.session, reviews).places ?? []).toEqual([])
+  expect(await reviewer.review(change(join(notes, "c.md")), context, { ...given(model(allows)), now: () => at + 1 })).toMatchObject({ decision: "allow", by: "model" })
+  expect(reviewer.reviewLog(context.session, reviews).places).toEqual([realpathSync(notes)])
 })
