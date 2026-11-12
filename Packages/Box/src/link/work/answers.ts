@@ -5,19 +5,16 @@
 // session's. Each answer is kept on the session (`kuvo.answers`), for every client to show it on
 // the step that asked ("Allowed by Pixel") and in the bot's work. A question it answers in words.
 
-import path from "node:path";
 import { isObject } from "../../shared/json";
 import { call } from "../engine/client";
+import { rewriteOn } from "../engine/notes";
 import { stopSession } from "../engine/queue";
-import { lockedWhile } from "../files";
 import { homeFolder } from "../home";
 import { permissionsHere } from "../bots/tell";
 import { describePermission } from "../notices/news";
-import { WORK_FOLDER } from "./changes";
 import type { Target } from "../../shared/records";
 import type { WorkAnswer } from "../../shared/routes/work";
 import type { KitRule } from "../bots/kit";
-import type { EngineSession } from "../engine/sessions";
 
 // A rule's resource as the engine matches it: `*` any text, `?` one character.
 const matches = (pattern: string, resource: string) => new RegExp(`^${pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, "[\\s\\S]*").replace(/\?/g, ".")}$`).test(resource);
@@ -259,17 +256,16 @@ export async function pendingAsk(target: Target, session: string, ask: string, s
 /** The answers kept on a session, at most this many (the latest). */
 const KEPT = 40;
 
-/** A session's notes changed, one change at a time across processes: the engine keeps them whole,
- * so they're read first and sent back with the change (to its `kuvo`, and to the rest of them). */
+/** A session's notes changed in its turn (`../engine/notes.ts`), one change at a time across
+ * processes: read just before they're written, and sent back with the change (to its `kuvo`, and
+ * to the rest of them). It throws where the engine didn't take it, or there's no such session. */
 export async function noteSession(target: Target, session: string, change: (kuvo: Record<string, unknown>, metadata: Record<string, unknown>) => Record<string, unknown>): Promise<void> {
-  // (Held for as long as the engine takes to answer twice: never taken from a slow one.)
-  await lockedWhile(path.join(WORK_FOLDER, ".notes.lock"), async () => {
-    const at = `/api/session/${encodeURIComponent(session)}`;
-    const data = await call(target, "GET", at) as Partial<EngineSession> | null;
-    const metadata: Record<string, unknown> = isObject(data?.metadata) ? { ...data.metadata } : {};
+  const done = await rewriteOn(target, session, data => {
+    const metadata: Record<string, unknown> = isObject(data.metadata) ? { ...data.metadata } : {};
     const kuvo = change(isObject(metadata.kuvo) ? { ...metadata.kuvo } : {}, metadata);
-    await call(target, "PATCH", at, { metadata: { ...metadata, kuvo } });
-  }, { stale: 120_000, wait: 30_000 });
+    return { metadata: { ...metadata, kuvo } };
+  });
+  if (!done) throw new Error("There's no such session.");
 }
 
 /** An answer kept on its session, for every client to show. */

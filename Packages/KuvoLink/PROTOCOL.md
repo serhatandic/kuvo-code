@@ -4477,12 +4477,43 @@ Nothing else writes it: a chat from before the mark that's only written to (a me
 title), or one changed while the box wasn't hearing its engine, stays without it. The box decides it
 from its own chats folder (the same folder through a link counts too). Their APIs write metadata
 whole, with nothing to say "only if it's unchanged": the box reads a session just before it writes
-the mark, and writes only when it's wrong (a client's write between the two is lost, as with the
-box's other writers of a session's metadata, #581). A client keeps the mark as it keeps the rest of
+the mark, in its turn, and writes only when it's wrong (see "Session notes" for what can still be
+lost). A client keeps the mark as it keeps the rest of
 the metadata when it writes it back. A session without the mark (a chat from before, or on a box
 from before `sessions.chat`, which marks nothing) goes by its folder, as before (the folder its
 box's `kuvo/info` names, kept for when that isn't answered). What both apps read is `SessionChat`
 (`Packages/KuvoClient`, ClientSessions).
+
+#### Session notes
+
+A session's metadata (its notes: `kuvo.*` and the rest) is written whole: the engine (2.2.5) and
+the coding agents' bridge keep what a `PATCH api/session/<id>` sends as its `metadata` in place of
+what was there (`{}` empties it; a key left out goes; a PATCH without `metadata`, a title or its
+rules alone, leaves it as it is), with nothing to say "only if it's unchanged". So every writer
+reads it, changes what it owns and sends it all back (the bridge keeps its own `kuvoAgent` and
+`kuvo.messages` whatever is sent).
+
+The box's own writers (#581: the chat mark, a new conversation's approval and any change to it,
+Autopilot, an agent's answers, archiving by a tool or a project's removal, a carry to the coding
+agents, the marks of a session it starts and of a bot it makes, a bot's rules repaired) each take
+their turn on the session, by place and session, in that box process and across its processes on
+that computer (a lock folder in `run/notes`): each reads the session as it is then, changes only its
+own keys on it, and writes it straight away. A client's `PATCH api/session/<id>` that comes through
+the box (a phone's, another computer's) waits for that turn too, so the box never writes over it
+with what it read before. The coding agents' bridge does the same for its writers through the API
+(a branch's mark, a handoff's, a group chat seat's), in its own process.
+
+What can still be lost, as long as the engine has no "only if unchanged": a write that lands
+between a writer's read and its write (a few milliseconds), when it's
+
+- a client's that doesn't come through the box (a Mac to its own engine), or a write by another
+  program: the bridge's writers on the engine's sessions and the box's on the bridge's take no turn
+  with each other;
+- or a client's whole write made from what it read before the box wrote: the box's change is lost
+  (the chat mark is put back as that write's `session.metadata.updated` comes; the box's other
+  notes aren't).
+
+A client writes back what it read with only its own change, as late as it can.
 
 ### Artifacts
 

@@ -8,6 +8,9 @@ import { IS_MAC } from "../home";
 import { holdArchived } from "../areas/wakes";
 import { MOVING } from "../bots/here";
 import { frozen } from "../moves/records";
+import { inTurnOn } from "../engine/notes";
+import { NOTES_STEP } from "../../shared/session-notes";
+import { pause } from "../../shared/wait";
 import { stopIfWaiting } from "../work/answers";
 import { attachedIn } from "./attached";
 import type { ModelInput } from "./attached";
@@ -88,12 +91,12 @@ export async function* forward(target: Target, path: string, request: LinkReques
   // it can't say). A phone sends all of it with any change (a pin, say), the flag as it was too.
   const changed = method === "PATCH" && /^\/api\/session\/([^/]+)$/.exec(url.pathname);
   let wasArchived: boolean | null = null;
-  if (changed) {
+  const readBefore = async () => {
     try {
       const before = await fetch(url, { headers, signal });
       if (before.ok) wasArchived = (await before.json() as { data?: EngineSession } | null)?.data?.metadata?.["kuvo.archived"] === true;
     } catch {}
-  }
+  };
   // A message that's here whole goes on to its conversation even if whoever sent it goes
   // meanwhile (a phone that gave up waiting while a big file was still on its way, #358): its
   // files are kept here by then, and it isn't lost without a word. Sent again under the same id
@@ -107,14 +110,29 @@ export async function* forward(target: Target, path: string, request: LinkReques
     const body = await attachedIn(request.body, session, modelInput(url, headers, delivering), request.fromMac === true, toAgents);
     return prompt ? fromPhone(await namedIn(body, session, naming)) : body;
   };
+  const send = async () => fetch(url, {
+    method,
+    headers,
+    body: method === "GET" || method === "HEAD" ? undefined : await outgoing(),
+    signal: delivering,
+  });
   let response: Response;
   try {
-    response = await fetch(url, {
-      method,
-      headers,
-      body: method === "GET" || method === "HEAD" ? undefined : await outgoing(),
-      signal: delivering,
-    });
+    // A session's written in its turn, as the box's own writers of it write (`../engine/notes.ts`),
+    // so none of theirs lands between what it read and this; held until it's answered (at most as
+    // long as one of theirs may take).
+    if (changed) {
+      const turn: { sent?: Promise<Response> } = {};
+      await inTurnOn(target, decodeURIComponent(changed[1]!), async () => {
+        await readBefore();
+        const sent = turn.sent = send();
+        const done = new AbortController();
+        await Promise.race([sent.catch(() => {}), pause(NOTES_STEP, done.signal)]);
+        done.abort();
+      });
+      if (!turn.sent) throw new Error("It wasn't sent.");
+      response = await turn.sent;
+    } else response = await send();
   } catch (error) {
     // Not answering (starting again, say): said so, unless the asker went.
     if (signal?.aborted) throw error;

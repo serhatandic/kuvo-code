@@ -4622,6 +4622,96 @@ async function sideQuestionRoutes(questions, method, parts, body) {
   }
 }
 
+// Packages/Box/src/shared/session-notes.ts
+import { AsyncLocalStorage } from "async_hooks";
+
+// Packages/Box/src/shared/json.ts
+function sortedJSON(value) {
+  if (Array.isArray(value))
+    return `[${value.map(sortedJSON).join(",")}]`;
+  if (value && typeof value === "object") {
+    const object = value;
+    return `{${Object.keys(object).sort().filter((k) => object[k] !== undefined).map((k) => `${JSON.stringify(k)}:${sortedJSON(object[k])}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+var isObject = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
+var sameJSON = (a, b) => sortedJSON(a ?? null) === sortedJSON(b ?? null);
+
+// Packages/Box/src/shared/session-notes.ts
+var NOTES_STEP = 30000;
+var turns = new Map;
+var holding = new AsyncLocalStorage;
+async function inTurn(place, id, work, across) {
+  const key = `${place}
+${id}`;
+  const held = holding.getStore();
+  if (held?.has(key))
+    return work();
+  const before = turns.get(key) ?? Promise.resolve();
+  let done = () => {};
+  const ended = new Promise((resolve) => {
+    done = resolve;
+  });
+  const mine = before.then(() => ended);
+  turns.set(key, mine);
+  await before;
+  try {
+    const run = () => holding.run(new Set([...held ?? [], key]), work);
+    return await (across ? across(id, run) : run());
+  } finally {
+    done();
+    if (turns.get(key) === mine)
+      turns.delete(key);
+  }
+}
+var within = (signal, ms) => signal ? AbortSignal.any([signal, AbortSignal.timeout(ms)]) : AbortSignal.timeout(ms);
+function rewriteSession(place, id, change, signal) {
+  return inTurn(place.name, id, async () => {
+    const session = await place.read(id, within(signal, NOTES_STEP));
+    if (!session)
+      return null;
+    const wanted = change(session);
+    if (!wanted)
+      return { written: false, session };
+    await place.write(id, wanted, within(signal, NOTES_STEP));
+    return { written: true, session: { ...session, ...wanted } };
+  }, place.across);
+}
+function withNotes(metadata, kuvo, top = {}) {
+  const notes = isObject(metadata) ? { ...metadata } : {};
+  for (const [key, value] of Object.entries(top)) {
+    if (value === undefined)
+      delete notes[key];
+    else
+      notes[key] = value;
+  }
+  if (!kuvo)
+    return notes;
+  const own = isObject(notes.kuvo) ? { ...notes.kuvo } : {};
+  for (const [key, value] of Object.entries(kuvo)) {
+    if (value === undefined)
+      delete own[key];
+    else
+      own[key] = value;
+  }
+  return { ...notes, kuvo: own };
+}
+
+// Packages/Box/src/agents/notes.ts
+var at3 = (id) => "/api/session/" + encodeURIComponent(id);
+function notesPlace(api) {
+  return {
+    name: "bridge",
+    read: async (id) => {
+      const data = (await api.request("GET", at3(id)))?.data;
+      return typeof data?.id === "string" ? data : null;
+    },
+    write: (id, change) => api.request("PATCH", at3(id), change)
+  };
+}
+var rewriteVia = (api, id, change) => rewriteSession(notesPlace(api), id, change);
+
 // Packages/Box/src/agents/handoff.ts
 var handoffMarker = "[Handoff] ";
 
@@ -4743,10 +4833,7 @@ ${next ? `What to do next: ${next}` : "Read it, say in a line what you'll do nex
     return Boolean(answer?.data && session in answer.data);
   }
   async link(place, session, kuvo) {
-    const metadata = (await sessionInfo(place.api, session).catch(() => {
-      return;
-    }))?.metadata ?? {};
-    await place.api.request("PATCH", at(session), { metadata: { ...metadata, kuvo: { ...metadata.kuvo ?? {}, ...kuvo } } }).catch(() => {});
+    await rewriteVia(place.api, session, (now) => ({ metadata: withNotes(now.metadata, kuvo) })).catch(() => {});
   }
 }
 var json3 = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
@@ -9157,14 +9244,14 @@ function upward(directory) {
     at = up;
   }
 }
-function within(path, folders) {
+function within2(path, folders) {
   return folders.some((folder) => path === folder || path.startsWith(folder.endsWith(sep10) ? folder : folder + sep10));
 }
 async function skillsFor(directory, own, off) {
   const seen = new Set;
   const skills = [];
   for (const skill of await engineSkills(directory)) {
-    if (seen.has(skill.name) || off(skill.name) || within(skill.folder, own))
+    if (seen.has(skill.name) || off(skill.name) || within2(skill.folder, own))
       continue;
     seen.add(skill.name);
     skills.push(skill);
@@ -9309,9 +9396,6 @@ function copySkillsInto(folder, skills) {
 import { createHash as createHash5 } from "crypto";
 import { existsSync as existsSync11, lstatSync as lstatSync4, mkdirSync as mkdirSync12, readdirSync as readdirSync11, readFileSync as readFileSync17, realpathSync as realpathSync5, renameSync as renameSync9, rmSync as rmSync9, statSync as statSync7, utimesSync as utimesSync2, writeFileSync as writeFileSync14 } from "fs";
 import { join as join19 } from "path";
-
-// Packages/Box/src/shared/json.ts
-var isObject = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
 
 // Packages/Box/src/shared/subagents.ts
 var SUBAGENT_MODEL = ["subagent_model"];
@@ -14338,7 +14422,7 @@ class CodexThread {
     const off = turnedOff(hooks);
     const skills = skillsFolder(await skillsFor(directory, own, off));
     await this.agent.useSkills(this.session.id, skills, rpc);
-    const turnedOffHere = (await engineSkills(directory)).filter((skill) => within(skill.folder, own) && off(skill.name)).map((skill) => ({ path: join24(skill.folder, "SKILL.md"), enabled: false }));
+    const turnedOffHere = (await engineSkills(directory)).filter((skill) => within2(skill.folder, own) && off(skill.name)).map((skill) => ({ path: join24(skill.folder, "SKILL.md"), enabled: false }));
     const skillsKey = JSON.stringify([skills, turnedOffHere]);
     const computer = await computerServers(directory);
     const servers = relayedServers(this.session.id, this.agent, directory, computer);
@@ -17370,11 +17454,19 @@ async function branch(places, session, before) {
   const copy = made?.data;
   if (typeof copy?.id !== "string")
     throw new BranchError(503, "The new conversation couldn't be started.");
-  const metadata = Object.fromEntries(Object.entries(copy.metadata ?? {}).filter(([key]) => !listed2.includes(key)));
-  const kuvo = Object.fromEntries(Object.entries(metadata.kuvo ?? {}).filter(([key]) => !origins.includes(key)));
-  metadata.kuvo = { ...kuvo, branchedFrom: session };
-  const marked = await place.api.request("PATCH", at(copy.id), { metadata }).then(() => true, () => false);
-  return marked ? { ...copy, metadata } : copy;
+  const came = copy.metadata ?? {};
+  const marked = await rewriteVia(place.api, copy.id, (now) => {
+    const metadata = { ...now.metadata ?? {} };
+    for (const key of listed2)
+      if (key in came && sameJSON(metadata[key], came[key]))
+        delete metadata[key];
+    const kuvo = { ...metadata.kuvo ?? {} };
+    for (const key of origins)
+      if (key in (came.kuvo ?? {}) && sameJSON(kuvo[key], came.kuvo[key]))
+        delete kuvo[key];
+    return { metadata: { ...metadata, kuvo: { ...kuvo, branchedFrom: session } } };
+  }).catch(() => null);
+  return marked ? { ...copy, metadata: marked.session.metadata } : copy;
 }
 var json7 = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
 async function branchRoutes(places, method, parts, body) {
@@ -18455,7 +18547,7 @@ function outsidePaths(ask, directory, attached, own = ownPlaces(), owns) {
     return [];
   const paths = ask.resources.filter((resource) => resource && resource !== "*" && (resource.startsWith("/") || resource.startsWith("~/") || !/[*?[]/.test(resource))).map((resource) => resolve7(directory, resource.startsWith("~/") ? join28(homedir5(), resource.slice(2)) : resource));
   const places = [directory, realFolder(directory), ...own];
-  return paths.filter((path) => !within(path, places) && !attached.has(path) && !owns?.(path));
+  return paths.filter((path) => !within2(path, places) && !attached.has(path) && !owns?.(path));
 }
 function realFolder(folder) {
   try {
@@ -23044,7 +23136,7 @@ function server3(url, password) {
     }
   };
 }
-var at3 = (id) => "/api/session/" + encodeURIComponent(id);
+var at4 = (id) => "/api/session/" + encodeURIComponent(id);
 var sharedSession = "global";
 
 class SeatAPI {
@@ -23071,7 +23163,7 @@ class SeatAPI {
     return all;
   }
   async session(id) {
-    return (await this.requester.request("GET", at3(id)))?.data;
+    return (await this.requester.request("GET", at4(id)))?.data;
   }
   async account(model) {
     const [providers, integrations] = await Promise.all([this.requester.request("GET", "/api/provider"), this.requester.request("GET", "/api/integration")]);
@@ -23091,10 +23183,12 @@ class SeatAPI {
     return (await this.requester.request("POST", "/api/session", body))?.data;
   }
   async setPermissions(id, rules) {
-    await this.requester.request("PATCH", at3(id), { permissions: rules });
+    await this.requester.request("PATCH", at4(id), { permissions: rules });
   }
-  async setMetadata(id, metadata) {
-    await this.requester.request("PATCH", at3(id), { metadata });
+  async markSeat(id, seat) {
+    const done = await rewriteVia(this.requester, id, (now) => ({ metadata: withNotes(now.metadata, { seat }) }));
+    if (!done)
+      throw new Error("There's no such conversation.");
   }
   async setInstruction(id, key, text) {
     await this.requester.request("PUT", `/api/experimental/session/${encodeURIComponent(id)}/instructions/entries/${encodeURIComponent(key)}`, { value: text });
@@ -23103,52 +23197,52 @@ class SeatAPI {
     await this.requester.request("DELETE", `/api/experimental/session/${encodeURIComponent(id)}/instructions/entries/${encodeURIComponent(key)}`);
   }
   async delete(id) {
-    await this.requester.request("DELETE", at3(id));
+    await this.requester.request("DELETE", at4(id));
   }
   async prompt(id, message, text, delivery) {
-    await this.requester.request("POST", at3(id) + "/prompt", { id: message, text, delivery });
+    await this.requester.request("POST", at4(id) + "/prompt", { id: message, text, delivery });
   }
   async interrupt(id) {
-    await this.requester.request("POST", at3(id) + "/interrupt");
+    await this.requester.request("POST", at4(id) + "/interrupt");
   }
   async selectModel(id, model) {
-    await this.requester.request("POST", at3(id) + "/model", { model });
+    await this.requester.request("POST", at4(id) + "/model", { model });
   }
   async selectAgent(id, agent) {
-    await this.requester.request("POST", at3(id) + "/agent", { agent });
+    await this.requester.request("POST", at4(id) + "/agent", { agent });
   }
   async setDelivery(id, item, delivery) {
-    await this.requester.request("PATCH", `${at3(id)}/inbox/${encodeURIComponent(item)}`, { delivery });
+    await this.requester.request("PATCH", `${at4(id)}/inbox/${encodeURIComponent(item)}`, { delivery });
   }
   async cancelInbox(id, item) {
-    await this.requester.request("DELETE", `${at3(id)}/inbox/${encodeURIComponent(item)}`);
+    await this.requester.request("DELETE", `${at4(id)}/inbox/${encodeURIComponent(item)}`);
   }
   async inbox(id) {
-    return (await this.requester.request("GET", at3(id) + "/inbox"))?.data ?? [];
+    return (await this.requester.request("GET", at4(id) + "/inbox"))?.data ?? [];
   }
   async messages(id, limit, cursor) {
     const query = cursor ? `limit=${limit}&cursor=${encodeURIComponent(cursor)}` : `limit=${limit}&order=desc`;
-    const answer = await this.requester.request("GET", `${at3(id)}/message?${query}`);
+    const answer = await this.requester.request("GET", `${at4(id)}/message?${query}`);
     const data = Array.isArray(answer?.data) ? [...answer.data].reverse() : [];
     return { data, cursor: answer?.cursor?.next ?? answer?.cursor?.previous };
   }
   async permissions(id) {
-    return (await this.requester.request("GET", at3(id) + "/permission"))?.data ?? [];
+    return (await this.requester.request("GET", at4(id) + "/permission"))?.data ?? [];
   }
   async reject(id, permission, message) {
-    await this.requester.request("POST", `${at3(id)}/permission/${encodeURIComponent(permission)}/reply`, { decision: "reject", message });
+    await this.requester.request("POST", `${at4(id)}/permission/${encodeURIComponent(permission)}/reply`, { decision: "reject", message });
   }
   async forms(id) {
-    return (await this.requester.request("GET", at3(id) + "/form"))?.data ?? [];
+    return (await this.requester.request("GET", at4(id) + "/form"))?.data ?? [];
   }
   async dismiss(id, form, message) {
-    await this.requester.request("DELETE", `${at3(id)}/form/${encodeURIComponent(form)}?message=${encodeURIComponent(message)}`);
+    await this.requester.request("DELETE", `${at4(id)}/form/${encodeURIComponent(form)}?message=${encodeURIComponent(message)}`);
   }
   async sharedForms(directory) {
-    return (await this.requester.request("GET", at3(sharedSession) + "/form", undefined, undefined, directory))?.data ?? [];
+    return (await this.requester.request("GET", at4(sharedSession) + "/form", undefined, undefined, directory))?.data ?? [];
   }
   async dismissShared(form, directory) {
-    await this.requester.request("DELETE", `${at3(sharedSession)}/form/${encodeURIComponent(form)}`, undefined, undefined, directory);
+    await this.requester.request("DELETE", `${at4(sharedSession)}/form/${encodeURIComponent(form)}`, undefined, undefined, directory);
   }
 }
 
@@ -23198,7 +23292,7 @@ function locked(lock, work, { stale = 1e4, wait = 3000 } = {}) {
       } catch {}
   }
 }
-var turns = new Map;
+var turns2 = new Map;
 
 // Packages/Box/src/shared/queues.ts
 var queueFiles = (run) => ({
@@ -23400,7 +23494,7 @@ class Seats {
     const metadata = { kuvo: { seat: { group: chat.id, bot: bot.id, ...scratch ? { scratch: true } : {} } } };
     const session = await api.create(bot.directory, title, agent, model, this.rules(bot), metadata);
     try {
-      await api.setMetadata(session.id, metadata);
+      await api.markSeat(session.id, metadata.kuvo.seat);
       await api.setInstruction(session.id, seatKey, text);
     } catch (error) {
       await api.delete(session.id).catch(() => {});
@@ -27446,4 +27540,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents d60871a78df9dd31a517b9d4c846e8fc7424e32080d17d66f823b6f46b2cf54e
+// Built from Packages/Box/src/agents d9046ccd730042c0b1d17897c30ee01000816761449c87ac8b5067d14b517802

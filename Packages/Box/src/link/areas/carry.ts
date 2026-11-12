@@ -4,10 +4,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { isObject, parsed } from "../../shared/json";
 import type { Body, Fields } from "../../shared/json";
+import { withNotes } from "../../shared/session-notes";
 import { botHere, isModel, isMoving, MOVING } from "../bots/here";
 import { readKit, runsWithAgents } from "../bots/kit";
 import { tellBot, toldNow } from "../bots/tell";
 import { call, engineGet } from "../engine/client";
+import { rewriteOn } from "../engine/notes";
 import { carryQueue, queueOf, resumeQueue } from "../engine/queue";
 import { beginCarry, endCarry, isSessionID } from "../engine/carrying";
 import { conversationOf } from "../engine/conversations";
@@ -202,7 +204,7 @@ export async function carryToAgents(id: string, model: unknown, readEngine: () =
     // drops what an import carries; then its rules made for what its approval comes to with the
     // coding agents, which may be less than where it was.)
     await tellWorktree(agents, moved).catch(() => {});
-    await call(agents, "PATCH", `/api/session/${encodeURIComponent(moved)}`, { metadata: marks }).catch(() => {});
+    await rewriteOn(agents, moved, now => ({ metadata: withNotes(now.metadata, marks.kuvo) })).catch(() => {});
     // Its project's other folders, as a session started there is told of them.
     const folders = directory ? readProjects().find(each => each.directory === projectOfFolder(directory))?.folders ?? [] : [];
     if (directory && folders.length) {
@@ -227,18 +229,17 @@ export async function carryToAgents(id: string, model: unknown, readEngine: () =
       }
       kept = true;
     } else {
-      // Carried on meanwhile by another of this box's processes (a client's `box route` beside a
-      // phone's): that one stands, and this one's goes.
-      const now = (await engineGet(engine, route).catch(() => null) as EngineAnswer<EngineSession> | null)?.data;
-      if (now?.metadata?.["kuvo.carriedTo"]) {
-        await call(agents, "DELETE", `/api/session/${encodeURIComponent(moved)}`).catch(() => {});
-        made = null;
-        return no(409, "It’s with the coding agents already.");
-      }
       // Archived, and marked as carried on, so it isn't carried twice: it's the new one's from here.
-      // (One the engine took without saying so is taken; one it may have taken stays unsure.)
+      // In its turn (`../engine/notes.ts`), so of two of this box's processes carrying it at once
+      // (a client's `box route` beside a phone's), the one that marks it first stands, and the
+      // other's goes. (One the engine took without saying so is taken; one it may have taken stays
+      // unsure.)
+      let elsewhere = false;
       try {
-        await call(engine, "PATCH", `/${route}`, { metadata: { ...(session.metadata ?? {}), "kuvo.archived": true, "kuvo.carriedTo": moved } }, AbortSignal.timeout(COMMIT_TIMEOUT));
+        await rewriteOn(engine, id, now => {
+          elsewhere = Boolean(now.metadata?.["kuvo.carriedTo"]) && now.metadata?.["kuvo.carriedTo"] !== moved;
+          return elsewhere ? null : { metadata: withNotes(now.metadata, null, { "kuvo.archived": true, "kuvo.carriedTo": moved }) };
+        }, AbortSignal.timeout(COMMIT_TIMEOUT));
       } catch (error) {
         const now = (await engineGet(engine, route).catch(() => undefined) as EngineAnswer<EngineSession> | null | undefined);
         if (now === undefined) {
@@ -246,6 +247,11 @@ export async function carryToAgents(id: string, model: unknown, readEngine: () =
           throw new Error(`The engine stopped answering as it was archived here, so it may be with the coding agents already. Look in the list before trying again.`);
         }
         if (now?.data?.metadata?.["kuvo.carriedTo"] !== moved) throw error;
+      }
+      if (elsewhere) {
+        await call(agents, "DELETE", `/api/session/${encodeURIComponent(moved)}`).catch(() => {});
+        made = null;
+        return no(409, "It’s with the coding agents already.");
       }
       kept = true;
     }

@@ -5,10 +5,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { isObject } from "../../shared/json";
 import type { Fields } from "../../shared/json";
+import { withNotes } from "../../shared/session-notes";
 import { newID, plainName, stamp } from "../../shared/text";
 import { settleAgain } from "../areas/approval";
 import { boxProjects } from "../areas/projects";
 import { call } from "../engine/client";
+import { rewriteOn } from "../engine/notes";
 import { BOTS, HERE, IS_MAC } from "../home";
 import { botPersonalities } from "../personalities/library";
 import { BOT_STEP, botLook, botModel, DESCRIPTION, isModel, noteBotsChanged } from "./here";
@@ -174,10 +176,12 @@ async function makeOnce(given: GivenBot | null | undefined, readEngine: () => Ta
     // computer's default, as any new conversation's), its rules made for what that comes to here
     // (Auto asks first where the sandbox doesn't run).
     const kept = approvalOf({ permissions: rules }, { agents, bot: true });
-    await call(target, "PATCH", `/api/session/${encodeURIComponent(session.id)}`, {
-      metadata: { kuvo: { bot: id, approval: kept.approval, applied: kept.effective } },
+    // (In its turn, onto its notes as they are then.)
+    const marked = await rewriteOn(target, session.id, now => ({
+      metadata: withNotes(now.metadata, { bot: id, approval: kept.approval, applied: kept.effective }),
       permissions: approvalRules(kept.effective, rules),
-    }, AbortSignal.timeout(BOT_STEP));
+    }), AbortSignal.timeout(BOT_STEP));
+    if (!marked) throw new Error("The conversation it made went.");
     const told = botInstructions(kit, name, folder, personality?.instruction, project as string | undefined);
     await call(target, "PUT", `/api/experimental/session/${encodeURIComponent(session.id)}/instructions/entries/kuvo.bot`, { value: told }, AbortSignal.timeout(BOT_STEP));
     fs.writeFileSync(path.join(folder, "session"), session.id);
