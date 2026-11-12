@@ -596,8 +596,19 @@ import Testing
         #expect(try start() == 0)
         usleep(300_000)
         #expect(keeper == nil, "not started again from its crontab")
+    }
+
+    /// One its Mac removed (marked off) starts again once a Mac starts it there: off no longer.
+    @Test func aMacsStartTakesOffAway() throws {
+        defer { cleanUp() }
+        try write(run.appending(path: "off"), "")
+        #expect(try start() == 0)
+        usleep(300_000)
+        #expect(keeper == nil, "off: its start after a restart starts nothing")
         #expect(try macLaunch() == 0)
         #expect(!FileManager.default.fileExists(atPath: run.appending(path: "off").path), "a Mac's start: off no longer")
+        until { keeper != nil }
+        #expect(keeper != nil, "its keeper keeps it again")
     }
 
     /// A Stop while a start is under way waits for it, then stops what it started, for good: the
