@@ -634,6 +634,29 @@ test("a hand-off to a computer that's no longer one of yours comes back after a 
   assert.equal((await view("all")).items.some(item => item.id === coming), false);
 });
 
+test("what happened to an item goes with it to another computer, as its notes do, and comes in with one handed here", async () => {
+  write(path.join(queues, "numbers.json"), { primary: mac.pub, leases: [[100, 149]] });
+  await tool("queue_add", { title: "Port the importer", working: true }, "ses_lead");
+  await route("POST", "kuvo/work-queue/items/100/move", { category: "later", top: true });
+  const events = (await route("GET", "kuvo/work-queue/items/100")).body.item.events;
+  assert.deepEqual(events.map(event => [event.kind, event.by]), [["started", { session: "ses_lead", name: "Lead" }], ["moved", { user: true }]]);
+  assert.equal((await tool("queue_hand", { item: "#100", to: "ses_far" }, "ses_lead")).isError, false);
+  await link.pushQueues(host, link.readLink(), targets, Date.now());
+  const hand = mailTo(lab).map(each => each.workQueue).find(each => each.hand)?.hand;
+  assert.deepEqual(hand.item.events, events, "it goes whole");
+  receive(lab, { workQueue: { handed: { id: hand.id, ok: true } } });
+
+  // One handed here keeps what happened to it there, who and when.
+  const far = [{ at: 1500, by: { session: "ses_farlead", name: "Far lead" }, kind: "started" }, { at: 1600, by: { user: true }, kind: "moved", from: "next", to: "later" }];
+  const item = told(701, "ses_farlead", { id: "wqi_handedfromlab0000003", body: "", notes: [], files: [], links: [], handed: [], events: far });
+  await takeFrom(lab, { hand: { id: "wqh_fromlab00000003", to: "ses_child", from: "ses_farlead", by: { session: "ses_farlead", name: "Far lead" }, at: Date.now(), item, files: [] } });
+  assert.equal(mailTo(lab)[0].workQueue.handed.ok, true);
+  assert.deepEqual((await route("GET", "kuvo/work-queue/items/701")).body.item.events, far);
+  // One handed here from an older box has none.
+  await takeFrom(lab, { hand: { id: "wqh_fromlab00000004", to: "ses_child", from: "ses_farlead", by: { session: "ses_farlead", name: "Far lead" }, at: Date.now(), item: told(702, "ses_farlead", { id: "wqi_handedfromlab0000004", body: "", notes: [], files: [], links: [], handed: [] }), files: [] } });
+  assert.deepEqual((await route("GET", "kuvo/work-queue/items/702")).body.item.events, []);
+});
+
 test("an item handed here without a number takes one as it arrives", async () => {
   write(path.join(queues, "numbers.json"), { primary: mac.pub, leases: [[100, 149]] });
   const { number: _, ...item } = told(1, "ses_farlead", { id: "wqi_handedwithoutnumber1", body: "", notes: [], files: [], links: [], handed: [] });

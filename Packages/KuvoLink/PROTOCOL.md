@@ -3531,9 +3531,24 @@ kind: mac|machine, id?}`: the computer it's on, when that isn't the box asked, a
 it; `id`, a machine's name on this Mac, for a client to reach it), `created` and `updated` (`{at,
 by}`: `by` is `{user: true}`, `{session, name}`, or another shape kept as it came, such as an outside
 tracker's `{source, name?}`: a client shows its `name`, never takes it for you), `doneAt`, `removed`
-(`{at, by}`, deleted). Whole, it has `body` (Markdown), `notes` (`[{at, by, text}]`), `files`
-(`[{name, size, type, at}]`), `links` (`[{url, title?, kind?, ref?}]`) and `handed` (`[{from, to,
-at}]`, the last 20).
+(`{at, by}`, deleted). Whole, it has `body` (Markdown), `notes` (`[{at, by, text}]`), `events`
+(below), `files` (`[{name, size, type, at}]`), `links` (`[{url, title?, kind?, ref?}]`) and
+`handed` (`[{from, to, at}]`, the last 20).
+
+**What happened to it** (`events`, for its feed): `[{at, by, kind, from?, to?, top?}]`, oldest
+first, the last 50, kept with the item and going with it wherever it goes (a hand-off to another
+computer, a move), as its notes do. `by` is who did it, as for `created`. `started`: a session's
+agent said it's working on it (`working: true`), when it wasn't already at it (linked, and its last
+word `started`); `stopped`: it said it stopped (`working: false`) while linked. `moved`: you or an
+agent moved it to another category, or to another place in its own (`from` and `to`, category ids,
+the same for a reorder; `top` when it went to the top), and a move that leaves it where it was
+isn't one; one's reorders in one category within 10 minutes of each other, nothing else between,
+are one `moved`. `done`: moved to Done (a move out of Done is `moved`). A hand-off is in `handed`,
+not here; Done and a delete unlinking everyone say no `stopped`. A newer box may keep other kinds:
+a box keeps them as they came, a client leaves them out. An item from before this has none
+(`[]`), and keeps what happens from then on. A client puts `notes` and `events` (with `created`,
+`handed`, `doneAt` where no `done` was kept, and `removed`) in one feed, oldest first; at one
+moment, `started` before a note, and a note before the rest.
 
 **In progress** isn't a category: an item is in progress while a session linked to it is at work
 (its turn running, or what it left running), unless it's Done or deleted. A session is linked to
@@ -3569,7 +3584,7 @@ before (a linked item is its owner's to change). A client shows them first, as "
 - `GET kuvo/work-queue/items/<id or number>` → `{item}`, whole (an issue's `gh:` ref names it too,
   but its "/" can't go in a path through every client: a client asks by the `id` its chip has). `…/files/<name>` → its bytes. An
   item on another computer answers as that one told it, with `computer` and an empty `body`,
-  `notes`, `files`, `links` and `handed`: a client reads it whole, and its files, from that computer
+  `notes`, `events`, `files`, `links` and `handed`: a client reads it whole, and its files, from that computer
   (a machine by `computer.id`; a Mac, its own box).
 - `GET kuvo/work-queue/refs?refs=243,12`, or `POST kuvo/work-queue/refs {refs: [...],
   conversation?}` (a list, so a ref with a comma in it, an outside one later, goes whole;

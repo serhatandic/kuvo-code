@@ -13,7 +13,7 @@ import { callerOf, isCalling } from "../vault/who";
 import { addCategory, categories, categoryNamed } from "./categories";
 import { importItems, importWords, givenItems } from "./import";
 import { numberWaiting, primaryOf } from "./numbers";
-import { addItem, applyFileOps, changeItem, handItem, linkSession, linkSource, Refusal, refuseHanding, refuseMoving, removeItem, restoreItem, stageFiles, type Acting, type Fields, type FilePlaces } from "./ops";
+import { addItem, applyFileOps, changeItem, handItem, linkSession, linkSource, Refusal, refuseHanding, refuseMoving, removeItem, restoreItem, stageFiles, startWork, stopWork, type Acting, type Fields, type FilePlaces } from "./ops";
 import { allItems, byUser, changeQueues, matching, MOST_BODY, whoWords, type Book, type Item, type Who } from "./store";
 import { canonicalOf, readIssue, seenOf, sourceOf, withSeen, type IssueRead } from "./github";
 import { issueAt, refText, sourceKey, sourceKeyOf, type IssueAt } from "./sources";
@@ -256,7 +256,7 @@ async function run(name: string, args: Record<string, unknown>, caller: QueueCal
         if (issue) refuseTaken(book.items(), issue.at, caller, overseen, undefined, issue.read.id);
         const made = addItem(book, caller.owner, fields as Fields, acting, primaryOf(), issue ? sourceOf(issue.at, issue.read) : undefined);
         if (issue) made.body = issue.body.slice(0, MOST_BODY);
-        if (args.working === true && !caller.seat) linkSession(book, made, caller.session, now);
+        if (args.working === true && !caller.seat) startWork(book, made, caller.session, acting);
         applyFileOps(acting);
         return made;
       }));
@@ -293,10 +293,10 @@ async function run(name: string, args: Record<string, unknown>, caller: QueueCal
         changeItem(book, item, args as Fields, acting);
         const named = (value: unknown) => (Array.isArray(value) ? value : value === undefined ? [] : [value]).map(String).filter(each => /^ses_[A-Za-z0-9]{1,60}$/.test(each));
         if (item.category !== "done") {
-          if (args.working === true && !caller.seat) linkSession(book, item, caller.session, now);
+          if (args.working === true && !caller.seat) startWork(book, item, caller.session, acting);
           for (const session of named(args.sessions)) linkSession(book, item, session, now);
         }
-        if (args.working === false) item.sessions = item.sessions.filter(each => each.session !== caller.session);
+        if (args.working === false) stopWork(item, caller.session, acting);
         const unlinked = new Set(named(args.unlink));
         item.sessions = item.sessions.filter(each => !unlinked.has(each.session));
         applyFileOps(acting);

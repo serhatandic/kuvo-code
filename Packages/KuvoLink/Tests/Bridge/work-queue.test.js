@@ -334,6 +334,104 @@ test("you reorder and move items between categories, never change what they say"
   assert.equal((await route("GET", "kuvo/work-queue/items/2")).body.item.title, "B");
 });
 
+test("an item keeps what happened to it for its feed: work started and stopped, moves, done; who did each, and when", async () => {
+  const lead = { session: "ses_lead", name: "Lead" };
+  const before = Date.now();
+  await tool("queue_add", { title: "Write the tests", working: true }, "ses_lead");
+  await tool("queue_add", { title: "Other" }, "ses_lead");
+  const whole = async () => (await route("GET", "kuvo/work-queue/items/1")).body.item;
+  const kinds = async () => (await whole()).events.map(({ at: _, ...event }) => event);
+  assert.deepEqual(await kinds(), [{ by: lead, kind: "started" }], "an agent that says it's working on it started work");
+  // Said again while it's at it: once.
+  await tool("queue_update", { item: 1, working: true, progress_note: "Halfway" }, "ses_lead");
+  assert.deepEqual(await kinds(), [{ by: lead, kind: "started" }]);
+  // You move it: to the top of another category, and within one.
+  await route("POST", "kuvo/work-queue/items/1/move", { category: "later", top: true });
+  await route("POST", "kuvo/work-queue/items/2/move", { category: "later" });
+  await route("POST", "kuvo/work-queue/items/1/move", { after: 2 });
+  // An agent moves it back, top first.
+  await tool("queue_update", { item: 1, category: "next", top: true }, "ses_lead");
+  await tool("queue_update", { item: 1, working: false }, "ses_lead");
+  // Stopped again when it isn't on it: nothing.
+  await tool("queue_update", { item: 1, working: false }, "ses_lead");
+  await tool("queue_update", { item: 1, category: "done" }, "ses_lead");
+  assert.deepEqual(await kinds(), [
+    { by: lead, kind: "started" },
+    { by: { user: true }, kind: "moved", from: "next", to: "later", top: true },
+    { by: { user: true }, kind: "moved", from: "later", to: "later" },
+    { by: lead, kind: "moved", from: "later", to: "next", top: true },
+    { by: lead, kind: "stopped" },
+    { by: lead, kind: "done" },
+  ]);
+  const events = (await whole()).events;
+  assert.ok(events.every(event => event.at >= before && event.at <= Date.now()), "when");
+  assert.deepEqual(events.map(event => event.at), [...events.map(event => event.at)].sort((a, b) => a - b), "oldest first");
+  // You mark one done too; a move out of Done is a move.
+  await route("POST", "kuvo/work-queue/items/2/move", { category: "done" });
+  await route("POST", "kuvo/work-queue/items/2/move", { category: "next" });
+  assert.deepEqual((await route("GET", "kuvo/work-queue/items/2")).body.item.events.map(({ at: _, ...event }) => event), [
+    { by: { user: true }, kind: "moved", from: "next", to: "later" },
+    { by: { user: true }, kind: "done" },
+    { by: { user: true }, kind: "moved", from: "done", to: "next" },
+  ]);
+  // Back to work on it once it's unlinked (Done unlinks everyone): started again.
+  await route("POST", "kuvo/work-queue/items/1/move", { category: "next" });
+  await tool("queue_update", { item: 1, working: true }, "ses_lead");
+  assert.equal((await whole()).events.at(-1).kind, "started");
+  // Kept on the box with the item.
+  const kept = JSON.parse(fs.readFileSync(path.join(queues, "queues", "ses_lead.json"), "utf8")).items.find(item => item.number === 1);
+  assert.deepEqual(kept.events, (await whole()).events);
+});
+
+test("you reordering one item again and again is one move in its feed; another's move between isn't folded in", async () => {
+  for (const title of ["A", "B", "C"]) await tool("queue_add", { title }, "ses_lead");
+  await route("POST", "kuvo/work-queue/items/1/move", { after: 2 });
+  await route("POST", "kuvo/work-queue/items/1/move", { after: 3 });
+  await route("POST", "kuvo/work-queue/items/1/move", { top: true });
+  const events = async () => (await route("GET", "kuvo/work-queue/items/1")).body.item.events.map(({ at: _, ...event }) => event);
+  assert.deepEqual(await events(), [{ by: { user: true }, kind: "moved", from: "next", to: "next", top: true }]);
+  await tool("queue_update", { item: 1, after: 2 }, "ses_lead");
+  await route("POST", "kuvo/work-queue/items/1/move", { after: 3 });
+  assert.deepEqual(await events(), [
+    { by: { user: true }, kind: "moved", from: "next", to: "next", top: true },
+    { by: { session: "ses_lead", name: "Lead" }, kind: "moved", from: "next", to: "next" },
+    { by: { user: true }, kind: "moved", from: "next", to: "next" },
+  ]);
+  // A move to another category is never folded into a reorder.
+  await route("POST", "kuvo/work-queue/items/1/move", { category: "later" });
+  assert.equal((await events()).length, 4);
+});
+
+test("an item keeps the last 50 of what happened to it", async () => {
+  await tool("queue_add", { title: "Busy" }, "ses_lead");
+  const file = path.join(queues, "queues", "ses_lead.json");
+  const kept = JSON.parse(fs.readFileSync(file, "utf8"));
+  // (Older ones a box kept with a higher bound, or a newer box's kinds, as they came.)
+  kept.items[0].events = Array.from({ length: 70 }, (_, index) => ({ at: index + 1, by: { user: true }, kind: index % 2 ? "seen-upstream" : "moved", from: "next", to: "next" }));
+  fs.writeFileSync(file, JSON.stringify(kept));
+  assert.equal((await route("GET", "kuvo/work-queue/items/1")).body.item.events.length, 50, "read: the last 50");
+  await tool("queue_update", { item: 1, working: true }, "ses_lead");
+  const events = (await route("GET", "kuvo/work-queue/items/1")).body.item.events;
+  assert.equal(events.length, 50);
+  assert.equal(events[0].at, 22, "the oldest go first");
+  assert.equal(events[48].kind, "seen-upstream", "a kind this box doesn't know is kept as it came");
+  assert.equal(events.at(-1).kind, "started");
+  assert.equal(JSON.parse(fs.readFileSync(file, "utf8")).items[0].events.length, 50);
+});
+
+test("an item from before the box kept its history has none, and keeps what happens from now on", async () => {
+  write(path.join(queues, "queues", "ses_lead.json"), JSON.stringify({ owner: "ses_lead", items: [{ id: "wqi_AAAAAAAAAAAAAAAAAAAB", number: 7, title: "Old", body: "", category: "next", order: 0, notes: [{ at: 5, by: { user: true }, text: "From before." }], files: [], links: [], sessions: [], created: { at: 1, by: { user: true } }, updated: { at: 5, by: { user: true } } }] }));
+  const old = (await route("GET", "kuvo/work-queue/items/7")).body.item;
+  assert.deepEqual(old.events, []);
+  assert.equal(old.notes[0].text, "From before.");
+  assert.equal((await view("ses_lead")).items[0].title, "Old");
+  // Written again by an unrelated change, it's as it was (nothing made up for it).
+  await tool("queue_update", { item: 7, note: "Picked up." }, "ses_lead");
+  assert.equal("events" in JSON.parse(fs.readFileSync(path.join(queues, "queues", "ses_lead.json"), "utf8")).items[0], false);
+  await route("POST", "kuvo/work-queue/items/7/move", { category: "parked" });
+  assert.deepEqual((await route("GET", "kuvo/work-queue/items/7")).body.item.events.map(event => event.kind), ["moved"]);
+});
+
 test("a view lists the categories in order, Done last, and each one's items by their place (as you and agents set it), not by number or when they were made", async () => {
   for (const title of ["A", "B", "C", "D"]) await tool("queue_add", { title }, "ses_lead");
   await tool("queue_categories", { add: "Design" }, "ses_lead");
@@ -1005,6 +1103,18 @@ test("a move carries its conversations' queues and their files, and the box it l
   // A conversation carried on as another takes its queue.
   link.carryWorkQueue("ses_scout", "ses_other");
   assert.deepEqual((await view("ses_other")).items.map(item => item.title), ["Carried"]);
+});
+
+test("what happened to an item goes with it when a move carries its queue", async () => {
+  await tool("queue_add", { title: "Carried", working: true }, "ses_scout");
+  await route("POST", "kuvo/work-queue/items/1/move", { category: "later" });
+  const before = (await route("GET", "kuvo/work-queue/items/1")).body.item.events;
+  assert.deepEqual(before.map(event => event.kind), ["started", "moved"]);
+  const carried = JSON.parse(JSON.stringify(link.packWorkQueues(["ses_scout"])));
+  link.forgetWorkQueues(["ses_scout"]);
+  assert.equal((await route("GET", "kuvo/work-queue/items/1")).status, 404);
+  link.placeWorkQueues(carried, ["ses_scout"], null);
+  assert.deepEqual((await route("GET", "kuvo/work-queue/items/1")).body.item.events, before);
 });
 
 test("a client follows a queue: a line now, and one when it changes (another process's change too) or a linked session starts work", async () => {

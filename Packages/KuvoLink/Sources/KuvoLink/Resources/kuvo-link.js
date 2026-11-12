@@ -11504,6 +11504,7 @@ var MOST_NOTES = 200;
 var MOST_FILE = 25000000;
 var MOST_FILES = 50;
 var MOST_LINKS = 50;
+var MOST_EVENTS = 50;
 var MOST_HANDED = 20;
 var whoWords = (who) => {
   const given = who;
@@ -11528,7 +11529,7 @@ var whoOf = (given) => {
   return Object.keys(kept).length ? kept : null;
 };
 var FILE_NAME = /^(?!\.\.?$)[^/\\\0]{1,200}$/;
-var KNOWN2 = new Set(["id", "number", "owner", "title", "body", "category", "order", "progress", "notes", "files", "links", "sessions", "handed", "handedBy", "wanted", "importedAs", "backGranted", "stays", "source", "handing", "created", "updated", "doneAt", "removed"]);
+var KNOWN2 = new Set(["id", "number", "owner", "title", "body", "category", "order", "progress", "notes", "events", "files", "links", "sessions", "handed", "handedBy", "wanted", "importedAs", "backGranted", "stays", "source", "handing", "created", "updated", "doneAt", "removed"]);
 var handingOf = (given) => {
   if (!isObject(given) || typeof given.id !== "string" || !/^wqh_[A-Za-z0-9_-]{8,40}$/.test(given.id) || typeof given.to !== "string" || !OWNER2.test(given.to) || typeof given.key !== "string" || typeof given.at !== "number")
     return null;
@@ -11552,6 +11553,7 @@ function itemOf(given, owner) {
     order: typeof given.order === "number" && Number.isFinite(given.order) ? given.order : 0,
     ...isObject(given.progress) ? { progress: { ...typeof given.progress.value === "number" ? { value: given.progress.value } : {}, ...typeof given.progress.note === "string" ? { note: given.progress.note } : {} } } : {},
     notes: list(given.notes, (each) => typeof each.at === "number" && typeof each.text === "string" && whoOf(each.by) !== null),
+    ...Array.isArray(given.events) ? { events: list(given.events, (each) => typeof each.at === "number" && typeof each.kind === "string" && whoOf(each.by) !== null).slice(-MOST_EVENTS) } : {},
     files: list(given.files, (each) => typeof each.name === "string" && FILE_NAME.test(each.name) && typeof each.size === "number"),
     links: list(given.links, (each) => typeof each.url === "string"),
     sessions: list(given.sessions, (each) => typeof each.session === "string" && SESSION2.test(each.session)),
@@ -19725,7 +19727,7 @@ function summaryOf(item, working, titles) {
   });
 }
 function wholeOf(item, working, titles) {
-  return { ...summaryOf(item, working, titles), body: item.body, notes: item.notes, files: item.files, links: item.links, handed: item.handed ?? [] };
+  return { ...summaryOf(item, working, titles), body: item.body, notes: item.notes, events: item.events ?? [], files: item.files, links: item.links, handed: item.handed ?? [] };
 }
 async function ownersOf(owner, items, facts, targets, cache) {
   const keys = new Set([...owner === "all" ? [] : [owner], ...items.map((item) => item.owner), ...items.flatMap((item) => item.handedBy ? [item.handedBy] : [])]);
@@ -19918,6 +19920,32 @@ function linkSession2(book, item, session, now) {
   }
   item.sessions.push({ session, since: now });
 }
+var FOLD_REORDERS = 10 * 60000;
+function noteEvent(item, event) {
+  const events = [...item.events ?? []];
+  const last = events.at(-1);
+  const reorder = (each) => each.kind === "moved" && each.from === each.to;
+  if (last && reorder(last) && reorder(event) && last.to === event.to && JSON.stringify(last.by) === JSON.stringify(event.by) && event.at - last.at < FOLD_REORDERS) {
+    const { top: _, ...folded } = last;
+    events[events.length - 1] = { ...folded, at: event.at, ...event.top ? { top: true } : {} };
+  } else {
+    events.push(event);
+  }
+  item.events = events.slice(-MOST_EVENTS);
+}
+var startedLast = (item, session) => [...item.events ?? []].reverse().find((each) => (each.kind === "started" || each.kind === "stopped") && each.by.session === session)?.kind === "started";
+function startWork(book, item, session, { who, now }) {
+  const linked = item.sessions.some((each) => each.session === session);
+  linkSession2(book, item, session, now);
+  if (!linked || !startedLast(item, session))
+    noteEvent(item, { at: now, by: who, kind: "started" });
+}
+function stopWork2(item, session, { who, now }) {
+  if (!item.sessions.some((each) => each.session === session))
+    return;
+  item.sessions = item.sessions.filter((each) => each.session !== session);
+  noteEvent(item, { at: now, by: who, kind: "stopped" });
+}
 function applyFileOps(acting) {
   for (const op of acting.fileOps.splice(0))
     op();
@@ -19961,6 +19989,8 @@ function addItem2(book, owner, fields, acting, primary, source) {
 var refuseDone = (name) => refuse(`${name} is Done once it's closed on GitHub (or, a pull request, merged): close it there, or let the pull request that fixes it close it.`);
 function changeItem2(book, item, fields, acting) {
   const { who, now } = acting;
+  const placeNow = () => ({ category: item.category, index: book.items().filter((each) => each.id !== item.id && !each.removed && each.category === item.category && each.order < item.order).length });
+  const was = placeNow();
   if (fields.title !== undefined) {
     const title = plainName(text2(fields.title, MOST_TITLE * 4, "The title")).slice(0, MOST_TITLE);
     if (!title)
@@ -20002,6 +20032,13 @@ function changeItem2(book, item, fields, acting) {
     item.order = placeBeside(book.items(), beside(fields.after), true, item);
   else if (fields.top === true && fields.category === undefined)
     item.order = placeIn(book.items().filter((each) => each.id !== item.id), item.category, { top: true });
+  const placed = placeNow();
+  if (placed.category !== was.category && placed.category === "done")
+    noteEvent(item, { at: now, by: who, kind: "done" });
+  else if (placed.category !== was.category || placed.index !== was.index) {
+    const top = placed.index === 0 && (fields.top === true || fields.before !== undefined || fields.after !== undefined);
+    noteEvent(item, { at: now, by: who, kind: "moved", from: was.category, to: placed.category, ...top ? { top: true } : {} });
+  }
   if (fields.progress !== undefined) {
     if (fields.progress === null) {
       if (item.progress)
@@ -37123,7 +37160,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "6a88312aeade";
+var BRIDGE_VERSION = "2f63f02245ee";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
@@ -39836,7 +39873,7 @@ async function run3(name, args, caller, targets, signal) {
         if (issue)
           made.body = issue.body.slice(0, MOST_BODY);
         if (args.working === true && !caller.seat)
-          linkSession2(book, made, caller.session, now);
+          startWork(book, made, caller.session, acting);
         applyFileOps(acting);
         return made;
       }));
@@ -39874,12 +39911,12 @@ async function run3(name, args, caller, targets, signal) {
         const named = (value) => (Array.isArray(value) ? value : value === undefined ? [] : [value]).map(String).filter((each) => /^ses_[A-Za-z0-9]{1,60}$/.test(each));
         if (item.category !== "done") {
           if (args.working === true && !caller.seat)
-            linkSession2(book, item, caller.session, now);
+            startWork(book, item, caller.session, acting);
           for (const session of named(args.sessions))
             linkSession2(book, item, session, now);
         }
         if (args.working === false)
-          item.sessions = item.sessions.filter((each) => each.session !== caller.session);
+          stopWork2(item, caller.session, acting);
         const unlinked = new Set(named(args.unlink));
         item.sessions = item.sessions.filter((each) => !unlinked.has(each.session));
         applyFileOps(acting);
@@ -40313,7 +40350,7 @@ async function* workQueueRoute(context, match) {
         await readSeen([itemElsewhere(ref, readLink(), { asTold: true }) ?? far], GITHUB_WAIT);
         far = itemElsewhere({ id: far.id }) ?? far;
         const { handedFrom: _, ...summary } = far;
-        return yield* json(200, { item: { ...summary, body: "", notes: [], files: [], links: [], handed: [] } });
+        return yield* json(200, { item: { ...summary, body: "", notes: [], events: [], files: [], links: [], handed: [] } });
       }
       return yield* json(404, { message: "There's no such item." });
     }
