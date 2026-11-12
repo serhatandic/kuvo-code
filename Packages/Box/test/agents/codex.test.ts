@@ -14,6 +14,7 @@ import { Auto } from "../../src/agents/auto"
 import { watchFolder } from "../../src/shared/watch"
 import { canFence, realFence } from "./support/fence"
 import { callServer, computerServers, KEYS } from "./support/servers"
+import { forgetServers } from "../../src/agents/servers"
 import { subagentEngine } from "./support/subagents"
 import { fencePolicy } from "../../src/link/fence/policy"
 import type { Roster } from "../../src/agents/roster"
@@ -1679,6 +1680,29 @@ describe("Codex and the computer's MCP servers", () => {
       for (const key of Object.values(KEYS)) expect(text).not.toContain(key)
       expect(await callServer({ url: given.files.url, headers: given.files.http_headers })).toBe(`key:${KEYS.shared}`)
       expect(await callServer({ url: given.tracker.url, headers: given.tracker.http_headers })).toBe(`auth:Bearer ${KEYS.tracker},key:none,at:/tracker`)
+    } finally {
+      servers.stop()
+    }
+  })
+
+  test("one whose sign-in is turned down (taken back) still connects, its call saying to sign in again; signed in again, the thread's next message is given it afresh, and it reaches it", async () => {
+    const servers = computerServers(root)
+    servers.refusing = "start"
+    await servers.serve()
+    try {
+      const id = await run([["item/completed", { item: { type: "agentMessage", id: "m1", text: "Done." } }]])
+      const tracker = (config: Record<string, any>) => ({ url: config["mcp_servers.tracker"].url as string, headers: config["mcp_servers.tracker"].http_headers as Record<string, string> })
+      const first = tracker(sent().find((message) => message.method === "thread/start").params.config)
+      expect(await callServer(first)).toMatch(/^The tracker server turned down its sign-in.*sign in to it again in Kuvo Code \(Settings › Integrations/)
+      servers.signedInAgain = true
+      forgetServers()
+      sessions.prompt(id, { id: "msg_codex_test_141", text: "again", files: [], delivery: "steer" })
+      await until(() => sessions.messages(id).filter((message) => message.type === "idle").length === 2)
+      const resumed = sent().filter((message) => message.method === "thread/resume")
+      expect(resumed).toHaveLength(1)
+      const again = tracker(resumed[0].params.config)
+      expect(again.url).not.toBe(first.url)
+      expect(await callServer(again)).toBe(`auth:Bearer ${KEYS.again},key:none,at:/tracker`)
     } finally {
       servers.stop()
     }

@@ -22,6 +22,7 @@ import { canFence, realFence } from "./support/fence"
 import { computerServers, KEYS, SERVER_COMMAND } from "./support/servers"
 import { subagentEngine } from "./support/subagents"
 import { forgetServers } from "../../src/agents/servers"
+import { relayTiming } from "../../src/agents/toolrelay"
 import { noteAgentsInside } from "../../src/agents/fence"
 import type { PermissionRule } from "../../src/agents/wire"
 
@@ -68,6 +69,9 @@ interface Script {
   fails?: string
   /** What it says again as a session is loaded, before it answers (Grok's replay of what it said before). */
   replays?: [string, any][]
+  /** As Antigravity does, it starts every MCP server it's given as it makes or loads its session,
+   * and gives up the whole session (with Antigravity's words) when one of them doesn't start. */
+  startsServers?: boolean
 }
 
 /**
@@ -114,6 +118,37 @@ if (${JSON.stringify(Boolean(script.readsItsFolder || script.fails))}) {
   }
 }
 let servers = []
+const startsServers = ${JSON.stringify(Boolean(script.startsServers))}
+/** Why one of \`list\` didn't start, as Antigravity says it; none if they all did. */
+async function startAll(list) {
+  for (const server of list) {
+    if (server.type !== "http") continue
+    const headers = { ...Object.fromEntries(server.headers.map((each) => [each.name, each.value])), "Content-Type": "application/json", Accept: "application/json, text/event-stream" }
+    let why
+    try {
+      const started = await fetch(server.url, { method: "POST", headers, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "agent", version: "1" } } }) })
+      // (A stream read up to its first event, as MCP's clients do: a server may keep it open.)
+      const first = async () => {
+        if (!(started.headers.get("content-type") ?? "").includes("text/event-stream")) return started.json()
+        const reader = started.body.getReader()
+        let text = ""
+        while (!text.includes("\\n\\n")) {
+          const next = await reader.read()
+          if (next.done) break
+          text += new TextDecoder().decode(next.value)
+        }
+        reader.cancel()
+        return JSON.parse(text.split("\\n").find((line) => line.startsWith("data:")).slice(5))
+      }
+      const answer = started.ok ? await first().catch(() => null) : null
+      if (!started.ok) why = started.status === 401 ? "Unauthorized" : "HTTP " + started.status
+      else if (!answer || answer.error) why = answer?.error?.message ?? "no answer"
+    } catch (error) {
+      why = String(error)
+    }
+    if (why) return "The MCP server '" + server.name + "' failed to initialize: calling 'initialize': sending 'initialize': " + why + ". Fix the MCP server, or remove it from your configuration and start a new session, to continue."
+  }
+}
 async function attempt(how, place, through) {
   if (how === "env") return process.env[place] ?? "none"
   if (how === "arg") return process.argv.includes(place) ? "yes" : "no"
@@ -143,6 +178,7 @@ async function attempt(how, place, through) {
       const headers = { ...Object.fromEntries(server.headers.map((each) => [each.name, each.value])), "Content-Type": "application/json", Accept: "application/json, text/event-stream" }
       const started = await fetch(server.url, { method: "POST", headers, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "agent", version: "1" } } }) })
       if (!started.ok) return "no"
+      await started.body?.cancel()
       const session = started.headers.get("mcp-session-id")
       const response = await fetch(server.url, { method: "POST", headers: { ...headers, ...(session ? { "mcp-session-id": session } : {}) }, body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: tool, arguments: tool === "env" ? { name: argument } : { path: argument } } }) })
       if (!response.ok) return "no"
@@ -177,7 +213,11 @@ process.stdin.on("data", (chunk) => {
     log(message)
     if (refuses.some((refused) => refused.method === message.method && Object.entries(refused.params ?? {}).every(([key, value]) => message.params?.[key] === value))) send({ id: message.id, error: { code: -32603, message: "Refused." } })
     else if (message.method === "initialize") send({ id: message.id, result: { protocolVersion: 1, authMethods: [], agentCapabilities: { loadSession: true, mcpCapabilities: { http: true } } } })
-    else if (message.method === "session/new" || message.method === "session/load") {
+    else if ((message.method === "session/new" || message.method === "session/load") && startsServers) {
+      servers = message.params?.mcpServers ?? []
+      const id = message.id
+      void startAll(servers).then((failed) => send(failed ? { id, error: { code: -32603, message: failed } } : { id, result: setup }))
+    } else if (message.method === "session/new" || message.method === "session/load") {
       servers = message.params?.mcpServers ?? []
       if (message.method === "session/load") for (const [sessionId, value] of replays) update(sessionId, value)
       send({ id: message.id, result: setup })
@@ -1142,6 +1182,216 @@ describe.skipIf(!canFence)("The computer's MCP servers, for an ACP agent in the 
     send(id, "again")
     await settled(id, 2)
     expect(words(id)).toBe(`files=key:${KEYS.shared}files=key:${KEYS.bot}`)
+  })
+
+  /** What puts the relay's timing back after a test that changed it. */
+  const afterChecks: (() => void)[] = []
+  afterEach(() => {
+    for (const undo of afterChecks.splice(0)) undo()
+  })
+
+  /** One like Antigravity, which gives up its whole session when one server it's given doesn't start. */
+  const startingAll = (tries: Record<string, [string, string]>) => new TestGrok(program(fakeAcp([], [], undefined, { tries, startsServers: true }), join(root, "grok")), root)
+  const given = () => received().filter((message) => message.method === "session/new" || message.method === "session/load").map((message) => message.params.mcpServers as any[])
+
+  test("one whose sign-in is turned down (taken back) doesn't stop the turn: the agent goes on with the rest, is told to have you sign in again, and the engine finds it needs signing in", async () => {
+    servers.refusing = "start"
+    const id = await run(startingAll(everyKind))
+    expect(ended(id)).toMatchObject({ type: "idle", outcome: "succeeded" })
+    const said = words(id)
+    expect(said).toContain(`files=key:${KEYS.shared} notes=auth:none,key:${KEYS.notes},at:/notes`)
+    expect(said).toMatch(/tracker=The tracker server turned down its sign-in.*sign in to it again in Kuvo Code \(Settings › Integrations/)
+    // The engine connected it again, so Settings › Integrations says it needs signing in.
+    expect(servers.connects).toBeGreaterThan(0)
+    // Signed in again: the next message reaches it, the agent given it afresh.
+    servers.signedInAgain = true
+    forgetServers()
+    send(id, "again")
+    await settled(id, 2)
+    expect(words(id).slice(said.length)).toContain(`tracker=auth:Bearer ${KEYS.again},key:none,at:/tracker`)
+    // (Started again: given it as it started.)
+    expect(given().length).toBeGreaterThan(1)
+  })
+
+  test("one that turns down its sign-in partway, at a call, answers it as the tool's error saying to sign in again, rather than failing the agent's connection", async () => {
+    servers.refusing = "calls"
+    const id = await run(startingAll({ tracker: ["server", "tracker"], notes: ["server", "notes"] }))
+    expect(ended(id)).toMatchObject({ type: "idle", outcome: "succeeded" })
+    expect(words(id)).toMatch(/^tracker=The tracker server turned down its sign-in.* notes=auth:none/)
+    expect(servers.connects).toBeGreaterThan(0)
+  })
+
+  test("however many calls a server turns down, the engine is asked to connect it again only once for each sign-in", async () => {
+    servers.refusing = "calls"
+    const id = await run(startingAll({ first: ["server", "tracker"], second: ["server", "tracker"], third: ["server", "tracker"] }))
+    expect(words(id)).toMatch(/^first=The tracker server turned down its sign-in.* second=The tracker server turned down its sign-in.* third=The tracker server/)
+    // (Once: for the conversation's folder and the engine's own.)
+    expect(servers.connects).toBe(2)
+  })
+
+  test("one that can't be reached as the agent starts, or a command's server that turns down starting, doesn't stop the turn: the agent goes on with the rest", async () => {
+    servers.notesDown = "start"
+    servers.filesEnvironment = { REFUSES_TO_START: "1" }
+    forgetServers()
+    const id = await run(startingAll({ notes: ["server", "notes"], files: ["server", "files"], tracker: ["server", "tracker"] }))
+    expect(ended(id)).toMatchObject({ type: "idle", outcome: "succeeded" })
+    expect(words(id)).toBe(`notes=The notes server couldn't be reached (HTTP 500), so its tools aren't available for now. files=The files server couldn't start: Its settings are wrong. tracker=auth:Bearer ${KEYS.tracker},key:none,at:/tracker`)
+  })
+
+  test("one that turns down what's asked (403) doesn't stop the turn either, says so without asking you to sign in again, and the engine isn't asked to connect it again", async () => {
+    servers.refusing = "start"
+    servers.refusingWith = 403
+    const id = await run(startingAll({ tracker: ["server", "tracker"], notes: ["server", "notes"] }))
+    expect(ended(id)).toMatchObject({ type: "idle", outcome: "succeeded" })
+    expect(words(id)).toBe(`tracker=The tracker server turned this down (HTTP 403): its sign-in or key may not be allowed to do it. notes=auth:none,key:${KEYS.notes},at:/notes`)
+    expect(servers.connects).toBe(0)
+  })
+
+  test("one that goes down partway: its tool's call says so, as the tool's error", async () => {
+    servers.notesDown = "calls"
+    const id = await run(startingAll({ notes: ["server", "notes"], tracker: ["server", "tracker"] }))
+    expect(words(id)).toBe(`notes=The notes server couldn't be reached (HTTP 500), so its tools aren't available for now. tracker=auth:Bearer ${KEYS.tracker},key:none,at:/tracker`)
+  })
+
+  for (const [how, said] of [
+    ["error", "The notes server couldn't start (Its workspace is gone.)"],
+    ["redirect", "The notes server couldn't be reached (HTTP 302: it sent elsewhere, perhaps to sign in)"],
+    ["elsewhere", "The notes server couldn't be reached (HTTP 307: it sent elsewhere, perhaps to sign in)"],
+    ["hangs", "The notes server couldn't be reached (no answer)"],
+  ] as const) {
+    test(`one that doesn't start though it answers (${{ error: "an error for its start", redirect: "it sends you to a sign-in page", elsewhere: "it sends you to another site", hangs: "nothing, in time" }[how]}) doesn't stop the turn`, async () => {
+      servers.notesStart = how
+      const timing = { ...relayTiming }
+      relayTiming.starts = relayTiming.check = 300
+      try {
+        const id = await run(startingAll({ notes: ["server", "notes"], files: ["server", "files"] }))
+        expect(ended(id)).toMatchObject({ type: "idle", outcome: "succeeded" })
+        expect(words(id)).toBe(`notes=${said}, so its tools aren't available for now. files=key:${KEYS.shared}`)
+      } finally {
+        Object.assign(relayTiming, timing)
+      }
+    })
+  }
+
+  for (const [how, what] of [["moved", "at its address with a slash (a 307 there)"], ["stream", "as a stream it keeps open after"]] as const) {
+    test(`one that starts in its own way (${what}) is reached`, async () => {
+      servers.notesStart = how
+      const id = await run(startingAll({ notes: ["server", "notes"] }))
+      expect(words(id)).toBe(`notes=auth:none,key:${KEYS.notes},at:/notes`)
+    })
+  }
+
+  test("one still not answering at the next message doesn't hold the message up: it's checked on meanwhile", async () => {
+    servers.notesDown = "start"
+    // (The agent tries nothing itself at its prompts: only its start reaches the server.)
+    const id = await run(startingAll({}))
+    expect(ended(id)).toMatchObject({ type: "idle", outcome: "succeeded" })
+    // Now it hangs: the next message goes on long before the check would end (a minute).
+    servers.notesDown = false
+    servers.notesStart = "hangs"
+    const timing = { ...relayTiming }
+    relayTiming.starts = 60_000
+    relayTiming.check = 100
+    relayTiming.checkEvery = 0
+    try {
+      send(id, "again")
+      await settled(id, 2)
+      expect(ended(id)).toMatchObject({ type: "idle", outcome: "succeeded" })
+    } finally {
+      Object.assign(relayTiming, timing)
+    }
+  })
+
+  test("one that couldn't be reached as the agent started is given to it afresh at the next message once it answers again", async () => {
+    // (Checked at each message, not a few minutes on.)
+    const timing = { ...relayTiming }
+    relayTiming.checkEvery = 0
+    afterChecks.push(() => Object.assign(relayTiming, timing))
+    servers.notesDown = "start"
+    const id = await run(startingAll({ notes: ["server", "notes"] }))
+    expect(words(id)).toStartWith("notes=The notes server couldn't be reached (HTTP 500)")
+    // Still down: the agent goes on as it is (not started again for it).
+    send(id, "again")
+    await settled(id, 2)
+    expect(given()).toHaveLength(1)
+    servers.notesDown = false
+    send(id, "and again")
+    await settled(id, 3)
+    expect(words(id)).toEndWith(`notes=auth:none,key:${KEYS.notes},at:/notes`)
+    // (Started again: given it as it started.)
+    expect(given().length).toBeGreaterThan(1)
+  })
+
+  test("one connected for real that then turns down its sign-in: its lists say why as an error, not as if it had no tools, and its stream is none; calls at once ask the engine only once", async () => {
+    servers.noExpiry = true
+    await run(startingAll({}))
+    const tracker = given()[0]!.find((server) => server.name === "tracker")
+    const headers = { ...Object.fromEntries(tracker.headers.map((each: any) => [each.name, each.value])), "Content-Type": "application/json", Accept: "application/json, text/event-stream" }
+    const started = await fetch(tracker.url, { method: "POST", headers, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "agent", version: "1" } } }) })
+    expect(started.status).toBe(200)
+    const session = { ...headers, "mcp-session-id": started.headers.get("mcp-session-id")! }
+    servers.refusing = "start"
+    const asked = (id: number, method: string) => fetch(tracker.url, { method: "POST", headers: session, body: JSON.stringify({ jsonrpc: "2.0", id, method, params: method === "tools/call" ? { name: "reveal", arguments: {} } : {} }) }).then((response) => response.json() as any)
+    const [list, ...calls] = await Promise.all([asked(2, "tools/list"), asked(3, "tools/call"), asked(4, "tools/call"), asked(5, "tools/call")])
+    expect(list.error.message).toStartWith("The tracker server turned down its sign-in")
+    for (const call of calls) expect(call.result).toMatchObject({ isError: true, content: [{ type: "text", text: expect.stringContaining("sign in to it again") }] })
+    // (Once: for the conversation's folder and the engine's own.)
+    expect(servers.connects).toBe(2)
+    const stream = await fetch(tracker.url, { method: "GET", headers: { ...session, Accept: "text/event-stream" } })
+    expect(stream.status).toBe(405)
+  })
+
+  test("a command's server that won't start isn't started again at the next messages (it's checked a few minutes on), and what it started of its own stops with it", async () => {
+    const starts = join(root, "starts.log")
+    const child = join(root, "child.pid")
+    servers.filesEnvironment = { REFUSES_TO_START: "1", START_LOG: starts, CHILD_PID_FILE: child }
+    forgetServers()
+    // (The agent tries nothing itself at its prompts: only its start reaches the server.)
+    const id = await run(startingAll({}))
+    expect(ended(id)).toMatchObject({ type: "idle", outcome: "succeeded" })
+    send(id, "again")
+    await settled(id, 2)
+    send(id, "and again")
+    await settled(id, 3)
+    expect(readFileSync(starts, "utf8")).toBe("start\n")
+    const pid = Number(readFileSync(child, "utf8"))
+    await until(() => {
+      try {
+        process.kill(pid, 0)
+        return false
+      } catch {
+        return true
+      }
+    })
+  })
+
+  test("a command's server that doesn't answer its start in time doesn't stop the turn", async () => {
+    servers.filesEnvironment = { HANGS_AT_START: "1" }
+    forgetServers()
+    const timing = { ...relayTiming }
+    relayTiming.commandStarts = 300
+    afterChecks.push(() => Object.assign(relayTiming, timing))
+    const id = await run(startingAll({ files: ["server", "files"], notes: ["server", "notes"] }))
+    expect(ended(id)).toMatchObject({ type: "idle", outcome: "succeeded" })
+    expect(words(id)).toBe(`files=The files server couldn't start: The files server took too long. notes=auth:none,key:${KEYS.notes},at:/notes`)
+  })
+
+  test("your sign-in renewed for a server that's down doesn't start the agent again: it's still down", async () => {
+    servers.trackerDown = true
+    const id = await run(startingAll({}))
+    servers.signedInAgain = true
+    forgetServers()
+    send(id, "again")
+    await settled(id, 2)
+    expect(given()).toHaveLength(1)
+  })
+
+  test("a command's server that can't start (its program isn't installed) doesn't stop the turn: the agent goes on with the rest, told why", async () => {
+    servers.filesCommand = "kuvo-test-not-installed"
+    forgetServers()
+    const id = await run(startingAll({ files: ["server", "files"], notes: ["server", "notes"] }))
+    expect(ended(id)).toMatchObject({ type: "idle", outcome: "succeeded" })
+    expect(words(id)).toMatch(/^files=The files server can't start: kuvo-test-not-installed isn't installed here.* notes=auth:none/)
   })
 
   test("a call that doesn't carry the conversation's key to the bridge reaches none of them", async () => {
