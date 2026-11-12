@@ -4,6 +4,7 @@ import ClientText
 import Foundation
 import KuvoLink
 import OpenCodeKit
+import Observation
 import Testing
 import Textual
 @testable import KuvoCode
@@ -34,6 +35,24 @@ import Textual
         #expect(store.refs(in: "see #1", box: BoxClient.mac, owner: "ses_other").isEmpty)
         #expect(store.refs(in: "#1 #2", box: BoxClient.mac, owner: "ses_ours", typing: true).keys.sorted() == ["1"])
         #expect(store.refs(in: "the #1 Google result", box: BoxClient.mac, owner: "ses_ours").isEmpty)
+    }
+
+    @Test func unrelatedQueueUpdatesDoNotInvalidateNumericChips() throws {
+        let store = app.workQueues
+        let item = try JSONDecoder().decode(WorkItem.self, from: JSONSerialization.data(withJSONObject: Self.item(243, "Ours", order: 0)))
+        let key = WorkQueues.Key(box: "lab", owner: "ses_ours")
+        store.standIn(WorkQueueView(owner: key.owner, items: [item]), for: key)
+        @MainActor final class Changes { var called = false }
+        let changes = Changes()
+        withObservationTracking {
+            #expect(store.refs(in: "to #243", box: key.box, owner: key.owner)["243"] != nil)
+        } onChange: { MainActor.assumeIsolated { changes.called = true } }
+        store.standIn(WorkQueueView(owner: "ses_other"), for: .init(box: key.box, owner: "ses_other"))
+        #expect(!changes.called)
+        store.standIn(WorkQueueView(owner: key.owner), for: key)
+        #expect(changes.called)
+        app.openWorkItem("243", box: key.box)
+        #expect(store.opened[app.utilities.panelKey]?.box == "lab")
     }
 
     /// The box, as this Mac's app reaches it (as you, not an agent).

@@ -82,7 +82,7 @@ struct WorkItemPage: View {
             missing = loaded == nil
             if let loaded { pictures = await keepPictures(loaded) }
         }
-        .workChipContext(item?.owner.map { WorkQueues.Key(box: opened.box, owner: $0) })
+        .workChipContext(item.map { WorkQueues.Key(box: opened.box, owner: $0.owner) })
         .onDisappear { removePictures() }
     }
 
