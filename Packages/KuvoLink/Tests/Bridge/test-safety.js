@@ -357,10 +357,19 @@ function refuseStart(program, env) {
 }
 // (A program given BUN_BE_BUN is the engine run as Bun. But a run on the engine, `BUN_BE_BUN=1
 // <engine> test` as on a machine, hands that to everything it starts, git and the shell too: there it
-// says nothing of a program, and only the run's own runtime, by its file, is Bun.)
-const runsOnEngine = Boolean(process.env.BUN_BE_BUN);
-const runner = (() => { try { return fs.realpathSync(process.execPath); } catch { return process.execPath; } })();
-const isRunner = at => { try { return Boolean(at) && fs.realpathSync(String(at)) === runner; } catch { return false; } };
+// says nothing of a program, and only the run's own runtime is Bun, by its file: through a link, a
+// hard link or a copy. One that's given BUN_BE_BUN anew isn't told from one that has it from the run.)
+const runsOnEngine = Boolean(process.versions.bun && process.env.BUN_BE_BUN);
+const runner = (() => { try { return fs.statSync(process.execPath); } catch { return undefined; } })();
+const isRunner = at => {
+  if (!at || !runner) return false;
+  try {
+    const stat = fs.statSync(String(at));
+    return (stat.dev === runner.dev && stat.ino === runner.ino) || (stat.isFile() && stat.size === runner.size);
+  } catch {
+    return false;
+  }
+};
 const runtimeOf = (program, at, env) => /^(bun|node)(-[a-z]+)?$/.test(path.basename(String(at ?? program))) || String(at ?? program) === process.execPath || isRunner(at) || (Boolean(env?.BUN_BE_BUN) && !runsOnEngine);
 
 // What a test starts (the bridge, a box) finds programs on the PATH it's handed, outside this guard:
