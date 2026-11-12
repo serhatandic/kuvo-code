@@ -771,13 +771,18 @@ public final class RemoteServer: @unchecked Sendable {
 
     /// The engine running on the machine, if there is one, or whether it's stopped on purpose;
     /// and the box's keeper made sure of (a machine set up by an older version gets it here).
+    /// This Mac's own box (`SSHConnection.thisMac`) is only read: its keeper is its own (launchd's),
+    /// never one the app starts, which would run as Kuvo Code's, and its Mac says whether it's off.
     public static func find(on connection: SSHConnection) async throws -> Found {
-        let text = try await connection.run("""
-            K="$HOME/\(RemoteEngineInstaller.root)"; R="\(run)"
-            \(RemoteProcess.check)
+        let keep = connection.isLocal ? "" : """
             # A Mac that has it among its machines: no longer off (a removal before, cut short), if it was.
             rm -f "$R/off"
             [ -f "$K/bin/kuvo-start" ] && sh "$K/bin/kuvo-start" box >/dev/null 2>&1
+            """
+        let text = try await connection.run("""
+            K="$HOME/\(RemoteEngineInstaller.root)"; R="\(run)"
+            \(RemoteProcess.check)
+            \(keep)
             pid=$(sed -n 's/^{"pid":\\([0-9]*\\),.*/\\1/p' "$R/engine.json" 2>/dev/null)
             if kuvo_runs "$pid" opencode; then
               cat "$R/engine.json"

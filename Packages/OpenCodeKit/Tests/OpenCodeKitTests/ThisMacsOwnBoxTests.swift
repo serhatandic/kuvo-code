@@ -80,6 +80,23 @@ import Testing
         #expect(SSHConnection(destination: "mac.example").invocation(running: "true").executable == "/usr/bin/ssh")
     }
 
+    /// Looking for its engine only reads: its keeper is launchd's, never one the app would start (it
+    /// would run as Kuvo Code's), and whether it's off is its Mac's to say.
+    @Test func lookingForItsEngineStartsNothing() async throws {
+        try await withHome { home in
+            try await RemoteEngineInstaller.$scopedRoot.withValue(".kuvo-code-test") {
+                let box = home.appending(path: ".kuvo-code-test")
+                try FileManager.default.createDirectory(at: box.appending(path: "bin"), withIntermediateDirectories: true)
+                try FileManager.default.createDirectory(at: box.appending(path: "run"), withIntermediateDirectories: true)
+                try "touch \"$HOME/started\"\n".write(to: box.appending(path: "bin/kuvo-start"), atomically: true, encoding: .utf8)
+                try Data().write(to: box.appending(path: "run/off"))
+                #expect(try await RemoteServer.find(on: connection) == .none)
+                #expect(!FileManager.default.fileExists(atPath: home.appending(path: "started").path), "its keeper isn't started from here")
+                #expect(FileManager.default.fileExists(atPath: box.appending(path: "run/off").path))
+            }
+        }
+    }
+
     /// Its engine is reached at its own port on this Mac, with nothing in between.
     @Test func itsEngineIsReachedAtItsOwnPort() async throws {
         let engine = try Engine.answering()

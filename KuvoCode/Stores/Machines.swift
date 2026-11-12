@@ -554,36 +554,41 @@ final class MachineEngine {
                 // what's there runs as it is, and nothing of this app's goes over it.
                 boxIsNewer = BoxVersion.isNewer(try await BoxVersion.read(on: connection))
                 try check()
+                // This Mac's own box, attached in place, is used as it is too: the Mac that set it up
+                // keeps it, and nothing the app would start there (its engine, its keeper) ever runs
+                // as Kuvo Code's, under its privacy permissions, rather than as the box's own.
+                let asItIs = boxIsNewer || machine.isThisMac
                 // COMPAT(0.7 files): `run/mac-installing` while this app puts its files there. Goes 3 months after 0.8.0.
                 // What follows puts this app's files there: the box doesn't take them for an older Mac's.
-                if !boxIsNewer { try? await BoxVersion.installing(on: connection) }
+                if !asItIs { try? await BoxVersion.installing(on: connection) }
                 try check()
                 // The box's own tool and keeper first, which what follows counts on.
-                try await RemoteServer.installBoot(on: connection)
+                if !machine.isThisMac { try await RemoteServer.installBoot(on: connection) }
                 try check()
                 var found = try await RemoteServer.find(on: connection)
                 try check()
                 let starting = startWanted
                 // COMPAT(0.7 engine-stop): an engine an older Mac stopped stays down until Start. Goes 3 months after 0.8.0.
                 if found == .stopped, !starting {
-                    if !boxIsNewer { try? await BoxVersion.notInstalling(on: connection) }
+                    if !asItIs { try? await BoxVersion.notInstalling(on: connection) }
                     return nil
                 }
                 isStopped = false
-                // A newer box's engine isn't running: its own keeper starts the one it has.
-                if boxIsNewer, found.engine == nil {
+                // A newer box's engine isn't running: its own keeper starts the one it has. (This
+                // Mac's own box's keeper was seen running as the app attached.)
+                if asItIs, found.engine == nil {
                     // COMPAT(0.7 engine-stop): a newer box found stopped is started. Goes 3 months after 0.8.0.
-                    if found == .stopped { try await RemoteServer.startEngine(on: connection) }
+                    if found == .stopped, !machine.isThisMac { try await RemoteServer.startEngine(on: connection) }
                     for _ in 0..<15 where found.engine == nil {
                         try await Task.sleep(for: .seconds(2))
                         try check()
                         found = try await RemoteServer.find(on: connection)
                     }
-                    guard found.engine != nil else { throw NewerBox() }
+                    guard found.engine != nil else { throw machine.isThisMac ? OwnBoxDown() : NewerBox() }
                 }
                 var engine = found.engine
                 let isNewer = engine.map { $0.version.compare(OpenCodeEngine.version, options: .numeric) == .orderedDescending } ?? false
-                var updates = !boxIsNewer && engine?.version != OpenCodeEngine.version && !(isNewer && engine.map(isAnotherMacs) == true)
+                var updates = !asItIs && engine?.version != OpenCodeEngine.version && !(isNewer && engine.map(isAnotherMacs) == true)
                 // An engine of another version still at work (a session left running when the app
                 // quit or updated): kept, with its work, until a connection finds it with none.
                 var busy: RemoteServer?
@@ -622,7 +627,7 @@ final class MachineEngine {
                 step = .starting
                 // Its own settings, a box of its own: made so once (from what it runs with, or this
                 // Mac's on one with none), then read, for what its engine starts with.
-                try await MachineBox.install(on: connection)
+                if !machine.isThisMac { try await MachineBox.install(on: connection) }
                 try check()
                 var launch = launch
                 // COMPAT(0.7 settings): the settings an older Mac's start left, made the box's own. Goes 3 months after 0.8.0.
@@ -632,9 +637,11 @@ final class MachineEngine {
                 if box.seeded { seededNow = true }
                 try check()
                 // The browser tools' helper, and the agents bridge, which an engine starts with.
-                try await MachineBrowserInstaller.installHelper(launch.helper, on: connection)
-                try check()
-                if let agents = launch.agents { try await Self.installAgents(agents, on: connection) }
+                if !machine.isThisMac {
+                    try await MachineBrowserInstaller.installHelper(launch.helper, on: connection)
+                    try check()
+                    if let agents = launch.agents { try await Self.installAgents(agents, on: connection) }
+                }
                 try check()
                 let running: RemoteServer.Engine
                 // One of another version is replaced in the same start, so its keeper starts no other.
@@ -648,7 +655,7 @@ final class MachineEngine {
                 // COMPAT(0.7 engine-stop): an older Mac's engine started over once nothing runs. Goes 3 months after 0.8.0.
                 // Taken from another Mac (Make This Mac Its Home): this Mac's from now on.
                 let takes = takingHome && isAnotherMacs(server.engine)
-                if !boxIsNewer, takes || isOlderMacs(server.engine) || server.engine.notes["settings"] != launch.fingerprint && !isAnotherMacs(server.engine), (try? await api.activeSessions())?.isEmpty == true {
+                if !asItIs, takes || isOlderMacs(server.engine) || server.engine.notes["settings"] != launch.fingerprint && !isAnotherMacs(server.engine), (try? await api.activeSessions())?.isEmpty == true {
                     takingHome = false
                     // Started with older settings (or an older Mac's), and nothing to interrupt: start it over.
                     try check()
@@ -663,7 +670,7 @@ final class MachineEngine {
                 try check()
                 // COMPAT(0.7 files): the marks of this app's tools, for `bin/.own`. Goes 3 months after 0.8.0.
                 // What this app put there runs: the box is this version's.
-                if !boxIsNewer {
+                if !asItIs {
                     var marks = ["kuvo-browser.js": "// kuvo-browser \(launch.helper.hash)"]
                     if let agents = launch.agents { marks["kuvo-agents.js"] = "// kuvo-agents \(agents.hash)" }
                     try? await BoxVersion.mark(on: connection, marks: marks)
@@ -832,6 +839,12 @@ final class MachineEngine {
     #endif
 
     /// A newer box whose engine didn't come up by itself: this app won't start an older one there.
+    /// This Mac's own box, attached in place, isn't running its engine: its keeper starts it, never
+    /// the app.
+    struct OwnBoxDown: LocalizedError {
+        var errorDescription: String? { "This Mac’s box isn’t running its engine. It starts again on its own; try again in a moment." }
+    }
+
     struct NewerBox: LocalizedError {
         var errorDescription: String? { "This machine has a newer Kuvo Code than this Mac, and its engine didn't start. Update Kuvo Code on this Mac to start it from here." }
     }
