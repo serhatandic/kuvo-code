@@ -69,7 +69,7 @@ const KEEP_GIT = String.raw`# (Read-only in two steps, a bind and then its remou
 # path. Each noted, and all checked once kept, below.)
 keep() {
   [ ! -L "$1" ] || fail "$1 is a link, which it can't keep as it is. Ask the user."
-  [ -e "$1" ] || return 0
+  [ -e "$1" ] || return 1
   if [ -d "$1" ]; then ( cd -P "$1" 2>/dev/null && [ "$(pwd -P)" = "$1" ] && mount -c --bind . . 2>/dev/null )
   else mount -c --bind "$1" "$1" 2>/dev/null; fi && printf 'rw %s\n' "$1" >>"$k_kept" || fail "$1 can't be kept from it."
   [ "$2" != ro ] || ro "$1"
@@ -78,13 +78,16 @@ keep() {
 # ".", util-linux before 2.39 finds none, and Linux refuses it. One a link swapped in leads elsewhere
 # is found below.)
 ro() { [ ! -L "$1" ] && mount -c -o remount,bind,ro "$1" 2>/dev/null && printf 'ro %s\n' "$1" >>"$k_kept" || fail "$1 can't be kept from it."; }
+# (One that was there and isn't as it's kept, one a command still running moved away for a moment,
+# runs nothing.)
+must() { keep "$@" || fail "$1 changed as it started. Run it again, or ask the user."; }
 # (Each submodule's work tree's .git file, which its kept settings name: read-only.)
 tree_file() {
   local t
   t=$(sed -n 's/^[[:space:]]*worktree[[:space:]]*=[[:space:]]*//p' "$1/config" 2>/dev/null | head -n 1)
   [ -n "$t" ] || return 0
   t=$(cd "$1" 2>/dev/null && cd -P "$t" 2>/dev/null && pwd -P) && [ -f "$t/.git" ] && [ ! -L "$t/.git" ] || return 0
-  keep "$t/.git" ro
+  must "$t/.git" ro
 }
 # Where a commondir leads, as git reads it: one line, with no NUL or carriage return (which the shell
 # and git would read differently), from its folder. (A worktree's own as git writes it, first: one
@@ -101,18 +104,19 @@ empty() { for k_x in "$1"/* "$1"/.[!.]* "$1"/..?*; do [ -e "$k_x" ] || [ -L "$k_
 repo() {
   local r e f k_lacks
   r=$1
-  keep "$r"
+  must "$r"
   # (Each a link refuses: one a command could trade for its own, or that leads where commands are
-  # kept from.)
-  for f in config config.worktree commondir gitdir hooks; do keep "$r/$f" ro; done
-  # (One that still lacks what the launcher gives it: every check all the same, then read-only whole
-  # but for what's kept on its own in it, which are checked as ever, so none of those can be made.)
+  # kept from. One that still lacks what the launcher gives it, or isn't there as it's kept: every
+  # check all the same, then its folder read-only but for what's kept on its own in it, which are
+  # checked as ever, so none of those can be made. A main repository's own gitdir git doesn't read.)
   k_lacks=
-  for f in commondir hooks config.worktree modules worktrees; do [ -e "$r/$f" ] || [ -L "$r/$f" ] || k_lacks=1; done
+  for f in config config.worktree commondir hooks; do keep "$r/$f" ro || k_lacks=1; done
+  keep "$r/gitdir" ro || :
+  for f in modules worktrees; do [ -e "$r/$f" ] || [ -L "$r/$f" ] || k_lacks=1; done
   [ ! -e "$r/commondir" ] || [ "$(leads "$r" commondir "$r")" = "$r" ] || fail "$r/commondir leads git to another repository. Ask the user."
-  if [ -e "$r/worktrees" ] || [ -L "$r/worktrees" ]; then
-    keep "$r/worktrees"
-    for e in "$r/worktrees"/* "$r/worktrees"/.[!.]* "$r/worktrees"/..?*; do [ ! -L "$e" ] || keep "$e"; [ ! -d "$e" ] || keep "$e"; done
+  if { [ -e "$r/worktrees" ] || [ -L "$r/worktrees" ]; } && { keep "$r/worktrees" || { k_lacks=1; false; }; }; then
+    # (One gone as it's kept is read-only within worktrees.)
+    for e in "$r/worktrees"/* "$r/worktrees"/.[!.]* "$r/worktrees"/..?*; do [ ! -L "$e" ] || keep "$e"; [ ! -d "$e" ] || keep "$e" || :; done
     ro "$r/worktrees"
     # (Another's, many at once: each its own few mounts, side by side.)
     k_failed=$own/failed
@@ -123,7 +127,7 @@ repo() {
 $e
 "*) continue ;; esac
       ( if [ ! -e "$e/config.worktree" ] || [ ! -e "$e/modules" ] || [ "$(leads "$e" commondir "$r")" != "$r" ]; then ro "$e"
-        else for f in commondir gitdir config.worktree modules; do keep "$e/$f" ro; done; fi ) </dev/null || : >"$k_failed" &
+        else for f in commondir gitdir config.worktree modules; do keep "$e/$f" ro || { ro "$e"; break; }; done; fi ) </dev/null || : >"$k_failed" &
     done
     wait
     [ ! -e "$k_failed" ] || exit 126
@@ -134,7 +138,7 @@ $e
 "*) [ -d "$e" ] || continue ;; *) continue ;; esac
       [ -e "$e/config.worktree" ] && [ -e "$e/modules" ] || fail "$e lacks config.worktree or modules, which it can't keep from being made. Ask the user."
       [ "$(leads "$e" commondir "$r")" = "$r" ] || fail "$e/commondir doesn't lead git back to its repository. Ask the user."
-      for f in commondir gitdir config.worktree; do keep "$e/$f" ro; done
+      for f in commondir gitdir config.worktree; do must "$e/$f" ro; done
       mods "$e/modules"
     done
   fi
@@ -145,8 +149,8 @@ mods() {
   local m k_found k_done h d k_in p
   m=$1
   [ -e "$m" ] || [ -L "$m" ] || return 0
-  if [ ! -L "$m" ] && [ -d "$m" ] && empty "$m"; then keep "$m" ro; return 0; fi
-  keep "$m"
+  if [ ! -L "$m" ] && [ -d "$m" ] && empty "$m"; then must "$m" ro; return 0; fi
+  must "$m"
   [ -z "$(find "$m" \( -name objects -o -name refs -o -name logs -o -name lfs -o -name rr-cache -o -name hooks -o -name info \) -prune -o -name '*
 *' -print 2>/dev/null | head -c 1)" ] || fail "$m holds a name it can't keep. Ask the user."
   k_found=$(find "$m" \( -name objects -o -name refs -o -name logs -o -name lfs -o -name rr-cache -o -name hooks -o -name info \) -prune -o -name HEAD -type f -print 2>/dev/null | awk -F / '{ print NF "\t" $0 }' | LC_ALL=C sort -n | cut -f 2-)
@@ -167,12 +171,15 @@ $k_found
 EOF_FOUND
   ro "$m"
 }
-# The .git file that leads a folder to its repository (a worktree's), up from it: kept read-only, and
-# the worktree's own folder it names is the conversation's (k_own, one a line); or the .git folder
-# found instead (k_dirs).
+# The .git file that leads a folder to its repository (a worktree's), up from it: kept read-only once
+# the repositories are (one of them could cover it otherwise), still leading where it led, and the
+# worktree's own folder it names is the conversation's (k_own, one a line); or the .git folder found
+# instead (k_dirs).
 k_own= k_dirs= k_files= k_plain=$own/commondir k_kept=$own/k/kept
-# (What's kept, noted in a folder of its own with room for a repository's thousands.)
-mkdir "$own/k" && mount -c -t tmpfs -o size=16m,mode=0700 kuvo-kept "$own/k" 2>/dev/null && : >"$k_kept" || fail "it isn't set up."
+# (What's kept, noted in a folder of its own with room for a repository's thousands; and the mounts
+# there were before, so each made since must be one of those.)
+mkdir "$own/k" && mount -c -t tmpfs -o size=16m,mode=0700 kuvo-kept "$own/k" 2>/dev/null && : >"$k_kept" && awk '{ print $1 }' /proc/self/mountinfo >"$own/k/before" || fail "it isn't set up."
+leads_to() { (cd "$1" 2>/dev/null && cd -P "$(sed -n 's/^gitdir: *//p' .git | head -n 1)" 2>/dev/null && pwd -P); }
 printf '../..\n' >"$k_plain" || fail "it isn't set up."
 gitfile() {
   local at
@@ -180,11 +187,12 @@ gitfile() {
   while [ -n "$at" ] && [ "$at" != / ]; do
     if [ -e "$at/.git" ] || [ -L "$at/.git" ]; then
       if [ -f "$at/.git" ] && [ ! -L "$at/.git" ]; then
-        keep "$at/.git" ro
-        k_files="$k_files
-$at/.git"
+        k_to=$(leads_to "$at")
+        k_files="$k_files$at/.git
+$k_to
+"
         k_own="$k_own
-$(cd "$at" && cd -P "$(sed -n 's/^gitdir: *//p' .git | head -n 1)" 2>/dev/null && pwd -P)"
+$k_to"
       elif as_is "$at/.git"; then k_dirs="$k_dirs
 $at/.git"
       fi
@@ -217,26 +225,38 @@ done <<EOF_REPOS
 $(case $git in /*.git) printf '%s\n' "$git" ;; esac)
 $k_dirs
 EOF_REPOS
-# (Those .git files again, read-only as they are, where a repository's folder kept since, one
-# they're in, covers what kept them.)
-while IFS= read -r k_at; do [ -z "$k_at" ] || keep "$k_at" ro; done <<EOF_FILES
+while IFS= read -r k_at && IFS= read -r k_to; do
+  [ -n "$k_at" ] || continue
+  must "$k_at" ro
+  [ "$(leads_to "$(dirname "$k_at")")" = "$k_to" ] || fail "$k_at changed as it started. Run it again, or ask the user."
+done <<EOF_FILES
 $k_files
 EOF_FILES
 # Each kept as noted, as the mount table has it now: the top mount at its path, of what's there in
-# what it's mounted on (its root there is that mount's own and the way to it, on the same device), and
-# read-only where it should be. One a link swapped in led elsewhere, or that's been moved since, isn't.
-[ ! -s "$k_kept" ] || { k_bad=$(awk '
+# what it's mounted on (its root there is that mount's own and the way to it, on the same device),
+# not covered by a folder mounted since above it, and read-only where it should be; and each mount made
+# since it started one of those, so a link swapped in can't have led one elsewhere.
+[ ! -s "$k_kept" ] || k_bad=$(awk '
 function plain(p) { gsub(/\\040/, " ", p); gsub(/\\011/, "\t", p); gsub(/\\012/, "\n", p); gsub(/\\134/, "\\", p); return p }
-FILENAME == ARGV[1] { want[++n] = $0; next }
-{ seen[$1] = 1; at[$1] = plain($5); root[$1] = plain($4); dev[$1] = $3; under[$1] = $2; how[$1] = $6; top[plain($5)] = $1 }
+function bad(p) { print (p == "" ? "a mount" : p); exit 1 }
+function from(m, p,   q, way) {
+  q = under[m]
+  if (!(q in seen) || dev[q] != dev[m]) return 0
+  if (p == at[q]) way = ""; else if (at[q] == "/") way = p; else if (substr(p, 1, length(at[q]) + 1) == at[q] "/") way = substr(p, length(at[q]) + 1); else return 0
+  return root[m] == (root[q] == "/" ? (way == "" ? "/" : way) : root[q] way)
+}
+FILENAME == ARGV[1] { old[$1] = 1; next }
+FILENAME == ARGV[2] { want[++n] = $0; noted[substr($0, 4)] = 1; next }
+{ seen[$1] = 1; at[$1] = plain($5); root[$1] = plain($4); dev[$1] = $3; under[$1] = $2; how[$1] = $6; top[plain($5)] = $1; on[$2, plain($5)] = 1; ids[++k] = $1 }
 END {
+  if (!k) bad("")
+  for (i = 1; i <= k; i++) { m = ids[i]; if (!(m in old) && (!(at[m] in noted) || !from(m, at[m]))) bad(at[m]) }
   for (i = 1; i <= n; i++) {
-    p = substr(want[i], 4); m = top[p]; q = under[m]
-    if (m == "" || !(q in seen) || dev[q] != dev[m]) { print p; exit }
-    if (p == at[q]) way = ""; else if (at[q] == "/") way = p; else if (substr(p, 1, length(at[q]) + 1) == at[q] "/") way = substr(p, length(at[q]) + 1); else { print p; exit }
-    if (root[m] != (root[q] == "/" ? (way == "" ? "/" : way) : root[q] way) || (substr(want[i], 1, 2) == "ro" && how[m] !~ /(^|,)ro(,|$)/)) { print p; exit }
+    p = substr(want[i], 4); m = top[p]
+    if (m == "" || !from(m, p) || (substr(want[i], 1, 2) == "ro" && how[m] !~ /(^|,)ro(,|$)/)) bad(p)
+    for (a = p; (j = match(a, /\/[^\/]*$/)) > 1; ) { a = substr(a, 1, j - 1); if ((under[m], a) in on) bad(p) }
   }
-}' "$k_kept" /proc/self/mountinfo) && [ -z "$k_bad" ]; } || { [ -n "$k_bad" ] || k_bad="git's own files"; fail "$k_bad changed as it started (git outside the sandbox may have been writing it). Run it again, or ask the user."; }
+}' "$own/k/before" "$k_kept" /proc/self/mountinfo) || { [ -n "$k_bad" ] || k_bad="git's own files"; fail "$k_bad changed as it started (git outside the sandbox may have been writing it). Run it again, or ask the user."; }
 `;
 
 /**

@@ -5598,16 +5598,20 @@ starts, in its conversation's repository, the `.git` folder up from its folder, 
 Allowed holds, and their submodules' repositories:
 - the repository's folder, `worktrees` and `modules` are mounted on themselves, so none is moved,
   removed or replaced;
-- its `config`, `config.worktree`, `commondir`, `gitdir` and `hooks` are read-only;
+- its `config`, `config.worktree`, `commondir`, `gitdir` and `hooks` are read-only (where one of
+  them but `gitdir` isn't there as it's kept, the repository's folder is, as below);
 - `worktrees`, and every folder in `modules` but each submodule's repository, are read-only, as are
   each worktree's own `commondir`, `gitdir`, `config.worktree` and `modules` (the worktrees' folders
   themselves are written as git works in them and tidies their reflogs);
-- each submodule's `.git` file in the project (not the folder it's in), and the `.git` file that
-  leads the conversation's worktree to its repository, are read-only.
+- each submodule's `.git` file in the project (not the folder it's in), and, once those are kept,
+  the `.git` file that leads the conversation's worktree to its repository, still leading there,
+  are read-only.
 
 A folder is mounted from within it, a file by its path (which a link swapped in at that moment
 could lead elsewhere), and each made read-only by its path; then all are checked in the namespace's
-mount table: each the top mount at its path, of what's there, read-only where it should be. A
+mount table: each the top mount at its path, of what's there, not covered by a folder mounted since
+above it, and read-only where it should be; and every mount made since the command started is one of
+those. A
 repository that changes as the command starts (git outside the sandbox writing it, or a command
 still running), or a mount that isn't so, runs nothing (126, to run again). This is done before
 what the namespace hides is hidden, so no mount there can uncover it.
@@ -5637,7 +5641,8 @@ worktree's own folder. These are the files Kuvo Code leaves in a repository's `.
 absolute paths rather than ones under `.git` (`--git-dir` still prints `.git`), so a script that
 compares the two as strings to tell a linked worktree takes the repository for one. It never changes
 one that's there, and makes them as you, in the folder as it is (never through a link put there), so
-never in a folder you made read-only. A repository it can't give one to is checked as every other,
+never in a folder you made read-only. A repository that lacks one of them (it can't give one, or one,
+`config` included, isn't there as it's kept) is checked as every other,
 then its folder is read-only to commands (they can't make it writable either), but for its
 worktrees' own folders and its submodules' repositories, each kept as above; the command runs, told
 so once in what it prints (again once it can and then can't).

@@ -80,6 +80,7 @@ const WAYS: Record<string, Way> = {
   "a common folder led into its folder, its repository read-only whole": { openOnMac: true, before: "rm -rf .git/hooks && cp -R .git evil && printf '../evil\\n' > .git/commondir && chmod a-w .git", tries: `git config core.fsmonitor "$FSMONITOR"`, after: "chmod u+w .git" },
   "a worktree's common folder led into its folder, its repository read-only whole": { worktree: true, openOnMac: true, before: "rm -rf .git/hooks && cp -R .git ../wt/evil && printf '%s\\n' \"$(cd ../wt && pwd -P)/evil\" > .git/worktrees/wt/commondir && chmod a-w .git", tries: `git config core.fsmonitor "$FSMONITOR"`, after: "chmod u+w .git" },
   "a worktree's submodule's folder led elsewhere, its repository read-only whole": { worktree: true, submodule: true, before: "git -c protocol.file.allow=always -C ../wt submodule update -q --init && rm -rf .git/hooks && chmod a-w .git", tries: `cp -R "$G/worktrees/wt/modules/lib" evil && git config --file evil/config --unset core.worktree; git config --file evil/config core.fsmonitor "$FSMONITOR" && printf 'gitdir: %s\\n' "$PWD/evil" > lib/.git`, after: "chmod u+w .git" },
+  "its git settings made where it has none": { before: "rm .git/config", tries: `printf '[core]\\n\\tfsmonitor = %s\\n' "$FSMONITOR" > "$G/config"` },
   "a submodule's repository traded": { submodule: true, tries: `cp -R "$G/modules/lib" evil && git config --file evil/config core.fsmonitor "$FSMONITOR" && mv "$G/modules/lib" "$G/modules/lib-old" && mv evil "$G/modules/lib"` },
 }
 
@@ -254,7 +255,7 @@ test.skipIf(!canFence || process.platform !== "linux")("on Linux, a repository w
 })
 
 // And where a folder can't be made read-only in a command's namespace (each command in a repository
-// then refuses), the box finds so as it checks the sandbox, to say it (\`gaps\`: \`git\`), as it does
+// then refuses), the box finds so as it checks the sandbox, to say it (`gaps`: `git`), as it does
 // on this machine's own unshare.
 test.skipIf(process.platform !== "linux")("on Linux, the box finds whether a folder can be made read-only in a command's namespace", () => {
   const unshare = UNSHARE.find(each => existsSync(each))
@@ -283,10 +284,11 @@ test.skipIf(!canFence || process.platform !== "linux")("on Linux, a repository w
 })
 
 // Nor can a command still running steer those mounts: one that keeps swapping its repository's
-// \`.git\` for a link (to the folder holding sockets each namespace hides) as later commands start
-// never has where the link leads mounted anew (on \`.git\`, or where the swap takes that), nor gets
-// them seen. (A race: each start is one try, many at once, of the namespace each command starts in,
-// as the launcher starts it.)
+// `.git` for a link (to the folder holding sockets each namespace hides) as later commands start
+// never has where the link leads mounted anew (on `.git`, or where the swap takes that), nor gets
+// them seen, nor writes the repository's settings; and one that swaps now and then leaves commands
+// running between. (A race: each start is one try, many at once, of the namespace each command
+// starts in, as the launcher starts it.)
 test.skipIf(!canFence || process.platform !== "linux")("on Linux, a .git swapped for a link as commands start never has where it leads mounted, nor what's hidden seen", async () => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "kuvo-sandbox-git-raced-")))
   let swapper: { kill(signal: NodeJS.Signals): void; exited: Promise<number> } | undefined
@@ -302,31 +304,54 @@ test.skipIf(!canFence || process.platform !== "linux")("on Linux, a .git swapped
     const fence = join(kuvo, "run", "fence")
     const id = (flag: string) => Bun.spawnSync(["id", flag]).stdout.toString().trim()
     symlinkSync(apps, join(raced.work, ".git-swap"))
-    // (What swaps them, as fast as it can: renameat2's RENAME_EXCHANGE, through Bun's own FFI.)
+    // (What swaps them, renameat2's RENAME_EXCHANGE through Bun's own FFI: as fast as it can, or
+    // with a pause between, in milliseconds.)
     const swap = join(root, "swap.js")
     writeFileSync(swap, `import { dlopen, FFIType, ptr } from "bun:ffi"
 const { symbols } = dlopen("libc.so.6", { renameat2: { args: [FFIType.i32, FFIType.ptr, FFIType.i32, FFIType.ptr, FFIType.u32], returns: FFIType.i32 }, getppid: { args: [], returns: FFIType.i32 } })
-const [a, b] = process.argv.slice(2).map(name => Buffer.from(name + "\\0"))
+const [a, b] = process.argv.slice(2, 4).map(name => Buffer.from(name + "\\0"))
+const pause = Number(process.argv[4])
 const parent = symbols.getppid()
 console.log(symbols.renameat2(-100, ptr(a), -100, ptr(b), 2) === 0 ? "swapping" : "can't")
 // (Until the test that started it is gone, if it isn't stopped first.)
-for (let round = 1; round % 65536 || symbols.getppid() === parent; round++) symbols.renameat2(-100, ptr(a), -100, ptr(b), 2)
+for (let round = 1; (pause ? 1 : round % 65536) || symbols.getppid() === parent; round++) {
+  symbols.renameat2(-100, ptr(a), -100, ptr(b), 2)
+  if (pause) { if (symbols.getppid() !== parent) break; Bun.sleepSync(pause) }
+}
 `)
-    const swapping = Bun.spawn([process.execPath, swap, join(raced.work, ".git"), join(raced.work, ".git-swap")], { stdout: "pipe", stderr: "ignore", env: { ...ENV, BUN_BE_BUN: "1" } })
-    swapper = swapping
-    expect(new TextDecoder().decode((await swapping.stdout.getReader().read()).value).trim()).toBe("swapping")
+    const startSwapping = async (pause: number) => {
+      const swapping = Bun.spawn([process.execPath, swap, join(raced.work, ".git"), join(raced.work, ".git-swap"), String(pause)], { stdout: "pipe", stderr: "ignore", env: { ...ENV, BUN_BE_BUN: "1" } })
+      swapper = swapping
+      expect(new TextDecoder().decode((await swapping.stdout.getReader().read()).value).trim()).toBe("swapping")
+      return swapping
+    }
+    const stopSwapping = async () => {
+      swapper?.kill("SIGKILL")
+      await swapper?.exited
+      swapper = undefined
+    }
     const once = async () => {
-      const ran = Bun.spawn([unshare, "-Urm", "/bin/sh", "-c", HIDE, unshare, id("-u"), id("-g"), id("-un"), join(fence, "ns"), join(fence, "sockets"), "", "", raced.work, raced.git, "", "/bin/sh", "-c", `ls -A ${sh(join(apps, "agent"))} .git/agent .git-swap/agent 2>/dev/null; for each in .git .git-swap; do printf '#planted\\n' >> "$each/config"; done 2>/dev/null`], { cwd: raced.work, stdout: "pipe", stderr: "ignore", env: ENV })
+      const ran = Bun.spawn([unshare, "-Urm", "/bin/sh", "-c", HIDE, unshare, id("-u"), id("-g"), id("-un"), join(fence, "ns"), join(fence, "sockets"), "", "", raced.work, raced.git, "", "/bin/sh", "-c", `ls -A ${sh(join(apps, "agent"))} .git/agent .git-swap/agent 2>/dev/null; for each in .git .git-swap; do printf '#planted\\n' >> "$each/config"; done 2>/dev/null; exit 0`], { cwd: raced.work, stdout: "pipe", stderr: "ignore", env: ENV })
       const out = await new Response(ran.stdout).text()
       return out.includes("socket") ? "seen" : `${await ran.exited}`
     }
-    const ended: Record<string, number> = {}
-    for (let round = 0; round < 250; round++) for (const end of await Promise.all(Array.from({ length: 16 }, once))) ended[end] = (ended[end] ?? 0) + 1
-    console.log("How the tries ended:", ended)
-    expect(ended.seen ?? 0).toBe(0)
+    const tries = async (rounds: number) => {
+      const ended: Record<string, number> = {}
+      for (let round = 0; round < rounds; round++) for (const end of await Promise.all(Array.from({ length: 16 }, once))) ended[end] = (ended[end] ?? 0) + 1
+      return ended
+    }
+    // (One runs before any swap: the try itself does.)
+    expect(await once()).toBe("0")
+    await startSwapping(0)
+    const fast = await tries(250)
+    await stopSwapping()
+    await startSwapping(250)
+    const slow = await tries(25)
+    await stopSwapping()
+    console.log("How the tries ended, swapped as fast as can be and now and then:", fast, slow)
+    expect([fast.seen ?? 0, slow.seen ?? 0]).toEqual([0, 0])
+    expect(slow["0"] ?? 0).toBeGreaterThan(0)
     // Nor did any that ran write the repository's settings, which stayed kept.
-    swapping.kill("SIGKILL")
-    await swapping.exited
     const real = [".git", ".git-swap"].map(name => join(raced.app, name)).find(each => statSync(each, { throwIfNoEntry: false })?.isDirectory() && !existsSync(join(each, "agent")))!
     expect(readFileSync(join(real, "config"), "utf8")).not.toContain("#planted")
   } finally {
