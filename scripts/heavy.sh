@@ -26,10 +26,10 @@
 #
 # (phone-build is mac-build below: everything said of mac-build holds for it.)
 #
-# Jobs of one kind share their build folders, which two builds at once break, so they run one at a
-# time, each waiting on its kind's lock in this user's own temporary folder (getconf's, not
-# $TMPDIR, which a caller may point elsewhere). Jobs of different kinds run side by side. Before it
-# joins its lane's line, a new job waits while the Mac is thrashing: swapping more than
+# Jobs of one kind share their build folders, which two builds at once break, so each slot of a kind
+# (mac has one; phone, mac-build and box two, below) runs one job at a time, each waiting on its
+# slot's lock in this user's own temporary folder (getconf's, not $TMPDIR, which a caller may point
+# elsewhere). Jobs of different kinds run side by side. Before it joins its lane's line, a new job waits while the Mac is thrashing: swapping more than
 # KUVO_HEAVY_SWAP MB a second (10 unless set) or its memory pressure critical, for
 # KUVO_HEAVY_MEMORY_WAIT_FOR (2 minutes) at most (below; KUVO_HEAVY_MEMORY=0 for never). It waits
 # for a busy Mac (its load over the last minute above KUVO_HEAVY_LOAD) or for less than
@@ -64,9 +64,8 @@
 # ~/.kuvo-code-test (test-safety.js, named by its pid) and scripts/test-box.sh a temporary folder of
 # its own; their servers listen on port 0, their sockets are in those folders, and the built
 # kuvo-link.js and kuvo-agents.js are only read; a run on a test machine (scripts/test-linux.sh) has
-# a folder of its own in that machine's ~/.kuvo-code-test. Two whole suites at once, from two
-# checkouts and from one, passed as one alone does, each in about the time one alone takes (7
-# minutes on the Mini, 7.5 to 8.5 beside another).
+# a folder of its own in that machine's ~/.kuvo-code-test. Keep it so: a box or bridge test listens
+# on port 0 and keeps to folders of its own.
 #
 # For phone, slot 2 is only for a caller that handles slots (KUVO_HEAVY_SLOTS=2): an older caller would take it
 # and still build in slot 1's folder and drive slot 1's simulator, beside whoever holds slot 1.
@@ -123,7 +122,7 @@
 # job is stopped (its process group, as below: TERM, then KILL), it says what was running, and
 # heavy.sh exits 124. The clock starts when the command does: not while it waits in line for its
 # slot (for as long as that takes), nor while it waits for room on the Mac. Generous, per kind: mac 45
-# minutes (the app's whole suite), phone 45, mac-build 30 (a build, a package's tests), box 40 (the
+# minutes (the app's whole suite), phone 45, mac-build 90 (a build, a package's tests), box 40 (the
 # box's and the bridge's suites, which may go together).
 #
 #   KUVO_HEAVY_LIMIT    this job's limit instead: 90m, 600s, 2h, or plain minutes; 0 for none

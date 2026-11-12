@@ -198,7 +198,7 @@ in this copy; a holder that hasn't run its command for 2 minutes (an older copy 
 under the lock) is named in `status` and by every job waiting for that slot.
 
 When running heavy builds or tests locally, start them with `scripts/heavy.sh <kind>`, which
-waits for jobs of the same kind (they share build folders) and runs the other
+waits for a free slot of its kind (each lane below says how many it has) and runs the other
 kinds alongside:
 
 ```sh

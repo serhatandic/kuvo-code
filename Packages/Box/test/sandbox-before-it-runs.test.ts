@@ -2,7 +2,7 @@ import "./safety"
 import { ownPath } from "../../KuvoLink/Tests/Bridge/test-safety.js"
 import { expect, setDefaultTimeout, test } from "bun:test"
 import { createHash } from "node:crypto"
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmdirSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fencePolicy } from "../src/link/fence/policy"
@@ -57,16 +57,15 @@ test.skipIf(!canFence || !tmux)("a command can't reach your tmux, and the one it
   // (Short folders: a socket's path has to be.)
   const root = realpathSync(mkdtempSync("/tmp/kst-"))
   const yours = `${realpathSync("/tmp")}/tmux-${uid}`
-  const made = !existsSync(yours)
   // A server of yours, in your tmux's folder, by a name of its own (never your own sessions).
   const server = ownPath(join(yours, `kuvo-test-${root.slice(-6)}`))
-  if (made) ownPath(yours)
   try {
     const kuvo = join(root, "kuvo")
     const project = join(root, "project")
     for (const folder of [kuvo, project]) mkdirSync(folder, { recursive: true })
-    // (Another run beside this one may make it too.)
-    if (made) mkdirSync(yours, { mode: 0o700, recursive: true })
+    // (Made as tmux makes it, where it isn't yet, and left there: another run beside this one may
+    // have its server in it.)
+    mkdirSync(yours, { mode: 0o700, recursive: true })
     expect(Bun.spawnSync([tmux!, "-S", server, "new-session", "-d", "-s", "yours", "sleep 600"]).exitCode).toBe(0)
     // (The box's rules for your sockets: on a Mac, your tmux's folder's.)
     const policy = fencePolicy()
@@ -97,8 +96,6 @@ test.skipIf(!canFence || !tmux)("a command can't reach your tmux, and the one it
     const own = join(root, "kuvo", "run", "fence", "tmp", createHash("sha256").update(join(root, "project")).digest("hex").slice(0, 32))
     Bun.spawnSync([tmux!, "kill-server"], { env: { TMUX_TMPDIR: own } })
     rmSync(server, { force: true })
-    // (Only once it's empty: another run's server may be in it still.)
-    if (made) try { rmdirSync(yours) } catch {}
     rmSync(root, { recursive: true, force: true })
   }
 })
