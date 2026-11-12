@@ -17,6 +17,8 @@ import { awaySince, readReach } from "../peers/reach";
 import { readLink } from "../state";
 import { categories, takePrimaryCategories } from "./categories";
 import { handArrived, handedBack, sendHandings } from "./hand";
+import { actForPeer } from "./acts";
+import { takeAct, takeActed } from "./forward";
 import { mailsFor, takePart } from "./parts";
 import { movePast, ownSince, primaryOf, takeNumbersMail, topOf } from "./numbers";
 import { sharedMachine } from "../setup/settle";
@@ -229,8 +231,9 @@ function takeTold(sender: MailSender, given: unknown, reply: (payload: Record<st
 }
 
 /** The Work Queue's mail from another computer (`{workQueue: …}`): a part of one too big for one
- * mail, what it tells of its queue and that it has this box's, numbers' asks and blocks, and items
- * handed between them. */
+ * mail, what it tells of its queue and that it has this box's, numbers' asks and blocks, items
+ * handed between them, and what a client did to an item one keeps, handed on by the box it asked
+ * (`forward.ts`), and its answer. */
 export async function takeWorkQueueMail(sender: MailSender, given: unknown, host: Pick<LinkHost, "send"> | null | undefined, places: () => PeerPlaces): Promise<void> {
   if (!isObject(given)) return;
   const whole = isObject(given.part) ? takePart(sender, given.part) : given;
@@ -249,6 +252,8 @@ export async function takeWorkQueueMail(sender: MailSender, given: unknown, host
   }
   if (isObject(whole.handed)) handedBack(sender, whole.handed);
   if (isObject(whole.hand)) await handArrived(sender, whole.hand, reply, places).catch(() => {});
+  if (isObject(whole.acted)) takeActed(sender, whole.acted);
+  if (isObject(whole.act)) await takeAct(sender, whole.act, reply, act => actForPeer(act, places().targets)).catch(() => {});
 }
 
 

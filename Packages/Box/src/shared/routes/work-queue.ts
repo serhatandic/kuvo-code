@@ -55,9 +55,11 @@ export const QUEUE_ITEM = object({
   "removed?": STAMP,
 });
 
-/** An item whole. */
+/** An item whole. One on another of your computers says `told`: false, read whole there (its box
+ * answered the box asked); true, as that computer last told it, without what only it keeps. */
 export const QUEUE_ITEM_WHOLE = object({
   ...QUEUE_ITEM.object,
+  "told?": bool,
   body: string,
   notes: list(NOTE),
   events: list(EVENT),
@@ -75,7 +77,8 @@ export const QUEUE_VIEW = object({ owner: string, categories: list(QUEUE_CATEGOR
 
 const REF = nullable(object({ id: string, "number?": number, "source?": SOURCE, "seen?": SEEN, "struck?": bool, "closesOn?": string, title: string, category: string, inProgress: bool, owner: string, "removed?": bool, "computer?": COMPUTER }));
 
-// An item on another of your computers: changed there.
+// An item on another of your computers that couldn't be changed there now: 409, a computer that
+// doesn't take it from another box (changed there); 503, one that isn't answering.
 const ON_ANOTHER = object({ message: string, computer: COMPUTER });
 
 export const WORK_QUEUE_ROUTES: RouteShape[] = [
@@ -90,9 +93,9 @@ export const WORK_QUEUE_ROUTES: RouteShape[] = [
   { route: "POST kuvo/work-queue/import", answers: { 200: object({ added: number, byCategory: map(number), waiting: number, skipped: list(string), said: string }) } },
   { route: "GET kuvo/work-queue/items/:item", answers: { 200: object({ item: QUEUE_ITEM_WHOLE }) } },
   { route: "GET kuvo/work-queue/items/:item/files/:name", answers: { 200: BYTES } },
-  { route: "POST kuvo/work-queue/items/:item/move", answers: { 200: object({ item: QUEUE_ITEM }), 409: ON_ANOTHER } },
-  { route: "POST kuvo/work-queue/items/:item/restore", answers: { 200: object({ item: QUEUE_ITEM }), 409: ON_ANOTHER } },
-  { route: "DELETE kuvo/work-queue/items/:item", answers: { 200: object({ item: QUEUE_ITEM }), 409: ON_ANOTHER } },
+  { route: "POST kuvo/work-queue/items/:item/move", answers: { 200: object({ item: QUEUE_ITEM }), 409: ON_ANOTHER, 503: ON_ANOTHER } },
+  { route: "POST kuvo/work-queue/items/:item/restore", answers: { 200: object({ item: QUEUE_ITEM }), 409: ON_ANOTHER, 503: ON_ANOTHER } },
+  { route: "DELETE kuvo/work-queue/items/:item", answers: { 200: object({ item: QUEUE_ITEM }), 409: ON_ANOTHER, 503: ON_ANOTHER } },
 ];
 
 

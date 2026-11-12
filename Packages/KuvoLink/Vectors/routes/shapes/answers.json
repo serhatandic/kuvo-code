@@ -3296,6 +3296,9 @@
             "literal": "work-queue.elsewhere"
            },
            {
+            "literal": "work-queue.forward"
+           },
+           {
             "literal": "work.elsewhere"
            },
            {
@@ -3671,6 +3674,9 @@
            },
            {
             "literal": "work-queue.elsewhere"
+           },
+           {
+            "literal": "work-queue.forward"
            },
            {
             "literal": "work.elsewhere"
@@ -11993,6 +11999,7 @@
           }
          }
         },
+        "told?": "bool",
         "body": "string",
         "notes": {
          "list": {
@@ -12287,6 +12294,28 @@
        }
       }
      }
+    },
+    "503": {
+     "object": {
+      "message": "string",
+      "computer": {
+       "object": {
+        "key": "string",
+        "name": "string",
+        "kind": {
+         "oneOf": [
+          {
+           "literal": "mac"
+          },
+          {
+           "literal": "machine"
+          }
+         ]
+        },
+        "id?": "string"
+       }
+      }
+     }
     }
    }
   },
@@ -12487,6 +12516,28 @@
        }
       }
      }
+    },
+    "503": {
+     "object": {
+      "message": "string",
+      "computer": {
+       "object": {
+        "key": "string",
+        "name": "string",
+        "kind": {
+         "oneOf": [
+          {
+           "literal": "mac"
+          },
+          {
+           "literal": "machine"
+          }
+         ]
+        },
+        "id?": "string"
+       }
+      }
+     }
     }
    }
   },
@@ -12667,6 +12718,28 @@
      }
     },
     "409": {
+     "object": {
+      "message": "string",
+      "computer": {
+       "object": {
+        "key": "string",
+        "name": "string",
+        "kind": {
+         "oneOf": [
+          {
+           "literal": "mac"
+          },
+          {
+           "literal": "machine"
+          }
+         ]
+        },
+        "id?": "string"
+       }
+      }
+     }
+    },
+    "503": {
      "object": {
       "message": "string",
       "computer": {

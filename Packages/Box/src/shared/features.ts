@@ -110,6 +110,7 @@ export const FEATURES = [
   "work",
   "work-queue",
   "work-queue.elsewhere",
+  "work-queue.forward",
   "work.elsewhere",
   "work.elsewhere.start",
   "work.goals",
