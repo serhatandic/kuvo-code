@@ -1043,7 +1043,18 @@ browser's tools (`browser_…`), which work in a client's own browser, aren't th
   - From a client (no `startedBy`): in `folder`, in Auto unless `approval` says (which asks first
     where the sandbox doesn't run, "Approval"), with Settings › Permissions, the task as the user's
     own first message.
-  - Either way its project's other folders are allowed to it and named in its instructions, one in
+  - A client's New Session (`sessions.start.empty`, #341): `task` left out, the session is made as
+    above and nothing is sent to it, for the user's own first message. It may name `agent` (any of
+    its engine's agents, as its picker has them; `mode` stays build or plan) and `model` as
+    `{providerID, id, variant?}`, taken as named: on the coding agents' bridge for one of theirs or
+    Auto (503 while it isn't running), else on the engine. Its answer adds `info`, the session as
+    its engine (or the bridge) lists it then, and with `worktree: true`, `worktree`, the worktree made
+    for it as `POST kuvo/worktrees` makes one (`{project, root, folder, branch, base?}`); the box
+    takes that away again should the session not be made. With `wait`, or from a conversation, a
+    task is still needed (400). A box from before needs a task: a client makes the session with its
+    engine then, and gives it its project's folders, approval and Autopilot itself.
+  - Either way its project's other folders (those of the project whose folder it's in, or a
+    worktree of; none in one of those other folders) are allowed to it and named in its instructions, one in
     a worktree is told so, one filed under another folder than its own (a worktree, a project's
     other folder) carries that project from the first (`kuvo.filed`, "Projects"), and a folder
     that's no project yet, nor one of a project's, becomes one.
@@ -4324,6 +4335,7 @@ One row a name, in order, so branches that each add one merge cleanly.
 | `pieces` | a machine only: `kuvo/info`'s `pieces`, which version its link, coding agents' bridge and engine run ("Updates", "A new version while it works") |
 | `plugins.search` | `kuvo/plugins/search` |
 | `programs` | `kuvo/programs` |
+| `projects.folders` | A change to a project's `folders` reaches each of its sessions, and a session the box starts or moves gets them ("Projects", #341) |
 | `providers.models` | `POST kuvo/providers/models` |
 | `queue` | `kuvo/sessions/<id>/queue…`, `…/stop` and `kuvo/sessions/queues/events`: the box carries the queue (bridge 0.9.100) |
 | `queue.waits` | A Stop holds the conversation: what arrives waits on the box (`waiting`), `…/queue/add` and `DELETE …/queue/<item>` (bridge 0.9.128) |
@@ -4340,7 +4352,9 @@ One row a name, in order, so branches that each add one merge cleanly.
 | `sessions.chat` | A chat made, moved or with its metadata written since carries `kuvo.chat` in its metadata, naming the chats folder it's in; older ones go by their folder ("Chats") |
 | `sessions.glance` | `kuvo/sessions/glance`, `…/events`, and `session` in `POST kuvo/git/pull-request` ("A session at a glance") |
 | `sessions.models` | `GET kuvo/sessions/models` ("A session's model") |
+| `sessions.move` | `POST kuvo/sessions/<id>/move`: a conversation moved into a project, given its folders ("Projects", #341) |
 | `sessions.start` | `POST kuvo/sessions`: a session started with a task (bridge 0.9.100) |
+| `sessions.start.empty` | `POST kuvo/sessions` from a client without a task, `agent`, `model` as `{providerID, id, variant?}`, and `info` and `worktree` in its answer (#341) |
 | `setup` | `kuvo/setup`, `…/events`: your setup and its main computer ("Your setup") |
 | `shell.stop` | `POST kuvo/shell/<id>/stop` |
 | `sign-in.return` | `POST kuvo/sign-in/return` |
@@ -4712,6 +4726,20 @@ while a box is away goes there when it's back.
   `200 {project}`; 400 for a folder that isn't a whole path. The folder is kept as it's named,
   as its sessions run there (a link isn't followed), and whether it's there now or not (a drive
   that's away).
+  A change to its `folders` reaches each of its sessions before the answer (`projects.folders`,
+  #341), whichever client made it: on the engine and the coding agents' bridge, in its folder and
+  its worktrees', but for subagents' and those put away, each gets a rule allowing each folder
+  (`external_directory` `<folder>/*`, and where a link leads, after its approval's rules; a bot's own
+  folder's rule stays) and the instruction `kuvo.project-folders` naming them, or neither once
+  there are none. A box from before doesn't: a client gives each session it opens its folders then.
+- `POST kuvo/sessions/<id>/move` `{directory}` (`sessions.move`, #341) moves a conversation into the
+  project at `directory` here, as a chat that turns into work is: the engine moves it (one at work at
+  its next step), and it gets that project's other folders as above. `200 {session, directory,
+  info?}` (`info`, the session as its engine lists it now); 400 for a folder that isn't here; 404
+  for no such conversation; 409 for a coding agent's session (their sessions keep the folder they
+  started in) and one moving to another computer; 502 where the engine didn't take it; 503 with no
+  engine. A box from before: a client moves it with the engine's `POST api/session/<id>/move` and
+  gives it the project's folders itself.
 - `DELETE kuvo/projects?directory=<folder>` is Remove Project: every session of it, its worktrees' and
   other folders' too, and those filed under it from elsewhere (`kuvo.filed`) (removed worktrees included, and the folders an optional body `{folders}` names: those a client
   shows under it that the box doesn't know, worktrees removed before it kept them), archived on

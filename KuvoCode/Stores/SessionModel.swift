@@ -427,6 +427,9 @@ final class SessionModel {
     @ObservationIgnored private var queueFollow: Task<Void, Never>?
     /// The session's box (this Mac's, or its machine's).
     @ObservationIgnored var box: () -> BoxClient? = { nil }
+    /// Whether its box gives it its project's folders as they change (`projects.folders`): then this
+    /// app gives none itself.
+    @ObservationIgnored var foldersOnBox: () async -> Bool = { false }
     /// What its box says of its model (`kuvo/sessions/models`, `readModelState`): the model it runs
     /// on, whether it can, and what's missing if not, which its model button, Send and a sign-in
     /// card draw. Nil until read, and from a box without `sessions.models`, whose model this Mac
@@ -2592,6 +2595,10 @@ final class SessionModel {
     /// Gives the agent the project's folders as they're set now, if it doesn't have them yet:
     /// allowed in its permissions, and named in its instructions.
     func syncFolders() async {
+        // COMPAT(projects.folders): a box from before doesn't give its sessions their project's
+        // folders: the app gives an open one them. Remove once every supported box has
+        // `projects.folders`.
+        guard await !foldersOnBox() else { return }
         // As the engine knows them: a machine's folders are plain paths there.
         let folders = projectFolders().map(api.enginePath)
         let machine = RemoteFolder.machine(of: session.location.directory)

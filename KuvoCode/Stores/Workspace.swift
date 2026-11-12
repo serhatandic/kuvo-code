@@ -388,6 +388,17 @@ final class Workspace {
     /// it works in that project's folders. If it's working, the move comes at its next step.
     func move(_ id: String, toProject directory: String) async throws {
         guard let session = session(id) else { return }
+        // Its box moves it and gives it the project's folders (PROTOCOL.md, "Projects"); it says
+        // why where it can't (a coding agent's, one moving to another computer).
+        let boxID = Self.box(of: directory)
+        if let box = boxes?(boxID), await boxHas(SessionMove.feature, on: boxID) {
+            _ = try await box.value(SessionMove.Moved.self, "POST", SessionMove.route(id), body: SessionMove.Asked(directory: Self.onBox(directory)))
+            await reload(id)
+            Analytics.shared.track("chat_moved")
+            return
+        }
+        // COMPAT(sessions.move): a box from before has no move: the app moves it with the engine and
+        // gives it the project's folders itself. Remove once every supported box has `sessions.move`.
         if OutsideAgents.isAgentSession(session) { throw OutsideAgents.Failure.unavailable("Moving a chat into a project") }
         // Moving to another computer: what changes it waits until it's there.
         if Moves.isFrozen(id) { throw Moves.Failure.moving }
@@ -658,6 +669,12 @@ final class Workspace {
         }
         model.isReachable = reachable(directory)
         model.box = box(of: id, else: directory)
+        // Its box gives it its project's folders, as they change, where it can.
+        let boxID = Self.box(of: directory)
+        model.foldersOnBox = { [weak self] in
+            guard let self, self.boxes?(boxID) != nil else { return false }
+            return await self.boxHas(ProjectFoldersOnBox.feature, on: boxID)
+        }
         followGoals(of: model)
         models[id] = model
         // This Mac's conversation as last seen, in its first frame, while the engine's is read
@@ -1001,6 +1018,33 @@ final class Workspace {
         if isAgents, bridge?.api == nil { throw OutsideAgents.Failure.notRunning(bridge?.failure) }
         guard let api = isAgents ? bridge?.api : api(forFolder: directory) else { throw CancellationError() }
         let directory = addFolder(directory)
+        // Its box makes it (PROTOCOL.md, `kuvo/sessions`): its worktree, its project's folders, its
+        // approval and Autopilot, all there.
+        let boxID = Self.box(of: directory)
+        if let box = boxes?(boxID), await boxHas(SessionStart.feature, on: boxID) {
+            let asked = SessionStart.Asked(folder: Self.onBox(directory), chat: !worktree && Self.isChat(directory), worktree: worktree, agent: agent, model: model, approval: approval?.rawValue, autopilot: autopilot)
+            let started = try await box.value(SessionStart.Started.self, "POST", SessionStart.route, body: asked)
+            let session: Session
+            if var made = started.info {
+                made.location.directory = api.appFolder(made.location.directory)
+                session = made
+            } else {
+                session = try await api.session(started.session)
+            }
+            if let tree = started.worktree {
+                let folder = Self.here(tree.folder ?? tree.root, on: boxID)
+                worktrees[folder] = Worktree(project: directory, root: Self.here(tree.root, on: boxID), branch: tree.branch, base: tree.base)
+                saveWorktrees()
+                // (Its box told it it works there.)
+                toldWorktree.insert(session.id)
+            }
+            upsert(session)
+            trackCreated(session, model: model, agent: agent, approval: session.metadata?["kuvo"]?["applied"]?.string ?? "default", worktree: worktree)
+            return session
+        }
+        // COMPAT(sessions.start.empty): a box from before makes no session without a task, so the app
+        // makes it here, with the project's folders, approval and Autopilot itself. Remove once
+        // every supported box has `sessions.start.empty`.
         let folder = worktree ? try await makeWorktree(of: directory) : directory
         // As its engine knows them: a machine's folders are plain paths there.
         let extra = (settings[directory]?.folders ?? []).map(api.enginePath)
@@ -1045,14 +1089,34 @@ final class Workspace {
             try? await api.setInstruction(session: session.id, key: Self.worktreeInstructionKey, text: Self.instructions(for: tree))
         }
         upsert(session)
+        trackCreated(session, model: model, agent: agent, approval: starting.rawValue, worktree: worktree)
+        return session
+    }
+
+    private func trackCreated(_ session: Session, model: ModelRef?, agent: String?, approval: String, worktree: Bool) {
         let used = model ?? session.model
         var props = Analytics.model(provider: used?.providerID, model: used?.id)
         props["mode"] = Analytics.mode(agent)
-        props["approval"] = starting.rawValue
+        props["approval"] = approval
         props["worktree"] = worktree
         if let since = Analytics.shared.sinceInstall { props["since_install"] = since }
         Analytics.shared.track("session_created", props)
-        return session
+    }
+
+    /// Each box's features, by box, as last read (`kuvo/info`): whether a new session, a move into a
+    /// project and a project's folders go through it there. Read once a run.
+    @ObservationIgnored private var featuresHere: [String: Set<String>] = [:]
+
+    /// Whether the box `id` has `feature`: the app's own always, a machine's as it says.
+    func boxHas(_ feature: String, on id: String) async -> Bool {
+        if BoxClient.hasEveryFeature(id) { return true }
+        if let known = featuresHere[id] { return known.contains(feature) }
+        guard let box = boxes?(id) else { return false }
+        struct Info: Decodable { var features: [String]? }
+        guard let info = try? await box.value(Info.self, "GET", "kuvo/info") else { return false }
+        let features = Set(info.features ?? [])
+        featuresHere[id] = features
+        return features.contains(feature)
     }
 
     // MARK: Worktrees
