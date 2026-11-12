@@ -242,7 +242,7 @@ export function letterWent(sender: Pick<Peer, "key">, { id, ok, why, retry, answ
     } catch {}
   }
   // Not there, for good: its sender hears why, in that box's words (one that ran out of time, in ours).
-  if (!ok) return failLetter(id, file, letter, retry === true ? { why: "It couldn't be delivered within two days.", on: sender.key }
+  if (!ok) return failLetter(id, file, letter, retry === true ? { why: EXPIRED, on: sender.key }
     : { why: words || "It wasn't accepted there.", on: sender.key, said: Boolean(words) }, now);
   fs.rmSync(file, { force: true });
   // Only a tool waiting for its answer reads how it went.
@@ -250,24 +250,44 @@ export function letterWent(sender: Pick<Peer, "key">, { id, ok, why, retry, answ
   if (answer === false) reply(id, { note: words ?? "It got your message, but its answer can't come back to you here." });
 }
 
-/** Why a letter won't be delivered (`failLetter`): in words, the box its agent is on (`on`, its key),
- * whether those words are that box's own (`said`), and what its conversation's called there. */
+/** Why a letter won't be delivered (`failLetter`): in words (none when that wasn't kept), the box its
+ * agent is on (`on`, its key), whether those words are that box's own (`said`), and what its
+ * conversation's called there. */
 interface Failure {
-  why: string;
+  why?: string;
   on?: string;
   said?: boolean;
   title?: string;
 }
 
+// Why one tried for its two days won't be delivered (not the last word from where it went, which was
+// "not now").
+const EXPIRED = "It couldn't get there in two days of trying.";
+
+// The notice for letter `id` that won't be delivered: an id of its own (so no word on the letter acts
+// on it), the same each time it's made (a box it goes to takes it once).
+const noticeID = (id: string): string => "ltr_" + crypto.createHash("sha256").update(`${id} not delivered`).digest("base64url").slice(0, 22);
+
+// Notices left this round: the outbox goes again once it's over, not inside it.
+let noticesLeft = false;
+function sendNoticesSoon(): void {
+  if (noticesLeft) return;
+  noticesLeft = true;
+  setImmediate(() => {
+    noticesLeft = false;
+    outboxSoon.send();
+  });
+}
+
 // A letter that won't be delivered: a tool waiting hears why; one sent without waiting (its tool
-// said "On its way") is the box's own word to its sender instead, as a call's lead hears of its call
-// (`tellLead`), once: queued, marked, by its agent's name and computer, in the letter's own place in
-// the outbox (taken out of sending first, `.failed`, so it never goes again; a round finishes one cut
-// short). The box's own words (notes, answers), reads and calls just go.
+// said "On its way", or gave up waiting) is the box's own word to its sender instead, as a call's
+// lead hears of its call (`tellLead`), once: queued, marked, by its agent's name and computer. The
+// letter's taken out of sending first (`.failed`, which the next round finishes should this be cut
+// short), so it never goes again. The box's own words (notes, answers), reads and calls just go.
 function failLetter(id: string, file: string, letter: InSending, { why, on, said = false, title }: Failure, now = Date.now()): void {
   letterTries.delete(id);
-  if (letter.wait === true) {
-    reply(id, { failed: why });
+  if (letter.wait === true && (IS_MAC || !fs.existsSync(path.join(REPLIES, `${id}.gaveup`)))) {
+    reply(id, { failed: why || "It wasn't delivered." });
     fs.rmSync(file, { force: true });
     return;
   }
@@ -282,15 +302,16 @@ function failLetter(id: string, file: string, letter: InSending, { why, on, said
     const mine = ownKey(link ?? {});
     const peer = peersOf(link).find(each => each.key === on);
     const told = readPeerAgents();
-    const listed = [...(on ? [on] : []), ...Object.keys(told)].map(key => told[key]?.list?.find(each => each?.session === letter.to)?.name).find(name => typeof name === "string");
+    const nameIn = (key: string) => { const list = told[key]?.list; return Array.isArray(list) ? list.find(each => each?.session === letter.to)?.name : undefined; };
+    const listed = [...(on ? [on] : []), ...Object.keys(told)].map(nameIn).find(name => typeof name === "string");
     const name = plainName(title ?? listed ?? ownListed().find(each => each.session === letter.to)?.name ?? "") || "that chat";
     const computer = on && on === mine ? HERE : peer ? boxName(peer) : "another computer";
     const line = `Your message to ${name} on ${computer} wasn't delivered`;
-    const text = `[Not delivered] ${line}. ${said ? `${computer.charAt(0).toUpperCase()}${computer.slice(1)} said: ${why}` : why}`;
-    writePrivate(failed, JSON.stringify({ to: letter.from, text, ...(mine ? { peer: mine } : {}), at: now,
+    const text = `[Not delivered] ${line}${!why ? "." : said ? `: ${computer} said "${why}"` : `. ${why}`}`;
+    writePrivate(path.join(SENDING, `${noticeID(id)}.json`), JSON.stringify({ to: letter.from, text, ...(mine ? { peer: mine } : {}), wait: false, at: now,
       note: { from: "Your other computers", words: text, line, delivery: "queue" } } satisfies OutboxLetter));
-    fs.renameSync(failed, path.join(SENDING, `${id}.json`));
-    outboxSoon.send();
+    fs.rmSync(failed, { force: true });
+    sendNoticesSoon();
   } catch {}
 }
 
@@ -503,14 +524,13 @@ export function sendOutbox(host: Pick<LinkHost, "send">, link: LinkState | null 
     givenUp(id);
   }
   // Letters that won't be delivered whose senders' notices were cut short (`failLetter`): finished
-  // (why, if it wasn't kept, in a word), never sent.
+  // (without why, which wasn't kept), never sent.
   for (const name of listOf(SENDING)) {
     if (!name.endsWith(".failed")) continue;
     const file = path.join(SENDING, name), id = name.slice(0, -7);
     try {
       const letter: InSending = JSON.parse(fs.readFileSync(file, "utf8"));
-      if (noteOf(letter.note)) fs.renameSync(file, path.join(SENDING, `${id}.json`));
-      else failLetter(id, file, letter, { why: "It couldn't be delivered.", on: letter.sentTo ?? letter.peer }, now);
+      failLetter(id, file, letter, { on: letter.sentTo ?? letter.peer }, now);
     } catch {}
   }
   const listed = new Set<string>();
@@ -570,7 +590,7 @@ export function sendOutbox(host: Pick<LinkHost, "send">, link: LinkState | null 
     const peer = lives ? peers.find(each => each.key === lives) ?? null
       : typeof letter.peer === "string" ? peers.find(each => each.key === letter.peer) ?? null : peerOf(letter.to, peers, told, moved);
     if (now - made > (note ? NOTE_MEMORY : LETTER_MEMORY)) {
-      failLetter(id, file, letter, { why: "It couldn't be delivered within two days.", on: lives ?? (ownHere.has(letter.to) ? mine ?? undefined : peer?.key ?? letter.sentTo) }, now);
+      failLetter(id, file, letter, { why: EXPIRED, on: lives ?? (ownHere.has(letter.to) ? mine ?? undefined : peer?.key ?? letter.sentTo) }, now);
       continue;
     }
     // Moved here since it was left (as the box it went from says, or as this box lists it now): here,

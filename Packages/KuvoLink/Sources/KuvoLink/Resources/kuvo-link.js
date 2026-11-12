@@ -2094,9 +2094,12 @@ function noteEnded(id, as, now = Date.now(), sessions = [], last) {
   try {
     kept = JSON.parse(fs11.readFileSync(ENDED_FILE, "utf8")) ?? {};
   } catch {}
-  for (const [other, one] of Object.entries(kept))
+  for (const [other, one] of Object.entries(kept)) {
     if (!keptFor(one, now))
       delete kept[other];
+    else if (one.as === "switched" && now - one.at >= MOVED_FOR)
+      delete one.sessions;
+  }
   kept[id] = { as, at: now, ...sessions.length ? { sessions: [...sessions] } : {}, ...last ? { last } : {} };
   writePrivate(ENDED_FILE, JSON.stringify(kept));
 }
@@ -28455,17 +28458,29 @@ function letterWent(sender, { id, ok, why, retry, answer, lives }, now = Date.no
       } catch {}
   }
   if (!ok)
-    return failLetter(id, file, letter, retry === true ? { why: "It couldn't be delivered within two days.", on: sender.key } : { why: words || "It wasn't accepted there.", on: sender.key, said: Boolean(words) }, now);
+    return failLetter(id, file, letter, retry === true ? { why: EXPIRED, on: sender.key } : { why: words || "It wasn't accepted there.", on: sender.key, said: Boolean(words) }, now);
   fs94.rmSync(file, { force: true });
   if (letter.wait !== true)
     return;
   if (answer === false)
     reply2(id, { note: words ?? "It got your message, but its answer can't come back to you here." });
 }
+var EXPIRED = "It couldn't get there in two days of trying.";
+var noticeID = (id) => "ltr_" + crypto39.createHash("sha256").update(`${id} not delivered`).digest("base64url").slice(0, 22);
+var noticesLeft = false;
+function sendNoticesSoon() {
+  if (noticesLeft)
+    return;
+  noticesLeft = true;
+  setImmediate(() => {
+    noticesLeft = false;
+    outboxSoon.send();
+  });
+}
 function failLetter(id, file, letter, { why, on, said = false, title }, now = Date.now()) {
   letterTries.delete(id);
-  if (letter.wait === true) {
-    reply2(id, { failed: why });
+  if (letter.wait === true && (IS_MAC || !fs94.existsSync(path97.join(REPLIES, `${id}.gaveup`)))) {
+    reply2(id, { failed: why || "It wasn't delivered." });
     fs94.rmSync(file, { force: true });
     return;
   }
@@ -28481,20 +28496,25 @@ function failLetter(id, file, letter, { why, on, said = false, title }, now = Da
     const mine = ownKey(link ?? {});
     const peer = peersOf(link).find((each) => each.key === on);
     const told = readPeerAgents();
-    const listed = [...on ? [on] : [], ...Object.keys(told)].map((key) => told[key]?.list?.find((each) => each?.session === letter.to)?.name).find((name) => typeof name === "string");
+    const nameIn = (key) => {
+      const list = told[key]?.list;
+      return Array.isArray(list) ? list.find((each) => each?.session === letter.to)?.name : undefined;
+    };
+    const listed = [...on ? [on] : [], ...Object.keys(told)].map(nameIn).find((name) => typeof name === "string");
     const name = plainName(title ?? listed ?? ownListed().find((each) => each.session === letter.to)?.name ?? "") || "that chat";
     const computer = on && on === mine ? HERE : peer ? boxName(peer) : "another computer";
     const line = `Your message to ${name} on ${computer} wasn't delivered`;
-    const text = `[Not delivered] ${line}. ${said ? `${computer.charAt(0).toUpperCase()}${computer.slice(1)} said: ${why}` : why}`;
-    writePrivate(failed, JSON.stringify({
+    const text = `[Not delivered] ${line}${!why ? "." : said ? `: ${computer} said "${why}"` : `. ${why}`}`;
+    writePrivate(path97.join(SENDING, `${noticeID(id)}.json`), JSON.stringify({
       to: letter.from,
       text,
       ...mine ? { peer: mine } : {},
+      wait: false,
       at: now,
       note: { from: "Your other computers", words: text, line, delivery: "queue" }
     }));
-    fs94.renameSync(failed, path97.join(SENDING, `${id}.json`));
-    outboxSoon.send();
+    fs94.rmSync(failed, { force: true });
+    sendNoticesSoon();
   } catch {}
 }
 var deliveringHere = new Set;
@@ -28702,10 +28722,7 @@ function sendOutbox(host, link = readLink(), now = Date.now(), offline = 0, ask 
     const file = path97.join(SENDING, name), id = name.slice(0, -7);
     try {
       const letter = JSON.parse(fs94.readFileSync(file, "utf8"));
-      if (noteOf(letter.note))
-        fs94.renameSync(file, path97.join(SENDING, `${id}.json`));
-      else
-        failLetter(id, file, letter, { why: "It couldn't be delivered.", on: letter.sentTo ?? letter.peer }, now);
+      failLetter(id, file, letter, { on: letter.sentTo ?? letter.peer }, now);
     } catch {}
   }
   const listed = new Set;
@@ -28767,7 +28784,7 @@ function sendOutbox(host, link = readLink(), now = Date.now(), offline = 0, ask 
     const lives = (note && !ownHere.has(letter.to) ? homes.get(letter.to) : undefined) ?? moved.get(letter.to) ?? (note && letter.peer === mine ? mine : undefined);
     const peer = lives ? peers.find((each) => each.key === lives) ?? null : typeof letter.peer === "string" ? peers.find((each) => each.key === letter.peer) ?? null : peerOf(letter.to, peers, told, moved);
     if (now - made > (note ? NOTE_MEMORY : LETTER_MEMORY)) {
-      failLetter(id, file, letter, { why: "It couldn't be delivered within two days.", on: lives ?? (ownHere.has(letter.to) ? mine ?? undefined : peer?.key ?? letter.sentTo) }, now);
+      failLetter(id, file, letter, { why: EXPIRED, on: lives ?? (ownHere.has(letter.to) ? mine ?? undefined : peer?.key ?? letter.sentTo) }, now);
       continue;
     }
     if (lives === mine || !lives && ownHere.has(letter.to)) {
@@ -38079,7 +38096,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "5500d20c57e0";
+var BRIDGE_VERSION = "0e2cf49630f4";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {

@@ -430,8 +430,9 @@ connection.
     refused where it moved to) is told to its sender once, as the sending box's own word: a `note`
     from "Your other computers", queued, whose `line` names the conversation as it's listed and its
     computer (never its address), with why as that computer said it, or for its two days over, in
-    the sending box's words. It takes the letter's place in the outbox (`.failed` while it's
-    written, finished by the next round), so the letter never goes again. One for a conversation that
+    the sending box's words. The letter's taken out of sending first (`<id>.failed`, which the next
+    round finishes should that be cut short), so it never goes again; the notice is a letter of its
+    own, its id made from the letter's, so no word on the letter acts on it. One for a conversation that
     moved (`moved`) goes where it lives now, whichever box it was left for; one that moved to the
     sending box itself is delivered there, as a tool's there is (its answer to the tool waiting,
     relay or not). Before a

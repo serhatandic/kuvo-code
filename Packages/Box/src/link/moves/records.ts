@@ -261,7 +261,11 @@ export function endedLast(id: string, now = Date.now()): string | undefined {
 export function noteEnded(id: string, as: "switched" | "dropped", now = Date.now(), sessions: readonly string[] = [], last?: string): void {
   let kept: Record<string, { as: string; at: number; sessions?: string[]; last?: string }> = {};
   try { kept = JSON.parse(fs.readFileSync(ENDED_FILE, "utf8")) ?? {}; } catch {}
-  for (const [other, one] of Object.entries(kept)) if (!keptFor(one, now)) delete kept[other];
+  for (const [other, one] of Object.entries(kept)) {
+    if (!keptFor(one, now)) delete kept[other];
+    // (A switched one's are only for `switchedHere`.)
+    else if (one.as === "switched" && now - one.at >= MOVED_FOR) delete one.sessions;
+  }
   kept[id] = { as, at: now, ...(sessions.length ? { sessions: [...sessions] } : {}), ...(last ? { last } : {}) };
   writePrivate(ENDED_FILE, JSON.stringify(kept));
 }

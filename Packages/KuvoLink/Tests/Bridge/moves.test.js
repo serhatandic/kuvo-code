@@ -348,7 +348,8 @@ test("a chat moves from this Mac to the machine, with its wake-ups; here it's go
 test("the chat that moved takes messages where it lives now", { timeout: 60_000 }, async t => {
   signal = t.signal;
   // The machine works out its list again (each minute, as asked, as list_agents does) after the
-  // move, and before the message comes: asked, once in ten seconds at most, until it's told this Mac.
+  // move, and before the message comes: asked until it's told this Mac (it answers a peer's ask once
+  // in ten seconds at most).
   const told = () => { try { return JSON.parse(fs.readFileSync(path.join(macHome, "run", "peer-agents.json"), "utf8"))[lab.key]?.at ?? 0; } catch { return 0; } };
   const before = told();
   let asked = 0;
@@ -361,6 +362,7 @@ test("the chat that moved takes messages where it lives now", { timeout: 60_000 
   });
   const listed = JSON.parse(fs.readFileSync(path.join(machineHome, "run", "agents.json"), "utf8"));
   assert.ok(!listed.agents.some(agent => agent.session === "ses_chat1" && agent.machine === listed.machine), "older than the machine's latest forty, the chat isn't in its list");
+  const mailed = relay.delivered.length;
   const sent = await ask("POST", "kuvo/agent-tools", { name: "send_message", arguments: { to: "ses_chat1", text: "Did you book it?", wait: false }, session: "ses_chat2" });
   assert.equal(sent.status, 200);
   assert.equal(sent.json.isError, false, sent.json.text);
@@ -369,7 +371,7 @@ test("the chat that moved takes messages where it lives now", { timeout: 60_000 
   const result = await eventually(() => {
     const prompt = labEngine.prompts.find(each => each.session === "ses_chat1");
     if (prompt) return { prompt };
-    for (const mail of relay.delivered) {
+    for (const mail of relay.delivered.slice(mailed)) {
       try {
         const body = link.readFrame(mail.payload).body;
         const payload = JSON.parse(link.openOneWay(body, macKey, Buffer.from(lab.key, "base64url")).payload.toString());

@@ -921,12 +921,14 @@ test("a message sent without waiting that the box it went to refuses: its sender
   link.letterWent(stranger.peer, { id: "ltr_refused", ok: false, why: "No." }, now);
   assert.ok(fs.existsSync(file), "only the box it went to can refuse it");
   link.letterWent(second.peer, { id: "ltr_refused", ok: false, why: "That conversation doesn't take messages." }, now);
-  assert.ok(JSON.parse(fs.readFileSync(file)).note, "its notice takes its place in the outbox");
-  assert.equal(fs.readdirSync(sending).length, 1, "the message itself never goes again");
+  assert.equal(fs.existsSync(file), false, "the message itself never goes again");
+  const left = fs.readdirSync(sending);
+  assert.equal(left.length, 1);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(sending, left[0]), "utf8")).to, "ses_mine", "its notice, for its sender");
   await link.sendOutbox({ send: () => assert.fail("the notice belongs here") }, link.readLink(), now);
   assert.equal(prompts.length, 1);
   assert.equal(prompts[0].session, "ses_mine");
-  assert.equal(prompts[0].text, "[Not delivered] Your message to API on second wasn't delivered. Second said: That conversation doesn't take messages.");
+  assert.equal(prompts[0].text, `[Not delivered] Your message to API on second wasn't delivered: second said "That conversation doesn't take messages."`);
   assert.equal(prompts[0].delivery, "queue");
   assert.deepEqual(prompts[0].metadata.kuvo.note, { from: "Your other computers", line: "Your message to API on second wasn't delivered" });
   assert.ok(!prompts[0].text.includes("ses_target"));
