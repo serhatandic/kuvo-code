@@ -686,6 +686,18 @@ var peerTargets = () => peerPlaces().targets;
 function engineGet(engine, route, folder) {
   return fetch(`http://127.0.0.1:${engine.port}/${route}`, { headers: { authorization: `Basic ${Buffer.from(`opencode:${engine.password}`).toString("base64")}`, ...folder ? { "x-opencode-directory": encodeURIComponent(folder) } : {} }, signal: AbortSignal.timeout(1e4) }).then((response) => response.ok ? response.json() : Promise.reject(new Error(`${response.status}`)));
 }
+async function pluginsSetUp(engine, folder, signal) {
+  await call(engine, "GET", "/api/provider", undefined, signal ?? AbortSignal.timeout(1e4), folder);
+}
+async function engineList(engine, route, folder) {
+  try {
+    await pluginsSetUp(engine, folder);
+    const listed = (await engineGet(engine, route, folder))?.data;
+    return Array.isArray(listed) && listed.length ? listed : null;
+  } catch {
+    return null;
+  }
+}
 async function asked(target, method, route, body, patience = 30000) {
   const response = await fetch(`http://127.0.0.1:${target.port}/${route}`, {
     method,
@@ -4809,7 +4821,7 @@ export default {
       const exit = call.result.metadata?.exit
       if (typeof exit !== "number" || exit === 0) return
       // (What it printed is its result's output, which the agent reads as its content's first text,
-      // and then "Exited with code N".)
+      // and then how it ended: "Exit code: N" from engine 2.2.7 on, "Exited with code N" before.)
       const output = call.result.output
       const parts = Array.isArray(call.result.content) ? call.result.content : []
       const printed = typeof output?.output === "string" ? output.output : parts.filter(part => part?.type === "text").map(part => part.text).join("\\n")
@@ -4818,7 +4830,10 @@ export default {
       if (typeof answer?.text !== "string") return
       // Not let out: why not, after what it printed, and it ended as it did.
       if (typeof answer.exit !== "number") return void (call.result.content = [...parts, { type: "text", text: answer.text }])
-      call.result.content = [...parts.filter(part => part?.type !== "text"), { type: "text", text: answer.text }, ...(answer.exit ? [{ type: "text", text: "Exited with code " + answer.exit }] : [])]
+      // (Said in its last text, after what it printed, a timeout's note before it on a line.)
+      const last = parts.filter(part => part?.type === "text").at(-1)?.text
+      const ended = typeof last === "string" && /(^|\\n)Exit code: \\S+$/.test(last) ? "Exit code: " : "Exited with code "
+      call.result.content = [...parts.filter(part => part?.type !== "text"), { type: "text", text: answer.text }, ...(answer.exit ? [{ type: "text", text: ended + answer.exit }] : [])]
       if (output && typeof output === "object") call.result.output = { ...output, output: answer.text, exit: answer.exit, truncated: false }
       call.result.metadata = { ...call.result.metadata, exit: answer.exit, truncated: false }
     })
@@ -29275,6 +29290,7 @@ async function engineSkills(engine) {
   if (!engine?.port)
     return [];
   try {
+    await pluginsSetUp(engine, undefined, AbortSignal.timeout(5000));
     const response = await fetch(`http://127.0.0.1:${engine.port}/api/skill`, {
       headers: { authorization: `Basic ${Buffer.from(`opencode:${engine.password}`).toString("base64")}` },
       signal: AbortSignal.timeout(5000)
@@ -30517,6 +30533,7 @@ function readCompatibility(file = COMPATIBILITY_FILE) {
   return {};
 }
 async function learnCompatibility(engine, file = COMPATIBILITY_FILE, layerFile = ENGINE_LAYER_FILE) {
+  await pluginsSetUp(engine);
   const account = await engineGet(engine, "api/integration/github-copilot");
   const connections = isObject(account) && isObject(account.data) ? account.data.connections : undefined;
   if (!Array.isArray(connections))
@@ -30746,6 +30763,8 @@ async function refreshModels(engine, provider, file = MODELS_DUE_FILE) {
   if (!REFRESHABLE.includes(provider))
     return { status: 409, message: "Its models come from a catalog the engine reads again by itself: they show within a few minutes." };
   const unreachable = { status: 503, message: "The engine isn't answering. Try again in a moment." };
+  if (!await pluginsSetUp(engine).then(() => true, () => false))
+    return unreachable;
   const known = await fetch(`http://127.0.0.1:${engine.port}/api/integration/${encodeURIComponent(provider)}`, {
     headers: { authorization: `Basic ${Buffer.from(`opencode:${engine.password}`).toString("base64")}` },
     signal: AbortSignal.timeout(1e4)
@@ -30852,8 +30871,8 @@ async function noteSignIn(event, source) {
     changeEndedSignIns((each) => each.set(provider, active.id));
 }
 async function signInsInUse(engine) {
-  const integrations = (await engineGet(engine, "api/integration"))?.data;
-  if (!Array.isArray(integrations))
+  const integrations = await engineList(engine, "api/integration");
+  if (!integrations)
     throw new Error("The engine didn't list its plans.");
   return (provider) => integrations.find((each) => each?.id === provider)?.connections?.find((each) => each?.type === "credential") ?? null;
 }
@@ -30868,9 +30887,9 @@ async function endedProviders(engine) {
   return [...ended].filter(([provider, credential]) => inUse(provider)?.id === credential).map(([provider]) => provider).sort();
 }
 async function forgetPlan(engine, id) {
-  const integrations = (await engineGet(engine, "api/integration"))?.data;
+  const integrations = await engineList(engine, "api/integration");
   const entries = (await engineGet(engine, "api/credential"))?.data;
-  if (!Array.isArray(integrations) || !Array.isArray(entries))
+  if (!integrations || !Array.isArray(entries))
     return { status: 503, message: "The engine isn't answering. Try again in a moment." };
   const plan = integrations.find((each) => each?.id === id);
   if (!plan || plan.metadata?.source === "mcp")
@@ -37333,11 +37352,14 @@ function readOpencode(file) {
   }
   return found;
 }
-async function integrations(target, signal, fresh = false) {
+async function integrations(target, signal, fresh = false, engine = false) {
   if (!target?.port)
     return null;
-  const data = await call(target, "GET", `/api/integration${fresh ? "?fresh=1" : ""}`, undefined, signal ?? AbortSignal.timeout(20000)).catch(() => null);
-  if (!Array.isArray(data))
+  const wait = signal ?? AbortSignal.timeout(20000);
+  if (engine && !await pluginsSetUp(target, undefined, wait).then(() => true, () => false))
+    return null;
+  const data = await call(target, "GET", `/api/integration${fresh ? "?fresh=1" : ""}`, undefined, wait).catch(() => null);
+  if (!Array.isArray(data) || engine && !data.length)
     return null;
   return data.filter(isObject).filter((each) => typeof each.id === "string").map((each) => ({
     id: each.id,
@@ -37347,7 +37369,7 @@ async function integrations(target, signal, fresh = false) {
   }));
 }
 async function found3({ engine, bridge, authFile = readFrom() }, signal) {
-  const [engineRead, agentsRead] = await Promise.all([integrations(engine, signal), integrations(bridge, signal, true)]);
+  const [engineRead, agentsRead] = await Promise.all([integrations(engine, signal, false, true), integrations(bridge, signal, true)]);
   const unread = [...engineRead ? [] : ["engine"], ...agentsRead ? [] : ["agents"]];
   const engineList = engineRead ?? [];
   const agentList = agentsRead ?? [];
@@ -38001,7 +38023,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "8d31916dede6";
+var BRIDGE_VERSION = "cee2cd615333";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {

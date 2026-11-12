@@ -6,6 +6,7 @@ import path from "node:path";
 import { parsed } from "../../shared/json";
 import type { EngineRecord } from "../../shared/records";
 import type { DeletedSkill, SkillAbout, SkillCollection, SkillRepository as LibraryRepository, SkillLibrary, SkillNamed, Skills, SkillText, SkillTrash } from "../../shared/routes/skills";
+import { pluginsSetUp } from "../engine/client";
 import { listOf, textOf } from "../files";
 import { ENGINE_CONFIG, IN_TEST_FOLDER, K, homeFolder } from "../home";
 import type { AnswerPiece, JSONAnswer, OtherStatus, RouteContext } from "../server/context";
@@ -191,10 +192,12 @@ async function skillRepository(owner: string, name: string): Promise<SkillReposi
 }
 
 /** The skills the engine lists (its own, and those in other tools' folders), `{id, path?}`, which a
- * new one mustn't take; none when it doesn't answer. */
+ * new one mustn't take; none when it doesn't answer. (Once its plugins are set up: those they give
+ * aren't listed before.) */
 async function engineSkills(engine: EngineRecord | null): Promise<EngineSkill[]> {
   if (!engine?.port) return [];
   try {
+    await pluginsSetUp(engine, undefined, AbortSignal.timeout(5_000));
     const response = await fetch(`http://127.0.0.1:${engine.port}/api/skill`, {
       headers: { authorization: `Basic ${Buffer.from(`opencode:${engine.password}`).toString("base64")}` },
       signal: AbortSignal.timeout(5_000),

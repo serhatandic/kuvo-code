@@ -3307,7 +3307,7 @@ class EngineLink {
     return this.names.get(providerID);
   }
   reads = new Map;
-  async read(path, directory, usable = () => true, fresh = false) {
+  async read(path, directory, usable = () => true, fresh = false, settled) {
     const key = `${path}
 ${directory}`;
     const kept = this.reads.get(key);
@@ -3322,9 +3322,14 @@ ${directory}`;
       if (generation === this.generation)
         this.reads.set(key, entry);
     };
-    const pending = this.request("GET", path, undefined, 4000, directory).then((value) => {
+    let setUp = true;
+    const asked = settled ? this.pluginsSetUp(directory).then(async (done) => {
+      setUp = done;
+      return settled(await this.request("GET", path, undefined, 4000, directory));
+    }) : this.request("GET", path, undefined, 4000, directory);
+    const pending = asked.then((value) => {
       if (usable(value))
-        keep({ at: Date.now(), value });
+        keep({ at: setUp ? Date.now() : 0, value });
       else
         keep({ at: 0, value: kept?.value });
       return usable(value) ? value : kept?.value;
@@ -3342,23 +3347,26 @@ ${directory}`;
     return Array.isArray(answer) ? answer : Array.isArray(answer?.data) ? answer.data : [{ info: answer?.data ?? answer }];
   }
   async agent(name, directory) {
-    const usable = (value) => Array.isArray(value?.data) && value.data.length > 0;
-    const named = (value) => (value?.data ?? []).find((agent) => agent?.id === name || agent?.name === name);
-    let answer = await this.read("/api/agent", directory, usable);
-    if (answer !== undefined && !named(answer))
-      answer = await this.read("/api/agent", directory, usable, true);
-    if (answer === undefined)
+    const listed = await this.agentList(directory, name);
+    if (listed === undefined)
       return name === "build" || name === "plan" ? undefined : { system: await this.agentPrompt(name, directory) };
-    const found = named(answer);
+    const found = listed.find(named(name));
     if (!found)
       return;
     return { system: typeof found.system === "string" && found.system.trim() ? found.system.trim() : undefined, permissions: Array.isArray(found.permissions) ? found.permissions : undefined };
   }
   async agents(directory) {
-    const answer = await this.read("/api/agent", directory, (value) => Array.isArray(value?.data) && value.data.length > 0);
-    if (answer === undefined)
-      return;
-    return Array.isArray(answer?.data) ? answer.data : [];
+    return this.agentList(directory);
+  }
+  async agentList(directory, name) {
+    const usable = (value) => Array.isArray(value?.data) && value.data.length > 0;
+    let answer = await this.read("/api/agent", directory, usable, false, withKuvoRules);
+    if (answer !== undefined && name && !answer.data.some(named(name)))
+      answer = await this.read("/api/agent", directory, usable, true, withKuvoRules);
+    return answer?.data;
+  }
+  pluginsSetUp(directory) {
+    return this.request("GET", "/api/provider", undefined, 5000, directory).then(() => true, () => false);
   }
   async policies(directory) {
     const files = await this.settingsFiles(directory);
@@ -3514,6 +3522,29 @@ ${directory}`;
       await Bun.sleep(1000);
     }
   }
+}
+var named = (name) => (agent) => agent?.id === name || agent?.name === name;
+var OUTSIDE = "/kuvo-code/an/outside/folder/*";
+function fromPlugin(agent) {
+  const rules = Array.isArray(agent?.permissions) ? agent.permissions : [];
+  const at = rules.findIndex((rule) => rule?.action === "external_directory" && rule.resource === "*" && rule.effect === "ask");
+  return at >= 0 && rules.slice(at + 1).some((rule) => rule?.action === "external_directory" && rule.effect === "allow" && typeof rule.resource === "string" && rule.resource.endsWith("/tool-output/*"));
+}
+function withKuvoRules(answer) {
+  if (!Array.isArray(answer?.data) || answer.data.some(fromPlugin))
+    return answer;
+  const asking = (agent) => {
+    const permissions = Array.isArray(agent?.permissions) ? agent.permissions : [];
+    const effect = ruled(permissions, "external_directory", [OUTSIDE]);
+    if (effect === "ask" || effect === "deny")
+      return agent;
+    const at = permissions.findLastIndex((rule) => matches(rule.action, "external_directory") && matches(rule.resource, OUTSIDE));
+    if (at >= 0 && permissions[at].action === "external_directory")
+      return agent;
+    const ask = { action: "external_directory", resource: "*", effect: "ask" };
+    return { ...agent, permissions: [...permissions.slice(0, at + 1), ask, ...permissions.slice(at + 1)] };
+  };
+  return { ...answer, data: answer.data.map(asking) };
 }
 
 class EngineError extends Error {
@@ -9899,6 +9930,7 @@ function engineSkills(directory) {
     if (!link2?.ready)
       return [];
     try {
+      await link2.request("GET", "/api/provider", undefined, 1e4, directory);
       const answer = await link2.request("GET", "/api/skill", undefined, 1e4, directory);
       const list = Array.isArray(answer?.data) ? answer.data : Array.isArray(answer) ? answer : [];
       const found = [];
@@ -9980,7 +10012,7 @@ function stamp2(folder) {
     return;
   }
 }
-function named(skills) {
+function named2(skills) {
   const names = new Set;
   const list = [];
   for (const skill of [...skills].sort((a, b) => a.name.localeCompare(b.name))) {
@@ -10007,7 +10039,7 @@ function copy(from, to) {
 function skillsFolder(skills) {
   if (!home || !skills.length)
     return;
-  const list = named(skills);
+  const list = named2(skills);
   if (!list.length)
     return;
   const set = createHash4("sha256").update(list.map((entry) => `${entry.name}\x00${entry.skill.folder}\x00${entry.stamp}`).join(`
@@ -10055,7 +10087,7 @@ function tidy(root) {
   }
 }
 function copySkillsInto(folder, skills) {
-  const list = named(skills);
+  const list = named2(skills);
   const record = join19(folder, ".kuvo-code");
   let before = {};
   try {
@@ -10209,7 +10241,7 @@ function cursorSubagents(subagents) {
 function slug(name, separator = "-") {
   return name.toLowerCase().replace(separator === "_" ? /[^a-z0-9_]+/g : /[^a-z0-9_-]+/g, separator).replace(/^[-_]+|[-_]+$/g, "") || "agent";
 }
-function named2(agents, separator = "-") {
+function named3(agents, separator = "-") {
   const taken = new Set;
   return agents.map((agent) => {
     const base = slug(agent.name, separator);
@@ -10226,7 +10258,7 @@ function codexSubagents(subagents) {
   const config = {};
   const files = {};
   const roles = [];
-  for (const { agent, slug: role } of named2(subagents.agents, "_")) {
+  for (const { agent, slug: role } of named3(subagents.agents, "_")) {
     const name = codexReserved.has(role) ? `${role}_agent` : role;
     const model = nativeModel("codex", agent.model);
     const lines = [`developer_instructions = ${quoted(agent.prompt || agent.description)}`, ...model ? [`model = ${quoted(model)}`] : []];
@@ -10251,7 +10283,7 @@ function codexSubagents(subagents) {
 }
 function grokSubagents(subagents) {
   const files = {};
-  for (const { agent, slug: file } of named2(subagents.agents)) {
+  for (const { agent, slug: file } of named3(subagents.agents)) {
     const model = nativeModel("grok", agent.model);
     files[join20("agents", `${file}.md`)] = frontMatter({ name: agent.name, description: agent.description, ...model ? { model } : {} }, agent.prompt);
   }
@@ -10264,7 +10296,7 @@ function grokSubagents(subagents) {
 var ownFile = /^[a-z0-9_-]+\.md$/;
 function antigravityCustomAgents(home, subagents) {
   const after = {};
-  for (const { agent, slug: file } of named2(subagents.agents)) {
+  for (const { agent, slug: file } of named3(subagents.agents)) {
     const tier = antigravityTier(agent.model);
     after[`${file}.md`] = frontMatter({ name: agent.name, description: agent.description, subagent: true, mainAgent: false, ...tier ? { model: tier } : {} }, agent.prompt);
   }
@@ -23877,11 +23909,14 @@ class SeatAPI {
     return (await this.requester.request("GET", at4(id)))?.data;
   }
   async account(model) {
-    const [providers, integrations] = await Promise.all([this.requester.request("GET", "/api/provider"), this.requester.request("GET", "/api/integration")]);
+    const providers = await this.requester.request("GET", "/api/provider");
     const ready = Array.isArray(providers?.data) ? providers.data.map((each) => each?.id) : [];
     if (!ready.length)
       return;
+    const integrations = await this.requester.request("GET", "/api/integration");
     const listed = Array.isArray(integrations?.data) ? integrations.data : [];
+    if (!listed.length)
+      return;
     const provider = listed.find((each) => each?.id === model.providerID);
     return { name: String(provider?.name ?? model.providerID), signedOut: provider !== undefined && !ready.includes(model.providerID) };
   }
@@ -25325,8 +25360,8 @@ class GroupRunner {
         this.changed(id);
         seat = undefined;
       }
-      const fresh = guest ? undefined : seatStartText(botID, kept.group, all, wrapUp, name, named3(all));
-      const text = guest ? guestText(botID, kept.group, all, namedIn?.author, name) : seat ? turnText(botID, kept.group, unheard, wrapUp, name, named3(unheard)) : fresh;
+      const fresh = guest ? undefined : seatStartText(botID, kept.group, all, wrapUp, name, named4(all));
+      const text = guest ? guestText(botID, kept.group, all, namedIn?.author, name) : seat ? turnText(botID, kept.group, unheard, wrapUp, name, named4(unheard)) : fresh;
       const last = all.at(-1);
       const home = this.home(bot.box);
       const result = await home.turn({
@@ -25338,7 +25373,7 @@ class GroupRunner {
         text,
         ...guest ? {} : { chatSize: new TextEncoder().encode(chatText(botID, kept.group, all, name)).length }
       }, (state) => this.heardOf(state, { id, botID, box: bot.box, guest, run, last: last?.id, retracted, own }), stopped.signal, {
-        shorter: seat ? () => turnText(botID, kept.group, unheard, wrapUp, name, named3(unheard), chatBudget) : undefined,
+        shorter: seat ? () => turnText(botID, kept.group, unheard, wrapUp, name, named4(unheard), chatBudget) : undefined,
         progress: (now) => {
           if (guest || bot.box || now.prompt === undefined || now.sent === undefined || stopped.signal.aborted)
             return;
@@ -26058,7 +26093,7 @@ _Earlier messages aren\u2019t here: this is the latest of the chat._
   }
 }
 var peerPrefix = (key) => key.replace(/[^A-Za-z0-9_-]/g, "").slice(0, 8);
-function named3(unheard) {
+function named4(unheard) {
   const blocks = unheard.slice(-40).filter((message) => message.author === undefined).map((message) => message.named).filter((block) => typeof block === "string" && block.length > 0);
   if (blocks.length <= 1)
     return blocks[0];
@@ -28207,4 +28242,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 619e79972309c00145ecdb2ce5a320041c58aacada41facb021f8c96b524ba23
+// Built from Packages/Box/src/agents b42cec805c3b61390cc0183e84f9929e53518bb37146b40f924a6d02f72ae29e

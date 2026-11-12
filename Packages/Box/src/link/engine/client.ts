@@ -63,6 +63,28 @@ export function engineGet(engine: Target, route: string, folder?: string): Promi
     .then(response => response.ok ? response.json() : Promise.reject(new Error(`${response.status}`)));
 }
 
+/**
+ * Once `engine` has set up its plugins: an engine that opened a folder a moment ago, or is reading
+ * it again, lists its integrations, agents and skills at once with what it has so far (2.2.7 does,
+ * without what its plugins give, and then says `integration.updated` and `agent.updated`), while
+ * its providers wait for them; so they're asked for first. It throws when the engine doesn't answer.
+ */
+export async function pluginsSetUp(engine: Target, folder?: string, signal?: AbortSignal): Promise<void> {
+  await call(engine, "GET", "/api/provider", undefined, signal ?? AbortSignal.timeout(10_000), folder);
+}
+
+/** `engine`'s list at `route` (`api/integration`, a path under its API) once its plugins are set
+ * up; null when it doesn't answer, or lists nothing yet: not read, never "none". */
+export async function engineList(engine: Target, route: string, folder?: string): Promise<unknown[] | null> {
+  try {
+    await pluginsSetUp(engine, folder);
+    const listed = (await engineGet(engine, route, folder) as UncheckedAnswer)?.data;
+    return Array.isArray(listed) && listed.length ? listed : null;
+  } catch {
+    return null;
+  }
+}
+
 /** `target`'s answer to `method route` (with `body` as JSON), as JSON, or null for an empty one; it throws for a status that isn't ok. `patience`: how long it may take. */
 export async function asked(target: Target, method: string, route: string, body?: unknown, patience = 30_000): Promise<unknown> {
   const response = await fetch(`http://127.0.0.1:${target.port}/${route}`, {

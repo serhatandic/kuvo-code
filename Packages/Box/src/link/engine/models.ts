@@ -15,7 +15,7 @@ import { isObject } from "../../shared/json";
 import type { EngineRecord, Target } from "../../shared/records";
 import { writePrivate } from "../files";
 import { RUN } from "../home";
-import { engineGet } from "./client";
+import { engineGet, pluginsSetUp } from "./client";
 import { learnCompatibility } from "./compatibility";
 
 export const MODELS_DUE_FILE = path.join(RUN, "models-due.json");
@@ -142,6 +142,8 @@ async function closeQuiet(engine: Target, folders: string[]): Promise<string[]> 
 export async function refreshModels(engine: EngineRecord, provider: string, file = MODELS_DUE_FILE): Promise<ModelsRefresh> {
   if (!REFRESHABLE.includes(provider)) return { status: 409, message: "Its models come from a catalog the engine reads again by itself: they show within a few minutes." };
   const unreachable = { status: 503 as const, message: "The engine isn't answering. Try again in a moment." };
+  // (Once its plugins are set up: a provider one gives isn't there before.)
+  if (!(await pluginsSetUp(engine).then(() => true, () => false))) return unreachable;
   const known = await fetch(`http://127.0.0.1:${engine.port}/api/integration/${encodeURIComponent(provider)}`, {
     headers: { authorization: `Basic ${Buffer.from(`opencode:${engine.password}`).toString("base64")}` },
     signal: AbortSignal.timeout(10_000),
