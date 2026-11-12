@@ -14638,20 +14638,21 @@ function moveGitSettings(given, file = CONFIG_FILE, lock = CONFIG_LOCK, gitFile 
   if (!ownsSettings())
     return { status: 409, message: "This machine's settings still come from your Mac. Connect it from Kuvo Code on your Mac once." };
   return locked(lock, () => {
-    takeOldBranchPrefix(file, gitFile);
     const { settings, problem } = readSettings(file);
     if (problem)
       return { status: 409, message: `The engine's settings file can't be changed from here: ${problem}` };
-    if (readGitFile(gitFile).moved === true)
-      return { status: 200, moved: false };
-    const changes = offered.filter((key) => valueAt(settings, [...GIT_SETTINGS[key]]) === undefined).map((key) => ({ path: [...GIT_SETTINGS[key]], value: key === "branchPrefix" ? given[key] : given[key].trim() })).filter((change) => change.value !== "" || change.path[0] === GIT_SETTINGS.branchPrefix[0]);
-    if (!changes.length)
-      return { status: 200, moved: false };
-    const written = writeSettings(settings, changes, file);
-    if (written.status !== 200)
-      return { status: written.status, message: written.message };
-    keepInGitFile({ moved: true }, gitFile);
-    return { status: 200, moved: true };
+    const real = offered.map((key) => ({ key, value: key === "branchPrefix" ? given[key] : given[key].trim() })).filter((each) => each.value !== "" || each.key === "branchPrefix");
+    const movedBefore = readGitFile(gitFile).moved === true;
+    const changes = movedBefore ? [] : real.filter((each) => valueAt(settings, [...GIT_SETTINGS[each.key]]) === undefined).map((each) => ({ path: [...GIT_SETTINGS[each.key]], value: each.value }));
+    if (changes.length) {
+      const written = writeSettings(settings, changes, file);
+      if (written.status !== 200)
+        return { status: written.status, message: written.message };
+    }
+    if (!movedBefore && real.length)
+      keepInGitFile({ moved: true }, gitFile);
+    takeOldBranchPrefix(file, gitFile);
+    return { status: 200, moved: changes.length > 0 };
   });
 }
 
@@ -38360,7 +38361,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "5a4aaf3e9c5a";
+var BRIDGE_VERSION = "26e21b3467a1";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
@@ -43107,6 +43108,7 @@ async function box(command) {
         seed = JSON.parse(await input() || "null");
       } catch {}
       const adopted = adoptBox(seed);
+      keepOldBranchPrefix();
       await upgradeIntegrations().catch(() => {});
       return say({ ...adopted, settings: readSettings().settings ?? adopted.settings });
     }
@@ -43271,7 +43273,6 @@ async function serve() {
   keepFence();
   keepApprovals();
   keepGroupSettings();
-  keepOldBranchPrefix();
   keepEngineDefaults();
   holdVault(engineHandler(readEngineFile, { name: os18.hostname() }, readBridgeFile));
   console.log(JSON.stringify({ url: `http://127.0.0.1:${server.address().port}` }));

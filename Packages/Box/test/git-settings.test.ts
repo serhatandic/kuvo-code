@@ -106,6 +106,30 @@ test("a box whose settings weren't its own as it started takes its old branch pr
   expect((await phonesWorktree()).branch).toMatch(/^ada\/brave-otter-\d+$/)
 })
 
+test("your Mac's own branch prefix, moved as the box's settings become its own, comes before the one the box kept", async () => {
+  put(gitFile, { branchPrefix: "ada/" })
+  put(settingsFile, {})
+  const { moveGitSettings } = await import("../src/link/areas/git-words")
+  expect(moveGitSettings({ branchPrefix: "team/" })).toEqual({ status: 200, moved: true })
+  expect((await settings()).branch_prefix).toBe("team/")
+  expect(kept()).toEqual({ moved: true })
+  expect((await phonesWorktree()).branch).toMatch(/^team\/brave-otter-\d+$/)
+})
+
+test("a Mac whose instructions the box had its own of already doesn't bring them back after you clear the box's", async () => {
+  // Set on this computer from another Mac (or the phone) first.
+  put(settingsFile, { commit_instructions: "Mine here." })
+  const { moveGitSettings } = await import("../src/link/areas/git-words")
+  expect(moveGitSettings({ commitInstructions: "From an old Mac." })).toEqual({ status: 200, moved: false })
+  expect((await settings()).commit_instructions).toBe("Mine here.")
+
+  // Cleared here; the old Mac connects again, as it does each time.
+  const { changeSettings } = await import("../src/link/areas/config")
+  expect(changeSettings([{ path: ["commit_instructions"], value: null }], settingsFile).status).toBe(200)
+  expect(moveGitSettings({ commitInstructions: "From an old Mac." })).toEqual({ status: 200, moved: false })
+  expect(await settings()).toEqual({})
+})
+
 test("a Mac with nothing to give doesn't turn a later Mac's Settings › Git away", async () => {
   put(settingsFile, {})
   const { moveGitSettings } = await import("../src/link/areas/git-words")

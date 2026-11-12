@@ -494,6 +494,8 @@ async function box(command: string): Promise<void> {
       let seed: { settings?: unknown; keys?: unknown } | null = null;
       try { seed = JSON.parse((await input()) || "null"); } catch {}
       const adopted = adoptBox(seed);
+      // Its settings its own now: the branch prefix it kept before, taken into them.
+      keepOldBranchPrefix();
       // As its catalogs have them now: a Mac runs this as it connects, having just put newer ones here,
       // whether or not this box has a bridge or starts its engine again. (Stays when adopting goes.)
       await upgradeIntegrations().catch(() => {});
@@ -665,7 +667,6 @@ async function serve(): Promise<void> {
   keepFence();
   keepApprovals();
   keepGroupSettings();
-  keepOldBranchPrefix();
   keepEngineDefaults();
   // The vault, held here (on a machine, `run` holds it; a test's box serves alone), its asks told
   // to your phones through this Mac's link: listening before it says where it is, so what reaches
