@@ -19868,8 +19868,11 @@ class JSONLFiles {
     } catch {
       return;
     }
-    for (const path of this.forgotten)
-      rmSync14(join30(this.folder, keptName(path)), { force: true });
+    for (const path of this.forgotten) {
+      try {
+        rmSync14(join30(this.folder, keptName(path)), { force: true });
+      } catch {}
+    }
     this.forgotten.clear();
     for (const path of this.changed) {
       const file = join30(this.folder, keptName(path));
@@ -20012,6 +20015,8 @@ function usageRows(boxes) {
     };
     if (members.every((member) => member.box.away))
       row.away = true;
+    if (members.some((member) => member.account.cut))
+      row.cut = true;
     return row;
   });
 }
@@ -20069,7 +20074,7 @@ class Usage {
   async round() {
     const pricing = this.pricing.current();
     const at = this.now();
-    const since = at - KEPT_DAYS * DAY2;
+    const since = Math.floor((at - KEPT_DAYS * DAY2) / DAY2) * DAY2;
     const sources = this.sources();
     let complete = true;
     for (const source of sources) {
@@ -25988,6 +25993,7 @@ var SKEW = MINUTE3;
 var MOST_ACCOUNTS = 50;
 var MOST_USES = 50000;
 var MOST_BYTES2 = 400000;
+var RECENT = 2 * 24 * 60 * MINUTE3;
 var SERVICE = /^[a-z0-9][a-z0-9-]{0,39}$/;
 var text4 = (value, most = 200) => typeof value === "string" && value ? value.slice(0, most) : undefined;
 
@@ -26029,12 +26035,16 @@ class UsagePeers {
       return;
     const now = this.now();
     const { accounts, digest } = this.shared();
+    const from = Math.floor((now - RECENT) / SLOT);
+    const recent = () => recentOf(accounts, from);
     for (const { key } of this.directory.peerBoxes()) {
       const last = this.told.get(key);
-      if (!last || changed && last.digest !== digest)
-        this.transport.send(key, { kind: "usage", at: now, accounts, digest, ...!last ? { ask: true } : {} }, false);
+      if (!last)
+        this.transport.send(key, { kind: "usage", at: now, accounts, digest, ask: true }, false);
+      else if (last.digest !== digest && (changed || now - last.at >= TELL_AGAIN))
+        this.transport.send(key, { kind: "usage", at: now, accounts: recent(), from, digest }, false);
       else if (now - last.at >= TELL_AGAIN)
-        this.transport.send(key, { kind: "usage", at: now, digest, ...last.digest === digest ? {} : { accounts } }, false);
+        this.transport.send(key, { kind: "usage", at: now, digest }, false);
       else
         continue;
       this.told.set(key, { digest, at: now });
@@ -26047,7 +26057,7 @@ class UsagePeers {
     if (now - this.refreshedElsewhere < MINUTE3)
       return;
     this.refreshedElsewhere = now;
-    const { digest } = this.shared();
+    const digest = this.lastDigest ?? this.shared().digest;
     for (const { key } of this.directory.peerBoxes())
       this.transport.send(key, { kind: "usage", at: now, digest, refresh: true }, false);
   }
@@ -26060,29 +26070,35 @@ class UsagePeers {
     const before = this.peers.get(from);
     const name = this.directory.peerBoxes().find((box) => box.key === from)?.name ?? before?.name ?? "another computer";
     const digest = text4(mail.digest, 64);
+    const wasAway = !!before && now - before.heard > PEER_AWAY;
+    let whole = !!before && !!digest && before.digest === digest;
     if (Array.isArray(mail.accounts)) {
       const off = typeof mail.at === "number" && Number.isFinite(mail.at) && Math.abs(now - mail.at) >= SKEW ? now - mail.at : 0;
-      const accounts = mail.accounts.slice(0, MOST_ACCOUNTS).flatMap((account) => {
+      let accounts = mail.accounts.slice(0, MOST_ACCOUNTS).flatMap((account) => {
         const taken = takenAccount(account, off, now);
         return taken ? [taken] : [];
       });
+      const since = typeof mail.from === "number" && Number.isInteger(mail.from) && mail.from > 0 ? mail.from * SLOT : undefined;
+      if (since !== undefined)
+        accounts = accounts.map((account) => withOlder(account, before?.accounts.find((kept) => kept.provider === account.provider), since));
+      whole = !!digest && digestOf2(accounts.map(toldOf2)) === digest;
       this.peers.set(from, { name, heard: now, ...digest ? { digest } : {}, accounts });
       this.save();
       this.usage.peersChanged();
-    } else if (before && digest && before.digest === digest) {
-      const away = now - before.heard > PEER_AWAY;
+    } else if (before) {
       before.heard = now;
       before.name = name;
-      if (away)
+      if (wasAway)
         this.usage.peersChanged();
-    } else if (now - (this.askedBack.get(from) ?? -Infinity) >= MINUTE3) {
+    }
+    if (!whole && digest && mail.ask !== true && now - (this.askedBack.get(from) ?? -Infinity) >= MINUTE3) {
       this.askedBack.set(from, now);
       const mine = this.shared();
       this.transport.send(from, { kind: "usage", at: now, ...mine, ask: true }, false);
       this.told.set(from, { digest: mine.digest, at: now });
     }
-    if (mail.ask === true || before && now - before.heard > PEER_AWAY)
-      this.answer(from);
+    if (mail.ask === true || wasAway)
+      this.answer(from, mail.ask === true);
     if (mail.refresh === true && now - (this.readFor.get(from) ?? -Infinity) >= MINUTE3) {
       this.readFor.set(from, now);
       const reading = this.usage.refresh().then(() => this.answer(from, true));
@@ -26105,15 +26121,25 @@ class UsagePeers {
     this.transport.send(key, { kind: "usage", at: now, ...mine }, false);
     this.told.set(key, { digest: mine.digest, at: now });
   }
+  lastDigest;
   shared() {
     const accounts = this.usage.own().slice(0, MOST_ACCOUNTS).map(({ slots, ...account }) => ({ ...account, slots: keptSlots(slots) }));
-    while (Buffer.byteLength(JSON.stringify(accounts)) > MOST_BYTES2) {
-      const oldest = accounts.filter((account) => account.slots.used.length).sort((a, b) => a.slots.used[0][0] - b.slots.used[0][0])[0];
-      if (!oldest)
+    for (let bytes = Buffer.byteLength(JSON.stringify(accounts));bytes > MOST_BYTES2; bytes = Buffer.byteLength(JSON.stringify(accounts))) {
+      const uses = accounts.reduce((sum, account) => sum + account.slots.used.length, 0);
+      if (!uses)
         break;
-      oldest.slots = { ...oldest.slots, used: oldest.slots.used.slice(Math.max(1, Math.floor(oldest.slots.used.length / 10))) };
+      const over = Math.ceil((bytes - MOST_BYTES2) / bytes * uses) + 16;
+      const cutoff = accounts.flatMap((account) => account.slots.used.map((use) => use[0])).sort((a, b) => a - b)[Math.min(over, uses) - 1];
+      for (const account of accounts) {
+        const kept = account.slots.used.filter((use) => use[0] > cutoff);
+        if (kept.length === account.slots.used.length)
+          continue;
+        account.slots = keptSlots(slotsFrom({ ...account.slots, used: kept, ...account.slots.unknown ? { unknown: account.slots.unknown.filter((each) => each[0] > cutoff) } : {} }, Infinity));
+        account.cut = true;
+      }
     }
-    const digest = createHash13("sha256").update(JSON.stringify(accounts.map(({ scanned: _, ...account }) => account))).digest("hex").slice(0, 32);
+    const digest = digestOf2(accounts);
+    this.lastDigest = digest;
     return { accounts, digest };
   }
   directorySaid() {
@@ -26159,6 +26185,33 @@ class UsagePeers {
     } catch {}
   }
 }
+function digestOf2(accounts) {
+  const canonical = accounts.map((account) => [account.provider, account.service, account.agent ?? null, account.account ?? null, account.label ?? null, account.identity ?? null, account.cut === true, account.slots.models, account.slots.used, account.slots.unknown ?? []]);
+  return createHash13("sha256").update(JSON.stringify(canonical)).digest("hex").slice(0, 32);
+}
+var toldOf2 = ({ slots, ...account }) => ({ ...account, slots: keptSlots(slots) });
+function recentOf(accounts, from) {
+  return accounts.map((account) => ({
+    ...account,
+    slots: { models: account.slots.models, used: account.slots.used.filter((use) => use[0] >= from), ...account.slots.unknown ? { unknown: account.slots.unknown.filter((each) => each[0] >= from) } : {} }
+  }));
+}
+function withOlder(account, kept, since) {
+  const slots = noSlots();
+  for (const [slot, models] of kept?.slots.used ?? [])
+    if (slot < since)
+      slots.used.set(slot, models);
+  for (const [slot, models] of kept?.slots.unknown ?? [])
+    if (slot < since)
+      slots.unknown.set(slot, models);
+  for (const [slot, models] of account.slots.used)
+    if (slot >= since)
+      slots.used.set(slot, models);
+  for (const [slot, models] of account.slots.unknown)
+    if (slot >= since)
+      slots.unknown.set(slot, models);
+  return { ...account, slots };
+}
 function takenAccount(given, off, now) {
   if (!given || typeof given !== "object")
     return null;
@@ -26174,7 +26227,8 @@ function takenAccount(given, off, now) {
     ...text4(account.label, 100) ? { label: text4(account.label, 100) } : {},
     ...typeof account.identity === "string" && /^[0-9a-f]{16}$/.test(account.identity) ? { identity: account.identity } : {},
     ...scanned ? { scanned } : {},
-    slots: slotsFrom(account.slots, MOST_USES)
+    slots: slotsFrom(account.slots, MOST_USES),
+    ...account.cut === true ? { cut: true } : {}
   };
 }
 
@@ -30884,4 +30938,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 3ba47ceb91d113c419b2691869c78b3c48f708ebdc19af31dceb023851b7d110
+// Built from Packages/Box/src/agents 3e23abaca59d2c254e836a880c6d6ae8e00d1e48abb9859e4c5da2badee21fd3

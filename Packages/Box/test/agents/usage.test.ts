@@ -384,7 +384,7 @@ describe("across your computers", () => {
   test("one account used on two computers is one row, its usage added up from both; another account is a row of its own; each box lists them all", async () => {
     const macHome = mkdtempSync(join(base, "mac-"))
     const devHome = mkdtempSync(join(base, "devbox-"))
-    const mac = new PeerBox("mac-key", "MacBook", relay, macHome, [account(macHome, "work", reply("2026-11-12T09:00:00Z", "m1", "claude-opus-4-5", 1000, 0))], () => "aaaaaaaaaaaaaaaa", now)
+    const mac = new PeerBox("mac-key", "MacBook", relay, macHome, [account(macHome, "work", reply("2026-11-05T09:00:00Z", "m0", "claude-opus-4-5", 400, 0) + reply("2026-11-12T09:00:00Z", "m1", "claude-opus-4-5", 1000, 0))], () => "aaaaaaaaaaaaaaaa", now)
     const dev = new PeerBox(
       "dev-key",
       "devbox",
@@ -429,6 +429,18 @@ describe("across your computers", () => {
     expect([onDev.days[0]!.tokens, onDev.boxes.map((each) => [each.name, each.away ?? false])]).toEqual([1300, [["devbox", false], ["MacBook", false]]])
     listening()
 
+    // The Mac's Claude writes more: only its last two days go, and the devbox, putting them with what
+    // it had, has all of it (nothing asked again).
+    appendFileSync(join(macHome, "accounts", "work", "projects", "p", "log.jsonl"), reply("2026-11-12T11:30:00Z", "m2", "claude-opus-4-5", 9, 0))
+    at += MINUTE
+    const partly = relay.sent.length
+    await mac.usage.refresh()
+    await relay.settled()
+    const update = relay.sent.slice(partly)
+    expect(update.map((each) => [each.from, each.to, typeof each.mail.from, each.mail.ask ?? false])).toEqual([["mac-key", "dev-key", "number", false]])
+    expect(JSON.stringify(update[0]!.mail.accounts)).not.toContain(String(Date.parse("2026-11-05T09:00:00Z") / (15 * MINUTE)))
+    expect(dev.usage.view("UTC").rows[0]!.days.map((day) => [day.date, day.tokens])).toEqual([["2026-11-12", 1309], ["2026-11-05", 400]])
+
     // What went: slots, models and numbers, hashed identities; no path, log or sign-in.
     const told = JSON.stringify(relay.sent.map((each) => each.mail))
     expect(told).not.toContain(macHome)
@@ -443,7 +455,7 @@ describe("across your computers", () => {
 
     // Removed from your computers: what it said goes.
     await mac.meet([])
-    expect(mac.usage.view("UTC").rows.map((row) => [row.id, row.days[0]!.tokens])).toEqual([["claude#aaaaaaaaaaaaaaaa", 1000]])
+    expect(mac.usage.view("UTC").rows.map((row) => [row.id, row.days[0]!.tokens])).toEqual([["claude#aaaaaaaaaaaaaaaa", 1009]])
     mac.stop()
     dev.stop()
   })

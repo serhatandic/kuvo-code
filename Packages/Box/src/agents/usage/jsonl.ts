@@ -129,7 +129,11 @@ export class JSONLFiles<T> {
     } catch {
       return
     }
-    for (const path of this.forgotten) rmSync(join(this.folder, keptName(path)), { force: true })
+    for (const path of this.forgotten) {
+      try {
+        rmSync(join(this.folder, keptName(path)), { force: true })
+      } catch {}
+    }
     this.forgotten.clear()
     for (const path of this.changed) {
       const file = join(this.folder, keptName(path))

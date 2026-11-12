@@ -3745,7 +3745,7 @@ hourly, kept in the bridge's `usage/pricing`): estimates, not your bill. A clien
   - A `row` is one account across your computers, with the same `id` as its plan limits row
     (`<service>#<identity>`, or `<box key>/<provider>` for one that can't say who it is), so a
     client puts an account's limits and its usage side by side: `{id, service, provider, agent?,
-    account?, label?, identity?, scanned?, boxes, away?, days}`, `boxes` as limits' rows have them
+    account?, label?, identity?, scanned?, boxes, away?, cut?, days}`, `boxes` as limits' rows have them
     (`{key, name, provider, agent?, account?, label?, scanned?, here?, away?}`). Its `days` are the
     **sum** of every box's own (each box reads only its own logs). A conversation moved to another
     computer (`kuvo/moves`) is copied there, and the one it left keeps its copy for a while: its
@@ -3777,17 +3777,21 @@ hourly, kept in the bridge's `usage/pricing`): estimates, not your bill. A clien
   Kept 35 days.
 - **Across your computers**, as plan limits are ("Plan limits", "Across your computers": the same
   boxes, no hub, each working with the others off): each box tells each of them its own accounts'
-  use, `{"seat": {"kind": "usage", at, digest, accounts?, ask?, refresh?}}` through its link (in
-  parts when it's big, as a group chat's mail is; to and from a box a peer vouches for too, which
-  sends nothing else that's taken): in full (`accounts`) after a read that changed what they used
-  (not only when they were read), and with `ask` to one it hasn't told since its bridge or link
-  started; every ten minutes otherwise, `digest` alone, saying what it told is as it was. `digest`
-  is a hash of what it tells; a receiver whose last from it has another asks again (`ask`, at most
-  once a minute). Each account is `{provider, service, agent?, account?, label?, identity?,
-  scanned?, slots: {models, used: [[slot, model, tokens, dollars]], unknown?: [[slot, model]]}}`:
-  `slot`, quarter hours since 1970 (UTC), `model`, an index into `models`, `tokens` a whole
-  number. As many as fit in 400 KB, the oldest left out first. Never a log, a message, a path or a
-  sign-in. `refresh: true`: read yours now and tell (each box asks at most once a minute, and
+  use, `{"seat": {"kind": "usage", at, digest, accounts?, from?, ask?, refresh?}}` through its link
+  (in parts when it's big, as a group chat's mail is; to and from a box a peer vouches for too,
+  which sends nothing else that's taken): all of it (`accounts`) with `ask` to one it hasn't told
+  since its bridge or link started, and to one that asks; after a read that changed what they used
+  (not only when they were read), only the last two days' slots, `from` the first slot they're
+  from, the receiver keeping its older ones as told before; every ten minutes otherwise, `digest`
+  alone, saying what it told is as it was. `digest` is a hash of all of it (each account's
+  `provider`, `service`, `agent`, `account`, `label`, `identity`, `cut` and slots as kept); a
+  receiver whose own, put together, isn't that asks for all of it (`ask`, at most once a minute),
+  and is answered at once. Each account is `{provider, service, agent?, account?, label?,
+  identity?, scanned?, cut?, slots: {models, used: [[slot, model, tokens, dollars]], unknown?:
+  [[slot, model]]}}`: `slot`, quarter hours since 1970 (UTC), `model`, an index into `models`,
+  `tokens` a whole number. As many as fit in 400 KB, the oldest left out first, an account so cut
+  marked `cut` (and its rows elsewhere `cut: true`: their oldest days are short). Never a log, a
+  message, a path or a sign-in. `refresh: true`: read yours now and tell (each box asks at most once a minute, and
   reads for each at most once a minute). The receiver keeps the last from each
   (`usage/peers.json`), through a restart; a box not heard from for 25 minutes is away (its rows
   `away` when every box of theirs is), what it said kept; a computer you removed goes, with what

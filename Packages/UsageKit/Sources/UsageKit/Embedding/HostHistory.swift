@@ -64,14 +64,15 @@ public final class HostHistory {
     }
 
     /// A covered provider's history as the panel's own scan of its logs would have been, or nil for
-    /// one the host doesn't cover. Only its main card (`claude`) takes the host's days; its cards for
-    /// other logins of yours read none (nil inside: nothing of their own), as does the main one until
-    /// the host has answered (what it last showed stays). Every account the host runs is in the
-    /// main card's: none is counted on two cards.
+    /// one the host doesn't cover. Only its main card (`claude`) takes the host's days, once the
+    /// host has answered (until then nil inside: what it last showed stays); its cards for other
+    /// logins of yours show none (an empty history, so what they had before goes). Every account
+    /// the host runs is in the main card's: none is counted on two cards.
     func scan(for providerID: String) -> LogUsageScan?? {
         let family = ProviderAccountID.family(of: providerID)
         guard covered.contains(family) else { return nil }
-        guard providerID == family, answered else { return .some(nil) }
+        guard providerID == family else { return .some(Self.scan([])) }
+        guard answered else { return .some(nil) }
         return .some(Self.scan(days[family] ?? []))
     }
 

@@ -121,8 +121,7 @@ final class UsageBoxParityTests: XCTestCase {
         XCTAssertNil(history.scan(for: "claude")!, "nothing yet: what the card showed stays")
         history.update(days: ["claude": [day]], covered: ["claude"])
         XCTAssertEqual(history.scan(for: "claude")??.series.daily.map(\.totalTokens), [10])
-        XCTAssertNotNil(history.scan(for: "claude@1a2b3c4d"))
-        XCTAssertNil(history.scan(for: "claude@1a2b3c4d")!, "another login's card: none of its own")
+        XCTAssertEqual(history.scan(for: "claude@1a2b3c4d")??.series.daily, [], "another login's card: none, what it had before gone")
         XCTAssertNil(history.scan(for: "codex"), "not covered: it reads its own")
         // Covered, with nothing in the window: an empty history, not the last one kept.
         history.update(days: [:], covered: ["claude"])

@@ -52,6 +52,8 @@ export interface OwnUsage {
   /** When its logs were last read here, in ms. */
   scanned?: number
   slots: Slots
+  /** A peer's whose oldest use was left out of its mail (too much to tell): this box has less of it. */
+  cut?: true
 }
 
 /** A computer an account's usage comes from, as a row names it. */
@@ -82,6 +84,8 @@ export interface UsageRow {
   boxes: UsageRowBox[]
   /** Every computer it's on is away: its numbers are as of then. */
   away?: true
+  /** One of its computers told less than all of its use (`OwnUsage.cut`): its oldest days are short. */
+  cut?: true
   slots: Slots
 }
 
@@ -137,6 +141,7 @@ export function usageRows(boxes: UsageBox[]): UsageRow[] {
       slots: summed(members.map((member) => member.account.slots)),
     }
     if (members.every((member) => member.box.away)) row.away = true
+    if (members.some((member) => member.account.cut)) row.cut = true
     return row
   })
 }
@@ -208,7 +213,8 @@ export class Usage {
   private async round() {
     const pricing = this.pricing.current()
     const at = this.now()
-    const since = at - KEPT_DAYS * DAY
+    // (From a UTC midnight: what ages out goes once a day, not a little each round.)
+    const since = Math.floor((at - KEPT_DAYS * DAY) / DAY) * DAY
     const sources = this.sources()
     let complete = true
     for (const source of sources) {

@@ -1,12 +1,14 @@
 // What your accounts used, shared between your computers (PROTOCOL.md, "Usage history"): each box
 // tells the boxes it shares plan limits with (its peers and those they vouch for, `LimitsDirectory`)
 // its own accounts' slots (who each account is, as a hash, its name, and each quarter hour's tokens
-// and dollars by model; never a sign-in, a log or a message) when they changed, and keeps the last
-// each one told, through a restart. Every box then lists every account across them, each account's
-// slots added up from every box it's used on (`usageRows`). In between, every ten minutes, a box
-// says only that it's there and what it told is as it was (`digest`); a box that missed it asks
-// again. One that stops telling keeps what it last said, and is marked away. The mail goes through
-// the box's link, in parts when it's big, as a group chat's does.
+// and dollars by model; never a sign-in, a log or a message), and keeps the last each one told,
+// through a restart. Every box then lists every account across them, each account's slots added up
+// from every box it's used on (`usageRows`). In full when a box asks (it started, or what it has
+// isn't what was told); when they changed, only the last two days (`from`), the receiver keeping
+// the rest; and every ten minutes, only that what was told is as it was. Each mail says what the
+// whole is (`digest`): a box whose own isn't that asks for it in full. One that stops telling keeps
+// what it last said, and is marked away. The mail goes through the box's link, in parts when it's
+// big, as a group chat's does.
 
 import { createHash } from "node:crypto"
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs"
@@ -14,7 +16,7 @@ import { dirname } from "node:path"
 import { kinds, type AgentKind } from "../accounts"
 import type { LimitsDirectory, LimitsTransport } from "../limits-peers"
 import type { LimitsService } from "../limits"
-import { keptSlots, slotsFrom, trimmed, type KeptSlots } from "./history"
+import { keptSlots, noSlots, slotsFrom, SLOT, trimmed, type KeptSlots } from "./history"
 import { usageRows, type OwnUsage, type Usage, type UsageBox, type UsageRow } from "./usage"
 
 /** One account as a box tells it. */
@@ -29,7 +31,9 @@ export interface UsageMail {
   at: number
   /** What its accounts used: none in a mail that only says what it told is as it was (`digest`). */
   accounts?: ToldUsage[]
-  /** What its accounts used, hashed: the same as last told, nothing new. */
+  /** The accounts' slots are those from this one on (quarter hours since 1970), the older as told before. */
+  from?: number
+  /** What its accounts used, all of it, hashed (`digestOf`): the receiver's, put together, is the same. */
   digest: string
   /** Tell me yours (it just started, or missed what you told). */
   ask?: true
@@ -60,6 +64,8 @@ const MOST_ACCOUNTS = 50
 const MOST_USES = 50_000
 /** A mail at most this big, its JSON in UTF-8 (the link sends it in parts; it takes 512 KB at most). */
 const MOST_BYTES = 400_000
+/** What changed is told from this far back: a round is minutes apart, so the last two days hold it. */
+const RECENT = 2 * 24 * 60 * MINUTE
 
 const SERVICE = /^[a-z0-9][a-z0-9-]{0,39}$/
 const text = (value: unknown, most = 200) => (typeof value === "string" && value ? value.slice(0, most) : undefined)
@@ -109,10 +115,13 @@ export class UsagePeers {
     if (!this.transport.followed || !this.directory.told) return
     const now = this.now()
     const { accounts, digest } = this.shared()
+    const from = Math.floor((now - RECENT) / SLOT)
+    const recent = () => recentOf(accounts, from)
     for (const { key } of this.directory.peerBoxes()) {
       const last = this.told.get(key)
-      if (!last || (changed && last.digest !== digest)) this.transport.send(key, { kind: "usage", at: now, accounts, digest, ...(!last ? { ask: true as const } : {}) }, false)
-      else if (now - last.at >= TELL_AGAIN) this.transport.send(key, { kind: "usage", at: now, digest, ...(last.digest === digest ? {} : { accounts }) }, false)
+      if (!last) this.transport.send(key, { kind: "usage", at: now, accounts, digest, ask: true }, false)
+      else if (last.digest !== digest && (changed || now - last.at >= TELL_AGAIN)) this.transport.send(key, { kind: "usage", at: now, accounts: recent(), from, digest }, false)
+      else if (now - last.at >= TELL_AGAIN) this.transport.send(key, { kind: "usage", at: now, digest }, false)
       else continue
       this.told.set(key, { digest, at: now })
     }
@@ -124,7 +133,8 @@ export class UsagePeers {
     const now = this.now()
     if (now - this.refreshedElsewhere < MINUTE) return
     this.refreshedElsewhere = now
-    const { digest } = this.shared()
+    // (A refresh only asks: what it says of this box is as last told.)
+    const digest = this.lastDigest ?? this.shared().digest
     for (const { key } of this.directory.peerBoxes()) this.transport.send(key, { kind: "usage", at: now, digest, refresh: true }, false)
   }
 
@@ -136,29 +146,35 @@ export class UsagePeers {
     const before = this.peers.get(from)
     const name = this.directory.peerBoxes().find((box) => box.key === from)?.name ?? before?.name ?? "another computer"
     const digest = text(mail.digest, 64)
+    const wasAway = !!before && now - before.heard > PEER_AWAY
+    let whole = !!before && !!digest && before.digest === digest
     if (Array.isArray(mail.accounts)) {
       const off = typeof mail.at === "number" && Number.isFinite(mail.at) && Math.abs(now - mail.at) >= SKEW ? now - mail.at : 0
-      const accounts = mail.accounts.slice(0, MOST_ACCOUNTS).flatMap((account) => {
+      let accounts = mail.accounts.slice(0, MOST_ACCOUNTS).flatMap((account) => {
         const taken = takenAccount(account, off, now)
         return taken ? [taken] : []
       })
+      // Only its recent slots: the older ones as it told them before.
+      const since = typeof mail.from === "number" && Number.isInteger(mail.from) && mail.from > 0 ? mail.from * SLOT : undefined
+      if (since !== undefined) accounts = accounts.map((account) => withOlder(account, before?.accounts.find((kept) => kept.provider === account.provider), since))
+      whole = !!digest && digestOf(accounts.map(toldOf)) === digest
       this.peers.set(from, { name, heard: now, ...(digest ? { digest } : {}), accounts })
       this.save()
       this.usage.peersChanged()
-    } else if (before && digest && before.digest === digest) {
-      // As it told before: there still.
-      const away = now - before.heard > PEER_AWAY
+    } else if (before) {
       before.heard = now
       before.name = name
-      if (away) this.usage.peersChanged()
-    } else if (now - (this.askedBack.get(from) ?? -Infinity) >= MINUTE) {
-      // What it says is as it was isn't what this box has: asked for it.
+      if (wasAway) this.usage.peersChanged()
+    }
+    // What this box has of it isn't what it says it told (it missed some): asked for all of it.
+    if (!whole && digest && mail.ask !== true && now - (this.askedBack.get(from) ?? -Infinity) >= MINUTE) {
       this.askedBack.set(from, now)
       const mine = this.shared()
       this.transport.send(from, { kind: "usage", at: now, ...mine, ask: true }, false)
       this.told.set(from, { digest: mine.digest, at: now })
     }
-    if (mail.ask === true || (before && now - before.heard > PEER_AWAY)) this.answer(from)
+    // (Asked: answered whatever was told lately, as the asker asks at most once a minute.)
+    if (mail.ask === true || wasAway) this.answer(from, mail.ask === true)
     if (mail.refresh === true && now - (this.readFor.get(from) ?? -Infinity) >= MINUTE) {
       this.readFor.set(from, now)
       const reading = this.usage.refresh().then(() => this.answer(from, true))
@@ -187,21 +203,29 @@ export class UsagePeers {
    * This box's own accounts as told, as many uses as fit in a mail (the oldest left out first), and
    * their digest: what they used, not when each was read.
    */
+  private lastDigest?: string
+
   private shared(): { accounts: ToldUsage[]; digest: string } {
-    const accounts = this.usage
+    const accounts: ToldUsage[] = this.usage
       .own()
       .slice(0, MOST_ACCOUNTS)
       .map(({ slots, ...account }) => ({ ...account, slots: keptSlots(slots) }))
-    while (Buffer.byteLength(JSON.stringify(accounts)) > MOST_BYTES) {
-      // (The account with the oldest use gives it up.)
-      const oldest = accounts.filter((account) => account.slots.used.length).sort((a, b) => a.slots.used[0]![0] - b.slots.used[0]![0])[0]
-      if (!oldest) break
-      oldest.slots = { ...oldest.slots, used: oldest.slots.used.slice(Math.max(1, Math.floor(oldest.slots.used.length / 10))) }
+    for (let bytes = Buffer.byteLength(JSON.stringify(accounts)); bytes > MOST_BYTES; bytes = Buffer.byteLength(JSON.stringify(accounts))) {
+      // The oldest uses across the accounts left out, about as many as are too many (and a few more).
+      const uses = accounts.reduce((sum, account) => sum + account.slots.used.length, 0)
+      if (!uses) break
+      const over = Math.ceil(((bytes - MOST_BYTES) / bytes) * uses) + 16
+      const cutoff = accounts.flatMap((account) => account.slots.used.map((use) => use[0])).sort((a, b) => a - b)[Math.min(over, uses) - 1]!
+      for (const account of accounts) {
+        const kept = account.slots.used.filter((use) => use[0] > cutoff)
+        if (kept.length === account.slots.used.length) continue
+        // (Kept as a receiver keeps it, its models only those still used: the digests agree.)
+        account.slots = keptSlots(slotsFrom({ ...account.slots, used: kept, ...(account.slots.unknown ? { unknown: account.slots.unknown.filter((each) => each[0] > cutoff) } : {}) }, Infinity))
+        account.cut = true
+      }
     }
-    const digest = createHash("sha256")
-      .update(JSON.stringify(accounts.map(({ scanned: _, ...account }) => account)))
-      .digest("hex")
-      .slice(0, 32)
+    const digest = digestOf(accounts)
+    this.lastDigest = digest
     return { accounts, digest }
   }
 
@@ -244,6 +268,36 @@ export class UsagePeers {
   }
 }
 
+/**
+ * What a box's accounts used, hashed, as told: the same on both sides once the receiver has put
+ * together what it was told (each account's fields in one order, its slots as kept: `keptSlots`).
+ */
+export function digestOf(accounts: ToldUsage[]): string {
+  const canonical = accounts.map((account) => [account.provider, account.service, account.agent ?? null, account.account ?? null, account.label ?? null, account.identity ?? null, account.cut === true, account.slots.models, account.slots.used, account.slots.unknown ?? []])
+  return createHash("sha256").update(JSON.stringify(canonical)).digest("hex").slice(0, 32)
+}
+
+/** An account as this box keeps a peer's, as it was told. */
+const toldOf = ({ slots, ...account }: OwnUsage): ToldUsage => ({ ...account, slots: keptSlots(slots) })
+
+/** Each account with only its slots from `from` (quarter hours since 1970) on. */
+function recentOf(accounts: ToldUsage[], from: number): ToldUsage[] {
+  return accounts.map((account) => ({
+    ...account,
+    slots: { models: account.slots.models, used: account.slots.used.filter((use) => use[0] >= from), ...(account.slots.unknown ? { unknown: account.slots.unknown.filter((each) => each[0] >= from) } : {}) },
+  }))
+}
+
+/** A peer's account told from `since` (ms) on, with what this box kept of it before then. */
+function withOlder(account: OwnUsage, kept: OwnUsage | undefined, since: number): OwnUsage {
+  const slots = noSlots()
+  for (const [slot, models] of kept?.slots.used ?? []) if (slot < since) slots.used.set(slot, models)
+  for (const [slot, models] of kept?.slots.unknown ?? []) if (slot < since) slots.unknown.set(slot, models)
+  for (const [slot, models] of account.slots.used) if (slot >= since) slots.used.set(slot, models)
+  for (const [slot, models] of account.slots.unknown) if (slot >= since) slots.unknown.set(slot, models)
+  return { ...account, slots }
+}
+
 /** A peer's account as it's kept: only what an account says, checked; its `scanned` moved by `off` onto this box's clock (never past `now`). */
 function takenAccount(given: unknown, off: number, now: number): OwnUsage | null {
   if (!given || typeof given !== "object") return null
@@ -259,5 +313,6 @@ function takenAccount(given: unknown, off: number, now: number): OwnUsage | null
     ...(typeof account.identity === "string" && /^[0-9a-f]{16}$/.test(account.identity) ? { identity: account.identity } : {}),
     ...(scanned ? { scanned } : {}),
     slots: slotsFrom(account.slots, MOST_USES),
+    ...(account.cut === true ? { cut: true as const } : {}),
   }
 }
