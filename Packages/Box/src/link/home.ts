@@ -105,8 +105,9 @@ export function socketKey(): string {
     if (KEY_SHAPE.test(key)) return key;
   } catch {}
   fs.mkdirSync(RUN, { recursive: true, mode: 0o700 });
-  const made = `${SOCKET_KEY_FILE}.${process.pid}`;
-  fs.writeFileSync(made, madeKey(), { mode: 0o600 });
+  const made = `${SOCKET_KEY_FILE}.${process.pid}.${crypto.randomBytes(4).toString("hex")}`;
+  // (A new file only you can read, never one there before; gone below, however this goes.)
+  try { fs.writeFileSync(made, madeKey(), { mode: 0o600, flag: "wx" }); } catch (error) { fs.rmSync(made, { force: true }); throw error; }
   // Linked into place: whoever made it first, the others take theirs. (One that isn't a key at all
   // is replaced, as it is where a folder can't link files.)
   try { fs.linkSync(made, SOCKET_KEY_FILE); } catch {

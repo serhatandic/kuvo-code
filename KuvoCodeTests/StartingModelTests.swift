@@ -1,3 +1,4 @@
+import ClientSessions
 import Foundation
 import OpenCodeKit
 import Testing
@@ -197,11 +198,16 @@ import Testing
         await catalog.refreshAgents(fresh: true)
         let claude = ModelRef(id: "opus", providerID: "claude-code")
         #expect(catalog.chipModel(claude)?.name == "Claude Opus")
-        // One its program no longer lists, its account signed in: named and sent, as before (the
-        // agent says whether it can run it), not "Choose a Model".
+        // One its program no longer lists, its account signed in: on a box from before
+        // `sessions.models` (the old-box path), named and sent, as before (the agent says whether it
+        // can run it), not "Choose a Model".
         let dropped = ModelRef(id: "opus-4", providerID: "claude-code")
         #expect(catalog.chipModel(dropped)?.name == "opus-4")
         #expect(catalog.refusal(dropped) == nil)
+        // Its box says it's gone (#572): "Choose a Model", and a message on it isn't sent to fail.
+        let gone = try said(#"{"model":{"providerID":"claude-code","id":"opus-4"},"runs":false,"missing":"gone","account":{"id":"claude-code","name":"Claude Code"}}"#)
+        #expect(catalog.chipModel(dropped, in: .all, said: gone) == nil)
+        #expect(catalog.refusal(dropped, said: gone) == "opus-4 is no longer among Claude Code’s models: choose another model.")
 
         account.lock.withLock { account.signedIn = false }
         await catalog.refreshAgents(fresh: true)
@@ -248,5 +254,55 @@ import Testing
         #expect(catalog.refusal(ModelRef(id: "opus", providerID: "claude-code")) == nil, "its agents still loading")
         // A provider the project's own settings add, which the engine lists only in that project: it goes.
         #expect(catalog.refusal(ModelRef(id: "qwen", providerID: "lmstudio")) == nil)
+    }
+
+    private func said(_ json: String) throws -> SessionModelState {
+        try JSONDecoder().decode(SessionModelState.self, from: Data(json.utf8))
+    }
+
+    /// What the conversation's box says of its model decides its chip, a message refused on it and
+    /// its card's Sign In, over what this Mac's lists would say (#572: the Mac and the phone each
+    /// decided for themselves, and disagreed on the same conversation).
+    @Test func theBoxSaysWhatAConversationsModelNeeds() async throws {
+        defer { StubWeb.stop() }
+        try await engine(accounts: [Self.account("anthropic", signedIn: true), Self.account("openai", signedIn: true)],
+                         models: [Self.model("anthropic", "sonnet"), Self.model("openai", "luna")],
+                         defaultModel: Self.model("openai", "luna"))
+        // Signed out on its box, though this Mac's lists have it: named, and a message on it says
+        // where to sign in, on the machine it's on.
+        let out = try said(#"{"model":{"providerID":"anthropic","id":"sonnet"},"name":"Sonnet","runs":false,"missing":"signIn","account":{"id":"anthropic","name":"Anthropic"}}"#)
+        #expect(catalog.chipModel(sonnet, in: .all, said: out)?.id == "sonnet")
+        #expect(catalog.refusal(sonnet, on: "devbox", said: out) == "Sonnet needs a sign-in on devbox: sign in to Anthropic in Settings › Accounts, or choose another model.")
+        #expect(catalog.chipHelp(sonnet, in: .all, on: "devbox", said: out) == "Sonnet needs a sign-in on devbox: sign in to Anthropic in Settings › Accounts, or choose another model.")
+        #expect(catalog.needsAccount(sonnet, said: out))
+        // The engine's xAI, its SuperGrok plan Grok's: its card's Sign In opens the key sheet, and
+        // says so, here and on a machine whose accounts this Mac doesn't list (#338's leftover).
+        let grok = ModelRef(id: "grok-4.7", providerID: "xai")
+        let xai = try said(#"{"model":{"providerID":"xai","id":"grok-4.7"},"name":"Grok 4.7","runs":false,"missing":"key","account":{"id":"xai","name":"xAI"},"plan":{"name":"SuperGrok","agent":"Grok","provider":"grok-cli"}}"#)
+        #expect(catalog.signInHelp("xai", on: "devbox", said: xai) == "Add an xAI key on devbox (with a SuperGrok plan, choose a model under Grok instead)")
+        #expect(catalog.refusal(grok, said: xai) == "Grok 4.7 needs an xAI key: add one in Settings › Accounts, or choose another model (with a SuperGrok plan, one under Grok).")
+        #expect(catalog.chipModel(grok, in: .all, said: xai)?.name == "Grok 4.7", "named as its box lists it, though this Mac doesn't")
+        // It runs: named, nothing refused, its help the chip's own.
+        let fine = try said(#"{"model":{"providerID":"anthropic","id":"sonnet"},"name":"Sonnet","runs":true}"#)
+        #expect(catalog.refusal(sonnet, said: fine) == nil)
+        #expect(catalog.chipHelp(sonnet, in: .all, said: fine) == "Model and effort")
+        // Another model just picked: what the box said is of the one before, so this one is as this
+        // Mac has it until the box is asked again.
+        #expect(catalog.chipModel(luna, in: .all, said: try said(#"{"model":{"providerID":"anthropic","id":"sonnet"},"runs":false,"missing":"gone"}"#))?.id == "luna")
+        // A conversation with no model of its own: the one its box says it runs on.
+        // A conversation with no model of its own: the composer is given the one its box says it
+        // runs on, as the conversation's view picks it (`composerModel`).
+        let onDefault = try said(#"{"model":{"providerID":"anthropic","id":"sonnet"},"name":"Sonnet","runs":true}"#)
+        let given = catalog.composerModel(nil, said: onDefault, lastModel: luna)
+        #expect(given == sonnet)
+        #expect(catalog.chipModel(given, in: .all, said: onDefault)?.id == "sonnet")
+        // None at all, as its box says: nothing given, so it asks for one and Send waits, as on the
+        // phone, rather than the one picked last here.
+        let none = try said(#"{"model":null,"runs":false,"missing":"model"}"#)
+        let nothing = catalog.composerModel(nil, said: none, lastModel: luna)
+        #expect(nothing == nil)
+        #expect(catalog.chipModel(nothing, in: .all, said: none) == nil, "the chip says Choose a Model")
+        // A box from before it: the one picked last, as before.
+        #expect(catalog.composerModel(nil, said: nil, lastModel: luna) == luna)
     }
 }

@@ -225,6 +225,10 @@ export interface Model {
   family?: string
   /** Other ids this model is known by, which a session or a pick may still name it with (Claude Code's `default` is whichever model it recommends now). */
   aliases?: string[]
+  /** Its agent's usual models, listed until it says which your account has (Claude Code's, as it starts): not its word that one is gone. */
+  provisional?: true
+  /** One its agent still runs but keeps out of its own picker (Codex's): listed only when asked for (`api/model?hidden=1`). */
+  hidden?: true
   capabilities: { tools: boolean; input: string[]; output: string[] }
   variants: { id: string }[]
   time: { released: Millis }

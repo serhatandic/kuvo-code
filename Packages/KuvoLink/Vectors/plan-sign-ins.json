@@ -1,0 +1,30 @@
+{
+  "why": "How a signed-out provider of the engine's is signed in to, the same in the box (kuvo/sessions/models' signInNeed), the Mac's Accounts (Integration.offeredSignInMethods) and KuvoClient's PlanSignIns: the ways Accounts offers (a ChatGPT or SuperGrok plan's sign-in isn't: those plans go through Codex and Grok), whether that leaves only a key, and the plan a key's words point to. Methods as engine 2.2.5 lists them (api/integration).",
+  "cases": [
+    {
+      "provider": "xai", "name": "xAI",
+      "methods": [{ "type": "key", "label": "Manually enter API Key" }, { "type": "env", "names": ["XAI_API_KEY"] }, { "type": "oauth", "id": "device", "label": "SuperGrok Subscription" }],
+      "offered": ["key"], "missing": "key", "plan": { "name": "SuperGrok", "agent": "Grok", "provider": "grok-cli" }
+    },
+    {
+      "provider": "openai", "name": "OpenAI",
+      "methods": [{ "type": "key" }, { "type": "env", "names": ["OPENAI_API_KEY"] }, { "type": "oauth", "id": "chatgpt-token-sharing", "label": "Sign in with ChatGPT" }, { "type": "oauth", "id": "chatgpt-browser", "label": "Codex browser (legacy)" }, { "type": "oauth", "id": "chatgpt-headless", "label": "Codex device code (legacy)" }],
+      "offered": ["key"], "missing": "key", "plan": { "name": "ChatGPT", "agent": "Codex", "provider": "codex-cli" }
+    },
+    {
+      "provider": "opencode", "name": "OpenCode Zen",
+      "methods": [{ "type": "key", "label": "API key (service account)" }, { "type": "env", "names": ["OPENCODE_API_KEY"] }, { "type": "oauth", "id": "device", "label": "OpenCode Console account" }],
+      "offered": ["key", "oauth:device"], "missing": "signIn", "plan": null
+    },
+    {
+      "provider": "deepseek", "name": "DeepSeek",
+      "methods": [{ "type": "key" }, { "type": "env", "names": ["DEEPSEEK_API_KEY"] }],
+      "offered": ["key"], "missing": "key", "plan": null
+    },
+    {
+      "provider": "github-copilot", "name": "GitHub Copilot",
+      "methods": [{ "type": "oauth", "id": "device", "label": "Sign in with GitHub" }],
+      "offered": ["oauth:device"], "missing": "signIn", "plan": null
+    }
+  ]
+}

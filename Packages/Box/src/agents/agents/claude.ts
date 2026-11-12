@@ -19,6 +19,7 @@ import { CLAUDE_LIMITS_EVERY, claudeIdentity, credentialsIn, heardWindows, limit
 import { emit } from "../events"
 import { run, which } from "../proc"
 import { Queue } from "../queue"
+import { writeSecret } from "../../shared/files"
 import { commandSignIn } from "../signin"
 import { newID } from "../ids"
 import { kuvoTools } from "../kuvotools"
@@ -477,11 +478,8 @@ export class ClaudeAgent implements Agent {
       const started = Date.now()
       let handedOver = false
       const keep = (token: string) => {
-        mkdirSync(dirname(this.tokenFile), { recursive: true, mode: 0o700 })
-        // Whole or not at all, for a session starting meanwhile.
-        const writing = `${this.tokenFile}.${process.pid}.tmp`
-        writeFileSync(writing, JSON.stringify({ token, made: started }), { mode: 0o600 })
-        renameSync(writing, this.tokenFile)
+        // Whole or not at all, for a session starting meanwhile; only you can read it, and nothing's left if it fails.
+        writeSecret(this.tokenFile, JSON.stringify({ token, made: started }))
         handedOver = true
       }
       return commandSignIn({
@@ -674,6 +672,11 @@ export class ClaudeAgent implements Agent {
     // first time with Claude Code's usual ones meanwhile.
     this.loadingModels ??= this.loadModels().finally(() => (this.loadingModels = undefined))
     return this.modelList?.models ?? fallbackModels(this.providerID)
+  }
+
+  /** Only once Claude Code said which models your account has: its usual ones meanwhile are a guess. */
+  listsEveryModel(): boolean {
+    return Boolean(this.modelList)
   }
 
   async concreteModel(id: string): Promise<string | undefined> {
@@ -891,11 +894,12 @@ function updateChannel(): string {
 }
 
 function fallbackModels(providerID: string): Model[] {
+  // (Its usual ones, not its word: one missing from them isn't gone.)
   return [
     // (Until Claude Code says which its default is, a session on it shows as this and goes on.)
-    model(providerID, "opus", "Opus", { family: "claude-opus", images: true, variants: ["low", "medium", "high", "xhigh", "max"], released: 3, aliases: ["default"] }),
-    model(providerID, "sonnet", "Sonnet", { family: "claude-sonnet", images: true, variants: ["low", "medium", "high", "max"], released: 2 }),
-    model(providerID, "haiku", "Haiku", { family: "claude-haiku", images: true, released: 1 }),
+    model(providerID, "opus", "Opus", { family: "claude-opus", images: true, variants: ["low", "medium", "high", "xhigh", "max"], released: 3, aliases: ["default"], provisional: true }),
+    model(providerID, "sonnet", "Sonnet", { family: "claude-sonnet", images: true, variants: ["low", "medium", "high", "max"], released: 2, provisional: true }),
+    model(providerID, "haiku", "Haiku", { family: "claude-haiku", images: true, released: 1, provisional: true }),
   ]
 }
 
