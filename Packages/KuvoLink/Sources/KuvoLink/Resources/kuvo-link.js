@@ -4709,13 +4709,14 @@ function topOf(folder) {
 }
 // What the read tool reads instead of a file that isn't there: one beside it whose name looks the
 // same (fence/lookalike.ts), a plain file (engine 2.2.5) in the same folder as the name it was given.
-// Whether a link beside \`where\` (which isn't there) has such a name: one an engine that followed it
-// would read in its place, while what's asked about, and judged, is the name given.
+// Whether something beside \`where\` (which isn't there) has such a name (\`links\`: a link): one
+// the engine (or one that followed links) would read in its place, while what's asked about, and
+// judged, is the name given.
 const same = ${alikeName.toString()}
-function lookalikeLink(where) {
+function lookalikeBeside(where, links) {
   const name = same(path.basename(where))
   try {
-    return fs.readdirSync(path.dirname(where), { withFileTypes: true }).some(each => each.isSymbolicLink() && same(each.name) === name)
+    return fs.readdirSync(path.dirname(where), { withFileTypes: true }).some(each => (!links || each.isSymbolicLink()) && same(each.name) === name)
   } catch { return false }
 }
 
@@ -4820,9 +4821,9 @@ export default {
     // A read of a file that isn't there, beside a link whose name looks the same: refused, in the
     // folder or out of it (where the link leads is never what the box judged, nor asked about).
     const LOOKALIKE = "This names a file that isn't there, beside a link whose name looks the same, which Kuvo Code's sandbox doesn't let the engine's read tool open in its place. Name the file exactly as it's written, or ask the user."
-    // And one through a link out of the folder to a file that isn't there, where read would take a
-    // look-alike beside where it leads.
-    const NOWHERE = "This names a link out of the conversation's folder to a file that isn't there, which Kuvo Code's sandbox doesn't let the engine's read tool follow. Ask the user."
+    // And one through a link out of the folder to a file that isn't there, beside one whose name looks
+    // the same, which read would take in its place.
+    const NOWHERE = "This leads, through a link out of the conversation's folder, to a file that isn't there, beside one whose name looks the same, which Kuvo Code's sandbox doesn't let the engine's read tool open in its place. Ask the user."
     // The engine reads a \\ in a path as a / where it weighs your rules for folders outside the
     // project, and the system doesn't: \`notes\\x\` would pass for a file in \`notes\` (one
     // you allowed) while it's a folder beside it. So no file tool's path has one.
@@ -4838,8 +4839,8 @@ export default {
           const opens = resolved(work, given)
           let there = true
           try { fs.statSync(opens) } catch { there = false }
-          if (!there && given !== input[field]) throw new Error(NOWHERE)
-          if (!there && lookalikeLink(opens)) throw new Error(LOOKALIKE)
+          if (!there && given !== input[field] && lookalikeBeside(opens, false)) throw new Error(NOWHERE)
+          if (!there && lookalikeBeside(opens, true)) throw new Error(LOOKALIKE)
         }
         if (given !== input[field]) call.input = { ...input, [field]: given }
       } else if ((call.tool === "patch" || call.tool === "apply_patch") && typeof input.patchText === "string") {
@@ -15778,7 +15779,7 @@ var nameOf = (word) => word.split("/").pop() ?? "";
 var homeWord = (text) => text.replace(/^(~|\$HOME|\$\{HOME\})(?=\/|$)/, homeFolder());
 function pathOf(word, folder) {
   const named = namedPath(word, folder);
-  return named === null ? null : realish(named);
+  return named === null ? null : landsAt(named);
 }
 function namedPath(word, folder) {
   let text = word.replace(/^['"]|['"]$/g, "").replace(/^[A-Za-z_][A-Za-z0-9_]*=/, "").replace(/^-[A-Za-z-]*=/, "");
@@ -16068,7 +16069,7 @@ function persistenceOf(action, policy = fencePolicy()) {
     return action.access === "write" && atLogin(landsAt(action.path), policy.home) ? PERSISTS : null;
   if (action.kind === "tool")
     return null;
-  return commandPersists(action.command, action.folder, policy, 0) || stoppedWrites(action).some((where) => atLogin(realish(where), policy.home)) ? PERSISTS : null;
+  return commandPersists(action.command, action.folder, policy, 0) || stoppedWrites(action).some((where) => atLogin(landsAt(where), policy.home)) ? PERSISTS : null;
 }
 function commandPersists(command, start, policy, depth) {
   const line = readLine(command, true);
@@ -16547,7 +16548,7 @@ ${tag("refused", stops.map((stop) => `- ${stop.kind}${stop.path ? ` ${stop.path}
 `))}` : ""}
 If what it printed shows something else refused it, not the sandbox (a database, a server, a file's own permissions), refuse it: running it outside won't help.` : `Run this command outside the sandbox, in ${action.folder}:
 ${tag("command", action.command)}` : action.kind === "file" ? `${action.access === "write" ? "Change" : "Read"} this file or folder outside the conversation's folder (${action.folder})${action.tool ? `, with the agent's ${action.tool} tool` : ""}:
-${tag("file", action.path)}${landsAt(action.path) !== path65.resolve(action.path) ? `
+${tag("file", action.path)}${leadsTo(action.path) !== path65.resolve(action.path) ? `
 Through a link, it really is:
 ${tag("file", landsAt(action.path))}` : ""}${action.input ? `
 The tool's arguments:
@@ -17509,11 +17510,7 @@ async function answerPermission(source, id, sessionID, signal, found) {
   }
   const file = seen && [seen.input.filePath, seen.input.file_path, seen.input.notebook_path, seen.input.path, seen.input.file].find((each) => typeof each === "string" && each.startsWith("/"));
   const named = permission.resources.filter((each) => each !== "*").map((each) => path66.resolve(folder, each.replace(/^~(?=\/|$)/, homeFolder()).replace(/\/\*$/, "") || "/"));
-  const reads = Boolean(seen && file && seen.tool.toLowerCase() === "read");
-  if (reads)
-    await askedAbout([folder, path66.resolve(file)]);
-  const alikes = reads ? lookalikesOf(landsAt(file)) : [];
-  const actions = seen && file ? [file, ...alikes].map((each) => ({ kind: "file", path: each, access: READING.has(seen.tool.toLowerCase()) ? "read" : "write", folder, tool: seen.tool, input: seen.input })) : named.length ? named.map((each) => ({ kind: "file", path: each, access: "write", folder })) : [{ kind: "tool", tool: seen?.tool || "work outside its folder", args: seen?.input ?? { asked: permission.resources }, folder }];
+  const actions = seen && file ? [{ kind: "file", path: file, access: READING.has(seen.tool.toLowerCase()) ? "read" : "write", folder, tool: seen.tool, input: seen.input }] : named.length ? named.map((each) => ({ kind: "file", path: each, access: "write", folder })) : [{ kind: "tool", tool: seen?.tool || "work outside its folder", args: seen?.input ?? { asked: permission.resources }, folder }];
   const readsOwn = [commandTemporary(folder), ...[at.data.id, at.data.parentID].filter((each) => typeof each === "string").flatMap(attachedOf)].filter((each) => Boolean(each));
   const ownReads = (within) => actions.every((action) => action.kind === "file" && action.access === "read" && OWN_READING.has(String(action.tool).toLowerCase()) && readsOwn.some((place) => within(action.path, place)));
   const ownByName = ownReads((file, place) => {
@@ -17527,6 +17524,11 @@ async function answerPermission(source, id, sessionID, signal, found) {
     noteReview(id, sessionID, "yours", call2);
     return null;
   }
+  const reads = Boolean(seen && file && seen.tool.toLowerCase() === "read");
+  if (reads)
+    await askedAbout([folder, path66.resolve(file)]);
+  const alikes = reads ? lookalikesOf(landsAt(file)) : [];
+  actions.push(...alikes.map((each) => ({ ...actions[0], path: each })));
   const reply = async (body, decided) => {
     replying.set(id, false);
     try {
@@ -38587,7 +38589,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "a19e2eca4534";
+var BRIDGE_VERSION = "36ed3d7e79bf";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
