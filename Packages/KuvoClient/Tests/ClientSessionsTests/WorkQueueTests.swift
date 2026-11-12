@@ -330,4 +330,28 @@ import ClientSessions
         #expect(WorkQueue.moveTargets(for: open, in: view.categories).map(\.id) == ["later", "parked"], "never into Done")
         #expect(WorkRef(closed).name == "app#12" && WorkRef(closed).isStruck)
     }
+
+    /// The box says the words for one its source made Done, so both apps say the same; one gone
+    /// from GitHub says so, its mark dimmed. An older box's words are worked out as before.
+    @Test func whatGitHubMadeDoneIsSaidInTheBoxsWordsAndOneGoneIsDimmed() throws {
+        let item = { (extra: String) in
+            #"{"id":"wqi_1","source":{"kind":"github","ref":"gh:kuvo/app#12","name":"app#12"},"keptIn":"later","closesOn":"github","owner":"ses_lead","title":"Upload retries","category":"done","order":1,"inProgress":false,"sessions":[],"noteCount":0,"fileCount":0,"linkCount":0,"created":{"at":1,"by":{"user":true}},"updated":{"at":1,"by":{"user":true}},"#
+                + extra + "}"
+        }
+        let json = """
+        {"owner":"ses_lead","categories":[{"id":"next","name":"Next","builtIn":true},{"id":"later","name":"Later","builtIn":true},{"id":"done","name":"Done","builtIn":true}],"owners":[],"removed":[],
+         "items":[\(item(#""seen":{"state":"open","at":5,"gone":true},"struck":true,"doneAs":"Gone from GitHub""#)),
+                  \(item(#""seen":{"state":"completed","at":5},"doneAs":"Closed as planned""#)),
+                  \(item(#""seen":{"state":"merged","at":5}"#))]}
+        """
+        let view = try JSONDecoder().decode(WorkQueueView.self, from: Data(json.utf8))
+        let now = Date(timeIntervalSince1970: 0)
+        let (gone, closed, older) = (view.items[0], view.items[1], view.items[2])
+        #expect(gone.isGone && gone.isStruck && WorkRef(gone).isGone)
+        #expect(!closed.isGone)
+        #expect(WorkQueue.properties(of: gone, in: view, now: now).first?.words == "Gone from GitHub")
+        #expect(WorkQueue.properties(of: gone, in: view, now: now).first?.help == "If GitHub shows it again, it’s back in Later.")
+        #expect(WorkQueue.properties(of: closed, in: view, now: now).first?.words == "Closed as planned", "the box's words, whatever the state")
+        #expect(WorkQueue.properties(of: older, in: view, now: now).first?.words == "Merged on GitHub", "an older box's, from its state")
+    }
 }

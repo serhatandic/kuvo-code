@@ -108,13 +108,14 @@ public struct WorkItemStatusMark: View {
 /// number and its title cut to one line. Its words for VoiceOver are "Work item 243, <title>". One
 /// that's an issue or a pull request (`gh:owner/repo#12`) has its service's mark (`brand`, a
 /// `BrandMark` id) and its name ("app#12") in place of the number, its title struck through when
-/// it was closed without being done.
+/// it was closed without being done, its mark dimmed once it's gone there (`gone`).
 public struct WorkItemChip: View {
     let name: String
     let brand: String?
     let title: String
     let mark: WorkItemMark
     let struck: Bool
+    let gone: Bool
     let spokenAs: String
     let size: CGFloat
     let dark: Bool
@@ -122,18 +123,22 @@ public struct WorkItemChip: View {
     /// The longest title a chip shows before it's cut with "…".
     public static let titleLimit = 36
 
+    /// How an outside source's mark is dimmed, in a chip, a row or a page, once it's gone there.
+    public static let goneOpacity = 0.4
+
     public init(number: Int, title: String, mark: WorkItemMark, size: CGFloat, dark: Bool) {
         self.init(name: "#\(number)", brand: nil, title: title, mark: mark, struck: false, spokenAs: "Work item \(number)", size: size, dark: dark)
     }
 
     /// `name` as it's shown ("#243", "app#12"), `brand` its service's mark, `spokenAs` what
     /// VoiceOver says for the name ("Work item 243", "GitHub issue app#12").
-    public init(name: String, brand: String?, title: String, mark: WorkItemMark, struck: Bool, spokenAs: String, size: CGFloat, dark: Bool) {
+    public init(name: String, brand: String?, title: String, mark: WorkItemMark, struck: Bool, gone: Bool = false, spokenAs: String, size: CGFloat, dark: Bool) {
         self.name = name
         self.brand = brand
         self.title = title
         self.mark = mark
         self.struck = struck
+        self.gone = gone
         self.spokenAs = spokenAs
         self.size = size
         self.dark = dark
@@ -156,6 +161,7 @@ public struct WorkItemChip: View {
                 if let brand {
                     BrandMarkView(brand, size: (size * 0.78).rounded())
                         .foregroundStyle(ink.opacity(mark == .removed ? 0.5 : 0.85))
+                        .opacity(gone ? WorkItemChip.goneOpacity : 1)
                 }
                 Text(name)
                     .font(.system(size: font, weight: .semibold).monospacedDigit())

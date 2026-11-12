@@ -58,7 +58,7 @@ public extension WorkQueue {
     }
 
     /// An item's properties, on one line under its title: the category it's kept in ("In Next",
-    /// "Done", "Merged on GitHub"), only when no session is at work on it and it isn't deleted (its
+    /// "Done", or the box's words for one its source made Done, "Merged on GitHub"), only when no session is at work on it and it isn't deleted (its
     /// status says those, once); whose queue it's in; the computer it's on, when that's another;
     /// where it's being handed; and when it was added. Whose queue only where the view names its
     /// owner (a page opened from a chip may have no list read yet).
@@ -66,9 +66,11 @@ public extension WorkQueue {
         var properties: [Property] = []
         if status(of: item) == nil {
             if let kept = item.keptIn {
-                let merged = item.seen?.state == "merged"
-                properties.append(Property(kind: .category(item.category), words: merged ? "Merged on GitHub" : "Closed on GitHub",
-                                           help: "If it’s reopened there, it’s back in \(categoryName(kept, in: view.categories))."))
+                // (The box's words; an older box's, worked out from what it read.)
+                let words = item.doneAs ?? (item.seen?.state == "merged" ? "Merged on GitHub" : "Closed on GitHub")
+                let back = categoryName(kept, in: view.categories)
+                properties.append(Property(kind: .category(item.category), words: words,
+                                           help: item.isGone ? "If GitHub shows it again, it’s back in \(back)." : "If it’s reopened there, it’s back in \(back)."))
             } else if item.isDone {
                 properties.append(Property(kind: .category(item.category), words: "Done", help: item.doneAt.map { "Done \(ago(Date(timeIntervalSince1970: $0 / 1000), now: now, calendar: calendar, locale: locale))" }))
             } else {
