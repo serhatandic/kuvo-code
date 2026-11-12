@@ -126,7 +126,7 @@ public enum WorkItemRefs {
         let before = text[..<hash].reversed().drop(while: { $0.isWhitespace }).prefix(while: { $0.isLetter }).reversed()
         let after = text[end...].drop(while: { $0.isWhitespace })
         if words.contains(String(before).lowercased()) || words.contains(after.prefix(while: { $0.isLetter }).lowercased()) { return true }
-        let following = after.split(whereSeparator: { $0.isWhitespace }).prefix(2).map { $0.lowercased().trimmingCharacters(in: .punctuationCharacters) }
+        let following = after.split(maxSplits: 2, whereSeparator: { $0.isWhitespace }).prefix(2).map { $0.lowercased().trimmingCharacters(in: .punctuationCharacters) }
         return following == ["on", "google"] || following == ["in", "search"] || following == ["google", "result"]
     }
 
