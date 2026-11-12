@@ -2975,8 +2975,10 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   (`["agents", "<id>"]` or `["commands", "<name>"]`) through that computer's `kuvo/config`;
   `imported` says whether its settings have it there.
 - `POST kuvo/engine/restart`: the computer's engine starts over, as Settings › Engine's Restart
-  does on a Mac; what's running in it stops. It answers `202 {}` first. On a Mac the link goes
-  down with the engine, and the Mac is back once it answers again (`kuvo/info`). A machine's
+  does on a Mac; what's running in it stops. It answers `202 {}` first. On a Mac whose keeper runs
+  the box, the box asks its keeper (`bin/kuvo-start restart`), with the app closed too, and stays
+  up (from #341); while the app runs the box itself, the app answers, and the link goes down with
+  the engine, and the Mac is back once it answers again (`kuvo/info`). A machine's
   bridge stays up, starts its engine over as it was last started (with its coding agents'
   bridge), and a Mac connected to it goes on with the new one; one never started from a Mac
   answers `409 {"message"}`.
@@ -4370,7 +4372,8 @@ machine's, while its keeper's next start is more than half a minute away (`run/e
 in seconds since 1970), "This machine's engine keeps stopping. It's started again in about N
 minutes." The Mac's own routes (`MAC_APP_ROUTES`, the one list of them: `kuvo/machines…`,
 `kuvo/hosts…`, `kuvo/usage…`, `kuvo/asks…`, `kuvo/mac`, `kuvo/claude-code`, `kuvo/engine/…`), it
-hands the app (`link/route`), as it comes, whether its app or its keeper runs the box (the keeper's
+hands the app (`link/route`), but for `kuvo/engine/restart` while its keeper runs (`run/keeper.json`,
+its process alive), which it answers itself (from #341). Those it hands the app as it comes, whether its app or its keeper runs the box (the keeper's
 host passes on the app's answer as it came, `x-kuvo-answer` with it), `503 {"message"}` at once when
 the app isn't answering (of its machines and hosts it says what it can itself then: "Machines").
 The app answers those alone, and hands its box everything else it's asked, its own requests

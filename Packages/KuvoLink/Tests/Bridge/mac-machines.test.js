@@ -410,3 +410,44 @@ test("a list that can't be read as a stream starts says so, as a read does", asy
   await stream.close();
   fs.rmSync(listFile, { force: true });
 });
+
+// What this Mac's box takes of the app's own areas itself, with the app closed too (#341).
+async function asked(front, method, route) {
+  const parts = [];
+  for await (const part of front({ method, path: route, headers: {}, body: Buffer.alloc(0) }, undefined, undefined)) parts.push(part);
+  const text = Buffer.concat(parts.filter(part => part.body).map(part => part.body)).toString();
+  return { status: parts[0].head.status, json: text ? JSON.parse(text) : undefined };
+}
+
+test("a phone restarts this Mac's engine through its keeper with the app closed; while the app runs the box itself, the app does", async () => {
+  app.state = "closed";
+  const run = path.join(box, "run"), bin = path.join(box, "bin");
+  fs.mkdirSync(run, { recursive: true });
+  fs.mkdirSync(bin, { recursive: true });
+  // The keeper's `kuvo-start`, as it writes it (`--box-control`): here, what it was asked.
+  const told = path.join(support, "keeper-told");
+  fs.writeFileSync(path.join(bin, "kuvo-start"), `#!/bin/sh\necho "$@" >"${told}"\n`, { mode: 0o700 });
+  const front = link.macFront(link.engineHandler(() => ({ pid: process.pid, port: 1, password: "p" })));
+  const keeper = path.join(run, "keeper.json");
+  try {
+    // The keeper runs (this process stands for it): the box asks it, and the app isn't needed.
+    fs.writeFileSync(keeper, JSON.stringify({ pid: process.pid, version: "1.0.0", build: "1", url: "http://127.0.0.1:9", password: "k", started: 0 }));
+    const asking = app.asked.length;
+    assert.equal((await asked(front, "POST", "kuvo/engine/restart")).status, 202);
+    await link.toolRun();
+    assert.equal(fs.readFileSync(told, "utf8").trim(), "restart");
+    assert.equal(app.asked.length, asking, "the app wasn't asked");
+
+    // No keeper running (its record left by one that's gone, or none): the app runs the box and
+    // restarts its engine, and says it isn't there when it's closed.
+    fs.rmSync(told);
+    for (const record of [JSON.stringify({ pid: 999999, version: "1.0.0", build: "1", url: "", password: "", started: 0 }), null]) {
+      if (record) fs.writeFileSync(keeper, record); else fs.rmSync(keeper);
+      assert.equal((await asked(front, "POST", "kuvo/engine/restart")).status, 503);
+      assert.equal(app.asked.at(-1).path, "kuvo/engine/restart");
+      assert.equal(fs.existsSync(told), false);
+    }
+  } finally {
+    for (const file of [keeper, told, path.join(bin, "kuvo-start")]) fs.rmSync(file, { force: true });
+  }
+});

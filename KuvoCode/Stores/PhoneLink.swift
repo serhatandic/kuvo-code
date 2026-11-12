@@ -1169,7 +1169,8 @@ final class PhoneLink {
         case let path where path.hasPrefix("kuvo/asks/"):
             return (405, Data("{}".utf8))
         case "kuvo/engine/restart" where request.method.uppercased() == "POST":
-            // Answered first: the restart takes the link down with the engine, and the phone sees
+            // Asked here only while the app runs this Mac's box itself (the keeper's box restarts
+            // its engine itself), or by an older box (old-box path). Answered first: the restart takes the link down with the engine, and the phone sees
             // this Mac come back (its box's `kuvo/info` says when it started).
             let restart = restartEngine
             Task { @MainActor in

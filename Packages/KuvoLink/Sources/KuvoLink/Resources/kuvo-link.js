@@ -3,9 +3,9 @@
 // Packages/Box/src/link/main.ts
 import { spawn as spawn14 } from "node:child_process";
 import crypto52 from "node:crypto";
-import fs134 from "node:fs";
+import fs135 from "node:fs";
 import os18 from "node:os";
-import path135 from "node:path";
+import path136 from "node:path";
 import { fileURLToPath as fileURLToPath3 } from "node:url";
 
 // Packages/Box/src/shared/text.ts
@@ -36208,7 +36208,9 @@ function macTell(notice) {
 }
 
 // Packages/Box/src/link/mac/relay.ts
+import fs134 from "node:fs";
 import os16 from "node:os";
+import path135 from "node:path";
 
 // Packages/Box/src/link/peers/mail.ts
 var answeringAsk = null;
@@ -37333,7 +37335,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "277e4c5d4e59";
+var BRIDGE_VERSION = "08e45d8ab2c5";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
@@ -41802,7 +41804,28 @@ function engineHandler(readEngine = readEngineFile, info = {}, readBridge = read
 
 // Packages/Box/src/link/mac/relay.ts
 var MAC_APP_ROUTES = ["kuvo/machines", "kuvo/hosts", "kuvo/usage", "kuvo/asks", "kuvo/mac", "kuvo/claude-code", "kuvo/engine"];
-var macAppAnswers = (route) => MAC_APP_ROUTES.some((area) => route === area || route.startsWith(`${area}/`));
+var macAppAnswers = (route, request) => MAC_APP_ROUTES.some((area) => route === area || route.startsWith(`${area}/`)) && !(request && boxAnswers(route, request));
+function boxAnswers(route, _request) {
+  if (route === "kuvo/engine/restart")
+    return keeperRuns();
+  return false;
+}
+function keeperRuns() {
+  let pid = 0;
+  try {
+    pid = Number(JSON.parse(fs134.readFileSync(path135.join(RUN, "keeper.json"), "utf8"))?.pid);
+  } catch {
+    return false;
+  }
+  if (!Number.isInteger(pid) || pid <= 0)
+    return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
 var APP_NOT_ANSWERING = "Kuvo Code on this Mac isn't answering. Try again in a moment.";
 async function* toApp(request, phone, signal) {
   const response = await appAnswer(request, phone, signal);
@@ -41816,7 +41839,7 @@ function macFront(handle = engineHandler(readEngineFile, { name: os16.hostname()
     const route = String(request.path ?? "").split("?")[0];
     if (isMachinesRoute(route))
       return yield* machinesRoute(request, phone, signal, route, timing);
-    if (macAppAnswers(route))
+    if (macAppAnswers(route, request))
       return yield* toApp(request, phone, signal);
     yield* handle(request, phone, signal);
   };
@@ -41974,9 +41997,9 @@ onLinkWritten((link) => {
     return;
   }
   if (needed(link))
-    fs134.writeFileSync(NEEDED_FILE, "", { mode: 384 });
+    fs135.writeFileSync(NEEDED_FILE, "", { mode: 384 });
   else
-    fs134.rmSync(NEEDED_FILE, { force: true });
+    fs135.rmSync(NEEDED_FILE, { force: true });
 });
 function machineWelcomed(host) {
   announce(host, readEngineFile, undefined, undefined, true).catch(() => {});
@@ -41994,18 +42017,18 @@ function updateIsWell() {
 async function run4() {
   let old = null;
   try {
-    old = Number(fs134.readFileSync(PID_FILE, "utf8"));
+    old = Number(fs135.readFileSync(PID_FILE, "utf8"));
     if (isBridge2(old))
       process.kill(old, "SIGTERM");
   } catch {}
-  fs134.mkdirSync(RUN, { recursive: true, mode: 448 });
-  fs134.writeFileSync(PID_FILE, String(process.pid), { mode: 384 });
-  fs134.writeFileSync(VERSION_FILE, BRIDGE_VERSION, { mode: 384 });
+  fs135.mkdirSync(RUN, { recursive: true, mode: 448 });
+  fs135.writeFileSync(PID_FILE, String(process.pid), { mode: 384 });
+  fs135.writeFileSync(VERSION_FILE, BRIDGE_VERSION, { mode: 384 });
   const saved = savedLoginPath(K);
   if (saved)
-    process.env.PATH = joinPath(path135.join(K, "bin"), saved);
+    process.env.PATH = joinPath(path136.join(K, "bin"), saved);
   for (const folder of ["present", "connected"])
-    fs134.rmSync(path135.join(RUN, folder), { recursive: true, force: true });
+    fs135.rmSync(path136.join(RUN, folder), { recursive: true, force: true });
   try {
     keepJobs();
   } catch {}
@@ -42021,8 +42044,8 @@ async function run4() {
   });
   const cleanUp = () => {
     try {
-      if (fs134.readFileSync(PID_FILE, "utf8") === String(process.pid))
-        fs134.unlinkSync(PID_FILE);
+      if (fs135.readFileSync(PID_FILE, "utf8") === String(process.pid))
+        fs135.unlinkSync(PID_FILE);
     } catch {}
     process.exit(0);
   };
@@ -42033,7 +42056,7 @@ async function run4() {
   setInterval(() => {
     let owner = null;
     try {
-      owner = Number(fs134.readFileSync(PID_FILE, "utf8"));
+      owner = Number(fs135.readFileSync(PID_FILE, "utf8"));
     } catch {}
     const link = readLink();
     if (!needed(link)) {
@@ -42050,7 +42073,7 @@ async function run4() {
     await sleep(50);
   let held = [];
   try {
-    held = JSON.parse(fs134.readFileSync(HELD_FILE, "utf8"));
+    held = JSON.parse(fs135.readFileSync(HELD_FILE, "utf8"));
   } catch {}
   const hold = new NoticeHold({
     send: tellPhones,
@@ -42060,7 +42083,7 @@ async function run4() {
         if (entries.length)
           writePrivate(HELD_FILE, JSON.stringify(entries));
         else
-          fs134.rmSync(HELD_FILE, { force: true });
+          fs135.rmSync(HELD_FILE, { force: true });
       } catch {}
     }
   });
@@ -42128,7 +42151,7 @@ async function run4() {
     }, 50);
   };
   try {
-    fs134.mkdirSync(SENDING, { recursive: true, mode: 448 });
+    fs135.mkdirSync(SENDING, { recursive: true, mode: 448 });
   } catch {}
   let outboxWatch = watchFolders([SENDING], leftNow, { recursive: false });
   setInterval(() => {
@@ -42346,7 +42369,7 @@ async function serve() {
     console.error('serve answers only with a password: on its stdin, {"password"}, or in OPENCODE_PASSWORD.');
     process.exit(2);
   }
-  fs134.mkdirSync(RUN, { recursive: true, mode: 448 });
+  fs135.mkdirSync(RUN, { recursive: true, mode: 448 });
   if (IS_MAC)
     addMacDefaults();
   try {
@@ -42489,7 +42512,7 @@ async function setup() {
   }
   let runningVersion = null;
   try {
-    runningVersion = fs134.readFileSync(VERSION_FILE, "utf8").trim();
+    runningVersion = fs135.readFileSync(VERSION_FILE, "utf8").trim();
   } catch {}
   const restart = old?.relay !== link.relay || old?.name !== link.name || runningVersion !== BRIDGE_VERSION;
   if (!isUpdating()) {
@@ -42571,7 +42594,7 @@ function selftest() {
   const ok = said.toString() === "hello" && payload.toString() === "welcome" && echoed.toString() === "ping" && mail.toString() === "mail" && responder.rs.equals(publicOf(phone)) && typeof WebSocket === "function" && typeof fetch === "function";
   return ok;
 }
-var main = process.argv[1] && fs134.realpathSync(process.argv[1]) === fs134.realpathSync(fileURLToPath3(import.meta.url));
+var main = process.argv[1] && fs135.realpathSync(process.argv[1]) === fs135.realpathSync(fileURLToPath3(import.meta.url));
 if (main) {
   const [mode, argument] = process.argv.slice(2);
   if (mode === "run")
