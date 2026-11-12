@@ -1450,6 +1450,8 @@ test("each feature kuvo/info names is a route the machine answers, and one it do
     "plugins.search": ["POST", "kuvo/plugins/search"],
     programs: ["POST", "kuvo/programs"],
     projects: ["GET", "kuvo/projects"],
+    // (A change to a project's folders given to its sessions: `PUT kuvo/projects` too.)
+    "projects.folders": ["GET", "kuvo/projects"],
     "providers.models": ["GET", "kuvo/providers/models"],
     queue: ["GET", "kuvo/sessions/ses_none/queue"],
     "queue.waits": ["POST", "kuvo/sessions/ses_none/queue/add"],
@@ -1470,7 +1472,10 @@ test("each feature kuvo/info names is a route the machine answers, and one it do
     "sessions.chat": ["GET", "kuvo/info"],
     "sessions.glance": ["POST", "kuvo/sessions/glance"],
     "sessions.models": ["POST", "kuvo/sessions/models"],
+    "sessions.move": ["POST", "kuvo/sessions/ses_none/move"],
     "sessions.start": ["POST", "kuvo/sessions"],
+    // (A client's start without a task, `kuvo/sessions` too.)
+    "sessions.start.empty": ["POST", "kuvo/sessions"],
     // (Your setup, and who's its main computer.)
     setup: ["GET", "kuvo/setup"],
     "shell.stop": ["POST", "kuvo/shell/sh_none/stop"],

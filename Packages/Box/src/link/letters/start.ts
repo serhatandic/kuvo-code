@@ -528,8 +528,10 @@ export async function startSession(given: StartGiven, by: Starter | null, place:
   // here for something else. Auto stays Auto, asking while the sandbox isn't running, as here.)
   const kept: Approval = remote && wanted === "fullAccess" && unavailable("fullAccess") ? "auto" : wanted;
   const got = applied !== (requested ?? wanted) && lowerOf(applied, requested ?? wanted) === applied ? applied : undefined;
-  // (A worktree made elsewhere is its project's, as the projects' worktrees are found now.)
-  if (folder !== CHATS) await inTime(findLinkedTrees(), undefined, 3_000);
+  // (A worktree made elsewhere is its project's, as the projects' worktrees are found now: not
+  // looked for in a project's own folder, which is no other's, so New Session there waits for no
+  // git.)
+  if (folder !== CHATS && !readProjects().some(each => each.directory === folder && !each.removed)) await inTime(findLinkedTrees(), undefined, 3_000);
   // The project it's filed under: the one named; else its folder's (a worktree's, or a project's
   // other folder's); else, in its starter's folder, the one its starter is filed under there. One
   // filed under another folder than its own carries it from the first (`kuvo.filed`), so every

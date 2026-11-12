@@ -18713,7 +18713,7 @@ async function startSession(given, by, place) {
   const applied = asBefore ? wanted : effective.approval;
   const kept = remote && wanted === "fullAccess" && unavailable("fullAccess") ? "auto" : wanted;
   const got = applied !== (requested ?? wanted) && lowerOf(applied, requested ?? wanted) === applied ? applied : undefined;
-  if (folder !== CHATS)
+  if (folder !== CHATS && !readProjects().some((each) => each.directory === folder && !each.removed))
     await inTime(findLinkedTrees(), undefined, 3000);
   const startersFiled = filedOf(parent);
   const mapped = folder === CHATS ? null : filedUnder(folder);
@@ -39194,7 +39194,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "2944223d5c3d";
+var BRIDGE_VERSION = "4bc9f7e0f1a5";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
