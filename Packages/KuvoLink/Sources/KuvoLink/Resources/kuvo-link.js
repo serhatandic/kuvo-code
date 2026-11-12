@@ -4103,6 +4103,19 @@ async function writeRuleWouldBe(where) {
 // Packages/Box/src/link/fence/landlock.ts
 import { spawn as spawn2, spawnSync as spawnSync2 } from "node:child_process";
 import fs19 from "node:fs";
+
+// Packages/Box/src/link/fence/finished.ts
+var LOAD = new Set(["ETIMEDOUT", "EAGAIN", "ENOMEM", "EMFILE", "ENFILE"]);
+function didntFinish(run) {
+  if (run.status !== null)
+    return false;
+  const code = run.error?.code;
+  if (code)
+    return LOAD.has(code);
+  return run.signal === "SIGKILL";
+}
+
+// Packages/Box/src/link/fence/landlock.ts
 function landlockPolicy(policy) {
   return JSON.stringify({
     hidden: [...policy.kuvo, ...policy.secrets],
@@ -4139,27 +4152,34 @@ mkfifo -m 600 "$own/in" "$own/on" || fail "it isn't set up."
 timeout 10 sh -c 'read _ <"$1" && echo "$2 0 1" >/proc/$0/uid_map && echo "$3 0 1" >/proc/$0/gid_map; echo >"$4"' $$ "$own/in" "$u" "$g" "$own/on" </dev/null >/dev/null 2>&1 &
 exec "$0" --user -- /bin/sh -c 'echo >"$0"; read _ <"$1"; [ "$(id -u)" = "$2" ] || { echo "This command can'"'"'t run in the sandbox here: it can'"'"'t run as you." >&2; exit 126; }; PATH=$3; shift 3; exec "$@"' "$own/in" "$own/on" "$u" "$p" "$@"`;
 var UNSHARE = ["/usr/bin/unshare", "/bin/unshare"];
-function ownNamespace(own) {
+var UNFINISHED = "unfinished";
+function triedNamespace(own) {
   const unshare = UNSHARE.find((each) => fs19.existsSync(each));
   if (!unshare)
     return null;
   const tried = spawnSync2(unshare, namespaceTry(unshare, own), { cwd: "/", stdio: "ignore", timeout: TRY_FOR });
+  if (didntFinish(tried))
+    return UNFINISHED;
   return tried.status === 0 ? unshare : null;
 }
-function ownNamespaceLater(own, unshare = UNSHARE.find((each) => fs19.existsSync(each))) {
+function ownNamespaceLater(own, unshare = UNSHARE.find((each) => fs19.existsSync(each)), limit = TRY_FOR) {
   if (!unshare)
     return Promise.resolve(null);
   return new Promise((resolve) => {
     const child = spawn2(unshare, namespaceTry(unshare, own), { cwd: "/", stdio: "ignore" });
-    const late = setTimeout(() => child.kill("SIGKILL"), TRY_FOR);
-    late.unref?.();
-    child.once("error", () => {
-      clearTimeout(late);
-      resolve(null);
+    let late = false;
+    const cut = setTimeout(() => {
+      late = true;
+      child.kill("SIGKILL");
+    }, limit);
+    cut.unref?.();
+    child.once("error", (error) => {
+      clearTimeout(cut);
+      resolve(didntFinish({ status: null, error }) ? UNFINISHED : null);
     });
-    child.once("exit", (status) => {
-      clearTimeout(late);
-      resolve(status === 0 ? unshare : null);
+    child.once("exit", (status, signal) => {
+      clearTimeout(cut);
+      resolve(late || didntFinish({ status, signal }) ? UNFINISHED : status === 0 ? unshare : null);
     });
   });
 }
@@ -4899,6 +4919,7 @@ var NAMESPACE_FOLDER = path19.join(FOLDER2, "ns");
 var ON = path19.join(FOLDER2, "on");
 var READY = path19.join(FOLDER2, "ready");
 var DECIDED = path19.join(FOLDER2, "decided");
+var HELD = path19.join(FOLDER2, "held");
 var platform = process.platform === "darwin" ? "darwin" : "linux";
 var places = {
   folder: FOLDER2,
@@ -4926,11 +4947,16 @@ function fenceState() {
   const base = { able: checked.able, agents: said === "none" || said === "inside", ...said === "outside" ? { outside: true } : {}, ...asksToRestart() ? { restart: true } : {} };
   if (!fenceWanted())
     return { ...base, on: false, why: "Kuvo Code has it turned off on this computer for now." };
-  if (!checked.passed)
+  if (!checked.passed && !checked.unfinished)
     return { ...base, on: false, ...cannot(checked) };
   const now = loaded();
-  return { ...base, ...now, ...now.on && withoutNamespace ? { gaps: ["services"], needs: withoutNamespace } : {} };
+  if (!now.on)
+    return { ...base, ...now };
+  if (checked.unfinished || fs20.existsSync(HELD))
+    return { ...base, on: false, ...cannot({ able: true, passed: false, reason: "checking", why: PENDING_WHY }) };
+  return { ...base, ...now, ...withoutNamespace ? { gaps: ["services"], needs: withoutNamespace } : {} };
 }
+var PENDING_WHY = "Its check didn't finish in time (this computer may be busy), so it's checked again in a minute. Until then commands still run in it, and Auto asks first.";
 function fenceWhole() {
   return platform === "darwin" || (textOf(path19.join(FOLDER2, "namespace")) ?? "").startsWith("/");
 }
@@ -4956,9 +4982,22 @@ function loaded() {
   return { on: false, why: "Waiting for the engine to load it.", reason: "waiting", action: "restartEngine", route: RESTART };
 }
 function engineCommandsInSandbox() {
-  return fenceWanted() && fs20.existsSync(ON) && loaded().on;
+  return fenceWanted() && fs20.existsSync(ON) && !fs20.existsSync(HELD) && loaded().on;
 }
-var agentsCommandsInSandbox = () => fenceWanted() && fs20.existsSync(ON);
+var fencePending = () => fenceWanted() && (checked.unfinished === true || fs20.existsSync(HELD));
+var BEING_CHECKED = "The sandbox is being checked again, so nothing can be let out of it yet: commands still run in it. Try again in a minute, or tell the user what you need.";
+var NOT_ON_NOW = "The sandbox isn't on here now, so Auto lets nothing out of it: run the command with your shell tool, which asks the user first.";
+var CHECK_FAILED = "The sandbox's check failed here, so nothing can be let out of it: run the command with your shell tool, which asks the user first.";
+function notOnWords() {
+  if (!fenceWanted())
+    return NOT_ON_NOW;
+  if (checked.unfinished)
+    return BEING_CHECKED;
+  if (checked.reason === "checkFailed")
+    return CHECK_FAILED;
+  return fs20.existsSync(HELD) ? BEING_CHECKED : NOT_ON_NOW;
+}
+var agentsCommandsInSandbox = () => fenceWanted() && fs20.existsSync(ON) && !fs20.existsSync(HELD);
 function bridgeSays() {
   if (!agentsCommandsInSandbox())
     return;
@@ -5063,7 +5102,7 @@ function writeProfiles() {
     ["project-agent.sb", seatbeltProfile(policy, { inside: false, agent: true })],
     ["inside-agent.sb", seatbeltProfile(policy, { inside: true, agent: true })],
     ["policy.json", landlockPolicy(policy)]
-  ] : [["policy.json", landlockPolicy(policy)], ["runtime", runtime() ?? ""], ["namespace", namespace ?? "-"], ["sockets", (policy.sockets ?? []).map((each) => each + `
+  ] : [["policy.json", landlockPolicy(policy)], ["runtime", runtime() ?? ""], ["namespace", inUse() ?? "-"], ["sockets", (policy.sockets ?? []).map((each) => each + `
 `).join("")]];
   if (platform === "linux")
     fs20.mkdirSync(NAMESPACE_FOLDER, { recursive: true, mode: 448 });
@@ -5083,10 +5122,13 @@ function writeExecutable(file, text) {
 var WITHOUT_NAMESPACE = "without";
 var namespace = null;
 var namespaceKnown = false;
+var namespaceUnfinished = false;
 var withoutNamespace = null;
+var kept = null;
+var inUse = () => kept ?? namespace;
 var namespaceHere = () => {
   fs20.mkdirSync(NAMESPACE_FOLDER, { recursive: true, mode: 448 });
-  return ownNamespace(NAMESPACE_FOLDER);
+  return triedNamespace(NAMESPACE_FOLDER);
 };
 function able(found) {
   if (platform === "darwin")
@@ -5096,8 +5138,12 @@ function able(found) {
   if (!fs20.existsSync("/sys/kernel/security/landlock") && !/landlock/.test(textOf("/sys/kernel/security/lsm") ?? "landlock")) {
     return { able: false, passed: false, why: `Linux ${os4.release().split("-")[0]} can't sandbox commands: it needs Landlock (Linux 5.13 or later, with it on).`, reason: "kernel", needs: "Linux 5.13" };
   }
-  namespace = found === undefined ? namespaceHere() : found;
-  namespaceKnown = true;
+  const tried = found === undefined ? namespaceHere() : found;
+  namespaceUnfinished = tried === UNFINISHED;
+  if (!namespaceUnfinished)
+    [namespace, namespaceKnown] = [tried, true];
+  else if (!namespaceKnown)
+    namespace = UNSHARE.find((each) => fs20.existsSync(each)) ?? null;
   withoutNamespace = namespace ? null : UNSHARE.some((each) => fs20.existsSync(each)) ? "user namespaces" : "util-linux";
   if (withoutNamespace && WITHOUT_NAMESPACE === "off") {
     const services = "which the sandbox needs to keep commands from the services your login runs: systemd, your keyring, your agents";
@@ -5105,6 +5151,7 @@ function able(found) {
   }
   return { able: true, passed: false };
 }
+var CHECK_LIMIT = 20000;
 function probe() {
   fs20.rmSync(PROBE, { recursive: true, force: true });
   fs20.mkdirSync(PROBE, { recursive: true, mode: 448 });
@@ -5120,7 +5167,7 @@ function probe() {
     `echo ok > written && [ "$(cat written)" = ok ] || exit 11`,
     `echo ok > "$TMPDIR/probe" || exit 12`,
     `cat "$1" >/dev/null 2>&1 && exit 13`,
-    ...namespace ? [`[ -z "$(ls -A "/run/user/$(id -u)" 2>/dev/null)" ] || exit 14`] : [],
+    ...inUse() ? [`[ -z "$(ls -A "/run/user/$(id -u)" 2>/dev/null)" ] || exit 14`] : [],
     `(echo escaped > "$2") 2>/dev/null`,
     `exit 0`
   ].join(`
@@ -5129,7 +5176,11 @@ function probe() {
   const bun = runtime();
   if (bun)
     env.KUVO_FENCE_RUNTIME = bun;
-  const run = spawnSync3(places.launcher, ["-c", script, PROBE, hidden, escaped], { env, encoding: "utf8", timeout: 20000 });
+  const hold = IN_TEST_FOLDER ? process.env.KUVO_TEST_SANDBOX_CHECK_HOLD : undefined;
+  const held = Boolean(hold && fs20.statSync(hold, { throwIfNoEntry: false })?.isFIFO());
+  const fails = Boolean(hold && !held && textOf(hold)?.trim() === "fail");
+  const args = [places.launcher, "-c", script, PROBE, hidden, escaped];
+  const run = held ? spawnSync3("/bin/sh", ["-c", `read -r _ <"$0"; exec "$@"`, hold, ...args], { env, encoding: "utf8", timeout: 250 }) : fails ? spawnSync3("/bin/sh", ["-c", "exit 13"], { encoding: "utf8" }) : spawnSync3(args[0], args.slice(1), { env, encoding: "utf8", timeout: CHECK_LIMIT });
   const reasons = {
     10: ["folder", "a command couldn't go to its own folder"],
     11: ["folder", "a command couldn't write in its own folder"],
@@ -5142,6 +5193,8 @@ function probe() {
       return { passed: false, check: "writesOwn", why: "Its check failed: a command could write in Kuvo Code's own folder." };
     if (run.status === 0)
       return { passed: true };
+    if (didntFinish(run))
+      return { passed: false, unfinished: true };
     const [check, reason] = (run.status !== null ? reasons[run.status] : undefined) ?? ["didntRun", undefined];
     const said = (run.stderr || "").trim().split(`
 `).pop();
@@ -5158,19 +5211,66 @@ function probe() {
     } catch {}
   }
 }
-function tellAgents(on = fenceState().on) {
+function tellAgents(on = fenceState().on || fencePending() && loaded().on) {
   const note = on ? agentsNote(platform, fitsTmux(appTemporary() ?? TEMPORARY)) : "";
   if (textOf(SANDBOX_NOTE) !== note)
     writePrivate(SANDBOX_NOTE, note);
 }
-function withdraw() {
+function withdraw(ready = "remove") {
   try {
     tellAgents(false);
   } catch {}
   fs20.rmSync(PLUGIN, { force: true });
   fs20.rmSync(ON, { force: true });
-  fs20.rmSync(READY, { force: true });
+  if (ready === "remove")
+    fs20.rmSync(READY, { force: true });
   fs20.rmSync(NOTE, { force: true });
+  fs20.rmSync(HELD, { force: true });
+  loosening = null;
+}
+function hold2() {
+  try {
+    if (!textOf(HELD))
+      writePrivate(HELD, crypto9.randomUUID());
+    return true;
+  } catch {
+    fs20.rmSync(ON, { force: true });
+    return false;
+  }
+}
+var heldMark = () => textOf(HELD) || null;
+var MOST_UNFINISHED = 5;
+var unfinishedInARow = 0;
+var loosening = null;
+var looseningMark = null;
+var keepReady = false;
+var mayLoosen = false;
+function loosen(what, why, ready) {
+  checked = why;
+  if (![PLUGIN, ON].some((file) => fs20.existsSync(file))) {
+    withdraw(ready);
+    return fenceState();
+  }
+  hold2();
+  const mark = heldMark();
+  loosening = what === "withdraw" || loosening === "withdraw" && looseningMark === mark ? "withdraw" : "namespace";
+  looseningMark = mark;
+  keepReady = ready === "keep";
+  return fenceState();
+}
+function nothingCountsOnIt(mark) {
+  const what = loosening;
+  if (!what || !fenceWanted() || !mark || heldMark() !== mark || looseningMark !== mark)
+    return;
+  loosening = null;
+  if (what === "withdraw")
+    return withdraw(keepReady ? "keep" : "remove");
+  mayLoosen = true;
+  try {
+    setUpFence(null);
+  } finally {
+    mayLoosen = false;
+  }
 }
 var TEMPORARY = realish(path19.join(K, "t"));
 var SOCKET_PATH = platform === "darwin" ? 103 : 107;
@@ -5210,11 +5310,11 @@ function setUpFence(found) {
     checked = can;
     return fenceState();
   }
-  if (!can.able) {
-    withdraw();
-    checked = can;
-    return fenceState();
-  }
+  if (!can.able)
+    return loosen("withdraw", can, "remove");
+  const inEffect = platform === "linux" ? textOf(path19.join(FOLDER2, "namespace")) ?? "" : "";
+  const dropping = !namespace && !namespaceUnfinished && inEffect.startsWith("/") && !mayLoosen;
+  kept = dropping ? inEffect : namespaceUnfinished && !mayLoosen ? kept : null;
   try {
     fs20.mkdirSync(path19.join(FOLDER2, "tmp"), { recursive: true, mode: 448 });
     writeTemporary();
@@ -5228,28 +5328,44 @@ function setUpFence(found) {
     lastProfiles = "";
     writeProfiles();
     tellLauncher();
-    const result = probe();
-    checked = { able: true, ...result, ...result.passed ? {} : { reason: "checkFailed" } };
-    failures = result.passed ? 0 : failures + 1;
-    if (!result.passed) {
-      withdraw();
-      return fenceState();
+    let held = true;
+    let result = namespaceUnfinished ? { passed: false, unfinished: true } : probe();
+    unfinishedInARow = result.unfinished ? unfinishedInARow + 1 : 0;
+    if (unfinishedInARow >= MOST_UNFINISHED)
+      result = { passed: false, check: "didntRun", why: `Its check didn't finish ${unfinishedInARow} times in a row.` };
+    if (result.unfinished) {
+      checked = { able: true, passed: false, unfinished: true, reason: "checking", why: PENDING_WHY };
+      held = hold2();
+      loosening = null;
+    } else if (!result.passed) {
+      failures += 1;
+      return loosen(dropping ? "namespace" : "withdraw", { able: true, ...result, reason: "checkFailed" }, "keep");
+    } else {
+      checked = { able: true, ...result };
+      failures = 0;
+      if (dropping)
+        [namespace, namespaceKnown, withoutNamespace, kept] = [inEffect, true, null, null];
+      loosening = null;
     }
     if (!fs20.existsSync(READY))
       writePrivate(READY, "");
-    const plugin = pluginScript(places, VERSION);
-    if (textOf(PLUGIN) !== plugin) {
-      fs20.rmSync(NOTE, { force: true });
-      writePrivate(PLUGIN, plugin);
-    }
-    if (!textOf(ON)?.trim())
+    givePlugin();
+    if (!textOf(ON)?.trim() && held)
       writePrivate(ON, crypto9.randomUUID());
+    if (result.passed)
+      fs20.rmSync(HELD, { force: true });
   } catch (error) {
-    withdraw();
-    checked = { able: true, passed: false, why: `It couldn't be set up: ${error.message}`, reason: "checkFailed", check: "setup" };
     failures += 1;
+    return loosen("withdraw", { able: true, passed: false, why: `It couldn't be set up: ${error.message}`, reason: "checkFailed", check: "setup" }, "keep");
   }
   return fenceState();
+}
+function givePlugin() {
+  const plugin = pluginScript(places, VERSION);
+  if (textOf(PLUGIN) === plugin)
+    return;
+  fs20.rmSync(NOTE, { force: true });
+  writePrivate(PLUGIN, plugin);
 }
 function holdsFiles(folder) {
   return fs20.readdirSync(folder, { withFileTypes: true }).some((entry) => !entry.isDirectory() || holdsFiles(path19.join(folder, entry.name)));
@@ -5295,7 +5411,7 @@ function keepFence(every = (round) => {
 }) {
   whenReadLate(() => {
     try {
-      if (fenceWanted() && checked.passed)
+      if (fenceWanted() && (checked.passed || checked.unfinished))
         writeProfiles();
     } catch {}
   });
@@ -5327,15 +5443,19 @@ function keepFence(every = (round) => {
       return;
     let checking;
     try {
-      if (checked.passed)
+      if (checked.passed || checked.unfinished)
         writeProfiles();
-      if (checked.passed ? textOf(PLUGIN) !== pluginScript(places, VERSION) : round % 6 === 0)
+      const changed = textOf(PLUGIN) !== pluginScript(places, VERSION);
+      const elsewhere = checked.passed ? fs20.existsSync(HELD) : (checked.unfinished === true || loosening !== null && looseningMark !== null) && !fs20.existsSync(HELD);
+      if (checked.passed ? changed || elsewhere : round % 6 === 0 || elsewhere)
         setUpFence(namespaceKnown ? namespace : undefined);
+      else if (checked.unfinished && changed)
+        givePlugin();
       if (platform === "linux" && round % 6 === 5 && !trying) {
         fs20.mkdirSync(NAMESPACE_FOLDER, { recursive: true, mode: 448 });
         trying = true;
         checking = ownNamespaceLater(NAMESPACE_FOLDER).then((found) => {
-          if (fenceWanted() && !found !== !namespace)
+          if (fenceWanted() && found !== UNFINISHED && (!namespaceKnown || !found !== !namespace))
             setUpFence(found);
         }).catch(() => {}).finally(() => {
           trying = false;
@@ -17548,6 +17668,7 @@ function approvalHere() {
   };
   return { fullAccess: fullAccessAllowed(), default: defaultApproval(), auto: { engine: auto(false), agents: auto(true) }, otherComputers: otherComputersAllowed() };
 }
+var MOST_PAGES = 2500;
 async function reapplyApprovals(engine, bridge, settings = false) {
   let done = true;
   const since = approvalsSince();
@@ -17555,8 +17676,10 @@ async function reapplyApprovals(engine, bridge, settings = false) {
   for (const [target, agents] of [[engine, false], [bridge, true]]) {
     if (!target)
       continue;
-    let query = "limit=200&order=desc&parentID=null";
-    for (let pages = 0;pages < 15 && query; pages++) {
+    let query = "limit=200&order=desc";
+    for (let pages = 0;query; pages++) {
+      if (pages >= MOST_PAGES)
+        return false;
       const page = await engineGet(target, `api/session?${query}`).catch(() => null);
       if (!page)
         return false;
@@ -17565,10 +17688,13 @@ async function reapplyApprovals(engine, bridge, settings = false) {
         if (!data?.id)
           continue;
         const kept = data.metadata?.kuvo?.approval;
+        if (data.parentID && kept === undefined)
+          continue;
         const bot = found2(target, data, agents).bot;
         const now = approvalOf(data, { agents, bot }, since, byDefault);
-        markConversation(data.id, now.effective === "fullAccess");
-        if (now.effective !== "auto")
+        if (!data.parentID)
+          markConversation(data.id, now.effective === "fullAccess");
+        if (!data.parentID && now.effective !== "auto")
           try {
             clearPlaces(data.id);
           } catch {}
@@ -17586,7 +17712,7 @@ async function reapplyApprovals(engine, bridge, settings = false) {
           done = false;
       }
       const next = page.cursor?.next;
-      query = listed.length === 200 && next ? `limit=200&parentID=null&cursor=${encodeURIComponent(next)}` : null;
+      query = listed.length === 200 && next ? `limit=200&cursor=${encodeURIComponent(next)}` : null;
     }
   }
   return done;
@@ -17636,16 +17762,29 @@ function keepApprovals(engine = ownEngine2, bridge = bridgeTarget, every = (roun
   let last = null;
   let going = false;
   const adopted = new Set;
+  let failed = null;
+  let failures = 0;
+  let waiting = 0;
   every(async () => {
     const [here, agents] = [engine(), bridge()];
-    const now = `${sandboxOn(false)} ${sandboxOn(true)} ${fullAccessAllowed()} ${here?.port ?? 0} ${agents?.port ?? 0}`;
+    const mark = heldMark();
+    const off = !sandboxOn(false);
+    const now = `${!off} ${sandboxOn(true)} ${fullAccessAllowed()} ${here?.port ?? 0} ${agents?.port ?? 0} ${mark ?? ""}`;
     if (going || following)
       return;
     going = true;
     try {
       const settings = JSON.stringify(permissionsHere());
-      if ((now !== last || settings !== settingsMade) && await reapplyApprovals(here, agents, settings !== settingsMade))
-        [last, settingsMade] = [now, settings];
+      const state = `${now}
+${settings}`;
+      if ((now !== last || settings !== settingsMade) && (state !== failed || --waiting <= 0)) {
+        if (await reapplyApprovals(here, agents, settings !== settingsMade))
+          [last, settingsMade, failed, failures] = [now, settings, null, 0];
+        else
+          [failed, failures, waiting] = [state, failures + 1, Math.min(2 ** (failures + 1), 30)];
+      }
+      if (off && last === now && here)
+        nothingCountsOnIt(mark);
       await adoptPending(here, agents);
       await adoptBots(here, agents, adopted);
     } catch {} finally {
@@ -21695,10 +21834,10 @@ function packageName(spec) {
   return at > 0 ? spec.slice(0, at) : spec;
 }
 var leftForItsMaker = (entry, server) => entry.way === "official" && isObject(entry.settings) && Array.isArray(server.command) && server.command[0] === LAUNCHER;
-var kept = (server, names) => Object.fromEntries(names.filter((name) => server[name] !== undefined).map((name) => [name, server[name]]));
+var kept2 = (server, names) => Object.fromEntries(names.filter((name) => server[name] !== undefined).map((name) => [name, server[name]]));
 function broughtUpToDate(entry, server) {
   if (leftForItsMaker(entry, server))
-    return { ...entry.settings, ...kept(server, ["disabled", "codemode"]) };
+    return { ...entry.settings, ...kept2(server, ["disabled", "codemode"]) };
   const next = { ...server };
   if (next.codemode === undefined)
     next.codemode = false;
@@ -23683,7 +23822,7 @@ var pausedText = (folder) => {
     return null;
   }
 };
-function hold2(record) {
+function hold3(record) {
   if (!record.folder || !fs87.existsSync(record.folder))
     return;
   const was = pausedText(record.folder);
@@ -23746,7 +23885,7 @@ async function carryOn(id) {
       return;
     record = now;
   }
-  hold2(record);
+  hold3(record);
   record.holdSince = Date.now();
   saveMove(record);
   const takenBack = () => {
@@ -32023,6 +32162,11 @@ async function askToRun(caller, args, signal) {
       how = "always";
     } catch {}
   }
+  const notNow = verdict?.decision === "allow" ? stillOff(at?.agents ?? true) : null;
+  if (notNow) {
+    forgetFetched(fetched);
+    return { text: notNow, isError: false };
+  }
   const left = Math.floor((CALL_BUDGET - (Date.now() - started)) / 1000);
   const seconds = Math.max(1, Math.min(600, left, Number(args.timeout) || 300));
   const { shown, code, timedOut } = await runOutside(fetched?.command ?? command, project, seconds, signal).finally(() => forgetFetched(fetched));
@@ -32078,6 +32222,11 @@ async function stoppedInAuto(caller, input, printed, calling, signal) {
     return null;
   if (verdict.decision === "refuse")
     return { text: refusalWords(verdict) };
+  const notNow = stillOff(at.agents);
+  if (notNow) {
+    forgetFetched(verdict.fetched);
+    return { text: notNow };
+  }
   const asked = Number(input.timeout);
   const left = Math.floor((CALL_BUDGET - (Date.now() - started)) / 1000);
   const seconds = Math.max(1, Math.min(600, left, asked > 0 ? Math.ceil(asked / 1000) : asked === 0 ? 600 : 300));
@@ -32099,6 +32248,14 @@ async function stoppedInAuto(caller, input, printed, calling, signal) {
 ${ran.shown.trimEnd()}${ran.timedOut ? `
 
 It was stopped after ${seconds} seconds.` : ""}`, exit: ran.timedOut ? 124 : ran.code ?? 1 };
+}
+function stillOff(agents) {
+  const gap = sandboxGap(agents);
+  if (gap === "partial")
+    return "Auto needs the whole sandbox, and on this computer it can't keep commands from your login's services now, so nothing is let out of it: run the command with your shell tool, which asks the user first.";
+  if (gap === "agents")
+    return "Auto needs the coding agents' own programs in the sandbox, and some still run outside it, so nothing is let out of it: run the command with your shell tool, which asks the user first.";
+  return gap ? notOnWords() : null;
 }
 async function runOutside(command, folder, seconds, signal) {
   const { output, code, timedOut } = await runCommand(command, folder, commandEnv(), seconds * 1000, signal);
@@ -33242,29 +33399,29 @@ var asked6 = (target, route, folder) => call(target, "GET", route, undefined, Ab
   return;
 });
 var KEPT_FOR2 = 1e4;
-var kept2 = new Map;
+var kept3 = new Map;
 function keptOr(key, read, whole) {
   const now = Date.now();
-  const before = kept2.get(key);
+  const before = kept3.get(key);
   if (before && now - before.at < KEPT_FOR2)
     return before.lists;
   const lists = read();
-  kept2.set(key, { at: now, lists });
+  kept3.set(key, { at: now, lists });
   lists.then((value) => {
-    if ((value === null || !whole(value)) && kept2.get(key)?.lists === lists)
-      kept2.delete(key);
+    if ((value === null || !whole(value)) && kept3.get(key)?.lists === lists)
+      kept3.delete(key);
   });
-  if (kept2.size > 200)
-    kept2.delete(kept2.keys().next().value);
+  if (kept3.size > 200)
+    kept3.delete(kept3.keys().next().value);
   return lists;
 }
 var CHANGES = new Set(["integration.updated", "model.updated", "provider.updated", "config.updated", "global.disposed", "kuvo.auto.updated"]);
 function noteModelsEvent(event) {
   if (event.type && CHANGES.has(event.type))
-    kept2.clear();
+    kept3.clear();
 }
 function forgetModelLists() {
-  kept2.clear();
+  kept3.clear();
 }
 function modelsIn2(listed) {
   if (!Array.isArray(listed))
@@ -35985,7 +36142,7 @@ function hasBrowser(build) {
   }
   return false;
 }
-function inUse() {
+function inUse2() {
   let build;
   try {
     build = fs114.realpathSync(CURRENT());
@@ -36061,7 +36218,7 @@ function installing() {
 function browserStatus() {
   const here = runtimeHere();
   const chromium = "runtime" in here ? here.runtime.chromium.version : null;
-  const now = inUse();
+  const now = inUse2();
   const installed = now ? now.chromium : null;
   if (IS_MAC)
     return { state: "missing", chromium: null, installed: null, progress: null, message: "This Mac's agents browse in its app's panel.", retryAt: null };
@@ -36347,7 +36504,7 @@ function decide({ now, repair }) {
     repair = false;
   if (repair && waits)
     repair = false;
-  const current = inUse();
+  const current = inUse2();
   if (repair && !current)
     repair = false;
   if (!repair && current && compareVersions(current.chromium, here.runtime.chromium.version) >= 0)
@@ -36378,7 +36535,7 @@ async function installBrowser(asked = {}) {
   if (!takeLock2())
     return "busy";
   const failedBefore = (before.failures ?? 0) > 0 && before.id === here.id;
-  const current = inUse();
+  const current = inUse2();
   const folder = BROWSER();
   let staging = null;
   const stop = new AbortController;
@@ -38109,7 +38266,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "6848e3bdeada";
+var BRIDGE_VERSION = "8d2c20d5cc6f";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
@@ -41430,7 +41587,7 @@ var NOT_ON = "Commands aren't in the sandbox on this computer now, so there's no
 var shown4 = () => {
   const { on, able, agents, ...not } = fenceState();
   try {
-    tellAgents(on);
+    tellAgents();
   } catch {}
   return { on, able, agents, ...Object.fromEntries(Object.entries(not).filter(([, value]) => value !== undefined)) };
 };
@@ -41453,7 +41610,9 @@ async function* sandboxRoute(context) {
   if (route === "kuvo/sandbox/check") {
     if (method !== "POST")
       return yield* json(405, {});
-    setUpFence();
+    try {
+      setUpFence();
+    } catch {}
     return yield* json(200, shown4());
   }
   if (route === "kuvo/sandbox") {
@@ -41519,7 +41678,7 @@ async function* sandboxRoute(context) {
     if (method !== "POST")
       return yield* json(405, {});
     if (!on)
-      return yield* json(200, { text: NOT_ON, isError: true });
+      return yield* json(200, { text: fencePending() ? notOnWords() : NOT_ON, isError: true });
     const args = isObject(given.arguments) ? given.arguments : {};
     const session = typeof given.session === "string" ? given.session : undefined;
     if (typeof given.name !== "string" || !await isCalling(session, [given.name], args, readEngine, readBridge)) {

@@ -47,6 +47,16 @@ export function fullAccessMark(session: string | undefined): string {
   return where && session && /^ses_[A-Za-z0-9_]+$/.test(session) && existsSync(join(where, "full", session)) ? " full" : ""
 }
 
+/**
+ * Whether this box has a sandbox here that isn't on now (taken away after a failed check, or
+ * turned off): a conversation whose rules were made while it was on (Auto) asks before its
+ * commands until the box makes them again, so none runs outside it unasked meanwhile.
+ */
+export function fenceOff(): boolean {
+  const where = folder()
+  return Boolean(where) && existsSync(where!) && !fenceOn()
+}
+
 /** Whether the box's sandbox is on here: its commands run in it. */
 export function fenceOn(): boolean {
   const where = folder()

@@ -7132,6 +7132,10 @@ function fullAccessMark(session) {
   const where = folder();
   return where && session && /^ses_[A-Za-z0-9_]+$/.test(session) && existsSync7(join16(where, "full", session)) ? " full" : "";
 }
+function fenceOff() {
+  const where = folder();
+  return Boolean(where) && existsSync7(where) && !fenceOn();
+}
 function fenceOn() {
   const where = folder();
   return Boolean(where) && process.env.KUVO_SANDBOX !== "off" && existsSync7(join16(where, "on"));
@@ -19321,6 +19325,7 @@ function partsOf2(ask) {
 function isShell(action) {
   return action === "shell" || action === "bash";
 }
+var madeForAuto = (session) => session.metadata?.kuvo?.applied === "auto";
 function alwaysSaves(ask) {
   if (ask.save)
     return ask.save;
@@ -21045,6 +21050,8 @@ ${live.agentPrompt}` : ""
       approvesAll: (canAsk = true) => {
         if (plan)
           return false;
+        if (this.autoWithoutSandbox(live, record.session))
+          return false;
         if ((record.session.permissions ?? []).some((rule) => rule.effect !== "allow"))
           return false;
         const isDefault = (rule) => engineDefaults.some((other) => other.action === rule.action && other.resource === rule.resource && other.effect === rule.effect);
@@ -21169,6 +21176,13 @@ ${live.agentPrompt}` : ""
     }
     return going.length > 0;
   }
+  autoWithoutSandbox(live, session) {
+    if (!madeForAuto(session))
+      return false;
+    if (fenceOff())
+      return true;
+    return [...live.threads].some(([providerID, thread]) => thread.outside || this.agent(providerID)?.outside?.() === true);
+  }
   checkPermission(live, session, ask, plan, owns) {
     const parts = partsOf2(ask);
     if (live.blocks && strictest(live.blocks, ask.action, parts) === "deny")
@@ -21196,6 +21210,8 @@ ${live.agentPrompt}` : ""
     if (live.blocks === undefined && !looks2.has(ask.action))
       return "ask";
     if (hidesFromBlocks(live.blocks, ask))
+      return "ask";
+    if (isShell(ask.action) && this.autoWithoutSandbox(live, session) && !this.allowedBefore(live, ask))
       return "ask";
     return effect === "ask" && !this.allowedBefore(live, ask) ? "ask" : undefined;
   }
@@ -21262,7 +21278,8 @@ ${live.agentPrompt}` : ""
     if (effect === "deny")
       return "reject";
     const unclassified = ask.unclassified && matched === undefined && asksFirst(session.permissions) && !this.allowedBefore(live, ask);
-    if (!unknown && !unclassified && !hidesFromBlocks(live.blocks, ask) && (effect === "allow" || this.allowedBefore(live, ask)))
+    const unfenced = isShell(ask.action) && this.autoWithoutSandbox(live, session) && !this.allowedBefore(live, ask);
+    if (!unknown && !unclassified && !unfenced && !hidesFromBlocks(live.blocks, ask) && (effect === "allow" || this.allowedBefore(live, ask)))
       return "once";
     if (turn.isEnded || refusesAsks(live.doing))
       return "reject";
@@ -28242,4 +28259,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents b42cec805c3b61390cc0183e84f9929e53518bb37146b40f924a6d02f72ae29e
+// Built from Packages/Box/src/agents 7b465832cd014554d8fe6c0e538f1f15d7ed9c3778edc1f5dfc883541d4e6537

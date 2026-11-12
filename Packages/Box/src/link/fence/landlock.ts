@@ -17,6 +17,7 @@
 
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
+import { didntFinish } from "./finished";
 import type { FencePolicy } from "./policy";
 
 /** What the Linux script reads: the policy's parts it needs. */
@@ -79,22 +80,34 @@ export const UNSHARE = ["/usr/bin/unshare", "/bin/unshare"];
  * where the machine doesn't let it (no `unshare`, user namespaces off, or AppArmor restricting them,
  * as Ubuntu 24.04 and later do). */
 export function ownNamespace(own: string): string | null {
+  const found = triedNamespace(own);
+  return found === UNFINISHED ? null : found;
+}
+
+/** A try of a namespace that didn't finish (a busy machine): whether commands can have one isn't
+ * known, which is never taken for "they can't" (fence/state.ts). */
+export const UNFINISHED = "unfinished";
+
+/** As `ownNamespace`, or `UNFINISHED` where the try didn't finish. */
+export function triedNamespace(own: string): string | null | typeof UNFINISHED {
   const unshare = UNSHARE.find(each => fs.existsSync(each));
   if (!unshare) return null;
   const tried = spawnSync(unshare, namespaceTry(unshare, own), { cwd: "/", stdio: "ignore", timeout: TRY_FOR });
+  if (didntFinish(tried)) return UNFINISHED;
   return tried.status === 0 ? unshare : null;
 }
 
 /** The same, while the box goes on answering (it's tried again each minute): `unshare`, the one to
- * try. */
-export function ownNamespaceLater(own: string, unshare = UNSHARE.find(each => fs.existsSync(each))): Promise<string | null> {
+ * try. `UNFINISHED` where it didn't finish in time (`limit`, a test's own). */
+export function ownNamespaceLater(own: string, unshare = UNSHARE.find(each => fs.existsSync(each)), limit = TRY_FOR): Promise<string | null | typeof UNFINISHED> {
   if (!unshare) return Promise.resolve(null);
   return new Promise(resolve => {
     const child = spawn(unshare, namespaceTry(unshare, own), { cwd: "/", stdio: "ignore" });
-    const late = setTimeout(() => child.kill("SIGKILL"), TRY_FOR);
-    late.unref?.();
-    child.once("error", () => { clearTimeout(late); resolve(null); });
-    child.once("exit", status => { clearTimeout(late); resolve(status === 0 ? unshare : null); });
+    let late = false;
+    const cut = setTimeout(() => { late = true; child.kill("SIGKILL"); }, limit);
+    cut.unref?.();
+    child.once("error", error => { clearTimeout(cut); resolve(didntFinish({ status: null, error }) ? UNFINISHED : null); });
+    child.once("exit", (status, signal) => { clearTimeout(cut); resolve(late || didntFinish({ status, signal }) ? UNFINISHED : status === 0 ? unshare : null); });
   });
 }
 
