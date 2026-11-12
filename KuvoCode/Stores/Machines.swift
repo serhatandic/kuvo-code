@@ -706,7 +706,8 @@ final class MachineEngine {
             startWanted = false
             let opened = connected()
             learnIdentity()
-            Analytics.shared.trackOnce("machine_connected")
+            // (This Mac's own box, attached in place, isn't one of your machines.)
+            if !machine.isThisMac { Analytics.shared.trackOnce("machine_connected") }
             listen(to: current)
             // The browser, in the background: the machine's box sets it up the first time (its
             // download), and this follows how that goes. A browser tab in view comes back live.

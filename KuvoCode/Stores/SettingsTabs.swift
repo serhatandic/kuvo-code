@@ -179,7 +179,7 @@ final class SettingsTabs {
         } else {
             preview(page, on: box, isBusy: isBusy)
         }
-        Analytics.shared.track("settings_opened", ["tab": page.rawValue, "machine": box.machine != nil])
+        Analytics.shared.track("settings_opened", ["tab": page.rawValue, "machine": BoxClient.isMachine(box.machine)])
     }
 
     /// `page` as `show` has it, without counting it as opened: what searching finds first.

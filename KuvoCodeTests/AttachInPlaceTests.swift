@@ -77,7 +77,14 @@ import Testing
     }
 
     private func cleanUp(_ app: AppModel?) {
+        // The box here's connection ends, and what follows it there with it.
+        app?.machines.engine(SSHConnection.thisMac)?.disconnect()
         app?.stop()
+        // (The usage panel reads the app's own engine's spend again, not this test's folder, and
+        // the shared stores look at no box of this test's.)
+        app?.usage.readEngineData([AppModel.engineFolders.dataDirectory])
+        Personalities.shared.box = { nil }
+        Analytics.shared.catalog = nil
         AppModel.attachesInPlace = false
         BackgroundWork.heldBack = nil
         for database in databases { try? FileManager.default.removeItem(at: database) }
@@ -85,6 +92,7 @@ import Testing
         SSHConnection.thisMacHome = AppModel.defaultHereHome.path(percentEncoded: false)
         MachineEngine.standIn = nil
         BoxClient.thisMac = BoxClient.mac
+        BoxClient.readAgainAfter = .seconds(30)
         unsetenv("KUVO_OPENCODE_BINARY")
         try? FileManager.default.removeItem(at: folder)
         engine.stop()
@@ -123,8 +131,14 @@ import Testing
                 const fs = require("fs"), path = require("path"), run = path.join(process.env.KUVO_HOME, "run");
                 fs.writeFileSync(path.join(run, "app-attached.json"), "{}");
                 fs.writeFileSync(path.join(run, "setup-card.json"), JSON.stringify({ app: true, by: "its own" }));
-                // (Where its chats go, as its `kuvo/info` says; every route answers the same.)
-                console.log(JSON.stringify({ status: 200, body: JSON.stringify({ chats: path.join(process.env.KUVO_HOME, "box-chats") }) }));
+                // The route asked (noted, in order), answered as the test says it is there (`answers.json`);
+                // any other with where its chats go, as its `kuvo/info` says.
+                let asked = {}, answers = {};
+                try { asked = JSON.parse(fs.readFileSync(0, "utf8")); } catch {}
+                try { answers = JSON.parse(fs.readFileSync(path.join(run, "answers.json"), "utf8")); } catch {}
+                if (asked.path) fs.appendFileSync(path.join(run, "asked.log"), asked.method + " " + asked.path + "\\n");
+                const body = asked.path in answers ? answers[asked.path] : { chats: path.join(process.env.KUVO_HOME, "box-chats") };
+                console.log(JSON.stringify({ status: 200, body: JSON.stringify(body) }));
 
                 """.write(to: box.appending(path: "bin/kuvo-link.js"), atomically: true, encoding: .utf8)
             if runs == .running {
@@ -294,6 +308,117 @@ import Testing
         await model.phoneLink.sync(here, asked: true)
         #expect(try Data(contentsOf: link) == before)
         #expect(model.phoneLink.setupFailed[SSHConnection.thisMac] == nil)
+    }
+
+    /// What the box here answers for each of `routes` (by its path, with its query), from now on.
+    private func boxHereAnswers(_ routes: [String: Any]) throws {
+        // (Whole, as the box is read meanwhile.)
+        let file = home.appending(path: "\(RemoteEngineInstaller.root)/run/answers.json")
+        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try JSONSerialization.data(withJSONObject: routes).write(to: file, options: .atomic)
+    }
+
+    /// The routes the box here was asked, in order ("GET kuvo/info").
+    private var askedOfTheBoxHere: [String] {
+        let log = home.appending(path: "\(RemoteEngineInstaller.root)/run/asked.log")
+        return ((try? String(contentsOf: log, encoding: .utf8)) ?? "").split(separator: "\n").map(String.init)
+    }
+
+    private func library(_ names: [String]) -> [String: Any] {
+        ["personalities": names.map { ["id": "custom.\($0.lowercased())", "name": $0, "description": "Talks like \($0).", "symbol": "person", "updated": 1] }, "removed": []]
+    }
+
+    /// The personalities you write are the box here's (#333): the ones it keeps show as it connects,
+    /// and one written there since (from a phone, say) shows too, as it's read again.
+    @Test func thePersonalitiesShownAreTheBoxHeres() async throws {
+        var app: AppModel?
+        defer { cleanUp(app) }
+        connectsReady()
+        BoxClient.readAgainAfter = .milliseconds(100)
+        app = try await started {
+            try memberOfMacBooks()
+            try boxHereAnswers(["kuvo/personalities/document": library(["Ada"])])
+        }
+        let shared = Personalities.shared
+        try await until { shared.custom.map(\.name) == ["Ada"] }
+        try boxHereAnswers(["kuvo/personalities/document": library(["Ada", "Grace"])])
+        try await until { shared.custom.map(\.name) == ["Ada", "Grace"] }
+        #expect(!askedOfTheBoxHere.contains { $0.hasSuffix("kuvo/personalities/take") }, "its own library isn't met with itself")
+        // (Read empty again, as the next test finds it.)
+        try boxHereAnswers(["kuvo/personalities/document": library([])])
+        await shared.refresh()
+    }
+
+    /// A bot on the box here: its wake-ups show without its conversation being opened, and one
+    /// canceled there (from a phone, say) goes, as the box is read again (#333).
+    @Test func theBoxHeresBotsWakeUpsAreFollowed() async throws {
+        var app: AppModel?
+        defer {
+            cleanUp(app)
+            // (Its bot, kept with the others, isn't the next test's.)
+            try? FileManager.default.removeItem(at: Bots.file)
+        }
+        try? FileManager.default.removeItem(at: Bots.file)
+        connectsReady()
+        BoxClient.readAgainAfter = .milliseconds(100)
+        let bot: [String: Any] = ["id": "bot_ci", "session": "ses_ci", "name": "Ci", "look": ["color": "mint", "shape": "round", "face": "calm"]]
+        let wake = ["id": "4102444800-abcd", "note": "Check CI"]
+        app = try await started {
+            try memberOfMacBooks()
+            try boxHereAnswers(["kuvo/bots": ["bots": [bot]],
+                                "kuvo/wakes/events": ["sessions": [["session": "ses_ci", "wakes": [wake], "watches": [], "paused": false]]]])
+        }
+        let model = try #require(app)
+        try await until { model.wakeUps.wakes["bot_ci"]?.map(\.note) == ["Check CI"] }
+        #expect(model.bots.bot("bot_ci")?.machine == SSHConnection.thisMac)
+        try boxHereAnswers(["kuvo/bots": ["bots": [bot]], "kuvo/wakes/events": ["sessions": []]])
+        try await until { model.wakeUps.wakes["bot_ci"] == nil }
+    }
+
+    /// A worktree the box here removed (from a phone, say) goes here too, as it's read again (#333).
+    @Test func theBoxHeresWorktreesAreFollowed() async throws {
+        var app: AppModel?
+        defer {
+            cleanUp(app)
+            for key in ["worktrees", "removedWorktrees"] { UserDefaults.standard.removeObject(forKey: key) }
+        }
+        connectsReady()
+        BoxClient.readAgainAfter = .milliseconds(100)
+        let tree: [String: Any] = ["project": "/Users/me/api", "root": "/Users/me/.worktrees/api-1", "branch": "kuvo/fix"]
+        app = try await started {
+            try memberOfMacBooks()
+            try boxHereAnswers(["kuvo/worktrees?records=1": ["worktrees": [tree]]])
+        }
+        let model = try #require(app)
+        let root = RemoteFolder.folder("/Users/me/.worktrees/api-1", on: SSHConnection.thisMac)
+        try await until { model.workspace.worktrees[root]?.branch == "kuvo/fix" }
+        try boxHereAnswers(["kuvo/worktrees?records=1": ["worktrees": []]])
+        try await until { model.workspace.worktrees[root] == nil }
+        #expect(!askedOfTheBoxHere.contains { $0.hasPrefix("POST kuvo/worktrees/record") }, "what it removed isn't handed back to it")
+    }
+
+    /// Attached, this Mac's engine is the box here's: the usage panel reads its accounts (#333).
+    @Test func theUsagePanelReadsTheBoxHeresEngine() async throws {
+        var app: AppModel?
+        defer { cleanUp(app) }
+        connectsReady()
+        app = try await started { try memberOfMacBooks() }
+        let model = try #require(app)
+        try await until { model.usage.api != nil }
+        #expect(model.usage.api?.client.endpoint.url.absoluteString == engine.url)
+    }
+
+    /// The box here keeps its own link to your phones: the app never tells it what to do with it,
+    /// and Pair a Phone says why it can't from here, rather than that a service isn't running (#333).
+    @Test func aPhoneIsntPairedFromHereYet() async throws {
+        var app: AppModel?
+        defer { cleanUp(app) }
+        connectsReady()
+        app = try await started { try memberOfMacBooks() }
+        let model = try #require(app)
+        await model.phoneLink.beginPairing()
+        #expect(model.phoneLink.pairingProblem == PhoneLink.keptByTheBoxHere)
+        #expect(!askedOfTheBoxHere.contains { $0.contains("kuvo/link/") || $0.contains("kuvo/phones/") })
     }
 
     /// Folders, of `folders`, on the box here.

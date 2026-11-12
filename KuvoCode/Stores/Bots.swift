@@ -454,7 +454,7 @@ final class Bots {
         guard let bot = bot(answer.bot.id) else { throw CancellationError() }
         // Its conversation, there from the start.
         if let api = api(for: bot), let session = try? await api.session(bot.sessionID) { app?.workspace.add(session) }
-        Analytics.shared.track("bot_created", ["machine": machine != nil, "project": project != nil])
+        Analytics.shared.track("bot_created", ["machine": BoxClient.isMachine(machine), "project": project != nil])
         return Made(bot: bot, firstMessage: answer.firstMessage)
     }
 
