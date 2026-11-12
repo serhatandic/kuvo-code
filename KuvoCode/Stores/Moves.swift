@@ -255,7 +255,7 @@ final class Moves {
         prefetching?.cancel()
         prefetching = Task { [weak self] in
             guard let app = self?.app else { return }
-            let chats = app.workspace.sessions.filter { $0.parentID == nil && Workspace.isChat($0.location.directory) && !Workspace.isArchived($0) }
+            let chats = app.workspace.sessions.filter { $0.parentID == nil && Workspace.isChat($0) && !Workspace.isArchived($0) }
             let things = app.bots.list.map { ("bot", $0.id, $0.machine) } + app.chats.list.map { ("group", $0.id, app.chats.machine(of: $0.id)) }
                 + chats.map { ("chat", $0.id, RemoteFolder.machine(of: $0.location.directory)) }
             let byBox = things.sorted { ($0.2 ?? "") < ($1.2 ?? "") }

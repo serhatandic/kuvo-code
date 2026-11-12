@@ -3236,6 +3236,9 @@
             "literal": "sessions.agents"
            },
            {
+            "literal": "sessions.chat"
+           },
+           {
             "literal": "sessions.glance"
            },
            {
@@ -3596,6 +3599,9 @@
            },
            {
             "literal": "sessions.agents"
+           },
+           {
+            "literal": "sessions.chat"
            },
            {
             "literal": "sessions.glance"

@@ -16,6 +16,7 @@ release, Unreleased is renamed to the version; the release notes come from that 
 
 ### All Changes
 
+- Each computer now marks its chats itself, so a chat always shows under Chats on your Mac and iPhone. Before, when your iPhone couldn't ask a computer where it keeps chats (Kuvo Code on that Mac wasn't answering, say), they showed there as a project called "Chats".
 - In a group chat, the line under the bot that's talking now changes from one step to the next cleanly, and so does "… is thinking…" as the next bot takes its turn, also after one that had nothing to add: before, the old words and the new ones showed over each other for a moment as they changed.
 - A session you stop while Auto is checking what it asked no longer shows as asking you later: in its bot's sessions bar its row kept saying "Asks to …" (and the Dock counted it) after the session went on, with nothing in it to answer.
 - A Claude conversation's warning that a plan's limit is being used up now says how much of which limit is used ("You've used 25% of your weekly Claude limit."), and calls it close only from 90%. Claude Code warns early in a week too, and it said "You're close to your Claude usage limit" with a quarter of the week used, on your Mac and iPhone alike. Reaching the weekly limit now says so ("You've reached your weekly Claude limit."), rather than "your Claude usage limit for now".

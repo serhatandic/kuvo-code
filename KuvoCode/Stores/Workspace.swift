@@ -346,7 +346,16 @@ final class Workspace {
         return url.path
     }()
 
-    /// This Mac's chats, and those moved to a machine, in Kuvo Code's folder there (`Moves`).
+    /// Whether `session` is a chat: as its box marks it (`kuvo.chat`, PROTOCOL.md "Chats"). One
+    /// without the mark goes by its folder (`isChat(_ directory:)`): the old-box path, for a machine
+    /// whose box is from before the mark, and for a chat its box hasn't marked yet.
+    static func isChat(_ session: Session) -> Bool {
+        SessionChat.isChat(session) { isChat($0) }
+    }
+
+    /// Whether `directory` is the chats folder: this Mac's, or a machine's in Kuvo Code's folder
+    /// there (`Moves`). For a new chat's folder (a draft has no session yet), and the old-box path
+    /// of `isChat(_ session:)`: a session is a chat as its box marks it.
     static func isChat(_ directory: String) -> Bool {
         directory == chatsFolder || (RemoteFolder.parse(directory)?.path.hasSuffix("/\(RemoteEngineInstaller.root)/chats") ?? false)
     }
@@ -359,7 +368,7 @@ final class Workspace {
 
     /// Chats, newest first.
     var chats: [Session] {
-        sessions.filter { Self.isChat($0.location.directory) && !Self.isArchived($0) && !botSessions.contains($0.id) && !deleting.contains($0.id) }
+        sessions.filter { Self.isChat($0) && !Self.isArchived($0) && !botSessions.contains($0.id) && !deleting.contains($0.id) }
             .sorted { $0.time.updated > $1.time.updated }
     }
 
@@ -405,7 +414,7 @@ final class Workspace {
     }
 
     private func makeProjects() -> [Project] {
-        let grouped = Dictionary(grouping: sessions.filter { !Self.isArchived($0) && !botSessions.contains($0.id) && !deleting.contains($0.id) && !Self.isChat($0.location.directory) && !Self.isBotFolder($0.location.directory) }, by: projectDirectory(of:))
+        let grouped = Dictionary(grouping: sessions.filter { !Self.isArchived($0) && !botSessions.contains($0.id) && !deleting.contains($0.id) && !Self.isChat($0) && !Self.isBotFolder($0.location.directory) }, by: projectDirectory(of:))
         let directories = Set(grouped.keys).union(folders).filter { RemoteFolder.machine(of: $0).map(machines.contains) ?? true }
         return directories.map { directory in
             Project(directory: directory, sessions: (grouped[directory] ?? []).sorted { $0.time.updated > $1.time.updated }, settings: settings[directory] ?? ProjectSettings())
@@ -887,7 +896,7 @@ final class Workspace {
 
     /// The name of the project a session is filed under.
     func projectName(of session: Session) -> String {
-        if Self.isChat(session.location.directory) { return "Chats" }
+        if Self.isChat(session) { return "Chats" }
         let directory = projectDirectory(of: session)
         return settings[directory]?.name ?? (directory as NSString).lastPathComponent
     }

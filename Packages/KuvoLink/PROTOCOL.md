@@ -2242,7 +2242,7 @@ answers `404 {}`; a path that isn't what it seems, `403`. A host serves:
   `started`, when the engine running now came up, in seconds since 1970 (null while none runs): a
   restart changes it, so a phone tells the new engine from the old. Both name the folder of chats
   (`chats`: conversations of no project, made if it isn't there yet, so a phone can start the first
-  one there through the engine, as for a project). A machine's bridge also says whether its engine
+  one there through the engine, as for a project; each of their sessions is marked a chat, "Chats"). A machine's bridge also says whether its engine
   is `running`, and whether it's `stopped` on purpose (it stays down until it's started, from a Mac
   or a phone), and `home`, the Mac that started its engine (`{"mac", "name"?}`, its name where
   its start noted one). It also says who uses it, for an uninstall to name whom it would stop it
@@ -4065,6 +4065,7 @@ One row a name, in order, so branches that each add one merge cleanly.
 | `sandbox.reviews.whole` | `reviews` on `kuvo/sandbox/asks` lists every ask to work outside a conversation's folder, so a client shows one only once it's listed `yours` ("Sandbox") |
 | `search` | `kuvo/search` |
 | `sessions.agents` | `POST kuvo/sessions/<id>/agents` |
+| `sessions.chat` | Every chat's session carries `kuvo.chat: true` in its metadata, and no other session does ("Chats") |
 | `sessions.glance` | `kuvo/sessions/glance`, `…/events`, and `session` in `POST kuvo/git/pull-request` ("A session at a glance") |
 | `sessions.start` | `POST kuvo/sessions`: a session started with a task (bridge 0.9.100) |
 | `setup` | `kuvo/setup`, `…/events`: your setup and its main computer ("Your setup") |
@@ -4447,6 +4448,32 @@ while a box is away goes there when it's back.
   or not (nothing is archived).
 - `GET kuvo/projects/events`: `application/x-ndjson`, the list now, then again each time it
   changes.
+
+#### Chats
+
+A chat is a conversation of no project: one in the box's chats folder (`kuvo/info`'s `chats`). The
+box marks each one in its session's metadata, `kuvo.chat: true` (`sessions.chat`, #571), and no
+other session carries it, so a client draws a session as a chat from the session itself, wherever
+it reads it (the engine's or the coding agents' bridge's list, a session read again as its event
+comes, `kuvo/search`'s `info`, a session a move brought), and never works it out from its folder.
+The box decides it from its own chats folder (the same folder through a link counts too), for
+every session there, subagents' included:
+
+- as a session is made (one a box's `kuvo/sessions` starts carries it from the first), as it moves
+  (`session.moved`: a chat moved into a project loses it), and as its metadata is written whole
+  (`session.metadata.updated`): read just before it's written, and only written when it's wrong;
+- as the box follows its engine and its coding agents' bridge again (it started, or the box did):
+  every session, for those made, moved or written to while it wasn't heard, and those from before
+  boxes marked chats;
+- as a move brings conversations in ("kuvo/moves"): a chat's mark comes along in its metadata, and
+  the box sets it as it is here before it's imported (kept among its chats, taken off in a bot's
+  folder).
+
+A client keeps the mark as it keeps the rest of the metadata, when it writes it back. A box from
+before `sessions.chat` marks nothing: a client goes by its folder there, as it did before (the
+folder its `kuvo/info` names, kept for when that isn't answered), and does the same for a session
+that has no mark yet (a chat its box hasn't marked in the moment since it was made). What both
+apps read is `SessionChat` (`Packages/KuvoClient`, ClientSessions).
 
 ### Artifacts
 

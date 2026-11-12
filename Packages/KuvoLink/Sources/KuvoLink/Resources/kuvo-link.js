@@ -625,7 +625,7 @@ var REAL_BOX = (() => {
 var IN_TEST_FOLDER = !REAL_BOX;
 var CONFIG_LOCK = path3.join(RUN, ".config.lock");
 var BOTS = process.env.KUVO_BOTS || path3.join(K, "bots");
-var CHATS = process.env.KUVO_CHATS || path3.join(K, "chats");
+var CHATS = process.env.KUVO_CHATS || (process.env.KUVO_BOX === "mac" ? path3.join(path3.dirname(K), "Chats") : path3.join(K, "chats"));
 var MAC_ATTACHMENTS = process.env.KUVO_MAC_ATTACHMENTS || null;
 var attachmentRoots = () => [path3.join(K, "attachments"), ...MAC_ATTACHMENTS ? [MAC_ATTACHMENTS] : []];
 var IS_MAC = process.env.KUVO_BOX === "mac";
@@ -2147,6 +2147,7 @@ var FEATURES = [
   "sandbox.reviews.whole",
   "search",
   "sessions.agents",
+  "sessions.chat",
   "sessions.glance",
   "sessions.start",
   "setup",
@@ -13877,6 +13878,81 @@ function startedAs(bot, token, session, prompted = false, file = LIMITS_FILE) {
 import fs64 from "node:fs";
 import path66 from "node:path";
 
+// Packages/Box/src/link/engine/chats.ts
+function isChatsFolder(directory) {
+  if (typeof directory !== "string" || !directory)
+    return false;
+  if (directory === CHATS)
+    return true;
+  return located(directory) === located(CHATS);
+}
+var folderOf = (session) => session.location?.directory ?? session.directory;
+var isMarkedChat = (session) => session?.metadata?.kuvo?.chat === true;
+var markedRight = (session) => isMarkedChat(session) === isChatsFolder(folderOf(session));
+function chatNotes(metadata, directory) {
+  const notes = isObject(metadata) ? metadata : {};
+  const { chat: _, ...kuvo } = isObject(notes.kuvo) ? notes.kuvo : {};
+  if (isChatsFolder(directory))
+    return { ...notes, kuvo: { ...kuvo, chat: true } };
+  return isObject(notes.kuvo) ? { ...notes, kuvo } : notes;
+}
+var marking = new Set;
+async function markChat(target, id, signal) {
+  if (typeof id !== "string" || !id)
+    return false;
+  const key = `${target.port}:${id}`;
+  if (marking.has(key))
+    return false;
+  marking.add(key);
+  try {
+    const session = (await engineGet(target, `api/session/${encodeURIComponent(id)}`))?.data;
+    if (!session?.id || markedRight(session))
+      return false;
+    await call(target, "PATCH", `/api/session/${encodeURIComponent(id)}`, { metadata: chatNotes(session.metadata, folderOf(session)) }, signal);
+    return true;
+  } finally {
+    marking.delete(key);
+  }
+}
+function sessionIn(data) {
+  if (!isObject(data))
+    return null;
+  const whole = isObject(data.session) ? data.session : data;
+  return isObject(whole.location) && typeof whole.location.directory === "string" ? whole : null;
+}
+function markChatOn(target, type, data, signal) {
+  if (type !== "session.created" && type !== "session.moved" && type !== "session.metadata.updated")
+    return null;
+  const id = isObject(data) ? data.sessionID ?? (isObject(data.info) ? data.info.id : undefined) : undefined;
+  const said = type === "session.created" ? sessionIn(data) : null;
+  if (said && markedRight(said))
+    return null;
+  return markChat(target, id, signal);
+}
+async function markAllChats(target, signal) {
+  const wrong = [];
+  let query = "limit=200&order=desc";
+  for (let pages = 0;query && pages < 500; pages++) {
+    if (signal?.aborted)
+      return 0;
+    const page = await engineGet(target, `api/session?${query}`);
+    const data = Array.isArray(page?.data) ? page.data : [];
+    for (const session of data)
+      if (session?.id && !markedRight(session))
+        wrong.push(session.id);
+    const next = page?.cursor?.next;
+    query = data.length === 200 && next ? `limit=200&cursor=${encodeURIComponent(next)}` : null;
+  }
+  let written = 0;
+  for (const id of wrong) {
+    if (signal?.aborted)
+      break;
+    if (await markChat(target, id, signal).catch(() => false))
+      written += 1;
+  }
+  return written;
+}
+
 // Packages/Box/src/link/areas/worktree-records.ts
 import fs56 from "node:fs";
 import path59 from "node:path";
@@ -14348,7 +14424,7 @@ async function answerWorktrees(method, requestPath, body, engine, signal, bridge
   return { status: 404, value: {} };
 }
 var isArchived2 = (session) => Boolean(session.time?.archived || session.metadata?.["kuvo.archived"] === true || session.metadata?.kuvo?.archived === true);
-var folderOf = (session) => session.location?.directory ?? session.directory;
+var folderOf2 = (session) => session.location?.directory ?? session.directory;
 var snapshotRef = (root, commit) => `refs/kuvo/worktrees/${path60.basename(root).replace(/[^A-Za-z0-9_-]+/g, "-")}-${commit.slice(0, 12)}`;
 var dropSnapshot = (project, root, commit) => gitIn(project, ["update-ref", "-d", snapshotRef(root, commit), commit]);
 function snapshot(root, branch) {
@@ -14393,10 +14469,10 @@ async function removeTree(tree, removal, engine, signal, bridge, known) {
   if (!here)
     return { status: 503, value: message(engine?.port ? `It couldn't be told whether an agent is working in the worktree of ${tree.branch}, so it stays. Try again in a moment.` : `The engine isn't running, so the worktree of ${tree.branch} stays. Try again once it's started.`) };
   const { sessions, active } = here;
-  if (sessions.some((session) => inside2(folderOf(session), tree.root) && active.has(session.id))) {
+  if (sessions.some((session) => inside2(folderOf2(session), tree.root) && active.has(session.id))) {
     return { status: 409, value: message(`An agent is still working in the worktree of ${tree.branch}, so it stays. Stop it first, then remove the worktree.`) };
   }
-  if (removal.forget && sessions.some((session) => inside2(folderOf(session), tree.root))) {
+  if (removal.forget && sessions.some((session) => inside2(folderOf2(session), tree.root))) {
     return { status: 409, value: message(`A session works in the worktree of ${tree.branch}, so it stays. Remove it with the session, or in Settings › Worktrees.`) };
   }
   const gone = !fs57.existsSync(tree.root);
@@ -14486,7 +14562,7 @@ async function restoreTree(folder, engine, signal, bridge) {
     dropSnapshot(tree.project, tree.root, saved);
   const here = await sessionsHere(engine, signal, bridge);
   for (const session of here?.sessions ?? []) {
-    if (!inside2(folderOf(session), tree.root) || isHiddenRun(session))
+    if (!inside2(folderOf2(session), tree.root) || isHiddenRun(session))
       continue;
     for (const target of [engine, bridge])
       if (target?.port)
@@ -14536,7 +14612,7 @@ async function sweep(signal, given, givenBridge) {
   const here = await sessionsHere(engine, signal, bridge);
   if (!here)
     return;
-  const ranIn = (root, seen = here) => seen.sessions.filter((session) => !isHiddenRun(session) && !session.parentID && inside2(folderOf(session), root));
+  const ranIn = (root, seen = here) => seen.sessions.filter((session) => !isHiddenRun(session) && !session.parentID && inside2(folderOf2(session), root));
   const used = readWorktrees().filter((tree) => tree.used === undefined ? ranIn(tree.root).length : !tree.used && ranIn(tree.root).some((session) => !isArchived2(session))).map((tree) => tree.root);
   if (used.length)
     updateWorktrees((list) => list.map((each) => used.includes(each.root) ? { ...each, used: true } : each));
@@ -17643,7 +17719,7 @@ async function startSession(given, by, place) {
     ...remote ? { call: remote.call, lead: { box: remote.computer, key: remote.key, name: by.name }, ...brought.length ? { held: brought } : {} } : {}
   };
   const starter = Boolean(by?.place || remote);
-  const marks = { ...starter ? { startedBy: by.session } : {}, ...asBefore ? {} : { approval: kept, applied }, ...autopilot ? { autopilot: true } : {}, ...filed ? { filed } : {}, ...marksOfLine };
+  const marks = { ...starter ? { startedBy: by.session } : {}, ...asBefore ? {} : { approval: kept, applied }, ...autopilot ? { autopilot: true } : {}, ...filed ? { filed } : {}, ...isChatsFolder(folder) ? { chat: true } : {}, ...marksOfLine };
   const waits = given.wait === true && !remote;
   const wakes = wakesFrom(given.wait === true && remote ? given.wake ?? "both" : given.wake, remote ? remote.own : Boolean(ownBot), waits);
   const kuvo = { ...starter ? { startedBy: by.session, ...bot ? { by: bot, depth } : {}, ...wakes.length ? { wake: wakes } : {} } : {}, ...asBefore ? {} : { approval: kept, applied }, ...autopilot ? { autopilot: true } : {}, ...filed ? { filed } : {}, ...marksOfLine };
@@ -22371,9 +22447,8 @@ var MOST_BUNDLE = 1e9;
 var ENGINE_WAIT = 2 * 60000;
 var EXPORT_WAIT = 10 * 60000;
 var engineWait = (signal, most = ENGINE_WAIT) => signal ? AbortSignal.any([signal, AbortSignal.timeout(most)]) : AbortSignal.timeout(most);
-var CHATS2 = IS_MAC ? path84.join(path84.dirname(K), "Chats") : path84.join(K, "chats");
-var folderOf2 = (kind, thing) => kind === "bot" ? path84.join(BOTS, thing) : kind === "chat" ? path84.join(SESSION_WAKES, thing) : null;
-var directoryOf = (kind, thing) => kind === "bot" ? path84.join(BOTS, thing, "workspace") : CHATS2;
+var folderOf3 = (kind, thing) => kind === "bot" ? path84.join(BOTS, thing) : kind === "chat" ? path84.join(SESSION_WAKES, thing) : null;
+var directoryOf = (kind, thing) => kind === "bot" ? path84.join(BOTS, thing, "workspace") : CHATS;
 function run2(program, args) {
   return new Promise((resolve, reject) => {
     const child = spawn8(program, args, { stdio: ["ignore", "ignore", "pipe"], env: { ...process.env, COPYFILE_DISABLE: "1" } });
@@ -22484,7 +22559,7 @@ async function pack(id, contents) {
   const folder = bundleOf(id);
   const staging = path84.join(folder, "pack");
   const moveJSON = JSON.stringify(contents);
-  const original = contents.folder ? folderOf2(contents.kind, contents.thing) : null;
+  const original = contents.folder ? folderOf3(contents.kind, contents.thing) : null;
   const carried = contents.lane ? path84.join(folder, "carry") : null;
   if (Buffer.byteLength(moveJSON) + (original ? bytesIn(original, MOST_BUNDLE) : 0) + (carried ? bytesIn(carried, MOST_BUNDLE) : 0) + filesSize(contents.workQueue) > MOST_BUNDLE)
     throw new TooBig;
@@ -22645,7 +22720,8 @@ async function importAll(engine, exports, directory, signal) {
   for (const exported of exports) {
     if (!isObject(exported))
       continue;
-    await call(engine, "POST", "/api/experimental/session/import", { info: exported.info, messages: exported.messages, location: { directory } }, signal);
+    const info = isObject(exported.info) ? { ...exported.info, metadata: chatNotes(exported.info.metadata, directory) } : exported.info;
+    await call(engine, "POST", "/api/experimental/session/import", { info, messages: exported.messages, location: { directory } }, signal);
   }
 }
 async function deleteSession(engine, id) {
@@ -23038,7 +23114,7 @@ async function movable(kind, thing, signal) {
       return null;
     const title = typeof session.title === "string" && session.title.trim() ? `“${session.title.trim()}”` : "This chat";
     const directory = isObject(session.location) ? session.location.directory : session.directory;
-    if (directory !== CHATS2)
+    if (!isChatsFolder(directory))
       return null;
     if (await chatGoalRuns(thing, signal))
       return { name: title, why: say.onGoal(title), note: note.onGoal };
@@ -23149,7 +23225,7 @@ async function startMove(kind, thing, to, signal) {
   if (what.lane && olderThanCarrying(to))
     return { ok: false, status: 409, message: say.needsUpdate(plainName(peer.name) || "That computer") };
   const id = `mov_${crypto34.randomBytes(12).toString("base64url").replace(/[-_]/g, "")}`;
-  const folder = folderOf2(kind, thing);
+  const folder = folderOf3(kind, thing);
   const record = {
     id,
     kind,
@@ -23329,7 +23405,7 @@ async function carryOn(id) {
       record.sessions = idsOf(exports);
       digest = conversationHash(exports);
     }
-    const worked = record.kind === "bot" ? record.folder : CHATS2;
+    const worked = record.kind === "bot" ? record.folder : CHATS;
     contents.was = { place: plainName(readLink()?.name ?? "") || (IS_MAC ? "a Mac" : "a machine"), ...worked ? { folder: worked } : {} };
     queues = await queuesOf(target, record.sessions, record.name);
     if (Object.keys(queues).length)
@@ -23706,7 +23782,7 @@ async function livesHere(kind, thing) {
     } catch {}
     return bridge ? (await askGroups(bridge, "GET", `/${encodeURIComponent(thing)}`, undefined, engineWait()).catch(() => null))?.status === 200 : false;
   }
-  if (fs84.existsSync(folderOf2(kind, thing)))
+  if (fs84.existsSync(folderOf3(kind, thing)))
     return true;
   const root = kind === "bot" ? null : thing;
   if (!root)
@@ -23803,7 +23879,7 @@ async function bringIn(record, signal) {
     placeWorkQueues(contents.workQueue, [record.thing], opened);
     return [];
   }
-  const place = folderOf2(record.kind, record.thing);
+  const place = folderOf3(record.kind, record.thing);
   const root = record.kind === "chat" ? record.thing : (() => {
     try {
       return folder ? fs84.readFileSync(path87.join(folder, "session"), "utf8").trim() : "";
@@ -23834,7 +23910,7 @@ async function bringIn(record, signal) {
     });
     writePrivate(PAUSED2(place), "moving");
     if (record.kind === "chat")
-      writePrivate(path87.join(place, "directory"), CHATS2);
+      writePrivate(path87.join(place, "directory"), CHATS);
   }
   const directory = directoryOf(record.kind, record.thing);
   fs84.mkdirSync(directory, { recursive: true });
@@ -23904,7 +23980,7 @@ async function tellMoved(record) {
   const root = record.sessions[0];
   if (!root || !record.was)
     return;
-  const folder = record.kind === "bot" ? folderOf2(record.kind, record.thing) : CHATS2;
+  const folder = record.kind === "bot" ? folderOf3(record.kind, record.thing) : CHATS;
   const lines = [
     `You moved to this computer from ${record.was.place}. What you did before that happened there.`,
     ...record.was.folder && folder && record.was.folder !== folder ? [`Paths in your conversation under ${record.was.folder} are under ${folder} now.`] : [],
@@ -23917,7 +23993,7 @@ async function switchHere(record) {
   if (record.kind === "group") {
     await groupAction(readBridgeFile(), record.thing, "activate");
   } else {
-    unhold(folderOf2(record.kind, record.thing) ?? undefined, record.wasPaused, record.pausedAs);
+    unhold(folderOf3(record.kind, record.thing) ?? undefined, record.wasPaused, record.pausedAs);
     forgetMovedAway(record.sessions);
     await backHere(record.thing).catch((error) => console.error(`kuvo-link: what an earlier move of ${record.name} left couldn't all be cleared: ${String(error?.message ?? error)}`));
     await tellMoved(record).catch((error) => console.error(`kuvo-link: ${record.name} couldn't be told it moved: ${String(error?.message ?? error)}`));
@@ -24052,7 +24128,7 @@ async function clearCopy(record) {
     for (const session of record.sessions)
       forgetQueue(session);
     forgetWorkQueues(record.sessions);
-    const place = folderOf2(record.kind, record.thing);
+    const place = folderOf3(record.kind, record.thing);
     if (place && record.placed) {
       if (record.kind === "bot")
         await answerBotKeys("DELETE", `kuvo/bots/${record.thing}/keys`, null, null).catch(() => {});
@@ -24450,7 +24526,7 @@ async function resumeMoves(now = Date.now()) {
   }
   const moving = new Set(readMoves().map((record) => record.thing));
   for (const kind of ["bot", "chat"]) {
-    const parent = path87.dirname(folderOf2(kind, "x"));
+    const parent = path87.dirname(folderOf3(kind, "x"));
     let names = [];
     try {
       names = fs84.readdirSync(parent);
@@ -26845,11 +26921,10 @@ function answersYou(began, session) {
     return false;
   return !isBot(session) && !session.metadata?.kuvo?.startedBy;
 }
-var chatsFolder = () => IS_MAC ? path91.join(path91.dirname(K), "Chats") : path91.join(K, "chats");
 function projectNameOf(directory, session) {
   if (!directory)
     return;
-  if (directory === chatsFolder())
+  if (isChatsFolder(directory))
     return "Chats";
   const under = filedUnder(directory);
   const mark = session?.metadata?.kuvo?.filed;
@@ -27801,7 +27876,7 @@ async function ownAgents(readEngine, machine, kit = readKit(), readBridge = read
       sessions = sessions.concat(await sessionsOf(bridge));
   } catch {}
   const projects = boxProjects(kit);
-  const named = (directory) => projects.find((project) => project.directory === directory)?.name ?? (directory === path95.join(K, "chats") ? "Chats" : directory ? path95.basename(directory) : undefined);
+  const named = (directory) => projects.find((project) => project.directory === directory)?.name ?? (isChatsFolder(directory) ? "Chats" : directory ? path95.basename(directory) : undefined);
   const recent = sessions.filter((session) => !session.parentID && !botSessions.has(session.id) && !away.has(session.id) && !session.metadata?.kuvo?.seat && !isPutAway(session)).sort((a, b) => (b.time?.updated ?? 0) - (a.time?.updated ?? 0)).slice(0, 40).map((session) => ({ session: session.id, name: session.title || "New session", kind: "session", ...named(session.location?.directory ?? session.directory) ? { project: named(session.location?.directory ?? session.directory) } : {} }));
   return [...bots, ...recent].map(keptAgent);
 }
@@ -32662,6 +32737,8 @@ async function watchEvents(read, tell, signal, answered = () => {}, { bots = fal
       if (work)
         noteFullAccessAtWork(source, atWork3).catch(() => {});
       if (work)
+        markAllChats(source, connection.signal).catch(() => {});
+      if (work)
         atWork3(source).then((sessions) => takeUpWaitingAsks(source, sessions, connection.signal)).catch(() => {});
       if (work)
         settleWorkRead(source, connection.signal).catch(() => {});
@@ -32674,8 +32751,9 @@ async function watchEvents(read, tell, signal, answered = () => {}, { bots = fal
           noteFullAccess(event.data?.sessionID ?? event.data?.info?.id).catch(() => {});
         if (work && event.type === "session.deleted" && typeof event.data?.sessionID === "string")
           markConversation(event.data.sessionID, false);
-        if (work && event.type === "session.created")
-          adoptConversation(source, event.data?.sessionID ?? event.data?.info?.id, work === "bridge").catch(() => {});
+        const adopted = work && event.type === "session.created" ? adoptConversation(source, event.data?.sessionID ?? event.data?.info?.id, work === "bridge").catch(() => {}) : null;
+        if (work)
+          Promise.resolve(adopted).then(() => markChatOn(source, event.type, event.data, connection.signal)).catch(() => {});
         if (event.type === "session.deleted" && typeof event.data?.sessionID === "string") {
           letSessionFilesGo(attachmentsLooked, event.data.sessionID);
           forgetReviews(event.data.sessionID);
@@ -37123,7 +37201,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "6a88312aeade";
+var BRIDGE_VERSION = "ac7cd7b1c53d";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
@@ -37137,7 +37215,7 @@ async function* infoRoute(context) {
     try {
       started = fs119.statSync(ENGINE_FILE).mtimeMs / 1000;
     } catch {}
-  const chats = IS_MAC ? CHATS : path124.join(K, "chats");
+  const chats = CHATS;
   try {
     fs119.mkdirSync(chats, { recursive: true });
   } catch {}

@@ -328,6 +328,7 @@ test("a chat moves from this Mac to the machine, with its wake-ups; here it's go
   const there = labEngine.sessions.get("ses_chat1");
   assert.equal(there?.directory, labChats);
   assert.deepEqual(there.messages, said);
+  assert.equal(there.metadata?.kuvo?.chat, true, "a chat there from the first, as the box it came to marks its chats");
   assert.equal(JSON.parse(fs.readFileSync(path.join(labWakes, "ses_chat1", "wakes.json"), "utf8"))[0].note, "Book the train");
   assert.equal(fs.readFileSync(path.join(labWakes, "ses_chat1", "directory"), "utf8"), labChats);
   assert.ok(!fs.existsSync(path.join(labWakes, "ses_chat1", "paused")), "its wake-ups go on there");
