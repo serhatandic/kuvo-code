@@ -1577,6 +1577,8 @@ test("each feature kuvo/info names is a route the machine answers, and one it do
     projects: ["GET", "kuvo/projects"],
     "providers.models": ["GET", "kuvo/providers/models"],
     queue: ["GET", "kuvo/sessions/ses_none/queue"],
+    // (queue/add taking a message once by its id, sent again.)
+    "queue.once": ["POST", "kuvo/sessions/ses_none/queue/add"],
     "queue.waits": ["POST", "kuvo/sessions/ses_none/queue/add"],
     reviews: ["GET", "kuvo/agents/api/kuvo/reviews"],
     "reviews.parts": ["GET", "kuvo/agents/api/kuvo/reviews"],
