@@ -1,6 +1,6 @@
 import "./safety"
 import { expect, test } from "bun:test"
-import { inTurn, rewriteSession, withNotes, type NotesPlace } from "../src/shared/session-notes"
+import { inTurn, rewriteSession, turnsOn, withNotes, type NotesPlace } from "../src/shared/session-notes"
 
 // A session's notes written one writer at a time per place and session (#581), against a place that
 // keeps them as the engine (2.2.5) does: a PATCH's metadata replaces it whole, with nothing to say
@@ -15,12 +15,16 @@ function standIn(...ids: string[]) {
   const holds = new Map<string, Promise<void>>()
   const writes: string[] = []
   let failing = 0
-  const moment = () => new Promise(resolve => setTimeout(resolve, 5))
+  // Reads asked, by session: a test waits for one to be asked.
+  const asked: string[] = []
+  // A moment for the rest of what's under way, as a place's answer takes.
+  const moment = () => new Promise(resolve => setImmediate(resolve))
   const place: NotesPlace<Kept> = {
     name: `stand-in ${++places}`,
     read: async (id, signal) => {
+      asked.push(id)
       await moment()
-      await Promise.race([holds.get(id), new Promise((_, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }))])
+      await Promise.race([holds.get(id), new Promise((_, reject) => signal.aborted ? reject(signal.reason) : signal.addEventListener("abort", () => reject(signal.reason), { once: true }))])
       const kept = sessions.get(id)
       return kept ? structuredClone(kept) : null
     },
@@ -39,7 +43,7 @@ function standIn(...ids: string[]) {
     holds.set(id, new Promise<void>(resolve => { release = resolve }))
     return () => { holds.delete(id); release() }
   }
-  return { place, sessions, writes, hold, fail: (times = 1) => { failing = times } }
+  return { place, sessions, writes, asked, hold, fail: (times = 1) => { failing = times } }
 }
 
 const add = (kuvo: Record<string, unknown>) => (session: Kept) => ({ metadata: withNotes(session.metadata, kuvo) })
@@ -84,15 +88,43 @@ test("a write that fails ends its turn: the next one goes ahead, on the session 
   expect(sessions.get("ses_one")!.metadata.kuvo).toEqual({ chat: "/chats", autopilot: true })
 })
 
+/** Lets the rest of what's under way run until `ready` says so. */
+async function until(ready: () => boolean): Promise<void> {
+  while (!ready()) await new Promise(resolve => setImmediate(resolve))
+}
+
 test("a read that hangs past its writer's patience ends its turn", async () => {
-  const { place, sessions, hold } = standIn("ses_one")
+  const { place, sessions, hold, asked } = standIn("ses_one")
   const release = hold("ses_one")
-  const hung = rewriteSession(place, "ses_one", add({ autopilot: true }), AbortSignal.timeout(30))
+  const patience = new AbortController()
+  const hung = rewriteSession(place, "ses_one", add({ autopilot: true }), patience.signal)
   const next = rewriteSession(place, "ses_one", add({ chat: "/chats" }))
-  await expect(hung).rejects.toBeDefined()
+  // Its read asked, and hanging: its writer gives up.
+  await until(() => asked.length === 1)
+  patience.abort()
+  expect((await hung.then(() => null, error => error))?.name).toBe("AbortError")
   release()
   await next
   expect(sessions.get("ses_one")!.metadata.kuvo).toEqual({ chat: "/chats" })
+})
+
+test("a writer that gives up while it waits for its turn goes, and holds up no one after it", async () => {
+  const { place, sessions, hold, asked } = standIn("ses_one")
+  const release = hold("ses_one")
+  const first = rewriteSession(place, "ses_one", add({ autopilot: true }))
+  await until(() => asked.length === 1)
+  const patience = new AbortController()
+  const gaveUp = rewriteSession(place, "ses_one", add({ chat: "/chats" }), patience.signal)
+  const third = rewriteSession(place, "ses_one", add({ approval: "auto" }))
+  expect(turnsOn(place.name, "ses_one")).toBe(3)
+  // Still waiting behind the first, it gives up: at once, without reading.
+  patience.abort()
+  expect((await gaveUp.then(() => null, error => error))?.name).toBe("AbortError")
+  expect(asked).toEqual(["ses_one"])
+  release()
+  await Promise.all([first, third])
+  expect(sessions.get("ses_one")!.metadata.kuvo).toEqual({ autopilot: true, approval: "auto" })
+  expect(turnsOn(place.name, "ses_one")).toBe(0)
 })
 
 test("nothing to change writes nothing; a session that isn't there is null", async () => {
@@ -108,7 +140,7 @@ test("a writer within its own turn doesn't wait on itself; others wait for the w
     inTurn("place", "ses_one", async () => {
       order.push("outer starts")
       await inTurn("place", "ses_one", async () => { order.push("inner") })
-      await new Promise(resolve => setTimeout(resolve, 5))
+      await new Promise(resolve => setImmediate(resolve))
       order.push("outer ends")
     }),
     inTurn("place", "ses_one", async () => { order.push("next") }),

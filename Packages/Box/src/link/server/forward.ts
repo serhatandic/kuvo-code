@@ -130,7 +130,7 @@ export async function* forward(target: Target, path: string, request: LinkReques
         const done = new AbortController();
         await Promise.race([sent.catch(() => {}), pause(NOTES_STEP, done.signal)]);
         done.abort();
-      });
+      }, signal);
       if (!turn.sent) throw new Error("It wasn't sent.");
       response = await turn.sent;
     } else response = await send();

@@ -1,8 +1,13 @@
 import "../safety"
 import { expect, test } from "bun:test"
+import { existsSync, mkdirSync, mkdtempSync, rmdirSync, rmSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { branch } from "../../src/agents/branch"
 import { SeatAPI, type Requester } from "../../src/agents/groups/api"
 import type { GoalPlaces } from "../../src/agents/goals"
+import { notesBeside } from "../../src/agents/notes"
+import { notesLock, waitingAcross } from "../../src/shared/session-notes"
 
 // The bridge's writers of a conversation's notes through its place's API (#581): a branch's mark
 // and a seat's, each in its turn, on its notes as they are then, never on what it read before. The
@@ -14,9 +19,11 @@ function place({ forkSaysMetadata = true } = {}) {
   // hears of it), before the one that made it writes its own.
   let onMade = (_id: string) => {}
   let made = 0
+  // Reads of a conversation, as they're asked.
+  const reads: string[] = []
   const api: Requester = {
     async request(method: string, path: string, body?: any): Promise<any> {
-      await new Promise(resolve => setTimeout(resolve, 2))
+      await new Promise(resolve => setImmediate(resolve))
       const fork = path.match(/^\/api\/session\/([^/]+)\/fork$/)
       if (fork && method === "POST") {
         const source = sessions.get(decodeURIComponent(fork[1]!))!
@@ -39,10 +46,11 @@ function place({ forkSaysMetadata = true } = {}) {
         if (body.metadata) session.metadata = body.metadata
         return undefined
       }
+      reads.push(session.id)
       return { data: structuredClone(session) }
     },
   }
-  return { api, sessions, made: (then: (id: string) => void) => { onMade = then } }
+  return { api, sessions, reads, made: (then: (id: string) => void) => { onMade = then } }
 }
 
 test("a branch's mark keeps what was written to the copy since it was made, and takes off only what it carried of its source", async () => {
@@ -79,3 +87,37 @@ test("a seat's mark keeps what was written to it since it was made", async () =>
   await seats.markSeat(session.id, seat)
   expect(sessions.get(session.id)!.metadata).toEqual({ kuvo: { seat, approval: "askFirst", applied: "askFirst" } })
 })
+
+// The box's link holding a conversation's turn: its lock folder in the box's `run/notes`, named for
+// the conversation as both name it. The bridge's writer waits for it, reading nothing, and goes
+// ahead once it's gone.
+test("a conversation's turn held by the box's link: the bridge's writer reads nothing until it's done", async () => {
+  const run = mkdtempSync(join(tmpdir(), "kuvo-notes-run-"))
+  notesBeside(run)
+  try {
+    const { api, sessions, reads } = place()
+    sessions.set("ses_seat", { id: "ses_seat", metadata: { kuvo: { approval: "auto" } } })
+    const lock = notesLock(join(run, "notes"), "ses_seat")
+    mkdirSync(lock, { recursive: true })
+    const seat = { group: "grp_1", bot: "bot_ada" }
+    const marking = new SeatAPI(api).markSeat("ses_seat", seat)
+    try {
+      await until(() => waitingAcross(join(run, "notes"), "ses_seat") === 1)
+      for (let round = 0; round < 50; round++) await new Promise(resolve => setImmediate(resolve))
+      expect(waitingAcross(join(run, "notes"), "ses_seat")).toBe(1)
+      expect(reads).toEqual([])
+    } finally {
+      rmdirSync(lock)
+    }
+    await marking
+    expect(sessions.get("ses_seat")!.metadata).toEqual({ kuvo: { approval: "auto", seat } })
+    expect(existsSync(lock)).toBe(false)
+  } finally {
+    notesBeside(undefined)
+    rmSync(run, { recursive: true, force: true })
+  }
+})
+
+async function until(ready: () => boolean): Promise<void> {
+  while (!ready()) await new Promise(resolve => setImmediate(resolve))
+}

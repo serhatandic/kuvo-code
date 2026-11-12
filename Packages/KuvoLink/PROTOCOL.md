@@ -4534,23 +4534,31 @@ reads it, changes what it owns and sends it all back (the bridge keeps its own `
 The box's own writers (#581: the chat mark, a new conversation's approval and any change to it,
 Autopilot, an agent's answers, archiving by a tool or a project's removal, a carry to the coding
 agents, the marks of a session it starts and of a bot it makes, a bot's rules repaired) each take
-their turn on the session, by place and session, in that box process and across its processes on
-that computer (a lock folder in `run/notes`): each reads the session as it is then, changes only its
-own keys on it, and writes it straight away. A client's `PATCH api/session/<id>` that comes through
-the box (a phone's, another computer's) waits for that turn too, so the box doesn't write over it
-with what it read before (but see below). The coding agents' bridge does the same for its writers through the API
-(a branch's mark, a handoff's, a group chat seat's), in its own process.
+their turn on the session: in their process, and across the box's processes on that computer and
+its coding agents' bridge by a lock folder per session in the box's `run/notes` (named for the
+session's ID, so the engine's and the bridge's sessions alike). Each reads the session as it is
+then, changes only its own keys on it, and writes it straight away. The bridge's writers through
+the API (a branch's mark, a handoff's, a group chat seat's) take the same turn. A client's
+`PATCH api/session/<id>` that comes through the box (a phone's, another computer's) waits for it
+too, so the box doesn't write over it with what it read before (but see below).
+
+A turn's read and its write are each cut short at half a minute, so none lasts more than a minute;
+a lock folder older than that (65 seconds) was left by a process cut off: another process takes it
+over then, and the box clears those as it starts. Another process waits for a turn's folder that
+long at most, then goes ahead without it. While a box from before #581 runs beside a newer one (an
+update taking over), the newer one waits for that box's one lock (`run/work/.notes.lock`, held for
+its answers and archiving) as it would have, without taking it.
 
 What can still be lost, as long as the engine has no "only if unchanged", is a write that lands
 between a writer's read and its write (a few milliseconds), when it's
 
-- a client's that doesn't come through the box (a Mac to its own engine), or a write by another
-  program: the bridge's writers on the engine's sessions and the box's on the bridge's take no turn
-  with each other;
-- one that doesn't wait as long as a turn can last: a turn's read and its write are each cut short
-  at half a minute (a client's PATCH through the box gives up its turn after that time too, its
-  write still on its way), and another box process waits at most half a minute for a turn's lock
-  folder before it goes ahead without it;
+- a client's that doesn't come through the box: the Mac's app writes a session's metadata whole
+  straight to its own engine (archiving or pinning it, say), taking no turn (an iPhone's, and the
+  Mac's to another computer, come through that computer's box and wait for the turn, but are whole
+  too: below);
+- one that doesn't wait as long as a turn can last: a client's PATCH through the box gives up its
+  turn after half a minute, its write still on its way, and a process that waited 65 seconds for a
+  turn's folder goes ahead without it;
 - a session's rules (`permissions`) written alone, outside a turn (a group chat seat's, the
   bridge's for an engine run of its own), against the box's approval writes, which send them whole;
 - or a client's whole write made from what it read before the box wrote: the box's change is lost
