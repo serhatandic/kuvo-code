@@ -168,8 +168,9 @@ export function engineCommandsInSandbox(): boolean {
   return fenceWanted() && fs.existsSync(ON) && !fs.existsSync(CHECKING) && loaded().on;
 }
 
-/** Whether its check didn't finish in time, so commands go through it but nothing counts on it. */
-export const fencePending = (): boolean => fenceWanted() && checked.unfinished === true;
+/** Whether its check didn't finish in time (here, or in another of the box's processes), so
+ * commands go through it but nothing counts on it. */
+export const fencePending = (): boolean => fenceWanted() && (checked.unfinished === true || fs.existsSync(CHECKING));
 
 /** Whether the coding agents' own programs (Claude Code, Codex, Cursor, Grok, Antigravity, whose
  * commands don't go through the engine) run in it: each runs whole in it, as the bridge starts
@@ -301,7 +302,7 @@ function writeExecutable(file: string, text: string): void {
 
 /**
  * Where a Linux machine doesn't let commands have a namespace of their own (fence/landlock.ts,
- * `ownNamespace`): "off", the sandbox isn't on there, so commands go to the ask as where it can't
+ * `triedNamespace`): "off", the sandbox isn't on there, so commands go to the ask as where it can't
  * run; "without" (the user's choice, 2026-11-01), it runs without one, and commands can still reach
  * your session's services: the state says so (`gaps`), and what needs it whole waits (`fenceWhole`).
  */
@@ -622,8 +623,10 @@ export function keepFence(every: (round: () => Promise<void>) => void = round =>
       // A failed check, or one that didn't finish, tried again each minute (it holds the box up
       // while it runs), with commands' namespace as last found.
       const changed = textOf(PLUGIN) !== pluginScript(places, VERSION);
-      // Checked again too where another of the box's processes found its check didn't finish.
-      if (checked.passed ? changed || fs.existsSync(CHECKING) : round % 6 === 0) setUpFence(namespaceKnown ? namespace : undefined);
+      // Checked again too where another of the box's processes (`box route`) found its check
+      // didn't finish, or since passed it (or found it failed, and took it away).
+      const elsewhere = checked.passed ? fs.existsSync(CHECKING) : checked.unfinished === true && !fs.existsSync(CHECKING);
+      if (checked.passed ? changed || elsewhere : round % 6 === 0 || elsewhere) setUpFence(namespaceKnown ? namespace : undefined);
       // While it hasn't finished, its plugin put back at once, as while it's on.
       else if (checked.unfinished && changed) givePlugin();
       // And on Linux, set up again once commands can have a namespace of their own after all
@@ -634,7 +637,8 @@ export function keepFence(every: (round: () => Promise<void>) => void = round =>
         trying = true;
         checking = ownNamespaceLater(NAMESPACE_FOLDER)
           // (One that didn't finish changes nothing.)
-          .then(found => { if (fenceWanted() && found !== UNFINISHED && !found !== !namespace) setUpFence(found); })
+          // (And one found while the last try didn't finish, kept as found.)
+          .then(found => { if (fenceWanted() && found !== UNFINISHED && (!namespaceKnown || !found !== !namespace)) setUpFence(found); })
           .catch(() => {})
           .finally(() => { trying = false; });
       }

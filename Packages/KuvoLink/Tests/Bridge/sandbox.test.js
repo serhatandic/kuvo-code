@@ -1729,6 +1729,12 @@ test("Check Now runs a watch's check in the sandbox, and none whose folder is go
   }
 });
 
+// What a Mac asks a machine's box over SSH (`box route`): a process of its own, its answer's body.
+function routeOnce(box, env, method, route) {
+  const run = spawnSync(process.execPath, [script, "box", "route"], { env: { ...box.env, ...env }, input: JSON.stringify({ method, path: route }), encoding: "utf8" });
+  return JSON.parse(JSON.parse(run.stdout.trim().split("\n").at(-1)).body);
+}
+
 // A busy computer (a Mac mini running the box's whole suite) can keep the sandbox's check from
 // finishing in time: that says nothing of whether the sandbox works, so it's never taken for a
 // failed check, which would leave commands outside it.
@@ -1781,7 +1787,23 @@ test("a check that doesn't finish in time leaves nothing outside the sandbox, an
     holdUp();
     await running.ask("POST", "kuvo/sandbox/check");
     await allInIt();
+    // Its plugin for the engine taken away meanwhile: put back within the box's round.
+    fs.rmSync(box.plugin);
+    await changeIn(path.dirname(box.plugin), () => fs.existsSync(box.plugin));
+    // (On again once the engine has it again, as it opens the folder.)
+    await engineRuns(box, project, "true", "ses_slow");
     await checkedAgain();
+    // Checked in another of the box's processes (`box route`, as a Mac asks a machine's box), where
+    // it doesn't finish: the box says so too, and checks again itself once it can.
+    holdUp();
+    const routed = routeOnce(box, { KUVO_TEST_SANDBOX_CHECK_HOLD: hold }, "POST", "kuvo/sandbox/check");
+    assert.equal(routed.reason, "checking", routed.why);
+    await allInIt();
+    letGo();
+    const fence = path.join(box.home, "run", "fence");
+    await changeIn(fence, () => !fs.existsSync(path.join(fence, "checking")));
+    const state = (await running.ask("GET", "kuvo/sandbox")).value;
+    assert.equal(state.on, true, state.why);
   } finally {
     await running.stop();
     fs.rmSync(hold, { force: true });

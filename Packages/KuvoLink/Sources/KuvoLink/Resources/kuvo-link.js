@@ -4973,7 +4973,7 @@ function loaded() {
 function engineCommandsInSandbox() {
   return fenceWanted() && fs20.existsSync(ON) && !fs20.existsSync(CHECKING) && loaded().on;
 }
-var fencePending = () => fenceWanted() && checked.unfinished === true;
+var fencePending = () => fenceWanted() && (checked.unfinished === true || fs20.existsSync(CHECKING));
 var agentsCommandsInSandbox = () => fenceWanted() && fs20.existsSync(ON) && !fs20.existsSync(CHECKING);
 function bridgeSays() {
   if (!agentsCommandsInSandbox())
@@ -5369,7 +5369,8 @@ function keepFence(every = (round) => {
       if (checked.passed || checked.unfinished)
         writeProfiles();
       const changed = textOf(PLUGIN) !== pluginScript(places, VERSION);
-      if (checked.passed ? changed || fs20.existsSync(CHECKING) : round % 6 === 0)
+      const elsewhere = checked.passed ? fs20.existsSync(CHECKING) : checked.unfinished === true && !fs20.existsSync(CHECKING);
+      if (checked.passed ? changed || elsewhere : round % 6 === 0 || elsewhere)
         setUpFence(namespaceKnown ? namespace : undefined);
       else if (checked.unfinished && changed)
         givePlugin();
@@ -5377,7 +5378,7 @@ function keepFence(every = (round) => {
         fs20.mkdirSync(NAMESPACE_FOLDER, { recursive: true, mode: 448 });
         trying = true;
         checking = ownNamespaceLater(NAMESPACE_FOLDER).then((found) => {
-          if (fenceWanted() && found !== UNFINISHED && !found !== !namespace)
+          if (fenceWanted() && found !== UNFINISHED && (!namespaceKnown || !found !== !namespace))
             setUpFence(found);
         }).catch(() => {}).finally(() => {
           trying = false;
@@ -38076,7 +38077,7 @@ function keeperEngine(root) {
 }
 
 // Packages/Box/src/link/version.ts
-var BRIDGE_VERSION = "0e3cf74b28f6";
+var BRIDGE_VERSION = "18ccf5502427";
 
 // Packages/Box/src/link/areas/info.ts
 async function* infoRoute(context) {
