@@ -858,6 +858,55 @@ describe("a group chat on any computer", () => {
     expect(groups.get(id)!.messages[0].tasks!.map((part) => part.state)).toEqual(["done", "failed"])
   })
 
+  test("a bot with nothing to report on its part passes: the part's done, nothing's said in the chat, and the part after it starts without it", async () => {
+    const { groups } = runner()
+    engine.lines = { Ada: ["We'll split it.", "&Ada: write the notes\n&Ben (after &Ada): fix the build\nGO"], Ben: ["PASS"] }
+    engine.reports = { Ada: "PASS", Ben: "Build fixed." }
+    groups.put(group(), [], "active", false)
+    groups.send(id, "Split it and go ahead.")
+    await until(() => groups.get(id)!.messages.some((message) => message.report !== undefined && message.author === "bot_ben"))
+    const messages = groups.get(id)!.messages
+    expect(messages.find((message) => message.tasks)!.tasks!.map((part) => [part.bot, part.state])).toEqual([
+      ["bot_ada", "done"],
+      ["bot_ben", "done"],
+    ])
+    expect(messages.filter((message) => message.report !== undefined).map((message) => [message.author, message.text])).toEqual([["bot_ben", "Build fixed."]])
+    expect(messages.some((message) => /^\W*pass\W*$/i.test(message.text))).toBe(false)
+    expect(notes(groups)).toEqual([])
+    const benPart = engine.prompts("ses_own_Ben")[0]?.body.text as string
+    expect(benPart).not.toContain("**Ada**")
+    expect(benPart).not.toContain("What they reported")
+    expect(events.filter((event) => event.type === "kuvo.group.done").map((event) => (event.data as any).bot)).toEqual(["bot_ben"])
+  }, 20_000)
+
+  test("a pass read back after a restart, in lowercase with spaces around it, ends its part the same way; a report that goes on after PASS is a report", async () => {
+    const { store } = runner()
+    const started = stamp()
+    const wrapUp = {
+      id: "gm_wrap", author: "bot_ada", text: "Ada writes, Ben tests.", time: started, kind: "wrapUp" as const,
+      tasks: [
+        { id: "gt_ada", bot: "bot_ada", task: "write the notes", state: "working" as const, prompt: "msg_part", started },
+        { id: "gt_ben", bot: "bot_ben", task: "run the tests", state: "working" as const, prompt: "msg_ben", started },
+      ],
+    }
+    store.saveGroup({ group: group(), status: "active", messages: [wrapUp] })
+    store.saveMessages({ group: group(), status: "active", messages: [wrapUp] })
+    const at = Date.now()
+    const ran = (name: string, prompt: string, text: string) =>
+      engine.seed(`ses_own_${name}`, [
+        { type: "user", id: prompt, time: { created: at }, text: "[Work from Team · grp_team000001]" },
+        { type: "assistant", id: `${prompt}_a`, time: { created: at + 1, completed: at + 2 }, agent: "build", model: { id: "m", providerID: "p" }, content: [{ type: "text", text }] },
+        { type: "idle", id: `${prompt}_i`, time: { created: at + 3 }, outcome: "succeeded" },
+      ])
+    ran("Ada", "msg_part", "  \n pass. \n")
+    ran("Ben", "msg_ben", "PASS src/build.test.ts")
+    const { groups } = runner()
+    groups.start()
+    await until(() => groups.get(id)!.messages[0].tasks!.every((part) => part.state === "done"))
+    expect(groups.get(id)!.messages.filter((message) => message.report !== undefined).map((message) => [message.author, message.text])).toEqual([["bot_ben", "PASS src/build.test.ts"]])
+    expect(notes(groups)).toEqual([])
+  })
+
   test("a part for a bot whose conversation you stopped waits on the box, shown as the chat's and as waiting on it, and the bot does it once you resume", async () => {
     const queues = queueFiles(join(root, "run"))
     mkdirSync(join(root, "run"), { recursive: true })

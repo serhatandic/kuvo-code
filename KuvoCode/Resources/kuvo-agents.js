@@ -21597,6 +21597,12 @@ function isPass(text) {
     return true;
   if (!new RegExp(`^${nonWord}*pass(?:${boundary})`, "iu").test(text))
     return false;
+  return saysNothingMore(text);
+}
+function isPassReport(text) {
+  return isPass(text) && saysNothingMore(trim(text));
+}
+function saysNothingMore(text) {
   const rest = text.replace(new RegExp(`^${nonWord}*pass${nonWord}*`, "iu"), "");
   return rest.length === 0 || /^(nothing|no (new|more|comment|further)|i('| ha)ve nothing|skip|n\/a)/iu.test(rest);
 }
@@ -24916,10 +24922,12 @@ class GroupRunner {
       part.finished = stamp3();
       delete part.lost;
     });
-    this.append({ id: groupMessageID(), author: botID, text: result.text, time: stamp3(), kind: "message", report: taskID }, id);
+    const passed = isPassReport(result.text);
+    if (!passed)
+      this.append({ id: groupMessageID(), author: botID, text: result.text, time: stamp3(), kind: "message", report: taskID }, id);
     this.startReady(wrapUpID, id);
     const kept = this.chats.get(id);
-    if (kept)
+    if (kept && !passed)
       emit("kuvo.group.done", { id, name: kept.group.name, bot: botID, who: this.name(botID), text: result.text });
   }
   held(from, part) {
@@ -27435,4 +27443,4 @@ if (onMachine) {
 }
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);
-// Built from Packages/Box/src/agents 5edf5e91f30c7375663bd78bfa9f9b5ac507a82a2e023acc99e7a83ed24794e7
+// Built from Packages/Box/src/agents 0b9e8fa9fa05f6db7403155bc4bcb55fce78bfdb159becc4fea0f22018126532

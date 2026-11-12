@@ -101,6 +101,20 @@ export function isPass(text: string): boolean {
   if (length(text) >= 80) return false
   if (new RegExp(`^${nonWord}*PASS(?:${boundary})`, "u").test(text)) return true
   if (!new RegExp(`^${nonWord}*pass(?:${boundary})`, "iu").test(text)) return false
+  return saysNothingMore(text)
+}
+
+/**
+ * A part's report that's only a pass ("PASS", " pass. ", "PASS — nothing new"): its bot had
+ * nothing to report, and the chat hears nothing. Not one that goes on after the word ("PASS: all
+ * 42 tests green", a test run's "PASS src/build.test.ts"): that says what it did.
+ */
+export function isPassReport(text: string): boolean {
+  return isPass(text) && saysNothingMore(trim(text))
+}
+
+/** Whether what follows a pass's word says there's nothing more. */
+function saysNothingMore(text: string): boolean {
   const rest = text.replace(new RegExp(`^${nonWord}*pass${nonWord}*`, "iu"), "")
   return rest.length === 0 || /^(nothing|no (new|more|comment|further)|i('| ha)ve nothing|skip|n\/a)/iu.test(rest)
 }
