@@ -102,11 +102,41 @@ final class WorkQueues {
     }
     #endif
 
+    @Observable final class ChipView {
+        var refs: [String: WorkRef] = [:]
+    }
+    @ObservationIgnored private var chipViews: [Key: ChipView] = [:]
+    private func chipView(_ key: Key) -> ChipView {
+        if let view = chipViews[key] { return view }
+        let view = ChipView()
+        chipViews[key] = view
+        return view
+    }
+
     // MARK: Views
 
     /// A view as it changes, until the task following it ends: this Mac's box tells each change as
     /// it's made; a machine's is asked again every few seconds.
+    @ObservationIgnored private var streams: [Key: Task<Void, Never>] = [:]
+    @ObservationIgnored private var subscribers: [Key: Int] = [:]
+
     func follow(_ key: Key) async {
+        guard !key.owner.isEmpty else { return }
+        subscribers[key, default: 0] += 1
+        if streams[key] == nil { streams[key] = Task { await stream(key) } }
+        defer {
+            subscribers[key, default: 1] -= 1
+            if subscribers[key] == 0 {
+                streams.removeValue(forKey: key)?.cancel()
+                subscribers[key] = nil
+            }
+        }
+        // Cancellation of the view's task ends its subscription; the final subscriber stops SSE.
+        let lifetime = AsyncStream<Void> { _ in }
+        for await _ in lifetime {}
+    }
+
+    private func stream(_ key: Key) async {
         let me = UUID()
         following[key] = me
         defer { if following[key] == me { following[key] = nil } }
@@ -173,6 +203,9 @@ final class WorkQueues {
     /// from another box than the key's: `refs` false).
     private func take(_ view: WorkQueueView, for key: Key, refs keepsRefs: Bool = true) {
         if views[key] != view { views[key] = view }
+        let visible = WorkQueue.visibleRefs(in: view)
+        let chips = chipView(key)
+        if chips.refs != visible { chips.refs = visible }
         if keepsRefs { fellBack.remove(key) }
         failures[key] = nil
         older.remove(key.box)
@@ -426,7 +459,7 @@ final class WorkQueues {
     /// What the refs in `text` name on `box` (by the ref as asked: "243", `gh:owner/repo#12`), as
     /// far as it's known now; the ones not known yet are asked (once a minute at most each), and
     /// their chips come when the box answers.
-    func refs(in text: String, box: String, typing: Bool = false) -> [String: WorkRef] {
+    func refs(in text: String, box: String, owner: String? = nil, typing: Bool = false) -> [String: WorkRef] {
         var found = WorkItemRefs.findRefs(in: text)
         // One being typed at the end of a draft isn't asked for until it's whole ("#2" of "#243").
         if typing, let last = found.last, last.range.upperBound == text.endIndex { found.removeLast() }
@@ -434,16 +467,16 @@ final class WorkQueues {
         let keys = Set(found.map(\.ref))
         let now = Date()
         // Known ones too, a minute on: a chip shows where its item stands now, not when it came.
-        let wanted = keys.filter { asked[box]?[$0].map { now.timeIntervalSince($0) > refreshAfter } ?? true }
+        let wanted = keys.filter { $0.hasPrefix("gh:") && (asked[box]?[$0].map { now.timeIntervalSince($0) > refreshAfter } ?? true) }
         if !wanted.isEmpty {
             for key in wanted { asked[box, default: [:]][key] = now }
             Task { await lookUp(Array(wanted), on: box) }
         }
-        startRefreshing()
-        let known = refs[box] ?? [:]
-        var named: [String: WorkRef] = [:]
-        for key in keys { if let ref = known[key] { named[key] = ref } }
-        return named
+        if keys.contains(where: { $0.hasPrefix("gh:") }) { startRefreshing() }
+        let known = keys.contains(where: { $0.hasPrefix("gh:") }) ? refs[box] ?? [:] : [:]
+        let visible = owner.flatMap { $0.isEmpty ? nil : chipView(Key(box: box, owner: $0)).refs } ?? [:]
+        return WorkItemRefs.chipRefs(in: text, known: known, visible: visible)
+            .filter { keys.contains($0.key) }
     }
 
     /// Every half minute, what the chips asked for lately name now: a chip on screen follows its
@@ -469,7 +502,8 @@ final class WorkQueues {
 
     /// Asks the box what `keys` name ("243", `gh:owner/repo#12`), in a list (a box that doesn't
     /// know one says null).
-    func lookUp(_ keys: [String], on box: String) async {
+    private func lookUp(_ keys: [String], on box: String) async {
+        let keys = keys.filter { $0.hasPrefix("gh:") }
         guard let client = client(box), !keys.isEmpty else { return }
         struct Asked: Encodable { var refs: [String] }
         guard let answer = try? await client.value(WorkRefs.self, "POST", "kuvo/work-queue/refs", body: Asked(refs: Array(keys.prefix(200)))) else { return }
@@ -505,12 +539,29 @@ final class WorkQueues {
 extension AppModel {
     /// Opens the Work Queue item `ref` names (a chip clicked: "243", `gh:owner/repo#12`) in the
     /// panel of the conversation in view.
-    func openWorkItem(_ ref: String) {
-        workQueues.open(ref: ref, on: utilities.queueBox, panel: utilities.panelKey)
+    func openWorkItem(_ ref: String, box: String? = nil) {
+        workQueues.open(ref: ref, on: box ?? utilities.queueBox, panel: utilities.panelKey)
         withAnimation(.ui) {
             utilities.showWorkQueue()
             tabs.showPanel()
             showsSettings = false
         }
     }
+}
+
+extension EnvironmentValues {
+    /// The conversation drawing this text, independent of which split pane has focus.
+    @Entry var workChipQueue: WorkQueues.Key?
+}
+
+private struct WorkChipContext: ViewModifier {
+    let key: WorkQueues.Key?
+    @Environment(AppModel.self) private var app
+    func body(content: Content) -> some View {
+        content.environment(\.workChipQueue, key)
+            .task(id: key) { if let key { await app.workQueues.follow(key) } }
+    }
+}
+extension View {
+    func workChipContext(_ key: WorkQueues.Key?) -> some View { modifier(WorkChipContext(key: key)) }
 }

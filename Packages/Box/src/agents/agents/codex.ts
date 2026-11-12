@@ -958,6 +958,8 @@ class CodexThread implements Thread {
   private answers: Answer[] = []
   /** Answers gone into the turn under way, for the first sleep that starts after them. */
   private answered: Answered[] = []
+  /** Answers a sleep took from `answered` as it started, while it's told them again: one Codex takes meanwhile, as it was first sent, is heard. */
+  private retelling = new Set<Answered>()
   /** The sleep it's in, which what goes in now ends. */
   private sleep?: AbortController
   /** How many of its questions its box turned down with words, this message. */
@@ -1545,6 +1547,7 @@ class CodexThread implements Thread {
       this.answered = []
       if (said.length && !stopped) {
         const words = { text: `Your question has its answer, so there's nothing to wait for on it:\n\n${said.map((each) => each.text).join("\n\n")}`, files: [] }
+        for (const each of said) this.retelling.add(each)
         this.keep(this.steerIn(active, words).then(async (took) => {
           if (took) return
           // Into this sleep, and then into one that started while that was tried (as in steerAnswer).
@@ -1557,12 +1560,15 @@ class CodexThread implements Thread {
           // next turn, rather than wait on a sleep that may never come.
           this.answered.push(...said.filter((each) => each.heard))
           this.answers.push(...said.filter((each) => !each.heard).map((each) => ({ text: each.text, files: each.files ?? [] })))
+        }).finally(() => {
+          for (const each of said) this.retelling.delete(each)
         }))
       }
     } else if (item?.type === "userMessage") {
-      // (Its words first: what it attached, Codex may be told of after them.)
+      // (Its words first: what it attached, Codex may be told of after them. One being told again
+      // as a sleep started counts too: Codex may take it as it was first sent meanwhile.)
       const text: unknown = (item.content ?? []).find((part: any) => part?.type === "text")?.text
-      const heard = typeof text === "string" ? this.answered.find((each) => !each.heard && text.startsWith(each.text)) : undefined
+      const heard = typeof text === "string" ? [...this.retelling, ...this.answered].find((each) => !each.heard && text.startsWith(each.text)) : undefined
       if (heard) heard.heard = true
     } else if (WORK_ITEMS.has(item?.type)) {
       this.turnedDown = 0

@@ -52,6 +52,7 @@ import { GroupRunner } from "./groups/runner"
 import { GroupStore } from "./groups/store"
 import { queueFiles } from "../shared/queues"
 import { HangWatch, isEngine } from "../shared/hang"
+import { notesBeside } from "./notes"
 import { agentAccounts, Limits } from "./limits"
 import { ENGINE_SERVICES, EngineAccounts } from "./engine-limits"
 
@@ -201,6 +202,8 @@ const botsFolder = groupFolders?.bots ?? (onMachine ? join(machineHome!, "bots")
 const agentsFile = onMachine ? join(machineHome!, "run", "agents.json") : process.env.KUVO_AGENTS_FILE || undefined
 // The box's queues, where a chat's part for a conversation you stopped waits (on the Mac, the box's run folder the app says).
 const runFolder = onMachine ? join(machineHome!, "run") : process.env.KUVO_RUN || undefined
+// Sessions' turns held with the box's link, in its run folder.
+notesBeside(runFolder)
 // Nor do the agents get these.
 for (const name of ["KUVO_GROUPS", "KUVO_TRASH", "KUVO_GROUPS_MEMORY_KEY", "KUVO_AGENTS_FILE", "KUVO_ARTIFACTS", "KUVO_RUN", ...(onMachine ? [] : ["KUVO_BOTS"])]) delete process.env[name]
 if (groupFolders) {

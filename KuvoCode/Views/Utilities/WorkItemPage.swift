@@ -82,6 +82,7 @@ struct WorkItemPage: View {
             missing = loaded == nil
             if let loaded { pictures = await keepPictures(loaded) }
         }
+        .workChipContext(item.map { WorkQueues.Key(box: opened.box, owner: $0.owner) })
         .onDisappear { removePictures() }
     }
 
@@ -287,7 +288,7 @@ struct WorkItemPage: View {
     /// What it says, as a reply is drawn: other items it names (`#212`) as their chips. An issue's
     /// own description is GitHub's, where a bare `#45` is that repository's: only its `gh:` refs.
     private func parser(_ text: String, fromSource: Bool = false) -> FileLinkingParser {
-        var refs = text.contains("#") ? store.refs(in: text, box: opened.box) : [:]
+        var refs = text.contains("#") ? store.refs(in: text, box: opened.box, owner: item?.owner) : [:]
         if fromSource { refs = refs.filter { Int($0.key) == nil } }
         return FileLinkingParser(folders: { [] }, refs: refs)
     }

@@ -45,6 +45,8 @@ const refusesNextSteer: [string, any] = ["(refuses the next steer)", {}]
 const refusesAsItSleeps: [string, any] = ["(refuses as it starts to sleep)", {}]
 /** In a turn's events: Codex takes what's steered, and says its turn is over in the same breath. */
 const endsAsTold: [string, any] = ["(ends as told)", {}]
+/** In a turn's events: Codex works until something's steered in, and as it takes it, says a sleep's started, that it ended, and that its turn is over, in the same breath. */
+const takesAsItSleeps: [string, any] = ["(takes it as it starts to sleep, and ends)", {}]
 /** In a turn's events: Codex leaves `command` running in a background terminal, until a file `terminal-done` is in its folder. */
 const leavesTerminal = (command: string): [string, any] => ["(leaves a terminal)", { processId: "p1", command }]
 
@@ -77,6 +79,7 @@ let sleptInBreath
 let refusedOne
 let turning = false
 let endsAsTold = false
+let takesAsItSleeps = false
 let summaryWorks = false
 let summarizing = false
 let terminals = []
@@ -99,6 +102,10 @@ async function turn() {
     }
     if (method === ${JSON.stringify(endsAsTold[0])}) {
       endsAsTold = true
+      return
+    }
+    if (method === ${JSON.stringify(takesAsItSleeps[0])}) {
+      takesAsItSleeps = true
       return
     }
     if (method === ${JSON.stringify(refusesSteers[0])}) {
@@ -219,6 +226,19 @@ process.stdin.on("data", (chunk) => {
       if (endsAsTold) {
         endsAsTold = turning = false
         process.stdout.write(JSON.stringify({ id: message.id, result: { turnId: "u1" } }) + "\\n" + JSON.stringify({ method: "turn/completed", params: { threadId: thread, turn: { id: "u1", status: "completed" } } }) + "\\n")
+        continue
+      }
+      if (takesAsItSleeps && turning) {
+        takesAsItSleeps = turning = false
+        const sleep = { type: "sleep", id: "sleep" + ++sleeps, durationMs: 43200000 }
+        const told = [
+          { method: "item/started", params: inTurn({ item: sleep }) },
+          { id: message.id, result: { turnId: "u1" } },
+          { method: "item/started", params: inTurn({ item: { type: "userMessage", id: "steer" + steers++, content: message.params.input } }) },
+          { method: "item/completed", params: inTurn({ item: sleep }) },
+          { method: "turn/completed", params: { threadId: thread, turn: { id: "u1", status: "completed" } } },
+        ]
+        process.stdout.write(told.map((each) => JSON.stringify(each) + "\\n").join(""))
         continue
       }
       if (refusingAsItSleeps) {
@@ -983,6 +1003,19 @@ describe("A question Codex asks (request_user_input_async)", () => {
     expect(steered().length).toBeGreaterThanOrEqual(2)
     expect(starts()).toEqual(["go"])
     expect(said(id)).toContain("Writing it in Turkish.")
+  })
+
+  test("an answer it takes in the breath a sleep starts, its turn ending there: told again and turned down, it isn't sent again in a turn of its own", async () => {
+    // (As when an answer it turned down goes in again as it goes on, and it sleeps before it says
+    // it took it: the sleep is told again, and finds its turn over.)
+    const id = start([...asking, takesAsItSleeps], {}, answered)
+    await until(() => sessions.forms(id).length === 1)
+    sessions.replyForm(id, sessions.forms(id)[0].id, { [sessions.forms(id)[0].fields[0].key]: "Turkish" })
+    await until(() => ended(id))
+    expect(steered()).toHaveLength(2)
+    expect(steered()[0]).toBe("Turkish")
+    expect(steered()[1]).toContain("Turkish")
+    expect(starts()).toEqual(["go"])
   })
 
   test("an answer turned down as its sleep gives way to another goes into the new one, and ends it", async () => {
