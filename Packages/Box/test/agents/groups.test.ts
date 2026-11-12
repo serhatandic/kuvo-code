@@ -5,6 +5,7 @@ import { join } from "node:path"
 import {
   compose,
   isPass,
+  isPassReport,
   mentions,
   nextSpeaker,
   parts,
@@ -49,6 +50,22 @@ describe("what the app reads as a box does", () => {
 describe("a group chat goes by its rules", () => {
   test("what counts as a pass", () => {
     for (const { text, pass } of vectors.isPass) expect([text, isPass(text)]).toEqual([text, pass])
+  })
+
+  test("what counts as a pass for a part's report: only a pass, not one that goes on to say what it did", () => {
+    const cases: [string, boolean][] = [
+      ["PASS", true],
+      ["  pass. \n", true],
+      ["**Pass**", true],
+      ["PASS — nothing new", true],
+      ["pass: no new info", true],
+      ["PASS: all 42 tests green", false],
+      ["PASS src/build.test.ts", false],
+      ["Pass rate is 98% on main.", false],
+      ["Notes written.", false],
+      ["", false],
+    ]
+    for (const [text, pass] of cases) expect([text, isPassReport(text)]).toEqual([text, pass])
   })
 
   test("who does what, from the lead's list", () => {
